@@ -1,0 +1,16 @@
+[package]
+name = "shync"
+version = "0.1.0"
+authors = ["Ellie Huxtable <e@elm.sh>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+log = "0.4"
+pretty_env_logger = "0.4"
+clap = "2.33.3"
+chrono = "0.4.19"
+eyre = "0.6.1"
+shellexpand = "2.0.0"
+rusqlite = "0.24.0"
