@@ -3,6 +3,8 @@ name = "shync"
 version = "0.1.0"
 authors = ["Ellie Huxtable <e@elm.sh>"]
 edition = "2018"
+license = "MIT"
+description = "shync - sync your shell history"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
