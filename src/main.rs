@@ -1,6 +1,6 @@
 use std::env;
 
-use clap::{Arg, App, SubCommand};
+use structopt::StructOpt;
 use eyre::Result;
 
 #[macro_use] extern crate log;
@@ -11,65 +11,82 @@ mod local;
 use local::history::History;
 use local::database::{Database, SqliteDatabase};
 
+#[derive(StructOpt)]
+#[structopt(
+    author="Ellie Huxtable <e@elm.sh>",
+    version="0.1.0",
+    about="Keep your shell history in sync"
+)]
+enum Shync {
+    #[structopt(
+        about="manipulate shell history",
+        aliases=&["h", "hi", "his", "hist", "histo", "histor"],
+    )]
+    History(HistoryCmd),
+
+    #[structopt(
+        about="import shell history from file",
+    )]
+    Import,
+
+    #[structopt(
+        about="start a shync server",
+    )]
+    Server,
+}
+
+impl Shync {
+    fn run(self, db: SqliteDatabase) -> Result<()> {
+        match self {
+            Shync::History(history) => history.run(db),
+            _ => Ok(())
+        }
+    }
+}
+
+#[derive(StructOpt)]
+enum HistoryCmd {
+    #[structopt(
+        about="add a new command to the history",
+        aliases=&["a", "ad"],
+    )]
+    Add {
+        command: Vec<String>,
+    },
+
+    #[structopt(
+        about="list all items in history",
+        aliases=&["l", "li", "lis"],
+    )]
+    List,
+}
+
+impl HistoryCmd {
+    fn run(self, db: SqliteDatabase) -> Result<()> {
+        match self {
+            HistoryCmd::Add{command: words} => {
+                let command = words.join(" ");
+
+                let cwd = env::current_dir()?;
+                let h = History::new(
+                    command.as_str(),
+                    cwd.display().to_string().as_str(),
+                );
+
+                debug!("adding history: {:?}", h);
+                db.save(h)?;
+                debug!("saved history to sqlite");
+                Ok(())
+            }
+
+            HistoryCmd::List => db.list()
+        }
+    }
+}
+
 fn main() -> Result<()> {
     pretty_env_logger::init();
 
     let db = SqliteDatabase::new("~/.history.db")?;
-
-    let matches = App::new("Shync")
-        .version("0.1.0")
-        .author("Ellie Huxtable <e@elm.sh>")
-        .about("Keep your shell history in sync")
-        .subcommand(
-            SubCommand::with_name("history")
-                .aliases(&["h", "hi", "his", "hist", "histo", "histor"])
-                .about("manipulate shell history")
-                .subcommand(
-                    SubCommand::with_name("add")
-                        .aliases(&["a", "ad"])
-                        .about("add a new command to the history")
-                        .arg(
-                            Arg::with_name("command")
-                                .multiple(true)
-                                .required(true)
-                        )
-                )
-                .subcommand(
-                    SubCommand::with_name("list")
-                        .aliases(&["l", "li", "lis"])
-                        .about("list all items in history")
-                )
-        )
-        .subcommand(
-            SubCommand::with_name("import")
-                .about("import shell history from file")
-        )
-        .subcommand(
-            SubCommand::with_name("server")
-                .about("start a shync server")
-        )
-        .get_matches();
-
-
-    if let Some(m) = matches.subcommand_matches("history") {
-        if let Some(m) = m.subcommand_matches("add") {
-            let words: Vec<&str> = m.values_of("command").unwrap().collect();
-            let command = words.join(" ");
-
-            let cwd = env::current_dir()?;
-            let h = History::new(
-                command.as_str(), 
-                cwd.display().to_string().as_str(),
-            );
-
-            debug!("adding history: {:?}", h);
-            db.save(h)?;
-            debug!("saved history to sqlite");
-        }
-        else if let Some(_m) = m.subcommand_matches("list") {
-            db.list()?;
-        }
-    }
-
-    Ok(())
+    Shync::from_args().run(db)
 }
