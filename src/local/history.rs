@@ -8,11 +8,11 @@ pub struct History {
 }
 
 impl History {
-    pub fn new(command: &str, cwd: &str) -> History {
+    pub fn new(command: String, cwd: String) -> History {
         History {
             timestamp: chrono::Utc::now().timestamp_millis(),
-            command: command.to_string(),
-            cwd: cwd.to_string(),
+            command,
+            cwd,
         }
     }
 }
