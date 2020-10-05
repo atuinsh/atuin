@@ -21,7 +21,7 @@ use local::history::History;
     about = "Keep your shell history in sync"
 )]
 struct Shync {
-    #[structopt(long, parse(from_os_str), about = "db file path")]
+    #[structopt(long, parse(from_os_str), help = "db file path")]
     db: Option<PathBuf>,
 
     #[structopt(subcommand)]
