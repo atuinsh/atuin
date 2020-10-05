@@ -1,12 +1,11 @@
 use std::path::Path;
 
 use eyre::Result;
-use shellexpand;
 
-use rusqlite::{params, Connection};
 use rusqlite::NO_PARAMS;
+use rusqlite::{params, Connection};
 
-use super::history::History;
+use crate::History;
 
 pub trait Database {
     fn save(&self, h: History) -> Result<()>;
@@ -19,23 +18,25 @@ pub struct SqliteDatabase {
     conn: Connection,
 }
 
-impl SqliteDatabase{
-    pub fn new(path: &str) -> Result<SqliteDatabase> {
-        let path = shellexpand::full(path)?;
+impl SqliteDatabase {
+    pub fn new(path: impl AsRef<Path>) -> Result<SqliteDatabase> {
         let path = path.as_ref();
-
         debug!("opening sqlite database at {:?}", path);
 
-        let create = !Path::new(path).exists();
+        let create = !path.exists();
+        if create {
+            if let Some(dir) = path.parent() {
+                std::fs::create_dir_all(dir)?;
+            }
+        }
+
         let conn = Connection::open(path)?;
 
         if create {
             Self::setup_db(&conn)?;
         }
 
-        Ok(SqliteDatabase{
-            conn: conn,
-        })
+        Ok(SqliteDatabase { conn })
     }
 
     fn setup_db(conn: &Connection) -> Result<()> {
@@ -43,11 +44,11 @@ impl SqliteDatabase{
 
         conn.execute(
             "create table if not exists history (
-                 id integer primary key,
-                 timestamp integer not null,
-                 command text not null,
-                 cwd text not null
-             )",
+                id integer primary key,
+                timestamp integer not null,
+                command text not null,
+                cwd text not null
+            )",
             NO_PARAMS,
         )?;
 
@@ -61,19 +62,22 @@ impl Database for SqliteDatabase {
 
         self.conn.execute(
             "insert into history (
-                timestamp, 
+                timestamp,
                 command,
                 cwd
-             ) values (?1, ?2, ?3)", 
-            params![h.timestamp, h.command, h.cwd])?;
+            ) values (?1, ?2, ?3)",
+            params![h.timestamp, h.command, h.cwd],
+        )?;
 
         Ok(())
     }
 
     fn list(&self) -> Result<()> {
         debug!("listing history");
-    
-        let mut stmt = self.conn.prepare("SELECT timestamp, command, cwd FROM history")?;
+
+        let mut stmt = self
+            .conn
+            .prepare("SELECT timestamp, command, cwd FROM history")?;
         let history_iter = stmt.query_map(params![], |row| {
             Ok(History {
                 timestamp: row.get(0)?,

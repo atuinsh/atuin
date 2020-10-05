@@ -11,10 +11,11 @@ description = "shync - sync your shell history"
 [dependencies]
 log = "0.4"
 pretty_env_logger = "0.4"
-clap = "2.33.3"
 chrono = "0.4.19"
 eyre = "0.6.1"
 shellexpand = "2.0.0"
+structopt = "0.3.15"
+directories = "3.0.1"
 
 [dependencies.rusqlite]
 version = "0.24.0"
