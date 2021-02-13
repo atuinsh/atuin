@@ -85,11 +85,5 @@ impl Atuin {
 fn main() -> Result<()> {
     pretty_env_logger::init();
 
-    let session = env::var("ATUIN_SESSION");
-
-    if session.is_err() {
-        panic!("Please follow the atuin setup! Missing session.")
-    }
-
     Atuin::from_args().run()
 }
