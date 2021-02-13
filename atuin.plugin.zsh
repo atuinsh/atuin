@@ -33,5 +33,4 @@ add-zsh-hook precmd _atuin_precmd
 
 zle -N _atuin_search_widget _atuin_search
 
-bindkey -r '^r'
 bindkey '^r' _atuin_search_widget
