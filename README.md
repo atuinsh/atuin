@@ -35,19 +35,7 @@ zplug:
 zplug "ellie/atuin", at:main
 ```
 
-antigen:
-
-```
-antigen use https://github.com/ellie/atuin.git
-```
-
-oh-my-zsh:
-
-```
-git clone https://github.com/ellie/atuin ~/.oh-my-zsh/plugins/atuin
-```
-
-and then add `atuin` to your `plugins` list in `~/.zshrc`
+otherwise, clone the repo and `source /path/to/repo/atuin.plugin.zsh` in your `.zshrc`
 
 ## Usage
 
