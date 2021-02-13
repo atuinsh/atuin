@@ -1,4 +1,5 @@
 # Source this in your ~/.zshrc
+export ATUIN_SESSION=$(atuin uuid)
 
 _atuin_preexec(){
 	id=$(atuin history start $1)
