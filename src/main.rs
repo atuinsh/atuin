@@ -74,10 +74,20 @@ impl Atuin {
 #[derive(StructOpt)]
 enum HistoryCmd {
     #[structopt(
-        about="add a new command to the history",
-        aliases=&["a", "ad"],
+        about="begins a new command in the history",
+        aliases=&["s", "st", "sta", "star"],
     )]
-    Add { command: Vec<String> },
+    Start { command: Vec<String> },
+
+    #[structopt(
+        about="finishes a new command in the history (adds time, exit code)",
+        aliases=&["e", "en"],
+    )]
+    End {
+        id: String,
+        #[structopt(long, short)]
+        exit: i64,
+    },
 
     #[structopt(
         about="list all items in history",
@@ -87,16 +97,28 @@ enum HistoryCmd {
 }
 
 impl HistoryCmd {
-    fn run(self, db: SqliteDatabase) -> Result<()> {
+    fn run(&self, db: SqliteDatabase) -> Result<()> {
         match self {
-            HistoryCmd::Add { command: words } => {
+            HistoryCmd::Start { command: words } => {
                 let command = words.join(" ");
                 let cwd = env::current_dir()?.display().to_string();
-                let h = History::new(command, cwd);
 
-                debug!("adding history: {:?}", h);
+                let h = History::new(command, cwd, -1, -1);
+
+                // print the ID
+                // we use this as the key for calling end
+                println!("{}", h.id);
                 db.save(h)?;
-                debug!("saved history to sqlite");
+                Ok(())
+            }
+
+            HistoryCmd::End { id, exit } => {
+                let mut h = db.load(id)?;
+                h.exit = *exit;
+                h.duration = chrono::Utc::now().timestamp_millis() - h.timestamp;
+
+                db.update(h)?;
+
                 Ok(())
             }
 
