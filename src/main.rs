@@ -1,4 +1,3 @@
-use std::env;
 use std::path::PathBuf;
 
 use directories::ProjectDirs;
@@ -9,10 +8,12 @@ use structopt::StructOpt;
 extern crate log;
 use pretty_env_logger;
 
-mod local;
-
+use command::{history::HistoryCmd, import::ImportCmd};
 use local::database::{Database, SqliteDatabase};
 use local::history::History;
+
+mod command;
+mod local;
 
 #[derive(StructOpt)]
 #[structopt(
@@ -37,7 +38,7 @@ enum AtuinCmd {
     History(HistoryCmd),
 
     #[structopt(about = "import shell history from file")]
-    Import,
+    Import(ImportCmd),
 
     #[structopt(about = "start a atuin server")]
     Server,
@@ -62,67 +63,12 @@ impl Atuin {
             }
         };
 
-        let db = SqliteDatabase::new(db_path)?;
+        let mut db = SqliteDatabase::new(db_path)?;
 
         match self.atuin {
             AtuinCmd::History(history) => history.run(db),
+            AtuinCmd::Import(import) => import.run(&mut db),
             _ => Ok(()),
-        }
-    }
-}
-
-#[derive(StructOpt)]
-enum HistoryCmd {
-    #[structopt(
-        about="begins a new command in the history",
-        aliases=&["s", "st", "sta", "star"],
-    )]
-    Start { command: Vec<String> },
-
-    #[structopt(
-        about="finishes a new command in the history (adds time, exit code)",
-        aliases=&["e", "en"],
-    )]
-    End {
-        id: String,
-        #[structopt(long, short)]
-        exit: i64,
-    },
-
-    #[structopt(
-        about="list all items in history",
-        aliases=&["l", "li", "lis"],
-    )]
-    List,
-}
-
-impl HistoryCmd {
-    fn run(&self, db: SqliteDatabase) -> Result<()> {
-        match self {
-            HistoryCmd::Start { command: words } => {
-                let command = words.join(" ");
-                let cwd = env::current_dir()?.display().to_string();
-
-                let h = History::new(command, cwd, -1, -1);
-
-                // print the ID
-                // we use this as the key for calling end
-                println!("{}", h.id);
-                db.save(h)?;
-                Ok(())
-            }
-
-            HistoryCmd::End { id, exit } => {
-                let mut h = db.load(id)?;
-                h.exit = *exit;
-                h.duration = chrono::Utc::now().timestamp_millis() - h.timestamp;
-
-                db.update(h)?;
-
-                Ok(())
-            }
-
-            HistoryCmd::List => db.list(),
         }
     }
 }

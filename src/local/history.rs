@@ -12,10 +12,10 @@ pub struct History {
 }
 
 impl History {
-    pub fn new(command: String, cwd: String, exit: i64, duration: i64) -> History {
+    pub fn new(timestamp: i64, command: String, cwd: String, exit: i64, duration: i64) -> History {
         History {
             id: Uuid::new_v4().to_simple().to_string(),
-            timestamp: chrono::Utc::now().timestamp_millis(),
+            timestamp,
             command,
             cwd,
             exit,

@@ -9,6 +9,7 @@ use crate::History;
 
 pub trait Database {
     fn save(&self, h: History) -> Result<()>;
+    fn save_bulk(&mut self, h: &Vec<History>) -> Result<()>;
     fn load(&self, id: &str) -> Result<History>;
     fn list(&self) -> Result<()>;
     fn update(&self, h: History) -> Result<()>;
@@ -51,7 +52,9 @@ impl SqliteDatabase {
                 duration integer not null,
                 exit integer not null,
                 command text not null,
-                cwd text not null
+                cwd text not null,
+
+                unique(timestamp, cwd, command)
             )",
             NO_PARAMS,
         )?;
@@ -65,7 +68,7 @@ impl Database for SqliteDatabase {
         debug!("saving history to sqlite");
 
         self.conn.execute(
-            "insert into history (
+            "insert or ignore into history (
                 id,
                 timestamp,
                 duration,
@@ -75,6 +78,30 @@ impl Database for SqliteDatabase {
             ) values (?1, ?2, ?3, ?4, ?5, ?6)",
             params![h.id, h.timestamp, h.duration, h.exit, h.command, h.cwd],
         )?;
+
+        Ok(())
+    }
+
+    fn save_bulk(&mut self, h: &Vec<History>) -> Result<()> {
+        debug!("saving history to sqlite");
+
+        let tx = self.conn.transaction()?;
+
+        for i in h {
+            tx.execute(
+                "insert or ignore into history (
+                id,
+                timestamp,
+                duration,
+                exit,
+                command,
+                cwd
+            ) values (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![i.id, i.timestamp, i.duration, i.exit, i.command, i.cwd],
+            )?;
+        }
+
+        tx.commit()?;
 
         Ok(())
     }
