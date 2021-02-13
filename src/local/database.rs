@@ -8,7 +8,7 @@ use rusqlite::{params, Connection};
 use crate::History;
 
 pub trait Database {
-    fn save(&self, h: History) -> Result<()>;
+    fn save(&mut self, h: History) -> Result<()>;
     fn save_bulk(&mut self, h: &Vec<History>) -> Result<()>;
     fn load(&self, id: &str) -> Result<History>;
     fn list(&self) -> Result<()>;
@@ -53,6 +53,8 @@ impl SqliteDatabase {
                 exit integer not null,
                 command text not null,
                 cwd text not null,
+                session text not null,
+                hostname text not null,
 
                 unique(timestamp, cwd, command)
             )",
@@ -64,22 +66,11 @@ impl SqliteDatabase {
 }
 
 impl Database for SqliteDatabase {
-    fn save(&self, h: History) -> Result<()> {
+    fn save(&mut self, h: History) -> Result<()> {
         debug!("saving history to sqlite");
+        let v = vec![h];
 
-        self.conn.execute(
-            "insert or ignore into history (
-                id,
-                timestamp,
-                duration,
-                exit,
-                command,
-                cwd
-            ) values (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![h.id, h.timestamp, h.duration, h.exit, h.command, h.cwd],
-        )?;
-
-        Ok(())
+        self.save_bulk(&v)
     }
 
     fn save_bulk(&mut self, h: &Vec<History>) -> Result<()> {
@@ -95,9 +86,20 @@ impl Database for SqliteDatabase {
                 duration,
                 exit,
                 command,
-                cwd
-            ) values (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![i.id, i.timestamp, i.duration, i.exit, i.command, i.cwd],
+                cwd,
+                session,
+                hostname
+            ) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    i.id,
+                    i.timestamp,
+                    i.duration,
+                    i.exit,
+                    i.command,
+                    i.cwd,
+                    i.session,
+                    i.hostname
+                ],
             )?;
         }
 
@@ -110,7 +112,7 @@ impl Database for SqliteDatabase {
         debug!("loading history item");
 
         let mut stmt = self.conn.prepare(
-            "select id, timestamp, duration, exit, command, cwd from history
+            "select id, timestamp, duration, exit, command, cwd, session, hostname from history
                 where id = ?1",
         )?;
 
@@ -122,6 +124,8 @@ impl Database for SqliteDatabase {
                 exit: row.get(3)?,
                 command: row.get(4)?,
                 cwd: row.get(5)?,
+                session: row.get(6)?,
+                hostname: row.get(7)?,
             })
         })?;
 
@@ -137,9 +141,9 @@ impl Database for SqliteDatabase {
 
         self.conn.execute(
             "update history
-                set timestamp = ?2, duration = ?3, exit = ?4, command = ?5, cwd = ?6
+                set timestamp = ?2, duration = ?3, exit = ?4, command = ?5, cwd = ?6, session = ?7, hostname = ?8
                 where id = ?1",
-            params![h.id, h.timestamp, h.duration, h.exit, h.command, h.cwd],
+            params![h.id, h.timestamp, h.duration, h.exit, h.command, h.cwd, h.session, h.hostname],
         )?;
 
         Ok(())
@@ -148,9 +152,9 @@ impl Database for SqliteDatabase {
     fn list(&self) -> Result<()> {
         debug!("listing history");
 
-        let mut stmt = self
-            .conn
-            .prepare("SELECT id, timestamp, duration, exit, command, cwd FROM history")?;
+        let mut stmt = self.conn.prepare(
+            "SELECT id, timestamp, duration, exit, command, cwd, session, hostname FROM history",
+        )?;
 
         let history_iter = stmt.query_map(params![], |row| {
             Ok(History {
@@ -160,6 +164,8 @@ impl Database for SqliteDatabase {
                 exit: row.get(3)?,
                 command: row.get(4)?,
                 cwd: row.get(5)?,
+                session: row.get(6)?,
+                hostname: row.get(7)?,
             })
         })?;
 
@@ -167,8 +173,8 @@ impl Database for SqliteDatabase {
             let h = h.unwrap();
 
             println!(
-                "{} | {} | {} | {} | {}",
-                h.timestamp, h.cwd, h.duration, h.exit, h.command
+                "{} | {} | {} | {} | {} | {} | {}",
+                h.timestamp, h.hostname, h.session, h.cwd, h.duration, h.exit, h.command
             );
         }
 

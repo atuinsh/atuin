@@ -1,6 +1,6 @@
 [package]
 name = "atuin"
-version = "0.2.0"
+version = "0.2.1"
 authors = ["Ellie Huxtable <e@elm.sh>"]
 edition = "2018"
 license = "MIT"
@@ -17,6 +17,7 @@ directories = "3.*"
 uuid = { version = "0.8", features = ["serde", "v4"] }
 home = "0.5.3"
 indicatif = "0.15.0"
+hostname = "0.3.1"
 
 [dependencies.rusqlite]
 version = "0.24.*"

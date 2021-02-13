@@ -32,13 +32,21 @@ pub enum HistoryCmd {
 }
 
 impl HistoryCmd {
-    pub fn run(&self, db: SqliteDatabase) -> Result<()> {
+    pub fn run(&self, db: &mut SqliteDatabase) -> Result<()> {
         match self {
             HistoryCmd::Start { command: words } => {
                 let command = words.join(" ");
                 let cwd = env::current_dir()?.display().to_string();
 
-                let h = History::new(chrono::Utc::now().timestamp_nanos(), command, cwd, -1, -1);
+                let h = History::new(
+                    chrono::Utc::now().timestamp_nanos(),
+                    command,
+                    cwd,
+                    -1,
+                    -1,
+                    None,
+                    None,
+                );
 
                 // print the ID
                 // we use this as the key for calling end

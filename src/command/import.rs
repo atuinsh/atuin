@@ -87,12 +87,23 @@ impl ImportCmd {
     }
 
     pub fn run(&self, db: &mut SqliteDatabase) -> Result<()> {
+        println!("        A'Tuin       ");
+        println!("=====================");
+        println!("          🌍         ");
+        println!("       🐘🐘🐘🐘      ");
+        println!("          🐢         ");
+        println!("=====================");
+        println!("Importing history...");
+
         match self {
             ImportCmd::Auto => {
                 let shell = env::var("SHELL").unwrap_or(String::from("NO_SHELL"));
 
                 match shell.as_str() {
-                    "/bin/zsh" => self.import_zsh(db),
+                    "/bin/zsh" => {
+                        println!("Detected ZSH");
+                        self.import_zsh(db)
+                    }
 
                     _ => {
                         println!("cannot import {} history", shell);

@@ -70,11 +70,13 @@ fn parse_extended(line: String) -> History {
 
     // use nanos, because why the hell not? we won't display them.
     History::new(
-        Utc.timestamp(time, 0).timestamp_nanos(),
+        time * 1_000_000_000,
         trim_newline(command),
         String::from("unknown"),
         -1,
         duration * 1_000_000_000,
+        None,
+        None,
     )
 }
 
@@ -104,6 +106,8 @@ impl Iterator for ImportZsh {
                         String::from("unknown"),
                         -1,
                         -1,
+                        None,
+                        None,
                     )))
                 }
             }

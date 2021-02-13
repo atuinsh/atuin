@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use directories::ProjectDirs;
 use eyre::{eyre, Result};
 use structopt::StructOpt;
+use uuid::Uuid;
 
 #[macro_use]
 extern crate log;
@@ -40,8 +41,11 @@ enum AtuinCmd {
     #[structopt(about = "import shell history from file")]
     Import(ImportCmd),
 
-    #[structopt(about = "start a atuin server")]
+    #[structopt(about = "start an atuin server")]
     Server,
+
+    #[structopt(about = "generates a UUID")]
+    Uuid,
 }
 
 impl Atuin {
@@ -66,8 +70,12 @@ impl Atuin {
         let mut db = SqliteDatabase::new(db_path)?;
 
         match self.atuin {
-            AtuinCmd::History(history) => history.run(db),
+            AtuinCmd::History(history) => history.run(&mut db),
             AtuinCmd::Import(import) => import.run(&mut db),
+            AtuinCmd::Uuid => {
+                println!("{}", Uuid::new_v4().to_simple().to_string());
+                Ok(())
+            }
             _ => Ok(()),
         }
     }
