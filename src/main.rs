@@ -20,16 +20,16 @@ use local::history::History;
     version = "0.1.0",
     about = "Keep your shell history in sync"
 )]
-struct Shync {
+struct Atuin {
     #[structopt(long, parse(from_os_str), help = "db file path")]
     db: Option<PathBuf>,
 
     #[structopt(subcommand)]
-    shync: ShyncCmd,
+    atuin: AtuinCmd,
 }
 
 #[derive(StructOpt)]
-enum ShyncCmd {
+enum AtuinCmd {
     #[structopt(
         about="manipulate shell history",
         aliases=&["h", "hi", "his", "hist", "histo", "histor"],
@@ -39,11 +39,11 @@ enum ShyncCmd {
     #[structopt(about = "import shell history from file")]
     Import,
 
-    #[structopt(about = "start a shync server")]
+    #[structopt(about = "start a atuin server")]
     Server,
 }
 
-impl Shync {
+impl Atuin {
     fn run(self) -> Result<()> {
         let db_path = match self.db {
             Some(db_path) => {
@@ -54,9 +54,9 @@ impl Shync {
                 PathBuf::from(path.as_ref())
             }
             None => {
-                let project_dirs = ProjectDirs::from("bike", "ellie", "shync").ok_or(eyre!(
-                    "could not determine db file location\nspecify one using the --db flag"
-                ))?;
+                let project_dirs = ProjectDirs::from("com", "elliehuxtable", "atuin").ok_or(
+                    eyre!("could not determine db file location\nspecify one using the --db flag"),
+                )?;
                 let root = project_dirs.data_dir();
                 root.join("history.db")
             }
@@ -64,8 +64,8 @@ impl Shync {
 
         let db = SqliteDatabase::new(db_path)?;
 
-        match self.shync {
-            ShyncCmd::History(history) => history.run(db),
+        match self.atuin {
+            AtuinCmd::History(history) => history.run(db),
             _ => Ok(()),
         }
     }
@@ -108,5 +108,5 @@ impl HistoryCmd {
 fn main() -> Result<()> {
     pretty_env_logger::init();
 
-    Shync::from_args().run()
+    Atuin::from_args().run()
 }

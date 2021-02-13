@@ -42,6 +42,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "atuin"
+version = "0.1.1"
+dependencies = [
+ "chrono",
+ "directories",
+ "eyre",
+ "log",
+ "pretty_env_logger",
+ "rusqlite",
+ "shellexpand",
+ "structopt",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -447,20 +461,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9a2b22262a9aaf9464d356f656fea420634f78c881c5eebd5ef5e66d8b9bc603"
 dependencies = [
  "dirs",
-]
-
-[[package]]
-name = "shync"
-version = "0.1.1"
-dependencies = [
- "chrono",
- "directories",
- "eyre",
- "log",
- "pretty_env_logger",
- "rusqlite",
- "shellexpand",
- "structopt",
 ]
 
 [[package]]
