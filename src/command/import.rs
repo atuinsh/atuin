@@ -112,7 +112,7 @@ impl ImportCmd {
                 }
             }
 
-            ImportCmd::Zsh => Ok(()),
+            ImportCmd::Zsh => self.import_zsh(db),
         }
     }
 }
