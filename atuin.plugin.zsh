@@ -16,7 +16,16 @@ _atuin_precmd(){
 }
 
 _atuin_search(){
-	$(atuin history list --distinct | $ATUIN_FUZZY)
+	emulate -L zsh
+	zle -I
+
+	output=$(atuin history list --distinct | $ATUIN_FUZZY)
+
+	if [[ -n $output ]] ; then
+		LBUFFER=$output
+	fi
+
+	zle reset-prompt
 }
 
 add-zsh-hook preexec _atuin_preexec
