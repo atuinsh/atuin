@@ -11,7 +11,7 @@ pub trait Database {
     fn save(&mut self, h: History) -> Result<()>;
     fn save_bulk(&mut self, h: &Vec<History>) -> Result<()>;
     fn load(&self, id: &str) -> Result<History>;
-    fn list(&self) -> Result<()>;
+    fn list(&self, distinct: bool) -> Result<()>;
     fn update(&self, h: History) -> Result<()>;
 }
 
@@ -149,33 +149,29 @@ impl Database for SqliteDatabase {
         Ok(())
     }
 
-    fn list(&self) -> Result<()> {
+    fn list(&self, distinct: bool) -> Result<()> {
         debug!("listing history");
 
-        let mut stmt = self.conn.prepare(
-            "SELECT id, timestamp, duration, exit, command, cwd, session, hostname FROM history",
-        )?;
+        let mut stmt = match distinct {
+            false => self
+                .conn
+                .prepare("SELECT command FROM history order by timestamp asc")?,
+
+            true => self
+                .conn
+                .prepare("SELECT distinct command FROM history order by timestamp asc")?,
+        };
 
         let history_iter = stmt.query_map(params![], |row| {
-            Ok(History {
-                id: row.get(0)?,
-                timestamp: row.get(1)?,
-                duration: row.get(2)?,
-                exit: row.get(3)?,
-                command: row.get(4)?,
-                cwd: row.get(5)?,
-                session: row.get(6)?,
-                hostname: row.get(7)?,
-            })
+            let command: String = row.get(0)?;
+
+            Ok(command)
         })?;
 
         for h in history_iter {
             let h = h.unwrap();
 
-            println!(
-                "{} | {} | {} | {} | {} | {} | {}",
-                h.timestamp, h.hostname, h.session, h.cwd, h.duration, h.exit, h.command
-            );
+            println!("{}", h);
         }
 
         Ok(())

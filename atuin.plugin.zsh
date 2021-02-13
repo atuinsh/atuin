@@ -1,5 +1,6 @@
 # Source this in your ~/.zshrc
 export ATUIN_SESSION=$(atuin uuid)
+export ATUIN_FUZZY=fzf
 
 _atuin_preexec(){
 	id=$(atuin history start $1)
@@ -14,5 +15,14 @@ _atuin_precmd(){
 	atuin history end $ATUIN_HISTORY_ID --exit $EXIT
 }
 
+_atuin_search(){
+	$(atuin history list --distinct | $ATUIN_FUZZY)
+}
+
 add-zsh-hook preexec _atuin_preexec
 add-zsh-hook precmd _atuin_precmd
+
+zle -N _atuin_search_widget _atuin_search
+
+bindkey -r '^r'
+bindkey '^r' _atuin_search_widget

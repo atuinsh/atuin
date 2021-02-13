@@ -51,10 +51,20 @@ and then add `atuin` to your `plugins` list in `~/.zshrc`
 
 ## Usage
 
+By default A'tuin will rebind ctrl-r to use fzf to fuzzy search your history. You
+can specify a different fuzzy tool by changing the value of `ATUIN_FUZZY`:
+
+```
+export ATUIN_FUZZY=fzy
+```
+
 ### Import history
 
 ```
 atuin import auto # detect shell, then import
+
+or
+
 atuin import zsh  # specify shell
 ```
 

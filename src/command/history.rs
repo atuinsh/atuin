@@ -28,7 +28,10 @@ pub enum HistoryCmd {
         about="list all items in history",
         aliases=&["l", "li", "lis"],
     )]
-    List,
+    List {
+        #[structopt(long)]
+        distinct: bool,
+    },
 }
 
 impl HistoryCmd {
@@ -65,7 +68,7 @@ impl HistoryCmd {
                 Ok(())
             }
 
-            HistoryCmd::List => db.list(),
+            HistoryCmd::List { distinct } => db.list(*distinct),
         }
     }
 }
