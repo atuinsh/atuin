@@ -4,7 +4,6 @@
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 
-use chrono::{TimeZone, Utc};
 use eyre::{eyre, Result};
 
 use crate::local::history::History;

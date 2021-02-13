@@ -1,6 +1,5 @@
 use std::env;
 
-use hostname;
 use uuid::Uuid;
 
 #[derive(Debug)]

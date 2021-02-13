@@ -1,4 +1,3 @@
-use std::env;
 use std::path::PathBuf;
 
 use directories::ProjectDirs;
@@ -8,10 +7,9 @@ use uuid::Uuid;
 
 #[macro_use]
 extern crate log;
-use pretty_env_logger;
 
 use command::{history::HistoryCmd, import::ImportCmd};
-use local::database::{Database, SqliteDatabase};
+use local::database::SqliteDatabase;
 use local::history::History;
 
 mod command;
