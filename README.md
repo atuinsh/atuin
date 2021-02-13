@@ -5,11 +5,11 @@
   Through the fathomless deeps of space swims the star turtle Great A’Tuin, bearing on its back the four giant elephants who carry on their shoulders the mass of the Discworld.
  </blockquote>
  
-`atuin` manages and synchronizes your shell history! Instead of storing 
-everything in a text file (such as ~/.history), `atuin` uses a sqlite database.
-This lets us do all kinds of analysis on it!
+A'tuin manages and synchronizes your shell history! Instead of storing
+everything in a text file (such as ~/.history), A'tuin uses a sqlite database.
+While being a little more complex, this allows for more functionality.
 
-As well as the expected command, this stores
+As well as the expected command, A'tuin stores
 
 - duration
 - exit code
@@ -20,36 +20,34 @@ As well as the expected command, this stores
 
 ## Install
 
-`atuin` needs a recent version of Rust + Cargo! It's best to use rustup for.
+`atuin` needs a recent version of Rust + Cargo! It's best to use
+[rustup](https://rustup.rs/) for getting set up there.
 
 ```
 cargo install atuin
 ```
 
-and then add this to your ~/.zshrc
+Once the binary is installed, the shell plugin requires installing:
+
+zplug:
 
 ```
-export ATUIN_SESSION=$(atuin uuid)
-
-_atuin_preexec(){
-	id=$(atuin history start $1)
-	export ATUIN_HISTORY_ID="$id"
-}
-
-_atuin_precmd(){
-	local EXIT="$?"
-
-	[[ -z "${ATUIN_HISTORY_ID}" ]] && return
-
-	atuin history end $ATUIN_HISTORY_ID --exit $EXIT
-}
-
-add-zsh-hook preexec _atuin_preexec
-add-zsh-hook precmd _atuin_precmd
+zplug "ellie/atuin"
 ```
 
-We're not replacing anything here, so your default shell history file will still
-be written to!
+antigen:
+
+```
+antigen use https://github.com/ellie/atuin.git
+```
+
+oh-my-zsh:
+
+```
+git clone https://github.com/ellie/atuin ~/.oh-my-zsh/plugins/atuin
+```
+
+and then add `atuin` to your `plugins` list in `~/.zshrc`
 
 ## Usage
 
@@ -65,3 +63,8 @@ atuin import zsh  # specify shell
 ```
 atuin history list
 ```
+
+## ...what's with the name?
+
+A'tuin is named after "The Great A'tuin", a giant turtle from Terry Pratchett's
+Discworld series of books.
