@@ -32,7 +32,7 @@ Once the binary is installed, the shell plugin requires installing:
 zplug:
 
 ```
-zplug "ellie/atuin"
+zplug "ellie/atuin", at:main
 ```
 
 antigen:
