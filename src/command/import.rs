@@ -96,16 +96,11 @@ fn import_zsh(db: &mut Sqlite) -> Result<()> {
     let buf_size = 100;
     let mut buf = Vec::<History>::with_capacity(buf_size);
 
-    for i in zsh {
-        match i {
-            Ok(h) => {
-                buf.push(h);
-            }
-            Err(e) => {
-                error!("{}", e);
-                continue;
-            }
-        }
+    for i in zsh
+        .filter_map(Result::ok)
+        .filter(|x| !x.command.trim().is_empty())
+    {
+        buf.push(i);
 
         if buf.len() == buf_size {
             db.save_bulk(&buf)?;

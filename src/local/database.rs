@@ -13,7 +13,8 @@ pub trait Database {
     fn save_bulk(&mut self, h: &[History]) -> Result<()>;
     fn load(&self, id: &str) -> Result<History>;
     fn list(&self) -> Result<Vec<History>>;
-    fn since(&self, date: chrono::DateTime<Utc>) -> Result<Vec<History>>;
+    fn range(&self, from: chrono::DateTime<Utc>, to: chrono::DateTime<Utc>)
+        -> Result<Vec<History>>;
     fn update(&self, h: &History) -> Result<()>;
 }
 
@@ -157,16 +158,21 @@ impl Database for Sqlite {
         Ok(history_iter.filter_map(Result::ok).collect())
     }
 
-    fn since(&self, date: chrono::DateTime<Utc>) -> Result<Vec<History>> {
-        debug!("listing history since {:?}", date);
+    fn range(
+        &self,
+        from: chrono::DateTime<Utc>,
+        to: chrono::DateTime<Utc>,
+    ) -> Result<Vec<History>> {
+        debug!("listing history from {:?} to {:?}", from, to);
 
         let mut stmt = self.conn.prepare(
-            "SELECT distinct command FROM history where timestamp > ?1 order by timestamp asc",
+            "SELECT * FROM history where timestamp >= ?1 and timestamp <= ?2 order by timestamp asc",
         )?;
 
-        let history_iter = stmt.query_map(params![date.timestamp_nanos()], |row| {
-            history_from_sqlite_row(None, row)
-        })?;
+        let history_iter = stmt.query_map(
+            params![from.timestamp_nanos(), to.timestamp_nanos()],
+            |row| history_from_sqlite_row(None, row),
+        )?;
 
         Ok(history_iter.filter_map(Result::ok).collect())
     }

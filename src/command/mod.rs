@@ -7,6 +7,7 @@ use crate::local::database::Sqlite;
 mod history;
 mod import;
 mod server;
+mod stats;
 
 #[derive(StructOpt)]
 pub enum AtuinCmd {
@@ -22,6 +23,9 @@ pub enum AtuinCmd {
     #[structopt(about = "start an atuin server")]
     Server(server::Cmd),
 
+    #[structopt(about = "calculate statistics for your history")]
+    Stats(stats::Cmd),
+
     #[structopt(about = "generates a UUID")]
     Uuid,
 }
@@ -36,6 +40,7 @@ impl AtuinCmd {
             Self::History(history) => history.run(db),
             Self::Import(import) => import.run(db),
             Self::Server(server) => server.run(),
+            Self::Stats(stats) => stats.run(db),
 
             Self::Uuid => {
                 println!("{}", uuid_v4());
