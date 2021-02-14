@@ -27,17 +27,31 @@ As well as the expected command, A'tuin stores
 
 ## Install
 
+### AUR
+A'tuin is available on the [AUR](https://aur.archlinux.org/packages/atuin/)
+```
+yay -S atuin # or your AUR helper of choice
+```
+
+### With cargo
 `atuin` needs a nightly version of Rust + Cargo! It's best to use
 [rustup](https://rustup.rs/) for getting set up there.
 
 ```
 rustup default nightly
-```
 
-```
 cargo install atuin
 ```
 
+### From source
+```
+rustup default nightly
+git clone https://github.com/ellie/atuin.git
+cd atuin
+cargo install --path .
+```
+
+### Shell plugin
 Once the binary is installed, the shell plugin requires installing:
 
 zplug:
