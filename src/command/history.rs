@@ -34,7 +34,7 @@ pub enum Cmd {
     },
 }
 
-fn print_list(h: &Vec<History>) {
+fn print_list(h: &[History]) {
     for i in h {
         println!("{}", i.command);
     }
@@ -60,7 +60,7 @@ impl Cmd {
                 // print the ID
                 // we use this as the key for calling end
                 println!("{}", h.id);
-                db.save(h)?;
+                db.save(&h)?;
                 Ok(())
             }
 
@@ -69,7 +69,7 @@ impl Cmd {
                 h.exit = *exit;
                 h.duration = chrono::Utc::now().timestamp_nanos() - h.timestamp;
 
-                db.update(h)?;
+                db.update(&h)?;
 
                 Ok(())
             }

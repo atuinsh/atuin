@@ -1,3 +1,4 @@
+#![feature(str_split_once)]
 #![feature(proc_macro_hygiene)]
 #![feature(decl_macro)]
 #![warn(clippy::pedantic, clippy::nursery)]
@@ -15,9 +16,8 @@ extern crate log;
 #[macro_use]
 extern crate rocket;
 
-use command::{history, import, server};
+use command::AtuinCmd;
 use local::database::Sqlite;
-use local::history::History;
 
 mod command;
 mod local;
@@ -35,24 +35,6 @@ struct Atuin {
 
     #[structopt(subcommand)]
     atuin: AtuinCmd,
-}
-
-#[derive(StructOpt)]
-enum AtuinCmd {
-    #[structopt(
-        about="manipulate shell history",
-        aliases=&["h", "hi", "his", "hist", "histo", "histor"],
-    )]
-    History(history::Cmd),
-
-    #[structopt(about = "import shell history from file")]
-    Import(import::Cmd),
-
-    #[structopt(about = "start an atuin server")]
-    Server(server::Cmd),
-
-    #[structopt(about = "generates a UUID")]
-    Uuid,
 }
 
 impl Atuin {

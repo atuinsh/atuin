@@ -3,18 +3,18 @@ use std::path::Path;
 
 use eyre::{eyre, Result};
 
-use rusqlite::NO_PARAMS;
 use rusqlite::{params, Connection};
+use rusqlite::{Transaction, NO_PARAMS};
 
-use crate::History;
+use super::history::History;
 
 pub trait Database {
-    fn save(&mut self, h: History) -> Result<()>;
+    fn save(&mut self, h: &History) -> Result<()>;
     fn save_bulk(&mut self, h: &[History]) -> Result<()>;
     fn load(&self, id: &str) -> Result<History>;
     fn list(&self) -> Result<Vec<History>>;
     fn since(&self, date: chrono::DateTime<Utc>) -> Result<Vec<History>>;
-    fn update(&self, h: History) -> Result<()>;
+    fn update(&self, h: &History) -> Result<()>;
 }
 
 // Intended for use on a developer machine and not a sync server.
@@ -65,46 +65,53 @@ impl Sqlite {
 
         Ok(())
     }
+
+    fn save_raw(tx: &Transaction, h: &History) -> Result<()> {
+        tx.execute(
+            "insert or ignore into history (
+            id,
+            timestamp,
+            duration,
+            exit,
+            command,
+            cwd,
+            session,
+            hostname
+        ) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                h.id,
+                h.timestamp,
+                h.duration,
+                h.exit,
+                h.command,
+                h.cwd,
+                h.session,
+                h.hostname
+            ],
+        )?;
+
+        Ok(())
+    }
 }
 
 impl Database for Sqlite {
-    fn save(&mut self, h: History) -> Result<()> {
+    fn save(&mut self, h: &History) -> Result<()> {
         debug!("saving history to sqlite");
-        let v = vec![h];
 
-        self.save_bulk(&v)
+        let tx = self.conn.transaction()?;
+        Self::save_raw(&tx, h)?;
+        tx.commit()?;
+
+        Ok(())
     }
 
     fn save_bulk(&mut self, h: &[History]) -> Result<()> {
         debug!("saving history to sqlite");
 
         let tx = self.conn.transaction()?;
-
         for i in h {
-            tx.execute(
-                "insert or ignore into history (
-                id,
-                timestamp,
-                duration,
-                exit,
-                command,
-                cwd,
-                session,
-                hostname
-            ) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                params![
-                    i.id,
-                    i.timestamp,
-                    i.duration,
-                    i.exit,
-                    i.command,
-                    i.cwd,
-                    i.session,
-                    i.hostname
-                ],
-            )?;
+            Self::save_raw(&tx, i)?
         }
-
         tx.commit()?;
 
         Ok(())
@@ -119,16 +126,7 @@ impl Database for Sqlite {
         )?;
 
         let mut iter = stmt.query_map(params![id], |row| {
-            Ok(History {
-                id: String::from(id),
-                timestamp: row.get(1)?,
-                duration: row.get(2)?,
-                exit: row.get(3)?,
-                command: row.get(4)?,
-                cwd: row.get(5)?,
-                session: row.get(6)?,
-                hostname: row.get(7)?,
-            })
+            history_from_sqlite_row(Some(id.to_string()), row)
         })?;
 
         let history = iter.next().unwrap();
@@ -139,7 +137,7 @@ impl Database for Sqlite {
         }
     }
 
-    fn update(&self, h: History) -> Result<()> {
+    fn update(&self, h: &History) -> Result<()> {
         debug!("updating sqlite history");
 
         self.conn.execute(
@@ -159,42 +157,43 @@ impl Database for Sqlite {
             .conn
             .prepare("SELECT * FROM history order by timestamp asc")?;
 
-        let history_iter = stmt.query_map(params![], |row| {
-            Ok(History {
-                id: row.get(0)?,
-                timestamp: row.get(1)?,
-                duration: row.get(2)?,
-                exit: row.get(3)?,
-                command: row.get(4)?,
-                cwd: row.get(5)?,
-                session: row.get(6)?,
-                hostname: row.get(7)?,
-            })
-        })?;
+        let history_iter = stmt.query_map(params![], |row| history_from_sqlite_row(None, row))?;
 
-        Ok(history_iter.filter_map(|x| x.ok()).collect())
+        Ok(history_iter.filter_map(Result::ok).collect())
     }
 
     fn since(&self, date: chrono::DateTime<Utc>) -> Result<Vec<History>> {
-        debug!("listing history");
+        debug!("listing history since {:?}", date);
 
         let mut stmt = self.conn.prepare(
             "SELECT distinct command FROM history where timestamp > ?1 order by timestamp asc",
         )?;
 
         let history_iter = stmt.query_map(params![date.timestamp_nanos()], |row| {
-            Ok(History {
-                id: row.get(0)?,
-                timestamp: row.get(1)?,
-                duration: row.get(2)?,
-                exit: row.get(3)?,
-                command: row.get(4)?,
-                cwd: row.get(5)?,
-                session: row.get(6)?,
-                hostname: row.get(7)?,
-            })
+            history_from_sqlite_row(None, row)
         })?;
 
-        Ok(history_iter.filter_map(|x| x.ok()).collect())
+        Ok(history_iter.filter_map(Result::ok).collect())
     }
+}
+
+fn history_from_sqlite_row(
+    id: Option<String>,
+    row: &rusqlite::Row,
+) -> Result<History, rusqlite::Error> {
+    let id = match id {
+        Some(id) => id,
+        None => row.get(0)?,
+    };
+
+    Ok(History {
+        id,
+        timestamp: row.get(1)?,
+        duration: row.get(2)?,
+        exit: row.get(3)?,
+        command: row.get(4)?,
+        cwd: row.get(5)?,
+        session: row.get(6)?,
+        hostname: row.get(7)?,
+    })
 }

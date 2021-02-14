@@ -1,8 +1,8 @@
 // import old shell history!
 // automatically hoover up all that we can find
 
-use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Seek, SeekFrom};
+use std::{fs::File, path::Path};
 
 use eyre::{eyre, Result};
 
@@ -16,19 +16,18 @@ pub struct Zsh {
 }
 
 // this could probably be sped up
-fn count_lines(path: &str) -> Result<usize> {
-    let file = File::open(path)?;
-    let buf = BufReader::new(file);
+fn count_lines(buf: &mut BufReader<File>) -> Result<usize> {
+    let lines = buf.lines().count();
+    buf.seek(SeekFrom::Start(0))?;
 
-    Ok(buf.lines().count())
+    Ok(lines)
 }
 
 impl Zsh {
-    pub fn new(path: &str) -> Result<Self> {
-        let loc = count_lines(path)?;
-
+    pub fn new(path: impl AsRef<Path>) -> Result<Self> {
         let file = File::open(path)?;
-        let buf = BufReader::new(file);
+        let mut buf = BufReader::new(file);
+        let loc = count_lines(&mut buf)?;
 
         Ok(Self {
             file: buf,
@@ -37,43 +36,25 @@ impl Zsh {
     }
 }
 
-fn trim_newline(s: &str) -> String {
-    let mut s = String::from(s);
-
-    if s.ends_with('\n') {
-        s.pop();
-        if s.ends_with('\r') {
-            s.pop();
-        }
-    }
-
-    s
-}
-
 fn parse_extended(line: &str) -> History {
     let line = line.replacen(": ", "", 2);
-    let mut split = line.splitn(2, ':');
+    let (time, duration) = line.split_once(':').unwrap();
+    let (duration, command) = duration.split_once(';').unwrap();
 
-    let time = split.next().unwrap_or("-1");
-    let time = time
-        .parse::<i64>()
-        .unwrap_or_else(|_| chrono::Utc::now().timestamp_nanos());
+    let time = time.parse::<i64>().map_or_else(
+        |_| chrono::Utc::now().timestamp_nanos(),
+        |t| t * 1_000_000_000,
+    );
 
-    let duration_command = split.next().unwrap(); // might be 0;the command
-    let mut split = duration_command.split(';');
-
-    let duration = split.next().unwrap_or("-1"); // should just be the 0
-    let duration = duration.parse::<i64>().unwrap_or(-1);
-
-    let command = split.next().unwrap();
+    let duration = duration.parse::<i64>().map_or(-1, |t| t * 1_000_000_000);
 
     // use nanos, because why the hell not? we won't display them.
     History::new(
-        time * 1_000_000_000,
-        trim_newline(command),
+        time,
+        command.trim_end().to_string(),
         String::from("unknown"),
         -1,
-        duration * 1_000_000_000,
+        duration,
         None,
         None,
     )
@@ -101,7 +82,7 @@ impl Iterator for Zsh {
                 } else {
                     Some(Ok(History::new(
                         chrono::Utc::now().timestamp_nanos(), // what else? :/
-                        trim_newline(line.as_str()),
+                        line.trim_end().to_string(),
                         String::from("unknown"),
                         -1,
                         -1,
