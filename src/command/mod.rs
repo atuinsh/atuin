@@ -29,11 +29,11 @@ pub enum AtuinCmd {
 impl AtuinCmd {
     pub fn run(self, db: &mut Sqlite) -> Result<()> {
         match self {
-            AtuinCmd::History(history) => history.run(db),
-            AtuinCmd::Import(import) => import.run(db),
-            AtuinCmd::Server(server) => server.run(),
+            Self::History(history) => history.run(db),
+            Self::Import(import) => import.run(db),
+            Self::Server(server) => server.run(),
 
-            AtuinCmd::Uuid => {
+            Self::Uuid => {
                 println!("{}", Uuid::new_v4().to_simple().to_string());
                 Ok(())
             }
