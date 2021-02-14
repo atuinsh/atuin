@@ -1,3 +1,4 @@
+use chrono::Utc;
 use std::path::Path;
 
 use eyre::{eyre, Result};
@@ -11,7 +12,8 @@ pub trait Database {
     fn save(&mut self, h: History) -> Result<()>;
     fn save_bulk(&mut self, h: &[History]) -> Result<()>;
     fn load(&self, id: &str) -> Result<History>;
-    fn list(&self, distinct: bool) -> Result<()>;
+    fn list(&self) -> Result<Vec<History>>;
+    fn since(&self, date: chrono::DateTime<Utc>) -> Result<Vec<History>>;
     fn update(&self, h: History) -> Result<()>;
 }
 
@@ -150,29 +152,49 @@ impl Database for Sqlite {
         Ok(())
     }
 
-    fn list(&self, distinct: bool) -> Result<()> {
+    fn list(&self) -> Result<Vec<History>> {
         debug!("listing history");
 
-        let mut stmt = if distinct {
-            self.conn
-                .prepare("SELECT command FROM history order by timestamp asc")?
-        } else {
-            self.conn
-                .prepare("SELECT distinct command FROM history order by timestamp asc")?
-        };
+        let mut stmt = self
+            .conn
+            .prepare("SELECT * FROM history order by timestamp asc")?;
 
         let history_iter = stmt.query_map(params![], |row| {
-            let command: String = row.get(0)?;
-
-            Ok(command)
+            Ok(History {
+                id: row.get(0)?,
+                timestamp: row.get(1)?,
+                duration: row.get(2)?,
+                exit: row.get(3)?,
+                command: row.get(4)?,
+                cwd: row.get(5)?,
+                session: row.get(6)?,
+                hostname: row.get(7)?,
+            })
         })?;
 
-        for h in history_iter {
-            let h = h.unwrap();
+        Ok(history_iter.filter_map(|x| x.ok()).collect())
+    }
 
-            println!("{}", h);
-        }
+    fn since(&self, date: chrono::DateTime<Utc>) -> Result<Vec<History>> {
+        debug!("listing history");
 
-        Ok(())
+        let mut stmt = self.conn.prepare(
+            "SELECT distinct command FROM history where timestamp > ?1 order by timestamp asc",
+        )?;
+
+        let history_iter = stmt.query_map(params![date.timestamp_nanos()], |row| {
+            Ok(History {
+                id: row.get(0)?,
+                timestamp: row.get(1)?,
+                duration: row.get(2)?,
+                exit: row.get(3)?,
+                command: row.get(4)?,
+                cwd: row.get(5)?,
+                session: row.get(6)?,
+                hostname: row.get(7)?,
+            })
+        })?;
+
+        Ok(history_iter.filter_map(|x| x.ok()).collect())
     }
 }

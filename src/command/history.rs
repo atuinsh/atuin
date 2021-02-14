@@ -34,6 +34,12 @@ pub enum Cmd {
     },
 }
 
+fn print_list(h: &Vec<History>) {
+    for i in h {
+        println!("{}", i.command);
+    }
+}
+
 impl Cmd {
     pub fn run(&self, db: &mut Sqlite) -> Result<()> {
         match self {
@@ -68,7 +74,12 @@ impl Cmd {
                 Ok(())
             }
 
-            Self::List { distinct } => db.list(*distinct),
+            Self::List { .. } => {
+                let history = db.list()?;
+                print_list(&history);
+
+                Ok(())
+            }
         }
     }
 }
