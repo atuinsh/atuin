@@ -1,6 +1,6 @@
 #![feature(proc_macro_hygiene)]
 #![feature(decl_macro)]
-#![warn(clippy::pedantic)]
+#![warn(clippy::pedantic, clippy::nursery)]
 
 use std::path::PathBuf;
 
@@ -15,13 +15,13 @@ extern crate log;
 #[macro_use]
 extern crate rocket;
 
-use command::{history::HistoryCmd, import::ImportCmd, server::ServerCmd};
-use local::database::SqliteDatabase;
+use command::{history, import, server};
+use local::database::Sqlite;
 use local::history::History;
 
 mod command;
 mod local;
-mod server;
+mod remote;
 
 #[derive(StructOpt)]
 #[structopt(
@@ -43,13 +43,13 @@ enum AtuinCmd {
         about="manipulate shell history",
         aliases=&["h", "hi", "his", "hist", "histo", "histor"],
     )]
-    History(HistoryCmd),
+    History(history::Cmd),
 
     #[structopt(about = "import shell history from file")]
-    Import(ImportCmd),
+    Import(import::Cmd),
 
     #[structopt(about = "start an atuin server")]
-    Server(ServerCmd),
+    Server(server::Cmd),
 
     #[structopt(about = "generates a UUID")]
     Uuid,
@@ -57,24 +57,22 @@ enum AtuinCmd {
 
 impl Atuin {
     fn run(self) -> Result<()> {
-        let db_path = match self.db {
-            Some(db_path) => {
-                let path = db_path
-                    .to_str()
-                    .ok_or(eyre!("path {:?} was not valid UTF-8", db_path))?;
-                let path = shellexpand::full(path)?;
-                PathBuf::from(path.as_ref())
-            }
-            None => {
-                let project_dirs = ProjectDirs::from("com", "elliehuxtable", "atuin").ok_or(
-                    eyre!("could not determine db file location\nspecify one using the --db flag"),
-                )?;
-                let root = project_dirs.data_dir();
-                root.join("history.db")
-            }
+        let db_path = if let Some(db_path) = self.db {
+            let path = db_path
+                .to_str()
+                .ok_or_else(|| eyre!("path {:?} was not valid UTF-8", db_path))?;
+            let path = shellexpand::full(path)?;
+            PathBuf::from(path.as_ref())
+        } else {
+            let project_dirs =
+                ProjectDirs::from("com", "elliehuxtable", "atuin").ok_or_else(|| {
+                    eyre!("could not determine db file location\nspecify one using the --db flag")
+                })?;
+            let root = project_dirs.data_dir();
+            root.join("history.db")
         };
 
-        let mut db = SqliteDatabase::new(db_path)?;
+        let mut db = Sqlite::new(db_path)?;
 
         match self.atuin {
             AtuinCmd::History(history) => history.run(&mut db),

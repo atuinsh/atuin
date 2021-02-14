@@ -9,7 +9,7 @@ use eyre::{eyre, Result};
 use crate::local::history::History;
 
 #[derive(Debug)]
-pub struct ImportZsh {
+pub struct Zsh {
     file: BufReader<File>,
 
     pub loc: u64,
@@ -23,14 +23,14 @@ fn count_lines(path: &str) -> Result<usize> {
     Ok(buf.lines().count())
 }
 
-impl ImportZsh {
-    pub fn new(path: &str) -> Result<ImportZsh> {
+impl Zsh {
+    pub fn new(path: &str) -> Result<Self> {
         let loc = count_lines(path)?;
 
         let file = File::open(path)?;
         let buf = BufReader::new(file);
 
-        Ok(ImportZsh {
+        Ok(Self {
             file: buf,
             loc: loc as u64,
         })
@@ -50,17 +50,17 @@ fn trim_newline(s: &str) -> String {
     s
 }
 
-fn parse_extended(line: String) -> History {
+fn parse_extended(line: &str) -> History {
     let line = line.replacen(": ", "", 2);
-    let mut split = line.splitn(2, ":");
+    let mut split = line.splitn(2, ':');
 
     let time = split.next().unwrap_or("-1");
     let time = time
         .parse::<i64>()
-        .unwrap_or(chrono::Utc::now().timestamp_nanos());
+        .unwrap_or_else(|_| chrono::Utc::now().timestamp_nanos());
 
-    let duration = split.next().unwrap(); // might be 0;the command
-    let mut split = duration.split(";");
+    let duration_command = split.next().unwrap(); // might be 0;the command
+    let mut split = duration_command.split(';');
 
     let duration = split.next().unwrap_or("-1"); // should just be the 0
     let duration = duration.parse::<i64>().unwrap_or(-1);
@@ -79,7 +79,7 @@ fn parse_extended(line: String) -> History {
     )
 }
 
-impl Iterator for ImportZsh {
+impl Iterator for Zsh {
     type Item = Result<History>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -94,10 +94,10 @@ impl Iterator for ImportZsh {
             Err(e) => Some(Err(eyre!("failed to parse line: {}", e))),
 
             Ok(_) => {
-                let extended = line.starts_with(":");
+                let extended = line.starts_with(':');
 
                 if extended {
-                    Some(Ok(parse_extended(line)))
+                    Some(Ok(parse_extended(line.as_str())))
                 } else {
                     Some(Ok(History::new(
                         chrono::Utc::now().timestamp_nanos(), // what else? :/

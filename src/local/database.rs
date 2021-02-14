@@ -9,7 +9,7 @@ use crate::History;
 
 pub trait Database {
     fn save(&mut self, h: History) -> Result<()>;
-    fn save_bulk(&mut self, h: &Vec<History>) -> Result<()>;
+    fn save_bulk(&mut self, h: &[History]) -> Result<()>;
     fn load(&self, id: &str) -> Result<History>;
     fn list(&self, distinct: bool) -> Result<()>;
     fn update(&self, h: History) -> Result<()>;
@@ -17,12 +17,12 @@ pub trait Database {
 
 // Intended for use on a developer machine and not a sync server.
 // TODO: implement IntoIterator
-pub struct SqliteDatabase {
+pub struct Sqlite {
     conn: Connection,
 }
 
-impl SqliteDatabase {
-    pub fn new(path: impl AsRef<Path>) -> Result<SqliteDatabase> {
+impl Sqlite {
+    pub fn new(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
         debug!("opening sqlite database at {:?}", path);
 
@@ -39,7 +39,7 @@ impl SqliteDatabase {
             Self::setup_db(&conn)?;
         }
 
-        Ok(SqliteDatabase { conn })
+        Ok(Self { conn })
     }
 
     fn setup_db(conn: &Connection) -> Result<()> {
@@ -65,7 +65,7 @@ impl SqliteDatabase {
     }
 }
 
-impl Database for SqliteDatabase {
+impl Database for Sqlite {
     fn save(&mut self, h: History) -> Result<()> {
         debug!("saving history to sqlite");
         let v = vec![h];
@@ -73,7 +73,7 @@ impl Database for SqliteDatabase {
         self.save_bulk(&v)
     }
 
-    fn save_bulk(&mut self, h: &Vec<History>) -> Result<()> {
+    fn save_bulk(&mut self, h: &[History]) -> Result<()> {
         debug!("saving history to sqlite");
 
         let tx = self.conn.transaction()?;
@@ -116,7 +116,7 @@ impl Database for SqliteDatabase {
                 where id = ?1",
         )?;
 
-        let iter = stmt.query_map(params![id], |row| {
+        let mut iter = stmt.query_map(params![id], |row| {
             Ok(History {
                 id: String::from(id),
                 timestamp: row.get(1)?,
@@ -129,11 +129,12 @@ impl Database for SqliteDatabase {
             })
         })?;
 
-        for i in iter {
-            return Ok(i.unwrap());
-        }
+        let history = iter.next().unwrap();
 
-        return Err(eyre!("Failed to fetch history: {}", id));
+        match history {
+            Ok(i) => Ok(i),
+            Err(e) => Err(eyre!("could not find item: {}", e)),
+        }
     }
 
     fn update(&self, h: History) -> Result<()> {
@@ -152,14 +153,12 @@ impl Database for SqliteDatabase {
     fn list(&self, distinct: bool) -> Result<()> {
         debug!("listing history");
 
-        let mut stmt = match distinct {
-            false => self
-                .conn
-                .prepare("SELECT command FROM history order by timestamp asc")?,
-
-            true => self
-                .conn
-                .prepare("SELECT distinct command FROM history order by timestamp asc")?,
+        let mut stmt = if distinct {
+            self.conn
+                .prepare("SELECT command FROM history order by timestamp asc")?
+        } else {
+            self.conn
+                .prepare("SELECT distinct command FROM history order by timestamp asc")?
         };
 
         let history_iter = stmt.query_map(params![], |row| {

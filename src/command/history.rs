@@ -3,11 +3,11 @@ use std::env;
 use eyre::Result;
 use structopt::StructOpt;
 
-use crate::local::database::{Database, SqliteDatabase};
+use crate::local::database::{Database, Sqlite};
 use crate::local::history::History;
 
 #[derive(StructOpt)]
-pub enum HistoryCmd {
+pub enum Cmd {
     #[structopt(
         about="begins a new command in the history",
         aliases=&["s", "st", "sta", "star"],
@@ -34,10 +34,10 @@ pub enum HistoryCmd {
     },
 }
 
-impl HistoryCmd {
-    pub fn run(&self, db: &mut SqliteDatabase) -> Result<()> {
+impl Cmd {
+    pub fn run(&self, db: &mut Sqlite) -> Result<()> {
         match self {
-            HistoryCmd::Start { command: words } => {
+            Self::Start { command: words } => {
                 let command = words.join(" ");
                 let cwd = env::current_dir()?.display().to_string();
 
@@ -58,7 +58,7 @@ impl HistoryCmd {
                 Ok(())
             }
 
-            HistoryCmd::End { id, exit } => {
+            Self::End { id, exit } => {
                 let mut h = db.load(id)?;
                 h.exit = *exit;
                 h.duration = chrono::Utc::now().timestamp_nanos() - h.timestamp;
@@ -68,7 +68,7 @@ impl HistoryCmd {
                 Ok(())
             }
 
-            HistoryCmd::List { distinct } => db.list(*distinct),
+            Self::List { distinct } => db.list(*distinct),
         }
     }
 }

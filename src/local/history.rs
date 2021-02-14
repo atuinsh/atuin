@@ -23,10 +23,10 @@ impl History {
         duration: i64,
         session: Option<String>,
         hostname: Option<String>,
-    ) -> History {
+    ) -> Self {
         // get the current session or just generate a random string
         let env_session =
-            env::var("ATUIN_SESSION").unwrap_or(Uuid::new_v4().to_simple().to_string());
+            env::var("ATUIN_SESSION").unwrap_or_else(|_| Uuid::new_v4().to_simple().to_string());
 
         // best attempt at getting the current hostname, or just unknown
         let os_hostname = hostname::get().unwrap();
@@ -36,7 +36,7 @@ impl History {
         let session = session.unwrap_or(env_session);
         let hostname = hostname.unwrap_or(os_hostname);
 
-        History {
+        Self {
             id: Uuid::new_v4().to_simple().to_string(),
             timestamp,
             command,

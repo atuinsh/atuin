@@ -1,5 +1,5 @@
 #[get("/")]
-fn index() -> &'static str {
+const fn index() -> &'static str {
     "Hello, world!"
 }
 

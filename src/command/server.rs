@@ -1,14 +1,15 @@
 use eyre::Result;
 use structopt::StructOpt;
 
-use crate::server::server;
+use crate::remote::server;
 
 #[derive(StructOpt)]
-pub enum ServerCmd {
-    Start { command: Vec<String> },
+pub enum Cmd {
+    Start { host: Vec<String> },
 }
 
-impl ServerCmd {
+#[allow(clippy::unused_self)] // I'll use it later
+impl Cmd {
     pub fn run(&self) -> Result<()> {
         server::launch();
         Ok(())
