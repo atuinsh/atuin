@@ -25,8 +25,8 @@ mod remote;
 #[derive(StructOpt)]
 #[structopt(
     author = "Ellie Huxtable <e@elm.sh>",
-    version = "0.1.0",
-    about = "Keep your shell history in sync"
+    version = "0.3.1",
+    about = "Magical shell history"
 )]
 struct Atuin {
     #[structopt(long, parse(from_os_str), help = "db file path")]
