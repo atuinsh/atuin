@@ -24,9 +24,9 @@ impl History {
         session: Option<String>,
         hostname: Option<String>,
     ) -> Self {
-        let session = session.unwrap_or_else(|| {
-            env::var("ATUIN_SESSION").unwrap_or_else(|_| Uuid::new_v4().to_simple().to_string())
-        });
+        let session = session
+            .or_else(|| env::var("ATUIN_SESSION").ok())
+            .unwrap_or_else(|| Uuid::new_v4().to_simple().to_string());
         let hostname =
             hostname.unwrap_or_else(|| hostname::get().unwrap().to_str().unwrap().to_string());
 
