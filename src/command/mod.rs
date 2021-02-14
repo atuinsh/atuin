@@ -26,6 +26,10 @@ pub enum AtuinCmd {
     Uuid,
 }
 
+pub fn uuid_v4() -> String {
+    Uuid::new_v4().to_simple().to_string()
+}
+
 impl AtuinCmd {
     pub fn run(self, db: &mut Sqlite) -> Result<()> {
         match self {
@@ -34,7 +38,7 @@ impl AtuinCmd {
             Self::Server(server) => server.run(),
 
             Self::Uuid => {
-                println!("{}", Uuid::new_v4().to_simple().to_string());
+                println!("{}", uuid_v4());
                 Ok(())
             }
         }

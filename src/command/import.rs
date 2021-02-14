@@ -1,8 +1,8 @@
 use std::env;
 use std::path::PathBuf;
 
+use directories::UserDirs;
 use eyre::{eyre, Result};
-use home::home_dir;
 use structopt::StructOpt;
 
 use crate::local::database::{Database, Sqlite};
@@ -39,7 +39,7 @@ impl Cmd {
             Self::Auto => {
                 let shell = env::var("SHELL").unwrap_or_else(|_| String::from("NO_SHELL"));
 
-                if shell.as_str() == "/bin/zsh" {
+                if shell.ends_with("/zsh") {
                     println!("Detected ZSH");
                     import_zsh(db)
                 } else {
@@ -61,20 +61,33 @@ fn import_zsh(db: &mut Sqlite) -> Result<()> {
     let histpath = env::var("HISTFILE");
 
     let histpath = if let Ok(p) = histpath {
-        PathBuf::from(p)
+        let histpath = PathBuf::from(p);
+
+        if !histpath.exists() {
+            return Err(eyre!(
+                "Could not find history file at {}",
+                histpath.to_str().unwrap()
+            ));
+        }
+
+        histpath
     } else {
-        let mut home = home_dir().unwrap();
-        home.push(".zhistory");
+        let user_dirs = UserDirs::new().unwrap();
+        let home_dir = user_dirs.home_dir();
 
-        home
+        let mut candidates = [".zhistory", ".zsh_history"].iter();
+        loop {
+            match candidates.next() {
+                Some(candidate) => {
+                    let histpath = home_dir.join(candidate);
+                    if histpath.exists() {
+                        break histpath;
+                    }
+                }
+                None => return Err(eyre!("Could not find history file. try setting $HISTFILE")),
+            }
+        }
     };
-
-    if !histpath.exists() {
-        return Err(eyre!(
-            "Could not find history file at {}, try setting $HISTFILE",
-            histpath.to_str().unwrap()
-        ));
-    }
 
     let zsh = Zsh::new(histpath.to_str().unwrap())?;
 

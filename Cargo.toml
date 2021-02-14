@@ -7,19 +7,18 @@ license = "MIT"
 description = "atuin - sync your shell history"
 
 [dependencies]
-log = "0.4.*"
-pretty_env_logger = "0.4.*"
-chrono = "0.4.*"
-eyre = "0.6.*"
-shellexpand = "2.*"
-structopt = "0.3.*"
-directories = "3.*"
-uuid = { version = "0.8", features = ["serde", "v4"] }
-home = "0.5.3"
+log = "0.4"
+pretty_env_logger = "0.4"
+chrono = "0.4"
+eyre = "0.6"
+shellexpand = "2"
+structopt = "0.3"
+directories = "3"
+uuid = { version = "0.8", features = ["v4"] }
 indicatif = "0.15.0"
 hostname = "0.3.1"
 rocket = "0.4.7"
 
 [dependencies.rusqlite]
-version = "0.24.*"
+version = "0.24"
 features = ["bundled"]
