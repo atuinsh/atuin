@@ -51,7 +51,7 @@ jobs:
       with:
           toolchain: nightly
           override: true
-          components: rustfmt
+          components: clippy
 
     - name: Run clippy
       run: cargo clippy
