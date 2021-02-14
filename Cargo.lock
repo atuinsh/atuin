@@ -110,6 +110,7 @@ version = "0.2.4"
 dependencies = [
  "chrono",
  "chrono-english",
+ "cli-table",
  "directories",
  "eyre",
  "hostname",
@@ -265,6 +266,28 @@ dependencies = [
  "textwrap",
  "unicode-width",
  "vec_map",
+]
+
+[[package]]
+name = "cli-table"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c568382da2369ef1fcbfc2665c6f93f1b6ec9caf585312d2034d2d2584ea68b9"
+dependencies = [
+ "cli-table-derive",
+ "termcolor",
+ "unicode-width",
+]
+
+[[package]]
+name = "cli-table-derive"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5ee3795f920d8cf38d4902e8bf4573e7aa9ba430e0144b5b5ee3ae4da34f819b"
+dependencies = [
+ "proc-macro2 1.0.24",
+ "quote 1.0.9",
+ "syn 1.0.60",
 ]
 
 [[package]]
