@@ -54,7 +54,7 @@ jobs:
           components: clippy
 
     - name: Run clippy
-      run: cargo clippy -D warnings
+      run: cargo clippy -- -D warnings
         
   format:
     runs-on: ubuntu-latest
