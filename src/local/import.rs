@@ -93,3 +93,29 @@ impl Iterator for Zsh {
         }
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::parse_extended;
+
+    #[test]
+    fn test_parse_extended_simple() {
+        let parsed = parse_extended(": 1613322469:0;cargo install atuin");
+
+        assert_eq!(parsed.command, "cargo install atuin");
+        assert_eq!(parsed.duration, 0);
+        assert_eq!(parsed.timestamp, 1_613_322_469_000_000_000);
+
+        let parsed = parse_extended(": 1613322469:10;cargo install atuin;cargo update");
+
+        assert_eq!(parsed.command, "cargo install atuin;cargo update");
+        assert_eq!(parsed.duration, 10_000_000_000);
+        assert_eq!(parsed.timestamp, 1_613_322_469_000_000_000);
+
+        let parsed = parse_extended(": 1613322469:10;cargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷");
+
+        assert_eq!(parsed.command, "cargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷");
+        assert_eq!(parsed.duration, 10_000_000_000);
+        assert_eq!(parsed.timestamp, 1_613_322_469_000_000_000);
+    }
+}
