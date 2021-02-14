@@ -18,6 +18,7 @@ uuid = { version = "0.8", features = ["v4"] }
 indicatif = "0.15.0"
 hostname = "0.3.1"
 rocket = "0.4.7"
+chrono-english = "0.1.4"
 
 [dependencies.rusqlite]
 version = "0.24"

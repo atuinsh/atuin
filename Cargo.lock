@@ -109,6 +109,7 @@ name = "atuin"
 version = "0.2.4"
 dependencies = [
  "chrono",
+ "chrono-english",
  "directories",
  "eyre",
  "hostname",
@@ -238,6 +239,17 @@ dependencies = [
  "num-traits",
  "time",
  "winapi",
+]
+
+[[package]]
+name = "chrono-english"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4233ee19352739cfdcb5d7c2085005b166f6170ef2845ed9eef27a8fa5f95206"
+dependencies = [
+ "chrono",
+ "scanlex",
+ "time",
 ]
 
 [[package]]
@@ -1061,6 +1073,12 @@ name = "safemem"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ef703b7cb59335eae2eb93ceb664c0eb7ea6bf567079d843e09420219668e072"
+
+[[package]]
+name = "scanlex"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "088c5d71572124929ea7549a8ce98e1a6fd33d0a38367b09027b382e67c033db"
 
 [[package]]
 name = "serde"
