@@ -23,9 +23,7 @@ jobs:
           override: true
 
     - name: Run cargo build
-      uses: actions-rs/cargo@v1
-      with:
-        command: build
+      run: cargo build
     
   test:
     runs-on: ubuntu-latest
@@ -40,9 +38,7 @@ jobs:
           override: true
 
     - name: Run cargo test
-      uses: actions-rs/cargo@v1
-      with:
-        command: test
+      run: cargo test
 
   clippy:
     runs-on: ubuntu-latest
@@ -57,5 +53,21 @@ jobs:
           override: true
           components: rustfmt
 
-    - name: Run cargo test
-      run: rustfmt --check
+    - name: Run clippy
+      run: cargo clippy
+        
+  format:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v2
+
+    - name: Install latest nightly
+      uses: actions-rs/toolchain@v1
+      with:
+          toolchain: nightly
+          override: true
+          components: rustfmt
+         
+    - name: Format
+      run: cargo fmt -- --check
