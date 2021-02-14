@@ -4,9 +4,9 @@
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::{fs::File, path::Path};
 
-use eyre::{eyre, Result};
+use eyre::{Result, WrapErr};
 
-use crate::local::history::History;
+use super::history::History;
 
 #[derive(Debug)]
 pub struct Zsh {
@@ -72,8 +72,6 @@ impl Iterator for Zsh {
 
         match self.file.read_line(&mut line) {
             Ok(0) => None,
-            Err(e) => Some(Err(eyre!("failed to parse line: {}", e))),
-
             Ok(_) => {
                 let extended = line.starts_with(':');
 
@@ -91,6 +89,7 @@ impl Iterator for Zsh {
                     )))
                 }
             }
+            Err(e) => Some(Err(e).wrap_err("failed to parse line")),
         }
     }
 }

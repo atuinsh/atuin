@@ -1,7 +1,7 @@
 use chrono::Utc;
 use std::path::Path;
 
-use eyre::{eyre, Result};
+use eyre::Result;
 
 use rusqlite::{params, Connection};
 use rusqlite::{Transaction, NO_PARAMS};
@@ -125,16 +125,11 @@ impl Database for Sqlite {
                 where id = ?1",
         )?;
 
-        let mut iter = stmt.query_map(params![id], |row| {
+        let history = stmt.query_row(params![id], |row| {
             history_from_sqlite_row(Some(id.to_string()), row)
         })?;
 
-        let history = iter.next().unwrap();
-
-        match history {
-            Ok(i) => Ok(i),
-            Err(e) => Err(eyre!("could not find item: {}", e)),
-        }
+        Ok(history)
     }
 
     fn update(&self, h: &History) -> Result<()> {

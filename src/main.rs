@@ -8,7 +8,6 @@ use std::path::PathBuf;
 use directories::ProjectDirs;
 use eyre::{eyre, Result};
 use structopt::StructOpt;
-use uuid::Uuid;
 
 #[macro_use]
 extern crate log;
@@ -46,26 +45,17 @@ impl Atuin {
             let path = shellexpand::full(path)?;
             PathBuf::from(path.as_ref())
         } else {
-            let project_dirs =
-                ProjectDirs::from("com", "elliehuxtable", "atuin").ok_or_else(|| {
+            ProjectDirs::from("com", "elliehuxtable", "atuin")
+                .ok_or_else(|| {
                     eyre!("could not determine db file location\nspecify one using the --db flag")
-                })?;
-            let root = project_dirs.data_dir();
-            root.join("history.db")
+                })?
+                .data_dir()
+                .join("history.db")
         };
 
         let mut db = Sqlite::new(db_path)?;
 
-        match self.atuin {
-            AtuinCmd::History(history) => history.run(&mut db),
-            AtuinCmd::Import(import) => import.run(&mut db),
-            AtuinCmd::Server(server) => server.run(),
-
-            AtuinCmd::Uuid => {
-                println!("{}", Uuid::new_v4().to_simple().to_string());
-                Ok(())
-            }
-        }
+        self.atuin.run(&mut db)
     }
 }
 
