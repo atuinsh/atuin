@@ -27,8 +27,12 @@ As well as the expected command, A'tuin stores
 
 ## Install
 
-`atuin` needs a recent version of Rust + Cargo! It's best to use
+`atuin` needs a nightly version of Rust + Cargo! It's best to use
 [rustup](https://rustup.rs/) for getting set up there.
+
+```
+rustup default nightly
+```
 
 ```
 cargo install atuin
