@@ -1,6 +1,6 @@
 use std::env;
 
-use uuid::Uuid;
+use crate::command::uuid_v4;
 
 #[derive(Debug)]
 pub struct History {
@@ -26,12 +26,12 @@ impl History {
     ) -> Self {
         let session = session
             .or_else(|| env::var("ATUIN_SESSION").ok())
-            .unwrap_or_else(|| Uuid::new_v4().to_simple().to_string());
+            .unwrap_or_else(uuid_v4);
         let hostname =
             hostname.unwrap_or_else(|| hostname::get().unwrap().to_str().unwrap().to_string());
 
         Self {
-            id: Uuid::new_v4().to_simple().to_string(),
+            id: uuid_v4(),
             timestamp,
             command,
             cwd,
