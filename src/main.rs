@@ -1,3 +1,7 @@
+#![feature(proc_macro_hygiene)]
+#![feature(decl_macro)]
+#![warn(clippy::pedantic)]
+
 use std::path::PathBuf;
 
 use directories::ProjectDirs;
@@ -8,12 +12,16 @@ use uuid::Uuid;
 #[macro_use]
 extern crate log;
 
-use command::{history::HistoryCmd, import::ImportCmd};
+#[macro_use]
+extern crate rocket;
+
+use command::{history::HistoryCmd, import::ImportCmd, server::ServerCmd};
 use local::database::SqliteDatabase;
 use local::history::History;
 
 mod command;
 mod local;
+mod server;
 
 #[derive(StructOpt)]
 #[structopt(
@@ -41,7 +49,7 @@ enum AtuinCmd {
     Import(ImportCmd),
 
     #[structopt(about = "start an atuin server")]
-    Server,
+    Server(ServerCmd),
 
     #[structopt(about = "generates a UUID")]
     Uuid,
@@ -71,11 +79,12 @@ impl Atuin {
         match self.atuin {
             AtuinCmd::History(history) => history.run(&mut db),
             AtuinCmd::Import(import) => import.run(&mut db),
+            AtuinCmd::Server(server) => server.run(),
+
             AtuinCmd::Uuid => {
                 println!("{}", Uuid::new_v4().to_simple().to_string());
                 Ok(())
             }
-            _ => Ok(()),
         }
     }
 }
