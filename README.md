@@ -73,6 +73,42 @@ atuin import zsh  # specify shell
 atuin history list
 ```
 
+### Stats
+
+A'tuin can calculate statistics for a single day, and accepts "natural language" style date input, as well as absolute dates:
+
+```
+$ atuin stats day last friday
+
++---------------------+------------+
+| Statistic           | Value      |
++---------------------+------------+
+| Most used command   | git status |
++---------------------+------------+
+| Commands ran        |        450 |
++---------------------+------------+
+| Unique commands ran |        213 |
++---------------------+------------+
+
+$ atuin stats day 01/01/21 # also accepts absolute dates
+```
+
+It can also calculate statistics for all of known history:
+
+```
+$ atuin stats all
+
++---------------------+-------+
+| Statistic           | Value |
++---------------------+-------+
+| Most used command   |    ls |
++---------------------+-------+
+| Commands ran        |  8190 |
++---------------------+-------+
+| Unique commands ran |  2996 |
++---------------------+-------+
+```
+
 ## ...what's with the name?
 
 A'tuin is named after "The Great A'tuin", a giant turtle from Terry Pratchett's
