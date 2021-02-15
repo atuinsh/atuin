@@ -105,7 +105,7 @@ impl rusqlite::ToSql for QueryParam {
         use rusqlite::types::{ToSqlOutput, Value};
 
         match self {
-            QueryParam::Text(s) => Ok(ToSqlOutput::Owned(Value::Text(s.clone()))),
+            Self::Text(s) => Ok(ToSqlOutput::Owned(Value::Text(s.clone()))),
         }
     }
 }
