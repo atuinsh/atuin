@@ -115,7 +115,8 @@ fn import_zsh(db: &mut impl Database) -> Result<()> {
         progress.inc(buf.len() as u64);
     }
 
-    progress.finish_with_message("Imported history!");
+    progress.finish();
+    println!("Import complete!");
 
     Ok(())
 }
