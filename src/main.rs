@@ -25,7 +25,7 @@ mod remote;
 #[derive(StructOpt)]
 #[structopt(
     author = "Ellie Huxtable <e@elm.sh>",
-    version = "0.3.1",
+    version = "0.3.2",
     about = "Magical shell history"
 )]
 struct Atuin {

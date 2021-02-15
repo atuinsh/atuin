@@ -30,7 +30,7 @@ pub enum Cmd {
     )]
     List {
         #[structopt(long, short)]
-        dir: bool,
+        cwd: bool,
 
         #[structopt(long, short)]
         session: bool,
@@ -77,13 +77,13 @@ impl Cmd {
                 Ok(())
             }
 
-            Self::List { session, dir, .. } => {
+            Self::List { session, cwd, .. } => {
                 const QUERY_SESSION: &str = "select * from history where session = ?;";
                 const QUERY_DIR: &str = "select * from history where cwd = ?;";
                 const QUERY_SESSION_DIR: &str =
                     "select * from history where cwd = ?1 and session = ?2;";
 
-                let params = (session, dir);
+                let params = (session, cwd);
 
                 let cwd = env::current_dir()?.display().to_string();
                 let session = env::var("ATUIN_SESSION")?;
