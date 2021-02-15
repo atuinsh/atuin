@@ -3,7 +3,7 @@ use std::env;
 use eyre::Result;
 use structopt::StructOpt;
 
-use crate::local::database::Database;
+use crate::local::database::{Database, QueryParam};
 use crate::local::history::History;
 
 #[derive(StructOpt)]
@@ -29,8 +29,11 @@ pub enum Cmd {
         aliases=&["l", "li", "lis"],
     )]
     List {
-        #[structopt(long)]
-        distinct: bool,
+        #[structopt(long, short)]
+        dir: bool,
+
+        #[structopt(long, short)]
+        session: bool,
     },
 }
 
@@ -74,8 +77,27 @@ impl Cmd {
                 Ok(())
             }
 
-            Self::List { .. } => {
-                let history = db.list()?;
+            Self::List { session, dir, .. } => {
+                const QUERY_SESSION: &str = "select * from history where session = ?;";
+                const QUERY_DIR: &str = "select * from history where cwd = ?;";
+                const QUERY_SESSION_DIR: &str =
+                    "select * from history where cwd = ?1 and session = ?2;";
+
+                let params = (session, dir);
+
+                let cwd = env::current_dir()?.display().to_string();
+                let session = env::var("ATUIN_SESSION")?;
+
+                let history = match params {
+                    (false, false) => db.list()?,
+                    (true, false) => db.query(QUERY_SESSION, &[QueryParam::Text(session)])?,
+                    (false, true) => db.query(QUERY_DIR, &[QueryParam::Text(cwd)])?,
+                    (true, true) => db.query(
+                        QUERY_SESSION_DIR,
+                        &[QueryParam::Text(cwd), QueryParam::Text(session)],
+                    )?,
+                };
+
                 print_list(&history);
 
                 Ok(())

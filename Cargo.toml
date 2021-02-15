@@ -20,6 +20,7 @@ hostname = "0.3.1"
 rocket = "0.4.7"
 chrono-english = "0.1.4"
 cli-table = "0.4"
+config = "0.9"
 
 [dependencies.rusqlite]
 version = "0.24"

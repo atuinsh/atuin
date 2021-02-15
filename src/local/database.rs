@@ -8,6 +8,10 @@ use rusqlite::{Transaction, NO_PARAMS};
 
 use super::history::History;
 
+pub enum QueryParam {
+    Text(String),
+}
+
 pub trait Database {
     fn save(&mut self, h: &History) -> Result<()>;
     fn save_bulk(&mut self, h: &[History]) -> Result<()>;
@@ -16,6 +20,7 @@ pub trait Database {
     fn range(&self, from: chrono::DateTime<Utc>, to: chrono::DateTime<Utc>)
         -> Result<Vec<History>>;
     fn update(&self, h: &History) -> Result<()>;
+    fn query(&self, query: &str, params: &[QueryParam]) -> Result<Vec<History>>;
 }
 
 // Intended for use on a developer machine and not a sync server.
@@ -92,6 +97,16 @@ impl Sqlite {
         )?;
 
         Ok(())
+    }
+}
+
+impl rusqlite::ToSql for QueryParam {
+    fn to_sql(&self) -> Result<rusqlite::types::ToSqlOutput<'_>, rusqlite::Error> {
+        use rusqlite::types::{ToSqlOutput, Value};
+
+        match self {
+            QueryParam::Text(s) => Ok(ToSqlOutput::Owned(Value::Text(s.clone()))),
+        }
     }
 }
 
@@ -173,6 +188,14 @@ impl Database for Sqlite {
             params![from.timestamp_nanos(), to.timestamp_nanos()],
             |row| history_from_sqlite_row(None, row),
         )?;
+
+        Ok(history_iter.filter_map(Result::ok).collect())
+    }
+
+    fn query(&self, query: &str, params: &[QueryParam]) -> Result<Vec<History>> {
+        let mut stmt = self.conn.prepare(query)?;
+
+        let history_iter = stmt.query_map(params, |row| history_from_sqlite_row(None, row))?;
 
         Ok(history_iter.filter_map(Result::ok).collect())
     }
