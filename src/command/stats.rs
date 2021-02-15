@@ -1,14 +1,14 @@
 use std::collections::HashMap;
 
 use chrono::prelude::*;
-use chrono::{Duration, Utc};
+use chrono::Duration;
 use chrono_english::{parse_date_string, Dialect};
 
 use cli_table::{format::Justify, print_stdout, Cell, Style, Table};
 use eyre::{eyre, Result};
 use structopt::StructOpt;
 
-use crate::local::database::{Database, Sqlite};
+use crate::local::database::Database;
 use crate::local::history::History;
 
 #[derive(StructOpt)]
@@ -70,7 +70,7 @@ fn compute_stats(history: &[History]) -> Result<()> {
 }
 
 impl Cmd {
-    pub fn run(&self, db: &mut Sqlite) -> Result<()> {
+    pub fn run(&self, db: &mut impl Database) -> Result<()> {
         match self {
             Self::Day { words } => {
                 let words = if words.is_empty() {
@@ -79,10 +79,10 @@ impl Cmd {
                     words.join(" ")
                 };
 
-                let start = parse_date_string(words.as_str(), Local::now(), Dialect::Us)?;
+                let start = parse_date_string(&words, Local::now(), Dialect::Us)?;
                 let end = start + Duration::days(1);
 
-                let history = db.range(start.with_timezone(&Utc), end.with_timezone(&Utc))?;
+                let history = db.range(start.into(), end.into())?;
 
                 compute_stats(&history)?;
 
