@@ -4,7 +4,7 @@ version = "0.3.1"
 authors = ["Ellie Huxtable <e@elm.sh>"]
 edition = "2018"
 license = "MIT"
-description = "atuin - sync your shell history"
+description = "atuin - magical shell history"
 
 [dependencies]
 log = "0.4"
