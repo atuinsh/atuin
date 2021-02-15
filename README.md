@@ -25,15 +25,26 @@ As well as the expected command, A'tuin stores
 - time
 - a unique session ID
 
+## Supported Shells
+
+- zsh
+
+## Requirements
+
+- [fzf](https://github.com/junegunn/fzf)
+
 ## Install
 
 ### AUR
+
 A'tuin is available on the [AUR](https://aur.archlinux.org/packages/atuin/)
+
 ```
 yay -S atuin # or your AUR helper of choice
 ```
 
 ### With cargo
+
 `atuin` needs a nightly version of Rust + Cargo! It's best to use
 [rustup](https://rustup.rs/) for getting set up there.
 
@@ -44,6 +55,7 @@ cargo install atuin
 ```
 
 ### From source
+
 ```
 rustup default nightly
 git clone https://github.com/ellie/atuin.git
@@ -52,24 +64,50 @@ cargo install --path .
 ```
 
 ### Shell plugin
-Once the binary is installed, the shell plugin requires installing:
 
-zplug:
+Once the binary is installed, the shell plugin requires installing. Add
 
 ```
-zplug "ellie/atuin", at:main
+eval "$(atuin init)"
 ```
 
-otherwise, clone the repo and `source /path/to/repo/atuin.plugin.zsh` in your `.zshrc`
+to your `.zshrc`/`.bashrc`/whatever your shell uses.
 
 ## Usage
 
-By default A'tuin will rebind ctrl-r to use fzf to fuzzy search your history. You
-can specify a different fuzzy tool by changing the value of `ATUIN_FUZZY`:
+### History search
+
+By default A'tuin will rebind ctrl-r to use fzf to fuzzy search your history.
+It will also rebind the up arrow to use fzf, just without sorting. You can
+prevent this by putting
 
 ```
-export ATUIN_FUZZY=fzy
+export ATUIN_BINDKEYS="false"
 ```
+
+into your shell config.
+
+You may also change the default history selection. The default behaviour will search your entire history, however
+
+```
+export ATUIN_HISTORY="atuin history list --cwd"
+```
+
+will switch to only searching history for the current directory.
+
+Similarly,
+
+```
+export ATUIN_HISTORY="atuin history list --session"
+```
+
+will search for the current session only, and
+
+```
+export ATUIN_HISTORY="atuin history list --session --cwd"
+```
+
+will do both!
 
 ### Import history
 
@@ -83,8 +121,26 @@ atuin import zsh  # specify shell
 
 ### List history
 
+List all history
+
 ```
 atuin history list
+```
+
+List history for the current directory
+
+```
+atuin history list --cwd
+
+atuin h l -c # alternative, shorter version
+```
+
+List history for the current session
+
+```
+atuin history list --session
+
+atuin h l -s # similarly short
 ```
 
 ### Stats
