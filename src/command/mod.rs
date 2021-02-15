@@ -2,7 +2,7 @@ use eyre::Result;
 use structopt::StructOpt;
 use uuid::Uuid;
 
-use crate::local::database::Sqlite;
+use crate::local::database::Database;
 
 mod history;
 mod import;
@@ -35,7 +35,7 @@ pub fn uuid_v4() -> String {
 }
 
 impl AtuinCmd {
-    pub fn run(self, db: &mut Sqlite) -> Result<()> {
+    pub fn run(self, db: &mut impl Database) -> Result<()> {
         match self {
             Self::History(history) => history.run(db),
             Self::Import(import) => import.run(db),

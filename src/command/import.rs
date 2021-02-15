@@ -5,7 +5,7 @@ use directories::UserDirs;
 use eyre::{eyre, Result};
 use structopt::StructOpt;
 
-use crate::local::database::{Database, Sqlite};
+use crate::local::database::Database;
 use crate::local::history::History;
 use crate::local::import::Zsh;
 use indicatif::ProgressBar;
@@ -26,13 +26,13 @@ pub enum Cmd {
 }
 
 impl Cmd {
-    pub fn run(&self, db: &mut Sqlite) -> Result<()> {
-        println!("        A'Tuin       ");
-        println!("=====================");
-        println!("          \u{1f30d}         ");
-        println!("       \u{1f418}\u{1f418}\u{1f418}\u{1f418}      ");
-        println!("          \u{1f422}         ");
-        println!("=====================");
+    pub fn run(&self, db: &mut impl Database) -> Result<()> {
+        println!("        A'Tuin        ");
+        println!("======================");
+        println!("          \u{1f30d}          ");
+        println!("       \u{1f418}\u{1f418}\u{1f418}\u{1f418}       ");
+        println!("          \u{1f422}          ");
+        println!("======================");
         println!("Importing history...");
 
         match self {
@@ -53,7 +53,7 @@ impl Cmd {
     }
 }
 
-fn import_zsh(db: &mut Sqlite) -> Result<()> {
+fn import_zsh(db: &mut impl Database) -> Result<()> {
     // oh-my-zsh sets HISTFILE=~/.zhistory
     // zsh has no default value for this var, but uses ~/.zhistory.
     // we could maybe be smarter about this in the future :)
@@ -65,8 +65,8 @@ fn import_zsh(db: &mut Sqlite) -> Result<()> {
 
         if !histpath.exists() {
             return Err(eyre!(
-                "Could not find history file at {}",
-                histpath.to_str().unwrap()
+                "Could not find history file {:?}. try updating $HISTFILE",
+                histpath
             ));
         }
 
@@ -89,7 +89,7 @@ fn import_zsh(db: &mut Sqlite) -> Result<()> {
         }
     };
 
-    let zsh = Zsh::new(histpath.to_str().unwrap())?;
+    let zsh = Zsh::new(histpath)?;
 
     let progress = ProgressBar::new(zsh.loc);
 
@@ -106,7 +106,7 @@ fn import_zsh(db: &mut Sqlite) -> Result<()> {
             db.save_bulk(&buf)?;
             progress.inc(buf.len() as u64);
 
-            buf = Vec::<History>::with_capacity(buf_size);
+            buf.clear();
         }
     }
 

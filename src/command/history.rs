@@ -3,7 +3,7 @@ use std::env;
 use eyre::Result;
 use structopt::StructOpt;
 
-use crate::local::database::{Database, Sqlite};
+use crate::local::database::Database;
 use crate::local::history::History;
 
 #[derive(StructOpt)]
@@ -41,7 +41,7 @@ fn print_list(h: &[History]) {
 }
 
 impl Cmd {
-    pub fn run(&self, db: &mut Sqlite) -> Result<()> {
+    pub fn run(&self, db: &mut impl Database) -> Result<()> {
         match self {
             Self::Start { command: words } => {
                 let command = words.join(" ");
