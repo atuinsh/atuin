@@ -23,7 +23,7 @@ _atuin_search(){
 	output=$(eval $ATUIN_HISTORY | fzf)
 
 	if [[ -n $output ]] ; then
-		BUFFER=$output
+		LBUFFER=$output
 	fi
 
 	zle reset-prompt
@@ -36,7 +36,7 @@ _atuin_up_search(){
 	output=$(eval $ATUIN_HISTORY | fzf --no-sort --tac)
 
 	if [[ -n $output ]] ; then
-		BUFFER=$output
+		LBUFFER=$output
 	fi
 
 	zle reset-prompt
