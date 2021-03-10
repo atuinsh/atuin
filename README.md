@@ -179,6 +179,20 @@ $ atuin stats all
 +---------------------+-------+
 ```
 
+## Config
+
+A'tuin is configurable via TOML. The file lives at ` ~/.config/atuin/config.toml`,
+and looks like this:
+
+```
+[local]
+dialect = "uk" # or us. sets the date format used by stats
+server_address = "https://atuin.elliehuxtable.com/" # the server to sync with
+
+[local.db]
+path = "~/.local/share/atuin/history.db" # the local database for history
+```
+
 ## ...what's with the name?
 
 A'tuin is named after "The Great A'tuin", a giant turtle from Terry Pratchett's

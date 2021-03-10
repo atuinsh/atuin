@@ -3,6 +3,7 @@ use structopt::StructOpt;
 use uuid::Uuid;
 
 use crate::local::database::Database;
+use crate::settings::Settings;
 
 mod history;
 mod import;
@@ -39,12 +40,12 @@ pub fn uuid_v4() -> String {
 }
 
 impl AtuinCmd {
-    pub fn run(self, db: &mut impl Database) -> Result<()> {
+    pub fn run(self, db: &mut impl Database, settings: &Settings) -> Result<()> {
         match self {
             Self::History(history) => history.run(db),
             Self::Import(import) => import.run(db),
             Self::Server(server) => server.run(),
-            Self::Stats(stats) => stats.run(db),
+            Self::Stats(stats) => stats.run(db, settings),
             Self::Init => init::init(),
 
             Self::Uuid => {
