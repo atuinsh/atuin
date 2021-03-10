@@ -1,11 +1,9 @@
-#![feature(str_split_once)]
 #![feature(proc_macro_hygiene)]
 #![feature(decl_macro)]
 #![warn(clippy::pedantic, clippy::nursery)]
 
 use std::path::PathBuf;
 
-use directories::ProjectDirs;
 use eyre::{eyre, Result};
 use structopt::StructOpt;
 
@@ -15,12 +13,17 @@ extern crate log;
 #[macro_use]
 extern crate rocket;
 
+#[macro_use]
+extern crate serde_derive;
+
 use command::AtuinCmd;
 use local::database::Sqlite;
+use settings::Settings;
 
 mod command;
 mod local;
 mod remote;
+mod settings;
 
 #[derive(StructOpt)]
 #[structopt(
@@ -38,6 +41,8 @@ struct Atuin {
 
 impl Atuin {
     fn run(self) -> Result<()> {
+        let settings = Settings::new()?;
+
         let db_path = if let Some(db_path) = self.db {
             let path = db_path
                 .to_str()
@@ -45,17 +50,12 @@ impl Atuin {
             let path = shellexpand::full(path)?;
             PathBuf::from(path.as_ref())
         } else {
-            ProjectDirs::from("com", "elliehuxtable", "atuin")
-                .ok_or_else(|| {
-                    eyre!("could not determine db file location\nspecify one using the --db flag")
-                })?
-                .data_dir()
-                .join("history.db")
+            PathBuf::from(settings.local.db.path.as_str())
         };
 
         let mut db = Sqlite::new(db_path)?;
 
-        self.atuin.run(&mut db)
+        self.atuin.run(&mut db, &settings)
     }
 }
 
