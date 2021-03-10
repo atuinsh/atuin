@@ -1,6 +1,7 @@
 #![feature(proc_macro_hygiene)]
 #![feature(decl_macro)]
 #![warn(clippy::pedantic, clippy::nursery)]
+#![allow(clippy::use_self)] // not 100% reliable
 
 use std::path::PathBuf;
 
