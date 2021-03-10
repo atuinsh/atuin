@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use config::{Config, File};
 use directories::ProjectDirs;
 use eyre::{eyre, Result};
@@ -22,13 +24,17 @@ pub struct Settings {
 
 impl Settings {
     pub fn new() -> Result<Self> {
-        let path = ProjectDirs::from("com", "elliehuxtable", "atuin").unwrap();
-        let path = path.config_dir();
+        let config_dir = ProjectDirs::from("com", "elliehuxtable", "atuin").unwrap();
+        let config_dir = config_dir.config_dir();
 
-        fs::create_dir_all(path)?;
+        fs::create_dir_all(config_dir)?;
 
-        let path = path.to_str().unwrap();
-        let path = format!("{}/config", path);
+        let mut config_file = PathBuf::new();
+        config_file.push(config_dir);
+        config_file.push("config.toml");
+        let config_file = config_file.as_path();
+
+        // create the config file if it does not exist
 
         let mut s = Config::new();
 
@@ -43,7 +49,9 @@ impl Settings {
         s.set_default("local.dialect", "us")?;
         s.set_default("local.db.path", db_path.to_str())?;
 
-        s.merge(File::with_name(path.as_str()))?;
+        if config_file.exists() {
+            s.merge(File::with_name(config_file.to_str().unwrap()))?;
+        }
 
         // all paths should be expanded
         let db_path = s.get_str("local.db.path")?;
