@@ -11,6 +11,7 @@ pub struct LocalDatabase {
 #[derive(Debug, Deserialize)]
 pub struct Local {
     pub server_address: String,
+    pub dialect: String,
     pub db: LocalDatabase,
 }
 
@@ -39,6 +40,7 @@ impl Settings {
             .join("history.db");
 
         s.set_default("local.server_address", "https://atuin.elliehuxtable.com")?;
+        s.set_default("local.dialect", "us")?;
         s.set_default("local.db.path", db_path.to_str())?;
 
         s.merge(File::with_name(path.as_str()))?;

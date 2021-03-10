@@ -10,6 +10,7 @@ use structopt::StructOpt;
 
 use crate::local::database::Database;
 use crate::local::history::History;
+use crate::settings::Settings;
 
 #[derive(StructOpt)]
 pub enum Cmd {
@@ -70,7 +71,7 @@ fn compute_stats(history: &[History]) -> Result<()> {
 }
 
 impl Cmd {
-    pub fn run(&self, db: &mut impl Database) -> Result<()> {
+    pub fn run(&self, db: &mut impl Database, settings: &Settings) -> Result<()> {
         match self {
             Self::Day { words } => {
                 let words = if words.is_empty() {
@@ -79,7 +80,10 @@ impl Cmd {
                     words.join(" ")
                 };
 
-                let start = parse_date_string(&words, Local::now(), Dialect::Us)?;
+                let start = match settings.local.dialect.to_lowercase().as_str() {
+                    "uk" => parse_date_string(&words, Local::now(), Dialect::Uk)?,
+                    _ => parse_date_string(&words, Local::now(), Dialect::Us)?,
+                };
                 let end = start + Duration::days(1);
 
                 let history = db.range(start.into(), end.into())?;
