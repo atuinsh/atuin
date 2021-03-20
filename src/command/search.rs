@@ -94,7 +94,7 @@ fn key_handler(input: Key, db: &mut impl Database, app: &mut State) -> Option<St
 // for now, it works. But it'd be great if it were more easily readable, and
 // modular. I'd like to add some more stats and stuff at some point
 #[allow(clippy::clippy::cast_possible_truncation)]
-fn select_history(db: &mut impl Database) -> Result<String> {
+fn select_history(query: Vec<String>, db: &mut impl Database) -> Result<String> {
     let stdout = stdout().into_raw_mode()?;
     let stdout = MouseTerminal::from(stdout);
     let stdout = AlternateScreen::from(stdout);
@@ -105,7 +105,7 @@ fn select_history(db: &mut impl Database) -> Result<String> {
     let events = Events::new();
 
     let mut app = State {
-        input: String::new(),
+        input: query.join(" "),
         results: Vec::new(),
         results_state: ListState::default(),
     };
@@ -212,8 +212,8 @@ fn select_history(db: &mut impl Database) -> Result<String> {
     }
 }
 
-pub fn run(db: &mut impl Database) -> Result<()> {
-    let item = select_history(db)?;
+pub fn run(query: Vec<String>, db: &mut impl Database) -> Result<()> {
+    let item = select_history(query, db)?;
     eprintln!("{}", item);
 
     Ok(())

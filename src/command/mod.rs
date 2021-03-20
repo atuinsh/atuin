@@ -37,7 +37,7 @@ pub enum AtuinCmd {
     Uuid,
 
     #[structopt(about = "interactive history search")]
-    Search,
+    Search { query: Vec<String> },
 }
 
 pub fn uuid_v4() -> String {
@@ -52,7 +52,7 @@ impl AtuinCmd {
             Self::Server(server) => server.run(),
             Self::Stats(stats) => stats.run(db, settings),
             Self::Init => init::init(),
-            Self::Search => search::run(db),
+            Self::Search { query } => search::run(query, db),
 
             Self::Uuid => {
                 println!("{}", uuid_v4());

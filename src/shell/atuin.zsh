@@ -22,7 +22,7 @@ _atuin_search(){
 
 	# swap stderr and stdout, so that the tui stuff works
 	# TODO: not this
-	output=$(atuin search 3>&1 1>&2 2>&3)
+	output=$(atuin search $BUFFER 3>&1 1>&2 2>&3)
 
 	if [[ -n $output ]] ; then
 		LBUFFER=$output
@@ -37,7 +37,7 @@ _atuin_up_search(){
 
 	# swap stderr and stdout, so that the tui stuff works
 	# TODO: not this
-	output=$(atuin search 3>&1 1>&2 2>&3)
+	output=$(atuin search $BUFFER 3>&1 1>&2 2>&3)
 
 	if [[ -n $output ]] ; then
 		LBUFFER=$output
