@@ -8,7 +8,7 @@ description = "atuin - magical shell history"
 
 [dependencies]
 log = "0.4"
-pretty_env_logger = "0.4"
+fern = "0.6.0"
 chrono = "0.4"
 eyre = "0.6"
 shellexpand = "2"
@@ -27,7 +27,16 @@ tui = "0.14"
 termion = "1.5"
 unicode-width = "0.1"
 itertools = "0.10.0"
+diesel = { version = "1.4.4", features = ["postgres", "chrono"] }
+diesel_codegen = { version = "0.16.1", features = ["postgres"] }
+diesel_migrations = "1.4.0"
+dotenv = "0.15.0"
 
 [dependencies.rusqlite]
 version = "0.24"
 features = ["bundled"]
+
+[dependencies.rocket_contrib]
+version = "0.4.7"
+default-features = false
+features = ["diesel_postgres_pool"]

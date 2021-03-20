@@ -49,7 +49,7 @@ impl AtuinCmd {
         match self {
             Self::History(history) => history.run(db),
             Self::Import(import) => import.run(db),
-            Self::Server(server) => server.run(),
+            Self::Server(server) => server.run(settings),
             Self::Stats(stats) => stats.run(db, settings),
             Self::Init => init::init(),
             Self::Search { query } => search::run(&query, db),
