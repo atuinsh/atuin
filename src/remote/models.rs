@@ -1,6 +1,6 @@
 use chrono::naive::NaiveDateTime;
 
-use crate::schema::history;
+use crate::schema::{history, users};
 
 #[derive(Queryable)]
 pub struct History {
@@ -21,4 +21,20 @@ pub struct NewHistory<'a> {
     pub timestamp: &'a NaiveDateTime,
 
     pub data: &'a str,
+}
+
+#[derive(Queryable)]
+pub struct User {
+    pub id: i64,
+    pub email: String,
+    pub api: String,
+    pub key: String,
+}
+
+#[derive(Insertable)]
+#[table_name = "users"]
+pub struct NewUser<'a> {
+    pub email: &'a str,
+    pub key: &'a str,
+    pub api: &'a str,
 }

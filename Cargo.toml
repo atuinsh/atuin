@@ -28,7 +28,6 @@ termion = "1.5"
 unicode-width = "0.1"
 itertools = "0.10.0"
 diesel = { version = "1.4.4", features = ["postgres", "chrono"] }
-diesel_codegen = { version = "0.16.1", features = ["postgres"] }
 diesel_migrations = "1.4.0"
 dotenv = "0.15.0"
 
@@ -39,4 +38,4 @@ features = ["bundled"]
 [dependencies.rocket_contrib]
 version = "0.4.7"
 default-features = false
-features = ["diesel_postgres_pool"]
+features = ["diesel_postgres_pool", "json"]
