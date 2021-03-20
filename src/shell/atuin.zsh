@@ -20,7 +20,9 @@ _atuin_search(){
 	emulate -L zsh
 	zle -I
 
-	output=$(eval $ATUIN_HISTORY | fzf)
+	# swap stderr and stdout, so that the tui stuff works
+	# TODO: not this
+	output=$(atuin search 3>&1 1>&2 2>&3)
 
 	if [[ -n $output ]] ; then
 		LBUFFER=$output
@@ -33,7 +35,9 @@ _atuin_up_search(){
 	emulate -L zsh
 	zle -I
 
-	output=$(eval $ATUIN_HISTORY | fzf --no-sort --tac)
+	# swap stderr and stdout, so that the tui stuff works
+	# TODO: not this
+	output=$(atuin search 3>&1 1>&2 2>&3)
 
 	if [[ -n $output ]] ; then
 		LBUFFER=$output

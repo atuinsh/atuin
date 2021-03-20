@@ -5,9 +5,11 @@ use uuid::Uuid;
 use crate::local::database::Database;
 use crate::settings::Settings;
 
+mod event;
 mod history;
 mod import;
 mod init;
+mod search;
 mod server;
 mod stats;
 
@@ -33,6 +35,9 @@ pub enum AtuinCmd {
 
     #[structopt(about = "generates a UUID")]
     Uuid,
+
+    #[structopt(about = "interactive history search")]
+    Search,
 }
 
 pub fn uuid_v4() -> String {
@@ -47,6 +52,7 @@ impl AtuinCmd {
             Self::Server(server) => server.run(),
             Self::Stats(stats) => stats.run(db, settings),
             Self::Init => init::init(),
+            Self::Search => search::run(db),
 
             Self::Uuid => {
                 println!("{}", uuid_v4());

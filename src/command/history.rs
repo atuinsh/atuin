@@ -35,6 +35,12 @@ pub enum Cmd {
         #[structopt(long, short)]
         session: bool,
     },
+
+    #[structopt(
+        about="search for a command",
+        aliases=&["se", "sea", "sear", "searc"],
+    )]
+    Search { query: Vec<String> },
 }
 
 fn print_list(h: &[History]) {
@@ -98,6 +104,13 @@ impl Cmd {
                     )?,
                 };
 
+                print_list(&history);
+
+                Ok(())
+            }
+
+            Self::Search { query } => {
+                let history = db.prefix_search(&query.join(""))?;
                 print_list(&history);
 
                 Ok(())

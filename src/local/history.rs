@@ -1,8 +1,9 @@
 use std::env;
+use std::hash::{Hash, Hasher};
 
 use crate::command::uuid_v4;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct History {
     pub id: String,
     pub timestamp: i64,
@@ -40,5 +41,23 @@ impl History {
             session,
             hostname,
         }
+    }
+}
+
+impl PartialEq for History {
+    // for the sakes of listing unique history only, we do not care about
+    // anything else
+    // obviously this does not refer to the *same* item of history, but when
+    // we only render the command, it looks the same
+    fn eq(&self, other: &Self) -> bool {
+        self.command == other.command
+    }
+}
+
+impl Eq for History {}
+
+impl Hash for History {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.command.hash(state);
     }
 }
