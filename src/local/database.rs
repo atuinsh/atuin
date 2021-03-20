@@ -15,12 +15,17 @@ pub enum QueryParam {
 pub trait Database {
     fn save(&mut self, h: &History) -> Result<()>;
     fn save_bulk(&mut self, h: &[History]) -> Result<()>;
+
     fn load(&self, id: &str) -> Result<History>;
     fn list(&self) -> Result<Vec<History>>;
     fn range(&self, from: chrono::DateTime<Utc>, to: chrono::DateTime<Utc>)
         -> Result<Vec<History>>;
-    fn update(&self, h: &History) -> Result<()>;
+
     fn query(&self, query: &str, params: &[QueryParam]) -> Result<Vec<History>>;
+    fn update(&self, h: &History) -> Result<()>;
+    fn history_count(&self) -> Result<i64>;
+
+    fn prefix_search(&self, query: &str) -> Result<Vec<History>>;
 }
 
 // Intended for use on a developer machine and not a sync server.
@@ -198,6 +203,21 @@ impl Database for Sqlite {
         let history_iter = stmt.query_map(params, |row| history_from_sqlite_row(None, row))?;
 
         Ok(history_iter.filter_map(Result::ok).collect())
+    }
+
+    fn prefix_search(&self, query: &str) -> Result<Vec<History>> {
+        self.query(
+            "select * from history where command like ?1 || '%' order by timestamp asc",
+            &[QueryParam::Text(query.to_string())],
+        )
+    }
+
+    fn history_count(&self) -> Result<i64> {
+        let res: i64 =
+            self.conn
+                .query_row_and_then("select count(1) from history;", params![], |row| row.get(0))?;
+
+        Ok(res)
     }
 }
 

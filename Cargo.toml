@@ -1,6 +1,6 @@
 [package]
 name = "atuin"
-version = "0.3.3"
+version = "0.4.0"
 authors = ["Ellie Huxtable <e@elm.sh>"]
 edition = "2018"
 license = "MIT"
@@ -23,6 +23,10 @@ cli-table = "0.4"
 config = "0.10"
 serde_derive = "1.0.124"
 serde = "1.0.124"
+tui = "0.14"
+termion = "1.5"
+unicode-width = "0.1"
+itertools = "0.10.0"
 
 [dependencies.rusqlite]
 version = "0.24"

@@ -29,10 +29,6 @@ As well as the expected command, A'tuin stores
 
 - zsh
 
-## Requirements
-
-- [fzf](https://github.com/junegunn/fzf)
-
 ## Install
 
 ### AUR
@@ -77,37 +73,15 @@ to your `.zshrc`/`.bashrc`/whatever your shell uses.
 
 ### History search
 
-By default A'tuin will rebind ctrl-r to use fzf to fuzzy search your history.
-It will also rebind the up arrow to use fzf, just without sorting. You can
-prevent this by putting
+By default A'tuin will rebind ctrl-r and the up arrow to search your history.
+
+You can prevent this by putting
 
 ```
 export ATUIN_BINDKEYS="false"
 ```
 
 into your shell config.
-
-You may also change the default history selection. The default behaviour will search your entire history, however
-
-```
-export ATUIN_HISTORY="atuin history list --cwd"
-```
-
-will switch to only searching history for the current directory.
-
-Similarly,
-
-```
-export ATUIN_HISTORY="atuin history list --session"
-```
-
-will search for the current session only, and
-
-```
-export ATUIN_HISTORY="atuin history list --session --cwd"
-```
-
-will do both!
 
 ### Import history
 
