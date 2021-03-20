@@ -52,7 +52,7 @@ impl AtuinCmd {
             Self::Server(server) => server.run(),
             Self::Stats(stats) => stats.run(db, settings),
             Self::Init => init::init(),
-            Self::Search { query } => search::run(query, db),
+            Self::Search { query } => search::run(&query, db),
 
             Self::Uuid => {
                 println!("{}", uuid_v4());
