@@ -1,21 +1,28 @@
 table! {
     history (id) {
-        id -> Text,
-        user -> Text,
-        mac -> Text,
+        id -> Int8,
+        client_id -> Text,
+        user_id -> Int8,
+        mac -> Varchar,
         timestamp -> Timestamp,
-        data -> Text,
-        signature -> Text,
+        data -> Varchar,
+    }
+}
+
+table! {
+    sessions (id) {
+        id -> Int8,
+        user_id -> Int8,
+        token -> Varchar,
     }
 }
 
 table! {
     users (id) {
         id -> Int8,
-        email -> Text,
-        api -> Text,
-        key -> Text,
+        email -> Varchar,
+        password -> Varchar,
     }
 }
 
-allow_tables_to_appear_in_same_query!(history, users,);
+allow_tables_to_appear_in_same_query!(history, sessions, users,);

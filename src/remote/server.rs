@@ -11,6 +11,9 @@ use super::database::AtuinDbConn;
 #[allow(clippy::clippy::wildcard_imports)]
 use super::views::*;
 
+#[allow(clippy::clippy::wildcard_imports)]
+use super::auth::*;
+
 embed_migrations!("migrations");
 
 pub fn launch(settings: &Settings) {
@@ -32,7 +35,7 @@ pub fn launch(settings: &Settings) {
         .unwrap();
 
     let app = rocket::custom(config);
-    app.mount("/", routes![index, register, add_history])
+    app.mount("/", routes![index, register, add_history, login])
         .attach(AtuinDbConn::fairing())
         .register(catchers![internal_error, bad_request])
         .launch();

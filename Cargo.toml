@@ -30,6 +30,7 @@ itertools = "0.10.0"
 diesel = { version = "1.4.4", features = ["postgres", "chrono"] }
 diesel_migrations = "1.4.0"
 dotenv = "0.15.0"
+sodiumoxide = "0.2.6"
 
 [dependencies.rusqlite]
 version = "0.24"
