@@ -11,6 +11,11 @@ pub struct LocalDatabase {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct RemoteDatabase {
+    pub url: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct Local {
     pub server_address: String,
     pub dialect: String,
@@ -18,8 +23,14 @@ pub struct Local {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct Remote {
+    pub db: RemoteDatabase,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct Settings {
     pub local: Local,
+    pub remote: Remote,
 }
 
 impl Settings {
@@ -48,6 +59,8 @@ impl Settings {
         s.set_default("local.server_address", "https://atuin.elliehuxtable.com")?;
         s.set_default("local.dialect", "us")?;
         s.set_default("local.db.path", db_path.to_str())?;
+
+        s.set_default("remote.db.url", "please set a postgres url")?;
 
         if config_file.exists() {
             s.merge(File::with_name(config_file.to_str().unwrap()))?;

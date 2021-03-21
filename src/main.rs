@@ -17,6 +17,15 @@ extern crate rocket;
 #[macro_use]
 extern crate serde_derive;
 
+#[macro_use]
+extern crate diesel;
+
+#[macro_use]
+extern crate diesel_migrations;
+
+#[macro_use]
+extern crate rocket_contrib;
+
 use command::AtuinCmd;
 use local::database::Sqlite;
 use settings::Settings;
@@ -25,6 +34,8 @@ mod command;
 mod local;
 mod remote;
 mod settings;
+
+pub mod schema;
 
 #[derive(StructOpt)]
 #[structopt(
@@ -61,7 +72,18 @@ impl Atuin {
 }
 
 fn main() -> Result<()> {
-    pretty_env_logger::init();
+    fern::Dispatch::new()
+        .format(|out, message, record| {
+            out.finish(format_args!(
+                "{} [{}] {}",
+                chrono::Local::now().format("[%Y-%m-%d][%H:%M:%S]"),
+                record.level(),
+                message
+            ))
+        })
+        .level(log::LevelFilter::Info)
+        .chain(std::io::stdout())
+        .apply()?;
 
     Atuin::from_args().run()
 }
