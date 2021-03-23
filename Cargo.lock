@@ -212,6 +212,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "bstr"
+version = "0.2.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a40b47ad93e1a5404e6c18dec46b628214fee441c70f4ab5d6942142cc268a3d"
+dependencies = [
+ "lazy_static",
+ "memchr",
+ "regex-automata",
+ "serde 1.0.125",
+]
+
+[[package]]
 name = "byte-tools"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -288,20 +300,21 @@ dependencies = [
 
 [[package]]
 name = "cli-table"
-version = "0.4.1"
+version = "0.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c568382da2369ef1fcbfc2665c6f93f1b6ec9caf585312d2034d2d2584ea68b9"
+checksum = "357acc9f995a3b6628b4e78e54fce0e763b0c00b36e491d8a6842855fe4f4de9"
 dependencies = [
  "cli-table-derive",
+ "csv",
  "termcolor",
  "unicode-width",
 ]
 
 [[package]]
 name = "cli-table-derive"
-version = "0.4.0"
+version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5ee3795f920d8cf38d4902e8bf4573e7aa9ba430e0144b5b5ee3ae4da34f819b"
+checksum = "efe942512e068e15991cbcef4e8182884555febbb21b5b4faf5dd5561850141a"
 dependencies = [
  "proc-macro2 1.0.24",
  "quote 1.0.9",
@@ -380,6 +393,28 @@ checksum = "4434400df11d95d556bac068ddfedd482915eb18fe8bea89bc80b6e4b1c179e5"
 dependencies = [
  "generic-array",
  "subtle 1.0.0",
+]
+
+[[package]]
+name = "csv"
+version = "1.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22813a6dc45b335f9bade10bf7271dc477e81113e89eb251a0bc2a8a81c536e1"
+dependencies = [
+ "bstr",
+ "csv-core",
+ "itoa",
+ "ryu",
+ "serde 1.0.125",
+]
+
+[[package]]
+name = "csv-core"
+version = "0.1.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b2466559f260f48ad25fe6317b3c8dac77b5bdb5763ac7d9d6103530663bc90"
+dependencies = [
+ "memchr",
 ]
 
 [[package]]
@@ -1393,6 +1428,15 @@ dependencies = [
  "memchr",
  "regex-syntax",
  "thread_local",
+]
+
+[[package]]
+name = "regex-automata"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ae1ded71d66a4a97f5e961fd0cb25a5f366a42a41570d16a763a69c092c26ae4"
+dependencies = [
+ "byteorder",
 ]
 
 [[package]]
