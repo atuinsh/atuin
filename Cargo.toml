@@ -33,7 +33,7 @@ dotenv = "0.15.0"
 sodiumoxide = "0.2.6"
 
 [dependencies.rusqlite]
-version = "0.24"
+version = "0.25"
 features = ["bundled"]
 
 [dependencies.rocket_contrib]
