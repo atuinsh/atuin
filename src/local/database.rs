@@ -4,13 +4,9 @@ use std::path::Path;
 use eyre::Result;
 
 use rusqlite::{params, Connection};
-use rusqlite::{Transaction, NO_PARAMS};
+use rusqlite::{Params, Transaction};
 
 use super::history::History;
-
-pub enum QueryParam {
-    Text(String),
-}
 
 pub trait Database {
     fn save(&mut self, h: &History) -> Result<()>;
@@ -21,7 +17,7 @@ pub trait Database {
     fn range(&self, from: chrono::DateTime<Utc>, to: chrono::DateTime<Utc>)
         -> Result<Vec<History>>;
 
-    fn query(&self, query: &str, params: &[QueryParam]) -> Result<Vec<History>>;
+    fn query(&self, query: &str, params: impl Params) -> Result<Vec<History>>;
     fn update(&self, h: &History) -> Result<()>;
     fn history_count(&self) -> Result<i64>;
 
@@ -71,7 +67,7 @@ impl Sqlite {
 
                 unique(timestamp, cwd, command)
             )",
-            NO_PARAMS,
+            [],
         )?;
 
         Ok(())
@@ -102,16 +98,6 @@ impl Sqlite {
         )?;
 
         Ok(())
-    }
-}
-
-impl rusqlite::ToSql for QueryParam {
-    fn to_sql(&self) -> Result<rusqlite::types::ToSqlOutput<'_>, rusqlite::Error> {
-        use rusqlite::types::{ToSqlOutput, Value};
-
-        match self {
-            Self::Text(s) => Ok(ToSqlOutput::Owned(Value::Text(s.clone()))),
-        }
     }
 }
 
@@ -197,7 +183,7 @@ impl Database for Sqlite {
         Ok(history_iter.filter_map(Result::ok).collect())
     }
 
-    fn query(&self, query: &str, params: &[QueryParam]) -> Result<Vec<History>> {
+    fn query(&self, query: &str, params: impl Params) -> Result<Vec<History>> {
         let mut stmt = self.conn.prepare(query)?;
 
         let history_iter = stmt.query_map(params, |row| history_from_sqlite_row(None, row))?;
@@ -208,7 +194,7 @@ impl Database for Sqlite {
     fn prefix_search(&self, query: &str) -> Result<Vec<History>> {
         self.query(
             "select * from history where command like ?1 || '%' order by timestamp asc",
-            &[QueryParam::Text(query.to_string())],
+            &[query],
         )
     }
 
