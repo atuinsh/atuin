@@ -3,7 +3,7 @@ use std::env;
 use eyre::Result;
 use structopt::StructOpt;
 
-use crate::local::database::{Database, QueryParam};
+use crate::local::database::Database;
 use crate::local::history::History;
 
 #[derive(StructOpt)]
@@ -96,12 +96,11 @@ impl Cmd {
 
                 let history = match params {
                     (false, false) => db.list()?,
-                    (true, false) => db.query(QUERY_SESSION, &[QueryParam::Text(session)])?,
-                    (false, true) => db.query(QUERY_DIR, &[QueryParam::Text(cwd)])?,
-                    (true, true) => db.query(
-                        QUERY_SESSION_DIR,
-                        &[QueryParam::Text(cwd), QueryParam::Text(session)],
-                    )?,
+                    (true, false) => db.query(QUERY_SESSION, &[session.as_str()])?,
+                    (false, true) => db.query(QUERY_DIR, &[cwd.as_str()])?,
+                    (true, true) => {
+                        db.query(QUERY_SESSION_DIR, &[cwd.as_str(), session.as_str()])?
+                    }
                 };
 
                 print_list(&history);
