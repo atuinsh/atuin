@@ -62,7 +62,7 @@ impl Atuin {
             let path = shellexpand::full(path)?;
             PathBuf::from(path.as_ref())
         } else {
-            PathBuf::from(settings.local.db.path.as_str())
+            PathBuf::from(settings.local.db_path.as_str())
         };
 
         let mut db = Sqlite::new(db_path)?;

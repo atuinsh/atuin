@@ -6,25 +6,20 @@ use eyre::{eyre, Result};
 use std::fs;
 
 #[derive(Debug, Deserialize)]
-pub struct LocalDatabase {
-    pub path: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct RemoteDatabase {
-    pub url: String,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct Local {
-    pub server_address: String,
     pub dialect: String,
-    pub db: LocalDatabase,
+    pub sync: bool,
+    pub sync_address: String,
+    pub sync_frequency: String,
+    pub db_path: String,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct Remote {
-    pub db: RemoteDatabase,
+    pub host: String,
+    pub port: u16,
+    pub db_uri: String,
+    pub open_registration: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -56,18 +51,23 @@ impl Settings {
             .data_dir()
             .join("history.db");
 
-        s.set_default("local.server_address", "https://atuin.elliehuxtable.com")?;
+        s.set_default("local.db_path", db_path.to_str())?;
         s.set_default("local.dialect", "us")?;
-        s.set_default("local.db.path", db_path.to_str())?;
+        s.set_default("local.sync", false)?;
+        s.set_default("local.sync_frequency", "5m")?;
+        s.set_default("local.sync_address", "https://atuin.ellie.wtf")?;
 
-        s.set_default("remote.db.url", "please set a postgres url")?;
+        s.set_default("remote.host", "127.0.0.1")?;
+        s.set_default("remote.port", 8888)?;
+        s.set_default("remote.open_registration", false)?;
+        s.set_default("remote.db_uri", "please set a postgres url")?;
 
         if config_file.exists() {
             s.merge(File::with_name(config_file.to_str().unwrap()))?;
         }
 
         // all paths should be expanded
-        let db_path = s.get_str("local.db.path")?;
+        let db_path = s.get_str("local.db_path")?;
         let db_path = shellexpand::full(db_path.as_str())?;
         s.set("local.db.path", db_path.to_string())?;
 

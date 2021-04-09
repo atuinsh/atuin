@@ -16,25 +16,26 @@ use super::auth::*;
 
 embed_migrations!("migrations");
 
-pub fn launch(settings: &Settings) {
+pub fn launch(settings: &Settings, host: String, port: u16) {
     let mut database_config = HashMap::new();
     let mut databases = HashMap::new();
 
-    database_config.insert("url", Value::from(settings.remote.db.url.clone()));
+    database_config.insert("url", Value::from(settings.remote.db_uri.clone()));
     databases.insert("atuin", Value::from(database_config));
 
     let connection = establish_connection(settings);
     embedded_migrations::run(&connection).expect("failed to run migrations");
 
     let config = Config::build(Environment::Production)
-        .address("0.0.0.0")
+        .address(host)
         .log_level(LoggingLevel::Normal)
-        .port(8080)
+        .port(port)
         .extra("databases", databases)
         .finalize()
         .unwrap();
 
     let app = rocket::custom(config);
+
     app.mount("/", routes![index, register, add_history, login])
         .attach(AtuinDbConn::fairing())
         .register(catchers![internal_error, bad_request])

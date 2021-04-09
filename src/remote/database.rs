@@ -8,7 +8,7 @@ pub struct AtuinDbConn(diesel::PgConnection);
 
 // TODO: connection pooling
 pub fn establish_connection(settings: &Settings) -> PgConnection {
-    let database_url = &settings.remote.db.url;
+    let database_url = &settings.remote.db_uri;
     PgConnection::establish(database_url)
         .unwrap_or_else(|_| panic!("Error connecting to {}", database_url))
 }

@@ -1,0 +1,37 @@
+# A'tuin example config
+
+# This section specifies the config for a local client,
+# ie where your shell history is on your local machine
+[local]
+# (optional)
+# where to store your database, default is your system data directory
+# mac: ~/Library/Application Support/com.elliehuxtable.atuin/history.db
+# linux: ~/.local/share/atuin/history.db
+db_path = "~/.history.db"
+# (optional, default us)
+# date format used, either "us" or "uk"
+dialect = "uk" 								
+# (optional, default false)
+# whether to enable sync of history. requires authentication
+sync = false
+# (optional, default 5m)
+# how often to sync history. note that this is only triggered when a command is ran, and the last sync was >= this value ago
+sync_frequency = "5m"
+# (optional, default https://atuin.elliehuxtable.com)
+# address of the sync server
+sync_address = "https://atuin.elliehuxtable.com"
+
+# This section configures the sync server, if you decide to host your own
+[remote]
+# (optional, default 127.0.0.1)
+# host to bind, can also be passed via CLI args
+host = "127.0.0.1"
+# (optional, default 8888)
+# port to bind, can also be passed via CLI args
+port = 8888
+# (optional, default false)
+# whether to allow anyone to register an account
+open_registration = false
+# (required)
+# URI for postgres (using development creds here)
+db_uri="postgres://username:password@localhost/atuin"
