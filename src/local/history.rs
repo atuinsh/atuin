@@ -3,7 +3,8 @@ use std::hash::{Hash, Hasher};
 
 use crate::command::uuid_v4;
 
-#[derive(Debug, Clone)]
+// Any new fields MUST be Optional<>!
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct History {
     pub id: String,
     pub timestamp: i64,

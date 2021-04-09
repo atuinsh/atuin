@@ -44,9 +44,7 @@ impl Sqlite {
 
         let conn = Connection::open(path)?;
 
-        if create {
-            Self::setup_db(&conn)?;
-        }
+        Self::setup_db(&conn)?;
 
         Ok(Self { conn })
     }
@@ -66,6 +64,14 @@ impl Sqlite {
                 hostname text not null,
 
                 unique(timestamp, cwd, command)
+            )",
+            [],
+        )?;
+
+        conn.execute(
+            "create table if not exists history_encrypted (
+                id text primary key,
+                data blob not null
             )",
             [],
         )?;

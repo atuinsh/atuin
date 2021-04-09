@@ -31,6 +31,7 @@ diesel = { version = "1.4.4", features = ["postgres", "chrono"] }
 diesel_migrations = "1.4.0"
 dotenv = "0.15.0"
 sodiumoxide = "0.2.6"
+rmp-serde = "0.15.4"
 
 [dependencies.rusqlite]
 version = "0.25"

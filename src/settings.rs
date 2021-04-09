@@ -12,6 +12,7 @@ pub struct Local {
     pub sync_address: String,
     pub sync_frequency: String,
     pub db_path: String,
+    pub key_path: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -45,13 +46,17 @@ impl Settings {
         let mut s = Config::new();
 
         let db_path = ProjectDirs::from("com", "elliehuxtable", "atuin")
-            .ok_or_else(|| {
-                eyre!("could not determine db file location\nspecify one using the --db flag")
-            })?
+            .ok_or_else(|| eyre!("could not determine db file location"))?
             .data_dir()
             .join("history.db");
 
+        let key_path = ProjectDirs::from("com", "elliehuxtable", "atuin")
+            .ok_or_else(|| eyre!("could not determine key file location"))?
+            .data_dir()
+            .join("key");
+
         s.set_default("local.db_path", db_path.to_str())?;
+        s.set_default("local.key_path", key_path.to_str())?;
         s.set_default("local.dialect", "us")?;
         s.set_default("local.sync", false)?;
         s.set_default("local.sync_frequency", "5m")?;
@@ -69,7 +74,11 @@ impl Settings {
         // all paths should be expanded
         let db_path = s.get_str("local.db_path")?;
         let db_path = shellexpand::full(db_path.as_str())?;
-        s.set("local.db.path", db_path.to_string())?;
+        s.set("local.db_path", db_path.to_string())?;
+
+        let key_path = s.get_str("local.key_path")?;
+        let key_path = shellexpand::full(key_path.as_str())?;
+        s.set("local.key_path", key_path.to_string())?;
 
         s.try_into()
             .map_err(|e| eyre!("failed to deserialize: {}", e))

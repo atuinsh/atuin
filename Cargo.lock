@@ -122,6 +122,7 @@ dependencies = [
  "indicatif",
  "itertools",
  "log 0.4.14",
+ "rmp-serde",
  "rocket",
  "rocket_contrib",
  "rusqlite",
@@ -1434,6 +1435,27 @@ name = "regex-syntax"
 version = "0.6.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b5eb417147ba9860a96cfe72a0b93bf88fee1744b5636ec99ab20c1aa9376581"
+
+[[package]]
+name = "rmp"
+version = "0.8.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4f55e5fa1446c4d5dd1f5daeed2a4fe193071771a2636274d0d7a3b082aa7ad6"
+dependencies = [
+ "byteorder",
+ "num-traits 0.2.14",
+]
+
+[[package]]
+name = "rmp-serde"
+version = "0.15.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "839395ef53057db96b84c9238ab29e1a13f2e5c8ec9f66bef853ab4197303924"
+dependencies = [
+ "byteorder",
+ "rmp",
+ "serde 1.0.125",
+]
 
 [[package]]
 name = "rocket"
