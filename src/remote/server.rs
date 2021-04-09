@@ -36,8 +36,11 @@ pub fn launch(settings: &Settings, host: String, port: u16) {
 
     let app = rocket::custom(config);
 
-    app.mount("/", routes![index, register, add_history, login, get_user])
-        .attach(AtuinDbConn::fairing())
-        .register(catchers![internal_error, bad_request])
-        .launch();
+    app.mount(
+        "/",
+        routes![index, register, add_history, login, get_user, sync_count],
+    )
+    .attach(AtuinDbConn::fairing())
+    .register(catchers![internal_error, bad_request])
+    .launch();
 }

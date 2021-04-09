@@ -87,3 +87,31 @@ pub fn add_history(conn: AtuinDbConn, user: User, add_history: Json<AddHistory>)
         },
     }
 }
+
+#[get("/sync/count")]
+#[allow(clippy::wildcard_imports, clippy::needless_pass_by_value)]
+pub fn sync_count(conn: AtuinDbConn, user: User) -> ApiResponse {
+    use crate::schema::history::dsl::*;
+
+    // we need to return the number of history items we have for this user
+    // in the future I'd like to use something like a merkel tree to calculate
+    // which day specifically needs syncing
+    let count = history
+        .filter(user_id.eq(user.id))
+        .count()
+        .first::<i64>(&*conn);
+
+    if count.is_err() {
+        error!("failed to count: {}", count.err().unwrap());
+
+        return ApiResponse {
+            json: json!({"message": "internal server error"}),
+            status: Status::InternalServerError,
+        };
+    }
+
+    ApiResponse {
+        status: Status::Ok,
+        json: json!({"count": count.ok()}),
+    }
+}
