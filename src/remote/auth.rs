@@ -1,5 +1,6 @@
 use self::diesel::prelude::*;
-use rocket::http::Status;
+use eyre::Result;
+use rocket::http::{ContentType, Header, Status};
 use rocket::request::{self, FromRequest, Outcome, Request};
 use rocket_contrib::databases::diesel;
 use sodiumoxide::crypto::pwhash::argon2id13;
@@ -95,9 +96,37 @@ impl<'a, 'r> FromRequest<'a, 'r> for User {
     }
 }
 
+#[get("/user/<user>")]
+#[allow(clippy::clippy::needless_pass_by_value)]
+pub fn get_user(user: String, conn: AtuinDbConn) -> ApiResponse {
+    use crate::schema::users::dsl::*;
+
+    let user: Result<String, diesel::result::Error> = users
+        .select(username)
+        .filter(username.eq(user))
+        .first(&*conn);
+
+    if user.is_err() {
+        return ApiResponse {
+            json: json!({
+                "message": "could not find user",
+            }),
+            status: Status::NotFound,
+        };
+    }
+
+    let user = user.unwrap();
+
+    ApiResponse {
+        json: json!({ "username": user.as_str() }),
+        status: Status::Ok,
+    }
+}
+
 #[derive(Deserialize)]
 pub struct Register {
     email: String,
+    username: String,
     password: String,
 }
 
@@ -108,6 +137,7 @@ pub fn register(conn: AtuinDbConn, register: Json<Register>) -> ApiResponse {
 
     let new_user = NewUser {
         email: register.email.as_str(),
+        username: register.username.as_str(),
         password: hashed.as_str(),
     };
 
@@ -120,7 +150,7 @@ pub fn register(conn: AtuinDbConn, register: Json<Register>) -> ApiResponse {
             status: Status::BadRequest,
             json: json!({
                 "status": "error",
-                "message": "failed to create user - is the email already in use?",
+                "message": "failed to create user - username or email in use?",
             }),
         };
     }
@@ -150,7 +180,7 @@ pub fn register(conn: AtuinDbConn, register: Json<Register>) -> ApiResponse {
 
 #[derive(Deserialize)]
 pub struct Login {
-    email: String,
+    username: String,
     password: String,
 }
 
@@ -158,7 +188,7 @@ pub struct Login {
 #[allow(clippy::clippy::needless_pass_by_value)]
 pub fn login(conn: AtuinDbConn, login: Json<Login>) -> ApiResponse {
     let user = users::table
-        .filter(users::email.eq(login.email.as_str()))
+        .filter(users::username.eq(login.username.as_str()))
         .first(&*conn);
 
     if user.is_err() {
@@ -195,6 +225,6 @@ pub fn login(conn: AtuinDbConn, login: Json<Login>) -> ApiResponse {
 
     ApiResponse {
         status: Status::Ok,
-        json: json!({"status": "ok", "token": session.token}),
+        json: json!({"status": "ok", "session": session.token}),
     }
 }

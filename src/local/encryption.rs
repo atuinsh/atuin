@@ -18,6 +18,7 @@ use sodiumoxide::crypto::secretbox;
 use crate::local::history::History;
 use crate::settings::Settings;
 
+#[derive(Serialize, Deserialize)]
 pub struct EncryptedHistory {
     pub ciphertext: Vec<u8>,
     pub nonce: secretbox::Nonce,

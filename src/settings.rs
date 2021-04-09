@@ -13,6 +13,7 @@ pub struct Local {
     pub sync_frequency: String,
     pub db_path: String,
     pub key_path: String,
+    pub session_path: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -55,8 +56,14 @@ impl Settings {
             .data_dir()
             .join("key");
 
+        let session_path = ProjectDirs::from("com", "elliehuxtable", "atuin")
+            .ok_or_else(|| eyre!("could not determine session file location"))?
+            .data_dir()
+            .join("session");
+
         s.set_default("local.db_path", db_path.to_str())?;
         s.set_default("local.key_path", key_path.to_str())?;
+        s.set_default("local.session_path", session_path.to_str())?;
         s.set_default("local.dialect", "us")?;
         s.set_default("local.sync", false)?;
         s.set_default("local.sync_frequency", "5m")?;
@@ -79,6 +86,10 @@ impl Settings {
         let key_path = s.get_str("local.key_path")?;
         let key_path = shellexpand::full(key_path.as_str())?;
         s.set("local.key_path", key_path.to_string())?;
+
+        let session_path = s.get_str("local.session_path")?;
+        let session_path = shellexpand::full(session_path.as_str())?;
+        s.set("local.session_path", session_path.to_string())?;
 
         s.try_into()
             .map_err(|e| eyre!("failed to deserialize: {}", e))

@@ -9,6 +9,8 @@ mod event;
 mod history;
 mod import;
 mod init;
+mod login;
+mod register;
 mod search;
 mod server;
 mod stats;
@@ -38,6 +40,15 @@ pub enum AtuinCmd {
 
     #[structopt(about = "interactive history search")]
     Search { query: Vec<String> },
+
+    #[structopt(about = "sync with the configured server")]
+    Sync,
+
+    #[structopt(about = "login to the configured server")]
+    Login(login::Cmd),
+
+    #[structopt(about = "register with the configured server")]
+    Register(register::Cmd),
 }
 
 pub fn uuid_v4() -> String {
@@ -53,6 +64,10 @@ impl AtuinCmd {
             Self::Stats(stats) => stats.run(db, settings),
             Self::Init => init::init(),
             Self::Search { query } => search::run(&query, db),
+
+            Self::Sync => Ok(()),
+            Self::Login(l) => login::run(settings, l.username, l.password),
+            Self::Register(r) => register::run(settings, r.username, r.email, r.password),
 
             Self::Uuid => {
                 println!("{}", uuid_v4());

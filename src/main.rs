@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 
 use eyre::{eyre, Result};
-use structopt::StructOpt;
+use structopt::{clap::AppSettings, StructOpt};
 
 #[macro_use]
 extern crate log;
@@ -41,7 +41,8 @@ pub mod schema;
 #[structopt(
     author = "Ellie Huxtable <e@elm.sh>",
     version = "0.4.0",
-    about = "Magical shell history"
+    about = "Magical shell history",
+    global_settings(&[AppSettings::ColoredHelp, AppSettings::DeriveDisplayOrder])
 )]
 struct Atuin {
     #[structopt(long, parse(from_os_str), help = "db file path")]

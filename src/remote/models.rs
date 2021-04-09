@@ -7,7 +7,7 @@ use crate::schema::{history, sessions, users};
 #[belongs_to(User)]
 pub struct History {
     pub id: i64,
-    pub client_id: String,
+    pub client_id: String, // a client generated ID
     pub user_id: i64,
     pub mac: String,
     pub timestamp: NaiveDateTime,
@@ -18,6 +18,7 @@ pub struct History {
 #[derive(Identifiable, Queryable, Associations)]
 pub struct User {
     pub id: i64,
+    pub username: String,
     pub email: String,
     pub password: String,
 }
@@ -44,6 +45,7 @@ pub struct NewHistory<'a> {
 #[derive(Insertable)]
 #[table_name = "users"]
 pub struct NewUser<'a> {
+    pub username: &'a str,
     pub email: &'a str,
     pub password: &'a str,
 }
