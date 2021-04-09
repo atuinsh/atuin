@@ -51,7 +51,6 @@ pub struct AddHistory {
     id: String,
     timestamp: i64,
     data: String,
-    mac: String,
 }
 
 #[post("/history", data = "<add_history>")]
@@ -60,18 +59,26 @@ pub struct AddHistory {
     clippy::cast_possible_truncation,
     clippy::clippy::needless_pass_by_value
 )]
-pub fn add_history(conn: AtuinDbConn, user: User, add_history: Json<AddHistory>) -> ApiResponse {
-    let secs: i64 = add_history.timestamp / 1_000_000_000;
-    let nanosecs: u32 = (add_history.timestamp - (secs * 1_000_000_000)) as u32;
-    let datetime = chrono::NaiveDateTime::from_timestamp(secs, nanosecs);
+pub fn add_history(
+    conn: AtuinDbConn,
+    user: User,
+    add_history: Json<Vec<AddHistory>>,
+) -> ApiResponse {
+    let new_history: Vec<NewHistory> = add_history
+        .iter()
+        .map(|h| {
+            let secs: i64 = h.timestamp / 1_000_000_000;
+            let nanosecs: u32 = (h.timestamp - (secs * 1_000_000_000)) as u32;
+            let datetime = chrono::NaiveDateTime::from_timestamp(secs, nanosecs);
 
-    let new_history = NewHistory {
-        client_id: add_history.id.as_str(),
-        user_id: user.id,
-        mac: add_history.mac.as_str(),
-        timestamp: datetime,
-        data: add_history.data.as_str(),
-    };
+            NewHistory {
+                client_id: h.id.as_str(),
+                user_id: user.id,
+                timestamp: datetime,
+                data: h.data.as_str(),
+            }
+        })
+        .collect();
 
     match diesel::insert_into(history::table)
         .values(&new_history)
@@ -79,7 +86,7 @@ pub fn add_history(conn: AtuinDbConn, user: User, add_history: Json<AddHistory>)
     {
         Ok(_) => ApiResponse {
             status: Status::Ok,
-            json: json!({"status": "ok", "message": "history added", "id": new_history.client_id}),
+            json: json!({"status": "ok", "message": "history added"}),
         },
         Err(_) => ApiResponse {
             status: Status::BadRequest,
@@ -91,6 +98,34 @@ pub fn add_history(conn: AtuinDbConn, user: User, add_history: Json<AddHistory>)
 #[get("/sync/count")]
 #[allow(clippy::wildcard_imports, clippy::needless_pass_by_value)]
 pub fn sync_count(conn: AtuinDbConn, user: User) -> ApiResponse {
+    use crate::schema::history::dsl::*;
+
+    // we need to return the number of history items we have for this user
+    // in the future I'd like to use something like a merkel tree to calculate
+    // which day specifically needs syncing
+    let count = history
+        .filter(user_id.eq(user.id))
+        .count()
+        .first::<i64>(&*conn);
+
+    if count.is_err() {
+        error!("failed to count: {}", count.err().unwrap());
+
+        return ApiResponse {
+            json: json!({"message": "internal server error"}),
+            status: Status::InternalServerError,
+        };
+    }
+
+    ApiResponse {
+        status: Status::Ok,
+        json: json!({"count": count.ok()}),
+    }
+}
+
+#[get("/sync/list?<page>")]
+#[allow(clippy::wildcard_imports, clippy::needless_pass_by_value)]
+pub fn sync_list(conn: AtuinDbConn, user: User, page: i64) -> ApiResponse {
     use crate::schema::history::dsl::*;
 
     // we need to return the number of history items we have for this user

@@ -3,7 +3,6 @@ table! {
         id -> Int8,
         client_id -> Text,
         user_id -> Int8,
-        mac -> Varchar,
         timestamp -> Timestamp,
         data -> Varchar,
     }

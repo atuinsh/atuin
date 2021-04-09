@@ -36,7 +36,6 @@ pub struct Session {
 pub struct NewHistory<'a> {
     pub client_id: &'a str,
     pub user_id: i64,
-    pub mac: &'a str,
     pub timestamp: NaiveDateTime,
 
     pub data: &'a str,

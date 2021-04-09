@@ -108,6 +108,7 @@ dependencies = [
 name = "atuin"
 version = "0.4.0"
 dependencies = [
+ "base64 0.13.0",
  "chrono",
  "chrono-english",
  "cli-table",

@@ -14,6 +14,7 @@ mod register;
 mod search;
 mod server;
 mod stats;
+mod sync;
 
 #[derive(StructOpt)]
 pub enum AtuinCmd {
@@ -65,7 +66,7 @@ impl AtuinCmd {
             Self::Init => init::init(),
             Self::Search { query } => search::run(&query, db),
 
-            Self::Sync => Ok(()),
+            Self::Sync => sync::run(settings, db),
             Self::Login(l) => login::run(settings, l.username, l.password),
             Self::Register(r) => register::run(settings, r.username, r.email, r.password),
 
