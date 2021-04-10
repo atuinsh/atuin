@@ -30,6 +30,7 @@ use command::AtuinCmd;
 use local::database::Sqlite;
 use settings::Settings;
 
+mod api;
 mod command;
 mod local;
 mod remote;

@@ -1,56 +1,103 @@
-use std::collections::HashMap;
-
-use base64;
-use diesel::expression::ops::Add;
-use eyre::{eyre, Result};
+use chrono::prelude::*;
+use eyre::Result;
 use reqwest::{blocking::Response, header::AUTHORIZATION};
 
+use crate::api::AddHistoryRequest;
+use crate::local::api_client;
 use crate::local::database::Database;
 use crate::local::encryption::{encrypt, load_key};
-use crate::local::history::History;
 use crate::settings::Settings;
 
-#[derive(Serialize, Deserialize)]
-struct AddHistory {
-    id: String,
-    timestamp: i64,
-    data: String,
+// Check if remote has things we don't, and if so, download them.
+// Returns (num downloaded, total local)
+fn sync_download(client: &api_client::Client, db: &mut impl Database) -> Result<(i64, i64)> {
+    let remote_count = client.count()?;
+
+    let initial_local = db.history_count()?;
+    let mut local_count = initial_local;
+
+    let mut last_timestamp = Utc::now();
+    let mut page = client.get_history(last_timestamp)?;
+
+    while remote_count > local_count {
+        if page.len() == 0 {
+            break;
+        }
+
+        db.save_bulk(&page)?;
+
+        local_count = db.history_count()?;
+        last_timestamp = page
+            .last()
+            .expect("could not get last element of page")
+            .timestamp;
+
+        page = client.get_history(last_timestamp)?;
+    }
+
+    Ok((local_count - initial_local, local_count))
+}
+
+// Check if we have things remote doesn't, and if so, upload them
+fn sync_upload(
+    settings: &Settings,
+    client: &api_client::Client,
+    db: &mut impl Database,
+) -> Result<()> {
+    let initial_remote_count = client.count()?;
+    let mut remote_count = initial_remote_count;
+
+    let local_count = db.history_count()?;
+
+    let key = load_key(settings)?; // encryption key
+
+    let mut cursor = Utc::now();
+
+    while local_count > remote_count {
+        let missing = local_count - remote_count;
+
+        // unless any new clients have been setup, odds are the missing
+        // history is recent
+        let last = db.before(cursor, missing)?;
+        let mut buffer = Vec::<AddHistoryRequest>::new();
+
+        for i in last {
+            let data = encrypt(settings, &i, &key)?;
+            let data = serde_json::to_string(&data)?;
+
+            let add_hist = AddHistoryRequest {
+                id: i.id,
+                timestamp: i.timestamp,
+                data,
+            };
+
+            buffer.push(add_hist);
+
+            if buffer.len() >= 100 {
+                println!("{}, {}", buffer.len(), cursor);
+                client.post_history(&buffer)?;
+
+                cursor = buffer.last().unwrap().timestamp;
+                buffer = Vec::new();
+            }
+        }
+
+        // anything left over outside of the 100 block size
+        client.post_history(&buffer)?;
+        remote_count = client.count()?;
+    }
+
+    Ok(())
 }
 
 pub fn run(settings: &Settings, db: &mut impl Database) -> Result<()> {
-    let mut buffer = Vec::<AddHistory>::new();
+    let client = api_client::Client::new(settings);
 
-    let sync_buffer = |b: &[AddHistory]| -> Result<Response> {
-        let token = std::fs::read_to_string(settings.local.session_path.as_str())?;
+    let download = sync_download(&client, db)?;
 
-        let url = format!("{}/history", settings.local.sync_address);
-        let client = reqwest::blocking::Client::new();
-        let resp = client
-            .post(url)
-            .json(b)
-            .header(AUTHORIZATION, format!("Token {}", token))
-            .send()?;
+    println!("Downloaded: {}", download.0);
 
-        Ok(resp)
-    };
-
-    for i in db.list()? {
-        let key = load_key(settings)?;
-        let data = encrypt(settings, &i, &key)?;
-
-        let add_hist = AddHistory {
-            id: i.id,
-            timestamp: i.timestamp,
-            data: base64::encode(data.ciphertext),
-        };
-
-        buffer.push(add_hist);
-
-        if buffer.len() >= 100 {
-            sync_buffer(&buffer)?;
-            buffer = Vec::new();
-        }
-    }
+    sync_upload(settings, &client, db)?;
 
     Ok(())
 }

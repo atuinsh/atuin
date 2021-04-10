@@ -1,13 +1,15 @@
 use std::env;
 use std::hash::{Hash, Hasher};
 
+use chrono::Utc;
+
 use crate::command::uuid_v4;
 
 // Any new fields MUST be Optional<>!
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct History {
     pub id: String,
-    pub timestamp: i64,
+    pub timestamp: chrono::DateTime<Utc>,
     pub duration: i64,
     pub exit: i64,
     pub command: String,
@@ -18,7 +20,7 @@ pub struct History {
 
 impl History {
     pub fn new(
-        timestamp: i64,
+        timestamp: chrono::DateTime<Utc>,
         command: String,
         cwd: String,
         exit: i64,

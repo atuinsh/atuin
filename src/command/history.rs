@@ -56,15 +56,7 @@ impl Cmd {
                 let command = words.join(" ");
                 let cwd = env::current_dir()?.display().to_string();
 
-                let h = History::new(
-                    chrono::Utc::now().timestamp_nanos(),
-                    command,
-                    cwd,
-                    -1,
-                    -1,
-                    None,
-                    None,
-                );
+                let h = History::new(chrono::Utc::now(), command, cwd, -1, -1, None, None);
 
                 // print the ID
                 // we use this as the key for calling end
@@ -76,7 +68,7 @@ impl Cmd {
             Self::End { id, exit } => {
                 let mut h = db.load(id)?;
                 h.exit = *exit;
-                h.duration = chrono::Utc::now().timestamp_nanos() - h.timestamp;
+                h.duration = chrono::Utc::now().timestamp_nanos() - h.timestamp.timestamp_nanos();
 
                 db.update(&h)?;
 

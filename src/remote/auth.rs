@@ -10,6 +10,7 @@ use uuid::Uuid;
 
 use super::models::{NewSession, NewUser, Session, User};
 use super::views::ApiResponse;
+use crate::api::{LoginRequest, RegisterRequest};
 use crate::schema::{sessions, users};
 
 use super::database::AtuinDbConn;
@@ -123,16 +124,9 @@ pub fn get_user(user: String, conn: AtuinDbConn) -> ApiResponse {
     }
 }
 
-#[derive(Deserialize)]
-pub struct Register {
-    email: String,
-    username: String,
-    password: String,
-}
-
 #[post("/register", data = "<register>")]
 #[allow(clippy::clippy::needless_pass_by_value)]
-pub fn register(conn: AtuinDbConn, register: Json<Register>) -> ApiResponse {
+pub fn register(conn: AtuinDbConn, register: Json<RegisterRequest>) -> ApiResponse {
     let hashed = hash_str(register.password.as_str());
 
     let new_user = NewUser {
@@ -178,15 +172,9 @@ pub fn register(conn: AtuinDbConn, register: Json<Register>) -> ApiResponse {
     }
 }
 
-#[derive(Deserialize)]
-pub struct Login {
-    username: String,
-    password: String,
-}
-
 #[post("/login", data = "<login>")]
 #[allow(clippy::clippy::needless_pass_by_value)]
-pub fn login(conn: AtuinDbConn, login: Json<Login>) -> ApiResponse {
+pub fn login(conn: AtuinDbConn, login: Json<LoginRequest>) -> ApiResponse {
     let user = users::table
         .filter(users::username.eq(login.username.as_str()))
         .first(&*conn);

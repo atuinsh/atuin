@@ -14,6 +14,10 @@ pub struct Local {
     pub db_path: String,
     pub key_path: String,
     pub session_path: String,
+
+    // This is automatically loaded when settings is created. Do not set in
+    // config! Keep secrets and settings apart.
+    pub session_token: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -90,6 +94,10 @@ impl Settings {
         let session_path = s.get_str("local.session_path")?;
         let session_path = shellexpand::full(session_path.as_str())?;
         s.set("local.session_path", session_path.to_string())?;
+
+        // Finally, set the auth token
+        let token = std::fs::read_to_string(session_path.to_string())?;
+        s.set("local.session_token", token)?;
 
         s.try_into()
             .map_err(|e| eyre!("failed to deserialize: {}", e))

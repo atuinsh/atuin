@@ -38,7 +38,15 @@ pub fn launch(settings: &Settings, host: String, port: u16) {
 
     app.mount(
         "/",
-        routes![index, register, add_history, login, get_user, sync_count],
+        routes![
+            index,
+            register,
+            add_history,
+            login,
+            get_user,
+            sync_count,
+            sync_list
+        ],
     )
     .attach(AtuinDbConn::fairing())
     .register(catchers![internal_error, bad_request])

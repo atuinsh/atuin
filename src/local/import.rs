@@ -4,6 +4,8 @@
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::{fs::File, path::Path};
 
+use chrono::prelude::*;
+use chrono::Utc;
 use eyre::{Result, WrapErr};
 
 use super::history::History;
@@ -41,10 +43,10 @@ fn parse_extended(line: &str) -> History {
     let (time, duration) = line.split_once(':').unwrap();
     let (duration, command) = duration.split_once(';').unwrap();
 
-    let time = time.parse::<i64>().map_or_else(
-        |_| chrono::Utc::now().timestamp_nanos(),
-        |t| t * 1_000_000_000,
-    );
+    let time = time
+        .parse::<i64>()
+        .unwrap_or_else(|_| chrono::Utc::now().timestamp());
+    let time = Utc.timestamp_nanos(time);
 
     let duration = duration.parse::<i64>().map_or(-1, |t| t * 1_000_000_000);
 
@@ -73,13 +75,16 @@ impl Iterator for Zsh {
         match self.file.read_line(&mut line) {
             Ok(0) => None,
             Ok(_) => {
+                // We have to handle the case where a line has escaped newlines.
+                // Keep reading until we have a non-escaped newline
+
                 let extended = line.starts_with(':');
 
                 if extended {
                     Some(Ok(parse_extended(line.as_str())))
                 } else {
                     Some(Ok(History::new(
-                        chrono::Utc::now().timestamp_nanos(), // what else? :/
+                        chrono::Utc::now(),
                         line.trim_end().to_string(),
                         String::from("unknown"),
                         -1,
@@ -115,6 +120,12 @@ mod test {
         let parsed = parse_extended(": 1613322469:10;cargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷");
 
         assert_eq!(parsed.command, "cargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷");
+        assert_eq!(parsed.duration, 10_000_000_000);
+        assert_eq!(parsed.timestamp, 1_613_322_469_000_000_000);
+
+        let parsed = parse_extended(": 1613322469:10;cargo install \\n atuin\n");
+
+        assert_eq!(parsed.command, "cargo install \\n atuin");
         assert_eq!(parsed.duration, 10_000_000_000);
         assert_eq!(parsed.timestamp, 1_613_322_469_000_000_000);
     }

@@ -18,7 +18,7 @@ use sodiumoxide::crypto::secretbox;
 use crate::local::history::History;
 use crate::settings::Settings;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct EncryptedHistory {
     pub ciphertext: Vec<u8>,
     pub nonce: secretbox::Nonce,
@@ -58,17 +58,9 @@ pub fn encrypt(
     Ok(EncryptedHistory { ciphertext, nonce })
 }
 
-pub fn decrypt(
-    settings: &Settings,
-    encrypted_history: &EncryptedHistory,
-    key: &secretbox::Key,
-) -> Result<History> {
-    let plaintext = secretbox::open(
-        &encrypted_history.ciphertext,
-        &encrypted_history.nonce,
-        &key,
-    )
-    .map_err(|_| eyre!("failed to open secretbox - invalid key?"))?;
+pub fn decrypt(encrypted_history: &EncryptedHistory, key: &secretbox::Key) -> Result<History> {
+    let plaintext = secretbox::open(&encrypted_history.ciphertext, &encrypted_history.nonce, key)
+        .map_err(|_| eyre!("failed to open secretbox - invalid key?"))?;
 
     let history = rmp_serde::from_read_ref(&plaintext)?;
 

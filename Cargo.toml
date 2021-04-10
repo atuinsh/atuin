@@ -9,7 +9,7 @@ description = "atuin - magical shell history"
 [dependencies]
 log = "0.4"
 fern = "0.6.0"
-chrono = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
 eyre = "0.6"
 shellexpand = "2"
 structopt = "0.3"
@@ -23,6 +23,8 @@ cli-table = "0.4"
 config = "0.11"
 serde_derive = "1.0.125"
 serde = "1.0.125"
+serde_json = "1.0.64"
+rmp-serde = "0.15.4"
 tui = "0.14"
 termion = "1.5"
 unicode-width = "0.1"
@@ -31,7 +33,6 @@ diesel = { version = "1.4.4", features = ["postgres", "chrono"] }
 diesel_migrations = "1.4.0"
 dotenv = "0.15.0"
 sodiumoxide = "0.2.6"
-rmp-serde = "0.15.4"
 reqwest = { version = "0.11", features = ["blocking", "json"] }
 base64 = "0.13.0"
 

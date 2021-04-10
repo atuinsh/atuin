@@ -1,15 +1,15 @@
-use chrono::naive::NaiveDateTime;
+use chrono::prelude::*;
+use chrono::Utc;
 
 use crate::schema::{history, sessions, users};
 
-#[derive(Identifiable, Queryable, Associations)]
+#[derive(Deserialize, Serialize, Identifiable, Queryable, Associations)]
 #[table_name = "history"]
 #[belongs_to(User)]
 pub struct History {
     pub id: i64,
     pub client_id: String, // a client generated ID
     pub user_id: i64,
-    pub mac: String,
     pub timestamp: NaiveDateTime,
 
     pub data: String,
@@ -36,7 +36,7 @@ pub struct Session {
 pub struct NewHistory<'a> {
     pub client_id: &'a str,
     pub user_id: i64,
-    pub timestamp: NaiveDateTime,
+    pub timestamp: chrono::NaiveDateTime,
 
     pub data: &'a str,
 }
