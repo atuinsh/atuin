@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use chrono::Utc;
@@ -153,8 +153,12 @@ impl Settings {
         s.set("local.session_path", session_path.to_string())?;
 
         // Finally, set the auth token
-        let token = std::fs::read_to_string(session_path.to_string())?;
-        s.set("local.session_token", token)?;
+        if Path::new(session_path.to_string().as_str()).exists() {
+            let token = std::fs::read_to_string(session_path.to_string())?;
+            s.set("local.session_token", token)?;
+        } else {
+            s.set("local.session_token", "not logged in")?;
+        }
 
         s.try_into()
             .map_err(|e| eyre!("failed to deserialize: {}", e))
