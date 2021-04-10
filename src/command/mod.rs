@@ -50,6 +50,9 @@ pub enum AtuinCmd {
 
     #[structopt(about = "register with the configured server")]
     Register(register::Cmd),
+
+    #[structopt(about = "print the encryption key for transfer to another machine")]
+    Key,
 }
 
 pub fn uuid_v4() -> String {
@@ -67,8 +70,13 @@ impl AtuinCmd {
             Self::Search { query } => search::run(&query, db),
 
             Self::Sync => sync::run(settings, db),
-            Self::Login(l) => login::run(settings, l.username, l.password),
+            Self::Login(l) => l.run(settings),
             Self::Register(r) => register::run(settings, r.username, r.email, r.password),
+            Self::Key => {
+                let key = std::fs::read(settings.local.key_path.as_str())?;
+                println!("{}", base64::encode(key));
+                Ok(())
+            }
 
             Self::Uuid => {
                 println!("{}", uuid_v4());

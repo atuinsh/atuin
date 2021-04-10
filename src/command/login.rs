@@ -15,25 +15,34 @@ pub struct Cmd {
 
     #[structopt(long, short)]
     pub password: String,
+
+    #[structopt(long, short, about = "the encryption key for your account")]
+    pub key: String,
 }
 
-pub fn run(settings: &Settings, username: String, password: String) -> Result<()> {
-    let mut map = HashMap::new();
-    map.insert("username", username);
-    map.insert("password", password);
+impl Cmd {
+    pub fn run(&self, settings: &Settings) -> Result<()> {
+        let mut map = HashMap::new();
+        map.insert("username", self.username.clone());
+        map.insert("password", self.password.clone());
 
-    let url = format!("{}/login", settings.local.sync_address);
-    let client = reqwest::blocking::Client::new();
-    let resp = client.post(url).json(&map).send()?;
+        let url = format!("{}/login", settings.local.sync_address);
+        let client = reqwest::blocking::Client::new();
+        let resp = client.post(url).json(&map).send()?;
 
-    let session = resp.json::<HashMap<String, String>>()?;
-    let session = session["session"].clone();
+        let session = resp.json::<HashMap<String, String>>()?;
+        let session = session["session"].clone();
 
-    let path = settings.local.session_path.as_str();
-    let mut file = File::create(path)?;
-    file.write_all(session.as_bytes())?;
+        let session_path = settings.local.session_path.as_str();
+        let mut file = File::create(session_path)?;
+        file.write_all(session.as_bytes())?;
 
-    println!("Logged in!");
+        let key_path = settings.local.key_path.as_str();
+        let mut file = File::create(key_path)?;
+        file.write_all(&base64::decode(self.key.clone())?)?;
 
-    Ok(())
+        println!("Logged in!");
+
+        Ok(())
+    }
 }
