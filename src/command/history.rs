@@ -75,7 +75,7 @@ impl Cmd {
 
                 db.update(&h)?;
 
-                if settings.local.should_sync() {
+                if settings.local.should_sync()? {
                     match fork() {
                         Ok(Fork::Parent(child)) => {
                             debug!("launched sync background process with PID {}", child);

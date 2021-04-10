@@ -13,6 +13,8 @@ pub struct History {
     pub timestamp: NaiveDateTime,
 
     pub data: String,
+
+    pub created_at: NaiveDateTime,
 }
 
 #[derive(Identifiable, Queryable, Associations)]

@@ -2,6 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use chrono::prelude::*;
 use chrono::Utc;
 use config::{Config, File};
 use directories::ProjectDirs;
@@ -34,45 +35,34 @@ impl Local {
         Ok(())
     }
 
-    pub fn should_sync(&self) -> bool {
-        // TODO: Make the sync time file path configurable
+    pub fn last_sync(&self) -> Result<chrono::DateTime<Utc>> {
         let sync_time_path = ProjectDirs::from("com", "elliehuxtable", "atuin");
 
         if sync_time_path.is_none() {
             debug!("failed to load projectdirs, not syncing");
-            return false;
+            return Err(eyre!("could not load project dirs"));
         }
 
         let sync_time_path = sync_time_path.unwrap();
         let sync_time_path = sync_time_path.data_dir().join("last_sync_time");
 
         if !sync_time_path.exists() {
-            debug!("no prior sync time file found, syncing");
-            return true;
+            return Ok(Utc.ymd(1970, 1, 1).and_hms(0, 0, 0));
         }
 
-        let time = std::fs::read_to_string(sync_time_path);
+        let time = std::fs::read_to_string(sync_time_path)?;
+        let time = chrono::DateTime::parse_from_rfc3339(time.as_str())?;
 
-        if time.is_err() {
-            debug!("failed to read last sync time, not syncing");
-            return false;
-        }
+        Ok(time.with_timezone(&Utc))
+    }
 
-        let time = chrono::DateTime::parse_from_rfc3339(time.unwrap().as_str());
-
-        if time.is_err() {
-            debug!("failed to parse last sync time, not syncing");
-            return false;
-        }
-
-        let time = time.unwrap().with_timezone(&Utc);
-
+    pub fn should_sync(&self) -> Result<bool> {
         match parse(self.sync_frequency.as_str()) {
             Ok(d) => {
                 let d = chrono::Duration::from_std(d).unwrap();
-                Utc::now() - time >= d
+                Ok(Utc::now() - self.last_sync()? >= d)
             }
-            Err(_) => false,
+            Err(e) => Err(eyre!("failed to check sync: {}", e)),
         }
     }
 }

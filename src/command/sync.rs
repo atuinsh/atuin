@@ -10,16 +10,21 @@ use crate::settings::Settings;
 
 // Check if remote has things we don't, and if so, download them.
 // Returns (num downloaded, total local)
-fn sync_download(client: &api_client::Client, db: &mut impl Database) -> Result<(i64, i64)> {
+fn sync_download(
+    settings: &Settings,
+    client: &api_client::Client,
+    db: &mut impl Database,
+) -> Result<(i64, i64)> {
     let remote_count = client.count()?;
 
     let initial_local = db.history_count()?;
     let mut local_count = initial_local;
 
-    let mut last_timestamp = Utc::now();
+    let last_sync = settings.local.last_sync()?;
+    let mut last_timestamp = Utc.timestamp_millis(0);
 
     while remote_count > local_count {
-        let page = client.get_history(last_timestamp)?;
+        let page = client.get_history(last_sync, last_timestamp)?;
 
         if page.len() == 0 {
             break;
@@ -28,6 +33,7 @@ fn sync_download(client: &api_client::Client, db: &mut impl Database) -> Result<
         db.save_bulk(&page)?;
 
         local_count = db.history_count()?;
+
         last_timestamp = page
             .last()
             .expect("could not get last element of page")
@@ -91,7 +97,7 @@ fn sync_upload(
 pub fn run(settings: &Settings, db: &mut impl Database) -> Result<()> {
     let client = api_client::Client::new(settings);
 
-    let download = sync_download(&client, db)?;
+    let download = sync_download(settings, &client, db)?;
 
     debug!("sync downloaded {}", download.0);
 

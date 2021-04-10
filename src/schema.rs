@@ -5,6 +5,7 @@ table! {
         user_id -> Int8,
         timestamp -> Timestamp,
         data -> Varchar,
+        created_at -> Timestamp,
     }
 }
 
@@ -25,8 +26,4 @@ table! {
     }
 }
 
-allow_tables_to_appear_in_same_query!(
-    history,
-    sessions,
-    users,
-);
+allow_tables_to_appear_in_same_query!(history, sessions, users,);

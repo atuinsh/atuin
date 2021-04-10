@@ -36,12 +36,17 @@ impl<'a> Client<'a> {
         Ok(count.count)
     }
 
-    pub fn get_history(&self, before: chrono::DateTime<Utc>) -> Result<Vec<History>> {
+    pub fn get_history(
+        &self,
+        sync_ts: chrono::DateTime<Utc>,
+        history_ts: chrono::DateTime<Utc>,
+    ) -> Result<Vec<History>> {
         let key = load_key(self.settings)?;
         let url = format!(
-            "{}/history?before={}",
+            "{}/sync/history?sync_ts={}&history_ts={}",
             self.settings.local.sync_address,
-            before.to_rfc3339()
+            sync_ts.to_rfc3339(),
+            history_ts.to_rfc3339()
         );
         let client = reqwest::blocking::Client::new();
 

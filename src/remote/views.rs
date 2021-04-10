@@ -145,11 +145,15 @@ impl<'v> FromFormValue<'v> for UtcDateTime {
     }
 }
 
-// Request a list of all history items since a given timestamp. The timestamp is
-// expected to be given as nanoseconds since 1st Jan 1970, UTC.
-#[get("/history?<before>")]
+// Request a list of all history items added to the DB after a given timestamp.
+#[get("/sync/history?<sync_ts>&<history_ts>")]
 #[allow(clippy::wildcard_imports, clippy::needless_pass_by_value)]
-pub fn sync_list(conn: AtuinDbConn, user: User, before: UtcDateTime) -> ApiResponse {
+pub fn sync_list(
+    conn: AtuinDbConn,
+    user: User,
+    sync_ts: UtcDateTime,
+    history_ts: UtcDateTime,
+) -> ApiResponse {
     use crate::schema::history::dsl::*;
 
     // we need to return the number of history items we have for this user
@@ -159,13 +163,14 @@ pub fn sync_list(conn: AtuinDbConn, user: User, before: UtcDateTime) -> ApiRespo
     // the max in config. 100 is fine for now.
     let h = history
         .filter(user_id.eq(user.id))
-        .filter(timestamp.le(before.0.naive_utc()))
-        .order(timestamp.desc())
+        .filter(created_at.ge(sync_ts.0.naive_utc()))
+        .filter(timestamp.ge(history_ts.0.naive_utc()))
+        .order(timestamp.asc())
         .limit(100)
         .load::<History>(&*conn);
 
-    if h.is_err() {
-        error!("failed to list: {}", h.err().unwrap());
+    if let Err(e) = h {
+        error!("failed to load history: {}", e);
 
         return ApiResponse {
             json: json!({"message": "internal server error"}),

@@ -6,5 +6,7 @@ create table history (
 	user_id bigserial not null,     -- allow multiple users
 	timestamp timestamp not null,   -- one of the few non-encrypted metadatas
 
-	data varchar(8192) not null     -- store the actual history data, encrypted. I don't wanna know!
+	data varchar(8192) not null,    -- store the actual history data, encrypted. I don't wanna know!
+
+	created_at timestamp not null default current_timestamp
 );

@@ -1,4 +1,6 @@
 # Source this in your ~/.zshrc
+autoload -U add-zsh-hook
+
 export ATUIN_SESSION=$(atuin uuid)
 export ATUIN_HISTORY="atuin history list"
 export ATUIN_BINDKEYS="true"
