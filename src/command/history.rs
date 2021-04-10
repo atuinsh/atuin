@@ -1,10 +1,13 @@
 use std::env;
 
 use eyre::Result;
+use fork::{fork, Fork};
 use structopt::StructOpt;
 
+use crate::command::sync;
 use crate::local::database::Database;
 use crate::local::history::History;
+use crate::settings::Settings;
 
 #[derive(StructOpt)]
 pub enum Cmd {
@@ -50,7 +53,7 @@ fn print_list(h: &[History]) {
 }
 
 impl Cmd {
-    pub fn run(&self, db: &mut impl Database) -> Result<()> {
+    pub fn run(&self, settings: &Settings, db: &mut impl Database) -> Result<()> {
         match self {
             Self::Start { command: words } => {
                 let command = words.join(" ");
@@ -71,6 +74,20 @@ impl Cmd {
                 h.duration = chrono::Utc::now().timestamp_nanos() - h.timestamp.timestamp_nanos();
 
                 db.update(&h)?;
+
+                if settings.local.should_sync() {
+                    match fork() {
+                        Ok(Fork::Parent(child)) => {
+                            debug!("launched sync background process with PID {}", child);
+                        }
+                        Ok(Fork::Child) => {
+                            debug!("running periodic background sync");
+                            sync::run(settings, db)?;
+                            settings.local.save_sync_time()?;
+                        }
+                        Err(_) => println!("Fork failed"),
+                    }
+                }
 
                 Ok(())
             }

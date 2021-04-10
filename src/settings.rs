@@ -1,9 +1,12 @@
+use std::fs;
 use std::path::PathBuf;
+use std::time::Duration;
 
+use chrono::Utc;
 use config::{Config, File};
 use directories::ProjectDirs;
 use eyre::{eyre, Result};
-use std::fs;
+use parse_duration::parse;
 
 #[derive(Debug, Deserialize)]
 pub struct Local {
@@ -18,6 +21,60 @@ pub struct Local {
     // This is automatically loaded when settings is created. Do not set in
     // config! Keep secrets and settings apart.
     pub session_token: String,
+}
+
+impl Local {
+    pub fn save_sync_time(&self) -> Result<()> {
+        let sync_time_path = ProjectDirs::from("com", "elliehuxtable", "atuin")
+            .ok_or_else(|| eyre!("could not determine key file location"))?;
+        let sync_time_path = sync_time_path.data_dir().join("last_sync_time");
+
+        std::fs::write(sync_time_path, Utc::now().to_rfc3339())?;
+
+        Ok(())
+    }
+
+    pub fn should_sync(&self) -> bool {
+        // TODO: Make the sync time file path configurable
+        let sync_time_path = ProjectDirs::from("com", "elliehuxtable", "atuin");
+
+        if sync_time_path.is_none() {
+            debug!("failed to load projectdirs, not syncing");
+            return false;
+        }
+
+        let sync_time_path = sync_time_path.unwrap();
+        let sync_time_path = sync_time_path.data_dir().join("last_sync_time");
+
+        if !sync_time_path.exists() {
+            debug!("no prior sync time file found, syncing");
+            return true;
+        }
+
+        let time = std::fs::read_to_string(sync_time_path);
+
+        if time.is_err() {
+            debug!("failed to read last sync time, not syncing");
+            return false;
+        }
+
+        let time = chrono::DateTime::parse_from_rfc3339(time.unwrap().as_str());
+
+        if time.is_err() {
+            debug!("failed to parse last sync time, not syncing");
+            return false;
+        }
+
+        let time = time.unwrap().with_timezone(&Utc);
+
+        match parse(self.sync_frequency.as_str()) {
+            Ok(d) => {
+                let d = chrono::Duration::from_std(d).unwrap();
+                Utc::now() - time >= d
+            }
+            Err(_) => false,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]

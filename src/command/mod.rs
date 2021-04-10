@@ -59,7 +59,7 @@ pub fn uuid_v4() -> String {
 impl AtuinCmd {
     pub fn run(self, db: &mut impl Database, settings: &Settings) -> Result<()> {
         match self {
-            Self::History(history) => history.run(db),
+            Self::History(history) => history.run(settings, db),
             Self::Import(import) => import.run(db),
             Self::Server(server) => server.run(settings),
             Self::Stats(stats) => stats.run(db, settings),

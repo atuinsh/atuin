@@ -17,9 +17,10 @@ fn sync_download(client: &api_client::Client, db: &mut impl Database) -> Result<
     let mut local_count = initial_local;
 
     let mut last_timestamp = Utc::now();
-    let mut page = client.get_history(last_timestamp)?;
 
     while remote_count > local_count {
+        let page = client.get_history(last_timestamp)?;
+
         if page.len() == 0 {
             break;
         }
@@ -31,8 +32,6 @@ fn sync_download(client: &api_client::Client, db: &mut impl Database) -> Result<
             .last()
             .expect("could not get last element of page")
             .timestamp;
-
-        page = client.get_history(last_timestamp)?;
     }
 
     Ok((local_count - initial_local, local_count))
@@ -74,7 +73,6 @@ fn sync_upload(
             buffer.push(add_hist);
 
             if buffer.len() >= 100 {
-                println!("{}, {}", buffer.len(), cursor);
                 client.post_history(&buffer)?;
 
                 cursor = buffer.last().unwrap().timestamp;
@@ -95,7 +93,7 @@ pub fn run(settings: &Settings, db: &mut impl Database) -> Result<()> {
 
     let download = sync_download(&client, db)?;
 
-    println!("Downloaded: {}", download.0);
+    debug!("sync downloaded {}", download.0);
 
     sync_upload(settings, &client, db)?;
 

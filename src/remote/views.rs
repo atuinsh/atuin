@@ -134,7 +134,6 @@ impl<'v> FromFormValue<'v> for UtcDateTime {
     fn from_form_value(form_value: &'v RawStr) -> Result<UtcDateTime, &'v RawStr> {
         let time = Uri::percent_decode(form_value.as_bytes()).map_err(|_| form_value)?;
         let time = time.to_string();
-        info!("got time {}", time);
 
         match chrono::DateTime::parse_from_rfc3339(time.as_str()) {
             Ok(t) => Ok(UtcDateTime(t.with_timezone(&Utc))),
