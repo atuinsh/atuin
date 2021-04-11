@@ -6,7 +6,7 @@ use std::{fs::File, path::Path};
 
 use chrono::prelude::*;
 use chrono::Utc;
-use eyre::{Result, WrapErr};
+use eyre::{eyre, Result, WrapErr};
 
 use super::history::History;
 
@@ -62,6 +62,18 @@ fn parse_extended(line: &str) -> History {
     )
 }
 
+impl Zsh {
+    fn read_line(&mut self) -> Option<Result<String>> {
+        let mut line = String::new();
+
+        match self.file.read_line(&mut line) {
+            Ok(0) => None,
+            Ok(_) => Some(Ok(line)),
+            Err(e) => Some(Err(eyre!("failed to read line: {}", e))), // we can skip past things like invalid utf8
+        }
+    }
+}
+
 impl Iterator for Zsh {
     type Item = Result<History>;
 
@@ -70,31 +82,47 @@ impl Iterator for Zsh {
         // These lines begin with :
         // So, if the line begins with :, parse it. Otherwise it's just
         // the command
-        let mut line = String::new();
+        let line = self.read_line()?;
 
-        match self.file.read_line(&mut line) {
-            Ok(0) => None,
-            Ok(_) => {
-                // We have to handle the case where a line has escaped newlines.
-                // Keep reading until we have a non-escaped newline
+        if let Err(e) = line {
+            return Some(Err(e)); // :(
+        }
 
-                let extended = line.starts_with(':');
+        let mut line = line.unwrap();
 
-                if extended {
-                    Some(Ok(parse_extended(line.as_str())))
-                } else {
-                    Some(Ok(History::new(
-                        chrono::Utc::now(),
-                        line.trim_end().to_string(),
-                        String::from("unknown"),
-                        -1,
-                        -1,
-                        None,
-                        None,
-                    )))
-                }
+        while line.ends_with("\\\n") {
+            let next_line = self.read_line()?;
+
+            if let Err(_) = next_line {
+                // There's a chance that the last line of a command has invalid
+                // characters, the only safe thing to do is break :/
+                // usually just invalid utf8 or smth
+                // however, we really need to avoid missing history, so it's
+                // better to have some items that should have been part of
+                // something else, than to miss things. So break.
+                break;
             }
-            Err(e) => Some(Err(e).wrap_err("failed to parse line")),
+
+            line.push_str(next_line.unwrap().as_str());
+        }
+
+        // We have to handle the case where a line has escaped newlines.
+        // Keep reading until we have a non-escaped newline
+
+        let extended = line.starts_with(':');
+
+        if extended {
+            Some(Ok(parse_extended(line.as_str())))
+        } else {
+            Some(Ok(History::new(
+                chrono::Utc::now(),
+                line.trim_end().to_string(),
+                String::from("unknown"),
+                -1,
+                -1,
+                None,
+                None,
+            )))
         }
     }
 }
