@@ -29,6 +29,7 @@ extern crate rocket_contrib;
 use command::AtuinCmd;
 use local::database::Sqlite;
 use settings::Settings;
+use utils::hash_str;
 
 mod api;
 mod command;

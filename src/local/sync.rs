@@ -2,11 +2,11 @@ use chrono::prelude::*;
 use eyre::Result;
 use reqwest::{blocking::Response, header::AUTHORIZATION};
 
-use crate::api::AddHistoryRequest;
 use crate::local::api_client;
 use crate::local::database::Database;
 use crate::local::encryption::{encrypt, load_key};
 use crate::settings::Settings;
+use crate::{api::AddHistoryRequest, utils::hash_str};
 
 // Currently sync is kinda naive, and basically just pages backwards through
 // history. This means newly added stuff shows up properly! We also just use
@@ -95,6 +95,7 @@ fn sync_upload(
                 id: i.id,
                 timestamp: i.timestamp,
                 data,
+                hostname: hash_str(hostname::get()?.to_str().unwrap()),
             };
 
             buffer.push(add_hist);

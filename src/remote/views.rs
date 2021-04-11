@@ -76,7 +76,7 @@ pub fn add_history(
         .iter()
         .map(|h| NewHistory {
             client_id: h.id.as_str(),
-            hostname: h.hostname,
+            hostname: h.hostname.to_string(),
             user_id: user.id,
             timestamp: h.timestamp.naive_utc(),
             data: h.data.as_str(),

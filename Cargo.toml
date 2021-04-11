@@ -38,6 +38,7 @@ base64 = "0.13.0"
 fork = "0.1.18"
 parse_duration = "2.1.1"
 rand = "0.8.3"
+rust-crypto = "^0.2"
 
 [dependencies.rusqlite]
 version = "0.25"

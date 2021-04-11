@@ -12,7 +12,7 @@ use super::models::{NewSession, NewUser, Session, User};
 use super::views::ApiResponse;
 use crate::api::{LoginRequest, RegisterRequest};
 use crate::schema::{sessions, users};
-use crate::utils::hash_str;
+use crate::utils::hash_secret;
 
 use super::database::AtuinDbConn;
 
@@ -114,7 +114,7 @@ pub fn get_user(user: String, conn: AtuinDbConn) -> ApiResponse {
 #[post("/register", data = "<register>")]
 #[allow(clippy::clippy::needless_pass_by_value)]
 pub fn register(conn: AtuinDbConn, register: Json<RegisterRequest>) -> ApiResponse {
-    let hashed = hash_str(register.password.as_str());
+    let hashed = hash_secret(register.password.as_str());
 
     let new_user = NewUser {
         email: register.email.as_str(),
