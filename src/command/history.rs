@@ -83,7 +83,6 @@ impl Cmd {
                         Ok(Fork::Child) => {
                             debug!("running periodic background sync");
                             sync::run(settings, db)?;
-                            settings.local.save_sync_time()?;
                         }
                         Err(_) => println!("Fork failed"),
                     }

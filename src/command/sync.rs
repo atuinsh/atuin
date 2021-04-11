@@ -8,6 +8,15 @@ use crate::local::database::Database;
 use crate::local::encryption::{encrypt, load_key};
 use crate::settings::Settings;
 
+// Currently sync is kinda naive, and basically just pages backwards through
+// history. This means newly added stuff shows up properly! We also just use
+// the total count in each database to indicate whether a sync is needed.
+// I think this could be massively improved! If we had a way of easily
+// indicating count per time period (hour, day, week, year, etc) then we can
+// easily pinpoint where we are missing data and what needs downloading. Start
+// with year, then find the week, then the day, then the hour, then download it
+// all! The current naive approach will do for now.
+
 // Check if remote has things we don't, and if so, download them.
 // Returns (num downloaded, total local)
 fn sync_download(
@@ -20,7 +29,7 @@ fn sync_download(
     let initial_local = db.history_count()?;
     let mut local_count = initial_local;
 
-    let last_sync = settings.local.last_sync()?;
+    let mut last_sync = settings.local.last_sync()?;
     let mut last_timestamp = Utc.timestamp_millis(0);
 
     while remote_count > local_count {
@@ -39,8 +48,12 @@ fn sync_download(
             .expect("could not get last element of page")
             .timestamp;
 
+        // in the case of a small sync frequency, it's possible for history to
+        // be "lost" between syncs. In this case we need to rewind the sync
+        // timestamps
         if page_last == last_timestamp {
             last_timestamp = Utc.timestamp_millis(0);
+            last_sync = last_sync - chrono::Duration::hours(1);
         } else {
             last_timestamp = page_last;
         }
@@ -100,11 +113,12 @@ fn sync_upload(
 pub fn run(settings: &Settings, db: &mut impl Database) -> Result<()> {
     let client = api_client::Client::new(settings);
 
+    sync_upload(settings, &client, db)?;
+
     let download = sync_download(settings, &client, db)?;
 
     debug!("sync downloaded {}", download.0);
 
-    sync_upload(settings, &client, db)?;
-
+    settings.local.save_sync_time()?;
     Ok(())
 }
