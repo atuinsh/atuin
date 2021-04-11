@@ -46,7 +46,8 @@ fn parse_extended(line: &str) -> History {
     let time = time
         .parse::<i64>()
         .unwrap_or_else(|_| chrono::Utc::now().timestamp());
-    let time = Utc.timestamp_nanos(time);
+
+    let time = Utc.timestamp(time, 0);
 
     let duration = duration.parse::<i64>().map_or(-1, |t| t * 1_000_000_000);
 
@@ -129,6 +130,9 @@ impl Iterator for Zsh {
 
 #[cfg(test)]
 mod test {
+    use chrono::prelude::*;
+    use chrono::Utc;
+
     use super::parse_extended;
 
     #[test]
@@ -137,24 +141,24 @@ mod test {
 
         assert_eq!(parsed.command, "cargo install atuin");
         assert_eq!(parsed.duration, 0);
-        assert_eq!(parsed.timestamp, 1_613_322_469_000_000_000);
+        assert_eq!(parsed.timestamp, Utc.timestamp(1_613_322_469, 0));
 
         let parsed = parse_extended(": 1613322469:10;cargo install atuin;cargo update");
 
         assert_eq!(parsed.command, "cargo install atuin;cargo update");
         assert_eq!(parsed.duration, 10_000_000_000);
-        assert_eq!(parsed.timestamp, 1_613_322_469_000_000_000);
+        assert_eq!(parsed.timestamp, Utc.timestamp(1_613_322_469, 0));
 
         let parsed = parse_extended(": 1613322469:10;cargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷");
 
         assert_eq!(parsed.command, "cargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷");
         assert_eq!(parsed.duration, 10_000_000_000);
-        assert_eq!(parsed.timestamp, 1_613_322_469_000_000_000);
+        assert_eq!(parsed.timestamp, Utc.timestamp(1_613_322_469, 0));
 
         let parsed = parse_extended(": 1613322469:10;cargo install \\n atuin\n");
 
         assert_eq!(parsed.command, "cargo install \\n atuin");
         assert_eq!(parsed.duration, 10_000_000_000);
-        assert_eq!(parsed.timestamp, 1_613_322_469_000_000_000);
+        assert_eq!(parsed.timestamp, Utc.timestamp(1_613_322_469, 0));
     }
 }

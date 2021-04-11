@@ -83,7 +83,7 @@ mod test {
         let settings = Settings::new().unwrap();
 
         let history = History::new(
-            0,
+            chrono::Utc::now(),
             "ls".to_string(),
             "/home/ellie".to_string(),
             0,
@@ -100,13 +100,13 @@ mod test {
 
         // test decryption works
         // this should pass
-        match decrypt(&settings, &e1, &key1) {
+        match decrypt(&e1, &key1) {
             Err(e) => assert!(false, "failed to decrypt, got {}", e),
             Ok(h) => assert_eq!(h, history),
         };
 
         // this should err
-        match decrypt(&settings, &e2, &key1) {
+        match decrypt(&e2, &key1) {
             Ok(_) => assert!(false, "expected an error decrypting with invalid key"),
             Err(_) => {}
         };
