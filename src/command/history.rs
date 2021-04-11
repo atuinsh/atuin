@@ -4,9 +4,9 @@ use eyre::Result;
 use fork::{fork, Fork};
 use structopt::StructOpt;
 
-use crate::command::sync;
 use crate::local::database::Database;
 use crate::local::history::History;
+use crate::local::sync;
 use crate::settings::Settings;
 
 #[derive(StructOpt)]
@@ -82,7 +82,7 @@ impl Cmd {
                         }
                         Ok(Fork::Child) => {
                             debug!("running periodic background sync");
-                            sync::run(settings, db)?;
+                            sync::sync(settings, db)?;
                         }
                         Err(_) => println!("Fork failed"),
                     }

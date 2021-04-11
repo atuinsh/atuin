@@ -26,6 +26,7 @@ pub struct AddHistoryRequest {
     pub id: String,
     pub timestamp: chrono::DateTime<Utc>,
     pub data: String,
+    pub hostname: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

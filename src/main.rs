@@ -35,6 +35,7 @@ mod command;
 mod local;
 mod remote;
 mod settings;
+mod utils;
 
 pub mod schema;
 

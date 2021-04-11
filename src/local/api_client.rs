@@ -9,6 +9,7 @@ use crate::api::{AddHistoryRequest, CountResponse, ListHistoryResponse};
 use crate::local::encryption::{decrypt, load_key};
 use crate::local::history::History;
 use crate::settings::Settings;
+use crate::utils::hash_str;
 
 pub struct Client<'a> {
     settings: &'a Settings,
@@ -43,10 +44,11 @@ impl<'a> Client<'a> {
     ) -> Result<Vec<History>> {
         let key = load_key(self.settings)?;
         let url = format!(
-            "{}/sync/history?sync_ts={}&history_ts={}",
+            "{}/sync/history?sync_ts={}&history_ts={}&host={}",
             self.settings.local.sync_address,
             sync_ts.to_rfc3339(),
-            history_ts.to_rfc3339()
+            history_ts.to_rfc3339(),
+            hash_str(hostname::get()?.to_str().unwrap()),
         );
         let client = reqwest::blocking::Client::new();
 

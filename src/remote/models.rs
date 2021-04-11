@@ -10,6 +10,7 @@ pub struct History {
     pub id: i64,
     pub client_id: String, // a client generated ID
     pub user_id: i64,
+    pub hostname: String,
     pub timestamp: NaiveDateTime,
 
     pub data: String,
@@ -38,6 +39,7 @@ pub struct Session {
 pub struct NewHistory<'a> {
     pub client_id: &'a str,
     pub user_id: i64,
+    pub hostname: String,
     pub timestamp: chrono::NaiveDateTime,
 
     pub data: &'a str,

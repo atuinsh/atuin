@@ -3,6 +3,7 @@ table! {
         id -> Int8,
         client_id -> Text,
         user_id -> Int8,
+        hostname -> Text,
         timestamp -> Timestamp,
         data -> Varchar,
         created_at -> Timestamp,

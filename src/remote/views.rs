@@ -76,6 +76,7 @@ pub fn add_history(
         .iter()
         .map(|h| NewHistory {
             client_id: h.id.as_str(),
+            hostname: h.hostname,
             user_id: user.id,
             timestamp: h.timestamp.naive_utc(),
             data: h.data.as_str(),
@@ -146,13 +147,16 @@ impl<'v> FromFormValue<'v> for UtcDateTime {
 }
 
 // Request a list of all history items added to the DB after a given timestamp.
-#[get("/sync/history?<sync_ts>&<history_ts>")]
+// Provide the current hostname, so that we don't send the client data that
+// originated from them
+#[get("/sync/history?<sync_ts>&<history_ts>&<host>")]
 #[allow(clippy::wildcard_imports, clippy::needless_pass_by_value)]
 pub fn sync_list(
     conn: AtuinDbConn,
     user: User,
     sync_ts: UtcDateTime,
     history_ts: UtcDateTime,
+    host: String,
 ) -> ApiResponse {
     use crate::schema::history::dsl::*;
 
@@ -163,6 +167,7 @@ pub fn sync_list(
     // the max in config. 100 is fine for now.
     let h = history
         .filter(user_id.eq(user.id))
+        .filter(hostname.ne(host))
         .filter(created_at.ge(sync_ts.0.naive_utc()))
         .filter(timestamp.ge(history_ts.0.naive_utc()))
         .order(timestamp.asc())
