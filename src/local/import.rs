@@ -7,6 +7,7 @@ use std::{fs::File, path::Path};
 use chrono::prelude::*;
 use chrono::Utc;
 use eyre::{eyre, Result, WrapErr};
+use rand::Rng;
 
 use super::history::History;
 
@@ -115,8 +116,20 @@ impl Iterator for Zsh {
         if extended {
             Some(Ok(parse_extended(line.as_str())))
         } else {
+            // Timestamps are used as part of paging, and are useful for stable
+            // sorting. There's no way to know when this history item was added
+            // anyway, so we set it to the current time with a random offset.
+            // The random offset means that we should get nice stable sorting
+            // and paging!
+            let time = chrono::Utc::now();
+
+            let mut rng = rand::thread_rng();
+            // up to 1 hour offset, in nanoseconds
+            let offset = chrono::Duration::nanoseconds(rng.gen_range(0..3_600_000_000_000));
+            let time = time - offset;
+
             Some(Ok(History::new(
-                chrono::Utc::now(),
+                time,
                 line.trim_end().to_string(),
                 String::from("unknown"),
                 -1,

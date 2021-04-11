@@ -125,6 +125,7 @@ dependencies = [
  "itertools",
  "log 0.4.14",
  "parse_duration",
+ "rand 0.8.3",
  "reqwest",
  "rmp-serde",
  "rocket",
