@@ -215,9 +215,9 @@ impl Database for Sqlite {
     }
 
     fn before(&self, timestamp: chrono::DateTime<Utc>, count: i64) -> Result<Vec<History>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT * FROM history where timestamp < ? order by timestamp desc limit ?")?;
+        let mut stmt = self.conn.prepare(
+            "SELECT * FROM history where timestamp <= ? order by timestamp desc limit ?",
+        )?;
 
         let history_iter = stmt.query_map(params![timestamp.timestamp_nanos(), count], |row| {
             history_from_sqlite_row(None, row)

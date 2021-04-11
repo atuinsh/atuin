@@ -56,15 +56,17 @@ fn sync_upload(
 
     let key = load_key(settings)?; // encryption key
 
+    // first just try the most recent set
+
     let mut cursor = Utc::now();
 
     while local_count > remote_count {
-        let missing = local_count - remote_count;
-
-        // unless any new clients have been setup, odds are the missing
-        // history is recent
-        let last = db.before(cursor, missing)?;
+        let last = db.before(cursor, 100)?;
         let mut buffer = Vec::<AddHistoryRequest>::new();
+
+        if last.len() == 0 {
+            break;
+        }
 
         for i in last {
             let data = encrypt(settings, &i, &key)?;
@@ -77,17 +79,12 @@ fn sync_upload(
             };
 
             buffer.push(add_hist);
-
-            if buffer.len() >= 100 {
-                client.post_history(&buffer)?;
-
-                cursor = buffer.last().unwrap().timestamp;
-                buffer = Vec::new();
-            }
         }
 
         // anything left over outside of the 100 block size
         client.post_history(&buffer)?;
+        cursor = buffer.last().unwrap().timestamp;
+
         remote_count = client.count()?;
     }
 
