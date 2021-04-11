@@ -34,10 +34,16 @@ fn sync_download(
 
         local_count = db.history_count()?;
 
-        last_timestamp = page
+        let page_last = page
             .last()
             .expect("could not get last element of page")
             .timestamp;
+
+        if page_last == last_timestamp {
+            last_timestamp = Utc.timestamp_millis(0);
+        } else {
+            last_timestamp = page_last;
+        }
     }
 
     Ok((local_count - initial_local, local_count))
