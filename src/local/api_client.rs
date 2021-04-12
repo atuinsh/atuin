@@ -43,12 +43,14 @@ impl<'a> Client<'a> {
         history_ts: chrono::DateTime<Utc>,
     ) -> Result<Vec<History>> {
         let key = load_key(self.settings)?;
+
+        // this allows for syncing between users on the same machine
         let url = format!(
             "{}/sync/history?sync_ts={}&history_ts={}&host={}",
             self.settings.local.sync_address,
             sync_ts.to_rfc3339(),
             history_ts.to_rfc3339(),
-            hash_str(hostname::get()?.to_str().unwrap()),
+            hash_str(&format!("{}:{}", whoami::hostname(), whoami::username())),
         );
         let client = reqwest::blocking::Client::new();
 

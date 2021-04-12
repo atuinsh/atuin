@@ -16,6 +16,7 @@ pub struct Zsh {
     file: BufReader<File>,
 
     pub loc: u64,
+    pub counter: i64,
 }
 
 // this could probably be sped up
@@ -35,11 +36,12 @@ impl Zsh {
         Ok(Self {
             file: buf,
             loc: loc as u64,
+            counter: 0,
         })
     }
 }
 
-fn parse_extended(line: &str) -> History {
+fn parse_extended(line: &str, counter: i64) -> History {
     let line = line.replacen(": ", "", 2);
     let (time, duration) = line.split_once(':').unwrap();
     let (duration, command) = duration.split_once(';').unwrap();
@@ -48,7 +50,9 @@ fn parse_extended(line: &str) -> History {
         .parse::<i64>()
         .unwrap_or_else(|_| chrono::Utc::now().timestamp());
 
+    let offset = chrono::Duration::milliseconds(counter);
     let time = Utc.timestamp(time, 0);
+    let time = time + offset;
 
     let duration = duration.parse::<i64>().map_or(-1, |t| t * 1_000_000_000);
 
@@ -114,19 +118,14 @@ impl Iterator for Zsh {
         let extended = line.starts_with(':');
 
         if extended {
-            Some(Ok(parse_extended(line.as_str())))
+            self.counter += 1;
+            Some(Ok(parse_extended(line.as_str(), self.counter)))
         } else {
-            // Timestamps are used as part of paging, and are useful for stable
-            // sorting. There's no way to know when this history item was added
-            // anyway, so we set it to the current time with a random offset.
-            // The random offset means that we should get nice stable sorting
-            // and paging!
             let time = chrono::Utc::now();
-
-            let mut rng = rand::thread_rng();
-            // up to 1 hour offset, in nanoseconds
-            let offset = chrono::Duration::nanoseconds(rng.gen_range(0..3_600_000_000_000));
+            let offset = chrono::Duration::seconds(self.counter);
             let time = time - offset;
+
+            self.counter += 1;
 
             Some(Ok(History::new(
                 time,
@@ -150,25 +149,25 @@ mod test {
 
     #[test]
     fn test_parse_extended_simple() {
-        let parsed = parse_extended(": 1613322469:0;cargo install atuin");
+        let parsed = parse_extended(": 1613322469:0;cargo install atuin", 0);
 
         assert_eq!(parsed.command, "cargo install atuin");
         assert_eq!(parsed.duration, 0);
         assert_eq!(parsed.timestamp, Utc.timestamp(1_613_322_469, 0));
 
-        let parsed = parse_extended(": 1613322469:10;cargo install atuin;cargo update");
+        let parsed = parse_extended(": 1613322469:10;cargo install atuin;cargo update", 0);
 
         assert_eq!(parsed.command, "cargo install atuin;cargo update");
         assert_eq!(parsed.duration, 10_000_000_000);
         assert_eq!(parsed.timestamp, Utc.timestamp(1_613_322_469, 0));
 
-        let parsed = parse_extended(": 1613322469:10;cargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷");
+        let parsed = parse_extended(": 1613322469:10;cargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷", 0);
 
         assert_eq!(parsed.command, "cargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷");
         assert_eq!(parsed.duration, 10_000_000_000);
         assert_eq!(parsed.timestamp, Utc.timestamp(1_613_322_469, 0));
 
-        let parsed = parse_extended(": 1613322469:10;cargo install \\n atuin\n");
+        let parsed = parse_extended(": 1613322469:10;cargo install \\n atuin\n", 0);
 
         assert_eq!(parsed.command, "cargo install \\n atuin");
         assert_eq!(parsed.duration, 10_000_000_000);

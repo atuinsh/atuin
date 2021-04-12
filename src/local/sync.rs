@@ -29,7 +29,7 @@ fn sync_download(
     let initial_local = db.history_count()?;
     let mut local_count = initial_local;
 
-    let mut last_sync = settings.local.last_sync()?;
+    let mut last_sync = Utc.timestamp_millis(0);
     let mut last_timestamp = Utc.timestamp_millis(0);
 
     while remote_count > local_count {
@@ -95,7 +95,7 @@ fn sync_upload(
                 id: i.id,
                 timestamp: i.timestamp,
                 data,
-                hostname: hash_str(hostname::get()?.to_str().unwrap()),
+                hostname: hash_str(i.hostname.as_str()),
             };
 
             buffer.push(add_hist);
