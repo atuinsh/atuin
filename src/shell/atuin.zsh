@@ -57,6 +57,7 @@ zle -N _atuin_up_search_widget _atuin_up_search
 if [[ $ATUIN_BINDKEYS == "true" ]]; then
 	bindkey '^r' _atuin_search_widget
 
-	# seems like one on some systems, one on others. Idk why
+	# depends on terminal mode
 	bindkey '^[[A' _atuin_up_search_widget
+	bindkey '^[OA' _atuin_up_search_widget
 fi
