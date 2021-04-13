@@ -42,7 +42,7 @@ pub mod schema;
 #[derive(StructOpt)]
 #[structopt(
     author = "Ellie Huxtable <e@elm.sh>",
-    version = "0.4.0",
+    version = "0.5.0",
     about = "Magical shell history",
     global_settings(&[AppSettings::ColoredHelp, AppSettings::DeriveDisplayOrder])
 )]
