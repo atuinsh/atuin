@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::prelude::*;
 use chrono::Utc;
-use config::{Config, File as ConfigFile};
+use config::{Config, Environment, File as ConfigFile};
 use directories::ProjectDirs;
 use eyre::{eyre, Result};
 use parse_duration::parse;
@@ -94,10 +94,14 @@ impl Settings {
 
         create_dir_all(config_dir)?;
 
-        let mut config_file = PathBuf::new();
-        config_file.push(config_dir);
-        config_file.push("config.toml");
-        let config_file = config_file.as_path();
+        let config_file = if let Ok(p) = std::env::var("ATUIN_CONFIG") {
+            PathBuf::from(p)
+        } else {
+            let mut config_file = PathBuf::new();
+            config_file.push(config_dir);
+            config_file.push("config.toml");
+            config_file
+        };
 
         // create the config file if it does not exist
 
@@ -129,7 +133,7 @@ impl Settings {
         s.set_default("server.host", "127.0.0.1")?;
         s.set_default("server.port", 8888)?;
         s.set_default("server.open_registration", false)?;
-        s.set_default("server.db_uri", "please set a postgres url")?;
+        s.set_default("server.db_uri", "DEFAULT POSTGRES URI, PLEASE CHANGE")?;
 
         if config_file.exists() {
             s.merge(ConfigFile::with_name(config_file.to_str().unwrap()))?;
@@ -138,6 +142,8 @@ impl Settings {
             let mut file = File::create(config_file)?;
             file.write_all(example_config)?;
         }
+
+        s.merge(Environment::with_prefix("atuin").separator("_"))?;
 
         // all paths should be expanded
         let db_path = s.get_str("local.db_path")?;
