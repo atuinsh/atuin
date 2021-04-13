@@ -82,7 +82,7 @@ impl Cmd {
                         }
                         Ok(Fork::Child) => {
                             debug!("running periodic background sync");
-                            sync::sync(settings, db)?;
+                            sync::sync(settings, false, db)?;
                         }
                         Err(_) => println!("Fork failed"),
                     }

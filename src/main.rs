@@ -56,9 +56,7 @@ struct Atuin {
 }
 
 impl Atuin {
-    fn run(self) -> Result<()> {
-        let settings = Settings::new()?;
-
+    fn run(self, settings: &Settings) -> Result<()> {
         let db_path = if let Some(db_path) = self.db {
             let path = db_path
                 .to_str()
@@ -76,6 +74,8 @@ impl Atuin {
 }
 
 fn main() -> Result<()> {
+    let settings = Settings::new()?;
+
     fern::Dispatch::new()
         .format(|out, message, record| {
             out.finish(format_args!(
@@ -89,5 +89,5 @@ fn main() -> Result<()> {
         .chain(std::io::stdout())
         .apply()?;
 
-    Atuin::from_args().run()
+    Atuin::from_args().run(&settings)
 }

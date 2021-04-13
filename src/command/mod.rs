@@ -43,7 +43,10 @@ pub enum AtuinCmd {
     Search { query: Vec<String> },
 
     #[structopt(about = "sync with the configured server")]
-    Sync,
+    Sync {
+        #[structopt(long, short, about = "force re-download everything")]
+        force: bool,
+    },
 
     #[structopt(about = "login to the configured server")]
     Login(login::Cmd),
@@ -69,7 +72,7 @@ impl AtuinCmd {
             Self::Init => init::init(),
             Self::Search { query } => search::run(&query, db),
 
-            Self::Sync => sync::run(settings, db),
+            Self::Sync { force } => sync::run(settings, force, db),
             Self::Login(l) => l.run(settings),
             Self::Register(r) => register::run(settings, r.username, r.email, r.password),
             Self::Key => {

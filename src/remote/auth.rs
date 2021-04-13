@@ -2,6 +2,7 @@ use self::diesel::prelude::*;
 use eyre::Result;
 use rocket::http::{ContentType, Header, Status};
 use rocket::request::{self, FromRequest, Outcome, Request};
+use rocket::State;
 use rocket_contrib::databases::diesel;
 use sodiumoxide::crypto::pwhash::argon2id13;
 
@@ -10,8 +11,10 @@ use uuid::Uuid;
 
 use super::models::{NewSession, NewUser, Session, User};
 use super::views::ApiResponse;
+
 use crate::api::{LoginRequest, RegisterRequest};
 use crate::schema::{sessions, users};
+use crate::settings::Settings;
 use crate::utils::hash_secret;
 
 use super::database::AtuinDbConn;
@@ -113,7 +116,20 @@ pub fn get_user(user: String, conn: AtuinDbConn) -> ApiResponse {
 
 #[post("/register", data = "<register>")]
 #[allow(clippy::clippy::needless_pass_by_value)]
-pub fn register(conn: AtuinDbConn, register: Json<RegisterRequest>) -> ApiResponse {
+pub fn register(
+    conn: AtuinDbConn,
+    register: Json<RegisterRequest>,
+    settings: State<Settings>,
+) -> ApiResponse {
+    if !settings.server.open_registration {
+        return ApiResponse {
+            status: Status::BadRequest,
+            json: json!({
+                "message": "registrations are not open"
+            }),
+        };
+    }
+
     let hashed = hash_secret(register.password.as_str());
 
     let new_user = NewUser {
@@ -130,7 +146,6 @@ pub fn register(conn: AtuinDbConn, register: Json<RegisterRequest>) -> ApiRespon
         return ApiResponse {
             status: Status::BadRequest,
             json: json!({
-                "status": "error",
                 "message": "failed to create user - username or email in use?",
             }),
         };
@@ -150,11 +165,11 @@ pub fn register(conn: AtuinDbConn, register: Json<RegisterRequest>) -> ApiRespon
     {
         Ok(_) => ApiResponse {
             status: Status::Ok,
-            json: json!({"status": "ok", "message": "user created!", "session": token}),
+            json: json!({"message": "user created!", "session": token}),
         },
         Err(_) => ApiResponse {
             status: Status::BadRequest,
-            json: json!({"status": "error", "message": "failed to create user"}),
+            json: json!({ "message": "failed to create user"}),
         },
     }
 }
@@ -169,7 +184,7 @@ pub fn login(conn: AtuinDbConn, login: Json<LoginRequest>) -> ApiResponse {
     if user.is_err() {
         return ApiResponse {
             status: Status::NotFound,
-            json: json!({"status": "error", "message": "user not found"}),
+            json: json!({"message": "user not found"}),
         };
     }
 
@@ -183,7 +198,7 @@ pub fn login(conn: AtuinDbConn, login: Json<LoginRequest>) -> ApiResponse {
     if session.is_err() {
         return ApiResponse {
             status: Status::InternalServerError,
-            json: json!({"status": "error", "message": "something went wrong"}),
+            json: json!({"message": "something went wrong"}),
         };
     }
 
@@ -192,7 +207,7 @@ pub fn login(conn: AtuinDbConn, login: Json<LoginRequest>) -> ApiResponse {
     if !verified {
         return ApiResponse {
             status: Status::NotFound,
-            json: json!({"status": "error", "message": "user not found"}),
+            json: json!({"message": "user not found"}),
         };
     }
 
@@ -200,6 +215,6 @@ pub fn login(conn: AtuinDbConn, login: Json<LoginRequest>) -> ApiResponse {
 
     ApiResponse {
         status: Status::Ok,
-        json: json!({"status": "ok", "session": session.token}),
+        json: json!({"session": session.token}),
     }
 }

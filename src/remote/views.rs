@@ -13,6 +13,7 @@ use self::diesel::prelude::*;
 
 use crate::api::AddHistoryRequest;
 use crate::schema::history;
+use crate::settings::HISTORY_PAGE_SIZE;
 
 use super::database::AtuinDbConn;
 use super::models::{History, NewHistory, User};
@@ -171,7 +172,7 @@ pub fn sync_list(
         .filter(created_at.ge(sync_ts.0.naive_utc()))
         .filter(timestamp.ge(history_ts.0.naive_utc()))
         .order(timestamp.asc())
-        .limit(100)
+        .limit(HISTORY_PAGE_SIZE)
         .load::<History>(&*conn);
 
     if let Err(e) = h {

@@ -17,13 +17,15 @@ use super::auth::*;
 embed_migrations!("migrations");
 
 pub fn launch(settings: &Settings, host: String, port: u16) {
+    let settings: Settings = settings.clone(); // clone so rocket can manage it
+
     let mut database_config = HashMap::new();
     let mut databases = HashMap::new();
 
-    database_config.insert("url", Value::from(settings.remote.db_uri.clone()));
+    database_config.insert("url", Value::from(settings.server.db_uri.clone()));
     databases.insert("atuin", Value::from(database_config));
 
-    let connection = establish_connection(settings);
+    let connection = establish_connection(&settings);
     embedded_migrations::run(&connection).expect("failed to run migrations");
 
     let config = Config::build(Environment::Production)
@@ -48,6 +50,7 @@ pub fn launch(settings: &Settings, host: String, port: u16) {
             sync_list
         ],
     )
+    .manage(settings)
     .attach(AtuinDbConn::fairing())
     .register(catchers![internal_error, bad_request])
     .launch();

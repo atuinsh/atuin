@@ -1,18 +1,20 @@
-use std::fs;
+use std::fs::{create_dir_all, File};
+use std::io::prelude::*;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use chrono::prelude::*;
 use chrono::Utc;
-use config::{Config, File};
+use config::{Config, File as ConfigFile};
 use directories::ProjectDirs;
 use eyre::{eyre, Result};
 use parse_duration::parse;
 
-#[derive(Debug, Deserialize)]
+pub const HISTORY_PAGE_SIZE: i64 = 100;
+
+#[derive(Clone, Debug, Deserialize)]
 pub struct Local {
     pub dialect: String,
-    pub sync: bool,
+    pub auto_sync: bool,
     pub sync_address: String,
     pub sync_frequency: String,
     pub db_path: String,
@@ -57,6 +59,10 @@ impl Local {
     }
 
     pub fn should_sync(&self) -> Result<bool> {
+        if !self.auto_sync {
+            return Ok(false);
+        }
+
         match parse(self.sync_frequency.as_str()) {
             Ok(d) => {
                 let d = chrono::Duration::from_std(d).unwrap();
@@ -67,18 +73,18 @@ impl Local {
     }
 }
 
-#[derive(Debug, Deserialize)]
-pub struct Remote {
+#[derive(Clone, Debug, Deserialize)]
+pub struct Server {
     pub host: String,
     pub port: u16,
     pub db_uri: String,
     pub open_registration: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct Settings {
     pub local: Local,
-    pub remote: Remote,
+    pub server: Server,
 }
 
 impl Settings {
@@ -86,7 +92,7 @@ impl Settings {
         let config_dir = ProjectDirs::from("com", "elliehuxtable", "atuin").unwrap();
         let config_dir = config_dir.config_dir();
 
-        fs::create_dir_all(config_dir)?;
+        create_dir_all(config_dir)?;
 
         let mut config_file = PathBuf::new();
         config_file.push(config_dir);
@@ -116,17 +122,21 @@ impl Settings {
         s.set_default("local.key_path", key_path.to_str())?;
         s.set_default("local.session_path", session_path.to_str())?;
         s.set_default("local.dialect", "us")?;
-        s.set_default("local.sync", false)?;
+        s.set_default("local.auto_sync", true)?;
         s.set_default("local.sync_frequency", "5m")?;
-        s.set_default("local.sync_address", "https://atuin.ellie.wtf")?;
+        s.set_default("local.sync_address", "https://api.atuin.sh")?;
 
-        s.set_default("remote.host", "127.0.0.1")?;
-        s.set_default("remote.port", 8888)?;
-        s.set_default("remote.open_registration", false)?;
-        s.set_default("remote.db_uri", "please set a postgres url")?;
+        s.set_default("server.host", "127.0.0.1")?;
+        s.set_default("server.port", 8888)?;
+        s.set_default("server.open_registration", false)?;
+        s.set_default("server.db_uri", "please set a postgres url")?;
 
         if config_file.exists() {
-            s.merge(File::with_name(config_file.to_str().unwrap()))?;
+            s.merge(ConfigFile::with_name(config_file.to_str().unwrap()))?;
+        } else {
+            let example_config = include_bytes!("../config.toml");
+            let mut file = File::create(config_file)?;
+            file.write_all(example_config)?;
         }
 
         // all paths should be expanded

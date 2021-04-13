@@ -1,3 +1,5 @@
+use std::convert::TryInto;
+
 use chrono::prelude::*;
 use eyre::Result;
 use reqwest::{blocking::Response, header::AUTHORIZATION};
@@ -5,7 +7,7 @@ use reqwest::{blocking::Response, header::AUTHORIZATION};
 use crate::local::api_client;
 use crate::local::database::Database;
 use crate::local::encryption::{encrypt, load_key};
-use crate::settings::Settings;
+use crate::settings::{Settings, HISTORY_PAGE_SIZE};
 use crate::{api::AddHistoryRequest, utils::hash_str};
 
 // Currently sync is kinda naive, and basically just pages backwards through
@@ -21,6 +23,7 @@ use crate::{api::AddHistoryRequest, utils::hash_str};
 // Returns (num downloaded, total local)
 fn sync_download(
     settings: &Settings,
+    force: bool,
     client: &api_client::Client,
     db: &mut impl Database,
 ) -> Result<(i64, i64)> {
@@ -29,13 +32,20 @@ fn sync_download(
     let initial_local = db.history_count()?;
     let mut local_count = initial_local;
 
-    let mut last_sync = Utc.timestamp_millis(0);
+    let mut last_sync = if force {
+        Utc.timestamp_millis(0)
+    } else {
+        settings.local.last_sync()?
+    };
+
     let mut last_timestamp = Utc.timestamp_millis(0);
 
-    while remote_count > local_count {
-        let page = client.get_history(last_sync, last_timestamp)?;
+    let host = if force { Some(String::from("")) } else { None };
 
-        if page.len() == 0 {
+    while remote_count > local_count {
+        let page = client.get_history(last_sync, last_timestamp, host.clone())?;
+
+        if page.len() < HISTORY_PAGE_SIZE.try_into().unwrap() {
             break;
         }
 
@@ -65,6 +75,7 @@ fn sync_download(
 // Check if we have things remote doesn't, and if so, upload them
 fn sync_upload(
     settings: &Settings,
+    force: bool,
     client: &api_client::Client,
     db: &mut impl Database,
 ) -> Result<()> {
@@ -80,7 +91,7 @@ fn sync_upload(
     let mut cursor = Utc::now();
 
     while local_count > remote_count {
-        let last = db.before(cursor, 100)?;
+        let last = db.before(cursor, HISTORY_PAGE_SIZE)?;
         let mut buffer = Vec::<AddHistoryRequest>::new();
 
         if last.len() == 0 {
@@ -111,12 +122,12 @@ fn sync_upload(
     Ok(())
 }
 
-pub fn sync(settings: &Settings, db: &mut impl Database) -> Result<()> {
+pub fn sync(settings: &Settings, force: bool, db: &mut impl Database) -> Result<()> {
     let client = api_client::Client::new(settings);
 
-    sync_upload(settings, &client, db)?;
+    sync_upload(settings, force, &client, db)?;
 
-    let download = sync_download(settings, &client, db)?;
+    let download = sync_download(settings, force, &client, db)?;
 
     debug!("sync downloaded {}", download.0);
 
