@@ -1,6 +1,8 @@
 use self::diesel::prelude::*;
+use eyre::Result;
 use rocket::http::Status;
 use rocket::request::{self, FromRequest, Outcome, Request};
+use rocket::State;
 use rocket_contrib::databases::diesel;
 use sodiumoxide::crypto::pwhash::argon2id13;
 
@@ -9,7 +11,11 @@ use uuid::Uuid;
 
 use super::models::{NewSession, NewUser, Session, User};
 use super::views::ApiResponse;
+
+use crate::api::{LoginRequest, RegisterRequest};
 use crate::schema::{sessions, users};
+use crate::settings::Settings;
+use crate::utils::hash_secret;
 
 use super::database::AtuinDbConn;
 
@@ -17,20 +23,6 @@ use super::database::AtuinDbConn;
 pub enum KeyError {
     Missing,
     Invalid,
-}
-
-pub fn hash_str(secret: &str) -> String {
-    sodiumoxide::init().unwrap();
-    let hash = argon2id13::pwhash(
-        secret.as_bytes(),
-        argon2id13::OPSLIMIT_INTERACTIVE,
-        argon2id13::MEMLIMIT_INTERACTIVE,
-    )
-    .unwrap();
-    let texthash = std::str::from_utf8(&hash.0).unwrap().to_string();
-
-    // postgres hates null chars. don't do that to postgres
-    texthash.trim_end_matches('\u{0}').to_string()
 }
 
 pub fn verify_str(secret: &str, verify: &str) -> bool {
@@ -95,19 +87,54 @@ impl<'a, 'r> FromRequest<'a, 'r> for User {
     }
 }
 
-#[derive(Deserialize)]
-pub struct Register {
-    email: String,
-    password: String,
+#[get("/user/<user>")]
+#[allow(clippy::clippy::needless_pass_by_value)]
+pub fn get_user(user: String, conn: AtuinDbConn) -> ApiResponse {
+    use crate::schema::users::dsl::{username, users};
+
+    let user: Result<String, diesel::result::Error> = users
+        .select(username)
+        .filter(username.eq(user))
+        .first(&*conn);
+
+    if user.is_err() {
+        return ApiResponse {
+            json: json!({
+                "message": "could not find user",
+            }),
+            status: Status::NotFound,
+        };
+    }
+
+    let user = user.unwrap();
+
+    ApiResponse {
+        json: json!({ "username": user.as_str() }),
+        status: Status::Ok,
+    }
 }
 
 #[post("/register", data = "<register>")]
 #[allow(clippy::clippy::needless_pass_by_value)]
-pub fn register(conn: AtuinDbConn, register: Json<Register>) -> ApiResponse {
-    let hashed = hash_str(register.password.as_str());
+pub fn register(
+    conn: AtuinDbConn,
+    register: Json<RegisterRequest>,
+    settings: State<Settings>,
+) -> ApiResponse {
+    if !settings.server.open_registration {
+        return ApiResponse {
+            status: Status::BadRequest,
+            json: json!({
+                "message": "registrations are not open"
+            }),
+        };
+    }
+
+    let hashed = hash_secret(register.password.as_str());
 
     let new_user = NewUser {
         email: register.email.as_str(),
+        username: register.username.as_str(),
         password: hashed.as_str(),
     };
 
@@ -119,8 +146,7 @@ pub fn register(conn: AtuinDbConn, register: Json<Register>) -> ApiResponse {
         return ApiResponse {
             status: Status::BadRequest,
             json: json!({
-                "status": "error",
-                "message": "failed to create user - is the email already in use?",
+                "message": "failed to create user - username or email in use?",
             }),
         };
     }
@@ -139,32 +165,26 @@ pub fn register(conn: AtuinDbConn, register: Json<Register>) -> ApiResponse {
     {
         Ok(_) => ApiResponse {
             status: Status::Ok,
-            json: json!({"status": "ok", "message": "user created!", "session": token}),
+            json: json!({"message": "user created!", "session": token}),
         },
         Err(_) => ApiResponse {
             status: Status::BadRequest,
-            json: json!({"status": "error", "message": "failed to create user"}),
+            json: json!({ "message": "failed to create user"}),
         },
     }
 }
 
-#[derive(Deserialize)]
-pub struct Login {
-    email: String,
-    password: String,
-}
-
 #[post("/login", data = "<login>")]
 #[allow(clippy::clippy::needless_pass_by_value)]
-pub fn login(conn: AtuinDbConn, login: Json<Login>) -> ApiResponse {
+pub fn login(conn: AtuinDbConn, login: Json<LoginRequest>) -> ApiResponse {
     let user = users::table
-        .filter(users::email.eq(login.email.as_str()))
+        .filter(users::username.eq(login.username.as_str()))
         .first(&*conn);
 
     if user.is_err() {
         return ApiResponse {
             status: Status::NotFound,
-            json: json!({"status": "error", "message": "user not found"}),
+            json: json!({"message": "user not found"}),
         };
     }
 
@@ -178,7 +198,7 @@ pub fn login(conn: AtuinDbConn, login: Json<Login>) -> ApiResponse {
     if session.is_err() {
         return ApiResponse {
             status: Status::InternalServerError,
-            json: json!({"status": "error", "message": "something went wrong"}),
+            json: json!({"message": "something went wrong"}),
         };
     }
 
@@ -187,7 +207,7 @@ pub fn login(conn: AtuinDbConn, login: Json<Login>) -> ApiResponse {
     if !verified {
         return ApiResponse {
             status: Status::NotFound,
-            json: json!({"status": "error", "message": "user not found"}),
+            json: json!({"message": "user not found"}),
         };
     }
 
@@ -195,6 +215,6 @@ pub fn login(conn: AtuinDbConn, login: Json<Login>) -> ApiResponse {
 
     ApiResponse {
         status: Status::Ok,
-        json: json!({"status": "ok", "token": session.token}),
+        json: json!({"session": session.token}),
     }
 }

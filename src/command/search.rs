@@ -171,7 +171,8 @@ fn select_history(query: &[String], db: &mut impl Database) -> Result<String> {
                 .iter()
                 .enumerate()
                 .map(|(i, m)| {
-                    let mut content = Span::raw(m.command.to_string());
+                    let mut content =
+                        Span::raw(m.command.to_string().replace("\n", " ").replace("\t", " "));
 
                     if let Some(selected) = app.results_state.selected() {
                         if selected == i {

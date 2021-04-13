@@ -24,10 +24,10 @@ impl Cmd {
         match self {
             Self::Start { host, port } => {
                 let host = host.as_ref().map_or(
-                    settings.remote.host.clone(),
+                    settings.server.host.clone(),
                     std::string::ToString::to_string,
                 );
-                let port = port.map_or(settings.remote.port, |p| p);
+                let port = port.map_or(settings.server.port, |p| p);
 
                 server::launch(settings, host, port);
             }

@@ -9,9 +9,12 @@ mod event;
 mod history;
 mod import;
 mod init;
+mod login;
+mod register;
 mod search;
 mod server;
 mod stats;
+mod sync;
 
 #[derive(StructOpt)]
 pub enum AtuinCmd {
@@ -38,6 +41,21 @@ pub enum AtuinCmd {
 
     #[structopt(about = "interactive history search")]
     Search { query: Vec<String> },
+
+    #[structopt(about = "sync with the configured server")]
+    Sync {
+        #[structopt(long, short, about = "force re-download everything")]
+        force: bool,
+    },
+
+    #[structopt(about = "login to the configured server")]
+    Login(login::Cmd),
+
+    #[structopt(about = "register with the configured server")]
+    Register(register::Cmd),
+
+    #[structopt(about = "print the encryption key for transfer to another machine")]
+    Key,
 }
 
 pub fn uuid_v4() -> String {
@@ -47,12 +65,26 @@ pub fn uuid_v4() -> String {
 impl AtuinCmd {
     pub fn run(self, db: &mut impl Database, settings: &Settings) -> Result<()> {
         match self {
-            Self::History(history) => history.run(db),
+            Self::History(history) => history.run(settings, db),
             Self::Import(import) => import.run(db),
             Self::Server(server) => server.run(settings),
             Self::Stats(stats) => stats.run(db, settings),
             Self::Init => init::init(),
             Self::Search { query } => search::run(&query, db),
+
+            Self::Sync { force } => sync::run(settings, force, db),
+            Self::Login(l) => l.run(settings),
+            Self::Register(r) => register::run(
+                settings,
+                r.username.as_str(),
+                r.email.as_str(),
+                r.password.as_str(),
+            ),
+            Self::Key => {
+                let key = std::fs::read(settings.local.key_path.as_str())?;
+                println!("{}", base64::encode(key));
+                Ok(())
+            }
 
             Self::Uuid => {
                 println!("{}", uuid_v4());

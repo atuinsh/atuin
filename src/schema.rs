@@ -3,9 +3,10 @@ table! {
         id -> Int8,
         client_id -> Text,
         user_id -> Int8,
-        mac -> Varchar,
+        hostname -> Text,
         timestamp -> Timestamp,
         data -> Varchar,
+        created_at -> Timestamp,
     }
 }
 
@@ -20,6 +21,7 @@ table! {
 table! {
     users (id) {
         id -> Int8,
+        username -> Varchar,
         email -> Varchar,
         password -> Varchar,
     }

@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 
 use eyre::{eyre, Result};
-use structopt::StructOpt;
+use structopt::{clap::AppSettings, StructOpt};
 
 #[macro_use]
 extern crate log;
@@ -30,18 +30,21 @@ use command::AtuinCmd;
 use local::database::Sqlite;
 use settings::Settings;
 
+mod api;
 mod command;
 mod local;
 mod remote;
 mod settings;
+mod utils;
 
 pub mod schema;
 
 #[derive(StructOpt)]
 #[structopt(
     author = "Ellie Huxtable <e@elm.sh>",
-    version = "0.4.0",
-    about = "Magical shell history"
+    version = "0.5.0",
+    about = "Magical shell history",
+    global_settings(&[AppSettings::ColoredHelp, AppSettings::DeriveDisplayOrder])
 )]
 struct Atuin {
     #[structopt(long, parse(from_os_str), help = "db file path")]
@@ -52,9 +55,7 @@ struct Atuin {
 }
 
 impl Atuin {
-    fn run(self) -> Result<()> {
-        let settings = Settings::new()?;
-
+    fn run(self, settings: &Settings) -> Result<()> {
         let db_path = if let Some(db_path) = self.db {
             let path = db_path
                 .to_str()
@@ -67,11 +68,13 @@ impl Atuin {
 
         let mut db = Sqlite::new(db_path)?;
 
-        self.atuin.run(&mut db, &settings)
+        self.atuin.run(&mut db, settings)
     }
 }
 
 fn main() -> Result<()> {
+    let settings = Settings::new()?;
+
     fern::Dispatch::new()
         .format(|out, message, record| {
             out.finish(format_args!(
@@ -85,5 +88,5 @@ fn main() -> Result<()> {
         .chain(std::io::stdout())
         .apply()?;
 
-    Atuin::from_args().run()
+    Atuin::from_args().run(&settings)
 }

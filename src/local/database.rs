@@ -1,3 +1,4 @@
+use chrono::prelude::*;
 use chrono::Utc;
 use std::path::Path;
 
@@ -20,6 +21,10 @@ pub trait Database {
     fn query(&self, query: &str, params: impl Params) -> Result<Vec<History>>;
     fn update(&self, h: &History) -> Result<()>;
     fn history_count(&self) -> Result<i64>;
+
+    fn first(&self) -> Result<History>;
+    fn last(&self) -> Result<History>;
+    fn before(&self, timestamp: chrono::DateTime<Utc>, count: i64) -> Result<Vec<History>>;
 
     fn prefix_search(&self, query: &str) -> Result<Vec<History>>;
 }
@@ -44,9 +49,7 @@ impl Sqlite {
 
         let conn = Connection::open(path)?;
 
-        if create {
-            Self::setup_db(&conn)?;
-        }
+        Self::setup_db(&conn)?;
 
         Ok(Self { conn })
     }
@@ -70,6 +73,14 @@ impl Sqlite {
             [],
         )?;
 
+        conn.execute(
+            "create table if not exists history_encrypted (
+                id text primary key,
+                data blob not null
+            )",
+            [],
+        )?;
+
         Ok(())
     }
 
@@ -87,7 +98,7 @@ impl Sqlite {
         ) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 h.id,
-                h.timestamp,
+                h.timestamp.timestamp_nanos(),
                 h.duration,
                 h.exit,
                 h.command,
@@ -146,7 +157,7 @@ impl Database for Sqlite {
             "update history
                 set timestamp = ?2, duration = ?3, exit = ?4, command = ?5, cwd = ?6, session = ?7, hostname = ?8
                 where id = ?1",
-            params![h.id, h.timestamp, h.duration, h.exit, h.command, h.cwd, h.session, h.hostname],
+            params![h.id, h.timestamp.timestamp_nanos(), h.duration, h.exit, h.command, h.cwd, h.session, h.hostname],
         )?;
 
         Ok(())
@@ -179,6 +190,38 @@ impl Database for Sqlite {
             params![from.timestamp_nanos(), to.timestamp_nanos()],
             |row| history_from_sqlite_row(None, row),
         )?;
+
+        Ok(history_iter.filter_map(Result::ok).collect())
+    }
+
+    fn first(&self) -> Result<History> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT * FROM history order by timestamp asc limit 1")?;
+
+        let history = stmt.query_row(params![], |row| history_from_sqlite_row(None, row))?;
+
+        Ok(history)
+    }
+
+    fn last(&self) -> Result<History> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT * FROM history order by timestamp desc limit 1")?;
+
+        let history = stmt.query_row(params![], |row| history_from_sqlite_row(None, row))?;
+
+        Ok(history)
+    }
+
+    fn before(&self, timestamp: chrono::DateTime<Utc>, count: i64) -> Result<Vec<History>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT * FROM history where timestamp <= ? order by timestamp desc limit ?",
+        )?;
+
+        let history_iter = stmt.query_map(params![timestamp.timestamp_nanos(), count], |row| {
+            history_from_sqlite_row(None, row)
+        })?;
 
         Ok(history_iter.filter_map(Result::ok).collect())
     }
@@ -218,7 +261,7 @@ fn history_from_sqlite_row(
 
     Ok(History {
         id,
-        timestamp: row.get(1)?,
+        timestamp: Utc.timestamp_nanos(row.get(1)?),
         duration: row.get(2)?,
         exit: row.get(3)?,
         command: row.get(4)?,
