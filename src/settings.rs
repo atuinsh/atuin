@@ -27,7 +27,7 @@ pub struct Local {
 }
 
 impl Local {
-    pub fn save_sync_time(&self) -> Result<()> {
+    pub fn save_sync_time() -> Result<()> {
         let sync_time_path = ProjectDirs::from("com", "elliehuxtable", "atuin")
             .ok_or_else(|| eyre!("could not determine key file location"))?;
         let sync_time_path = sync_time_path.data_dir().join("last_sync_time");
@@ -37,7 +37,7 @@ impl Local {
         Ok(())
     }
 
-    pub fn last_sync(&self) -> Result<chrono::DateTime<Utc>> {
+    pub fn last_sync() -> Result<chrono::DateTime<Utc>> {
         let sync_time_path = ProjectDirs::from("com", "elliehuxtable", "atuin");
 
         if sync_time_path.is_none() {
@@ -66,7 +66,7 @@ impl Local {
         match parse(self.sync_frequency.as_str()) {
             Ok(d) => {
                 let d = chrono::Duration::from_std(d).unwrap();
-                Ok(Utc::now() - self.last_sync()? >= d)
+                Ok(Utc::now() - Local::last_sync()? >= d)
             }
             Err(e) => Err(eyre!("failed to check sync: {}", e)),
         }

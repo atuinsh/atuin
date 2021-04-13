@@ -2,12 +2,11 @@ use std::convert::TryInto;
 
 use chrono::prelude::*;
 use eyre::Result;
-use reqwest::{blocking::Response, header::AUTHORIZATION};
 
 use crate::local::api_client;
 use crate::local::database::Database;
 use crate::local::encryption::{encrypt, load_key};
-use crate::settings::{Settings, HISTORY_PAGE_SIZE};
+use crate::settings::{Local, Settings, HISTORY_PAGE_SIZE};
 use crate::{api::AddHistoryRequest, utils::hash_str};
 
 // Currently sync is kinda naive, and basically just pages backwards through
@@ -22,7 +21,6 @@ use crate::{api::AddHistoryRequest, utils::hash_str};
 // Check if remote has things we don't, and if so, download them.
 // Returns (num downloaded, total local)
 fn sync_download(
-    settings: &Settings,
     force: bool,
     client: &api_client::Client,
     db: &mut impl Database,
@@ -35,7 +33,7 @@ fn sync_download(
     let mut last_sync = if force {
         Utc.timestamp_millis(0)
     } else {
-        settings.local.last_sync()?
+        Local::last_sync()?
     };
 
     let mut last_timestamp = Utc.timestamp_millis(0);
@@ -75,7 +73,7 @@ fn sync_download(
 // Check if we have things remote doesn't, and if so, upload them
 fn sync_upload(
     settings: &Settings,
-    force: bool,
+    _force: bool,
     client: &api_client::Client,
     db: &mut impl Database,
 ) -> Result<()> {
@@ -94,12 +92,12 @@ fn sync_upload(
         let last = db.before(cursor, HISTORY_PAGE_SIZE)?;
         let mut buffer = Vec::<AddHistoryRequest>::new();
 
-        if last.len() == 0 {
+        if last.is_empty() {
             break;
         }
 
         for i in last {
-            let data = encrypt(settings, &i, &key)?;
+            let data = encrypt(&i, &key)?;
             let data = serde_json::to_string(&data)?;
 
             let add_hist = AddHistoryRequest {
@@ -127,11 +125,11 @@ pub fn sync(settings: &Settings, force: bool, db: &mut impl Database) -> Result<
 
     sync_upload(settings, force, &client, db)?;
 
-    let download = sync_download(settings, force, &client, db)?;
+    let download = sync_download(force, &client, db)?;
 
     debug!("sync downloaded {}", download.0);
 
-    settings.local.save_sync_time()?;
+    Local::save_sync_time()?;
 
     Ok(())
 }

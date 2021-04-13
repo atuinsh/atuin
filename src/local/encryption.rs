@@ -43,17 +43,13 @@ pub fn load_key(settings: &Settings) -> Result<secretbox::Key> {
     }
 }
 
-pub fn encrypt(
-    settings: &Settings,
-    history: &History,
-    key: &secretbox::Key,
-) -> Result<EncryptedHistory> {
+pub fn encrypt(history: &History, key: &secretbox::Key) -> Result<EncryptedHistory> {
     // serialize with msgpack
     let buf = rmp_serde::to_vec(history)?;
 
     let nonce = secretbox::gen_nonce();
 
-    let ciphertext = secretbox::seal(&buf, &nonce, &key);
+    let ciphertext = secretbox::seal(&buf, &nonce, key);
 
     Ok(EncryptedHistory { ciphertext, nonce })
 }
@@ -72,7 +68,6 @@ mod test {
     use sodiumoxide::crypto::secretbox;
 
     use crate::local::history::History;
-    use crate::settings::Settings;
 
     use super::{decrypt, encrypt};
 
@@ -80,7 +75,6 @@ mod test {
     fn test_encrypt_decrypt() {
         let key1 = secretbox::gen_key();
         let key2 = secretbox::gen_key();
-        let settings = Settings::new().unwrap();
 
         let history = History::new(
             chrono::Utc::now(),
@@ -92,8 +86,8 @@ mod test {
             Some("booop".to_string()),
         );
 
-        let e1 = encrypt(&settings, &history, &key1).unwrap();
-        let e2 = encrypt(&settings, &history, &key2).unwrap();
+        let e1 = encrypt(&history, &key1).unwrap();
+        let e2 = encrypt(&history, &key2).unwrap();
 
         assert_ne!(e1.ciphertext, e2.ciphertext);
         assert_ne!(e1.nonce, e2.nonce);

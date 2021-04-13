@@ -6,8 +6,7 @@ use std::{fs::File, path::Path};
 
 use chrono::prelude::*;
 use chrono::Utc;
-use eyre::{eyre, Result, WrapErr};
-use rand::Rng;
+use eyre::{eyre, Result};
 
 use super::history::History;
 
@@ -99,7 +98,7 @@ impl Iterator for Zsh {
         while line.ends_with("\\\n") {
             let next_line = self.read_line()?;
 
-            if let Err(_) = next_line {
+            if next_line.is_err() {
                 // There's a chance that the last line of a command has invalid
                 // characters, the only safe thing to do is break :/
                 // usually just invalid utf8 or smth

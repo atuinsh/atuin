@@ -1,6 +1,6 @@
 use self::diesel::prelude::*;
 use eyre::Result;
-use rocket::http::{ContentType, Header, Status};
+use rocket::http::Status;
 use rocket::request::{self, FromRequest, Outcome, Request};
 use rocket::State;
 use rocket_contrib::databases::diesel;
@@ -90,7 +90,7 @@ impl<'a, 'r> FromRequest<'a, 'r> for User {
 #[get("/user/<user>")]
 #[allow(clippy::clippy::needless_pass_by_value)]
 pub fn get_user(user: String, conn: AtuinDbConn) -> ApiResponse {
-    use crate::schema::users::dsl::*;
+    use crate::schema::users::dsl::{username, users};
 
     let user: Result<String, diesel::result::Error> = users
         .select(username)

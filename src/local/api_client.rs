@@ -1,6 +1,3 @@
-use std::collections::HashMap;
-
-use base64;
 use chrono::Utc;
 use eyre::Result;
 use reqwest::header::AUTHORIZATION;

@@ -20,11 +20,11 @@ pub struct Cmd {
     pub password: String,
 }
 
-pub fn run(settings: &Settings, username: String, email: String, password: String) -> Result<()> {
+pub fn run(settings: &Settings, username: &str, email: &str, password: &str) -> Result<()> {
     let mut map = HashMap::new();
-    map.insert("username", username.as_str());
-    map.insert("email", email.as_str());
-    map.insert("password", password.as_str());
+    map.insert("username", username);
+    map.insert("email", email);
+    map.insert("password", password);
 
     let url = format!("{}/user/{}", settings.local.sync_address, username);
     let resp = reqwest::blocking::get(url)?;

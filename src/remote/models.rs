@@ -1,5 +1,4 @@
 use chrono::prelude::*;
-use chrono::Utc;
 
 use crate::schema::{history, sessions, users};
 

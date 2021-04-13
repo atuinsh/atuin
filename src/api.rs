@@ -1,8 +1,4 @@
-use chrono::prelude::*;
 use chrono::Utc;
-
-use crate::local::encryption::EncryptedHistory;
-use crate::remote::models::History;
 
 // This is shared between the client and the server, and has the data structures
 // representing the requests/responses for each method.

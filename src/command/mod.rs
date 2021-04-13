@@ -74,7 +74,12 @@ impl AtuinCmd {
 
             Self::Sync { force } => sync::run(settings, force, db),
             Self::Login(l) => l.run(settings),
-            Self::Register(r) => register::run(settings, r.username, r.email, r.password),
+            Self::Register(r) => register::run(
+                settings,
+                r.username.as_str(),
+                r.email.as_str(),
+                r.password.as_str(),
+            ),
             Self::Key => {
                 let key = std::fs::read(settings.local.key_path.as_str())?;
                 println!("{}", base64::encode(key));

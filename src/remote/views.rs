@@ -18,14 +18,6 @@ use crate::settings::HISTORY_PAGE_SIZE;
 use super::database::AtuinDbConn;
 use super::models::{History, NewHistory, User};
 
-fn nsec_to_ts(nanos: i64) -> chrono::NaiveDateTime {
-    let secs: i64 = nanos / 1_000_000_000;
-    let nanosecs: u32 = (nanos - (secs * 1_000_000_000)) as u32;
-    let datetime = chrono::NaiveDateTime::from_timestamp(secs, nanosecs);
-
-    datetime
-}
-
 #[derive(Debug)]
 pub struct ApiResponse {
     pub json: JsonValue,
