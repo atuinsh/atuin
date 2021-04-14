@@ -6,6 +6,7 @@
 use std::path::PathBuf;
 
 use eyre::{eyre, Result};
+use human_panic::setup_panic;
 use structopt::{clap::AppSettings, StructOpt};
 
 #[macro_use]
@@ -73,6 +74,7 @@ impl Atuin {
 }
 
 fn main() -> Result<()> {
+    setup_panic!();
     let settings = Settings::new()?;
 
     fern::Dispatch::new()

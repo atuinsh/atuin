@@ -39,6 +39,7 @@ fork = "0.1.18"
 parse_duration = "2.1.1"
 rand = "0.8.3"
 rust-crypto = "^0.2"
+human-panic = "1.0.3"
 
 [dependencies.rusqlite]
 version = "0.25"

@@ -1,12 +1,33 @@
-# no point in tagging the rust version, currently using nightly
-FROM rust:slim-buster
+FROM rust as builder
 
-RUN apt update && apt -y install libssl-dev libpq-dev pkg-config make
 RUN rustup default nightly
 
+
+RUN cargo new --bin atuin
 WORKDIR /atuin
-COPY . /atuin
+COPY ./Cargo.toml ./Cargo.toml
+COPY ./Cargo.lock ./Cargo.lock
 
 RUN cargo build --release
 
-ENTRYPOINT ["/atuin/target/release/atuin"]
+RUN rm src/*.rs
+
+ADD . ./
+
+RUN rm ./target/release/deps/atuin*
+RUN cargo build --release
+
+FROM debian:buster-slim
+
+RUN apt-get update \
+    && apt-get install -y ca-certificates tzdata libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+EXPOSE 8888
+
+ENV TZ=Etc/UTC
+ENV RUST_LOG=info
+
+COPY --from=builder /atuin/target/release/atuin ./atuin
+
+ENTRYPOINT ["./atuin"]

@@ -1,5 +1,5 @@
 <h1 align="center">
-  A'tuin
+  A'Tuin
 </h1>
 <blockquote align="center">
   Through the fathomless deeps of space swims the star turtle Great A’Tuin, bearing on its back the four giant elephants who carry on their shoulders the mass of the Discworld.
@@ -12,11 +12,11 @@
   <a href="https://github.com/ellie/atuin/blob/main/LICENSE"><img src="https://img.shields.io/crates/l/atuin.svg?style=flat-square" /></a>
 </p>
  
-A'tuin manages and synchronizes your shell history! Instead of storing
-everything in a text file (such as ~/.history), A'tuin uses a sqlite database.
+A'Tuin manages and synchronizes your shell history! Instead of storing
+everything in a text file (such as ~/.history), A'Tuin uses a sqlite database.
 While being a little more complex, this allows for more functionality.
 
-As well as the expected command, A'tuin stores
+As well as the expected command, A'Tuin stores
 
 - duration
 - exit code
@@ -33,7 +33,7 @@ As well as the expected command, A'tuin stores
 
 ### AUR
 
-A'tuin is available on the [AUR](https://aur.archlinux.org/packages/atuin/)
+A'Tuin is available on the [AUR](https://aur.archlinux.org/packages/atuin/)
 
 ```
 yay -S atuin # or your AUR helper of choice
@@ -73,7 +73,7 @@ to your `.zshrc`/`.bashrc`/whatever your shell uses.
 
 ### History search
 
-By default A'tuin will rebind ctrl-r and the up arrow to search your history.
+By default A'Tuin will rebind ctrl-r and the up arrow to search your history.
 
 You can prevent this by putting
 
@@ -119,7 +119,7 @@ atuin h l -s # similarly short
 
 ### Stats
 
-A'tuin can calculate statistics for a single day, and accepts "natural language" style date input, as well as absolute dates:
+A'Tuin can calculate statistics for a single day, and accepts "natural language" style date input, as well as absolute dates:
 
 ```
 $ atuin stats day last friday
@@ -155,7 +155,7 @@ $ atuin stats all
 
 ## Config
 
-A'tuin is configurable via TOML. The file lives at ` ~/.config/atuin/config.toml`,
+A'Tuin is configurable via TOML. The file lives at ` ~/.config/atuin/config.toml`,
 and looks like this:
 
 ```
@@ -169,5 +169,5 @@ path = "~/.local/share/atuin/history.db" # the local database for history
 
 ## ...what's with the name?
 
-A'tuin is named after "The Great A'tuin", a giant turtle from Terry Pratchett's
+A'Tuin is named after "The Great A'Tuin", a giant turtle from Terry Pratchett's
 Discworld series of books.

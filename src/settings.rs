@@ -133,7 +133,7 @@ impl Settings {
         s.set_default("server.host", "127.0.0.1")?;
         s.set_default("server.port", 8888)?;
         s.set_default("server.open_registration", false)?;
-        s.set_default("server.db_uri", "DEFAULT POSTGRES URI, PLEASE CHANGE")?;
+        s.set_default("server.db_uri", "default_uri")?;
 
         if config_file.exists() {
             s.merge(ConfigFile::with_name(config_file.to_str().unwrap()))?;
