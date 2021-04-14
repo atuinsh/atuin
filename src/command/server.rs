@@ -29,9 +29,8 @@ impl Cmd {
                 );
                 let port = port.map_or(settings.server.port, |p| p);
 
-                server::launch(settings, host, port);
+                server::launch(settings, host, port)
             }
         }
-        Ok(())
     }
 }
