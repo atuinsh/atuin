@@ -27,6 +27,7 @@ EXPOSE 8888
 
 ENV TZ=Etc/UTC
 ENV RUST_LOG=info
+ENV ATUIN_CONFIG=/config/config.toml
 
 COPY --from=builder /atuin/target/release/atuin ./atuin
 
