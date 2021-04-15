@@ -1,6 +1,8 @@
 use eyre::Result;
 use itertools::Itertools;
 use std::io::stdout;
+use std::time::Duration;
+
 use termion::{event::Key, input::MouseTerminal, raw::IntoRawMode, screen::AlternateScreen};
 use tui::{
     backend::TermionBackend,
@@ -26,6 +28,78 @@ struct State {
     results_state: ListState,
 }
 
+#[allow(clippy::clippy::cast_sign_loss)]
+impl State {
+    fn durations(&self) -> Vec<String> {
+        self.results
+            .iter()
+            .map(|h| {
+                let duration =
+                    Duration::from_millis(std::cmp::max(h.duration, 0) as u64 / 1_000_000);
+                let duration = humantime::format_duration(duration).to_string();
+                let duration: Vec<&str> = duration.split(' ').collect();
+
+                duration[0].to_string()
+            })
+            .collect()
+    }
+
+    fn render_results<T: tui::backend::Backend>(
+        &mut self,
+        f: &mut tui::Frame<T>,
+        r: tui::layout::Rect,
+    ) {
+        let durations = self.durations();
+        let max_length = durations
+            .iter()
+            .fold(0, |largest, i| std::cmp::max(largest, i.len()));
+
+        let results: Vec<ListItem> = self
+            .results
+            .iter()
+            .enumerate()
+            .map(|(i, m)| {
+                let command = m.command.to_string().replace("\n", " ").replace("\t", " ");
+
+                let mut command = Span::raw(command);
+
+                let mut duration = durations[i].clone();
+
+                while duration.len() < max_length {
+                    duration.push(' ');
+                }
+
+                let duration = Span::styled(
+                    duration,
+                    Style::default().fg(if m.exit == 0 || m.duration == -1 {
+                        Color::Green
+                    } else {
+                        Color::Red
+                    }),
+                );
+
+                if let Some(selected) = self.results_state.selected() {
+                    if selected == i {
+                        command.style =
+                            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD);
+                    }
+                }
+
+                let spans = Spans::from(vec![duration, Span::raw(" "), command]);
+
+                ListItem::new(spans)
+            })
+            .collect();
+
+        let results = List::new(results)
+            .block(Block::default().borders(Borders::ALL).title("History"))
+            .start_corner(Corner::BottomLeft)
+            .highlight_symbol(">> ");
+
+        f.render_stateful_widget(results, r, &mut self.results_state);
+    }
+}
+
 fn query_results(app: &mut State, db: &mut impl Database) {
     let results = match app.input.as_str() {
         "" => db.list(),
@@ -48,7 +122,11 @@ fn key_handler(input: Key, db: &mut impl Database, app: &mut State) -> Option<St
         Key::Esc | Key::Char('\n') => {
             let i = app.results_state.selected().unwrap_or(0);
 
-            return Some(app.results.get(i).unwrap().command.clone());
+            return Some(
+                app.results
+                    .get(i)
+                    .map_or("".to_string(), |h| h.command.clone()),
+            );
         }
         Key::Char(c) => {
             app.input.push(c);
@@ -163,32 +241,8 @@ fn select_history(query: &[String], db: &mut impl Database) -> Result<String> {
             let help = Text::from(Spans::from(help));
             let help = Paragraph::new(help);
 
-            let input = Paragraph::new(app.input.as_ref())
-                .block(Block::default().borders(Borders::ALL).title("Search"));
-
-            let results: Vec<ListItem> = app
-                .results
-                .iter()
-                .enumerate()
-                .map(|(i, m)| {
-                    let mut content =
-                        Span::raw(m.command.to_string().replace("\n", " ").replace("\t", " "));
-
-                    if let Some(selected) = app.results_state.selected() {
-                        if selected == i {
-                            content.style =
-                                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD);
-                        }
-                    }
-
-                    ListItem::new(content)
-                })
-                .collect();
-
-            let results = List::new(results)
-                .block(Block::default().borders(Borders::ALL).title("History"))
-                .start_corner(Corner::BottomLeft)
-                .highlight_symbol(">> ");
+            let input = Paragraph::new(app.input.clone())
+                .block(Block::default().borders(Borders::ALL).title("Query"));
 
             let stats = Paragraph::new(Text::from(Span::raw(format!(
                 "history count: {}",
@@ -199,8 +253,8 @@ fn select_history(query: &[String], db: &mut impl Database) -> Result<String> {
             f.render_widget(title, top_left_chunks[0]);
             f.render_widget(help, top_left_chunks[1]);
 
+            app.render_results(f, chunks[1]);
             f.render_widget(stats, top_right_chunks[0]);
-            f.render_stateful_widget(results, chunks[1], &mut app.results_state);
             f.render_widget(input, chunks[2]);
 
             f.set_cursor(

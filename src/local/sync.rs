@@ -20,12 +20,12 @@ use crate::{api::AddHistoryRequest, utils::hash_str};
 
 // Check if remote has things we don't, and if so, download them.
 // Returns (num downloaded, total local)
-fn sync_download(
+async fn sync_download(
     force: bool,
-    client: &api_client::Client,
-    db: &mut impl Database,
+    client: &api_client::Client<'_>,
+    db: &mut (impl Database + Send),
 ) -> Result<(i64, i64)> {
-    let remote_count = client.count()?;
+    let remote_count = client.count().await?;
 
     let initial_local = db.history_count()?;
     let mut local_count = initial_local;
@@ -41,7 +41,9 @@ fn sync_download(
     let host = if force { Some(String::from("")) } else { None };
 
     while remote_count > local_count {
-        let page = client.get_history(last_sync, last_timestamp, host.clone())?;
+        let page = client
+            .get_history(last_sync, last_timestamp, host.clone())
+            .await?;
 
         if page.len() < HISTORY_PAGE_SIZE.try_into().unwrap() {
             break;
@@ -71,13 +73,13 @@ fn sync_download(
 }
 
 // Check if we have things remote doesn't, and if so, upload them
-fn sync_upload(
+async fn sync_upload(
     settings: &Settings,
     _force: bool,
-    client: &api_client::Client,
-    db: &mut impl Database,
+    client: &api_client::Client<'_>,
+    db: &mut (impl Database + Send),
 ) -> Result<()> {
-    let initial_remote_count = client.count()?;
+    let initial_remote_count = client.count().await?;
     let mut remote_count = initial_remote_count;
 
     let local_count = db.history_count()?;
@@ -111,21 +113,25 @@ fn sync_upload(
         }
 
         // anything left over outside of the 100 block size
-        client.post_history(&buffer)?;
+        client.post_history(&buffer).await?;
         cursor = buffer.last().unwrap().timestamp;
 
-        remote_count = client.count()?;
+        remote_count = client.count().await?;
     }
 
     Ok(())
 }
 
-pub fn sync(settings: &Settings, force: bool, db: &mut impl Database) -> Result<()> {
-    let client = api_client::Client::new(settings);
+pub async fn sync(settings: &Settings, force: bool, db: &mut (impl Database + Send)) -> Result<()> {
+    let client = api_client::Client::new(
+        settings.local.sync_address.as_str(),
+        settings.local.session_token.as_str(),
+        load_key(settings)?,
+    );
 
-    sync_upload(settings, force, &client, db)?;
+    sync_upload(settings, force, &client, db).await?;
 
-    let download = sync_download(force, &client, db)?;
+    let download = sync_download(force, &client, db).await?;
 
     debug!("sync downloaded {}", download.0);
 

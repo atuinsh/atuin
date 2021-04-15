@@ -8,7 +8,7 @@ description = "atuin - magical shell history"
 
 [dependencies]
 log = "0.4"
-fern = "0.6.0"
+fern = {version = "0.6.0", features = ["colored"] }
 chrono = { version = "0.4", features = ["serde"] }
 eyre = "0.6"
 shellexpand = "2"
@@ -17,7 +17,6 @@ directories = "3"
 uuid = { version = "0.8", features = ["v4"] }
 indicatif = "0.15.0"
 whoami = "1.1.2"
-rocket = "0.4.7"
 chrono-english = "0.1.4"
 cli-table = "0.4"
 config = "0.11"
@@ -29,8 +28,6 @@ tui = "0.14"
 termion = "1.5"
 unicode-width = "0.1"
 itertools = "0.10.0"
-diesel = { version = "1.4.4", features = ["postgres", "chrono"] }
-diesel_migrations = "1.4.0"
 dotenv = "0.15.0"
 sodiumoxide = "0.2.6"
 reqwest = { version = "0.11", features = ["blocking", "json"] }
@@ -40,12 +37,13 @@ parse_duration = "2.1.1"
 rand = "0.8.3"
 rust-crypto = "^0.2"
 human-panic = "1.0.3"
+tokio = { version = "1", features = ["full"] }
+warp = "0.3"
+sqlx = { version = "0.5", features = [ "runtime-tokio-native-tls", "uuid", "chrono", "postgres" ] }
+async-trait = "0.1.49"
+urlencoding = "1.1.1"
+humantime = "2.1.0"
 
 [dependencies.rusqlite]
 version = "0.25"
 features = ["bundled"]
-
-[dependencies.rocket_contrib]
-version = "0.4.7"
-default-features = false
-features = ["diesel_postgres_pool", "json"]

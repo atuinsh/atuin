@@ -1,7 +1,7 @@
 use eyre::Result;
 use structopt::StructOpt;
 
-use crate::remote::server;
+use crate::server;
 use crate::settings::Settings;
 
 #[derive(StructOpt)]
@@ -20,7 +20,7 @@ pub enum Cmd {
 }
 
 impl Cmd {
-    pub fn run(&self, settings: &Settings) -> Result<()> {
+    pub async fn run(&self, settings: &Settings) -> Result<()> {
         match self {
             Self::Start { host, port } => {
                 let host = host.as_ref().map_or(
@@ -29,7 +29,7 @@ impl Cmd {
                 );
                 let port = port.map_or(settings.server.port, |p| p);
 
-                server::launch(settings, host, port)
+                server::launch(settings, host, port).await
             }
         }
     }

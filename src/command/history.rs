@@ -53,7 +53,7 @@ fn print_list(h: &[History]) {
 }
 
 impl Cmd {
-    pub fn run(&self, settings: &Settings, db: &mut impl Database) -> Result<()> {
+    pub async fn run(&self, settings: &Settings, db: &mut (impl Database + Send)) -> Result<()> {
         match self {
             Self::Start { command: words } => {
                 let command = words.join(" ");
@@ -69,6 +69,10 @@ impl Cmd {
             }
 
             Self::End { id, exit } => {
+                if id.trim() == "" {
+                    return Ok(());
+                }
+
                 let mut h = db.load(id)?;
                 h.exit = *exit;
                 h.duration = chrono::Utc::now().timestamp_nanos() - h.timestamp.timestamp_nanos();
@@ -82,7 +86,7 @@ impl Cmd {
                         }
                         Ok(Fork::Child) => {
                             debug!("running periodic background sync");
-                            sync::sync(settings, false, db)?;
+                            sync::sync(settings, false, db).await?;
                         }
                         Err(_) => println!("Fork failed"),
                     }

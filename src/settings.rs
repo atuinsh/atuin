@@ -161,7 +161,7 @@ impl Settings {
         // Finally, set the auth token
         if Path::new(session_path.to_string().as_str()).exists() {
             let token = std::fs::read_to_string(session_path.to_string())?;
-            s.set("local.session_token", token)?;
+            s.set("local.session_token", token.trim())?;
         } else {
             s.set("local.session_token", "not logged in")?;
         }
