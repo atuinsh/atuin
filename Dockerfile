@@ -1,7 +1,4 @@
-FROM rust as builder
-
-RUN rustup default nightly
-
+FROM rust:1.51-buster as builder
 
 RUN cargo new --bin atuin
 WORKDIR /atuin

@@ -29,7 +29,7 @@
 # sync_address = "https://api.atuin.sh"
 
 # This section configures the sync server, if you decide to host your own
-[remote]
+[server]
 ## host to bind, can also be passed via CLI args
 # host = "127.0.0.1"
 

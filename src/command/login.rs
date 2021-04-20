@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::prelude::*;
 
-use eyre::Result;
+use eyre::{eyre, Result};
 use structopt::StructOpt;
 
 use crate::settings::Settings;
@@ -28,7 +28,12 @@ impl Cmd {
 
         let url = format!("{}/login", settings.local.sync_address);
         let client = reqwest::blocking::Client::new();
+
         let resp = client.post(url).json(&map).send()?;
+
+        if resp.status() != reqwest::StatusCode::OK {
+            return Err(eyre!("invalid login details"));
+        }
 
         let session = resp.json::<HashMap<String, String>>()?;
         let session = session["session"].clone();

@@ -16,6 +16,7 @@ _atuin_precmd(){
 	[[ -z "${ATUIN_HISTORY_ID}" ]] && return
 
 	atuin history end $ATUIN_HISTORY_ID --exit $EXIT
+	export ATUIN_HISTORY_ID=""
 }
 
 _atuin_search(){

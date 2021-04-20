@@ -63,16 +63,16 @@ pub fn uuid_v4() -> String {
 }
 
 impl AtuinCmd {
-    pub fn run(self, db: &mut impl Database, settings: &Settings) -> Result<()> {
+    pub async fn run<T: Database + Send>(self, db: &mut T, settings: &Settings) -> Result<()> {
         match self {
-            Self::History(history) => history.run(settings, db),
+            Self::History(history) => history.run(settings, db).await,
             Self::Import(import) => import.run(db),
-            Self::Server(server) => server.run(settings),
+            Self::Server(server) => server.run(settings).await,
             Self::Stats(stats) => stats.run(db, settings),
             Self::Init => init::init(),
             Self::Search { query } => search::run(&query, db),
 
-            Self::Sync { force } => sync::run(settings, force, db),
+            Self::Sync { force } => sync::run(settings, force, db).await,
             Self::Login(l) => l.run(settings),
             Self::Register(r) => register::run(
                 settings,

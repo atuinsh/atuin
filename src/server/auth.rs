@@ -1,3 +1,4 @@
+/*
 use self::diesel::prelude::*;
 use eyre::Result;
 use rocket::http::Status;
@@ -218,3 +219,4 @@ pub fn login(conn: AtuinDbConn, login: Json<LoginRequest>) -> ApiResponse {
         json: json!({"session": session.token}),
     }
 }
+*/

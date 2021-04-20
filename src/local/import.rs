@@ -7,6 +7,7 @@ use std::{fs::File, path::Path};
 use chrono::prelude::*;
 use chrono::Utc;
 use eyre::{eyre, Result};
+use itertools::Itertools;
 
 use super::history::History;
 
@@ -42,8 +43,8 @@ impl Zsh {
 
 fn parse_extended(line: &str, counter: i64) -> History {
     let line = line.replacen(": ", "", 2);
-    let (time, duration) = line.split_once(':').unwrap();
-    let (duration, command) = duration.split_once(';').unwrap();
+    let (time, duration) = line.splitn(2, ':').collect_tuple().unwrap();
+    let (duration, command) = duration.splitn(2, ';').collect_tuple().unwrap();
 
     let time = time
         .parse::<i64>()
@@ -60,7 +61,7 @@ fn parse_extended(line: &str, counter: i64) -> History {
         time,
         command.trim_end().to_string(),
         String::from("unknown"),
-        -1,
+        0, // assume 0, we have no way of knowing :(
         duration,
         None,
         None,

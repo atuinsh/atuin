@@ -1,11 +1,10 @@
-#![feature(proc_macro_hygiene)]
-#![feature(decl_macro)]
 #![warn(clippy::pedantic, clippy::nursery)]
 #![allow(clippy::use_self)] // not 100% reliable
 
 use std::path::PathBuf;
 
 use eyre::{eyre, Result};
+use fern::colors::{Color, ColoredLevelConfig};
 use human_panic::setup_panic;
 use structopt::{clap::AppSettings, StructOpt};
 
@@ -13,19 +12,7 @@ use structopt::{clap::AppSettings, StructOpt};
 extern crate log;
 
 #[macro_use]
-extern crate rocket;
-
-#[macro_use]
 extern crate serde_derive;
-
-#[macro_use]
-extern crate diesel;
-
-#[macro_use]
-extern crate diesel_migrations;
-
-#[macro_use]
-extern crate rocket_contrib;
 
 use command::AtuinCmd;
 use local::database::Sqlite;
@@ -34,11 +21,9 @@ use settings::Settings;
 mod api;
 mod command;
 mod local;
-mod remote;
+mod server;
 mod settings;
 mod utils;
-
-pub mod schema;
 
 #[derive(StructOpt)]
 #[structopt(
@@ -56,7 +41,7 @@ struct Atuin {
 }
 
 impl Atuin {
-    fn run(self, settings: &Settings) -> Result<()> {
+    async fn run(self, settings: &Settings) -> Result<()> {
         let db_path = if let Some(db_path) = self.db {
             let path = db_path
                 .to_str()
@@ -69,26 +54,32 @@ impl Atuin {
 
         let mut db = Sqlite::new(db_path)?;
 
-        self.atuin.run(&mut db, settings)
+        self.atuin.run(&mut db, settings).await
     }
 }
 
-fn main() -> Result<()> {
-    setup_panic!();
-    let settings = Settings::new()?;
+#[tokio::main]
+async fn main() -> Result<()> {
+    let colors = ColoredLevelConfig::new()
+        .warn(Color::Yellow)
+        .error(Color::Red);
 
     fern::Dispatch::new()
-        .format(|out, message, record| {
+        .format(move |out, message, record| {
             out.finish(format_args!(
                 "{} [{}] {}",
-                chrono::Local::now().format("[%Y-%m-%d][%H:%M:%S]"),
-                record.level(),
+                chrono::Local::now().to_rfc3339(),
+                colors.color(record.level()),
                 message
             ))
         })
         .level(log::LevelFilter::Info)
+        .level_for("sqlx", log::LevelFilter::Warn)
         .chain(std::io::stdout())
         .apply()?;
 
-    Atuin::from_args().run(&settings)
+    let settings = Settings::new()?;
+    setup_panic!();
+
+    Atuin::from_args().run(&settings).await
 }
