@@ -16,10 +16,10 @@ jobs:
     steps:
     - uses: actions/checkout@v2
       
-    - name: Install latest nightly
+    - name: Install rust
       uses: actions-rs/toolchain@v1
       with:
-          toolchain: nightly
+          toolchain: stable
           override: true
 
     - name: Run cargo build
@@ -31,10 +31,10 @@ jobs:
     steps:
     - uses: actions/checkout@v2
 
-    - name: Install latest nightly
+    - name: Install rust
       uses: actions-rs/toolchain@v1
       with:
-          toolchain: nightly
+          toolchain: stable
           override: true
 
     - name: Run cargo test
@@ -46,10 +46,10 @@ jobs:
     steps:
     - uses: actions/checkout@v2
 
-    - name: Install latest nightly
+    - name: Install latest rust
       uses: actions-rs/toolchain@v1
       with:
-          toolchain: nightly
+          toolchain: stable
           override: true
           components: clippy
 
@@ -62,10 +62,10 @@ jobs:
     steps:
     - uses: actions/checkout@v2
 
-    - name: Install latest nightly
+    - name: Install latest rust
       uses: actions-rs/toolchain@v1
       with:
-          toolchain: nightly
+          toolchain: stable
           override: true
           components: rustfmt
          
