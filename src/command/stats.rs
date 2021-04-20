@@ -8,9 +8,9 @@ use cli_table::{format::Justify, print_stdout, Cell, Style, Table};
 use eyre::{eyre, Result};
 use structopt::StructOpt;
 
-use crate::local::database::Database;
-use crate::local::history::History;
-use crate::settings::Settings;
+use atuin_client::database::Database;
+use atuin_client::history::History;
+use atuin_client::settings::Settings;
 
 #[derive(StructOpt)]
 pub enum Cmd {
@@ -80,7 +80,7 @@ impl Cmd {
                     words.join(" ")
                 };
 
-                let start = match settings.local.dialect.to_lowercase().as_str() {
+                let start = match settings.dialect.to_lowercase().as_str() {
                     "uk" => parse_date_string(&words, Local::now(), Dialect::Uk)?,
                     _ => parse_date_string(&words, Local::now(), Dialect::Us)?,
                 };

@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use eyre::{eyre, Result};
 use sodiumoxide::crypto::secretbox;
 
-use crate::local::history::History;
+use crate::history::History;
 use crate::settings::Settings;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -26,7 +26,7 @@ pub struct EncryptedHistory {
 
 // Loads the secret key, will create + save if it doesn't exist
 pub fn load_key(settings: &Settings) -> Result<secretbox::Key> {
-    let path = settings.local.key_path.as_str();
+    let path = settings.key_path.as_str();
 
     if PathBuf::from(path).exists() {
         let bytes = std::fs::read(path)?;

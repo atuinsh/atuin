@@ -3,21 +3,6 @@
 version = 3
 
 [[package]]
-name = "addr2line"
-version = "0.14.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a55f82cfe485775d02112886f4169bde0c5894d75e79ead7eafe7e40a25e45f7"
-dependencies = [
- "gimli",
-]
-
-[[package]]
-name = "adler"
-version = "1.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f26201604c87b1e01bd3d98f8d5d9a8fcbb815e8cedb41ffccbeb4bf593a35fe"
-
-[[package]]
 name = "ahash"
 version = "0.4.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -100,17 +85,46 @@ name = "atuin"
 version = "0.5.0"
 dependencies = [
  "async-trait",
+ "atuin-client",
+ "atuin-common",
+ "atuin-server",
  "base64",
  "chrono",
  "chrono-english",
  "cli-table",
- "config",
  "directories",
- "dotenv",
  "eyre",
  "fern",
  "fork",
- "human-panic",
+ "humantime",
+ "indicatif",
+ "itertools",
+ "log",
+ "reqwest",
+ "rusqlite",
+ "serde 1.0.125",
+ "serde_derive",
+ "serde_json",
+ "structopt",
+ "termion",
+ "tokio",
+ "tui",
+ "unicode-width",
+]
+
+[[package]]
+name = "atuin-client"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "atuin-common",
+ "base64",
+ "chrono",
+ "chrono-english",
+ "config",
+ "directories",
+ "eyre",
+ "fern",
  "humantime",
  "indicatif",
  "itertools",
@@ -126,11 +140,55 @@ dependencies = [
  "serde_json",
  "shellexpand",
  "sodiumoxide",
- "sqlx",
- "structopt",
- "termion",
  "tokio",
- "tui",
+ "urlencoding",
+ "uuid",
+ "whoami",
+]
+
+[[package]]
+name = "atuin-common"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "eyre",
+ "rmp-serde",
+ "rust-crypto",
+ "serde 1.0.125",
+ "serde_derive",
+ "serde_json",
+ "sodiumoxide",
+ "uuid",
+ "warp",
+]
+
+[[package]]
+name = "atuin-server"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "atuin-common",
+ "base64",
+ "chrono",
+ "chrono-english",
+ "config",
+ "directories",
+ "eyre",
+ "fern",
+ "fork",
+ "indicatif",
+ "log",
+ "parse_duration",
+ "rand 0.8.3",
+ "reqwest",
+ "rmp-serde",
+ "rust-crypto",
+ "serde 1.0.125",
+ "serde_derive",
+ "serde_json",
+ "sodiumoxide",
+ "sqlx",
+ "tokio",
  "unicode-width",
  "urlencoding",
  "uuid",
@@ -143,20 +201,6 @@ name = "autocfg"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cdb031dd78e28731d87d56cc8ffef4a8f36ca26c38fe2de700543e627f8a464a"
-
-[[package]]
-name = "backtrace"
-version = "0.3.56"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9d117600f438b1707d4e4ae15d3595657288f8235a0eb593e80ecc98ab34e1bc"
-dependencies = [
- "addr2line",
- "cfg-if",
- "libc",
- "miniz_oxide",
- "object",
- "rustc-demangle",
-]
 
 [[package]]
 name = "base64"
@@ -772,12 +816,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "gimli"
-version = "0.23.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f6503fe142514ca4799d4c26297c4248239fe8838d827db6bd6065c6ed29a6ce"
-
-[[package]]
 name = "h2"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -906,21 +944,6 @@ name = "httpdate"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "494b4d60369511e7dea41cf646832512a94e542f68bb9c49e54518e0f468eb47"
-
-[[package]]
-name = "human-panic"
-version = "1.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "39f357a500abcbd7c5f967c1d45c8838585b36743823b9d43488f24850534e36"
-dependencies = [
- "backtrace",
- "os_type",
- "serde 1.0.125",
- "serde_derive",
- "termcolor",
- "toml",
- "uuid",
-]
 
 [[package]]
 name = "humantime"
@@ -1169,16 +1192,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "miniz_oxide"
-version = "0.4.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a92518e98c078586bc6c934028adcca4c92a53d6a958196de835170a01d84e4b"
-dependencies = [
- "adler",
- "autocfg",
-]
-
-[[package]]
 name = "mio"
 version = "0.7.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1378,12 +1391,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8f8bdf33df195859076e54ab11ee78a1b208382d3a26ec40d142ffc1ecc49ef"
 
 [[package]]
-name = "object"
-version = "0.23.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a9a7ab5d64814df0fe4a4b5ead45ed6c5f181ee3ff04ba344313a6c80446c5d4"
-
-[[package]]
 name = "once_cell"
 version = "1.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1426,15 +1433,6 @@ dependencies = [
  "libc",
  "pkg-config",
  "vcpkg",
-]
-
-[[package]]
-name = "os_type"
-version = "2.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7edc011af0ae98b7f88cf7e4a83b70a54a75d2b8cb013d6efd02e5956207e9eb"
-dependencies = [
- "regex",
 ]
 
 [[package]]
@@ -1899,12 +1897,6 @@ name = "rust-ini"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3e52c148ef37f8c375d49d5a73aa70713125b7f19095948a923f80afdeb22ec2"
-
-[[package]]
-name = "rustc-demangle"
-version = "0.1.18"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e3bad0ee36814ca07d7968269dd4b7ec89ec2da10c4bb613928d3077083c232"
 
 [[package]]
 name = "rustc-serialize"

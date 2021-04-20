@@ -1,8 +1,3 @@
-# A'tuin example config
-
-# This section specifies the config for a local client,
-# ie where your shell history is on your local machine
-[local]
 ## where to store your database, default is your system data directory
 ## mac: ~/Library/Application Support/com.elliehuxtable.atuin/history.db
 ## linux: ~/.local/share/atuin/history.db
@@ -27,17 +22,3 @@
 
 ## address of the sync server
 # sync_address = "https://api.atuin.sh"
-
-# This section configures the sync server, if you decide to host your own
-[server]
-## host to bind, can also be passed via CLI args
-# host = "127.0.0.1"
-
-## port to bind, can also be passed via CLI args
-# port = 8888
-
-## whether to allow anyone to register an account
-# open_registration = false
-
-## URI for postgres (using development creds here)
-# db_uri="postgres://username:password@localhost/atuin"

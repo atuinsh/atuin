@@ -1,0 +1,38 @@
+[package]
+name = "atuin-server"
+version = "0.1.0"
+authors = ["Ellie Huxtable <ellie@elliehuxtable.com>"]
+edition = "2018"
+license = "MIT"
+description = "server library for atuin"
+
+[dependencies]
+atuin-common = { path = "../atuin-common", version = "0.1.0" }
+
+log = "0.4"
+fern = {version = "0.6.0", features = ["colored"] }
+chrono = { version = "0.4", features = ["serde"] }
+eyre = "0.6"
+directories = "3"
+uuid = { version = "0.8", features = ["v4"] }
+indicatif = "0.15.0"
+whoami = "1.1.2"
+chrono-english = "0.1.4"
+config = "0.11"
+serde_derive = "1.0.125"
+serde = "1.0.125"
+serde_json = "1.0.64"
+rmp-serde = "0.15.4"
+unicode-width = "0.1"
+sodiumoxide = "0.2.6"
+reqwest = { version = "0.11", features = ["blocking", "json"] }
+base64 = "0.13.0"
+fork = "0.1.18"
+parse_duration = "2.1.1"
+rand = "0.8.3"
+rust-crypto = "^0.2"
+tokio = { version = "1", features = ["full"] }
+warp = "0.3"
+sqlx = { version = "0.5", features = [ "runtime-tokio-native-tls", "uuid", "chrono", "postgres" ] }
+async-trait = "0.1.49"
+urlencoding = "1.1.1"

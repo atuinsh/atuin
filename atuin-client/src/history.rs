@@ -3,7 +3,7 @@ use std::hash::{Hash, Hasher};
 
 use chrono::Utc;
 
-use crate::command::uuid_v4;
+use atuin_common::utils::uuid_v4;
 
 // Any new fields MUST be Optional<>!
 #[derive(Debug, Clone, Serialize, Deserialize)]

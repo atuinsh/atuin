@@ -5,13 +5,14 @@ use uuid::Uuid;
 use warp::http::StatusCode;
 use warp::reply::json;
 
-use crate::api::{
+use atuin_common::api::{
     ErrorResponse, LoginRequest, LoginResponse, RegisterRequest, RegisterResponse, UserResponse,
 };
-use crate::server::database::Database;
-use crate::server::models::{NewSession, NewUser};
+use atuin_common::utils::hash_secret;
+
+use crate::database::Database;
+use crate::models::{NewSession, NewUser};
 use crate::settings::Settings;
-use crate::utils::hash_secret;
 
 pub fn verify_str(secret: &str, verify: &str) -> bool {
     sodiumoxide::init().unwrap();
@@ -52,7 +53,7 @@ pub async fn register(
     settings: Settings,
     db: impl Database + Clone + Send + Sync,
 ) -> Result<Box<dyn warp::Reply>, Infallible> {
-    if !settings.server.open_registration {
+    if !settings.open_registration {
         return Ok(Box::new(ErrorResponse::reply(
             "this server is not open for registrations",
             StatusCode::BAD_REQUEST,

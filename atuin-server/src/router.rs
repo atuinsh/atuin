@@ -3,10 +3,12 @@ use std::convert::Infallible;
 use eyre::Result;
 use warp::Filter;
 
+use atuin_common::api::SyncHistoryRequest;
+
 use super::handlers;
 use super::{database::Database, database::Postgres};
-use crate::server::models::User;
-use crate::{api::SyncHistoryRequest, settings::Settings};
+use crate::models::User;
+use crate::settings::Settings;
 
 fn with_settings(
     settings: Settings,
@@ -55,7 +57,7 @@ fn with_user(
 pub async fn router(
     settings: &Settings,
 ) -> Result<impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone> {
-    let postgres = Postgres::new(settings.server.db_uri.as_str()).await?;
+    let postgres = Postgres::new(settings.db_uri.as_str()).await?;
     let index = warp::get().and(warp::path::end()).map(handlers::index);
 
     let count = warp::get()

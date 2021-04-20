@@ -12,7 +12,7 @@ use parse_duration::parse;
 pub const HISTORY_PAGE_SIZE: i64 = 100;
 
 #[derive(Clone, Debug, Deserialize)]
-pub struct Local {
+pub struct Settings {
     pub dialect: String,
     pub auto_sync: bool,
     pub sync_address: String,
@@ -26,7 +26,7 @@ pub struct Local {
     pub session_token: String,
 }
 
-impl Local {
+impl Settings {
     pub fn save_sync_time() -> Result<()> {
         let sync_time_path = ProjectDirs::from("com", "elliehuxtable", "atuin")
             .ok_or_else(|| eyre!("could not determine key file location"))?;
@@ -66,28 +66,12 @@ impl Local {
         match parse(self.sync_frequency.as_str()) {
             Ok(d) => {
                 let d = chrono::Duration::from_std(d).unwrap();
-                Ok(Utc::now() - Local::last_sync()? >= d)
+                Ok(Utc::now() - Settings::last_sync()? >= d)
             }
             Err(e) => Err(eyre!("failed to check sync: {}", e)),
         }
     }
-}
 
-#[derive(Clone, Debug, Deserialize)]
-pub struct Server {
-    pub host: String,
-    pub port: u16,
-    pub db_uri: String,
-    pub open_registration: bool,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct Settings {
-    pub local: Local,
-    pub server: Server,
-}
-
-impl Settings {
     pub fn new() -> Result<Self> {
         let config_dir = ProjectDirs::from("com", "elliehuxtable", "atuin").unwrap();
         let config_dir = config_dir.config_dir();
@@ -102,8 +86,6 @@ impl Settings {
             config_file.push("config.toml");
             config_file
         };
-
-        // create the config file if it does not exist
 
         let mut s = Config::new();
 
@@ -122,18 +104,13 @@ impl Settings {
             .data_dir()
             .join("session");
 
-        s.set_default("local.db_path", db_path.to_str())?;
-        s.set_default("local.key_path", key_path.to_str())?;
-        s.set_default("local.session_path", session_path.to_str())?;
-        s.set_default("local.dialect", "us")?;
-        s.set_default("local.auto_sync", true)?;
-        s.set_default("local.sync_frequency", "5m")?;
-        s.set_default("local.sync_address", "https://api.atuin.sh")?;
-
-        s.set_default("server.host", "127.0.0.1")?;
-        s.set_default("server.port", 8888)?;
-        s.set_default("server.open_registration", false)?;
-        s.set_default("server.db_uri", "default_uri")?;
+        s.set_default("db_path", db_path.to_str())?;
+        s.set_default("key_path", key_path.to_str())?;
+        s.set_default("session_path", session_path.to_str())?;
+        s.set_default("dialect", "us")?;
+        s.set_default("auto_sync", true)?;
+        s.set_default("sync_frequency", "5m")?;
+        s.set_default("sync_address", "https://api.atuin.sh")?;
 
         if config_file.exists() {
             s.merge(ConfigFile::with_name(config_file.to_str().unwrap()))?;
@@ -146,24 +123,24 @@ impl Settings {
         s.merge(Environment::with_prefix("atuin").separator("_"))?;
 
         // all paths should be expanded
-        let db_path = s.get_str("local.db_path")?;
+        let db_path = s.get_str("db_path")?;
         let db_path = shellexpand::full(db_path.as_str())?;
-        s.set("local.db_path", db_path.to_string())?;
+        s.set("db_path", db_path.to_string())?;
 
-        let key_path = s.get_str("local.key_path")?;
+        let key_path = s.get_str("key_path")?;
         let key_path = shellexpand::full(key_path.as_str())?;
-        s.set("local.key_path", key_path.to_string())?;
+        s.set("key_path", key_path.to_string())?;
 
-        let session_path = s.get_str("local.session_path")?;
+        let session_path = s.get_str("session_path")?;
         let session_path = shellexpand::full(session_path.as_str())?;
-        s.set("local.session_path", session_path.to_string())?;
+        s.set("session_path", session_path.to_string())?;
 
         // Finally, set the auth token
         if Path::new(session_path.to_string().as_str()).exists() {
             let token = std::fs::read_to_string(session_path.to_string())?;
-            s.set("local.session_token", token.trim())?;
+            s.set("session_token", token.trim())?;
         } else {
-            s.set("local.session_token", "not logged in")?;
+            s.set("session_token", "not logged in")?;
         }
 
         s.try_into()

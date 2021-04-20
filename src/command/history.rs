@@ -4,10 +4,10 @@ use eyre::Result;
 use fork::{fork, Fork};
 use structopt::StructOpt;
 
-use crate::local::database::Database;
-use crate::local::history::History;
-use crate::local::sync;
-use crate::settings::Settings;
+use atuin_client::database::Database;
+use atuin_client::history::History;
+use atuin_client::settings::Settings;
+use atuin_client::sync;
 
 #[derive(StructOpt)]
 pub enum Cmd {
@@ -79,7 +79,7 @@ impl Cmd {
 
                 db.update(&h)?;
 
-                if settings.local.should_sync()? {
+                if settings.should_sync()? {
                     match fork() {
                         Ok(Fork::Parent(child)) => {
                             debug!("launched sync background process with PID {}", child);
