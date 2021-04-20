@@ -1,13 +1,13 @@
 [package]
 name = "atuin-server"
-version = "0.1.0"
+version = "0.5.0"
 authors = ["Ellie Huxtable <ellie@elliehuxtable.com>"]
 edition = "2018"
 license = "MIT"
 description = "server library for atuin"
 
 [dependencies]
-atuin-common = { path = "../atuin-common", version = "0.1.0" }
+atuin-common = { path = "../atuin-common", version = "0.5.0" }
 
 log = "0.4"
 fern = {version = "0.6.0", features = ["colored"] }
