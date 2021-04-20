@@ -1,31 +1,22 @@
-FROM rust:1.51-buster as builder
+FROM lukemathwalker/cargo-chef as planner
+WORKDIR app
+COPY . .
+RUN cargo chef prepare  --recipe-path recipe.json
 
-RUN cargo new --bin atuin
-WORKDIR /atuin
-COPY ./Cargo.toml ./Cargo.toml
-COPY ./Cargo.lock ./Cargo.lock
+FROM lukemathwalker/cargo-chef as cacher
+WORKDIR app
+COPY --from=planner /app/recipe.json recipe.json
+RUN cargo chef cook --release --recipe-path recipe.json
 
-RUN cargo build --release
+FROM rust as builder
+WORKDIR app
+COPY . .
+# Copy over the cached dependencies
+COPY --from=cacher /app/target target
+COPY --from=cacher $CARGO_HOME $CARGO_HOME
+RUN cargo build --release --bin atuin
 
-RUN rm src/*.rs
-
-ADD . ./
-
-RUN rm ./target/release/deps/atuin*
-RUN cargo build --release
-
-FROM debian:buster-slim
-
-RUN apt-get update \
-    && apt-get install -y ca-certificates tzdata libpq-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-EXPOSE 8888
-
-ENV TZ=Etc/UTC
-ENV RUST_LOG=info
-ENV ATUIN_CONFIG=/config/config.toml
-
-COPY --from=builder /atuin/target/release/atuin ./atuin
-
-ENTRYPOINT ["./atuin"]
+FROM debian:buster-slim as runtime
+WORKDIR app
+COPY --from=builder /app/target/release/atuin /usr/local/bin
+ENTRYPOINT ["/usr/local/bin/atuin"]
