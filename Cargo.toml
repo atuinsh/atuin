@@ -31,7 +31,7 @@ itertools = "0.10.0"
 fork = "0.1.18"
 tokio = { version = "1", features = ["full"] }
 async-trait = "0.1.49"
-chrono-english = "0.1.4"
+chrono-english = "0.1.6"
 cli-table = "0.4"
 reqwest = { version = "0.11", features = ["blocking", "json"] }
 base64 = "0.13.0"

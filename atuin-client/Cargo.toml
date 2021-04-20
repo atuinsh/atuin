@@ -19,7 +19,7 @@ directories = "3"
 uuid = { version = "0.8", features = ["v4"] }
 indicatif = "0.15.0"
 whoami = "1.1.2"
-chrono-english = "0.1.4"
+chrono-english = "0.1.6"
 config = "0.11"
 serde_derive = "1.0.125"
 serde = "1.0.125"
