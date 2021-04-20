@@ -5,7 +5,7 @@ use std::io::prelude::*;
 use eyre::{eyre, Result};
 use structopt::StructOpt;
 
-use crate::settings::Settings;
+use atuin_client::settings::Settings;
 
 #[derive(StructOpt)]
 #[structopt(setting(structopt::clap::AppSettings::DeriveDisplayOrder))]
@@ -26,7 +26,7 @@ pub fn run(settings: &Settings, username: &str, email: &str, password: &str) -> 
     map.insert("email", email);
     map.insert("password", password);
 
-    let url = format!("{}/user/{}", settings.local.sync_address, username);
+    let url = format!("{}/user/{}", settings.sync_address, username);
     let resp = reqwest::blocking::get(url)?;
 
     if resp.status().is_success() {
@@ -34,7 +34,7 @@ pub fn run(settings: &Settings, username: &str, email: &str, password: &str) -> 
         return Ok(());
     }
 
-    let url = format!("{}/register", settings.local.sync_address);
+    let url = format!("{}/register", settings.sync_address);
     let client = reqwest::blocking::Client::new();
     let resp = client.post(url).json(&map).send()?;
 
@@ -46,7 +46,7 @@ pub fn run(settings: &Settings, username: &str, email: &str, password: &str) -> 
     let session = resp.json::<HashMap<String, String>>()?;
     let session = session["session"].clone();
 
-    let path = settings.local.session_path.as_str();
+    let path = settings.session_path.as_str();
     let mut file = File::create(path)?;
     file.write_all(session.as_bytes())?;
 

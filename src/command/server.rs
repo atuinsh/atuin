@@ -1,8 +1,8 @@
 use eyre::Result;
 use structopt::StructOpt;
 
-use crate::server;
-use crate::settings::Settings;
+use atuin_server::launch;
+use atuin_server::settings::Settings;
 
 #[derive(StructOpt)]
 pub enum Cmd {
@@ -23,13 +23,12 @@ impl Cmd {
     pub async fn run(&self, settings: &Settings) -> Result<()> {
         match self {
             Self::Start { host, port } => {
-                let host = host.as_ref().map_or(
-                    settings.server.host.clone(),
-                    std::string::ToString::to_string,
-                );
-                let port = port.map_or(settings.server.port, |p| p);
+                let host = host
+                    .as_ref()
+                    .map_or(settings.host.clone(), std::string::ToString::to_string);
+                let port = port.map_or(settings.port, |p| p);
 
-                server::launch(settings, host, port).await
+                launch(settings, host, port).await
             }
         }
     }

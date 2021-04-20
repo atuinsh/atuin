@@ -1,0 +1,40 @@
+[package]
+name = "atuin-client"
+version = "0.1.0"
+authors = ["Ellie Huxtable <ellie@elliehuxtable.com>"]
+edition = "2018"
+license = "MIT"
+description = "client library for atuin"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+atuin-common = { path = "../atuin-common", version = "0.1.0" }
+
+log = "0.4"
+fern = {version = "0.6.0", features = ["colored"] }
+chrono = { version = "0.4", features = ["serde"] }
+eyre = "0.6"
+directories = "3"
+uuid = { version = "0.8", features = ["v4"] }
+indicatif = "0.15.0"
+whoami = "1.1.2"
+chrono-english = "0.1.4"
+config = "0.11"
+serde_derive = "1.0.125"
+serde = "1.0.125"
+serde_json = "1.0.64"
+rmp-serde = "0.15.4"
+sodiumoxide = "0.2.6"
+reqwest = { version = "0.11", features = ["blocking", "json"] }
+base64 = "0.13.0"
+parse_duration = "2.1.1"
+rand = "0.8.3"
+rust-crypto = "^0.2"
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1.49"
+urlencoding = "1.1.1"
+humantime = "2.1.0"
+rusqlite= { version = "0.25", features = ["bundled"] }
+itertools = "0.10.0"
+shellexpand = "2"

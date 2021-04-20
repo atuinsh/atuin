@@ -2,11 +2,11 @@ use std::convert::Infallible;
 
 use warp::{http::StatusCode, reply::json};
 
-use crate::api::{
+use crate::database::Database;
+use crate::models::{NewHistory, User};
+use atuin_common::api::{
     AddHistoryRequest, CountResponse, ErrorResponse, SyncHistoryRequest, SyncHistoryResponse,
 };
-use crate::server::database::Database;
-use crate::server::models::{NewHistory, User};
 
 pub async fn count(
     user: User,

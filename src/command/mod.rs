@@ -1,9 +1,12 @@
+use std::path::PathBuf;
+
 use eyre::Result;
 use structopt::StructOpt;
-use uuid::Uuid;
 
-use crate::local::database::Database;
-use crate::settings::Settings;
+use atuin_client::database::Sqlite;
+use atuin_client::settings::Settings as ClientSettings;
+use atuin_common::utils::uuid_v4;
+use atuin_server::settings::Settings as ServerSettings;
 
 mod event;
 mod history;
@@ -58,30 +61,33 @@ pub enum AtuinCmd {
     Key,
 }
 
-pub fn uuid_v4() -> String {
-    Uuid::new_v4().to_simple().to_string()
-}
-
 impl AtuinCmd {
-    pub async fn run<T: Database + Send>(self, db: &mut T, settings: &Settings) -> Result<()> {
-        match self {
-            Self::History(history) => history.run(settings, db).await,
-            Self::Import(import) => import.run(db),
-            Self::Server(server) => server.run(settings).await,
-            Self::Stats(stats) => stats.run(db, settings),
-            Self::Init => init::init(),
-            Self::Search { query } => search::run(&query, db),
+    pub async fn run(self) -> Result<()> {
+        let client_settings = ClientSettings::new()?;
+        let server_settings = ServerSettings::new()?;
 
-            Self::Sync { force } => sync::run(settings, force, db).await,
-            Self::Login(l) => l.run(settings),
+        let db_path = PathBuf::from(client_settings.db_path.as_str());
+
+        let mut db = Sqlite::new(db_path)?;
+
+        match self {
+            Self::History(history) => history.run(&client_settings, &mut db).await,
+            Self::Import(import) => import.run(&mut db),
+            Self::Server(server) => server.run(&server_settings).await,
+            Self::Stats(stats) => stats.run(&mut db, &client_settings),
+            Self::Init => init::init(),
+            Self::Search { query } => search::run(&query, &mut db),
+
+            Self::Sync { force } => sync::run(&client_settings, force, &mut db).await,
+            Self::Login(l) => l.run(&client_settings),
             Self::Register(r) => register::run(
-                settings,
+                &client_settings,
                 r.username.as_str(),
                 r.email.as_str(),
                 r.password.as_str(),
             ),
             Self::Key => {
-                let key = std::fs::read(settings.local.key_path.as_str())?;
+                let key = std::fs::read(client_settings.key_path.as_str())?;
                 println!("{}", base64::encode(key));
                 Ok(())
             }

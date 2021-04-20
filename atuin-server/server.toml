@@ -1,0 +1,11 @@
+## host to bind, can also be passed via CLI args
+# host = "127.0.0.1"
+
+## port to bind, can also be passed via CLI args
+# port = 8888
+
+## whether to allow anyone to register an account
+# open_registration = false
+
+## URI for postgres (using development creds here)
+# db_uri="postgres://username:password@localhost/atuin"

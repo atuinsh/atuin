@@ -4,10 +4,11 @@ use reqwest::header::{HeaderMap, AUTHORIZATION};
 use reqwest::Url;
 use sodiumoxide::crypto::secretbox;
 
-use crate::api::{AddHistoryRequest, CountResponse, SyncHistoryResponse};
-use crate::local::encryption::decrypt;
-use crate::local::history::History;
-use crate::utils::hash_str;
+use atuin_common::api::{AddHistoryRequest, CountResponse, SyncHistoryResponse};
+use atuin_common::utils::hash_str;
+
+use crate::encryption::decrypt;
+use crate::history::History;
 
 pub struct Client<'a> {
     sync_addr: &'a str,

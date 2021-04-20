@@ -5,7 +5,7 @@ use std::io::prelude::*;
 use eyre::{eyre, Result};
 use structopt::StructOpt;
 
-use crate::settings::Settings;
+use atuin_client::settings::Settings;
 
 #[derive(StructOpt)]
 #[structopt(setting(structopt::clap::AppSettings::DeriveDisplayOrder))]
@@ -26,7 +26,7 @@ impl Cmd {
         map.insert("username", self.username.clone());
         map.insert("password", self.password.clone());
 
-        let url = format!("{}/login", settings.local.sync_address);
+        let url = format!("{}/login", settings.sync_address);
         let client = reqwest::blocking::Client::new();
 
         let resp = client.post(url).json(&map).send()?;
@@ -38,11 +38,11 @@ impl Cmd {
         let session = resp.json::<HashMap<String, String>>()?;
         let session = session["session"].clone();
 
-        let session_path = settings.local.session_path.as_str();
+        let session_path = settings.session_path.as_str();
         let mut file = File::create(session_path)?;
         file.write_all(session.as_bytes())?;
 
-        let key_path = settings.local.key_path.as_str();
+        let key_path = settings.key_path.as_str();
         let mut file = File::create(key_path)?;
         file.write_all(&base64::decode(self.key.clone())?)?;
 

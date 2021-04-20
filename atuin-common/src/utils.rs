@@ -1,6 +1,7 @@
 use crypto::digest::Digest;
 use crypto::sha2::Sha256;
 use sodiumoxide::crypto::pwhash::argon2id13;
+use uuid::Uuid;
 
 pub fn hash_secret(secret: &str) -> String {
     sodiumoxide::init().unwrap();
@@ -21,4 +22,8 @@ pub fn hash_str(string: &str) -> String {
     hasher.input_str(string);
 
     hasher.result_str()
+}
+
+pub fn uuid_v4() -> String {
+    Uuid::new_v4().to_simple().to_string()
 }

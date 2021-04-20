@@ -14,9 +14,10 @@ use tui::{
 };
 use unicode_width::UnicodeWidthStr;
 
+use atuin_client::database::Database;
+use atuin_client::history::History;
+
 use crate::command::event::{Event, Events};
-use crate::local::database::Database;
-use crate::local::history::History;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 

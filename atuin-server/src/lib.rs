@@ -4,11 +4,18 @@ use eyre::Result;
 
 use crate::settings::Settings;
 
+#[macro_use]
+extern crate log;
+
+#[macro_use]
+extern crate serde_derive;
+
 pub mod auth;
 pub mod database;
 pub mod handlers;
 pub mod models;
 pub mod router;
+pub mod settings;
 
 pub async fn launch(settings: &Settings, host: String, port: u16) -> Result<()> {
     // routes to run:

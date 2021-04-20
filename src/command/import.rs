@@ -5,9 +5,9 @@ use directories::UserDirs;
 use eyre::{eyre, Result};
 use structopt::StructOpt;
 
-use crate::local::database::Database;
-use crate::local::history::History;
-use crate::local::import::Zsh;
+use atuin_client::database::Database;
+use atuin_client::history::History;
+use atuin_client::import::Zsh;
 use indicatif::ProgressBar;
 
 #[derive(StructOpt)]

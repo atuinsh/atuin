@@ -3,11 +3,12 @@ use std::convert::TryInto;
 use chrono::prelude::*;
 use eyre::Result;
 
-use crate::local::api_client;
-use crate::local::database::Database;
-use crate::local::encryption::{encrypt, load_key};
-use crate::settings::{Local, Settings, HISTORY_PAGE_SIZE};
-use crate::{api::AddHistoryRequest, utils::hash_str};
+use atuin_common::{api::AddHistoryRequest, utils::hash_str};
+
+use crate::api_client;
+use crate::database::Database;
+use crate::encryption::{encrypt, load_key};
+use crate::settings::{Settings, HISTORY_PAGE_SIZE};
 
 // Currently sync is kinda naive, and basically just pages backwards through
 // history. This means newly added stuff shows up properly! We also just use
@@ -33,7 +34,7 @@ async fn sync_download(
     let mut last_sync = if force {
         Utc.timestamp_millis(0)
     } else {
-        Local::last_sync()?
+        Settings::last_sync()?
     };
 
     let mut last_timestamp = Utc.timestamp_millis(0);
@@ -124,8 +125,8 @@ async fn sync_upload(
 
 pub async fn sync(settings: &Settings, force: bool, db: &mut (impl Database + Send)) -> Result<()> {
     let client = api_client::Client::new(
-        settings.local.sync_address.as_str(),
-        settings.local.session_token.as_str(),
+        settings.sync_address.as_str(),
+        settings.session_token.as_str(),
         load_key(settings)?,
     );
 
@@ -135,7 +136,7 @@ pub async fn sync(settings: &Settings, force: bool, db: &mut (impl Database + Se
 
     debug!("sync downloaded {}", download.0);
 
-    Local::save_sync_time()?;
+    Settings::save_sync_time()?;
 
     Ok(())
 }
