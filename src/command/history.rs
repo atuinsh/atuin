@@ -1,7 +1,6 @@
 use std::env;
 
 use eyre::Result;
-use fork::{fork, Fork};
 use structopt::StructOpt;
 
 use atuin_client::database::Database;
@@ -44,6 +43,12 @@ pub enum Cmd {
         aliases=&["se", "sea", "sear", "searc"],
     )]
     Search { query: Vec<String> },
+
+    #[structopt(
+        about="get the last command ran",
+        aliases=&["la", "las"],
+    )]
+    Last {},
 }
 
 fn print_list(h: &[History]) {
@@ -74,22 +79,24 @@ impl Cmd {
                 }
 
                 let mut h = db.load(id)?;
+
+                if h.duration > 0 {
+                    debug!("cannot end history - already has duration");
+
+                    // returning OK as this can occur if someone Ctrl-c a prompt
+                    return Ok(());
+                }
+
                 h.exit = *exit;
                 h.duration = chrono::Utc::now().timestamp_nanos() - h.timestamp.timestamp_nanos();
 
                 db.update(&h)?;
 
                 if settings.should_sync()? {
-                    match fork() {
-                        Ok(Fork::Parent(child)) => {
-                            debug!("launched sync background process with PID {}", child);
-                        }
-                        Ok(Fork::Child) => {
-                            debug!("running periodic background sync");
-                            sync::sync(settings, false, db).await?;
-                        }
-                        Err(_) => println!("Fork failed"),
-                    }
+                    debug!("running periodic background sync");
+                    sync::sync(settings, false, db).await?;
+                } else {
+                    debug!("sync disabled! not syncing");
                 }
 
                 Ok(())
@@ -107,7 +114,7 @@ impl Cmd {
                 let session = env::var("ATUIN_SESSION")?;
 
                 let history = match params {
-                    (false, false) => db.list()?,
+                    (false, false) => db.list(None, false)?,
                     (true, false) => db.query(QUERY_SESSION, &[session.as_str()])?,
                     (false, true) => db.query(QUERY_DIR, &[cwd.as_str()])?,
                     (true, true) => {
@@ -123,6 +130,13 @@ impl Cmd {
             Self::Search { query } => {
                 let history = db.prefix_search(&query.join(""))?;
                 print_list(&history);
+
+                Ok(())
+            }
+
+            Self::Last {} => {
+                let last = db.last()?;
+                print_list(&[last]);
 
                 Ok(())
             }

@@ -1,10 +1,10 @@
-use std::collections::HashMap;
 use std::fs::File;
 use std::io::prelude::*;
 
-use eyre::{eyre, Result};
+use eyre::Result;
 use structopt::StructOpt;
 
+use atuin_client::api_client;
 use atuin_client::settings::Settings;
 
 #[derive(StructOpt)]
@@ -21,34 +21,11 @@ pub struct Cmd {
 }
 
 pub fn run(settings: &Settings, username: &str, email: &str, password: &str) -> Result<()> {
-    let mut map = HashMap::new();
-    map.insert("username", username);
-    map.insert("email", email);
-    map.insert("password", password);
-
-    let url = format!("{}/user/{}", settings.sync_address, username);
-    let resp = reqwest::blocking::get(url)?;
-
-    if resp.status().is_success() {
-        println!("Username is already in use! Please try another.");
-        return Ok(());
-    }
-
-    let url = format!("{}/register", settings.sync_address);
-    let client = reqwest::blocking::Client::new();
-    let resp = client.post(url).json(&map).send()?;
-
-    if !resp.status().is_success() {
-        println!("Failed to register user - please check your details and try again");
-        return Err(eyre!("failed to register user"));
-    }
-
-    let session = resp.json::<HashMap<String, String>>()?;
-    let session = session["session"].clone();
+    let session = api_client::register(settings.sync_address.as_str(), username, email, password)?;
 
     let path = settings.session_path.as_str();
     let mut file = File::create(path)?;
-    file.write_all(session.as_bytes())?;
+    file.write_all(session.session.as_bytes())?;
 
     Ok(())
 }

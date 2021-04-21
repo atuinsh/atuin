@@ -17,6 +17,12 @@ COPY --from=cacher $CARGO_HOME $CARGO_HOME
 RUN cargo build --release --bin atuin
 
 FROM debian:buster-slim as runtime
+
 WORKDIR app
+
+ENV TZ=Etc/UTC
+ENV RUST_LOG=info
+ENV ATUIN_CONFIG_DIR=/config
+
 COPY --from=builder /app/target/release/atuin /usr/local/bin
 ENTRYPOINT ["/usr/local/bin/atuin"]

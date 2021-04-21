@@ -29,18 +29,49 @@ pub fn load_key(settings: &Settings) -> Result<secretbox::Key> {
     let path = settings.key_path.as_str();
 
     if PathBuf::from(path).exists() {
-        let bytes = std::fs::read(path)?;
-        let key: secretbox::Key = rmp_serde::from_read_ref(&bytes)?;
+        let key = std::fs::read_to_string(path)?;
+        let key = decode_key(key)?;
         Ok(key)
     } else {
         let key = secretbox::gen_key();
-        let buf = rmp_serde::to_vec(&key)?;
+        let encoded = encode_key(key.clone())?;
 
         let mut file = File::create(path)?;
-        file.write_all(&buf)?;
+        file.write_all(encoded.as_bytes())?;
 
         Ok(key)
     }
+}
+
+pub fn load_encoded_key(settings: &Settings) -> Result<String> {
+    let path = settings.key_path.as_str();
+
+    if PathBuf::from(path).exists() {
+        let key = std::fs::read_to_string(path)?;
+        Ok(key)
+    } else {
+        let key = secretbox::gen_key();
+        let encoded = encode_key(key)?;
+
+        let mut file = File::create(path)?;
+        file.write_all(encoded.as_bytes())?;
+
+        Ok(encoded)
+    }
+}
+
+pub fn encode_key(key: secretbox::Key) -> Result<String> {
+    let buf = rmp_serde::to_vec(&key)?;
+    let buf = base64::encode(buf);
+
+    Ok(buf)
+}
+
+pub fn decode_key(key: String) -> Result<secretbox::Key> {
+    let buf = base64::decode(key)?;
+    let buf: secretbox::Key = rmp_serde::from_read_ref(&buf)?;
+
+    Ok(buf)
 }
 
 pub fn encrypt(history: &History, key: &secretbox::Key) -> Result<EncryptedHistory> {

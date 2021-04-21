@@ -23,14 +23,15 @@ impl Settings {
 
         create_dir_all(config_dir)?;
 
-        let config_file = if let Ok(p) = std::env::var("ATUIN_CONFIG") {
+        let mut config_file = if let Ok(p) = std::env::var("ATUIN_CONFIG_DIR") {
             PathBuf::from(p)
         } else {
             let mut config_file = PathBuf::new();
             config_file.push(config_dir);
-            config_file.push("server.toml");
             config_file
         };
+
+        config_file.push("server.toml");
 
         // create the config file if it does not exist
 

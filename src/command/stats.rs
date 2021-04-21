@@ -94,7 +94,7 @@ impl Cmd {
             }
 
             Self::All => {
-                let history = db.list()?;
+                let history = db.list(None, false)?;
 
                 compute_stats(&history)?;
 

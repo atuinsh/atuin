@@ -15,7 +15,7 @@ atuin-client = { path = "atuin-client", version = "0.6.0" }
 atuin-common = { path = "atuin-common", version = "0.6.0" }
 
 log = "0.4"
-fern = {version = "0.6.0", features = ["colored"] }
+pretty_env_logger = "0.4"
 chrono = { version = "0.4", features = ["serde"] }
 eyre = "0.6"
 structopt = "0.3"
@@ -33,7 +33,6 @@ tokio = { version = "1", features = ["full"] }
 async-trait = "0.1.49"
 chrono-english = "0.1.4"
 cli-table = "0.4"
-reqwest = { version = "0.11", features = ["blocking", "json"] }
 base64 = "0.13.0"
 humantime = "2.1.0"
 

@@ -2,7 +2,7 @@ use chrono::prelude::*;
 use chrono::Utc;
 use std::path::Path;
 
-use eyre::Result;
+use eyre::{eyre, Result};
 
 use rusqlite::{params, Connection};
 use rusqlite::{Params, Transaction};
@@ -14,7 +14,7 @@ pub trait Database {
     fn save_bulk(&mut self, h: &[History]) -> Result<()>;
 
     fn load(&self, id: &str) -> Result<History>;
-    fn list(&self) -> Result<Vec<History>>;
+    fn list(&self, max: Option<usize>, unique: bool) -> Result<Vec<History>>;
     fn range(&self, from: chrono::DateTime<Utc>, to: chrono::DateTime<Utc>)
         -> Result<Vec<History>>;
 
@@ -27,6 +27,8 @@ pub trait Database {
     fn before(&self, timestamp: chrono::DateTime<Utc>, count: i64) -> Result<Vec<History>>;
 
     fn prefix_search(&self, query: &str) -> Result<Vec<History>>;
+
+    fn search(&self, cwd: Option<String>, exit: Option<i64>, query: &str) -> Result<Vec<History>>;
 }
 
 // Intended for use on a developer machine and not a sync server.
@@ -78,6 +80,16 @@ impl Sqlite {
                 id text primary key,
                 data blob not null
             )",
+            [],
+        )?;
+
+        conn.execute(
+            "create index if not exists idx_history_timestamp on history(timestamp)",
+            [],
+        )?;
+
+        conn.execute(
+            "create index if not exists idx_history_command on history(command)",
             [],
         )?;
 
@@ -136,16 +148,19 @@ impl Database for Sqlite {
     }
 
     fn load(&self, id: &str) -> Result<History> {
-        debug!("loading history item");
+        debug!("loading history item {}", id);
 
-        let mut stmt = self.conn.prepare(
+        let history = self.query(
             "select id, timestamp, duration, exit, command, cwd, session, hostname from history
-                where id = ?1",
+                where id = ?1 limit 1",
+            &[id],
         )?;
 
-        let history = stmt.query_row(params![id], |row| {
-            history_from_sqlite_row(Some(id.to_string()), row)
-        })?;
+        if history.is_empty() {
+            return Err(eyre!("could not find history with id {}", id));
+        }
+
+        let history = history[0].clone();
 
         Ok(history)
     }
@@ -163,16 +178,39 @@ impl Database for Sqlite {
         Ok(())
     }
 
-    fn list(&self) -> Result<Vec<History>> {
+    // make a unique list, that only shows the *newest* version of things
+    fn list(&self, max: Option<usize>, unique: bool) -> Result<Vec<History>> {
         debug!("listing history");
 
-        let mut stmt = self
-            .conn
-            .prepare("SELECT * FROM history order by timestamp asc")?;
+        // very likely vulnerable to SQL injection
+        // however, this is client side, and only used by the client, on their
+        // own data. They can just open the db file...
+        // otherwise building the query is awkward
+        let query = format!(
+            "select * from history h
+                {}
+                order by timestamp desc
+                {}",
+            // inject the unique check
+            if unique {
+                "where timestamp = (
+                        select max(timestamp) from history 
+                        where h.command = history.command
+                    )"
+            } else {
+                ""
+            },
+            // inject the limit
+            if let Some(max) = max {
+                format!("limit {}", max)
+            } else {
+                "".to_string()
+            }
+        );
 
-        let history_iter = stmt.query_map(params![], |row| history_from_sqlite_row(None, row))?;
+        let history = self.query(query.as_str(), params![])?;
 
-        Ok(history_iter.filter_map(Result::ok).collect())
+        Ok(history)
     }
 
     fn range(
@@ -207,7 +245,7 @@ impl Database for Sqlite {
     fn last(&self) -> Result<History> {
         let mut stmt = self
             .conn
-            .prepare("SELECT * FROM history order by timestamp desc limit 1")?;
+            .prepare("SELECT * FROM history where duration >= 0 order by timestamp desc limit 1")?;
 
         let history = stmt.query_row(params![], |row| history_from_sqlite_row(None, row))?;
 
@@ -235,9 +273,17 @@ impl Database for Sqlite {
     }
 
     fn prefix_search(&self, query: &str) -> Result<Vec<History>> {
+        let query = query.to_string().replace("*", "%"); // allow wildcard char
+
         self.query(
-            "select * from history where command like ?1 || '%' order by timestamp asc limit 1000",
-            &[query],
+            "select * from history h 
+                where command like ?1 || '%' 
+                and timestamp = (
+                    select max(timestamp) from history 
+                    where h.command = history.command
+                ) 
+                order by timestamp desc limit 200",
+            &[query.as_str()],
         )
     }
 
@@ -247,6 +293,39 @@ impl Database for Sqlite {
                 .query_row_and_then("select count(1) from history;", params![], |row| row.get(0))?;
 
         Ok(res)
+    }
+
+    fn search(&self, cwd: Option<String>, exit: Option<i64>, query: &str) -> Result<Vec<History>> {
+        match (cwd, exit) {
+            (Some(cwd), Some(exit)) => self.query(
+                "select * from history 
+                where command like ?1 || '%' 
+                and cwd = ?2 
+                and exit = ?3 
+                order by timestamp asc limit 1000",
+                &[query, cwd.as_str(), exit.to_string().as_str()],
+            ),
+            (Some(cwd), None) => self.query(
+                "select * from history 
+                where command like ?1 || '%' 
+                and cwd = ?2 
+                order by timestamp asc limit 1000",
+                &[query, cwd.as_str()],
+            ),
+            (None, Some(exit)) => self.query(
+                "select * from history 
+            where command like ?1 || '%' 
+            and exit = ?2 
+            order by timestamp asc limit 1000",
+                &[query, exit.to_string().as_str()],
+            ),
+            (None, None) => self.query(
+                "select * from history 
+            where command like ?1 || '%' 
+            order by timestamp asc limit 1000",
+                &[query],
+            ),
+        }
     }
 }
 

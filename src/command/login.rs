@@ -1,10 +1,10 @@
-use std::collections::HashMap;
 use std::fs::File;
 use std::io::prelude::*;
 
-use eyre::{eyre, Result};
+use eyre::Result;
 use structopt::StructOpt;
 
+use atuin_client::api_client;
 use atuin_client::settings::Settings;
 
 #[derive(StructOpt)]
@@ -22,25 +22,15 @@ pub struct Cmd {
 
 impl Cmd {
     pub fn run(&self, settings: &Settings) -> Result<()> {
-        let mut map = HashMap::new();
-        map.insert("username", self.username.clone());
-        map.insert("password", self.password.clone());
-
-        let url = format!("{}/login", settings.sync_address);
-        let client = reqwest::blocking::Client::new();
-
-        let resp = client.post(url).json(&map).send()?;
-
-        if resp.status() != reqwest::StatusCode::OK {
-            return Err(eyre!("invalid login details"));
-        }
-
-        let session = resp.json::<HashMap<String, String>>()?;
-        let session = session["session"].clone();
+        let session = api_client::login(
+            settings.sync_address.as_str(),
+            self.username.as_str(),
+            self.password.as_str(),
+        )?;
 
         let session_path = settings.session_path.as_str();
         let mut file = File::create(session_path)?;
-        file.write_all(session.as_bytes())?;
+        file.write_all(session.session.as_bytes())?;
 
         let key_path = settings.key_path.as_str();
         let mut file = File::create(key_path)?;

@@ -1,7 +1,6 @@
 use eyre::Result;
-use itertools::Itertools;
-use std::io::stdout;
 use std::time::Duration;
+use std::{io::stdout, ops::Sub};
 
 use termion::{event::Key, input::MouseTerminal, raw::IntoRawMode, screen::AlternateScreen};
 use tui::{
@@ -31,7 +30,7 @@ struct State {
 
 #[allow(clippy::clippy::cast_sign_loss)]
 impl State {
-    fn durations(&self) -> Vec<String> {
+    fn durations(&self) -> Vec<(String, String)> {
         self.results
             .iter()
             .map(|h| {
@@ -40,7 +39,33 @@ impl State {
                 let duration = humantime::format_duration(duration).to_string();
                 let duration: Vec<&str> = duration.split(' ').collect();
 
-                duration[0].to_string()
+                let ago = chrono::Utc::now().sub(h.timestamp);
+                let ago = humantime::format_duration(ago.to_std().unwrap()).to_string();
+                let ago: Vec<&str> = ago.split(' ').collect();
+
+                (
+                    duration[0]
+                        .to_string()
+                        .replace("days", "d")
+                        .replace("day", "d")
+                        .replace("weeks", "w")
+                        .replace("week", "w")
+                        .replace("months", "mo")
+                        .replace("month", "mo")
+                        .replace("years", "y")
+                        .replace("year", "y"),
+                    ago[0]
+                        .to_string()
+                        .replace("days", "d")
+                        .replace("day", "d")
+                        .replace("weeks", "w")
+                        .replace("week", "w")
+                        .replace("months", "mo")
+                        .replace("month", "mo")
+                        .replace("years", "y")
+                        .replace("year", "y")
+                        + " ago",
+                )
             })
             .collect()
     }
@@ -51,9 +76,9 @@ impl State {
         r: tui::layout::Rect,
     ) {
         let durations = self.durations();
-        let max_length = durations
-            .iter()
-            .fold(0, |largest, i| std::cmp::max(largest, i.len()));
+        let max_length = durations.iter().fold(0, |largest, i| {
+            std::cmp::max(largest, i.0.len() + i.1.len())
+        });
 
         let results: Vec<ListItem> = self
             .results
@@ -64,10 +89,10 @@ impl State {
 
                 let mut command = Span::raw(command);
 
-                let mut duration = durations[i].clone();
+                let (duration, mut ago) = durations[i].clone();
 
-                while duration.len() < max_length {
-                    duration.push(' ');
+                while (duration.len() + ago.len()) < max_length {
+                    ago = " ".to_owned() + ago.as_str();
                 }
 
                 let duration = Span::styled(
@@ -79,6 +104,8 @@ impl State {
                     }),
                 );
 
+                let ago = Span::styled(ago, Style::default().fg(Color::Blue));
+
                 if let Some(selected) = self.results_state.selected() {
                     if selected == i {
                         command.style =
@@ -86,7 +113,8 @@ impl State {
                     }
                 }
 
-                let spans = Spans::from(vec![duration, Span::raw(" "), command]);
+                let spans =
+                    Spans::from(vec![duration, Span::raw(" "), ago, Span::raw(" "), command]);
 
                 ListItem::new(spans)
             })
@@ -103,12 +131,12 @@ impl State {
 
 fn query_results(app: &mut State, db: &mut impl Database) {
     let results = match app.input.as_str() {
-        "" => db.list(),
+        "" => db.list(Some(200), true),
         i => db.prefix_search(i),
     };
 
     if let Ok(results) = results {
-        app.results = results.into_iter().rev().unique().collect();
+        app.results = results;
     }
 
     if app.results.is_empty() {
@@ -120,7 +148,8 @@ fn query_results(app: &mut State, db: &mut impl Database) {
 
 fn key_handler(input: Key, db: &mut impl Database, app: &mut State) -> Option<String> {
     match input {
-        Key::Esc | Key::Char('\n') => {
+        Key::Esc => return Some(String::from("")),
+        Key::Char('\n') => {
             let i = app.results_state.selected().unwrap_or(0);
 
             return Some(
@@ -268,9 +297,37 @@ fn select_history(query: &[String], db: &mut impl Database) -> Result<String> {
     }
 }
 
-pub fn run(query: &[String], db: &mut impl Database) -> Result<()> {
-    let item = select_history(query, db)?;
-    eprintln!("{}", item);
+pub fn run(
+    cwd: Option<String>,
+    exit: Option<i64>,
+    interactive: bool,
+    query: &[String],
+    db: &mut impl Database,
+) -> Result<()> {
+    let dir = if let Some(cwd) = cwd {
+        if cwd == "." {
+            let current = std::env::current_dir()?;
+            let current = current.as_os_str();
+            let current = current.to_str().unwrap();
+
+            Some(current.to_owned())
+        } else {
+            Some(cwd)
+        }
+    } else {
+        None
+    };
+
+    if interactive {
+        let item = select_history(query, db)?;
+        eprintln!("{}", item);
+    } else {
+        let results = db.search(dir, exit, query.join(" ").as_str())?;
+
+        for i in &results {
+            println!("{}", i.command);
+        }
+    }
 
     Ok(())
 }

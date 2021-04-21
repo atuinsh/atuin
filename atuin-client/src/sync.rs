@@ -7,7 +7,7 @@ use atuin_common::{api::AddHistoryRequest, utils::hash_str};
 
 use crate::api_client;
 use crate::database::Database;
-use crate::encryption::{encrypt, load_key};
+use crate::encryption::{encrypt, load_encoded_key, load_key};
 use crate::settings::{Settings, HISTORY_PAGE_SIZE};
 
 // Currently sync is kinda naive, and basically just pages backwards through
@@ -26,6 +26,8 @@ async fn sync_download(
     client: &api_client::Client<'_>,
     db: &mut (impl Database + Send),
 ) -> Result<(i64, i64)> {
+    debug!("starting sync download");
+
     let remote_count = client.count().await?;
 
     let initial_local = db.history_count()?;
@@ -46,13 +48,13 @@ async fn sync_download(
             .get_history(last_sync, last_timestamp, host.clone())
             .await?;
 
-        if page.len() < HISTORY_PAGE_SIZE.try_into().unwrap() {
-            break;
-        }
-
         db.save_bulk(&page)?;
 
         local_count = db.history_count()?;
+
+        if page.len() < HISTORY_PAGE_SIZE.try_into().unwrap() {
+            break;
+        }
 
         let page_last = page
             .last()
@@ -80,10 +82,14 @@ async fn sync_upload(
     client: &api_client::Client<'_>,
     db: &mut (impl Database + Send),
 ) -> Result<()> {
+    debug!("starting sync upload");
+
     let initial_remote_count = client.count().await?;
     let mut remote_count = initial_remote_count;
 
     let local_count = db.history_count()?;
+
+    debug!("remote has {}, we have {}", remote_count, local_count);
 
     let key = load_key(settings)?; // encryption key
 
@@ -127,8 +133,8 @@ pub async fn sync(settings: &Settings, force: bool, db: &mut (impl Database + Se
     let client = api_client::Client::new(
         settings.sync_address.as_str(),
         settings.session_token.as_str(),
-        load_key(settings)?,
-    );
+        load_encoded_key(settings)?,
+    )?;
 
     sync_upload(settings, force, &client, db).await?;
 

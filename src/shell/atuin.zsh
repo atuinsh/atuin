@@ -15,8 +15,8 @@ _atuin_precmd(){
 
 	[[ -z "${ATUIN_HISTORY_ID}" ]] && return
 
-	atuin history end $ATUIN_HISTORY_ID --exit $EXIT
-	export ATUIN_HISTORY_ID=""
+
+	(RUST_LOG=error atuin history end $ATUIN_HISTORY_ID --exit $EXIT &) > /dev/null 2>&1
 }
 
 _atuin_search(){
@@ -27,7 +27,7 @@ _atuin_search(){
 	echoti rmkx
 	# swap stderr and stdout, so that the tui stuff works
 	# TODO: not this
-	output=$(atuin search $BUFFER 3>&1 1>&2 2>&3)
+	output=$(RUST_LOG=error atuin search -i $BUFFER 3>&1 1>&2 2>&3)
 	echoti smkx
 
 	if [[ -n $output ]] ; then

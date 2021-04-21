@@ -43,7 +43,18 @@ pub enum AtuinCmd {
     Uuid,
 
     #[structopt(about = "interactive history search")]
-    Search { query: Vec<String> },
+    Search {
+        #[structopt(long, short, about = "filter search result by directory")]
+        cwd: Option<String>,
+
+        #[structopt(long, short, about = "filter search result by exit code")]
+        exit: Option<i64>,
+
+        #[structopt(long, short, about = "open interactive search UI")]
+        interactive: bool,
+
+        query: Vec<String>,
+    },
 
     #[structopt(about = "sync with the configured server")]
     Sync {
@@ -76,7 +87,12 @@ impl AtuinCmd {
             Self::Server(server) => server.run(&server_settings).await,
             Self::Stats(stats) => stats.run(&mut db, &client_settings),
             Self::Init => init::init(),
-            Self::Search { query } => search::run(&query, &mut db),
+            Self::Search {
+                cwd,
+                exit,
+                interactive,
+                query,
+            } => search::run(cwd, exit, interactive, &query, &mut db),
 
             Self::Sync { force } => sync::run(&client_settings, force, &mut db).await,
             Self::Login(l) => l.run(&client_settings),

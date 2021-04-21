@@ -2,7 +2,6 @@
 #![allow(clippy::use_self)] // not 100% reliable
 
 use eyre::Result;
-use fern::colors::{Color, ColoredLevelConfig};
 use structopt::{clap::AppSettings, StructOpt};
 
 #[macro_use]
@@ -32,23 +31,7 @@ impl Atuin {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let colors = ColoredLevelConfig::new()
-        .warn(Color::Yellow)
-        .error(Color::Red);
-
-    fern::Dispatch::new()
-        .format(move |out, message, record| {
-            out.finish(format_args!(
-                "{} [{}] {}",
-                chrono::Local::now().to_rfc3339(),
-                colors.color(record.level()),
-                message
-            ))
-        })
-        .level(log::LevelFilter::Info)
-        .level_for("sqlx", log::LevelFilter::Warn)
-        .chain(std::io::stdout())
-        .apply()?;
+    pretty_env_logger::init();
 
     Atuin::from_args().run().await
 }
