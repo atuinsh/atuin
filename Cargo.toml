@@ -5,6 +5,8 @@ authors = ["Ellie Huxtable <ellie@elliehuxtable.com>"]
 edition = "2018"
 license = "MIT"
 description = "atuin - magical shell history"
+homepage = "https://atuin.sh"
+repository = "https://github.com/ellie/atuin"
 
 [workspace]
 members = ["./atuin-client", "./atuin-server", "./atuin-common"]

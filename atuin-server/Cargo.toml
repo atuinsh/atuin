@@ -5,6 +5,8 @@ authors = ["Ellie Huxtable <ellie@elliehuxtable.com>"]
 edition = "2018"
 license = "MIT"
 description = "server library for atuin"
+homepage = "https://atuin.sh"
+repository = "https://github.com/ellie/atuin"
 
 [dependencies]
 atuin-common = { path = "../atuin-common", version = "0.6.0" }
