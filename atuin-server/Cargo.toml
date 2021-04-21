@@ -34,5 +34,5 @@ rust-crypto = "^0.2"
 tokio = { version = "1", features = ["full"] }
 warp = "0.3"
 sqlx = { version = "0.5", features = [ "runtime-tokio-native-tls", "uuid", "chrono", "postgres" ] }
-async-trait = "0.1.49"
+async-trait = "0.1.50"
 urlencoding = "1.1.1"
