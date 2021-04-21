@@ -1,6 +1,6 @@
 [package]
 name = "atuin"
-version = "0.6.0"
+version = "0.6.1"
 authors = ["Ellie Huxtable <ellie@elliehuxtable.com>"]
 edition = "2018"
 license = "MIT"
