@@ -28,7 +28,7 @@ pub trait Database {
 
     fn prefix_search(&self, query: &str) -> Result<Vec<History>>;
 
-    fn search(&self, cwd: Option<String>, exit: Option<i64>, query: &str) -> Result<Vec<History>>;
+    fn search(&self, limit: Option<i64>, query: &str) -> Result<Vec<History>>;
 }
 
 // Intended for use on a developer machine and not a sync server.
@@ -58,40 +58,6 @@ impl Sqlite {
 
     fn setup_db(conn: &Connection) -> Result<()> {
         debug!("running sqlite database setup");
-
-        conn.execute(
-            "create table if not exists history (
-                id text primary key,
-                timestamp integer not null,
-                duration integer not null,
-                exit integer not null,
-                command text not null,
-                cwd text not null,
-                session text not null,
-                hostname text not null,
-
-                unique(timestamp, cwd, command)
-            )",
-            [],
-        )?;
-
-        conn.execute(
-            "create table if not exists history_encrypted (
-                id text primary key,
-                data blob not null
-            )",
-            [],
-        )?;
-
-        conn.execute(
-            "create index if not exists idx_history_timestamp on history(timestamp)",
-            [],
-        )?;
-
-        conn.execute(
-            "create index if not exists idx_history_command on history(command)",
-            [],
-        )?;
 
         Ok(())
     }
@@ -295,37 +261,19 @@ impl Database for Sqlite {
         Ok(res)
     }
 
-    fn search(&self, cwd: Option<String>, exit: Option<i64>, query: &str) -> Result<Vec<History>> {
-        match (cwd, exit) {
-            (Some(cwd), Some(exit)) => self.query(
-                "select * from history 
-                where command like ?1 || '%' 
-                and cwd = ?2 
-                and exit = ?3 
-                order by timestamp asc limit 1000",
-                &[query, cwd.as_str(), exit.to_string().as_str()],
-            ),
-            (Some(cwd), None) => self.query(
-                "select * from history 
-                where command like ?1 || '%' 
-                and cwd = ?2 
-                order by timestamp asc limit 1000",
-                &[query, cwd.as_str()],
-            ),
-            (None, Some(exit)) => self.query(
-                "select * from history 
+    fn search(&self, limit: Option<i64>, query: &str) -> Result<Vec<History>> {
+        let limit = limit.map_or("".to_owned(), |l| format!("limit {}", l));
+
+        self.query(
+            format!(
+                "select * from history
             where command like ?1 || '%' 
-            and exit = ?2 
-            order by timestamp asc limit 1000",
-                &[query, exit.to_string().as_str()],
-            ),
-            (None, None) => self.query(
-                "select * from history 
-            where command like ?1 || '%' 
-            order by timestamp asc limit 1000",
-                &[query],
-            ),
-        }
+            order by timestamp desc {}",
+                limit.clone()
+            )
+            .as_str(),
+            &[query],
+        )
     }
 }
 

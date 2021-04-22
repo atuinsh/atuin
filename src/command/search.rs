@@ -1,3 +1,4 @@
+use chrono::Utc;
 use eyre::Result;
 use std::time::Duration;
 use std::{io::stdout, ops::Sub};
@@ -15,6 +16,7 @@ use unicode_width::UnicodeWidthStr;
 
 use atuin_client::database::Database;
 use atuin_client::history::History;
+use atuin_client::settings::Settings;
 
 use crate::command::event::{Event, Events};
 
@@ -301,7 +303,13 @@ pub fn run(
     cwd: Option<String>,
     exit: Option<i64>,
     interactive: bool,
+    human: bool,
+    exclude_exit: Option<i64>,
+    exclude_cwd: Option<String>,
+    before: Option<String>,
+    after: Option<String>,
     query: &[String],
+    settings: &Settings,
     db: &mut impl Database,
 ) -> Result<()> {
     let dir = if let Some(cwd) = cwd {
@@ -322,11 +330,67 @@ pub fn run(
         let item = select_history(query, db)?;
         eprintln!("{}", item);
     } else {
-        let results = db.search(dir, exit, query.join(" ").as_str())?;
+        let results = db.search(None, query.join(" ").as_str())?;
 
-        for i in &results {
-            println!("{}", i.command);
-        }
+        // TODO: This filtering would be better done in the SQL query, I just
+        // need a nice way of building queries.
+        let results: Vec<History> = results
+            .iter()
+            .filter(|h| {
+                if let Some(exit) = exit {
+                    if h.exit != exit {
+                        return false;
+                    }
+                }
+
+                if let Some(exit) = exclude_exit {
+                    if h.exit == exit {
+                        return false;
+                    }
+                }
+
+                if let Some(cwd) = &exclude_cwd {
+                    if h.cwd.as_str() == cwd.as_str() {
+                        return false;
+                    }
+                }
+
+                if let Some(cwd) = &dir {
+                    if h.cwd.as_str() != cwd.as_str() {
+                        return false;
+                    }
+                }
+
+                if let Some(before) = &before {
+                    let before = chrono_english::parse_date_string(
+                        before.as_str(),
+                        Utc::now(),
+                        chrono_english::Dialect::Uk,
+                    );
+
+                    if before.is_err() || h.timestamp.gt(&before.unwrap()) {
+                        return false;
+                    }
+                }
+
+                if let Some(after) = &after {
+                    let after = chrono_english::parse_date_string(
+                        after.as_str(),
+                        Utc::now(),
+                        chrono_english::Dialect::Uk,
+                    );
+
+                    if after.is_err() || h.timestamp.lt(&after.unwrap()) {
+                        return false;
+                    }
+                }
+
+                true
+            })
+            .map(|h| h.to_owned())
+            .collect();
+
+        super::history::print_list(&results, human);
     }
 
     Ok(())

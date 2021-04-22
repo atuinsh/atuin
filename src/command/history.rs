@@ -1,7 +1,10 @@
 use std::env;
+use std::io::Write;
+use std::time::Duration;
 
 use eyre::Result;
 use structopt::StructOpt;
+use tabwriter::TabWriter;
 
 use atuin_client::database::Database;
 use atuin_client::history::History;
@@ -36,25 +39,67 @@ pub enum Cmd {
 
         #[structopt(long, short)]
         session: bool,
+
+        #[structopt(long, short)]
+        human: bool,
     },
 
     #[structopt(
         about="search for a command",
         aliases=&["se", "sea", "sear", "searc"],
     )]
-    Search { query: Vec<String> },
+    Search {
+        #[structopt(long, short)]
+        human: bool,
+
+        query: Vec<String>,
+    },
 
     #[structopt(
         about="get the last command ran",
         aliases=&["la", "las"],
     )]
-    Last {},
+    Last {
+        #[structopt(long, short)]
+        human: bool,
+    },
 }
 
-fn print_list(h: &[History]) {
-    for i in h {
-        println!("{}", i.command);
+pub fn print_list(h: &[History], human: bool) {
+    let mut writer = TabWriter::new(std::io::stdout()).padding(2);
+
+    let lines = h.iter().map(|h| {
+        if human {
+            let duration = humantime::format_duration(Duration::from_nanos(std::cmp::max(
+                h.duration, 0,
+            ) as u64))
+            .to_string();
+            let duration: Vec<&str> = duration.split(" ").collect();
+            let duration = duration[0];
+
+            format!(
+                "{}\t{}\t{}\n",
+                h.timestamp.format("%Y-%m-%d %H:%M:%S"),
+                h.command.trim(),
+                duration,
+            )
+        } else {
+            format!(
+                "{}\t{}\t{}\n",
+                h.timestamp.timestamp_nanos(),
+                h.command.trim(),
+                h.duration
+            )
+        }
+    });
+
+    for i in lines.rev() {
+        writer
+            .write_all(i.as_bytes())
+            .expect("failed to write to tab writer");
     }
+
+    writer.flush().expect("failed to flush tab writer");
 }
 
 impl Cmd {
@@ -102,7 +147,11 @@ impl Cmd {
                 Ok(())
             }
 
-            Self::List { session, cwd, .. } => {
+            Self::List {
+                session,
+                cwd,
+                human,
+            } => {
                 const QUERY_SESSION: &str = "select * from history where session = ?;";
                 const QUERY_DIR: &str = "select * from history where cwd = ?;";
                 const QUERY_SESSION_DIR: &str =
@@ -122,21 +171,21 @@ impl Cmd {
                     }
                 };
 
-                print_list(&history);
+                print_list(&history, *human);
 
                 Ok(())
             }
 
-            Self::Search { query } => {
+            Self::Search { query, human } => {
                 let history = db.prefix_search(&query.join(""))?;
-                print_list(&history);
+                print_list(&history, *human);
 
                 Ok(())
             }
 
-            Self::Last {} => {
+            Self::Last { human } => {
                 let last = db.last()?;
-                print_list(&[last]);
+                print_list(&[last], *human);
 
                 Ok(())
             }

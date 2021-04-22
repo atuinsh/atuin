@@ -47,11 +47,26 @@ pub enum AtuinCmd {
         #[structopt(long, short, about = "filter search result by directory")]
         cwd: Option<String>,
 
+        #[structopt(long = "exclude-cwd", about = "exclude directory from results")]
+        exclude_cwd: Option<String>,
+
         #[structopt(long, short, about = "filter search result by exit code")]
         exit: Option<i64>,
 
+        #[structopt(long = "exclude-exit", about = "exclude results with this exit code")]
+        exclude_exit: Option<i64>,
+
+        #[structopt(long, short, about = "only include results added before this date")]
+        before: Option<String>,
+
+        #[structopt(long, about = "only include results after this date")]
+        after: Option<String>,
+
         #[structopt(long, short, about = "open interactive search UI")]
         interactive: bool,
+
+        #[structopt(long, short, about = "use human-readable formatting for time")]
+        human: bool,
 
         query: Vec<String>,
     },
@@ -91,8 +106,25 @@ impl AtuinCmd {
                 cwd,
                 exit,
                 interactive,
+                human,
+                exclude_exit,
+                exclude_cwd,
+                before,
+                after,
                 query,
-            } => search::run(cwd, exit, interactive, &query, &mut db),
+            } => search::run(
+                cwd,
+                exit,
+                interactive,
+                human,
+                exclude_exit,
+                exclude_cwd,
+                before,
+                after,
+                &query,
+                &client_settings,
+                &mut db,
+            ),
 
             Self::Sync { force } => sync::run(&client_settings, force, &mut db).await,
             Self::Login(l) => l.run(&client_settings),
