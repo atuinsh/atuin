@@ -1,7 +1,7 @@
 use std::convert::Infallible;
 
 use eyre::Result;
-use warp::Filter;
+use warp::{hyper::StatusCode, Filter};
 
 use atuin_common::api::SyncHistoryRequest;
 
@@ -115,7 +115,8 @@ pub async fn router(
                 .or(add_history)
                 .or(user)
                 .or(register)
-                .or(login),
+                .or(login)
+                .or(warp::any().map(|| warp::reply::with_status("☕", StatusCode::IM_A_TEAPOT))),
         )
         .with(warp::filters::log::log("atuin::api"));
 
