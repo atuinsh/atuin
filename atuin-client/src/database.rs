@@ -2,11 +2,15 @@ use std::path::Path;
 use std::str::FromStr;
 
 use async_trait::async_trait;
+use chrono::prelude::*;
 use chrono::Utc;
 
 use eyre::Result;
 
-use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions};
+use sqlx::sqlite::{
+    SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteRow,
+};
+use sqlx::Row;
 
 use super::history::History;
 
@@ -78,7 +82,7 @@ impl Sqlite {
                 values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         )
         .bind(h.id.as_str())
-        .bind(h.timestamp.to_rfc3339())
+        .bind(h.timestamp.timestamp_nanos())
         .bind(h.duration)
         .bind(h.exit)
         .bind(h.command.as_str())
@@ -89,6 +93,19 @@ impl Sqlite {
         .await?;
 
         Ok(())
+    }
+
+    fn query_history(row: SqliteRow) -> History {
+        History {
+            id: row.get("id"),
+            timestamp: Utc.timestamp_nanos(row.get("timestamp")),
+            duration: row.get("duration"),
+            exit: row.get("exit"),
+            command: row.get("command"),
+            cwd: row.get("cwd"),
+            session: row.get("session"),
+            hostname: row.get("hostname"),
+        }
     }
 }
 
@@ -121,8 +138,9 @@ impl Database for Sqlite {
     async fn load(&self, id: &str) -> Result<History> {
         debug!("loading history item {}", id);
 
-        let res = sqlx::query_as::<_, History>("select * from history where id = ?1")
+        let res = sqlx::query("select * from history where id = ?1")
             .bind(id)
+            .map(Self::query_history)
             .fetch_one(&self.pool)
             .await?;
 
@@ -138,7 +156,7 @@ impl Database for Sqlite {
                 where id = ?1",
         )
         .bind(h.id.as_str())
-        .bind(h.timestamp.to_rfc3339())
+        .bind(h.timestamp.timestamp_nanos())
         .bind(h.duration)
         .bind(h.exit)
         .bind(h.command.as_str())
@@ -181,7 +199,8 @@ impl Database for Sqlite {
             }
         );
 
-        let res = sqlx::query_as::<_, History>(query.as_str())
+        let res = sqlx::query(query.as_str())
+            .map(Self::query_history)
             .fetch_all(&self.pool)
             .await?;
 
@@ -195,11 +214,12 @@ impl Database for Sqlite {
     ) -> Result<Vec<History>> {
         debug!("listing history from {:?} to {:?}", from, to);
 
-        let res = sqlx::query_as::<_, History>(
+        let res = sqlx::query(
             "select * from history where timestamp >= ?1 and timestamp <= ?2 order by timestamp asc",
         )
         .bind(from)
         .bind(to)
+            .map(Self::query_history)
         .fetch_all(&self.pool)
         .await?;
 
@@ -207,19 +227,20 @@ impl Database for Sqlite {
     }
 
     async fn first(&self) -> Result<History> {
-        let res = sqlx::query_as::<_, History>(
-            "select * from history where duration >= 0 order by timestamp asc limit 1",
-        )
-        .fetch_one(&self.pool)
-        .await?;
+        let res =
+            sqlx::query("select * from history where duration >= 0 order by timestamp asc limit 1")
+                .map(Self::query_history)
+                .fetch_one(&self.pool)
+                .await?;
 
         Ok(res)
     }
 
     async fn last(&self) -> Result<History> {
-        let res = sqlx::query_as::<_, History>(
+        let res = sqlx::query(
             "select * from history where duration >= 0 order by timestamp desc limit 1",
         )
+        .map(Self::query_history)
         .fetch_one(&self.pool)
         .await?;
 
@@ -227,11 +248,12 @@ impl Database for Sqlite {
     }
 
     async fn before(&self, timestamp: chrono::DateTime<Utc>, count: i64) -> Result<Vec<History>> {
-        let res = sqlx::query_as::<_, History>(
+        let res = sqlx::query(
             "select * from history where timestamp < ?1 order by timestamp desc limit ?2",
         )
-        .bind(timestamp)
+        .bind(timestamp.timestamp_nanos())
         .bind(count)
+        .map(Self::query_history)
         .fetch_all(&self.pool)
         .await?;
 
@@ -250,7 +272,7 @@ impl Database for Sqlite {
         let query = query.to_string().replace("*", "%"); // allow wildcard char
         let limit = limit.map_or("".to_owned(), |l| format!("limit {}", l));
 
-        let res = sqlx::query_as::<_, History>(
+        let res = sqlx::query(
             format!(
                 "select * from history
             where command like ?1 || '%' 
@@ -260,6 +282,7 @@ impl Database for Sqlite {
             .as_str(),
         )
         .bind(query)
+        .map(Self::query_history)
         .fetch_all(&self.pool)
         .await?;
 
@@ -267,7 +290,8 @@ impl Database for Sqlite {
     }
 
     async fn query_history(&self, query: &str) -> Result<Vec<History>> {
-        let res = sqlx::query_as::<_, History>(query)
+        let res = sqlx::query(query)
+            .map(Self::query_history)
             .fetch_all(&self.pool)
             .await?;
 

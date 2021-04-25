@@ -122,7 +122,6 @@ async fn sync_upload(
         // anything left over outside of the 100 block size
         client.post_history(&buffer).await?;
         cursor = buffer.last().unwrap().timestamp;
-
         remote_count = client.count().await?;
     }
 
