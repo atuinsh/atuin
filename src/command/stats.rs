@@ -71,7 +71,11 @@ fn compute_stats(history: &[History]) -> Result<()> {
 }
 
 impl Cmd {
-    pub fn run(&self, db: &mut impl Database, settings: &Settings) -> Result<()> {
+    pub async fn run(
+        &self,
+        db: &mut (impl Database + Send + Sync),
+        settings: &Settings,
+    ) -> Result<()> {
         match self {
             Self::Day { words } => {
                 let words = if words.is_empty() {
@@ -86,7 +90,7 @@ impl Cmd {
                 };
                 let end = start + Duration::days(1);
 
-                let history = db.range(start.into(), end.into())?;
+                let history = db.range(start.into(), end.into()).await?;
 
                 compute_stats(&history)?;
 
@@ -94,7 +98,7 @@ impl Cmd {
             }
 
             Self::All => {
-                let history = db.list(None, false)?;
+                let history = db.list(None, false).await?;
 
                 compute_stats(&history)?;
 

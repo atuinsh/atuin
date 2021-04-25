@@ -56,7 +56,7 @@ fn with_user(
 
 pub async fn router(
     settings: &Settings,
-) -> Result<impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone> {
+) -> Result<impl Filter<Extract = impl warp::Reply, Error = Infallible> + Clone> {
     let postgres = Postgres::new(settings.db_uri.as_str()).await?;
     let index = warp::get().and(warp::path::end()).map(handlers::index);
 

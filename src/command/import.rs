@@ -26,7 +26,7 @@ pub enum Cmd {
 }
 
 impl Cmd {
-    pub fn run(&self, db: &mut impl Database) -> Result<()> {
+    pub async fn run(&self, db: &mut (impl Database + Send + Sync)) -> Result<()> {
         println!("        A'Tuin        ");
         println!("======================");
         println!("          \u{1f30d}          ");
@@ -41,19 +41,19 @@ impl Cmd {
 
                 if shell.ends_with("/zsh") {
                     println!("Detected ZSH");
-                    import_zsh(db)
+                    import_zsh(db).await
                 } else {
                     println!("cannot import {} history", shell);
                     Ok(())
                 }
             }
 
-            Self::Zsh => import_zsh(db),
+            Self::Zsh => import_zsh(db).await,
         }
     }
 }
 
-fn import_zsh(db: &mut impl Database) -> Result<()> {
+async fn import_zsh(db: &mut (impl Database + Send + Sync)) -> Result<()> {
     // oh-my-zsh sets HISTFILE=~/.zhistory
     // zsh has no default value for this var, but uses ~/.zhistory.
     // we could maybe be smarter about this in the future :)
@@ -103,7 +103,7 @@ fn import_zsh(db: &mut impl Database) -> Result<()> {
         buf.push(i);
 
         if buf.len() == buf_size {
-            db.save_bulk(&buf)?;
+            db.save_bulk(&buf).await?;
             progress.inc(buf.len() as u64);
 
             buf.clear();
@@ -111,7 +111,7 @@ fn import_zsh(db: &mut impl Database) -> Result<()> {
     }
 
     if !buf.is_empty() {
-        db.save_bulk(&buf)?;
+        db.save_bulk(&buf).await?;
         progress.inc(buf.len() as u64);
     }
 

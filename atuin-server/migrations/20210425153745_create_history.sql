@@ -1,5 +1,3 @@
--- Your SQL goes here
--- lower case SQL please, this isn't a shouting match
 create table history (
 	id bigserial primary key,
 	client_id text not null unique, -- the client-generated ID

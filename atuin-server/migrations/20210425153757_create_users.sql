@@ -1,4 +1,3 @@
--- Your SQL goes here
 create table users (
 	id bigserial primary key,               -- also store our own ID
 	username varchar(32) not null unique,   -- being able to contact users is useful

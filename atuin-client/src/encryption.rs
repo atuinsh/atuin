@@ -98,7 +98,7 @@ pub fn decrypt(encrypted_history: &EncryptedHistory, key: &secretbox::Key) -> Re
 mod test {
     use sodiumoxide::crypto::secretbox;
 
-    use crate::local::history::History;
+    use crate::history::History;
 
     use super::{decrypt, encrypt};
 

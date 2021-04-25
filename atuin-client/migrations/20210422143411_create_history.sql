@@ -1,7 +1,7 @@
 -- Add migration script here
 create table if not exists history (
 	id text primary key,
-	timestamp integer not null,
+	timestamp text not null,
 	duration integer not null,
 	exit integer not null,
 	command text not null,

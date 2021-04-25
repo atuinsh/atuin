@@ -94,13 +94,13 @@ impl AtuinCmd {
 
         let db_path = PathBuf::from(client_settings.db_path.as_str());
 
-        let mut db = Sqlite::new(db_path)?;
+        let mut db = Sqlite::new(db_path).await?;
 
         match self {
             Self::History(history) => history.run(&client_settings, &mut db).await,
-            Self::Import(import) => import.run(&mut db),
+            Self::Import(import) => import.run(&mut db).await,
             Self::Server(server) => server.run(&server_settings).await,
-            Self::Stats(stats) => stats.run(&mut db, &client_settings),
+            Self::Stats(stats) => stats.run(&mut db, &client_settings).await,
             Self::Init => init::init(),
             Self::Search {
                 cwd,
@@ -112,19 +112,21 @@ impl AtuinCmd {
                 before,
                 after,
                 query,
-            } => search::run(
-                cwd,
-                exit,
-                interactive,
-                human,
-                exclude_exit,
-                exclude_cwd,
-                before,
-                after,
-                &query,
-                &client_settings,
-                &mut db,
-            ),
+            } => {
+                search::run(
+                    cwd,
+                    exit,
+                    interactive,
+                    human,
+                    exclude_exit,
+                    exclude_cwd,
+                    before,
+                    after,
+                    &query,
+                    &mut db,
+                )
+                .await
+            }
 
             Self::Sync { force } => sync::run(&client_settings, force, &mut db).await,
             Self::Login(l) => l.run(&client_settings),

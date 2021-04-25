@@ -37,7 +37,7 @@ pub fn config_dir() -> PathBuf {
     let home = std::env::var("HOME").expect("$HOME not found");
     let home = PathBuf::from(home);
 
-    let config_base = std::env::var("XDG_CONFIG_HOME").map_or_else(
+    std::env::var("XDG_CONFIG_HOME").map_or_else(
         |_| {
             let mut config = home.clone();
             config.push(".config");
@@ -45,9 +45,7 @@ pub fn config_dir() -> PathBuf {
             config
         },
         PathBuf::from,
-    );
-
-    config_base
+    )
 }
 
 pub fn data_dir() -> PathBuf {
@@ -57,7 +55,7 @@ pub fn data_dir() -> PathBuf {
     let home = std::env::var("HOME").expect("$HOME not found");
     let home = PathBuf::from(home);
 
-    let data_base = std::env::var("XDG_DATA_HOME").map_or_else(
+    std::env::var("XDG_DATA_HOME").map_or_else(
         |_| {
             let mut data = home.clone();
             data.push(".local");
@@ -66,7 +64,5 @@ pub fn data_dir() -> PathBuf {
             data
         },
         PathBuf::from,
-    );
-
-    data_base
+    )
 }
