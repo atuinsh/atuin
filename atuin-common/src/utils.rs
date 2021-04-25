@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use crypto::digest::Digest;
 use crypto::sha2::Sha256;
 use sodiumoxide::crypto::pwhash::argon2id13;
@@ -26,4 +28,41 @@ pub fn hash_str(string: &str) -> String {
 
 pub fn uuid_v4() -> String {
     Uuid::new_v4().to_simple().to_string()
+}
+
+pub fn config_dir() -> PathBuf {
+    // TODO: more reliable, more tested
+    // I don't want to use ProjectDirs, it puts config in awkward places on
+    // mac. Data too. Seems to be more intended for GUI apps.
+    let home = std::env::var("HOME").expect("$HOME not found");
+    let home = PathBuf::from(home);
+
+    std::env::var("XDG_CONFIG_HOME").map_or_else(
+        |_| {
+            let mut config = home.clone();
+            config.push(".config");
+            config.push("atuin");
+            config
+        },
+        PathBuf::from,
+    )
+}
+
+pub fn data_dir() -> PathBuf {
+    // TODO: more reliable, more tested
+    // I don't want to use ProjectDirs, it puts config in awkward places on
+    // mac. Data too. Seems to be more intended for GUI apps.
+    let home = std::env::var("HOME").expect("$HOME not found");
+    let home = PathBuf::from(home);
+
+    std::env::var("XDG_DATA_HOME").map_or_else(
+        |_| {
+            let mut data = home.clone();
+            data.push(".local");
+            data.push("share");
+            data.push("atuin");
+            data
+        },
+        PathBuf::from,
+    )
 }

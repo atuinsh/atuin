@@ -1,7 +1,10 @@
 use std::env;
+use std::io::Write;
+use std::time::Duration;
 
 use eyre::Result;
 use structopt::StructOpt;
+use tabwriter::TabWriter;
 
 use atuin_client::database::Database;
 use atuin_client::history::History;
@@ -36,29 +39,65 @@ pub enum Cmd {
 
         #[structopt(long, short)]
         session: bool,
-    },
 
-    #[structopt(
-        about="search for a command",
-        aliases=&["se", "sea", "sear", "searc"],
-    )]
-    Search { query: Vec<String> },
+        #[structopt(long, short)]
+        human: bool,
+    },
 
     #[structopt(
         about="get the last command ran",
         aliases=&["la", "las"],
     )]
-    Last {},
+    Last {
+        #[structopt(long, short)]
+        human: bool,
+    },
 }
 
-fn print_list(h: &[History]) {
-    for i in h {
-        println!("{}", i.command);
+#[allow(clippy::clippy::cast_sign_loss)]
+pub fn print_list(h: &[History], human: bool) {
+    let mut writer = TabWriter::new(std::io::stdout()).padding(2);
+
+    let lines = h.iter().map(|h| {
+        if human {
+            let duration = humantime::format_duration(Duration::from_nanos(std::cmp::max(
+                h.duration, 0,
+            ) as u64))
+            .to_string();
+            let duration: Vec<&str> = duration.split(' ').collect();
+            let duration = duration[0];
+
+            format!(
+                "{}\t{}\t{}\n",
+                h.timestamp.format("%Y-%m-%d %H:%M:%S"),
+                h.command.trim(),
+                duration,
+            )
+        } else {
+            format!(
+                "{}\t{}\t{}\n",
+                h.timestamp.timestamp_nanos(),
+                h.command.trim(),
+                h.duration
+            )
+        }
+    });
+
+    for i in lines.rev() {
+        writer
+            .write_all(i.as_bytes())
+            .expect("failed to write to tab writer");
     }
+
+    writer.flush().expect("failed to flush tab writer");
 }
 
 impl Cmd {
-    pub async fn run(&self, settings: &Settings, db: &mut (impl Database + Send)) -> Result<()> {
+    pub async fn run(
+        &self,
+        settings: &Settings,
+        db: &mut (impl Database + Send + Sync),
+    ) -> Result<()> {
         match self {
             Self::Start { command: words } => {
                 let command = words.join(" ");
@@ -69,7 +108,7 @@ impl Cmd {
                 // print the ID
                 // we use this as the key for calling end
                 println!("{}", h.id);
-                db.save(&h)?;
+                db.save(&h).await?;
                 Ok(())
             }
 
@@ -78,7 +117,7 @@ impl Cmd {
                     return Ok(());
                 }
 
-                let mut h = db.load(id)?;
+                let mut h = db.load(id).await?;
 
                 if h.duration > 0 {
                     debug!("cannot end history - already has duration");
@@ -90,7 +129,7 @@ impl Cmd {
                 h.exit = *exit;
                 h.duration = chrono::Utc::now().timestamp_nanos() - h.timestamp.timestamp_nanos();
 
-                db.update(&h)?;
+                db.update(&h).await?;
 
                 if settings.should_sync()? {
                     debug!("running periodic background sync");
@@ -102,41 +141,38 @@ impl Cmd {
                 Ok(())
             }
 
-            Self::List { session, cwd, .. } => {
-                const QUERY_SESSION: &str = "select * from history where session = ?;";
-                const QUERY_DIR: &str = "select * from history where cwd = ?;";
-                const QUERY_SESSION_DIR: &str =
-                    "select * from history where cwd = ?1 and session = ?2;";
-
+            Self::List {
+                session,
+                cwd,
+                human,
+            } => {
                 let params = (session, cwd);
-
                 let cwd = env::current_dir()?.display().to_string();
                 let session = env::var("ATUIN_SESSION")?;
 
+                let query_session = format!("select * from history where session = {};", session);
+
+                let query_dir = format!("select * from history where cwd = {};", cwd);
+                let query_session_dir = format!(
+                    "select * from history where cwd = {} and session = {};",
+                    cwd, session
+                );
+
                 let history = match params {
-                    (false, false) => db.list(None, false)?,
-                    (true, false) => db.query(QUERY_SESSION, &[session.as_str()])?,
-                    (false, true) => db.query(QUERY_DIR, &[cwd.as_str()])?,
-                    (true, true) => {
-                        db.query(QUERY_SESSION_DIR, &[cwd.as_str(), session.as_str()])?
-                    }
+                    (false, false) => db.list(None, false).await?,
+                    (true, false) => db.query_history(query_session.as_str()).await?,
+                    (false, true) => db.query_history(query_dir.as_str()).await?,
+                    (true, true) => db.query_history(query_session_dir.as_str()).await?,
                 };
 
-                print_list(&history);
+                print_list(&history, *human);
 
                 Ok(())
             }
 
-            Self::Search { query } => {
-                let history = db.prefix_search(&query.join(""))?;
-                print_list(&history);
-
-                Ok(())
-            }
-
-            Self::Last {} => {
-                let last = db.last()?;
-                print_list(&[last]);
+            Self::Last { human } => {
+                let last = db.last().await?;
+                print_list(&[last], *human);
 
                 Ok(())
             }

@@ -1,4 +1,4 @@
--- Your SQL goes here
+-- Add migration script here
 create table sessions (
 	id bigserial primary key,
 	user_id bigserial,

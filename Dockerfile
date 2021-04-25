@@ -21,7 +21,7 @@ FROM debian:buster-slim as runtime
 WORKDIR app
 
 ENV TZ=Etc/UTC
-ENV RUST_LOG=info
+ENV RUST_LOG=atuin::api=info
 ENV ATUIN_CONFIG_DIR=/config
 
 COPY --from=builder /app/target/release/atuin /usr/local/bin

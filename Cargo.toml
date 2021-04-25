@@ -37,7 +37,6 @@ chrono-english = "0.1.4"
 cli-table = "0.4"
 base64 = "0.13.0"
 humantime = "2.1.0"
+tabwriter = "1.2.1"
+crossbeam-channel = "0.5.1"
 
-[dependencies.rusqlite]
-version = "0.25"
-features = ["bundled"]

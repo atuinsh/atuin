@@ -1,15 +1,16 @@
+use chrono::Utc;
 use eyre::Result;
 use std::time::Duration;
 use std::{io::stdout, ops::Sub};
 
 use termion::{event::Key, input::MouseTerminal, raw::IntoRawMode, screen::AlternateScreen};
 use tui::{
-    backend::TermionBackend,
+    backend::{Backend, TermionBackend},
     layout::{Alignment, Constraint, Corner, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Span, Spans, Text},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
-    Terminal,
+    Frame, Terminal,
 };
 use unicode_width::UnicodeWidthStr;
 
@@ -28,8 +29,8 @@ struct State {
     results_state: ListState,
 }
 
-#[allow(clippy::clippy::cast_sign_loss)]
 impl State {
+    #[allow(clippy::clippy::cast_sign_loss)]
     fn durations(&self) -> Vec<(String, String)> {
         self.results
             .iter()
@@ -129,24 +130,28 @@ impl State {
     }
 }
 
-fn query_results(app: &mut State, db: &mut impl Database) {
+async fn query_results(app: &mut State, db: &mut (impl Database + Send + Sync)) -> Result<()> {
     let results = match app.input.as_str() {
-        "" => db.list(Some(200), true),
-        i => db.prefix_search(i),
+        "" => db.list(Some(200), true).await?,
+        i => db.search(Some(200), i).await?,
     };
 
-    if let Ok(results) = results {
-        app.results = results;
-    }
+    app.results = results;
 
     if app.results.is_empty() {
         app.results_state.select(None);
     } else {
         app.results_state.select(Some(0));
     }
+
+    Ok(())
 }
 
-fn key_handler(input: Key, db: &mut impl Database, app: &mut State) -> Option<String> {
+async fn key_handler(
+    input: Key,
+    db: &mut (impl Database + Send + Sync),
+    app: &mut State,
+) -> Option<String> {
     match input {
         Key::Esc => return Some(String::from("")),
         Key::Char('\n') => {
@@ -160,11 +165,11 @@ fn key_handler(input: Key, db: &mut impl Database, app: &mut State) -> Option<St
         }
         Key::Char(c) => {
             app.input.push(c);
-            query_results(app, db);
+            query_results(app, db).await.unwrap();
         }
         Key::Backspace => {
             app.input.pop();
-            query_results(app, db);
+            query_results(app, db).await.unwrap();
         }
         Key::Down => {
             let i = match app.results_state.selected() {
@@ -198,11 +203,82 @@ fn key_handler(input: Key, db: &mut impl Database, app: &mut State) -> Option<St
     None
 }
 
+#[allow(clippy::clippy::cast_possible_truncation)]
+fn draw<T: Backend>(f: &mut Frame<'_, T>, history_count: i64, app: &mut State) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .margin(1)
+        .constraints(
+            [
+                Constraint::Length(2),
+                Constraint::Min(1),
+                Constraint::Length(3),
+            ]
+            .as_ref(),
+        )
+        .split(f.size());
+
+    let top_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)].as_ref())
+        .split(chunks[0]);
+
+    let top_left_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Length(1)].as_ref())
+        .split(top_chunks[0]);
+
+    let top_right_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Length(1)].as_ref())
+        .split(top_chunks[1]);
+
+    let title = Paragraph::new(Text::from(Span::styled(
+        format!("A'tuin v{}", VERSION),
+        Style::default().add_modifier(Modifier::BOLD),
+    )));
+
+    let help = vec![
+        Span::raw("Press "),
+        Span::styled("Esc", Style::default().add_modifier(Modifier::BOLD)),
+        Span::raw(" to exit."),
+    ];
+
+    let help = Text::from(Spans::from(help));
+    let help = Paragraph::new(help);
+
+    let input = Paragraph::new(app.input.clone())
+        .block(Block::default().borders(Borders::ALL).title("Query"));
+
+    let stats = Paragraph::new(Text::from(Span::raw(format!(
+        "history count: {}",
+        history_count,
+    ))))
+    .alignment(Alignment::Right);
+
+    f.render_widget(title, top_left_chunks[0]);
+    f.render_widget(help, top_left_chunks[1]);
+
+    app.render_results(f, chunks[1]);
+    f.render_widget(stats, top_right_chunks[0]);
+    f.render_widget(input, chunks[2]);
+
+    f.set_cursor(
+        // Put cursor past the end of the input text
+        chunks[2].x + app.input.width() as u16 + 1,
+        // Move one line down, from the border to the input line
+        chunks[2].y + 1,
+    );
+}
+
 // this is a big blob of horrible! clean it up!
 // for now, it works. But it'd be great if it were more easily readable, and
 // modular. I'd like to add some more stats and stuff at some point
 #[allow(clippy::clippy::cast_possible_truncation)]
-fn select_history(query: &[String], db: &mut impl Database) -> Result<String> {
+async fn select_history(
+    query: &[String],
+    db: &mut (impl Database + Send + Sync),
+) -> Result<String> {
     let stdout = stdout().into_raw_mode()?;
     let stdout = MouseTerminal::from(stdout);
     let stdout = AlternateScreen::from(stdout);
@@ -218,91 +294,35 @@ fn select_history(query: &[String], db: &mut impl Database) -> Result<String> {
         results_state: ListState::default(),
     };
 
-    query_results(&mut app, db);
+    query_results(&mut app, db).await?;
 
     loop {
+        let history_count = db.history_count().await?;
         // Handle input
         if let Event::Input(input) = events.next()? {
-            if let Some(output) = key_handler(input, db, &mut app) {
+            if let Some(output) = key_handler(input, db, &mut app).await {
                 return Ok(output);
             }
         }
 
-        terminal.draw(|f| {
-            let chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .margin(1)
-                .constraints(
-                    [
-                        Constraint::Length(2),
-                        Constraint::Min(1),
-                        Constraint::Length(3),
-                    ]
-                    .as_ref(),
-                )
-                .split(f.size());
-
-            let top_chunks = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Percentage(50), Constraint::Percentage(50)].as_ref())
-                .split(chunks[0]);
-
-            let top_left_chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Length(1), Constraint::Length(1)].as_ref())
-                .split(top_chunks[0]);
-
-            let top_right_chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Length(1), Constraint::Length(1)].as_ref())
-                .split(top_chunks[1]);
-
-            let title = Paragraph::new(Text::from(Span::styled(
-                format!("A'tuin v{}", VERSION),
-                Style::default().add_modifier(Modifier::BOLD),
-            )));
-
-            let help = vec![
-                Span::raw("Press "),
-                Span::styled("Esc", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(" to exit."),
-            ];
-
-            let help = Text::from(Spans::from(help));
-            let help = Paragraph::new(help);
-
-            let input = Paragraph::new(app.input.clone())
-                .block(Block::default().borders(Borders::ALL).title("Query"));
-
-            let stats = Paragraph::new(Text::from(Span::raw(format!(
-                "history count: {}",
-                db.history_count().unwrap()
-            ))))
-            .alignment(Alignment::Right);
-
-            f.render_widget(title, top_left_chunks[0]);
-            f.render_widget(help, top_left_chunks[1]);
-
-            app.render_results(f, chunks[1]);
-            f.render_widget(stats, top_right_chunks[0]);
-            f.render_widget(input, chunks[2]);
-
-            f.set_cursor(
-                // Put cursor past the end of the input text
-                chunks[2].x + app.input.width() as u16 + 1,
-                // Move one line down, from the border to the input line
-                chunks[2].y + 1,
-            );
-        })?;
+        terminal.draw(|f| draw(f, history_count, &mut app))?;
     }
 }
 
-pub fn run(
+// This is supposed to more-or-less mirror the command line version, so ofc
+// it is going to have a lot of args
+#[allow(clippy::clippy::clippy::too_many_arguments)]
+pub async fn run(
     cwd: Option<String>,
     exit: Option<i64>,
     interactive: bool,
+    human: bool,
+    exclude_exit: Option<i64>,
+    exclude_cwd: Option<String>,
+    before: Option<String>,
+    after: Option<String>,
     query: &[String],
-    db: &mut impl Database,
+    db: &mut (impl Database + Send + Sync),
 ) -> Result<()> {
     let dir = if let Some(cwd) = cwd {
         if cwd == "." {
@@ -319,14 +339,70 @@ pub fn run(
     };
 
     if interactive {
-        let item = select_history(query, db)?;
+        let item = select_history(query, db).await?;
         eprintln!("{}", item);
     } else {
-        let results = db.search(dir, exit, query.join(" ").as_str())?;
+        let results = db.search(None, query.join(" ").as_str()).await?;
 
-        for i in &results {
-            println!("{}", i.command);
-        }
+        // TODO: This filtering would be better done in the SQL query, I just
+        // need a nice way of building queries.
+        let results: Vec<History> = results
+            .iter()
+            .filter(|h| {
+                if let Some(exit) = exit {
+                    if h.exit != exit {
+                        return false;
+                    }
+                }
+
+                if let Some(exit) = exclude_exit {
+                    if h.exit == exit {
+                        return false;
+                    }
+                }
+
+                if let Some(cwd) = &exclude_cwd {
+                    if h.cwd.as_str() == cwd.as_str() {
+                        return false;
+                    }
+                }
+
+                if let Some(cwd) = &dir {
+                    if h.cwd.as_str() != cwd.as_str() {
+                        return false;
+                    }
+                }
+
+                if let Some(before) = &before {
+                    let before = chrono_english::parse_date_string(
+                        before.as_str(),
+                        Utc::now(),
+                        chrono_english::Dialect::Uk,
+                    );
+
+                    if before.is_err() || h.timestamp.gt(&before.unwrap()) {
+                        return false;
+                    }
+                }
+
+                if let Some(after) = &after {
+                    let after = chrono_english::parse_date_string(
+                        after.as_str(),
+                        Utc::now(),
+                        chrono_english::Dialect::Uk,
+                    );
+
+                    if after.is_err() || h.timestamp.lt(&after.unwrap()) {
+                        return false;
+                    }
+                }
+
+                true
+            })
+            .map(std::borrow::ToOwned::to_owned)
+            .collect();
+
+        super::history::print_list(&results, human);
     }
 
     Ok(())

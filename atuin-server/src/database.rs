@@ -40,6 +40,8 @@ impl Postgres {
             .connect(uri)
             .await?;
 
+        sqlx::migrate!("./migrations").run(&pool).await?;
+
         Ok(Self { pool })
     }
 }

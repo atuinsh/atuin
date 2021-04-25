@@ -1,7 +1,7 @@
-use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
+use crossbeam_channel::unbounded;
 use termion::event::Key;
 use termion::input::TermRead;
 
@@ -13,7 +13,7 @@ pub enum Event<I> {
 /// A small event handler that wrap termion input and tick events. Each event
 /// type is handled in its own thread and returned to a common `Receiver`
 pub struct Events {
-    rx: mpsc::Receiver<Event<Key>>,
+    rx: crossbeam_channel::Receiver<Event<Key>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -37,7 +37,7 @@ impl Events {
     }
 
     pub fn with_config(config: Config) -> Events {
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = unbounded();
 
         {
             let tx = tx.clone();
@@ -62,7 +62,7 @@ impl Events {
         Events { rx }
     }
 
-    pub fn next(&self) -> Result<Event<Key>, mpsc::RecvError> {
+    pub fn next(&self) -> Result<Event<Key>, crossbeam_channel::RecvError> {
         self.rx.recv()
     }
 }

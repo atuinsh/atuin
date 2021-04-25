@@ -30,7 +30,7 @@ async fn sync_download(
 
     let remote_count = client.count().await?;
 
-    let initial_local = db.history_count()?;
+    let initial_local = db.history_count().await?;
     let mut local_count = initial_local;
 
     let mut last_sync = if force {
@@ -48,9 +48,9 @@ async fn sync_download(
             .get_history(last_sync, last_timestamp, host.clone())
             .await?;
 
-        db.save_bulk(&page)?;
+        db.save_bulk(&page).await?;
 
-        local_count = db.history_count()?;
+        local_count = db.history_count().await?;
 
         if page.len() < HISTORY_PAGE_SIZE.try_into().unwrap() {
             break;
@@ -87,7 +87,7 @@ async fn sync_upload(
     let initial_remote_count = client.count().await?;
     let mut remote_count = initial_remote_count;
 
-    let local_count = db.history_count()?;
+    let local_count = db.history_count().await?;
 
     debug!("remote has {}, we have {}", remote_count, local_count);
 
@@ -98,7 +98,7 @@ async fn sync_upload(
     let mut cursor = Utc::now();
 
     while local_count > remote_count {
-        let last = db.before(cursor, HISTORY_PAGE_SIZE)?;
+        let last = db.before(cursor, HISTORY_PAGE_SIZE).await?;
         let mut buffer = Vec::<AddHistoryRequest>::new();
 
         if last.is_empty() {

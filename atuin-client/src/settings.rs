@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 use chrono::prelude::*;
 use chrono::Utc;
 use config::{Config, Environment, File as ConfigFile};
-use directories::ProjectDirs;
 use eyre::{eyre, Result};
 use parse_duration::parse;
 
@@ -28,9 +27,10 @@ pub struct Settings {
 
 impl Settings {
     pub fn save_sync_time() -> Result<()> {
-        let sync_time_path = ProjectDirs::from("com", "elliehuxtable", "atuin")
-            .ok_or_else(|| eyre!("could not determine key file location"))?;
-        let sync_time_path = sync_time_path.data_dir().join("last_sync_time");
+        let data_dir = atuin_common::utils::data_dir();
+        let data_dir = data_dir.as_path();
+
+        let sync_time_path = data_dir.join("last_sync_time");
 
         std::fs::write(sync_time_path, Utc::now().to_rfc3339())?;
 
@@ -38,15 +38,10 @@ impl Settings {
     }
 
     pub fn last_sync() -> Result<chrono::DateTime<Utc>> {
-        let sync_time_path = ProjectDirs::from("com", "elliehuxtable", "atuin");
+        let data_dir = atuin_common::utils::data_dir();
+        let data_dir = data_dir.as_path();
 
-        if sync_time_path.is_none() {
-            debug!("failed to load projectdirs, not syncing");
-            return Err(eyre!("could not load project dirs"));
-        }
-
-        let sync_time_path = sync_time_path.unwrap();
-        let sync_time_path = sync_time_path.data_dir().join("last_sync_time");
+        let sync_time_path = data_dir.join("last_sync_time");
 
         if !sync_time_path.exists() {
             return Ok(Utc.ymd(1970, 1, 1).and_hms(0, 0, 0));
@@ -73,10 +68,14 @@ impl Settings {
     }
 
     pub fn new() -> Result<Self> {
-        let config_dir = ProjectDirs::from("com", "elliehuxtable", "atuin").unwrap();
-        let config_dir = config_dir.config_dir();
+        let config_dir = atuin_common::utils::config_dir();
+        let config_dir = config_dir.as_path();
+
+        let data_dir = atuin_common::utils::data_dir();
+        let data_dir = data_dir.as_path();
 
         create_dir_all(config_dir)?;
+        create_dir_all(data_dir)?;
 
         let mut config_file = if let Ok(p) = std::env::var("ATUIN_CONFIG_DIR") {
             PathBuf::from(p)
@@ -90,27 +89,16 @@ impl Settings {
 
         let mut s = Config::new();
 
-        let db_path = ProjectDirs::from("com", "elliehuxtable", "atuin")
-            .ok_or_else(|| eyre!("could not determine db file location"))?
-            .data_dir()
-            .join("history.db");
-
-        let key_path = ProjectDirs::from("com", "elliehuxtable", "atuin")
-            .ok_or_else(|| eyre!("could not determine key file location"))?
-            .data_dir()
-            .join("key");
-
-        let session_path = ProjectDirs::from("com", "elliehuxtable", "atuin")
-            .ok_or_else(|| eyre!("could not determine session file location"))?
-            .data_dir()
-            .join("session");
+        let db_path = data_dir.join("history.db");
+        let key_path = data_dir.join("key");
+        let session_path = data_dir.join("session");
 
         s.set_default("db_path", db_path.to_str())?;
         s.set_default("key_path", key_path.to_str())?;
         s.set_default("session_path", session_path.to_str())?;
         s.set_default("dialect", "us")?;
         s.set_default("auto_sync", true)?;
-        s.set_default("sync_frequency", "5m")?;
+        s.set_default("sync_frequency", "1h")?;
         s.set_default("sync_address", "https://api.atuin.sh")?;
 
         if config_file.exists() {

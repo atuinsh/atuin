@@ -6,7 +6,7 @@ use chrono::Utc;
 use atuin_common::utils::uuid_v4;
 
 // Any new fields MUST be Optional<>!
-#[derive(Debug, Clone, Serialize, Deserialize, Ord, PartialOrd)]
+#[derive(Debug, Clone, Serialize, Deserialize, Ord, PartialOrd, sqlx::FromRow)]
 pub struct History {
     pub id: String,
     pub timestamp: chrono::DateTime<Utc>,

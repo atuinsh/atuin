@@ -3,7 +3,6 @@ use std::io::prelude::*;
 use std::path::PathBuf;
 
 use config::{Config, Environment, File as ConfigFile};
-use directories::ProjectDirs;
 use eyre::{eyre, Result};
 
 pub const HISTORY_PAGE_SIZE: i64 = 100;
@@ -18,8 +17,8 @@ pub struct Settings {
 
 impl Settings {
     pub fn new() -> Result<Self> {
-        let config_dir = ProjectDirs::from("com", "elliehuxtable", "atuin").unwrap();
-        let config_dir = config_dir.config_dir();
+        let config_dir = atuin_common::utils::config_dir();
+        let config_dir = config_dir.as_path();
 
         create_dir_all(config_dir)?;
 

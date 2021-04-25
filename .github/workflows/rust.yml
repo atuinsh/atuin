@@ -38,7 +38,7 @@ jobs:
           override: true
 
     - name: Run cargo test
-      run: cargo test
+      run: cargo test --workspace
 
   clippy:
     runs-on: ubuntu-latest
