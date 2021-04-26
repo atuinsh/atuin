@@ -1,6 +1,6 @@
 [package]
 name = "atuin-common"
-version = "0.6.1"
+version = "0.6.2"
 authors = ["Ellie Huxtable <ellie@elliehuxtable.com>"]
 edition = "2018"
 license = "MIT"

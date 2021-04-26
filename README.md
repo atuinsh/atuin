@@ -12,9 +12,17 @@
   <a href="https://crates.io/crates/atuin"><img src="https://img.shields.io/crates/d/atuin.svg?style=flat-square" /></a>
   <a href="https://github.com/ellie/atuin/blob/main/LICENSE"><img src="https://img.shields.io/crates/l/atuin.svg?style=flat-square" /></a>
 </p>
- 
+
+<p align="center">
+  <img src="demo.gif" alt="animated" width="80%" />
+</p>
+
+<p align="center">
+<em>exit code, duration, time and command shown</em>
+</p>
+
 - store shell history in a sqlite database
-- backup shell history to the cloud
+- backup encrypted shell history to the cloud
 - the same history across terminals, across session, and across machines
 - log exit code, cwd, hostname, session, command duration, etc
 - smart interactive history search to replace ctrl-r

@@ -274,8 +274,12 @@ impl Database for Sqlite {
 
         let res = sqlx::query(
             format!(
-                "select * from history
+                "select * from history h
             where command like ?1 || '%' 
+            and timestamp = (
+                    select max(timestamp) from history 
+                    where h.command = history.command
+                )
             order by timestamp desc {}",
                 limit.clone()
             )
