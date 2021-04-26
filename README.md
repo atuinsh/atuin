@@ -13,7 +13,10 @@
   <a href="https://github.com/ellie/atuin/blob/main/LICENSE"><img src="https://img.shields.io/crates/l/atuin.svg?style=flat-square" /></a>
 </p>
 
-[![asciicast](https://asciinema.org/a/xj7bcDlqrdU9PxwKecYGu24nJ.svg)](https://asciinema.org/a/xj7bcDlqrdU9PxwKecYGu24nJ)
+<p align="center">
+  <img src="demo.gif" alt="animated" />
+</p>
+_exit code, duration, time and command shown_
 
 - store shell history in a sqlite database
 - backup encrypted shell history to the cloud
