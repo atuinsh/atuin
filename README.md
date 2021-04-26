@@ -47,7 +47,7 @@
 # Quickstart
 
 ```
-curl https://github.com/ellie/atuin/blob/main/install.sh | bash
+curl https://raw.githubusercontent.com/ellie/atuin/main/install.sh | bash
 
 atuin register -u <USERNAME> -e <EMAIL> -p <PASSWORD>
 atuin import auto
@@ -64,7 +64,7 @@ system package manager where possible (AUR, homebrew, etc etc).
 
 ```
 # do not run this as root, root will be asked for if required
-curl https://github.com/ellie/atuin/blob/main/install.sh | sh
+curl https://raw.githubusercontent.com/ellie/atuin/main/install.sh | sh
 ```
 
 ### With cargo
