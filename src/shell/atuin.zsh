@@ -6,7 +6,7 @@ export ATUIN_HISTORY="atuin history list"
 export ATUIN_BINDKEYS="true"
 
 _atuin_preexec(){
-	id=$(atuin history start $1)
+	id=$(atuin history start "$1")
 	export ATUIN_HISTORY_ID="$id"
 }
 

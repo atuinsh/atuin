@@ -1,19 +1,32 @@
 use std::env;
 
 use eyre::{eyre, Result};
+use structopt::StructOpt;
+
+#[derive(StructOpt)]
+pub enum Cmd {
+    #[structopt(about = "zsh setup")]
+    Zsh,
+    #[structopt(about = "bash setup")]
+    Bash,
+}
 
 fn init_zsh() {
     let full = include_str!("../shell/atuin.zsh");
     println!("{}", full);
 }
 
-pub fn init() -> Result<()> {
-    let shell = env::var("SHELL")?;
+fn init_bash() {
+    let full = include_str!("../shell/atuin.bash");
+    println!("{}", full);
+}
 
-    if shell.ends_with("zsh") {
-        init_zsh();
+impl Cmd {
+    pub fn run(&self) -> Result<()> {
+        match self {
+            Self::Zsh => init_zsh(),
+            Self::Bash => init_bash(),
+        }
         Ok(())
-    } else {
-        Err(eyre!("Could not detect shell, or shell unsupported"))
     }
 }

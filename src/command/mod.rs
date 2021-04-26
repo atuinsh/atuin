@@ -37,7 +37,7 @@ pub enum AtuinCmd {
     Stats(stats::Cmd),
 
     #[structopt(about = "output shell setup")]
-    Init,
+    Init(init::Cmd),
 
     #[structopt(about = "generates a UUID")]
     Uuid,
@@ -101,7 +101,7 @@ impl AtuinCmd {
             Self::Import(import) => import.run(&mut db).await,
             Self::Server(server) => server.run(&server_settings).await,
             Self::Stats(stats) => stats.run(&mut db, &client_settings).await,
-            Self::Init => init::init(),
+            Self::Init(init) => init.run(),
             Self::Search {
                 cwd,
                 exit,

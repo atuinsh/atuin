@@ -1,7 +1,6 @@
 <h1 align="center">
   Atuin
 </h1>
-<em align="center">Magical shell history</em>
 
 <p align="center">
   <a href="https://github.com/ellie/atuin/actions?query=workflow%3ARust"><img src="https://img.shields.io/github/workflow/status/ellie/atuin/Rust?style=flat-square" /></a>
@@ -30,6 +29,7 @@
 ## Supported Shells
 
 - zsh
+- bash
 
 # Quickstart
 
@@ -43,12 +43,15 @@ atuin sync
 
 ## Install
 
-### AUR
+### Script (recommended)
 
-Atuin is available on the [AUR](https://aur.archlinux.org/packages/atuin/)
+The install script will help you through the setup, ensuring your shell is
+properly configured. It will also use one of the below methods, preferring the
+system package manager where possible (AUR, homebrew, etc etc).
 
 ```
-yay -S atuin # or your AUR helper of choice
+# do not run this as root, root will be asked for if required
+curl https://github.com/ellie/atuin/blob/main/install.sh | sh
 ```
 
 ### With cargo
@@ -60,6 +63,14 @@ toolchain, then you can run:
 cargo install atuin
 ```
 
+### AUR
+
+Atuin is available on the [AUR](https://aur.archlinux.org/packages/atuin/)
+
+```
+yay -S atuin # or your AUR helper of choice
+```
+
 ### From source
 
 ```
@@ -68,15 +79,31 @@ cd atuin
 cargo install --path .
 ```
 
-### Shell plugin
+## Shell plugin
 
-Once the binary is installed, the shell plugin requires installing. Add
+Once the binary is installed, the shell plugin requires installing. If you use
+the install script, this should all be done for you!
+
+### zsh
 
 ```
-eval "$(atuin init)"
+echo 'eval "$(atuin init zsh)"' >> ~/.zshrc
 ```
 
-to your `.zshrc`
+### bash
+
+We need to setup some hooks, so first install bash-preexec:
+
+```
+curl https://raw.githubusercontent.com/rcaloras/bash-preexec/master/bash-preexec.sh -o ~/.bash-preexec.sh
+echo '[[ -f ~/.bash-preexec.sh ]] && source ~/.bash-preexec.sh' >> ~/.bashrc
+```
+
+Then setup Atuin
+
+```
+echo 'eval "$(atuin init bash)"' >> ~/.bashrc
+```
 
 ## ...what's with the name?
 

@@ -123,6 +123,8 @@ async fn sync_upload(
         client.post_history(&buffer).await?;
         cursor = buffer.last().unwrap().timestamp;
         remote_count = client.count().await?;
+
+        debug!("upload cursor: {:?}", cursor);
     }
 
     Ok(())
