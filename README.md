@@ -12,9 +12,11 @@
   <a href="https://crates.io/crates/atuin"><img src="https://img.shields.io/crates/d/atuin.svg?style=flat-square" /></a>
   <a href="https://github.com/ellie/atuin/blob/main/LICENSE"><img src="https://img.shields.io/crates/l/atuin.svg?style=flat-square" /></a>
 </p>
- 
+
+[![asciicast](https://asciinema.org/a/xj7bcDlqrdU9PxwKecYGu24nJ.svg)](https://asciinema.org/a/xj7bcDlqrdU9PxwKecYGu24nJ)
+
 - store shell history in a sqlite database
-- backup shell history to the cloud
+- backup encrypted shell history to the cloud
 - the same history across terminals, across session, and across machines
 - log exit code, cwd, hostname, session, command duration, etc
 - smart interactive history search to replace ctrl-r
