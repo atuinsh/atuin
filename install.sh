@@ -26,24 +26,24 @@ LATEST_RELEASE=$(curl -L -s -H 'Accept: application/json' https://github.com/ell
 LATEST_VERSION=$(echo $LATEST_RELEASE | sed -e 's/.*"tag_name":"\([^"]*\)".*/\1/')
 
 __atuin_install_arch(){
-		echo "Arch Linux detected!"
-		echo "Attempting AUR install"
+	echo "Arch Linux detected!"
+	echo "Attempting AUR install"
 
-        if command -v yaourt &> /dev/null; then
-			echo "Found yaourt"
-			yaourt -S atuin
-        elif command -v yay &> /dev/null; then
-			echo "Found yay"
-			yay -S atuin
-        elif command -v pakku &> /dev/null; then
-			echo "Found pakku"
-			pakku -S atuin
-        elif command -v pamac &> /dev/null; then
-			echo "Found pamac"
-			pamac install atuin
-		else
-			echo "Failed to install atuin! Please try manually: https://aur.archlinux.org/packages/atuin/"
-        fi
+	if command -v yaourt &> /dev/null; then
+		echo "Found yaourt"
+		yaourt -S atuin
+	elif command -v yay &> /dev/null; then
+		echo "Found yay"
+		yay -S atuin
+	elif command -v pakku &> /dev/null; then
+		echo "Found pakku"
+		pakku -S atuin
+	elif command -v pamac &> /dev/null; then
+		echo "Found pamac"
+		pamac install atuin
+	else
+		echo "Failed to install atuin! Please try manually: https://aur.archlinux.org/packages/atuin/"
+	fi
 
 }
 
@@ -51,17 +51,6 @@ __atuin_install_ubuntu(){
 	echo "Ubuntu detected"
 	# TODO: select correct AARCH too
 	ARTIFACT_URL="https://github.com/account/project/releases/download/$LATEST_VERSION/atuin_$LATEST_VERSION_amd64.deb"
-
-	TEMP_DEB="$(mktemp)" &&
-	wget -O "$TEMP_DEB" $ARTIFACT_URL
-	sudo dpkg -i "$TEMP_DEB"
-	rm -f "$TEMP_DEB"
-}
-
-__atuin_install_fedora(){
-	echo "Fedora detected"
-	# TODO: select correct AARCH too
-	ARTIFACT_URL="https://github.com/account/project/releases/download/$LATEST_VERSION/atuin_$LATEST_VERSION_amd64.rpm"
 
 	TEMP_DEB="$(mktemp)" &&
 	wget -O "$TEMP_DEB" $ARTIFACT_URL
@@ -88,8 +77,6 @@ __atuin_install_linux(){
 		__atuin_install_arch
     elif [ $OS == "Ubuntu" ] || [ $OS == "Debian" ] || [ $OS == "Linuxmint" ] || [ $OS == "Parrot" ] || [ $OS == "Kali" ]; then
 		__atuin_install_ubuntu
-	elif [ $OS == "Fedora" ]; then
-		__atuin_install_fedora
 	else
 		# TODO: download a binary or smth
 		__atuin_install_unsupported

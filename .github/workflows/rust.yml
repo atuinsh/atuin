@@ -23,17 +23,8 @@ jobs:
           override: true
 
     - name: Run cargo build
-      run: cargo build --all --release && strip target/release/atuin && mv target/release/atuin target/release/atuin_linux
+      run: cargo build --all --release && strip target/release/atuin
 
-    - name: Release
-      uses: softprops/action-gh-release@v1
-      if: startsWith(github.ref, 'refs/tags/')
-      with:
-        files: |
-          target/release/atuin_linux
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      
   test:
     runs-on: ubuntu-latest
 
@@ -80,30 +71,3 @@ jobs:
          
     - name: Format
       run: cargo fmt -- --check
-
-  build-mac:
-    runs-on: macos-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v2
-
-      - name: Install latest rust toolchain
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          target: x86_64-apple-darwin
-          default: true
-          override: true
-
-      - name: Build for mac
-        run: cargo build --all --release && strip target/release/atuin && mv target/release/atuin target/release/atuin_darwin
-
-      - name: Release
-        uses: softprops/action-gh-release@v1
-        if: startsWith(github.ref, 'refs/tags/')
-        with:
-          files: |
-            target/release/atuin_darwin
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
