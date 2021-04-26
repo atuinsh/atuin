@@ -1,6 +1,4 @@
-use std::env;
-
-use eyre::{eyre, Result};
+use eyre::Result;
 use structopt::StructOpt;
 
 #[derive(StructOpt)]
