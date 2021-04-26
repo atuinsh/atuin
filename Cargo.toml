@@ -1,12 +1,29 @@
 [package]
 name = "atuin"
-version = "0.6.1"
+version = "0.6.2"
 authors = ["Ellie Huxtable <ellie@elliehuxtable.com>"]
 edition = "2018"
 license = "MIT"
 description = "atuin - magical shell history"
 homepage = "https://atuin.sh"
 repository = "https://github.com/ellie/atuin"
+readme = "README.md"
+
+[package.metadata.deb]
+maintainer = "Ellie Huxtable <ellie@elliehuxtable.com>"
+copyright = "2021, Ellie Huxtable <ellie@elliehuxtable.com>"
+license-file = ["LICENSE"]
+depends = "$auto"
+section = "utility"
+
+[package.metadata.rpm]
+package = "atuin"
+
+[package.metadata.rpm.cargo]
+buildflags = ["--release"]
+
+[package.metadata.rpm.targets]
+atuin = { path = "/usr/bin/atuin" }
 
 [workspace]
 members = ["./atuin-client", "./atuin-server", "./atuin-common"]
@@ -39,4 +56,3 @@ base64 = "0.13.0"
 humantime = "2.1.0"
 tabwriter = "1.2.1"
 crossbeam-channel = "0.5.1"
-

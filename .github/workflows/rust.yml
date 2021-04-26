@@ -31,8 +31,8 @@ jobs:
       with:
         files: |
           target/release/atuin_linux
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       
   test:
     runs-on: ubuntu-latest
@@ -105,5 +105,5 @@ jobs:
         with:
           files: |
             target/release/atuin_darwin
-          env:
-            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
