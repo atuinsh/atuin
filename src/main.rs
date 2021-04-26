@@ -11,10 +11,12 @@ use command::AtuinCmd;
 
 mod command;
 
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 #[derive(StructOpt)]
 #[structopt(
     author = "Ellie Huxtable <e@elm.sh>",
-    version = "0.5.0",
+    version = VERSION,
     about = "Magical shell history",
     global_settings(&[AppSettings::ColoredHelp, AppSettings::DeriveDisplayOrder])
 )]

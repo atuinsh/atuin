@@ -18,9 +18,6 @@ jobs:
       fail-fast: false
       matrix:
         job:
-          - { os: ubuntu-18.04 , target: arm-unknown-linux-gnueabihf , use-cross: true }
-          - { os: ubuntu-18.04 , target: aarch64-unknown-linux-gnu   , use-cross: true }
-          - { os: ubuntu-18.04 , target: i686-unknown-linux-gnu      , use-cross: true }
           - { os: ubuntu-18.04 , target: x86_64-unknown-linux-gnu    }
           - { os: macos-10.15  , target: x86_64-apple-darwin         }
     steps:
