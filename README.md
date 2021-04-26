@@ -14,9 +14,12 @@
 </p>
 
 <p align="center">
-  <img src="demo.gif" alt="animated" />
+  <img src="demo.gif" alt="animated" width="80%" />
 </p>
-_exit code, duration, time and command shown_
+
+<p align="center">
+<em>exit code, duration, time and command shown</em>
+</p>
 
 - store shell history in a sqlite database
 - backup encrypted shell history to the cloud
