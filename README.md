@@ -3,6 +3,10 @@
 </h1>
 
 <p align="center">
+<em>magical shell history</em>
+</p>
+
+<p align="center">
   <a href="https://github.com/ellie/atuin/actions?query=workflow%3ARust"><img src="https://img.shields.io/github/workflow/status/ellie/atuin/Rust?style=flat-square" /></a>
   <a href="https://crates.io/crates/atuin"><img src="https://img.shields.io/crates/v/atuin.svg?style=flat-square" /></a>
   <a href="https://crates.io/crates/atuin"><img src="https://img.shields.io/crates/d/atuin.svg?style=flat-square" /></a>
@@ -10,7 +14,8 @@
 </p>
  
 - store shell history in a sqlite database
-- back up e2e encrypted history to the cloud, and synchronize between machines
+- backup shell history to the cloud
+- the same history across terminals, across session, and across machines
 - log exit code, cwd, hostname, session, command duration, etc
 - smart interactive history search to replace ctrl-r
 - calculate statistics such as "most used command"
