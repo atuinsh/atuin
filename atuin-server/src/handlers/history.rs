@@ -8,10 +8,10 @@ pub async fn count(
     db: impl Database + Clone + Send + Sync,
 ) -> JSONResponse<CountResponse> {
     db.count_history(&user).await.map_or(
-        json_error(ErrorResponse::reply(
-            "failed to query history count",
-            StatusCode::INTERNAL_SERVER_ERROR,
-        )),
+        json_error(
+            ErrorResponse::reply("failed to query history count")
+                .with_status(StatusCode::INTERNAL_SERVER_ERROR),
+        ),
         |count| json(CountResponse { count }),
     )
 }
@@ -32,9 +32,10 @@ pub async fn list(
 
     if let Err(e) = history {
         error!("failed to load history: {}", e);
-        let resp =
-            ErrorResponse::reply("failed to load history", StatusCode::INTERNAL_SERVER_ERROR);
-        return json_error(resp);
+        return json_error(
+            ErrorResponse::reply("failed to load history")
+                .with_status(StatusCode::INTERNAL_SERVER_ERROR),
+        );
     }
 
     let history: Vec<String> = history
@@ -73,10 +74,10 @@ pub async fn add(
     if let Err(e) = db.add_history(&history).await {
         error!("failed to add history: {}", e);
 
-        return reply_error(ErrorResponse::reply(
-            "failed to add history",
-            StatusCode::INTERNAL_SERVER_ERROR,
-        ));
+        return reply_error(
+            ErrorResponse::reply("failed to add history")
+                .with_status(StatusCode::INTERNAL_SERVER_ERROR),
+        );
     };
 
     reply(warp::reply())

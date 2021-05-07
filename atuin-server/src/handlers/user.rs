@@ -1,8 +1,8 @@
+use atuin_common::api::*;
+use atuin_common::utils::hash_secret;
 use sodiumoxide::crypto::pwhash::argon2id13;
 use uuid::Uuid;
 use warp::http::StatusCode;
-use atuin_common::api::*;
-use atuin_common::utils::hash_secret;
 
 use crate::database::Database;
 use crate::models::{NewSession, NewUser};
@@ -30,10 +30,9 @@ pub async fn get(
         Ok(user) => user,
         Err(e) => {
             debug!("user not found: {}", e);
-            return json_error(ErrorResponse::reply(
-                "user not found",
-                StatusCode::NOT_FOUND,
-            ));
+            return json_error(
+                ErrorResponse::reply("user not found").with_status(StatusCode::NOT_FOUND),
+            );
         }
     };
 
@@ -48,10 +47,10 @@ pub async fn register(
     db: impl Database + Clone + Send + Sync,
 ) -> JSONResponse<RegisterResponse> {
     if !settings.open_registration {
-        return json_error(ErrorResponse::reply(
-            "this server is not open for registrations",
-            StatusCode::BAD_REQUEST,
-        ));
+        return json_error(
+            ErrorResponse::reply("this server is not open for registrations")
+                .with_status(StatusCode::BAD_REQUEST),
+        );
     }
 
     let hashed = hash_secret(register.password.as_str());
@@ -66,10 +65,9 @@ pub async fn register(
         Ok(id) => id,
         Err(e) => {
             error!("failed to add user: {}", e);
-            return json_error(ErrorResponse::reply(
-                "failed to add user",
-                StatusCode::BAD_REQUEST,
-            ));
+            return json_error(
+                ErrorResponse::reply("failed to add user").with_status(StatusCode::BAD_REQUEST),
+            );
         }
     };
 
@@ -84,10 +82,10 @@ pub async fn register(
         Ok(_) => json(RegisterResponse { session: token }),
         Err(e) => {
             error!("failed to add session: {}", e);
-            json_error(ErrorResponse::reply(
-                "failed to register user",
-                StatusCode::BAD_REQUEST,
-            ))
+            json_error(
+                ErrorResponse::reply("failed to register user")
+                    .with_status(StatusCode::BAD_REQUEST),
+            )
         }
     }
 }
@@ -101,10 +99,9 @@ pub async fn login(
         Err(e) => {
             error!("failed to get user {}: {}", login.username.clone(), e);
 
-            return json_error(ErrorResponse::reply(
-                "user not found",
-                StatusCode::NOT_FOUND,
-            ));
+            return json_error(
+                ErrorResponse::reply("user not found").with_status(StatusCode::NOT_FOUND),
+            );
         }
     };
 
@@ -113,20 +110,18 @@ pub async fn login(
         Err(e) => {
             error!("failed to get session for {}: {}", login.username, e);
 
-            return json_error(ErrorResponse::reply(
-                "user not found",
-                StatusCode::NOT_FOUND,
-            ));
+            return json_error(
+                ErrorResponse::reply("user not found").with_status(StatusCode::NOT_FOUND),
+            );
         }
     };
 
     let verified = verify_str(user.password.as_str(), login.password.as_str());
 
     if !verified {
-        return json_error(ErrorResponse::reply(
-            "user not found",
-            StatusCode::NOT_FOUND,
-        ));
+        return json_error(
+            ErrorResponse::reply("user not found").with_status(StatusCode::NOT_FOUND),
+        );
     }
 
     json(LoginResponse {

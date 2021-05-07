@@ -2,7 +2,7 @@ use std::convert::Infallible;
 
 use chrono::Utc;
 use serde::Serialize;
-use warp::{Reply, reply::Response};
+use warp::{reply::Response, Reply};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UserResponse {
@@ -80,12 +80,16 @@ impl Reply for ErrorResponseStatus {
 }
 
 impl ErrorResponse {
-    pub fn reply(reason: &str, status: warp::http::StatusCode) -> ErrorResponseStatus {
+    pub fn with_status(self, status: warp::http::StatusCode) -> ErrorResponseStatus {
         ErrorResponseStatus {
-            error: Self {
-                reason: reason.to_string(),
-            },
-            status
+            error: self,
+            status,
+        }
+    }
+
+    pub fn reply(reason: &str) -> ErrorResponse {
+        Self {
+            reason: reason.to_string(),
         }
     }
 }
