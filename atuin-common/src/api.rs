@@ -94,7 +94,6 @@ impl ErrorResponse {
     }
 }
 
-
 pub enum ReplyEither<T, E> {
     Ok(T),
     Err(E),
@@ -110,15 +109,15 @@ impl<T: Reply, E: Reply> Reply for ReplyEither<T, E> {
 }
 
 pub type ReplyResult<T, E> = Result<ReplyEither<T, E>, Infallible>;
-pub fn reply_error<T, E>(e: E) ->  ReplyResult<T, E> {
-    return Ok(ReplyEither::Err(e));
+pub fn reply_error<T, E>(e: E) -> ReplyResult<T, E> {
+    Ok(ReplyEither::Err(e))
 }
 
 pub type JSONResult<E> = Result<ReplyEither<warp::reply::Json, E>, Infallible>;
 pub fn reply_json<E>(t: impl Serialize) -> JSONResult<E> {
-    return reply(warp::reply::json(&t));
+    reply(warp::reply::json(&t))
 }
 
 pub fn reply<T, E>(t: T) -> ReplyResult<T, E> {
-    return Ok(ReplyEither::Ok(t));
+    Ok(ReplyEither::Ok(t))
 }
