@@ -63,7 +63,7 @@ jobs:
         path: |
           ~/.cargo/registry
           ~/.cargo/git
-          target/release
+          target
         key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
 
     - name: Build

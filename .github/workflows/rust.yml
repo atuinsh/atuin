@@ -27,7 +27,7 @@ jobs:
         path: |
           ~/.cargo/registry
           ~/.cargo/git
-          target/release
+          target
         key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
 
     - name: Run cargo build
@@ -50,7 +50,7 @@ jobs:
         path: |
           ~/.cargo/registry
           ~/.cargo/git
-          target/debug
+          target
         key: ${{ runner.os }}-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
 
     - name: Run cargo test
@@ -74,7 +74,7 @@ jobs:
         path: |
           ~/.cargo/registry
           ~/.cargo/git
-          target/debug
+          target
         key: ${{ runner.os }}-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
 
     - name: Run clippy
