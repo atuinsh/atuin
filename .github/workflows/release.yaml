@@ -58,14 +58,6 @@ jobs:
         cargo -V
         rustc -V
 
-    - uses: actions/cache@v2
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
-
     - name: Build
       uses: actions-rs/cargo@v1
       with:
