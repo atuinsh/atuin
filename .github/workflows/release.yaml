@@ -63,8 +63,8 @@ jobs:
         path: |
           ~/.cargo/registry
           ~/.cargo/git
-          target
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          target/release
+        key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
 
     - name: Build
       uses: actions-rs/cargo@v1

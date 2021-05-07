@@ -27,8 +27,8 @@ jobs:
         path: |
           ~/.cargo/registry
           ~/.cargo/git
-          target
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          target/release
+        key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
 
     - name: Run cargo build
       run: cargo build --all --release && strip target/release/atuin
@@ -50,8 +50,8 @@ jobs:
         path: |
           ~/.cargo/registry
           ~/.cargo/git
-          target
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          target/debug
+        key: ${{ runner.os }}-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
 
     - name: Run cargo test
       run: cargo test --workspace
@@ -74,8 +74,8 @@ jobs:
         path: |
           ~/.cargo/registry
           ~/.cargo/git
-          target
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          target/debug
+        key: ${{ runner.os }}-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
 
     - name: Run clippy
       run: cargo clippy -- -D warnings
@@ -92,14 +92,6 @@ jobs:
           toolchain: stable
           override: true
           components: rustfmt
-
-    - uses: actions/cache@v2
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
     - name: Format
       run: cargo fmt -- --check
