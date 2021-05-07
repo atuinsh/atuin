@@ -1,4 +1,8 @@
+use std::convert::Infallible;
+
 use chrono::Utc;
+use serde::Serialize;
+use warp::{reply::Response, Reply};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UserResponse {
@@ -58,13 +62,62 @@ pub struct ErrorResponse {
     pub reason: String,
 }
 
-impl ErrorResponse {
-    pub fn reply(reason: &str, status: warp::http::StatusCode) -> impl warp::Reply {
-        warp::reply::with_status(
-            warp::reply::json(&ErrorResponse {
-                reason: String::from(reason),
-            }),
-            status,
-        )
+impl Reply for ErrorResponse {
+    fn into_response(self) -> Response {
+        warp::reply::json(&self).into_response()
     }
+}
+
+pub struct ErrorResponseStatus {
+    pub error: ErrorResponse,
+    pub status: warp::http::StatusCode,
+}
+
+impl Reply for ErrorResponseStatus {
+    fn into_response(self) -> Response {
+        warp::reply::with_status(self.error, self.status).into_response()
+    }
+}
+
+impl ErrorResponse {
+    pub fn with_status(self, status: warp::http::StatusCode) -> ErrorResponseStatus {
+        ErrorResponseStatus {
+            error: self,
+            status,
+        }
+    }
+
+    pub fn reply(reason: &str) -> ErrorResponse {
+        Self {
+            reason: reason.to_string(),
+        }
+    }
+}
+
+pub enum ReplyEither<T, E> {
+    Ok(T),
+    Err(E),
+}
+
+impl<T: Reply, E: Reply> Reply for ReplyEither<T, E> {
+    fn into_response(self) -> Response {
+        match self {
+            ReplyEither::Ok(t) => t.into_response(),
+            ReplyEither::Err(e) => e.into_response(),
+        }
+    }
+}
+
+pub type ReplyResult<T, E> = Result<ReplyEither<T, E>, Infallible>;
+pub fn reply_error<T, E>(e: E) -> ReplyResult<T, E> {
+    Ok(ReplyEither::Err(e))
+}
+
+pub type JSONResult<E> = Result<ReplyEither<warp::reply::Json, E>, Infallible>;
+pub fn reply_json<E>(t: impl Serialize) -> JSONResult<E> {
+    reply(warp::reply::json(&t))
+}
+
+pub fn reply<T, E>(t: T) -> ReplyResult<T, E> {
+    Ok(ReplyEither::Ok(t))
 }
