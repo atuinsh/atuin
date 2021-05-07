@@ -21,11 +21,29 @@
 <em>exit code, duration, time and command shown</em>
 </p>
 
+Atuin replaces your existing shell history with a SQLite database, and records
+additional context for your commands. Additionally, it provides optional and
+_fully encrypted_ synchronisation of your history between machines, via an Atuin
+server.
+
+As well as the search UI, it can do things like this:
+
+```
+# search for all successful `make` commands, recorded after 3pm yesterday
+atuin search --exit 0 --after "yesterday 3pm" make
+```
+
+You may use either the server I host, or host your own! Or just don't use sync
+at all. As all history sync is encrypted, I couldn't access your data even if
+I wanted to. And I **really** don't want to.
+
+## Features
+
+- rebind `up` and `ctrl-r` with a full screen history search UI
 - store shell history in a sqlite database
-- backup encrypted shell history to the cloud
-- the same history across terminals, across session, and across machines
+- backup and sync **encrypted** shell history
+- the same history across terminals, across sessions, and across machines
 - log exit code, cwd, hostname, session, command duration, etc
-- smart interactive history search to replace ctrl-r
 - calculate statistics such as "most used command"
 - old history file is not replaced
 
@@ -38,6 +56,7 @@
 - [Searching history](docs/search.md)
 - [Cloud history sync](docs/sync.md)
 - [History stats](docs/stats.md)
+- [Running your own server](docs/server.md)
 
 ## Supported Shells
 
