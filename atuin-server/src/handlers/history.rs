@@ -6,7 +6,7 @@ use atuin_common::api::*;
 pub async fn count(
     user: User,
     db: impl Database + Clone + Send + Sync,
-) -> JSONResponse<CountResponse> {
+) -> JSONResult<CountResponse> {
     db.count_history(&user).await.map_or(
         json_error(
             ErrorResponse::reply("failed to query history count")
@@ -20,7 +20,7 @@ pub async fn list(
     req: SyncHistoryRequest,
     user: User,
     db: impl Database + Clone + Send + Sync,
-) -> JSONResponse<SyncHistoryResponse> {
+) -> JSONResult<SyncHistoryResponse> {
     let history = db
         .list_history(
             &user,
@@ -57,7 +57,7 @@ pub async fn add(
     req: Vec<AddHistoryRequest>,
     user: User,
     db: impl Database + Clone + Send + Sync,
-) -> ReplyResponse<impl Reply> {
+) -> SimpleReplyResult<impl Reply> {
     debug!("request to add {} history items", req.len());
 
     let history: Vec<NewHistory> = req

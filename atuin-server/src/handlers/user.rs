@@ -25,7 +25,7 @@ pub fn verify_str(secret: &str, verify: &str) -> bool {
 pub async fn get(
     username: String,
     db: impl Database + Clone + Send + Sync,
-) -> JSONResponse<UserResponse> {
+) -> JSONResult<UserResponse> {
     let user = match db.get_user(username).await {
         Ok(user) => user,
         Err(e) => {
@@ -45,7 +45,7 @@ pub async fn register(
     register: RegisterRequest,
     settings: Settings,
     db: impl Database + Clone + Send + Sync,
-) -> JSONResponse<RegisterResponse> {
+) -> JSONResult<RegisterResponse> {
     if !settings.open_registration {
         return json_error(
             ErrorResponse::reply("this server is not open for registrations")
@@ -93,7 +93,7 @@ pub async fn register(
 pub async fn login(
     login: LoginRequest,
     db: impl Database + Clone + Send + Sync,
-) -> JSONResponse<LoginResponse> {
+) -> JSONResult<LoginResponse> {
     let user = match db.get_user(login.username.clone()).await {
         Ok(u) => u,
         Err(e) => {

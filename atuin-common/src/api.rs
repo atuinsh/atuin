@@ -94,49 +94,49 @@ impl ErrorResponse {
     }
 }
 
-pub enum JSONResult<T> {
+pub enum JSONReply<T> {
     Ok(T),
     Err(ErrorResponseStatus),
 }
 
-pub fn json_error<T>(e: ErrorResponseStatus) -> JSONResponse<T> {
-    return Ok(JSONResult::Err(e));
-}
-
-pub fn json<T>(t: T) -> JSONResponse<T> {
-    return Ok(JSONResult::Ok(t));
-}
-
-impl<T: Send + Serialize> Reply for JSONResult<T> {
+impl<T: Send + Serialize> Reply for JSONReply<T> {
     fn into_response(self) -> Response {
         match self {
-            JSONResult::Ok(t) => warp::reply::json(&t).into_response(),
-            JSONResult::Err(e) => e.into_response(),
+            JSONReply::Ok(t) => warp::reply::json(&t).into_response(),
+            JSONReply::Err(e) => e.into_response(),
         }
     }
 }
 
-pub enum ReplyResult<T> {
+pub type JSONResult<T> = Result<JSONReply<T>, Infallible>;
+pub fn json_error<T>(e: ErrorResponseStatus) -> JSONResult<T> {
+    return Ok(JSONReply::Err(e));
+}
+
+pub fn json<T>(t: T) -> JSONResult<T> {
+    return Ok(JSONReply::Ok(t));
+}
+
+pub enum SimpleReply<T> {
     Ok(T),
     Err(ErrorResponseStatus),
 }
 
-impl<T: Reply> Reply for ReplyResult<T> {
+impl<T: Reply> Reply for SimpleReply<T> {
     fn into_response(self) -> Response {
         match self {
-            ReplyResult::Ok(t) => t.into_response(),
-            ReplyResult::Err(e) => e.into_response(),
+            SimpleReply::Ok(t) => t.into_response(),
+            SimpleReply::Err(e) => e.into_response(),
         }
     }
 }
 
-pub fn reply_error<T>(e: ErrorResponseStatus) -> ReplyResponse<T> {
-    return Ok(ReplyResult::Err(e));
+pub type SimpleReplyResult<T> = Result<SimpleReply<T>, Infallible>;
+pub fn reply_error<T>(e: ErrorResponseStatus) -> SimpleReplyResult<T> {
+    return Ok(SimpleReply::Err(e));
 }
 
-pub fn reply<T>(t: T) -> ReplyResponse<T> {
-    return Ok(ReplyResult::Ok(t));
+pub fn reply<T>(t: T) -> SimpleReplyResult<T> {
+    return Ok(SimpleReply::Ok(t));
 }
 
-pub type ReplyResponse<T> = Result<ReplyResult<T>, Infallible>;
-pub type JSONResponse<T> = Result<JSONResult<T>, Infallible>;
