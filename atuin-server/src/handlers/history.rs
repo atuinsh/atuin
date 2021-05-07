@@ -6,13 +6,13 @@ use atuin_common::api::*;
 pub async fn count(
     user: User,
     db: impl Database + Clone + Send + Sync,
-) -> JSONResult<CountResponse> {
+) -> JSONResult<ErrorResponseStatus> {
     db.count_history(&user).await.map_or(
-        json_error(
+        reply_error(
             ErrorResponse::reply("failed to query history count")
                 .with_status(StatusCode::INTERNAL_SERVER_ERROR),
         ),
-        |count| json(CountResponse { count }),
+        |count| reply_json(CountResponse { count }),
     )
 }
 
@@ -20,7 +20,7 @@ pub async fn list(
     req: SyncHistoryRequest,
     user: User,
     db: impl Database + Clone + Send + Sync,
-) -> JSONResult<SyncHistoryResponse> {
+) -> JSONResult<ErrorResponseStatus> {
     let history = db
         .list_history(
             &user,
@@ -32,7 +32,7 @@ pub async fn list(
 
     if let Err(e) = history {
         error!("failed to load history: {}", e);
-        return json_error(
+        return reply_error(
             ErrorResponse::reply("failed to load history")
                 .with_status(StatusCode::INTERNAL_SERVER_ERROR),
         );
@@ -50,14 +50,14 @@ pub async fn list(
         user.id
     );
 
-    json(SyncHistoryResponse { history })
+    reply_json(SyncHistoryResponse { history })
 }
 
 pub async fn add(
     req: Vec<AddHistoryRequest>,
     user: User,
     db: impl Database + Clone + Send + Sync,
-) -> SimpleReplyResult<impl Reply> {
+) -> ReplyResult<impl Reply, ErrorResponseStatus> {
     debug!("request to add {} history items", req.len());
 
     let history: Vec<NewHistory> = req

@@ -25,18 +25,18 @@ pub fn verify_str(secret: &str, verify: &str) -> bool {
 pub async fn get(
     username: String,
     db: impl Database + Clone + Send + Sync,
-) -> JSONResult<UserResponse> {
+) -> JSONResult<ErrorResponseStatus> {
     let user = match db.get_user(username).await {
         Ok(user) => user,
         Err(e) => {
             debug!("user not found: {}", e);
-            return json_error(
+            return reply_error(
                 ErrorResponse::reply("user not found").with_status(StatusCode::NOT_FOUND),
             );
         }
     };
 
-    json(UserResponse {
+    reply_json(UserResponse {
         username: user.username,
     })
 }
@@ -45,9 +45,9 @@ pub async fn register(
     register: RegisterRequest,
     settings: Settings,
     db: impl Database + Clone + Send + Sync,
-) -> JSONResult<RegisterResponse> {
+) -> JSONResult<ErrorResponseStatus> {
     if !settings.open_registration {
-        return json_error(
+        return reply_error(
             ErrorResponse::reply("this server is not open for registrations")
                 .with_status(StatusCode::BAD_REQUEST),
         );
@@ -65,7 +65,7 @@ pub async fn register(
         Ok(id) => id,
         Err(e) => {
             error!("failed to add user: {}", e);
-            return json_error(
+            return reply_error(
                 ErrorResponse::reply("failed to add user").with_status(StatusCode::BAD_REQUEST),
             );
         }
@@ -79,10 +79,10 @@ pub async fn register(
     };
 
     match db.add_session(&new_session).await {
-        Ok(_) => json(RegisterResponse { session: token }),
+        Ok(_) => reply_json(RegisterResponse { session: token }),
         Err(e) => {
             error!("failed to add session: {}", e);
-            json_error(
+            reply_error(
                 ErrorResponse::reply("failed to register user")
                     .with_status(StatusCode::BAD_REQUEST),
             )
@@ -93,13 +93,13 @@ pub async fn register(
 pub async fn login(
     login: LoginRequest,
     db: impl Database + Clone + Send + Sync,
-) -> JSONResult<LoginResponse> {
+) -> JSONResult<ErrorResponseStatus> {
     let user = match db.get_user(login.username.clone()).await {
         Ok(u) => u,
         Err(e) => {
             error!("failed to get user {}: {}", login.username.clone(), e);
 
-            return json_error(
+            return reply_error(
                 ErrorResponse::reply("user not found").with_status(StatusCode::NOT_FOUND),
             );
         }
@@ -110,7 +110,7 @@ pub async fn login(
         Err(e) => {
             error!("failed to get session for {}: {}", login.username, e);
 
-            return json_error(
+            return reply_error(
                 ErrorResponse::reply("user not found").with_status(StatusCode::NOT_FOUND),
             );
         }
@@ -119,12 +119,12 @@ pub async fn login(
     let verified = verify_str(user.password.as_str(), login.password.as_str());
 
     if !verified {
-        return json_error(
+        return reply_error(
             ErrorResponse::reply("user not found").with_status(StatusCode::NOT_FOUND),
         );
     }
 
-    json(LoginResponse {
+    reply_json(LoginResponse {
         session: session.token,
     })
 }

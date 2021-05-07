@@ -94,49 +94,31 @@ impl ErrorResponse {
     }
 }
 
-pub enum JSONReply<T> {
+
+pub enum ReplyEither<T, E> {
     Ok(T),
-    Err(ErrorResponseStatus),
+    Err(E),
 }
 
-impl<T: Send + Serialize> Reply for JSONReply<T> {
+impl<T: Reply, E: Reply> Reply for ReplyEither<T, E> {
     fn into_response(self) -> Response {
         match self {
-            JSONReply::Ok(t) => warp::reply::json(&t).into_response(),
-            JSONReply::Err(e) => e.into_response(),
+            ReplyEither::Ok(t) => t.into_response(),
+            ReplyEither::Err(e) => e.into_response(),
         }
     }
 }
 
-pub type JSONResult<T> = Result<JSONReply<T>, Infallible>;
-pub fn json_error<T>(e: ErrorResponseStatus) -> JSONResult<T> {
-    return Ok(JSONReply::Err(e));
+pub type ReplyResult<T, E> = Result<ReplyEither<T, E>, Infallible>;
+pub fn reply_error<T, E>(e: E) ->  ReplyResult<T, E> {
+    return Ok(ReplyEither::Err(e));
 }
 
-pub fn json<T>(t: T) -> JSONResult<T> {
-    return Ok(JSONReply::Ok(t));
+pub type JSONResult<E> = Result<ReplyEither<warp::reply::Json, E>, Infallible>;
+pub fn reply_json<E>(t: impl Serialize) -> JSONResult<E> {
+    return reply(warp::reply::json(&t));
 }
 
-pub enum SimpleReply<T> {
-    Ok(T),
-    Err(ErrorResponseStatus),
+pub fn reply<T, E>(t: T) -> ReplyResult<T, E> {
+    return Ok(ReplyEither::Ok(t));
 }
-
-impl<T: Reply> Reply for SimpleReply<T> {
-    fn into_response(self) -> Response {
-        match self {
-            SimpleReply::Ok(t) => t.into_response(),
-            SimpleReply::Err(e) => e.into_response(),
-        }
-    }
-}
-
-pub type SimpleReplyResult<T> = Result<SimpleReply<T>, Infallible>;
-pub fn reply_error<T>(e: ErrorResponseStatus) -> SimpleReplyResult<T> {
-    return Ok(SimpleReply::Err(e));
-}
-
-pub fn reply<T>(t: T) -> SimpleReplyResult<T> {
-    return Ok(SimpleReply::Ok(t));
-}
-
