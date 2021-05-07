@@ -15,12 +15,20 @@ jobs:
 
     steps:
     - uses: actions/checkout@v2
-      
+
     - name: Install rust
       uses: actions-rs/toolchain@v1
       with:
           toolchain: stable
           override: true
+
+    - uses: actions/cache@v2
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
     - name: Run cargo build
       run: cargo build --all --release && strip target/release/atuin
@@ -36,6 +44,14 @@ jobs:
       with:
           toolchain: stable
           override: true
+
+    - uses: actions/cache@v2
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
     - name: Run cargo test
       run: cargo test --workspace
@@ -53,6 +69,14 @@ jobs:
           override: true
           components: clippy
 
+    - uses: actions/cache@v2
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
     - name: Run clippy
       run: cargo clippy -- -D warnings
         
@@ -68,6 +92,14 @@ jobs:
           toolchain: stable
           override: true
           components: rustfmt
-         
+
+    - uses: actions/cache@v2
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
     - name: Format
       run: cargo fmt -- --check
