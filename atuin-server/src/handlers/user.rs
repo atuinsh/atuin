@@ -1,13 +1,7 @@
-use std::convert::Infallible;
-
 use sodiumoxide::crypto::pwhash::argon2id13;
 use uuid::Uuid;
 use warp::http::StatusCode;
-use warp::reply::json;
-
-use atuin_common::api::{
-    ErrorResponse, LoginRequest, LoginResponse, RegisterRequest, RegisterResponse, UserResponse,
-};
+use atuin_common::api::*;
 use atuin_common::utils::hash_secret;
 
 use crate::database::Database;
@@ -31,33 +25,33 @@ pub fn verify_str(secret: &str, verify: &str) -> bool {
 pub async fn get(
     username: String,
     db: impl Database + Clone + Send + Sync,
-) -> Result<Box<dyn warp::Reply>, Infallible> {
+) -> JSONResponse<UserResponse> {
     let user = match db.get_user(username).await {
         Ok(user) => user,
         Err(e) => {
             debug!("user not found: {}", e);
-            return Ok(Box::new(ErrorResponse::reply(
+            return json_error(ErrorResponse::reply(
                 "user not found",
                 StatusCode::NOT_FOUND,
-            )));
+            ));
         }
     };
 
-    Ok(Box::new(warp::reply::json(&UserResponse {
+    json(UserResponse {
         username: user.username,
-    })))
+    })
 }
 
 pub async fn register(
     register: RegisterRequest,
     settings: Settings,
     db: impl Database + Clone + Send + Sync,
-) -> Result<Box<dyn warp::Reply>, Infallible> {
+) -> JSONResponse<RegisterResponse> {
     if !settings.open_registration {
-        return Ok(Box::new(ErrorResponse::reply(
+        return json_error(ErrorResponse::reply(
             "this server is not open for registrations",
             StatusCode::BAD_REQUEST,
-        )));
+        ));
     }
 
     let hashed = hash_secret(register.password.as_str());
@@ -72,10 +66,10 @@ pub async fn register(
         Ok(id) => id,
         Err(e) => {
             error!("failed to add user: {}", e);
-            return Ok(Box::new(ErrorResponse::reply(
+            return json_error(ErrorResponse::reply(
                 "failed to add user",
                 StatusCode::BAD_REQUEST,
-            )));
+            ));
         }
     };
 
@@ -87,13 +81,13 @@ pub async fn register(
     };
 
     match db.add_session(&new_session).await {
-        Ok(_) => Ok(Box::new(json(&RegisterResponse { session: token }))),
+        Ok(_) => json(RegisterResponse { session: token }),
         Err(e) => {
             error!("failed to add session: {}", e);
-            Ok(Box::new(ErrorResponse::reply(
+            json_error(ErrorResponse::reply(
                 "failed to register user",
                 StatusCode::BAD_REQUEST,
-            )))
+            ))
         }
     }
 }
@@ -101,16 +95,16 @@ pub async fn register(
 pub async fn login(
     login: LoginRequest,
     db: impl Database + Clone + Send + Sync,
-) -> Result<Box<dyn warp::Reply>, Infallible> {
+) -> JSONResponse<LoginResponse> {
     let user = match db.get_user(login.username.clone()).await {
         Ok(u) => u,
         Err(e) => {
             error!("failed to get user {}: {}", login.username.clone(), e);
 
-            return Ok(Box::new(ErrorResponse::reply(
+            return json_error(ErrorResponse::reply(
                 "user not found",
                 StatusCode::NOT_FOUND,
-            )));
+            ));
         }
     };
 
@@ -119,23 +113,23 @@ pub async fn login(
         Err(e) => {
             error!("failed to get session for {}: {}", login.username, e);
 
-            return Ok(Box::new(ErrorResponse::reply(
+            return json_error(ErrorResponse::reply(
                 "user not found",
                 StatusCode::NOT_FOUND,
-            )));
+            ));
         }
     };
 
     let verified = verify_str(user.password.as_str(), login.password.as_str());
 
     if !verified {
-        return Ok(Box::new(ErrorResponse::reply(
+        return json_error(ErrorResponse::reply(
             "user not found",
             StatusCode::NOT_FOUND,
-        )));
+        ));
     }
 
-    Ok(Box::new(warp::reply::json(&LoginResponse {
+    json(LoginResponse {
         session: session.token,
-    })))
+    })
 }

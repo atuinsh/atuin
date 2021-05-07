@@ -1,23 +1,18 @@
-use std::convert::Infallible;
-
-use warp::{http::StatusCode, reply::json};
+use warp::{http::StatusCode, Reply};
 
 use crate::database::Database;
 use crate::models::{NewHistory, User};
-use atuin_common::api::{
-    AddHistoryRequest, CountResponse, ErrorResponse, SyncHistoryRequest, SyncHistoryResponse,
-};
-
+use atuin_common::api::*;
 pub async fn count(
     user: User,
     db: impl Database + Clone + Send + Sync,
-) -> Result<Box<dyn warp::Reply>, Infallible> {
+) -> JSONResponse<CountResponse> {
     db.count_history(&user).await.map_or(
-        Ok(Box::new(ErrorResponse::reply(
+        json_error(ErrorResponse::reply(
             "failed to query history count",
             StatusCode::INTERNAL_SERVER_ERROR,
-        ))),
-        |count| Ok(Box::new(json(&CountResponse { count }))),
+        )),
+        |count| json(CountResponse { count }),
     )
 }
 
@@ -25,7 +20,7 @@ pub async fn list(
     req: SyncHistoryRequest,
     user: User,
     db: impl Database + Clone + Send + Sync,
-) -> Result<Box<dyn warp::Reply>, Infallible> {
+) -> JSONResponse<SyncHistoryResponse> {
     let history = db
         .list_history(
             &user,
@@ -39,8 +34,7 @@ pub async fn list(
         error!("failed to load history: {}", e);
         let resp =
             ErrorResponse::reply("failed to load history", StatusCode::INTERNAL_SERVER_ERROR);
-        let resp = Box::new(resp);
-        return Ok(resp);
+        return json_error(resp);
     }
 
     let history: Vec<String> = history
@@ -55,14 +49,14 @@ pub async fn list(
         user.id
     );
 
-    Ok(Box::new(json(&SyncHistoryResponse { history })))
+    json(SyncHistoryResponse { history })
 }
 
 pub async fn add(
     req: Vec<AddHistoryRequest>,
     user: User,
     db: impl Database + Clone + Send + Sync,
-) -> Result<Box<dyn warp::Reply>, Infallible> {
+) -> ReplyResponse<impl Reply> {
     debug!("request to add {} history items", req.len());
 
     let history: Vec<NewHistory> = req
@@ -79,11 +73,11 @@ pub async fn add(
     if let Err(e) = db.add_history(&history).await {
         error!("failed to add history: {}", e);
 
-        return Ok(Box::new(ErrorResponse::reply(
+        return reply_error(ErrorResponse::reply(
             "failed to add history",
             StatusCode::INTERNAL_SERVER_ERROR,
-        )));
+        ));
     };
 
-    Ok(Box::new(warp::reply()))
+    reply(warp::reply())
 }
