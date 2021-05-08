@@ -3,7 +3,6 @@ autoload -U add-zsh-hook
 
 export ATUIN_SESSION=$(atuin uuid)
 export ATUIN_HISTORY="atuin history list"
-export ATUIN_BINDKEYS="true"
 
 _atuin_preexec(){
 	id=$(atuin history start "$1")
@@ -42,7 +41,7 @@ add-zsh-hook precmd _atuin_precmd
 
 zle -N _atuin_search_widget _atuin_search
 
-if [[ $ATUIN_BINDKEYS == "true" ]]; then
+if [[ -z $ATUIN_NOBIND ]]; then
 	bindkey '^r' _atuin_search_widget
 
 	# depends on terminal mode

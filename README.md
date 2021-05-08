@@ -57,6 +57,7 @@ I wanted to. And I **really** don't want to.
 - [Cloud history sync](docs/sync.md)
 - [History stats](docs/stats.md)
 - [Running your own server](docs/server.md)
+- [Key binding](docs/key-binding.md)
 
 ## Supported Shells
 
