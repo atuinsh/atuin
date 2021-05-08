@@ -102,10 +102,15 @@ where
 
     let contents = I::parse(histpath)?;
 
-    let progress = ProgressBar::new(contents.count());
+    let iter = contents.into_iter();
+    let progress = if let (_, Some(upper_bound)) = iter.size_hint() {
+        ProgressBar::new(upper_bound as u64)
+    } else {
+        ProgressBar::new_spinner()
+    };
 
     let mut buf = Vec::<History>::with_capacity(buf_size);
-    let mut iter = progress.wrap_iter(contents.into_iter());
+    let mut iter = progress.wrap_iter(iter);
     loop {
         // clear buffer
         buf.clear();

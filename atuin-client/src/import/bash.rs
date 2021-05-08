@@ -14,7 +14,7 @@ use crate::history::History;
 pub struct Bash {
     file: BufReader<File>,
     strbuf: String,
-    loc: u64,
+    loc: usize,
     counter: i64,
 }
 
@@ -36,13 +36,9 @@ impl Importer for Bash {
         Ok(Self {
             file: buf,
             strbuf: String::new(),
-            loc: loc as u64,
+            loc,
             counter: 0,
         })
-    }
-
-    fn count(&self) -> u64 {
-        self.loc
     }
 }
 
@@ -57,6 +53,8 @@ impl Iterator for Bash {
             Err(e) => return Some(Err(eyre!("failed to read line: {}", e))), // we can skip past things like invalid utf8
         }
 
+        self.loc -= 1;
+
         while self.strbuf.ends_with("\\\n") {
             if self.file.read_line(&mut self.strbuf).is_err() {
                 // There's a chance that the last line of a command has invalid
@@ -67,6 +65,8 @@ impl Iterator for Bash {
                 // something else, than to miss things. So break.
                 break;
             };
+
+            self.loc -= 1;
         }
 
         let time = chrono::Utc::now();
@@ -84,5 +84,9 @@ impl Iterator for Bash {
             None,
             None,
         )))
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (0, Some(self.loc))
     }
 }

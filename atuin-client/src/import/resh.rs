@@ -107,7 +107,7 @@ pub struct ReshEntry {
 pub struct Resh {
     file: BufReader<File>,
     strbuf: String,
-    loc: u64,
+    loc: usize,
     counter: i64,
 }
 
@@ -129,13 +129,9 @@ impl Importer for Resh {
         Ok(Self {
             file: buf,
             strbuf: String::new(),
-            loc: loc as u64,
+            loc,
             counter: 0,
         })
-    }
-
-    fn count(&self) -> u64 {
-        self.loc
     }
 }
 
@@ -181,5 +177,9 @@ impl Iterator for Resh {
             session: uuid_v4(),
             hostname: entry.host,
         }))
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.loc, Some(self.loc))
     }
 }

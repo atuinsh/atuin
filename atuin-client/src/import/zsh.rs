@@ -20,7 +20,7 @@ use crate::history::History;
 pub struct Zsh {
     file: BufReader<File>,
     strbuf: String,
-    loc: u64,
+    loc: usize,
     counter: i64,
 }
 
@@ -56,13 +56,9 @@ impl Importer for Zsh {
         Ok(Self {
             file: buf,
             strbuf: String::new(),
-            loc: loc as u64,
+            loc,
             counter: 0,
         })
-    }
-
-    fn count(&self) -> u64 {
-        self.loc
     }
 }
 
@@ -81,6 +77,8 @@ impl Iterator for Zsh {
             Err(e) => return Some(Err(eyre!("failed to read line: {}", e))), // we can skip past things like invalid utf8
         }
 
+        self.loc -= 1;
+
         while self.strbuf.ends_with("\\\n") {
             if self.file.read_line(&mut self.strbuf).is_err() {
                 // There's a chance that the last line of a command has invalid
@@ -91,6 +89,8 @@ impl Iterator for Zsh {
                 // something else, than to miss things. So break.
                 break;
             };
+
+            self.loc -= 1;
         }
 
         // We have to handle the case where a line has escaped newlines.
@@ -106,6 +106,8 @@ impl Iterator for Zsh {
             let offset = chrono::Duration::seconds(self.counter);
             let time = time - offset;
 
+            self.counter += 1;
+
             Some(Ok(History::new(
                 time,
                 self.strbuf.trim_end().to_string(),
@@ -116,6 +118,10 @@ impl Iterator for Zsh {
                 None,
             )))
         }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (0, Some(self.loc))
     }
 }
 
