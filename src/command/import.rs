@@ -73,20 +73,25 @@ async fn import_resh(db: &mut (impl Database + Send + Sync)) -> Result<()> {
     let histpath = std::path::Path::new(std::env::var("HOME")?.as_str()).join(".resh_history.json");
 
     println!("Parsing .resh_history.json...");
+    #[allow(clippy::filter_map)]
     let history = std::fs::read_to_string(histpath)?
         .split('\n')
-        .map(|x| x.trim())
+        .map(str::trim)
         .map(|x| serde_json::from_str::<ReshEntry>(x))
         .filter_map(Result::ok)
         .map(|x| {
+            #[allow(clippy::cast_possible_truncation)]
+            #[allow(clippy::cast_sign_loss)]
             let timestamp = {
                 let secs = x.realtime_before.floor() as i64;
-                let nanosecs = (x.realtime_before.fract() * 1_000_000_000 as f64).round() as u32;
+                let nanosecs = (x.realtime_before.fract() * 1_000_000_000_f64).round() as u32;
                 Utc.timestamp(secs, nanosecs)
             };
+            #[allow(clippy::cast_possible_truncation)]
+            #[allow(clippy::cast_sign_loss)]
             let duration = {
                 let secs = x.realtime_after.floor() as i64;
-                let nanosecs = (x.realtime_after.fract() * 1_000_000_000 as f64).round() as u32;
+                let nanosecs = (x.realtime_after.fract() * 1_000_000_000_f64).round() as u32;
                 let difference = Utc.timestamp(secs, nanosecs) - timestamp;
                 difference.num_nanoseconds().unwrap_or(0)
             };
