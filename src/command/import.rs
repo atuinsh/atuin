@@ -1,6 +1,6 @@
-use std::env;
+use std::{env, path::PathBuf};
 
-use eyre::Result;
+use eyre::{eyre, Result};
 use structopt::StructOpt;
 
 use atuin_client::import::{bash::Bash, zsh::Zsh};
@@ -74,7 +74,32 @@ async fn import<I: Importer + Send, DB: Database + Send + Sync>(
 where
     I::IntoIter: Send,
 {
-    let histpath = I::histpath()?;
+    println!("Importing history from {}", I::NAME);
+
+    let histpath = if let Ok(p) = env::var("HISTFILE") {
+        let histpath = PathBuf::from(p);
+
+        if !histpath.is_file() {
+            return Err(eyre!(
+                "Could not find history file {:?}. Try updating $HISTFILE",
+                histpath
+            ));
+        }
+
+        histpath
+    } else {
+        let histpath = I::histpath()?;
+
+        if !histpath.is_file() {
+            return Err(eyre!(
+                "Could not find history file {:?}. Try setting $HISTFILE",
+                histpath
+            ));
+        }
+
+        histpath
+    };
+
     let contents = I::parse(histpath)?;
 
     let progress = ProgressBar::new(contents.count());

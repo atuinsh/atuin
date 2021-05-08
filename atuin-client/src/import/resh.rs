@@ -112,6 +112,8 @@ pub struct Resh {
 }
 
 impl Importer for Resh {
+    const NAME: &'static str = "resh";
+
     fn histpath() -> Result<PathBuf> {
         let user_dirs = UserDirs::new().unwrap();
         let home_dir = user_dirs.home_dir();

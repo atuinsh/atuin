@@ -1,12 +1,11 @@
 // import old shell history!
 // automatically hoover up all that we can find
 
+use std::{fs::File, path::Path};
 use std::{
-    env,
     io::{BufRead, BufReader},
     path::PathBuf,
 };
-use std::{fs::File, path::Path};
 
 use chrono::prelude::*;
 use chrono::Utc;
@@ -26,24 +25,12 @@ pub struct Zsh {
 }
 
 impl Importer for Zsh {
+    const NAME: &'static str = "zsh";
+
     fn histpath() -> Result<PathBuf> {
         // oh-my-zsh sets HISTFILE=~/.zhistory
         // zsh has no default value for this var, but uses ~/.zhistory.
         // we could maybe be smarter about this in the future :)
-
-        if let Ok(p) = env::var("HISTFILE") {
-            let histpath = PathBuf::from(p);
-
-            if !histpath.exists() {
-                return Err(eyre!(
-                    "Could not find history file {:?}. try updating $HISTFILE",
-                    histpath
-                ));
-            }
-
-            return Ok(histpath);
-        }
-
         let user_dirs = UserDirs::new().unwrap();
         let home_dir = user_dirs.home_dir();
 

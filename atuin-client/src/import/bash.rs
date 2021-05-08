@@ -1,9 +1,8 @@
+use std::{fs::File, path::Path};
 use std::{
-    env,
     io::{BufRead, BufReader},
     path::PathBuf,
 };
-use std::{fs::File, path::Path};
 
 use directories::UserDirs;
 use eyre::{eyre, Result};
@@ -20,20 +19,9 @@ pub struct Bash {
 }
 
 impl Importer for Bash {
+    const NAME: &'static str = "bash";
+
     fn histpath() -> Result<PathBuf> {
-        if let Ok(p) = env::var("HISTFILE") {
-            let histpath = PathBuf::from(p);
-
-            if !histpath.exists() {
-                return Err(eyre!(
-                    "Could not find history file {:?}. try updating $HISTFILE",
-                    histpath
-                ));
-            }
-
-            return Ok(histpath);
-        }
-
         let user_dirs = UserDirs::new().unwrap();
         let home_dir = user_dirs.home_dir();
 

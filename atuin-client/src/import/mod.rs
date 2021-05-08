@@ -21,6 +21,7 @@ fn count_lines(buf: &mut BufReader<File>) -> Result<usize> {
 }
 
 pub trait Importer: IntoIterator<Item = Result<History>> + Sized {
+    const NAME: &'static str;
     fn histpath() -> Result<PathBuf>;
     fn parse(path: impl AsRef<Path>) -> Result<Self>;
     fn count(&self) -> u64;
