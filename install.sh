@@ -148,5 +148,5 @@ esac
 printf '\neval "$(atuin init zsh)"' >> ~/.zshrc
 
 curl https://raw.githubusercontent.com/rcaloras/bash-preexec/master/bash-preexec.sh -o ~/.bash-preexec.sh
-echo '\n[[ -f ~/.bash-preexec.sh ]] && source ~/.bash-preexec.sh' >> ~/.bashrc
+printf '\n[[ -f ~/.bash-preexec.sh ]] && source ~/.bash-preexec.sh' >> ~/.bashrc
 echo 'eval "$(atuin init bash)"' >> ~/.bashrc
