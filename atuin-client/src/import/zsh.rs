@@ -74,7 +74,7 @@ impl Importer for Zsh {
         })
     }
 
-    fn len(&self) -> u64 {
+    fn count(&self) -> u64 {
         self.loc
     }
 }

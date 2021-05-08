@@ -1,12 +1,11 @@
 use std::env;
 
 use eyre::Result;
-use itertools::Itertools;
 use structopt::StructOpt;
 
-use atuin_client::{history::History, import::resh::Resh};
 use atuin_client::import::{bash::Bash, zsh::Zsh};
 use atuin_client::{database::Database, import::Importer};
+use atuin_client::{history::History, import::resh::Resh};
 use indicatif::ProgressBar;
 
 #[derive(StructOpt)]
@@ -36,6 +35,8 @@ pub enum Cmd {
     Resh,
 }
 
+const BATCH_SIZE: usize = 100;
+
 impl Cmd {
     pub async fn run(&self, db: &mut (impl Database + Send + Sync)) -> Result<()> {
         println!("        Atuin         ");
@@ -45,8 +46,6 @@ impl Cmd {
         println!("          \u{1f422}          ");
         println!("======================");
         println!("Importing history...");
-
-        const BATCH_SIZE: usize = 100;
 
         match self {
             Self::Auto => {
@@ -68,27 +67,44 @@ impl Cmd {
     }
 }
 
-async fn import<I: Importer, DB: Database + Send + Sync>(
+async fn import<I: Importer + Send, DB: Database + Send + Sync>(
     db: &mut DB,
     buf_size: usize,
-) -> Result<()> {
+) -> Result<()>
+where
+    I::IntoIter: Send,
+{
     let histpath = I::histpath()?;
     let contents = I::parse(histpath)?;
 
-    let progress = ProgressBar::new(contents.len());
+    let progress = ProgressBar::new(contents.count());
 
     let mut buf = Vec::<History>::with_capacity(buf_size);
-    for chunk in contents
-        .into_iter()
-        .filter_map(Result::ok)
-        .chunks(buf_size)
-        .into_iter()
-    {
+    let mut iter = progress.wrap_iter(contents.into_iter());
+    loop {
+        // clear buffer
         buf.clear();
-        buf.extend(chunk);
 
+        // fill until either no more entries
+        // or until the buffer is full
+        let done = loop {
+            match iter.next() {
+                Some(Ok(hist)) => buf.push(hist),
+                Some(Err(_)) => (),
+                None => break true,
+            }
+
+            if buf.len() == buf_size {
+                break false;
+            }
+        };
+
+        // flush
         db.save_bulk(&buf).await?;
-        progress.inc(buf.len() as u64);
+
+        if done {
+            break;
+        }
     }
 
     progress.finish();

@@ -132,7 +132,7 @@ impl Importer for Resh {
         })
     }
 
-    fn len(&self) -> u64 {
+    fn count(&self) -> u64 {
         self.loc
     }
 }
