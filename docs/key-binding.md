@@ -1,6 +1,6 @@
 # Key binding
 
-By default, Atuin will rebind both Ctrl-r and the up arrow. If you do not want
+By default, Atuin will rebind both <kbd>Ctrl-r</kbd> and the up arrow. If you do not want
 this to happen, set ATUIN_NOBIND before the call to `atuin init`
 
 For example
