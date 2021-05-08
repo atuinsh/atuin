@@ -27,4 +27,6 @@ __atuin_history ()
 preexec_functions+=(_atuin_preexec)
 precmd_functions+=(_atuin_precmd)
 
-bind -x '"\C-r": __atuin_history'
+if [[ -z $ATUIN_NOBIND ]]; then
+	bind -x '"\C-r": __atuin_history'
+fi
