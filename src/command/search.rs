@@ -153,7 +153,7 @@ async fn key_handler(
     app: &mut State,
 ) -> Option<String> {
     match input {
-        Key::Esc | Key::Ctrl('c') => return Some(String::from("")),
+        Key::Esc | Key::Ctrl('c') | Key::Ctrl('d') => return Some(String::from("")),
         Key::Char('\n') => {
             let i = app.results_state.selected().unwrap_or(0);
 
