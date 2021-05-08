@@ -153,7 +153,9 @@ async fn key_handler(
     app: &mut State,
 ) -> Option<String> {
     match input {
-        Key::Esc | Key::Ctrl('c') | Key::Ctrl('d') => return Some(String::from("")),
+        Key::Esc | Key::Ctrl('c') | Key::Ctrl('d') | Key::Ctrl('g') => {
+            return Some(String::from(""))
+        }
         Key::Char('\n') => {
             let i = app.results_state.selected().unwrap_or(0);
 
@@ -171,7 +173,7 @@ async fn key_handler(
             app.input.pop();
             query_results(app, db).await.unwrap();
         }
-        Key::Down => {
+        Key::Down | Key::Ctrl('n') => {
             let i = match app.results_state.selected() {
                 Some(i) => {
                     if i == 0 {
@@ -184,7 +186,7 @@ async fn key_handler(
             };
             app.results_state.select(Some(i));
         }
-        Key::Up => {
+        Key::Up | Key::Ctrl('p') => {
             let i = match app.results_state.selected() {
                 Some(i) => {
                     if i >= app.results.len() - 1 {
