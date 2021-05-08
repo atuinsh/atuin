@@ -1,46 +1,81 @@
 // import old shell history!
 // automatically hoover up all that we can find
 
-use std::io::{BufRead, BufReader};
+use std::{
+    env,
+    io::{BufRead, BufReader},
+    path::PathBuf,
+};
 use std::{fs::File, path::Path};
 
 use chrono::prelude::*;
 use chrono::Utc;
+use directories::UserDirs;
 use eyre::{eyre, Result};
 use itertools::Itertools;
 
-use super::count_lines;
+use super::{count_lines, Importer};
 use crate::history::History;
 
 #[derive(Debug)]
 pub struct Zsh {
     file: BufReader<File>,
-
-    pub loc: u64,
-    pub counter: i64,
+    strbuf: String,
+    loc: u64,
+    counter: i64,
 }
 
-impl Zsh {
-    pub fn new(path: impl AsRef<Path>) -> Result<Self> {
+impl Importer for Zsh {
+    fn histpath() -> Result<PathBuf> {
+        // oh-my-zsh sets HISTFILE=~/.zhistory
+        // zsh has no default value for this var, but uses ~/.zhistory.
+        // we could maybe be smarter about this in the future :)
+
+        if let Ok(p) = env::var("HISTFILE") {
+            let histpath = PathBuf::from(p);
+
+            if !histpath.exists() {
+                return Err(eyre!(
+                    "Could not find history file {:?}. try updating $HISTFILE",
+                    histpath
+                ));
+            }
+
+            return Ok(histpath);
+        }
+
+        let user_dirs = UserDirs::new().unwrap();
+        let home_dir = user_dirs.home_dir();
+
+        let mut candidates = [".zhistory", ".zsh_history"].iter();
+        loop {
+            match candidates.next() {
+                Some(candidate) => {
+                    let histpath = home_dir.join(candidate);
+                    if histpath.exists() {
+                        break Ok(histpath);
+                    }
+                }
+                None => break Err(eyre!("Could not find history file. try setting $HISTFILE")),
+            }
+        }
+    }
+
+    fn parse(path: impl AsRef<Path>) -> Result<Self> {
         let file = File::open(path)?;
         let mut buf = BufReader::new(file);
         let loc = count_lines(&mut buf)?;
 
         Ok(Self {
             file: buf,
+            strbuf: String::new(),
             loc: loc as u64,
             counter: 0,
         })
     }
 
-    fn read_line(&mut self) -> Option<Result<String>> {
-        let mut line = String::new();
-
-        match self.file.read_line(&mut line) {
-            Ok(0) => None,
-            Ok(_) => Some(Ok(line)),
-            Err(e) => Some(Err(eyre!("failed to read line: {}", e))), // we can skip past things like invalid utf8
-        }
+    fn len(&self) -> u64 {
+        self.loc
     }
 }
 
@@ -52,18 +87,15 @@ impl Iterator for Zsh {
         // These lines begin with :
         // So, if the line begins with :, parse it. Otherwise it's just
         // the command
-        let line = self.read_line()?;
-
-        if let Err(e) = line {
-            return Some(Err(e)); // :(
+        self.strbuf.clear();
+        match self.file.read_line(&mut self.strbuf) {
+            Ok(0) => return None,
+            Ok(_) => (),
+            Err(e) => return Some(Err(eyre!("failed to read line: {}", e))), // we can skip past things like invalid utf8
         }
 
-        let mut line = line.unwrap();
-
-        while line.ends_with("\\\n") {
-            let next_line = self.read_line()?;
-
-            if next_line.is_err() {
+        while self.strbuf.ends_with("\\\n") {
+            if self.file.read_line(&mut self.strbuf).is_err() {
                 // There's a chance that the last line of a command has invalid
                 // characters, the only safe thing to do is break :/
                 // usually just invalid utf8 or smth
@@ -71,29 +103,25 @@ impl Iterator for Zsh {
                 // better to have some items that should have been part of
                 // something else, than to miss things. So break.
                 break;
-            }
-
-            line.push_str(next_line.unwrap().as_str());
+            };
         }
 
         // We have to handle the case where a line has escaped newlines.
         // Keep reading until we have a non-escaped newline
 
-        let extended = line.starts_with(':');
+        let extended = self.strbuf.starts_with(':');
 
         if extended {
             self.counter += 1;
-            Some(Ok(parse_extended(line.as_str(), self.counter)))
+            Some(Ok(parse_extended(&self.strbuf, self.counter)))
         } else {
             let time = chrono::Utc::now();
             let offset = chrono::Duration::seconds(self.counter);
             let time = time - offset;
 
-            self.counter += 1;
-
             Some(Ok(History::new(
                 time,
-                line.trim_end().to_string(),
+                self.strbuf.trim_end().to_string(),
                 String::from("unknown"),
                 -1,
                 -1,

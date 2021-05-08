@@ -1,7 +1,12 @@
-use std::fs::File;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
+use std::{
+    fs::File,
+    path::{Path, PathBuf},
+};
 
 use eyre::Result;
+
+use crate::history::History;
 
 pub mod bash;
 pub mod resh;
@@ -13,4 +18,10 @@ fn count_lines(buf: &mut BufReader<File>) -> Result<usize> {
     buf.seek(SeekFrom::Start(0))?;
 
     Ok(lines)
+}
+
+pub trait Importer: IntoIterator<Item = Result<History>> + Sized {
+    fn histpath() -> Result<PathBuf>;
+    fn parse(path: impl AsRef<Path>) -> Result<Self>;
+    fn len(&self) -> u64;
 }

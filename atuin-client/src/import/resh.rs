@@ -1,4 +1,17 @@
+use std::{
+    fs::File,
+    io::{BufRead, BufReader},
+    path::{Path, PathBuf},
+};
+
+use atuin_common::utils::uuid_v4;
+use chrono::{TimeZone, Utc};
+use directories::UserDirs;
+use eyre::{eyre, Result};
 use serde::Deserialize;
+
+use super::{count_lines, Importer};
+use crate::history::History;
 
 #[derive(Deserialize, Debug)]
 pub struct ReshEntry {
@@ -88,4 +101,83 @@ pub struct ReshEntry {
     pub recall_last_cmd_line: String,
     pub cols: String,
     pub lines: String,
+}
+
+#[derive(Debug)]
+pub struct Resh {
+    file: BufReader<File>,
+    strbuf: String,
+    loc: u64,
+    counter: i64,
+}
+
+impl Importer for Resh {
+    fn histpath() -> Result<PathBuf> {
+        let user_dirs = UserDirs::new().unwrap();
+        let home_dir = user_dirs.home_dir();
+
+        Ok(home_dir.join(".resh_history.json"))
+    }
+
+    fn parse(path: impl AsRef<Path>) -> Result<Self> {
+        let file = File::open(path)?;
+        let mut buf = BufReader::new(file);
+        let loc = count_lines(&mut buf)?;
+
+        Ok(Self {
+            file: buf,
+            strbuf: String::new(),
+            loc: loc as u64,
+            counter: 0,
+        })
+    }
+
+    fn len(&self) -> u64 {
+        self.loc
+    }
+}
+
+impl Iterator for Resh {
+    type Item = Result<History>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.strbuf.clear();
+        match self.file.read_line(&mut self.strbuf) {
+            Ok(0) => return None,
+            Ok(_) => (),
+            Err(e) => return Some(Err(eyre!("failed to read line: {}", e))), // we can skip past things like invalid utf8
+        }
+
+        let entry = match serde_json::from_str::<ReshEntry>(&self.strbuf) {
+            Ok(e) => e,
+            Err(e) => return Some(Err(eyre!("Invalid entry found in resh_history file: {}", e))),
+        };
+
+        #[allow(clippy::cast_possible_truncation)]
+        #[allow(clippy::cast_sign_loss)]
+        let timestamp = {
+            let secs = entry.realtime_before.floor() as i64;
+            let nanosecs = (entry.realtime_before.fract() * 1_000_000_000_f64).round() as u32;
+            Utc.timestamp(secs, nanosecs)
+        };
+        #[allow(clippy::cast_possible_truncation)]
+        #[allow(clippy::cast_sign_loss)]
+        let duration = {
+            let secs = entry.realtime_after.floor() as i64;
+            let nanosecs = (entry.realtime_after.fract() * 1_000_000_000_f64).round() as u32;
+            let difference = Utc.timestamp(secs, nanosecs) - timestamp;
+            difference.num_nanoseconds().unwrap_or(0)
+        };
+
+        Some(Ok(History {
+            id: uuid_v4(),
+            timestamp,
+            duration,
+            exit: entry.exit_code,
+            command: entry.cmd_line,
+            cwd: entry.pwd,
+            session: uuid_v4(),
+            hostname: entry.host,
+        }))
+    }
 }

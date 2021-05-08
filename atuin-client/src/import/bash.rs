@@ -1,40 +1,60 @@
-use std::io::{BufRead, BufReader};
+use std::{
+    env,
+    io::{BufRead, BufReader},
+    path::PathBuf,
+};
 use std::{fs::File, path::Path};
 
+use directories::UserDirs;
 use eyre::{eyre, Result};
 
-use super::count_lines;
+use super::{count_lines, Importer};
 use crate::history::History;
 
 #[derive(Debug)]
 pub struct Bash {
     file: BufReader<File>,
-
-    pub loc: u64,
-    pub counter: i64,
+    strbuf: String,
+    loc: u64,
+    counter: i64,
 }
 
-impl Bash {
-    pub fn new(path: impl AsRef<Path>) -> Result<Self> {
+impl Importer for Bash {
+    fn histpath() -> Result<PathBuf> {
+        if let Ok(p) = env::var("HISTFILE") {
+            let histpath = PathBuf::from(p);
+
+            if !histpath.exists() {
+                return Err(eyre!(
+                    "Could not find history file {:?}. try updating $HISTFILE",
+                    histpath
+                ));
+            }
+
+            return Ok(histpath);
+        }
+
+        let user_dirs = UserDirs::new().unwrap();
+        let home_dir = user_dirs.home_dir();
+
+        Ok(home_dir.join(".bash_history"))
+    }
+
+    fn parse(path: impl AsRef<Path>) -> Result<Self> {
         let file = File::open(path)?;
         let mut buf = BufReader::new(file);
         let loc = count_lines(&mut buf)?;
 
         Ok(Self {
             file: buf,
+            strbuf: String::new(),
             loc: loc as u64,
             counter: 0,
         })
     }
 
-    fn read_line(&mut self) -> Option<Result<String>> {
-        let mut line = String::new();
-
-        match self.file.read_line(&mut line) {
-            Ok(0) => None,
-            Ok(_) => Some(Ok(line)),
-            Err(e) => Some(Err(eyre!("failed to read line: {}", e))), // we can skip past things like invalid utf8
-        }
+    fn len(&self) -> u64 {
+        self.loc
     }
 }
 
@@ -42,22 +62,23 @@ impl Iterator for Bash {
     type Item = Result<History>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let line = self.read_line()?;
-
-        if let Err(e) = line {
-            return Some(Err(e)); // :(
+        self.strbuf.clear();
+        match self.file.read_line(&mut self.strbuf) {
+            Ok(0) => return None,
+            Ok(_) => (),
+            Err(e) => return Some(Err(eyre!("failed to read line: {}", e))), // we can skip past things like invalid utf8
         }
 
-        let mut line = line.unwrap();
-
-        while line.ends_with("\\\n") {
-            let next_line = self.read_line()?;
-
-            if next_line.is_err() {
+        while self.strbuf.ends_with("\\\n") {
+            if self.file.read_line(&mut self.strbuf).is_err() {
+                // There's a chance that the last line of a command has invalid
+                // characters, the only safe thing to do is break :/
+                // usually just invalid utf8 or smth
+                // however, we really need to avoid missing history, so it's
+                // better to have some items that should have been part of
+                // something else, than to miss things. So break.
                 break;
-            }
-
-            line.push_str(next_line.unwrap().as_str());
+            };
         }
 
         let time = chrono::Utc::now();
@@ -68,7 +89,7 @@ impl Iterator for Bash {
 
         Some(Ok(History::new(
             time,
-            line.trim_end().to_string(),
+            self.strbuf.trim_end().to_string(),
             String::from("unknown"),
             -1,
             -1,
