@@ -133,7 +133,7 @@ impl State {
 async fn query_results(app: &mut State, db: &mut (impl Database + Send + Sync)) -> Result<()> {
     let results = match app.input.as_str() {
         "" => db.list(Some(200), true).await?,
-        i => db.search(Some(200), &("*".to_owned() + &i)).await?,
+        i => db.search(Some(200), &format!("*{}", i)).await?,
     };
 
     app.results = results;
