@@ -160,7 +160,7 @@ async fn key_handler(
             return Some(
                 app.results
                     .get(i)
-                    .map_or("".to_string(), |h| h.command.clone()),
+                    .map_or(app.input.clone(), |h| h.command.clone()),
             );
         }
         Key::Char(c) => {
