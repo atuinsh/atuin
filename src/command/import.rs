@@ -1,13 +1,15 @@
 use std::env;
 use std::path::PathBuf;
 
+use atuin_common::utils::uuid_v4;
+use chrono::{TimeZone, Utc};
 use directories::UserDirs;
 use eyre::{eyre, Result};
 use structopt::StructOpt;
 
-use atuin_client::database::Database;
 use atuin_client::history::History;
 use atuin_client::import::{bash::Bash, zsh::Zsh};
+use atuin_client::{database::Database, import::resh::ReshEntry};
 use indicatif::ProgressBar;
 
 #[derive(StructOpt)]
@@ -29,6 +31,12 @@ pub enum Cmd {
         aliases=&["b", "ba", "bas"],
     )]
     Bash,
+
+    #[structopt(
+        about="import history from the resh history file",
+        aliases=&["r", "re", "res"],
+    )]
+    Resh,
 }
 
 impl Cmd {
@@ -56,8 +64,73 @@ impl Cmd {
 
             Self::Zsh => import_zsh(db).await,
             Self::Bash => import_bash(db).await,
+            Self::Resh => import_resh(db).await,
         }
     }
+}
+
+async fn import_resh(db: &mut (impl Database + Send + Sync)) -> Result<()> {
+    let histpath = std::path::Path::new(std::env::var("HOME")?.as_str()).join(".resh_history.json");
+
+    println!("Parsing .resh_history.json...");
+    #[allow(clippy::filter_map)]
+    let history = std::fs::read_to_string(histpath)?
+        .split('\n')
+        .map(str::trim)
+        .map(|x| serde_json::from_str::<ReshEntry>(x))
+        .filter_map(Result::ok)
+        .map(|x| {
+            #[allow(clippy::cast_possible_truncation)]
+            #[allow(clippy::cast_sign_loss)]
+            let timestamp = {
+                let secs = x.realtime_before.floor() as i64;
+                let nanosecs = (x.realtime_before.fract() * 1_000_000_000_f64).round() as u32;
+                Utc.timestamp(secs, nanosecs)
+            };
+            #[allow(clippy::cast_possible_truncation)]
+            #[allow(clippy::cast_sign_loss)]
+            let duration = {
+                let secs = x.realtime_after.floor() as i64;
+                let nanosecs = (x.realtime_after.fract() * 1_000_000_000_f64).round() as u32;
+                let difference = Utc.timestamp(secs, nanosecs) - timestamp;
+                difference.num_nanoseconds().unwrap_or(0)
+            };
+
+            History {
+                id: uuid_v4(),
+                timestamp,
+                duration,
+                exit: x.exit_code,
+                command: x.cmd_line,
+                cwd: x.pwd,
+                session: uuid_v4(),
+                hostname: x.host,
+            }
+        })
+        .collect::<Vec<_>>();
+    println!("Updating database...");
+
+    let progress = ProgressBar::new(history.len() as u64);
+
+    let buf_size = 100;
+    let mut buf = Vec::<_>::with_capacity(buf_size);
+
+    for i in history {
+        buf.push(i);
+
+        if buf.len() == buf_size {
+            db.save_bulk(&buf).await?;
+            progress.inc(buf.len() as u64);
+
+            buf.clear();
+        }
+    }
+
+    if !buf.is_empty() {
+        db.save_bulk(&buf).await?;
+        progress.inc(buf.len() as u64);
+    }
+    Ok(())
 }
 
 async fn import_zsh(db: &mut (impl Database + Send + Sync)) -> Result<()> {
