@@ -115,8 +115,9 @@ __atuin_install_cargo(){
 
 		echo "rustup installed! Attempting cargo install"
 
-		cargo install atuin
 	fi
+
+	cargo install atuin
 }
 
 __atuin_install_unsupported(){
