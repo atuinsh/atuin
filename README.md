@@ -96,6 +96,13 @@ toolchain, then you can run:
 cargo install atuin
 ```
 
+### Homebrew
+
+```
+brew tap ellie/atuin
+brew install atuin
+```
+
 ### AUR
 
 Atuin is available on the [AUR](https://aur.archlinux.org/packages/atuin/)
