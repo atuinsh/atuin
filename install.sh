@@ -145,7 +145,7 @@ case "$OSTYPE" in
 esac
 
 # TODO: Check which is in use
-echo '\neval "$(atuin init zsh)"' >> ~/.zshrc
+printf '\neval "$(atuin init zsh)"' >> ~/.zshrc
 
 curl https://raw.githubusercontent.com/rcaloras/bash-preexec/master/bash-preexec.sh -o ~/.bash-preexec.sh
 echo '\n[[ -f ~/.bash-preexec.sh ]] && source ~/.bash-preexec.sh' >> ~/.bashrc
