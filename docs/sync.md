@@ -53,3 +53,9 @@ If you want to login to a new machine, you will require your encryption key
 ```
 atuin login -u <USERNAME> -p <PASSWORD> -k <KEY>
 ```
+
+## Logout
+
+```
+atuin logout
+```
