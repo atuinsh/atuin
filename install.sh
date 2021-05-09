@@ -63,7 +63,7 @@ __atuin_install_linux(){
 	echo "Detected Linux!"
 	echo "Checking distro..."
 
-	if $(uname -a | grep -qi "Microsoft"); then
+	if (uname -a | grep -qi "Microsoft"); then
         OS="UbuntuWSL"
     else
         if ! command -v lsb_release &> /dev/null; then
