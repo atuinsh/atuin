@@ -107,6 +107,8 @@ async fn sync_upload(
 
         for i in last {
             let data = encrypt(&i, &key)?;
+            let data = serde_json::to_string(&data)?;
+
             let add_hist = AddHistoryRequest {
                 id: i.id.into(),
                 timestamp: i.timestamp,

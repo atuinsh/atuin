@@ -12,7 +12,7 @@ use atuin_common::api::{
 };
 use atuin_common::utils::hash_str;
 
-use crate::encryption::{decode_key, decrypt, EncryptedHistory};
+use crate::encryption::{decode_key, decrypt};
 use crate::history::History;
 
 static APP_USER_AGENT: &str = concat!("atuin/", env!("CARGO_PKG_VERSION"),);
@@ -140,10 +140,7 @@ impl<'a> Client<'a> {
         Ok(history)
     }
 
-    pub async fn post_history(
-        &self,
-        history: &[AddHistoryRequest<'_, EncryptedHistory>],
-    ) -> Result<()> {
+    pub async fn post_history(&self, history: &[AddHistoryRequest<'_, String>]) -> Result<()> {
         let url = format!("{}/history", self.sync_addr);
         let url = Url::parse(url.as_str())?;
 
