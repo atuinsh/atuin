@@ -13,3 +13,5 @@ jobs:
     steps:
     - Run shellcheck
       uses: ludeus/action-shellcheck@master
+      with:
+        ignore: *.zsh # shellcheck doesn't support zsh, per https://github.com/koalaman/shellcheck/wiki/SC1071
