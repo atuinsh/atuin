@@ -15,4 +15,5 @@ jobs:
     - name: Run shellcheck
       uses: ludeeus/action-shellcheck@master
       with:
-        ignore: "*.zsh" # shellcheck doesn't support zsh, per https://github.com/koalaman/shellcheck/wiki/SC1071
+        # shellcheck doesn't support zsh, per https://github.com/koalaman/shellcheck/wiki/SC1071
+        ignore: src/shell/atuin.zsh
