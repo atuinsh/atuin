@@ -1,3 +1,5 @@
+export ATUIN_SESSION=$(atuin uuid)
+
 _atuin_preexec() {
 	id=$(atuin history start "$1")
 	export ATUIN_HISTORY_ID="$id"
