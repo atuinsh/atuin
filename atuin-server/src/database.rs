@@ -13,9 +13,9 @@ pub trait Database {
     async fn get_session_user(&self, token: &str) -> Result<User>;
     async fn add_session(&self, session: &NewSession) -> Result<()>;
 
-    async fn get_user(&self, username: String) -> Result<User>;
+    async fn get_user(&self, username: &str) -> Result<User>;
     async fn get_user_session(&self, u: &User) -> Result<Session>;
-    async fn add_user(&self, user: NewUser) -> Result<i64>;
+    async fn add_user(&self, user: &NewUser) -> Result<i64>;
 
     async fn count_history(&self, user: &User) -> Result<i64>;
     async fn list_history(
@@ -23,7 +23,7 @@ pub trait Database {
         user: &User,
         created_since: chrono::NaiveDateTime,
         since: chrono::NaiveDateTime,
-        host: String,
+        host: &str,
     ) -> Result<Vec<History>>;
     async fn add_history(&self, history: &[NewHistory]) -> Result<()>;
 }
@@ -62,7 +62,7 @@ impl Database for Postgres {
         }
     }
 
-    async fn get_user(&self, username: String) -> Result<User> {
+    async fn get_user(&self, username: &str) -> Result<User> {
         let res: Option<User> =
             sqlx::query_as::<_, User>("select * from users where username = $1")
                 .bind(username)
@@ -111,7 +111,7 @@ impl Database for Postgres {
         user: &User,
         created_since: chrono::NaiveDateTime,
         since: chrono::NaiveDateTime,
-        host: String,
+        host: &str,
     ) -> Result<Vec<History>> {
         let res = sqlx::query_as::<_, History>(
             "select * from history 
@@ -137,6 +137,10 @@ impl Database for Postgres {
         let mut tx = self.pool.begin().await?;
 
         for i in history {
+            let client_id: &str = &i.client_id;
+            let hostname: &str = &i.hostname;
+            let data: &str = &i.data;
+
             sqlx::query(
                 "insert into history
                     (client_id, user_id, hostname, timestamp, data) 
@@ -144,11 +148,11 @@ impl Database for Postgres {
                 on conflict do nothing
                 ",
             )
-            .bind(i.client_id)
+            .bind(client_id)
             .bind(i.user_id)
-            .bind(i.hostname)
+            .bind(hostname)
             .bind(i.timestamp)
-            .bind(i.data)
+            .bind(data)
             .execute(&mut tx)
             .await?;
         }
@@ -158,16 +162,20 @@ impl Database for Postgres {
         Ok(())
     }
 
-    async fn add_user(&self, user: NewUser) -> Result<i64> {
+    async fn add_user(&self, user: &NewUser) -> Result<i64> {
+        let email: &str = &user.email;
+        let username: &str = &user.username;
+        let password: &str = &user.password;
+
         let res: (i64,) = sqlx::query_as(
             "insert into users
                 (username, email, password)
             values($1, $2, $3)
             returning id",
         )
-        .bind(user.username.as_str())
-        .bind(user.email.as_str())
-        .bind(user.password)
+        .bind(username)
+        .bind(email)
+        .bind(password)
         .fetch_one(&self.pool)
         .await?;
 
@@ -175,13 +183,15 @@ impl Database for Postgres {
     }
 
     async fn add_session(&self, session: &NewSession) -> Result<()> {
+        let token: &str = &session.token;
+
         sqlx::query(
             "insert into sessions
                 (user_id, token)
             values($1, $2)",
         )
         .bind(session.user_id)
-        .bind(session.token)
+        .bind(token)
         .execute(&self.pool)
         .await?;
 

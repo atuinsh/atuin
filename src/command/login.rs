@@ -1,6 +1,7 @@
-use std::fs::File;
+use std::{borrow::Cow, fs::File};
 use std::io::prelude::*;
 
+use atuin_common::api::LoginRequest;
 use eyre::Result;
 use structopt::StructOpt;
 
@@ -24,8 +25,10 @@ impl Cmd {
     pub fn run(&self, settings: &Settings) -> Result<()> {
         let session = api_client::login(
             settings.sync_address.as_str(),
-            self.username.as_str(),
-            self.password.as_str(),
+            LoginRequest{
+                username: Cow::Borrowed(&self.username),
+                password: Cow::Borrowed(&self.password),
+            }
         )?;
 
         let session_path = settings.session_path.as_str();

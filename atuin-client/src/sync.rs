@@ -99,7 +99,7 @@ async fn sync_upload(
 
     while local_count > remote_count {
         let last = db.before(cursor, HISTORY_PAGE_SIZE).await?;
-        let mut buffer = Vec::<AddHistoryRequest>::new();
+        let mut buffer = Vec::new();
 
         if last.is_empty() {
             break;
@@ -107,13 +107,11 @@ async fn sync_upload(
 
         for i in last {
             let data = encrypt(&i, &key)?;
-            let data = serde_json::to_string(&data)?;
-
             let add_hist = AddHistoryRequest {
-                id: i.id,
+                id: i.id.into(),
                 timestamp: i.timestamp,
                 data,
-                hostname: hash_str(i.hostname.as_str()),
+                hostname: hash_str(&i.hostname).into(),
             };
 
             buffer.push(add_hist);
@@ -132,8 +130,8 @@ async fn sync_upload(
 
 pub async fn sync(settings: &Settings, force: bool, db: &mut (impl Database + Send)) -> Result<()> {
     let client = api_client::Client::new(
-        settings.sync_address.as_str(),
-        settings.session_token.as_str(),
+        &settings.sync_address,
+        &settings.session_token,
         load_encoded_key(settings)?,
     )?;
 

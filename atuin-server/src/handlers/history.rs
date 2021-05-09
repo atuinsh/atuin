@@ -6,7 +6,7 @@ use atuin_common::api::*;
 pub async fn count(
     user: User,
     db: impl Database + Clone + Send + Sync,
-) -> JSONResult<ErrorResponseStatus> {
+) -> JSONResult<ErrorResponseStatus<'static>> {
     db.count_history(&user).await.map_or(
         reply_error(
             ErrorResponse::reply("failed to query history count")
@@ -17,16 +17,16 @@ pub async fn count(
 }
 
 pub async fn list(
-    req: SyncHistoryRequest,
+    req: SyncHistoryRequest<'_>,
     user: User,
     db: impl Database + Clone + Send + Sync,
-) -> JSONResult<ErrorResponseStatus> {
+) -> JSONResult<ErrorResponseStatus<'static>> {
     let history = db
         .list_history(
             &user,
             req.sync_ts.naive_utc(),
             req.history_ts.naive_utc(),
-            req.host,
+            &req.host,
         )
         .await;
 
@@ -54,20 +54,20 @@ pub async fn list(
 }
 
 pub async fn add(
-    req: Vec<AddHistoryRequest>,
+    req: Vec<AddHistoryRequest<'_, String>>,
     user: User,
     db: impl Database + Clone + Send + Sync,
-) -> ReplyResult<impl Reply, ErrorResponseStatus> {
+) -> ReplyResult<impl Reply, ErrorResponseStatus<'_>> {
     debug!("request to add {} history items", req.len());
 
     let history: Vec<NewHistory> = req
-        .iter()
+        .into_iter()
         .map(|h| NewHistory {
-            client_id: h.id.as_str(),
+            client_id: h.id.into(),
             user_id: user.id,
-            hostname: h.hostname.as_str(),
+            hostname: h.hostname.into(),
             timestamp: h.timestamp.naive_utc(),
-            data: h.data.as_str(),
+            data: h.data.into(),
         })
         .collect();
 

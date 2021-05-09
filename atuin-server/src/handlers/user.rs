@@ -1,3 +1,5 @@
+use std::borrow::Borrow;
+
 use atuin_common::api::*;
 use atuin_common::utils::hash_secret;
 use sodiumoxide::crypto::pwhash::argon2id13;
@@ -23,10 +25,10 @@ pub fn verify_str(secret: &str, verify: &str) -> bool {
 }
 
 pub async fn get(
-    username: String,
+    username: impl AsRef<str>,
     db: impl Database + Clone + Send + Sync,
-) -> JSONResult<ErrorResponseStatus> {
-    let user = match db.get_user(username).await {
+) -> JSONResult<ErrorResponseStatus<'static>> {
+    let user = match db.get_user(username.as_ref()).await {
         Ok(user) => user,
         Err(e) => {
             debug!("user not found: {}", e);
@@ -37,15 +39,15 @@ pub async fn get(
     };
 
     reply_json(UserResponse {
-        username: user.username,
+        username: user.username.into(),
     })
 }
 
 pub async fn register(
-    register: RegisterRequest,
+    register: RegisterRequest<'_>,
     settings: Settings,
     db: impl Database + Clone + Send + Sync,
-) -> JSONResult<ErrorResponseStatus> {
+) -> JSONResult<ErrorResponseStatus<'static>> {
     if !settings.open_registration {
         return reply_error(
             ErrorResponse::reply("this server is not open for registrations")
@@ -53,15 +55,15 @@ pub async fn register(
         );
     }
 
-    let hashed = hash_secret(register.password.as_str());
+    let hashed = hash_secret(&register.password);
 
     let new_user = NewUser {
         email: register.email,
         username: register.username,
-        password: hashed,
+        password: hashed.into(),
     };
 
-    let user_id = match db.add_user(new_user).await {
+    let user_id = match db.add_user(&new_user).await {
         Ok(id) => id,
         Err(e) => {
             error!("failed to add user: {}", e);
@@ -75,11 +77,11 @@ pub async fn register(
 
     let new_session = NewSession {
         user_id,
-        token: token.as_str(),
+        token: (&token).into(),
     };
 
     match db.add_session(&new_session).await {
-        Ok(_) => reply_json(RegisterResponse { session: token }),
+        Ok(_) => reply_json(RegisterResponse { session: token.into() }),
         Err(e) => {
             error!("failed to add session: {}", e);
             reply_error(
@@ -91,10 +93,10 @@ pub async fn register(
 }
 
 pub async fn login(
-    login: LoginRequest,
+    login: LoginRequest<'_>,
     db: impl Database + Clone + Send + Sync,
-) -> JSONResult<ErrorResponseStatus> {
-    let user = match db.get_user(login.username.clone()).await {
+) -> JSONResult<ErrorResponseStatus<'_>> {
+    let user = match db.get_user(login.username.borrow()).await {
         Ok(u) => u,
         Err(e) => {
             error!("failed to get user {}: {}", login.username.clone(), e);
@@ -116,7 +118,7 @@ pub async fn login(
         }
     };
 
-    let verified = verify_str(user.password.as_str(), login.password.as_str());
+    let verified = verify_str(user.password.as_str(), login.password.borrow());
 
     if !verified {
         return reply_error(
@@ -125,6 +127,6 @@ pub async fn login(
     }
 
     reply_json(LoginResponse {
-        session: session.token,
+        session: session.token.into(),
     })
 }
