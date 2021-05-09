@@ -27,5 +27,8 @@ pub fn run(settings: &Settings, username: &str, email: &str, password: &str) -> 
     let mut file = File::create(path)?;
     file.write_all(session.session.as_bytes())?;
 
+    // Create a new key, and save it to disk
+    let _key = atuin_client::encryption::new_key(settings)?;
+
     Ok(())
 }

@@ -83,7 +83,9 @@ impl Settings {
     }
 
     pub fn should_sync(&self) -> Result<bool> {
-        if !self.auto_sync {
+        let session_path = atuin_common::utils::data_dir().join("session");
+
+        if !self.auto_sync || !session_path.exists() {
             return Ok(false);
         }
 

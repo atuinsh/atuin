@@ -24,23 +24,30 @@ pub struct EncryptedHistory {
     pub nonce: secretbox::Nonce,
 }
 
+pub fn new_key(settings: &Settings) -> Result<secretbox::Key> {
+    let path = settings.key_path.as_str();
+
+    let key = secretbox::gen_key();
+    let encoded = encode_key(key.clone())?;
+
+    let mut file = File::create(path)?;
+    file.write_all(encoded.as_bytes())?;
+
+    Ok(key)
+}
+
 // Loads the secret key, will create + save if it doesn't exist
 pub fn load_key(settings: &Settings) -> Result<secretbox::Key> {
     let path = settings.key_path.as_str();
 
-    if PathBuf::from(path).exists() {
+    let key = if PathBuf::from(path).exists() {
         let key = std::fs::read_to_string(path)?;
-        let key = decode_key(key)?;
-        Ok(key)
+        decode_key(key)?
     } else {
-        let key = secretbox::gen_key();
-        let encoded = encode_key(key.clone())?;
+        new_key(settings)?
+    };
 
-        let mut file = File::create(path)?;
-        file.write_all(encoded.as_bytes())?;
-
-        Ok(key)
-    }
+    Ok(key)
 }
 
 pub fn load_encoded_key(settings: &Settings) -> Result<String> {

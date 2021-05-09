@@ -13,6 +13,7 @@ mod history;
 mod import;
 mod init;
 mod login;
+mod logout;
 mod register;
 mod search;
 mod server;
@@ -83,6 +84,9 @@ pub enum AtuinCmd {
     #[structopt(about = "login to the configured server")]
     Login(login::Cmd),
 
+    #[structopt(about = "log out")]
+    Logout,
+
     #[structopt(about = "register with the configured server")]
     Register(register::Cmd),
 
@@ -136,6 +140,10 @@ impl AtuinCmd {
 
             Self::Sync { force } => sync::run(&client_settings, force, &mut db).await,
             Self::Login(l) => l.run(&client_settings),
+            Self::Logout => {
+                logout::run();
+                Ok(())
+            }
             Self::Register(r) => register::run(
                 &client_settings,
                 r.username.as_str(),
@@ -143,8 +151,8 @@ impl AtuinCmd {
                 r.password.as_str(),
             ),
             Self::Key => {
-                let key = std::fs::read(client_settings.key_path.as_str())?;
-                println!("{}", base64::encode(key));
+                let key = atuin_client::encryption::load_key(&client_settings)?;
+                println!("{}", atuin_client::encryption::encode_key(key)?);
                 Ok(())
             }
 
