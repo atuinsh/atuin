@@ -1,3 +1,11 @@
+# shellcheck disable=SC2034,SC2153,SC2086,SC2155
+
+# Above line is because shellcheck doesn't support zsh, per
+# https://github.com/koalaman/shellcheck/wiki/SC1071, and the ignore: param in
+# ludeeus/action-shellcheck only supports _directories_, not _files_. So
+# instead, we manually add any error the shellcheck step finds in the file to
+# the above line ...
+
 # Source this in your ~/.zshrc
 autoload -U add-zsh-hook
 
