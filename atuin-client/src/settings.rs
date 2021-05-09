@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 
 use chrono::prelude::*;
 use chrono::Utc;
-use chrono_english;
 use config::{Config, Environment, File as ConfigFile};
 use eyre::{eyre, Result};
 use parse_duration::parse;
