@@ -1,4 +1,8 @@
-use std::{fs::File, path::Path};
+use std::{
+    fs::File,
+    io::{Read, Seek},
+    path::Path,
+};
 use std::{
     io::{BufRead, BufReader},
     path::PathBuf,
@@ -11,26 +15,16 @@ use super::{count_lines, Importer};
 use crate::history::History;
 
 #[derive(Debug)]
-pub struct Bash {
-    file: BufReader<File>,
+pub struct Bash<R> {
+    file: BufReader<R>,
     strbuf: String,
     loc: usize,
     counter: i64,
 }
 
-impl Importer for Bash {
-    const NAME: &'static str = "bash";
-
-    fn histpath() -> Result<PathBuf> {
-        let user_dirs = UserDirs::new().unwrap();
-        let home_dir = user_dirs.home_dir();
-
-        Ok(home_dir.join(".bash_history"))
-    }
-
-    fn parse(path: impl AsRef<Path>) -> Result<Self> {
-        let file = File::open(path)?;
-        let mut buf = BufReader::new(file);
+impl<R: Read + Seek> Bash<R> {
+    fn new(r: R) -> Result<Self> {
+        let mut buf = BufReader::new(r);
         let loc = count_lines(&mut buf)?;
 
         Ok(Self {
@@ -42,7 +36,22 @@ impl Importer for Bash {
     }
 }
 
-impl Iterator for Bash {
+impl Importer for Bash<File> {
+    const NAME: &'static str = "bash";
+
+    fn histpath() -> Result<PathBuf> {
+        let user_dirs = UserDirs::new().unwrap();
+        let home_dir = user_dirs.home_dir();
+
+        Ok(home_dir.join(".bash_history"))
+    }
+
+    fn parse(path: impl AsRef<Path>) -> Result<Self> {
+        Self::new(File::open(path)?)
+    }
+}
+
+impl<R: Read> Iterator for Bash<R> {
     type Item = Result<History>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -88,5 +97,42 @@ impl Iterator for Bash {
 
     fn size_hint(&self) -> (usize, Option<usize>) {
         (0, Some(self.loc))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Cursor;
+
+    use super::Bash;
+
+    #[test]
+    fn test_parse_file() {
+        let input = r"cargo install atuin
+cargo install atuin; \
+cargo update
+cargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷
+";
+
+        let cursor = Cursor::new(input);
+        let mut bash = Bash::new(cursor).unwrap();
+        assert_eq!(bash.loc, 4);
+        assert_eq!(bash.size_hint(), (0, Some(4)));
+
+        assert_eq!(
+            &bash.next().unwrap().unwrap().command,
+            "cargo install atuin"
+        );
+        assert_eq!(
+            &bash.next().unwrap().unwrap().command,
+            "cargo install atuin; \\\ncargo update"
+        );
+        assert_eq!(
+            &bash.next().unwrap().unwrap().command,
+            "cargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷"
+        );
+        assert!(bash.next().is_none());
+
+        assert_eq!(bash.size_hint(), (0, Some(0)));
     }
 }

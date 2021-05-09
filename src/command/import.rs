@@ -53,15 +53,15 @@ impl Cmd {
 
                 if shell.ends_with("/zsh") {
                     println!("Detected ZSH");
-                    import::<Zsh, _>(db, BATCH_SIZE).await
+                    import::<Zsh<_>, _>(db, BATCH_SIZE).await
                 } else {
                     println!("cannot import {} history", shell);
                     Ok(())
                 }
             }
 
-            Self::Zsh => import::<Zsh, _>(db, BATCH_SIZE).await,
-            Self::Bash => import::<Bash, _>(db, BATCH_SIZE).await,
+            Self::Zsh => import::<Zsh<_>, _>(db, BATCH_SIZE).await,
+            Self::Bash => import::<Bash<_>, _>(db, BATCH_SIZE).await,
             Self::Resh => import::<Resh, _>(db, BATCH_SIZE).await,
         }
     }
@@ -76,30 +76,7 @@ where
 {
     println!("Importing history from {}", I::NAME);
 
-    let histpath = if let Ok(p) = env::var("HISTFILE") {
-        let histpath = PathBuf::from(p);
-
-        if !histpath.is_file() {
-            return Err(eyre!(
-                "Could not find history file {:?}. Try setting $HISTFILE",
-                histpath
-            ));
-        }
-
-        histpath
-    } else {
-        let histpath = I::histpath()?;
-
-        if !histpath.is_file() {
-            return Err(eyre!(
-                "Could not find history file {:?}. Try setting $HISTFILE",
-                histpath
-            ));
-        }
-
-        histpath
-    };
-
+    let histpath = get_histpath::<I>()?;
     let contents = I::parse(histpath)?;
 
     let iter = contents.into_iter();
@@ -112,22 +89,9 @@ where
     let mut buf = Vec::<History>::with_capacity(buf_size);
     let mut iter = progress.wrap_iter(iter);
     loop {
-        // clear buffer
-        buf.clear();
-
         // fill until either no more entries
         // or until the buffer is full
-        let done = loop {
-            match iter.next() {
-                Some(Ok(hist)) => buf.push(hist),
-                Some(Err(_)) => (),
-                None => break true,
-            }
-
-            if buf.len() == buf_size {
-                break false;
-            }
-        };
+        let done = fill_buf(&mut buf, &mut iter);
 
         // flush
         db.save_bulk(&buf).await?;
@@ -137,8 +101,69 @@ where
         }
     }
 
-    progress.finish();
     println!("Import complete!");
 
     Ok(())
+}
+
+fn get_histpath<I: Importer>() -> Result<PathBuf> {
+    if let Ok(p) = env::var("HISTFILE") {
+        is_file(PathBuf::from(p))
+    } else {
+        is_file(I::histpath()?)
+    }
+}
+
+fn is_file(p: PathBuf) -> Result<PathBuf> {
+    if p.is_file() {
+        Ok(p)
+    } else {
+        Err(eyre!(
+            "Could not find history file {:?}. Try setting $HISTFILE",
+            p
+        ))
+    }
+}
+
+fn fill_buf<T, E>(buf: &mut Vec<T>, iter: &mut impl Iterator<Item = Result<T, E>>) -> bool {
+    buf.clear();
+    loop {
+        match iter.next() {
+            Some(Ok(t)) => buf.push(t),
+            Some(Err(_)) => (),
+            None => break true,
+        }
+
+        if buf.len() == buf.capacity() {
+            break false;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fill_buf;
+
+    #[test]
+    fn test_fill_buf() {
+        let mut buf = Vec::with_capacity(4);
+        let mut iter = vec![
+            Ok(1),
+            Err(2),
+            Ok(3),
+            Ok(4),
+            Err(5),
+            Ok(6),
+            Ok(7),
+            Err(8),
+            Ok(9),
+        ]
+        .into_iter();
+
+        assert!(!fill_buf(&mut buf, &mut iter));
+        assert_eq!(buf, vec![1, 3, 4, 6]);
+
+        assert!(fill_buf(&mut buf, &mut iter));
+        assert_eq!(buf, vec![7, 9]);
+    }
 }
