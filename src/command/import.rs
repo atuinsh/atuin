@@ -78,7 +78,17 @@ async fn import_resh(db: &mut (impl Database + Send + Sync)) -> Result<()> {
         .split('\n')
         .map(str::trim)
         .map(|x| serde_json::from_str::<ReshEntry>(x))
-        .filter_map(Result::ok)
+        .filter_map(|x| match x {
+            Ok(x) => Some(x),
+            Err(e) => {
+                if e.is_eof() {
+                    None
+                } else {
+                    warn!("Invalid entry found in resh_history file: {}", e);
+                    None
+                }
+            }
+        })
         .map(|x| {
             #[allow(clippy::cast_possible_truncation)]
             #[allow(clippy::cast_sign_loss)]
