@@ -97,6 +97,22 @@ impl State {
                     ago = " ".to_owned() + ago.as_str();
                 }
 
+                let selected_index = match self.results_state.selected() {
+                    None => Span::raw("   "),
+                    Some(selected) => {
+                        match i.checked_sub(selected) {
+                            None => Span::raw("   "),
+                            Some(diff) => {
+                                if diff < 10 {
+                                    Span::styled(format!(" {} ", diff), Style::default().fg(Color::DarkGray))
+                                } else {
+                                    Span::raw("   ")
+                                }
+                            }
+                        }
+                    }
+                };
+
                 let duration = Span::styled(
                     duration,
                     Style::default().fg(if m.exit == 0 || m.duration == -1 {
@@ -116,7 +132,7 @@ impl State {
                 }
 
                 let spans =
-                    Spans::from(vec![duration, Span::raw(" "), ago, Span::raw(" "), command]);
+                    Spans::from(vec![selected_index, duration, Span::raw(" "), ago, Span::raw(" "), command]);
 
                 ListItem::new(spans)
             })
@@ -162,6 +178,17 @@ async fn key_handler(
         Key::Esc | Key::Ctrl('c') | Key::Ctrl('d') => return Some(String::from("")),
         Key::Char('\n') => {
             let i = app.results_state.selected().unwrap_or(0);
+
+            return Some(
+                app.results
+                    .get(i)
+                    .map_or(app.input.clone(), |h| h.command.clone()),
+            );
+        }
+        Key::Ctrl(c) if ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'].contains(&c) => {
+            // FIXME: This doesn't work since Ctrl+<num> are reserved and don't pass through to programs
+            let c = c.to_digit(10)? as usize;
+            let i = app.results_state.selected().unwrap_or(0).checked_sub(c)?;
 
             return Some(
                 app.results
