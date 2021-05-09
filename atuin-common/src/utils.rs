@@ -53,14 +53,17 @@ pub fn data_dir() -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use std::env;
     use super::*;
+    use std::env;
 
     #[test]
     fn test_config_dir_xdg() {
         env::remove_var("HOME");
         env::set_var("XDG_CONFIG_HOME", "/home/user/custom_config");
-        assert_eq!(config_dir(), PathBuf::from("/home/user/custom_config/atuin"));
+        assert_eq!(
+            config_dir(),
+            PathBuf::from("/home/user/custom_config/atuin")
+        );
     }
 
     #[test]
