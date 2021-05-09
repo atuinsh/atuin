@@ -10,6 +10,15 @@ use parse_duration::parse;
 
 pub const HISTORY_PAGE_SIZE: i64 = 100;
 
+#[derive(Clone, Debug, Deserialize, Copy)]
+pub enum SearchMode {
+    #[serde(rename = "prefix")]
+    Prefix,
+
+    #[serde(rename = "fulltext")]
+    FullText,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct Settings {
     pub dialect: String,
@@ -19,6 +28,7 @@ pub struct Settings {
     pub db_path: String,
     pub key_path: String,
     pub session_path: String,
+    pub search_mode: SearchMode,
 
     // This is automatically loaded when settings is created. Do not set in
     // config! Keep secrets and settings apart.
@@ -100,6 +110,7 @@ impl Settings {
         s.set_default("auto_sync", true)?;
         s.set_default("sync_frequency", "1h")?;
         s.set_default("sync_address", "https://api.atuin.sh")?;
+        s.set_default("search_mode", "prefix")?;
 
         if config_file.exists() {
             s.merge(ConfigFile::with_name(config_file.to_str().unwrap()))?;

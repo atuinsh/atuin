@@ -13,6 +13,7 @@ use sqlx::sqlite::{
 use sqlx::Row;
 
 use super::history::History;
+use super::settings::SearchMode;
 
 #[async_trait]
 pub trait Database {
@@ -34,7 +35,7 @@ pub trait Database {
     async fn last(&self) -> Result<History>;
     async fn before(&self, timestamp: chrono::DateTime<Utc>, count: i64) -> Result<Vec<History>>;
 
-    async fn search(&self, limit: Option<i64>, query: &str) -> Result<Vec<History>>;
+    async fn search(&self, limit: Option<i64>, search_mode: SearchMode, query: &str) -> Result<Vec<History>>;
 
     async fn query_history(&self, query: &str) -> Result<Vec<History>>;
 }
@@ -268,9 +269,14 @@ impl Database for Sqlite {
         Ok(res.0)
     }
 
-    async fn search(&self, limit: Option<i64>, query: &str) -> Result<Vec<History>> {
+    async fn search(&self, limit: Option<i64>, search_mode: SearchMode, query: &str) -> Result<Vec<History>> {
         let query = query.to_string().replace("*", "%"); // allow wildcard char
         let limit = limit.map_or("".to_owned(), |l| format!("limit {}", l));
+
+        let query = match search_mode {
+            SearchMode::Prefix => query,
+            SearchMode::FullText => format!("%{}", query)
+        };
 
         let res = sqlx::query(
             format!(
