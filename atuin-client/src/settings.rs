@@ -98,13 +98,11 @@ impl Settings {
 
     pub fn new() -> Result<Self> {
         let config_dir = atuin_common::utils::config_dir();
-        let config_dir = config_dir.as_path();
 
         let data_dir = atuin_common::utils::data_dir();
-        let data_dir = data_dir.as_path();
 
-        create_dir_all(config_dir)?;
-        create_dir_all(data_dir)?;
+        create_dir_all(&config_dir)?;
+        create_dir_all(&data_dir)?;
 
         let mut config_file = if let Ok(p) = std::env::var("ATUIN_CONFIG_DIR") {
             PathBuf::from(p)

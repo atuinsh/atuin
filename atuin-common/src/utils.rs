@@ -30,39 +30,57 @@ pub fn uuid_v4() -> String {
     Uuid::new_v4().to_simple().to_string()
 }
 
-pub fn config_dir() -> PathBuf {
-    // TODO: more reliable, more tested
-    // I don't want to use ProjectDirs, it puts config in awkward places on
-    // mac. Data too. Seems to be more intended for GUI apps.
+// TODO: more reliable, more tested
+// I don't want to use ProjectDirs, it puts config in awkward places on
+// mac. Data too. Seems to be more intended for GUI apps.
+pub fn home_dir() -> PathBuf {
     let home = std::env::var("HOME").expect("$HOME not found");
-    let home = PathBuf::from(home);
+    PathBuf::from(home)
+}
 
-    std::env::var("XDG_CONFIG_HOME").map_or_else(
-        |_| {
-            let mut config = home.clone();
-            config.push(".config");
-            config.push("atuin");
-            config
-        },
-        PathBuf::from,
-    )
+pub fn config_dir() -> PathBuf {
+    let config_dir =
+        std::env::var("XDG_CONFIG_HOME").map_or_else(|_| home_dir().join(".config"), PathBuf::from);
+    config_dir.join("atuin")
 }
 
 pub fn data_dir() -> PathBuf {
-    // TODO: more reliable, more tested
-    // I don't want to use ProjectDirs, it puts config in awkward places on
-    // mac. Data too. Seems to be more intended for GUI apps.
-    let home = std::env::var("HOME").expect("$HOME not found");
-    let home = PathBuf::from(home);
+    let data_dir = std::env::var("XDG_DATA_HOME")
+        .map_or_else(|_| home_dir().join(".local").join("share"), PathBuf::from);
 
-    std::env::var("XDG_DATA_HOME").map_or_else(
-        |_| {
-            let mut data = home.clone();
-            data.push(".local");
-            data.push("share");
-            data.push("atuin");
-            data
-        },
-        PathBuf::from,
-    )
+    data_dir.join("atuin")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::env;
+    use super::*;
+
+    #[test]
+    fn test_config_dir_xdg() {
+        env::remove_var("HOME");
+        env::set_var("XDG_CONFIG_HOME", "/home/user/custom_config");
+        assert_eq!(config_dir(), PathBuf::from("/home/user/custom_config/atuin"));
+    }
+
+    #[test]
+    fn test_config_dir() {
+        env::set_var("HOME", "/home/user");
+        env::remove_var("XDG_CONFIG_HOME");
+        assert_eq!(config_dir(), PathBuf::from("/home/user/.config/atuin"));
+    }
+
+    #[test]
+    fn test_data_dir_xdg() {
+        env::remove_var("HOME");
+        env::set_var("XDG_DATA_HOME", "/home/user/custom_data");
+        assert_eq!(data_dir(), PathBuf::from("/home/user/custom_data/atuin"));
+    }
+
+    #[test]
+    fn test_data_dir() {
+        env::set_var("HOME", "/home/user");
+        env::remove_var("XDG_DATA_HOME");
+        assert_eq!(data_dir(), PathBuf::from("/home/user/.local/share/atuin"));
+    }
 }

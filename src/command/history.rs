@@ -155,23 +155,34 @@ impl Cmd {
                 human,
                 cmd_only,
             } => {
-                let params = (session, cwd);
-                let cwd = env::current_dir()?.display().to_string();
-                let session = env::var("ATUIN_SESSION")?;
+                let session = if *session {
+                    Some(env::var("ATUIN_SESSION")?)
+                } else {
+                    None
+                };
+                let cwd = if *cwd {
+                    Some(env::current_dir()?.display().to_string())
+                } else {
+                    None
+                };
 
-                let query_session = format!("select * from history where session = {};", session);
-
-                let query_dir = format!("select * from history where cwd = {};", cwd);
-                let query_session_dir = format!(
-                    "select * from history where cwd = {} and session = {};",
-                    cwd, session
-                );
-
-                let history = match params {
-                    (false, false) => db.list(None, false).await?,
-                    (true, false) => db.query_history(query_session.as_str()).await?,
-                    (false, true) => db.query_history(query_dir.as_str()).await?,
-                    (true, true) => db.query_history(query_session_dir.as_str()).await?,
+                let history = match (session, cwd) {
+                    (None, None) => db.list(None, false).await?,
+                    (None, Some(cwd)) => {
+                        let query = format!("select * from history where cwd = {};", cwd);
+                        db.query_history(&query).await?
+                    }
+                    (Some(session), None) => {
+                        let query = format!("select * from history where session = {};", session);
+                        db.query_history(&query).await?
+                    }
+                    (Some(session), Some(cwd)) => {
+                        let query = format!(
+                            "select * from history where cwd = {} and session = {};",
+                            cwd, session
+                        );
+                        db.query_history(&query).await?
+                    }
                 };
 
                 print_list(&history, *human, *cmd_only);
