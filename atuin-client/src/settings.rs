@@ -19,9 +19,28 @@ pub enum SearchMode {
     FullText,
 }
 
+// FIXME: Can use upstream Dialect enum if https://github.com/stevedonovan/chrono-english/pull/16 is merged
+#[derive(Clone, Debug, Deserialize, Copy)]
+pub enum Dialect {
+    #[serde(rename = "us")]
+    Us,
+
+    #[serde(rename = "uk")]
+    Uk,
+}
+
+impl From<Dialect> for chrono_english::Dialect {
+    fn from(d: Dialect) -> chrono_english::Dialect {
+        match d {
+            Dialect::Uk => chrono_english::Dialect::Uk,
+            Dialect::Us => chrono_english::Dialect::Us,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct Settings {
-    pub dialect: String,
+    pub dialect: Dialect,
     pub auto_sync: bool,
     pub sync_address: String,
     pub sync_frequency: String,
