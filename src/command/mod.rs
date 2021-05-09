@@ -69,6 +69,9 @@ pub enum AtuinCmd {
         human: bool,
 
         query: Vec<String>,
+
+        #[structopt(long, about = "Show only the text of the command")]
+        cmd_only: bool,
     },
 
     #[structopt(about = "sync with the configured server")]
@@ -112,6 +115,7 @@ impl AtuinCmd {
                 before,
                 after,
                 query,
+                cmd_only,
             } => {
                 search::run(
                     &client_settings,
@@ -123,6 +127,7 @@ impl AtuinCmd {
                     exclude_cwd,
                     before,
                     after,
+                    cmd_only,
                     &query,
                     &mut db,
                 )

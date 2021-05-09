@@ -42,6 +42,9 @@ pub enum Cmd {
 
         #[structopt(long, short)]
         human: bool,
+
+        #[structopt(long, about = "Show only the text of the command")]
+        cmd_only: bool,
     },
 
     #[structopt(
@@ -51,11 +54,14 @@ pub enum Cmd {
     Last {
         #[structopt(long, short)]
         human: bool,
+
+        #[structopt(long, about = "Show only the text of the command")]
+        cmd_only: bool,
     },
 }
 
 #[allow(clippy::clippy::cast_sign_loss)]
-pub fn print_list(h: &[History], human: bool) {
+pub fn print_list(h: &[History], human: bool, cmd_only: bool) {
     let mut writer = TabWriter::new(std::io::stdout()).padding(2);
 
     let lines = h.iter().map(|h| {
@@ -73,6 +79,8 @@ pub fn print_list(h: &[History], human: bool) {
                 h.command.trim(),
                 duration,
             )
+        } else if cmd_only {
+            format!("{}\n", h.command.trim())
         } else {
             format!(
                 "{}\t{}\t{}\n",
@@ -145,6 +153,7 @@ impl Cmd {
                 session,
                 cwd,
                 human,
+                cmd_only,
             } => {
                 let params = (session, cwd);
                 let cwd = env::current_dir()?.display().to_string();
@@ -165,14 +174,14 @@ impl Cmd {
                     (true, true) => db.query_history(query_session_dir.as_str()).await?,
                 };
 
-                print_list(&history, *human);
+                print_list(&history, *human, *cmd_only);
 
                 Ok(())
             }
 
-            Self::Last { human } => {
+            Self::Last { human, cmd_only } => {
                 let last = db.last().await?;
-                print_list(&[last], *human);
+                print_list(&[last], *human, *cmd_only);
 
                 Ok(())
             }

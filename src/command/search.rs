@@ -329,6 +329,7 @@ pub async fn run(
     exclude_cwd: Option<String>,
     before: Option<String>,
     after: Option<String>,
+    cmd_only: bool,
     query: &[String],
     db: &mut (impl Database + Send + Sync),
 ) -> Result<()> {
@@ -412,7 +413,7 @@ pub async fn run(
             .map(std::borrow::ToOwned::to_owned)
             .collect();
 
-        super::history::print_list(&results, human);
+        super::history::print_list(&results, human, cmd_only);
     }
 
     Ok(())
