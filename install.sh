@@ -23,7 +23,8 @@ Please file an issue if you encounter any problems!
 EOF
 
 LATEST_RELEASE=$(curl -L -s -H 'Accept: application/json' https://github.com/ellie/atuin/releases/latest)
-LATEST_VERSION=$(echo $LATEST_RELEASE | sed -e 's/.*"tag_name":"\([^"]*\)".*/\1/')
+# shellcheck disable=SC2001
+LATEST_VERSION=$(echo "$LATEST_RELEASE" | sed -e 's/.*"tag_name":"\([^"]*\)".*/\1/')
 
 __atuin_install_arch(){
 	echo "Arch Linux detected!"
@@ -53,7 +54,7 @@ __atuin_install_ubuntu(){
 	ARTIFACT_URL="https://github.com/ellie/atuin/releases/download/$LATEST_VERSION/atuin_${LATEST_VERSION//v/}_amd64.deb"
 
 	TEMP_DEB="$(mktemp)" &&
-	wget -O "$TEMP_DEB" $ARTIFACT_URL
+	wget -O "$TEMP_DEB" "$ARTIFACT_URL"
 	sudo dpkg -i "$TEMP_DEB"
 	rm -f "$TEMP_DEB"
 }
@@ -73,6 +74,7 @@ __atuin_install_linux(){
         OS=$(lsb_release -i | awk '{ print $3 }')
     fi
 
+  # shellcheck disable=SC2086
 	if [ $OS == "Arch" ] || [ $OS == "ManjaroLinux" ]; then
 		__atuin_install_arch
     elif [ $OS == "Ubuntu" ] || [ $OS == "Debian" ] || [ $OS == "Linuxmint" ] || [ $OS == "Parrot" ] || [ $OS == "Kali" ]; then
@@ -126,7 +128,7 @@ __atuin_install_unsupported(){
 	echo "If you have any problems, please open an issue!"
 
 	while true; do
-		read -p "Do you wish to attempt an install with `cargo`?" yn
+		read -r -p "Do you wish to attempt an install with 'cargo'?" yn
 		case $yn in
 			[Yy]* ) __atuin_install_cargo; break;;
 			[Nn]* ) exit;;
@@ -138,7 +140,7 @@ __atuin_install_unsupported(){
 # TODO: would be great to support others!
 case "$OSTYPE" in
   linux*)   __atuin_install_linux ;;
-  darwin*)  __atuin_install_mac ;; 
+  darwin*)  __atuin_install_mac ;;
   msys*)    __atuin_install_unsupported ;;
   solaris*) __atuin_install_unsupported ;;
   bsd*)     __atuin_install_unsupported ;;
@@ -146,8 +148,10 @@ case "$OSTYPE" in
 esac
 
 # TODO: Check which is in use
+# shellcheck disable=SC2016
 printf '\neval "$(atuin init zsh)"' >> ~/.zshrc
 
 curl https://raw.githubusercontent.com/rcaloras/bash-preexec/master/bash-preexec.sh -o ~/.bash-preexec.sh
 printf '\n[[ -f ~/.bash-preexec.sh ]] && source ~/.bash-preexec.sh' >> ~/.bashrc
+# shellcheck disable=SC2016
 echo 'eval "$(atuin init bash)"' >> ~/.bashrc
