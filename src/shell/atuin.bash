@@ -9,14 +9,14 @@ _atuin_precmd() {
 	[[ -z "${ATUIN_HISTORY_ID}" ]] && return
 
 
-	(RUST_LOG=error atuin history end $ATUIN_HISTORY_ID --exit $EXIT &) > /dev/null 2>&1
+	(RUST_LOG=error atuin history end "$ATUIN_HISTORY_ID" --exit $EXIT &) > /dev/null 2>&1
 }
 
 
 __atuin_history ()
 {
 	tput rmkx
-    HISTORY="$(RUST_LOG=error atuin search -i $BUFFER 3>&1 1>&2 2>&3)"
+    HISTORY="$(RUST_LOG=error atuin search -i "$BUFFER" 3>&1 1>&2 2>&3)"
 	tput smkx
 
     READLINE_LINE=${HISTORY}
