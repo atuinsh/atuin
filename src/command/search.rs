@@ -103,7 +103,7 @@ impl State {
                         match i.checked_sub(selected) {
                             None => Span::raw("   "),
                             Some(diff) => {
-                                if diff < 10 {
+                                if 0 < diff && diff < 10 {
                                     Span::styled(format!(" {} ", diff), Style::default().fg(Color::DarkGray))
                                 } else {
                                     Span::raw("   ")
