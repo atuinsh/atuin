@@ -35,7 +35,12 @@ pub trait Database {
     async fn last(&self) -> Result<History>;
     async fn before(&self, timestamp: chrono::DateTime<Utc>, count: i64) -> Result<Vec<History>>;
 
-    async fn search(&self, limit: Option<i64>, search_mode: SearchMode, query: &str) -> Result<Vec<History>>;
+    async fn search(
+        &self,
+        limit: Option<i64>,
+        search_mode: SearchMode,
+        query: &str,
+    ) -> Result<Vec<History>>;
 
     async fn query_history(&self, query: &str) -> Result<Vec<History>>;
 }
@@ -186,7 +191,7 @@ impl Database for Sqlite {
             // inject the unique check
             if unique {
                 "where timestamp = (
-                        select max(timestamp) from history 
+                        select max(timestamp) from history
                         where h.command = history.command
                     )"
             } else {
@@ -269,21 +274,26 @@ impl Database for Sqlite {
         Ok(res.0)
     }
 
-    async fn search(&self, limit: Option<i64>, search_mode: SearchMode, query: &str) -> Result<Vec<History>> {
+    async fn search(
+        &self,
+        limit: Option<i64>,
+        search_mode: SearchMode,
+        query: &str,
+    ) -> Result<Vec<History>> {
         let query = query.to_string().replace("*", "%"); // allow wildcard char
         let limit = limit.map_or("".to_owned(), |l| format!("limit {}", l));
 
         let query = match search_mode {
             SearchMode::Prefix => query,
-            SearchMode::FullText => format!("%{}", query)
+            SearchMode::FullText => format!("%{}", query),
         };
 
         let res = sqlx::query(
             format!(
                 "select * from history h
-            where command like ?1 || '%' 
+            where command like ?1 || '%'
             and timestamp = (
-                    select max(timestamp) from history 
+                    select max(timestamp) from history
                     where h.command = history.command
                 )
             order by timestamp desc {}",

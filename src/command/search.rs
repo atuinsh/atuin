@@ -16,7 +16,7 @@ use unicode_width::UnicodeWidthStr;
 
 use atuin_client::database::Database;
 use atuin_client::history::History;
-use atuin_client::settings::{Settings, SearchMode};
+use atuin_client::settings::{SearchMode, Settings};
 
 use crate::command::event::{Event, Events};
 
@@ -131,7 +131,11 @@ impl State {
     }
 }
 
-async fn query_results(app: &mut State, search_mode: SearchMode, db: &mut (impl Database + Send + Sync)) -> Result<()> {
+async fn query_results(
+    app: &mut State,
+    search_mode: SearchMode,
+    db: &mut (impl Database + Send + Sync),
+) -> Result<()> {
     let results = match app.input.as_str() {
         "" => db.list(Some(200), true).await?,
         i => db.search(Some(200), search_mode, i).await?,
@@ -346,7 +350,9 @@ pub async fn run(
         let item = select_history(query, settings.search_mode, db).await?;
         eprintln!("{}", item);
     } else {
-        let results = db.search(None, settings.search_mode, query.join(" ").as_str()).await?;
+        let results = db
+            .search(None, settings.search_mode, query.join(" ").as_str())
+            .await?;
 
         // TODO: This filtering would be better done in the SQL query, I just
         // need a nice way of building queries.
