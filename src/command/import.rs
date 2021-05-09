@@ -81,7 +81,7 @@ where
 
         if !histpath.is_file() {
             return Err(eyre!(
-                "Could not find history file {:?}. Try updating $HISTFILE",
+                "Could not find history file {:?}. Try setting $HISTFILE",
                 histpath
             ));
         }

@@ -148,7 +148,12 @@ impl Iterator for Resh {
 
         let entry = match serde_json::from_str::<ReshEntry>(&self.strbuf) {
             Ok(e) => e,
-            Err(e) => return Some(Err(eyre!("Invalid entry found in resh_history file: {}", e))),
+            Err(e) => {
+                return Some(Err(eyre!(
+                    "Invalid entry found in resh_history file: {}",
+                    e
+                )))
+            }
         };
 
         #[allow(clippy::cast_possible_truncation)]
