@@ -29,11 +29,11 @@ pub enum Dialect {
     Uk,
 }
 
-impl Into<chrono_english::Dialect> for Dialect {
-    fn into(self) -> chrono_english::Dialect {
-        match self {
+impl From<Dialect> for chrono_english::Dialect {
+    fn from(d: Dialect) -> chrono_english::Dialect {
+        match d {
             Dialect::Uk => chrono_english::Dialect::Uk,
-            Dialect::Us => chrono_english::Dialect::Uk,
+            Dialect::Us => chrono_english::Dialect::Us,
         }
     }
 }
