@@ -84,9 +84,9 @@ impl Cmd {
                     words.join(" ")
                 };
 
-                let start = match settings.dialect.to_lowercase().as_str() {
-                    "uk" => parse_date_string(&words, Local::now(), Dialect::Uk)?,
-                    _ => parse_date_string(&words, Local::now(), Dialect::Us)?,
+                let start = match settings.dialect {
+                    atuin_client::settings::Dialect::Uk => parse_date_string(&words, Local::now(), Dialect::Uk)?,
+                    atuin_client::settings::Dialect::Us => parse_date_string(&words, Local::now(), Dialect::Us)?,
                 };
                 let end = start + Duration::days(1);
 
