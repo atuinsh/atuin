@@ -63,9 +63,9 @@ pub async fn add(
     let history: Vec<NewHistory> = req
         .into_iter()
         .map(|h| NewHistory {
-            client_id: h.id.into(),
+            client_id: h.id,
             user_id: user.id,
-            hostname: h.hostname.into(),
+            hostname: h.hostname,
             timestamp: h.timestamp.naive_utc(),
             data: h.data.into(),
         })

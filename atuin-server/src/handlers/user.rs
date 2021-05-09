@@ -81,7 +81,9 @@ pub async fn register(
     };
 
     match db.add_session(&new_session).await {
-        Ok(_) => reply_json(RegisterResponse { session: token.into() }),
+        Ok(_) => reply_json(RegisterResponse {
+            session: token.into(),
+        }),
         Err(e) => {
             error!("failed to add session: {}", e);
             reply_error(

@@ -15,7 +15,7 @@ use atuin_common::utils::hash_str;
 use crate::encryption::{decode_key, decrypt, EncryptedHistory};
 use crate::history::History;
 
-static APP_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
+static APP_USER_AGENT: &str = concat!("atuin/", env!("CARGO_PKG_VERSION"),);
 
 // TODO: remove all references to the encryption key from this
 // It should be handled *elsewhere*
@@ -60,7 +60,7 @@ pub fn register(
     Ok(session)
 }
 
-pub fn login<'a>(address: &'a str, req: LoginRequest) -> Result<LoginResponse<'a>> {
+pub fn login(address: &str, req: LoginRequest) -> Result<LoginResponse<'static>> {
     let url = format!("{}/login", address);
     let client = reqwest::blocking::Client::new();
 
