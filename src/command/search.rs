@@ -94,7 +94,7 @@ impl State {
                 let (duration, mut ago) = durations[i].clone();
 
                 while (duration.len() + ago.len()) < max_length {
-                    ago = " ".to_owned() + ago.as_str();
+                    ago = format!(" {}", ago);
                 }
 
                 let duration = Span::styled(
