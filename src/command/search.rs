@@ -185,10 +185,14 @@ async fn key_handler(
                     .map_or(app.input.clone(), |h| h.command.clone()),
             );
         }
-        Key::Ctrl(c) if ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'].contains(&c) => {
-            // FIXME: This doesn't work since Ctrl+<num> are reserved and don't pass through to programs
+        Key::Alt(c) if ['1', '2', '3', '4', '5', '6', '7', '8', '9'].contains(&c) => {
             let c = c.to_digit(10)? as usize;
-            let i = app.results_state.selected().unwrap_or(0).checked_sub(c)?;
+            let i = match app.results_state.selected() {
+                None => return None,
+                Some(selected) => {
+                    c + selected
+                }
+            };
 
             return Some(
                 app.results
