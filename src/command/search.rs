@@ -99,18 +99,19 @@ impl State {
 
                 let selected_index = match self.results_state.selected() {
                     None => Span::raw("   "),
-                    Some(selected) => {
-                        match i.checked_sub(selected) {
-                            None => Span::raw("   "),
-                            Some(diff) => {
-                                if 0 < diff && diff < 10 {
-                                    Span::styled(format!(" {} ", diff), Style::default().fg(Color::DarkGray))
-                                } else {
-                                    Span::raw("   ")
-                                }
+                    Some(selected) => match i.checked_sub(selected) {
+                        None => Span::raw("   "),
+                        Some(diff) => {
+                            if 0 < diff && diff < 10 {
+                                Span::styled(
+                                    format!(" {} ", diff),
+                                    Style::default().fg(Color::DarkGray),
+                                )
+                            } else {
+                                Span::raw("   ")
                             }
                         }
-                    }
+                    },
                 };
 
                 let duration = Span::styled(
@@ -131,8 +132,14 @@ impl State {
                     }
                 }
 
-                let spans =
-                    Spans::from(vec![selected_index, duration, Span::raw(" "), ago, Span::raw(" "), command]);
+                let spans = Spans::from(vec![
+                    selected_index,
+                    duration,
+                    Span::raw(" "),
+                    ago,
+                    Span::raw(" "),
+                    command,
+                ]);
 
                 ListItem::new(spans)
             })
@@ -189,9 +196,7 @@ async fn key_handler(
             let c = c.to_digit(10)? as usize;
             let i = match app.results_state.selected() {
                 None => return None,
-                Some(selected) => {
-                    c + selected
-                }
+                Some(selected) => c + selected,
             };
 
             return Some(
