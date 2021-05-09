@@ -114,6 +114,7 @@ impl AtuinCmd {
                 query,
             } => {
                 search::run(
+                    &client_settings,
                     cwd,
                     exit,
                     interactive,

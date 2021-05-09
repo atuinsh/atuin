@@ -16,6 +16,7 @@ use unicode_width::UnicodeWidthStr;
 
 use atuin_client::database::Database;
 use atuin_client::history::History;
+use atuin_client::settings::{SearchMode, Settings};
 
 use crate::command::event::{Event, Events};
 
@@ -130,10 +131,14 @@ impl State {
     }
 }
 
-async fn query_results(app: &mut State, db: &mut (impl Database + Send + Sync)) -> Result<()> {
+async fn query_results(
+    app: &mut State,
+    search_mode: SearchMode,
+    db: &mut (impl Database + Send + Sync),
+) -> Result<()> {
     let results = match app.input.as_str() {
         "" => db.list(Some(200), true).await?,
-        i => db.search(Some(200), i).await?,
+        i => db.search(Some(200), search_mode, i).await?,
     };
 
     app.results = results;
@@ -149,6 +154,7 @@ async fn query_results(app: &mut State, db: &mut (impl Database + Send + Sync)) 
 
 async fn key_handler(
     input: Key,
+    search_mode: SearchMode,
     db: &mut (impl Database + Send + Sync),
     app: &mut State,
 ) -> Option<String> {
@@ -165,11 +171,11 @@ async fn key_handler(
         }
         Key::Char(c) => {
             app.input.push(c);
-            query_results(app, db).await.unwrap();
+            query_results(app, search_mode, db).await.unwrap();
         }
         Key::Backspace => {
             app.input.pop();
-            query_results(app, db).await.unwrap();
+            query_results(app, search_mode, db).await.unwrap();
         }
         Key::Down => {
             let i = match app.results_state.selected() {
@@ -277,6 +283,7 @@ fn draw<T: Backend>(f: &mut Frame<'_, T>, history_count: i64, app: &mut State) {
 #[allow(clippy::clippy::cast_possible_truncation)]
 async fn select_history(
     query: &[String],
+    search_mode: SearchMode,
     db: &mut (impl Database + Send + Sync),
 ) -> Result<String> {
     let stdout = stdout().into_raw_mode()?;
@@ -294,13 +301,13 @@ async fn select_history(
         results_state: ListState::default(),
     };
 
-    query_results(&mut app, db).await?;
+    query_results(&mut app, search_mode, db).await?;
 
     loop {
         let history_count = db.history_count().await?;
         // Handle input
         if let Event::Input(input) = events.next()? {
-            if let Some(output) = key_handler(input, db, &mut app).await {
+            if let Some(output) = key_handler(input, search_mode, db, &mut app).await {
                 return Ok(output);
             }
         }
@@ -313,6 +320,7 @@ async fn select_history(
 // it is going to have a lot of args
 #[allow(clippy::clippy::clippy::too_many_arguments)]
 pub async fn run(
+    settings: &Settings,
     cwd: Option<String>,
     exit: Option<i64>,
     interactive: bool,
@@ -339,10 +347,12 @@ pub async fn run(
     };
 
     if interactive {
-        let item = select_history(query, db).await?;
+        let item = select_history(query, settings.search_mode, db).await?;
         eprintln!("{}", item);
     } else {
-        let results = db.search(None, query.join(" ").as_str()).await?;
+        let results = db
+            .search(None, settings.search_mode, query.join(" ").as_str())
+            .await?;
 
         // TODO: This filtering would be better done in the SQL query, I just
         // need a nice way of building queries.
