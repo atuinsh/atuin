@@ -1,43 +1,43 @@
-use std::convert::Infallible;
+use std::{borrow::Cow, convert::Infallible};
 
 use chrono::Utc;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use warp::{reply::Response, Reply};
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct UserResponse {
-    pub username: String,
+pub struct UserResponse<'a> {
+    pub username: Cow<'a, str>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct RegisterRequest {
-    pub email: String,
-    pub username: String,
-    pub password: String,
+pub struct RegisterRequest<'a> {
+    pub email: Cow<'a, str>,
+    pub username: Cow<'a, str>,
+    pub password: Cow<'a, str>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct RegisterResponse {
-    pub session: String,
+pub struct RegisterResponse<'a> {
+    pub session: Cow<'a, str>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct LoginRequest {
-    pub username: String,
-    pub password: String,
+pub struct LoginRequest<'a> {
+    pub username: Cow<'a, str>,
+    pub password: Cow<'a, str>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct LoginResponse {
-    pub session: String,
+pub struct LoginResponse<'a> {
+    pub session: Cow<'a, str>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct AddHistoryRequest {
-    pub id: String,
+pub struct AddHistoryRequest<'a, D> {
+    pub id: Cow<'a, str>,
     pub timestamp: chrono::DateTime<Utc>,
-    pub data: String,
-    pub hostname: String,
+    pub data: D,
+    pub hostname: Cow<'a, str>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -46,10 +46,10 @@ pub struct CountResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct SyncHistoryRequest {
+pub struct SyncHistoryRequest<'a> {
     pub sync_ts: chrono::DateTime<chrono::FixedOffset>,
     pub history_ts: chrono::DateTime<chrono::FixedOffset>,
-    pub host: String,
+    pub host: Cow<'a, str>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -58,38 +58,38 @@ pub struct SyncHistoryResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct ErrorResponse {
-    pub reason: String,
+pub struct ErrorResponse<'a> {
+    pub reason: Cow<'a, str>,
 }
 
-impl Reply for ErrorResponse {
+impl Reply for ErrorResponse<'_> {
     fn into_response(self) -> Response {
         warp::reply::json(&self).into_response()
     }
 }
 
-pub struct ErrorResponseStatus {
-    pub error: ErrorResponse,
+pub struct ErrorResponseStatus<'a> {
+    pub error: ErrorResponse<'a>,
     pub status: warp::http::StatusCode,
 }
 
-impl Reply for ErrorResponseStatus {
+impl Reply for ErrorResponseStatus<'_> {
     fn into_response(self) -> Response {
         warp::reply::with_status(self.error, self.status).into_response()
     }
 }
 
-impl ErrorResponse {
-    pub fn with_status(self, status: warp::http::StatusCode) -> ErrorResponseStatus {
+impl<'a> ErrorResponse<'a> {
+    pub fn with_status(self, status: warp::http::StatusCode) -> ErrorResponseStatus<'a> {
         ErrorResponseStatus {
             error: self,
             status,
         }
     }
 
-    pub fn reply(reason: &str) -> ErrorResponse {
+    pub fn reply(reason: &'a str) -> ErrorResponse {
         Self {
-            reason: reason.to_string(),
+            reason: reason.into(),
         }
     }
 }

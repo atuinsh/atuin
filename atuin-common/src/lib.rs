@@ -1,5 +1,4 @@
-#[macro_use]
-extern crate serde_derive;
+#![forbid(unsafe_code)]
 
 pub mod api;
 pub mod utils;
