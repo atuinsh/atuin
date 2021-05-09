@@ -2,54 +2,89 @@ use serde::Deserialize;
 
 #[derive(Deserialize, Debug)]
 pub struct ReshEntry {
+    #[serde(rename = "cmdLine")]
     pub cmd_line: String,
+    #[serde(rename = "exitCode")]
     pub exit_code: i64,
     pub shell: String,
     pub uname: String,
+    #[serde(rename = "sessionId")]
     pub session_id: String,
     pub home: String,
     pub lang: String,
+    #[serde(rename = "lcAll")]
     pub lc_all: String,
     pub login: String,
     pub pwd: String,
+    #[serde(rename = "pwdAfter")]
     pub pwd_after: String,
+    #[serde(rename = "shellEnv")]
     pub shell_env: String,
     pub term: String,
+    #[serde(rename = "realPwd")]
     pub real_pwd: String,
+    #[serde(rename = "realPwdAfter")]
     pub real_pwd_after: String,
     pub pid: i64,
+    #[serde(rename = "sessionPid")]
     pub session_pid: i64,
     pub host: String,
     pub hosttype: String,
     pub ostype: String,
     pub machtype: String,
     pub shlvl: i64,
+    #[serde(rename = "timezoneBefore")]
     pub timezone_before: String,
+    #[serde(rename = "timezoneAfter")]
     pub timezone_after: String,
+    #[serde(rename = "realtimeBefore")]
     pub realtime_before: f64,
+    #[serde(rename = "realtimeAfter")]
     pub realtime_after: f64,
+    #[serde(rename = "realtimeBeforeLocal")]
     pub realtime_before_local: f64,
+    #[serde(rename = "realtimeAfterLocal")]
     pub realtime_after_local: f64,
+    #[serde(rename = "realtimeDuration")]
     pub realtime_duration: f64,
+    #[serde(rename = "realtimeSinceSessionStart")]
     pub realtime_since_session_start: f64,
+    #[serde(rename = "realtimeSinceBoot")]
     pub realtime_since_boot: f64,
+    #[serde(rename = "gitDir")]
     pub git_dir: String,
+    #[serde(rename = "gitRealDir")]
     pub git_real_dir: String,
+    #[serde(rename = "gitOriginRemote")]
     pub git_origin_remote: String,
+    #[serde(rename = "gitDirAfter")]
     pub git_dir_after: String,
+    #[serde(rename = "gitRealDirAfter")]
     pub git_real_dir_after: String,
+    #[serde(rename = "gitOriginRemoteAfter")]
     pub git_origin_remote_after: String,
+    #[serde(rename = "machineId")]
     pub machine_id: String,
+    #[serde(rename = "osReleaseId")]
     pub os_release_id: String,
+    #[serde(rename = "osReleaseVersionId")]
     pub os_release_version_id: String,
+    #[serde(rename = "osReleaseIdLike")]
     pub os_release_id_like: String,
+    #[serde(rename = "osReleaseName")]
     pub os_release_name: String,
+    #[serde(rename = "osReleasePrettyName")]
     pub os_release_pretty_name: String,
+    #[serde(rename = "reshUuid")]
     pub resh_uuid: String,
+    #[serde(rename = "reshVersion")]
     pub resh_version: String,
+    #[serde(rename = "reshRevision")]
     pub resh_revision: String,
+    #[serde(rename = "partsMerged")]
     pub parts_merged: bool,
     pub recalled: bool,
+    #[serde(rename = "recallLastCmdLine")]
     pub recall_last_cmd_line: String,
     pub cols: String,
     pub lines: String,
