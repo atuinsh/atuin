@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use chrono::prelude::*;
 use chrono::Duration;
-use chrono_english::{parse_date_string, Dialect};
+use chrono_english::parse_date_string;
 
 use cli_table::{format::Justify, print_stdout, Cell, Style, Table};
 use eyre::{eyre, Result};
@@ -84,10 +84,7 @@ impl Cmd {
                     words.join(" ")
                 };
 
-                let start = match settings.dialect {
-                    atuin_client::settings::Dialect::Uk => parse_date_string(&words, Local::now(), Dialect::Uk)?,
-                    atuin_client::settings::Dialect::Us => parse_date_string(&words, Local::now(), Dialect::Us)?,
-                };
+                let start = parse_date_string(&words, Local::now(), settings.dialect.into())?;
                 let end = start + Duration::days(1);
 
                 let history = db.range(start.into(), end.into()).await?;

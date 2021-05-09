@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::prelude::*;
 use chrono::Utc;
+use chrono_english;
 use config::{Config, Environment, File as ConfigFile};
 use eyre::{eyre, Result};
 use parse_duration::parse;
@@ -21,12 +22,21 @@ pub enum SearchMode {
 
 // FIXME: Can use upstream Dialect enum if https://github.com/stevedonovan/chrono-english/pull/16 is merged
 #[derive(Clone, Debug, Deserialize, Copy)]
-pub enum Dialect{
+pub enum Dialect {
     #[serde(rename = "us")]
     Us,
 
     #[serde(rename = "uk")]
     Uk,
+}
+
+impl Into<chrono_english::Dialect> for Dialect {
+    fn into(self) -> chrono_english::Dialect {
+        match self {
+            Dialect::Uk => chrono_english::Dialect::Uk,
+            Dialect::Us => chrono_english::Dialect::Uk,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
