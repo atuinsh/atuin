@@ -192,12 +192,9 @@ async fn key_handler(
                     .map_or(app.input.clone(), |h| h.command.clone()),
             );
         }
-        Key::Alt(c) if ['1', '2', '3', '4', '5', '6', '7', '8', '9'].contains(&c) => {
+        Key::Alt(c) if ('1'..='9').contains(&c) => {
             let c = c.to_digit(10)? as usize;
-            let i = match app.results_state.selected() {
-                None => return None,
-                Some(selected) => c + selected,
-            };
+            let i = app.results_state.selected()? + c;
 
             return Some(
                 app.results
