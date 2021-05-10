@@ -23,6 +23,7 @@ Please file an issue if you encounter any problems!
 EOF
 
 LATEST_RELEASE=$(curl -L -s -H 'Accept: application/json' https://github.com/ellie/atuin/releases/latest)
+# Allow sed; sometimes it's more readable than ${variable//search/replace}
 # shellcheck disable=SC2001
 LATEST_VERSION=$(echo "$LATEST_RELEASE" | sed -e 's/.*"tag_name":"\([^"]*\)".*/\1/')
 
@@ -74,10 +75,9 @@ __atuin_install_linux(){
         OS=$(lsb_release -i | awk '{ print $3 }')
     fi
 
-  # shellcheck disable=SC2086
-	if [ $OS == "Arch" ] || [ $OS == "ManjaroLinux" ]; then
+	if [ "$OS" == "Arch" ] || [ "$OS" == "ManjaroLinux" ]; then
 		__atuin_install_arch
-    elif [ $OS == "Ubuntu" ] || [ $OS == "Debian" ] || [ $OS == "Linuxmint" ] || [ $OS == "Parrot" ] || [ $OS == "Kali" ]; then
+    elif [ "$OS" == "Ubuntu" ] || [ "$OS" == "Debian" ] || [ "$OS" == "Linuxmint" ] || [ "$OS" == "Parrot" ] || [ "$OS" == "Kali" ]; then
 		__atuin_install_ubuntu
 	else
 		# TODO: download a binary or smth
@@ -147,11 +147,13 @@ case "$OSTYPE" in
   *)        __atuin_install_unsupported ;;
 esac
 
-# TODO: Check which is in use
+# TODO: Check which shell is in use
+# Use of single quotes around $() is intentional here
 # shellcheck disable=SC2016
 printf '\neval "$(atuin init zsh)"' >> ~/.zshrc
 
 curl https://raw.githubusercontent.com/rcaloras/bash-preexec/master/bash-preexec.sh -o ~/.bash-preexec.sh
 printf '\n[[ -f ~/.bash-preexec.sh ]] && source ~/.bash-preexec.sh' >> ~/.bashrc
+# Use of single quotes around $() is intentional here
 # shellcheck disable=SC2016
 echo 'eval "$(atuin init bash)"' >> ~/.bashrc
