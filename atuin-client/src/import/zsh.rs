@@ -84,7 +84,10 @@ impl<R: Read> Iterator for Zsh<R> {
 
         self.loc -= 1;
 
-        while self.strbuf.ends_with("\\\n") {
+        while self.strbuf.ends_with("\\\\\n") {
+            let range = (self.strbuf.len() - 3)..;
+            self.strbuf.replace_range(range, "\\\n");
+
             if self.file.read_line(&mut self.strbuf).is_err() {
                 // There's a chance that the last line of a command has invalid
                 // characters, the only safe thing to do is break :/
@@ -196,7 +199,7 @@ mod test {
     #[test]
     fn test_parse_file() {
         let input = r": 1613322469:0;cargo install atuin
-: 1613322469:10;cargo install atuin; \
+: 1613322469:10;cargo install atuin; \\
 cargo update
 : 1613322469:10;cargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷
 ";
