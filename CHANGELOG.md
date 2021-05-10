@@ -11,15 +11,15 @@ and this project (mostly) adheres to [Semantic Versioning](https://semver.org/sp
 
 Thank you so much to everyone that started contributing to Atuin for this release!
 
-- @yuvipanda
-- @Sciencentistguy
-- @bl-ue
-- @ElvishJerricco
-- @avinassh
-- @ismith
-- @thedrow
+- [@yuvipanda](https://github.com/yuvipanda)
+- [@Sciencentistguy](https://github.com/Sciencentistguy)
+- [@bl-ue](https://github.com/bl-ue)
+- [@ElvishJerricco](https://github.com/ElvishJerricco)
+- [@avinassh](https://github.com/avinassh)
+- [@ismith](https://github.com/ismith)
+- [@thedrow](https://github.com/thedrow)
 
-And a special thank you to @conradludgate for his ongoing contributions :)
+And a special thank you to [@conradludgate](https://github.com/conradludgate) for his ongoing contributions :)
 
 ### Added
 
