@@ -1,6 +1,6 @@
 [package]
 name = "atuin"
-version = "0.7.0"
+version = "0.7.1"
 authors = ["Ellie Huxtable <ellie@elliehuxtable.com>"]
 edition = "2018"
 license = "MIT"
@@ -29,9 +29,9 @@ atuin = { path = "/usr/bin/atuin" }
 members = ["./atuin-client", "./atuin-server", "./atuin-common"]
 
 [dependencies]
-atuin-server = { path = "atuin-server", version = "0.7.0" }
-atuin-client = { path = "atuin-client", version = "0.7.0" }
-atuin-common = { path = "atuin-common", version = "0.7.0" }
+atuin-server = { path = "atuin-server", version = "0.7.1" }
+atuin-client = { path = "atuin-client", version = "0.7.1" }
+atuin-common = { path = "atuin-common", version = "0.7.1" }
 
 log = "0.4"
 pretty_env_logger = "0.4"
