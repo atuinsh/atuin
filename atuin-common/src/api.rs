@@ -1,7 +1,7 @@
 use std::{borrow::Cow, convert::Infallible};
 
 use chrono::Utc;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use warp::{reply::Response, Reply};
 
 #[derive(Debug, Serialize, Deserialize)]
