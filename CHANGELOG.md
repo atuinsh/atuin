@@ -7,6 +7,24 @@ and this project (mostly) adheres to [Semantic Versioning](https://semver.org/sp
 
 ## [Unreleased]
 
+## [0.7.1] - 2021-05-10
+
+Very minor patch release
+
+### Added
+
+### Changed
+
+### Deprecated
+
+### Removed
+
+### Fixed
+
+- Fix the atuin-common build (#107)
+
+### Security
+
 ## [0.7.0] - 2021-05-10
 
 Thank you so much to everyone that started contributing to Atuin for this release!
