@@ -103,10 +103,7 @@ impl State {
                         None => Span::raw("   "),
                         Some(diff) => {
                             if 0 < diff && diff < 10 {
-                                Span::styled(
-                                    format!(" {} ", diff),
-                                    Style::default().fg(Color::DarkGray),
-                                )
+                                Span::raw(format!(" {} ", diff))
                             } else {
                                 Span::raw("   ")
                             }
@@ -275,7 +272,7 @@ fn draw<T: Backend>(f: &mut Frame<'_, T>, history_count: i64, app: &mut State) {
         .split(top_chunks[1]);
 
     let title = Paragraph::new(Text::from(Span::styled(
-        format!("A'tuin v{}", VERSION),
+        format!("Atuin v{}", VERSION),
         Style::default().add_modifier(Modifier::BOLD),
     )));
 

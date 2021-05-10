@@ -94,6 +94,17 @@ The path to the Atuin server session file. Defaults to
 key = "~/.atuin-session"
 ```
 
+### `search_mode`
+
+Which search mode to use. Atuin supports both "prefix" and full text search
+modes. The former will essentially search for "query*", and the latter "*query\*"
+
+Defaults to "prefix"
+
+```
+search_mode = "fulltext"
+```
+
 ## Server config
 
 `// TODO`
