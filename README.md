@@ -131,6 +131,12 @@ the install script, this should all be done for you!
 echo 'eval "$(atuin init zsh)"' >> ~/.zshrc
 ```
 
+Or using a plugin manager:
+
+```
+zinit load ellie/atuin
+```
+
 ### bash
 
 We need to setup some hooks, so first install bash-preexec:
