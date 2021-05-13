@@ -1,6 +1,6 @@
 [package]
 name = "atuin"
-version = "0.6.4"
+version = "0.7.1"
 authors = ["Ellie Huxtable <ellie@elliehuxtable.com>"]
 edition = "2018"
 license = "MIT"
@@ -29,9 +29,9 @@ atuin = { path = "/usr/bin/atuin" }
 members = ["./atuin-client", "./atuin-server", "./atuin-common"]
 
 [dependencies]
-atuin-server = { path = "atuin-server", version = "0.6.2" }
-atuin-client = { path = "atuin-client", version = "0.6.2" }
-atuin-common = { path = "atuin-common", version = "0.6.2" }
+atuin-server = { path = "atuin-server", version = "0.7.1" }
+atuin-client = { path = "atuin-client", version = "0.7.1" }
+atuin-common = { path = "atuin-common", version = "0.7.1" }
 
 log = "0.4"
 pretty_env_logger = "0.4"
@@ -56,3 +56,8 @@ base64 = "0.13.0"
 humantime = "2.1.0"
 tabwriter = "1.2.1"
 crossbeam-channel = "0.5.1"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+opt-level = 3

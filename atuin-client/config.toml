@@ -22,3 +22,7 @@
 
 ## address of the sync server
 # sync_address = "https://api.atuin.sh"
+
+## which search mode to use
+## possible values: prefix, fulltext
+# search_mode = "prefix"

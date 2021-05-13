@@ -77,7 +77,7 @@ __atuin_install_linux(){
 
 	if [ "$OS" == "Arch" ] || [ "$OS" == "ManjaroLinux" ]; then
 		__atuin_install_arch
-    elif [ "$OS" == "Ubuntu" ] || [ "$OS" == "Debian" ] || [ "$OS" == "Linuxmint" ] || [ "$OS" == "Parrot" ] || [ "$OS" == "Kali" ]; then
+    elif [ "$OS" == "Ubuntu" ] || [ "$OS" == "Debian" ] || [ "$OS" == "Linuxmint" ] || [ "$OS" == "Parrot" ] || [ "$OS" == "Kali" ] || [ "$OS" == "Elementary" ]; then
 		__atuin_install_ubuntu
 	else
 		# TODO: download a binary or smth
