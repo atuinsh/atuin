@@ -109,6 +109,11 @@ impl Cmd {
         match self {
             Self::Start { command: words } => {
                 let command = words.join(" ");
+
+                if command.starts_with(' ') {
+                    return Ok(());
+                }
+
                 let cwd = env::current_dir()?.display().to_string();
 
                 let h = History::new(chrono::Utc::now(), command, cwd, -1, -1, None, None);
