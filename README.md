@@ -100,7 +100,6 @@ cargo install atuin
 ### Homebrew
 
 ```
-brew tap ellie/atuin
 brew install atuin
 ```
 
