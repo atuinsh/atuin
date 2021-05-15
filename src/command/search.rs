@@ -18,6 +18,9 @@ use atuin_client::database::Database;
 use atuin_client::history::History;
 use atuin_client::settings::{SearchMode, Settings};
 
+use clipboard::ClipboardContext;
+use clipboard::ClipboardProvider;
+
 use crate::command::event::{Event, Events};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -200,6 +203,13 @@ async fn key_handler(
                     .get(i)
                     .map_or(app.input.clone(), |h| h.command.clone()),
             );
+        }
+        Key::Alt('w') => {
+            let i = app.results_state.selected()?;
+            let cmd = app.results.get(i)?;
+
+            let mut ctx: ClipboardContext = ClipboardProvider::new().unwrap();
+            ctx.set_contents(cmd.command.to_owned()).unwrap();
         }
         Key::Char(c) => {
             app.input.push(c);
