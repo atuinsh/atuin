@@ -1,0 +1,85 @@
+NOTE	implicit vs. explicit repetitions : 2009-02-02
+
+# Glenn Fowler <gsf@research.att.com>
+# conforming matches (column 4) must match one of the following BREs
+#	NOMATCH
+#	(0,.)\((\(.\),\(.\))(?,?)(\2,\3)\)*
+#	(0,.)\((\(.\),\(.\))(\2,\3)(?,?)\)*
+# i.e., each 3-tuple has two identical elements and one (?,?)
+
+NOTE	additional repetition tests graciously provided by Chris Kuklewicz www.haskell.org 2009-02-02
+
+:HA#100:E	X(.?){0,}Y	X1234567Y	(0,9)(7,8)
+:HA#101:E	X(.?){1,}Y	X1234567Y	(0,9)(7,8)
+:HA#102:E	X(.?){2,}Y	X1234567Y	(0,9)(7,8)
+:HA#103:E	X(.?){3,}Y	X1234567Y	(0,9)(7,8)
+:HA#104:E	X(.?){4,}Y	X1234567Y	(0,9)(7,8)
+:HA#105:E	X(.?){5,}Y	X1234567Y	(0,9)(7,8)
+:HA#106:E	X(.?){6,}Y	X1234567Y	(0,9)(7,8)
+:HA#107:E	X(.?){7,}Y	X1234567Y	(0,9)(7,8)
+:HA#108:E	X(.?){8,}Y	X1234567Y	(0,9)(8,8)
+#:HA#110:E	X(.?){0,8}Y	X1234567Y	(0,9)(7,8)
+:HA#110:E	X(.?){0,8}Y	X1234567Y	(0,9)(8,8)	RE2/Go
+#:HA#111:E	X(.?){1,8}Y	X1234567Y	(0,9)(7,8)
+:HA#111:E	X(.?){1,8}Y	X1234567Y	(0,9)(8,8)	RE2/Go
+#:HA#112:E	X(.?){2,8}Y	X1234567Y	(0,9)(7,8)
+:HA#112:E	X(.?){2,8}Y	X1234567Y	(0,9)(8,8)	RE2/Go
+#:HA#113:E	X(.?){3,8}Y	X1234567Y	(0,9)(7,8)
+:HA#113:E	X(.?){3,8}Y	X1234567Y	(0,9)(8,8)	RE2/Go
+#:HA#114:E	X(.?){4,8}Y	X1234567Y	(0,9)(7,8)
+:HA#114:E	X(.?){4,8}Y	X1234567Y	(0,9)(8,8)	RE2/Go
+#:HA#115:E	X(.?){5,8}Y	X1234567Y	(0,9)(7,8)
+:HA#115:E	X(.?){5,8}Y	X1234567Y	(0,9)(8,8)	RE2/Go
+#:HA#116:E	X(.?){6,8}Y	X1234567Y	(0,9)(7,8)
+:HA#116:E	X(.?){6,8}Y	X1234567Y	(0,9)(8,8)	RE2/Go
+#:HA#117:E	X(.?){7,8}Y	X1234567Y	(0,9)(7,8)
+:HA#117:E	X(.?){7,8}Y	X1234567Y	(0,9)(8,8)	RE2/Go
+:HA#118:E	X(.?){8,8}Y	X1234567Y	(0,9)(8,8)
+
+# These test a fixed bug in my regex-tdfa that did not keep the expanded
+# form properly grouped, so right association did the wrong thing with
+# these ambiguous patterns (crafted just to test my code when I became
+# suspicious of my implementation).  The first subexpression should use
+# "ab" then "a" then "bcd".
+
+# OS X / FreeBSD / NetBSD badly fail many of these, with impossible
+# results like (0,6)(4,5)(6,6).
+
+:HA#260:E	(a|ab|c|bcd){0,}(d*)	ababcd	(0,1)(0,1)(1,1)
+:HA#261:E	(a|ab|c|bcd){1,}(d*)	ababcd	(0,1)(0,1)(1,1)
+:HA#262:E	(a|ab|c|bcd){2,}(d*)	ababcd	(0,6)(3,6)(6,6)
+:HA#263:E	(a|ab|c|bcd){3,}(d*)	ababcd	(0,6)(3,6)(6,6)
+:HA#264:E	(a|ab|c|bcd){4,}(d*)	ababcd	NOMATCH
+:HA#265:E	(a|ab|c|bcd){0,10}(d*)	ababcd	(0,1)(0,1)(1,1)
+:HA#266:E	(a|ab|c|bcd){1,10}(d*)	ababcd	(0,1)(0,1)(1,1)
+:HA#267:E	(a|ab|c|bcd){2,10}(d*)	ababcd	(0,6)(3,6)(6,6)
+:HA#268:E	(a|ab|c|bcd){3,10}(d*)	ababcd	(0,6)(3,6)(6,6)
+:HA#269:E	(a|ab|c|bcd){4,10}(d*)	ababcd	NOMATCH
+:HA#270:E	(a|ab|c|bcd)*(d*)	ababcd	(0,1)(0,1)(1,1)
+:HA#271:E	(a|ab|c|bcd)+(d*)	ababcd	(0,1)(0,1)(1,1)
+
+# The above worked on Linux/GLIBC but the following often fail.
+# They also trip up OS X / FreeBSD / NetBSD:
+
+#:HA#280:E	(ab|a|c|bcd){0,}(d*)	ababcd	(0,6)(3,6)(6,6)
+:HA#280:E	(ab|a|c|bcd){0,}(d*)	ababcd	(0,6)(4,5)(5,6)	RE2/Go
+#:HA#281:E	(ab|a|c|bcd){1,}(d*)	ababcd	(0,6)(3,6)(6,6)
+:HA#281:E	(ab|a|c|bcd){1,}(d*)	ababcd	(0,6)(4,5)(5,6)	RE2/Go
+#:HA#282:E	(ab|a|c|bcd){2,}(d*)	ababcd	(0,6)(3,6)(6,6)
+:HA#282:E	(ab|a|c|bcd){2,}(d*)	ababcd	(0,6)(4,5)(5,6)	RE2/Go
+#:HA#283:E	(ab|a|c|bcd){3,}(d*)	ababcd	(0,6)(3,6)(6,6)
+:HA#283:E	(ab|a|c|bcd){3,}(d*)	ababcd	(0,6)(4,5)(5,6)	RE2/Go
+:HA#284:E	(ab|a|c|bcd){4,}(d*)	ababcd	NOMATCH
+#:HA#285:E	(ab|a|c|bcd){0,10}(d*)	ababcd	(0,6)(3,6)(6,6)
+:HA#285:E	(ab|a|c|bcd){0,10}(d*)	ababcd	(0,6)(4,5)(5,6)	RE2/Go
+#:HA#286:E	(ab|a|c|bcd){1,10}(d*)	ababcd	(0,6)(3,6)(6,6)
+:HA#286:E	(ab|a|c|bcd){1,10}(d*)	ababcd	(0,6)(4,5)(5,6)	RE2/Go
+#:HA#287:E	(ab|a|c|bcd){2,10}(d*)	ababcd	(0,6)(3,6)(6,6)
+:HA#287:E	(ab|a|c|bcd){2,10}(d*)	ababcd	(0,6)(4,5)(5,6)	RE2/Go
+#:HA#288:E	(ab|a|c|bcd){3,10}(d*)	ababcd	(0,6)(3,6)(6,6)
+:HA#288:E	(ab|a|c|bcd){3,10}(d*)	ababcd	(0,6)(4,5)(5,6)	RE2/Go
+:HA#289:E	(ab|a|c|bcd){4,10}(d*)	ababcd	NOMATCH
+#:HA#290:E	(ab|a|c|bcd)*(d*)	ababcd	(0,6)(3,6)(6,6)
+:HA#290:E	(ab|a|c|bcd)*(d*)	ababcd	(0,6)(4,5)(5,6)	RE2/Go
+#:HA#291:E	(ab|a|c|bcd)+(d*)	ababcd	(0,6)(3,6)(6,6)
+:HA#291:E	(ab|a|c|bcd)+(d*)	ababcd	(0,6)(4,5)(5,6)	RE2/Go

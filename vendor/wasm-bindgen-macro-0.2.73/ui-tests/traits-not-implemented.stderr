@@ -1,0 +1,5 @@
+error[E0277]: the trait bound `A: IntoWasmAbi` is not satisfied
+ --> $DIR/traits-not-implemented.rs:8:12
+  |
+8 |     pub fn foo(a: A);
+  |            ^^^ the trait `IntoWasmAbi` is not implemented for `A`

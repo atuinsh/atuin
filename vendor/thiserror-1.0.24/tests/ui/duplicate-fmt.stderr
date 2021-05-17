@@ -1,0 +1,5 @@
+error: only one #[error(...)] attribute is allowed
+ --> $DIR/duplicate-fmt.rs:5:1
+  |
+5 | #[error("...")]
+  | ^^^^^^^^^^^^^^^

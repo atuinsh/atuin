@@ -1,0 +1,8 @@
+steps:
+  - script: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh -s -- -f
+    displayName: "install wasm-pack"
+  - script: |
+      set -ex
+      cargo build -p wasm-bindgen-cli
+      ln -snf `pwd`/target/debug/wasm-bindgen $(dirname `which cargo`)/wasm-bindgen
+    displayName: "install wasm-bindgen for `wasm-pack` to use"

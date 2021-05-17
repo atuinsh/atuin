@@ -1,0 +1,16 @@
+steps:
+  - script: cargo build
+    displayName: "cargo build (debug; default features)"
+
+  - script: cargo test
+    displayName: "cargo test (debug; default features)"
+    env: { "RUST_BACKTRACE": "1" }
+  - script: cargo test --no-default-features --features webpki-tokio
+    displayName: "cargo test (debug; webpi-roots feature)"
+    env: { "RUST_BACKTRACE": "1" }
+  - script: cargo test --no-default-features
+    displayName: "cargo build (debug; no default features)"
+    env: { "RUST_BACKTRACE": "1" }
+
+  - script: cargo test --release --no-run
+    displayName: "cargo test (release; no run)"

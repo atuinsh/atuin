@@ -1,0 +1,8 @@
+error[E0277]: the trait bound `String: std::marker::Copy` is not satisfied
+ --> $DIR/pub-not-copy.rs:5:16
+  |
+3 | #[wasm_bindgen]
+  | --------------- required by this bound in `assert_copy`
+4 | pub struct A {
+5 |     pub field: String,
+  |                ^^^^^^ the trait `std::marker::Copy` is not implemented for `String`

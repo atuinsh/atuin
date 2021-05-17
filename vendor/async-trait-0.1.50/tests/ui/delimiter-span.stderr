@@ -1,0 +1,17 @@
+error: no rules expected the token `{`
+  --> $DIR/delimiter-span.rs:17:16
+   |
+3  | macro_rules! picky {
+   | ------------------ when calling this macro
+...
+17 |         picky!({ 123, self });
+   |                ^ no rules expected this token in macro call
+
+error: no rules expected the token `{`
+  --> $DIR/delimiter-span.rs:18:16
+   |
+3  | macro_rules! picky {
+   | ------------------ when calling this macro
+...
+18 |         picky!({ 123 });
+   |                ^ no rules expected this token in macro call

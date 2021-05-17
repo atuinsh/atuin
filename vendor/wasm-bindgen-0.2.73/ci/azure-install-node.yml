@@ -1,0 +1,6 @@
+steps:
+  - script: rustup target add wasm32-unknown-unknown
+    displayName: "Add WebAssembly target via rustup"
+  - task: NodeTool@0
+    inputs:
+      versionSpec: '>=12.11'

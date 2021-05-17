@@ -1,0 +1,7 @@
+# Ex 7.17
+{
+unqoted : "separate",
+http://foo.com,
+omitted value:,
+: omitted key,
+}

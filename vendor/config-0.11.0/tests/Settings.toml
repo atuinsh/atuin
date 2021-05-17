@@ -1,0 +1,53 @@
+debug = true
+debug_s = "true"
+production = false
+production_s = "false"
+
+code = 53
+
+# errors
+boolean_s_parse = "fals"
+
+arr = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+quarks = ["up", "down", "strange", "charm", "bottom", "top"]
+
+[diodes]
+green = "off"
+
+[diodes.red]
+brightness = 100
+
+[diodes.blue]
+blinking = [300, 700]
+
+[diodes.white.pattern]
+name = "christmas"
+inifinite = true
+
+[[items]]
+name = "1"
+
+[[items]]
+name = "2"
+
+[place]
+number = 1
+name = "Torre di Pisa"
+longitude = 43.7224985
+latitude = 10.3970522
+favorite = false
+reviews = 3866
+rating = 4.5
+
+[place.creator]
+name = "John Smith"
+
+[proton]
+up = 2
+down = 1
+
+[divisors]
+1 = 1
+2 = 2
+4 = 3
+5 = 2

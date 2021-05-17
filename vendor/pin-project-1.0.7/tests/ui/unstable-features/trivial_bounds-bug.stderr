@@ -1,0 +1,7 @@
+error[E0277]: `PhantomPinned` cannot be unpinned
+   --> $DIR/trivial_bounds-bug.rs:13:43
+    |
+13  |     impl Unpin for A where PhantomPinned: Unpin {} //~ ERROR E0277
+    |                                           ^^^^^ the trait `Unpin` is not implemented for `PhantomPinned`
+    |
+    = note: consider using `Box::pin`

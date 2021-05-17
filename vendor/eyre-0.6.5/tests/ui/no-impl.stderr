@@ -1,0 +1,21 @@
+error[E0599]: no method named `eyre_kind` found for reference `&Error` in the current scope
+ --> $DIR/no-impl.rs:7:13
+  |
+4 | struct Error;
+  | -------------
+  | |
+  | doesn't satisfy `Error: Into<ErrReport>`
+  | doesn't satisfy `Error: eyre::private::kind::TraitKind`
+  | doesn't satisfy `Error: std::fmt::Display`
+...
+7 |     let _ = eyre!(Error);
+  |             ^^^^^^^^^^^^ method not found in `&Error`
+  |
+  = note: the method `eyre_kind` exists but the following trait bounds were not satisfied:
+          `Error: Into<ErrReport>`
+          which is required by `Error: eyre::private::kind::TraitKind`
+          `Error: std::fmt::Display`
+          which is required by `&Error: eyre::private::kind::AdhocKind`
+          `&Error: Into<ErrReport>`
+          which is required by `&Error: eyre::private::kind::TraitKind`
+  = note: this error originates in a macro (in Nightly builds, run with -Z macro-backtrace for more info)

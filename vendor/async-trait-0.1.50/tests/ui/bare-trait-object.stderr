@@ -1,0 +1,11 @@
+error: trait objects without an explicit `dyn` are deprecated
+  --> $DIR/bare-trait-object.rs:11:16
+   |
+11 | impl Trait for Send + Sync {
+   |                ^^^^^^^^^^^ help: use `dyn`: `dyn Send + Sync`
+   |
+note: the lint level is defined here
+  --> $DIR/bare-trait-object.rs:1:9
+   |
+1  | #![deny(bare_trait_objects)]
+   |         ^^^^^^^^^^^^^^^^^^

@@ -1,0 +1,11 @@
+error: #[repr(packed)] attribute should not be name-value pair
+  --> $DIR/packed-name-value.rs:16:8
+   |
+16 | #[repr(packed = "")] //~ ERROR attribute should not be name-value pair
+   |        ^^^^^^^^^^^
+
+error: #[repr(packed)] attribute should not be name-value pair
+  --> $DIR/packed-name-value.rs:21:8
+   |
+21 | #[repr(packed = "")] //~ ERROR attribute should not be name-value pair
+   |        ^^^^^^^^^^^

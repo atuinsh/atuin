@@ -1,0 +1,343 @@
+[[tests]]
+name = "repetition10"
+options = ['escaped']
+pattern = '''((..)|(.))'''
+input = ''''''
+matches = []
+
+[[tests]]
+name = "repetition11"
+options = ['escaped']
+pattern = '''((..)|(.))((..)|(.))'''
+input = ''''''
+matches = []
+
+[[tests]]
+name = "repetition12"
+options = ['escaped']
+pattern = '''((..)|(.))((..)|(.))((..)|(.))'''
+input = ''''''
+matches = []
+
+[[tests]]
+name = "repetition14"
+options = ['escaped']
+pattern = '''((..)|(.)){1}'''
+input = ''''''
+matches = []
+
+[[tests]]
+name = "repetition15"
+options = ['escaped']
+pattern = '''((..)|(.)){2}'''
+input = ''''''
+matches = []
+
+[[tests]]
+name = "repetition16"
+options = ['escaped']
+pattern = '''((..)|(.)){3}'''
+input = ''''''
+matches = []
+
+[[tests]]
+name = "repetition18"
+options = ['escaped']
+pattern = '''((..)|(.))*'''
+input = ''''''
+matches = [[0, 0]]
+
+[[tests]]
+name = "repetition20"
+options = ['escaped']
+pattern = '''((..)|(.))'''
+input = '''a'''
+matches = [[0, 1]]
+
+[[tests]]
+name = "repetition21"
+options = ['escaped']
+pattern = '''((..)|(.))((..)|(.))'''
+input = '''a'''
+matches = []
+
+[[tests]]
+name = "repetition22"
+options = ['escaped']
+pattern = '''((..)|(.))((..)|(.))((..)|(.))'''
+input = '''a'''
+matches = []
+
+[[tests]]
+name = "repetition24"
+options = ['escaped']
+pattern = '''((..)|(.)){1}'''
+input = '''a'''
+matches = [[0, 1]]
+
+[[tests]]
+name = "repetition25"
+options = ['escaped']
+pattern = '''((..)|(.)){2}'''
+input = '''a'''
+matches = []
+
+[[tests]]
+name = "repetition26"
+options = ['escaped']
+pattern = '''((..)|(.)){3}'''
+input = '''a'''
+matches = []
+
+[[tests]]
+name = "repetition28"
+options = ['escaped']
+pattern = '''((..)|(.))*'''
+input = '''a'''
+matches = [[0, 1]]
+
+[[tests]]
+name = "repetition30"
+options = ['escaped']
+pattern = '''((..)|(.))'''
+input = '''aa'''
+matches = [[0, 2]]
+
+[[tests]]
+name = "repetition31"
+options = ['escaped']
+pattern = '''((..)|(.))((..)|(.))'''
+input = '''aa'''
+matches = [[0, 2]]
+
+[[tests]]
+name = "repetition32"
+options = ['escaped']
+pattern = '''((..)|(.))((..)|(.))((..)|(.))'''
+input = '''aa'''
+matches = []
+
+[[tests]]
+name = "repetition34"
+options = ['escaped']
+pattern = '''((..)|(.)){1}'''
+input = '''aa'''
+matches = [[0, 2]]
+
+[[tests]]
+name = "repetition35"
+options = ['escaped']
+pattern = '''((..)|(.)){2}'''
+input = '''aa'''
+matches = [[0, 2]]
+
+[[tests]]
+name = "repetition36"
+options = ['escaped']
+pattern = '''((..)|(.)){3}'''
+input = '''aa'''
+matches = []
+
+[[tests]]
+name = "repetition38"
+options = ['escaped']
+pattern = '''((..)|(.))*'''
+input = '''aa'''
+matches = [[0, 2]]
+
+[[tests]]
+name = "repetition40"
+options = ['escaped']
+pattern = '''((..)|(.))'''
+input = '''aaa'''
+matches = [[0, 2]]
+
+[[tests]]
+name = "repetition41"
+options = ['escaped']
+pattern = '''((..)|(.))((..)|(.))'''
+input = '''aaa'''
+matches = [[0, 3]]
+
+[[tests]]
+name = "repetition42"
+options = ['escaped']
+pattern = '''((..)|(.))((..)|(.))((..)|(.))'''
+input = '''aaa'''
+matches = [[0, 3]]
+
+[[tests]]
+name = "repetition44"
+options = ['escaped']
+pattern = '''((..)|(.)){1}'''
+input = '''aaa'''
+matches = [[0, 2]]
+
+[[tests]]
+name = "repetition46"
+options = ['escaped']
+pattern = '''((..)|(.)){2}'''
+input = '''aaa'''
+matches = [[0, 3]]
+
+[[tests]]
+name = "repetition47"
+options = ['escaped']
+pattern = '''((..)|(.)){3}'''
+input = '''aaa'''
+matches = [[0, 3]]
+
+[[tests]]
+name = "repetition50"
+options = ['escaped']
+pattern = '''((..)|(.))*'''
+input = '''aaa'''
+matches = [[0, 3]]
+
+[[tests]]
+name = "repetition52"
+options = ['escaped']
+pattern = '''((..)|(.))'''
+input = '''aaaa'''
+matches = [[0, 2]]
+
+[[tests]]
+name = "repetition53"
+options = ['escaped']
+pattern = '''((..)|(.))((..)|(.))'''
+input = '''aaaa'''
+matches = [[0, 4]]
+
+[[tests]]
+name = "repetition54"
+options = ['escaped']
+pattern = '''((..)|(.))((..)|(.))((..)|(.))'''
+input = '''aaaa'''
+matches = [[0, 4]]
+
+[[tests]]
+name = "repetition56"
+options = ['escaped']
+pattern = '''((..)|(.)){1}'''
+input = '''aaaa'''
+matches = [[0, 2]]
+
+[[tests]]
+name = "repetition57"
+options = ['escaped']
+pattern = '''((..)|(.)){2}'''
+input = '''aaaa'''
+matches = [[0, 4]]
+
+[[tests]]
+name = "repetition59"
+options = ['escaped']
+pattern = '''((..)|(.)){3}'''
+input = '''aaaa'''
+matches = [[0, 4]]
+
+[[tests]]
+name = "repetition61"
+options = ['escaped']
+pattern = '''((..)|(.))*'''
+input = '''aaaa'''
+matches = [[0, 4]]
+
+[[tests]]
+name = "repetition63"
+options = ['escaped']
+pattern = '''((..)|(.))'''
+input = '''aaaaa'''
+matches = [[0, 2]]
+
+[[tests]]
+name = "repetition64"
+options = ['escaped']
+pattern = '''((..)|(.))((..)|(.))'''
+input = '''aaaaa'''
+matches = [[0, 4]]
+
+[[tests]]
+name = "repetition65"
+options = ['escaped']
+pattern = '''((..)|(.))((..)|(.))((..)|(.))'''
+input = '''aaaaa'''
+matches = [[0, 5]]
+
+[[tests]]
+name = "repetition67"
+options = ['escaped']
+pattern = '''((..)|(.)){1}'''
+input = '''aaaaa'''
+matches = [[0, 2]]
+
+[[tests]]
+name = "repetition68"
+options = ['escaped']
+pattern = '''((..)|(.)){2}'''
+input = '''aaaaa'''
+matches = [[0, 4]]
+
+[[tests]]
+name = "repetition70"
+options = ['escaped']
+pattern = '''((..)|(.)){3}'''
+input = '''aaaaa'''
+matches = [[0, 5]]
+
+[[tests]]
+name = "repetition73"
+options = ['escaped']
+pattern = '''((..)|(.))*'''
+input = '''aaaaa'''
+matches = [[0, 5]]
+
+[[tests]]
+name = "repetition75"
+options = ['escaped']
+pattern = '''((..)|(.))'''
+input = '''aaaaaa'''
+matches = [[0, 2]]
+
+[[tests]]
+name = "repetition76"
+options = ['escaped']
+pattern = '''((..)|(.))((..)|(.))'''
+input = '''aaaaaa'''
+matches = [[0, 4]]
+
+[[tests]]
+name = "repetition77"
+options = ['escaped']
+pattern = '''((..)|(.))((..)|(.))((..)|(.))'''
+input = '''aaaaaa'''
+matches = [[0, 6]]
+
+[[tests]]
+name = "repetition79"
+options = ['escaped']
+pattern = '''((..)|(.)){1}'''
+input = '''aaaaaa'''
+matches = [[0, 2]]
+
+[[tests]]
+name = "repetition80"
+options = ['escaped']
+pattern = '''((..)|(.)){2}'''
+input = '''aaaaaa'''
+matches = [[0, 4]]
+
+[[tests]]
+name = "repetition81"
+options = ['escaped']
+pattern = '''((..)|(.)){3}'''
+input = '''aaaaaa'''
+matches = [[0, 6]]
+
+[[tests]]
+name = "repetition83"
+options = ['escaped']
+pattern = '''((..)|(.))*'''
+input = '''aaaaaa'''
+matches = [[0, 6]]
+

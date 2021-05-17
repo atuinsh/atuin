@@ -1,0 +1,16 @@
+parameters:
+  artifacts: 'target/release'
+  name: ''
+
+steps:
+  - bash: |
+      set -ex
+      dst=$BUILD_ARTIFACTSTAGINGDIRECTORY
+      rm -f ${{ parameters.artifacts }}/wasm*.d
+      rm -f ${{ parameters.artifacts }}/wasm*.pdb
+      cp ${{ parameters.artifacts }}/wasm* $dst/
+    displayName: Create distribution tarball
+  - task: PublishPipelineArtifact@0
+    inputs:
+      artifactName: ${{ parameters.name }}
+      targetPath: '$(Build.ArtifactStagingDirectory)'

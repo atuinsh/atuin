@@ -1,0 +1,35 @@
+{
+   <oom_instead_of_bump_pointer_overflow has an expected malloc fishy value>
+   Memcheck:FishyValue
+   malloc(size)
+   fun:malloc
+   obj:/**/target/*/deps/tests-*
+}
+{
+   <false positive fixed in valgrind 3.16 and higher part 1>
+   Memcheck:Param
+   statx(buf)
+   fun:syscall
+   fun:statx
+}
+{
+   <false positive fixed in valgrind 3.16 and higher part 2>
+   Memcheck:Param
+   statx(file_name)
+   fun:syscall
+   fun:statx
+}
+{
+   <false positive fixed in valgrind 3.16 and higher part 3>
+   Memcheck:Param
+   statx(buf)
+   fun:statx
+   fun:statx
+}
+{
+   <false positive fixed in valgrind 3.16 and higher part 4>
+   Memcheck:Param
+   statx(file_name)
+   fun:statx
+   fun:statx
+}

@@ -1,0 +1,138 @@
+[[tests]]
+name = "invalid-utf8-literal1"
+options = ["escaped", "invalid-utf8", "no-unicode"]
+pattern = '\xFF'
+input = '\xFF'
+matches = [[0, 1]]
+
+
+[[tests]]
+name = "no-unicode-mixed"
+options = ["escaped", "invalid-utf8"]
+pattern = '(.+)(?-u)(.+)'
+input = '\xCE\x93\xCE\x94\xFF'
+matches = [[0, 5]]
+
+
+[[tests]]
+name = "no-unicode-case1"
+options = ["case-insensitive", "no-unicode"]
+pattern = "a"
+input = "A"
+matches = [[0, 1]]
+
+[[tests]]
+name = "no-unicode-case2"
+options = ["case-insensitive", "no-unicode"]
+pattern = "[a-z]+"
+input = "AaAaA"
+matches = [[0, 5]]
+
+[[tests]]
+name = "no-unicode-case3"
+options = ["case-insensitive"]
+pattern = "[a-z]+"
+input = "aA\u212AaA"
+matches = [[0, 7]]
+
+[[tests]]
+name = "no-unicode-case4"
+options = ["case-insensitive", "no-unicode"]
+pattern = "[a-z]+"
+input = "aA\u212AaA"
+matches = [[0, 2]]
+
+
+[[tests]]
+name = "no-unicode-negate1"
+options = []
+pattern = "[^a]"
+input = "δ"
+matches = [[0, 2]]
+
+[[tests]]
+name = "no-unicode-negate2"
+options = ["no-unicode", "invalid-utf8"]
+pattern = "[^a]"
+input = "δ"
+matches = [[0, 1]]
+
+
+[[tests]]
+name = "no-unicode-dotstar-prefix1"
+options = ["escaped", "no-unicode", "invalid-utf8"]
+pattern = "a"
+input = '\xFFa'
+matches = [[1, 2]]
+
+[[tests]]
+name = "no-unicode-dotstar-prefix2"
+options = ["escaped", "invalid-utf8"]
+pattern = "a"
+input = '\xFFa'
+matches = [[1, 2]]
+
+
+[[tests]]
+name = "no-unicode-null-bytes1"
+options = ["escaped", "no-unicode", "invalid-utf8"]
+pattern = '[^\x00]+\x00'
+input = 'foo\x00'
+matches = [[0, 4]]
+
+
+[[tests]]
+name = "no-unicode1"
+options = ["no-unicode"]
+pattern = '\w+'
+input = "aδ"
+matches = [[0, 1]]
+
+[[tests]]
+name = "no-unicode2"
+options = []
+pattern = '\w+'
+input = "aδ"
+matches = [[0, 3]]
+
+[[tests]]
+name = "no-unicode3"
+options = ["no-unicode"]
+pattern = '\d+'
+input = "1२३9"
+matches = [[0, 1]]
+
+[[tests]]
+name = "no-unicode4"
+pattern = '\d+'
+input = "1२३9"
+matches = [[0, 8]]
+
+[[tests]]
+name = "no-unicode5"
+options = ["no-unicode"]
+pattern = '\s+'
+input = " \u1680"
+matches = [[0, 1]]
+
+[[tests]]
+name = "no-unicode6"
+pattern = '\s+'
+input = " \u1680"
+matches = [[0, 4]]
+
+
+[[tests]]
+# See: https://github.com/rust-lang/regex/issues/484
+name = "no-unicode-iter1"
+pattern = ''
+input = "☃"
+matches = [[0, 0], [1, 1], [2, 2], [3, 3]]
+
+[[tests]]
+# See: https://github.com/rust-lang/regex/issues/484
+options = ['escaped']
+name = "no-unicode-iter2"
+pattern = ''
+input = 'b\xFFr'
+matches = [[0, 0], [1, 1], [2, 2], [3, 3]]

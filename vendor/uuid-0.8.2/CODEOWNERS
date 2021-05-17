@@ -1,0 +1,16 @@
+# CI
+.travis.yml     @kinggoesgaming @KodrAus @Dylan-DPC @radix
+appveyor.yml    @kinggoesgaming @KodrAus @Dylan-DPC @radix
+
+# Cargo.toml
+Cargo.toml      @kinggoesgaming @KodrAus @Dylan-DPC @radix
+
+# Rust
+*.rs            @kinggoesgaming @KodrAus @Dylan-DPC @radix
+
+# CODEOWNERS
+CODEOWNERS      @kinggoesgaming @KodrAus @Dylan-DPC @radix
+
+#>> Critical
+# bors.toml file
+bors.toml       @kinggoesgaming @KodrAus @Dylan-DPC @radix

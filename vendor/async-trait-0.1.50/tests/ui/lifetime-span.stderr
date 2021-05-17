@@ -1,0 +1,46 @@
+error[E0726]: implicit elided lifetime not allowed here
+  --> $DIR/lifetime-span.rs:12:6
+   |
+12 | impl Trait for A {
+   |      ^^^^^- help: indicate the anonymous lifetime: `<'_>`
+
+error[E0107]: this trait takes 0 lifetime arguments but 1 lifetime argument was supplied
+  --> $DIR/lifetime-span.rs:32:10
+   |
+32 | impl<'r> Trait2<'r> for B {
+   |          ^^^^^^---- help: remove these generics
+   |          |
+   |          expected 0 lifetime arguments
+   |
+note: trait defined here, with 0 lifetime parameters
+  --> $DIR/lifetime-span.rs:22:11
+   |
+22 | pub trait Trait2 {
+   |           ^^^^^^
+
+error[E0195]: lifetime parameters or bounds on method `method` do not match the trait declaration
+  --> $DIR/lifetime-span.rs:13:14
+   |
+8  |     async fn method(&'r self);
+   |              ---------------- lifetimes in impl do not match this method in trait
+...
+13 |     async fn method(&self) { }
+   |              ^^^^^^^^^^^^^ lifetimes do not match method in trait
+
+error[E0195]: lifetime parameters or bounds on method `method` do not match the trait declaration
+  --> $DIR/lifetime-span.rs:18:14
+   |
+8  |     async fn method(&'r self);
+   |              ---------------- lifetimes in impl do not match this method in trait
+...
+18 |     async fn method(&self) { }
+   |              ^^^^^^^^^^^^^ lifetimes do not match method in trait
+
+error[E0195]: lifetime parameters or bounds on method `method` do not match the trait declaration
+  --> $DIR/lifetime-span.rs:33:14
+   |
+23 |     async fn method<'r>(&'r self);
+   |                    ---- lifetimes in impl do not match this method in trait
+...
+33 |     async fn method(&'r self) { }
+   |              ^^^^^^^^^^^^^^^^ lifetimes do not match method in trait

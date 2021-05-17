@@ -1,0 +1,135 @@
+From 426384ce34cf410d892eeeeeb7f6046d52bff8e7 Mon Sep 17 00:00:00 2001
+From: Tom Kaitchuck <Tom.Kaitchuck@gmail.com>
+Date: Sat, 11 Jul 2020 17:15:56 -0700
+Subject: [PATCH] Add support for ahash
+
+---
+ CMakeLists.txt |  1 +
+ Hashes.h       |  5 +++++
+ ahash.h        | 48 ++++++++++++++++++++++++++++++++++++++++++++++++
+ main.cpp       |  2 +-
+ 4 files changed, 55 insertions(+), 1 deletion(-)
+ create mode 100644 ahash.h
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 6ebab1a..9d79e98 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -470,10 +470,11 @@ add_executable(
+ target_link_libraries(
+   SMHasher
+   SMHasherSupport
+   ${HIGHWAY_LIB}
+   ${BLAKE3_LIB}
++  libahash_c.a
+   ${CMAKE_THREAD_LIBS_INIT}
+   )
+ 
+ #add_executable(
+ #  bittest
+diff --git a/Hashes.h b/Hashes.h
+index 4e111c1..fcd3e38 100644
+--- a/Hashes.h
++++ b/Hashes.h
+@@ -19,10 +19,11 @@
+ #if defined(__SSE4_2__) && defined(__x86_64__)
+ #include "metrohash/metrohash64crc.h"
+ #include "metrohash/metrohash128crc.h"
+ #endif
+ 
++#include "ahash.h"
+ #include "fasthash.h"
+ #include "jody_hash32.h"
+ #include "jody_hash64.h"
+ 
+ // objsize: 0-0x113 = 276
+@@ -356,10 +357,14 @@ inline void fasthash32_test ( const void * key, int len, uint32_t seed, void * o
+ }
+ #ifdef HAVE_INT64
+ inline void fasthash64_test ( const void * key, int len, uint32_t seed, void * out ) {
+   *(uint64_t*)out = fasthash64(key, (size_t) len, (uint64_t)seed);
+ }
++inline void ahash64_test ( const void * key, int len, uint32_t seed, void * out ) {
++  *(uint64_t*)out = ahash64(key, (size_t) len, (uint64_t)seed);
++}
++
+ #endif
+ 
+ // objsize 0-778: 1912
+ void mum_hash_test(const void * key, int len, uint32_t seed, void * out);
+ 
+diff --git a/ahash.h b/ahash.h
+new file mode 100644
+index 0000000..6c59caf
+--- /dev/null
++++ b/ahash.h
+@@ -0,0 +1,48 @@
++/* The MIT License
++
++   Copyright (C) 2012 Zilong Tan (eric.zltan@gmail.com)
++
++   Permission is hereby granted, free of charge, to any person
++   obtaining a copy of this software and associated documentation
++   files (the "Software"), to deal in the Software without
++   restriction, including without limitation the rights to use, copy,
++   modify, merge, publish, distribute, sublicense, and/or sell copies
++   of the Software, and to permit persons to whom the Software is
++   furnished to do so, subject to the following conditions:
++
++   The above copyright notice and this permission notice shall be
++   included in all copies or substantial portions of the Software.
++
++   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
++   EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
++   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
++   NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
++   BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
++   ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
++   CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++   SOFTWARE.
++*/
++
++#ifndef _AHASH_H
++#define _AHASH_H
++
++#include <stdint.h>
++#include <stdio.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++/**
++ * Ahash - 64-bit implementation of aHash
++ * @buf:  data buffer
++ * @len:  data size
++ * @seed: the seed
++ */
++       uint64_t ahash64(const void *buf, size_t len, uint64_t seed);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif
+\ No newline at end of file
+diff --git a/main.cpp b/main.cpp
+index 04060f2..7489aaf 100644
+--- a/main.cpp
++++ b/main.cpp
+@@ -263,11 +263,11 @@ HashInfo g_hashes[] =
+ 
+   { xxh3_test,            64, 0x39CD9E4A, "xxh3",        "xxHash v3, 64-bit", GOOD },
+   { xxh3low_test,         32, 0xFAE8467B, "xxh3low",     "xxHash v3, 64-bit, low 32-bits part", GOOD },
+   { xxh128_test,         128, 0xEB61B3A0, "xxh128",      "xxHash v3, 128-bit", GOOD },
+   { xxh128low_test,       64, 0x54D1CC70, "xxh128low",   "xxHash v3, 128-bit, low 64-bits part", GOOD },
+-
++  { ahash64_test,         64, 0x00000000, "ahash64",  "ahash 64bit", GOOD }, //Expected value set to zero because aHash does not adhere to a fixed output.
+ #if __WORDSIZE >= 64
+ # define TIFU_VERIF       0x644236D4
+ #else
+   // broken on certain travis
+ # define TIFU_VERIF       0x0
+-- 
+2.25.1
+

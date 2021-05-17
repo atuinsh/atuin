@@ -1,0 +1,415 @@
+trigger:
+  branches:
+    include:
+      - refs/heads/master
+      - refs/tags/*
+
+jobs:
+  - job: test_formatting
+    displayName: "Run cargo fmt"
+    steps:
+      - template: ci/azure-install-rust.yml
+      - script: cargo fmt --all -- --check
+
+  - job: test_wasm_bindgen
+    displayName: "Run wasm-bindgen crate tests (unix)"
+    steps:
+      - template: ci/azure-install-rust.yml
+      - template: ci/azure-install-node.yml
+      - template: ci/azure-install-geckodriver.yml
+      - script: cargo test
+        displayName: "Builds on native"
+      - script: cargo test --target wasm32-unknown-unknown
+        displayName: "Crate test suite"
+      - script: WASM_BINDGEN_NO_DEBUG=1 cargo test --target wasm32-unknown-unknown
+        displayName: "Crate test suite (no debug)"
+      - script: cargo test --target wasm32-unknown-unknown --features serde-serialize
+        displayName: "Crate test suite (with serde)"
+      - script: cargo test --target wasm32-unknown-unknown --features enable-interning
+        displayName: "Crate test suite (with enable-interning)"
+      - script: cargo test --target wasm32-unknown-unknown -p no-std
+        displayName: "Crate test suite (no_std)"
+      - script: cargo test -p wasm-bindgen-futures
+        displayName: "Futures test suite on native"
+      - script: cargo test -p wasm-bindgen-futures --target wasm32-unknown-unknown
+        displayName: "Futures test suite on wasm"
+      - script: cargo test -p wasm-bindgen-multi-value-xform
+        displayName: "multi-value xform tests on native"
+      # TODO: re-enable when binary decoding for reference types is updated in
+      # Node.
+      # - script: |
+      #     set -e
+      #     echo "##vso[task.setvariable variable=NODE_ARGS]--experimental-wasm-anyref"
+      #     echo "##vso[task.setvariable variable=WASM_BINDGEN_ANYREF]1"
+      #   displayName: "Configure anyref passes"
+      # - script: cargo test --target wasm32-unknown-unknown --test wasm
+      #   displayName: "(anyref) Crate test suite"
+      # - script: WASM_BINDGEN_NO_DEBUG=1 cargo test --target wasm32-unknown-unknown --test wasm
+      #   displayName: "(anyref) Crate test suite (no debug)"
+      # - script: cargo test --target wasm32-unknown-unknown --features serde-serialize --test wasm
+      #   displayName: "(anyref) Crate test suite (with serde)"
+      - script: |
+          set -e
+          echo "##vso[task.setvariable variable=NODE_ARGS]--harmony-weak-refs"
+          echo "##vso[task.setvariable variable=WASM_BINDGEN_WEAKREF]1"
+        displayName: "Configure anyref passes"
+      - script: cargo test --target wasm32-unknown-unknown --test wasm
+        displayName: "(weakref) Crate test suite"
+      - script: WASM_BINDGEN_NO_DEBUG=1 cargo test --target wasm32-unknown-unknown --test wasm
+        displayName: "(weakref) Crate test suite (no debug)"
+      - script: cargo test --target wasm32-unknown-unknown --features serde-serialize --test wasm
+        displayName: "(weakref) Crate test suite (with serde)"
+
+  - job: test_wasm_bindgen_windows
+    displayName: "Run wasm-bindgen crate tests (Windows)"
+    pool:
+      vmImage: vs2017-win2016
+    steps:
+      - template: ci/azure-install-rust.yml
+      - template: ci/azure-install-node.yml
+      - template: ci/azure-install-geckodriver.yml
+      - script: cargo test --target wasm32-unknown-unknown
+        displayName: "wasm-bindgen test suite"
+        env:
+          RUST_LOG: wasm_bindgen_test_runner
+          GECKODRIVER_ARGS: --log trace
+      - script: cargo test --target wasm32-unknown-unknown -p js-sys
+        displayName: "js-sys test suite"
+      - script: cargo test --target wasm32-unknown-unknown -p webidl-tests
+        displayName: "webidl-tests test suite"
+        env:
+          WBINDGEN_I_PROMISE_JS_SYNTAX_WORKS_IN_NODE: 1
+      - script: cargo build --manifest-path crates/web-sys/Cargo.toml --target wasm32-unknown-unknown --features "Node Window Document"
+        displayName: "web-sys build"
+
+  - job: test_wasm_bindgen_nightly
+    displayName: "Run wasm-bindgen crate tests (nightly)"
+    steps:
+      - template: ci/azure-install-rust.yml
+        parameters:
+          toolchain: nightly-2021-03-28
+      - template: ci/azure-install-node.yml
+      - script: cargo test --target wasm32-unknown-unknown --features nightly --test wasm
+
+  - job: test_cli
+    displayName: "Run wasm-bindgen-cli crate tests"
+    steps:
+      - template: ci/azure-install-rust.yml
+      - script: rustup target add wasm32-unknown-unknown
+        displayName: "install wasm target"
+      - task: NodeTool@0
+        inputs:
+          versionSpec: '>=15.0'
+      - script: cargo test -p wasm-bindgen-cli-support
+        displayName: "wasm-bindgen-cli-support tests"
+      - script: cargo test -p wasm-bindgen-cli
+        displayName: "wasm-bindgen-cli tests"
+      - script: cargo test -p wasm-bindgen-externref-xform
+        displayName: "wasm-bindgen-externref-xform tests"
+      - script: cargo test -p wasm-bindgen-multi-value-xform
+        displayName: "wasm-bindgen-multi-value-xform tests"
+      - script: cargo test -p wasm-bindgen-wasm-interpreter
+        displayName: "wasm-bindgen-wasm-interpreter tests"
+
+  - job: test_web_sys
+    displayName: "Run web-sys crate tests"
+    steps:
+      - template: ci/azure-install-rust.yml
+      - template: ci/azure-install-node.yml
+      - template: ci/azure-install-geckodriver.yml
+      - script: cargo build --manifest-path crates/web-sys/Cargo.toml --target wasm32-unknown-unknown
+      - script: cargo build --manifest-path crates/web-sys/Cargo.toml --target wasm32-unknown-unknown --features Node
+      - script: cargo build --manifest-path crates/web-sys/Cargo.toml --target wasm32-unknown-unknown --features Element
+      - script: cargo build --manifest-path crates/web-sys/Cargo.toml --target wasm32-unknown-unknown --features Window
+      - script: cargo test --manifest-path crates/web-sys/Cargo.toml --target wasm32-unknown-unknown --all-features
+      - script: cargo test --manifest-path crates/web-sys/Cargo.toml --target wasm32-unknown-unknown --all-features
+        displayName: "web-sys unstable APIs"
+        env:
+          RUSTFLAGS: --cfg=web_sys_unstable_apis
+
+  - job: check_web_sys
+    displayName: "Verify that web-sys is compiled correctly"
+    steps:
+      - template: ci/azure-install-rust.yml
+      - script: cd crates/web-sys && cargo run --release --package wasm-bindgen-webidl -- webidls src/features
+      - script: git diff --exit-code
+
+  - job: test_js_sys
+    displayName: "Run js-sys crate tests"
+    steps:
+      - template: ci/azure-install-rust.yml
+      - template: ci/azure-install-node.yml
+      - template: ci/azure-install-geckodriver.yml
+      - script: cargo test -p js-sys --target wasm32-unknown-unknown
+
+  - job: test_webidl
+    displayName: "Run wasm-bindgen-webidl crate tests"
+    steps:
+      - template: ci/azure-install-rust.yml
+      - template: ci/azure-install-node.yml
+      - script: cargo test -p wasm-bindgen-webidl
+      - script: cargo test -p webidl-tests --target wasm32-unknown-unknown
+        env:
+          WBINDGEN_I_PROMISE_JS_SYNTAX_WORKS_IN_NODE: 1
+      - script: cargo test -p webidl-tests --target wasm32-unknown-unknown
+        displayName: "webidl-tests unstable APIs"
+        env:
+          RUSTFLAGS: --cfg=web_sys_unstable_apis
+
+  - job: test_ui
+    displayName: "Run UI tests"
+    steps:
+      - template: ci/azure-install-rust.yml
+      - template: ci/azure-install-node.yml
+      - script: cargo test -p wasm-bindgen-macro
+
+  - job: test_typescript_output
+    displayName: "Test TypeScript output of wasm-bindgen"
+    steps:
+      - template: ci/azure-install-rust.yml
+      - template: ci/azure-install-node.yml
+      - script: cd crates/typescript-tests && ./run.sh
+
+  - job: build_examples
+    displayName: "Build almost all examples"
+    steps:
+      - template: ci/azure-install-rust.yml
+      - template: ci/azure-install-wasm-pack.yml
+      - script: mv _package.json package.json && npm install && rm package.json
+        displayName: "run npm install"
+      - script: |
+          for dir in `ls examples | grep -v README | grep -v asm.js | grep -v raytrace | grep -v without-a-bundler | grep -v websockets | grep -v webxr | grep -v deno`; do
+            (cd examples/$dir &&
+            ln -fs ../../node_modules . &&
+            npm run build -- --output-path $BUILD_ARTIFACTSTAGINGDIRECTORY/exbuild/$dir) || exit 1;
+          done
+        displayName: "build examples"
+      - task: PublishPipelineArtifact@0
+        inputs:
+          artifactName: examples1
+          targetPath: '$(Build.ArtifactStagingDirectory)'
+
+  - job: test_deno
+    displayName: "Build and test the deno example"
+    steps:
+      - template: ci/azure-install-rust.yml
+      - script: rustup target add wasm32-unknown-unknown
+        displayName: "install wasm target"
+      - template: ci/azure-install-deno.yml
+      - script: cd examples/deno && ./build.sh && $HOME/.deno/bin/deno run --allow-read test.ts
+        displayName: "build and run deno example"
+
+  - job: build_raytrace
+    displayName: "Build raytrace examples"
+    steps:
+      - template: ci/azure-install-rust.yml
+        parameters:
+          toolchain: nightly-2020-08-27
+      - script: rustup component add rust-src
+        displayName: "install rust-src"
+      - script: |
+          set -e
+          sed -i 's/python/#python/' examples/raytrace-parallel/build.sh
+          (cd examples/raytrace-parallel && ./build.sh)
+          cp examples/raytrace-parallel/*.{js,html,wasm} $BUILD_ARTIFACTSTAGINGDIRECTORY
+        displayName: "build example"
+      - task: PublishPipelineArtifact@0
+        inputs:
+          artifactName: examples2
+          targetPath: '$(Build.ArtifactStagingDirectory)'
+
+  - job: build_benchmarks
+    displayName: "Build benchmarks"
+    steps:
+      - template: ci/azure-install-rust.yml
+      - script: rustup target add wasm32-unknown-unknown
+        displayName: "add target"
+      - script: cargo build --manifest-path benchmarks/Cargo.toml --release --target wasm32-unknown-unknown
+        displayName: "build benchmarks"
+      - script: cargo run -p wasm-bindgen-cli -- target/wasm32-unknown-unknown/release/wasm_bindgen_benchmark.wasm --out-dir benchmarks/pkg --target web
+        displayName: "run wasm-bindgen"
+      - task: PublishPipelineArtifact@0
+        inputs:
+          artifactName: benchmarks
+          targetPath: benchmarks
+
+  - job: dist_linux
+    displayName: "Dist Linux binary"
+    steps:
+      - template: ci/azure-install-rust.yml
+      - script: rustup target add x86_64-unknown-linux-musl
+      - script: |
+          sudo apt update -y
+          sudo apt install musl-tools -y
+        displayName: "Install musl-tools"
+      - script: |
+          set -ex
+          cargo build --manifest-path crates/cli/Cargo.toml --target x86_64-unknown-linux-musl --features vendored-openssl --release
+          strip -g target/x86_64-unknown-linux-musl/release/wasm-bindgen
+          strip -g target/x86_64-unknown-linux-musl/release/wasm-bindgen-test-runner
+          strip -g target/x86_64-unknown-linux-musl/release/wasm2es6js
+      - template: ci/azure-create-tarball.yml
+        parameters:
+          artifacts: target/x86_64-unknown-linux-musl/release
+          name: dist_linux
+
+  - job: dist_darwin
+    displayName: "Dist Darwin binary"
+    pool:
+      vmImage: macOS-10.15
+    steps:
+      - template: ci/azure-install-rust.yml
+      - script: cargo build --manifest-path crates/cli/Cargo.toml --release
+        env:
+          MACOSX_DEPLOYMENT_TARGET: 10.7
+      - template: ci/azure-create-tarball.yml
+        parameters:
+          name: dist_darwin
+
+  - job: dist_windows
+    displayName: "Dist Windows binary"
+    pool:
+      vmImage: vs2017-win2016
+    steps:
+      - template: ci/azure-install-rust.yml
+      - script: cargo build --manifest-path crates/cli/Cargo.toml --release
+        env:
+          RUSTFLAGS: -Ctarget-feature=+crt-static
+      - template: ci/azure-create-tarball.yml
+        parameters:
+          name: dist_windows
+
+  - job: doc_book
+    displayName: "Doc - build the book"
+    steps:
+      - script: |
+          set -e
+          curl -L https://github.com/rust-lang-nursery/mdBook/releases/download/v0.3.0/mdbook-v0.3.0-x86_64-unknown-linux-gnu.tar.gz | tar xzf -
+          echo "##vso[task.prependpath]$PWD"
+        displayName: "Install mdbook"
+      - script: (cd guide && mv _theme theme && mdbook build)
+      - task: PublishPipelineArtifact@0
+        inputs:
+          artifactName: doc_book
+          targetPath: guide/book/html
+
+  - job: doc_api
+    displayName: "Doc - build the API documentation"
+    steps:
+      - template: ci/azure-install-rust.yml
+        parameters:
+          toolchain: nightly
+      - script: cargo doc --no-deps --features 'nightly serde-serialize'
+        displayName: "Document wasm-bindgen"
+      - script: cargo doc --no-deps --manifest-path crates/js-sys/Cargo.toml
+        displayName: "Document js-sys"
+      - script: cargo doc --no-deps --manifest-path crates/web-sys/Cargo.toml --all-features
+        displayName: "Document web-sys"
+        env:
+          RUSTDOCFLAGS: --cfg=web_sys_unstable_apis
+      - script: cargo doc --no-deps --manifest-path crates/futures/Cargo.toml
+        displayName: "Document wasm-bindgen-futures"
+      # Make a tarball even though a zip is uploaded, it looks like the tarball
+      # makes the uploading step much speedier.
+      - script: tar czvf $BUILD_ARTIFACTSTAGINGDIRECTORY/docs.tar.gz target/doc
+      - task: PublishPipelineArtifact@0
+        inputs:
+          artifactName: doc_api
+          targetPath: target/doc
+
+  - job: deploy
+    dependsOn:
+      - doc_api
+      - doc_book
+      - dist_linux
+      - dist_darwin
+      - dist_windows
+      - build_examples
+      - build_raytrace
+      - build_benchmarks
+    displayName: "Deploy everything"
+    steps:
+      - template: ci/azure-install-rust.yml
+      - task: DownloadPipelineArtifact@0
+        displayName: "Download docs - api"
+        inputs:
+          artifactName: doc_api
+          targetPath: gh-pages/api
+      - task: DownloadPipelineArtifact@0
+        displayName: "Download docs - book"
+        inputs:
+          artifactName: doc_book
+          targetPath: gh-pages
+      - task: DownloadPipelineArtifact@0
+        displayName: "Download examples"
+        inputs:
+          artifactName: examples1
+          targetPath: gh-pages
+      - task: DownloadPipelineArtifact@0
+        displayName: "Download examples - raytracer"
+        inputs:
+          artifactName: examples2
+          targetPath: gh-pages/exbuild/raytrace-parallel
+      - task: DownloadPipelineArtifact@0
+        displayName: "Download benchmarks"
+        inputs:
+          artifactName: benchmarks
+          targetPath: gh-pages/benchmarks
+      - task: DownloadPipelineArtifact@0
+        displayName: "Download dist - windows"
+        inputs:
+          artifactName: dist_windows
+          targetPath: tmp/windows
+      - task: DownloadPipelineArtifact@0
+        displayName: "Download dist - linux"
+        inputs:
+          artifactName: dist_linux
+          targetPath: tmp/linux
+      - task: DownloadPipelineArtifact@0
+        displayName: "Download dist - darwin"
+        inputs:
+          artifactName: dist_darwin
+          targetPath: tmp/darwin
+      - script: |
+          set -ex
+          mkdir -p gh-release
+          find .
+          tag=`git describe --tags`
+          mk() {
+            target=$1
+            src=$2
+            name=wasm-bindgen-$tag-$target
+            mkdir -p tmp/$name
+            cp README.md \
+              LICENSE-MIT \
+              LICENSE-APACHE \
+              tmp/$src/wasm* \
+              tmp/$name/
+            chmod +x tmp/$name/wasm*
+            tar czvf gh-release/$name.tar.gz -C tmp $name
+          }
+          mk x86_64-unknown-linux-musl linux
+          mk x86_64-apple-darwin darwin
+          mk x86_64-pc-windows-msvc windows
+        displayName: "prepare the github releases tarball artifacts"
+      - task: PublishPipelineArtifact@0
+        displayName: "publish gh_release artifact"
+        inputs:
+          artifactName: gh_release
+          targetPath: gh-release
+      - task: PublishPipelineArtifact@0
+        displayName: "publish gh_pages artifact"
+        inputs:
+          artifactName: gh_pages
+          targetPath: gh-pages
+      - script: curl -LsSf https://git.io/fhJ8n | rustc - && (cd gh-pages && ../rust_out)
+        condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/master'))
+        env:
+          GITHUB_DEPLOY_KEY: $(GITHUB_DEPLOY_KEY)
+      - task: GithubRelease@0
+        condition: and(succeeded(), startsWith(variables['Build.SourceBranch'], 'refs/tags/'))
+        displayName: 'Create GitHub Release'
+        inputs:
+          gitHubConnection: alexcrichton-token
+          repositoryName: rustwasm/wasm-bindgen
+          assets: gh-release/*.tar.gz

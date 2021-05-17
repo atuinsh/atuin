@@ -1,0 +1,5 @@
+# ex 7.2
+{
+        foo : !!str,
+        !!str : bar,
+}

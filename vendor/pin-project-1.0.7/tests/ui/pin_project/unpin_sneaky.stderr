@@ -1,0 +1,11 @@
+error[E0412]: cannot find type `__S` in this scope
+ --> $DIR/unpin_sneaky.rs:9:16
+  |
+9 | impl Unpin for __S {} //~ ERROR E0412,E0321
+  |                ^^^ not found in this scope
+
+error[E0321]: cross-crate traits with a default impl, like `Unpin`, can only be implemented for a struct/enum type, not `[type error]`
+ --> $DIR/unpin_sneaky.rs:9:1
+  |
+9 | impl Unpin for __S {} //~ ERROR E0412,E0321
+  | ^^^^^^^^^^^^^^^^^^ can't implement cross-crate trait with a default impl for non-struct/enum type

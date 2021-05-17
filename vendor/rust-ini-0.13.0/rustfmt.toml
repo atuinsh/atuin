@@ -1,0 +1,12 @@
+max_width = 120
+indent_style = "Visual"
+#fn_call_width = 120
+reorder_imports = true
+reorder_imports_in_group = true
+reorder_imported_names = true
+condense_wildcard_suffixes = true
+#fn_args_layout = "Visual"
+#fn_call_style = "Visual"
+#chain_indent = "Visual"
+normalize_comments = true
+use_try_shorthand = true

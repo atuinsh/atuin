@@ -1,0 +1,101 @@
+language: rust
+# sudo is required to enable kcov to use the personality syscall
+sudo: required
+dist: trusty
+cache: cargo
+
+rust:
+  - nightly
+  - beta
+  - stable
+  - 1.31.0
+
+env:
+  matrix:
+    - FEATURES='--features "regexp regexp_macros"'
+
+before_script:
+  - eval git pull --rebase https://github.com/Geal/nom master
+  - eval git log --pretty=oneline HEAD~5..HEAD
+
+matrix:
+  include:
+    - rust: nightly
+      env: FEATURES='--no-default-features'
+    - rust: nightly
+      env: FEATURES='--no-default-features --features "alloc"'
+    - rust: stable
+      env: FEATURES=''
+    - rust: nightly
+      env: DOC_FEATURES='--features "std lexical regexp regexp_macros" --no-default-features'
+      before_script:
+        - export PATH=$HOME/.cargo/bin:$PATH
+      script:
+        - eval cargo doc --verbose $DOC_FEATURES
+    - rust: nightly
+      env: FEATURES=''
+      before_script:
+        - export PATH=$HOME/.cargo/bin:$PATH
+        - cargo install cargo-update   || echo "cargo-update already installed"
+        - cargo install cargo-travis   || echo "cargo-travis already installed"
+        - cargo install-update -a
+        - mkdir -p target/kcov-master
+      script:
+        cargo coveralls --verbose --all-features
+  allow_failures:
+    - rust: stable
+      env: FEATURES=''
+      before_script:
+        - export PATH=$HOME/.cargo/bin:$PATH
+        - rustup component add rustfmt-preview
+      script:
+        - eval cargo fmt -- --write-mode=diff
+
+notifications:
+  webhooks:
+    urls:
+      - https://webhooks.gitter.im/e/9c035a194ac4fd4cc061
+    on_success: change
+    on_failure: always
+    on_start: false
+
+
+addons:
+  apt:
+    packages:
+      - libcurl4-openssl-dev
+      - libelf-dev
+      - libdw-dev
+      - binutils-dev
+      - cmake
+    sources:
+      - kalakris-cmake
+
+cache:
+  directories:
+    - /home/travis/.cargo
+
+before_cache:
+  - rm -rf /home/travis/.cargo/registry
+
+script:
+  - eval cargo build --verbose $FEATURES
+  - eval cargo test --verbose $FEATURES
+
+after_success: |
+  case "$TRAVIS_RUST_VERSION" in
+    nightly)
+      if [ "${TRAVIS_PULL_REQUEST_BRANCH:-$TRAVIS_BRANCH}" != "master" ]; then
+        git fetch &&
+        git checkout master &&
+        cargo bench --verbose
+      fi
+
+      if [ "$FEATURES" == '--features "regexp regexp_macros"' ]; then
+        cargo bench --verbose
+      fi
+      ;;
+
+    *)
+      ;;
+  esac

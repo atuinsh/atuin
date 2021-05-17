@@ -1,0 +1,35 @@
+This directory contains test data for testing net::VerifySignedData().
+
+When adding or changing test data, run the script
+  $ python annotate_test_data.py
+
+This script will apply a uniform formatting. For instance it will add a
+comment showing what the parsed ASN.1 looks like, and reformat the base64 to
+have consistent line breaks.
+
+The general format for the test files is as follows:
+
+
+  <A description of the test>
+
+  -----BEGIN PUBLIC KEY-----
+  <base64-encoded, DER-encoded, SPKI>
+  -----END PUBLIC KEY-----
+
+  -----BEGIN ALGORITHM-----
+  <base64-encoded, DER-encoded, AlgorithmIdentifier for the signature.>
+  -----END ALGORITHM-----
+
+  -----BEGIN DATA-----
+  <base64-encoded data that is being verified>
+  -----END DATA-----
+
+  -----BEGIN SIGNATURE-----
+  <base64-encoded, DER-encoded, BIT STRING of the signature>
+  -----END SIGNATURE-----
+
+
+Comments for a PEM block should be placed immediately below that block.
+The script will also insert a comment after the block describing its parsed
+ASN.1 structure (your extra comments need to be above the script-generated
+comments or they will be stripped).

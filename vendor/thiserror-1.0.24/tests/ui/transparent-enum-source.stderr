@@ -1,0 +1,5 @@
+error: transparent variant can't contain #[source]
+ --> $DIR/transparent-enum-source.rs:6:11
+  |
+6 |     Other(#[source] anyhow::Error),
+  |           ^^^^^^^^^

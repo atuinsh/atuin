@@ -1,0 +1,5 @@
+error: unexpected argument to proc_macro_hack macro implementation; args are only accepted on the macro declaration (the `pub use`)
+ --> $DIR/unexpected-arg.rs:3:19
+  |
+3 | #[proc_macro_hack(fake_call_site)]
+  |                   ^^^^^^^^^^^^^^

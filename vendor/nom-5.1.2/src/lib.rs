@@ -1,0 +1,513 @@
+//! # nom, eating data byte by byte
+//!
+//! nom is a parser combinator library with a focus on safe parsing,
+//! streaming patterns, and as much as possible zero copy.
+//!
+//! ## Example
+//!
+//! ```rust
+//! extern crate nom;
+//!
+//! use nom::{
+//!   IResult,
+//!   bytes::complete::{tag, take_while_m_n},
+//!   combinator::map_res,
+//!   sequence::tuple};
+//!
+//! #[derive(Debug,PartialEq)]
+//! pub struct Color {
+//!   pub red:     u8,
+//!   pub green:   u8,
+//!   pub blue:    u8,
+//! }
+//!
+//! fn from_hex(input: &str) -> Result<u8, std::num::ParseIntError> {
+//!   u8::from_str_radix(input, 16)
+//! }
+//!
+//! fn is_hex_digit(c: char) -> bool {
+//!   c.is_digit(16)
+//! }
+//!
+//! fn hex_primary(input: &str) -> IResult<&str, u8> {
+//!   map_res(
+//!     take_while_m_n(2, 2, is_hex_digit),
+//!     from_hex
+//!   )(input)
+//! }
+//!
+//! fn hex_color(input: &str) -> IResult<&str, Color> {
+//!   let (input, _) = tag("#")(input)?;
+//!   let (input, (red, green, blue)) = tuple((hex_primary, hex_primary, hex_primary))(input)?;
+//!
+//!   Ok((input, Color { red, green, blue }))
+//! }
+//!
+//! fn main() {
+//!   assert_eq!(hex_color("#2F14DF"), Ok(("", Color {
+//!     red: 47,
+//!     green: 20,
+//!     blue: 223,
+//!   })));
+//! }
+//! ```
+//!
+//! The code is available on [Github](https://github.com/Geal/nom)
+//!
+//! There are a few [guides](https://github.com/Geal/nom/tree/master/doc) with more details
+//! about [the design of nom macros](https://github.com/Geal/nom/blob/master/doc/how_nom_macros_work.md),
+//! [how to write parsers](https://github.com/Geal/nom/blob/master/doc/making_a_new_parser_from_scratch.md),
+//! or the [error management system](https://github.com/Geal/nom/blob/master/doc/error_management.md).
+//!
+//! **Looking for a specific combinator? Read the
+//! ["choose a combinator" guide](https://github.com/Geal/nom/blob/master/doc/choosing_a_combinator.md)**
+//!
+//! If you are upgrading to nom 5.0, please read the
+//! [migration document](https://github.com/Geal/nom/blob/master/doc/upgrading_to_nom_5.md).
+//!
+//! See also the [FAQ](https://github.com/Geal/nom/blob/master/doc/FAQ.md).
+//!
+//! ## Parser combinators
+//!
+//! Parser combinators are an approach to parsers that is very different from
+//! software like [lex](https://en.wikipedia.org/wiki/Lex_(software)) and
+//! [yacc](https://en.wikipedia.org/wiki/Yacc). Instead of writing the grammar
+//! in a separate syntax and generating the corresponding code, you use very small
+//! functions with very specific purposes, like "take 5 bytes", or "recognize the
+//! word 'HTTP'", and assemble them in meaningful patterns like "recognize
+//! 'HTTP', then a space, then a version".
+//! The resulting code is small, and looks like the grammar you would have
+//! written with other parser approaches.
+//!
+//! This gives us a few advantages:
+//!
+//! - the parsers are small and easy to write
+//! - the parsers components are easy to reuse (if they're general enough, please add them to nom!)
+//! - the parsers components are easy to test separately (unit tests and property-based tests)
+//! - the parser combination code looks close to the grammar you would have written
+//! - you can build partial parsers, specific to the data you need at the moment, and ignore the rest
+//!
+//! Here is an example of one such parser, to recognize text between parentheses:
+//!
+//! ```rust
+//! use nom::{
+//!   IResult,
+//!   sequence::delimited,
+//!   // see the "streaming/complete" paragraph lower for an explanation of these submodules
+//!   character::complete::char,
+//!   bytes::complete::is_not
+//! };
+//!
+//! fn parens(input: &str) -> IResult<&str, &str> {
+//!   delimited(char('('), is_not(")"), char(')'))(input)
+//! }
+//! ```
+//!
+//! It defines a function named `parens` which will recognize a sequence of the
+//! character `(`, the longest byte array not containing `)`, then the character
+//! `)`, and will return the byte array in the middle.
+//!
+//! Here is another parser, written without using nom's combinators this time:
+//!
+//! ```rust
+//! #[macro_use]
+//! extern crate nom;
+//!
+//! use nom::{IResult, Err, Needed};
+//!
+//! # fn main() {
+//! fn take4(i: &[u8]) -> IResult<&[u8], &[u8]>{
+//!   if i.len() < 4 {
+//!     Err(Err::Incomplete(Needed::Size(4)))
+//!   } else {
+//!     Ok((&i[4..], &i[0..4]))
+//!   }
+//! }
+//! # }
+//! ```
+//!
+//! This function takes a byte array as input, and tries to consume 4 bytes.
+//! Writing all the parsers manually, like this, is dangerous, despite Rust's
+//! safety features. There are still a lot of mistakes one can make. That's why
+//! nom provides a list of function and macros to help in developing parsers.
+//!
+//! With functions, you would write it like this:
+//!
+//! ```rust
+//! use nom::{IResult, bytes::streaming::take};
+//! fn take4(input: &str) -> IResult<&str, &str> {
+//!   take(4u8)(input)
+//! }
+//! ```
+//!
+//! With macros, you would write it like this:
+//!
+//! ```rust
+//! #[macro_use]
+//! extern crate nom;
+//!
+//! # fn main() {
+//! named!(take4, take!(4));
+//! # }
+//! ```
+//!
+//! nom has used macros for combinators from versions 1 to 4, and from version
+//! 5, it proposes new combinators as functions, but still allows the macros style
+//! (macros have been rewritten to use the functions under the hood).
+//! For new parsers, we recommend using the functions instead of macros, since
+//! rustc messages will be much easier to understand.
+//!
+//!
+//! A parser in nom is a function which, for an input type `I`, an output type `O`
+//! and an optional error type `E`, will have the following signature:
+//!
+//! ```rust,ignore
+//! fn parser(input: I) -> IResult<I, O, E>;
+//! ```
+//!
+//! Or like this, if you don't want to specify a custom error type (it will be `u32` by default):
+//!
+//! ```rust,ignore
+//! fn parser(input: I) -> IResult<I, O>;
+//! ```
+//!
+//! `IResult` is an alias for the `Result` type:
+//!
+//! ```rust
+//! use nom::{Needed, error::ErrorKind};
+//!
+//! type IResult<I, O, E = (I,ErrorKind)> = Result<(I, O), Err<E>>;
+//!
+//! enum Err<E> {
+//!   Incomplete(Needed),
+//!   Error(E),
+//!   Failure(E),
+//! }
+//! ```
+//!
+//! It can have the following values:
+//!
+//! - a correct result `Ok((I,O))` with the first element being the remaining of the input (not parsed yet), and the second the output value;
+//! - an error `Err(Err::Error(c))` with `c` an error that can be built from the input position and a parser specific error
+//! - an error `Err(Err::Incomplete(Needed))` indicating that more input is necessary. `Needed` can indicate how much data is needed
+//! - an error `Err(Err::Failure(c))`. It works like the `Error` case, except it indicates an unrecoverable error: we cannot backtrack and test another parser
+//!
+//! Please refer to the ["choose a combinator" guide](https://github.com/Geal/nom/blob/master/doc/choosing_a_combinator.md) for an exhaustive list of parsers.
+//! See also the rest of the documentation [here](https://github.com/Geal/nom/blob/master/doc).
+//! .
+//!
+//! ## Making new parsers with function combinators
+//!
+//! nom is based on functions that generate parsers, with a signature like
+//! this: `(arguments) -> impl Fn(Input) -> IResult<Input, Output, Error>`.
+//! The arguments of a combinator can be direct values (like `take` which uses
+//! a number of bytes or character as argument) or even other parsers (like
+//! `delimited` which takes as argument 3 parsers, and returns the result of
+//! the second one if all are successful).
+//!
+//! Here are some examples:
+//!
+//! ```rust
+//! use nom::IResult;
+//! use nom::bytes::complete::{tag, take};
+//! fn abcd_parser(i: &str) -> IResult<&str, &str> {
+//!   tag("abcd")(i) // will consume bytes if the input begins with "abcd"
+//! }
+//!
+//! fn take_10(i: &[u8]) -> IResult<&[u8], &[u8]> {
+//!   take(10u8)(i) // will consume and return 10 bytes of input
+//! }
+//! ```
+//!
+//! ## Combining parsers
+//!
+//! There are higher level patterns, like the **`alt`** combinator, which
+//! provides a choice between multiple parsers. If one branch fails, it tries
+//! the next, and returns the result of the first parser that succeeds:
+//!
+//! ```rust
+//! use nom::IResult;
+//! use nom::branch::alt;
+//! use nom::bytes::complete::tag;
+//!
+//! let alt_tags = alt((tag("abcd"), tag("efgh")));
+//!
+//! assert_eq!(alt_tags(&b"abcdxxx"[..]), Ok((&b"xxx"[..], &b"abcd"[..])));
+//! assert_eq!(alt_tags(&b"efghxxx"[..]), Ok((&b"xxx"[..], &b"efgh"[..])));
+//! assert_eq!(alt_tags(&b"ijklxxx"[..]), Err(nom::Err::Error((&b"ijklxxx"[..], nom::error::ErrorKind::Tag))));
+//! ```
+//!
+//! The **`opt`** combinator makes a parser optional. If the child parser returns
+//! an error, **`opt`** will still succeed and return None:
+//!
+//! ```rust
+//! use nom::{IResult, combinator::opt, bytes::complete::tag};
+//! fn abcd_opt(i: &[u8]) -> IResult<&[u8], Option<&[u8]>> {
+//!   opt(tag("abcd"))(i)
+//! }
+//!
+//! assert_eq!(abcd_opt(&b"abcdxxx"[..]), Ok((&b"xxx"[..], Some(&b"abcd"[..]))));
+//! assert_eq!(abcd_opt(&b"efghxxx"[..]), Ok((&b"efghxxx"[..], None)));
+//! ```
+//!
+//! **`many0`** applies a parser 0 or more times, and returns a vector of the aggregated results:
+//!
+//! ```rust
+//! # #[macro_use] extern crate nom;
+//! # #[cfg(feature = "alloc")]
+//! # fn main() {
+//! use nom::{IResult, multi::many0, bytes::complete::tag};
+//! use std::str;
+//!
+//! fn multi(i: &str) -> IResult<&str, Vec<&str>> {
+//!   many0(tag("abcd"))(i)
+//! }
+//!
+//! let a = "abcdef";
+//! let b = "abcdabcdef";
+//! let c = "azerty";
+//! assert_eq!(multi(a), Ok(("ef",     vec!["abcd"])));
+//! assert_eq!(multi(b), Ok(("ef",     vec!["abcd", "abcd"])));
+//! assert_eq!(multi(c), Ok(("azerty", Vec::new())));
+//! # }
+//! # #[cfg(not(feature = "alloc"))]
+//! # fn main() {}
+//! ```
+//!
+//! Here are some basic combining macros available:
+//!
+//! - **`opt`**: will make the parser optional (if it returns the `O` type, the new parser returns `Option<O>`)
+//! - **`many0`**: will apply the parser 0 or more times (if it returns the `O` type, the new parser returns `Vec<O>`)
+//! - **`many1`**: will apply the parser 1 or more times
+//!
+//! There are more complex (and more useful) parsers like `tuple!`, which is
+//! used to apply a series of parsers then assemble their results.
+//!
+//! Example with `tuple`:
+//!
+//! ```rust
+//! # #[macro_use] extern crate nom;
+//! # fn main() {
+//! use nom::{error::ErrorKind, Needed,
+//! number::streaming::be_u16,
+//! bytes::streaming::{tag, take},
+//! sequence::tuple};
+//!
+//! let tpl = tuple((be_u16, take(3u8), tag("fg")));
+//!
+//! assert_eq!(
+//!   tpl(&b"abcdefgh"[..]),
+//!   Ok((
+//!     &b"h"[..],
+//!     (0x6162u16, &b"cde"[..], &b"fg"[..])
+//!   ))
+//! );
+//! assert_eq!(tpl(&b"abcde"[..]), Err(nom::Err::Incomplete(Needed::Size(2))));
+//! let input = &b"abcdejk"[..];
+//! assert_eq!(tpl(input), Err(nom::Err::Error((&input[5..], ErrorKind::Tag))));
+//! # }
+//! ```
+//!
+//! But you can also use a sequence of combinators written in imperative style,
+//! thanks to the `?` operator:
+//!
+//! ```rust
+//! # #[macro_use] extern crate nom;
+//! # fn main() {
+//! use nom::{IResult, bytes::complete::tag};
+//!
+//! #[derive(Debug, PartialEq)]
+//! struct A {
+//!   a: u8,
+//!   b: u8
+//! }
+//!
+//! fn ret_int1(i:&[u8]) -> IResult<&[u8], u8> { Ok((i,1)) }
+//! fn ret_int2(i:&[u8]) -> IResult<&[u8], u8> { Ok((i,2)) }
+//!
+//! fn f(i: &[u8]) -> IResult<&[u8], A> {
+//!   // if successful, the parser returns `Ok((remaining_input, output_value))` that we can destructure
+//!   let (i, _) = tag("abcd")(i)?;
+//!   let (i, a) = ret_int1(i)?;
+//!   let (i, _) = tag("efgh")(i)?;
+//!   let (i, b) = ret_int2(i)?;
+//!
+//!   Ok((i, A { a, b }))
+//! }
+//!
+//! let r = f(b"abcdefghX");
+//! assert_eq!(r, Ok((&b"X"[..], A{a: 1, b: 2})));
+//! # }
+//! ```
+//!
+//! ## Streaming / Complete
+//!
+//! Some of nom's modules have `streaming` or `complete` submodules. They hold
+//! different variants of the same combinators.
+//!
+//! A streaming parser assumes that we might not have all of the input data.
+//! This can happen with some network protocol or large file parsers, where the
+//! input buffer can be full and need to be resized or refilled.
+//!
+//! A complete parser assumes that we already have all of the input data.
+//! This will be the common case with small files that can be read entirely to
+//! memory.
+//!
+//! Here is how it works in practice:
+//!
+//! ```rust
+//! use nom::{IResult, Err, Needed, error::ErrorKind, bytes, character};
+//!
+//! fn take_streaming(i: &[u8]) -> IResult<&[u8], &[u8]> {
+//!   bytes::streaming::take(4u8)(i)
+//! }
+//!
+//! fn take_complete(i: &[u8]) -> IResult<&[u8], &[u8]> {
+//!   bytes::complete::take(4u8)(i)
+//! }
+//!
+//! // both parsers will take 4 bytes as expected
+//! assert_eq!(take_streaming(&b"abcde"[..]), Ok((&b"e"[..], &b"abcd"[..])));
+//! assert_eq!(take_complete(&b"abcde"[..]), Ok((&b"e"[..], &b"abcd"[..])));
+//!
+//! // if the input is smaller than 4 bytes, the streaming parser
+//! // will return `Incomplete` to indicate that we need more data
+//! assert_eq!(take_streaming(&b"abc"[..]), Err(Err::Incomplete(Needed::Size(4))));
+//!
+//! // but the complete parser will return an error
+//! assert_eq!(take_complete(&b"abc"[..]), Err(Err::Error((&b"abc"[..], ErrorKind::Eof))));
+//!
+//! // the alpha0 function recognizes 0 or more alphabetic characters
+//! fn alpha0_streaming(i: &str) -> IResult<&str, &str> {
+//!   character::streaming::alpha0(i)
+//! }
+//!
+//! fn alpha0_complete(i: &str) -> IResult<&str, &str> {
+//!   character::complete::alpha0(i)
+//! }
+//!
+//! // if there's a clear limit to the recognized characters, both parsers work the same way
+//! assert_eq!(alpha0_streaming("abcd;"), Ok((";", "abcd")));
+//! assert_eq!(alpha0_complete("abcd;"), Ok((";", "abcd")));
+//!
+//! // but when there's no limit, the streaming version returns `Incomplete`, because it cannot
+//! // know if more input data should be recognized. The whole input could be "abcd;", or
+//! // "abcde;"
+//! assert_eq!(alpha0_streaming("abcd"), Err(Err::Incomplete(Needed::Size(1))));
+//!
+//! // while the complete version knows that all of the data is there
+//! assert_eq!(alpha0_complete("abcd"), Ok(("", "abcd")));
+//! ```
+//! **Going further:** read the [guides](https://github.com/Geal/nom/tree/master/doc)!
+#![cfg_attr(all(not(feature = "std"), feature = "alloc"), feature(alloc))]
+#![cfg_attr(not(feature = "std"), no_std)]
+#![cfg_attr(feature = "cargo-clippy", allow(doc_markdown))]
+#![cfg_attr(nightly, feature(test))]
+#![deny(missing_docs)]
+#![warn(missing_doc_code_examples)]
+
+#[cfg(all(not(feature = "std"), feature = "alloc"))]
+#[macro_use]
+extern crate alloc;
+#[cfg(feature = "regexp_macros")]
+#[macro_use]
+extern crate lazy_static;
+extern crate memchr;
+#[cfg(feature = "regexp")]
+pub extern crate regex;
+#[cfg(feature = "lexical")]
+extern crate lexical_core;
+#[cfg(nightly)]
+extern crate test;
+#[cfg(test)]
+extern crate doc_comment;
+
+//FIXME: reactivate doctest once https://github.com/rust-lang/rust/issues/62210 is done
+//#[cfg(doctest)]
+//doc_comment::doctest!("../README.md");
+
+/// Lib module to re-export everything needed from `std` or `core`/`alloc`. This is how `serde` does
+/// it, albeit there it is not public.
+pub mod lib {
+  /// `std` facade allowing `std`/`core` to be interchangeable. Reexports `alloc` crate optionally,
+  /// as well as `core` or `std`
+  #[cfg(not(feature = "std"))]
+  /// internal std exports for no_std compatibility
+  pub mod std {
+    #[cfg(feature = "alloc")]
+    #[cfg_attr(feature = "alloc", macro_use)]
+    pub use alloc::{boxed, string, vec};
+
+    pub use core::{cmp, convert, fmt, iter, mem, ops, option, result, slice, str, borrow};
+
+    /// internal reproduction of std prelude
+    pub mod prelude {
+      pub use core::prelude as v1;
+    }
+  }
+
+  #[cfg(feature = "std")]
+  /// internal std exports for no_std compatibility
+  pub mod std {
+    pub use std::{alloc, boxed, cmp, collections, convert, fmt, hash, iter, mem, ops, option, result, slice, str, string, vec, borrow};
+
+    /// internal reproduction of std prelude
+    pub mod prelude {
+      pub use std::prelude as v1;
+    }
+  }
+
+  #[cfg(feature = "regexp")]
+  pub use regex;
+}
+
+pub use self::traits::*;
+pub use self::util::*;
+pub use self::internal::*;
+pub use self::methods::*;
+pub use self::bits::*;
+pub use self::whitespace::*;
+
+#[cfg(feature = "regexp")]
+pub use self::regexp::*;
+pub use self::str::*;
+
+#[macro_use]
+mod util;
+
+#[macro_use]
+pub mod error;
+
+#[macro_use]
+mod internal;
+mod traits;
+#[macro_use]
+pub mod combinator;
+#[macro_use]
+pub mod branch;
+#[macro_use]
+pub mod sequence;
+#[macro_use]
+pub mod multi;
+#[macro_use]
+pub mod methods;
+
+#[macro_use]
+pub mod bytes;
+#[macro_use]
+pub mod bits;
+
+#[macro_use]
+pub mod character;
+
+#[macro_use]
+pub mod whitespace;
+
+#[cfg(feature = "regexp")]
+#[macro_use]
+mod regexp;
+
+mod str;
+
+#[macro_use]
+pub mod number;

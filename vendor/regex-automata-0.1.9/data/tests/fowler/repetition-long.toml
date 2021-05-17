@@ -1,0 +1,294 @@
+[[tests]]
+name = "repetition-long12"
+options = ['escaped']
+pattern = '''X(.?){0,}Y'''
+input = '''X1234567Y'''
+matches = [[0, 9]]
+
+[[tests]]
+name = "repetition-long13"
+options = ['escaped']
+pattern = '''X(.?){1,}Y'''
+input = '''X1234567Y'''
+matches = [[0, 9]]
+
+[[tests]]
+name = "repetition-long14"
+options = ['escaped']
+pattern = '''X(.?){2,}Y'''
+input = '''X1234567Y'''
+matches = [[0, 9]]
+
+[[tests]]
+name = "repetition-long15"
+options = ['escaped']
+pattern = '''X(.?){3,}Y'''
+input = '''X1234567Y'''
+matches = [[0, 9]]
+
+[[tests]]
+name = "repetition-long16"
+options = ['escaped']
+pattern = '''X(.?){4,}Y'''
+input = '''X1234567Y'''
+matches = [[0, 9]]
+
+[[tests]]
+name = "repetition-long17"
+options = ['escaped']
+pattern = '''X(.?){5,}Y'''
+input = '''X1234567Y'''
+matches = [[0, 9]]
+
+[[tests]]
+name = "repetition-long18"
+options = ['escaped']
+pattern = '''X(.?){6,}Y'''
+input = '''X1234567Y'''
+matches = [[0, 9]]
+
+[[tests]]
+name = "repetition-long19"
+options = ['escaped']
+pattern = '''X(.?){7,}Y'''
+input = '''X1234567Y'''
+matches = [[0, 9]]
+
+[[tests]]
+name = "repetition-long20"
+options = ['escaped']
+pattern = '''X(.?){8,}Y'''
+input = '''X1234567Y'''
+matches = [[0, 9]]
+
+[[tests]]
+name = "repetition-long22"
+options = ['escaped']
+pattern = '''X(.?){0,8}Y'''
+input = '''X1234567Y'''
+matches = [[0, 9]]
+
+[[tests]]
+name = "repetition-long24"
+options = ['escaped']
+pattern = '''X(.?){1,8}Y'''
+input = '''X1234567Y'''
+matches = [[0, 9]]
+
+[[tests]]
+name = "repetition-long26"
+options = ['escaped']
+pattern = '''X(.?){2,8}Y'''
+input = '''X1234567Y'''
+matches = [[0, 9]]
+
+[[tests]]
+name = "repetition-long28"
+options = ['escaped']
+pattern = '''X(.?){3,8}Y'''
+input = '''X1234567Y'''
+matches = [[0, 9]]
+
+[[tests]]
+name = "repetition-long30"
+options = ['escaped']
+pattern = '''X(.?){4,8}Y'''
+input = '''X1234567Y'''
+matches = [[0, 9]]
+
+[[tests]]
+name = "repetition-long32"
+options = ['escaped']
+pattern = '''X(.?){5,8}Y'''
+input = '''X1234567Y'''
+matches = [[0, 9]]
+
+[[tests]]
+name = "repetition-long34"
+options = ['escaped']
+pattern = '''X(.?){6,8}Y'''
+input = '''X1234567Y'''
+matches = [[0, 9]]
+
+[[tests]]
+name = "repetition-long36"
+options = ['escaped']
+pattern = '''X(.?){7,8}Y'''
+input = '''X1234567Y'''
+matches = [[0, 9]]
+
+[[tests]]
+name = "repetition-long37"
+options = ['escaped']
+pattern = '''X(.?){8,8}Y'''
+input = '''X1234567Y'''
+matches = [[0, 9]]
+
+[[tests]]
+name = "repetition-long48"
+options = ['escaped']
+pattern = '''(a|ab|c|bcd){0,}(d*)'''
+input = '''ababcd'''
+matches = [[0, 1]]
+
+[[tests]]
+name = "repetition-long49"
+options = ['escaped']
+pattern = '''(a|ab|c|bcd){1,}(d*)'''
+input = '''ababcd'''
+matches = [[0, 1]]
+
+[[tests]]
+name = "repetition-long50"
+options = ['escaped']
+pattern = '''(a|ab|c|bcd){2,}(d*)'''
+input = '''ababcd'''
+matches = [[0, 6]]
+
+[[tests]]
+name = "repetition-long51"
+options = ['escaped']
+pattern = '''(a|ab|c|bcd){3,}(d*)'''
+input = '''ababcd'''
+matches = [[0, 6]]
+
+[[tests]]
+name = "repetition-long52"
+options = ['escaped']
+pattern = '''(a|ab|c|bcd){4,}(d*)'''
+input = '''ababcd'''
+matches = []
+
+[[tests]]
+name = "repetition-long53"
+options = ['escaped']
+pattern = '''(a|ab|c|bcd){0,10}(d*)'''
+input = '''ababcd'''
+matches = [[0, 1]]
+
+[[tests]]
+name = "repetition-long54"
+options = ['escaped']
+pattern = '''(a|ab|c|bcd){1,10}(d*)'''
+input = '''ababcd'''
+matches = [[0, 1]]
+
+[[tests]]
+name = "repetition-long55"
+options = ['escaped']
+pattern = '''(a|ab|c|bcd){2,10}(d*)'''
+input = '''ababcd'''
+matches = [[0, 6]]
+
+[[tests]]
+name = "repetition-long56"
+options = ['escaped']
+pattern = '''(a|ab|c|bcd){3,10}(d*)'''
+input = '''ababcd'''
+matches = [[0, 6]]
+
+[[tests]]
+name = "repetition-long57"
+options = ['escaped']
+pattern = '''(a|ab|c|bcd){4,10}(d*)'''
+input = '''ababcd'''
+matches = []
+
+[[tests]]
+name = "repetition-long58"
+options = ['escaped']
+pattern = '''(a|ab|c|bcd)*(d*)'''
+input = '''ababcd'''
+matches = [[0, 1]]
+
+[[tests]]
+name = "repetition-long59"
+options = ['escaped']
+pattern = '''(a|ab|c|bcd)+(d*)'''
+input = '''ababcd'''
+matches = [[0, 1]]
+
+[[tests]]
+name = "repetition-long65"
+options = ['escaped']
+pattern = '''(ab|a|c|bcd){0,}(d*)'''
+input = '''ababcd'''
+matches = [[0, 6]]
+
+[[tests]]
+name = "repetition-long67"
+options = ['escaped']
+pattern = '''(ab|a|c|bcd){1,}(d*)'''
+input = '''ababcd'''
+matches = [[0, 6]]
+
+[[tests]]
+name = "repetition-long69"
+options = ['escaped']
+pattern = '''(ab|a|c|bcd){2,}(d*)'''
+input = '''ababcd'''
+matches = [[0, 6]]
+
+[[tests]]
+name = "repetition-long71"
+options = ['escaped']
+pattern = '''(ab|a|c|bcd){3,}(d*)'''
+input = '''ababcd'''
+matches = [[0, 6]]
+
+[[tests]]
+name = "repetition-long72"
+options = ['escaped']
+pattern = '''(ab|a|c|bcd){4,}(d*)'''
+input = '''ababcd'''
+matches = []
+
+[[tests]]
+name = "repetition-long74"
+options = ['escaped']
+pattern = '''(ab|a|c|bcd){0,10}(d*)'''
+input = '''ababcd'''
+matches = [[0, 6]]
+
+[[tests]]
+name = "repetition-long76"
+options = ['escaped']
+pattern = '''(ab|a|c|bcd){1,10}(d*)'''
+input = '''ababcd'''
+matches = [[0, 6]]
+
+[[tests]]
+name = "repetition-long78"
+options = ['escaped']
+pattern = '''(ab|a|c|bcd){2,10}(d*)'''
+input = '''ababcd'''
+matches = [[0, 6]]
+
+[[tests]]
+name = "repetition-long80"
+options = ['escaped']
+pattern = '''(ab|a|c|bcd){3,10}(d*)'''
+input = '''ababcd'''
+matches = [[0, 6]]
+
+[[tests]]
+name = "repetition-long81"
+options = ['escaped']
+pattern = '''(ab|a|c|bcd){4,10}(d*)'''
+input = '''ababcd'''
+matches = []
+
+[[tests]]
+name = "repetition-long83"
+options = ['escaped']
+pattern = '''(ab|a|c|bcd)*(d*)'''
+input = '''ababcd'''
+matches = [[0, 6]]
+
+[[tests]]
+name = "repetition-long85"
+options = ['escaped']
+pattern = '''(ab|a|c|bcd)+(d*)'''
+input = '''ababcd'''
+matches = [[0, 6]]
+

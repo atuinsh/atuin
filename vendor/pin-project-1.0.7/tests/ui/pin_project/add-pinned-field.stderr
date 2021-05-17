@@ -1,0 +1,33 @@
+error[E0277]: `PhantomPinned` cannot be unpinned
+  --> $DIR/add-pinned-field.rs:21:5
+   |
+4  | fn is_unpin<T: Unpin>() {}
+   |                ----- required by this bound in `is_unpin`
+...
+21 |     is_unpin::<Foo>(); //~ ERROR E0277
+   |     ^^^^^^^^^^^^^^^ within `__Foo<'_>`, the trait `Unpin` is not implemented for `PhantomPinned`
+   |
+   = note: consider using `Box::pin`
+note: required because it appears within the type `__Foo<'_>`
+  --> $DIR/add-pinned-field.rs:8:8
+   |
+8  | struct Foo {
+   |        ^^^
+   = note: required because of the requirements on the impl of `Unpin` for `Foo`
+
+error[E0277]: `PhantomPinned` cannot be unpinned
+  --> $DIR/add-pinned-field.rs:22:5
+   |
+4  | fn is_unpin<T: Unpin>() {}
+   |                ----- required by this bound in `is_unpin`
+...
+22 |     is_unpin::<Bar>(); //~ ERROR E0277
+   |     ^^^^^^^^^^^^^^^ within `__Bar<'_>`, the trait `Unpin` is not implemented for `PhantomPinned`
+   |
+   = note: consider using `Box::pin`
+note: required because it appears within the type `__Bar<'_>`
+  --> $DIR/add-pinned-field.rs:15:8
+   |
+15 | struct Bar {
+   |        ^^^
+   = note: required because of the requirements on the impl of `Unpin` for `Bar`

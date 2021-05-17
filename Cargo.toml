@@ -25,6 +25,12 @@ buildflags = ["--release"]
 [package.metadata.rpm.targets]
 atuin = { path = "/usr/bin/atuin" }
 
+[source.crates-io]
+replace-with = "vendored-sources"
+
+[source.vendored-sources]
+directory = "vendor"
+
 [workspace]
 members = ["./atuin-client", "./atuin-server", "./atuin-common"]
 

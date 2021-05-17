@@ -1,0 +1,3 @@
+steps:
+  - script: curl -fsSL https://deno.land/x/install/install.sh | sh
+    displayName: "install deno"

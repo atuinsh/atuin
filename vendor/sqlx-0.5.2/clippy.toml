@@ -1,0 +1,5 @@
+disallowed-methods = [
+    # It is *much* too easy to misread `x.min(y)` as "x should be *at least* y" when in fact it
+    # means the *exact* opposite, and same with `x.max(y)`; use `cmp::{min, max}` instead.
+    "core::cmp::Ord::min", "core::cmp::Ord::max"
+]

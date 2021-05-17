@@ -1,0 +1,7 @@
+{
+	"url": "ws://127.0.0.1:9001",
+	"outdir": "./autobahn/client",
+	"cases": ["*"],
+	"exclude-cases": [],
+	"exclude-agent-cases": {}
+}

@@ -1,0 +1,7 @@
+# This project uses rustfmt to format source code. Run `cargo +nightly fmt [-- --check].
+# https://github.com/rust-lang/rustfmt/blob/master/Configurations.md
+
+# Break complex but short statements a bit less.
+use_small_heuristics = "Max"
+
+merge_imports = true

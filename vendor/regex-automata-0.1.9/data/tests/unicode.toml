@@ -1,0 +1,489 @@
+[[tests]]
+name = "unicode-literal1"
+pattern = '☃'
+input = "☃"
+matches = [[0, 3]]
+
+[[tests]]
+name = "unicode-literal2"
+pattern = '☃+'
+input = "☃"
+matches = [[0, 3]]
+
+[[tests]]
+name = "unicode-literal3"
+options = ["case-insensitive"]
+pattern = '☃+'
+input = "☃"
+matches = [[0, 3]]
+
+[[tests]]
+name = "unicode-literal4"
+options = ["case-insensitive"]
+pattern = 'Δ'
+input = "δ"
+matches = [[0, 2]]
+
+
+[[tests]]
+name = "unicode-class1"
+pattern = '[☃Ⅰ]+'
+input = "☃"
+matches = [[0, 3]]
+
+[[tests]]
+name = "unicode-class2"
+pattern = '\pN'
+input = "Ⅰ"
+matches = [[0, 3]]
+
+[[tests]]
+name = "unicode-class3"
+pattern = '\pN+'
+input = "Ⅰ1Ⅱ2"
+matches = [[0, 8]]
+
+[[tests]]
+name = "unicode-class4"
+pattern = '\PN+'
+input = "abⅠ"
+matches = [[0, 2]]
+
+[[tests]]
+name = "unicode-class5"
+pattern = '[\PN]+'
+input = "abⅠ"
+matches = [[0, 2]]
+
+[[tests]]
+name = "unicode-class6"
+pattern = '[^\PN]+'
+input = "abⅠ"
+matches = [[2, 5]]
+
+[[tests]]
+name = "unicode-class7"
+pattern = '\p{Lu}+'
+input = "ΛΘΓΔα"
+matches = [[0, 8]]
+
+[[tests]]
+name = "unicode-class8"
+options = ["case-insensitive"]
+pattern = '\p{Lu}+'
+input = "ΛΘΓΔα"
+matches = [[0, 10]]
+
+[[tests]]
+name = "unicode-class9"
+pattern = '\pL+'
+input = "ΛΘΓΔα"
+matches = [[0, 10]]
+
+[[tests]]
+name = "unicode-class10"
+pattern = '\p{Ll}+'
+input = "ΛΘΓΔα"
+matches = [[8, 10]]
+
+
+[[tests]]
+name = "unicode-perl1"
+pattern = '\w+'
+input = "dδd"
+matches = [[0, 4]]
+
+[[tests]]
+name = "unicode-perl2"
+pattern = '\w+'
+input = "⥡"
+matches = []
+
+[[tests]]
+name = "unicode-perl3"
+pattern = '\W+'
+input = "⥡"
+matches = [[0, 3]]
+
+[[tests]]
+name = "unicode-perl4"
+pattern = '\d+'
+input = "1२३9"
+matches = [[0, 8]]
+
+[[tests]]
+name = "unicode-perl5"
+pattern = '\d+'
+input = "Ⅱ"
+matches = []
+
+[[tests]]
+name = "unicode-perl6"
+pattern = '\D+'
+input = "Ⅱ"
+matches = [[0, 3]]
+
+[[tests]]
+name = "unicode-perl7"
+pattern = '\s+'
+input = " "
+matches = [[0, 3]]
+
+[[tests]]
+name = "unicode-perl8"
+pattern = '\s+'
+input = "☃"
+matches = []
+
+[[tests]]
+name = "unicode-perl9"
+pattern = '\S+'
+input = "☃"
+matches = [[0, 3]]
+
+
+[[tests]]
+name = "unicode-class-gencat1"
+pattern = '\p{Cased_Letter}'
+input = "Ａ"
+matches = [[0, 3]]
+
+[[tests]]
+name = "unicode-class-gencat2"
+pattern = '\p{Close_Punctuation}'
+input = "❯"
+matches = [[0, 3]]
+
+[[tests]]
+name = "unicode-class-gencat3"
+pattern = '\p{Connector_Punctuation}'
+input = "⁀"
+matches = [[0, 3]]
+
+[[tests]]
+name = "unicode-class-gencat4"
+pattern = '\p{Control}'
+input = "\u009F"
+matches = [[0, 2]]
+
+[[tests]]
+name = "unicode-class-gencat5"
+pattern = '\p{Currency_Symbol}'
+input = "￡"
+matches = [[0, 3]]
+
+[[tests]]
+name = "unicode-class-gencat6"
+pattern = '\p{Dash_Punctuation}'
+input = "〰"
+matches = [[0, 3]]
+
+[[tests]]
+name = "unicode-class-gencat7"
+pattern = '\p{Decimal_Number}'
+input = "𑓙"
+matches = [[0, 4]]
+
+[[tests]]
+name = "unicode-class-gencat8"
+pattern = '\p{Enclosing_Mark}'
+input = "\uA672"
+matches = [[0, 3]]
+
+[[tests]]
+name = "unicode-class-gencat9"
+pattern = '\p{Final_Punctuation}'
+input = "⸡"
+matches = [[0, 3]]
+
+[[tests]]
+name = "unicode-class-gencat10"
+pattern = '\p{Format}'
+input = "\U000E007F"
+matches = [[0, 4]]
+
+[[tests]]
+name = "unicode-class-gencat11"
+pattern = '\p{Initial_Punctuation}'
+input = "⸜"
+matches = [[0, 3]]
+
+[[tests]]
+name = "unicode-class-gencat12"
+pattern = '\p{Letter}'
+input = "Έ"
+matches = [[0, 2]]
+
+[[tests]]
+name = "unicode-class-gencat13"
+pattern = '\p{Letter_Number}'
+input = "ↂ"
+matches = [[0, 3]]
+
+[[tests]]
+name = "unicode-class-gencat14"
+pattern = '\p{Line_Separator}'
+input = "\u2028"
+matches = [[0, 3]]
+
+[[tests]]
+name = "unicode-class-gencat15"
+pattern = '\p{Lowercase_Letter}'
+input = "ϛ"
+matches = [[0, 2]]
+
+[[tests]]
+name = "unicode-class-gencat16"
+pattern = '\p{Mark}'
+input = "\U000E01EF"
+matches = [[0, 4]]
+
+[[tests]]
+name = "unicode-class-gencat17"
+pattern = '\p{Math}'
+input = "⋿"
+matches = [[0, 3]]
+
+[[tests]]
+name = "unicode-class-gencat18"
+pattern = '\p{Modifier_Letter}'
+input = "𖭃"
+matches = [[0, 4]]
+
+[[tests]]
+name = "unicode-class-gencat19"
+pattern = '\p{Modifier_Symbol}'
+input = "🏿"
+matches = [[0, 4]]
+
+[[tests]]
+name = "unicode-class-gencat20"
+pattern = '\p{Nonspacing_Mark}'
+input = "\U0001E94A"
+matches = [[0, 4]]
+
+[[tests]]
+name = "unicode-class-gencat21"
+pattern = '\p{Number}'
+input = "⓿"
+matches = [[0, 3]]
+
+[[tests]]
+name = "unicode-class-gencat22"
+pattern = '\p{Open_Punctuation}'
+input = "｟"
+matches = [[0, 3]]
+
+[[tests]]
+name = "unicode-class-gencat23"
+pattern = '\p{Other}'
+input = "\u0BC9"
+matches = [[0, 3]]
+
+[[tests]]
+name = "unicode-class-gencat24"
+pattern = '\p{Other_Letter}'
+input = "ꓷ"
+matches = [[0, 3]]
+
+[[tests]]
+name = "unicode-class-gencat25"
+pattern = '\p{Other_Number}'
+input = "㉏"
+matches = [[0, 3]]
+
+[[tests]]
+name = "unicode-class-gencat26"
+pattern = '\p{Other_Punctuation}'
+input = "𞥞"
+matches = [[0, 4]]
+
+[[tests]]
+name = "unicode-class-gencat27"
+pattern = '\p{Other_Symbol}'
+input = "⅌"
+matches = [[0, 3]]
+
+[[tests]]
+name = "unicode-class-gencat28"
+pattern = '\p{Paragraph_Separator}'
+input = "\u2029"
+matches = [[0, 3]]
+
+[[tests]]
+name = "unicode-class-gencat29"
+pattern = '\p{Private_Use}'
+input = "\U0010FFFD"
+matches = [[0, 4]]
+
+[[tests]]
+name = "unicode-class-gencat30"
+pattern = '\p{Punctuation}'
+input = "𑁍"
+matches = [[0, 4]]
+
+[[tests]]
+name = "unicode-class-gencat31"
+pattern = '\p{Separator}'
+input = "\u3000"
+matches = [[0, 3]]
+
+[[tests]]
+name = "unicode-class-gencat32"
+pattern = '\p{Space_Separator}'
+input = "\u205F"
+matches = [[0, 3]]
+
+[[tests]]
+name = "unicode-class-gencat33"
+pattern = '\p{Spacing_Mark}'
+input = "\U00016F7E"
+matches = [[0, 4]]
+
+[[tests]]
+name = "unicode-class-gencat34"
+pattern = '\p{Symbol}'
+input = "⯈"
+matches = [[0, 3]]
+
+[[tests]]
+name = "unicode-class-gencat35"
+pattern = '\p{Titlecase_Letter}'
+input = "ῼ"
+matches = [[0, 3]]
+
+[[tests]]
+name = "unicode-class-gencat36"
+pattern = '\p{Unassigned}'
+input = "\U0010FFFF"
+matches = [[0, 4]]
+
+[[tests]]
+name = "unicode-class-gencat37"
+pattern = '\p{Uppercase_Letter}'
+input = "Ꝋ"
+matches = [[0, 3]]
+
+
+[[tests]]
+name = "unicode-class-emoji1"
+pattern = '\p{Emoji}'
+input = "\u23E9"
+matches = [[0, 3]]
+
+[[tests]]
+name = "unicode-class-emoji2"
+pattern = '\p{emoji}'
+input = "\U0001F21A"
+matches = [[0, 4]]
+
+[[tests]]
+name = "unicode-class-emoji3"
+pattern = '\p{extendedpictographic}'
+input = "\U0001FA6E"
+matches = [[0, 4]]
+
+[[tests]]
+name = "unicode-class-emoji4"
+pattern = '\p{extendedpictographic}'
+input = "\U0001FFFD"
+matches = [[0, 4]]
+
+
+[[tests]]
+name = "unicode-class-gcb1"
+pattern = '\p{grapheme_cluster_break=prepend}'
+input = "\U00011D46"
+matches = [[0, 4]]
+
+[[tests]]
+name = "unicode-class-gcb2"
+pattern = '\p{gcb=regional_indicator}'
+input = "\U0001F1E6"
+matches = [[0, 4]]
+
+[[tests]]
+name = "unicode-class-gcb3"
+pattern = '\p{gcb=ri}'
+input = "\U0001F1E7"
+matches = [[0, 4]]
+
+[[tests]]
+name = "unicode-class-gcb4"
+pattern = '\p{regionalindicator}'
+input = "\U0001F1FF"
+matches = [[0, 4]]
+
+[[tests]]
+name = "unicode-class-gcb5"
+pattern = '\p{gcb=lvt}'
+input = "\uC989"
+matches = [[0, 3]]
+
+[[tests]]
+name = "unicode-class-gcb6"
+pattern = '\p{gcb=zwj}'
+input = "\u200D"
+matches = [[0, 3]]
+
+
+[[tests]]
+name = "unicode-class-word-break1"
+pattern = '\p{word_break=Hebrew_Letter}'
+input = "\uFB46"
+matches = [[0, 3]]
+
+[[tests]]
+name = "unicode-class-word-break2"
+pattern = '\p{wb=hebrewletter}'
+input = "\uFB46"
+matches = [[0, 3]]
+
+[[tests]]
+name = "unicode-class-word-break3"
+pattern = '\p{wb=ExtendNumLet}'
+input = "\uFF3F"
+matches = [[0, 3]]
+
+[[tests]]
+name = "unicode-class-word-break4"
+pattern = '\p{wb=WSegSpace}'
+input = "\u3000"
+matches = [[0, 3]]
+
+[[tests]]
+name = "unicode-class-word-break5"
+pattern = '\p{wb=numeric}'
+input = "\U0001E950"
+matches = [[0, 4]]
+
+
+[[tests]]
+name = "unicode-class-sentence-break1"
+pattern = '\p{sentence_break=Lower}'
+input = "\u0469"
+matches = [[0, 2]]
+
+[[tests]]
+name = "unicode-class-sentence-break2"
+pattern = '\p{sb=lower}'
+input = "\u0469"
+matches = [[0, 2]]
+
+[[tests]]
+name = "unicode-class-sentence-break3"
+pattern = '\p{sb=Close}'
+input = "\uFF60"
+matches = [[0, 3]]
+
+[[tests]]
+name = "unicode-class-sentence-break4"
+pattern = '\p{sb=Close}'
+input = "\U0001F677"
+matches = [[0, 4]]
+
+[[tests]]
+name = "unicode-class-sentence-break5"
+pattern = '\p{sb=SContinue}'
+input = "\uFF64"
+matches = [[0, 3]]

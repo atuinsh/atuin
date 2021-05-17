@@ -1,0 +1,76 @@
+#!/usr/bin/env python
+
+from __future__ import absolute_import, division, print_function
+import argparse
+import os.path as path
+
+
+def read_tests(f):
+    basename, _ = path.splitext(path.basename(f))
+    tests = []
+    prev_pattern = None
+
+    for lineno, line in enumerate(open(f), 1):
+        fields = list(filter(None, map(str.strip, line.split('\t'))))
+        if not (4 <= len(fields) <= 5) \
+           or 'E' not in fields[0] or fields[0][0] == '#':
+            continue
+
+        terse_opts, pat, text, sgroups = fields[0:4]
+        groups = []  # groups as integer ranges
+        if sgroups == 'NOMATCH':
+            groups = []
+        elif ',' in sgroups:
+            noparen = map(lambda s: s.strip('()'), sgroups.split(')('))
+            for g in noparen:
+                s, e = map(str.strip, g.split(','))
+                groups.append([int(s), int(e)])
+                break
+        else:
+            # This skips tests that should result in an error.
+            # There aren't many, so I think we can just capture those
+            # manually. Possibly fix this in future.
+            continue
+
+        opts = []
+        if text == "NULL":
+            text = ""
+        if pat == 'SAME':
+            pat = prev_pattern
+        if '$' in terse_opts:
+            pat = pat.encode('utf-8').decode('unicode_escape')
+            text = text.encode('utf-8').decode('unicode_escape')
+            text = text.encode('unicode_escape').decode('utf-8')
+            opts.append('escaped')
+        else:
+            opts.append('escaped')
+            text = text.encode('unicode_escape').decode('utf-8')
+        if 'i' in terse_opts:
+            opts.append('case-insensitive')
+
+        pat = pat.encode('unicode_escape').decode('utf-8')
+        pat = pat.replace('\\\\', '\\')
+        tests.append({
+            'name': '"%s%d"' % (basename, lineno),
+            'options': repr(opts),
+            'pattern': "'''%s'''" % pat,
+            'input': "'''%s'''" % text,
+            'matches': str(groups),
+        })
+        prev_pattern = pat
+    return tests
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(
+        description='Generate match tests from an AT&T POSIX test file.')
+    aa = parser.add_argument
+    aa('datfile', help='A dat AT&T POSIX test file.')
+    args = parser.parse_args()
+
+    tests = read_tests(args.datfile)
+    for t in tests:
+        print('[[tests]]')
+        for k, v in t.items():
+            print('%s = %s' % (k, v))
+        print('')

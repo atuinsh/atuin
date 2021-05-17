@@ -1,0 +1,5 @@
+error: functions tagged with `#[proc_macro_hack]` must be `pub`
+ --> $DIR/private.rs:4:1
+  |
+4 | fn my_macro(input: TokenStream) -> TokenStream {
+  | ^^

@@ -1,0 +1,14 @@
+error: unreachable statement
+  --> $DIR/unreachable.rs:16:9
+   |
+15 |         let y = unimplemented!();
+   |                 ---------------- any code following this expression is unreachable
+16 |         let z = y;
+   |         ^^^^^^^^^^ unreachable statement
+   |
+note: the lint level is defined here
+  --> $DIR/unreachable.rs:1:9
+   |
+1  | #![deny(warnings)]
+   |         ^^^^^^^^
+   = note: `#[deny(unreachable_code)]` implied by `#[deny(warnings)]`

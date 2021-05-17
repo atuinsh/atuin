@@ -1,0 +1,113 @@
+# Changelog
+
+Notes significant changes to lexical-core.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+## [0.7.4] 2020-01-27
+### Changed
+- Changed NumberFormat to use 64-bit flags.
+- Added `NO_INTEGER_LEADING_ZEROS` and `NO_FLOAT_LEADING_ZEROS` NumberFormat flags.
+- Added `InvalidLeadingZeros` to ErrorCode enum.
+- Added `validate_no_leading_zeros` to reject invalid inputs.
+- Added new leading zero checks to all pre-defined NumberFormat constants.
+
+## [0.7.3] 2020-01-26
+### Changed
+- Updated the format bitflags to make matches more efficient, allowing jumptables to be used for most situations.
+
+## [0.7.2] 2020-01-25
+### Changed
+- Fixed a regression in parsing special values.
+
+## [0.7.1] 2020-01-23
+### Added
+- Added `format` feature to control parsing integers and floats from number specifications.
+- Added the `NumberFormat` bitflags to control Number format specifications. These flags control how a number is parsed, including enabling the use of digit separators, requiring integer or fraction digits, and more.
+- Added pre-defined constants for `NumberFormat` (`RUST_STRING`, `PYTHON_LITERAL`) to avoid compiling formats when not needed.
+- Added the `FromLexicalFormat` and `FromLexicalLossyFormat` traits with the `format` feature, which enable you to specify the number format during parsing.
+- Implemented algorithms in terms of generic iterators, to allow skipping digit separators.
+- Implemented data interfaces to simplify parsing and validating number format. 
+- Added more values to `ErrorCode` to signify more parse failures.
+
+### Changed
+- Changed `ErrorCode::MissingFraction` to be `ErrorCode::MissingMantissa`, to differentiate between missing integers, missing fractions, and missing significant digits (mantissa).
+- Remove `RawFloatState` and `FloatState` and replaced it logically with `FastDataInterface` and `SlowDataInterface`, allowing format-defined parsing.
+
+## [0.7.0] - 2020-01-07
+### Changed
+- Updated `arrayvec` and `static-assertions` versions.
+- Removed support for Rustc versions below 1.37.0.
+
+## [0.6.3] - 2019-10-08
+### Changed
+- Forced version `0.1.9` for cfg-if to support older Rustc versions.
+- Documented dependency versioning and upgrade procedure.
+
+## [0.6.2] - 2019-09-22
+### Changed
+- Fixed a bug causing compilation issues on MSVC.
+
+## [0.6.1] - 2019-09-16
+### Changed
+- Removed panic handler, allowing use in `no_std` environments.
+
+## [0.6.0] - 2019-09-08
+### Added
+- Added `get/set_exponent_default_char`, `get/set_exponent_backup_char`, and `get/set_float_rounding`, to allow validation logic for config variables.
+- Added the `write*` functions, which replace the `*toa` methods.
+- Added `parse*` functions, which replace the `ato*` methods.
+- Added tests to ensure lexical-core works with proc-macros.
+- Substituted rust-stackvector with arrayvec, which has better support.
+
+### Removed
+- Removed `EXPONENT_DEFAULT_CHAR`, `EXPONENT_BACKUP_CHAR`, and `FLOAT_ROUNDING`.
+- Removed all expanded API signatures for `ato*` to `*toa`, since these were for compatibility with the C-API and were therefore redundant.
+- Removed the FFI submodule, and moved all functionality to the `lexical-capi` crate.
+
+## [0.5.0] - 2019-08-20
+### Added
+- Added ffi::Result, an FFI-compatible tagged union, to store results for FFI-compatible functions.
+- Added `MAX_*_SIZE_BASE10` constants, to determine the maximum size in bytes a formatted type will take in base 10.
+- Added `ato*_partial` functions, which parse until an invalid digit is found, returning the value and number of processed digits.
+
+### Changed
+- Improved code generation and reduced binary bloat. There are a few algorithmic differences that make this possible, but the parsers now generally extract the float subcomponents first, then parsed known-good data after for enhanced performance.
+- Updated the benchmarks and benchmark results.
+- Add variants for lexical_core::ErrorCode. Added `Underflow`, to detect numerical underflow, `EmptyFraction`, to detect floats with an empty integer and fraction components, and `EmptyExponent`, to detect floats with no value following the exponent character.
+- Changed Result to use `std::result::Result`.
+- Fixed proptests and added more comprehensive proptests thanks to @dangrabcad.
+- Moved FFI-compatible code to the public `ffi` module.
+- Removed `*_slice` from functions in the public API, since there is no naming conflict with FFI code.
+- Removed `*_ffi` and `*_FFI` from public functions and constants.
+- Optimized the itoa exporters using specialized optimizations for the type size and number of digits. The resulting performance excels for all values, providing 2-3x performance improvements, with exceptional performance for values with a small number of digits.
+- Optimized integer division algorithm based off the compiler-builtins crate to avoid redundant calls to an expensive compiler intrinsic (`__udivmodti4`).
+- Optimized the atoi algorithm for 128-bit integers by using intermediary 64-bit integers, leading to performance boosts of up to 30x.
+
+### Removed
+- Removed the unchecked parsers from the public API. `try_parse*` has been replaced with `parse*`.
+- Removed ErrorCode::Success, since with the new result types it was redundant.
+
+## [0.4.3] - 2019-06-26
+- Fixed a bug (issue #20) leading to incorrect float parsing (1 ULP error) for slow-path algorithms containing floats with a trailing 0-digit in the fraction component (discovery by @dangrabcad). Added in comprehensive unittests to avoid future regressions.
+- Fixed CI for older Rustc versions due to issues with the `edition` keyword.
+- Updated dependencies (credit to @junhoo).
+- Updated the benchmarks for float and integer formatting to use `Write::write_fmt` rather than `to_string` to avoid heap allocation leading to misleading results (credit to @RazrFalcon).
+
+## [0.4.2] - 2019-06-24
+### Added
+- Comprehensive continuous integration unittests for numerous platforms, based off the [trust](https://github.com/japaric/trust) templates.
+- Added known issue for a non-default, lossy setting on armv6 architectures.
+
+### Changed
+- Bug fix for 32-bit targets.
+
+## [0.4.1] - 2019-06-20
+### Added
+- Backwards compatible support for Rustc 1.24.0.
+
+### Changed
+- Worked around a bug in the internal float formatter where `&arr[idx]` creates a local copy in Rust versions before 1.28.0, creating a dangling reference after the scope ends. For more details, see `cached_grisu_power` in `/lexical-core/src/ftoa/grisu2.rs` .

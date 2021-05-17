@@ -1,0 +1,5 @@
+error: expected one of: `support_nested`, `internal_macro_calls`, `fake_call_site`, `only_hack_old_rustc`
+ --> $DIR/unknown-arg.rs:3:35
+  |
+3 | #[proc_macro_hack(fake_call_site, support_nexted)]
+  |                                   ^^^^^^^^^^^^^^

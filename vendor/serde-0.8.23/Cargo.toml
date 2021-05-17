@@ -1,0 +1,25 @@
+[package]
+name = "serde"
+version = "0.8.23"
+authors = ["Erick Tryzelaar <erick.tryzelaar@gmail.com>"]
+license = "MIT/Apache-2.0"
+description = "A generic serialization/deserialization framework"
+homepage = "https://serde.rs"
+repository = "https://github.com/serde-rs/serde"
+documentation = "https://docs.serde.rs/serde/"
+readme = "../README.md"
+keywords = ["serde", "serialization"]
+categories = ["encoding"]
+include = ["Cargo.toml", "src/**/*.rs"]
+
+[features]
+default = ["std"]
+
+std = []
+unstable = []
+alloc = ["unstable"]
+collections = ["alloc"]
+unstable-testing = ["clippy", "unstable", "std"]
+
+[dependencies]
+clippy = { version = "^0.*", optional = true }

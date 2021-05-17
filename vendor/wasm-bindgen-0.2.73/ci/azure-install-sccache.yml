@@ -1,0 +1,35 @@
+steps:
+  - bash: |
+      set -ex
+      curl -L https://github.com/mozilla/sccache/releases/download/0.2.11/sccache-0.2.11-x86_64-unknown-linux-musl.tar.gz | tar xzf -
+      sccache=`pwd`/sccache-0.2.11-x86_64-unknown-linux-musl/sccache
+      echo "##vso[task.setvariable variable=RUSTC_WRAPPER;]$sccache"
+    displayName: Install sccache - Linux
+    condition: eq( variables['Agent.OS'], 'Linux' )
+
+  - bash: |
+      set -ex
+      brew install openssl@1.1
+      curl -L https://github.com/mozilla/sccache/releases/download/0.2.11/sccache-0.2.11-x86_64-apple-darwin.tar.gz | tar xzf -
+      sccache=`pwd`/sccache-0.2.11-x86_64-apple-darwin/sccache
+      echo "##vso[task.setvariable variable=RUSTC_WRAPPER;]$sccache"
+    displayName: Install sccache - Darwin
+    condition: eq( variables['Agent.OS'], 'Darwin' )
+
+  - powershell: |
+      Invoke-WebRequest https://github.com/mozilla/sccache/releases/download/0.2.11/sccache-0.2.11-x86_64-pc-windows-msvc.tar.gz -OutFile sccache.tar.gz
+      tar xzf sccache.tar.gz
+      Write-Host "##vso[task.setvariable variable=RUSTC_WRAPPER;]$pwd/sccache-0.2.11-x86_64-pc-windows-msvc/sccache.exe"
+    displayName: Install sccache - Windows
+    condition: eq( variables['Agent.OS'], 'Windows_NT' )
+
+  - bash: |
+      set -ex
+      env
+      SCCACHE_ERROR_LOG=`pwd`/sccache.log RUST_LOG=debug $RUSTC_WRAPPER --start-server
+      $RUSTC_WRAPPER -s
+      cat sccache.log
+    displayName: "start sccache"
+    env:
+      AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
+      AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)

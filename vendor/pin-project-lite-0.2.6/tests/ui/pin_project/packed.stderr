@@ -1,0 +1,107 @@
+error: reference to packed field is unaligned
+ --> $DIR/packed.rs:3:1
+  |
+3 | / pin_project! { //~ ERROR reference to packed field is unaligned
+4 | |     #[repr(packed, C)]
+5 | |     struct Packed {
+6 | |         #[pin]
+7 | |         field: u16,
+8 | |     }
+9 | | }
+  | |_^
+  |
+note: the lint level is defined here
+ --> $DIR/packed.rs:3:1
+  |
+3 | / pin_project! { //~ ERROR reference to packed field is unaligned
+4 | |     #[repr(packed, C)]
+5 | |     struct Packed {
+6 | |         #[pin]
+7 | |         field: u16,
+8 | |     }
+9 | | }
+  | |_^
+  = note: fields of packed structs are not properly aligned, and creating a misaligned reference is undefined behavior (even if that reference is never dereferenced)
+  = note: this error originates in a macro (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: reference to packed field is unaligned
+  --> $DIR/packed.rs:11:1
+   |
+11 | / pin_project! { //~ ERROR reference to packed field is unaligned
+12 | |     #[repr(packed(2))]
+13 | |     struct PackedN {
+14 | |         #[pin]
+15 | |         field: u32,
+16 | |     }
+17 | | }
+   | |_^
+   |
+note: the lint level is defined here
+  --> $DIR/packed.rs:11:1
+   |
+11 | / pin_project! { //~ ERROR reference to packed field is unaligned
+12 | |     #[repr(packed(2))]
+13 | |     struct PackedN {
+14 | |         #[pin]
+15 | |         field: u32,
+16 | |     }
+17 | | }
+   | |_^
+   = note: fields of packed structs are not properly aligned, and creating a misaligned reference is undefined behavior (even if that reference is never dereferenced)
+   = note: this error originates in a macro (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: borrow of packed field is unsafe and requires unsafe function or block (error E0133)
+ --> $DIR/packed.rs:3:1
+  |
+3 | / pin_project! { //~ ERROR reference to packed field is unaligned
+4 | |     #[repr(packed, C)]
+5 | |     struct Packed {
+6 | |         #[pin]
+7 | |         field: u16,
+8 | |     }
+9 | | }
+  | |_^
+  |
+note: the lint level is defined here
+ --> $DIR/packed.rs:3:1
+  |
+3 | / pin_project! { //~ ERROR reference to packed field is unaligned
+4 | |     #[repr(packed, C)]
+5 | |     struct Packed {
+6 | |         #[pin]
+7 | |         field: u16,
+8 | |     }
+9 | | }
+  | |_^
+  = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+  = note: for more information, see issue #46043 <https://github.com/rust-lang/rust/issues/46043>
+  = note: fields of packed structs might be misaligned: dereferencing a misaligned pointer or even just creating a misaligned reference is undefined behavior
+  = note: this error originates in a macro (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: borrow of packed field is unsafe and requires unsafe function or block (error E0133)
+  --> $DIR/packed.rs:11:1
+   |
+11 | / pin_project! { //~ ERROR reference to packed field is unaligned
+12 | |     #[repr(packed(2))]
+13 | |     struct PackedN {
+14 | |         #[pin]
+15 | |         field: u32,
+16 | |     }
+17 | | }
+   | |_^
+   |
+note: the lint level is defined here
+  --> $DIR/packed.rs:11:1
+   |
+11 | / pin_project! { //~ ERROR reference to packed field is unaligned
+12 | |     #[repr(packed(2))]
+13 | |     struct PackedN {
+14 | |         #[pin]
+15 | |         field: u32,
+16 | |     }
+17 | | }
+   | |_^
+   = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+   = note: for more information, see issue #46043 <https://github.com/rust-lang/rust/issues/46043>
+   = note: fields of packed structs might be misaligned: dereferencing a misaligned pointer or even just creating a misaligned reference is undefined behavior
+   = note: this error originates in a macro (in Nightly builds, run with -Z macro-backtrace for more info)

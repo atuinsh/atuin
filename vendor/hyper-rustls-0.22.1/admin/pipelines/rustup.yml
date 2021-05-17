@@ -1,0 +1,38 @@
+parameters:
+  rustup_toolchain: 'stable'
+  rustup_target: ''
+  components: []
+
+steps:
+# Linux and macOS.
+- script: |
+    curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain none
+    export PATH=$PATH:$HOME/.cargo/bin
+    rustup default ${{ parameters.rustup_toolchain }}
+    rustup update
+    echo "##vso[task.setvariable variable=PATH;]$PATH:$HOME/.cargo/bin"
+  condition: ne( variables['Agent.OS'], 'Windows_NT' )
+  displayName: Install rust
+# Windows.
+- script: |
+    curl -sSf -o rustup-init.exe https://win.rustup.rs
+    rustup-init.exe -y --default-toolchain none
+    set PATH=%PATH%;%USERPROFILE%\.cargo\bin
+    rustup default ${{ parameters.rustup_toolchain }}
+    rustup update
+    echo "##vso[task.setvariable variable=PATH;]%PATH%;%USERPROFILE%\.cargo\bin"
+  condition: eq( variables['Agent.OS'], 'Windows_NT' )
+  displayName: Install rust (windows)
+# All platforms.
+- script: |
+      rustc -Vv
+      cargo -V
+  displayName: Query rust and cargo versions
+- ${{ if ne(parameters.rustup_target, '') }}:
+  - script: |
+      rustup target add ${{ parameters.rustup_target }}
+    displayName: Install support for ${{ parameters.rustup_target }}
+- ${{ each component in parameters.components }}:
+  - script: |
+      rustup component add ${{ component }}
+    displayName: Install ${{ component }}

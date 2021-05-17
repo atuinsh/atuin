@@ -1,0 +1,59 @@
+[[tests]]
+name = "flags1"
+pattern = "(?i)abc"
+input = "ABC"
+matches = [[0, 3]]
+
+[[tests]]
+name = "flags2"
+pattern = "(?i)a(?-i)bc"
+input = "Abc"
+matches = [[0, 3]]
+
+[[tests]]
+name = "flags3"
+pattern = "(?i)a(?-i)bc"
+input = "ABC"
+matches = []
+
+[[tests]]
+name = "flags4"
+pattern = "(?is)a."
+input = "A\n"
+matches = [[0, 2]]
+
+[[tests]]
+name = "flags5"
+pattern = "(?is)a.(?-is)a."
+input = "A\nab"
+matches = [[0, 4]]
+
+[[tests]]
+name = "flags6"
+pattern = "(?is)a.(?-is)a."
+input = "A\na\n"
+matches = []
+
+[[tests]]
+name = "flags7"
+pattern = "(?is)a.(?-is:a.)?"
+input = "A\na\n"
+matches = [[0, 2]]
+
+[[tests]]
+name = "flags8"
+pattern = "(?U)a+"
+input = "aa"
+matches = [[0, 1]]
+
+[[tests]]
+name = "flags9"
+pattern = "(?U)a+?"
+input = "aa"
+matches = [[0, 2]]
+
+[[tests]]
+name = "flags10"
+pattern = "(?U)(?-U)a+"
+input = "aa"
+matches = [[0, 2]]

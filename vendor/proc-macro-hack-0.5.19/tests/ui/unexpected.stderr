@@ -1,0 +1,5 @@
+error: unexpected input to #[proc_macro_hack]
+ --> $DIR/unexpected.rs:4:5
+  |
+4 | pub struct What;
+  |     ^^^^^^

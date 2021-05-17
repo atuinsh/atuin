@@ -1,0 +1,92 @@
+[[tests]]
+name = "iter1"
+pattern = "a"
+input = "aaa"
+matches = [[0, 1], [1, 2], [2, 3]]
+
+[[tests]]
+name = "iter2"
+pattern = "a"
+input = "aba"
+matches = [[0, 1], [2, 3]]
+
+[[tests]]
+name = "iter-empty1"
+pattern = ''
+input = ''
+matches = [[0, 0]]
+
+[[tests]]
+name = "iter-empty2"
+pattern = ''
+input = 'abc'
+matches = [[0, 0], [1, 1], [2, 2], [3, 3]]
+
+[[tests]]
+name = "iter-empty3"
+pattern = '()'
+input = 'abc'
+matches = [[0, 0], [1, 1], [2, 2], [3, 3]]
+
+[[tests]]
+name = "iter-empty4"
+pattern = '()*'
+input = 'abc'
+matches = [[0, 0], [1, 1], [2, 2], [3, 3]]
+
+[[tests]]
+name = "iter-empty5"
+pattern = '()+'
+input = 'abc'
+matches = [[0, 0], [1, 1], [2, 2], [3, 3]]
+
+[[tests]]
+name = "iter-empty6"
+pattern = '()?'
+input = 'abc'
+matches = [[0, 0], [1, 1], [2, 2], [3, 3]]
+
+[[tests]]
+name = "iter-empty7"
+pattern = '()()'
+input = 'abc'
+matches = [[0, 0], [1, 1], [2, 2], [3, 3]]
+
+[[tests]]
+name = "iter-empty8"
+pattern = '()+|z'
+input = 'abc'
+matches = [[0, 0], [1, 1], [2, 2], [3, 3]]
+
+[[tests]]
+name = "iter-empty9"
+pattern = 'z|()+'
+input = 'abc'
+matches = [[0, 0], [1, 1], [2, 2], [3, 3]]
+
+[[tests]]
+name = "iter-empty10"
+pattern = '()+|b'
+input = 'abc'
+matches = [[0, 0], [1, 1], [2, 2], [3, 3]]
+
+[[tests]]
+name = "iter-empty11"
+pattern = 'b|()+'
+input = 'abc'
+matches = [[0, 0], [1, 2], [3, 3]]
+
+
+[[tests]]
+options = ["anchored"]
+name = "iter-anchored1"
+pattern = "a"
+input = "a"
+matches = [[0, 1]]
+
+[[tests]]
+options = ["anchored"]
+name = "iter-anchored2"
+pattern = "a"
+input = "aa"
+matches = [[0, 1]]

@@ -1,0 +1,232 @@
+version: "3"
+
+services:
+    #
+    # MySQL 5.6.x, 5.7.x, 8.x
+    # https://www.mysql.com/support/supportedplatforms/database.html
+    #
+
+    mysql_8:
+        image: mysql:8.0
+        volumes:
+            - "./mysql/setup.sql:/docker-entrypoint-initdb.d/setup.sql"
+        ports:
+            - 3306
+        environment:
+            MYSQL_ROOT_HOST: '%'
+            MYSQL_ROOT_PASSWORD: password
+            MYSQL_DATABASE: sqlx
+
+    mysql_5_7:
+        image: mysql:5.7
+        volumes:
+            - "./mysql/setup.sql:/docker-entrypoint-initdb.d/setup.sql"
+        ports:
+            - 3306
+        environment:
+            MYSQL_ROOT_HOST: '%'
+            MYSQL_ROOT_PASSWORD: password
+            MYSQL_DATABASE: sqlx
+
+    mysql_5_6:
+        image: mysql:5.6
+        volumes:
+            - "./mysql/setup.sql:/docker-entrypoint-initdb.d/setup.sql"
+        ports:
+            - 3306
+        environment:
+            MYSQL_ROOT_HOST: '%'
+            MYSQL_ROOT_PASSWORD: password
+            MYSQL_DATABASE: sqlx
+
+    #
+    # MariaDB 10.5, 10.4, 10.3, 10.2, 10.1
+    # https://mariadb.org/about/#maintenance-policy
+    #
+
+    mariadb_10_5:
+        image: mariadb:10.5
+        volumes:
+            - "./mysql/setup.sql:/docker-entrypoint-initdb.d/setup.sql"
+        ports:
+            - 3306
+        environment:
+            MYSQL_ROOT_PASSWORD: password
+            MYSQL_DATABASE: sqlx
+
+    mariadb_10_4:
+        image: mariadb:10.4
+        volumes:
+            - "./mysql/setup.sql:/docker-entrypoint-initdb.d/setup.sql"
+        ports:
+            - 3306
+        environment:
+            MYSQL_ROOT_PASSWORD: password
+            MYSQL_DATABASE: sqlx
+
+    mariadb_10_3:
+        image: mariadb:10.3
+        volumes:
+            - "./mysql/setup.sql:/docker-entrypoint-initdb.d/setup.sql"
+        ports:
+            - 3306
+        environment:
+            MYSQL_ROOT_PASSWORD: password
+            MYSQL_DATABASE: sqlx
+
+    mariadb_10_2:
+        image: mariadb:10.2
+        volumes:
+            - "./mysql/setup.sql:/docker-entrypoint-initdb.d/setup.sql"
+        ports:
+            - 3306
+        environment:
+            MYSQL_ROOT_PASSWORD: password
+            MYSQL_DATABASE: sqlx
+
+    mariadb_10_1:
+        image: mariadb:10.1
+        volumes:
+            - "./mysql/setup.sql:/docker-entrypoint-initdb.d/setup.sql"
+        ports:
+            - 3306
+        environment:
+            MYSQL_ROOT_PASSWORD: password
+            MYSQL_DATABASE: sqlx
+
+    #
+    # PostgreSQL 12.x, 10.x, 9.6.x, 9.5.x
+    # https://www.postgresql.org/support/versioning/
+    #
+
+    postgres_13:
+        build:
+            context: .
+            dockerfile: postgres/Dockerfile
+            args:
+                VERSION: 13-beta1
+        ports:
+            - 5432
+        environment:
+            POSTGRES_DB: sqlx
+            POSTGRES_USER: postgres
+            POSTGRES_PASSWORD: password
+            POSTGRES_HOST_AUTH_METHOD: scram-sha-256
+            POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+        volumes:
+            - "./postgres/setup.sql:/docker-entrypoint-initdb.d/setup.sql"
+        command: >
+            -c ssl=on -c ssl_cert_file=/var/lib/postgresql/server.crt -c ssl_key_file=/var/lib/postgresql/server.key
+
+    postgres_12:
+        build:
+            context: .
+            dockerfile: postgres/Dockerfile
+            args:
+              VERSION: 12.3
+        ports:
+            - 5432
+        environment:
+            POSTGRES_DB: sqlx
+            POSTGRES_USER: postgres
+            POSTGRES_PASSWORD: password
+            POSTGRES_HOST_AUTH_METHOD: scram-sha-256
+            POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+        volumes:
+            - "./postgres/setup.sql:/docker-entrypoint-initdb.d/setup.sql"
+        command: >
+            -c ssl=on -c ssl_cert_file=/var/lib/postgresql/server.crt -c ssl_key_file=/var/lib/postgresql/server.key
+
+    postgres_10:
+        build:
+            context: .
+            dockerfile: postgres/Dockerfile
+            args:
+                VERSION: 10.13
+        ports:
+          - 5432
+        environment:
+            POSTGRES_DB: sqlx
+            POSTGRES_USER: postgres
+            POSTGRES_PASSWORD: password
+            POSTGRES_HOST_AUTH_METHOD: trust
+        volumes:
+            - "./postgres/setup.sql:/docker-entrypoint-initdb.d/setup.sql"
+        command: >
+            -c ssl=on -c ssl_cert_file=/var/lib/postgresql/server.crt -c ssl_key_file=/var/lib/postgresql/server.key
+
+    postgres_9_6:
+        build:
+            context: .
+            dockerfile: postgres/Dockerfile
+            args:
+                VERSION: 9.6
+        ports:
+          - 5432
+        environment:
+            POSTGRES_DB: sqlx
+            POSTGRES_USER: postgres
+            POSTGRES_PASSWORD: password
+            POSTGRES_HOST_AUTH_METHOD: md5
+        volumes:
+            - "./postgres/setup.sql:/docker-entrypoint-initdb.d/setup.sql"
+        command: >
+            -c ssl=on -c ssl_cert_file=/var/lib/postgresql/server.crt -c ssl_key_file=/var/lib/postgresql/server.key
+
+    postgres_9_5:
+        build:
+            context: .
+            dockerfile: postgres/Dockerfile
+            args:
+                VERSION: 9.5
+        ports:
+          - 5432
+        environment:
+            POSTGRES_DB: sqlx
+            POSTGRES_USER: postgres
+            POSTGRES_PASSWORD: password
+            POSTGRES_HOST_AUTH_METHOD: password
+        volumes:
+            - "./postgres/setup.sql:/docker-entrypoint-initdb.d/setup.sql"
+        command: >
+            -c ssl=on -c ssl_cert_file=/var/lib/postgresql/server.crt -c ssl_key_file=/var/lib/postgresql/server.key
+
+    #
+    # Microsoft SQL Server (MSSQL)
+    # https://hub.docker.com/_/microsoft-mssql-server
+    #
+
+    mssql_2019:
+        build:
+            context: .
+            dockerfile: mssql/Dockerfile
+            args:
+                VERSION: 2019-latest
+        ports:
+          - 1433
+        environment:
+            ACCEPT_EULA: Y
+            SA_PASSWORD: Password123!
+
+    mssql_2017:
+        build:
+            context: .
+            dockerfile: mssql/Dockerfile
+            args:
+                VERSION: 2017-latest
+        environment:
+            ACCEPT_EULA: Y
+            SA_PASSWORD: Password123!
+
+    #
+    # IBM Db2
+    # https://hub.docker.com/r/ibmcom/db2
+    #
+
+    db2_11:
+        image: ibmcom/db2:11.5.1.0-CN1
+        privileged: true
+        environment:
+            LICENSE: accept
+            DB2INST1_PASSWORD: password
+            DBNAME: sqlx

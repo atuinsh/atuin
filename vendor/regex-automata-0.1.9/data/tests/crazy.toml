@@ -1,0 +1,177 @@
+[[tests]]
+name = "crazy-misc1"
+pattern = '[-+]?[0-9]*\.?[0-9]+'
+input = "0.1"
+matches = [[0, 3]]
+
+[[tests]]
+name = "crazy-misc2"
+pattern = '[-+]?[0-9]*\.?[0-9]+'
+input = "0.1.2"
+matches = [[0, 3]]
+
+[[tests]]
+name = "crazy-misc3"
+pattern = '[-+]?[0-9]*\.?[0-9]+'
+input = "a1.2"
+matches = [[1, 4]]
+
+[[tests]]
+options = ["case-insensitive"]
+name = "crazy-misc4"
+pattern = '[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,4}'
+input = "mine is jam.slam@gmail.com "
+matches = [[8, 26]]
+
+[[tests]]
+options = ["case-insensitive"]
+name = "crazy-misc5"
+pattern = '[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,4}'
+input = "mine is jam.slam@gmail "
+matches = []
+
+[[tests]]
+name = "crazy-misc6"
+pattern = '''[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]*[a-z0-9])?'''
+input = "mine is jam.slam@gmail.com "
+matches = [[8, 26]]
+
+[[tests]]
+name = "crazy-misc7"
+pattern = '(19|20)\d\d[- /.](0[1-9]|1[012])[- /.](0[1-9]|[12][0-9]|3[01])'
+input = "1900-01-01"
+matches = [[0, 10]]
+
+[[tests]]
+name = "crazy-misc8"
+pattern = '(19|20)\d\d[- /.](0[1-9]|1[012])[- /.](0[1-9]|[12][0-9]|3[01])'
+input = "1900-00-01"
+matches = []
+
+[[tests]]
+name = "crazy-misc9"
+pattern = '(19|20)\d\d[- /.](0[1-9]|1[012])[- /.](0[1-9]|[12][0-9]|3[01])'
+input = "1900-13-01"
+matches = []
+
+
+[[tests]]
+name = "crazy-negclass1"
+pattern = "[^ac]"
+input = "acx"
+matches = [[2, 3]]
+
+[[tests]]
+name = "crazy-negclass2"
+pattern = "[^a,]"
+input = "a,x"
+matches = [[2, 3]]
+
+[[tests]]
+name = "crazy-negclass3"
+pattern = '[^a\s]'
+input = "a x"
+matches = [[2, 3]]
+
+[[tests]]
+name = "crazy-negclass4"
+pattern = "[^,]"
+input = ",,x"
+matches = [[2, 3]]
+
+[[tests]]
+name = "crazy-negclass5"
+pattern = '[^\s]'
+input = " a"
+matches = [[1, 2]]
+
+[[tests]]
+name = "crazy-negclass6"
+pattern = '[^,\s]'
+input = ", a"
+matches = [[2, 3]]
+
+[[tests]]
+name = "crazy-negclass7"
+pattern = '[^\s,]'
+input = " ,a"
+matches = [[2, 3]]
+
+[[tests]]
+name = "crazy-negclass8"
+pattern = "[^[:alpha:]Z]"
+input = "A1"
+matches = [[1, 2]]
+
+
+[[tests]]
+name = "crazy-empty-repeat1"
+pattern = "((.*)*?)="
+input = "a=b"
+matches = [[0, 2]]
+
+[[tests]]
+name = "crazy-empty-repeat2"
+pattern = "((.?)*?)="
+input = "a=b"
+matches = [[0, 2]]
+
+[[tests]]
+name = "crazy-empty-repeat3"
+pattern = "((.*)+?)="
+input = "a=b"
+matches = [[0, 2]]
+
+[[tests]]
+name = "crazy-empty-repeat4"
+pattern = "((.?)+?)="
+input = "a=b"
+matches = [[0, 2]]
+
+[[tests]]
+name = "crazy-empty-repeat5"
+pattern = "((.*){1,}?)="
+input = "a=b"
+matches = [[0, 2]]
+
+[[tests]]
+name = "crazy-empty-repeat6"
+pattern = "((.*){1,2}?)="
+input = "a=b"
+matches = [[0, 2]]
+
+[[tests]]
+name = "crazy-empty-repeat7"
+pattern = "((.*)*)="
+input = "a=b"
+matches = [[0, 2]]
+
+[[tests]]
+name = "crazy-empty-repeat8"
+pattern = "((.?)*)="
+input = "a=b"
+matches = [[0, 2]]
+
+[[tests]]
+name = "crazy-empty-repeat9"
+pattern = "((.*)+)="
+input = "a=b"
+matches = [[0, 2]]
+
+[[tests]]
+name = "crazy-empty-repeat10"
+pattern = "((.?)+)="
+input = "a=b"
+matches = [[0, 2]]
+
+[[tests]]
+name = "crazy-empty-repeat11"
+pattern = "((.*){1,})="
+input = "a=b"
+matches = [[0, 2]]
+
+[[tests]]
+name = "crazy-empty-repeat12"
+pattern = "((.*){1,2})="
+input = "a=b"
+matches = [[0, 2]]

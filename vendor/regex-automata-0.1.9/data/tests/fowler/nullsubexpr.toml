@@ -1,0 +1,350 @@
+[[tests]]
+name = "nullsubexpr3"
+options = ['escaped']
+pattern = '''(a*)*'''
+input = '''a'''
+matches = [[0, 1]]
+
+[[tests]]
+name = "nullsubexpr5"
+options = ['escaped']
+pattern = '''(a*)*'''
+input = '''x'''
+matches = [[0, 0]]
+
+[[tests]]
+name = "nullsubexpr6"
+options = ['escaped']
+pattern = '''(a*)*'''
+input = '''aaaaaa'''
+matches = [[0, 6]]
+
+[[tests]]
+name = "nullsubexpr7"
+options = ['escaped']
+pattern = '''(a*)*'''
+input = '''aaaaaax'''
+matches = [[0, 6]]
+
+[[tests]]
+name = "nullsubexpr8"
+options = ['escaped']
+pattern = '''(a*)+'''
+input = '''a'''
+matches = [[0, 1]]
+
+[[tests]]
+name = "nullsubexpr9"
+options = ['escaped']
+pattern = '''(a*)+'''
+input = '''x'''
+matches = [[0, 0]]
+
+[[tests]]
+name = "nullsubexpr10"
+options = ['escaped']
+pattern = '''(a*)+'''
+input = '''aaaaaa'''
+matches = [[0, 6]]
+
+[[tests]]
+name = "nullsubexpr11"
+options = ['escaped']
+pattern = '''(a*)+'''
+input = '''aaaaaax'''
+matches = [[0, 6]]
+
+[[tests]]
+name = "nullsubexpr12"
+options = ['escaped']
+pattern = '''(a+)*'''
+input = '''a'''
+matches = [[0, 1]]
+
+[[tests]]
+name = "nullsubexpr13"
+options = ['escaped']
+pattern = '''(a+)*'''
+input = '''x'''
+matches = [[0, 0]]
+
+[[tests]]
+name = "nullsubexpr14"
+options = ['escaped']
+pattern = '''(a+)*'''
+input = '''aaaaaa'''
+matches = [[0, 6]]
+
+[[tests]]
+name = "nullsubexpr15"
+options = ['escaped']
+pattern = '''(a+)*'''
+input = '''aaaaaax'''
+matches = [[0, 6]]
+
+[[tests]]
+name = "nullsubexpr16"
+options = ['escaped']
+pattern = '''(a+)+'''
+input = '''a'''
+matches = [[0, 1]]
+
+[[tests]]
+name = "nullsubexpr17"
+options = ['escaped']
+pattern = '''(a+)+'''
+input = '''x'''
+matches = []
+
+[[tests]]
+name = "nullsubexpr18"
+options = ['escaped']
+pattern = '''(a+)+'''
+input = '''aaaaaa'''
+matches = [[0, 6]]
+
+[[tests]]
+name = "nullsubexpr19"
+options = ['escaped']
+pattern = '''(a+)+'''
+input = '''aaaaaax'''
+matches = [[0, 6]]
+
+[[tests]]
+name = "nullsubexpr21"
+options = ['escaped']
+pattern = '''([a]*)*'''
+input = '''a'''
+matches = [[0, 1]]
+
+[[tests]]
+name = "nullsubexpr23"
+options = ['escaped']
+pattern = '''([a]*)*'''
+input = '''x'''
+matches = [[0, 0]]
+
+[[tests]]
+name = "nullsubexpr24"
+options = ['escaped']
+pattern = '''([a]*)*'''
+input = '''aaaaaa'''
+matches = [[0, 6]]
+
+[[tests]]
+name = "nullsubexpr25"
+options = ['escaped']
+pattern = '''([a]*)*'''
+input = '''aaaaaax'''
+matches = [[0, 6]]
+
+[[tests]]
+name = "nullsubexpr26"
+options = ['escaped']
+pattern = '''([a]*)+'''
+input = '''a'''
+matches = [[0, 1]]
+
+[[tests]]
+name = "nullsubexpr27"
+options = ['escaped']
+pattern = '''([a]*)+'''
+input = '''x'''
+matches = [[0, 0]]
+
+[[tests]]
+name = "nullsubexpr28"
+options = ['escaped']
+pattern = '''([a]*)+'''
+input = '''aaaaaa'''
+matches = [[0, 6]]
+
+[[tests]]
+name = "nullsubexpr29"
+options = ['escaped']
+pattern = '''([a]*)+'''
+input = '''aaaaaax'''
+matches = [[0, 6]]
+
+[[tests]]
+name = "nullsubexpr30"
+options = ['escaped']
+pattern = '''([^b]*)*'''
+input = '''a'''
+matches = [[0, 1]]
+
+[[tests]]
+name = "nullsubexpr32"
+options = ['escaped']
+pattern = '''([^b]*)*'''
+input = '''b'''
+matches = [[0, 0]]
+
+[[tests]]
+name = "nullsubexpr33"
+options = ['escaped']
+pattern = '''([^b]*)*'''
+input = '''aaaaaa'''
+matches = [[0, 6]]
+
+[[tests]]
+name = "nullsubexpr34"
+options = ['escaped']
+pattern = '''([^b]*)*'''
+input = '''aaaaaab'''
+matches = [[0, 6]]
+
+[[tests]]
+name = "nullsubexpr35"
+options = ['escaped']
+pattern = '''([ab]*)*'''
+input = '''a'''
+matches = [[0, 1]]
+
+[[tests]]
+name = "nullsubexpr36"
+options = ['escaped']
+pattern = '''([ab]*)*'''
+input = '''aaaaaa'''
+matches = [[0, 6]]
+
+[[tests]]
+name = "nullsubexpr37"
+options = ['escaped']
+pattern = '''([ab]*)*'''
+input = '''ababab'''
+matches = [[0, 6]]
+
+[[tests]]
+name = "nullsubexpr38"
+options = ['escaped']
+pattern = '''([ab]*)*'''
+input = '''bababa'''
+matches = [[0, 6]]
+
+[[tests]]
+name = "nullsubexpr39"
+options = ['escaped']
+pattern = '''([ab]*)*'''
+input = '''b'''
+matches = [[0, 1]]
+
+[[tests]]
+name = "nullsubexpr40"
+options = ['escaped']
+pattern = '''([ab]*)*'''
+input = '''bbbbbb'''
+matches = [[0, 6]]
+
+[[tests]]
+name = "nullsubexpr41"
+options = ['escaped']
+pattern = '''([ab]*)*'''
+input = '''aaaabcde'''
+matches = [[0, 5]]
+
+[[tests]]
+name = "nullsubexpr42"
+options = ['escaped']
+pattern = '''([^a]*)*'''
+input = '''b'''
+matches = [[0, 1]]
+
+[[tests]]
+name = "nullsubexpr43"
+options = ['escaped']
+pattern = '''([^a]*)*'''
+input = '''bbbbbb'''
+matches = [[0, 6]]
+
+[[tests]]
+name = "nullsubexpr45"
+options = ['escaped']
+pattern = '''([^a]*)*'''
+input = '''aaaaaa'''
+matches = [[0, 0]]
+
+[[tests]]
+name = "nullsubexpr46"
+options = ['escaped']
+pattern = '''([^ab]*)*'''
+input = '''ccccxx'''
+matches = [[0, 6]]
+
+[[tests]]
+name = "nullsubexpr48"
+options = ['escaped']
+pattern = '''([^ab]*)*'''
+input = '''ababab'''
+matches = [[0, 0]]
+
+[[tests]]
+name = "nullsubexpr50"
+options = ['escaped']
+pattern = '''((z)+|a)*'''
+input = '''zabcde'''
+matches = [[0, 2]]
+
+[[tests]]
+name = "nullsubexpr69"
+options = ['escaped']
+pattern = '''(a*)*(x)'''
+input = '''x'''
+matches = [[0, 1]]
+
+[[tests]]
+name = "nullsubexpr70"
+options = ['escaped']
+pattern = '''(a*)*(x)'''
+input = '''ax'''
+matches = [[0, 2]]
+
+[[tests]]
+name = "nullsubexpr71"
+options = ['escaped']
+pattern = '''(a*)*(x)'''
+input = '''axa'''
+matches = [[0, 2]]
+
+[[tests]]
+name = "nullsubexpr73"
+options = ['escaped']
+pattern = '''(a*)+(x)'''
+input = '''x'''
+matches = [[0, 1]]
+
+[[tests]]
+name = "nullsubexpr74"
+options = ['escaped']
+pattern = '''(a*)+(x)'''
+input = '''ax'''
+matches = [[0, 2]]
+
+[[tests]]
+name = "nullsubexpr75"
+options = ['escaped']
+pattern = '''(a*)+(x)'''
+input = '''axa'''
+matches = [[0, 2]]
+
+[[tests]]
+name = "nullsubexpr77"
+options = ['escaped']
+pattern = '''(a*){2}(x)'''
+input = '''x'''
+matches = [[0, 1]]
+
+[[tests]]
+name = "nullsubexpr78"
+options = ['escaped']
+pattern = '''(a*){2}(x)'''
+input = '''ax'''
+matches = [[0, 2]]
+
+[[tests]]
+name = "nullsubexpr79"
+options = ['escaped']
+pattern = '''(a*){2}(x)'''
+input = '''axa'''
+matches = [[0, 2]]
+

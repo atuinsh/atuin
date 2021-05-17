@@ -1,0 +1,14 @@
+error[E0061]: this function takes 0 arguments but 1 argument was supplied
+  --> $DIR/call-drop-inner.rs:13:9
+   |
+13 |         __drop_inner(__self);
+   |         ^^^^^^^^^^^^ ------ supplied 1 argument
+   |         |
+   |         expected 0 arguments
+   |
+note: function defined here
+  --> $DIR/call-drop-inner.rs:10:1
+   |
+10 | #[pinned_drop]
+   | ^^^^^^^^^^^^^^
+   = note: this error originates in an attribute macro (in Nightly builds, run with -Z macro-backtrace for more info)

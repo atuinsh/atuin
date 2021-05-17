@@ -1,0 +1,29 @@
+parameters:
+  toolchain: 'stable'
+
+steps:
+  - bash: |
+      set -e
+      if command -v rustup; then
+        rustup set profile minimal
+        rustup update $TOOLCHAIN
+        rustup default $TOOLCHAIN
+      else
+        curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain $TOOLCHAIN
+        echo "##vso[task.prependpath]$HOME/.cargo/bin"
+      fi
+    displayName: Install rust - Unix
+    condition: ne( variables['Agent.OS'], 'Windows_NT' )
+    env:
+      TOOLCHAIN: ${{ parameters.toolchain }}
+
+  - bash: rustup update --no-self-update $TOOLCHAIN && rustup default $TOOLCHAIN
+    displayName: Install rust - Windows
+    condition: eq( variables['Agent.OS'], 'Windows_NT' )
+    env:
+      TOOLCHAIN: ${{ parameters.toolchain }}
+
+  - script: |
+        rustc -Vv
+        cargo -V
+    displayName: Query rust and cargo versions

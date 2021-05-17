@@ -1,0 +1,25 @@
+steps:
+  - bash: |
+      curl --retry 5 -LO https://github.com/mozilla/geckodriver/releases/download/v0.21.0/geckodriver-v0.21.0-linux64.tar.gz
+      tar xf geckodriver-v0.21.0-linux64.tar.gz
+      echo "##vso[task.setvariable variable=GECKODRIVER;]$PWD/geckodriver"
+    displayName: "Download Geckodriver (Linux)"
+    condition: eq( variables['Agent.OS'], 'Linux' )
+
+  - powershell: |
+      Invoke-WebRequest https://github.com/mozilla/geckodriver/releases/download/v0.24.0/geckodriver-v0.24.0-win64.zip -OutFile gecko.zip
+      unzip gecko.zip
+      Write-Host "##vso[task.setvariable variable=GECKODRIVER;]$pwd\geckodriver.exe"
+    displayName: "Download Geckodriver (Windows)"
+    condition: eq( variables['Agent.OS'], 'Windows_NT' )
+
+  # It turns out that geckodriver.exe will fail if firefox takes too long to
+  # start, and for whatever reason the first execution of `firefox.exe` can
+  # take upwards of a mimute. It seems that subsequent executions are much
+  # faster, so have a dedicated step to run Firefox once which should I
+  # guess warm some cache somewhere so the headless tests later on all
+  # finish successfully
+  - script: |
+      "C:\Program Files\Mozilla Firefox\firefox.exe" --version
+    displayName: "Load firefox.exe into cache (presumably?)"
+    condition: eq( variables['Agent.OS'], 'Windows_NT' )

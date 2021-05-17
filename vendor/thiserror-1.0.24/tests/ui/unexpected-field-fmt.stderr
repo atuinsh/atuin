@@ -1,0 +1,5 @@
+error: not expected here; the #[error(...)] attribute belongs on top of a struct or an enum variant
+ --> $DIR/unexpected-field-fmt.rs:6:9
+  |
+6 |         #[error("...")]
+  |         ^^^^^^^^^^^^^^^

@@ -1,0 +1,17 @@
+parameters:
+  rustup_toolchain: 'stable'
+  working_directory: './'
+jobs:
+- job: clippy
+  pool:
+    vmImage: ubuntu-16.04
+  steps:
+    - template: rustup.yml
+      parameters:
+        rustup_toolchain: ${{ parameters.rustup_toolchain }}
+        components:
+          - clippy
+    - script: |
+        cargo clippy
+      workingDirectory: ${{ parameters.working_directory }}
+      displayName: Run clippy

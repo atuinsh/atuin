@@ -1,0 +1,1428 @@
+[[tests]]
+name = "basic3"
+options = ['escaped']
+pattern = '''abracadabra$'''
+input = '''abracadabracadabra'''
+matches = [[7, 18]]
+
+[[tests]]
+name = "basic4"
+options = ['escaped']
+pattern = '''a...b'''
+input = '''abababbb'''
+matches = [[2, 7]]
+
+[[tests]]
+name = "basic5"
+options = ['escaped']
+pattern = '''XXXXXX'''
+input = '''..XXXXXX'''
+matches = [[2, 8]]
+
+[[tests]]
+name = "basic6"
+options = ['escaped']
+pattern = '''\)'''
+input = '''()'''
+matches = [[1, 2]]
+
+[[tests]]
+name = "basic7"
+options = ['escaped']
+pattern = '''a]'''
+input = '''a]a'''
+matches = [[0, 2]]
+
+[[tests]]
+name = "basic9"
+options = ['escaped']
+pattern = '''\}'''
+input = '''}'''
+matches = [[0, 1]]
+
+[[tests]]
+name = "basic10"
+options = ['escaped']
+pattern = '''\]'''
+input = ''']'''
+matches = [[0, 1]]
+
+[[tests]]
+name = "basic12"
+options = ['escaped']
+pattern = ''']'''
+input = ''']'''
+matches = [[0, 1]]
+
+[[tests]]
+name = "basic15"
+options = ['escaped']
+pattern = '''^a'''
+input = '''ax'''
+matches = [[0, 1]]
+
+[[tests]]
+name = "basic16"
+options = ['escaped']
+pattern = '''\^a'''
+input = '''a^a'''
+matches = [[1, 3]]
+
+[[tests]]
+name = "basic17"
+options = ['escaped']
+pattern = '''a\^'''
+input = '''a^'''
+matches = [[0, 2]]
+
+[[tests]]
+name = "basic18"
+options = ['escaped']
+pattern = '''a$'''
+input = '''aa'''
+matches = [[1, 2]]
+
+[[tests]]
+name = "basic19"
+options = ['escaped']
+pattern = '''a\$'''
+input = '''a$'''
+matches = [[0, 2]]
+
+[[tests]]
+name = "basic20"
+options = ['escaped']
+pattern = '''^$'''
+input = ''''''
+matches = [[0, 0]]
+
+[[tests]]
+name = "basic21"
+options = ['escaped']
+pattern = '''$^'''
+input = ''''''
+matches = [[0, 0]]
+
+[[tests]]
+name = "basic22"
+options = ['escaped']
+pattern = '''a($)'''
+input = '''aa'''
+matches = [[1, 2]]
+
+[[tests]]
+name = "basic23"
+options = ['escaped']
+pattern = '''a*(^a)'''
+input = '''aa'''
+matches = [[0, 1]]
+
+[[tests]]
+name = "basic24"
+options = ['escaped']
+pattern = '''(..)*(...)*'''
+input = '''a'''
+matches = [[0, 0]]
+
+[[tests]]
+name = "basic25"
+options = ['escaped']
+pattern = '''(..)*(...)*'''
+input = '''abcd'''
+matches = [[0, 4]]
+
+[[tests]]
+name = "basic26"
+options = ['escaped']
+pattern = '''(ab|a)(bc|c)'''
+input = '''abc'''
+matches = [[0, 3]]
+
+[[tests]]
+name = "basic27"
+options = ['escaped']
+pattern = '''(ab)c|abc'''
+input = '''abc'''
+matches = [[0, 3]]
+
+[[tests]]
+name = "basic28"
+options = ['escaped']
+pattern = '''a{0}b'''
+input = '''ab'''
+matches = [[1, 2]]
+
+[[tests]]
+name = "basic29"
+options = ['escaped']
+pattern = '''(a*)(b?)(b+)b{3}'''
+input = '''aaabbbbbbb'''
+matches = [[0, 10]]
+
+[[tests]]
+name = "basic30"
+options = ['escaped']
+pattern = '''(a*)(b{0,1})(b{1,})b{3}'''
+input = '''aaabbbbbbb'''
+matches = [[0, 10]]
+
+[[tests]]
+name = "basic32"
+options = ['escaped']
+pattern = '''((a|a)|a)'''
+input = '''a'''
+matches = [[0, 1]]
+
+[[tests]]
+name = "basic33"
+options = ['escaped']
+pattern = '''(a*)(a|aa)'''
+input = '''aaaa'''
+matches = [[0, 4]]
+
+[[tests]]
+name = "basic34"
+options = ['escaped']
+pattern = '''a*(a.|aa)'''
+input = '''aaaa'''
+matches = [[0, 4]]
+
+[[tests]]
+name = "basic35"
+options = ['escaped']
+pattern = '''a(b)|c(d)|a(e)f'''
+input = '''aef'''
+matches = [[0, 3]]
+
+[[tests]]
+name = "basic36"
+options = ['escaped']
+pattern = '''(a|b)?.*'''
+input = '''b'''
+matches = [[0, 1]]
+
+[[tests]]
+name = "basic37"
+options = ['escaped']
+pattern = '''(a|b)c|a(b|c)'''
+input = '''ac'''
+matches = [[0, 2]]
+
+[[tests]]
+name = "basic38"
+options = ['escaped']
+pattern = '''(a|b)c|a(b|c)'''
+input = '''ab'''
+matches = [[0, 2]]
+
+[[tests]]
+name = "basic39"
+options = ['escaped']
+pattern = '''(a|b)*c|(a|ab)*c'''
+input = '''abc'''
+matches = [[0, 3]]
+
+[[tests]]
+name = "basic40"
+options = ['escaped']
+pattern = '''(a|b)*c|(a|ab)*c'''
+input = '''xc'''
+matches = [[1, 2]]
+
+[[tests]]
+name = "basic41"
+options = ['escaped']
+pattern = '''(.a|.b).*|.*(.a|.b)'''
+input = '''xa'''
+matches = [[0, 2]]
+
+[[tests]]
+name = "basic42"
+options = ['escaped']
+pattern = '''a?(ab|ba)ab'''
+input = '''abab'''
+matches = [[0, 4]]
+
+[[tests]]
+name = "basic43"
+options = ['escaped']
+pattern = '''a?(ac{0}b|ba)ab'''
+input = '''abab'''
+matches = [[0, 4]]
+
+[[tests]]
+name = "basic44"
+options = ['escaped']
+pattern = '''ab|abab'''
+input = '''abbabab'''
+matches = [[0, 2]]
+
+[[tests]]
+name = "basic45"
+options = ['escaped']
+pattern = '''aba|bab|bba'''
+input = '''baaabbbaba'''
+matches = [[5, 8]]
+
+[[tests]]
+name = "basic46"
+options = ['escaped']
+pattern = '''aba|bab'''
+input = '''baaabbbaba'''
+matches = [[6, 9]]
+
+[[tests]]
+name = "basic47"
+options = ['escaped']
+pattern = '''(aa|aaa)*|(a|aaaaa)'''
+input = '''aa'''
+matches = [[0, 2]]
+
+[[tests]]
+name = "basic48"
+options = ['escaped']
+pattern = '''(a.|.a.)*|(a|.a...)'''
+input = '''aa'''
+matches = [[0, 2]]
+
+[[tests]]
+name = "basic49"
+options = ['escaped']
+pattern = '''ab|a'''
+input = '''xabc'''
+matches = [[1, 3]]
+
+[[tests]]
+name = "basic50"
+options = ['escaped']
+pattern = '''ab|a'''
+input = '''xxabc'''
+matches = [[2, 4]]
+
+[[tests]]
+name = "basic51"
+options = ['escaped', 'case-insensitive']
+pattern = '''(Ab|cD)*'''
+input = '''aBcD'''
+matches = [[0, 4]]
+
+[[tests]]
+name = "basic52"
+options = ['escaped']
+pattern = '''[^-]'''
+input = '''--a'''
+matches = [[2, 3]]
+
+[[tests]]
+name = "basic53"
+options = ['escaped']
+pattern = '''[a-]*'''
+input = '''--a'''
+matches = [[0, 3]]
+
+[[tests]]
+name = "basic54"
+options = ['escaped']
+pattern = '''[a-m-]*'''
+input = '''--amoma--'''
+matches = [[0, 4]]
+
+[[tests]]
+name = "basic55"
+options = ['escaped']
+pattern = ''':::1:::0:|:::1:1:0:'''
+input = ''':::0:::1:::1:::0:'''
+matches = [[8, 17]]
+
+[[tests]]
+name = "basic56"
+options = ['escaped']
+pattern = ''':::1:::0:|:::1:1:1:'''
+input = ''':::0:::1:::1:::0:'''
+matches = [[8, 17]]
+
+[[tests]]
+name = "basic57"
+options = ['escaped']
+pattern = '''[[:upper:]]'''
+input = '''A'''
+matches = [[0, 1]]
+
+[[tests]]
+name = "basic58"
+options = ['escaped']
+pattern = '''[[:lower:]]+'''
+input = '''`az{'''
+matches = [[1, 3]]
+
+[[tests]]
+name = "basic59"
+options = ['escaped']
+pattern = '''[[:upper:]]+'''
+input = '''@AZ['''
+matches = [[1, 3]]
+
+[[tests]]
+name = "basic65"
+options = ['escaped']
+pattern = '''\n'''
+input = '''\n'''
+matches = [[0, 1]]
+
+[[tests]]
+name = "basic66"
+options = ['escaped']
+pattern = '''\n'''
+input = '''\n'''
+matches = [[0, 1]]
+
+[[tests]]
+name = "basic67"
+options = ['escaped']
+pattern = '''[^a]'''
+input = '''\n'''
+matches = [[0, 1]]
+
+[[tests]]
+name = "basic68"
+options = ['escaped']
+pattern = '''\na'''
+input = '''\na'''
+matches = [[0, 2]]
+
+[[tests]]
+name = "basic69"
+options = ['escaped']
+pattern = '''(a)(b)(c)'''
+input = '''abc'''
+matches = [[0, 3]]
+
+[[tests]]
+name = "basic70"
+options = ['escaped']
+pattern = '''xxx'''
+input = '''xxx'''
+matches = [[0, 3]]
+
+[[tests]]
+name = "basic71"
+options = ['escaped']
+pattern = '''(^|[ (,;])((([Ff]eb[^ ]* *|0*2/|\* */?)0*[6-7]))([^0-9]|$)'''
+input = '''feb 6,'''
+matches = [[0, 6]]
+
+[[tests]]
+name = "basic72"
+options = ['escaped']
+pattern = '''(^|[ (,;])((([Ff]eb[^ ]* *|0*2/|\* */?)0*[6-7]))([^0-9]|$)'''
+input = '''2/7'''
+matches = [[0, 3]]
+
+[[tests]]
+name = "basic73"
+options = ['escaped']
+pattern = '''(^|[ (,;])((([Ff]eb[^ ]* *|0*2/|\* */?)0*[6-7]))([^0-9]|$)'''
+input = '''feb 1,Feb 6'''
+matches = [[5, 11]]
+
+[[tests]]
+name = "basic74"
+options = ['escaped']
+pattern = '''((((((((((((((((((((((((((((((x))))))))))))))))))))))))))))))'''
+input = '''x'''
+matches = [[0, 1]]
+
+[[tests]]
+name = "basic75"
+options = ['escaped']
+pattern = '''((((((((((((((((((((((((((((((x))))))))))))))))))))))))))))))*'''
+input = '''xx'''
+matches = [[0, 2]]
+
+[[tests]]
+name = "basic76"
+options = ['escaped']
+pattern = '''a?(ab|ba)*'''
+input = '''ababababababababababababababababababababababababababababababababababababababababa'''
+matches = [[0, 81]]
+
+[[tests]]
+name = "basic77"
+options = ['escaped']
+pattern = '''abaa|abbaa|abbbaa|abbbbaa'''
+input = '''ababbabbbabbbabbbbabbbbaa'''
+matches = [[18, 25]]
+
+[[tests]]
+name = "basic78"
+options = ['escaped']
+pattern = '''abaa|abbaa|abbbaa|abbbbaa'''
+input = '''ababbabbbabbbabbbbabaa'''
+matches = [[18, 22]]
+
+[[tests]]
+name = "basic79"
+options = ['escaped']
+pattern = '''aaac|aabc|abac|abbc|baac|babc|bbac|bbbc'''
+input = '''baaabbbabac'''
+matches = [[7, 11]]
+
+[[tests]]
+name = "basic80"
+options = ['escaped']
+pattern = '''.*'''
+input = '''\x01\x7f'''
+matches = [[0, 2]]
+
+[[tests]]
+name = "basic81"
+options = ['escaped']
+pattern = '''aaaa|bbbb|cccc|ddddd|eeeeee|fffffff|gggg|hhhh|iiiii|jjjjj|kkkkk|llll'''
+input = '''XaaaXbbbXcccXdddXeeeXfffXgggXhhhXiiiXjjjXkkkXlllXcbaXaaaa'''
+matches = [[53, 57]]
+
+[[tests]]
+name = "basic83"
+options = ['escaped']
+pattern = '''a*a*a*a*a*b'''
+input = '''aaaaaaaaab'''
+matches = [[0, 10]]
+
+[[tests]]
+name = "basic84"
+options = ['escaped']
+pattern = '''^'''
+input = ''''''
+matches = [[0, 0]]
+
+[[tests]]
+name = "basic85"
+options = ['escaped']
+pattern = '''$'''
+input = ''''''
+matches = [[0, 0]]
+
+[[tests]]
+name = "basic86"
+options = ['escaped']
+pattern = '''^$'''
+input = ''''''
+matches = [[0, 0]]
+
+[[tests]]
+name = "basic87"
+options = ['escaped']
+pattern = '''^a$'''
+input = '''a'''
+matches = [[0, 1]]
+
+[[tests]]
+name = "basic88"
+options = ['escaped']
+pattern = '''abc'''
+input = '''abc'''
+matches = [[0, 3]]
+
+[[tests]]
+name = "basic89"
+options = ['escaped']
+pattern = '''abc'''
+input = '''xabcy'''
+matches = [[1, 4]]
+
+[[tests]]
+name = "basic90"
+options = ['escaped']
+pattern = '''abc'''
+input = '''ababc'''
+matches = [[2, 5]]
+
+[[tests]]
+name = "basic91"
+options = ['escaped']
+pattern = '''ab*c'''
+input = '''abc'''
+matches = [[0, 3]]
+
+[[tests]]
+name = "basic92"
+options = ['escaped']
+pattern = '''ab*bc'''
+input = '''abc'''
+matches = [[0, 3]]
+
+[[tests]]
+name = "basic93"
+options = ['escaped']
+pattern = '''ab*bc'''
+input = '''abbc'''
+matches = [[0, 4]]
+
+[[tests]]
+name = "basic94"
+options = ['escaped']
+pattern = '''ab*bc'''
+input = '''abbbbc'''
+matches = [[0, 6]]
+
+[[tests]]
+name = "basic95"
+options = ['escaped']
+pattern = '''ab+bc'''
+input = '''abbc'''
+matches = [[0, 4]]
+
+[[tests]]
+name = "basic96"
+options = ['escaped']
+pattern = '''ab+bc'''
+input = '''abbbbc'''
+matches = [[0, 6]]
+
+[[tests]]
+name = "basic97"
+options = ['escaped']
+pattern = '''ab?bc'''
+input = '''abbc'''
+matches = [[0, 4]]
+
+[[tests]]
+name = "basic98"
+options = ['escaped']
+pattern = '''ab?bc'''
+input = '''abc'''
+matches = [[0, 3]]
+
+[[tests]]
+name = "basic99"
+options = ['escaped']
+pattern = '''ab?c'''
+input = '''abc'''
+matches = [[0, 3]]
+
+[[tests]]
+name = "basic100"
+options = ['escaped']
+pattern = '''^abc$'''
+input = '''abc'''
+matches = [[0, 3]]
+
+[[tests]]
+name = "basic101"
+options = ['escaped']
+pattern = '''^abc'''
+input = '''abcc'''
+matches = [[0, 3]]
+
+[[tests]]
+name = "basic102"
+options = ['escaped']
+pattern = '''abc$'''
+input = '''aabc'''
+matches = [[1, 4]]
+
+[[tests]]
+name = "basic103"
+options = ['escaped']
+pattern = '''^'''
+input = '''abc'''
+matches = [[0, 0]]
+
+[[tests]]
+name = "basic104"
+options = ['escaped']
+pattern = '''$'''
+input = '''abc'''
+matches = [[3, 3]]
+
+[[tests]]
+name = "basic105"
+options = ['escaped']
+pattern = '''a.c'''
+input = '''abc'''
+matches = [[0, 3]]
+
+[[tests]]
+name = "basic106"
+options = ['escaped']
+pattern = '''a.c'''
+input = '''axc'''
+matches = [[0, 3]]
+
+[[tests]]
+name = "basic107"
+options = ['escaped']
+pattern = '''a.*c'''
+input = '''axyzc'''
+matches = [[0, 5]]
+
+[[tests]]
+name = "basic108"
+options = ['escaped']
+pattern = '''a[bc]d'''
+input = '''abd'''
+matches = [[0, 3]]
+
+[[tests]]
+name = "basic109"
+options = ['escaped']
+pattern = '''a[b-d]e'''
+input = '''ace'''
+matches = [[0, 3]]
+
+[[tests]]
+name = "basic110"
+options = ['escaped']
+pattern = '''a[b-d]'''
+input = '''aac'''
+matches = [[1, 3]]
+
+[[tests]]
+name = "basic111"
+options = ['escaped']
+pattern = '''a[-b]'''
+input = '''a-'''
+matches = [[0, 2]]
+
+[[tests]]
+name = "basic112"
+options = ['escaped']
+pattern = '''a[b-]'''
+input = '''a-'''
+matches = [[0, 2]]
+
+[[tests]]
+name = "basic113"
+options = ['escaped']
+pattern = '''a]'''
+input = '''a]'''
+matches = [[0, 2]]
+
+[[tests]]
+name = "basic114"
+options = ['escaped']
+pattern = '''a[]]b'''
+input = '''a]b'''
+matches = [[0, 3]]
+
+[[tests]]
+name = "basic115"
+options = ['escaped']
+pattern = '''a[^bc]d'''
+input = '''aed'''
+matches = [[0, 3]]
+
+[[tests]]
+name = "basic116"
+options = ['escaped']
+pattern = '''a[^-b]c'''
+input = '''adc'''
+matches = [[0, 3]]
+
+[[tests]]
+name = "basic117"
+options = ['escaped']
+pattern = '''a[^]b]c'''
+input = '''adc'''
+matches = [[0, 3]]
+
+[[tests]]
+name = "basic118"
+options = ['escaped']
+pattern = '''ab|cd'''
+input = '''abc'''
+matches = [[0, 2]]
+
+[[tests]]
+name = "basic119"
+options = ['escaped']
+pattern = '''ab|cd'''
+input = '''abcd'''
+matches = [[0, 2]]
+
+[[tests]]
+name = "basic120"
+options = ['escaped']
+pattern = '''a\(b'''
+input = '''a(b'''
+matches = [[0, 3]]
+
+[[tests]]
+name = "basic121"
+options = ['escaped']
+pattern = '''a\(*b'''
+input = '''ab'''
+matches = [[0, 2]]
+
+[[tests]]
+name = "basic122"
+options = ['escaped']
+pattern = '''a\(*b'''
+input = '''a((b'''
+matches = [[0, 4]]
+
+[[tests]]
+name = "basic123"
+options = ['escaped']
+pattern = '''((a))'''
+input = '''abc'''
+matches = [[0, 1]]
+
+[[tests]]
+name = "basic124"
+options = ['escaped']
+pattern = '''(a)b(c)'''
+input = '''abc'''
+matches = [[0, 3]]
+
+[[tests]]
+name = "basic125"
+options = ['escaped']
+pattern = '''a+b+c'''
+input = '''aabbabc'''
+matches = [[4, 7]]
+
+[[tests]]
+name = "basic126"
+options = ['escaped']
+pattern = '''a*'''
+input = '''aaa'''
+matches = [[0, 3]]
+
+[[tests]]
+name = "basic128"
+options = ['escaped']
+pattern = '''(a*)*'''
+input = '''-'''
+matches = [[0, 0]]
+
+[[tests]]
+name = "basic129"
+options = ['escaped']
+pattern = '''(a*)+'''
+input = '''-'''
+matches = [[0, 0]]
+
+[[tests]]
+name = "basic131"
+options = ['escaped']
+pattern = '''(a*|b)*'''
+input = '''-'''
+matches = [[0, 0]]
+
+[[tests]]
+name = "basic132"
+options = ['escaped']
+pattern = '''(a+|b)*'''
+input = '''ab'''
+matches = [[0, 2]]
+
+[[tests]]
+name = "basic133"
+options = ['escaped']
+pattern = '''(a+|b)+'''
+input = '''ab'''
+matches = [[0, 2]]
+
+[[tests]]
+name = "basic134"
+options = ['escaped']
+pattern = '''(a+|b)?'''
+input = '''ab'''
+matches = [[0, 1]]
+
+[[tests]]
+name = "basic135"
+options = ['escaped']
+pattern = '''[^ab]*'''
+input = '''cde'''
+matches = [[0, 3]]
+
+[[tests]]
+name = "basic137"
+options = ['escaped']
+pattern = '''(^)*'''
+input = '''-'''
+matches = [[0, 0]]
+
+[[tests]]
+name = "basic138"
+options = ['escaped']
+pattern = '''a*'''
+input = ''''''
+matches = [[0, 0]]
+
+[[tests]]
+name = "basic139"
+options = ['escaped']
+pattern = '''([abc])*d'''
+input = '''abbbcd'''
+matches = [[0, 6]]
+
+[[tests]]
+name = "basic140"
+options = ['escaped']
+pattern = '''([abc])*bcd'''
+input = '''abcd'''
+matches = [[0, 4]]
+
+[[tests]]
+name = "basic141"
+options = ['escaped']
+pattern = '''a|b|c|d|e'''
+input = '''e'''
+matches = [[0, 1]]
+
+[[tests]]
+name = "basic142"
+options = ['escaped']
+pattern = '''(a|b|c|d|e)f'''
+input = '''ef'''
+matches = [[0, 2]]
+
+[[tests]]
+name = "basic144"
+options = ['escaped']
+pattern = '''((a*|b))*'''
+input = '''-'''
+matches = [[0, 0]]
+
+[[tests]]
+name = "basic145"
+options = ['escaped']
+pattern = '''abcd*efg'''
+input = '''abcdefg'''
+matches = [[0, 7]]
+
+[[tests]]
+name = "basic146"
+options = ['escaped']
+pattern = '''ab*'''
+input = '''xabyabbbz'''
+matches = [[1, 3]]
+
+[[tests]]
+name = "basic147"
+options = ['escaped']
+pattern = '''ab*'''
+input = '''xayabbbz'''
+matches = [[1, 2]]
+
+[[tests]]
+name = "basic148"
+options = ['escaped']
+pattern = '''(ab|cd)e'''
+input = '''abcde'''
+matches = [[2, 5]]
+
+[[tests]]
+name = "basic149"
+options = ['escaped']
+pattern = '''[abhgefdc]ij'''
+input = '''hij'''
+matches = [[0, 3]]
+
+[[tests]]
+name = "basic150"
+options = ['escaped']
+pattern = '''(a|b)c*d'''
+input = '''abcd'''
+matches = [[1, 4]]
+
+[[tests]]
+name = "basic151"
+options = ['escaped']
+pattern = '''(ab|ab*)bc'''
+input = '''abc'''
+matches = [[0, 3]]
+
+[[tests]]
+name = "basic152"
+options = ['escaped']
+pattern = '''a([bc]*)c*'''
+input = '''abc'''
+matches = [[0, 3]]
+
+[[tests]]
+name = "basic153"
+options = ['escaped']
+pattern = '''a([bc]*)(c*d)'''
+input = '''abcd'''
+matches = [[0, 4]]
+
+[[tests]]
+name = "basic154"
+options = ['escaped']
+pattern = '''a([bc]+)(c*d)'''
+input = '''abcd'''
+matches = [[0, 4]]
+
+[[tests]]
+name = "basic155"
+options = ['escaped']
+pattern = '''a([bc]*)(c+d)'''
+input = '''abcd'''
+matches = [[0, 4]]
+
+[[tests]]
+name = "basic156"
+options = ['escaped']
+pattern = '''a[bcd]*dcdcde'''
+input = '''adcdcde'''
+matches = [[0, 7]]
+
+[[tests]]
+name = "basic157"
+options = ['escaped']
+pattern = '''(ab|a)b*c'''
+input = '''abc'''
+matches = [[0, 3]]
+
+[[tests]]
+name = "basic158"
+options = ['escaped']
+pattern = '''((a)(b)c)(d)'''
+input = '''abcd'''
+matches = [[0, 4]]
+
+[[tests]]
+name = "basic159"
+options = ['escaped']
+pattern = '''[A-Za-z_][A-Za-z0-9_]*'''
+input = '''alpha'''
+matches = [[0, 5]]
+
+[[tests]]
+name = "basic160"
+options = ['escaped']
+pattern = '''^a(bc+|b[eh])g|.h$'''
+input = '''abh'''
+matches = [[1, 3]]
+
+[[tests]]
+name = "basic161"
+options = ['escaped']
+pattern = '''(bc+d$|ef*g.|h?i(j|k))'''
+input = '''effgz'''
+matches = [[0, 5]]
+
+[[tests]]
+name = "basic162"
+options = ['escaped']
+pattern = '''(bc+d$|ef*g.|h?i(j|k))'''
+input = '''ij'''
+matches = [[0, 2]]
+
+[[tests]]
+name = "basic163"
+options = ['escaped']
+pattern = '''(bc+d$|ef*g.|h?i(j|k))'''
+input = '''reffgz'''
+matches = [[1, 6]]
+
+[[tests]]
+name = "basic164"
+options = ['escaped']
+pattern = '''(((((((((a)))))))))'''
+input = '''a'''
+matches = [[0, 1]]
+
+[[tests]]
+name = "basic165"
+options = ['escaped']
+pattern = '''multiple words'''
+input = '''multiple words yeah'''
+matches = [[0, 14]]
+
+[[tests]]
+name = "basic166"
+options = ['escaped']
+pattern = '''(.*)c(.*)'''
+input = '''abcde'''
+matches = [[0, 5]]
+
+[[tests]]
+name = "basic167"
+options = ['escaped']
+pattern = '''abcd'''
+input = '''abcd'''
+matches = [[0, 4]]
+
+[[tests]]
+name = "basic168"
+options = ['escaped']
+pattern = '''a(bc)d'''
+input = '''abcd'''
+matches = [[0, 4]]
+
+[[tests]]
+name = "basic169"
+options = ['escaped']
+pattern = '''a[\x01-\x03]?c'''
+input = '''a\x02c'''
+matches = [[0, 3]]
+
+[[tests]]
+name = "basic170"
+options = ['escaped']
+pattern = '''M[ou]'?am+[ae]r .*([AEae]l[- ])?[GKQ]h?[aeu]+([dtz][dhz]?)+af[iy]'''
+input = '''Muammar Qaddafi'''
+matches = [[0, 15]]
+
+[[tests]]
+name = "basic171"
+options = ['escaped']
+pattern = '''M[ou]'?am+[ae]r .*([AEae]l[- ])?[GKQ]h?[aeu]+([dtz][dhz]?)+af[iy]'''
+input = '''Mo'ammar Gadhafi'''
+matches = [[0, 16]]
+
+[[tests]]
+name = "basic172"
+options = ['escaped']
+pattern = '''M[ou]'?am+[ae]r .*([AEae]l[- ])?[GKQ]h?[aeu]+([dtz][dhz]?)+af[iy]'''
+input = '''Muammar Kaddafi'''
+matches = [[0, 15]]
+
+[[tests]]
+name = "basic173"
+options = ['escaped']
+pattern = '''M[ou]'?am+[ae]r .*([AEae]l[- ])?[GKQ]h?[aeu]+([dtz][dhz]?)+af[iy]'''
+input = '''Muammar Qadhafi'''
+matches = [[0, 15]]
+
+[[tests]]
+name = "basic174"
+options = ['escaped']
+pattern = '''M[ou]'?am+[ae]r .*([AEae]l[- ])?[GKQ]h?[aeu]+([dtz][dhz]?)+af[iy]'''
+input = '''Muammar Gadafi'''
+matches = [[0, 14]]
+
+[[tests]]
+name = "basic175"
+options = ['escaped']
+pattern = '''M[ou]'?am+[ae]r .*([AEae]l[- ])?[GKQ]h?[aeu]+([dtz][dhz]?)+af[iy]'''
+input = '''Mu'ammar Qadafi'''
+matches = [[0, 15]]
+
+[[tests]]
+name = "basic176"
+options = ['escaped']
+pattern = '''M[ou]'?am+[ae]r .*([AEae]l[- ])?[GKQ]h?[aeu]+([dtz][dhz]?)+af[iy]'''
+input = '''Moamar Gaddafi'''
+matches = [[0, 14]]
+
+[[tests]]
+name = "basic177"
+options = ['escaped']
+pattern = '''M[ou]'?am+[ae]r .*([AEae]l[- ])?[GKQ]h?[aeu]+([dtz][dhz]?)+af[iy]'''
+input = '''Mu'ammar Qadhdhafi'''
+matches = [[0, 18]]
+
+[[tests]]
+name = "basic178"
+options = ['escaped']
+pattern = '''M[ou]'?am+[ae]r .*([AEae]l[- ])?[GKQ]h?[aeu]+([dtz][dhz]?)+af[iy]'''
+input = '''Muammar Khaddafi'''
+matches = [[0, 16]]
+
+[[tests]]
+name = "basic179"
+options = ['escaped']
+pattern = '''M[ou]'?am+[ae]r .*([AEae]l[- ])?[GKQ]h?[aeu]+([dtz][dhz]?)+af[iy]'''
+input = '''Muammar Ghaddafy'''
+matches = [[0, 16]]
+
+[[tests]]
+name = "basic180"
+options = ['escaped']
+pattern = '''M[ou]'?am+[ae]r .*([AEae]l[- ])?[GKQ]h?[aeu]+([dtz][dhz]?)+af[iy]'''
+input = '''Muammar Ghadafi'''
+matches = [[0, 15]]
+
+[[tests]]
+name = "basic181"
+options = ['escaped']
+pattern = '''M[ou]'?am+[ae]r .*([AEae]l[- ])?[GKQ]h?[aeu]+([dtz][dhz]?)+af[iy]'''
+input = '''Muammar Ghaddafi'''
+matches = [[0, 16]]
+
+[[tests]]
+name = "basic182"
+options = ['escaped']
+pattern = '''M[ou]'?am+[ae]r .*([AEae]l[- ])?[GKQ]h?[aeu]+([dtz][dhz]?)+af[iy]'''
+input = '''Muamar Kaddafi'''
+matches = [[0, 14]]
+
+[[tests]]
+name = "basic183"
+options = ['escaped']
+pattern = '''M[ou]'?am+[ae]r .*([AEae]l[- ])?[GKQ]h?[aeu]+([dtz][dhz]?)+af[iy]'''
+input = '''Muammar Quathafi'''
+matches = [[0, 16]]
+
+[[tests]]
+name = "basic184"
+options = ['escaped']
+pattern = '''M[ou]'?am+[ae]r .*([AEae]l[- ])?[GKQ]h?[aeu]+([dtz][dhz]?)+af[iy]'''
+input = '''Muammar Gheddafi'''
+matches = [[0, 16]]
+
+[[tests]]
+name = "basic185"
+options = ['escaped']
+pattern = '''M[ou]'?am+[ae]r .*([AEae]l[- ])?[GKQ]h?[aeu]+([dtz][dhz]?)+af[iy]'''
+input = '''Moammar Khadafy'''
+matches = [[0, 15]]
+
+[[tests]]
+name = "basic186"
+options = ['escaped']
+pattern = '''M[ou]'?am+[ae]r .*([AEae]l[- ])?[GKQ]h?[aeu]+([dtz][dhz]?)+af[iy]'''
+input = '''Moammar Qudhafi'''
+matches = [[0, 15]]
+
+[[tests]]
+name = "basic187"
+options = ['escaped']
+pattern = '''a+(b|c)*d+'''
+input = '''aabcdd'''
+matches = [[0, 6]]
+
+[[tests]]
+name = "basic188"
+options = ['escaped']
+pattern = '''^.+$'''
+input = '''vivi'''
+matches = [[0, 4]]
+
+[[tests]]
+name = "basic189"
+options = ['escaped']
+pattern = '''^(.+)$'''
+input = '''vivi'''
+matches = [[0, 4]]
+
+[[tests]]
+name = "basic190"
+options = ['escaped']
+pattern = '''^([^!.]+).att.com!(.+)$'''
+input = '''gryphon.att.com!eby'''
+matches = [[0, 19]]
+
+[[tests]]
+name = "basic191"
+options = ['escaped']
+pattern = '''^([^!]+!)?([^!]+)$'''
+input = '''bas'''
+matches = [[0, 3]]
+
+[[tests]]
+name = "basic192"
+options = ['escaped']
+pattern = '''^([^!]+!)?([^!]+)$'''
+input = '''bar!bas'''
+matches = [[0, 7]]
+
+[[tests]]
+name = "basic193"
+options = ['escaped']
+pattern = '''^([^!]+!)?([^!]+)$'''
+input = '''foo!bas'''
+matches = [[0, 7]]
+
+[[tests]]
+name = "basic194"
+options = ['escaped']
+pattern = '''^.+!([^!]+!)([^!]+)$'''
+input = '''foo!bar!bas'''
+matches = [[0, 11]]
+
+[[tests]]
+name = "basic195"
+options = ['escaped']
+pattern = '''((foo)|(bar))!bas'''
+input = '''bar!bas'''
+matches = [[0, 7]]
+
+[[tests]]
+name = "basic196"
+options = ['escaped']
+pattern = '''((foo)|(bar))!bas'''
+input = '''foo!bar!bas'''
+matches = [[4, 11]]
+
+[[tests]]
+name = "basic197"
+options = ['escaped']
+pattern = '''((foo)|(bar))!bas'''
+input = '''foo!bas'''
+matches = [[0, 7]]
+
+[[tests]]
+name = "basic198"
+options = ['escaped']
+pattern = '''((foo)|bar)!bas'''
+input = '''bar!bas'''
+matches = [[0, 7]]
+
+[[tests]]
+name = "basic199"
+options = ['escaped']
+pattern = '''((foo)|bar)!bas'''
+input = '''foo!bar!bas'''
+matches = [[4, 11]]
+
+[[tests]]
+name = "basic200"
+options = ['escaped']
+pattern = '''((foo)|bar)!bas'''
+input = '''foo!bas'''
+matches = [[0, 7]]
+
+[[tests]]
+name = "basic201"
+options = ['escaped']
+pattern = '''(foo|(bar))!bas'''
+input = '''bar!bas'''
+matches = [[0, 7]]
+
+[[tests]]
+name = "basic202"
+options = ['escaped']
+pattern = '''(foo|(bar))!bas'''
+input = '''foo!bar!bas'''
+matches = [[4, 11]]
+
+[[tests]]
+name = "basic203"
+options = ['escaped']
+pattern = '''(foo|(bar))!bas'''
+input = '''foo!bas'''
+matches = [[0, 7]]
+
+[[tests]]
+name = "basic204"
+options = ['escaped']
+pattern = '''(foo|bar)!bas'''
+input = '''bar!bas'''
+matches = [[0, 7]]
+
+[[tests]]
+name = "basic205"
+options = ['escaped']
+pattern = '''(foo|bar)!bas'''
+input = '''foo!bar!bas'''
+matches = [[4, 11]]
+
+[[tests]]
+name = "basic206"
+options = ['escaped']
+pattern = '''(foo|bar)!bas'''
+input = '''foo!bas'''
+matches = [[0, 7]]
+
+[[tests]]
+name = "basic207"
+options = ['escaped']
+pattern = '''^(([^!]+!)?([^!]+)|.+!([^!]+!)([^!]+))$'''
+input = '''foo!bar!bas'''
+matches = [[0, 11]]
+
+[[tests]]
+name = "basic208"
+options = ['escaped']
+pattern = '''^([^!]+!)?([^!]+)$|^.+!([^!]+!)([^!]+)$'''
+input = '''bas'''
+matches = [[0, 3]]
+
+[[tests]]
+name = "basic209"
+options = ['escaped']
+pattern = '''^([^!]+!)?([^!]+)$|^.+!([^!]+!)([^!]+)$'''
+input = '''bar!bas'''
+matches = [[0, 7]]
+
+[[tests]]
+name = "basic210"
+options = ['escaped']
+pattern = '''^([^!]+!)?([^!]+)$|^.+!([^!]+!)([^!]+)$'''
+input = '''foo!bar!bas'''
+matches = [[0, 11]]
+
+[[tests]]
+name = "basic211"
+options = ['escaped']
+pattern = '''^([^!]+!)?([^!]+)$|^.+!([^!]+!)([^!]+)$'''
+input = '''foo!bas'''
+matches = [[0, 7]]
+
+[[tests]]
+name = "basic212"
+options = ['escaped']
+pattern = '''^(([^!]+!)?([^!]+)|.+!([^!]+!)([^!]+))$'''
+input = '''bas'''
+matches = [[0, 3]]
+
+[[tests]]
+name = "basic213"
+options = ['escaped']
+pattern = '''^(([^!]+!)?([^!]+)|.+!([^!]+!)([^!]+))$'''
+input = '''bar!bas'''
+matches = [[0, 7]]
+
+[[tests]]
+name = "basic214"
+options = ['escaped']
+pattern = '''^(([^!]+!)?([^!]+)|.+!([^!]+!)([^!]+))$'''
+input = '''foo!bar!bas'''
+matches = [[0, 11]]
+
+[[tests]]
+name = "basic215"
+options = ['escaped']
+pattern = '''^(([^!]+!)?([^!]+)|.+!([^!]+!)([^!]+))$'''
+input = '''foo!bas'''
+matches = [[0, 7]]
+
+[[tests]]
+name = "basic216"
+options = ['escaped']
+pattern = '''.*(/XXX).*'''
+input = '''/XXX'''
+matches = [[0, 4]]
+
+[[tests]]
+name = "basic217"
+options = ['escaped']
+pattern = '''.*(\\XXX).*'''
+input = '''\\XXX'''
+matches = [[0, 4]]
+
+[[tests]]
+name = "basic218"
+options = ['escaped']
+pattern = '''\\XXX'''
+input = '''\\XXX'''
+matches = [[0, 4]]
+
+[[tests]]
+name = "basic219"
+options = ['escaped']
+pattern = '''.*(/000).*'''
+input = '''/000'''
+matches = [[0, 4]]
+
+[[tests]]
+name = "basic220"
+options = ['escaped']
+pattern = '''.*(\\000).*'''
+input = '''\\000'''
+matches = [[0, 4]]
+
+[[tests]]
+name = "basic221"
+options = ['escaped']
+pattern = '''\\000'''
+input = '''\\000'''
+matches = [[0, 4]]
+
