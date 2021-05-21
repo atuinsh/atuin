@@ -19,7 +19,7 @@ chrono = { version = "0.4", features = ["serde"] }
 eyre = "0.6"
 directories = "3"
 uuid = { version = "0.8", features = ["v4"] }
-indicatif = "0.16.0"
+indicatif = "0.16.1"
 whoami = "1.1.2"
 chrono-english = "0.1.4"
 config = "0.11"
