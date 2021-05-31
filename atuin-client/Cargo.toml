@@ -17,6 +17,7 @@ log = "0.4"
 fern = {version = "0.6.0", features = ["colored"] }
 chrono = { version = "0.4", features = ["serde"] }
 eyre = "0.6"
+tokio-test = "*"
 directories = "3"
 uuid = { version = "0.8", features = ["v4"] }
 indicatif = "0.16.0"

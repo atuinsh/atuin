@@ -286,6 +286,7 @@ impl Database for Sqlite {
         let query = match search_mode {
             SearchMode::Prefix => query,
             SearchMode::FullText => format!("%{}", query),
+            SearchMode::Fuzzy => query.split("").collect::<Vec<&str>>().join("%"),
         };
 
         let res = sqlx::query(
@@ -316,5 +317,91 @@ impl Database for Sqlite {
             .await?;
 
         Ok(res)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    async fn new_history_item(db: &mut impl Database, cmd: &str) -> Result<()> {
+        let history = History::new(
+            chrono::Utc::now(),
+            cmd.to_string(),
+            "/home/ellie".to_string(),
+            0,
+            1,
+            Some("beep boop".to_string()),
+            Some("booop".to_string()),
+        );
+        return db.save(&history).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_search_prefix() {
+        let mut db = Sqlite::new("sqlite::memory:").await.unwrap();
+        new_history_item(&mut db, "ls /home/ellie").await.unwrap();
+
+        let mut results = db.search(None, SearchMode::Prefix, "ls").await.unwrap();
+        assert_eq!(results.len(), 1);
+
+        results = db.search(None, SearchMode::Prefix, "/home").await.unwrap();
+        assert_eq!(results.len(), 0);
+
+        results = db.search(None, SearchMode::Prefix, "ls  ").await.unwrap();
+        assert_eq!(results.len(), 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_search_fulltext() {
+        let mut db = Sqlite::new("sqlite::memory:").await.unwrap();
+        new_history_item(&mut db, "ls /home/ellie").await.unwrap();
+
+        let mut results = db.search(None, SearchMode::FullText, "ls").await.unwrap();
+        assert_eq!(results.len(), 1);
+
+        results = db
+            .search(None, SearchMode::FullText, "/home")
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 1);
+
+        results = db.search(None, SearchMode::FullText, "ls  ").await.unwrap();
+        assert_eq!(results.len(), 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_search_fuzzy() {
+        let mut db = Sqlite::new("sqlite::memory:").await.unwrap();
+        new_history_item(&mut db, "ls /home/ellie").await.unwrap();
+        new_history_item(&mut db, "ls /home/frank").await.unwrap();
+        new_history_item(&mut db, "cd /home/ellie").await.unwrap();
+        new_history_item(&mut db, "/home/ellie/.bin/rustup")
+            .await
+            .unwrap();
+
+        let mut results = db.search(None, SearchMode::Fuzzy, "ls /").await.unwrap();
+        assert_eq!(results.len(), 2);
+
+        results = db.search(None, SearchMode::Fuzzy, "l/h/").await.unwrap();
+        assert_eq!(results.len(), 2);
+
+        results = db.search(None, SearchMode::Fuzzy, "/h/e").await.unwrap();
+        assert_eq!(results.len(), 3);
+
+        results = db.search(None, SearchMode::Fuzzy, "/hmoe/").await.unwrap();
+        assert_eq!(results.len(), 0);
+
+        results = db
+            .search(None, SearchMode::Fuzzy, "ellie/home")
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 0);
+
+        results = db.search(None, SearchMode::Fuzzy, "lsellie").await.unwrap();
+        assert_eq!(results.len(), 1);
+
+        results = db.search(None, SearchMode::Fuzzy, " ").await.unwrap();
+        assert_eq!(results.len(), 3);
     }
 }
