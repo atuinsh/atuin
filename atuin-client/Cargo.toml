@@ -17,7 +17,6 @@ log = "0.4"
 fern = {version = "0.6.0", features = ["colored"] }
 chrono = { version = "0.4", features = ["serde"] }
 eyre = "0.6"
-tokio-test = "*"
 directories = "3"
 uuid = { version = "0.8", features = ["v4"] }
 indicatif = "0.16.0"
@@ -41,3 +40,6 @@ humantime = "2.1.0"
 itertools = "0.10.0"
 shellexpand = "2"
 sqlx = { version = "0.5", features = [ "runtime-tokio-rustls", "uuid", "chrono", "sqlite" ] }
+
+[dev-dependencies]
+tokio-test = "*"

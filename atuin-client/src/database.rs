@@ -6,6 +6,7 @@ use chrono::prelude::*;
 use chrono::Utc;
 
 use eyre::Result;
+use itertools::Itertools;
 
 use sqlx::sqlite::{
     SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteRow,
@@ -286,7 +287,7 @@ impl Database for Sqlite {
         let query = match search_mode {
             SearchMode::Prefix => query,
             SearchMode::FullText => format!("%{}", query),
-            SearchMode::Fuzzy => query.split("").collect::<Vec<&str>>().join("%"),
+            SearchMode::Fuzzy => query.split("").join("%"),
         };
 
         let res = sqlx::query(
