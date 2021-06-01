@@ -17,6 +17,9 @@ pub enum SearchMode {
 
     #[serde(rename = "fulltext")]
     FullText,
+
+    #[serde(rename = "fuzzy")]
+    Fuzzy,
 }
 
 // FIXME: Can use upstream Dialect enum if https://github.com/stevedonovan/chrono-english/pull/16 is merged

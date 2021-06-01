@@ -96,8 +96,8 @@ key = "~/.atuin-session"
 
 ### `search_mode`
 
-Which search mode to use. Atuin supports both "prefix" and full text search
-modes. The former will essentially search for "query*", and the latter "*query\*"
+Which search mode to use. Atuin supports "prefix", full text and "fuzzy" search
+modes. The prefix search for "query\*", fulltext "\*query\*", and fuzzy "\*q\*u\*e\*r\*y\*"
 
 Defaults to "prefix"
 
