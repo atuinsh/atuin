@@ -50,9 +50,10 @@ __atuin_install_arch(){
 }
 
 __atuin_install_ubuntu(){
-	echo "Ubuntu detected"
-	# TODO: select correct AARCH too
-	ARTIFACT_URL="https://github.com/ellie/atuin/releases/download/$LATEST_VERSION/atuin_${LATEST_VERSION//v/}_amd64.deb"
+  ARCH=$(arch)
+	echo "Ubuntu ${ARCH} detected"
+	# TODO: select correct ARCH too
+	ARTIFACT_URL="https://github.com/ellie/atuin/releases/download/$LATEST_VERSION/atuin_${LATEST_VERSION//v/}_${ARCH}.deb"
 
 	TEMP_DEB="$(mktemp)" &&
 	wget -O "$TEMP_DEB" "$ARTIFACT_URL"
