@@ -66,6 +66,12 @@ I wanted to. And I **really** don't want to.
 - bash
 
 # Quickstart
+  
+## With the default sync server
+  
+This will sign you up for the default sync server, hosted by me. Everything is end-to-end encrypted, so your secrets are safe!
+  
+Read more below for offline-only usage, or for hosting your own server.
 
 ```
 bash <(curl https://raw.githubusercontent.com/ellie/atuin/main/install.sh)
@@ -73,6 +79,14 @@ bash <(curl https://raw.githubusercontent.com/ellie/atuin/main/install.sh)
 atuin register -u <USERNAME> -e <EMAIL> -p <PASSWORD>
 atuin import auto
 atuin sync
+```
+  
+## Offline only (no sync)
+  
+```
+bash <(curl https://raw.githubusercontent.com/ellie/atuin/main/install.sh)
+            
+atuin import auto
 ```
 
 ## Install
