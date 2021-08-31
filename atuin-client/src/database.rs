@@ -381,6 +381,11 @@ mod test {
             .await
             .unwrap();
 
+	// test ordering of results
+	new_history_item(&mut db, "cd az").await.unwrap();
+	new_history_item(&mut db, "cd /a/very/long/string/exists/z").await.unwrap();
+
+
         let mut results = db.search(None, SearchMode::Fuzzy, "ls /").await.unwrap();
         assert_eq!(results.len(), 2);
 
@@ -403,6 +408,12 @@ mod test {
         assert_eq!(results.len(), 1);
 
         results = db.search(None, SearchMode::Fuzzy, " ").await.unwrap();
-        assert_eq!(results.len(), 3);
+        assert_eq!(results.len(), 5);
+
+	results = db.search(None, SearchMode::Fuzzy, "az").await.unwrap();
+	assert_eq!(results.len(), 2);
+
+	assert_eq!(results[0].command , "cd az");
+	assert_eq!(results[1].command , "cd /a/very/long/string/exists/z");
     }
 }
