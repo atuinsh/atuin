@@ -40,6 +40,7 @@ humantime = "2.1.0"
 itertools = "0.10.0"
 shellexpand = "2"
 sqlx = { version = "0.5", features = [ "runtime-tokio-rustls", "uuid", "chrono", "sqlite" ] }
+minspan = "0.1.0"
 
 [dev-dependencies]
 tokio-test = "*"

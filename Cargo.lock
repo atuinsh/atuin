@@ -138,6 +138,7 @@ dependencies = [
  "indicatif",
  "itertools",
  "log",
+ "minspan",
  "parse_duration",
  "rand 0.8.3",
  "reqwest",
@@ -1167,6 +1168,12 @@ dependencies = [
  "mime",
  "unicase",
 ]
+
+[[package]]
+name = "minspan"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3ab7ea01c3aa6fee1b2626e92aca68416b09a4f05175b5ad4dec01637a864e44"
 
 [[package]]
 name = "mio"

@@ -20,6 +20,9 @@ pub enum SearchMode {
 
     #[serde(rename = "fuzzy")]
     Fuzzy,
+
+    #[serde(rename = "reorderedfuzzy")]
+    ReorderedFuzzy,
 }
 
 // FIXME: Can use upstream Dialect enum if https://github.com/stevedonovan/chrono-english/pull/16 is merged
@@ -51,7 +54,6 @@ pub struct Settings {
     pub key_path: String,
     pub session_path: String,
     pub search_mode: SearchMode,
-
     // This is automatically loaded when settings is created. Do not set in
     // config! Keep secrets and settings apart.
     pub session_token: String,
