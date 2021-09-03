@@ -12,9 +12,9 @@ use sqlx::sqlite::{
     SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteRow,
 };
 use sqlx::Row;
-use minspan::minspan;
 
 use super::history::History;
+use super::ordering;
 use super::settings::SearchMode;
 
 #[async_trait]
@@ -52,34 +52,6 @@ pub trait Database {
 pub struct Sqlite {
     pool: SqlitePool,
 }
-
-
-fn reorder_fuzzy(mode: SearchMode, query: &str, res: Vec<History>) -> Vec<History> {
-    match mode {
-	SearchMode::ReorderedFuzzy => {
-	    reorder(query, |x| &x.command, res)
-	},
-	_ => res,
-    }
-}
-
-
-fn reorder<F,A>(query: &str, f: F, res: Vec<A>) -> Vec<A>
-where
-    F: Fn(&A) -> &String,
-    A: Clone,
-{
-
-    let mut r = res.clone();
-
-    let qvec = &query.chars().collect();
-    r.sort_by_cached_key(|h| {
-	let (from,to) = minspan::span(qvec,&(f(h).chars().collect()));
-	1 + to - from
-    });
-    r
-}
-
 
 impl Sqlite {
     pub async fn new(path: impl AsRef<Path>) -> Result<Self> {
@@ -304,14 +276,13 @@ impl Database for Sqlite {
         Ok(res.0)
     }
 
-
     async fn search(
         &self,
         limit: Option<i64>,
         search_mode: SearchMode,
         query: &str,
     ) -> Result<Vec<History>> {
-	let orig_query = query;
+        let orig_query = query;
         let query = query.to_string().replace("*", "%"); // allow wildcard char
         let limit = limit.map_or("".to_owned(), |l| format!("limit {}", l));
 
@@ -319,7 +290,6 @@ impl Database for Sqlite {
             SearchMode::Prefix => query,
             SearchMode::FullText => format!("%{}", query),
             SearchMode::Fuzzy => query.split("").join("%"),
-	    SearchMode::ReorderedFuzzy => query.split("").join("%"),
         };
 
         let res = sqlx::query(
@@ -340,7 +310,7 @@ impl Database for Sqlite {
         .fetch_all(&self.pool)
         .await?;
 
-        Ok(reorder_fuzzy(search_mode,orig_query,res))
+        Ok(ordering::reorder_fuzzy(search_mode, orig_query, res))
     }
 
     async fn query_history(&self, query: &str) -> Result<Vec<History>> {
@@ -352,7 +322,6 @@ impl Database for Sqlite {
         Ok(res)
     }
 }
-
 
 #[cfg(test)]
 mod test {
@@ -414,8 +383,6 @@ mod test {
             .await
             .unwrap();
 
-
-
         let mut results = db.search(None, SearchMode::Fuzzy, "ls /").await.unwrap();
         assert_eq!(results.len(), 2);
 
@@ -439,28 +406,25 @@ mod test {
 
         results = db.search(None, SearchMode::Fuzzy, " ").await.unwrap();
         assert_eq!(results.len(), 3);
-
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_search_reordered_fuzzy() {
-    	let mut db = Sqlite::new("sqlite::memory:").await.unwrap();
-    	// test ordering of results: we should choose the first, even though it happened longer ago.
+        let mut db = Sqlite::new("sqlite::memory:").await.unwrap();
+        // test ordering of results: we should choose the first, even though it happened longer ago.
 
-    	new_history_item(&mut db, "curl").await.unwrap();
-    	new_history_item(&mut db, "corburl").await.unwrap();
-    	// if fuzzy reordering is on, it should come back in a more sensible order
-    	let mut	results = db.search(None, SearchMode::ReorderedFuzzy, "curl").await.unwrap();
-    	assert_eq!(results.len(), 2);
-    	let commands : Vec<&String> = results.iter().map(|a|&a.command).collect();
-    	//	assert_eq!(commands, vec!["cd az", "a/very/long/string/exists/z", "cd /a/very/long/string/exists/z"]);
-    	assert_eq!(commands, vec!["curl", "corburl"]);
+        new_history_item(&mut db, "curl").await.unwrap();
+        new_history_item(&mut db, "corburl").await.unwrap();
+        // if fuzzy reordering is on, it should come back in a more sensible order
+        let mut results = db.search(None, SearchMode::Fuzzy, "curl").await.unwrap();
+        assert_eq!(results.len(), 2);
+        let commands: Vec<&String> = results.iter().map(|a| &a.command).collect();
+        assert_eq!(commands, vec!["curl", "corburl"]);
 
-    	results = db.search(None, SearchMode::ReorderedFuzzy, "xxxx").await.unwrap();
-    	assert_eq!(results.len(), 0);
+        results = db.search(None, SearchMode::Fuzzy, "xxxx").await.unwrap();
+        assert_eq!(results.len(), 0);
 
-    	results = db.search(None, SearchMode::ReorderedFuzzy, "").await.unwrap();
-    	assert_eq!(results.len(), 2);
-
+        results = db.search(None, SearchMode::Fuzzy, "").await.unwrap();
+        assert_eq!(results.len(), 2);
     }
 }

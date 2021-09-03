@@ -1171,9 +1171,9 @@ dependencies = [
 
 [[package]]
 name = "minspan"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ab7ea01c3aa6fee1b2626e92aca68416b09a4f05175b5ad4dec01637a864e44"
+checksum = "1269a17ac308ae0b906ec1b0ff8062fd0c82f18cc2956faa367302ec3380f4e8"
 
 [[package]]
 name = "mio"
