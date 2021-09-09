@@ -8,7 +8,6 @@ use atuin_common::utils::uuid_v4;
 use chrono::{TimeZone, Utc};
 use directories::UserDirs;
 use eyre::{eyre, Result};
-use serde::Deserialize;
 
 use super::{count_lines, Importer};
 use crate::history::History;

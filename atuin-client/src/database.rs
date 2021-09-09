@@ -14,6 +14,7 @@ use sqlx::sqlite::{
 use sqlx::Row;
 
 use super::history::History;
+use super::ordering;
 use super::settings::SearchMode;
 
 #[async_trait]
@@ -281,6 +282,7 @@ impl Database for Sqlite {
         search_mode: SearchMode,
         query: &str,
     ) -> Result<Vec<History>> {
+        let orig_query = query;
         let query = query.to_string().replace("*", "%"); // allow wildcard char
         let limit = limit.map_or("".to_owned(), |l| format!("limit {}", l));
 
@@ -308,7 +310,7 @@ impl Database for Sqlite {
         .fetch_all(&self.pool)
         .await?;
 
-        Ok(res)
+        Ok(ordering::reorder_fuzzy(search_mode, orig_query, res))
     }
 
     async fn query_history(&self, query: &str) -> Result<Vec<History>> {
@@ -404,5 +406,25 @@ mod test {
 
         results = db.search(None, SearchMode::Fuzzy, " ").await.unwrap();
         assert_eq!(results.len(), 3);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_search_reordered_fuzzy() {
+        let mut db = Sqlite::new("sqlite::memory:").await.unwrap();
+        // test ordering of results: we should choose the first, even though it happened longer ago.
+
+        new_history_item(&mut db, "curl").await.unwrap();
+        new_history_item(&mut db, "corburl").await.unwrap();
+        // if fuzzy reordering is on, it should come back in a more sensible order
+        let mut results = db.search(None, SearchMode::Fuzzy, "curl").await.unwrap();
+        assert_eq!(results.len(), 2);
+        let commands: Vec<&String> = results.iter().map(|a| &a.command).collect();
+        assert_eq!(commands, vec!["curl", "corburl"]);
+
+        results = db.search(None, SearchMode::Fuzzy, "xxxx").await.unwrap();
+        assert_eq!(results.len(), 0);
+
+        results = db.search(None, SearchMode::Fuzzy, "").await.unwrap();
+        assert_eq!(results.len(), 2);
     }
 }
