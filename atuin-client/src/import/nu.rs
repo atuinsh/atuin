@@ -35,10 +35,7 @@ impl Importer for Nu {
         let mut hist = history::History::new();
         hist.load(path)?;
         let len = hist.len();
-        Ok(Self {
-            hist,
-            iter: 0..len,
-        })
+        Ok(Self { hist, iter: 0..len })
     }
 }
 

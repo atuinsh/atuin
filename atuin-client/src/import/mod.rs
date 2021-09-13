@@ -6,9 +6,9 @@ use eyre::Result;
 use crate::history::History;
 
 pub mod bash;
+pub mod nu;
 pub mod resh;
 pub mod zsh;
-pub mod nu;
 
 // this could probably be sped up
 fn count_lines(buf: &mut BufReader<impl Read + Seek>) -> Result<usize> {

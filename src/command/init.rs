@@ -7,6 +7,8 @@ pub enum Cmd {
     Zsh,
     #[structopt(about = "bash setup")]
     Bash,
+    #[structopt(about = "nu setup")]
+    Nushell,
 }
 
 fn init_zsh() {
@@ -19,11 +21,17 @@ fn init_bash() {
     println!("{}", full);
 }
 
+fn init_nu() {
+    let full = include_str!("../shell/atuin.nu");
+    println!("{}", full);
+}
+
 impl Cmd {
     pub fn run(&self) -> Result<()> {
         match self {
             Self::Zsh => init_zsh(),
             Self::Bash => init_bash(),
+            Self::Nushell => init_nu(),
         }
         Ok(())
     }

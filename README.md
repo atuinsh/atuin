@@ -165,6 +165,25 @@ Then setup Atuin
 echo 'eval "$(atuin init bash)"' >> ~/.bashrc
 ```
 
+### nushell
+
+#### Manual
+
+Open up your config file in your editor (run `config path` to locate the file).
+
+Add these two items to your startup section
+
+```
+"atuin init nushell | save ~/.atuin.nu",
+"source ~/.atuin.nu",
+```
+
+#### Automatic
+
+```nu
+config get startup | append 'atuin init nushell | save ~/.atuin.nu' | append 'source ~/.atuin.nu' | config set_into startup
+```
+
 ## ...what's with the name?
 
 Atuin is named after "The Great A'Tuin", a giant turtle from Terry Pratchett's

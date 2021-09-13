@@ -37,8 +37,9 @@ pub enum Cmd {
 
     #[structopt(
         about="import history from the nu history file",
+        aliases=&["nu"],
     )]
-    Nu,
+    Nushell,
 }
 
 const BATCH_SIZE: usize = 100;
@@ -72,7 +73,7 @@ impl Cmd {
             Self::Zsh => import::<Zsh<_>, _>(db, BATCH_SIZE).await,
             Self::Bash => import::<Bash<_>, _>(db, BATCH_SIZE).await,
             Self::Resh => import::<Resh, _>(db, BATCH_SIZE).await,
-            Self::Nu => import::<Nu, _>(db, BATCH_SIZE).await,
+            Self::Nushell => import::<Nu, _>(db, BATCH_SIZE).await,
         }
     }
 }
