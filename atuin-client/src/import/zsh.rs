@@ -62,7 +62,7 @@ impl Importer for Zsh<File> {
         }
     }
 
-    fn parse(path: impl AsRef<Path>) -> Result<Self> {
+    fn parse(path: &impl AsRef<Path>) -> Result<Self> {
         Self::new(File::open(path)?)
     }
 }

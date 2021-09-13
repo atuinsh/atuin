@@ -1,5 +1,6 @@
 use std::{env, path::PathBuf};
 
+use atuin_client::import::nu::Nu;
 use eyre::{eyre, Result};
 use structopt::StructOpt;
 
@@ -33,6 +34,11 @@ pub enum Cmd {
         aliases=&["r", "re", "res"],
     )]
     Resh,
+
+    #[structopt(
+        about="import history from the nu history file",
+    )]
+    Nu,
 }
 
 const BATCH_SIZE: usize = 100;
@@ -63,6 +69,7 @@ impl Cmd {
             Self::Zsh => import::<Zsh<_>, _>(db, BATCH_SIZE).await,
             Self::Bash => import::<Bash<_>, _>(db, BATCH_SIZE).await,
             Self::Resh => import::<Resh, _>(db, BATCH_SIZE).await,
+            Self::Nu => import::<Nu, _>(db, BATCH_SIZE).await,
         }
     }
 }
@@ -77,7 +84,7 @@ where
     println!("Importing history from {}", I::NAME);
 
     let histpath = get_histpath::<I>()?;
-    let contents = I::parse(histpath)?;
+    let contents = I::parse(&histpath)?;
 
     let iter = contents.into_iter();
     let progress = if let (_, Some(upper_bound)) = iter.size_hint() {

@@ -42,7 +42,7 @@ impl Importer for Bash<File> {
         Ok(home_dir.join(".bash_history"))
     }
 
-    fn parse(path: impl AsRef<Path>) -> Result<Self> {
+    fn parse(path: &impl AsRef<Path>) -> Result<Self> {
         Self::new(File::open(path)?)
     }
 }

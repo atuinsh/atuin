@@ -86,7 +86,7 @@ impl Importer for Resh {
         Ok(home_dir.join(".resh_history.json"))
     }
 
-    fn parse(path: impl AsRef<Path>) -> Result<Self> {
+    fn parse(path: &impl AsRef<Path>) -> Result<Self> {
         let file = File::open(path)?;
         let mut buf = BufReader::new(file);
         let loc = count_lines(&mut buf)?;
