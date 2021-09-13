@@ -60,6 +60,9 @@ impl Cmd {
                 if shell.ends_with("/zsh") {
                     println!("Detected ZSH");
                     import::<Zsh<_>, _>(db, BATCH_SIZE).await
+                } else if shell.ends_with("/nu") {
+                    println!("Detected Nu");
+                    import::<Nu, _>(db, BATCH_SIZE).await
                 } else {
                     println!("cannot import {} history", shell);
                     Ok(())
