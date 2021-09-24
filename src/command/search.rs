@@ -179,7 +179,7 @@ async fn key_handler(
     app: &mut State,
 ) -> Option<String> {
     match input {
-        Key::Esc | Key::Ctrl('c') | Key::Ctrl('d') | Key::Ctrl('g') => {
+        Key::Esc | Key::Ctrl('c' | 'd' | 'g') => {
             return Some(String::from(""))
         }
         Key::Char('\n') => {
