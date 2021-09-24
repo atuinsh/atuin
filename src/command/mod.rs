@@ -111,7 +111,7 @@ impl AtuinCmd {
             Self::Init(init) => {
                 init.run();
                 Ok(())
-            },
+            }
             Self::Search {
                 cwd,
                 exit,
