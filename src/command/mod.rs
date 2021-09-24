@@ -147,12 +147,7 @@ impl AtuinCmd {
                 logout::run();
                 Ok(())
             }
-            Self::Register(r) => register::run(
-                &client_settings,
-                r.username.as_str(),
-                r.email.as_str(),
-                r.password.as_str(),
-            ),
+            Self::Register(r) => register::run(&client_settings, r.username, r.email, r.password),
             Self::Key => {
                 let key = atuin_client::encryption::load_key(&client_settings)?;
                 println!("{}", atuin_client::encryption::encode_key(key)?);
