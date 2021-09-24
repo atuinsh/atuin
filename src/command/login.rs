@@ -1,6 +1,6 @@
+use std::io;
 use std::io::prelude::*;
 use std::{borrow::Cow, fs::File};
-use std::io;
 
 use atuin_common::api::LoginRequest;
 use eyre::Result;
@@ -40,19 +40,24 @@ impl Cmd {
             return Ok(());
         }
 
-
         // TODO: Maybe get rid of clone
-        let username = if let Some(username) = self.username.clone() { username } else {
+        let username = if let Some(username) = self.username.clone() {
+            username
+        } else {
             eprint!("Please enter username: ");
             get_input().expect("Failed to read username from input")
         };
 
-        let password = if let Some(password) = self.password.clone() { password } else {
+        let password = if let Some(password) = self.password.clone() {
+            password
+        } else {
             eprint!("Please enter password: ");
             get_input().expect("Failed to read email from input")
         };
 
-        let key = if let Some(key) = self.key.clone() { key } else {
+        let key = if let Some(key) = self.key.clone() {
+            key
+        } else {
             eprint!("Please enter encryption key: ");
             get_input().expect("Failed to read password from input")
         };
