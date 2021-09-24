@@ -1,4 +1,3 @@
-use eyre::Result;
 use structopt::StructOpt;
 
 #[derive(StructOpt)]
@@ -20,11 +19,10 @@ fn init_bash() {
 }
 
 impl Cmd {
-    pub fn run(&self) -> Result<()> {
+    pub fn run(&self) {
         match self {
             Self::Zsh => init_zsh(),
             Self::Bash => init_bash(),
         }
-        Ok(())
     }
 }
