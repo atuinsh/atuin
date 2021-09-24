@@ -60,7 +60,7 @@ pub enum Cmd {
     },
 }
 
-#[allow(clippy::clippy::cast_sign_loss)]
+#[allow(clippy::cast_sign_loss)]
 pub fn print_list(h: &[History], human: bool, cmd_only: bool) {
     let mut writer = TabWriter::new(std::io::stdout()).padding(2);
 

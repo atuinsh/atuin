@@ -31,7 +31,7 @@ struct State {
 }
 
 impl State {
-    #[allow(clippy::clippy::cast_sign_loss)]
+    #[allow(clippy::cast_sign_loss)]
     fn durations(&self) -> Vec<(String, String)> {
         self.results
             .iter()
@@ -241,7 +241,7 @@ async fn key_handler(
     None
 }
 
-#[allow(clippy::clippy::cast_possible_truncation)]
+#[allow(clippy::cast_possible_truncation)]
 fn draw<T: Backend>(f: &mut Frame<'_, T>, history_count: i64, app: &mut State) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -312,7 +312,7 @@ fn draw<T: Backend>(f: &mut Frame<'_, T>, history_count: i64, app: &mut State) {
 // this is a big blob of horrible! clean it up!
 // for now, it works. But it'd be great if it were more easily readable, and
 // modular. I'd like to add some more stats and stuff at some point
-#[allow(clippy::clippy::cast_possible_truncation)]
+#[allow(clippy::cast_possible_truncation)]
 async fn select_history(
     query: &[String],
     search_mode: SearchMode,
@@ -350,7 +350,7 @@ async fn select_history(
 
 // This is supposed to more-or-less mirror the command line version, so ofc
 // it is going to have a lot of args
-#[allow(clippy::clippy::clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     settings: &Settings,
     cwd: Option<String>,
