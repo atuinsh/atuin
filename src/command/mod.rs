@@ -108,7 +108,10 @@ impl AtuinCmd {
             Self::Import(import) => import.run(&mut db).await,
             Self::Server(server) => server.run(&server_settings).await,
             Self::Stats(stats) => stats.run(&mut db, &client_settings).await,
-            Self::Init(init) => init.run(),
+            Self::Init(init) => {
+                init.run();
+                Ok(())
+            },
             Self::Search {
                 cwd,
                 exit,
