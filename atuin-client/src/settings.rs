@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use chrono::prelude::*;
 use chrono::Utc;
 use config::{Config, Environment, File as ConfigFile};
-use eyre::{eyre, Result};
+use eyre::{eyre, Context, Result};
 use parse_duration::parse;
 
 pub const HISTORY_PAGE_SIZE: i64 = 100;
@@ -105,8 +105,10 @@ impl Settings {
 
         let data_dir = atuin_common::utils::data_dir();
 
-        create_dir_all(&config_dir)?;
-        create_dir_all(&data_dir)?;
+        create_dir_all(&config_dir)
+            .wrap_err_with(|| format!("could not create dir {:?}", config_dir))?;
+        create_dir_all(&data_dir)
+            .wrap_err_with(|| format!("could not create dir {:?}", data_dir))?;
 
         let mut config_file = if let Ok(p) = std::env::var("ATUIN_CONFIG_DIR") {
             PathBuf::from(p)
@@ -134,14 +136,17 @@ impl Settings {
         s.set_default("search_mode", "prefix")?;
 
         if config_file.exists() {
-            s.merge(ConfigFile::with_name(config_file.to_str().unwrap()))?;
+            s.merge(ConfigFile::with_name(config_file.to_str().unwrap()))
+                .wrap_err_with(|| format!("could not load config file {:?}", config_file))?;
         } else {
             let example_config = include_bytes!("../config.toml");
-            let mut file = File::create(config_file)?;
-            file.write_all(example_config)?;
+            let mut file = File::create(config_file).wrap_err("could not create config file")?;
+            file.write_all(example_config)
+                .wrap_err("could not write default config file")?;
         }
 
-        s.merge(Environment::with_prefix("atuin").separator("_"))?;
+        s.merge(Environment::with_prefix("atuin").separator("_"))
+            .wrap_err("could not load environment")?;
 
         // all paths should be expanded
         let db_path = s.get_str("db_path")?;
