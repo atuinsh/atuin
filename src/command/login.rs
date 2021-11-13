@@ -40,34 +40,13 @@ impl Cmd {
             return Ok(());
         }
 
-        // TODO: Maybe get rid of clone
-        let username = if let Some(username) = self.username.clone() {
-            username
-        } else {
-            eprint!("Please enter username: ");
-            get_input().expect("Failed to read username from input")
-        };
-
-        let password = if let Some(password) = self.password.clone() {
-            password
-        } else {
-            eprint!("Please enter password: ");
-            get_input().expect("Failed to read email from input")
-        };
-
-        let key = if let Some(key) = self.key.clone() {
-            key
-        } else {
-            eprint!("Please enter encryption key: ");
-            get_input().expect("Failed to read password from input")
-        };
+        let username = or_user_input(&self.username, "username");
+        let password = or_user_input(&self.password, "password");
+        let key = or_user_input(&self.key, "encryption key");
 
         let session = api_client::login(
             settings.sync_address.as_str(),
-            LoginRequest {
-                username: Cow::Borrowed(&username),
-                password: Cow::Borrowed(&password),
-            },
+            LoginRequest { username, password },
         )?;
 
         let session_path = settings.session_path.as_str();
@@ -82,4 +61,15 @@ impl Cmd {
 
         Ok(())
     }
+}
+
+pub(super) fn or_user_input<'a>(value: &'a Option<String>, name: &'static str) -> Cow<'a, str> {
+    value
+        .as_deref()
+        .map_or_else(|| Cow::Owned(read_user_input(name)), Cow::Borrowed)
+}
+
+fn read_user_input(name: &'static str) -> String {
+    eprint!("Please enter {}: ", name);
+    get_input().expect("Failed to read from input")
 }
