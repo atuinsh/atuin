@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use eyre::{WrapErr, Result};
+use eyre::{Result, WrapErr};
 use structopt::StructOpt;
 
 use atuin_client::database::Sqlite;
@@ -149,8 +149,10 @@ impl AtuinCmd {
             }
             Self::Register(r) => register::run(&client_settings, r.username, r.email, r.password),
             Self::Key => {
-                let key = atuin_client::encryption::load_key(&client_settings).wrap_err("could not load encryption key")?;
-                println!("{}", atuin_client::encryption::encode_key(key).wrap_err("could not encode encryption key")?);
+                use atuin_client::encryption::{encode_key, load_key};
+                let key = load_key(&client_settings).wrap_err("could not load encryption key")?;
+                let encode = encode_key(key).wrap_err("could not encode encryption key")?;
+                println!("{}", encode);
                 Ok(())
             }
 
