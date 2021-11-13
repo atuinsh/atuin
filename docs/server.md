@@ -35,3 +35,11 @@ db_uri="postgres://user:password@hostname/database"
 `open_registration` sets whether the server allows new user registrations. Set
 this to false after making your own account if you don't want others to be able
 to use your server.
+
+## Docker
+
+There is a supplied docker image to make deploying a server as a container easier.
+
+```sh
+docker run -d -v "$USER/.config/atuin:/config" ghcr.io/ellie/atuin:latest server start
+```
