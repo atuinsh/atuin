@@ -133,14 +133,11 @@ mod test {
         // test decryption works
         // this should pass
         match decrypt(&e1, &key1) {
-            Err(e) => assert!(false, "failed to decrypt, got {}", e),
+            Err(e) => panic!("failed to decrypt, got {}", e),
             Ok(h) => assert_eq!(h, history),
         };
 
         // this should err
-        match decrypt(&e2, &key1) {
-            Ok(_) => assert!(false, "expected an error decrypting with invalid key"),
-            Err(_) => {}
-        };
+        decrypt(&e2, &key1).expect_err("expected an error decrypting with invalid key");
     }
 }
