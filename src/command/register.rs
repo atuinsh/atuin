@@ -31,12 +31,8 @@ pub fn run(
     let email = or_user_input(email, "email");
     let password = or_user_input(password, "password");
 
-    let session = api_client::register(
-        settings.sync_address.as_str(),
-        &username,
-        &email,
-        &password,
-    )?;
+    let session =
+        api_client::register(settings.sync_address.as_str(), &username, &email, &password)?;
 
     let path = settings.session_path.as_str();
     let mut file = File::create(path)?;
