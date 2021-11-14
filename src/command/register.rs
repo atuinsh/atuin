@@ -1,5 +1,4 @@
 use std::fs::File;
-use std::io;
 use std::io::prelude::*;
 
 use eyre::Result;
@@ -21,45 +20,19 @@ pub struct Cmd {
     pub password: Option<String>,
 }
 
-fn get_input() -> Result<String> {
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-    Ok(input.trim_end_matches(&['\r', '\n'][..]).to_string())
-}
-
 pub fn run(
     settings: &Settings,
-    username: Option<String>,
-    email: Option<String>,
-    password: Option<String>,
+    username: &Option<String>,
+    email: &Option<String>,
+    password: &Option<String>,
 ) -> Result<()> {
-    let username = if let Some(username) = username {
-        username
-    } else {
-        eprint!("Please enter username: ");
-        get_input().expect("Failed to read username from input")
-    };
+    use super::login::or_user_input;
+    let username = or_user_input(username, "username");
+    let email = or_user_input(email, "email");
+    let password = or_user_input(password, "password");
 
-    let email = if let Some(email) = email {
-        email
-    } else {
-        eprint!("Please enter email: ");
-        get_input().expect("Failed to read email from input")
-    };
-
-    let password = if let Some(password) = password {
-        password
-    } else {
-        eprint!("Please enter password: ");
-        get_input().expect("Failed to read password from input")
-    };
-
-    let session = api_client::register(
-        settings.sync_address.as_str(),
-        username.as_str(),
-        email.as_str(),
-        password.as_str(),
-    )?;
+    let session =
+        api_client::register(settings.sync_address.as_str(), &username, &email, &password)?;
 
     let path = settings.session_path.as_str();
     let mut file = File::create(path)?;

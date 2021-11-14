@@ -73,7 +73,6 @@ pub struct Resh {
     file: BufReader<File>,
     strbuf: String,
     loc: usize,
-    counter: i64,
 }
 
 impl Importer for Resh {
@@ -95,7 +94,6 @@ impl Importer for Resh {
             file: buf,
             strbuf: String::new(),
             loc,
-            counter: 0,
         })
     }
 }

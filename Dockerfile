@@ -1,23 +1,18 @@
-FROM lukemathwalker/cargo-chef as planner
+FROM lukemathwalker/cargo-chef:latest-rust-1.56.1 AS chef
 WORKDIR app
-COPY . .
-RUN cargo chef prepare  --recipe-path recipe.json
 
-FROM lukemathwalker/cargo-chef as cacher
-WORKDIR app
+FROM chef AS planner
+COPY . .
+RUN cargo chef prepare --recipe-path recipe.json
+
+FROM chef AS builder
 COPY --from=planner /app/recipe.json recipe.json
 RUN cargo chef cook --release --recipe-path recipe.json
 
-FROM rust as builder
-WORKDIR app
 COPY . .
-# Copy over the cached dependencies
-COPY --from=cacher /app/target target
-COPY --from=cacher $CARGO_HOME $CARGO_HOME
 RUN cargo build --release --bin atuin
 
-FROM debian:buster-slim as runtime
-
+FROM debian:bullseye-20211011-slim AS runtime
 WORKDIR app
 
 ENV TZ=Etc/UTC
