@@ -28,34 +28,41 @@ atuin = { path = "/usr/bin/atuin" }
 [workspace]
 members = ["./atuin-client", "./atuin-server", "./atuin-common"]
 
-[dependencies]
-atuin-server = { path = "atuin-server", version = "0.7.1" }
-atuin-client = { path = "atuin-client", version = "0.7.1" }
-atuin-common = { path = "atuin-common", version = "0.7.1" }
+[features]
+default = ["client", "server", "sync"]
 
-log = "0.4"
+server = ["atuin-common/sync", "atuin-server"]
+
+sync = ["atuin-client/sync", "atuin-common/sync", "client"]
+
+client = [
+    "atuin-client", "atuin-common",
+    "chrono", "chrono-english", "cli-table", "crossbeam-channel",
+    "humantime", "indicatif", "log", "tabwriter", "termion", "tui", "unicode-width",
+]
+
+[dependencies]
+atuin-server = { path = "atuin-server", version = "0.7.1", default-features = false, optional = true }
+atuin-client = { path = "atuin-client", version = "0.7.1", default-features = false, optional = true }
+atuin-common = { path = "atuin-common", version = "0.7.1", default-features = false, optional = true }
+
 pretty_env_logger = "0.4"
-chrono = { version = "0.4", features = ["serde"] }
 eyre = "0.6"
 structopt = "0.3"
-directories = "3"
-indicatif = "0.16.2"
-serde_derive = "1.0.125"
-serde = "1.0.126"
-serde_json = "1.0.64"
-tui = "0.15"
-termion = "1.5"
-unicode-width = "0.1"
-itertools = "0.10.0"
-fork = "0.1.18"
 tokio = { version = "1", features = ["full"] }
-async-trait = "0.1.49"
-chrono-english = "0.1.4"
-cli-table = "0.4"
-base64 = "0.13.0"
-humantime = "2.1.0"
-tabwriter = "1.2.1"
-crossbeam-channel = "0.5.1"
+
+# Client
+chrono = { version = "0.4", features = ["serde"], optional = true }
+chrono-english = { version = "0.1.4", optional = true }
+cli-table = { version = "0.4", optional = true }
+crossbeam-channel = { version = "0.5.1", optional = true }
+humantime = { version = "2.1.0", optional = true }
+indicatif = { version = "0.16.2", optional = true }
+log = { version = "0.4", optional = true }
+tabwriter = { version = "1.2.1", optional = true }
+termion = { version = "1.5", optional = true }
+tui = { version = "0.15", optional = true }
+unicode-width = { version = "0.1", optional = true }
 
 [profile.release]
 lto = "fat"

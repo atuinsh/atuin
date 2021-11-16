@@ -1,10 +1,14 @@
 use std::path::PathBuf;
 
+#[cfg(feature = "sync")]
 use crypto::digest::Digest;
+#[cfg(feature = "sync")]
 use crypto::sha2::Sha256;
+#[cfg(feature = "sync")]
 use sodiumoxide::crypto::pwhash::argon2id13;
 use uuid::Uuid;
 
+#[cfg(feature = "sync")]
 pub fn hash_secret(secret: &str) -> String {
     sodiumoxide::init().unwrap();
     let hash = argon2id13::pwhash(
@@ -19,6 +23,7 @@ pub fn hash_secret(secret: &str) -> String {
     texthash.trim_end_matches('\u{0}').to_string()
 }
 
+#[cfg(feature = "sync")]
 pub fn hash_str(string: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.input_str(string);

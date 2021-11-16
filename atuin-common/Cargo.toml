@@ -10,14 +10,19 @@ repository = "https://github.com/ellie/atuin"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[features]
+sync = ["rmp-serde", "rust-crypto", "serde", "serde_derive", "serde_json", "sodiumoxide", "warp"]
+
 [dependencies]
-rust-crypto = "^0.2"
-sodiumoxide = "0.2.6"
 chrono = { version = "0.4", features = ["serde"] }
 eyre = "0.6"
-serde_derive = "1.0.125"
-serde = "1.0.126"
-serde_json = "1.0.64"
-rmp-serde = "0.15.4"
-warp = "0.3"
 uuid = { version = "0.8", features = ["v4"] }
+
+# Sync deps
+rmp-serde = {version="0.15.4", optional = true}
+rust-crypto = {version="^0.2", optional = true}
+serde = {version="1.0.126", optional = true}
+serde_derive = {version="1.0.125", optional = true}
+serde_json = {version="1.0.64", optional = true}
+sodiumoxide = {version="0.2.6", optional = true}
+warp = {version="0.3", optional = true}

@@ -4,6 +4,7 @@
 use eyre::Result;
 use structopt::{clap::AppSettings, StructOpt};
 
+#[cfg(feature = "client")]
 #[macro_use]
 extern crate log;
 

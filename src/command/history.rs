@@ -8,7 +8,9 @@ use tabwriter::TabWriter;
 
 use atuin_client::database::Database;
 use atuin_client::history::History;
+#[cfg(feature = "sync")]
 use atuin_client::settings::Settings;
+#[cfg(feature = "sync")]
 use atuin_client::sync;
 
 #[derive(StructOpt)]
@@ -103,7 +105,7 @@ pub fn print_list(h: &[History], human: bool, cmd_only: bool) {
 impl Cmd {
     pub async fn run(
         &self,
-        settings: &Settings,
+        #[cfg(feature = "sync")] settings: &Settings,
         db: &mut (impl Database + Send + Sync),
     ) -> Result<()> {
         match self {
@@ -144,6 +146,7 @@ impl Cmd {
 
                 db.update(&h).await?;
 
+                #[cfg(feature = "sync")]
                 if settings.should_sync()? {
                     debug!("running periodic background sync");
                     sync::sync(settings, false, db).await?;
