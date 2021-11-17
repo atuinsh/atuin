@@ -46,7 +46,7 @@ serde_json = "1.0.64"
 tui = "0.15"
 termion = "1.5"
 unicode-width = "0.1"
-itertools = "0.10.0"
+itertools = "0.10.1"
 fork = "0.1.18"
 tokio = { version = "1", features = ["full"] }
 async-trait = "0.1.49"
