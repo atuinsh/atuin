@@ -3,7 +3,7 @@ use std::io::prelude::*;
 use std::path::PathBuf;
 
 use config::{Config, Environment, File as ConfigFile};
-use eyre::{eyre, Result};
+use eyre::{Context, Result};
 
 pub const HISTORY_PAGE_SIZE: i64 = 100;
 
@@ -34,24 +34,26 @@ impl Settings {
 
         // create the config file if it does not exist
 
-        let mut s = Config::default();
+        let mut s = Config::builder();
 
         if config_file.exists() {
-            s.merge(ConfigFile::with_name(config_file.to_str().unwrap()))?;
+            s = s.add_source(ConfigFile::with_name(config_file.to_str().unwrap()));
         } else {
             let example_config = include_bytes!("../server.toml");
             let mut file = File::create(config_file)?;
             file.write_all(example_config)?;
         }
 
-        s.set_default("host", "127.0.0.1")?;
-        s.set_default("port", 8888)?;
-        s.set_default("open_registration", false)?;
-        s.set_default("db_uri", "default_uri")?;
+        let s = s
+            .set_default("host", "127.0.0.1")?
+            .set_default("port", 8888)?
+            .set_default("open_registration", false)?
+            .set_default("db_uri", "default_uri")?
+            .add_source(Environment::with_prefix("atuin").separator("_"));
 
-        s.merge(Environment::with_prefix("atuin").separator("_"))?;
-
-        s.try_into()
-            .map_err(|e| eyre!("failed to deserialize: {}", e))
+        s.build()
+            .wrap_err("failed to create config parser")?
+            .try_into()
+            .wrap_err("failed to deserialize")
     }
 }

@@ -1,7 +1,7 @@
 use std::convert::TryInto;
 
 use chrono::prelude::*;
-use eyre::Result;
+use eyre::{eyre, Result};
 
 use atuin_common::{api::AddHistoryRequest, utils::hash_str};
 
@@ -133,7 +133,7 @@ async fn sync_upload(
 pub async fn sync(settings: &Settings, force: bool, db: &mut (impl Database + Send)) -> Result<()> {
     let client = api_client::Client::new(
         &settings.sync_address,
-        &settings.session_token,
+        settings.session_token.as_ref().ok_or_else(|| eyre!("not logged in"))?,
         load_encoded_key(settings)?,
     )?;
 
