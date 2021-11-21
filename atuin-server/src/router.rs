@@ -66,7 +66,8 @@ pub async fn router(
         .and(warp::path::end())
         .and(with_user(postgres.clone()))
         .and(with_db(postgres.clone()))
-        .and_then(handlers::history::count);
+        .and_then(handlers::history::count)
+        .boxed();
 
     let sync = warp::get()
         .and(warp::path("sync"))
@@ -75,7 +76,8 @@ pub async fn router(
         .and(warp::path::end())
         .and(with_user(postgres.clone()))
         .and(with_db(postgres.clone()))
-        .and_then(handlers::history::list);
+        .and_then(handlers::history::list)
+        .boxed();
 
     let add_history = warp::post()
         .and(warp::path("history"))
@@ -83,14 +85,16 @@ pub async fn router(
         .and(warp::body::json())
         .and(with_user(postgres.clone()))
         .and(with_db(postgres.clone()))
-        .and_then(handlers::history::add);
+        .and_then(handlers::history::add)
+        .boxed();
 
     let user = warp::get()
         .and(warp::path("user"))
         .and(warp::path::param::<String>())
         .and(warp::path::end())
         .and(with_db(postgres.clone()))
-        .and_then(handlers::user::get);
+        .and_then(handlers::user::get)
+        .boxed();
 
     let register = warp::post()
         .and(warp::path("register"))
@@ -98,14 +102,16 @@ pub async fn router(
         .and(warp::body::json())
         .and(with_settings(settings.clone()))
         .and(with_db(postgres.clone()))
-        .and_then(handlers::user::register);
+        .and_then(handlers::user::register)
+        .boxed();
 
     let login = warp::post()
         .and(warp::path("login"))
         .and(warp::path::end())
         .and(warp::body::json())
         .and(with_db(postgres))
-        .and_then(handlers::user::login);
+        .and_then(handlers::user::login)
+        .boxed();
 
     let r = warp::any()
         .and(
