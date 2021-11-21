@@ -142,13 +142,13 @@ impl AtuinCmd {
             }
 
             Self::Sync { force } => sync::run(&client_settings, force, &mut db).await,
-            Self::Login(l) => l.run(&client_settings),
+            Self::Login(l) => l.run(&client_settings).await,
             Self::Logout => {
                 logout::run();
                 Ok(())
             }
             Self::Register(r) => {
-                register::run(&client_settings, &r.username, &r.email, &r.password)
+                register::run(&client_settings, &r.username, &r.email, &r.password).await
             }
             Self::Key => {
                 use atuin_client::encryption::{encode_key, load_key};

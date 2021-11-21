@@ -26,7 +26,7 @@ pub struct Client<'a> {
     client: reqwest::Client,
 }
 
-pub fn register(
+pub async fn register(
     address: &str,
     username: &str,
     email: &str,
@@ -45,36 +45,38 @@ pub fn register(
     }
 
     let url = format!("{}/register", address);
-    let client = reqwest::blocking::Client::new();
+    let client = reqwest::Client::new();
     let resp = client
         .post(url)
         .header(USER_AGENT, APP_USER_AGENT)
         .json(&map)
-        .send()?;
+        .send()
+        .await?;
 
     if !resp.status().is_success() {
         return Err(eyre!("failed to register user"));
     }
 
-    let session = resp.json::<RegisterResponse>()?;
+    let session = resp.json::<RegisterResponse>().await?;
     Ok(session)
 }
 
-pub fn login(address: &str, req: LoginRequest) -> Result<LoginResponse<'static>> {
+pub async fn login(address: &str, req: LoginRequest<'_>) -> Result<LoginResponse<'static>> {
     let url = format!("{}/login", address);
-    let client = reqwest::blocking::Client::new();
+    let client = reqwest::Client::new();
 
     let resp = client
         .post(url)
         .header(USER_AGENT, APP_USER_AGENT)
         .json(&req)
-        .send()?;
+        .send()
+        .await?;
 
     if resp.status() != reqwest::StatusCode::OK {
         return Err(eyre!("invalid login details"));
     }
 
-    let session = resp.json::<LoginResponse>()?;
+    let session = resp.json::<LoginResponse>().await?;
     Ok(session)
 }
 
