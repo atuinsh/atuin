@@ -419,7 +419,7 @@ dependencies = [
 [[package]]
 name = "config"
 version = "0.11.0"
-source = "git+https://github.com/conradludgate/config-rs?branch=absolute-path-current-dir#4e0e155b5f7ef32b5b3f9d02f8f5efedbdfa1782"
+source = "git+https://github.com/mehcode/config-rs?branch=master#fd7ef7fbce135da904fcef678d5ca3089d794a8d"
 dependencies = [
  "async-trait",
  "json5",
