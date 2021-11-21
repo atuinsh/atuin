@@ -114,7 +114,8 @@ impl Cmd {
                     return Ok(());
                 }
 
-                let cwd = env::current_dir()?.display().to_string();
+                let cwd = env::current_dir()
+                    .map_or_else(|_| String::new(), |cwd| cwd.display().to_string());
 
                 let h = History::new(chrono::Utc::now(), command, cwd, -1, -1, None, None);
 

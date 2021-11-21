@@ -34,7 +34,7 @@ impl Settings {
 
         // create the config file if it does not exist
 
-        let mut s = Config::new();
+        let mut s = Config::default();
 
         if config_file.exists() {
             s.merge(ConfigFile::with_name(config_file.to_str().unwrap()))?;

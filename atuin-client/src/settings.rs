@@ -120,7 +120,7 @@ impl Settings {
 
         config_file.push("config.toml");
 
-        let mut s = Config::new();
+        let mut s = Config::default();
 
         let db_path = data_dir.join("history.db");
         let key_path = data_dir.join("key");
@@ -149,15 +149,15 @@ impl Settings {
             .wrap_err("could not load environment")?;
 
         // all paths should be expanded
-        let db_path = s.get_str("db_path")?;
+        let db_path = s.get_string("db_path")?;
         let db_path = shellexpand::full(db_path.as_str())?;
         s.set("db_path", db_path.to_string())?;
 
-        let key_path = s.get_str("key_path")?;
+        let key_path = s.get_string("key_path")?;
         let key_path = shellexpand::full(key_path.as_str())?;
         s.set("key_path", key_path.to_string())?;
 
-        let session_path = s.get_str("session_path")?;
+        let session_path = s.get_string("session_path")?;
         let session_path = shellexpand::full(session_path.as_str())?;
         s.set("session_path", session_path.to_string())?;
 
