@@ -14,7 +14,7 @@ use tui::{
 };
 use unicode_width::UnicodeWidthStr;
 
-use atuin_client::database::Database;
+use atuin_client::database::Sqlite;
 use atuin_client::history::History;
 use atuin_client::settings::{SearchMode, Settings};
 
@@ -151,13 +151,9 @@ impl State {
     }
 }
 
-async fn query_results(
-    app: &mut State,
-    search_mode: SearchMode,
-    db: &mut (impl Database + Send + Sync),
-) -> Result<()> {
+async fn query_results(app: &mut State, search_mode: SearchMode, db: &mut Sqlite) -> Result<()> {
     let results = match app.input.as_str() {
-        "" => db.list(Some(200), true).await?,
+        // "" => db.list(Some(200), true).await?,
         i => db.search(Some(200), search_mode, i).await?,
     };
 
@@ -175,7 +171,7 @@ async fn query_results(
 async fn key_handler(
     input: Key,
     search_mode: SearchMode,
-    db: &mut (impl Database + Send + Sync),
+    db: &mut Sqlite,
     app: &mut State,
 ) -> Option<String> {
     match input {
@@ -314,7 +310,7 @@ fn draw<T: Backend>(f: &mut Frame<'_, T>, history_count: i64, app: &mut State) {
 async fn select_history(
     query: &[String],
     search_mode: SearchMode,
-    db: &mut (impl Database + Send + Sync),
+    db: &mut Sqlite,
 ) -> Result<String> {
     let stdout = stdout().into_raw_mode()?;
     let stdout = MouseTerminal::from(stdout);
@@ -361,7 +357,7 @@ pub async fn run(
     after: Option<String>,
     cmd_only: bool,
     query: &[String],
-    db: &mut (impl Database + Send + Sync),
+    db: &mut Sqlite,
 ) -> Result<()> {
     let dir = if let Some(cwd) = cwd {
         if cwd == "." {
@@ -443,7 +439,13 @@ pub async fn run(
             .map(std::borrow::ToOwned::to_owned)
             .collect();
 
-        super::history::print_list(&results, human, cmd_only);
+        super::history::print_list(
+            futures::stream::iter(results.into_iter().map(Result::<_, ()>::Ok)),
+            human,
+            cmd_only,
+        )
+        .await
+        .unwrap();
     }
 
     Ok(())

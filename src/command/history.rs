@@ -3,10 +3,11 @@ use std::io::Write;
 use std::time::Duration;
 
 use eyre::Result;
+use futures::stream::{Stream, TryStreamExt};
 use structopt::StructOpt;
 use tabwriter::TabWriter;
 
-use atuin_client::database::Database;
+use atuin_client::database::Sqlite;
 use atuin_client::history::History;
 use atuin_client::settings::Settings;
 use atuin_client::sync;
@@ -61,10 +62,10 @@ pub enum Cmd {
 }
 
 #[allow(clippy::cast_sign_loss)]
-pub fn print_list(h: &[History], human: bool, cmd_only: bool) {
+pub async fn print_list<E>(h: impl Stream<Item = Result<History, E>>, human: bool, cmd_only: bool) -> Result<(), E> {
     let mut writer = TabWriter::new(std::io::stdout()).padding(2);
 
-    let lines = h.iter().map(|h| {
+    let lines = h.map_ok(|h| {
         if human {
             let duration = humantime::format_duration(Duration::from_nanos(std::cmp::max(
                 h.duration, 0,
@@ -91,20 +92,26 @@ pub fn print_list(h: &[History], human: bool, cmd_only: bool) {
         }
     });
 
-    for i in lines.rev() {
-        writer
-            .write_all(i.as_bytes())
-            .expect("failed to write to tab writer");
-    }
+    let fut = lines
+        .try_for_each(|i| {
+            writer
+                .write_all(i.as_bytes())
+                .expect("failed to write to tab writer");
+
+            futures::future::ready(Ok(()))
+        });
+    fut.await?;
 
     writer.flush().expect("failed to flush tab writer");
+
+    Ok(())
 }
 
 impl Cmd {
     pub async fn run(
         &self,
         settings: &Settings,
-        db: &mut (impl Database + Send + Sync),
+        db: &mut Sqlite,
     ) -> Result<()> {
         match self {
             Self::Start { command: words } => {
@@ -171,33 +178,34 @@ impl Cmd {
                     None
                 };
 
-                let history = match (session, cwd) {
-                    (None, None) => db.list(None, false).await?,
+                let query = match (session, cwd) {
+                    (None, None) => db.list(None, false),
                     (None, Some(cwd)) => {
-                        let query = format!("select * from history where cwd = {};", cwd);
-                        db.query_history(&query).await?
+                        format!("select * from history where cwd = {};", cwd)
                     }
                     (Some(session), None) => {
-                        let query = format!("select * from history where session = {};", session);
-                        db.query_history(&query).await?
+                        format!("select * from history where session = {};", session)
                     }
                     (Some(session), Some(cwd)) => {
-                        let query = format!(
+                        format!(
                             "select * from history where cwd = {} and session = {};",
                             cwd, session
-                        );
-                        db.query_history(&query).await?
+                        )
                     }
                 };
 
-                print_list(&history, *human, *cmd_only);
+                let history = db.query_history(&query);
+
+                print_list(history, *human, *cmd_only).await?;
 
                 Ok(())
             }
 
             Self::Last { human, cmd_only } => {
-                let last = db.last().await?;
-                print_list(&[last], *human, *cmd_only);
+                let last = db.last();
+                let history = db.query_history(last);
+
+                print_list(history, *human, *cmd_only).await?;
 
                 Ok(())
             }

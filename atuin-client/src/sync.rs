@@ -6,7 +6,7 @@ use eyre::Result;
 use atuin_common::{api::AddHistoryRequest, utils::hash_str};
 
 use crate::api_client;
-use crate::database::Database;
+use crate::database::Sqlite;
 use crate::encryption::{encrypt, load_encoded_key, load_key};
 use crate::settings::{Settings, HISTORY_PAGE_SIZE};
 
@@ -24,7 +24,7 @@ use crate::settings::{Settings, HISTORY_PAGE_SIZE};
 async fn sync_download(
     force: bool,
     client: &api_client::Client<'_>,
-    db: &mut (impl Database + Send),
+    db: &mut Sqlite,
 ) -> Result<(i64, i64)> {
     debug!("starting sync download");
 
@@ -80,7 +80,7 @@ async fn sync_upload(
     settings: &Settings,
     _force: bool,
     client: &api_client::Client<'_>,
-    db: &mut (impl Database + Send),
+    db: &mut Sqlite,
 ) -> Result<()> {
     debug!("starting sync upload");
 
@@ -130,7 +130,7 @@ async fn sync_upload(
     Ok(())
 }
 
-pub async fn sync(settings: &Settings, force: bool, db: &mut (impl Database + Send)) -> Result<()> {
+pub async fn sync(settings: &Settings, force: bool, db: &mut Sqlite) -> Result<()> {
     let client = api_client::Client::new(
         &settings.sync_address,
         &settings.session_token,

@@ -1,11 +1,11 @@
 use std::path::Path;
 use std::str::FromStr;
 
-use async_trait::async_trait;
 use chrono::prelude::*;
 use chrono::Utc;
 
 use eyre::Result;
+use futures::Stream;
 use itertools::Itertools;
 
 use sqlx::sqlite::{
@@ -16,36 +16,6 @@ use sqlx::Row;
 use super::history::History;
 use super::ordering;
 use super::settings::SearchMode;
-
-#[async_trait]
-pub trait Database {
-    async fn save(&mut self, h: &History) -> Result<()>;
-    async fn save_bulk(&mut self, h: &[History]) -> Result<()>;
-
-    async fn load(&self, id: &str) -> Result<History>;
-    async fn list(&self, max: Option<usize>, unique: bool) -> Result<Vec<History>>;
-    async fn range(
-        &self,
-        from: chrono::DateTime<Utc>,
-        to: chrono::DateTime<Utc>,
-    ) -> Result<Vec<History>>;
-
-    async fn update(&self, h: &History) -> Result<()>;
-    async fn history_count(&self) -> Result<i64>;
-
-    async fn first(&self) -> Result<History>;
-    async fn last(&self) -> Result<History>;
-    async fn before(&self, timestamp: chrono::DateTime<Utc>, count: i64) -> Result<Vec<History>>;
-
-    async fn search(
-        &self,
-        limit: Option<i64>,
-        search_mode: SearchMode,
-        query: &str,
-    ) -> Result<Vec<History>>;
-
-    async fn query_history(&self, query: &str) -> Result<Vec<History>>;
-}
 
 // Intended for use on a developer machine and not a sync server.
 // TODO: implement IntoIterator
@@ -103,7 +73,7 @@ impl Sqlite {
         Ok(())
     }
 
-    fn query_history(row: SqliteRow) -> History {
+    fn query_history_row(row: SqliteRow) -> History {
         History {
             id: row.get("id"),
             timestamp: Utc.timestamp_nanos(row.get("timestamp")),
@@ -117,9 +87,8 @@ impl Sqlite {
     }
 }
 
-#[async_trait]
-impl Database for Sqlite {
-    async fn save(&mut self, h: &History) -> Result<()> {
+impl Sqlite {
+    pub async fn save(&mut self, h: &History) -> Result<()> {
         debug!("saving history to sqlite");
 
         let mut tx = self.pool.begin().await?;
@@ -129,7 +98,7 @@ impl Database for Sqlite {
         Ok(())
     }
 
-    async fn save_bulk(&mut self, h: &[History]) -> Result<()> {
+    pub async fn save_bulk(&mut self, h: &[History]) -> Result<()> {
         debug!("saving history to sqlite");
 
         let mut tx = self.pool.begin().await?;
@@ -143,19 +112,19 @@ impl Database for Sqlite {
         Ok(())
     }
 
-    async fn load(&self, id: &str) -> Result<History> {
+    pub async fn load(&self, id: &str) -> Result<History> {
         debug!("loading history item {}", id);
 
         let res = sqlx::query("select * from history where id = ?1")
             .bind(id)
-            .map(Self::query_history)
+            .map(Self::query_history_row)
             .fetch_one(&self.pool)
             .await?;
 
         Ok(res)
     }
 
-    async fn update(&self, h: &History) -> Result<()> {
+    pub async fn update(&self, h: &History) -> Result<()> {
         debug!("updating sqlite history");
 
         sqlx::query(
@@ -178,14 +147,14 @@ impl Database for Sqlite {
     }
 
     // make a unique list, that only shows the *newest* version of things
-    async fn list(&self, max: Option<usize>, unique: bool) -> Result<Vec<History>> {
+    pub fn list(&self, max: Option<usize>, unique: bool) -> String {
         debug!("listing history");
 
         // very likely vulnerable to SQL injection
         // however, this is client side, and only used by the client, on their
         // own data. They can just open the db file...
         // otherwise building the query is awkward
-        let query = format!(
+        format!(
             "select * from history h
                 {}
                 order by timestamp desc
@@ -205,17 +174,14 @@ impl Database for Sqlite {
             } else {
                 "".to_string()
             }
-        );
+        )
 
-        let res = sqlx::query(query.as_str())
-            .map(Self::query_history)
-            .fetch_all(&self.pool)
-            .await?;
-
-        Ok(res)
+        // sqlx::query(query.as_str())
+        //     .map(Self::query_history_row)
+        //     .fetch(&self.pool)
     }
 
-    async fn range(
+    pub async fn range(
         &self,
         from: chrono::DateTime<Utc>,
         to: chrono::DateTime<Utc>,
@@ -227,48 +193,41 @@ impl Database for Sqlite {
         )
         .bind(from)
         .bind(to)
-            .map(Self::query_history)
+            .map(Self::query_history_row)
         .fetch_all(&self.pool)
         .await?;
 
         Ok(res)
     }
 
-    async fn first(&self) -> Result<History> {
+    pub async fn first(&self) -> Result<History> {
         let res =
             sqlx::query("select * from history where duration >= 0 order by timestamp asc limit 1")
-                .map(Self::query_history)
+                .map(Self::query_history_row)
                 .fetch_one(&self.pool)
                 .await?;
 
         Ok(res)
     }
 
-    async fn last(&self) -> Result<History> {
-        let res = sqlx::query(
-            "select * from history where duration >= 0 order by timestamp desc limit 1",
-        )
-        .map(Self::query_history)
-        .fetch_one(&self.pool)
-        .await?;
-
-        Ok(res)
+    pub fn last(&self) -> &'static str {
+        "select * from history where duration >= 0 order by timestamp desc limit 1"
     }
 
-    async fn before(&self, timestamp: chrono::DateTime<Utc>, count: i64) -> Result<Vec<History>> {
+    pub async fn before(&self, timestamp: chrono::DateTime<Utc>, count: i64) -> Result<Vec<History>> {
         let res = sqlx::query(
             "select * from history where timestamp < ?1 order by timestamp desc limit ?2",
         )
         .bind(timestamp.timestamp_nanos())
         .bind(count)
-        .map(Self::query_history)
+        .map(Self::query_history_row)
         .fetch_all(&self.pool)
         .await?;
 
         Ok(res)
     }
 
-    async fn history_count(&self) -> Result<i64> {
+    pub async fn history_count(&self) -> Result<i64> {
         let res: (i64,) = sqlx::query_as("select count(1) from history")
             .fetch_one(&self.pool)
             .await?;
@@ -276,7 +235,7 @@ impl Database for Sqlite {
         Ok(res.0)
     }
 
-    async fn search(
+    pub async fn search(
         &self,
         limit: Option<i64>,
         search_mode: SearchMode,
@@ -306,20 +265,17 @@ impl Database for Sqlite {
             .as_str(),
         )
         .bind(query)
-        .map(Self::query_history)
+        .map(Self::query_history_row)
         .fetch_all(&self.pool)
         .await?;
 
         Ok(ordering::reorder_fuzzy(search_mode, orig_query, res))
     }
 
-    async fn query_history(&self, query: &str) -> Result<Vec<History>> {
-        let res = sqlx::query(query)
-            .map(Self::query_history)
-            .fetch_all(&self.pool)
-            .await?;
-
-        Ok(res)
+    pub fn query_history<'q: 'e, 'e>(&'e self, query: &'q str) -> impl Stream<Item = Result<History, sqlx::Error>> +'e {
+        sqlx::query(query)
+            .map(Self::query_history_row)
+            .fetch(&self.pool)
     }
 }
 
@@ -327,7 +283,7 @@ impl Database for Sqlite {
 mod test {
     use super::*;
 
-    async fn new_history_item(db: &mut impl Database, cmd: &str) -> Result<()> {
+    async fn new_history_item(db: &mut Sqlite, cmd: &str) -> Result<()> {
         let history = History::new(
             chrono::Utc::now(),
             cmd.to_string(),

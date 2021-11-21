@@ -1,13 +1,13 @@
 use eyre::Result;
 
-use atuin_client::database::Database;
+use atuin_client::database::Sqlite;
 use atuin_client::settings::Settings;
 use atuin_client::sync;
 
 pub async fn run(
     settings: &Settings,
     force: bool,
-    db: &mut (impl Database + Send + Sync),
+    db: &mut Sqlite,
 ) -> Result<()> {
     sync::sync(settings, force, db).await?;
     println!(

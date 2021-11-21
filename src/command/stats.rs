@@ -8,7 +8,7 @@ use cli_table::{format::Justify, print_stdout, Cell, Style, Table};
 use eyre::{eyre, Result};
 use structopt::StructOpt;
 
-use atuin_client::database::Database;
+use atuin_client::database::Sqlite;
 use atuin_client::history::History;
 use atuin_client::settings::Settings;
 
@@ -73,7 +73,7 @@ fn compute_stats(history: &[History]) -> Result<()> {
 impl Cmd {
     pub async fn run(
         &self,
-        db: &mut (impl Database + Send + Sync),
+        db: &mut Sqlite,
         settings: &Settings,
     ) -> Result<()> {
         match self {
@@ -95,9 +95,9 @@ impl Cmd {
             }
 
             Self::All => {
-                let history = db.list(None, false).await?;
+                // let history = db.list(None, false).await?;
 
-                compute_stats(&history)?;
+                // compute_stats(&history)?;
 
                 Ok(())
             }

@@ -4,7 +4,7 @@ use eyre::{eyre, Result};
 use structopt::StructOpt;
 
 use atuin_client::import::{bash::Bash, zsh::Zsh};
-use atuin_client::{database::Database, import::Importer};
+use atuin_client::{database::Sqlite, import::Importer};
 use atuin_client::{history::History, import::resh::Resh};
 use indicatif::ProgressBar;
 
@@ -38,7 +38,7 @@ pub enum Cmd {
 const BATCH_SIZE: usize = 100;
 
 impl Cmd {
-    pub async fn run(&self, db: &mut (impl Database + Send + Sync)) -> Result<()> {
+    pub async fn run(&self, db: &mut Sqlite) -> Result<()> {
         println!("        Atuin         ");
         println!("======================");
         println!("          \u{1f30d}          ");
@@ -53,22 +53,22 @@ impl Cmd {
 
                 if shell.ends_with("/zsh") {
                     println!("Detected ZSH");
-                    import::<Zsh<_>, _>(db, BATCH_SIZE).await
+                    import::<Zsh<_>>(db, BATCH_SIZE).await
                 } else {
                     println!("cannot import {} history", shell);
                     Ok(())
                 }
             }
 
-            Self::Zsh => import::<Zsh<_>, _>(db, BATCH_SIZE).await,
-            Self::Bash => import::<Bash<_>, _>(db, BATCH_SIZE).await,
-            Self::Resh => import::<Resh, _>(db, BATCH_SIZE).await,
+            Self::Zsh => import::<Zsh<_>>(db, BATCH_SIZE).await,
+            Self::Bash => import::<Bash<_>>(db, BATCH_SIZE).await,
+            Self::Resh => import::<Resh>(db, BATCH_SIZE).await,
         }
     }
 }
 
-async fn import<I: Importer + Send, DB: Database + Send + Sync>(
-    db: &mut DB,
+async fn import<I: Importer + Send>(
+    db: &mut Sqlite,
     buf_size: usize,
 ) -> Result<()>
 where
