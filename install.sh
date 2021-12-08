@@ -22,6 +22,14 @@ Please file an issue if you encounter any problems!
 
 EOF
 
+if ! command -v curl &> /dev/null; then
+    echo "curl not installed. Please install curl."
+    exit
+elif ! command -v sed &> /dev/null; then
+    echo "sed not installed. Please install sed."
+    exit
+fi
+
 LATEST_RELEASE=$(curl -L -s -H 'Accept: application/json' https://github.com/ellie/atuin/releases/latest)
 # Allow sed; sometimes it's more readable than ${variable//search/replace}
 # shellcheck disable=SC2001
@@ -55,8 +63,12 @@ __atuin_install_ubuntu(){
 	ARTIFACT_URL="https://github.com/ellie/atuin/releases/download/$LATEST_VERSION/atuin_${LATEST_VERSION//v/}_amd64.deb"
 
 	TEMP_DEB="$(mktemp)" &&
-	wget -O "$TEMP_DEB" "$ARTIFACT_URL"
-	sudo dpkg -i "$TEMP_DEB"
+	curl -Lo "$TEMP_DEB" "$ARTIFACT_URL"
+	if command -v sudo &> /dev/null; then
+		sudo dpkg -i "$TEMP_DEB"
+	else
+		su -l -c "dpkg -i '$TEMP_DEB'"
+	fi
 	rm -f "$TEMP_DEB"
 }
 
@@ -150,10 +162,10 @@ esac
 # TODO: Check which shell is in use
 # Use of single quotes around $() is intentional here
 # shellcheck disable=SC2016
-printf '\neval "$(atuin init zsh)"' >> ~/.zshrc
+printf '\neval "$(atuin init zsh)"\n' >> ~/.zshrc
 
 curl https://raw.githubusercontent.com/rcaloras/bash-preexec/master/bash-preexec.sh -o ~/.bash-preexec.sh
-printf '\n[[ -f ~/.bash-preexec.sh ]] && source ~/.bash-preexec.sh' >> ~/.bashrc
+printf '\n[[ -f ~/.bash-preexec.sh ]] && source ~/.bash-preexec.sh\n' >> ~/.bashrc
 # Use of single quotes around $() is intentional here
 # shellcheck disable=SC2016
 echo 'eval "$(atuin init bash)"' >> ~/.bashrc
