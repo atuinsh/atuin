@@ -20,7 +20,7 @@ eyre = "0.6"
 directories = "3"
 uuid = { version = "0.8", features = ["v4"] }
 indicatif = "0.16.2"
-whoami = "1.1.2"
+whoami = "1.2.1"
 chrono-english = "0.1.4"
 config = "0.11"
 serde_derive = "1.0.125"
