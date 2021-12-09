@@ -37,22 +37,28 @@ LATEST_VERSION=$(echo "$LATEST_RELEASE" | sed -e 's/.*"tag_name":"\([^"]*\)".*/\
 
 __atuin_install_arch(){
 	echo "Arch Linux detected!"
-	echo "Attempting AUR install"
 
-	if command -v yaourt &> /dev/null; then
-		echo "Found yaourt"
-		yaourt -S atuin
-	elif command -v yay &> /dev/null; then
-		echo "Found yay"
-		yay -S atuin
-	elif command -v pakku &> /dev/null; then
-		echo "Found pakku"
-		pakku -S atuin
-	elif command -v pamac &> /dev/null; then
-		echo "Found pamac"
-		pamac install atuin
+	if command -v pacman &> /dev/null
+	then
+		echo "Installing with pacman"
+		sudo pacman -S atuin
 	else
-		echo "Failed to install atuin! Please try manually: https://aur.archlinux.org/packages/atuin/"
+		echo "Attempting AUR install"
+		if command -v yaourt &> /dev/null; then
+			echo "Found yaourt"
+			yaourt -S atuin
+		elif command -v yay &> /dev/null; then
+			echo "Found yay"
+			yay -S atuin
+		elif command -v pakku &> /dev/null; then
+			echo "Found pakku"
+			pakku -S atuin
+		elif command -v pamac &> /dev/null; then
+			echo "Found pamac"
+			pamac install atuin
+		else
+			echo "Failed to install atuin! Please try manually: https://aur.archlinux.org/packages/atuin/"
+		fi
 	fi
 
 }
