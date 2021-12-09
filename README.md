@@ -95,7 +95,7 @@ atuin import auto
 
 The install script will help you through the setup, ensuring your shell is
 properly configured. It will also use one of the below methods, preferring the
-system package manager where possible (AUR, homebrew, etc etc).
+system package manager where possible (pacman, homebrew, etc etc).
 
 ```
 # do not run this as root, root will be asked for if required
@@ -117,12 +117,12 @@ cargo install atuin
 brew install atuin
 ```
 
-### AUR
+### Pacman
 
-Atuin is available on the [AUR](https://aur.archlinux.org/packages/atuin/)
+Atuin is available in the Arch Linux [community repository](https://archlinux.org/packages/community/x86_64/atuin/):
 
 ```
-yay -S atuin # or your AUR helper of choice
+pacman -S atuin
 ```
 
 ### From source
