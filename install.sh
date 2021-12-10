@@ -57,7 +57,7 @@ __atuin_install_arch(){
 			echo "Found pamac"
 			pamac install atuin
 		else
-			echo "Failed to install atuin! Please try manually: https://aur.archlinux.org/packages/atuin/"
+			echo "Failed to install atuin! Please try manually: https://aur.archlinux.org/packages/atuin-git/"
 		fi
 	fi
 
@@ -87,7 +87,7 @@ __atuin_install_linux(){
     else
         if ! command -v lsb_release &> /dev/null; then
             echo "lsb_release could not be found, unable to determine your distribution"
-            echo "If you are using Arch, please get lsb_release from AUR"
+            echo "If you are using Arch Linux, please get community/lsb-release"
             exit 1
         fi
         OS=$(lsb_release -i | awk '{ print $3 }')
