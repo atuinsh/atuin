@@ -165,6 +165,16 @@ Then setup Atuin
 echo 'eval "$(atuin init bash)"' >> ~/.bashrc
 ```
 
+### fish
+
+Add
+
+```
+atuin init fish | source
+```
+
+to your `is-interactive` block in your `~/.config/fish/config.fish` file
+
 ## ...what's with the name?
 
 Atuin is named after "The Great A'Tuin", a giant turtle from Terry Pratchett's
