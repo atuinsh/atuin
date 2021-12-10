@@ -2,23 +2,24 @@ use std::borrow::Cow;
 use std::io;
 
 use atuin_common::api::LoginRequest;
+use clap::{AppSettings, Parser};
 use eyre::Result;
-use structopt::StructOpt;
 use tokio::{fs::File, io::AsyncWriteExt};
 
 use atuin_client::api_client;
 use atuin_client::settings::Settings;
 
-#[derive(StructOpt)]
-#[structopt(setting(structopt::clap::AppSettings::DeriveDisplayOrder))]
+#[derive(Parser)]
+#[clap(setting(AppSettings::DeriveDisplayOrder))]
 pub struct Cmd {
-    #[structopt(long, short)]
+    #[clap(long, short)]
     pub username: Option<String>,
 
-    #[structopt(long, short)]
+    #[clap(long, short)]
     pub password: Option<String>,
 
-    #[structopt(long, short, help = "the encryption key for your account")]
+    /// the encryption key for your account
+    #[clap(long, short)]
     pub key: Option<String>,
 }
 

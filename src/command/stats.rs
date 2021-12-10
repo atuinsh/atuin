@@ -4,23 +4,23 @@ use chrono::prelude::*;
 use chrono::Duration;
 use chrono_english::parse_date_string;
 
+use clap::Subcommand;
 use cli_table::{format::Justify, print_stdout, Cell, Style, Table};
 use eyre::{eyre, Result};
-use structopt::StructOpt;
 
 use atuin_client::database::Database;
 use atuin_client::history::History;
 use atuin_client::settings::Settings;
 
-#[derive(StructOpt)]
+#[derive(Subcommand)]
 pub enum Cmd {
-    #[structopt(
+    #[clap(
         about="compute statistics for all of time",
         aliases=&["d", "da"],
     )]
     All,
 
-    #[structopt(
+    #[clap(
         about="compute statistics for a single day",
         aliases=&["d", "da"],
     )]

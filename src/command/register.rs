@@ -1,20 +1,20 @@
+use clap::{AppSettings, Parser};
 use eyre::Result;
-use structopt::StructOpt;
 use tokio::{fs::File, io::AsyncWriteExt};
 
 use atuin_client::api_client;
 use atuin_client::settings::Settings;
 
-#[derive(StructOpt)]
-#[structopt(setting(structopt::clap::AppSettings::DeriveDisplayOrder))]
+#[derive(Parser)]
+#[clap(setting(AppSettings::DeriveDisplayOrder))]
 pub struct Cmd {
-    #[structopt(long, short)]
+    #[clap(long, short)]
     pub username: Option<String>,
 
-    #[structopt(long, short)]
+    #[clap(long, short)]
     pub email: Option<String>,
 
-    #[structopt(long, short)]
+    #[clap(long, short)]
     pub password: Option<String>,
 }
 

@@ -37,7 +37,8 @@ log = "0.4"
 pretty_env_logger = "0.4"
 chrono = { version = "0.4", features = ["serde"] }
 eyre = "0.6"
-structopt = "0.3"
+clap = { version = "3.0.0-rc.7", features = ["derive"] }
+clap_generate = "3.0.0-rc.7"
 directories = "3"
 indicatif = "0.16.2"
 serde_derive = "1.0.125"

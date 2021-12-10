@@ -1,41 +1,40 @@
 use std::{env, path::PathBuf};
 
-use atuin_client::import::fish::Fish;
+use clap::Subcommand;
 use eyre::{eyre, Result};
-use structopt::StructOpt;
 
-use atuin_client::import::{bash::Bash, zsh::Zsh};
+use atuin_client::import::{bash::Bash, fish::Fish, zsh::Zsh};
 use atuin_client::{database::Database, import::Importer};
 use atuin_client::{history::History, import::resh::Resh};
 use indicatif::ProgressBar;
 
-#[derive(StructOpt)]
+#[derive(Subcommand)]
 pub enum Cmd {
-    #[structopt(
+    #[clap(
         about="import history for the current shell",
         aliases=&["a", "au", "aut"],
     )]
     Auto,
 
-    #[structopt(
+    #[clap(
         about="import history from the zsh history file",
         aliases=&["z", "zs"],
     )]
     Zsh,
 
-    #[structopt(
+    #[clap(
         about="import history from the bash history file",
         aliases=&["b", "ba", "bas"],
     )]
     Bash,
 
-    #[structopt(
+    #[clap(
         about="import history from the resh history file",
         aliases=&["r", "re", "res"],
     )]
     Resh,
 
-    #[structopt(
+    #[clap(
         about="import history from the fish history file",
         aliases=&["f", "fi", "fis"],
     )]
