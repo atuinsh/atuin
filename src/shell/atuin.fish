@@ -21,6 +21,8 @@ function _atuin_search
     end
 end
 
-bind -k up '_atuin_search'
-bind \eOA '_atuin_search'
-bind \e\[A '_atuin_search'
+if test -z $ATUIN_NOBIND
+	  bind -k up '_atuin_search'
+	  bind \eOA '_atuin_search'
+	  bind \e\[A '_atuin_search'
+end
