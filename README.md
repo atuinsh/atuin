@@ -59,6 +59,7 @@ I wanted to. And I **really** don't want to.
 - [History stats](docs/stats.md)
 - [Running your own server](docs/server.md)
 - [Key binding](docs/key-binding.md)
+- [Shell completions](docs/shell-completions.md)
 
 ## Supported Shells
 
