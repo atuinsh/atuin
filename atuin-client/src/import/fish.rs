@@ -53,7 +53,11 @@ impl Importer for Fish<File> {
         // fish supports multiple history sessions
         // If `fish_history` var is missing, or set to `default`, use `fish` as the session
         let session = std::env::var("fish_history").unwrap_or_else(|_| String::from("fish"));
-        let session = if session == "default" { String::from("fish" )} else { session };
+        let session = if session == "default" {
+            String::from("fish")
+        } else {
+            session
+        };
 
         let mut histpath = data.join("fish");
         histpath.push(format!("{}_history", session));
