@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use eyre::{Result, WrapErr};
+use structopt::clap::Shell;
 use structopt::StructOpt;
 
 use atuin_client::database::Sqlite;
@@ -92,6 +93,15 @@ pub enum AtuinCmd {
 
     #[structopt(about = "print the encryption key for transfer to another machine")]
     Key,
+
+    #[structopt(about = "generate shell completions")]
+    GenCompletions {
+        #[structopt(long, short, help = "set the shell for generating completions")]
+        shell: Shell,
+
+        #[structopt(long, short, help = "set the output directory")]
+        out_dir: String,
+    },
 }
 
 impl AtuinCmd {
@@ -157,9 +167,16 @@ impl AtuinCmd {
                 println!("{}", encode);
                 Ok(())
             }
-
             Self::Uuid => {
                 println!("{}", uuid_v4());
+                Ok(())
+            }
+            Self::GenCompletions { shell, out_dir } => {
+                AtuinCmd::clap().gen_completions(env!("CARGO_PKG_NAME"), shell, &out_dir);
+                println!(
+                    "Shell completion for {} is generated in {:?}",
+                    shell, out_dir
+                );
                 Ok(())
             }
         }
