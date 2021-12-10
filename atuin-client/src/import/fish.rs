@@ -9,7 +9,7 @@ use std::{
 
 use chrono::prelude::*;
 use chrono::Utc;
-use directories::UserDirs;
+use directories::BaseDirs;
 use eyre::{eyre, Result};
 
 use super::{count_lines, Importer};
@@ -45,11 +45,18 @@ impl<R: Read> Fish<R> {
 impl Importer for Fish<File> {
     const NAME: &'static str = "fish";
 
+    /// see https://fishshell.com/docs/current/interactive.html#searchable-command-history
     fn histpath() -> Result<PathBuf> {
-        let user_dirs = UserDirs::new().unwrap();
-        let home_dir = user_dirs.home_dir();
+        let base = BaseDirs::new().ok_or_else(|| eyre!("could not determine data directory"))?;
+        let data = base.data_local_dir();
 
-        let histpath = home_dir.join(".local/share/fish/fish_history");
+        let mut histpath = data.join("fish");
+        if let Ok(session) = std::env::var("fish_history") {
+            histpath.push(format!("{}_history", session));
+        } else {
+            histpath.push("fish_history");
+        }
+
         if histpath.exists() {
             Ok(histpath)
         } else {
