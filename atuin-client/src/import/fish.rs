@@ -11,7 +11,6 @@ use chrono::prelude::*;
 use chrono::Utc;
 use directories::UserDirs;
 use eyre::{eyre, Result};
-use itertools::Itertools;
 
 use super::{count_lines, Importer};
 use crate::history::History;
@@ -34,7 +33,9 @@ impl<R: Read + Seek> Fish<R> {
             loc,
         })
     }
+}
 
+impl<R: Read> Fish<R> {
     fn new_entry(&mut self) -> io::Result<bool> {
         let inner = self.file.fill_buf()?;
         Ok(inner.starts_with(b"- "))
@@ -74,7 +75,7 @@ impl<R: Read> Iterator for Fish<R> {
                 // no more content to read
                 Ok(0) => break,
                 // bail on IO error
-                e @ Err(_) => Some(e),
+                Err(e) => return Some(Err(e.into())),
                 _ => (),
             }
 
@@ -99,14 +100,17 @@ impl<R: Read> Iterator for Fish<R> {
                 // ... ignore paths lines
             }
 
-            if self.new_entry() {
+            match self.new_entry() {
                 // next line is a new entry, so let's stop here
-                break;
+                Ok(true) => break,
+                // bail on IO error
+                Err(e) => return Some(Err(e.into())),
+                _ => (),
             }
         }
 
         let cmd = cmd?;
-        let time = time.unwrap_or_else(|| Utc::now());
+        let time = time.unwrap_or_else(Utc::now);
 
         Some(Ok(History::new(
             time,
