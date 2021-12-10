@@ -102,7 +102,8 @@ impl<R: Read> Iterator for Fish<R> {
 
             match self.new_entry() {
                 // next line is a new entry, so let's stop here
-                Ok(true) => break,
+                // only if we have found a command though
+                Ok(true) if cmd.is_some() => break,
                 // bail on IO error
                 Err(e) => return Some(Err(e.into())),
                 _ => (),
@@ -130,4 +131,79 @@ impl<R: Read> Iterator for Fish<R> {
 }
 
 #[cfg(test)]
-mod test {}
+mod test {
+    use std::io::Cursor;
+    use chrono::{Utc, TimeZone};
+
+    use crate::history::History;
+    use super::Fish;
+
+    // simple wrapper for fish history entry
+    macro_rules! fishtory {
+        ($timestamp:literal, $command:literal) => {
+            History::new(
+                Utc.timestamp($timestamp, 0),
+                $command.into(),
+                "unknown".into(),
+                -1,
+                -1,
+                None,
+                None,
+            )
+        };
+    }
+
+    #[test]
+    fn parse_complex() {
+        // complicated input with varying contents and escaped strings.
+        let input = r#"- cmd: history --help
+  when: 1639162832
+- cmd: cat ~/.bash_history
+  when: 1639162851
+  paths:
+    - ~/.bash_history
+- cmd: ls ~/.local/share/fish/fish_history
+  when: 1639162890
+  paths:
+    - ~/.local/share/fish/fish_history
+- cmd: cat ~/.local/share/fish/fish_history
+  when: 1639162893
+  paths:
+    - ~/.local/share/fish/fish_history
+ERROR
+- CORRUPTED: ENTRY
+  CONTINUE:
+    - AS
+    - NORMAL
+- cmd: echo "foo" \\\n'bar' baz
+  when: 1639162933
+- cmd: cat ~/.local/share/fish/fish_history
+  when: 1639162939
+  paths:
+    - ~/.local/share/fish/fish_history
+- cmd: echo "\\"" \\\\ "\\\\"
+  when: 1639163063
+- cmd: cat ~/.local/share/fish/fish_history
+  when: 1639163066
+  paths:
+    - ~/.local/share/fish/fish_history
+"#;
+        let cursor = Cursor::new(input);
+        let fish = Fish::new(cursor).unwrap();
+
+        let history = fish.collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!(
+            history,
+            vec![
+                fishtory!(1639162832, "history --help"),
+                fishtory!(1639162851, "cat ~/.bash_history"),
+                fishtory!(1639162890, "ls ~/.local/share/fish/fish_history"),
+                fishtory!(1639162893, "cat ~/.local/share/fish/fish_history"),
+                fishtory!(1639162933, "echo \"foo\" \\\n'bar' baz"),
+                fishtory!(1639162939, "cat ~/.local/share/fish/fish_history"),
+                fishtory!(1639163063, r#"echo "\"" \\ "\\""#),
+                fishtory!(1639163066, "cat ~/.local/share/fish/fish_history"),
+            ]
+        );
+    }
+}
