@@ -132,11 +132,11 @@ impl<R: Read> Iterator for Fish<R> {
 
 #[cfg(test)]
 mod test {
+    use chrono::{TimeZone, Utc};
     use std::io::Cursor;
-    use chrono::{Utc, TimeZone};
 
-    use crate::history::History;
     use super::Fish;
+    use crate::history::History;
 
     // simple wrapper for fish history entry
     macro_rules! fishtory {
