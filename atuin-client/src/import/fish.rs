@@ -50,12 +50,13 @@ impl Importer for Fish<File> {
         let base = BaseDirs::new().ok_or_else(|| eyre!("could not determine data directory"))?;
         let data = base.data_local_dir();
 
+        // fish supports multiple history sessions
+        // If `fish_history` var is missing, or set to `default`, use `fish` as the session
+        let session = std::env::var("fish_history").unwrap_or_else(|_| String::from("fish"));
+        let session = if session == "default" { String::from("fish" )} else { session };
+
         let mut histpath = data.join("fish");
-        if let Ok(session) = std::env::var("fish_history") {
-            histpath.push(format!("{}_history", session));
-        } else {
-            histpath.push("fish_history");
-        }
+        histpath.push(format!("{}_history", session));
 
         if histpath.exists() {
             Ok(histpath)
