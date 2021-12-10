@@ -1,6 +1,6 @@
 
-set -Gx ATUIN_SESSION (atuin uuid)
-set -Gx ATUIN_HISTORY (atuin history list)
+set -gx ATUIN_SESSION (atuin uuid)
+set -gx ATUIN_HISTORY (atuin history list)
 
 function _atuin_preexec --on-event fish_preexec
     set -gx ATUIN_HISTORY_ID (atuin history start "$argv[1]")
