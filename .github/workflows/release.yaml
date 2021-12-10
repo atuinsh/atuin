@@ -116,13 +116,18 @@ jobs:
         PKG_STAGING="${{ env.CICD_INTERMEDIATES_DIR }}/package"
         ARCHIVE_DIR="${PKG_STAGING}/${PKG_BASENAME}/"
         mkdir -p "${ARCHIVE_DIR}"
-        mkdir -p "${ARCHIVE_DIR}/autocomplete"
+        mkdir -p "${ARCHIVE_DIR}/completions"
 
         # Binary
         cp "${{ steps.strip.outputs.BIN_PATH }}" "$ARCHIVE_DIR"
 
         # README, LICENSE and CHANGELOG files
         cp "README.md" "LICENSE" "$ARCHIVE_DIR"
+
+        # Shell completions
+        for sh in 'bash' 'fish' 'zsh'; do
+          "${{ steps.strip.outputs.BIN_PATH }}" gen-completions -s $sh -o "${ARCHIVE_DIR}/completions"
+        done
 
         # base compressed package
         pushd "${PKG_STAGING}/" >/dev/null
