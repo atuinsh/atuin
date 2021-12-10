@@ -57,7 +57,7 @@ __atuin_install_arch(){
 			echo "Found pamac"
 			pamac install atuin
 		else
-			echo "Failed to install atuin! Please try manually: https://aur.archlinux.org/packages/atuin/"
+			echo "Failed to install atuin! Please try manually: https://aur.archlinux.org/packages/atuin-git/"
 		fi
 	fi
 
