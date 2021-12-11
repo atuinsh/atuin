@@ -43,7 +43,7 @@ pub enum Cmd {
         #[structopt(long, short)]
         human: bool,
 
-        #[structopt(long, about = "Show only the text of the command")]
+        #[structopt(long, help = "Show only the text of the command")]
         cmd_only: bool,
     },
 
@@ -55,7 +55,7 @@ pub enum Cmd {
         #[structopt(long, short)]
         human: bool,
 
-        #[structopt(long, about = "Show only the text of the command")]
+        #[structopt(long, help = "Show only the text of the command")]
         cmd_only: bool,
     },
 }

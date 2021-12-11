@@ -11,10 +11,10 @@ pub enum Cmd {
         aliases=&["s", "st", "sta", "star"],
     )]
     Start {
-        #[structopt(about = "specify the host address to bind", long, short)]
+        #[structopt(help = "specify the host address to bind", long, short)]
         host: Option<String>,
 
-        #[structopt(about = "specify the port to bind", long, short)]
+        #[structopt(help = "specify the port to bind", long, short)]
         port: Option<u16>,
     },
 }
