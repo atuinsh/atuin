@@ -418,7 +418,7 @@ mod test {
         // if fuzzy reordering is on, it should come back in a more sensible order
         let mut results = db.search(None, SearchMode::Fuzzy, "curl").await.unwrap();
         assert_eq!(results.len(), 2);
-        let commands: Vec<&String> = results.iter().map(|a| &a.command).collect();
+        let commands: Vec<String> = results.into_iter().map(|a| a.command).collect();
         assert_eq!(commands, vec!["curl", "corburl"]);
 
         results = db.search(None, SearchMode::Fuzzy, "xxxx").await.unwrap();

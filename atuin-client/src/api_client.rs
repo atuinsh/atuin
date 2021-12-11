@@ -134,8 +134,8 @@ impl<'a> Client<'a> {
         let history = resp.json::<SyncHistoryResponse>().await?;
         let history = history
             .history
-            .iter()
-            .map(|h| serde_json::from_str(h).expect("invalid base64"))
+            .into_iter()
+            .map(|h| serde_json::from_str(&h).expect("invalid base64"))
             .map(|h| decrypt(&h, &self.key).expect("failed to decrypt history! check your key"))
             .collect();
 

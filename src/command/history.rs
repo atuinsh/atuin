@@ -70,8 +70,7 @@ pub fn print_list(h: &[History], human: bool, cmd_only: bool) {
                 h.duration, 0,
             ) as u64))
             .to_string();
-            let duration: Vec<&str> = duration.split(' ').collect();
-            let duration = duration[0];
+            let duration = duration.split(' ').next().unwrap();
 
             format!(
                 "{}\t{}\t{}\n",

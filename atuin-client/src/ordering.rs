@@ -15,9 +15,9 @@ where
     A: Clone,
 {
     let mut r = res.clone();
-    let qvec = &query.chars().collect();
+    let qvec: Vec<char> = query.chars().collect();
     r.sort_by_cached_key(|h| {
-        let (from, to) = match minspan::span(qvec, &(f(h).chars().collect())) {
+        let (from, to) = match minspan::span(&qvec, &(f(h).chars().collect())) {
             Some(x) => x,
             // this is a little unfortunate: when we are asked to match a query that is found nowhere,
             // we don't want to return a None, as the comparison behaviour would put the worst matches

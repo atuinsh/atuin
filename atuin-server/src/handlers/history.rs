@@ -30,19 +30,18 @@ pub async fn list(
         )
         .await;
 
-    if let Err(e) = history {
-        error!("failed to load history: {}", e);
-        return reply_error(
-            ErrorResponse::reply("failed to load history")
-                .with_status(StatusCode::INTERNAL_SERVER_ERROR),
-        );
-    }
+    let history = match history {
+        Err(e) => {
+            error!("failed to load history: {}", e);
+            return reply_error(
+                ErrorResponse::reply("failed to load history")
+                    .with_status(StatusCode::INTERNAL_SERVER_ERROR),
+            );
+        }
+        Ok(h) => h,
+    };
 
-    let history: Vec<String> = history
-        .unwrap()
-        .iter()
-        .map(|i| i.data.to_string())
-        .collect();
+    let history: Vec<String> = history.into_iter().map(|i| i.data).collect();
 
     debug!(
         "loaded {} items of history for user {}",

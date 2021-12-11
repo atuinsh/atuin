@@ -11,7 +11,6 @@ use chrono::prelude::*;
 use chrono::Utc;
 use directories::UserDirs;
 use eyre::{eyre, Result};
-use itertools::Itertools;
 
 use super::{count_lines, Importer};
 use crate::history::History;
@@ -132,8 +131,8 @@ impl<R: Read> Iterator for Zsh<R> {
 
 fn parse_extended(line: &str, counter: i64) -> History {
     let line = line.replacen(": ", "", 2);
-    let (time, duration) = line.splitn(2, ':').collect_tuple().unwrap();
-    let (duration, command) = duration.splitn(2, ';').collect_tuple().unwrap();
+    let (time, duration) = line.split_once(':').unwrap();
+    let (duration, command) = duration.split_once(';').unwrap();
 
     let time = time
         .parse::<i64>()

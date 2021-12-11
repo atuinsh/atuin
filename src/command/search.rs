@@ -39,15 +39,14 @@ impl State {
                 let duration =
                     Duration::from_millis(std::cmp::max(h.duration, 0) as u64 / 1_000_000);
                 let duration = humantime::format_duration(duration).to_string();
-                let duration: Vec<&str> = duration.split(' ').collect();
+                let duration = duration.split(' ').next().unwrap();
 
                 let ago = chrono::Utc::now().sub(h.timestamp);
                 let ago = humantime::format_duration(ago.to_std().unwrap()).to_string();
-                let ago: Vec<&str> = ago.split(' ').collect();
+                let ago = ago.split(' ').next().unwrap();
 
                 (
-                    duration[0]
-                        .to_string()
+                    duration
                         .replace("days", "d")
                         .replace("day", "d")
                         .replace("weeks", "w")
@@ -56,9 +55,7 @@ impl State {
                         .replace("month", "mo")
                         .replace("years", "y")
                         .replace("year", "y"),
-                    ago[0]
-                        .to_string()
-                        .replace("days", "d")
+                    ago.replace("days", "d")
                         .replace("day", "d")
                         .replace("weeks", "w")
                         .replace("week", "w")
@@ -87,7 +84,7 @@ impl State {
             .iter()
             .enumerate()
             .map(|(i, m)| {
-                let command = m.command.to_string().replace("\n", " ").replace("\t", " ");
+                let command = m.command.replace("\n", " ").replace("\t", " ");
 
                 let mut command = Span::raw(command);
 
@@ -381,67 +378,63 @@ pub async fn run(
         let item = select_history(query, settings.search_mode, db).await?;
         eprintln!("{}", item);
     } else {
-        let results = db
+        let mut results = db
             .search(None, settings.search_mode, query.join(" ").as_str())
             .await?;
 
         // TODO: This filtering would be better done in the SQL query, I just
         // need a nice way of building queries.
-        let results: Vec<History> = results
-            .iter()
-            .filter(|h| {
-                if let Some(exit) = exit {
-                    if h.exit != exit {
-                        return false;
-                    }
+        results.retain(|h| {
+            if let Some(exit) = exit {
+                if h.exit != exit {
+                    return false;
                 }
+            }
 
-                if let Some(exit) = exclude_exit {
-                    if h.exit == exit {
-                        return false;
-                    }
+            if let Some(exit) = exclude_exit {
+                if h.exit == exit {
+                    return false;
                 }
+            }
 
-                if let Some(cwd) = &exclude_cwd {
-                    if h.cwd.as_str() == cwd.as_str() {
-                        return false;
-                    }
+            if let Some(cwd) = &exclude_cwd {
+                if h.cwd.as_str() == cwd.as_str() {
+                    return false;
                 }
+            }
 
-                if let Some(cwd) = &dir {
-                    if h.cwd.as_str() != cwd.as_str() {
-                        return false;
-                    }
+            if let Some(cwd) = &dir {
+                if h.cwd.as_str() != cwd.as_str() {
+                    return false;
                 }
+            }
 
-                if let Some(before) = &before {
-                    let before = chrono_english::parse_date_string(
-                        before.as_str(),
-                        Utc::now(),
-                        chrono_english::Dialect::Uk,
-                    );
+            if let Some(before) = &before {
+                let before = chrono_english::parse_date_string(
+                    before.as_str(),
+                    Utc::now(),
+                    chrono_english::Dialect::Uk,
+                );
 
-                    if before.is_err() || h.timestamp.gt(&before.unwrap()) {
-                        return false;
-                    }
+                if before.is_err() || h.timestamp.gt(&before.unwrap()) {
+                    return false;
                 }
+            }
 
-                if let Some(after) = &after {
-                    let after = chrono_english::parse_date_string(
-                        after.as_str(),
-                        Utc::now(),
-                        chrono_english::Dialect::Uk,
-                    );
+            if let Some(after) = &after {
+                let after = chrono_english::parse_date_string(
+                    after.as_str(),
+                    Utc::now(),
+                    chrono_english::Dialect::Uk,
+                );
 
-                    if after.is_err() || h.timestamp.lt(&after.unwrap()) {
-                        return false;
-                    }
+                if after.is_err() || h.timestamp.lt(&after.unwrap()) {
+                    return false;
                 }
+            }
 
-                true
-            })
-            .map(std::borrow::ToOwned::to_owned)
-            .collect();
+            true
+        });
 
         super::history::print_list(&results, human, cmd_only);
     }
