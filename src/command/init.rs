@@ -2,9 +2,9 @@ use clap::Parser;
 
 #[derive(Parser)]
 pub enum Cmd {
-    #[clap(about = "zsh setup")]
+    /// zsh setup
     Zsh,
-    #[clap(about = "bash setup")]
+    /// bash setup
     Bash,
     #[structopt(about = "fish setup")]
     Fish,

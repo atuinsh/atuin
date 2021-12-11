@@ -1,15 +1,13 @@
-use clap::Subcommand;
+use clap::{AppSettings::InferSubcommands, Subcommand};
 use eyre::Result;
 
 use atuin_server::launch;
 use atuin_server::settings::Settings;
 
 #[derive(Subcommand)]
+#[clap(setting(InferSubcommands))]
 pub enum Cmd {
-    #[clap(
-        about="starts the server",
-        aliases=&["s", "st", "sta", "star"],
-    )]
+    /// starts the server
     Start {
         /// specify the host address to bind
         #[clap(long, short)]

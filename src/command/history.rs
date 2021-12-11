@@ -2,7 +2,7 @@ use std::env;
 use std::io::Write;
 use std::time::Duration;
 
-use clap::Subcommand;
+use clap::{AppSettings::InferSubcommands, Subcommand};
 use eyre::Result;
 use tabwriter::TabWriter;
 
@@ -13,13 +13,12 @@ use atuin_client::sync;
 
 #[derive(Subcommand)]
 #[clap(aliases = &["h", "hi", "his", "hist", "histo", "histor"])]
+#[clap(setting(InferSubcommands))]
 pub enum Cmd {
-    /// "begins a new command in the history
-    #[clap(aliases=&["s", "st", "sta", "star"])]
+    /// begins a new command in the history
     Start { command: Vec<String> },
 
     /// finishes a new command in the history (adds time, exit code)
-    #[clap(aliases=&["e", "en"])]
     End {
         id: String,
         #[clap(long, short)]
@@ -27,7 +26,6 @@ pub enum Cmd {
     },
 
     /// list all items in history
-    #[clap(aliases=&["l", "li", "lis"])]
     List {
         #[clap(long, short)]
         cwd: bool,
@@ -44,7 +42,6 @@ pub enum Cmd {
     },
 
     /// get the last command ran
-    #[clap(aliases=&["la", "las"])]
     Last {
         #[clap(long)]
         human: bool,

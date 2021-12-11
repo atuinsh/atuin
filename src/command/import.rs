@@ -1,6 +1,6 @@
 use std::{env, path::PathBuf};
 
-use clap::Subcommand;
+use clap::{AppSettings::InferSubcommands, Subcommand};
 use eyre::{eyre, Result};
 
 use atuin_client::import::{bash::Bash, fish::Fish, zsh::Zsh};
@@ -9,29 +9,18 @@ use atuin_client::{history::History, import::resh::Resh};
 use indicatif::ProgressBar;
 
 #[derive(Subcommand)]
+#[clap(setting(InferSubcommands))]
 pub enum Cmd {
-    #[clap(
-        about="import history for the current shell",
-        aliases=&["a", "au", "aut"],
-    )]
+    /// import history for the current shell
     Auto,
 
-    #[clap(
-        about="import history from the zsh history file",
-        aliases=&["z", "zs"],
-    )]
+    /// import history from the zsh history file
     Zsh,
 
-    #[clap(
-        about="import history from the bash history file",
-        aliases=&["b", "ba", "bas"],
-    )]
+    /// import history from the bash history file
     Bash,
 
-    #[clap(
-        about="import history from the resh history file",
-        aliases=&["r", "re", "res"],
-    )]
+    /// import history from the resh history file
     Resh,
 
     #[clap(

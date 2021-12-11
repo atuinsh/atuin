@@ -4,7 +4,7 @@ use chrono::prelude::*;
 use chrono::Duration;
 use chrono_english::parse_date_string;
 
-use clap::Subcommand;
+use clap::{AppSettings::InferSubcommands, Subcommand};
 use cli_table::{format::Justify, print_stdout, Cell, Style, Table};
 use eyre::{eyre, Result};
 
@@ -13,17 +13,12 @@ use atuin_client::history::History;
 use atuin_client::settings::Settings;
 
 #[derive(Subcommand)]
+#[clap(setting(InferSubcommands))]
 pub enum Cmd {
-    #[clap(
-        about="compute statistics for all of time",
-        aliases=&["d", "da"],
-    )]
+    /// compute statistics for all of time
     All,
 
-    #[clap(
-        about="compute statistics for a single day",
-        aliases=&["d", "da"],
-    )]
+    /// compute statistics for a single day
     Day { words: Vec<String> },
 }
 
