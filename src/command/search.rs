@@ -1,5 +1,6 @@
 use chrono::Utc;
 use eyre::Result;
+use futures::TryStreamExt;
 use std::time::Duration;
 use std::{io::stdout, ops::Sub};
 
@@ -157,7 +158,7 @@ async fn query_results(
     db: &mut (impl Database + Send + Sync),
 ) -> Result<()> {
     let results = match app.input.as_str() {
-        "" => db.list(Some(200), true).await?,
+        "" => db.list(Some(200), true).try_collect::<Vec<_>>().await?,
         i => db.search(Some(200), search_mode, i).await?,
     };
 
@@ -381,69 +382,68 @@ pub async fn run(
         let item = select_history(query, settings.search_mode, db).await?;
         eprintln!("{}", item);
     } else {
-        let results = db
+        let mut results = db
             .search(None, settings.search_mode, query.join(" ").as_str())
             .await?;
 
         // TODO: This filtering would be better done in the SQL query, I just
         // need a nice way of building queries.
-        let results: Vec<History> = results
-            .iter()
-            .filter(|h| {
-                if let Some(exit) = exit {
-                    if h.exit != exit {
-                        return false;
-                    }
+        results.retain(|h| {
+            if let Some(exit) = exit {
+                if h.exit != exit {
+                    return false;
                 }
+            }
 
-                if let Some(exit) = exclude_exit {
-                    if h.exit == exit {
-                        return false;
-                    }
+            if let Some(exit) = exclude_exit {
+                if h.exit == exit {
+                    return false;
                 }
+            }
 
-                if let Some(cwd) = &exclude_cwd {
-                    if h.cwd.as_str() == cwd.as_str() {
-                        return false;
-                    }
+            if let Some(cwd) = &exclude_cwd {
+                if h.cwd.as_str() == cwd.as_str() {
+                    return false;
                 }
+            }
 
-                if let Some(cwd) = &dir {
-                    if h.cwd.as_str() != cwd.as_str() {
-                        return false;
-                    }
+            if let Some(cwd) = &dir {
+                if h.cwd.as_str() != cwd.as_str() {
+                    return false;
                 }
+            }
 
-                if let Some(before) = &before {
-                    let before = chrono_english::parse_date_string(
-                        before.as_str(),
-                        Utc::now(),
-                        chrono_english::Dialect::Uk,
-                    );
+            if let Some(before) = &before {
+                let before = chrono_english::parse_date_string(
+                    before.as_str(),
+                    Utc::now(),
+                    chrono_english::Dialect::Uk,
+                );
 
-                    if before.is_err() || h.timestamp.gt(&before.unwrap()) {
-                        return false;
-                    }
+                if before.is_err() || h.timestamp.gt(&before.unwrap()) {
+                    return false;
                 }
+            }
 
-                if let Some(after) = &after {
-                    let after = chrono_english::parse_date_string(
-                        after.as_str(),
-                        Utc::now(),
-                        chrono_english::Dialect::Uk,
-                    );
+            if let Some(after) = &after {
+                let after = chrono_english::parse_date_string(
+                    after.as_str(),
+                    Utc::now(),
+                    chrono_english::Dialect::Uk,
+                );
 
-                    if after.is_err() || h.timestamp.lt(&after.unwrap()) {
-                        return false;
-                    }
+                if after.is_err() || h.timestamp.lt(&after.unwrap()) {
+                    return false;
                 }
+            }
 
-                true
-            })
-            .map(std::borrow::ToOwned::to_owned)
-            .collect();
+            true
+        });
 
-        super::history::print_list(&results, human, cmd_only);
+        let stream = futures::stream::iter(results.into_iter().map(Result::<_, ()>::Ok).rev());
+        super::history::print_list(stream, human, cmd_only)
+            .await
+            .unwrap();
     }
 
     Ok(())

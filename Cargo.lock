@@ -84,6 +84,7 @@ dependencies = [
  "directories",
  "eyre",
  "fork",
+ "futures",
  "humantime 2.1.0",
  "indicatif",
  "itertools",
@@ -113,6 +114,7 @@ dependencies = [
  "directories",
  "eyre",
  "fern",
+ "futures-core",
  "humantime 2.1.0",
  "indicatif",
  "itertools",
@@ -632,6 +634,7 @@ checksum = "a9d5813545e459ad3ca1bff9915e9ad7f1a47dc6a91b627ce321d5863b7dd253"
 dependencies = [
  "futures-channel",
  "futures-core",
+ "futures-executor",
  "futures-io",
  "futures-sink",
  "futures-task",
@@ -653,6 +656,17 @@ name = "futures-core"
 version = "0.3.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "098cd1c6dda6ca01650f1a37a794245eb73181d0d4d4e955e2f3c37db7af1815"
+
+[[package]]
+name = "futures-executor"
+version = "0.3.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "10f6cb7042eda00f0049b1d2080aa4b93442997ee507eb3828e8bd7577f94c9d"
+dependencies = [
+ "futures-core",
+ "futures-task",
+ "futures-util",
+]
 
 [[package]]
 name = "futures-intrusive"
@@ -701,6 +715,7 @@ version = "0.3.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3c144ad54d60f23927f0a6b6d816e4271278b64f005ad65e4e35291d2de9c025"
 dependencies = [
+ "futures-channel",
  "futures-core",
  "futures-io",
  "futures-macro",
@@ -2000,9 +2015,9 @@ dependencies = [
 
 [[package]]
 name = "sqlx"
-version = "0.5.7"
+version = "0.5.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e4b94ab0f8c21ee4899b93b06451ef5d965f1a355982ee73684338228498440"
+checksum = "7911b0031a0247af40095838002999c7a52fba29d9739e93326e71a5a1bc9d43"
 dependencies = [
  "sqlx-core",
  "sqlx-macros",

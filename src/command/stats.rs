@@ -6,6 +6,7 @@ use chrono_english::parse_date_string;
 
 use cli_table::{format::Justify, print_stdout, Cell, Style, Table};
 use eyre::{eyre, Result};
+use futures::TryStreamExt;
 use structopt::StructOpt;
 
 use atuin_client::database::Database;
@@ -95,8 +96,7 @@ impl Cmd {
             }
 
             Self::All => {
-                let history = db.list(None, false).await?;
-
+                let history: Vec<History> = db.list(None, false).try_collect().await?;
                 compute_stats(&history)?;
 
                 Ok(())

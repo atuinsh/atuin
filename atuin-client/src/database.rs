@@ -6,6 +6,7 @@ use chrono::prelude::*;
 use chrono::Utc;
 
 use eyre::Result;
+use futures_core::stream::BoxStream;
 use itertools::Itertools;
 
 use sqlx::sqlite::{
@@ -23,7 +24,6 @@ pub trait Database {
     async fn save_bulk(&mut self, h: &[History]) -> Result<()>;
 
     async fn load(&self, id: &str) -> Result<History>;
-    async fn list(&self, max: Option<usize>, unique: bool) -> Result<Vec<History>>;
     async fn range(
         &self,
         from: chrono::DateTime<Utc>,
@@ -44,7 +44,16 @@ pub trait Database {
         query: &str,
     ) -> Result<Vec<History>>;
 
-    async fn query_history(&self, query: &str) -> Result<Vec<History>>;
+    fn list(&self, max: Option<usize>, unique: bool) -> BoxStream<Result<History, sqlx::Error>>;
+    fn find(
+        &self,
+        session: Option<String>,
+        cwd: Option<String>,
+    ) -> BoxStream<Result<History, sqlx::Error>>;
+    fn query_history<'e, 'q: 'e>(
+        &'e self,
+        query: &'q str,
+    ) -> BoxStream<'e, Result<History, sqlx::Error>>;
 }
 
 // Intended for use on a developer machine and not a sync server.
@@ -178,41 +187,70 @@ impl Database for Sqlite {
     }
 
     // make a unique list, that only shows the *newest* version of things
-    async fn list(&self, max: Option<usize>, unique: bool) -> Result<Vec<History>> {
+    fn list(&self, max: Option<usize>, unique: bool) -> BoxStream<Result<History, sqlx::Error>> {
         debug!("listing history");
 
-        // very likely vulnerable to SQL injection
-        // however, this is client side, and only used by the client, on their
-        // own data. They can just open the db file...
-        // otherwise building the query is awkward
-        let query = format!(
-            "select * from history h
-                {}
+        let query = match (max, unique) {
+            (None, false) => sqlx::query(
+                "select * from history h
+                order by timestamp desc",
+            ),
+
+            (None, true) => sqlx::query(
+                "select * from history h
+                where timestamp = (
+                    select max(timestamp) from history
+                    where h.command = history.command
+                )
+                order by timestamp desc",
+            ),
+
+            (Some(max), true) => sqlx::query(
+                "select * from history h
+                where timestamp = (
+                    select max(timestamp) from history
+                    where h.command = history.command
+                )
                 order by timestamp desc
-                {}",
-            // inject the unique check
-            if unique {
-                "where timestamp = (
-                        select max(timestamp) from history
-                        where h.command = history.command
-                    )"
-            } else {
-                ""
-            },
-            // inject the limit
-            if let Some(max) = max {
-                format!("limit {}", max)
-            } else {
-                "".to_string()
+                limit ?1",
+            )
+            .bind(max as u32),
+
+            (Some(max), false) => sqlx::query(
+                "select * from history h
+                order by timestamp desc
+                limit ?1",
+            )
+            .bind(max as u32),
+        };
+
+        query.map(Self::query_history).fetch(&self.pool)
+    }
+
+    fn find(
+        &self,
+        session: Option<String>,
+        cwd: Option<String>,
+    ) -> BoxStream<Result<History, sqlx::Error>> {
+        debug!("listing history");
+
+        let query = match (session, cwd) {
+            (None, None) => sqlx::query("select * from history h"),
+
+            (None, Some(cwd)) => sqlx::query("select * from history h where cwd = ?1").bind(cwd),
+
+            (Some(session), None) => {
+                sqlx::query("select * from history h where session = ?1").bind(session)
             }
-        );
 
-        let res = sqlx::query(query.as_str())
-            .map(Self::query_history)
-            .fetch_all(&self.pool)
-            .await?;
+            (Some(session), Some(cwd)) => {
+                sqlx::query("select * from history h where cwd = ?1 and session = ?2")
+                    .bind(cwd)
+                    .bind(session)
+            }
+        };
 
-        Ok(res)
+        query.map(Self::query_history).fetch(&self.pool)
     }
 
     async fn range(
@@ -313,13 +351,13 @@ impl Database for Sqlite {
         Ok(ordering::reorder_fuzzy(search_mode, orig_query, res))
     }
 
-    async fn query_history(&self, query: &str) -> Result<Vec<History>> {
-        let res = sqlx::query(query)
+    fn query_history<'e, 'q: 'e>(
+        &'e self,
+        query: &'q str,
+    ) -> BoxStream<'e, Result<History, sqlx::Error>> {
+        sqlx::query(query)
             .map(Self::query_history)
-            .fetch_all(&self.pool)
-            .await?;
-
-        Ok(res)
+            .fetch(&self.pool)
     }
 }
 

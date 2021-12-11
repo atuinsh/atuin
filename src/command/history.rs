@@ -3,6 +3,7 @@ use std::io::Write;
 use std::time::Duration;
 
 use eyre::Result;
+use futures::{Stream, TryStreamExt};
 use structopt::StructOpt;
 use tabwriter::TabWriter;
 
@@ -61,10 +62,14 @@ pub enum Cmd {
 }
 
 #[allow(clippy::cast_sign_loss)]
-pub fn print_list(h: &[History], human: bool, cmd_only: bool) {
+pub async fn print_list<E: Send>(
+    h: impl Stream<Item = Result<History, E>> + Send,
+    human: bool,
+    cmd_only: bool,
+) -> Result<(), E> {
     let mut writer = TabWriter::new(std::io::stdout()).padding(2);
 
-    let lines = h.iter().map(|h| {
+    let lines = h.map_ok(|h| {
         if human {
             let duration = humantime::format_duration(Duration::from_nanos(std::cmp::max(
                 h.duration, 0,
@@ -91,18 +96,23 @@ pub fn print_list(h: &[History], human: bool, cmd_only: bool) {
         }
     });
 
-    for i in lines.rev() {
+    let fut = lines.try_for_each(|i| {
         writer
             .write_all(i.as_bytes())
             .expect("failed to write to tab writer");
-    }
+
+        futures::future::ready(Ok(()))
+    });
+    fut.await?;
 
     writer.flush().expect("failed to flush tab writer");
+
+    Ok(())
 }
 
 impl Cmd {
     pub async fn run(
-        &self,
+        self,
         settings: &Settings,
         db: &mut (impl Database + Send + Sync),
     ) -> Result<()> {
@@ -130,7 +140,7 @@ impl Cmd {
                     return Ok(());
                 }
 
-                let mut h = db.load(id).await?;
+                let mut h = db.load(&id).await?;
 
                 if h.duration > 0 {
                     debug!("cannot end history - already has duration");
@@ -139,7 +149,7 @@ impl Cmd {
                     return Ok(());
                 }
 
-                h.exit = *exit;
+                h.exit = exit;
                 h.duration = chrono::Utc::now().timestamp_nanos() - h.timestamp.timestamp_nanos();
 
                 db.update(&h).await?;
@@ -160,44 +170,20 @@ impl Cmd {
                 human,
                 cmd_only,
             } => {
-                let session = if *session {
-                    Some(env::var("ATUIN_SESSION")?)
-                } else {
-                    None
-                };
-                let cwd = if *cwd {
-                    Some(env::current_dir()?.display().to_string())
-                } else {
-                    None
-                };
+                let session = session.then(|| env::var("ATUIN_SESSION")).transpose()?;
+                let cwd = cwd
+                    .then(|| env::current_dir().map(|x| x.display().to_string()))
+                    .transpose()?;
 
-                let history = match (session, cwd) {
-                    (None, None) => db.list(None, false).await?,
-                    (None, Some(cwd)) => {
-                        let query = format!("select * from history where cwd = {};", cwd);
-                        db.query_history(&query).await?
-                    }
-                    (Some(session), None) => {
-                        let query = format!("select * from history where session = {};", session);
-                        db.query_history(&query).await?
-                    }
-                    (Some(session), Some(cwd)) => {
-                        let query = format!(
-                            "select * from history where cwd = {} and session = {};",
-                            cwd, session
-                        );
-                        db.query_history(&query).await?
-                    }
-                };
-
-                print_list(&history, *human, *cmd_only);
+                let history = db.find(session, cwd);
+                print_list(history, human, cmd_only).await?;
 
                 Ok(())
             }
 
             Self::Last { human, cmd_only } => {
-                let last = db.last().await?;
-                print_list(&[last], *human, *cmd_only);
+                let last = db.last().await;
+                print_list(futures::stream::iter(Some(last)), human, cmd_only).await?;
 
                 Ok(())
             }
