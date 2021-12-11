@@ -18,7 +18,7 @@ pub struct Cmd {
     #[structopt(long, short)]
     pub password: Option<String>,
 
-    #[structopt(long, short, about = "the encryption key for your account")]
+    #[structopt(long, short, help = "the encryption key for your account")]
     pub key: Option<String>,
 }
 

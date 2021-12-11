@@ -46,39 +46,39 @@ pub enum AtuinCmd {
 
     #[structopt(about = "interactive history search")]
     Search {
-        #[structopt(long, short, about = "filter search result by directory")]
+        #[structopt(long, short, help = "filter search result by directory")]
         cwd: Option<String>,
 
-        #[structopt(long = "exclude-cwd", about = "exclude directory from results")]
+        #[structopt(long = "exclude-cwd", help = "exclude directory from results")]
         exclude_cwd: Option<String>,
 
-        #[structopt(long, short, about = "filter search result by exit code")]
+        #[structopt(long, short, help = "filter search result by exit code")]
         exit: Option<i64>,
 
-        #[structopt(long = "exclude-exit", about = "exclude results with this exit code")]
+        #[structopt(long = "exclude-exit", help = "exclude results with this exit code")]
         exclude_exit: Option<i64>,
 
-        #[structopt(long, short, about = "only include results added before this date")]
+        #[structopt(long, short, help = "only include results added before this date")]
         before: Option<String>,
 
-        #[structopt(long, about = "only include results after this date")]
+        #[structopt(long, help = "only include results after this date")]
         after: Option<String>,
 
-        #[structopt(long, short, about = "open interactive search UI")]
+        #[structopt(long, short, help = "open interactive search UI")]
         interactive: bool,
 
-        #[structopt(long, short, about = "use human-readable formatting for time")]
+        #[structopt(long, short, help = "use human-readable formatting for time")]
         human: bool,
 
         query: Vec<String>,
 
-        #[structopt(long, about = "Show only the text of the command")]
+        #[structopt(long, help = "Show only the text of the command")]
         cmd_only: bool,
     },
 
     #[structopt(about = "sync with the configured server")]
     Sync {
-        #[structopt(long, short, about = "force re-download everything")]
+        #[structopt(long, short, help = "force re-download everything")]
         force: bool,
     },
 
