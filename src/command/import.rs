@@ -1,5 +1,6 @@
 use std::{env, path::PathBuf};
 
+use atuin_client::import::fish::Fish;
 use eyre::{eyre, Result};
 use structopt::StructOpt;
 
@@ -33,6 +34,12 @@ pub enum Cmd {
         aliases=&["r", "re", "res"],
     )]
     Resh,
+
+    #[structopt(
+        about="import history from the fish history file",
+        aliases=&["f", "fi", "fis"],
+    )]
+    Fish,
 }
 
 const BATCH_SIZE: usize = 100;
@@ -54,6 +61,9 @@ impl Cmd {
                 if shell.ends_with("/zsh") {
                     println!("Detected ZSH");
                     import::<Zsh<_>, _>(db, BATCH_SIZE).await
+                } else if shell.ends_with("/fish") {
+                    println!("Detected Fish");
+                    import::<Fish<_>, _>(db, BATCH_SIZE).await
                 } else {
                     println!("cannot import {} history", shell);
                     Ok(())
@@ -63,6 +73,7 @@ impl Cmd {
             Self::Zsh => import::<Zsh<_>, _>(db, BATCH_SIZE).await,
             Self::Bash => import::<Bash<_>, _>(db, BATCH_SIZE).await,
             Self::Resh => import::<Resh, _>(db, BATCH_SIZE).await,
+            Self::Fish => import::<Fish<_>, _>(db, BATCH_SIZE).await,
         }
     }
 }

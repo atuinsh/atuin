@@ -65,6 +65,7 @@ I wanted to. And I **really** don't want to.
 
 - zsh
 - bash
+- fish
 
 # Quickstart
   
@@ -165,6 +166,16 @@ Then setup Atuin
 ```
 echo 'eval "$(atuin init bash)"' >> ~/.bashrc
 ```
+
+### fish
+
+Add
+
+```
+atuin init fish | source
+```
+
+to your `is-interactive` block in your `~/.config/fish/config.fish` file
 
 ## ...what's with the name?
 
