@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.8.0] - 2021-12-17
+
+1339711 Add Alt+backspace and Ctrl+u keybinds for deleting by word and by line, respectively (#243)
+059e858 remove unused environment var loading entire history into an env var (#242)
+079d803 Enable help messages for command line arguments (#239)
+87df7d8 Fish importing (#234)
+6daaeb2 Bump serde_json from 1.0.64 to 1.0.72 (#219)
+2df7428 Bump itertools from 0.10.1 to 0.10.3 (#236)
+d81e452 Bump tui from 0.15.0 to 0.16.0 (#225)
+0abd063 Support generating shell completions (#235)
+28f78ba Update messages in install.sh about the AUR packages (#231)
+b549095 Update install.sh to use `pacman` on Arch Linux (#229)
+e242f89 Update installation instructions for Arch Linux (#228)
+cd3af87 Bump sqlx from 0.5.5 to 0.5.7 (#210)
+c8f60b2 fix: resolve some issues with install.sh (#188)
+4bdf4c4 feat: login/register no longer blocking (#216)
+9e6746a Remove dev dep with wildcard (#224)
+
 ## [0.7.2] - 2021-12-08
 
 6e8ec868 chore: improve build times (#213)  
