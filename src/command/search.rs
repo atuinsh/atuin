@@ -207,6 +207,23 @@ async fn key_handler(
             app.input.pop();
             query_results(app, search_mode, db).await.unwrap();
         }
+        // \u{7f} is escape sequence for backspace
+        Key::Alt('\u{7f}') => {
+            let words: Vec<&str> = app.input.split(' ').collect();
+            if words.is_empty() {
+                return None;
+            }
+            if words.len() == 1 {
+                app.input = String::from("");
+            } else {
+                app.input = words[0..(words.len() - 1)].join(" ");
+            }
+            query_results(app, search_mode, db).await.unwrap();
+        }
+        Key::Ctrl('u') => {
+            app.input = String::from("");
+            query_results(app, search_mode, db).await.unwrap();
+        }
         Key::Down | Key::Ctrl('n') => {
             let i = match app.results_state.selected() {
                 Some(i) => {
