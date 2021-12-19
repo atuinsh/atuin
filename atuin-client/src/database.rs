@@ -296,10 +296,8 @@ impl Database for Sqlite {
             format!(
                 "select * from history h
             where command like ?1 || '%'
-            and timestamp = (
-                    select max(timestamp) from history
-                    where h.command = history.command
-                )
+            group by command
+            having max(timestamp)
             order by timestamp desc {}",
                 limit.clone()
             )
@@ -326,6 +324,7 @@ impl Database for Sqlite {
 #[cfg(test)]
 mod test {
     use super::*;
+    use std::time::{Duration, Instant};
 
     async fn new_history_item(db: &mut impl Database, cmd: &str) -> Result<()> {
         let history = History::new(
@@ -426,5 +425,20 @@ mod test {
 
         results = db.search(None, SearchMode::Fuzzy, "").await.unwrap();
         assert_eq!(results.len(), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_search_bench_dupes() {
+        let mut db = Sqlite::new("sqlite::memory:").await.unwrap();
+        for _i in 1..10000 {
+            new_history_item(&mut db, "i am a duplicated command")
+                .await
+                .unwrap();
+        }
+        let start = Instant::now();
+        let _results = db.search(None, SearchMode::Fuzzy, "").await.unwrap();
+        let duration = start.elapsed();
+
+        assert!(duration < Duration::from_secs(15));
     }
 }
