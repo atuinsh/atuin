@@ -71,9 +71,9 @@ __atuin_install_ubuntu(){
 	TEMP_DEB="$(mktemp)" &&
 	curl -Lo "$TEMP_DEB" "$ARTIFACT_URL"
 	if command -v sudo &> /dev/null; then
-		sudo dpkg -i "$TEMP_DEB"
+		sudo apt install "$TEMP_DEB"
 	else
-		su -l -c "dpkg -i '$TEMP_DEB'"
+		su -l -c "apt install '$TEMP_DEB'"
 	fi
 	rm -f "$TEMP_DEB"
 }
