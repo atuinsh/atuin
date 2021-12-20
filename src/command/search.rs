@@ -42,7 +42,16 @@ impl State {
                 let duration: Vec<&str> = duration.split(' ').collect();
 
                 let ago = chrono::Utc::now().sub(h.timestamp);
-                let ago = humantime::format_duration(ago.to_std().unwrap()).to_string();
+
+                // Account for the chance that h.timestamp is "in the future"
+                // This would mean that "ago" is negative, and the unwrap here
+                // would fail.
+                // If the timestamp would otherwise be in the future, display
+                // the time ago as 0.
+                let ago = humantime::format_duration(
+                    ago.to_std().unwrap_or_else(|_| Duration::new(0, 0)),
+                )
+                .to_string();
                 let ago: Vec<&str> = ago.split(' ').collect();
 
                 (
