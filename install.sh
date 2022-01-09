@@ -68,7 +68,7 @@ __atuin_install_ubuntu(){
 	# TODO: select correct AARCH too
 	ARTIFACT_URL="https://github.com/ellie/atuin/releases/download/$LATEST_VERSION/atuin_${LATEST_VERSION//v/}_amd64.deb"
 
-	TEMP_DEB="$(mktemp)" &&
+	TEMP_DEB="$(mktemp)".deb &&
 	curl -Lo "$TEMP_DEB" "$ARTIFACT_URL"
 	if command -v sudo &> /dev/null; then
 		sudo apt install "$TEMP_DEB"
@@ -95,7 +95,7 @@ __atuin_install_linux(){
 
 	if [ "$OS" == "Arch" ] || [ "$OS" == "ManjaroLinux" ]; then
 		__atuin_install_arch
-    elif [ "$OS" == "Ubuntu" ] || [ "$OS" == "Debian" ] || [ "$OS" == "Linuxmint" ] || [ "$OS" == "Parrot" ] || [ "$OS" == "Kali" ] || [ "$OS" == "Elementary" ]; then
+    elif [ "$OS" == "Ubuntu" ] || [ "$OS" == "UbuntuWSL" ] || [ "$OS" == "Debian" ] || [ "$OS" == "Linuxmint" ] || [ "$OS" == "Parrot" ] || [ "$OS" == "Kali" ] || [ "$OS" == "Elementary" ]; then
 		__atuin_install_ubuntu
 	else
 		# TODO: download a binary or smth
