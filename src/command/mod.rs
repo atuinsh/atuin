@@ -11,6 +11,7 @@ use atuin_client::settings::Settings as ClientSettings;
 use atuin_common::utils::uuid_v4;
 use atuin_server::settings::Settings as ServerSettings;
 
+mod delete;
 mod event;
 mod history;
 mod import;
@@ -106,6 +107,9 @@ pub enum AtuinCmd {
     /// Register with the configured server
     Register(register::Cmd),
 
+    /// Delete account from the configured server
+    Delete(delete::Cmd),
+
     /// Print the encryption key for transfer to another machine
     Key,
 
@@ -177,6 +181,7 @@ impl AtuinCmd {
             Self::Register(r) => {
                 register::run(&client_settings, &r.username, &r.email, &r.password).await
             }
+            Self::Delete(d) => d.run(&client_settings).await,
             Self::Key => {
                 use atuin_client::encryption::{encode_key, load_key};
                 let key = load_key(&client_settings).wrap_err("could not load encryption key")?;

@@ -7,8 +7,8 @@ use reqwest::{StatusCode, Url};
 use sodiumoxide::crypto::secretbox;
 
 use atuin_common::api::{
-    AddHistoryRequest, CountResponse, LoginRequest, LoginResponse, RegisterResponse,
-    SyncHistoryResponse,
+    AddHistoryRequest, CountResponse, DeleteResponse, LoginRequest, LoginResponse,
+    RegisterResponse, SyncHistoryResponse,
 };
 use atuin_common::utils::hash_str;
 
@@ -149,5 +149,18 @@ impl<'a> Client<'a> {
         self.client.post(url).json(history).send().await?;
 
         Ok(())
+    }
+
+    pub async fn delete_account(&self) -> Result<DeleteResponse<'static>> {
+        let url = format!("{}/user", self.sync_addr);
+
+        let resp = self.client.delete(url).send().await?;
+
+        return match resp.status() {
+            reqwest::StatusCode::NOT_FOUND => Err(eyre!("invalid login details")),
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR => Err(eyre!("failed to delete account")),
+            reqwest::StatusCode::OK => Ok(resp.json::<DeleteResponse>().await?),
+            _ => Err(eyre!("request failed")),
+        };
     }
 }

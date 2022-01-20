@@ -14,8 +14,11 @@ pub trait Database {
     async fn add_session(&self, session: &NewSession) -> Result<()>;
 
     async fn get_user(&self, username: &str) -> Result<User>;
-    async fn get_user_session(&self, u: &User) -> Result<Session>;
+    async fn delete_user(&self, username: &str) -> Result<u64>;
     async fn add_user(&self, user: &NewUser) -> Result<i64>;
+
+    async fn get_user_session(&self, u: &User) -> Result<Session>;
+    async fn delete_user_sessions(&self, u: &User) -> Result<u64>;
 
     async fn count_history(&self, user: &User) -> Result<i64>;
     async fn list_history(
@@ -26,6 +29,7 @@ pub trait Database {
         host: &str,
     ) -> Result<Vec<History>>;
     async fn add_history(&self, history: &[NewHistory]) -> Result<()>;
+    async fn purge_history(&self, user: &User) -> Result<u64>;
 }
 
 #[derive(Clone)]
@@ -76,6 +80,15 @@ impl Database for Postgres {
         }
     }
 
+    async fn delete_user(&self, username: &str) -> Result<u64> {
+        let res = sqlx::query("delete * from users where username = $1")
+            .bind(username)
+            .execute(&self.pool)
+            .await?;
+
+        Ok(res.rows_affected())
+    }
+
     async fn get_session_user(&self, token: &str) -> Result<User> {
         let res: Option<User> = sqlx::query_as::<_, User>(
             "select * from users 
@@ -92,6 +105,15 @@ impl Database for Postgres {
         } else {
             Err(eyre!("could not find user"))
         }
+    }
+
+    async fn delete_user_sessions(&self, u: &User) -> Result<u64> {
+        let res = sqlx::query("delete * from sessions where user_id = $1")
+            .bind(u.id)
+            .execute(&self.pool)
+            .await?;
+
+        Ok(res.rows_affected())
     }
 
     async fn count_history(&self, user: &User) -> Result<i64> {
@@ -160,6 +182,15 @@ impl Database for Postgres {
         tx.commit().await?;
 
         Ok(())
+    }
+
+    async fn purge_history(&self, user: &User) -> Result<u64> {
+        let res = sqlx::query("delete * from history where user_id = $1")
+            .bind(user.id)
+            .execute(&self.pool)
+            .await?;
+
+        Ok(res.rows_affected())
     }
 
     async fn add_user(&self, user: &NewUser) -> Result<i64> {

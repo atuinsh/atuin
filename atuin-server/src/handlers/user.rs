@@ -1,4 +1,4 @@
-use std::borrow::Borrow;
+use std::borrow::{Borrow, Cow};
 
 use atuin_common::api::*;
 use atuin_common::utils::hash_secret;
@@ -7,7 +7,7 @@ use uuid::Uuid;
 use warp::http::StatusCode;
 
 use crate::database::Database;
-use crate::models::{NewSession, NewUser};
+use crate::models::{NewSession, NewUser, User};
 use crate::settings::Settings;
 
 pub fn verify_str(secret: &str, verify: &str) -> bool {
@@ -40,6 +40,51 @@ pub async fn get(
 
     reply_json(UserResponse {
         username: user.username.into(),
+    })
+}
+
+pub async fn delete(
+    user: User,
+    db: impl Database + Clone + Send + Sync,
+) -> JSONResult<ErrorResponseStatus<'static>> {
+    let _ = match db.purge_history(&user).await {
+        Ok(c) => c,
+        Err(e) => {
+            error!("failed to purge history: {}", e);
+
+            return reply_error(
+                ErrorResponse::reply("failed to purge history")
+                    .with_status(StatusCode::INTERNAL_SERVER_ERROR),
+            );
+        }
+    };
+
+    let _ = match db.delete_user_sessions(&user).await {
+        Ok(c) => c,
+        Err(e) => {
+            error!("failed to delete sessions: {}", e);
+
+            return reply_error(
+                ErrorResponse::reply("failed to delete sessions")
+                    .with_status(StatusCode::INTERNAL_SERVER_ERROR),
+            );
+        }
+    };
+
+    let _ = match db.delete_user(user.username.as_str()).await {
+        Ok(c) => c,
+        Err(e) => {
+            error!("failed to delete user: {}", e);
+
+            return reply_error(
+                ErrorResponse::reply("failed to delete user")
+                    .with_status(StatusCode::INTERNAL_SERVER_ERROR),
+            );
+        }
+    };
+
+    reply_json(DeleteResponse {
+        message: Cow::from("account deleted"),
     })
 }
 

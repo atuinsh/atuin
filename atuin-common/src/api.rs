@@ -33,6 +33,11 @@ pub struct LoginResponse<'a> {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct DeleteResponse<'a> {
+    pub message: Cow<'a, str>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct AddHistoryRequest<'a, D> {
     pub id: Cow<'a, str>,
     pub timestamp: chrono::DateTime<Utc>,

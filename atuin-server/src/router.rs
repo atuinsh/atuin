@@ -95,6 +95,14 @@ pub async fn router(
         .and_then(handlers::user::get)
         .boxed();
 
+    let delete = warp::delete()
+        .and(warp::path("user"))
+        .and(warp::path::end())
+        .and(with_user(postgres.clone()))
+        .and(with_db(postgres.clone()))
+        .and_then(handlers::user::delete)
+        .boxed();
+
     let register = warp::post()
         .and(warp::path("register"))
         .and(warp::path::end())
@@ -121,6 +129,7 @@ pub async fn router(
                 .or(user)
                 .or(register)
                 .or(login)
+                .or(delete)
                 .or(warp::any().map(|| warp::reply::with_status("☕", StatusCode::IM_A_TEAPOT))),
         )
         .with(warp::filters::log::log("atuin::api"));
