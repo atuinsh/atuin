@@ -26,8 +26,13 @@ __atuin_history ()
 }
 
 
-preexec_functions+=(_atuin_preexec)
-precmd_functions+=(_atuin_precmd)
+if [[ -v BLE_VERSION ]]; then
+    blehook PRECMD+=_atuin_precmd
+    blehook PREEXEC+=_atuin_preexec
+else
+    precmd_functions+=(_atuin_precmd)
+    preexec_functions+=(_atuin_preexec)
+fi
 
 if [[ -z $ATUIN_NOBIND ]]; then
     bind -x '"\C-r": __atuin_history'
