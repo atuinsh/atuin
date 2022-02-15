@@ -26,9 +26,9 @@ __atuin_history ()
 }
 
 
-if [[ -v BLE_VERSION ]]; then
-    blehook PRECMD+=_atuin_precmd
-    blehook PREEXEC+=_atuin_preexec
+if [[ -n "${BLE_VERSION-}" ]]; then
+    blehook PRECMD-+=_atuin_precmd
+    blehook PREEXEC-+=_atuin_preexec
 else
     precmd_functions+=(_atuin_precmd)
     preexec_functions+=(_atuin_preexec)
