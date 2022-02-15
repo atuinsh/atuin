@@ -177,6 +177,27 @@ atuin init fish | source
 
 to your `is-interactive` block in your `~/.config/fish/config.fish` file
 
+## Customize the Key Bindings
+
+The shell plugins come with default keybindings to start Atuin with
+UpArrow and Ctrl-R.
+
+To override the default keys:
+
+* set the `ATUIN_NOBIND` environment variable
+* invoke Atuin
+* bind your chosen keys
+
+Here's an example of a zsh config that only binds Ctrl-R (not UpArrow):
+
+```
+ATUIN_NOBIND=1 eval "$(atuin init zsh)"
+bindkey '^r' _atuin_search_widget
+```
+
+Look in `src/shell/atuin.[your shell]` for example keybindings or
+consult your favorite search engine.
+
 ## ...what's with the name?
 
 Atuin is named after "The Great A'Tuin", a giant turtle from Terry Pratchett's
