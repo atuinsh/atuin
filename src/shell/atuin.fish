@@ -21,7 +21,15 @@ function _atuin_search
 end
 
 if test -z $ATUIN_NOBIND
+    bind \cr _atuin_search
     bind -k up _atuin_search
     bind \eOA _atuin_search
     bind \e\[A _atuin_search
+
+    if bind -M insert > /dev/null 2>&1
+        bind -M insert \cr _atuin_search
+        bind -M insert -k up _atuin_search
+        bind -M insert \eOA _atuin_search
+        bind -M insert \e\[A _atuin_search
+    end
 end
