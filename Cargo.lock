@@ -83,7 +83,6 @@ dependencies = [
  "crossbeam-channel",
  "directories",
  "eyre",
- "fork",
  "humantime 2.1.0",
  "indicatif",
  "itertools",
@@ -112,9 +111,6 @@ dependencies = [
  "config",
  "directories",
  "eyre",
- "fern",
- "humantime 2.1.0",
- "indicatif",
  "itertools",
  "log",
  "minspan",
@@ -140,8 +136,6 @@ name = "atuin-common"
 version = "0.8.0"
 dependencies = [
  "chrono",
- "eyre",
- "rmp-serde",
  "rust-crypto",
  "serde 1.0.132",
  "serde_derive",
@@ -159,17 +153,10 @@ dependencies = [
  "atuin-common",
  "base64",
  "chrono",
- "chrono-english",
  "config",
- "directories",
  "eyre",
- "fern",
- "fork",
- "indicatif",
  "log",
- "parse_duration",
  "rand 0.8.4",
- "rmp-serde",
  "rust-crypto",
  "serde 1.0.132",
  "serde_derive",
@@ -177,8 +164,6 @@ dependencies = [
  "sodiumoxide",
  "sqlx",
  "tokio",
- "unicode-width",
- "urlencoding",
  "uuid",
  "warp",
  "whoami",
@@ -329,17 +314,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
-]
-
-[[package]]
-name = "colored"
-version = "1.9.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f4ffc801dacf156c5854b9df4f425a626539c3a6ef7893cc0c5084a23f0b6c59"
-dependencies = [
- "atty",
- "lazy_static",
- "winapi",
 ]
 
 [[package]]
@@ -576,29 +550,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "fern"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8c9a4820f0ccc8a7afd67c39a0f1a0f4b07ca1725164271a64939d7aeb9af065"
-dependencies = [
- "colored",
- "log",
-]
-
-[[package]]
 name = "fnv"
 version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
-
-[[package]]
-name = "fork"
-version = "0.1.18"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e4c5b9b0bce249a456f83ac4404e8baad0d2ba81cf651949719a4f74eb7323bb"
-dependencies = [
- "libc",
-]
 
 [[package]]
 name = "form_urlencoded"

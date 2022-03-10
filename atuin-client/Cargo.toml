@@ -14,12 +14,10 @@ repository = "https://github.com/ellie/atuin"
 atuin-common = { path = "../atuin-common", version = "0.8.0" }
 
 log = "0.4"
-fern = {version = "0.6.0", features = ["colored"] }
 chrono = { version = "0.4", features = ["serde"] }
 eyre = "0.6"
 directories = "3"
 uuid = { version = "0.8", features = ["v4"] }
-indicatif = "0.16.2"
 whoami = "1.1.2"
 chrono-english = "0.1.4"
 config = "0.11"
@@ -28,7 +26,11 @@ serde = "1.0.126"
 serde_json = "1.0.75"
 rmp-serde = "0.15.5"
 sodiumoxide = "0.2.6"
-reqwest = { version = "0.11", features = ["blocking", "json", "rustls-tls"], default-features = false }
+reqwest = { version = "0.11", features = [
+  "blocking",
+  "json",
+  "rustls-tls",
+], default-features = false }
 base64 = "0.13.0"
 parse_duration = "2.1.1"
 rand = "0.8.4"
@@ -36,8 +38,16 @@ rust-crypto = "^0.2"
 tokio = { version = "1", features = ["full"] }
 async-trait = "0.1.49"
 urlencoding = "1.3.3"
-humantime = "2.1.0"
 itertools = "0.10.3"
 shellexpand = "2"
-sqlx = { version = "0.5", features = [ "runtime-tokio-rustls", "uuid", "chrono", "sqlite" ] }
+sqlx = { version = "0.5", features = [
+  "runtime-tokio-rustls",
+  "uuid",
+  "chrono",
+  "sqlite",
+] }
 minspan = "0.1.1"
+
+# humantime = "2.1.0"
+# fern = { version = "0.6.0", features = ["colored"] }
+# indicatif = "0.16.2"

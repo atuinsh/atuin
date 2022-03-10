@@ -174,7 +174,7 @@ impl Cmd {
                 let history = match (session, cwd) {
                     (None, None) => db.list(None, false).await?,
                     (None, Some(cwd)) => {
-                        let query = format!("select * from history where cwd = {};", cwd);
+                        let query = format!("select * from history where cwd = '{}';", cwd);
                         db.query_history(&query).await?
                     }
                     (Some(session), None) => {
@@ -183,7 +183,7 @@ impl Cmd {
                     }
                     (Some(session), Some(cwd)) => {
                         let query = format!(
-                            "select * from history where cwd = {} and session = {};",
+                            "select * from history where cwd = '{}' and session = {};",
                             cwd, session
                         );
                         db.query_history(&query).await?
