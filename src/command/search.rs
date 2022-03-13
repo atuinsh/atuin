@@ -1,7 +1,6 @@
 use chrono::Utc;
 use eyre::Result;
-use std::time::Duration;
-use std::{io::stdout, ops::Sub};
+use std::{io::stdout, ops::Sub, time::Duration};
 
 use termion::{event::Key, input::MouseTerminal, raw::IntoRawMode, screen::AlternateScreen};
 use tui::{
@@ -14,9 +13,11 @@ use tui::{
 };
 use unicode_width::UnicodeWidthStr;
 
-use atuin_client::database::Database;
-use atuin_client::history::History;
-use atuin_client::settings::{SearchMode, Settings};
+use atuin_client::{
+    database::Database,
+    history::History,
+    settings::{SearchMode, Settings},
+};
 
 use crate::command::event::{Event, Events};
 
@@ -96,7 +97,7 @@ impl State {
             .iter()
             .enumerate()
             .map(|(i, m)| {
-                let command = m.command.to_string().replace("\n", " ").replace("\t", " ");
+                let command = m.command.to_string().replace('\n', " ").replace('\t', " ");
 
                 let mut command = Span::raw(command);
 

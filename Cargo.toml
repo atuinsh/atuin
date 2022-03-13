@@ -47,7 +47,6 @@ tui = "0.16"
 termion = "1.5"
 unicode-width = "0.1"
 itertools = "0.10.3"
-fork = "0.1.18"
 tokio = { version = "1", features = ["full"] }
 async-trait = "0.1.49"
 chrono-english = "0.1.4"

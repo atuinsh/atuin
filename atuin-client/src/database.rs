@@ -283,7 +283,7 @@ impl Database for Sqlite {
         query: &str,
     ) -> Result<Vec<History>> {
         let orig_query = query;
-        let query = query.to_string().replace("*", "%"); // allow wildcard char
+        let query = query.to_string().replace('*', "%"); // allow wildcard char
         let limit = limit.map_or("".to_owned(), |l| format!("limit {}", l));
 
         let query = match search_mode {
