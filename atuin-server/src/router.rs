@@ -23,7 +23,9 @@ fn with_db(
     warp::any().map(move || db.clone())
 }
 
-fn with_user(postgres: Postgres) -> impl Filter<Extract = (User,), Error = warp::Rejection> + Clone {
+fn with_user(
+    postgres: Postgres,
+) -> impl Filter<Extract = (User,), Error = warp::Rejection> + Clone {
     warp::header::<String>("authorization").and_then(move |header: String| {
         // async closures are still buggy :(
         let postgres = postgres.clone();
