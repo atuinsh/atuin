@@ -19,6 +19,3 @@ serde = "1.0.126"
 serde_json = "1.0.75"
 warp = "0.3"
 uuid = { version = "0.8", features = ["v4"] }
-
-# eyre = "0.6"
-# rmp-serde = "0.15.5"

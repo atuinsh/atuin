@@ -28,13 +28,3 @@ tokio = { version = "1", features = ["full"] }
 warp = "0.3"
 sqlx = { version = "0.5", features = [ "runtime-tokio-rustls", "uuid", "chrono", "postgres" ] }
 async-trait = "0.1.49"
-
-# urlencoding = "1.3.3"
-# unicode-width = "0.1"
-# rmp-serde = "0.15.5"
-# parse_duration = "2.1.1"
-# indicatif = "0.16.2"
-# fork = "0.1.18"
-# fern = {version = "0.6.0", features = ["colored"] }
-# directories = "3"
-# chrono-english = "0.1.4"
