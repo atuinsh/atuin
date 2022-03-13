@@ -5,10 +5,11 @@ use warp::{hyper::StatusCode, Filter};
 
 use atuin_common::api::SyncHistoryRequest;
 
-use super::handlers;
-use super::{database::Database, database::Postgres};
-use crate::models::User;
-use crate::settings::Settings;
+use super::{
+    database::{Database, Postgres},
+    handlers,
+};
+use crate::{models::User, settings::Settings};
 
 fn with_settings(
     settings: Settings,
@@ -22,9 +23,7 @@ fn with_db(
     warp::any().map(move || db.clone())
 }
 
-fn with_user(
-    postgres: Postgres,
-) -> impl Filter<Extract = (User,), Error = warp::Rejection> + Clone {
+fn with_user(postgres: Postgres) -> impl Filter<Extract = (User,), Error = warp::Rejection> + Clone {
     warp::header::<String>("authorization").and_then(move |header: String| {
         // async closures are still buggy :(
         let postgres = postgres.clone();
@@ -32,17 +31,15 @@ fn with_user(
         async move {
             let header: Vec<&str> = header.split(' ').collect();
 
-            let token;
-
-            if header.len() == 2 {
+            let token = if header.len() == 2 {
                 if header[0] != "Token" {
                     return Err(warp::reject());
                 }
 
-                token = header[1];
+                header[1]
             } else {
                 return Err(warp::reject());
-            }
+            };
 
             let user = postgres
                 .get_session_user(token)

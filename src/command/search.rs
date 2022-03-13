@@ -1,7 +1,6 @@
 use chrono::Utc;
 use eyre::Result;
-use std::time::Duration;
-use std::{io::stdout, ops::Sub};
+use std::{io::stdout, ops::Sub, time::Duration};
 
 use termion::{event::Key, input::MouseTerminal, raw::IntoRawMode, screen::AlternateScreen};
 use tui::{
@@ -10,13 +9,16 @@ use tui::{
     style::{Color, Modifier, Style},
     text::{Span, Spans, Text},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
-    Frame, Terminal,
+    Frame,
+    Terminal,
 };
 use unicode_width::UnicodeWidthStr;
 
-use atuin_client::database::Database;
-use atuin_client::history::History;
-use atuin_client::settings::{SearchMode, Settings};
+use atuin_client::{
+    database::Database,
+    history::History,
+    settings::{SearchMode, Settings},
+};
 
 use crate::command::event::{Event, Events};
 
@@ -36,8 +38,7 @@ impl State {
         self.results
             .iter()
             .map(|h| {
-                let duration =
-                    Duration::from_millis(std::cmp::max(h.duration, 0) as u64 / 1_000_000);
+                let duration = Duration::from_millis(std::cmp::max(h.duration, 0) as u64 / 1_000_000);
                 let duration = humantime::format_duration(duration).to_string();
                 let duration: Vec<&str> = duration.split(' ').collect();
 
@@ -48,10 +49,9 @@ impl State {
                 // would fail.
                 // If the timestamp would otherwise be in the future, display
                 // the time ago as 0.
-                let ago = humantime::format_duration(
-                    ago.to_std().unwrap_or_else(|_| Duration::new(0, 0)),
-                )
-                .to_string();
+                let ago =
+                    humantime::format_duration(ago.to_std().unwrap_or_else(|_| Duration::new(0, 0)))
+                        .to_string();
                 let ago: Vec<&str> = ago.split(' ').collect();
 
                 (
@@ -96,7 +96,7 @@ impl State {
             .iter()
             .enumerate()
             .map(|(i, m)| {
-                let command = m.command.to_string().replace("\n", " ").replace("\t", " ");
+                let command = m.command.to_string().replace('\n', " ").replace('\t', " ");
 
                 let mut command = Span::raw(command);
 
@@ -110,13 +110,12 @@ impl State {
                     None => Span::raw("   "),
                     Some(selected) => match i.checked_sub(selected) {
                         None => Span::raw("   "),
-                        Some(diff) => {
+                        Some(diff) =>
                             if 0 < diff && diff < 10 {
                                 Span::raw(format!(" {} ", diff))
                             } else {
                                 Span::raw("   ")
-                            }
-                        }
+                            },
                     },
                 };
 
@@ -133,8 +132,7 @@ impl State {
 
                 if let Some(selected) = self.results_state.selected() {
                     if selected == i {
-                        command.style =
-                            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD);
+                        command.style = Style::default().fg(Color::Red).add_modifier(Modifier::BOLD);
                     }
                 }
 
@@ -197,7 +195,7 @@ async fn key_handler(
                     .get(i)
                     .map_or(app.input.clone(), |h| h.command.clone()),
             );
-        }
+        },
         Key::Alt(c) if ('1'..='9').contains(&c) => {
             let c = c.to_digit(10)? as usize;
             let i = app.results_state.selected()? + c;
@@ -207,15 +205,15 @@ async fn key_handler(
                     .get(i)
                     .map_or(app.input.clone(), |h| h.command.clone()),
             );
-        }
+        },
         Key::Char(c) => {
             app.input.push(c);
             query_results(app, search_mode, db).await.unwrap();
-        }
+        },
         Key::Backspace => {
             app.input.pop();
             query_results(app, search_mode, db).await.unwrap();
-        }
+        },
         // \u{7f} is escape sequence for backspace
         Key::Alt('\u{7f}') => {
             let words: Vec<&str> = app.input.split(' ').collect();
@@ -228,38 +226,36 @@ async fn key_handler(
                 app.input = words[0..(words.len() - 1)].join(" ");
             }
             query_results(app, search_mode, db).await.unwrap();
-        }
+        },
         Key::Ctrl('u') => {
             app.input = String::from("");
             query_results(app, search_mode, db).await.unwrap();
-        }
+        },
         Key::Down | Key::Ctrl('n') => {
             let i = match app.results_state.selected() {
-                Some(i) => {
+                Some(i) =>
                     if i == 0 {
                         0
                     } else {
                         i - 1
-                    }
-                }
+                    },
                 None => 0,
             };
             app.results_state.select(Some(i));
-        }
+        },
         Key::Up | Key::Ctrl('p') => {
             let i = match app.results_state.selected() {
-                Some(i) => {
+                Some(i) =>
                     if i >= app.results.len() - 1 {
                         app.results.len() - 1
                     } else {
                         i + 1
-                    }
-                }
+                    },
                 None => 0,
             };
             app.results_state.select(Some(i));
-        }
-        _ => {}
+        },
+        _ => {},
     };
 
     None
@@ -352,8 +348,8 @@ async fn select_history(
     let events = Events::new();
 
     let mut app = State {
-        input: query.join(" "),
-        results: Vec::new(),
+        input:         query.join(" "),
+        results:       Vec::new(),
         results_state: ListState::default(),
     };
 
