@@ -34,14 +34,17 @@ impl Settings {
 
         // create the config file if it does not exist
         let mut config_builder = Config::builder()
-            .set_default("host", "127.0.0.1")? 
+            .set_default("host", "127.0.0.1")?
             .set_default("port", 8888)?
             .set_default("open_registration", false)?
             .set_default("db_uri", "default_uri")?
             .add_source(Environment::with_prefix("atuin").separator("_"));
 
         config_builder = if config_file.exists() {
-            config_builder.add_source(ConfigFile::new(config_file.to_str().unwrap(), FileFormat::Toml))
+            config_builder.add_source(ConfigFile::new(
+                config_file.to_str().unwrap(),
+                FileFormat::Toml,
+            ))
         } else {
             let example_config = include_bytes!("../server.toml");
             let mut file = File::create(config_file)?;
@@ -52,6 +55,8 @@ impl Settings {
 
         let config = config_builder.build()?;
 
-        config.try_deserialize().map_err(|e| eyre!("failed to deserialize: {}", e))
+        config
+            .try_deserialize()
+            .map_err(|e| eyre!("failed to deserialize: {}", e))
     }
 }
