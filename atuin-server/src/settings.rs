@@ -2,12 +2,12 @@ use std::fs::{create_dir_all, File};
 use std::io::prelude::*;
 use std::path::PathBuf;
 
-use config::{Config, Environment, File as ConfigFile};
+use config::{Config, Environment, File as ConfigFile, FileFormat};
 use eyre::{eyre, Result};
 
 pub const HISTORY_PAGE_SIZE: i64 = 100;
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Settings {
     pub host: String,
     pub port: u16,
@@ -33,25 +33,25 @@ impl Settings {
         config_file.push("server.toml");
 
         // create the config file if it does not exist
+        let mut config_builder = Config::builder()
+            .set_default("host", "127.0.0.1")? 
+            .set_default("port", 8888)?
+            .set_default("open_registration", false)?
+            .set_default("db_uri", "default_uri")?
+            .add_source(Environment::with_prefix("atuin").separator("_"));
 
-        let mut s = Config::new();
-
-        if config_file.exists() {
-            s.merge(ConfigFile::with_name(config_file.to_str().unwrap()))?;
+        config_builder = if config_file.exists() {
+            config_builder.add_source(ConfigFile::new(config_file.to_str().unwrap(), FileFormat::Toml))
         } else {
             let example_config = include_bytes!("../server.toml");
             let mut file = File::create(config_file)?;
             file.write_all(example_config)?;
-        }
 
-        s.set_default("host", "127.0.0.1")?;
-        s.set_default("port", 8888)?;
-        s.set_default("open_registration", false)?;
-        s.set_default("db_uri", "default_uri")?;
+            config_builder
+        };
 
-        s.merge(Environment::with_prefix("atuin").separator("_"))?;
+        let config = config_builder.build()?;
 
-        s.try_into()
-            .map_err(|e| eyre!("failed to deserialize: {}", e))
+        config.try_deserialize().map_err(|e| eyre!("failed to deserialize: {}", e))
     }
 }
