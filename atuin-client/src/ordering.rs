@@ -4,7 +4,7 @@ use minspan::minspan;
 
 pub fn reorder_fuzzy(mode: SearchMode, query: &str, res: Vec<History>) -> Vec<History> {
     match mode {
-        SearchMode::Fuzzy => reorder(query, |x| &x.command, res),
+        SearchMode::Fuzzy | SearchMode::Fzf => reorder(query, |x| &x.command, res),
         _ => res,
     }
 }
@@ -17,6 +17,7 @@ where
     let mut r = res.clone();
     let qvec = &query.chars().collect();
     r.sort_by_cached_key(|h| {
+        // TODO for fzf search we should sum up scores for each matched term
         let (from, to) = match minspan::span(qvec, &(f(h).chars().collect())) {
             Some(x) => x,
             // this is a little unfortunate: when we are asked to match a query that is found nowhere,

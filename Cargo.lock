@@ -116,6 +116,7 @@ dependencies = [
  "minspan",
  "parse_duration",
  "rand 0.8.4",
+ "regex",
  "reqwest",
  "rmp-serde",
  "rust-crypto",

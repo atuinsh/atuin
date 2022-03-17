@@ -24,5 +24,5 @@
 # sync_address = "https://api.atuin.sh"
 
 ## which search mode to use
-## possible values: prefix, fulltext, fuzzy
+## possible values: prefix, fulltext, fuzzy, fzf
 # search_mode = "prefix"
