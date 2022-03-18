@@ -11,6 +11,7 @@
   <a href="https://crates.io/crates/atuin"><img src="https://img.shields.io/crates/v/atuin.svg?style=flat-square" /></a>
   <a href="https://crates.io/crates/atuin"><img src="https://img.shields.io/crates/d/atuin.svg?style=flat-square" /></a>
   <a href="https://github.com/ellie/atuin/blob/main/LICENSE"><img src="https://img.shields.io/crates/l/atuin.svg?style=flat-square" /></a>
+  <a href="https://discord.gg/Fq8bJSKPHh"><img src="https://img.shields.io/discord/954121165239115808" /></a>
 </p>
 
 <p align="center">
@@ -66,6 +67,10 @@ I wanted to. And I **really** don't want to.
 - zsh
 - bash
 - fish
+ 
+## Community
+
+Atuin has a community Discord, available [here](https://discord.gg/Fq8bJSKPHh)
 
 # Quickstart
   

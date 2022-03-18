@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::prelude::*;
 use chrono::Utc;
-use config::{Config, Environment, File as ConfigFile};
+use config::{Config, Environment, File as ConfigFile, FileFormat};
 use eyre::{eyre, Context, Result};
 use parse_duration::parse;
 
@@ -123,56 +123,62 @@ impl Settings {
 
         config_file.push("config.toml");
 
-        let mut s = Config::new();
-
         let db_path = data_dir.join("history.db");
         let key_path = data_dir.join("key");
         let session_path = data_dir.join("session");
 
-        s.set_default("db_path", db_path.to_str())?;
-        s.set_default("key_path", key_path.to_str())?;
-        s.set_default("session_path", session_path.to_str())?;
-        s.set_default("dialect", "us")?;
-        s.set_default("auto_sync", true)?;
-        s.set_default("sync_frequency", "1h")?;
-        s.set_default("sync_address", "https://api.atuin.sh")?;
-        s.set_default("search_mode", "prefix")?;
+        let mut config_builder = Config::builder()
+            .set_default("db_path", db_path.to_str())?
+            .set_default("key_path", key_path.to_str())?
+            .set_default("session_path", session_path.to_str())?
+            .set_default("dialect", "us")?
+            .set_default("auto_sync", true)?
+            .set_default("sync_frequency", "1h")?
+            .set_default("sync_address", "https://api.atuin.sh")?
+            .set_default("search_mode", "prefix")?
+            .set_default("session_token", "")?
+            .add_source(Environment::with_prefix("atuin").separator("_"));
 
-        if config_file.exists() {
-            s.merge(ConfigFile::with_name(config_file.to_str().unwrap()))
-                .wrap_err_with(|| format!("could not load config file {:?}", config_file))?;
+        config_builder = if config_file.exists() {
+            config_builder.add_source(ConfigFile::new(
+                config_file.to_str().unwrap(),
+                FileFormat::Toml,
+            ))
         } else {
             let example_config = include_bytes!("../config.toml");
             let mut file = File::create(config_file).wrap_err("could not create config file")?;
             file.write_all(example_config)
                 .wrap_err("could not write default config file")?;
-        }
 
-        s.merge(Environment::with_prefix("atuin").separator("_"))
-            .wrap_err("could not load environment")?;
+            config_builder
+        };
+
+        let config = config_builder.build()?;
+        let mut settings: Settings = config
+            .try_deserialize()
+            .map_err(|e| eyre!("failed to deserialize: {}", e))?;
 
         // all paths should be expanded
-        let db_path = s.get_str("db_path")?;
-        let db_path = shellexpand::full(db_path.as_str())?;
-        s.set("db_path", db_path.to_string())?;
+        let db_path = settings.db_path;
+        let db_path = shellexpand::full(&db_path)?;
+        settings.db_path = db_path.to_string();
 
-        let key_path = s.get_str("key_path")?;
-        let key_path = shellexpand::full(key_path.as_str())?;
-        s.set("key_path", key_path.to_string())?;
+        let key_path = settings.key_path;
+        let key_path = shellexpand::full(&key_path)?;
+        settings.key_path = key_path.to_string();
 
-        let session_path = s.get_str("session_path")?;
-        let session_path = shellexpand::full(session_path.as_str())?;
-        s.set("session_path", session_path.to_string())?;
+        let session_path = settings.session_path;
+        let session_path = shellexpand::full(&session_path)?;
+        settings.session_path = session_path.to_string();
 
         // Finally, set the auth token
         if Path::new(session_path.to_string().as_str()).exists() {
             let token = std::fs::read_to_string(session_path.to_string())?;
-            s.set("session_token", token.trim())?;
+            settings.session_token = token.trim().to_string();
         } else {
-            s.set("session_token", "not logged in")?;
+            settings.session_token = String::from("not logged in");
         }
 
-        s.try_into()
-            .map_err(|e| eyre!("failed to deserialize: {}", e))
+        Ok(settings)
     }
 }
