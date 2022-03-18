@@ -389,29 +389,34 @@ mod test {
     use super::*;
     use std::time::{Duration, Instant};
 
-    macro_rules! assert_search_eq {
-        ($db:expr, $mode:expr, $query:expr, $expected:expr) => {
-            let results = $db.search(None, $mode, $query).await.unwrap();
-            assert_eq!(
-                results.len(),
-                $expected,
-                "query \"{}\", commands: {:?}",
-                $query,
-                results.iter().map(|a| &a.command).collect::<Vec<&String>>()
-            );
-        };
-        ($db:expr, $mode:expr, $query:expr, $expected:expr, $commands:expr) => {
-            let results = $db.search(None, $mode, $query).await.unwrap();
-            let commands: Vec<&String> = results.iter().map(|a| &a.command).collect();
-            assert_eq!(
-                results.len(),
-                $expected,
-                "query \"{}\", commands: {:?}",
-                $query,
-                commands
-            );
-            assert_eq!(commands, $commands);
-        };
+    async fn assert_search_eq<'a>(
+        db: &impl Database,
+        mode: SearchMode,
+        query: &str,
+        expected: usize,
+    ) -> Result<Vec<History>> {
+        let results = db.search(None, mode, query).await?;
+        assert_eq!(
+            results.len(),
+            expected,
+            "query \"{}\", commands: {:?}",
+            query,
+            results.iter().map(|a| &a.command).collect::<Vec<&String>>()
+        );
+        Ok(results)
+    }
+
+    async fn assert_search_commands(
+        db: &impl Database,
+        mode: SearchMode,
+        query: &str,
+        expected_commands: Vec<&str>,
+    ) {
+        let results = assert_search_eq(db, mode, query, expected_commands.len())
+            .await
+            .unwrap();
+        let commands: Vec<&str> = results.iter().map(|a| a.command.as_str()).collect();
+        assert_eq!(commands, expected_commands);
     }
 
     async fn new_history_item(db: &mut impl Database, cmd: &str) -> Result<()> {
@@ -432,9 +437,15 @@ mod test {
         let mut db = Sqlite::new("sqlite::memory:").await.unwrap();
         new_history_item(&mut db, "ls /home/ellie").await.unwrap();
 
-        assert_search_eq!(db, SearchMode::Prefix, "ls", 1);
-        assert_search_eq!(db, SearchMode::Prefix, "/home", 0);
-        assert_search_eq!(db, SearchMode::Prefix, "ls  ", 0);
+        assert_search_eq(&db, SearchMode::Prefix, "ls", 1)
+            .await
+            .unwrap();
+        assert_search_eq(&db, SearchMode::Prefix, "/home", 0)
+            .await
+            .unwrap();
+        assert_search_eq(&db, SearchMode::Prefix, "ls  ", 0)
+            .await
+            .unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -442,9 +453,15 @@ mod test {
         let mut db = Sqlite::new("sqlite::memory:").await.unwrap();
         new_history_item(&mut db, "ls /home/ellie").await.unwrap();
 
-        assert_search_eq!(db, SearchMode::FullText, "ls", 1);
-        assert_search_eq!(db, SearchMode::FullText, "/home", 1);
-        assert_search_eq!(db, SearchMode::FullText, "ls  ", 0);
+        assert_search_eq(&db, SearchMode::FullText, "ls", 1)
+            .await
+            .unwrap();
+        assert_search_eq(&db, SearchMode::FullText, "/home", 1)
+            .await
+            .unwrap();
+        assert_search_eq(&db, SearchMode::FullText, "ls  ", 0)
+            .await
+            .unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -457,32 +474,72 @@ mod test {
             .await
             .unwrap();
 
-        assert_search_eq!(db, SearchMode::Fuzzy, "ls /", 3);
-        assert_search_eq!(db, SearchMode::Fuzzy, "ls/", 2);
-        assert_search_eq!(db, SearchMode::Fuzzy, "l/h/", 2);
-        assert_search_eq!(db, SearchMode::Fuzzy, "/h/e", 3);
-        assert_search_eq!(db, SearchMode::Fuzzy, "/hmoe/", 0);
-        assert_search_eq!(db, SearchMode::Fuzzy, "ellie/home", 0);
-        assert_search_eq!(db, SearchMode::Fuzzy, "lsellie", 1);
-        assert_search_eq!(db, SearchMode::Fuzzy, " ", 4);
+        assert_search_eq(&db, SearchMode::Fuzzy, "ls /", 3)
+            .await
+            .unwrap();
+        assert_search_eq(&db, SearchMode::Fuzzy, "ls/", 2)
+            .await
+            .unwrap();
+        assert_search_eq(&db, SearchMode::Fuzzy, "l/h/", 2)
+            .await
+            .unwrap();
+        assert_search_eq(&db, SearchMode::Fuzzy, "/h/e", 3)
+            .await
+            .unwrap();
+        assert_search_eq(&db, SearchMode::Fuzzy, "/hmoe/", 0)
+            .await
+            .unwrap();
+        assert_search_eq(&db, SearchMode::Fuzzy, "ellie/home", 0)
+            .await
+            .unwrap();
+        assert_search_eq(&db, SearchMode::Fuzzy, "lsellie", 1)
+            .await
+            .unwrap();
+        assert_search_eq(&db, SearchMode::Fuzzy, " ", 4)
+            .await
+            .unwrap();
 
         // single term operators
-        assert_search_eq!(db, SearchMode::Fuzzy, "^ls", 2);
-        assert_search_eq!(db, SearchMode::Fuzzy, "'ls", 2);
-        assert_search_eq!(db, SearchMode::Fuzzy, "ellie$", 2);
-        assert_search_eq!(db, SearchMode::Fuzzy, "!^ls", 2);
-        assert_search_eq!(db, SearchMode::Fuzzy, "!ellie", 1);
-        assert_search_eq!(db, SearchMode::Fuzzy, "!ellie$", 2);
+        assert_search_eq(&db, SearchMode::Fuzzy, "^ls", 2)
+            .await
+            .unwrap();
+        assert_search_eq(&db, SearchMode::Fuzzy, "'ls", 2)
+            .await
+            .unwrap();
+        assert_search_eq(&db, SearchMode::Fuzzy, "ellie$", 2)
+            .await
+            .unwrap();
+        assert_search_eq(&db, SearchMode::Fuzzy, "!^ls", 2)
+            .await
+            .unwrap();
+        assert_search_eq(&db, SearchMode::Fuzzy, "!ellie", 1)
+            .await
+            .unwrap();
+        assert_search_eq(&db, SearchMode::Fuzzy, "!ellie$", 2)
+            .await
+            .unwrap();
 
         // multiple terms
-        assert_search_eq!(db, SearchMode::Fuzzy, "ls !ellie", 1);
-        assert_search_eq!(db, SearchMode::Fuzzy, "^ls !e$", 1);
-        assert_search_eq!(db, SearchMode::Fuzzy, "home !^ls", 2);
-        assert_search_eq!(db, SearchMode::Fuzzy, "'frank | 'rustup", 2);
-        assert_search_eq!(db, SearchMode::Fuzzy, "'frank | 'rustup 'ls", 1);
+        assert_search_eq(&db, SearchMode::Fuzzy, "ls !ellie", 1)
+            .await
+            .unwrap();
+        assert_search_eq(&db, SearchMode::Fuzzy, "^ls !e$", 1)
+            .await
+            .unwrap();
+        assert_search_eq(&db, SearchMode::Fuzzy, "home !^ls", 2)
+            .await
+            .unwrap();
+        assert_search_eq(&db, SearchMode::Fuzzy, "'frank | 'rustup", 2)
+            .await
+            .unwrap();
+        assert_search_eq(&db, SearchMode::Fuzzy, "'frank | 'rustup 'ls", 1)
+            .await
+            .unwrap();
 
         // case matching
-        assert_search_eq!(db, SearchMode::Fuzzy, "Ellie", 1);
+        assert_search_eq(&db, SearchMode::Fuzzy, "Ellie", 1)
+            .await
+            .unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -494,10 +551,14 @@ mod test {
         new_history_item(&mut db, "corburl").await.unwrap();
 
         // if fuzzy reordering is on, it should come back in a more sensible order
-        assert_search_eq!(db, SearchMode::Fuzzy, "curl", 2, vec!["curl", "corburl"]);
+        assert_search_commands(&db, SearchMode::Fuzzy, "curl", vec!["curl", "corburl"]).await;
 
-        assert_search_eq!(db, SearchMode::Fuzzy, "xxxx", 0);
-        assert_search_eq!(db, SearchMode::Fuzzy, "", 2);
+        assert_search_eq(&db, SearchMode::Fuzzy, "xxxx", 0)
+            .await
+            .unwrap();
+        assert_search_eq(&db, SearchMode::Fuzzy, "", 2)
+            .await
+            .unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]
