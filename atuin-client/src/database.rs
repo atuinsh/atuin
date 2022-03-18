@@ -293,9 +293,8 @@ impl Database for Sqlite {
             SearchMode::Fuzzy => {
                 let split_regex = Regex::new(r" +").unwrap();
                 let terms: Vec<&str> = split_regex.split(query.as_str()).collect();
-                let num_terms = terms.len();
-                let mut query_sql = "".to_string();
-                let mut query_params = std::vec::Vec::with_capacity(num_terms);
+                let mut query_sql = std::string::String::new();
+                let mut query_params = Vec::with_capacity(terms.len());
                 let mut was_or = false;
                 for (i, query_part) in terms.into_iter().enumerate() {
                     // TODO smart case mode could be made configurable like in fzf
@@ -304,10 +303,9 @@ impl Database for Sqlite {
                     } else {
                         ("like", '%')
                     };
-                    let (is_inverse, query_part) = if query_part.starts_with('!') {
-                        (true, query_part.strip_prefix('!').unwrap())
-                    } else {
-                        (false, query_part)
+                    let (is_inverse, query_part) = match query_part.strip_prefix('!') {
+                        Some(stripped) => (true, stripped),
+                        None => (false, query_part),
                     };
                     match query_part {
                         "|" => {
@@ -316,29 +314,24 @@ impl Database for Sqlite {
                                 was_or = true;
                                 continue;
                             } else {
-                                query_params.push(format!("{glob}|{glob}", glob = glob));
+                                query_params.push(format!("{glob}|{glob}"));
                             }
                         }
                         exact_prefix if query_part.starts_with('^') => query_params.push(format!(
                             "{term}{glob}",
-                            term = exact_prefix.strip_prefix('^').unwrap(),
-                            glob = glob
+                            term = exact_prefix.strip_prefix('^').unwrap()
                         )),
                         exact_suffix if query_part.ends_with('$') => query_params.push(format!(
                             "{glob}{term}",
-                            term = exact_suffix.strip_suffix('$').unwrap(),
-                            glob = glob
+                            term = exact_suffix.strip_suffix('$').unwrap()
                         )),
                         exact if query_part.starts_with('\'') => query_params.push(format!(
                             "{glob}{term}{glob}",
-                            term = exact.strip_prefix('\'').unwrap(),
-                            glob = glob
+                            term = exact.strip_prefix('\'').unwrap()
                         )),
-                        exact if is_inverse => query_params.push(format!(
-                            "{glob}{term}{glob}",
-                            term = exact,
-                            glob = glob
-                        )),
+                        exact if is_inverse => {
+                            query_params.push(format!("{glob}{term}{glob}", term = exact))
+                        }
                         _ => {
                             query_params.push(query_part.split("").join(glob.to_string().as_str()))
                         }
