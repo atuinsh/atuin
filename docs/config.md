@@ -96,15 +96,37 @@ key = "~/.atuin-session"
 
 ### `search_mode`
 
-Which search mode to use. Atuin supports "prefix", full text, "fuzzy" and "fzf"
-search modes. The prefix searches for "query\*", fulltext "\*query\*", and
-fuzzy "\*q\*u\*e\*r\*y\*". "fzf" uses the
-[fzf search syntax](https://github.com/junegunn/fzf#search-syntax).
+Which search mode to use. Atuin supports "prefix", full text and "fuzzy" search
+modes. The prefix searches for "query\*", fulltext "\*query\*", and fuzzy applies
+the search syntax [described below](#fuzzy-search-syntax).
 
 Defaults to "prefix"
 
 ```
 search_mode = "fulltext"
+```
+
+#### `fuzzy` search syntax
+
+The "fuzzy" search syntax is based on the
+[fzf search syntax](https://github.com/junegunn/fzf#search-syntax).
+
+| Token     | Match type                 | Description                          |
+| --------- | -------------------------- | ------------------------------------ |
+| `sbtrkt`  | fuzzy-match                | Items that match `sbtrkt`            |
+| `'wild`   | exact-match (quoted)       | Items that include `wild`            |
+| `^music`  | prefix-exact-match         | Items that start with `music`        |
+| `.mp3$`   | suffix-exact-match         | Items that end with `.mp3`           |
+| `!fire`   | inverse-exact-match        | Items that do not include `fire`     |
+| `!^music` | inverse-prefix-exact-match | Items that do not start with `music` |
+| `!.mp3$`  | inverse-suffix-exact-match | Items that do not end with `.mp3`    |
+
+A single bar character term acts as an OR operator. For example, the following
+query matches entries that start with `core` and end with either `go`, `rb`,
+or `py`.
+
+```
+^core go$ | rb$ | py$
 ```
 
 ## Server config

@@ -4,7 +4,7 @@ use minspan::minspan;
 
 pub fn reorder_fuzzy(mode: SearchMode, query: &str, res: Vec<History>) -> Vec<History> {
     match mode {
-        SearchMode::Fuzzy | SearchMode::Fzf => reorder(query, |x| &x.command, res),
+        SearchMode::Fuzzy => reorder(query, |x| &x.command, res),
         _ => res,
     }
 }

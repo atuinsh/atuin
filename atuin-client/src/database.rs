@@ -290,11 +290,7 @@ impl Database for Sqlite {
         let (query_sql, query_params) = match search_mode {
             SearchMode::Prefix => ("command like ?1".to_string(), vec![format!("{}%", query)]),
             SearchMode::FullText => ("command like ?1".to_string(), vec![format!("%{}%", query)]),
-            SearchMode::Fuzzy => (
-                "command like ?1".to_string(),
-                vec![query.split("").join("%")],
-            ),
-            SearchMode::Fzf => {
+            SearchMode::Fuzzy => {
                 let split_regex = Regex::new(r" +").unwrap();
                 let terms: Vec<&str> = split_regex.split(query.as_str()).collect();
                 let num_terms = terms.len();
@@ -463,17 +459,37 @@ mod test {
         let mut db = Sqlite::new("sqlite::memory:").await.unwrap();
         new_history_item(&mut db, "ls /home/ellie").await.unwrap();
         new_history_item(&mut db, "ls /home/frank").await.unwrap();
-        new_history_item(&mut db, "cd /home/ellie").await.unwrap();
+        new_history_item(&mut db, "cd /home/Ellie").await.unwrap();
         new_history_item(&mut db, "/home/ellie/.bin/rustup")
             .await
             .unwrap();
 
-        assert_search_eq!(db, SearchMode::Fuzzy, "ls /", 2);
+        assert_search_eq!(db, SearchMode::Fuzzy, "ls /", 3);
+        assert_search_eq!(db, SearchMode::Fuzzy, "ls/", 2);
         assert_search_eq!(db, SearchMode::Fuzzy, "l/h/", 2);
         assert_search_eq!(db, SearchMode::Fuzzy, "/h/e", 3);
+        assert_search_eq!(db, SearchMode::Fuzzy, "/hmoe/", 0);
         assert_search_eq!(db, SearchMode::Fuzzy, "ellie/home", 0);
         assert_search_eq!(db, SearchMode::Fuzzy, "lsellie", 1);
-        assert_search_eq!(db, SearchMode::Fuzzy, " ", 3);
+        assert_search_eq!(db, SearchMode::Fuzzy, " ", 4);
+
+        // single term operators
+        assert_search_eq!(db, SearchMode::Fuzzy, "^ls", 2);
+        assert_search_eq!(db, SearchMode::Fuzzy, "'ls", 2);
+        assert_search_eq!(db, SearchMode::Fuzzy, "ellie$", 2);
+        assert_search_eq!(db, SearchMode::Fuzzy, "!^ls", 2);
+        assert_search_eq!(db, SearchMode::Fuzzy, "!ellie", 1);
+        assert_search_eq!(db, SearchMode::Fuzzy, "!ellie$", 2);
+
+        // multiple terms
+        assert_search_eq!(db, SearchMode::Fuzzy, "ls !ellie", 1);
+        assert_search_eq!(db, SearchMode::Fuzzy, "^ls !e$", 1);
+        assert_search_eq!(db, SearchMode::Fuzzy, "home !^ls", 2);
+        assert_search_eq!(db, SearchMode::Fuzzy, "'frank | 'rustup", 2);
+        assert_search_eq!(db, SearchMode::Fuzzy, "'frank | 'rustup 'ls", 1);
+
+        // case matching
+        assert_search_eq!(db, SearchMode::Fuzzy, "Ellie", 1);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -489,50 +505,6 @@ mod test {
 
         assert_search_eq!(db, SearchMode::Fuzzy, "xxxx", 0);
         assert_search_eq!(db, SearchMode::Fuzzy, "", 2);
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_search_fzf() {
-        let mut db = Sqlite::new("sqlite::memory:").await.unwrap();
-        new_history_item(&mut db, "ls /home/ellie").await.unwrap();
-        new_history_item(&mut db, "ls /home/frank").await.unwrap();
-        new_history_item(&mut db, "cd /home/Ellie").await.unwrap();
-        new_history_item(&mut db, "/home/ellie/.bin/rustUp")
-            .await
-            .unwrap();
-
-        assert_search_eq!(db, SearchMode::Fzf, "ls /", 3);
-        assert_search_eq!(db, SearchMode::Fzf, "^ls /", 2);
-        assert_search_eq!(db, SearchMode::Fzf, "ls !ellie", 1);
-        assert_search_eq!(db, SearchMode::Fzf, "^ls !e$", 1);
-        assert_search_eq!(db, SearchMode::Fzf, "home !^ls", 2);
-        assert_search_eq!(db, SearchMode::Fzf, "'frank | 'rustup", 2);
-        assert_search_eq!(db, SearchMode::Fzf, "'frank | 'rustup 'ls", 1);
-        assert_search_eq!(db, SearchMode::Fzf, "Ellie", 1);
-        assert_search_eq!(db, SearchMode::Fzf, "'/rustUp '.bin", 1);
-        assert_search_eq!(db, SearchMode::Fzf, "l/h/", 2);
-        assert_search_eq!(db, SearchMode::Fzf, "^l/h/", 0);
-        assert_search_eq!(db, SearchMode::Fzf, "l/h/$", 0);
-        assert_search_eq!(db, SearchMode::Fzf, "/h/e", 3);
-        assert_search_eq!(db, SearchMode::Fzf, "/hmoe/", 0);
-        assert_search_eq!(db, SearchMode::Fzf, "ellie/home", 0);
-        assert_search_eq!(db, SearchMode::Fzf, "lsellie", 1);
-        assert_search_eq!(db, SearchMode::Fzf, " ", 4);
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_search_reordered_fzf() {
-        let mut db = Sqlite::new("sqlite::memory:").await.unwrap();
-        // test ordering of results: we should choose the first, even though it happened longer ago.
-
-        new_history_item(&mut db, "curl").await.unwrap();
-        new_history_item(&mut db, "corburl").await.unwrap();
-
-        // if fuzzy reordering is on, it should come back in a more sensible order
-        assert_search_eq!(db, SearchMode::Fzf, "curl", 2, vec!["curl", "corburl"]);
-
-        assert_search_eq!(db, SearchMode::Fzf, "xxxx", 0);
-        assert_search_eq!(db, SearchMode::Fzf, "", 2);
     }
 
     #[tokio::test(flavor = "multi_thread")]
