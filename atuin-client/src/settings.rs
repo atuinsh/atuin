@@ -41,9 +41,22 @@ impl From<Dialect> for chrono_english::Dialect {
     }
 }
 
+#[derive(Clone, Debug, Deserialize, Copy)]
+pub enum Style {
+    #[serde(rename = "auto")]
+    Auto,
+
+    #[serde(rename = "full")]
+    Full,
+
+    #[serde(rename = "compact")]
+    Compact,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct Settings {
     pub dialect: Dialect,
+    pub style: Style,
     pub auto_sync: bool,
     pub sync_address: String,
     pub sync_frequency: String,
@@ -134,6 +147,7 @@ impl Settings {
             .set_default("sync_address", "https://api.atuin.sh")?
             .set_default("search_mode", "prefix")?
             .set_default("session_token", "")?
+            .set_default("style", "auto")?
             .add_source(Environment::with_prefix("atuin").separator("_"));
 
         config_builder = if config_file.exists() {
