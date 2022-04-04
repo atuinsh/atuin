@@ -3,6 +3,7 @@ name = "atuin"
 version = "0.8.0"
 authors = ["Ellie Huxtable <ellie@elliehuxtable.com>"]
 edition = "2018"
+rust-version = "1.59"
 license = "MIT"
 description = "atuin - magical shell history"
 homepage = "https://atuin.sh"
