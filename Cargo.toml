@@ -38,7 +38,6 @@ log = "0.4"
 pretty_env_logger = "0.4"
 chrono = { version = "0.4", features = ["serde"] }
 eyre = "0.6"
-structopt = "0.3"
 directories = "3"
 indicatif = "0.16.2"
 serde_derive = "1.0.125"
@@ -56,6 +55,8 @@ base64 = "0.13.0"
 humantime = "2.1.0"
 tabwriter = "1.2.1"
 crossbeam-channel = "0.5.1"
+clap = { version = "3.1.8", features = ["derive"] }
+clap_complete = "3.1.1"
 
 [profile.release]
 lto = "fat"

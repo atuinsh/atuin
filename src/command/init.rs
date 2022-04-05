@@ -1,12 +1,12 @@
-use structopt::StructOpt;
+use clap::Parser;
 
-#[derive(StructOpt)]
+#[derive(Parser)]
 pub enum Cmd {
-    #[structopt(about = "zsh setup")]
+    /// Zsh setup
     Zsh,
-    #[structopt(about = "bash setup")]
+    /// Bash setup
     Bash,
-    #[structopt(about = "fish setup")]
+    /// Fish setup
     Fish,
 }
 

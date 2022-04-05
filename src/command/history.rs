@@ -2,8 +2,8 @@ use std::env;
 use std::io::Write;
 use std::time::Duration;
 
+use clap::Subcommand;
 use eyre::Result;
-use structopt::StructOpt;
 use tabwriter::TabWriter;
 
 use atuin_client::database::Database;
@@ -11,51 +11,42 @@ use atuin_client::history::History;
 use atuin_client::settings::Settings;
 use atuin_client::sync;
 
-#[derive(StructOpt)]
+#[derive(Subcommand)]
+#[clap(infer_subcommands = true)]
 pub enum Cmd {
-    #[structopt(
-        about="begins a new command in the history",
-        aliases=&["s", "st", "sta", "star"],
-    )]
+    /// Begins a new command in the history
     Start { command: Vec<String> },
 
-    #[structopt(
-        about="finishes a new command in the history (adds time, exit code)",
-        aliases=&["e", "en"],
-    )]
+    /// Finishes a new command in the history (adds time, exit code)
     End {
         id: String,
-        #[structopt(long, short)]
+        #[clap(long, short)]
         exit: i64,
     },
 
-    #[structopt(
-        about="list all items in history",
-        aliases=&["l", "li", "lis"],
-    )]
+    /// List all items in history
     List {
-        #[structopt(long, short)]
+        #[clap(long, short)]
         cwd: bool,
 
-        #[structopt(long, short)]
+        #[clap(long, short)]
         session: bool,
 
-        #[structopt(long, short)]
+        #[clap(long)]
         human: bool,
 
-        #[structopt(long, help = "Show only the text of the command")]
+        /// Show only the text of the command
+        #[clap(long)]
         cmd_only: bool,
     },
 
-    #[structopt(
-        about="get the last command ran",
-        aliases=&["la", "las"],
-    )]
+    /// Get the last command ran
     Last {
-        #[structopt(long, short)]
+        #[clap(long)]
         human: bool,
 
-        #[structopt(long, help = "Show only the text of the command")]
+        /// Show only the text of the command
+        #[clap(long)]
         cmd_only: bool,
     },
 }

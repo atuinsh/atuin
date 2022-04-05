@@ -1,8 +1,10 @@
 use std::path::PathBuf;
 
+use clap::CommandFactory;
+use clap::Subcommand;
+use clap_complete::Shell;
+use clap_complete::{generate, generate_to};
 use eyre::{Result, WrapErr};
-use structopt::clap::Shell;
-use structopt::StructOpt;
 
 use atuin_client::database::Sqlite;
 use atuin_client::settings::Settings as ClientSettings;
@@ -21,86 +23,101 @@ mod server;
 mod stats;
 mod sync;
 
-#[derive(StructOpt)]
+#[derive(Subcommand)]
+#[clap(infer_subcommands = true)]
 pub enum AtuinCmd {
-    #[structopt(
-        about="manipulate shell history",
-        aliases=&["h", "hi", "his", "hist", "histo", "histor"],
-    )]
+    /// Manipulate shell history
+    #[clap(subcommand)]
     History(history::Cmd),
 
-    #[structopt(about = "import shell history from file")]
+    /// Import shell history from file
+    #[clap(subcommand)]
     Import(import::Cmd),
 
-    #[structopt(about = "start an atuin server")]
+    /// Start an atuin server
+    #[clap(subcommand)]
     Server(server::Cmd),
 
-    #[structopt(about = "calculate statistics for your history")]
+    /// Calculate statistics for your history
+    #[clap(subcommand)]
     Stats(stats::Cmd),
 
-    #[structopt(about = "output shell setup")]
+    /// Output shell setup
+    #[clap(subcommand)]
     Init(init::Cmd),
 
-    #[structopt(about = "generates a UUID")]
+    /// Generate a UUID
     Uuid,
 
-    #[structopt(about = "interactive history search")]
+    /// Interactive history search
     Search {
-        #[structopt(long, short, help = "filter search result by directory")]
+        /// Filter search result by directory
+        #[clap(long, short)]
         cwd: Option<String>,
 
-        #[structopt(long = "exclude-cwd", help = "exclude directory from results")]
+        /// Exclude directory from results
+        #[clap(long = "exclude-cwd")]
         exclude_cwd: Option<String>,
 
-        #[structopt(long, short, help = "filter search result by exit code")]
+        /// Filter search result by exit code
+        #[clap(long, short)]
         exit: Option<i64>,
 
-        #[structopt(long = "exclude-exit", help = "exclude results with this exit code")]
+        /// Exclude results with this exit code
+        #[clap(long = "exclude-exit")]
         exclude_exit: Option<i64>,
 
-        #[structopt(long, short, help = "only include results added before this date")]
+        /// Only include results added before this date
+        #[clap(long, short)]
         before: Option<String>,
 
-        #[structopt(long, help = "only include results after this date")]
+        /// Only include results after this date
+        #[clap(long)]
         after: Option<String>,
 
-        #[structopt(long, short, help = "open interactive search UI")]
+        /// Open interactive search UI
+        #[clap(long, short)]
         interactive: bool,
 
-        #[structopt(long, short, help = "use human-readable formatting for time")]
+        /// Use human-readable formatting for time
+        #[clap(long)]
         human: bool,
 
         query: Vec<String>,
 
-        #[structopt(long, help = "Show only the text of the command")]
+        /// Show only the text of the command
+        #[clap(long)]
         cmd_only: bool,
     },
 
-    #[structopt(about = "sync with the configured server")]
+    /// Sync with the configured server
     Sync {
-        #[structopt(long, short, help = "force re-download everything")]
+        /// Force re-download everything
+        #[clap(long, short)]
         force: bool,
     },
 
-    #[structopt(about = "login to the configured server")]
+    /// Login to the configured server
     Login(login::Cmd),
 
-    #[structopt(about = "log out")]
+    /// Log out
     Logout,
 
-    #[structopt(about = "register with the configured server")]
+    /// Register with the configured server
     Register(register::Cmd),
 
-    #[structopt(about = "print the encryption key for transfer to another machine")]
+    /// Print the encryption key for transfer to another machine
     Key,
 
-    #[structopt(about = "generate shell completions")]
+    /// Generate shell completions
     GenCompletions {
-        #[structopt(long, short, help = "set the shell for generating completions")]
+        /// Set the shell for generating completions
+        #[clap(long, short)]
         shell: Shell,
 
-        #[structopt(long, short, help = "set the output directory")]
-        out_dir: String,
+        /// Set the output directory
+        #[clap(long, short)]
+        out_dir: Option<String>,
     },
 }
 
@@ -172,11 +189,22 @@ impl AtuinCmd {
                 Ok(())
             }
             Self::GenCompletions { shell, out_dir } => {
-                AtuinCmd::clap().gen_completions(env!("CARGO_PKG_NAME"), shell, &out_dir);
-                println!(
-                    "Shell completion for {} is generated in {:?}",
-                    shell, out_dir
-                );
+                let mut cli = crate::Atuin::command();
+
+                match out_dir {
+                    Some(out_dir) => {
+                        generate_to(shell, &mut cli, env!("CARGO_PKG_NAME"), &out_dir)?;
+                    }
+                    None => {
+                        generate(
+                            shell,
+                            &mut cli,
+                            env!("CARGO_PKG_NAME"),
+                            &mut std::io::stdout(),
+                        );
+                    }
+                }
+
                 Ok(())
             }
         }

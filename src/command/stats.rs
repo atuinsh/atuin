@@ -4,26 +4,21 @@ use chrono::prelude::*;
 use chrono::Duration;
 use chrono_english::parse_date_string;
 
+use clap::Parser;
 use cli_table::{format::Justify, print_stdout, Cell, Style, Table};
 use eyre::{eyre, Result};
-use structopt::StructOpt;
 
 use atuin_client::database::Database;
 use atuin_client::history::History;
 use atuin_client::settings::Settings;
 
-#[derive(StructOpt)]
+#[derive(Parser)]
+#[clap(infer_subcommands = true)]
 pub enum Cmd {
-    #[structopt(
-        about="compute statistics for all of time",
-        aliases=&["d", "da"],
-    )]
+    /// Compute statistics for all of time
     All,
 
-    #[structopt(
-        about="compute statistics for a single day",
-        aliases=&["d", "da"],
-    )]
+    /// Compute statistics for a single day
     Day { words: Vec<String> },
 }
 

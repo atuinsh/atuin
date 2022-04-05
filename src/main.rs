@@ -1,8 +1,9 @@
 #![warn(clippy::pedantic, clippy::nursery)]
 #![allow(clippy::use_self)] // not 100% reliable
 
+use clap::AppSettings;
+use clap::Parser;
 use eyre::Result;
-use structopt::{clap::AppSettings, StructOpt};
 
 #[macro_use]
 extern crate log;
@@ -13,15 +14,15 @@ mod command;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-#[derive(StructOpt)]
-#[structopt(
+/// Magical shell history
+#[derive(Parser)]
+#[clap(
     author = "Ellie Huxtable <e@elm.sh>",
     version = VERSION,
-    about = "Magical shell history",
-    global_settings(&[AppSettings::ColoredHelp, AppSettings::DeriveDisplayOrder])
+    global_setting(AppSettings::DeriveDisplayOrder),
 )]
 struct Atuin {
-    #[structopt(subcommand)]
+    #[clap(subcommand)]
     atuin: AtuinCmd,
 }
 
@@ -35,5 +36,5 @@ impl Atuin {
 async fn main() -> Result<()> {
     pretty_env_logger::init();
 
-    Atuin::from_args().run().await
+    Atuin::parse().run().await
 }

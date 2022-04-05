@@ -1,20 +1,20 @@
+use clap::Parser;
 use eyre::Result;
-use structopt::StructOpt;
 
 use atuin_server::launch;
 use atuin_server::settings::Settings;
 
-#[derive(StructOpt)]
+#[derive(Parser)]
+#[clap(infer_subcommands = true)]
 pub enum Cmd {
-    #[structopt(
-        about="starts the server",
-        aliases=&["s", "st", "sta", "star"],
-    )]
+    /// Start the server
     Start {
-        #[structopt(help = "specify the host address to bind", long, short)]
+        /// The host address to bind
+        #[clap(long, short)]
         host: Option<String>,
 
-        #[structopt(help = "specify the port to bind", long, short)]
+        /// The port to bind
+        #[clap(long, short)]
         port: Option<u16>,
     },
 }
