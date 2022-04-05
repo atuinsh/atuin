@@ -86,6 +86,7 @@ impl State {
         &mut self,
         f: &mut tui::Frame<T>,
         r: tui::layout::Rect,
+        b: tui::widgets::Block,
     ) {
         let durations = self.durations();
         let max_length = durations.iter().fold(0, |largest, i| {
@@ -153,7 +154,7 @@ impl State {
             .collect();
 
         let results = List::new(results)
-            .block(Block::default().borders(Borders::ALL).title("History"))
+            .block(b)
             .start_corner(Corner::BottomLeft)
             .highlight_symbol(">> ");
 
@@ -321,14 +322,82 @@ fn draw<T: Backend>(f: &mut Frame<'_, T>, history_count: i64, app: &mut State) {
 
     f.render_widget(title, top_left_chunks[0]);
     f.render_widget(help, top_left_chunks[1]);
-
-    app.render_results(f, chunks[1]);
     f.render_widget(stats, top_right_chunks[0]);
+
+    app.render_results(
+        f,
+        chunks[1],
+        Block::default().borders(Borders::ALL).title("History"),
+    );
     f.render_widget(input, chunks[2]);
 
     f.set_cursor(
         // Put cursor past the end of the input text
         chunks[2].x + app.input.width() as u16 + 1,
+        // Move one line down, from the border to the input line
+        chunks[2].y + 1,
+    );
+}
+
+#[allow(clippy::cast_possible_truncation)]
+fn draw_compact<T: Backend>(f: &mut Frame<'_, T>, history_count: i64, app: &mut State) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .margin(0)
+        .horizontal_margin(1)
+        .constraints(
+            [
+                Constraint::Length(1),
+                Constraint::Min(1),
+                Constraint::Length(1),
+            ]
+            .as_ref(),
+        )
+        .split(f.size());
+
+    let header_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints(
+            [
+                Constraint::Ratio(1, 3),
+                Constraint::Ratio(1, 3),
+                Constraint::Ratio(1, 3),
+            ]
+            .as_ref(),
+        )
+        .split(chunks[0]);
+
+    let title = Paragraph::new(Text::from(Span::styled(
+        format!("Atuin v{}", VERSION),
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let help = Paragraph::new(Text::from(Spans::from(vec![
+        Span::styled("Esc", Style::default().add_modifier(Modifier::BOLD)),
+        Span::raw(" to exit"),
+    ])))
+    .style(Style::default().fg(Color::DarkGray))
+    .alignment(Alignment::Center);
+
+    let stats = Paragraph::new(Text::from(Span::raw(format!(
+        "history count: {}",
+        history_count,
+    ))))
+    .style(Style::default().fg(Color::DarkGray))
+    .alignment(Alignment::Right);
+
+    let input = Paragraph::new(format!("] {}", app.input.clone())).block(Block::default());
+
+    f.render_widget(title, header_chunks[0]);
+    f.render_widget(help, header_chunks[1]);
+    f.render_widget(stats, header_chunks[2]);
+
+    app.render_results(f, chunks[1], Block::default());
+    f.render_widget(input, chunks[2]);
+
+    f.set_cursor(
+        // Put cursor past the end of the input text
+        chunks[2].x + app.input.width() as u16 + 2,
         // Move one line down, from the border to the input line
         chunks[2].y + 1,
     );
@@ -341,6 +410,7 @@ fn draw<T: Backend>(f: &mut Frame<'_, T>, history_count: i64, app: &mut State) {
 async fn select_history(
     query: &[String],
     search_mode: SearchMode,
+    style: atuin_client::settings::Style,
     db: &mut (impl Database + Send + Sync),
 ) -> Result<String> {
     let stdout = stdout().into_raw_mode()?;
@@ -369,7 +439,18 @@ async fn select_history(
             }
         }
 
-        terminal.draw(|f| draw(f, history_count, &mut app))?;
+        let compact = match style {
+            atuin_client::settings::Style::Auto => {
+                terminal.size().map(|size| size.height < 14).unwrap_or(true)
+            }
+            atuin_client::settings::Style::Compact => true,
+            atuin_client::settings::Style::Full => false,
+        };
+        if compact {
+            terminal.draw(|f| draw_compact(f, history_count, &mut app))?;
+        } else {
+            terminal.draw(|f| draw(f, history_count, &mut app))?;
+        }
     }
 }
 
@@ -405,7 +486,7 @@ pub async fn run(
     };
 
     if interactive {
-        let item = select_history(query, settings.search_mode, db).await?;
+        let item = select_history(query, settings.search_mode, settings.style, db).await?;
         eprintln!("{}", item);
     } else {
         let results = db
