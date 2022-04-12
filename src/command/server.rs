@@ -20,7 +20,7 @@ pub enum Cmd {
 }
 
 impl Cmd {
-    pub async fn run(&self, settings: &Settings) -> Result<()> {
+    pub async fn run(&self, settings: Settings) -> Result<()> {
         match self {
             Self::Start { host, port } => {
                 let host = host

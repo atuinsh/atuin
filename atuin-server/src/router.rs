@@ -1,9 +1,12 @@
-use std::convert::Infallible;
-
+use async_trait::async_trait;
+use axum::{
+    extract::{FromRequest, RequestParts},
+    handler::Handler,
+    response::IntoResponse,
+    routing::{get, post},
+    Extension, Router,
+};
 use eyre::Result;
-use warp::{hyper::StatusCode, Filter};
-
-use atuin_common::api::SyncHistoryRequest;
 
 use super::{
     database::{Database, Postgres},
@@ -11,119 +14,57 @@ use super::{
 };
 use crate::{models::User, settings::Settings};
 
-fn with_settings(
-    settings: Settings,
-) -> impl Filter<Extract = (Settings,), Error = Infallible> + Clone {
-    warp::any().map(move || settings.clone())
-}
+#[async_trait]
+impl<B> FromRequest<B> for User
+where
+    B: Send,
+{
+    type Rejection = http::StatusCode;
 
-fn with_db(
-    db: impl Database + Clone + Send + Sync,
-) -> impl Filter<Extract = (impl Database + Clone,), Error = Infallible> + Clone {
-    warp::any().map(move || db.clone())
-}
+    async fn from_request(req: &mut RequestParts<B>) -> Result<Self, Self::Rejection> {
+        let postgres = req
+            .extensions()
+            .get::<Postgres>()
+            .ok_or(http::StatusCode::INTERNAL_SERVER_ERROR)?;
 
-fn with_user(
-    postgres: Postgres,
-) -> impl Filter<Extract = (User,), Error = warp::Rejection> + Clone {
-    warp::header::<String>("authorization").and_then(move |header: String| {
-        // async closures are still buggy :(
-        let postgres = postgres.clone();
+        let auth_header = req
+            .headers()
+            .get(http::header::AUTHORIZATION)
+            .ok_or(http::StatusCode::FORBIDDEN)?;
+        let auth_header = auth_header
+            .to_str()
+            .map_err(|_| http::StatusCode::FORBIDDEN)?;
+        let (typ, token) = auth_header
+            .split_once(' ')
+            .ok_or(http::StatusCode::FORBIDDEN)?;
 
-        async move {
-            let header: Vec<&str> = header.split(' ').collect();
-
-            let token = if header.len() == 2 {
-                if header[0] != "Token" {
-                    return Err(warp::reject());
-                }
-
-                header[1]
-            } else {
-                return Err(warp::reject());
-            };
-
-            let user = postgres
-                .get_session_user(token)
-                .await
-                .map_err(|_| warp::reject())?;
-
-            Ok(user)
+        if typ != "Token" {
+            return Err(http::StatusCode::FORBIDDEN);
         }
-    })
+
+        let user = postgres
+            .get_session_user(token)
+            .await
+            .map_err(|_| http::StatusCode::FORBIDDEN)?;
+
+        Ok(user)
+    }
 }
 
-pub async fn router(
-    settings: &Settings,
-) -> Result<impl Filter<Extract = impl warp::Reply, Error = Infallible> + Clone> {
-    let postgres = Postgres::new(settings.db_uri.as_str()).await?;
-    let index = warp::get().and(warp::path::end()).map(handlers::index);
+async fn teapot() -> impl IntoResponse {
+    (http::StatusCode::IM_A_TEAPOT, "☕")
+}
 
-    let count = warp::get()
-        .and(warp::path("sync"))
-        .and(warp::path("count"))
-        .and(warp::path::end())
-        .and(with_user(postgres.clone()))
-        .and(with_db(postgres.clone()))
-        .and_then(handlers::history::count)
-        .boxed();
-
-    let sync = warp::get()
-        .and(warp::path("sync"))
-        .and(warp::path("history"))
-        .and(warp::query::<SyncHistoryRequest>())
-        .and(warp::path::end())
-        .and(with_user(postgres.clone()))
-        .and(with_db(postgres.clone()))
-        .and_then(handlers::history::list)
-        .boxed();
-
-    let add_history = warp::post()
-        .and(warp::path("history"))
-        .and(warp::path::end())
-        .and(warp::body::json())
-        .and(with_user(postgres.clone()))
-        .and(with_db(postgres.clone()))
-        .and_then(handlers::history::add)
-        .boxed();
-
-    let user = warp::get()
-        .and(warp::path("user"))
-        .and(warp::path::param::<String>())
-        .and(warp::path::end())
-        .and(with_db(postgres.clone()))
-        .and_then(handlers::user::get)
-        .boxed();
-
-    let register = warp::post()
-        .and(warp::path("register"))
-        .and(warp::path::end())
-        .and(warp::body::json())
-        .and(with_settings(settings.clone()))
-        .and(with_db(postgres.clone()))
-        .and_then(handlers::user::register)
-        .boxed();
-
-    let login = warp::post()
-        .and(warp::path("login"))
-        .and(warp::path::end())
-        .and(warp::body::json())
-        .and(with_db(postgres))
-        .and_then(handlers::user::login)
-        .boxed();
-
-    let r = warp::any()
-        .and(
-            index
-                .or(count)
-                .or(sync)
-                .or(add_history)
-                .or(user)
-                .or(register)
-                .or(login)
-                .or(warp::any().map(|| warp::reply::with_status("☕", StatusCode::IM_A_TEAPOT))),
-        )
-        .with(warp::filters::log::log("atuin::api"));
-
-    Ok(r)
+pub fn router(postgres: Postgres, settings: Settings) -> Router {
+    Router::new()
+        .route("/", get(handlers::index))
+        .route("/sync/count", get(handlers::history::count))
+        .route("/sync/history", get(handlers::history::list))
+        .route("/history", post(handlers::history::add))
+        .route("/user/:username", get(handlers::user::get))
+        .route("/register", post(handlers::user::register))
+        .route("/login", post(handlers::user::login))
+        .fallback(teapot.into_service())
+        .layer(Extension(postgres))
+        .layer(Extension(settings))
 }

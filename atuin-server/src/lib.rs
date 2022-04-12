@@ -1,7 +1,9 @@
 #![forbid(unsafe_code)]
 
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 
+use axum::Server;
+use database::Postgres;
 use eyre::Result;
 
 use crate::settings::Settings;
@@ -19,14 +21,16 @@ pub mod models;
 pub mod router;
 pub mod settings;
 
-pub async fn launch(settings: &Settings, host: String, port: u16) -> Result<()> {
-    // routes to run:
-    // index, register, add_history, login, get_user, sync_count, sync_list
+pub async fn launch(settings: Settings, host: String, port: u16) -> Result<()> {
     let host = host.parse::<IpAddr>()?;
 
-    let r = router::router(settings).await?;
+    let postgres = Postgres::new(settings.db_uri.as_str()).await?;
 
-    warp::serve(r).run((host, port)).await;
+    let r = router::router(postgres, settings);
+
+    Server::bind(&SocketAddr::new(host, port))
+        .serve(r.into_make_service())
+        .await?;
 
     Ok(())
 }

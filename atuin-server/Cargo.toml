@@ -25,6 +25,7 @@ base64 = "0.13.0"
 rand = "0.8.4"
 rust-crypto = "^0.2"
 tokio = { version = "1", features = ["full"] }
-warp = "0.3"
 sqlx = { version = "0.5", features = [ "runtime-tokio-rustls", "uuid", "chrono", "postgres" ] }
 async-trait = "0.1.49"
+axum = "0.5"
+http = "0.2"

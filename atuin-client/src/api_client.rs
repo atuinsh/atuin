@@ -31,7 +31,7 @@ pub async fn register(
     username: &str,
     email: &str,
     password: &str,
-) -> Result<RegisterResponse<'static>> {
+) -> Result<RegisterResponse> {
     let mut map = HashMap::new();
     map.insert("username", username);
     map.insert("email", email);
@@ -61,7 +61,7 @@ pub async fn register(
     Ok(session)
 }
 
-pub async fn login(address: &str, req: LoginRequest<'_>) -> Result<LoginResponse<'static>> {
+pub async fn login(address: &str, req: LoginRequest<'_>) -> Result<LoginResponse> {
     let url = format!("{}/login", address);
     let client = reqwest::Client::new();
 
