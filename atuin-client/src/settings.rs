@@ -148,7 +148,11 @@ impl Settings {
             .set_default("search_mode", "prefix")?
             .set_default("session_token", "")?
             .set_default("style", "auto")?
-            .add_source(Environment::with_prefix("atuin").prefix_separator("_").separator("__"));
+            .add_source(
+                Environment::with_prefix("atuin")
+                    .prefix_separator("_")
+                    .separator("__"),
+            );
 
         config_builder = if config_file.exists() {
             config_builder.add_source(ConfigFile::new(

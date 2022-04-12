@@ -38,7 +38,11 @@ impl Settings {
             .set_default("port", 8888)?
             .set_default("open_registration", false)?
             .set_default("db_uri", "default_uri")?
-            .add_source(Environment::with_prefix("atuin").prefix_separator("_").separator("__"));
+            .add_source(
+                Environment::with_prefix("atuin")
+                    .prefix_separator("_")
+                    .separator("__"),
+            );
 
         config_builder = if config_file.exists() {
             config_builder.add_source(ConfigFile::new(
