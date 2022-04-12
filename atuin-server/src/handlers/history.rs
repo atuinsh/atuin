@@ -1,26 +1,27 @@
-use warp::{http::StatusCode, Reply};
+use axum::extract::Query;
+use axum::{Extension, Json};
+use http::StatusCode;
 
-use crate::database::Database;
+use crate::database::{Database, Postgres};
 use crate::models::{NewHistory, User};
 use atuin_common::api::*;
+
 pub async fn count(
     user: User,
-    db: impl Database + Clone + Send + Sync,
-) -> JSONResult<ErrorResponseStatus<'static>> {
-    db.count_history(&user).await.map_or(
-        reply_error(
-            ErrorResponse::reply("failed to query history count")
-                .with_status(StatusCode::INTERNAL_SERVER_ERROR),
-        ),
-        |count| reply_json(CountResponse { count }),
-    )
+    db: Extension<Postgres>,
+) -> Result<Json<CountResponse>, ErrorResponseStatus<'static>> {
+    match db.count_history(&user).await {
+        Ok(count) => Ok(Json(CountResponse { count })),
+        Err(_) => Err(ErrorResponse::reply("failed to query history count")
+            .with_status(StatusCode::INTERNAL_SERVER_ERROR)),
+    }
 }
 
 pub async fn list(
-    req: SyncHistoryRequest<'_>,
+    req: Query<SyncHistoryRequest>,
     user: User,
-    db: impl Database + Clone + Send + Sync,
-) -> JSONResult<ErrorResponseStatus<'static>> {
+    db: Extension<Postgres>,
+) -> Result<Json<SyncHistoryResponse>, ErrorResponseStatus<'static>> {
     let history = db
         .list_history(
             &user,
@@ -32,10 +33,8 @@ pub async fn list(
 
     if let Err(e) = history {
         error!("failed to load history: {}", e);
-        return reply_error(
-            ErrorResponse::reply("failed to load history")
-                .with_status(StatusCode::INTERNAL_SERVER_ERROR),
-        );
+        return Err(ErrorResponse::reply("failed to load history")
+            .with_status(StatusCode::INTERNAL_SERVER_ERROR));
     }
 
     let history: Vec<String> = history
@@ -50,14 +49,14 @@ pub async fn list(
         user.id
     );
 
-    reply_json(SyncHistoryResponse { history })
+    Ok(Json(SyncHistoryResponse { history }))
 }
 
 pub async fn add(
-    req: Vec<AddHistoryRequest<'_, String>>,
+    Json(req): Json<Vec<AddHistoryRequest>>,
     user: User,
-    db: impl Database + Clone + Send + Sync,
-) -> ReplyResult<impl Reply, ErrorResponseStatus<'_>> {
+    db: Extension<Postgres>,
+) -> Result<(), ErrorResponseStatus<'static>> {
     debug!("request to add {} history items", req.len());
 
     let history: Vec<NewHistory> = req
@@ -67,18 +66,16 @@ pub async fn add(
             user_id: user.id,
             hostname: h.hostname,
             timestamp: h.timestamp.naive_utc(),
-            data: h.data.into(),
+            data: h.data,
         })
         .collect();
 
     if let Err(e) = db.add_history(&history).await {
         error!("failed to add history: {}", e);
 
-        return reply_error(
-            ErrorResponse::reply("failed to add history")
-                .with_status(StatusCode::INTERNAL_SERVER_ERROR),
-        );
+        return Err(ErrorResponse::reply("failed to add history")
+            .with_status(StatusCode::INTERNAL_SERVER_ERROR));
     };
 
-    reply(warp::reply())
+    Ok(())
 }

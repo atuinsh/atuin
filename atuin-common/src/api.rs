@@ -1,43 +1,43 @@
-use std::{borrow::Cow, convert::Infallible};
+use std::borrow::Cow;
 
+use axum::{response::IntoResponse, Json};
 use chrono::Utc;
 use serde::Serialize;
-use warp::{reply::Response, Reply};
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct UserResponse<'a> {
-    pub username: Cow<'a, str>,
+pub struct UserResponse {
+    pub username: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct RegisterRequest<'a> {
-    pub email: Cow<'a, str>,
-    pub username: Cow<'a, str>,
-    pub password: Cow<'a, str>,
+pub struct RegisterRequest {
+    pub email: String,
+    pub username: String,
+    pub password: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct RegisterResponse<'a> {
-    pub session: Cow<'a, str>,
+pub struct RegisterResponse {
+    pub session: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct LoginRequest<'a> {
-    pub username: Cow<'a, str>,
-    pub password: Cow<'a, str>,
+pub struct LoginRequest {
+    pub username: String,
+    pub password: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct LoginResponse<'a> {
-    pub session: Cow<'a, str>,
+pub struct LoginResponse {
+    pub session: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct AddHistoryRequest<'a, D> {
-    pub id: Cow<'a, str>,
+pub struct AddHistoryRequest {
+    pub id: String,
     pub timestamp: chrono::DateTime<Utc>,
-    pub data: D,
-    pub hostname: Cow<'a, str>,
+    pub data: String,
+    pub hostname: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -46,10 +46,10 @@ pub struct CountResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct SyncHistoryRequest<'a> {
+pub struct SyncHistoryRequest {
     pub sync_ts: chrono::DateTime<chrono::FixedOffset>,
     pub history_ts: chrono::DateTime<chrono::FixedOffset>,
-    pub host: Cow<'a, str>,
+    pub host: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -62,25 +62,19 @@ pub struct ErrorResponse<'a> {
     pub reason: Cow<'a, str>,
 }
 
-impl Reply for ErrorResponse<'_> {
-    fn into_response(self) -> Response {
-        warp::reply::json(&self).into_response()
+impl<'a> IntoResponse for ErrorResponseStatus<'a> {
+    fn into_response(self) -> axum::response::Response {
+        (self.status, Json(self.error)).into_response()
     }
 }
 
 pub struct ErrorResponseStatus<'a> {
     pub error: ErrorResponse<'a>,
-    pub status: warp::http::StatusCode,
-}
-
-impl Reply for ErrorResponseStatus<'_> {
-    fn into_response(self) -> Response {
-        warp::reply::with_status(self.error, self.status).into_response()
-    }
+    pub status: http::StatusCode,
 }
 
 impl<'a> ErrorResponse<'a> {
-    pub fn with_status(self, status: warp::http::StatusCode) -> ErrorResponseStatus<'a> {
+    pub fn with_status(self, status: http::StatusCode) -> ErrorResponseStatus<'a> {
         ErrorResponseStatus {
             error: self,
             status,
@@ -92,32 +86,4 @@ impl<'a> ErrorResponse<'a> {
             reason: reason.into(),
         }
     }
-}
-
-pub enum ReplyEither<T, E> {
-    Ok(T),
-    Err(E),
-}
-
-impl<T: Reply, E: Reply> Reply for ReplyEither<T, E> {
-    fn into_response(self) -> Response {
-        match self {
-            ReplyEither::Ok(t) => t.into_response(),
-            ReplyEither::Err(e) => e.into_response(),
-        }
-    }
-}
-
-pub type ReplyResult<T, E> = Result<ReplyEither<T, E>, Infallible>;
-pub fn reply_error<T, E>(e: E) -> ReplyResult<T, E> {
-    Ok(ReplyEither::Err(e))
-}
-
-pub type JSONResult<E> = Result<ReplyEither<warp::reply::Json, E>, Infallible>;
-pub fn reply_json<E>(t: impl Serialize) -> JSONResult<E> {
-    reply(warp::reply::json(&t))
-}
-
-pub fn reply<T, E>(t: T) -> ReplyResult<T, E> {
-    Ok(ReplyEither::Ok(t))
 }

@@ -10,7 +10,7 @@ pub enum Cmd {
     /// Start the server
     Start {
         /// The host address to bind
-        #[clap(long, short)]
+        #[clap(long)]
         host: Option<String>,
 
         /// The port to bind
@@ -20,7 +20,7 @@ pub enum Cmd {
 }
 
 impl Cmd {
-    pub async fn run(&self, settings: &Settings) -> Result<()> {
+    pub async fn run(&self, settings: Settings) -> Result<()> {
         match self {
             Self::Start { host, port } => {
                 let host = host

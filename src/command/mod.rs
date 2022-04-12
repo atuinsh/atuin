@@ -133,7 +133,7 @@ impl AtuinCmd {
         match self {
             Self::History(history) => history.run(&client_settings, &mut db).await,
             Self::Import(import) => import.run(&mut db).await,
-            Self::Server(server) => server.run(&server_settings).await,
+            Self::Server(server) => server.run(server_settings).await,
             Self::Stats(stats) => stats.run(&mut db, &client_settings).await,
             Self::Init(init) => {
                 init.run();

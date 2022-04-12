@@ -110,10 +110,10 @@ async fn sync_upload(
             let data = serde_json::to_string(&data)?;
 
             let add_hist = AddHistoryRequest {
-                id: i.id.into(),
+                id: i.id,
                 timestamp: i.timestamp,
                 data,
-                hostname: hash_str(&i.hostname).into(),
+                hostname: hash_str(&i.hostname),
             };
 
             buffer.push(add_hist);

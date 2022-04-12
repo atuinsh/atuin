@@ -31,7 +31,7 @@ pub async fn register(
     username: &str,
     email: &str,
     password: &str,
-) -> Result<RegisterResponse<'static>> {
+) -> Result<RegisterResponse> {
     let mut map = HashMap::new();
     map.insert("username", username);
     map.insert("email", email);
@@ -61,7 +61,7 @@ pub async fn register(
     Ok(session)
 }
 
-pub async fn login(address: &str, req: LoginRequest<'_>) -> Result<LoginResponse<'static>> {
+pub async fn login(address: &str, req: LoginRequest) -> Result<LoginResponse> {
     let url = format!("{}/login", address);
     let client = reqwest::Client::new();
 
@@ -142,7 +142,7 @@ impl<'a> Client<'a> {
         Ok(history)
     }
 
-    pub async fn post_history(&self, history: &[AddHistoryRequest<'_, String>]) -> Result<()> {
+    pub async fn post_history(&self, history: &[AddHistoryRequest]) -> Result<()> {
         let url = format!("{}/history", self.sync_addr);
         let url = Url::parse(url.as_str())?;
 
