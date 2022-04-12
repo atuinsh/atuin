@@ -10,7 +10,7 @@ pub enum Cmd {
     /// Start the server
     Start {
         /// The host address to bind
-        #[clap(long, short)]
+        #[clap(long)]
         host: Option<String>,
 
         /// The port to bind
