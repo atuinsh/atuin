@@ -1,5 +1,3 @@
-use std::borrow::Cow;
-
 use chrono::prelude::*;
 
 #[derive(sqlx::FromRow)]
@@ -15,13 +13,13 @@ pub struct History {
     pub created_at: NaiveDateTime,
 }
 
-pub struct NewHistory<'a> {
-    pub client_id: Cow<'a, str>,
+pub struct NewHistory {
+    pub client_id: String,
     pub user_id: i64,
-    pub hostname: Cow<'a, str>,
+    pub hostname: String,
     pub timestamp: chrono::NaiveDateTime,
 
-    pub data: Cow<'a, str>,
+    pub data: String,
 }
 
 #[derive(sqlx::FromRow)]
@@ -39,13 +37,13 @@ pub struct Session {
     pub token: String,
 }
 
-pub struct NewUser<'a> {
-    pub username: Cow<'a, str>,
-    pub email: Cow<'a, str>,
-    pub password: Cow<'a, str>,
+pub struct NewUser {
+    pub username: String,
+    pub email: String,
+    pub password: String,
 }
 
-pub struct NewSession<'a> {
+pub struct NewSession {
     pub user_id: i64,
-    pub token: Cow<'a, str>,
+    pub token: String,
 }

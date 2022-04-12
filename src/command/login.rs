@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::io;
 
 use atuin_common::api::LoginRequest;
@@ -66,10 +65,8 @@ impl Cmd {
     }
 }
 
-pub(super) fn or_user_input<'a>(value: &'a Option<String>, name: &'static str) -> Cow<'a, str> {
-    value
-        .as_deref()
-        .map_or_else(|| Cow::Owned(read_user_input(name)), Cow::Borrowed)
+pub(super) fn or_user_input(value: &'_ Option<String>, name: &'static str) -> String {
+    value.clone().unwrap_or_else(|| read_user_input(name))
 }
 
 fn read_user_input(name: &'static str) -> String {

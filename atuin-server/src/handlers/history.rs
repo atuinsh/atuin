@@ -18,7 +18,7 @@ pub async fn count(
 }
 
 pub async fn list(
-    req: Query<SyncHistoryRequest<'_>>,
+    req: Query<SyncHistoryRequest>,
     user: User,
     db: Extension<Postgres>,
 ) -> Result<Json<SyncHistoryResponse>, ErrorResponseStatus<'static>> {
@@ -53,10 +53,10 @@ pub async fn list(
 }
 
 pub async fn add(
-    Json(req): Json<Vec<AddHistoryRequest<'_, String>>>,
+    Json(req): Json<Vec<AddHistoryRequest>>,
     user: User,
     db: Extension<Postgres>,
-) -> Result<(), ErrorResponseStatus<'_>> {
+) -> Result<(), ErrorResponseStatus<'static>> {
     debug!("request to add {} history items", req.len());
 
     let history: Vec<NewHistory> = req
@@ -66,7 +66,7 @@ pub async fn add(
             user_id: user.id,
             hostname: h.hostname,
             timestamp: h.timestamp.naive_utc(),
-            data: h.data.into(),
+            data: h.data,
         })
         .collect();
 

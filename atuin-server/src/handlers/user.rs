@@ -44,7 +44,7 @@ pub async fn get(
 }
 
 pub async fn register(
-    Json(register): Json<RegisterRequest<'_>>,
+    Json(register): Json<RegisterRequest>,
     settings: Extension<Settings>,
     db: Extension<Postgres>,
 ) -> Result<Json<RegisterResponse>, ErrorResponseStatus<'static>> {
@@ -60,7 +60,7 @@ pub async fn register(
     let new_user = NewUser {
         email: register.email,
         username: register.username,
-        password: hashed.into(),
+        password: hashed,
     };
 
     let user_id = match db.add_user(&new_user).await {
@@ -91,7 +91,7 @@ pub async fn register(
 }
 
 pub async fn login(
-    login: Json<LoginRequest<'_>>,
+    login: Json<LoginRequest>,
     db: Extension<Postgres>,
 ) -> Result<Json<LoginResponse>, ErrorResponseStatus<'static>> {
     let user = match db.get_user(login.username.borrow()).await {

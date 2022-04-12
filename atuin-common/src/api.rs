@@ -10,10 +10,10 @@ pub struct UserResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct RegisterRequest<'a> {
-    pub email: Cow<'a, str>,
-    pub username: Cow<'a, str>,
-    pub password: Cow<'a, str>,
+pub struct RegisterRequest {
+    pub email: String,
+    pub username: String,
+    pub password: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -22,9 +22,9 @@ pub struct RegisterResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct LoginRequest<'a> {
-    pub username: Cow<'a, str>,
-    pub password: Cow<'a, str>,
+pub struct LoginRequest {
+    pub username: String,
+    pub password: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -33,11 +33,11 @@ pub struct LoginResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct AddHistoryRequest<'a, D> {
-    pub id: Cow<'a, str>,
+pub struct AddHistoryRequest {
+    pub id: String,
     pub timestamp: chrono::DateTime<Utc>,
-    pub data: D,
-    pub hostname: Cow<'a, str>,
+    pub data: String,
+    pub hostname: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -46,10 +46,10 @@ pub struct CountResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct SyncHistoryRequest<'a> {
+pub struct SyncHistoryRequest {
     pub sync_ts: chrono::DateTime<chrono::FixedOffset>,
     pub history_ts: chrono::DateTime<chrono::FixedOffset>,
-    pub host: Cow<'a, str>,
+    pub host: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
