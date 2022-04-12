@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.8.1] - 2022-04-12
+
+f861893 Update to clap 3.1.x (#289)
+e8f7aac Add compact mode (#288)
+1e04c4c Add rust-version to Cargo.toml (#287)
+222e52b Update Dockerfile
+fae118a Improve fuzzy search (#279)
+7cde55a Add code of conduct (#281)
+d270798 Update config-rs (#280)
+3248883 Update README.md
+7f58741 Fix `history list --cwd` errors (#278)
+e117b62 Update fish bindings. (#265)
+4223ac6 Restore bash 4.2 compatibility, only add hook once (#271)
+7651f89 Add support for blesh  (#267)
+c2dd332 fix: get install.sh working on UbuntuWSL (#260)
+84403a3 Bump reqwest from 0.11.7 to 0.11.9 (#261)
+5005cf7 Bump serde_json from 1.0.73 to 1.0.75 (#262)
+7fa3e1c Do not crash if the history timestamp is in the future (#250)
+8d21506 use sqlite grouping rather than subquery (#181)
+d36ff13 Replace dpkg with apt (#248)
+
 ## [0.8.0] - 2021-12-17
 
 1339711 Add Alt+backspace and Ctrl+u keybinds for deleting by word and by line, respectively (#243)

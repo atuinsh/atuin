@@ -1,6 +1,6 @@
 [package]
 name = "atuin-client"
-version = "0.8.0"
+version = "0.8.1"
 authors = ["Ellie Huxtable <ellie@elliehuxtable.com>"]
 edition = "2018"
 license = "MIT"
@@ -11,7 +11,7 @@ repository = "https://github.com/ellie/atuin"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-atuin-common = { path = "../atuin-common", version = "0.8.0" }
+atuin-common = { path = "../atuin-common", version = "0.8.1" }
 
 log = "0.4"
 chrono = { version = "0.4", features = ["serde"] }
