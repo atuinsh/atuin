@@ -15,6 +15,7 @@ extern crate log;
 extern crate serde_derive;
 
 pub mod auth;
+pub mod calendar;
 pub mod database;
 pub mod handlers;
 pub mod models;

@@ -54,12 +54,12 @@ where
 async fn teapot() -> impl IntoResponse {
     (http::StatusCode::IM_A_TEAPOT, "☕")
 }
-
 pub fn router(postgres: Postgres, settings: Settings) -> Router {
     Router::new()
         .route("/", get(handlers::index))
         .route("/sync/count", get(handlers::history::count))
         .route("/sync/history", get(handlers::history::list))
+        .route("/sync/calendar/:focus", get(handlers::history::calendar))
         .route("/history", post(handlers::history::add))
         .route("/user/:username", get(handlers::user::get))
         .route("/register", post(handlers::user::register))

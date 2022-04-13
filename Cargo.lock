@@ -144,6 +144,7 @@ dependencies = [
  "axum",
  "base64",
  "chrono",
+ "chronoutil",
  "config",
  "eyre",
  "fs-err",
@@ -330,6 +331,15 @@ checksum = "f73d909da7eb4a7d88c679c3f5a1bc09d965754e0adb2e7627426cef96a00d6f"
 dependencies = [
  "chrono",
  "scanlex",
+]
+
+[[package]]
+name = "chronoutil"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "43a58c924bb772aa201da3acf5308c46b60275c64e6d3bc89c23dd63d71e83fd"
+dependencies = [
+ "chrono",
 ]
 
 [[package]]
