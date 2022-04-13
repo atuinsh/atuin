@@ -1,4 +1,4 @@
-use std::fs::remove_file;
+use fs_err::remove_file;
 
 pub fn run() {
     let session_path = atuin_common::utils::data_dir().join("session");

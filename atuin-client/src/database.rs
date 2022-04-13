@@ -9,6 +9,7 @@ use eyre::Result;
 use itertools::Itertools;
 use regex::Regex;
 
+use fs_err as fs;
 use sqlx::sqlite::{
     SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteRow,
 };
@@ -62,7 +63,7 @@ impl Sqlite {
         let create = !path.exists();
         if create {
             if let Some(dir) = path.parent() {
-                std::fs::create_dir_all(dir)?;
+                fs::create_dir_all(dir)?;
             }
         }
 
