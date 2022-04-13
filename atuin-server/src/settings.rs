@@ -37,7 +37,6 @@ impl Settings {
             .set_default("host", "127.0.0.1")?
             .set_default("port", 8888)?
             .set_default("open_registration", false)?
-            .set_default("db_uri", "default_uri")?
             .add_source(
                 Environment::with_prefix("atuin")
                     .prefix_separator("_")
