@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use chrono::NaiveDate;
 use crypto::digest::Digest;
 use crypto::sha2::Sha256;
 use sodiumoxide::crypto::pwhash::argon2id13;
@@ -49,6 +50,22 @@ pub fn data_dir() -> PathBuf {
         .map_or_else(|_| home_dir().join(".local").join("share"), PathBuf::from);
 
     data_dir.join("atuin")
+}
+
+pub fn get_days_from_month(year: i32, month: u32) -> i64 {
+    NaiveDate::from_ymd(
+        match month {
+            12 => year + 1,
+            _ => year,
+        },
+        match month {
+            12 => 1,
+            _ => month + 1,
+        },
+        1,
+    )
+    .signed_duration_since(NaiveDate::from_ymd(year, month, 1))
+    .num_days()
 }
 
 #[cfg(test)]

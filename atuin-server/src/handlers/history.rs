@@ -1,10 +1,13 @@
 use axum::extract::Query;
-use axum::{Extension, Json};
+use axum::{extract::Path, Extension, Json};
 use http::StatusCode;
+use std::collections::HashMap;
 
 use crate::database::{Database, Postgres};
 use crate::models::{NewHistory, User};
 use atuin_common::api::*;
+
+use crate::calendar::{TimePeriod, TimePeriodInfo};
 
 pub async fn count(
     user: User,
@@ -78,4 +81,47 @@ pub async fn add(
     };
 
     Ok(())
+}
+
+pub async fn calendar(
+    Path(focus): Path<String>,
+    Query(params): Query<HashMap<String, u64>>,
+    user: User,
+    db: Extension<Postgres>,
+) -> Result<Json<HashMap<u64, TimePeriodInfo>>, ErrorResponseStatus<'static>> {
+    let focus = focus.as_str();
+
+    let year = params.get("year").unwrap_or(&0);
+    let month = params.get("month").unwrap_or(&1);
+
+    let focus = match focus {
+        "year" => db
+            .calendar(&user, TimePeriod::YEAR, *year, *month)
+            .await
+            .map_err(|_| {
+                ErrorResponse::reply("failed to query calendar")
+                    .with_status(StatusCode::INTERNAL_SERVER_ERROR)
+            }),
+
+        "month" => db
+            .calendar(&user, TimePeriod::MONTH, *year, *month)
+            .await
+            .map_err(|_| {
+                ErrorResponse::reply("failed to query calendar")
+                    .with_status(StatusCode::INTERNAL_SERVER_ERROR)
+            }),
+
+        "day" => db
+            .calendar(&user, TimePeriod::DAY, *year, *month)
+            .await
+            .map_err(|_| {
+                ErrorResponse::reply("failed to query calendar")
+                    .with_status(StatusCode::INTERNAL_SERVER_ERROR)
+            }),
+
+        _ => Err(ErrorResponse::reply("invalid focus: use year/month/day")
+            .with_status(StatusCode::BAD_REQUEST)),
+    }?;
+
+    Ok(Json(focus))
 }
