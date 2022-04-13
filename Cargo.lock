@@ -70,6 +70,7 @@ dependencies = [
  "crossbeam-channel",
  "directories",
  "eyre",
+ "fs-err",
  "humantime 2.1.0",
  "indicatif",
  "itertools",
@@ -97,6 +98,7 @@ dependencies = [
  "config",
  "directories",
  "eyre",
+ "fs-err",
  "itertools",
  "log",
  "minspan",
@@ -144,6 +146,7 @@ dependencies = [
  "chrono",
  "config",
  "eyre",
+ "fs-err",
  "http",
  "log",
  "rand 0.8.5",
@@ -675,6 +678,12 @@ dependencies = [
  "matches",
  "percent-encoding",
 ]
+
+[[package]]
+name = "fs-err"
+version = "2.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5bd79fa345a495d3ae89fb7165fec01c0e72f41821d642dda363a1e97975652e"
 
 [[package]]
 name = "fuchsia-cprng"

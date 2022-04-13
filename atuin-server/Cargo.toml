@@ -29,3 +29,4 @@ sqlx = { version = "0.5", features = [ "runtime-tokio-rustls", "uuid", "chrono",
 async-trait = "0.1.49"
 axum = "0.5"
 http = "0.2"
+fs-err = "2.7"

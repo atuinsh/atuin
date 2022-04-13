@@ -1,4 +1,4 @@
-use std::fs::{create_dir_all, File};
+use fs_err::{create_dir_all, File};
 use std::io::prelude::*;
 use std::path::PathBuf;
 

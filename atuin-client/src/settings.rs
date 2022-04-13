@@ -1,4 +1,4 @@
-use std::fs::{create_dir_all, File};
+use fs_err::{create_dir_all, File};
 use std::io::prelude::*;
 use std::path::{Path, PathBuf};
 
@@ -76,7 +76,7 @@ impl Settings {
 
         let sync_time_path = data_dir.join("last_sync_time");
 
-        std::fs::write(sync_time_path, Utc::now().to_rfc3339())?;
+        fs_err::write(sync_time_path, Utc::now().to_rfc3339())?;
 
         Ok(())
     }
@@ -91,7 +91,7 @@ impl Settings {
             return Ok(Utc.ymd(1970, 1, 1).and_hms(0, 0, 0));
         }
 
-        let time = std::fs::read_to_string(sync_time_path)?;
+        let time = fs_err::read_to_string(sync_time_path)?;
         let time = chrono::DateTime::parse_from_rfc3339(time.as_str())?;
 
         Ok(time.with_timezone(&Utc))
@@ -188,7 +188,7 @@ impl Settings {
 
         // Finally, set the auth token
         if Path::new(session_path.to_string().as_str()).exists() {
-            let token = std::fs::read_to_string(session_path.to_string())?;
+            let token = fs_err::read_to_string(session_path.to_string())?;
             settings.session_token = token.trim().to_string();
         } else {
             settings.session_token = String::from("not logged in");

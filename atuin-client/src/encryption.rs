@@ -8,11 +8,11 @@
 // clients must share the secret in order to be able to sync, as it is needed
 // to decrypt
 
-use std::fs::File;
+use fs_err as fs;
 use std::io::prelude::*;
 use std::path::PathBuf;
 
-use eyre::{eyre, Result};
+use eyre::{eyre, Context, Result};
 use sodiumoxide::crypto::secretbox;
 
 use crate::history::History;
@@ -30,7 +30,7 @@ pub fn new_key(settings: &Settings) -> Result<secretbox::Key> {
     let key = secretbox::gen_key();
     let encoded = encode_key(key.clone())?;
 
-    let mut file = File::create(path)?;
+    let mut file = fs::File::create(path)?;
     file.write_all(encoded.as_bytes())?;
 
     Ok(key)
@@ -41,7 +41,7 @@ pub fn load_key(settings: &Settings) -> Result<secretbox::Key> {
     let path = settings.key_path.as_str();
 
     let key = if PathBuf::from(path).exists() {
-        let key = std::fs::read_to_string(path)?;
+        let key = fs_err::read_to_string(path)?;
         decode_key(key)?
     } else {
         new_key(settings)?
@@ -54,13 +54,13 @@ pub fn load_encoded_key(settings: &Settings) -> Result<String> {
     let path = settings.key_path.as_str();
 
     if PathBuf::from(path).exists() {
-        let key = std::fs::read_to_string(path)?;
+        let key = fs::read_to_string(path)?;
         Ok(key)
     } else {
         let key = secretbox::gen_key();
         let encoded = encode_key(key)?;
 
-        let mut file = File::create(path)?;
+        let mut file = fs::File::create(path)?;
         file.write_all(encoded.as_bytes())?;
 
         Ok(encoded)
@@ -68,15 +68,16 @@ pub fn load_encoded_key(settings: &Settings) -> Result<String> {
 }
 
 pub fn encode_key(key: secretbox::Key) -> Result<String> {
-    let buf = rmp_serde::to_vec(&key)?;
+    let buf = rmp_serde::to_vec(&key).wrap_err("could not encode key to message pack")?;
     let buf = base64::encode(buf);
 
     Ok(buf)
 }
 
 pub fn decode_key(key: String) -> Result<secretbox::Key> {
-    let buf = base64::decode(key)?;
-    let buf: secretbox::Key = rmp_serde::from_read_ref(&buf)?;
+    let buf = base64::decode(key).wrap_err("encryption key is not a valid base64 encoding")?;
+    let buf: secretbox::Key = rmp_serde::from_read_ref(&buf)
+        .wrap_err("encryption key is not a valid message pack encoding")?;
 
     Ok(buf)
 }
