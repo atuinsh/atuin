@@ -123,6 +123,14 @@ cargo install atuin
 ```
 brew install atuin
 ```
+  
+### MacPorts
+
+Atuin is also available in [MacPorts](https://ports.macports.org/port/atuin/)  
+  
+```
+sudo port install atuin
+```
 
 ### Pacman
 
