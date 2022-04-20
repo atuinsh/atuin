@@ -9,9 +9,6 @@ use eyre::{Context, Result};
 use crate::settings::Settings;
 
 #[macro_use]
-extern crate log;
-
-#[macro_use]
 extern crate serde_derive;
 
 pub mod auth;

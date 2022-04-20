@@ -1,3 +1,5 @@
+use tracing_subscriber::{EnvFilter, fmt, prelude::*};
+
 use clap::Parser;
 use eyre::{Context, Result};
 
@@ -21,7 +23,10 @@ pub enum Cmd {
 
 impl Cmd {
     pub async fn run(self) -> Result<()> {
-        pretty_env_logger::init();
+        tracing_subscriber::registry()
+            .with(fmt::layer())
+            .with(EnvFilter::from_default_env())
+            .init();
 
         let settings = Settings::new().wrap_err("could not load server settings")?;
 

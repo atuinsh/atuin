@@ -6,6 +6,7 @@ use axum::extract::Path;
 use axum::{Extension, Json};
 use http::StatusCode;
 use sodiumoxide::crypto::pwhash::argon2id13;
+use tracing::{debug, error};
 use uuid::Uuid;
 
 use crate::database::{Database, Postgres};

@@ -59,6 +59,17 @@ clap = { version = "3.1.10", features = ["derive"] }
 clap_complete = "3.1.1"
 fs-err = "2.7"
 
+
+[dependencies.tracing-subscriber]
+version = "0.3"
+default-features = false
+features = [
+    "ansi",
+    "fmt",
+    "registry",
+    "env-filter",
+]
+
 [profile.release]
 lto = "fat"
 codegen-units = 1
