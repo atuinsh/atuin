@@ -79,7 +79,7 @@ pub enum Cmd {
 impl Cmd {
     pub async fn run(self) -> Result<()> {
         pretty_env_logger::init();
-    
+
         let settings = Settings::new().wrap_err("could not load client settings")?;
 
         let db_path = PathBuf::from(settings.db_path.as_str());

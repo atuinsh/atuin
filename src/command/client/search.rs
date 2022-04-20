@@ -65,7 +65,11 @@ pub struct Cmd {
 }
 
 impl Cmd {
-    pub async fn run(self, db: &mut (impl Database + Send + Sync), settings: &Settings) -> Result<()> {
+    pub async fn run(
+        self,
+        db: &mut (impl Database + Send + Sync),
+        settings: &Settings,
+    ) -> Result<()> {
         run(
             settings,
             self.cwd,
