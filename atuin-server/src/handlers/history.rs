@@ -1,8 +1,8 @@
 use axum::extract::Query;
 use axum::{extract::Path, Extension, Json};
 use http::StatusCode;
-use tracing::{error, debug};
 use std::collections::HashMap;
+use tracing::{debug, error};
 
 use crate::database::{Database, Postgres};
 use crate::models::{NewHistory, User};
