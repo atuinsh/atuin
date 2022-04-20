@@ -139,6 +139,6 @@ mod test {
         };
 
         // this should err
-        decrypt(&e2, &key1).expect_err("expected an error decrypting with invalid key");
+        let _ = decrypt(&e2, &key1).expect_err("expected an error decrypting with invalid key");
     }
 }

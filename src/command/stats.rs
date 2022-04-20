@@ -6,7 +6,7 @@ use chrono_english::parse_date_string;
 
 use clap::Parser;
 use cli_table::{format::Justify, print_stdout, Cell, Style, Table};
-use eyre::{eyre, Result};
+use eyre::{bail, Result};
 
 use atuin_client::database::Database;
 use atuin_client::history::History;
@@ -32,7 +32,7 @@ fn compute_stats(history: &[History]) -> Result<()> {
     let most_common_command = commands.iter().max_by(|a, b| a.1.cmp(b.1));
 
     if most_common_command.is_none() {
-        return Err(eyre!("No commands found"));
+        bail!("No commands found");
     }
 
     let table = vec![

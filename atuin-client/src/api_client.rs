@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use chrono::Utc;
-use eyre::{eyre, Result};
+use eyre::{bail, Result};
 use reqwest::header::{HeaderMap, AUTHORIZATION, USER_AGENT};
 use reqwest::{StatusCode, Url};
 use sodiumoxide::crypto::secretbox;
@@ -41,7 +41,7 @@ pub async fn register(
     let resp = reqwest::blocking::get(url)?;
 
     if resp.status().is_success() {
-        return Err(eyre!("username already in use"));
+        bail!("username already in use");
     }
 
     let url = format!("{}/register", address);
@@ -54,7 +54,7 @@ pub async fn register(
         .await?;
 
     if !resp.status().is_success() {
-        return Err(eyre!("failed to register user"));
+        bail!("failed to register user");
     }
 
     let session = resp.json::<RegisterResponse>().await?;
@@ -73,7 +73,7 @@ pub async fn login(address: &str, req: LoginRequest) -> Result<LoginResponse> {
         .await?;
 
     if resp.status() != reqwest::StatusCode::OK {
-        return Err(eyre!("invalid login details"));
+        bail!("invalid login details");
     }
 
     let session = resp.json::<LoginResponse>().await?;
@@ -102,7 +102,7 @@ impl<'a> Client<'a> {
         let resp = self.client.get(url).send().await?;
 
         if resp.status() != StatusCode::OK {
-            return Err(eyre!("failed to get count (are you logged in?)"));
+            bail!("failed to get count (are you logged in?)");
         }
 
         let count = resp.json::<CountResponse>().await?;
