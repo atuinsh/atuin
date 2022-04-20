@@ -25,6 +25,7 @@ pub trait Database {
     async fn add_user(&self, user: &NewUser) -> Result<i64>;
 
     async fn count_history(&self, user: &User) -> Result<i64>;
+    async fn count_history_cached(&self, user: &User) -> Result<i64>;
 
     async fn count_history_range(
         &self,
@@ -124,8 +125,24 @@ impl Database for Postgres {
     }
 
     async fn count_history(&self, user: &User) -> Result<i64> {
+        // The cache is new, and the user might not yet have a cache value.
+        // They will have one as soon as they post up some new history, but handle that
+        // edge case.
+
         let res: (i64,) = sqlx::query_as(
             "select count(1) from history
+            where user_id = $1",
+        )
+        .bind(user.id)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(res.0)
+    }
+
+    async fn count_history_cached(&self, user: &User) -> Result<i64> {
+        let res: (i64,) = sqlx::query_as(
+            "select total from total_history_count_user
             where user_id = $1",
         )
         .bind(user.id)
