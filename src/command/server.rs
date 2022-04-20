@@ -1,5 +1,5 @@
 use clap::Parser;
-use eyre::Result;
+use eyre::{Result, Context};
 
 use atuin_server::launch;
 use atuin_server::settings::Settings;
@@ -20,7 +20,11 @@ pub enum Cmd {
 }
 
 impl Cmd {
-    pub async fn run(&self, settings: Settings) -> Result<()> {
+    pub async fn run(self) -> Result<()> {
+        pretty_env_logger::init();
+    
+        let settings = Settings::new().wrap_err("could not load server settings")?;
+
         match self {
             Self::Start { host, port } => {
                 let host = host

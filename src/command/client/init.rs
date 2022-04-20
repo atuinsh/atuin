@@ -11,17 +11,17 @@ pub enum Cmd {
 }
 
 fn init_zsh() {
-    let full = include_str!("../shell/atuin.zsh");
+    let full = include_str!("../../shell/atuin.zsh");
     println!("{}", full);
 }
 
 fn init_bash() {
-    let full = include_str!("../shell/atuin.bash");
+    let full = include_str!("../../shell/atuin.bash");
     println!("{}", full);
 }
 
 fn init_fish() {
-    let full = include_str!("../shell/atuin.fish");
+    let full = include_str!("../../shell/atuin.fish");
     println!("{}", full);
 }
 

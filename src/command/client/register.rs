@@ -19,6 +19,12 @@ pub struct Cmd {
     pub password: Option<String>,
 }
 
+impl Cmd {
+    pub async fn run(self, settings: &Settings) -> Result<()> {
+        run(settings, &self.username, &self.email, &self.password).await
+    }
+}
+
 pub async fn run(
     settings: &Settings,
     username: &Option<String>,
