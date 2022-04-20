@@ -6,7 +6,7 @@ use axum::extract::Path;
 use axum::{Extension, Json};
 use http::StatusCode;
 use sodiumoxide::crypto::pwhash::argon2id13;
-use tracing::{debug, error};
+use tracing::{debug, error, instrument};
 use uuid::Uuid;
 
 use crate::database::{Database, Postgres};
@@ -27,6 +27,7 @@ pub fn verify_str(secret: &str, verify: &str) -> bool {
     }
 }
 
+#[instrument(skip_all, fields(user.username = username.as_str()))]
 pub async fn get(
     Path(username): Path<String>,
     db: Extension<Postgres>,
@@ -49,6 +50,7 @@ pub async fn get(
     }))
 }
 
+#[instrument(skip_all)]
 pub async fn register(
     Json(register): Json<RegisterRequest>,
     settings: Extension<Settings>,
@@ -96,6 +98,7 @@ pub async fn register(
     }
 }
 
+#[instrument(skip_all, fields(user.username = login.username.as_str()))]
 pub async fn login(
     login: Json<LoginRequest>,
     db: Extension<Postgres>,

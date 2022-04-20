@@ -167,6 +167,8 @@ dependencies = [
  "sodiumoxide",
  "sqlx",
  "tokio",
+ "tower",
+ "tower-http",
  "tracing",
  "uuid",
  "whoami",
@@ -2476,6 +2478,7 @@ dependencies = [
  "tower",
  "tower-layer",
  "tower-service",
+ "tracing",
 ]
 
 [[package]]

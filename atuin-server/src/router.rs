@@ -7,6 +7,8 @@ use axum::{
     Extension, Router,
 };
 use eyre::Result;
+use tower::ServiceBuilder;
+use tower_http::trace::TraceLayer;
 
 use super::{
     database::{Database, Postgres},
@@ -65,6 +67,10 @@ pub fn router(postgres: Postgres, settings: Settings) -> Router {
         .route("/register", post(handlers::user::register))
         .route("/login", post(handlers::user::login))
         .fallback(teapot.into_service())
-        .layer(Extension(postgres))
-        .layer(Extension(settings))
+        .layer(
+            ServiceBuilder::new()
+                .layer(TraceLayer::new_for_http())
+                .layer(Extension(postgres))
+                .layer(Extension(settings)),
+        )
 }
