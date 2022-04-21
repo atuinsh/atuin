@@ -5,15 +5,14 @@ use async_trait::async_trait;
 use chrono::prelude::*;
 use chrono::Utc;
 
-use eyre::Result;
 use itertools::Itertools;
 use regex::Regex;
 
 use fs_err as fs;
-use sqlx::sqlite::{
-    SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteRow,
+use sqlx::{
+    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteRow},
+    Result, Row,
 };
-use sqlx::Row;
 
 use super::history::History;
 use super::ordering;

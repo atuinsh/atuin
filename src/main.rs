@@ -9,7 +9,6 @@ use eyre::Result;
 extern crate log;
 
 use command::AtuinCmd;
-
 mod command;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");

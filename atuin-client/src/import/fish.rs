@@ -144,26 +144,9 @@ impl<R: Read> Iterator for Fish<R> {
 
 #[cfg(test)]
 mod test {
-    use chrono::{TimeZone, Utc};
     use std::io::Cursor;
 
     use super::Fish;
-    use crate::history::History;
-
-    // simple wrapper for fish history entry
-    macro_rules! fishtory {
-        ($timestamp:literal, $command:literal) => {
-            History::new(
-                Utc.timestamp($timestamp, 0),
-                $command.into(),
-                "unknown".into(),
-                -1,
-                -1,
-                None,
-                None,
-            )
-        };
-    }
 
     #[test]
     fn parse_complex() {
@@ -201,21 +184,24 @@ ERROR
     - ~/.local/share/fish/fish_history
 "#;
         let cursor = Cursor::new(input);
-        let fish = Fish::new(cursor).unwrap();
+        let mut fish = Fish::new(cursor).unwrap();
 
-        let history = fish.collect::<Result<Vec<_>, _>>().unwrap();
-        assert_eq!(
-            history,
-            vec![
-                fishtory!(1639162832, "history --help"),
-                fishtory!(1639162851, "cat ~/.bash_history"),
-                fishtory!(1639162890, "ls ~/.local/share/fish/fish_history"),
-                fishtory!(1639162893, "cat ~/.local/share/fish/fish_history"),
-                fishtory!(1639162933, "echo \"foo\" \\\n'bar' baz"),
-                fishtory!(1639162939, "cat ~/.local/share/fish/fish_history"),
-                fishtory!(1639163063, r#"echo "\"" \\ "\\""#),
-                fishtory!(1639163066, "cat ~/.local/share/fish/fish_history"),
-            ]
-        );
+        // simple wrapper for fish history entry
+        macro_rules! fishtory {
+            ($timestamp:expr, $command:expr) => {
+                let h = fish.next().expect("missing entry in history").unwrap();
+                assert_eq!(h.command.as_str(), $command);
+                assert_eq!(h.timestamp.timestamp(), $timestamp);
+            };
+        }
+
+        fishtory!(1639162832, "history --help");
+        fishtory!(1639162851, "cat ~/.bash_history");
+        fishtory!(1639162890, "ls ~/.local/share/fish/fish_history");
+        fishtory!(1639162893, "cat ~/.local/share/fish/fish_history");
+        fishtory!(1639162933, "echo \"foo\" \\\n'bar' baz");
+        fishtory!(1639162939, "cat ~/.local/share/fish/fish_history");
+        fishtory!(1639163063, r#"echo "\"" \\ "\\""#);
+        fishtory!(1639163066, "cat ~/.local/share/fish/fish_history");
     }
 }
