@@ -13,10 +13,17 @@ pub async fn count(
     user: User,
     db: Extension<Postgres>,
 ) -> Result<Json<CountResponse>, ErrorResponseStatus<'static>> {
-    match db.count_history(&user).await {
+    match db.count_history_cached(&user).await {
+        // By default read out the cached value
         Ok(count) => Ok(Json(CountResponse { count })),
-        Err(_) => Err(ErrorResponse::reply("failed to query history count")
-            .with_status(StatusCode::INTERNAL_SERVER_ERROR)),
+
+        // If that fails, fallback on a full COUNT. Cache is built on a POST
+        // only
+        Err(_) => match db.count_history(&user).await {
+            Ok(count) => Ok(Json(CountResponse { count })),
+            Err(_) => Err(ErrorResponse::reply("failed to query history count")
+                .with_status(StatusCode::INTERNAL_SERVER_ERROR)),
+        },
     }
 }
 

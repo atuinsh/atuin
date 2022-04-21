@@ -1,8 +1,7 @@
 use async_trait::async_trait;
 use std::collections::HashMap;
 
-use eyre::{eyre, Result};
-use sqlx::postgres::PgPoolOptions;
+use sqlx::{postgres::PgPoolOptions, Result};
 
 use crate::settings::HISTORY_PAGE_SIZE;
 
@@ -25,6 +24,7 @@ pub trait Database {
     async fn add_user(&self, user: &NewUser) -> Result<i64>;
 
     async fn count_history(&self, user: &User) -> Result<i64>;
+    async fn count_history_cached(&self, user: &User) -> Result<i64>;
 
     async fn count_history_range(
         &self,
@@ -63,7 +63,7 @@ pub struct Postgres {
 }
 
 impl Postgres {
-    pub async fn new(uri: &str) -> Result<Self, sqlx::Error> {
+    pub async fn new(uri: &str) -> Result<Self> {
         let pool = PgPoolOptions::new()
             .max_connections(100)
             .connect(uri)
@@ -78,54 +78,50 @@ impl Postgres {
 #[async_trait]
 impl Database for Postgres {
     async fn get_session(&self, token: &str) -> Result<Session> {
-        let res: Option<Session> =
-            sqlx::query_as::<_, Session>("select * from sessions where token = $1")
-                .bind(token)
-                .fetch_optional(&self.pool)
-                .await?;
-
-        if let Some(s) = res {
-            Ok(s)
-        } else {
-            Err(eyre!("could not find session"))
-        }
+        sqlx::query_as::<_, Session>("select * from sessions where token = $1")
+            .bind(token)
+            .fetch_one(&self.pool)
+            .await
     }
 
     async fn get_user(&self, username: &str) -> Result<User> {
-        let res: Option<User> =
-            sqlx::query_as::<_, User>("select * from users where username = $1")
-                .bind(username)
-                .fetch_optional(&self.pool)
-                .await?;
-
-        if let Some(u) = res {
-            Ok(u)
-        } else {
-            Err(eyre!("could not find user"))
-        }
+        sqlx::query_as::<_, User>("select * from users where username = $1")
+            .bind(username)
+            .fetch_one(&self.pool)
+            .await
     }
 
     async fn get_session_user(&self, token: &str) -> Result<User> {
-        let res: Option<User> = sqlx::query_as::<_, User>(
+        sqlx::query_as::<_, User>(
             "select * from users 
             inner join sessions 
             on users.id = sessions.user_id 
             and sessions.token = $1",
         )
         .bind(token)
-        .fetch_optional(&self.pool)
-        .await?;
-
-        if let Some(u) = res {
-            Ok(u)
-        } else {
-            Err(eyre!("could not find user"))
-        }
+        .fetch_one(&self.pool)
+        .await
     }
 
     async fn count_history(&self, user: &User) -> Result<i64> {
+        // The cache is new, and the user might not yet have a cache value.
+        // They will have one as soon as they post up some new history, but handle that
+        // edge case.
+
         let res: (i64,) = sqlx::query_as(
             "select count(1) from history
+            where user_id = $1",
+        )
+        .bind(user.id)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(res.0)
+    }
+
+    async fn count_history_cached(&self, user: &User) -> Result<i64> {
+        let res: (i64,) = sqlx::query_as(
+            "select total from total_history_count_user
             where user_id = $1",
         )
         .bind(user.id)
@@ -300,17 +296,10 @@ impl Database for Postgres {
     }
 
     async fn get_user_session(&self, u: &User) -> Result<Session> {
-        let res: Option<Session> =
-            sqlx::query_as::<_, Session>("select * from sessions where user_id = $1")
-                .bind(u.id)
-                .fetch_optional(&self.pool)
-                .await?;
-
-        if let Some(s) = res {
-            Ok(s)
-        } else {
-            Err(eyre!("could not find session"))
-        }
+        sqlx::query_as::<_, Session>("select * from sessions where user_id = $1")
+            .bind(u.id)
+            .fetch_one(&self.pool)
+            .await
     }
 
     async fn oldest_history(&self, user: &User) -> Result<History> {
