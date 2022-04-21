@@ -1,7 +1,7 @@
 use chrono::Utc;
+use clap::Parser;
 use eyre::Result;
 use std::{io::stdout, ops::Sub, time::Duration};
-
 use termion::{event::Key, input::MouseTerminal, raw::IntoRawMode, screen::AlternateScreen};
 use tui::{
     backend::{Backend, TermionBackend},
@@ -19,9 +19,74 @@ use atuin_client::{
     settings::{SearchMode, Settings},
 };
 
-use crate::command::event::{Event, Events};
+use super::event::{Event, Events};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+#[derive(Parser)]
+pub struct Cmd {
+    /// Filter search result by directory
+    #[clap(long, short)]
+    cwd: Option<String>,
+
+    /// Exclude directory from results
+    #[clap(long = "exclude-cwd")]
+    exclude_cwd: Option<String>,
+
+    /// Filter search result by exit code
+    #[clap(long, short)]
+    exit: Option<i64>,
+
+    /// Exclude results with this exit code
+    #[clap(long = "exclude-exit")]
+    exclude_exit: Option<i64>,
+
+    /// Only include results added before this date
+    #[clap(long, short)]
+    before: Option<String>,
+
+    /// Only include results after this date
+    #[clap(long)]
+    after: Option<String>,
+
+    /// Open interactive search UI
+    #[clap(long, short)]
+    interactive: bool,
+
+    /// Use human-readable formatting for time
+    #[clap(long)]
+    human: bool,
+
+    query: Vec<String>,
+
+    /// Show only the text of the command
+    #[clap(long)]
+    cmd_only: bool,
+}
+
+impl Cmd {
+    pub async fn run(
+        self,
+        db: &mut (impl Database + Send + Sync),
+        settings: &Settings,
+    ) -> Result<()> {
+        run(
+            settings,
+            self.cwd,
+            self.exit,
+            self.interactive,
+            self.human,
+            self.exclude_exit,
+            self.exclude_cwd,
+            self.before,
+            self.after,
+            self.cmd_only,
+            &self.query,
+            db,
+        )
+        .await
+    }
+}
 
 struct State {
     input: String,

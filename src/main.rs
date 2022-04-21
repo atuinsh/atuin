@@ -33,7 +33,5 @@ impl Atuin {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    pretty_env_logger::init();
-
     Atuin::parse().run().await
 }
