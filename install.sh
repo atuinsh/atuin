@@ -3,7 +3,7 @@
 set -euo pipefail
 
 cat << EOF
- _______  _______  __   __  ___   __    _ 
+ _______  _______  __   __  ___   __    _
 |   _   ||       ||  | |  ||   | |  |  | |
 |  |_|  ||_     _||  | |  ||   | |   |_| |
 |       |  |   |  |  |_|  ||   | |       |
@@ -95,7 +95,7 @@ __atuin_install_linux(){
 
 	if [ "$OS" == "Arch" ] || [ "$OS" == "ManjaroLinux" ]; then
 		__atuin_install_arch
-    elif [ "$OS" == "Ubuntu" ] || [ "$OS" == "UbuntuWSL" ] || [ "$OS" == "Debian" ] || [ "$OS" == "Linuxmint" ] || [ "$OS" == "Parrot" ] || [ "$OS" == "Kali" ] || [ "$OS" == "Elementary" ]; then
+    elif [ "$OS" == "Ubuntu" ] || [ "$OS" == "UbuntuWSL" ] || [ "$OS" == "Debian" ] || [ "$OS" == "Linuxmint" ] || [ "$OS" == "Parrot" ] || [ "$OS" == "Kali" ] || [ "$OS" == "Elementary" ] || [ "$OS" == "Pop" ]; then
 		__atuin_install_ubuntu
 	else
 		# TODO: download a binary or smth
