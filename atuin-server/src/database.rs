@@ -120,7 +120,7 @@ impl Database for Postgres {
     }
 
     async fn count_history_cached(&self, user: &User) -> Result<i64> {
-        let res: (i64,) = sqlx::query_as(
+        let res: (i32,) = sqlx::query_as(
             "select total from total_history_count_user
             where user_id = $1",
         )
@@ -128,7 +128,7 @@ impl Database for Postgres {
         .fetch_one(&self.pool)
         .await?;
 
-        Ok(res.0)
+        Ok(res.0 as i64)
     }
 
     async fn count_history_range(
