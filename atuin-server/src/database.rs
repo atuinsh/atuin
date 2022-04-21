@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use std::collections::HashMap;
+use tracing::{debug, instrument};
 
 use sqlx::{postgres::PgPoolOptions, Result};
 
@@ -77,6 +78,7 @@ impl Postgres {
 
 #[async_trait]
 impl Database for Postgres {
+    #[instrument(skip_all)]
     async fn get_session(&self, token: &str) -> Result<Session> {
         sqlx::query_as::<_, Session>("select * from sessions where token = $1")
             .bind(token)
@@ -84,6 +86,7 @@ impl Database for Postgres {
             .await
     }
 
+    #[instrument(skip_all)]
     async fn get_user(&self, username: &str) -> Result<User> {
         sqlx::query_as::<_, User>("select * from users where username = $1")
             .bind(username)
@@ -91,6 +94,7 @@ impl Database for Postgres {
             .await
     }
 
+    #[instrument(skip_all)]
     async fn get_session_user(&self, token: &str) -> Result<User> {
         sqlx::query_as::<_, User>(
             "select * from users 
@@ -103,6 +107,7 @@ impl Database for Postgres {
         .await
     }
 
+    #[instrument(skip_all)]
     async fn count_history(&self, user: &User) -> Result<i64> {
         // The cache is new, and the user might not yet have a cache value.
         // They will have one as soon as they post up some new history, but handle that
@@ -119,6 +124,7 @@ impl Database for Postgres {
         Ok(res.0)
     }
 
+    #[instrument(skip_all)]
     async fn count_history_cached(&self, user: &User) -> Result<i64> {
         let res: (i32,) = sqlx::query_as(
             "select total from total_history_count_user
@@ -131,6 +137,7 @@ impl Database for Postgres {
         Ok(res.0 as i64)
     }
 
+    #[instrument(skip_all)]
     async fn count_history_range(
         &self,
         user: &User,
@@ -153,6 +160,7 @@ impl Database for Postgres {
     }
 
     // Count the history for a given year
+    #[instrument(skip_all)]
     async fn count_history_year(&self, user: &User, year: i32) -> Result<i64> {
         let start = chrono::Utc.ymd(year, 1, 1).and_hms_nano(0, 0, 0, 0);
         let end = start + RelativeDuration::years(1);
@@ -164,6 +172,7 @@ impl Database for Postgres {
     }
 
     // Count the history for a given month
+    #[instrument(skip_all)]
     async fn count_history_month(&self, user: &User, month: chrono::NaiveDate) -> Result<i64> {
         let start = chrono::Utc
             .ymd(month.year(), month.month(), 1)
@@ -189,6 +198,7 @@ impl Database for Postgres {
     }
 
     // Count the history for a given day
+    #[instrument(skip_all)]
     async fn count_history_day(&self, user: &User, day: chrono::NaiveDate) -> Result<i64> {
         let start = chrono::Utc
             .ymd(day.year(), day.month(), day.day())
@@ -203,6 +213,7 @@ impl Database for Postgres {
         Ok(res)
     }
 
+    #[instrument(skip_all)]
     async fn list_history(
         &self,
         user: &User,
@@ -230,6 +241,7 @@ impl Database for Postgres {
         Ok(res)
     }
 
+    #[instrument(skip_all)]
     async fn add_history(&self, history: &[NewHistory]) -> Result<()> {
         let mut tx = self.pool.begin().await?;
 
@@ -259,6 +271,7 @@ impl Database for Postgres {
         Ok(())
     }
 
+    #[instrument(skip_all)]
     async fn add_user(&self, user: &NewUser) -> Result<i64> {
         let email: &str = &user.email;
         let username: &str = &user.username;
@@ -279,6 +292,7 @@ impl Database for Postgres {
         Ok(res.0)
     }
 
+    #[instrument(skip_all)]
     async fn add_session(&self, session: &NewSession) -> Result<()> {
         let token: &str = &session.token;
 
@@ -295,6 +309,7 @@ impl Database for Postgres {
         Ok(())
     }
 
+    #[instrument(skip_all)]
     async fn get_user_session(&self, u: &User) -> Result<Session> {
         sqlx::query_as::<_, Session>("select * from sessions where user_id = $1")
             .bind(u.id)
@@ -302,6 +317,7 @@ impl Database for Postgres {
             .await
     }
 
+    #[instrument(skip_all)]
     async fn oldest_history(&self, user: &User) -> Result<History> {
         let res = sqlx::query_as::<_, History>(
             "select * from history 
@@ -316,6 +332,7 @@ impl Database for Postgres {
         Ok(res)
     }
 
+    #[instrument(skip_all)]
     async fn calendar(
         &self,
         user: &User,

@@ -2,6 +2,7 @@ use axum::extract::Query;
 use axum::{extract::Path, Extension, Json};
 use http::StatusCode;
 use std::collections::HashMap;
+use tracing::{debug, error, instrument};
 
 use crate::database::{Database, Postgres};
 use crate::models::{NewHistory, User};
@@ -9,6 +10,7 @@ use atuin_common::api::*;
 
 use crate::calendar::{TimePeriod, TimePeriodInfo};
 
+#[instrument(skip_all, fields(user.id = user.id))]
 pub async fn count(
     user: User,
     db: Extension<Postgres>,
@@ -27,6 +29,7 @@ pub async fn count(
     }
 }
 
+#[instrument(skip_all, fields(user.id = user.id))]
 pub async fn list(
     req: Query<SyncHistoryRequest>,
     user: User,
@@ -62,6 +65,7 @@ pub async fn list(
     Ok(Json(SyncHistoryResponse { history }))
 }
 
+#[instrument(skip_all, fields(user.id = user.id))]
 pub async fn add(
     Json(req): Json<Vec<AddHistoryRequest>>,
     user: User,
@@ -90,6 +94,7 @@ pub async fn add(
     Ok(())
 }
 
+#[instrument(skip_all, fields(user.id = user.id))]
 pub async fn calendar(
     Path(focus): Path<String>,
     Query(params): Query<HashMap<String, u64>>,

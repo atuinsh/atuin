@@ -11,7 +11,7 @@ repository = "https://github.com/ellie/atuin"
 [dependencies]
 atuin-common = { path = "../atuin-common", version = "0.8.1" }
 
-log = "0.4"
+tracing = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 eyre = "0.6"
 uuid = { version = "0.8", features = ["v4"] }
@@ -31,3 +31,5 @@ axum = "0.5"
 http = "0.2"
 fs-err = "2.7"
 chronoutil = "0.2.3"
+tower = "0.4"
+tower-http = { version = "0.2", features = ["trace"] }
