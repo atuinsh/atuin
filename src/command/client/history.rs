@@ -6,7 +6,7 @@ use clap::Subcommand;
 use eyre::Result;
 use tabwriter::TabWriter;
 
-use atuin_client::database::Database;
+use atuin_client::database::{current_context, Database};
 use atuin_client::history::History;
 use atuin_client::settings::Settings;
 use atuin_client::sync;
@@ -97,6 +97,8 @@ impl Cmd {
         settings: &Settings,
         db: &mut (impl Database + Send + Sync),
     ) -> Result<()> {
+        let context = current_context();
+
         match self {
             Self::Start { command: words } => {
                 let command = words.join(" ");
@@ -168,7 +170,7 @@ impl Cmd {
                 };
 
                 let history = match (session, cwd) {
-                    (None, None) => db.list(settings.filter_mode, None, false).await?,
+                    (None, None) => db.list(settings.filter_mode, &context, None, false).await?,
                     (None, Some(cwd)) => {
                         let query = format!("select * from history where cwd = '{}';", cwd);
                         db.query_history(&query).await?

@@ -57,6 +57,7 @@ crossbeam-channel = "0.5.1"
 clap = { version = "3.1.11", features = ["derive"] }
 clap_complete = "3.1.2"
 fs-err = "2.7"
+whoami = "1.1.2"
 
 
 [dependencies.tracing-subscriber]

@@ -1,6 +1,7 @@
 use chrono::Utc;
 use clap::Parser;
 use eyre::Result;
+use std::env;
 use std::{io::stdout, ops::Sub, time::Duration};
 use termion::{event::Key, input::MouseTerminal, raw::IntoRawMode, screen::AlternateScreen};
 use tui::{
@@ -14,6 +15,8 @@ use tui::{
 use unicode_width::UnicodeWidthStr;
 
 use atuin_client::{
+    database::current_context,
+    database::Context,
     database::Database,
     history::History,
     settings::{FilterMode, SearchMode, Settings},
@@ -96,6 +99,8 @@ struct State {
     results: Vec<History>,
 
     results_state: ListState,
+
+    context: Context,
 }
 
 impl State {
@@ -235,9 +240,12 @@ async fn query_results(
     db: &mut (impl Database + Send + Sync),
 ) -> Result<()> {
     let results = match app.input.as_str() {
-        "" => db.list(app.filter_mode, Some(200), true).await?,
+        "" => {
+            db.list(app.filter_mode, &app.context, Some(200), true)
+                .await?
+        }
         i => {
-            db.search(Some(200), search_mode, app.filter_mode, i)
+            db.search(Some(200), search_mode, app.filter_mode, &app.context, i)
                 .await?
         }
     };
@@ -524,6 +532,7 @@ async fn select_history(
         input: query.join(" "),
         results: Vec::new(),
         results_state: ListState::default(),
+        context: current_context(),
         filter_mode,
     };
 
@@ -595,11 +604,14 @@ pub async fn run(
         .await?;
         eprintln!("{}", item);
     } else {
+        let context = current_context();
+
         let results = db
             .search(
                 None,
                 settings.search_mode,
                 settings.filter_mode,
+                &context,
                 query.join(" ").as_str(),
             )
             .await?;

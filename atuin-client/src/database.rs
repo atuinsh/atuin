@@ -19,6 +19,28 @@ use super::history::History;
 use super::ordering;
 use super::settings::{FilterMode, SearchMode};
 
+pub struct Context {
+    session: String,
+    cwd: String,
+    hostname: String,
+}
+
+pub fn current_context() -> Context {
+    let session =
+        env::var("ATUIN_SESSION").expect("failed to find ATUIN_SESSION - check your shell setup");
+    let hostname = format!("{}:{}", whoami::hostname(), whoami::username());
+    let cwd = match env::current_dir() {
+        Ok(dir) => dir.display().to_string(),
+        Err(_) => String::from(""),
+    };
+
+    Context {
+        session,
+        hostname,
+        cwd,
+    }
+}
+
 #[async_trait]
 pub trait Database {
     async fn save(&mut self, h: &History) -> Result<()>;
@@ -28,6 +50,7 @@ pub trait Database {
     async fn list(
         &self,
         filter: FilterMode,
+        context: &Context,
         max: Option<usize>,
         unique: bool,
     ) -> Result<Vec<History>>;
@@ -49,6 +72,7 @@ pub trait Database {
         limit: Option<i64>,
         search_mode: SearchMode,
         filter: FilterMode,
+        context: &Context,
         query: &str,
     ) -> Result<Vec<History>>;
 
@@ -189,17 +213,11 @@ impl Database for Sqlite {
     async fn list(
         &self,
         filter: FilterMode,
+        context: &Context,
         max: Option<usize>,
         unique: bool,
     ) -> Result<Vec<History>> {
         debug!("listing history");
-        let session = env::var("ATUIN_SESSION")
-            .expect("failed to find ATUIN_SESSION - check your shell setup");
-        let hostname = format!("{}:{}", whoami::hostname(), whoami::username());
-        let cwd = match env::current_dir() {
-            Ok(dir) => dir.display().to_string(),
-            Err(_) => String::from(""),
-        };
 
         // gotta get that query builder in soon cuz I kinda hate this
         let query = if unique {
@@ -219,9 +237,9 @@ impl Database for Sqlite {
                 join = "".to_string();
                 "".to_string()
             }
-            FilterMode::Host => format!("hostname = '{}'", hostname).to_string(),
-            FilterMode::Session => format!("session = '{}'", session).to_string(),
-            FilterMode::Directory => format!("cwd = '{}'", cwd).to_string(),
+            FilterMode::Host => format!("hostname = '{}'", context.hostname).to_string(),
+            FilterMode::Session => format!("session = '{}'", context.session).to_string(),
+            FilterMode::Directory => format!("cwd = '{}'", context.cwd).to_string(),
         };
 
         let filter = format!("{} {}", join, filter_query);
@@ -314,18 +332,12 @@ impl Database for Sqlite {
         limit: Option<i64>,
         search_mode: SearchMode,
         filter: FilterMode,
+        context: &Context,
         query: &str,
     ) -> Result<Vec<History>> {
         let orig_query = query;
         let query = query.to_string().replace('*', "%"); // allow wildcard char
         let limit = limit.map_or("".to_owned(), |l| format!("limit {}", l));
-        let session = env::var("ATUIN_SESSION")
-            .expect("failed to find ATUIN_SESSION - check your shell setup");
-        let hostname = format!("{}:{}", whoami::hostname(), whoami::username());
-        let cwd = match env::current_dir() {
-            Ok(dir) => dir.display().to_string(),
-            Err(_) => String::from(""),
-        };
 
         let (query_sql, query_params) = match search_mode {
             SearchMode::Prefix => ("command like ?1".to_string(), vec![format!("{}%", query)]),
@@ -392,9 +404,9 @@ impl Database for Sqlite {
 
         let filter_sql = match filter {
             FilterMode::Global => String::from(""),
-            FilterMode::Session => format!("and session = '{}'", session),
-            FilterMode::Directory => format!("and cwd = '{}'", cwd),
-            FilterMode::Host => format!("and hostname = '{}'", hostname),
+            FilterMode::Session => format!("and session = '{}'", context.session),
+            FilterMode::Directory => format!("and cwd = '{}'", context.cwd),
+            FilterMode::Host => format!("and hostname = '{}'", context.hostname),
         };
 
         let res = query_params
@@ -445,7 +457,14 @@ mod test {
         query: &str,
         expected: usize,
     ) -> Result<Vec<History>> {
-        let results = db.search(None, mode, filter_mode, query).await?;
+        let context = Context {
+            hostname: "test:host".to_string(),
+            session: "beepboopiamasession".to_string(),
+            cwd: "/home/ellie".to_string(),
+        };
+
+        let results = db.search(None, mode, filter_mode, &context, query).await?;
+
         assert_eq!(
             results.len(),
             expected,
@@ -633,6 +652,12 @@ mod test {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_search_bench_dupes() {
+        let context = Context {
+            hostname: "test:host".to_string(),
+            session: "beepboopiamasession".to_string(),
+            cwd: "/home/ellie".to_string(),
+        };
+
         let mut db = Sqlite::new("sqlite::memory:").await.unwrap();
         for _i in 1..10000 {
             new_history_item(&mut db, "i am a duplicated command")
@@ -641,7 +666,7 @@ mod test {
         }
         let start = Instant::now();
         let _results = db
-            .search(None, SearchMode::Fuzzy, FilterMode::Global, "")
+            .search(None, SearchMode::Fuzzy, FilterMode::Global, &context, "")
             .await
             .unwrap();
         let duration = start.elapsed();
