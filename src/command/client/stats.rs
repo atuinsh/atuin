@@ -10,7 +10,7 @@ use eyre::{bail, Result};
 
 use atuin_client::database::Database;
 use atuin_client::history::History;
-use atuin_client::settings::Settings;
+use atuin_client::settings::{Settings, FilterMode};
 
 #[derive(Parser)]
 #[clap(infer_subcommands = true)]
@@ -90,7 +90,7 @@ impl Cmd {
             }
 
             Self::All => {
-                let history = db.list(None, false).await?;
+                let history = db.list(FilterMode::Global, None, false).await?;
 
                 compute_stats(&history)?;
 

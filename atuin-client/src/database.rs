@@ -1,3 +1,4 @@
+use std::env;
 use std::path::Path;
 use std::str::FromStr;
 
@@ -16,7 +17,7 @@ use sqlx::{
 
 use super::history::History;
 use super::ordering;
-use super::settings::SearchMode;
+use super::settings::{SearchMode, FilterMode};
 
 #[async_trait]
 pub trait Database {
@@ -24,7 +25,7 @@ pub trait Database {
     async fn save_bulk(&mut self, h: &[History]) -> Result<()>;
 
     async fn load(&self, id: &str) -> Result<History>;
-    async fn list(&self, max: Option<usize>, unique: bool) -> Result<Vec<History>>;
+    async fn list(&self, filter: FilterMode, max: Option<usize>, unique: bool) -> Result<Vec<History>>;
     async fn range(
         &self,
         from: chrono::DateTime<Utc>,
@@ -42,6 +43,7 @@ pub trait Database {
         &self,
         limit: Option<i64>,
         search_mode: SearchMode,
+        filter: FilterMode,
         query: &str,
     ) -> Result<Vec<History>>;
 
@@ -179,33 +181,59 @@ impl Database for Sqlite {
     }
 
     // make a unique list, that only shows the *newest* version of things
-    async fn list(&self, max: Option<usize>, unique: bool) -> Result<Vec<History>> {
+    async fn list(&self, filter: FilterMode, max: Option<usize>, unique: bool) -> Result<Vec<History>> {
         debug!("listing history");
+        let session = env::var("ATUIN_SESSION").expect("failed to find ATUIN_SESSION - check your shell setup");
+        let hostname =
+            format!("{}:{}", whoami::hostname(), whoami::username());
+        let cwd = match env::current_dir() {
+            Ok(dir) => dir.display().to_string(),
+            Err(_) => String::from(""),
+        };
 
-        // very likely vulnerable to SQL injection
-        // however, this is client side, and only used by the client, on their
-        // own data. They can just open the db file...
-        // otherwise building the query is awkward
+        // gotta get that query builder in soon cuz I kinda hate this
+        let query = if unique {
+            "where timestamp = (
+                    select max(timestamp) from history
+                    where h.command = history.command
+                )"
+        } else {
+            ""
+        }.to_string();
+
+        let mut join = if unique{"and"} else {"where"}.to_string();
+
+        let filter_query = match filter {
+            FilterMode::Global => {
+                join = "".to_string();
+                "".to_string()
+            },
+            FilterMode::Host => {
+                format!("hostname = '{}'", hostname).to_string()
+            },
+            FilterMode::Session => {
+                format!("session = '{}'", session).to_string()
+            },
+            FilterMode::Directory => {
+                format!("cwd = '{}'", cwd).to_string()
+            }
+        };
+
+        let filter = format!("{} {}", join, filter_query);
+
+        let limit = if let Some(max) = max {
+                format!("limit {}", max)
+        } else {
+            "".to_string()
+        };
+
         let query = format!(
             "select * from history h
                 {}
                 order by timestamp desc
                 {}",
-            // inject the unique check
-            if unique {
-                "where timestamp = (
-                        select max(timestamp) from history
-                        where h.command = history.command
-                    )"
-            } else {
-                ""
-            },
-            // inject the limit
-            if let Some(max) = max {
-                format!("limit {}", max)
-            } else {
-                "".to_string()
-            }
+                format!("{} {}", query, filter),
+                limit,
         );
 
         let res = sqlx::query(query.as_str())
@@ -281,11 +309,19 @@ impl Database for Sqlite {
         &self,
         limit: Option<i64>,
         search_mode: SearchMode,
+        filter: FilterMode,
         query: &str,
     ) -> Result<Vec<History>> {
         let orig_query = query;
         let query = query.to_string().replace('*', "%"); // allow wildcard char
         let limit = limit.map_or("".to_owned(), |l| format!("limit {}", l));
+        let session = env::var("ATUIN_SESSION").expect("failed to find ATUIN_SESSION - check your shell setup");
+        let hostname =
+            format!("{}:{}", whoami::hostname(), whoami::username());
+        let cwd = match env::current_dir() {
+            Ok(dir) => dir.display().to_string(),
+            Err(_) => String::from(""),
+        };
 
         let (query_sql, query_params) = match search_mode {
             SearchMode::Prefix => ("command like ?1".to_string(), vec![format!("{}%", query)]),
@@ -350,6 +386,14 @@ impl Database for Sqlite {
             }
         };
 
+        let filter_sql = match filter {
+            FilterMode::Global => String::from(""),
+            FilterMode::Session => format!("and session = '{}'", session),
+            FilterMode::Directory=> format!("and cwd = '{}'", cwd),
+            FilterMode::Host=> format!("and hostname = '{}'", hostname),
+            _ => String::from(""),
+        };
+
         let res = query_params
             .iter()
             .fold(
@@ -357,10 +401,12 @@ impl Database for Sqlite {
                     format!(
                         "select * from history h
                                            where {}
+                                           {}
                                            group by command
                                            having max(timestamp)
                                            order by timestamp desc {}",
                         query_sql.as_str(),
+                        filter_sql.as_str(),
                         limit.clone()
                     )
                     .as_str(),
