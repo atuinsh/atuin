@@ -23,6 +23,21 @@ pub enum SearchMode {
     Fuzzy,
 }
 
+#[derive(Clone, Debug, Deserialize, Copy)]
+pub enum FilterMode {
+    #[serde(rename = "global")]
+    Global,
+
+    #[serde(rename = "host")]
+    Host,
+
+    #[serde(rename = "session")]
+    Session,
+
+    #[serde(rename = "directory")]
+    Directory,
+}
+
 // FIXME: Can use upstream Dialect enum if https://github.com/stevedonovan/chrono-english/pull/16 is merged
 #[derive(Clone, Debug, Deserialize, Copy)]
 pub enum Dialect {
@@ -65,6 +80,7 @@ pub struct Settings {
     pub key_path: String,
     pub session_path: String,
     pub search_mode: SearchMode,
+    pub filter_mode: FilterMode,
     // This is automatically loaded when settings is created. Do not set in
     // config! Keep secrets and settings apart.
     pub session_token: String,
@@ -147,6 +163,7 @@ impl Settings {
             .set_default("sync_frequency", "1h")?
             .set_default("sync_address", "https://api.atuin.sh")?
             .set_default("search_mode", "prefix")?
+            .set_default("filter_mode", "global")?
             .set_default("session_token", "")?
             .set_default("style", "auto")?
             .add_source(

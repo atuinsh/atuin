@@ -102,6 +102,20 @@ the search syntax [described below](#fuzzy-search-syntax).
 
 Defaults to "prefix"
 
+### `filter_mode`
+
+The default filter to use when searching
+
+| Column1   | Column2	|
+|--------------- | --------------- |
+| global (default)   | Search history from all hosts, all sessions, all directories  |
+| host   | Search history just from this host   |
+| session   | Search history just from the current session   |
+| directory | Search history just from the current directory|
+
+Filter modes can still be toggled via ctrl-r
+
+
 ```
 search_mode = "fulltext"
 ```
