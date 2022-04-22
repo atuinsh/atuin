@@ -9,7 +9,7 @@
 // to decrypt
 
 use fs_err as fs;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use std::io::prelude::*;
 use std::path::PathBuf;
 
