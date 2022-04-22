@@ -13,7 +13,7 @@ pub fn hash_str(string: &str) -> String {
 }
 
 pub fn uuid_v4() -> String {
-    Uuid::new_v4().to_simple().to_string()
+    Uuid::new_v4().as_simple().to_string()
 }
 
 // TODO: more reliable, more tested

@@ -41,7 +41,6 @@ itertools = "0.10.3"
 shellexpand = "2"
 sqlx = { version = "0.5", features = [
   "runtime-tokio-rustls",
-  "uuid",
   "chrono",
   "sqlite",
 ] }
