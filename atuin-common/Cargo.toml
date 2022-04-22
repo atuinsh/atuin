@@ -12,11 +12,6 @@ repository = "https://github.com/ellie/atuin"
 
 [dependencies]
 rust-crypto = "^0.2"
-sodiumoxide = "0.2.6"
 chrono = { version = "0.4", features = ["serde"] }
-serde_derive = "1.0.125"
-serde = "1.0.126"
-serde_json = "1.0.75"
+serde = { version = "1.0.126", features = ["derive"] }
 uuid = { version = "0.8", features = ["v4"] }
-axum = "0.5"
-http = "0.2"

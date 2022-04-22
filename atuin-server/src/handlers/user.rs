@@ -1,7 +1,6 @@
 use std::borrow::Borrow;
 
 use atuin_common::api::*;
-use atuin_common::utils::hash_secret;
 use axum::extract::Path;
 use axum::{Extension, Json};
 use http::StatusCode;
@@ -12,6 +11,8 @@ use uuid::Uuid;
 use crate::database::{Database, Postgres};
 use crate::models::{NewSession, NewUser};
 use crate::settings::Settings;
+
+use super::{ErrorResponse, ErrorResponseStatus};
 
 pub fn verify_str(secret: &str, verify: &str) -> bool {
     sodiumoxide::init().unwrap();
@@ -138,4 +139,18 @@ pub async fn login(
     Ok(Json(LoginResponse {
         session: session.token,
     }))
+}
+
+fn hash_secret(secret: &str) -> String {
+    sodiumoxide::init().unwrap();
+    let hash = argon2id13::pwhash(
+        secret.as_bytes(),
+        argon2id13::OPSLIMIT_INTERACTIVE,
+        argon2id13::MEMLIMIT_INTERACTIVE,
+    )
+    .unwrap();
+    let texthash = std::str::from_utf8(&hash.0).unwrap().to_string();
+
+    // postgres hates null chars. don't do that to postgres
+    texthash.trim_end_matches('\u{0}').to_string()
 }

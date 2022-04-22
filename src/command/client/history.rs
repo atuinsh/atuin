@@ -55,7 +55,7 @@ pub enum Cmd {
 pub fn print_list(h: &[History], human: bool, cmd_only: bool) {
     let mut writer = TabWriter::new(std::io::stdout()).padding(2);
 
-    let lines = h.iter().map(|h| {
+    let lines = h.iter().rev().map(|h| {
         if human {
             let duration = humantime::format_duration(Duration::from_nanos(std::cmp::max(
                 h.duration, 0,
@@ -82,7 +82,7 @@ pub fn print_list(h: &[History], human: bool, cmd_only: bool) {
         }
     });
 
-    for i in lines.rev() {
+    for i in lines {
         writer
             .write_all(i.as_bytes())
             .expect("failed to write to tab writer");

@@ -1,5 +1,7 @@
 // Calendar data
 
+use serde::{Deserialize, Serialize};
+
 pub enum TimePeriod {
     YEAR,
     MONTH,
