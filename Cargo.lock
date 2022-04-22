@@ -93,6 +93,7 @@ dependencies = [
  "tracing-subscriber",
  "tui",
  "unicode-width",
+ "whoami",
 ]
 
 [[package]]

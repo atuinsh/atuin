@@ -63,7 +63,7 @@ jobs:
         key: ${{ runner.os }}-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
 
     - name: Run cargo test
-      run: cargo test --workspace
+      run: ATUIN_SESSION=beepboopiamasession cargo test --workspace
 
   clippy:
     runs-on: ubuntu-latest
