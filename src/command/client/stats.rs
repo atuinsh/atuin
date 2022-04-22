@@ -10,7 +10,7 @@ use eyre::{bail, Result};
 
 use atuin_client::database::Database;
 use atuin_client::history::History;
-use atuin_client::settings::{Settings, FilterMode};
+use atuin_client::settings::{FilterMode, Settings};
 
 #[derive(Parser)]
 #[clap(infer_subcommands = true)]

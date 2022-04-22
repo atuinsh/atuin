@@ -16,7 +16,7 @@ use unicode_width::UnicodeWidthStr;
 use atuin_client::{
     database::Database,
     history::History,
-    settings::{SearchMode, Settings, FilterMode},
+    settings::{FilterMode, SearchMode, Settings},
 };
 
 use super::event::{Event, Events};
@@ -236,7 +236,10 @@ async fn query_results(
 ) -> Result<()> {
     let results = match app.input.as_str() {
         "" => db.list(app.filter_mode, Some(200), true).await?,
-        i => db.search(Some(200), search_mode, app.filter_mode, i).await?,
+        i => {
+            db.search(Some(200), search_mode, app.filter_mode, i)
+                .await?
+        }
     };
 
     app.results = results;
@@ -279,11 +282,11 @@ async fn key_handler(
         }
         Key::Char(c) => {
             app.input.push(c);
-            query_results(app, search_mode,  db).await.unwrap();
+            query_results(app, search_mode, db).await.unwrap();
         }
         Key::Backspace => {
             app.input.pop();
-            query_results(app, search_mode,  db).await.unwrap();
+            query_results(app, search_mode, db).await.unwrap();
         }
         // \u{7f} is escape sequence for backspace
         Key::Alt('\u{7f}') => {
@@ -296,18 +299,18 @@ async fn key_handler(
             } else {
                 app.input = words[0..(words.len() - 1)].join(" ");
             }
-            query_results(app, search_mode,  db).await.unwrap();
+            query_results(app, search_mode, db).await.unwrap();
         }
         Key::Ctrl('u') => {
             app.input = String::from("");
-            query_results(app, search_mode,  db).await.unwrap();
+            query_results(app, search_mode, db).await.unwrap();
         }
         Key::Ctrl('r') => {
             app.filter_mode = match app.filter_mode {
                 FilterMode::Global => FilterMode::Host,
-                FilterMode::Host=> FilterMode::Session,
-                FilterMode::Session=> FilterMode::Directory,
-                FilterMode::Directory=> FilterMode::Global,
+                FilterMode::Host => FilterMode::Session,
+                FilterMode::Session => FilterMode::Directory,
+                FilterMode::Directory => FilterMode::Global,
             };
 
             query_results(app, search_mode, db).await.unwrap();
@@ -388,12 +391,11 @@ fn draw<T: Backend>(f: &mut Frame<'_, T>, history_count: i64, app: &mut State) {
     let help = Text::from(Spans::from(help));
     let help = Paragraph::new(help);
 
-
-    let filter_mode = match app.filter_mode{
+    let filter_mode = match app.filter_mode {
         FilterMode::Global => "GLOBAL",
-        FilterMode::Host=> "HOST",
+        FilterMode::Host => "HOST",
         FilterMode::Session => "SESSION",
-        FilterMode::Directory=> "DIRECTORY",
+        FilterMode::Directory => "DIRECTORY",
     };
 
     let input = Paragraph::new(app.input.clone())
@@ -471,14 +473,15 @@ fn draw_compact<T: Backend>(f: &mut Frame<'_, T>, history_count: i64, app: &mut 
     .style(Style::default().fg(Color::DarkGray))
     .alignment(Alignment::Right);
 
-    let filter_mode = match app.filter_mode{
+    let filter_mode = match app.filter_mode {
         FilterMode::Global => "GLOBAL",
-        FilterMode::Host=> "HOST",
+        FilterMode::Host => "HOST",
         FilterMode::Session => "SESSION",
-        FilterMode::Directory=> "DIRECTORY",
+        FilterMode::Directory => "DIRECTORY",
     };
 
-    let input = Paragraph::new(format!("{}] {}", filter_mode, app.input.clone())).block(Block::default());
+    let input =
+        Paragraph::new(format!("{}] {}", filter_mode, app.input.clone())).block(Block::default());
 
     f.render_widget(title, header_chunks[0]);
     f.render_widget(help, header_chunks[1]);
@@ -582,11 +585,23 @@ pub async fn run(
     };
 
     if interactive {
-        let item = select_history(query, settings.search_mode, settings.filter_mode,settings.style, db).await?;
+        let item = select_history(
+            query,
+            settings.search_mode,
+            settings.filter_mode,
+            settings.style,
+            db,
+        )
+        .await?;
         eprintln!("{}", item);
     } else {
         let results = db
-            .search(None, settings.search_mode, settings.filter_mode,query.join(" ").as_str())
+            .search(
+                None,
+                settings.search_mode,
+                settings.filter_mode,
+                query.join(" ").as_str(),
+            )
             .await?;
 
         // TODO: This filtering would be better done in the SQL query, I just

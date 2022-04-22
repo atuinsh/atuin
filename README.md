@@ -48,6 +48,7 @@ I wanted to. And I **really** don't want to.
 - calculate statistics such as "most used command"
 - old history file is not replaced
 - quick-jump to previous items with <kbd>Alt-\<num\></kbd>
+- switch filter modes via ctrl-r; search history just from the current session, directory, or globally
 
 ## Documentation
 
