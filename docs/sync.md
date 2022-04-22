@@ -1,6 +1,6 @@
 # `atuin sync`
 
-Atuin can backup your history to a server, and use this to ensure multiple
+Atuin can back up your history to a server, and use this to ensure multiple
 machines have the same shell history. This is all encrypted end-to-end, so the
 server operator can _never_ see your data!
 
@@ -47,7 +47,7 @@ Never share this with anyone!
 
 ## Login
 
-If you want to login to a new machine, you will require your encryption key
+If you want to log in to a new machine, you will require your encryption key
 (`atuin key`).
 
 ```

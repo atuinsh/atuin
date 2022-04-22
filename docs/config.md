@@ -58,7 +58,7 @@ sync_address = "https://api.atuin.sh"
 ### `sync_frequency`
 
 How often to automatically sync with the server. This can be given in a
-"human readable" format. For example, `10s`, `20m`, `1h`, etc. Defaults to `1h`.
+"human-readable" format. For example, `10s`, `20m`, `1h`, etc. Defaults to `1h`.
 
 If set to `0`, Atuin will sync after every command. Some servers may potentially
 rate limit, which won't cause any issues.
