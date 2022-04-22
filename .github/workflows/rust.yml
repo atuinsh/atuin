@@ -63,7 +63,19 @@ jobs:
         key: ${{ runner.os }}-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
 
     - name: Run cargo test
-      run: ATUIN_SESSION=beepboopiamasession cargo test --workspace
+      run: cargo test --all-features --workspace
+
+    - name: Run cargo check (all features)
+      run: cargo check --all-features --workspace
+
+    - name: Run cargo check (no features)
+      run: cargo check --no-default-features --workspace
+
+    - name: Run cargo check (sync)
+      run: cargo check --no-default-features --features sync --workspace
+
+    - name: Run cargo check (server)
+      run: cargo check --no-default-features --features server --workspace
 
   clippy:
     runs-on: ubuntu-latest

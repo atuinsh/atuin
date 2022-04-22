@@ -9,6 +9,8 @@ use tabwriter::TabWriter;
 use atuin_client::database::{current_context, Database};
 use atuin_client::history::History;
 use atuin_client::settings::Settings;
+
+#[cfg(feature = "sync")]
 use atuin_client::sync;
 
 #[derive(Subcommand)]
@@ -143,8 +145,13 @@ impl Cmd {
                 db.update(&h).await?;
 
                 if settings.should_sync()? {
-                    debug!("running periodic background sync");
-                    sync::sync(settings, false, db).await?;
+                    #[cfg(feature = "sync")]
+                    {
+                        debug!("running periodic background sync");
+                        sync::sync(settings, false, db).await?;
+                    }
+                    #[cfg(not(feature = "sync"))]
+                    debug!("not compiled with sync support");
                 } else {
                     debug!("sync disabled! not syncing");
                 }

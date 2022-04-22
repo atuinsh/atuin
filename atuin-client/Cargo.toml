@@ -10,6 +10,17 @@ repository = "https://github.com/ellie/atuin"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[features]
+default = ["sync"]
+sync = [
+  "urlencoding",
+  "sodiumoxide",
+  "reqwest",
+  "rust-crypto",
+  "rmp-serde",
+  "base64",
+]
+
 [dependencies]
 atuin-common = { path = "../atuin-common", version = "0.8.1" }
 
@@ -23,20 +34,8 @@ chrono-english = "0.1.4"
 config = "0.13"
 serde = { version = "1.0.126", features = ["derive"] }
 serde_json = "1.0.75"
-rmp-serde = "1.0.0"
-sodiumoxide = "0.2.6"
-reqwest = { version = "0.11", features = [
-  "blocking",
-  "json",
-  "rustls-tls",
-], default-features = false }
-base64 = "0.13.0"
 parse_duration = "2.1.1"
-rand = "0.8.4"
-rust-crypto = "^0.2"
-tokio = { version = "1", features = ["full"] }
 async-trait = "0.1.49"
-urlencoding = "2.1.0"
 itertools = "0.10.3"
 shellexpand = "2"
 sqlx = { version = "0.5", features = [
@@ -48,3 +47,17 @@ sqlx = { version = "0.5", features = [
 minspan = "0.1.1"
 regex = "1.5.4"
 fs-err = "2.7"
+
+# sync
+urlencoding = { version = "2.1.0", optional = true }
+sodiumoxide = { version = "0.2.6", optional = true }
+reqwest = { version = "0.11", features = [
+  "json",
+  "rustls-tls",
+], default-features = false, optional = true }
+rust-crypto = { version = "^0.2", optional = true }
+rmp-serde = { version = "1.0.0", optional = true }
+base64 = { version = "0.13.0", optional = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }

@@ -38,7 +38,7 @@ pub async fn register(
     map.insert("password", password);
 
     let url = format!("{}/user/{}", address, username);
-    let resp = reqwest::blocking::get(url)?;
+    let resp = reqwest::get(url).await?;
 
     if resp.status().is_success() {
         bail!("username already in use");

@@ -8,16 +8,16 @@ use atuin_client::database::Sqlite;
 use atuin_client::settings::Settings;
 use atuin_common::utils::uuid_v4;
 
+#[cfg(feature = "sync")]
+mod sync;
+
 mod event;
 mod history;
 mod import;
 mod init;
-mod login;
-mod logout;
-mod register;
 mod search;
 mod stats;
-mod sync;
+
 use std::path::PathBuf;
 
 #[derive(Subcommand)]
@@ -45,25 +45,6 @@ pub enum Cmd {
     /// Interactive history search
     Search(search::Cmd),
 
-    /// Sync with the configured server
-    Sync {
-        /// Force re-download everything
-        #[clap(long, short)]
-        force: bool,
-    },
-
-    /// Login to the configured server
-    Login(login::Cmd),
-
-    /// Log out
-    Logout,
-
-    /// Register with the configured server
-    Register(register::Cmd),
-
-    /// Print the encryption key for transfer to another machine
-    Key,
-
     /// Generate shell completions
     GenCompletions {
         /// Set the shell for generating completions
@@ -74,6 +55,10 @@ pub enum Cmd {
         #[clap(long, short)]
         out_dir: Option<String>,
     },
+
+    #[cfg(feature = "sync")]
+    #[clap(flatten)]
+    Sync(sync::Cmd),
 }
 
 impl Cmd {
@@ -94,17 +79,6 @@ impl Cmd {
                 Ok(())
             }
             Self::Search(search) => search.run(&mut db, &settings).await,
-            Self::Sync { force } => sync::run(&settings, force, &mut db).await,
-            Self::Login(l) => l.run(&settings).await,
-            Self::Logout => logout::run(),
-            Self::Register(r) => r.run(&settings).await,
-            Self::Key => {
-                use atuin_client::encryption::{encode_key, load_key};
-                let key = load_key(&settings).wrap_err("could not load encryption key")?;
-                let encode = encode_key(key).wrap_err("could not encode encryption key")?;
-                println!("{}", encode);
-                Ok(())
-            }
             Self::Uuid => {
                 println!("{}", uuid_v4());
                 Ok(())
@@ -128,6 +102,8 @@ impl Cmd {
 
                 Ok(())
             }
+            #[cfg(feature = "sync")]
+            Self::Sync(sync) => sync.run(settings, &mut db).await,
         }
     }
 }
