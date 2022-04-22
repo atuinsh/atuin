@@ -45,7 +45,6 @@ pub enum Cmd {
     /// Interactive history search
     Search(search::Cmd),
 
-
     /// Generate shell completions
     GenCompletions {
         /// Set the shell for generating completions

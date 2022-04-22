@@ -143,7 +143,8 @@ impl Cmd {
                 db.update(&h).await?;
 
                 if settings.should_sync()? {
-                    #[cfg(feature = "sync")] {
+                    #[cfg(feature = "sync")]
+                    {
                         debug!("running periodic background sync");
                         sync::sync(settings, false, db).await?;
                     }
