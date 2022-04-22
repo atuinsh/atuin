@@ -86,7 +86,6 @@ dependencies = [
  "log",
  "pretty_env_logger",
  "serde",
- "serde_derive",
  "serde_json",
  "tabwriter",
  "termion",
@@ -119,7 +118,6 @@ dependencies = [
  "rmp-serde",
  "rust-crypto",
  "serde",
- "serde_derive",
  "serde_json",
  "shellexpand",
  "sodiumoxide",
@@ -134,14 +132,9 @@ dependencies = [
 name = "atuin-common"
 version = "0.8.1"
 dependencies = [
- "axum",
  "chrono",
- "http",
  "rust-crypto",
  "serde",
- "serde_derive",
- "serde_json",
- "sodiumoxide",
  "uuid",
 ]
 
@@ -162,7 +155,6 @@ dependencies = [
  "rand 0.8.5",
  "rust-crypto",
  "serde",
- "serde_derive",
  "serde_json",
  "sodiumoxide",
  "sqlx",
@@ -1068,9 +1060,9 @@ dependencies = [
 
 [[package]]
 name = "ipnet"
-version = "2.4.0"
+version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "35e70ee094dc02fd9c13fdad4940090f22dbd6ac7c9e7094a46cf0232a50bc7c"
+checksum = "879d54834c8c76457ef4293a689b2a8c59b076067ad77b15efafbb05f92a592b"
 
 [[package]]
 name = "itertools"

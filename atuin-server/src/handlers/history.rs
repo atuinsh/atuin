@@ -10,6 +10,8 @@ use atuin_common::api::*;
 
 use crate::calendar::{TimePeriod, TimePeriodInfo};
 
+use super::{ErrorResponse, ErrorResponseStatus};
+
 #[instrument(skip_all, fields(user.id = user.id))]
 pub async fn count(
     user: User,

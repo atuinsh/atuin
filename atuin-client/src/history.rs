@@ -3,6 +3,7 @@ use std::env;
 use chrono::Utc;
 
 use atuin_common::utils::uuid_v4;
+use serde::{Deserialize, Serialize};
 
 // Any new fields MUST be Optional<>!
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, sqlx::FromRow)]
