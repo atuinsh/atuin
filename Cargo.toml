@@ -30,13 +30,16 @@ atuin = { path = "/usr/bin/atuin" }
 members = ["./atuin-client", "./atuin-server", "./atuin-common"]
 
 [features]
+# TODO(conradludgate)
+# Currently, this keeps the same default built behaviour for v0.8
+# We should rethink this by the time we hit a new breaking change
 default = ["sync", "server"]
 sync = ["atuin-client/sync"]
-server = ["atuin-server"]
+server = ["atuin-server", "tracing-subscriber"]
 
 [dependencies]
 atuin-server = { path = "atuin-server", version = "0.8.1", optional = true }
-atuin-client = { path = "atuin-client", version = "0.8.1" }
+atuin-client = { path = "atuin-client", version = "0.8.1", default-features = false }
 atuin-common = { path = "atuin-common", version = "0.8.1" }
 
 log = "0.4"
@@ -63,7 +66,6 @@ clap = { version = "3.1.11", features = ["derive"] }
 clap_complete = "3.1.2"
 fs-err = "2.7"
 
-
 [dependencies.tracing-subscriber]
 version = "0.3"
 default-features = false
@@ -73,8 +75,4 @@ features = [
     "registry",
     "env-filter",
 ]
-
-[profile.release]
-lto = "fat"
-codegen-units = 1
-opt-level = 3
+optional = true

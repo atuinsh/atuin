@@ -9,7 +9,7 @@
 // to decrypt
 
 use fs_err as fs;
-use serde::{Deserialize, Serialize};
+use serde::{Serialize, Deserialize};
 use std::io::prelude::*;
 use std::path::PathBuf;
 
@@ -77,7 +77,7 @@ pub fn encode_key(key: secretbox::Key) -> Result<String> {
 
 pub fn decode_key(key: String) -> Result<secretbox::Key> {
     let buf = base64::decode(key).wrap_err("encryption key is not a valid base64 encoding")?;
-    let buf: secretbox::Key = rmp_serde::from_read_ref(&buf)
+    let buf: secretbox::Key = rmp_serde::from_slice(&buf)
         .wrap_err("encryption key is not a valid message pack encoding")?;
 
     Ok(buf)
@@ -98,7 +98,7 @@ pub fn decrypt(encrypted_history: &EncryptedHistory, key: &secretbox::Key) -> Re
     let plaintext = secretbox::open(&encrypted_history.ciphertext, &encrypted_history.nonce, key)
         .map_err(|_| eyre!("failed to open secretbox - invalid key?"))?;
 
-    let history = rmp_serde::from_read_ref(&plaintext)?;
+    let history = rmp_serde::from_slice(&plaintext)?;
 
     Ok(history)
 }
