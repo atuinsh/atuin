@@ -242,7 +242,11 @@ impl Database for Sqlite {
             FilterMode::Directory => format!("cwd = '{}'", context.cwd).to_string(),
         };
 
-        let filter = format!("{} {}", join, filter_query);
+        let filter = if filter_query.is_empty() {
+            "".to_string()
+        } else {
+            format!("{} {}", join, filter_query)
+        };
 
         let limit = if let Some(max) = max {
             format!("limit {}", max)
@@ -252,9 +256,9 @@ impl Database for Sqlite {
 
         let query = format!(
             "select * from history h
-                {}
+                {} {}
                 order by timestamp desc
-                {} {}",
+                {}",
             query, filter, limit,
         );
 
@@ -402,32 +406,41 @@ impl Database for Sqlite {
             }
         };
 
-        let filter_sql = match filter {
-            FilterMode::Global => String::from(""),
-            FilterMode::Session => format!("and session = '{}'", context.session),
-            FilterMode::Directory => format!("and cwd = '{}'", context.cwd),
-            FilterMode::Host => format!("and hostname = '{}'", context.hostname),
+        let filter_base = if query_sql.is_empty() {
+            "".to_string()
+        } else {
+            "and".to_string()
         };
 
-        let res = query_params
-            .iter()
-            .fold(
-                sqlx::query(
-                    format!(
-                        "select * from history h
-                                           where {}
-                                           {}
+        let filter_query = match filter {
+            FilterMode::Global => String::from(""),
+            FilterMode::Session => format!("session = '{}'", context.session),
+            FilterMode::Directory => format!("cwd = '{}'", context.cwd),
+            FilterMode::Host => format!("hostname = '{}'", context.hostname),
+        };
+
+        let filter_sql = if filter_query.is_empty() {
+            "".to_string()
+        } else {
+            format!("{} {}", filter_base, filter_query)
+        };
+
+        let sql = format!(
+            "select * from history h
+                                           where {} {}
                                            group by command
                                            having max(timestamp)
                                            order by timestamp desc {}",
-                        query_sql.as_str(),
-                        filter_sql.as_str(),
-                        limit.clone()
-                    )
-                    .as_str(),
-                ),
-                |query, query_param| query.bind(query_param),
-            )
+            query_sql.as_str(),
+            filter_sql.as_str(),
+            limit.clone()
+        );
+
+        let res = query_params
+            .iter()
+            .fold(sqlx::query(sql.as_str()), |query, query_param| {
+                query.bind(query_param)
+            })
             .map(Self::query_history)
             .fetch_all(&self.pool)
             .await?;
