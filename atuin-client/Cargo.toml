@@ -28,7 +28,7 @@ log = "0.4"
 chrono = { version = "0.4", features = ["serde"] }
 eyre = "0.6"
 directories = "4"
-uuid = { version = "0.8", features = ["v4"] }
+uuid = { version = "1.0", features = ["v4"] }
 whoami = "1.1.2"
 chrono-english = "0.1.4"
 config = "0.13"
@@ -40,7 +40,6 @@ itertools = "0.10.3"
 shellexpand = "2"
 sqlx = { version = "0.5", features = [
   "runtime-tokio-rustls",
-  "uuid",
   "chrono",
   "sqlite",
 ] }

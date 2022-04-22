@@ -82,7 +82,7 @@ pub async fn register(
         }
     };
 
-    let token = Uuid::new_v4().to_simple().to_string();
+    let token = Uuid::new_v4().as_simple().to_string();
 
     let new_session = NewSession {
         user_id,

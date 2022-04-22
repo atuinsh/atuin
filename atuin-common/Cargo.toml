@@ -14,4 +14,4 @@ repository = "https://github.com/ellie/atuin"
 rust-crypto = "^0.2"
 chrono = { version = "0.4", features = ["serde"] }
 serde = { version = "1.0.126", features = ["derive"] }
-uuid = { version = "0.8", features = ["v4"] }
+uuid = { version = "1.0", features = ["v4"] }
