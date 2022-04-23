@@ -7,9 +7,15 @@ use chrono::prelude::*;
 use chrono::Utc;
 
 use itertools::Itertools;
+use lazy_static::lazy_static;
 use regex::Regex;
 
 use fs_err as fs;
+use sql_builder::bind::Bind;
+use sql_builder::esc;
+use sql_builder::quote;
+use sql_builder::SqlBuilder;
+use sql_builder::SqlName;
 use sqlx::{
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteRow},
     Result, Row,
@@ -219,50 +225,30 @@ impl Database for Sqlite {
     ) -> Result<Vec<History>> {
         debug!("listing history");
 
-        // gotta get that query builder in soon cuz I kinda hate this
-        let query = if unique {
-            "where timestamp = (
-                    select max(timestamp) from history
-                    where h.command = history.command
-                )"
-        } else {
-            ""
+        let mut query = SqlBuilder::select_from(SqlName::new("history").alias("h").baquoted());
+        query.field("*").order_desc("timestamp");
+
+        match filter {
+            FilterMode::Global => &mut query,
+            FilterMode::Host => query.and_where_eq("hostname", quote(&context.hostname)),
+            FilterMode::Session => query.and_where_eq("session", quote(&context.session)),
+            FilterMode::Directory => query.and_where_eq("cwd", quote(&context.cwd)),
+        };
+
+        if unique {
+            query.and_where_eq(
+                "timestamp",
+                "(select max(timestamp) from history where h.command = history.command)",
+            );
         }
-        .to_string();
 
-        let mut join = if unique { "and" } else { "where" }.to_string();
+        if let Some(max) = max {
+            query.limit(max);
+        }
 
-        let filter_query = match filter {
-            FilterMode::Global => {
-                join = "".to_string();
-                "".to_string()
-            }
-            FilterMode::Host => format!("hostname = '{}'", context.hostname).to_string(),
-            FilterMode::Session => format!("session = '{}'", context.session).to_string(),
-            FilterMode::Directory => format!("cwd = '{}'", context.cwd).to_string(),
-        };
+        let query = query.sql().expect("bug in list query. please report");
 
-        let filter = if filter_query.is_empty() {
-            "".to_string()
-        } else {
-            format!("{} {}", join, filter_query)
-        };
-
-        let limit = if let Some(max) = max {
-            format!("limit {}", max)
-        } else {
-            "".to_string()
-        };
-
-        let query = format!(
-            "select * from history h
-                {} {}
-                order by timestamp desc
-                {}",
-            query, filter, limit,
-        );
-
-        let res = sqlx::query(query.as_str())
+        let res = sqlx::query(&query)
             .map(Self::query_history)
             .fetch_all(&self.pool)
             .await?;
@@ -339,108 +325,100 @@ impl Database for Sqlite {
         context: &Context,
         query: &str,
     ) -> Result<Vec<History>> {
-        let orig_query = query;
-        let query = query.to_string().replace('*', "%"); // allow wildcard char
-        let limit = limit.map_or("".to_owned(), |l| format!("limit {}", l));
+        let mut sql = SqlBuilder::select_from("history");
 
-        let (query_sql, query_params) = match search_mode {
-            SearchMode::Prefix => ("command like ?1".to_string(), vec![format!("{}%", query)]),
-            SearchMode::FullText => ("command like ?1".to_string(), vec![format!("%{}%", query)]),
+        sql.group_by("command")
+            .having("max(timestamp)")
+            .order_desc("timestamp");
+
+        if let Some(limit) = limit {
+            sql.limit(limit);
+        }
+
+        match filter {
+            FilterMode::Global => &mut sql,
+            FilterMode::Host => sql.and_where_eq("hostname", quote(&context.hostname)),
+            FilterMode::Session => sql.and_where_eq("session", quote(&context.session)),
+            FilterMode::Directory => sql.and_where_eq("cwd", quote(&context.cwd)),
+        };
+
+        let orig_query = query;
+        let query = query.replace('*', "%"); // allow wildcard char
+
+        match search_mode {
+            SearchMode::Prefix => sql.and_where_like_left("command", query),
+            SearchMode::FullText => sql.and_where_like_any("command", query),
             SearchMode::Fuzzy => {
-                let split_regex = Regex::new(r" +").unwrap();
-                let terms: Vec<&str> = split_regex.split(query.as_str()).collect();
-                let mut query_sql = std::string::String::new();
-                let mut query_params = Vec::with_capacity(terms.len());
+                // don't recompile the regex on successive calls!
+                lazy_static! {
+                    static ref SPLIT_REGEX: Regex = Regex::new(r" +").unwrap();
+                }
+
                 let mut was_or = false;
-                for (i, query_part) in terms.into_iter().enumerate() {
+                for query_part in SPLIT_REGEX.split(query.as_str()) {
                     // TODO smart case mode could be made configurable like in fzf
-                    let (operator, glob) = if query_part.contains(char::is_uppercase) {
-                        ("glob", '*')
+                    let (is_glob, glob) = if query_part.contains(char::is_uppercase) {
+                        (true, '*')
                     } else {
-                        ("like", '%')
+                        (false, '%')
                     };
+
                     let (is_inverse, query_part) = match query_part.strip_prefix('!') {
                         Some(stripped) => (true, stripped),
                         None => (false, query_part),
                     };
-                    match query_part {
+
+                    let param = match query_part {
                         "|" => {
                             if !was_or {
-                                query_sql.push_str(" OR ");
                                 was_or = true;
                                 continue;
                             } else {
-                                query_params.push(format!("{glob}|{glob}"));
+                                format!("{glob}|{glob}")
                             }
                         }
-                        exact_prefix if query_part.starts_with('^') => query_params.push(format!(
+                        exact_prefix if query_part.starts_with('^') => format!(
                             "{term}{glob}",
                             term = exact_prefix.strip_prefix('^').unwrap()
-                        )),
-                        exact_suffix if query_part.ends_with('$') => query_params.push(format!(
+                        ),
+                        exact_suffix if query_part.ends_with('$') => format!(
                             "{glob}{term}",
                             term = exact_suffix.strip_suffix('$').unwrap()
-                        )),
-                        exact if query_part.starts_with('\'') => query_params.push(format!(
+                        ),
+                        exact if query_part.starts_with('\'') => format!(
                             "{glob}{term}{glob}",
                             term = exact.strip_prefix('\'').unwrap()
-                        )),
+                        ),
                         exact if is_inverse => {
-                            query_params.push(format!("{glob}{term}{glob}", term = exact))
+                            format!("{glob}{term}{glob}", term = exact)
                         }
-                        _ => {
-                            query_params.push(query_part.split("").join(glob.to_string().as_str()))
-                        }
+                        _ => query_part.split("").join(glob.to_string().as_str()),
+                    };
+                    if is_glob {
+                        match (was_or, is_inverse) {
+                            (true, true) => sql.or_where_not_glob("command", param),
+                            (true, false) => sql.or_where_glob("command", param),
+                            (false, true) => sql.and_where_not_glob("command", param),
+                            (false, false) => sql.and_where_glob("command", param),
+                        };
+                    } else {
+                        match (was_or, is_inverse) {
+                            (true, true) => sql.or_where_not_like("command", param),
+                            (true, false) => sql.or_where_like("command", param),
+                            (false, true) => sql.and_where_not_like("command", param),
+                            (false, false) => sql.and_where_like("command", param),
+                        };
                     }
-                    if i > 0 && !was_or {
-                        query_sql.push_str(" AND ");
-                    }
-                    if is_inverse {
-                        query_sql.push_str("NOT ");
-                    }
-                    query_sql
-                        .push_str(format!("command {} ?{}", operator, query_params.len()).as_str());
+
                     was_or = false;
                 }
-                (query_sql, query_params)
+                &mut sql
             }
         };
 
-        let filter_base = if query_sql.is_empty() {
-            "".to_string()
-        } else {
-            "and".to_string()
-        };
+        let query = sql.sql().expect("bug in search query. please report");
 
-        let filter_query = match filter {
-            FilterMode::Global => String::from(""),
-            FilterMode::Session => format!("session = '{}'", context.session),
-            FilterMode::Directory => format!("cwd = '{}'", context.cwd),
-            FilterMode::Host => format!("hostname = '{}'", context.hostname),
-        };
-
-        let filter_sql = if filter_query.is_empty() {
-            "".to_string()
-        } else {
-            format!("{} {}", filter_base, filter_query)
-        };
-
-        let sql = format!(
-            "select * from history h
-                                           where {} {}
-                                           group by command
-                                           having max(timestamp)
-                                           order by timestamp desc {}",
-            query_sql.as_str(),
-            filter_sql.as_str(),
-            limit.clone()
-        );
-
-        let res = query_params
-            .iter()
-            .fold(sqlx::query(sql.as_str()), |query, query_param| {
-                query.bind(query_param)
-            })
+        let res = sqlx::query(&query)
             .map(Self::query_history)
             .fetch_all(&self.pool)
             .await?;
@@ -685,5 +663,75 @@ mod test {
         let duration = start.elapsed();
 
         assert!(duration < Duration::from_secs(15));
+    }
+}
+
+// borrowed from the sql-builder *like functions
+trait SqlBuilderExt {
+    fn and_where_glob<S, T>(&mut self, field: S, mask: T) -> &mut Self
+    where
+        S: ToString,
+        T: ToString;
+    fn and_where_not_glob<S, T>(&mut self, field: S, mask: T) -> &mut Self
+    where
+        S: ToString,
+        T: ToString;
+    fn or_where_glob<S, T>(&mut self, field: S, mask: T) -> &mut Self
+    where
+        S: ToString,
+        T: ToString;
+    fn or_where_not_glob<S, T>(&mut self, field: S, mask: T) -> &mut Self
+    where
+        S: ToString,
+        T: ToString;
+}
+
+impl SqlBuilderExt for SqlBuilder {
+    fn and_where_glob<S, T>(&mut self, field: S, mask: T) -> &mut Self
+    where
+        S: ToString,
+        T: ToString,
+    {
+        let mut cond = field.to_string();
+        cond.push_str(" GLOB '");
+        cond.push_str(&esc(&mask.to_string()));
+        cond.push('\'');
+        self.and_where(&cond)
+    }
+
+    fn or_where_glob<S, T>(&mut self, field: S, mask: T) -> &mut Self
+    where
+        S: ToString,
+        T: ToString,
+    {
+        let mut cond = field.to_string();
+        cond.push_str(" GLOB '");
+        cond.push_str(&esc(&mask.to_string()));
+        cond.push('\'');
+        self.or_where(&cond)
+    }
+
+    fn and_where_not_glob<S, T>(&mut self, field: S, mask: T) -> &mut Self
+    where
+        S: ToString,
+        T: ToString,
+    {
+        let mut cond = field.to_string();
+        cond.push_str(" NOT GLOB '");
+        cond.push_str(&esc(&mask.to_string()));
+        cond.push('\'');
+        self.and_where(&cond)
+    }
+
+    fn or_where_not_glob<S, T>(&mut self, field: S, mask: T) -> &mut Self
+    where
+        S: ToString,
+        T: ToString,
+    {
+        let mut cond = field.to_string();
+        cond.push_str(" NOT GLOB '");
+        cond.push_str(&esc(&mask.to_string()));
+        cond.push('\'');
+        self.or_where(&cond)
     }
 }
