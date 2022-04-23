@@ -348,7 +348,7 @@ impl Database for Sqlite {
                     static ref SPLIT_REGEX: Regex = Regex::new(r" +").unwrap();
                 }
 
-                let mut was_or = false;
+                let mut is_or = false;
                 for query_part in SPLIT_REGEX.split(query.as_str()) {
                     // TODO smart case mode could be made configurable like in fzf
                     let (is_glob, glob) = if query_part.contains(char::is_uppercase) {
@@ -363,8 +363,8 @@ impl Database for Sqlite {
                     };
 
                     let param = if query_part == "|" {
-                        if !was_or {
-                            was_or = true;
+                        if !is_or {
+                            is_or = true;
                             continue;
                         } else {
                             format!("{glob}|{glob}")
@@ -381,23 +381,8 @@ impl Database for Sqlite {
                         query_part.split("").join(glob)
                     };
 
-                    if is_glob {
-                        match (was_or, is_inverse) {
-                            (true, true) => sql.or_where_not_glob("command", param),
-                            (true, false) => sql.or_where_glob("command", param),
-                            (false, true) => sql.and_where_not_glob("command", param),
-                            (false, false) => sql.and_where_glob("command", param),
-                        };
-                    } else {
-                        match (was_or, is_inverse) {
-                            (true, true) => sql.or_where_not_like("command", param),
-                            (true, false) => sql.or_where_like("command", param),
-                            (false, true) => sql.and_where_not_like("command", param),
-                            (false, false) => sql.and_where_like("command", param),
-                        };
-                    }
-
-                    was_or = false;
+                    sql.fuzzy_condition("command", param, is_inverse, is_glob, is_or);
+                    is_or = false;
                 }
                 &mut sql
             }
@@ -653,72 +638,42 @@ mod test {
     }
 }
 
-/// borrowed from the sql-builder *like functions
 trait SqlBuilderExt {
-    fn and_where_glob<S, T>(&mut self, field: S, mask: T) -> &mut Self
-    where
-        S: ToString,
-        T: ToString;
-    fn and_where_not_glob<S, T>(&mut self, field: S, mask: T) -> &mut Self
-    where
-        S: ToString,
-        T: ToString;
-    fn or_where_glob<S, T>(&mut self, field: S, mask: T) -> &mut Self
-    where
-        S: ToString,
-        T: ToString;
-    fn or_where_not_glob<S, T>(&mut self, field: S, mask: T) -> &mut Self
-    where
-        S: ToString,
-        T: ToString;
+    fn fuzzy_condition<S: ToString, T: ToString>(
+        &mut self,
+        field: S,
+        mask: T,
+        inverse: bool,
+        glob: bool,
+        is_or: bool,
+    ) -> &mut Self;
 }
 
 impl SqlBuilderExt for SqlBuilder {
-    fn and_where_glob<S, T>(&mut self, field: S, mask: T) -> &mut Self
-    where
-        S: ToString,
-        T: ToString,
-    {
+    /// adapted from the sql-builder *like functions
+    fn fuzzy_condition<S: ToString, T: ToString>(
+        &mut self,
+        field: S,
+        mask: T,
+        inverse: bool,
+        glob: bool,
+        is_or: bool,
+    ) -> &mut Self {
         let mut cond = field.to_string();
-        cond.push_str(" GLOB '");
+        if inverse {
+            cond.push_str(" NOT");
+        }
+        if glob {
+            cond.push_str(" GLOB '");
+        } else {
+            cond.push_str(" LIKE '");
+        }
         cond.push_str(&esc(&mask.to_string()));
         cond.push('\'');
-        self.and_where(&cond)
-    }
-
-    fn or_where_glob<S, T>(&mut self, field: S, mask: T) -> &mut Self
-    where
-        S: ToString,
-        T: ToString,
-    {
-        let mut cond = field.to_string();
-        cond.push_str(" GLOB '");
-        cond.push_str(&esc(&mask.to_string()));
-        cond.push('\'');
-        self.or_where(&cond)
-    }
-
-    fn and_where_not_glob<S, T>(&mut self, field: S, mask: T) -> &mut Self
-    where
-        S: ToString,
-        T: ToString,
-    {
-        let mut cond = field.to_string();
-        cond.push_str(" NOT GLOB '");
-        cond.push_str(&esc(&mask.to_string()));
-        cond.push('\'');
-        self.and_where(&cond)
-    }
-
-    fn or_where_not_glob<S, T>(&mut self, field: S, mask: T) -> &mut Self
-    where
-        S: ToString,
-        T: ToString,
-    {
-        let mut cond = field.to_string();
-        cond.push_str(" NOT GLOB '");
-        cond.push_str(&esc(&mask.to_string()));
-        cond.push('\'');
-        self.or_where(&cond)
+        if is_or {
+            self.or_where(cond)
+        } else {
+            self.and_where(cond)
+        }
     }
 }
