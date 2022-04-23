@@ -5,17 +5,11 @@ use std::str::FromStr;
 use async_trait::async_trait;
 use chrono::prelude::*;
 use chrono::Utc;
-
+use fs_err as fs;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use regex::Regex;
-
-use fs_err as fs;
-use sql_builder::bind::Bind;
-use sql_builder::esc;
-use sql_builder::quote;
-use sql_builder::SqlBuilder;
-use sql_builder::SqlName;
+use sql_builder::{esc, quote, SqlBuilder, SqlName};
 use sqlx::{
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteRow},
     Result, Row,
@@ -358,9 +352,9 @@ impl Database for Sqlite {
                 for query_part in SPLIT_REGEX.split(query.as_str()) {
                     // TODO smart case mode could be made configurable like in fzf
                     let (is_glob, glob) = if query_part.contains(char::is_uppercase) {
-                        (true, '*')
+                        (true, "*")
                     } else {
-                        (false, '%')
+                        (false, "%")
                     };
 
                     let (is_inverse, query_part) = match query_part.strip_prefix('!') {
@@ -368,32 +362,25 @@ impl Database for Sqlite {
                         None => (false, query_part),
                     };
 
-                    let param = match query_part {
-                        "|" => {
-                            if !was_or {
-                                was_or = true;
-                                continue;
-                            } else {
-                                format!("{glob}|{glob}")
-                            }
+                    let param = if query_part == "|" {
+                        if !was_or {
+                            was_or = true;
+                            continue;
+                        } else {
+                            format!("{glob}|{glob}")
                         }
-                        exact_prefix if query_part.starts_with('^') => format!(
-                            "{term}{glob}",
-                            term = exact_prefix.strip_prefix('^').unwrap()
-                        ),
-                        exact_suffix if query_part.ends_with('$') => format!(
-                            "{glob}{term}",
-                            term = exact_suffix.strip_suffix('$').unwrap()
-                        ),
-                        exact if query_part.starts_with('\'') => format!(
-                            "{glob}{term}{glob}",
-                            term = exact.strip_prefix('\'').unwrap()
-                        ),
-                        exact if is_inverse => {
-                            format!("{glob}{term}{glob}", term = exact)
-                        }
-                        _ => query_part.split("").join(glob.to_string().as_str()),
+                    } else if let Some(term) = query_part.strip_prefix('^') {
+                        format!("{term}{glob}")
+                    } else if let Some(term) = query_part.strip_suffix('$') {
+                        format!("{glob}{term}")
+                    } else if let Some(term) = query_part.strip_prefix('\'') {
+                        format!("{glob}{term}{glob}")
+                    } else if is_inverse {
+                        format!("{glob}{term}{glob}", term = query_part)
+                    } else {
+                        query_part.split("").join(glob)
                     };
+
                     if is_glob {
                         match (was_or, is_inverse) {
                             (true, true) => sql.or_where_not_glob("command", param),
@@ -666,7 +653,7 @@ mod test {
     }
 }
 
-// borrowed from the sql-builder *like functions
+/// borrowed from the sql-builder *like functions
 trait SqlBuilderExt {
     fn and_where_glob<S, T>(&mut self, field: S, mask: T) -> &mut Self
     where
