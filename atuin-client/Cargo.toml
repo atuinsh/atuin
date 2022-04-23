@@ -1,6 +1,6 @@
 [package]
 name = "atuin-client"
-version = "0.8.1"
+version = "0.9.0"
 authors = ["Ellie Huxtable <ellie@elliehuxtable.com>"]
 edition = "2018"
 license = "MIT"
@@ -22,7 +22,7 @@ sync = [
 ]
 
 [dependencies]
-atuin-common = { path = "../atuin-common", version = "0.8.1" }
+atuin-common = { path = "../atuin-common", version = "0.9.0" }
 
 log = "0.4"
 chrono = { version = "0.4", features = ["serde"] }
