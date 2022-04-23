@@ -31,16 +31,16 @@ jobs:
         key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
 
     - name: Run cargo build common
-      run: cargo build -p atuin-common --release
+      run: cargo build -p atuin-common --locked --release
 
     - name: Run cargo build client
-      run: cargo build -p atuin-client --release
+      run: cargo build -p atuin-client --locked --release
 
     - name: Run cargo build server
-      run: cargo build -p atuin-server --release
+      run: cargo build -p atuin-server --locked --release
 
     - name: Run cargo build main
-      run: cargo build --all --release && strip target/release/atuin
+      run: cargo build --all --locked --release && strip target/release/atuin
 
   test:
     runs-on: ubuntu-latest
