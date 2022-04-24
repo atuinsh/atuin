@@ -1,10 +1,9 @@
 use std::env;
-use std::io::Write;
+use std::io::{StdoutLock, Write};
 use std::time::Duration;
 
 use clap::Subcommand;
 use eyre::Result;
-use tabwriter::TabWriter;
 
 use atuin_client::database::{current_context, Database};
 use atuin_client::history::History;
@@ -12,6 +11,7 @@ use atuin_client::settings::Settings;
 
 #[cfg(feature = "sync")]
 use atuin_client::sync;
+use owo_colors::OwoColorize;
 
 #[derive(Subcommand)]
 #[clap(infer_subcommands = true)]
@@ -55,42 +55,62 @@ pub enum Cmd {
 
 #[allow(clippy::cast_sign_loss)]
 pub fn print_list(h: &[History], human: bool, cmd_only: bool) {
-    let mut writer = TabWriter::new(std::io::stdout()).padding(2);
+    let w = std::io::stdout();
+    let mut w = w.lock();
 
-    let lines = h.iter().rev().map(|h| {
-        if human {
-            let duration = humantime::format_duration(Duration::from_nanos(std::cmp::max(
-                h.duration, 0,
-            ) as u64))
-            .to_string();
-            let duration: Vec<&str> = duration.split(' ').collect();
-            let duration = duration[0];
-
-            format!(
-                "{}\t{}\t{}\n",
-                h.timestamp.format("%Y-%m-%d %H:%M:%S"),
-                h.command.trim(),
-                duration,
-            )
-        } else if cmd_only {
-            format!("{}\n", h.command.trim())
-        } else {
-            format!(
-                "{}\t{}\t{}\n",
-                h.timestamp.timestamp_nanos(),
-                h.command.trim(),
-                h.duration
-            )
-        }
-    });
-
-    for i in lines {
-        writer
-            .write_all(i.as_bytes())
-            .expect("failed to write to tab writer");
+    if human {
+        print_human_list(&mut w, h);
+    } else if cmd_only {
+        print_cmd_only(&mut w, h);
+    } else {
+        print_basic(&mut w, h);
     }
 
-    writer.flush().expect("failed to flush tab writer");
+    w.flush().expect("failed to flush history");
+}
+
+#[allow(clippy::cast_sign_loss)]
+pub fn print_human_list(w: &mut StdoutLock, h: &[History]) {
+    for h in h.iter().rev() {
+        let duration =
+            humantime::format_duration(Duration::from_nanos(std::cmp::max(h.duration, 0) as u64))
+                .to_string();
+        let duration: Vec<&str> = duration.split(' ').collect();
+        let duration = duration[0];
+
+        let time = h.timestamp.format("%Y-%m-%d %H:%M:%S");
+        let cmd = h.command.trim();
+
+        let duration = if h.exit == 0 {
+            duration.color(owo_colors::AnsiColors::Green)
+        } else {
+            duration.color(owo_colors::AnsiColors::Red)
+        };
+
+        writeln!(w, "{time} · {duration}\t{cmd}").expect("failed to write history");
+    }
+}
+
+#[allow(clippy::cast_sign_loss)]
+pub fn print_basic(w: &mut StdoutLock, h: &[History]) {
+    for h in h.iter().rev() {
+        let duration =
+            humantime::format_duration(Duration::from_nanos(std::cmp::max(h.duration, 0) as u64))
+                .to_string();
+        let duration: Vec<&str> = duration.split(' ').collect();
+        let duration = duration[0];
+
+        let time = h.timestamp.format("%Y-%m-%d %H:%M:%S");
+        let cmd = h.command.trim();
+
+        writeln!(w, "{time}\t{cmd}\t{duration}").expect("failed to write history");
+    }
+}
+
+pub fn print_cmd_only(w: &mut StdoutLock, h: &[History]) {
+    for h in h.iter().rev() {
+        writeln!(w, "{}", h.command.trim()).expect("failed to write history");
+    }
 }
 
 impl Cmd {

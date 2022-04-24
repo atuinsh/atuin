@@ -3,7 +3,7 @@ use std::convert::TryInto;
 use chrono::prelude::*;
 use eyre::Result;
 
-use atuin_common::{api::AddHistoryRequest};
+use atuin_common::api::AddHistoryRequest;
 
 use crate::api_client;
 use crate::database::Database;
@@ -11,7 +11,7 @@ use crate::encryption::{encrypt, load_encoded_key, load_key};
 use crate::settings::{Settings, HISTORY_PAGE_SIZE};
 
 pub fn hash_str(string: &str) -> String {
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(string.as_bytes());
     hex::encode(hasher.finalize())
