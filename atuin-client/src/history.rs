@@ -45,4 +45,8 @@ impl History {
             hostname,
         }
     }
+
+    pub fn success(&self) -> bool {
+        self.exit == 0 || self.duration == -1
+    }
 }

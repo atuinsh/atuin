@@ -81,11 +81,12 @@ pub fn print_human_list(w: &mut StdoutLock, h: &[History]) {
         let time = h.timestamp.format("%Y-%m-%d %H:%M:%S");
         let cmd = h.command.trim();
 
-        let duration = if h.exit == 0 {
-            duration.color(owo_colors::AnsiColors::Green)
+        let exit_color = if h.success() {
+            owo_colors::AnsiColors::Green
         } else {
-            duration.color(owo_colors::AnsiColors::Red)
+            owo_colors::AnsiColors::Red
         };
+        let duration = duration.color(exit_color);
 
         writeln!(w, "{time} · {duration}\t{cmd}").expect("failed to write history");
     }

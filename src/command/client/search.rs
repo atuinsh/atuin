@@ -196,7 +196,7 @@ impl State {
 
                 let duration = Span::styled(
                     duration,
-                    Style::default().fg(if m.exit == 0 || m.duration == -1 {
+                    Style::default().fg(if m.success() {
                         Color::Green
                     } else {
                         Color::Red
