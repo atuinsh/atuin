@@ -23,6 +23,7 @@ use atuin_client::{
 };
 
 use super::event::{Event, Events};
+use super::history::ListMode;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -73,21 +74,33 @@ impl Cmd {
         db: &mut (impl Database + Send + Sync),
         settings: &Settings,
     ) -> Result<()> {
-        run(
-            settings,
-            self.cwd,
-            self.exit,
-            self.interactive,
-            self.human,
-            self.exclude_exit,
-            self.exclude_cwd,
-            self.before,
-            self.after,
-            self.cmd_only,
-            &self.query,
-            db,
-        )
-        .await
+        if self.interactive {
+            let item = select_history(
+                &self.query,
+                settings.search_mode,
+                settings.filter_mode,
+                settings.style,
+                db,
+            )
+            .await?;
+            eprintln!("{}", item);
+        } else {
+            let list_mode = ListMode::from_flags(self.human, self.cmd_only);
+            run_non_interactive(
+                settings,
+                list_mode,
+                self.cwd,
+                self.exit,
+                self.exclude_exit,
+                self.exclude_cwd,
+                self.before,
+                self.after,
+                &self.query,
+                db,
+            )
+            .await?;
+        };
+        Ok(())
     }
 }
 
@@ -565,117 +578,98 @@ async fn select_history(
 // This is supposed to more-or-less mirror the command line version, so ofc
 // it is going to have a lot of args
 #[allow(clippy::too_many_arguments)]
-pub async fn run(
+async fn run_non_interactive(
     settings: &Settings,
+    list_mode: ListMode,
     cwd: Option<String>,
     exit: Option<i64>,
-    interactive: bool,
-    human: bool,
     exclude_exit: Option<i64>,
     exclude_cwd: Option<String>,
     before: Option<String>,
     after: Option<String>,
-    cmd_only: bool,
     query: &[String],
     db: &mut (impl Database + Send + Sync),
 ) -> Result<()> {
-    let dir = if let Some(cwd) = cwd {
-        if cwd == "." {
-            let current = std::env::current_dir()?;
-            let current = current.as_os_str();
-            let current = current.to_str().unwrap();
+    let dir = if cwd.as_deref() == Some(".") {
+        let current = std::env::current_dir()?;
+        let current = current.as_os_str();
+        let current = current.to_str().unwrap();
 
-            Some(current.to_owned())
-        } else {
-            Some(cwd)
-        }
+        Some(current.to_owned())
     } else {
-        None
+        cwd
     };
 
-    if interactive {
-        let item = select_history(
-            query,
+    let context = current_context();
+
+    let results = db
+        .search(
+            None,
             settings.search_mode,
             settings.filter_mode,
-            settings.style,
-            db,
+            &context,
+            query.join(" ").as_str(),
         )
         .await?;
-        eprintln!("{}", item);
-    } else {
-        let context = current_context();
 
-        let results = db
-            .search(
-                None,
-                settings.search_mode,
-                settings.filter_mode,
-                &context,
-                query.join(" ").as_str(),
-            )
-            .await?;
-
-        // TODO: This filtering would be better done in the SQL query, I just
-        // need a nice way of building queries.
-        let results: Vec<History> = results
-            .iter()
-            .filter(|h| {
-                if let Some(exit) = exit {
-                    if h.exit != exit {
-                        return false;
-                    }
+    // TODO: This filtering would be better done in the SQL query, I just
+    // need a nice way of building queries.
+    let results: Vec<History> = results
+        .iter()
+        .filter(|h| {
+            if let Some(exit) = exit {
+                if h.exit != exit {
+                    return false;
                 }
+            }
 
-                if let Some(exit) = exclude_exit {
-                    if h.exit == exit {
-                        return false;
-                    }
+            if let Some(exit) = exclude_exit {
+                if h.exit == exit {
+                    return false;
                 }
+            }
 
-                if let Some(cwd) = &exclude_cwd {
-                    if h.cwd.as_str() == cwd.as_str() {
-                        return false;
-                    }
+            if let Some(cwd) = &exclude_cwd {
+                if h.cwd.as_str() == cwd.as_str() {
+                    return false;
                 }
+            }
 
-                if let Some(cwd) = &dir {
-                    if h.cwd.as_str() != cwd.as_str() {
-                        return false;
-                    }
+            if let Some(cwd) = &dir {
+                if h.cwd.as_str() != cwd.as_str() {
+                    return false;
                 }
+            }
 
-                if let Some(before) = &before {
-                    let before = chrono_english::parse_date_string(
-                        before.as_str(),
-                        Utc::now(),
-                        chrono_english::Dialect::Uk,
-                    );
+            if let Some(before) = &before {
+                let before = chrono_english::parse_date_string(
+                    before.as_str(),
+                    Utc::now(),
+                    chrono_english::Dialect::Uk,
+                );
 
-                    if before.is_err() || h.timestamp.gt(&before.unwrap()) {
-                        return false;
-                    }
+                if before.is_err() || h.timestamp.gt(&before.unwrap()) {
+                    return false;
                 }
+            }
 
-                if let Some(after) = &after {
-                    let after = chrono_english::parse_date_string(
-                        after.as_str(),
-                        Utc::now(),
-                        chrono_english::Dialect::Uk,
-                    );
+            if let Some(after) = &after {
+                let after = chrono_english::parse_date_string(
+                    after.as_str(),
+                    Utc::now(),
+                    chrono_english::Dialect::Uk,
+                );
 
-                    if after.is_err() || h.timestamp.lt(&after.unwrap()) {
-                        return false;
-                    }
+                if after.is_err() || h.timestamp.lt(&after.unwrap()) {
+                    return false;
                 }
+            }
 
-                true
-            })
-            .map(std::borrow::ToOwned::to_owned)
-            .collect();
+            true
+        })
+        .map(std::borrow::ToOwned::to_owned)
+        .collect();
 
-        super::history::print_list(&results, human, cmd_only);
-    }
-
+    super::history::print_list(&results, list_mode);
     Ok(())
 }

@@ -11,7 +11,6 @@ use atuin_client::settings::Settings;
 
 #[cfg(feature = "sync")]
 use atuin_client::sync;
-use owo_colors::OwoColorize;
 
 #[derive(Subcommand)]
 #[clap(infer_subcommands = true)]
@@ -53,17 +52,34 @@ pub enum Cmd {
     },
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum ListMode {
+    Human,
+    CmdOnly,
+    Regular,
+}
+
+impl ListMode {
+    pub const fn from_flags(human: bool, cmd_only: bool) -> Self {
+        if human {
+            ListMode::Human
+        } else if cmd_only {
+            ListMode::CmdOnly
+        } else {
+            ListMode::Regular
+        }
+    }
+}
+
 #[allow(clippy::cast_sign_loss)]
-pub fn print_list(h: &[History], human: bool, cmd_only: bool) {
+pub fn print_list(h: &[History], list_mode: ListMode) {
     let w = std::io::stdout();
     let mut w = w.lock();
 
-    if human {
-        print_human_list(&mut w, h);
-    } else if cmd_only {
-        print_cmd_only(&mut w, h);
-    } else {
-        print_basic(&mut w, h);
+    match list_mode {
+        ListMode::Human => print_human_list(&mut w, h),
+        ListMode::CmdOnly => print_cmd_only(&mut w, h),
+        ListMode::Regular => print_regular(&mut w, h),
     }
 
     w.flush().expect("failed to flush history");
@@ -81,19 +97,12 @@ pub fn print_human_list(w: &mut StdoutLock, h: &[History]) {
         let time = h.timestamp.format("%Y-%m-%d %H:%M:%S");
         let cmd = h.command.trim();
 
-        let exit_color = if h.success() {
-            owo_colors::AnsiColors::Green
-        } else {
-            owo_colors::AnsiColors::Red
-        };
-        let duration = duration.color(exit_color);
-
         writeln!(w, "{time} · {duration}\t{cmd}").expect("failed to write history");
     }
 }
 
 #[allow(clippy::cast_sign_loss)]
-pub fn print_basic(w: &mut StdoutLock, h: &[History]) {
+pub fn print_regular(w: &mut StdoutLock, h: &[History]) {
     for h in h.iter().rev() {
         let duration =
             humantime::format_duration(Duration::from_nanos(std::cmp::max(h.duration, 0) as u64))
@@ -216,14 +225,14 @@ impl Cmd {
                     }
                 };
 
-                print_list(&history, *human, *cmd_only);
+                print_list(&history, ListMode::from_flags(*human, *cmd_only));
 
                 Ok(())
             }
 
             Self::Last { human, cmd_only } => {
                 let last = db.last().await?;
-                print_list(&[last], *human, *cmd_only);
+                print_list(&[last], ListMode::from_flags(*human, *cmd_only));
 
                 Ok(())
             }
