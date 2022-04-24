@@ -10,10 +10,10 @@ use atuin_common::api::{
     AddHistoryRequest, CountResponse, LoginRequest, LoginResponse, RegisterResponse,
     SyncHistoryResponse,
 };
-use atuin_common::utils::hash_str;
 
 use crate::encryption::{decode_key, decrypt};
 use crate::history::History;
+use crate::sync::hash_str;
 
 static APP_USER_AGENT: &str = concat!("atuin/", env!("CARGO_PKG_VERSION"),);
 

@@ -3,15 +3,6 @@ use std::path::PathBuf;
 use chrono::NaiveDate;
 use uuid::Uuid;
 
-pub fn hash_str(string: &str) -> String {
-    use crypto::digest::Digest;
-    use crypto::sha2::Sha256;
-    let mut hasher = Sha256::new();
-    hasher.input_str(string);
-
-    hasher.result_str()
-}
-
 pub fn uuid_v4() -> String {
     Uuid::new_v4().as_simple().to_string()
 }
