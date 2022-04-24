@@ -1,5 +1,5 @@
+#![forbid(unsafe_code)]
 #![warn(clippy::pedantic, clippy::nursery)]
-#![allow(clippy::use_self)] // not 100% reliable
 
 use clap::AppSettings;
 use clap::Parser;

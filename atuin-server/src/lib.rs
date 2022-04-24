@@ -1,4 +1,14 @@
 #![forbid(unsafe_code)]
+#![warn(clippy::pedantic, clippy::nursery)]
+#![allow(
+    clippy::missing_panics_doc,
+    clippy::missing_errors_doc,
+    clippy::unused_async,
+    clippy::must_use_candidate,
+    clippy::cast_sign_loss,
+    clippy::cast_lossless,
+    clippy::cast_possible_truncation
+)]
 
 use std::net::{IpAddr, SocketAddr};
 
@@ -17,6 +27,8 @@ pub mod router;
 pub mod settings;
 
 pub async fn launch(settings: Settings, host: String, port: u16) -> Result<()> {
+    sodiumoxide::init().unwrap();
+
     let host = host.parse::<IpAddr>()?;
 
     let postgres = Postgres::new(settings.db_uri.as_str())

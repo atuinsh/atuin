@@ -1,6 +1,8 @@
 use std::borrow::Borrow;
 
-use atuin_common::api::*;
+use atuin_common::api::{
+    LoginRequest, LoginResponse, RegisterRequest, RegisterResponse, UserResponse,
+};
 use axum::extract::Path;
 use axum::{Extension, Json};
 use http::StatusCode;
@@ -15,8 +17,6 @@ use crate::settings::Settings;
 use super::{ErrorResponse, ErrorResponseStatus};
 
 pub fn verify_str(secret: &str, verify: &str) -> bool {
-    sodiumoxide::init().unwrap();
-
     let mut padded = [0_u8; 128];
     secret.as_bytes().iter().enumerate().for_each(|(i, val)| {
         padded[i] = *val;

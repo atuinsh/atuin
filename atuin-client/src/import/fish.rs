@@ -45,7 +45,7 @@ impl<R: Read> Fish<R> {
 impl Importer for Fish<File> {
     const NAME: &'static str = "fish";
 
-    /// see https://fishshell.com/docs/current/interactive.html#searchable-command-history
+    /// see <https://fishshell.com/docs/current/interactive.html#searchable-command-history>
     fn histpath() -> Result<PathBuf> {
         let base = BaseDirs::new().ok_or_else(|| eyre!("could not determine data directory"))?;
         let data = base.data_local_dir();

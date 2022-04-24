@@ -26,7 +26,7 @@ pub struct ErrorResponseStatus<'a> {
 }
 
 impl<'a> ErrorResponse<'a> {
-    pub fn with_status(self, status: http::StatusCode) -> ErrorResponseStatus<'a> {
+    pub const fn with_status(self, status: http::StatusCode) -> ErrorResponseStatus<'a> {
         ErrorResponseStatus {
             error: self,
             status,

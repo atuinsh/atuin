@@ -31,7 +31,7 @@ pub fn hash_str(string: &str) -> String {
 async fn sync_download(
     force: bool,
     client: &api_client::Client<'_>,
-    db: &mut (impl Database + Send),
+    db: &mut (impl Database + Send + Sync),
 ) -> Result<(i64, i64)> {
     debug!("starting sync download");
 
@@ -87,7 +87,7 @@ async fn sync_upload(
     settings: &Settings,
     _force: bool,
     client: &api_client::Client<'_>,
-    db: &mut (impl Database + Send),
+    db: &mut (impl Database + Send + Sync),
 ) -> Result<()> {
     debug!("starting sync upload");
 
@@ -137,7 +137,7 @@ async fn sync_upload(
     Ok(())
 }
 
-pub async fn sync(settings: &Settings, force: bool, db: &mut (impl Database + Send)) -> Result<()> {
+pub async fn sync(settings: &Settings, force: bool, db: &mut (impl Database + Send + Sync)) -> Result<()> {
     let client = api_client::Client::new(
         &settings.sync_address,
         &settings.session_token,

@@ -354,7 +354,7 @@ impl Database for Postgres {
 
                 // All the years we need to get data for
                 // The upper bound is exclusive, so include current +1
-                let years = oldest..current_year + 1;
+                let years = oldest..=current_year;
 
                 for year in years {
                     let count = self.count_history_year(user, year).await?;

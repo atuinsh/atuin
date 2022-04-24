@@ -62,11 +62,11 @@ pub enum ListMode {
 impl ListMode {
     pub const fn from_flags(human: bool, cmd_only: bool) -> Self {
         if human {
-            ListMode::Human
+            Self::Human
         } else if cmd_only {
-            ListMode::CmdOnly
+            Self::CmdOnly
         } else {
-            ListMode::Regular
+            Self::Regular
         }
     }
 }

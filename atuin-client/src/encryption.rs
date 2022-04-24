@@ -29,7 +29,7 @@ pub fn new_key(settings: &Settings) -> Result<secretbox::Key> {
     let path = settings.key_path.as_str();
 
     let key = secretbox::gen_key();
-    let encoded = encode_key(key.clone())?;
+    let encoded = encode_key(&key)?;
 
     let mut file = fs::File::create(path)?;
     file.write_all(encoded.as_bytes())?;
@@ -59,7 +59,7 @@ pub fn load_encoded_key(settings: &Settings) -> Result<String> {
         Ok(key)
     } else {
         let key = secretbox::gen_key();
-        let encoded = encode_key(key)?;
+        let encoded = encode_key(&key)?;
 
         let mut file = fs::File::create(path)?;
         file.write_all(encoded.as_bytes())?;
@@ -68,7 +68,7 @@ pub fn load_encoded_key(settings: &Settings) -> Result<String> {
     }
 }
 
-pub fn encode_key(key: secretbox::Key) -> Result<String> {
+pub fn encode_key(key: &secretbox::Key) -> Result<String> {
     let buf = rmp_serde::to_vec(&key).wrap_err("could not encode key to message pack")?;
     let buf = base64::encode(buf);
 
@@ -140,6 +140,7 @@ mod test {
         };
 
         // this should err
-        let _ = decrypt(&e2, &key1).expect_err("expected an error decrypting with invalid key");
+        let err = decrypt(&e2, &key1).expect_err("expected an error decrypting with invalid key");
+        drop(err);
     }
 }

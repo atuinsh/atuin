@@ -49,10 +49,10 @@ pub enum Dialect {
 }
 
 impl From<Dialect> for chrono_english::Dialect {
-    fn from(d: Dialect) -> chrono_english::Dialect {
+    fn from(d: Dialect) -> Self {
         match d {
-            Dialect::Uk => chrono_english::Dialect::Uk,
-            Dialect::Us => chrono_english::Dialect::Us,
+            Dialect::Uk => Self::Uk,
+            Dialect::Us => Self::Us,
         }
     }
 }
@@ -124,7 +124,7 @@ impl Settings {
         match parse(self.sync_frequency.as_str()) {
             Ok(d) => {
                 let d = chrono::Duration::from_std(d).unwrap();
-                Ok(Utc::now() - Settings::last_sync()? >= d)
+                Ok(Utc::now() - Self::last_sync()? >= d)
             }
             Err(e) => Err(eyre!("failed to check sync: {}", e)),
         }
@@ -187,8 +187,8 @@ impl Settings {
         };
 
         let config = config_builder.build()?;
-        let mut settings: Settings = config
-            .try_deserialize()
+        let mut settings = config
+            .try_deserialize::<Self>()
             .map_err(|e| eyre!("failed to deserialize: {}", e))?;
 
         // all paths should be expanded

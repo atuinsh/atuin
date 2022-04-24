@@ -1,4 +1,11 @@
 #![forbid(unsafe_code)]
+#![warn(clippy::pedantic, clippy::nursery)]
+#![allow(
+    clippy::missing_panics_doc,
+    clippy::missing_errors_doc,
+    clippy::must_use_candidate,
+    clippy::unreadable_literal
+)]
 
 #[macro_use]
 extern crate log;

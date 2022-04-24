@@ -56,6 +56,7 @@ where
 async fn teapot() -> impl IntoResponse {
     (http::StatusCode::IM_A_TEAPOT, "☕")
 }
+
 pub fn router(postgres: Postgres, settings: Settings) -> Router {
     Router::new()
         .route("/", get(handlers::index))

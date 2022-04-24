@@ -6,7 +6,9 @@ use tracing::{debug, error, instrument};
 
 use crate::database::{Database, Postgres};
 use crate::models::{NewHistory, User};
-use atuin_common::api::*;
+use atuin_common::api::{
+    AddHistoryRequest, CountResponse, SyncHistoryRequest, SyncHistoryResponse,
+};
 
 use crate::calendar::{TimePeriod, TimePeriodInfo};
 

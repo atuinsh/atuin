@@ -15,7 +15,7 @@ use crate::history::History;
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
-pub struct ReshEntry {
+pub struct Entry {
     pub cmd_line: String,
     pub exit_code: i64,
     pub shell: String,
@@ -113,7 +113,7 @@ impl Iterator for Resh {
         // .resh_history.json lies about being a json. It is actually a file containing valid json
         // on every line. This means that the last line will throw an error, as it is just an EOF.
         // Without the special case here, that will crash the importer.
-        let entry = match serde_json::from_str::<ReshEntry>(&self.strbuf) {
+        let entry = match serde_json::from_str::<Entry>(&self.strbuf) {
             Ok(e) => e,
             Err(e) if e.is_eof() => return None,
             Err(e) => {

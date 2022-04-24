@@ -36,8 +36,8 @@ pub fn current_context() -> Context {
 
     Context {
         session,
-        hostname,
         cwd,
+        hostname,
     }
 }
 
@@ -86,26 +86,28 @@ pub struct Sqlite {
 }
 
 impl Sqlite {
-    pub async fn new(path: impl AsRef<Path>) -> Result<Self> {
-        let path = path.as_ref();
-        debug!("opening sqlite database at {:?}", path);
+    pub async fn new(path: impl AsRef<Path> + Sync + Send) -> Result<Self> {
+        async fn inner(path: &Path) -> Result<Sqlite> {
+            debug!("opening sqlite database at {:?}", path);
 
-        let create = !path.exists();
-        if create {
-            if let Some(dir) = path.parent() {
-                fs::create_dir_all(dir)?;
+            let create = !path.exists();
+            if create {
+                if let Some(dir) = path.parent() {
+                    fs::create_dir_all(dir)?;
+                }
             }
+
+            let opts = SqliteConnectOptions::from_str(path.as_os_str().to_str().unwrap())?
+                .journal_mode(SqliteJournalMode::Wal)
+                .create_if_missing(true);
+
+            let pool = SqlitePoolOptions::new().connect_with(opts).await?;
+
+            Sqlite::setup_db(&pool).await?;
+
+            Ok(Sqlite { pool })
         }
-
-        let opts = SqliteConnectOptions::from_str(path.as_os_str().to_str().unwrap())?
-            .journal_mode(SqliteJournalMode::Wal)
-            .create_if_missing(true);
-
-        let pool = SqlitePoolOptions::new().connect_with(opts).await?;
-
-        Self::setup_db(&pool).await?;
-
-        Ok(Self { pool })
+        inner(path.as_ref()).await
     }
 
     async fn setup_db(pool: &SqlitePool) -> Result<()> {
@@ -135,6 +137,7 @@ impl Sqlite {
         Ok(())
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn query_history(row: SqliteRow) -> History {
         History {
             id: row.get("id"),
@@ -167,7 +170,7 @@ impl Database for Sqlite {
         let mut tx = self.pool.begin().await?;
 
         for i in h {
-            Self::save_raw(&mut tx, i).await?
+            Self::save_raw(&mut tx, i).await?;
         }
 
         tx.commit().await?;
@@ -366,9 +369,8 @@ impl Database for Sqlite {
                         if !is_or {
                             is_or = true;
                             continue;
-                        } else {
-                            format!("{glob}|{glob}")
                         }
+                        format!("{glob}|{glob}")
                     } else if let Some(term) = query_part.strip_prefix('^') {
                         format!("{term}{glob}")
                     } else if let Some(term) = query_part.strip_suffix('$') {
@@ -414,7 +416,7 @@ mod test {
     use std::time::{Duration, Instant};
 
     async fn assert_search_eq<'a>(
-        db: &impl Database,
+        db: &(impl Database + Sync + Send),
         mode: SearchMode,
         filter_mode: FilterMode,
         query: &str,
@@ -439,7 +441,7 @@ mod test {
     }
 
     async fn assert_search_commands(
-        db: &impl Database,
+        db: &(impl Database + Sync + Send),
         mode: SearchMode,
         filter_mode: FilterMode,
         query: &str,
@@ -452,7 +454,7 @@ mod test {
         assert_eq!(commands, expected_commands);
     }
 
-    async fn new_history_item(db: &mut impl Database, cmd: &str) -> Result<()> {
+    async fn new_history_item(db: &mut (impl Database + Sync + Send), cmd: &str) -> Result<()> {
         let history = History::new(
             chrono::Utc::now(),
             cmd.to_string(),
