@@ -1,10 +1,9 @@
 use std::env;
-use std::io::Write;
+use std::io::{StdoutLock, Write};
 use std::time::Duration;
 
 use clap::Subcommand;
 use eyre::Result;
-use tabwriter::TabWriter;
 
 use atuin_client::database::{current_context, Database};
 use atuin_client::history::History;
@@ -53,44 +52,75 @@ pub enum Cmd {
     },
 }
 
-#[allow(clippy::cast_sign_loss)]
-pub fn print_list(h: &[History], human: bool, cmd_only: bool) {
-    let mut writer = TabWriter::new(std::io::stdout()).padding(2);
+#[derive(Clone, Copy, Debug)]
+pub enum ListMode {
+    Human,
+    CmdOnly,
+    Regular,
+}
 
-    let lines = h.iter().rev().map(|h| {
+impl ListMode {
+    pub const fn from_flags(human: bool, cmd_only: bool) -> Self {
         if human {
-            let duration = humantime::format_duration(Duration::from_nanos(std::cmp::max(
-                h.duration, 0,
-            ) as u64))
-            .to_string();
-            let duration: Vec<&str> = duration.split(' ').collect();
-            let duration = duration[0];
-
-            format!(
-                "{}\t{}\t{}\n",
-                h.timestamp.format("%Y-%m-%d %H:%M:%S"),
-                h.command.trim(),
-                duration,
-            )
+            ListMode::Human
         } else if cmd_only {
-            format!("{}\n", h.command.trim())
+            ListMode::CmdOnly
         } else {
-            format!(
-                "{}\t{}\t{}\n",
-                h.timestamp.timestamp_nanos(),
-                h.command.trim(),
-                h.duration
-            )
+            ListMode::Regular
         }
-    });
+    }
+}
 
-    for i in lines {
-        writer
-            .write_all(i.as_bytes())
-            .expect("failed to write to tab writer");
+#[allow(clippy::cast_sign_loss)]
+pub fn print_list(h: &[History], list_mode: ListMode) {
+    let w = std::io::stdout();
+    let mut w = w.lock();
+
+    match list_mode {
+        ListMode::Human => print_human_list(&mut w, h),
+        ListMode::CmdOnly => print_cmd_only(&mut w, h),
+        ListMode::Regular => print_regular(&mut w, h),
     }
 
-    writer.flush().expect("failed to flush tab writer");
+    w.flush().expect("failed to flush history");
+}
+
+#[allow(clippy::cast_sign_loss)]
+pub fn print_human_list(w: &mut StdoutLock, h: &[History]) {
+    for h in h.iter().rev() {
+        let duration =
+            humantime::format_duration(Duration::from_nanos(std::cmp::max(h.duration, 0) as u64))
+                .to_string();
+        let duration: Vec<&str> = duration.split(' ').collect();
+        let duration = duration[0];
+
+        let time = h.timestamp.format("%Y-%m-%d %H:%M:%S");
+        let cmd = h.command.trim();
+
+        writeln!(w, "{time} · {duration}\t{cmd}").expect("failed to write history");
+    }
+}
+
+#[allow(clippy::cast_sign_loss)]
+pub fn print_regular(w: &mut StdoutLock, h: &[History]) {
+    for h in h.iter().rev() {
+        let duration =
+            humantime::format_duration(Duration::from_nanos(std::cmp::max(h.duration, 0) as u64))
+                .to_string();
+        let duration: Vec<&str> = duration.split(' ').collect();
+        let duration = duration[0];
+
+        let time = h.timestamp.format("%Y-%m-%d %H:%M:%S");
+        let cmd = h.command.trim();
+
+        writeln!(w, "{time}\t{cmd}\t{duration}").expect("failed to write history");
+    }
+}
+
+pub fn print_cmd_only(w: &mut StdoutLock, h: &[History]) {
+    for h in h.iter().rev() {
+        writeln!(w, "{}", h.command.trim()).expect("failed to write history");
+    }
 }
 
 impl Cmd {
@@ -195,14 +225,14 @@ impl Cmd {
                     }
                 };
 
-                print_list(&history, *human, *cmd_only);
+                print_list(&history, ListMode::from_flags(*human, *cmd_only));
 
                 Ok(())
             }
 
             Self::Last { human, cmd_only } => {
                 let last = db.last().await?;
-                print_list(&[last], *human, *cmd_only);
+                print_list(&[last], ListMode::from_flags(*human, *cmd_only));
 
                 Ok(())
             }

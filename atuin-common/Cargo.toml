@@ -11,7 +11,6 @@ repository = "https://github.com/ellie/atuin"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-rust-crypto = "^0.2"
 chrono = { version = "0.4", features = ["serde"] }
 serde = { version = "1.0.126", features = ["derive"] }
 uuid = { version = "1.0", features = ["v4"] }
