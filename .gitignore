@@ -1,3 +1,6 @@
 /target
 */target
 .env
+
+# JetBrains IDEs
+.idea/
