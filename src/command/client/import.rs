@@ -50,6 +50,9 @@ impl Cmd {
                 } else if shell.ends_with("/fish") {
                     println!("Detected Fish");
                     import::<Fish<_>, _>(db, BATCH_SIZE).await
+                } else if shell.ends_with("/bash") {
+                    println!("Detected Bash");
+                    import::<Bash<_>, _>(db, BATCH_SIZE).await
                 } else {
                     println!("cannot import {} history", shell);
                     Ok(())
