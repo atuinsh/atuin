@@ -7,8 +7,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use chrono::prelude::*;
-use chrono::Utc;
+use chrono::{prelude::*, Utc};
 use directories::UserDirs;
 use eyre::{eyre, Result};
 use itertools::Itertools;

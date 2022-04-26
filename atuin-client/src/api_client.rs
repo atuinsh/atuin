@@ -2,8 +2,10 @@ use std::collections::HashMap;
 
 use chrono::Utc;
 use eyre::{bail, Result};
-use reqwest::header::{HeaderMap, AUTHORIZATION, USER_AGENT};
-use reqwest::{StatusCode, Url};
+use reqwest::{
+    header::{HeaderMap, AUTHORIZATION, USER_AGENT},
+    StatusCode, Url,
+};
 use sodiumoxide::crypto::secretbox;
 
 use atuin_common::api::{
@@ -11,9 +13,11 @@ use atuin_common::api::{
     SyncHistoryResponse,
 };
 
-use crate::encryption::{decode_key, decrypt};
-use crate::history::History;
-use crate::sync::hash_str;
+use crate::{
+    encryption::{decode_key, decrypt},
+    history::History,
+    sync::hash_str,
+};
 
 static APP_USER_AGENT: &str = concat!("atuin/", env!("CARGO_PKG_VERSION"),);
 

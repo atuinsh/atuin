@@ -3,8 +3,7 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 use clap::Parser;
 use eyre::{Context, Result};
 
-use atuin_server::launch;
-use atuin_server::settings::Settings;
+use atuin_server::{launch, settings::Settings};
 
 #[derive(Parser)]
 #[clap(infer_subcommands = true)]

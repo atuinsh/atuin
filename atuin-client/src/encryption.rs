@@ -8,16 +8,14 @@
 // clients must share the secret in order to be able to sync, as it is needed
 // to decrypt
 
-use fs_err as fs;
-use serde::{Deserialize, Serialize};
-use std::io::prelude::*;
-use std::path::PathBuf;
+use std::{io::prelude::*, path::PathBuf};
 
 use eyre::{eyre, Context, Result};
+use fs_err as fs;
+use serde::{Deserialize, Serialize};
 use sodiumoxide::crypto::secretbox;
 
-use crate::history::History;
-use crate::settings::Settings;
+use crate::{history::History, settings::Settings};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct EncryptedHistory {

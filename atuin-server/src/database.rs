@@ -1,16 +1,16 @@
-use async_trait::async_trait;
 use std::collections::HashMap;
-use tracing::{debug, instrument};
 
-use sqlx::{postgres::PgPoolOptions, Result};
-
-use crate::settings::HISTORY_PAGE_SIZE;
-
-use super::calendar::{TimePeriod, TimePeriodInfo};
-use super::models::{History, NewHistory, NewSession, NewUser, Session, User};
-
+use async_trait::async_trait;
 use chrono::{Datelike, TimeZone};
 use chronoutil::RelativeDuration;
+use sqlx::{postgres::PgPoolOptions, Result};
+use tracing::{debug, instrument};
+
+use super::{
+    calendar::{TimePeriod, TimePeriodInfo},
+    models::{History, NewHistory, NewSession, NewUser, Session, User},
+};
+use crate::settings::HISTORY_PAGE_SIZE;
 
 use atuin_common::utils::get_days_from_month;
 

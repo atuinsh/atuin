@@ -4,11 +4,12 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use atuin_common::utils::uuid_v4;
 use chrono::{TimeZone, Utc};
 use directories::UserDirs;
 use eyre::{eyre, Result};
 use serde::Deserialize;
+
+use atuin_common::utils::uuid_v4;
 
 use super::{count_lines, Importer};
 use crate::history::History;
