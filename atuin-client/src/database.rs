@@ -260,8 +260,8 @@ impl Database for Sqlite {
         let res = sqlx::query(
             "select * from history where timestamp >= ?1 and timestamp <= ?2 order by timestamp asc",
         )
-        .bind(from)
-        .bind(to)
+        .bind(from.timestamp_nanos())
+        .bind(to.timestamp_nanos())
             .map(Self::query_history)
         .fetch_all(&self.pool)
         .await?;
