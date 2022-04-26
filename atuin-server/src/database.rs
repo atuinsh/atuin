@@ -80,7 +80,7 @@ impl Postgres {
 impl Database for Postgres {
     #[instrument(skip_all)]
     async fn get_session(&self, token: &str) -> Result<Session> {
-        sqlx::query_as::<_, Session>("select * from sessions where token = $1")
+        sqlx::query_as::<_, Session>("select id, user_id, token from sessions where token = $1")
             .bind(token)
             .fetch_one(&self.pool)
             .await
@@ -88,7 +88,7 @@ impl Database for Postgres {
 
     #[instrument(skip_all)]
     async fn get_user(&self, username: &str) -> Result<User> {
-        sqlx::query_as::<_, User>("select * from users where username = $1")
+        sqlx::query_as::<_, User>("select id, username, email, password from users where username = $1")
             .bind(username)
             .fetch_one(&self.pool)
             .await
@@ -97,7 +97,7 @@ impl Database for Postgres {
     #[instrument(skip_all)]
     async fn get_session_user(&self, token: &str) -> Result<User> {
         sqlx::query_as::<_, User>(
-            "select * from users 
+            "select users.id, users.username, user.email, users.password from users 
             inner join sessions 
             on users.id = sessions.user_id 
             and sessions.token = $1",
@@ -222,7 +222,7 @@ impl Database for Postgres {
         host: &str,
     ) -> Result<Vec<History>> {
         let res = sqlx::query_as::<_, History>(
-            "select * from history 
+            "select id, client_id, user_id, hostname, timestamp, data, created_at from history 
             where user_id = $1
             and hostname != $2
             and created_at >= $3
@@ -311,7 +311,7 @@ impl Database for Postgres {
 
     #[instrument(skip_all)]
     async fn get_user_session(&self, u: &User) -> Result<Session> {
-        sqlx::query_as::<_, Session>("select * from sessions where user_id = $1")
+        sqlx::query_as::<_, Session>("select id, user_id, token from sessions where user_id = $1")
             .bind(u.id)
             .fetch_one(&self.pool)
             .await
@@ -320,7 +320,7 @@ impl Database for Postgres {
     #[instrument(skip_all)]
     async fn oldest_history(&self, user: &User) -> Result<History> {
         let res = sqlx::query_as::<_, History>(
-            "select * from history 
+            "select id, client_id, user_id, hostname, timestamp, data, created_at from history 
             where user_id = $1
             order by timestamp asc
             limit 1",
