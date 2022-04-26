@@ -99,7 +99,7 @@ impl Database for Postgres {
     #[instrument(skip_all)]
     async fn get_session_user(&self, token: &str) -> Result<User> {
         sqlx::query_as::<_, User>(
-            "select users.id, users.username, user.email, users.password from users 
+            "select users.id, users.username, users.email, users.password from users 
             inner join sessions 
             on users.id = sessions.user_id 
             and sessions.token = $1",
