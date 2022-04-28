@@ -53,6 +53,10 @@ pub struct Cmd {
     #[clap(long)]
     after: Option<String>,
 
+    /// How many entries to return at most
+    #[clap(long)]
+    limit: Option<i64>,
+
     /// Open interactive search UI
     #[clap(long, short)]
     interactive: bool,
@@ -95,6 +99,7 @@ impl Cmd {
                 self.exclude_cwd,
                 self.before,
                 self.after,
+                self.limit,
                 &self.query,
                 db,
             )
@@ -587,6 +592,7 @@ async fn run_non_interactive(
     exclude_cwd: Option<String>,
     before: Option<String>,
     after: Option<String>,
+    limit: Option<i64>,
     query: &[String],
     db: &mut (impl Database + Send + Sync),
 ) -> Result<()> {
@@ -604,7 +610,7 @@ async fn run_non_interactive(
 
     let results = db
         .search(
-            None,
+            limit,
             settings.search_mode,
             settings.filter_mode,
             &context,
