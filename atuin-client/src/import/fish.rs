@@ -7,8 +7,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use chrono::prelude::*;
-use chrono::Utc;
+use chrono::{prelude::*, Utc};
 use directories::BaseDirs;
 use eyre::{eyre, Result};
 

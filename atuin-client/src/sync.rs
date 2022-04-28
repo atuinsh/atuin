@@ -5,10 +5,12 @@ use eyre::Result;
 
 use atuin_common::api::AddHistoryRequest;
 
-use crate::api_client;
-use crate::database::Database;
-use crate::encryption::{encrypt, load_encoded_key, load_key};
-use crate::settings::{Settings, HISTORY_PAGE_SIZE};
+use crate::{
+    api_client,
+    database::Database,
+    encryption::{encrypt, load_encoded_key, load_key},
+    settings::{Settings, HISTORY_PAGE_SIZE},
+};
 
 pub fn hash_str(string: &str) -> String {
     use sha2::{Digest, Sha256};

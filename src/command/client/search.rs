@@ -1,8 +1,8 @@
+use std::{env, io::stdout, ops::Sub, time::Duration};
+
 use chrono::Utc;
 use clap::Parser;
 use eyre::Result;
-use std::env;
-use std::{io::stdout, ops::Sub, time::Duration};
 use termion::{event::Key, input::MouseTerminal, raw::IntoRawMode, screen::AlternateScreen};
 use tui::{
     backend::{Backend, TermionBackend},
@@ -22,8 +22,10 @@ use atuin_client::{
     settings::{FilterMode, SearchMode, Settings},
 };
 
-use super::event::{Event, Events};
-use super::history::ListMode;
+use super::{
+    event::{Event, Events},
+    history::ListMode,
+};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 

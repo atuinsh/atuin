@@ -1,9 +1,7 @@
-use std::thread;
-use std::time::Duration;
+use std::{thread, time::Duration};
 
 use crossbeam_channel::unbounded;
-use termion::event::Key;
-use termion::input::TermRead;
+use termion::{event::Key, input::TermRead};
 
 pub enum Event<I> {
     Input(I),

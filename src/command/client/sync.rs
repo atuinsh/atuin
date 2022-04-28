@@ -1,8 +1,7 @@
-use atuin_client::database::Database;
 use clap::Subcommand;
 use eyre::{Result, WrapErr};
 
-use atuin_client::settings::Settings;
+use atuin_client::{database::Database, settings::Settings};
 
 mod login;
 mod logout;

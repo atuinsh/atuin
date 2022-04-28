@@ -1,13 +1,14 @@
 use std::{env, path::PathBuf};
 
-use atuin_client::import::fish::Fish;
 use clap::Parser;
 use eyre::{eyre, Result};
-
-use atuin_client::import::{bash::Bash, zsh::Zsh};
-use atuin_client::{database::Database, import::Importer};
-use atuin_client::{history::History, import::resh::Resh};
 use indicatif::ProgressBar;
+
+use atuin_client::{
+    database::Database,
+    history::History,
+    import::{bash::Bash, fish::Fish, resh::Resh, zsh::Zsh, Importer},
+};
 
 #[derive(Parser)]
 #[clap(infer_subcommands = true)]

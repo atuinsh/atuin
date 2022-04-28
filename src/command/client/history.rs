@@ -1,13 +1,17 @@
-use std::env;
-use std::io::{StdoutLock, Write};
-use std::time::Duration;
+use std::{
+    env,
+    io::{StdoutLock, Write},
+    time::Duration,
+};
 
 use clap::Subcommand;
 use eyre::Result;
 
-use atuin_client::database::{current_context, Database};
-use atuin_client::history::History;
-use atuin_client::settings::Settings;
+use atuin_client::{
+    database::{current_context, Database},
+    history::History,
+    settings::Settings,
+};
 
 #[cfg(feature = "sync")]
 use atuin_client::sync;
