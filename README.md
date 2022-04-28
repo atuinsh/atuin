@@ -22,7 +22,7 @@
 <em>exit code, duration, time and command shown</em>
 </p>
 
-Atuin replaces your existing shell history with a SQLite database, and records
+Atuin replaces your existing shell history with a Postgresql database, and records
 additional context for your commands. Additionally, it provides optional and
 _fully encrypted_ synchronisation of your history between machines, via an Atuin
 server.
@@ -41,7 +41,7 @@ I wanted to. And I **really** don't want to.
 ## Features
 
 - rebind `up` and `ctrl-r` with a full screen history search UI
-- store shell history in a sqlite database
+- store shell history in a postgresql database
 - backup and sync **encrypted** shell history
 - the same history across terminals, across sessions, and across machines
 - log exit code, cwd, hostname, session, command duration, etc
