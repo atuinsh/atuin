@@ -1,8 +1,8 @@
+use std::{env, io::stdout, ops::Sub, time::Duration};
+
 use chrono::Utc;
 use clap::Parser;
 use eyre::Result;
-use std::env;
-use std::{io::stdout, ops::Sub, time::Duration};
 use termion::{event::Key, input::MouseTerminal, raw::IntoRawMode, screen::AlternateScreen};
 use tui::{
     backend::{Backend, TermionBackend},
@@ -22,8 +22,10 @@ use atuin_client::{
     settings::{FilterMode, SearchMode, Settings},
 };
 
-use super::event::{Event, Events};
-use super::history::ListMode;
+use super::{
+    event::{Event, Events},
+    history::ListMode,
+};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -52,6 +54,10 @@ pub struct Cmd {
     /// Only include results after this date
     #[clap(long)]
     after: Option<String>,
+
+    /// How many entries to return at most
+    #[clap(long)]
+    limit: Option<i64>,
 
     /// Open interactive search UI
     #[clap(long, short)]
@@ -95,6 +101,7 @@ impl Cmd {
                 self.exclude_cwd,
                 self.before,
                 self.after,
+                self.limit,
                 &self.query,
                 db,
             )
@@ -587,6 +594,7 @@ async fn run_non_interactive(
     exclude_cwd: Option<String>,
     before: Option<String>,
     after: Option<String>,
+    limit: Option<i64>,
     query: &[String],
     db: &mut (impl Database + Send + Sync),
 ) -> Result<()> {
@@ -604,7 +612,7 @@ async fn run_non_interactive(
 
     let results = db
         .search(
-            None,
+            limit,
             settings.search_mode,
             settings.filter_mode,
             &context,

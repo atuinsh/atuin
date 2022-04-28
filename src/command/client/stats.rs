@@ -1,16 +1,16 @@
 use std::collections::HashMap;
 
-use chrono::prelude::*;
-use chrono::Duration;
+use chrono::{prelude::*, Duration};
 use chrono_english::parse_date_string;
-
 use clap::Parser;
 use cli_table::{format::Justify, print_stdout, Cell, Style, Table};
 use eyre::{bail, Result};
 
-use atuin_client::database::{current_context, Database};
-use atuin_client::history::History;
-use atuin_client::settings::{FilterMode, Settings};
+use atuin_client::{
+    database::{current_context, Database},
+    history::History,
+    settings::{FilterMode, Settings},
+};
 
 #[derive(Parser)]
 #[clap(infer_subcommands = true)]

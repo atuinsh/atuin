@@ -1,10 +1,9 @@
-use fs_err::{create_dir_all, File};
-use serde::{Deserialize, Serialize};
-use std::io::prelude::*;
-use std::path::PathBuf;
+use std::{io::prelude::*, path::PathBuf};
 
 use config::{Config, Environment, File as ConfigFile, FileFormat};
 use eyre::{eyre, Result};
+use fs_err::{create_dir_all, File};
+use serde::{Deserialize, Serialize};
 
 pub const HISTORY_PAGE_SIZE: i64 = 100;
 

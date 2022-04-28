@@ -1,6 +1,7 @@
+use std::borrow::Cow;
+
 use axum::{response::IntoResponse, Json};
 use serde::{Deserialize, Serialize};
-use std::borrow::Cow;
 
 pub mod history;
 pub mod user;

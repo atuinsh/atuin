@@ -1,11 +1,10 @@
-use clap::CommandFactory;
-use clap::Subcommand;
-use clap_complete::Shell;
-use clap_complete::{generate, generate_to};
+use std::path::PathBuf;
+
+use clap::{CommandFactory, Subcommand};
+use clap_complete::{generate, generate_to, Shell};
 use eyre::{Result, WrapErr};
 
-use atuin_client::database::Sqlite;
-use atuin_client::settings::Settings;
+use atuin_client::{database::Sqlite, settings::Settings};
 use atuin_common::utils::uuid_v4;
 
 #[cfg(feature = "sync")]
@@ -17,8 +16,6 @@ mod import;
 mod init;
 mod search;
 mod stats;
-
-use std::path::PathBuf;
 
 #[derive(Subcommand)]
 #[clap(infer_subcommands = true)]

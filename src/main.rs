@@ -1,8 +1,7 @@
 #![warn(clippy::pedantic, clippy::nursery)]
 #![allow(clippy::use_self)] // not 100% reliable
 
-use clap::AppSettings;
-use clap::Parser;
+use clap::{AppSettings, Parser};
 use eyre::Result;
 
 #[macro_use]
