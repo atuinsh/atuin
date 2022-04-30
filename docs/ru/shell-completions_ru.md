@@ -17,4 +17,4 @@ Shell completion for BASH is generated in "/home/user"
 - `powershell`
 - `elvish`
 
-Также рекомендуем прочитать  [supported shells](./../README.md#supported-shells).
+Также рекомендуем прочитать  [supported shells](./../../README.md#supported-shells).

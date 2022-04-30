@@ -23,7 +23,7 @@ $ atuin stats day last friday
 $ atuin stats day 01/01/21 # also accepts absolute dates
 ```
 
-Также, может быть выведена статистика всей известной Autin истоии:
+Также, может быть выведена статистика всей известной Autin истории:
 
 ```
 $ atuin stats all

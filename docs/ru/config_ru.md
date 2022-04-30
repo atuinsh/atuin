@@ -119,7 +119,7 @@ key = "~/.atuin-session"
 search_mode = "fulltext"
 ```
 
-#### `fuzzy` синтаксис поиска
+#### fuzzy search syntax
 
 Режим поиска "fuzzy" основан на
 [fzf search syntax](https://github.com/junegunn/fzf#search-syntax).
