@@ -22,6 +22,8 @@
 <em>exit code, duration, time and command shown</em>
 </p>
 
+[English] | [简体中文]
+
 Atuin replaces your existing shell history with a SQLite database, and records
 additional context for your commands. Additionally, it provides optional and
 _fully encrypted_ synchronisation of your history between machines, via an Atuin
@@ -195,3 +197,6 @@ to your `is-interactive` block in your `~/.config/fish/config.fish` file
 
 Atuin is named after "The Great A'Tuin", a giant turtle from Terry Pratchett's
 Discworld series of books.
+
+[English]: ./README.md
+[简体中文]: ./docs/zh-CN/README.md
