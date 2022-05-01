@@ -1,10 +1,8 @@
 # `atuin server`
 
-Atuin allows you to run your own sync server, in case you don't want to use the
-one I host :)
+Atuin 允许您运行自己的同步服务器，以防您不想使用我(ellie)托管的服务器 :)
 
-There's currently only one subcommand, `atuin server start` which will start the
-Atuin http sync server
+目前只有一个子命令，`atuin server start`，它将启动 Atuin http 同步服务器。
 
 ```
 USAGE:
@@ -19,13 +17,11 @@ OPTIONS:
     -p, --port <port>
 ```
 
-## Configuration
+## 配置
 
-The config for the server is kept separate from the config for the client, even
-though they are the same binary. Server config can be found at
-`~/.config/atuin/server.toml`.
+服务器的配置与客户端的配置是分开的，即使它们是相同的二进制文件。服务器配置可以在 `~/.config/atuin/server.toml` 找到。
 
-It looks something like this:
+它看起来像这样:
 
 ```toml
 host = "0.0.0.0"
@@ -34,7 +30,7 @@ open_registration = true
 db_uri="postgres://user:password@hostname/database"
 ```
 
-Alternatively, configuration can also be provided with environment variables.
+另外，配置也可以用环境变量来提供。
 
 ```sh
 ATUIN_HOST="0.0.0.0"
@@ -45,31 +41,29 @@ ATUIN_DB_URI="postgres://user:password@hostname/database"
 
 ### host
 
-The host address the atuin server should listen on.
+Atuin 服务器应该监听的地址
 
-Defaults to `127.0.0.1`.
+默认为 `127.0.0.1`.
 
 ### port
 
-The port the atuin server should listen on.
+Atuin 服务器应该监听的端口
 
-Defaults to `8888`.
+默认为 `8888`.
 
 ### open_registration
 
-If `true`, atuin will accept new user registrations.
-Set this to `false` after making your own account if you don't want others to be
-able to use your server.
+如果为 `true` ，atuin 将接受新用户注册。如果您不希望其他人能够使用您的服务器，请在创建自己的账号后将此设置为 `false` 
 
-Defaults to `false`.
+默认为 `false`.
 
 ### db_uri
 
-A valid postgres URI, where the user and history data will be saved to.
+一个有效的 postgres URI, 用户和历史记录数据将被保存到其中。
 
 ## Docker
 
-There is a supplied docker image to make deploying a server as a container easier.
+提供了一个 docker 镜像（image），可以更轻松地将服务器部署为容器（container）。
 
 ```sh
 docker run -d -v "$USER/.config/atuin:/config" ghcr.io/ellie/atuin:latest server start
@@ -77,9 +71,9 @@ docker run -d -v "$USER/.config/atuin:/config" ghcr.io/ellie/atuin:latest server
 
 ## Docker Compose
 
-Using the already build docker image hosting your own Atuin can be done using the supplied docker-compose file. 
+使用已有的 docker 镜像（image）来托管你自己的 Atuin，可以使用提供的 docker-compose 文件来完成
 
-Create a `.env` file next to `docker-compose.yml` with contents like this:
+在 `docker-compose.yml` 同级目录下创建一个 `.env` 文件，内容如下:
 
 ```
 ATUIN_DB_USERNAME=atuin
@@ -87,7 +81,7 @@ ATUIN_DB_USERNAME=atuin
 ATUIN_DB_PASSWORD=really-insecure
 ```
 
-Create a `docker-compose.yml`:
+创建一个 `docker-compose.yml` 文件:
 
 ```yaml
 version: '3.5'
@@ -109,7 +103,7 @@ services:
   postgresql:
     image: postgres:14
     restart: unless-stopped
-    volumes: # Don't remove permanent storage for index database files!
+    volumes: # 不要删除索引数据库文件的永久存储空间!
       - "./database:/var/lib/postgresql/data/"
     environment:
       POSTGRES_USER: $ATUIN_DB_USERNAME
@@ -117,15 +111,15 @@ services:
       POSTGRES_DB: atuin
 ```
 
-Start the services using `docker-compose`:
+使用 `docker-compose` 启动服务:
 
 ```sh
 docker-compose up -d
 ```
 
-### Using systemd to manage your atuin server
+### 使用 systemd 来管理你的 Atuin 服务器
 
-The following `systemd` unit file to manage your `docker-compose` managed service:
+以下 `systemd` 单元文件用于管理您的 `docker-compose` 托管服务：
 
 ```
 [Unit]
@@ -134,7 +128,7 @@ Requires=docker.service
 After=docker.service
 
 [Service]
-# Where the docker-compose file is located
+# docker-compose 文件所在的位置
 WorkingDirectory=/srv/atuin-server 
 ExecStart=/usr/bin/docker-compose up
 ExecStop=/usr/bin/docker-compose down
@@ -146,13 +140,13 @@ StartLimitBurst=3
 WantedBy=multi-user.target
 ```
 
-Start and enable the service with:
+使用以下命令启动并启用服务：
 
 ```sh
 systemctl enable --now atuin
 ```
 
-Check if its running with:
+检查它是否运行：
 
 ```sh
 systemctl status atuin
