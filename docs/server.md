@@ -51,7 +51,7 @@ Defaults to `127.0.0.1`.
 
 ### port
 
-The post the atuin server should listen on.
+The port the atuin server should listen on.
 
 Defaults to `8888`.
 
