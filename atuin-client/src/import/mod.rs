@@ -11,6 +11,7 @@ pub mod bash;
 pub mod fish;
 pub mod resh;
 pub mod zsh;
+pub mod zsh_histdb;
 
 // this could probably be sped up
 fn count_lines(buf: &mut BufReader<impl Read + Seek>) -> Result<usize> {
