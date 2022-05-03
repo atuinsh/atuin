@@ -73,13 +73,12 @@ impl Cmd {
         } else {
             self.period.join(" ")
         };
-        let history = match words.as_str() {
-            "all" => db.list(FilterMode::Global, &context, None, false).await?,
-            _ => {
-                let start = parse_date_string(&words, Local::now(), settings.dialect.into())?;
-                let end = start + Duration::days(1);
-                db.range(start.into(), end.into()).await?
-            }
+        let history = if words.as_str() == "all" {
+            db.list(FilterMode::Global, &context, None, false).await?
+        } else {
+            let start = parse_date_string(&words, Local::now(), settings.dialect.into())?;
+            let end = start + Duration::days(1);
+            db.range(start.into(), end.into()).await?
         };
         compute_stats(&history)?;
         Ok(())
