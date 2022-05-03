@@ -29,7 +29,6 @@ pub enum Cmd {
     Import(import::Cmd),
 
     /// Calculate statistics for your history
-    #[clap(subcommand)]
     Stats(stats::Cmd),
 
     /// Output shell setup
