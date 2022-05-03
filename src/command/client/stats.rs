@@ -74,15 +74,13 @@ impl Cmd {
             self.period.join(" ")
         };
         let history = match words.as_str() {
-            "all" => {
-                db.list(FilterMode::Global, &context, None, false).await?
-            }
+            "all" => db.list(FilterMode::Global, &context, None, false).await?,
             _ => {
                 let start = parse_date_string(&words, Local::now(), settings.dialect.into())?;
                 let end = start + Duration::days(1);
-                history = db.range(start.into(), end.into()).await?;
+                db.range(start.into(), end.into()).await?
             }
-        }
+        };
         compute_stats(&history)?;
         Ok(())
     }
