@@ -73,10 +73,9 @@ impl Cmd {
         } else {
             self.period.join(" ")
         };
-        let history: Vec<History>;
-        match words.as_str() {
+        let history = match words.as_str() {
             "all" => {
-                history = db.list(FilterMode::Global, &context, None, false).await?;
+                db.list(FilterMode::Global, &context, None, false).await?
             }
             _ => {
                 let start = parse_date_string(&words, Local::now(), settings.dialect.into())?;
