@@ -16,6 +16,7 @@ use super::{
     history::History,
     ordering,
     settings::{FilterMode, SearchMode},
+    event::{Event, EventType},
 };
 
 pub struct Context {
@@ -115,6 +116,27 @@ impl Sqlite {
         Ok(())
     }
 
+    async fn save_event(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, e: &Event) -> Result<()> {
+        let event_type = match e.event_type {
+            EventType::Create => "create",
+            EventType::Delete => "create",
+        };
+
+        sqlx::query(
+            "insert or ignore into events(id, timestamp, hostname, event_type, history_id)
+                values(?1, ?2, ?3, ?4, ?5)",
+        )
+        .bind(e.id.as_str())
+        .bind(e.timestamp.timestamp_nanos())
+        .bind(e.hostname.as_str())
+        .bind(event_type)
+        .bind(e.history_id.as_str())
+        .execute(tx)
+        .await?;
+
+        Ok(())
+    }
+
     async fn save_raw(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, h: &History) -> Result<()> {
         sqlx::query(
             "insert or ignore into history(id, timestamp, duration, exit, command, cwd, session, hostname)
@@ -152,9 +174,11 @@ impl Sqlite {
 impl Database for Sqlite {
     async fn save(&mut self, h: &History) -> Result<()> {
         debug!("saving history to sqlite");
+        let event = Event::new_create(h).expect("failed to create event from history");
 
         let mut tx = self.pool.begin().await?;
         Self::save_raw(&mut tx, h).await?;
+        Self::save_event(&mut tx, &event).await?;
         tx.commit().await?;
 
         Ok(())
@@ -166,7 +190,9 @@ impl Database for Sqlite {
         let mut tx = self.pool.begin().await?;
 
         for i in h {
-            Self::save_raw(&mut tx, i).await?
+            let event = Event::new_create(i).expect("failed to create event from history");
+            Self::save_raw(&mut tx, i).await?;
+            Self::save_event(&mut tx, &event).await?;
         }
 
         tx.commit().await?;

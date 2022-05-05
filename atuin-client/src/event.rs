@@ -20,7 +20,7 @@ pub struct Event {
     pub hostname: String,
     pub event_type: EventType,
 
-    pub data: String
+    pub history_id: String
 }
 
 impl Event {
@@ -31,7 +31,7 @@ impl Event {
             hostname: history.hostname.clone(),
             event_type: EventType::Create,
 
-            data: serde_json::to_string(history)?,
+            history_id: history.id.clone(),
         })
     }
 
@@ -44,7 +44,7 @@ impl Event {
             hostname,
             event_type: EventType::Create,
 
-            data: history_id.to_string(),
+            history_id: history_id.to_string(),
         })
     }
 }
