@@ -3,14 +3,25 @@
 
 // As far as i can tell there are no version numbers in the histdb sqlite DB, so we're going based
 // on the schema from 2022-05-01
+//
+// I have run into some histories that will not import b/c of non UTF-8 characters. 
+//
 
 //
-//select * from history left join commands on history.command_id = commands.rowid left join places on history.place_id = places.rowid limit 10;
+// An Example sqlite query for hsitdb data: 
 //
 //id|session|command_id|place_id|exit_status|start_time|duration|id|argv|id|host|dir
 //
 //
-// select history.id,history.start_time,places.host,places.dir,commands.argv from history left join commands on history.command_id = commands.rowid left join places on history.place_id = places.rowid ;
+//  select 
+//    history.id,
+//    history.start_time,
+//    places.host,
+//    places.dir,
+//    commands.argv 
+//  from history 
+//    left join commands on history.command_id = commands.rowid 
+//    left join places on history.place_id = places.rowid ;
 //
 // CREATE TABLE history  (id integer primary key autoincrement,
 //                       session int,
@@ -19,11 +30,14 @@
 //                       exit_status int,
 //                       start_time int,
 //                       duration int);
+//
 
 use std::{
     path::{Path, PathBuf},
 };
+use std::sync::RwLock;
 
+use lazy_static::lazy_static;
 use chrono::{prelude::*, Utc};
 use directories::UserDirs;
 use eyre::{eyre, Result};
@@ -31,6 +45,20 @@ use sqlx::sqlite::SqlitePool;
 
 use super::Importer;
 use crate::history::History;
+
+// Using lazy_static! here is just of a hack. The issue with importing zsh-histdb data is that
+// sqlx-rs is fully async, but the Importer trait is not, so it is not possible to call async
+// functions fromt this trait. So as a workaround, i'm using lazy_static to hold a vector of
+// History Structs, and pre-populate that before the Importer trait is used. Then the Importer
+// trait can recall the vector held in lazy_static!.
+//
+
+lazy_static! {
+    static ref ZSH_HISTDB_VEC: RwLock<Vec<History>> = {
+        let m = Vec::new();
+        RwLock::new(m)
+    };
+}
 
 #[derive(sqlx::FromRow, Debug)]
 pub struct HistDbHistoryCount {
@@ -67,27 +95,48 @@ pub struct ZshHistDb {
     counter: i64,
 }
 
-impl ZshHistDb {
-    //fn new<P: AsRef<Path>>(dbpath: P) -> Result<Self> {
-    fn new(dbpath: PathBuf) -> Result<Self> {
-        // Create the runtime
-        //let rt  = tokio::runtime::Runtime::new().unwrap();
-        let handle = tokio::runtime::Handle::current();
 
-        // Execute the future, blocking the current thread until completion
-        let histdb_vec :Vec<HistDbHistory> = handle.block_on(async {
-            let pool = SqlitePool::connect(dbpath.to_str().unwrap()).await?;
-            let query = format!("select history.id,history.start_time,history.duration,places.host,places.dir,commands.argv from history left join commands on history.command_id = commands.rowid left join places on history.place_id = places.rowid");
-            sqlx::query_as::<_, HistDbHistory>(&query)
-                    .fetch_all(&pool)
-                    .await
-        }).unwrap();
-        
-        let hist : Vec<History> = histdb_vec.into_iter().map(|x| x.into()).collect::<Vec<History>>();
-        Ok(Self {
-            histdb: hist,
-            counter: 0,
-        })
+async fn hist_from_db(dbpath: PathBuf) -> Result<Vec<History>> {
+    let pool = SqlitePool::connect(dbpath.to_str().unwrap()).await?;
+    let query = format!("select history.id,history.start_time,history.duration,places.host,places.dir,commands.argv from history left join commands on history.command_id = commands.rowid left join places on history.place_id = places.rowid order by history.start_time");
+    let histdb_vec : Vec<HistDbHistory> = sqlx::query_as::<_, HistDbHistory>(&query)
+            .fetch_all(&pool)
+            .await?;
+    let hist : Vec<History> = histdb_vec.into_iter().map(|x| x.into()).collect::<Vec<History>>();
+    Ok(hist)
+}
+
+impl ZshHistDb {
+
+    /// Creates a new ZshHistDb and populates the history based on the pre-populated data
+    /// structure.
+    pub fn new(_dbpath: PathBuf) -> Result<Self> {
+        if let Ok(mut static_zsh_histdb_vec) = ZSH_HISTDB_VEC.write()
+        {
+            let mut hist_vec = Vec::with_capacity(static_zsh_histdb_vec.len());
+            for i in static_zsh_histdb_vec.drain(..) { hist_vec.push(i) }
+            Ok(Self {
+                histdb: hist_vec,
+                counter: 0,
+            })
+        }
+        else {  Err(eyre!("Could not find copy history")) } 
+    }
+
+    /// This function is used to pre-populate a vector of readings since the Importer trait is not
+    /// async. 
+    pub async fn populate(dbpath: PathBuf) {
+        if let Ok(mut static_zsh_histdb_vec) = ZSH_HISTDB_VEC.write()
+        {
+            let mut hist = hist_from_db(dbpath).await.unwrap();
+            *static_zsh_histdb_vec = Vec::with_capacity(hist.len());
+            for i in hist.drain(..) { static_zsh_histdb_vec.push(i) }
+        }
+    }
+
+    /// get the number entries already loaded.
+    pub fn count() -> usize {
+        ZSH_HISTDB_VEC.read().and_then(|x| Ok(x.len())).unwrap_or_else(|_x| 0)
     }
 }
 
@@ -127,19 +176,6 @@ impl Iterator for ZshHistDb {
             None    => { None }
         }
     }
-}
-
-// This was a debug function 
-pub async fn _print_db() -> Result<()> {
-    let db_path = ZshHistDb::histpath().unwrap();
-    let pool = SqlitePool::connect(db_path.to_str().unwrap()).await?;
-    let query = format!("select history.id,history.start_time,places.host,places.dir,commands.argv from history left join commands on history.command_id = commands.rowid left join places on history.place_id = places.rowid");
-    //db.query_history(&query).await?;
-    let a = sqlx::query_as::<_, HistDbHistory>(&query)
-            .fetch_one(&pool)
-            .await?;
-    println!("{:?}", a);
-    Ok(())
 }
 
 #[cfg(test)]

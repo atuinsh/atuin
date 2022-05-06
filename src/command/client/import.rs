@@ -16,7 +16,7 @@ pub enum Cmd {
     /// Import history for the current shell
     Auto,
 
-    /// Import history from the zsh history file
+    /// Import history from the zsh history file (or zsh_histdb file)
     Zsh,
 
     /// Import history from the bash history file
@@ -47,9 +47,9 @@ impl Cmd {
 
                 if shell.ends_with("/zsh") {
                     if ZshHistDb::histpath().is_ok() {
-                        println!("Detected Zsh-HistDb");
-                        //atuin_client::import::zsh_histdb::print_db().await?;
-                        //todo!();
+                        println!("Detected Zsh-HistDb, using :{}", ZshHistDb::histpath().unwrap().to_str().unwrap());
+                        ZshHistDb::populate(ZshHistDb::histpath().unwrap()).await;
+                        println!("Found {} entries ", ZshHistDb::count());
                         import::<ZshHistDb, _>(db, BATCH_SIZE).await
                     }
                     else {
