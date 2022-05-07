@@ -343,7 +343,7 @@ async fn key_handler(
 
             query_results(app, search_mode, db).await.unwrap();
         }
-        Key::Down | Key::Ctrl('n') => {
+        Key::Down | Key::Ctrl('n') | Key::Ctrl('j') => {
             let i = match app.results_state.selected() {
                 Some(i) => {
                     if i == 0 {
@@ -356,7 +356,7 @@ async fn key_handler(
             };
             app.results_state.select(Some(i));
         }
-        Key::Up | Key::Ctrl('p') => {
+        Key::Up | Key::Ctrl('p') | Key::Ctrl('k') => {
             let i = match app.results_state.selected() {
                 Some(i) => {
                     if i >= app.results.len() - 1 {
