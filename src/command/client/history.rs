@@ -128,11 +128,7 @@ pub fn print_cmd_only(w: &mut StdoutLock, h: &[History]) {
 }
 
 impl Cmd {
-    pub async fn run(
-        &self,
-        settings: &Settings,
-        db: &mut (impl Database + Send + Sync),
-    ) -> Result<()> {
+    pub async fn run(&self, settings: &Settings, db: &mut impl Database) -> Result<()> {
         let context = current_context();
 
         match self {

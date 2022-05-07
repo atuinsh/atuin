@@ -25,12 +25,11 @@ struct Atuin {
 }
 
 impl Atuin {
-    async fn run(self) -> Result<()> {
-        self.atuin.run().await
+    fn run(self) -> Result<()> {
+        self.atuin.run()
     }
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    Atuin::parse().run().await
+fn main() -> Result<()> {
+    Atuin::parse().run()
 }
