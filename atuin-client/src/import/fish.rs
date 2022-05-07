@@ -1,99 +1,90 @@
 // import old shell history!
 // automatically hoover up all that we can find
 
-use std::{
-    fs::File,
-    io::{self, BufRead, BufReader, Read, Seek},
-    path::{Path, PathBuf},
-};
+use std::{fs::File, io::Read, path::PathBuf};
 
+use async_trait::async_trait;
 use chrono::{prelude::*, Utc};
 use directories::BaseDirs;
 use eyre::{eyre, Result};
 
-use super::{count_lines, Importer};
+use super::{get_histpath, unix_byte_lines, Importer, Loader};
 use crate::history::History;
 
 #[derive(Debug)]
-pub struct Fish<R> {
-    file: BufReader<R>,
-    strbuf: String,
-    loc: usize,
+pub struct Fish {
+    bytes: Vec<u8>,
 }
 
-impl<R: Read + Seek> Fish<R> {
-    fn new(r: R) -> Result<Self> {
-        let mut buf = BufReader::new(r);
-        let loc = count_lines(&mut buf)?;
+/// see https://fishshell.com/docs/current/interactive.html#searchable-command-history
+fn default_histpath() -> Result<PathBuf> {
+    let base = BaseDirs::new().ok_or_else(|| eyre!("could not determine data directory"))?;
+    let data = base.data_local_dir();
 
-        Ok(Self {
-            file: buf,
-            strbuf: String::new(),
-            loc,
-        })
+    // fish supports multiple history sessions
+    // If `fish_history` var is missing, or set to `default`, use `fish` as the session
+    let session = std::env::var("fish_history").unwrap_or_else(|_| String::from("fish"));
+    let session = if session == "default" {
+        String::from("fish")
+    } else {
+        session
+    };
+
+    let mut histpath = data.join("fish");
+    histpath.push(format!("{}_history", session));
+
+    if histpath.exists() {
+        Ok(histpath)
+    } else {
+        Err(eyre!("Could not find history file. Try setting $HISTFILE"))
     }
 }
 
-impl<R: Read> Fish<R> {
-    fn new_entry(&mut self) -> io::Result<bool> {
-        let inner = self.file.fill_buf()?;
-        Ok(inner.starts_with(b"- "))
-    }
-}
-
-impl Importer for Fish<File> {
+#[async_trait]
+impl Importer for Fish {
     const NAME: &'static str = "fish";
 
-    /// see https://fishshell.com/docs/current/interactive.html#searchable-command-history
-    fn histpath() -> Result<PathBuf> {
-        let base = BaseDirs::new().ok_or_else(|| eyre!("could not determine data directory"))?;
-        let data = base.data_local_dir();
-
-        // fish supports multiple history sessions
-        // If `fish_history` var is missing, or set to `default`, use `fish` as the session
-        let session = std::env::var("fish_history").unwrap_or_else(|_| String::from("fish"));
-        let session = if session == "default" {
-            String::from("fish")
-        } else {
-            session
-        };
-
-        let mut histpath = data.join("fish");
-        histpath.push(format!("{}_history", session));
-
-        if histpath.exists() {
-            Ok(histpath)
-        } else {
-            Err(eyre!("Could not find history file. Try setting $HISTFILE"))
-        }
+    async fn new() -> Result<Self> {
+        let mut bytes = Vec::new();
+        let path = get_histpath(default_histpath)?;
+        let mut f = File::open(path)?;
+        f.read_to_end(&mut bytes)?;
+        Ok(Self { bytes })
     }
 
-    fn parse(path: impl AsRef<Path>) -> Result<Self> {
-        Self::new(File::open(path)?)
+    async fn entries(&mut self) -> Result<usize> {
+        Ok(super::count_lines(&self.bytes))
     }
-}
 
-impl<R: Read> Iterator for Fish<R> {
-    type Item = Result<History>;
-
-    fn next(&mut self) -> Option<Self::Item> {
+    async fn load(self, loader: &mut impl Loader) -> Result<()> {
+        let now = Utc::now();
         let mut time: Option<DateTime<Utc>> = None;
         let mut cmd: Option<String> = None;
 
-        loop {
-            self.strbuf.clear();
-            match self.file.read_line(&mut self.strbuf) {
-                // no more content to read
-                Ok(0) => break,
-                // bail on IO error
-                Err(e) => return Some(Err(e.into())),
-                _ => (),
-            }
+        for b in unix_byte_lines(&self.bytes) {
+            let s = match std::str::from_utf8(b) {
+                Ok(s) => s,
+                Err(_) => continue, // we can skip past things like invalid utf8
+            };
 
-            // `read_line` adds the line delimeter to the string. No thanks
-            self.strbuf.pop();
+            if let Some(c) = s.strip_prefix("- cmd: ") {
+                // first, we must deal with the prev cmd
+                if let Some(cmd) = cmd.take() {
+                    let time = time.unwrap_or(now);
 
-            if let Some(c) = self.strbuf.strip_prefix("- cmd: ") {
+                    loader
+                        .push(History::new(
+                            time,
+                            cmd,
+                            "unknown".into(),
+                            -1,
+                            -1,
+                            None,
+                            None,
+                        ))
+                        .await?;
+                }
+
                 // using raw strings to avoid needing escaping.
                 // replaces double backslashes with single backslashes
                 let c = c.replace(r"\\", r"\");
@@ -102,7 +93,7 @@ impl<R: Read> Iterator for Fish<R> {
                 // TODO: any other escape characters?
 
                 cmd = Some(c);
-            } else if let Some(t) = self.strbuf.strip_prefix("  when: ") {
+            } else if let Some(t) = s.strip_prefix("  when: ") {
                 // if t is not an int, just ignore this line
                 if let Ok(t) = t.parse::<i64>() {
                     time = Some(Utc.timestamp(t, 0));
@@ -110,47 +101,40 @@ impl<R: Read> Iterator for Fish<R> {
             } else {
                 // ... ignore paths lines
             }
-
-            match self.new_entry() {
-                // next line is a new entry, so let's stop here
-                // only if we have found a command though
-                Ok(true) if cmd.is_some() => break,
-                // bail on IO error
-                Err(e) => return Some(Err(e.into())),
-                _ => (),
-            }
         }
 
-        let cmd = cmd?;
-        let time = time.unwrap_or_else(Utc::now);
+        // we might have a trailing cmd
+        if let Some(cmd) = cmd.take() {
+            let time = time.unwrap_or(now);
 
-        Some(Ok(History::new(
-            time,
-            cmd,
-            "unknown".into(),
-            -1,
-            -1,
-            None,
-            None,
-        )))
-    }
+            loader
+                .push(History::new(
+                    time,
+                    cmd,
+                    "unknown".into(),
+                    -1,
+                    -1,
+                    None,
+                    None,
+                ))
+                .await?;
+        }
 
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        // worst case, entry per line
-        (0, Some(self.loc))
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod test {
-    use std::io::Cursor;
+
+    use crate::import::{tests::TestLoader, Importer};
 
     use super::Fish;
 
-    #[test]
-    fn parse_complex() {
+    #[tokio::test]
+    async fn parse_complex() {
         // complicated input with varying contents and escaped strings.
-        let input = r#"- cmd: history --help
+        let bytes = r#"- cmd: history --help
   when: 1639162832
 - cmd: cat ~/.bash_history
   when: 1639162851
@@ -181,14 +165,18 @@ ERROR
   when: 1639163066
   paths:
     - ~/.local/share/fish/fish_history
-"#;
-        let cursor = Cursor::new(input);
-        let mut fish = Fish::new(cursor).unwrap();
+"#.as_bytes().to_owned();
+
+        let fish = Fish { bytes };
+
+        let mut loader = TestLoader::default();
+        fish.load(&mut loader).await.unwrap();
+        let mut history = loader.buf.into_iter();
 
         // simple wrapper for fish history entry
         macro_rules! fishtory {
             ($timestamp:expr, $command:expr) => {
-                let h = fish.next().expect("missing entry in history").unwrap();
+                let h = history.next().expect("missing entry in history");
                 assert_eq!(h.command.as_str(), $command);
                 assert_eq!(h.timestamp.timestamp(), $timestamp);
             };

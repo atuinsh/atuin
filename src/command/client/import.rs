@@ -8,7 +8,7 @@ use indicatif::ProgressBar;
 use atuin_client::{
     database::Database,
     history::History,
-    import::{bash::Bash, Importer, Loader},
+    import::{bash::Bash, fish::Fish, Importer, Loader},
 };
 
 #[derive(Parser)]
@@ -23,9 +23,8 @@ pub enum Cmd {
     Bash,
     // /// Import history from the resh history file
     // Resh,
-
-    // /// Import history from the fish history file
-    // Fish,
+    /// Import history from the fish history file
+    Fish,
 }
 
 const BATCH_SIZE: usize = 100;
@@ -44,15 +43,14 @@ impl Cmd {
             Self::Auto => {
                 let shell = env::var("SHELL").unwrap_or_else(|_| String::from("NO_SHELL"));
 
-                if
-                /* shell.ends_with("/zsh") {
+                /* if shell.ends_with("/zsh") {
                     println!("Detected ZSH");
-                    import::<Zsh<_>, _>(db, BATCH_SIZE).await
-                } else if shell.ends_with("/fish") {
+                    import::<Zsh, DB>(db).await
+                } else */
+                if shell.ends_with("/fish") {
                     println!("Detected Fish");
-                    import::<Fish<_>, _>(db, BATCH_SIZE).await
-                } else if */
-                shell.ends_with("/bash") {
+                    import::<Fish, DB>(db).await
+                } else if shell.ends_with("/bash") {
                     println!("Detected Bash");
                     import::<Bash, DB>(db).await
                 } else {
@@ -61,10 +59,10 @@ impl Cmd {
                 }
             }
 
-            // Self::Zsh => import::<Zsh<_>, _>(db, BATCH_SIZE).await,
+            // Self::Zsh => import::<Zsh, DB>(db).await,
             Self::Bash => import::<Bash, DB>(db).await,
-            // Self::Resh => import::<Resh, _>(db, BATCH_SIZE).await,
-            // Self::Fish => import::<Fish<_>, _>(db, BATCH_SIZE).await,
+            // Self::Resh => import::<Resh, DB>(db).await,
+            Self::Fish => import::<Fish, DB>(db).await,
         }
     }
 }
@@ -88,6 +86,7 @@ impl<'db, DB: Database> HistoryImporter<'db, DB> {
         if !self.buf.is_empty() {
             self.db.save_bulk(&self.buf).await?;
         }
+        self.pb.finish();
         Ok(())
     }
 }

@@ -1,14 +1,10 @@
-use std::{
-    fs::File,
-    io::{self, Read},
-    path::PathBuf,
-};
+use std::{fs::File, io::Read, path::PathBuf};
 
 use async_trait::async_trait;
 use directories::UserDirs;
-use eyre::Result;
+use eyre::{eyre, Result};
 
-use super::{Importer, Loader};
+use super::{get_histpath, Importer, Loader, unix_byte_lines};
 use crate::history::History;
 
 #[derive(Debug)]
@@ -16,20 +12,21 @@ pub struct Bash {
     bytes: Vec<u8>,
 }
 
-fn histpath() -> PathBuf {
-    let user_dirs = UserDirs::new().unwrap();
+fn default_histpath() -> Result<PathBuf> {
+    let user_dirs = UserDirs::new().ok_or_else(|| eyre!("could not find user directories"))?;
     let home_dir = user_dirs.home_dir();
 
-    home_dir.join(".bash_history")
+    Ok(home_dir.join(".bash_history"))
 }
 
 #[async_trait]
 impl Importer for Bash {
     const NAME: &'static str = "bash";
 
-    async fn new() -> io::Result<Self> {
+    async fn new() -> Result<Self> {
         let mut bytes = Vec::new();
-        let mut f = File::open(histpath())?;
+        let path = get_histpath(default_histpath)?;
+        let mut f = File::open(path)?;
         f.read_to_end(&mut bytes)?;
         Ok(Self { bytes })
     }
@@ -40,15 +37,9 @@ impl Importer for Bash {
 
     async fn load(self, h: &mut impl Loader) -> Result<()> {
         let now = chrono::Utc::now();
-
-        let mut i = 0;
-
         let mut line = String::new();
 
-        for j in memchr::memchr_iter(b'\n', &self.bytes) {
-            let b = &self.bytes[i..j];
-            i = j + 1; // skip over the \n
-
+        for (i, b) in unix_byte_lines(&self.bytes).enumerate() {
             let s = match std::str::from_utf8(b) {
                 Ok(s) => s,
                 Err(_) => continue, // we can skip past things like invalid utf8
