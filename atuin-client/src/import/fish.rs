@@ -165,7 +165,9 @@ ERROR
   when: 1639163066
   paths:
     - ~/.local/share/fish/fish_history
-"#.as_bytes().to_owned();
+"#
+        .as_bytes()
+        .to_owned();
 
         let fish = Fish { bytes };
 

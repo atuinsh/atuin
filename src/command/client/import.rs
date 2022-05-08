@@ -8,7 +8,7 @@ use indicatif::ProgressBar;
 use atuin_client::{
     database::Database,
     history::History,
-    import::{bash::Bash, fish::Fish, Importer, Loader},
+    import::{bash::Bash, fish::Fish, resh::Resh, Importer, Loader},
 };
 
 #[derive(Parser)]
@@ -21,8 +21,8 @@ pub enum Cmd {
     // Zsh,
     /// Import history from the bash history file
     Bash,
-    // /// Import history from the resh history file
-    // Resh,
+    /// Import history from the resh history file
+    Resh,
     /// Import history from the fish history file
     Fish,
 }
@@ -61,7 +61,7 @@ impl Cmd {
 
             // Self::Zsh => import::<Zsh, DB>(db).await,
             Self::Bash => import::<Bash, DB>(db).await,
-            // Self::Resh => import::<Resh, DB>(db).await,
+            Self::Resh => import::<Resh, DB>(db).await,
             Self::Fish => import::<Fish, DB>(db).await,
         }
     }

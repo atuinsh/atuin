@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use directories::UserDirs;
 use eyre::{eyre, Result};
 
-use super::{get_histpath, Importer, Loader, unix_byte_lines};
+use super::{get_histpath, unix_byte_lines, Importer, Loader};
 use crate::history::History;
 
 #[derive(Debug)]

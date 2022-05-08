@@ -8,7 +8,7 @@ use crate::history::History;
 
 pub mod bash;
 pub mod fish;
-// pub mod resh;
+pub mod resh;
 // pub mod zsh;
 
 #[async_trait]
