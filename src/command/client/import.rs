@@ -8,7 +8,7 @@ use indicatif::ProgressBar;
 use atuin_client::{
     database::Database,
     history::History,
-    import::{bash::Bash, fish::Fish, resh::Resh, Importer, Loader},
+    import::{bash::Bash, fish::Fish, resh::Resh, zsh::Zsh, Importer, Loader},
 };
 
 #[derive(Parser)]
@@ -17,8 +17,8 @@ pub enum Cmd {
     /// Import history for the current shell
     Auto,
 
-    // /// Import history from the zsh history file
-    // Zsh,
+    /// Import history from the zsh history file
+    Zsh,
     /// Import history from the bash history file
     Bash,
     /// Import history from the resh history file
@@ -43,11 +43,10 @@ impl Cmd {
             Self::Auto => {
                 let shell = env::var("SHELL").unwrap_or_else(|_| String::from("NO_SHELL"));
 
-                /* if shell.ends_with("/zsh") {
+                if shell.ends_with("/zsh") {
                     println!("Detected ZSH");
                     import::<Zsh, DB>(db).await
-                } else */
-                if shell.ends_with("/fish") {
+                } else if shell.ends_with("/fish") {
                     println!("Detected Fish");
                     import::<Fish, DB>(db).await
                 } else if shell.ends_with("/bash") {
@@ -59,7 +58,7 @@ impl Cmd {
                 }
             }
 
-            // Self::Zsh => import::<Zsh, DB>(db).await,
+            Self::Zsh => import::<Zsh, DB>(db).await,
             Self::Bash => import::<Bash, DB>(db).await,
             Self::Resh => import::<Resh, DB>(db).await,
             Self::Fish => import::<Fish, DB>(db).await,
