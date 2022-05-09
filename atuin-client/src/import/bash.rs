@@ -1,134 +1,106 @@
-use std::{
-    fs::File,
-    io::{BufRead, BufReader, Read, Seek},
-    path::{Path, PathBuf},
-};
+use std::{fs::File, io::Read, path::PathBuf};
 
+use async_trait::async_trait;
 use directories::UserDirs;
 use eyre::{eyre, Result};
 
-use super::{count_lines, Importer};
+use super::{get_histpath, unix_byte_lines, Importer, Loader};
 use crate::history::History;
 
 #[derive(Debug)]
-pub struct Bash<R> {
-    file: BufReader<R>,
-    strbuf: String,
-    loc: usize,
-    counter: i64,
+pub struct Bash {
+    bytes: Vec<u8>,
 }
 
-impl<R: Read + Seek> Bash<R> {
-    fn new(r: R) -> Result<Self> {
-        let mut buf = BufReader::new(r);
-        let loc = count_lines(&mut buf)?;
+fn default_histpath() -> Result<PathBuf> {
+    let user_dirs = UserDirs::new().ok_or_else(|| eyre!("could not find user directories"))?;
+    let home_dir = user_dirs.home_dir();
 
-        Ok(Self {
-            file: buf,
-            strbuf: String::new(),
-            loc,
-            counter: 0,
-        })
-    }
+    Ok(home_dir.join(".bash_history"))
 }
 
-impl Importer for Bash<File> {
+#[async_trait]
+impl Importer for Bash {
     const NAME: &'static str = "bash";
 
-    fn histpath() -> Result<PathBuf> {
-        let user_dirs = UserDirs::new().unwrap();
-        let home_dir = user_dirs.home_dir();
-
-        Ok(home_dir.join(".bash_history"))
+    async fn new() -> Result<Self> {
+        let mut bytes = Vec::new();
+        let path = get_histpath(default_histpath)?;
+        let mut f = File::open(path)?;
+        f.read_to_end(&mut bytes)?;
+        Ok(Self { bytes })
     }
 
-    fn parse(path: impl AsRef<Path>) -> Result<Self> {
-        Self::new(File::open(path)?)
+    async fn entries(&mut self) -> Result<usize> {
+        Ok(super::count_lines(&self.bytes))
     }
-}
 
-impl<R: Read> Iterator for Bash<R> {
-    type Item = Result<History>;
+    async fn load(self, h: &mut impl Loader) -> Result<()> {
+        let now = chrono::Utc::now();
+        let mut line = String::new();
 
-    fn next(&mut self) -> Option<Self::Item> {
-        self.strbuf.clear();
-        match self.file.read_line(&mut self.strbuf) {
-            Ok(0) => return None,
-            Ok(_) => (),
-            Err(e) => return Some(Err(eyre!("failed to read line: {}", e))), // we can skip past things like invalid utf8
-        }
-
-        self.loc -= 1;
-
-        while self.strbuf.ends_with("\\\n") {
-            if self.file.read_line(&mut self.strbuf).is_err() {
-                // There's a chance that the last line of a command has invalid
-                // characters, the only safe thing to do is break :/
-                // usually just invalid utf8 or smth
-                // however, we really need to avoid missing history, so it's
-                // better to have some items that should have been part of
-                // something else, than to miss things. So break.
-                break;
+        for (i, b) in unix_byte_lines(&self.bytes).enumerate() {
+            let s = match std::str::from_utf8(b) {
+                Ok(s) => s,
+                Err(_) => continue, // we can skip past things like invalid utf8
             };
 
-            self.loc -= 1;
+            if let Some(s) = s.strip_suffix('\\') {
+                line.push_str(s);
+                line.push_str("\\\n");
+            } else {
+                line.push_str(s);
+                let command = std::mem::take(&mut line);
+
+                let offset = chrono::Duration::seconds(i as i64);
+                h.push(History::new(
+                    now - offset, // preserve ordering
+                    command,
+                    String::from("unknown"),
+                    -1,
+                    -1,
+                    None,
+                    None,
+                ))
+                .await?;
+            }
         }
 
-        let time = chrono::Utc::now();
-        let offset = chrono::Duration::seconds(self.counter);
-        let time = time - offset;
-
-        self.counter += 1;
-
-        Some(Ok(History::new(
-            time,
-            self.strbuf.trim_end().to_string(),
-            String::from("unknown"),
-            -1,
-            -1,
-            None,
-            None,
-        )))
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        (0, Some(self.loc))
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::io::Cursor;
+    use itertools::assert_equal;
+
+    use crate::import::{tests::TestLoader, Importer};
 
     use super::Bash;
 
-    #[test]
-    fn test_parse_file() {
-        let input = r"cargo install atuin
+    #[tokio::test]
+    async fn test_parse_file() {
+        let bytes = r"cargo install atuin
 cargo install atuin; \
 cargo update
 cargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷
-";
+"
+        .as_bytes()
+        .to_owned();
 
-        let cursor = Cursor::new(input);
-        let mut bash = Bash::new(cursor).unwrap();
-        assert_eq!(bash.loc, 4);
-        assert_eq!(bash.size_hint(), (0, Some(4)));
+        let mut bash = Bash { bytes };
+        assert_eq!(bash.entries().await.unwrap(), 4);
 
-        assert_eq!(
-            &bash.next().unwrap().unwrap().command,
-            "cargo install atuin"
-        );
-        assert_eq!(
-            &bash.next().unwrap().unwrap().command,
-            "cargo install atuin; \\\ncargo update"
-        );
-        assert_eq!(
-            &bash.next().unwrap().unwrap().command,
-            "cargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷"
-        );
-        assert!(bash.next().is_none());
+        let mut loader = TestLoader::default();
+        bash.load(&mut loader).await.unwrap();
 
-        assert_eq!(bash.size_hint(), (0, Some(0)));
+        assert_equal(
+            loader.buf.iter().map(|h| h.command.as_str()),
+            [
+                "cargo install atuin",
+                "cargo install atuin; \\\ncargo update",
+                "cargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷",
+            ],
+        );
     }
 }

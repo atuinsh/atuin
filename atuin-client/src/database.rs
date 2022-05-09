@@ -41,7 +41,7 @@ pub fn current_context() -> Context {
 }
 
 #[async_trait]
-pub trait Database {
+pub trait Database: Send + Sync {
     async fn save(&mut self, h: &History) -> Result<()>;
     async fn save_bulk(&mut self, h: &[History]) -> Result<()>;
 

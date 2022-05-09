@@ -75,11 +75,7 @@ pub struct Cmd {
 }
 
 impl Cmd {
-    pub async fn run(
-        self,
-        db: &mut (impl Database + Send + Sync),
-        settings: &Settings,
-    ) -> Result<()> {
+    pub async fn run(self, db: &mut impl Database, settings: &Settings) -> Result<()> {
         if self.interactive {
             let item = select_history(
                 &self.query,
@@ -257,7 +253,7 @@ impl State {
 async fn query_results(
     app: &mut State,
     search_mode: SearchMode,
-    db: &mut (impl Database + Send + Sync),
+    db: &mut impl Database,
 ) -> Result<()> {
     let results = match app.input.as_str() {
         "" => {
@@ -284,7 +280,7 @@ async fn query_results(
 async fn key_handler(
     input: Key,
     search_mode: SearchMode,
-    db: &mut (impl Database + Send + Sync),
+    db: &mut impl Database,
     app: &mut State,
 ) -> Option<String> {
     match input {
@@ -537,7 +533,7 @@ async fn select_history(
     search_mode: SearchMode,
     filter_mode: FilterMode,
     style: atuin_client::settings::Style,
-    db: &mut (impl Database + Send + Sync),
+    db: &mut impl Database,
 ) -> Result<String> {
     let stdout = stdout().into_raw_mode()?;
     let stdout = MouseTerminal::from(stdout);
@@ -596,7 +592,7 @@ async fn run_non_interactive(
     after: Option<String>,
     limit: Option<i64>,
     query: &[String],
-    db: &mut (impl Database + Send + Sync),
+    db: &mut impl Database,
 ) -> Result<()> {
     let dir = if cwd.as_deref() == Some(".") {
         let current = std::env::current_dir()?;
