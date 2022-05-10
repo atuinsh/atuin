@@ -1,6 +1,5 @@
 /target
 */target
 .env
-
-# JetBrains IDEs
 .idea/
+.vscode/

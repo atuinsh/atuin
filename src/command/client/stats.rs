@@ -14,12 +14,9 @@ use atuin_client::{
 
 #[derive(Parser)]
 #[clap(infer_subcommands = true)]
-pub enum Cmd {
-    /// Compute statistics for all of time
-    All,
-
-    /// Compute statistics for a single day
-    Day { words: Vec<String> },
+pub struct Cmd {
+    /// compute statistics for the specified period, leave blank for statistics since the beginning
+    period: Vec<String>,
 }
 
 fn compute_stats(history: &[History]) -> Result<()> {
@@ -28,7 +25,6 @@ fn compute_stats(history: &[History]) -> Result<()> {
     for i in history {
         *commands.entry(i.command.clone()).or_default() += 1;
     }
-
     let most_common_command = commands.iter().max_by(|a, b| a.1.cmp(b.1));
 
     if most_common_command.is_none() {
@@ -66,38 +62,21 @@ fn compute_stats(history: &[History]) -> Result<()> {
 }
 
 impl Cmd {
-    pub async fn run(
-        &self,
-        db: &mut (impl Database + Send + Sync),
-        settings: &Settings,
-    ) -> Result<()> {
+    pub async fn run(&self, db: &mut impl Database, settings: &Settings) -> Result<()> {
         let context = current_context();
-
-        match self {
-            Self::Day { words } => {
-                let words = if words.is_empty() {
-                    String::from("yesterday")
-                } else {
-                    words.join(" ")
-                };
-
-                let start = parse_date_string(&words, Local::now(), settings.dialect.into())?;
-                let end = start + Duration::days(1);
-
-                let history = db.range(start.into(), end.into()).await?;
-
-                compute_stats(&history)?;
-
-                Ok(())
-            }
-
-            Self::All => {
-                let history = db.list(FilterMode::Global, &context, None, false).await?;
-
-                compute_stats(&history)?;
-
-                Ok(())
-            }
-        }
+        let words = if self.period.is_empty() {
+            String::from("all")
+        } else {
+            self.period.join(" ")
+        };
+        let history = if words.as_str() == "all" {
+            db.list(FilterMode::Global, &context, None, false).await?
+        } else {
+            let start = parse_date_string(&words, Local::now(), settings.dialect.into())?;
+            let end = start + Duration::days(1);
+            db.range(start.into(), end.into()).await?
+        };
+        compute_stats(&history)?;
+        Ok(())
     }
 }

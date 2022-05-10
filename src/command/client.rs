@@ -29,7 +29,6 @@ pub enum Cmd {
     Import(import::Cmd),
 
     /// Calculate statistics for your history
-    #[clap(subcommand)]
     Stats(stats::Cmd),
 
     /// Output shell setup
@@ -59,6 +58,7 @@ pub enum Cmd {
 }
 
 impl Cmd {
+    #[tokio::main(flavor = "current_thread")]
     pub async fn run(self) -> Result<()> {
         pretty_env_logger::init();
 
