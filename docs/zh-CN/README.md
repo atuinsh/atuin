@@ -1,10 +1,12 @@
-<h1 align="center">
-  Atuin
-</h1>
+<p align="center">
+<img height="250" src="https://user-images.githubusercontent.com/53315310/167610618-284491ac-c5d3-4957-9e4b-604bb97e23e6.png"/>
+</p>
 
 <p align="center">
 <em>神奇的 shell 历史记录</em>
 </p>
+
+<hr/>
 
 <p align="center">
   <a href="https://github.com/ellie/atuin/actions?query=workflow%3ARust"><img src="https://img.shields.io/github/workflow/status/ellie/atuin/Rust?style=flat-square" /></a>
@@ -14,6 +16,10 @@
   <a href="https://discord.gg/Fq8bJSKPHh"><img src="https://img.shields.io/discord/954121165239115808" /></a>
 </p>
 
+[English] | [简体中文]
+
+Atuin 使用 SQLite 数据库取代了你现有的 shell 历史，并为你的命令记录了额外的内容。此外，它还通过 Atuin 服务器，在机器之间提供可选的、完全加密的历史记录同步功能。
+
 <p align="center">
   <img src="../../demo.gif" alt="animated" width="80%" />
 </p>
@@ -21,11 +27,6 @@
 <p align="center">
 <em>显示退出代码、命令持续时间、上次执行时间和执行的命令</em>
 </p>
-
-[English] | [简体中文]
-
-Atuin 使用 SQLite 数据库取代了你现有的 shell 历史，并为你的命令记录了额外的内容。此外，它还通过 Atuin 服务器，在机器之间提供可选的、完全加密的历史记录同步功能。
-
 
 除了搜索 UI，它还可以执行以下操作：
 
