@@ -33,13 +33,14 @@ members = ["./atuin-client", "./atuin-server", "./atuin-common"]
 # TODO(conradludgate)
 # Currently, this keeps the same default built behaviour for v0.8
 # We should rethink this by the time we hit a new breaking change
-default = ["sync", "server"]
+default = ["client", "sync", "server"]
+client = ["atuin-client"]
 sync = ["atuin-client/sync"]
 server = ["atuin-server", "tracing-subscriber"]
 
 [dependencies]
 atuin-server = { path = "atuin-server", version = "0.9.1", optional = true }
-atuin-client = { path = "atuin-client", version = "0.9.1", default-features = false }
+atuin-client = { path = "atuin-client", version = "0.9.1", optional = true, default-features = false }
 atuin-common = { path = "atuin-common", version = "0.9.1" }
 
 log = "0.4"
