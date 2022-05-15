@@ -110,6 +110,8 @@ impl Cmd {
 struct State {
     input: String,
 
+    cursor_index: usize,
+
     filter_mode: FilterMode,
 
     results: Vec<History>,
@@ -304,29 +306,46 @@ async fn key_handler(
                     .map_or(app.input.clone(), |h| h.command.clone()),
             );
         }
+        Key::Right | Key::Ctrl('h') => {
+            if app.cursor_index != 0 {
+                app.cursor_index -= 1;
+            }
+        }
+        Key::Left | Key::Ctrl('l') => {
+            if app.cursor_index < app.input.width() {
+                app.cursor_index += 1;
+            }
+        }
+        Key::Ctrl('a') => {
+            app.cursor_index = 0;
+        }
+        Key::Ctrl('e') => {
+            app.cursor_index = app.input.width();
+        }
         Key::Char(c) => {
-            app.input.push(c);
+            app.input.insert(app.cursor_index, c);
+            app.cursor_index += 1;
             query_results(app, search_mode, db).await.unwrap();
         }
         Key::Backspace => {
-            app.input.pop();
+            app.input.remove(app.cursor_index);
+            app.cursor_index -= 1;
             query_results(app, search_mode, db).await.unwrap();
         }
-        // \u{7f} is escape sequence for backspace
-        Key::Alt('\u{7f}') => {
-            let words: Vec<&str> = app.input.split(' ').collect();
-            if words.is_empty() {
-                return None;
+        Key::Ctrl('w') => {
+            let mut stop_on_next_whitespace = false;
+            loop {
+                if app.cursor_index == 0 { break; }
+                if app.input.chars().nth(app.cursor_index-1) == Some(' ') && stop_on_next_whitespace { break; }
+                if !app.input.remove(app.cursor_index-1).is_whitespace() {
+                    stop_on_next_whitespace = true;
+                }
+                app.cursor_index -= 1;
             }
-            if words.len() == 1 {
-                app.input = String::from("");
-            } else {
-                app.input = words[0..(words.len() - 1)].join(" ");
-            }
-            query_results(app, search_mode, db).await.unwrap();
         }
         Key::Ctrl('u') => {
             app.input = String::from("");
+            app.cursor_index = 0;
             query_results(app, search_mode, db).await.unwrap();
         }
         Key::Ctrl('r') => {
@@ -444,7 +463,7 @@ fn draw<T: Backend>(f: &mut Frame<'_, T>, history_count: i64, app: &mut State) {
 
     f.set_cursor(
         // Put cursor past the end of the input text
-        chunks[2].x + app.input.width() as u16 + 1,
+        chunks[2].x + app.cursor_index as u16 + 1,
         // Move one line down, from the border to the input line
         chunks[2].y + 1,
     );
@@ -514,7 +533,7 @@ fn draw_compact<T: Backend>(f: &mut Frame<'_, T>, history_count: i64, app: &mut 
     app.render_results(f, chunks[1], Block::default());
     f.render_widget(input, chunks[2]);
 
-    let extra_width = app.input.width() + filter_mode.len();
+    let extra_width = app.cursor_index + filter_mode.len();
 
     f.set_cursor(
         // Put cursor past the end of the input text
@@ -544,8 +563,12 @@ async fn select_history(
     // Setup event handlers
     let events = Events::new();
 
+    let input = query.join(" ");
+    // Put the cursor at the end of the query by default
+    let cursor_index = input.width();
     let mut app = State {
-        input: query.join(" "),
+        input,
+        cursor_index,
         results: Vec::new(),
         results_state: ListState::default(),
         context: current_context(),
