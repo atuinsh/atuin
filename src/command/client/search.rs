@@ -328,7 +328,8 @@ async fn key_handler(
             query_results(app, search_mode, db).await.unwrap();
         }
         Key::Backspace => {
-            app.input.remove(app.cursor_index);
+            if app.cursor_index == 0 { return None; }
+            app.input.remove(app.cursor_index-1);
             app.cursor_index -= 1;
             query_results(app, search_mode, db).await.unwrap();
         }
@@ -342,6 +343,7 @@ async fn key_handler(
                 }
                 app.cursor_index -= 1;
             }
+            query_results(app, search_mode, db).await.unwrap();
         }
         Key::Ctrl('u') => {
             app.input = String::from("");
