@@ -1,10 +1,7 @@
-use std::env;
-use std::path::Path;
-use std::str::FromStr;
+use std::{env, path::Path, str::FromStr};
 
 use async_trait::async_trait;
-use chrono::prelude::*;
-use chrono::Utc;
+use chrono::{prelude::*, Utc};
 use fs_err as fs;
 use itertools::Itertools;
 use lazy_static::lazy_static;
@@ -15,9 +12,11 @@ use sqlx::{
     Result, Row,
 };
 
-use super::history::History;
-use super::ordering;
-use super::settings::{FilterMode, SearchMode};
+use super::{
+    history::History,
+    ordering,
+    settings::{FilterMode, SearchMode},
+};
 
 pub struct Context {
     session: String,
@@ -42,7 +41,7 @@ pub fn current_context() -> Context {
 }
 
 #[async_trait]
-pub trait Database {
+pub trait Database: Send + Sync {
     async fn save(&mut self, h: &History) -> Result<()>;
     async fn save_bulk(&mut self, h: &[History]) -> Result<()>;
 

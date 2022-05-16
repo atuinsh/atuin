@@ -1,18 +1,19 @@
 use std::borrow::Borrow;
 
-use atuin_common::api::*;
-use axum::extract::Path;
-use axum::{Extension, Json};
+use axum::{extract::Path, Extension, Json};
 use http::StatusCode;
 use sodiumoxide::crypto::pwhash::argon2id13;
 use tracing::{debug, error, instrument};
 use uuid::Uuid;
 
-use crate::database::{Database, Any};
-use crate::models::{NewSession, NewUser};
-use crate::settings::Settings;
-
 use super::{ErrorResponse, ErrorResponseStatus};
+use crate::{
+    database::{Database, Any},
+    models::{NewSession, NewUser},
+    settings::Settings,
+};
+
+use atuin_common::api::*;
 
 pub fn verify_str(secret: &str, verify: &str) -> bool {
     sodiumoxide::init().unwrap();

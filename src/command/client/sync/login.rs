@@ -1,13 +1,11 @@
 use std::io;
 
-use atuin_common::api::LoginRequest;
-use clap::AppSettings;
-use clap::Parser;
+use clap::{AppSettings, Parser};
 use eyre::Result;
 use tokio::{fs::File, io::AsyncWriteExt};
 
-use atuin_client::api_client;
-use atuin_client::settings::Settings;
+use atuin_client::{api_client, settings::Settings};
+use atuin_common::api::LoginRequest;
 
 #[derive(Parser)]
 #[clap(setting(AppSettings::DeriveDisplayOrder))]

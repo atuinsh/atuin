@@ -1,16 +1,19 @@
-use axum::extract::Query;
-use axum::{extract::Path, Extension, Json};
-use http::StatusCode;
 use std::collections::HashMap;
+use axum::{
+    extract::{Path, Query},
+    Extension, Json,
+};
+use http::StatusCode;
 use tracing::{debug, error, instrument};
 
-use crate::database::{Database, Any};
-use crate::models::{NewHistory, User};
-use atuin_common::api::*;
-
-use crate::calendar::{TimePeriod, TimePeriodInfo};
-
 use super::{ErrorResponse, ErrorResponseStatus};
+use crate::{
+    calendar::{TimePeriod, TimePeriodInfo},
+    database::{Database, Any},
+    models::{NewHistory, User},
+};
+
+use atuin_common::api::*;
 
 #[instrument(skip_all, fields(user.id = user.id))]
 pub async fn count(

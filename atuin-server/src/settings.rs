@@ -1,10 +1,9 @@
-use fs_err::{create_dir_all, File};
-use serde::{Deserialize, Serialize};
-use std::io::prelude::*;
-use std::path::PathBuf;
+use std::{io::prelude::*, path::PathBuf};
 
 use config::{Config, Environment, File as ConfigFile, FileFormat};
 use eyre::{eyre, Result};
+use fs_err::{create_dir_all, File};
+use serde::{Deserialize, Serialize};
 
 pub const HISTORY_PAGE_SIZE: i64 = 100;
 
@@ -19,15 +18,11 @@ pub struct Settings {
 
 impl Settings {
     pub fn new() -> Result<Self> {
-        let config_dir = atuin_common::utils::config_dir();
-        let config_dir = config_dir.as_path();
-
-        create_dir_all(config_dir)?;
-
         let mut config_file = if let Ok(p) = std::env::var("ATUIN_CONFIG_DIR") {
             PathBuf::from(p)
         } else {
             let mut config_file = PathBuf::new();
+            let config_dir = atuin_common::utils::config_dir();
             config_file.push(config_dir);
             config_file
         };
@@ -52,6 +47,7 @@ impl Settings {
             ))
         } else {
             let example_config = include_bytes!("../server.toml");
+            create_dir_all(config_file.parent().unwrap())?;
             let mut file = File::create(config_file)?;
             file.write_all(example_config)?;
 

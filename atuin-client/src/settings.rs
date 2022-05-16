@@ -1,13 +1,14 @@
-use fs_err::{create_dir_all, File};
-use serde::Deserialize;
-use std::io::prelude::*;
-use std::path::{Path, PathBuf};
+use std::{
+    io::prelude::*,
+    path::{Path, PathBuf},
+};
 
-use chrono::prelude::*;
-use chrono::Utc;
+use chrono::{prelude::*, Utc};
 use config::{Config, Environment, File as ConfigFile, FileFormat};
 use eyre::{eyre, Context, Result};
+use fs_err::{create_dir_all, File};
 use parse_duration::parse;
+use serde::Deserialize;
 
 pub const HISTORY_PAGE_SIZE: i64 = 100;
 

@@ -1,8 +1,7 @@
-use atuin_client::database::Database;
 use clap::Subcommand;
 use eyre::{Result, WrapErr};
 
-use atuin_client::settings::Settings;
+use atuin_client::{database::Database, settings::Settings};
 
 mod login;
 mod logout;
@@ -32,11 +31,7 @@ pub enum Cmd {
 }
 
 impl Cmd {
-    pub async fn run(
-        self,
-        settings: Settings,
-        db: &mut (impl Database + Send + Sync),
-    ) -> Result<()> {
+    pub async fn run(self, settings: Settings, db: &mut impl Database) -> Result<()> {
         match self {
             Self::Sync { force } => run(&settings, force, db).await,
             Self::Login(l) => l.run(&settings).await,
@@ -53,11 +48,7 @@ impl Cmd {
     }
 }
 
-async fn run(
-    settings: &Settings,
-    force: bool,
-    db: &mut (impl Database + Send + Sync),
-) -> Result<()> {
+async fn run(settings: &Settings, force: bool, db: &mut impl Database) -> Result<()> {
     atuin_client::sync::sync(settings, force, db).await?;
     println!(
         "Sync complete! {} items in database, force: {}",

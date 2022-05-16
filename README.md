@@ -1,10 +1,12 @@
-<h1 align="center">
-  Atuin
-</h1>
+<p align="center">
+<img height="250" src="https://user-images.githubusercontent.com/53315310/167610618-284491ac-c5d3-4957-9e4b-604bb97e23e6.png"/>
+</p>
 
 <p align="center">
 <em>magical shell history</em>
 </p>
+
+<hr/>
 
 <p align="center">
   <a href="https://github.com/ellie/atuin/actions?query=workflow%3ARust"><img src="https://img.shields.io/github/workflow/status/ellie/atuin/Rust?style=flat-square" /></a>
@@ -14,6 +16,18 @@
   <a href="https://discord.gg/Fq8bJSKPHh"><img src="https://img.shields.io/discord/954121165239115808" /></a>
 </p>
 
+
+[English] | [简体中文]
+
+
+Atuin replaces your existing shell history with a SQLite database, and records
+additional context for your commands. Additionally, it provides optional and
+_fully encrypted_ synchronisation of your history between machines, via an Atuin
+server.  
+
+
+
+
 <p align="center">
   <img src="demo.gif" alt="animated" width="80%" />
 </p>
@@ -22,10 +36,9 @@
 <em>exit code, duration, time and command shown</em>
 </p>
 
-Atuin replaces your existing shell history with a SQLite database, and records
-additional context for your commands. Additionally, it provides optional and
-_fully encrypted_ synchronisation of your history between machines, via an Atuin
-server.
+
+
+
 
 As well as the search UI, it can do things like this:
 
@@ -195,3 +208,6 @@ to your `is-interactive` block in your `~/.config/fish/config.fish` file
 
 Atuin is named after "The Great A'Tuin", a giant turtle from Terry Pratchett's
 Discworld series of books.
+
+[English]: ./README.md
+[简体中文]: ./docs/zh-CN/README.md
