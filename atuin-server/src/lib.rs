@@ -3,7 +3,7 @@
 use std::net::{IpAddr, SocketAddr};
 
 use axum::Server;
-use database::Postgres;
+use database::Any;
 use eyre::{Context, Result};
 
 use crate::settings::Settings;
@@ -19,11 +19,11 @@ pub mod settings;
 pub async fn launch(settings: Settings, host: String, port: u16) -> Result<()> {
     let host = host.parse::<IpAddr>()?;
 
-    let postgres = Postgres::new(settings.db_uri.as_str())
+    let db = Any::new(settings.db_uri.as_str(), settings.db_type.as_str())
         .await
         .wrap_err_with(|| format!("failed to connect to db: {}", settings.db_uri))?;
 
-    let r = router::router(postgres, settings);
+    let r = router::router(db, settings);
 
     Server::bind(&SocketAddr::new(host, port))
         .serve(r.into_make_service())

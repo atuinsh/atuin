@@ -8,7 +8,7 @@ use sodiumoxide::crypto::pwhash::argon2id13;
 use tracing::{debug, error, instrument};
 use uuid::Uuid;
 
-use crate::database::{Database, Postgres};
+use crate::database::{Database, Any};
 use crate::models::{NewSession, NewUser};
 use crate::settings::Settings;
 
@@ -31,7 +31,7 @@ pub fn verify_str(secret: &str, verify: &str) -> bool {
 #[instrument(skip_all, fields(user.username = username.as_str()))]
 pub async fn get(
     Path(username): Path<String>,
-    db: Extension<Postgres>,
+    db: Extension<Any>,
 ) -> Result<Json<UserResponse>, ErrorResponseStatus<'static>> {
     let user = match db.get_user(username.as_ref()).await {
         Ok(user) => user,
@@ -55,7 +55,7 @@ pub async fn get(
 pub async fn register(
     Json(register): Json<RegisterRequest>,
     settings: Extension<Settings>,
-    db: Extension<Postgres>,
+    db: Extension<Any>,
 ) -> Result<Json<RegisterResponse>, ErrorResponseStatus<'static>> {
     if !settings.open_registration {
         return Err(
@@ -102,7 +102,7 @@ pub async fn register(
 #[instrument(skip_all, fields(user.username = login.username.as_str()))]
 pub async fn login(
     login: Json<LoginRequest>,
-    db: Extension<Postgres>,
+    db: Extension<Any>,
 ) -> Result<Json<LoginResponse>, ErrorResponseStatus<'static>> {
     let user = match db.get_user(login.username.borrow()).await {
         Ok(u) => u,
@@ -151,6 +151,6 @@ fn hash_secret(secret: &str) -> String {
     .unwrap();
     let texthash = std::str::from_utf8(&hash.0).unwrap().to_string();
 
-    // postgres hates null chars. don't do that to postgres
+    // Any hates null chars. don't do that to Any
     texthash.trim_end_matches('\u{0}').to_string()
 }

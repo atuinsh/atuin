@@ -7,5 +7,11 @@
 ## whether to allow anyone to register an account
 # open_registration = false
 
-## URI for postgres (using development creds here)
+## Database Type, valid options are "postgres" and "sqlite"
+# db_type = "sqlite"
+
+## Database Connection string
+# Sqlite Example
+# db_uri="sqlite:///home/rigrassm/Development/atuin/config/data.db"
+# Postgres Example
 # db_uri="postgres://username:password@localhost/atuin"

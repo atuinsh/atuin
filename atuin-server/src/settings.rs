@@ -12,6 +12,7 @@ pub const HISTORY_PAGE_SIZE: i64 = 100;
 pub struct Settings {
     pub host: String,
     pub port: u16,
+    pub db_type: String,
     pub db_uri: String,
     pub open_registration: bool,
 }

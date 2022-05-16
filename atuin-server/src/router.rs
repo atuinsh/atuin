@@ -11,7 +11,7 @@ use tower::ServiceBuilder;
 use tower_http::trace::TraceLayer;
 
 use super::{
-    database::{Database, Postgres},
+    database::{Database, Any},
     handlers,
 };
 use crate::{models::User, settings::Settings};
@@ -26,7 +26,7 @@ where
     async fn from_request(req: &mut RequestParts<B>) -> Result<Self, Self::Rejection> {
         let postgres = req
             .extensions()
-            .get::<Postgres>()
+            .get::<Any>()
             .ok_or(http::StatusCode::INTERNAL_SERVER_ERROR)?;
 
         let auth_header = req
@@ -56,7 +56,7 @@ where
 async fn teapot() -> impl IntoResponse {
     (http::StatusCode::IM_A_TEAPOT, "☕")
 }
-pub fn router(postgres: Postgres, settings: Settings) -> Router {
+pub fn router(db: Any, settings: Settings) -> Router {
     Router::new()
         .route("/", get(handlers::index))
         .route("/sync/count", get(handlers::history::count))
@@ -70,7 +70,7 @@ pub fn router(postgres: Postgres, settings: Settings) -> Router {
         .layer(
             ServiceBuilder::new()
                 .layer(TraceLayer::new_for_http())
-                .layer(Extension(postgres))
+                .layer(Extension(db))
                 .layer(Extension(settings)),
         )
 }

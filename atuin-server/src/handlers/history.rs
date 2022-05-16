@@ -4,7 +4,7 @@ use http::StatusCode;
 use std::collections::HashMap;
 use tracing::{debug, error, instrument};
 
-use crate::database::{Database, Postgres};
+use crate::database::{Database, Any};
 use crate::models::{NewHistory, User};
 use atuin_common::api::*;
 
@@ -15,7 +15,7 @@ use super::{ErrorResponse, ErrorResponseStatus};
 #[instrument(skip_all, fields(user.id = user.id))]
 pub async fn count(
     user: User,
-    db: Extension<Postgres>,
+    db: Extension<Any>,
 ) -> Result<Json<CountResponse>, ErrorResponseStatus<'static>> {
     match db.count_history_cached(&user).await {
         // By default read out the cached value
@@ -35,7 +35,7 @@ pub async fn count(
 pub async fn list(
     req: Query<SyncHistoryRequest>,
     user: User,
-    db: Extension<Postgres>,
+    db: Extension<Any>,
 ) -> Result<Json<SyncHistoryResponse>, ErrorResponseStatus<'static>> {
     let history = db
         .list_history(
@@ -71,7 +71,7 @@ pub async fn list(
 pub async fn add(
     Json(req): Json<Vec<AddHistoryRequest>>,
     user: User,
-    db: Extension<Postgres>,
+    db: Extension<Any>,
 ) -> Result<(), ErrorResponseStatus<'static>> {
     debug!("request to add {} history items", req.len());
 
@@ -101,7 +101,7 @@ pub async fn calendar(
     Path(focus): Path<String>,
     Query(params): Query<HashMap<String, u64>>,
     user: User,
-    db: Extension<Postgres>,
+    db: Extension<Any>,
 ) -> Result<Json<HashMap<u64, TimePeriodInfo>>, ErrorResponseStatus<'static>> {
     let focus = focus.as_str();
 

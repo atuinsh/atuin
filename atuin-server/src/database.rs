@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use std::collections::HashMap;
 use tracing::{debug, instrument};
 
-use sqlx::{postgres::PgPoolOptions, Result};
+use sqlx::{any::AnyPoolOptions, Result};
 
 use crate::settings::HISTORY_PAGE_SIZE;
 
@@ -59,25 +59,28 @@ pub trait Database {
 }
 
 #[derive(Clone)]
-pub struct Postgres {
-    pool: sqlx::Pool<sqlx::postgres::Postgres>,
+pub struct Any {
+    pool: sqlx::any::AnyPool,
 }
 
-impl Postgres {
-    pub async fn new(uri: &str) -> Result<Self> {
-        let pool = PgPoolOptions::new()
+impl Any {
+    pub async fn new(uri: &str, db: &str) -> Result<Self> {
+        let pool = AnyPoolOptions::new()
             .max_connections(100)
             .connect(uri)
             .await?;
-
-        sqlx::migrate!("./migrations").run(&pool).await?;
+        if db == "sqlite" {
+            sqlx::migrate!("./migrations/sqlite").run(&pool).await?;
+        } else {
+            sqlx::migrate!("./migrations/postgresql").run(&pool).await?;
+        }
 
         Ok(Self { pool })
     }
 }
 
 #[async_trait]
-impl Database for Postgres {
+impl Database for Any {
     #[instrument(skip_all)]
     async fn get_session(&self, token: &str) -> Result<Session> {
         sqlx::query_as::<_, Session>("select id, user_id, token from sessions where token = $1")
