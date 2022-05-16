@@ -4,23 +4,23 @@
 // As far as i can tell there are no version numbers in the histdb sqlite DB, so we're going based
 // on the schema from 2022-05-01
 //
-// I have run into some histories that will not import b/c of non UTF-8 characters. 
+// I have run into some histories that will not import b/c of non UTF-8 characters.
 //
 
 //
-// An Example sqlite query for hsitdb data: 
+// An Example sqlite query for hsitdb data:
 //
 //id|session|command_id|place_id|exit_status|start_time|duration|id|argv|id|host|dir
 //
 //
-//  select 
+//  select
 //    history.id,
 //    history.start_time,
 //    places.host,
 //    places.dir,
-//    commands.argv 
-//  from history 
-//    left join commands on history.command_id = commands.rowid 
+//    commands.argv
+//  from history
+//    left join commands on history.command_id = commands.rowid
 //    left join places on history.place_id = places.rowid ;
 //
 // CREATE TABLE history  (id integer primary key autoincrement,
@@ -32,15 +32,13 @@
 //                       duration int);
 //
 
-use std::{
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
-use chrono::{prelude::*, Utc};
 use async_trait::async_trait;
+use chrono::{prelude::*, Utc};
 use directories::UserDirs;
 use eyre::{eyre, Result};
-use sqlx::{Pool, sqlite::SqlitePool};
+use sqlx::{sqlite::SqlitePool, Pool};
 
 use super::Importer;
 use crate::history::History;
@@ -48,7 +46,7 @@ use crate::import::Loader;
 
 #[derive(sqlx::FromRow, Debug)]
 pub struct HistDbEntryCount {
-    pub count: usize
+    pub count: usize,
 }
 
 #[derive(sqlx::FromRow, Debug)]
@@ -63,9 +61,12 @@ pub struct HistDbEntry {
 
 impl From<HistDbEntry> for History {
     fn from(histdb_item: HistDbEntry) -> Self {
-        History::new (
-            DateTime::from_utc(histdb_item.start_time, Utc), // must assume UTC? 
-            String::from_utf8(histdb_item.argv).unwrap_or_else(|_e| String::from("")).trim_end().to_string(),
+        History::new(
+            DateTime::from_utc(histdb_item.start_time, Utc), // must assume UTC?
+            String::from_utf8(histdb_item.argv)
+                .unwrap_or_else(|_e| String::from(""))
+                .trim_end()
+                .to_string(),
             histdb_item.dir,
             0, // assume 0, we have no way of knowing :(
             histdb_item.duration,
@@ -80,7 +81,6 @@ pub struct ZshHistDb {
     histdb: Vec<HistDbEntry>,
 }
 
-
 /// Read db at given file, return vector of entries.
 async fn hist_from_db(dbpath: PathBuf) -> Result<Vec<HistDbEntry>> {
     let pool = SqlitePool::connect(dbpath.to_str().unwrap()).await?;
@@ -89,15 +89,14 @@ async fn hist_from_db(dbpath: PathBuf) -> Result<Vec<HistDbEntry>> {
 
 async fn hist_from_db_conn(pool: Pool<sqlx::Sqlite>) -> Result<Vec<HistDbEntry>> {
     let query = "select history.id,history.start_time,history.duration,places.host,places.dir,commands.argv from history left join commands on history.command_id = commands.rowid left join places on history.place_id = places.rowid order by history.start_time";
-    let histdb_vec : Vec<HistDbEntry> = sqlx::query_as::<_, HistDbEntry>(query)
-            .fetch_all(&pool)
-            .await?;
+    let histdb_vec: Vec<HistDbEntry> = sqlx::query_as::<_, HistDbEntry>(query)
+        .fetch_all(&pool)
+        .await?;
     Ok(histdb_vec)
 }
 
 impl ZshHistDb {
     pub fn histpath_candidate() -> PathBuf {
-
         // By default histdb database is `${HOME}/.histdb/zsh-history.db`
         // This can be modified by ${HISTDB_FILE}
         //
@@ -106,14 +105,19 @@ impl ZshHistDb {
         let user_dirs = UserDirs::new().unwrap(); // should catch error here?
         let home_dir = user_dirs.home_dir();
         std::env::var("HISTDB_FILE")
-                            .as_ref()
-                            .map(|x| Path::new(x).to_path_buf())
-                            .unwrap_or_else(|_err| home_dir.join(".histdb/zsh-history.db"))
+            .as_ref()
+            .map(|x| Path::new(x).to_path_buf())
+            .unwrap_or_else(|_err| home_dir.join(".histdb/zsh-history.db"))
     }
     pub fn histpath() -> Result<PathBuf> {
         let histdb_path = ZshHistDb::histpath_candidate();
-        if histdb_path.exists() { Ok(histdb_path) }
-        else {  Err(eyre!("Could not find history file. Try setting $HISTDB_FILE")) }
+        if histdb_path.exists() {
+            Ok(histdb_path)
+        } else {
+            Err(eyre!(
+                "Could not find history file. Try setting $HISTDB_FILE"
+            ))
+        }
     }
 }
 
@@ -125,8 +129,7 @@ impl Importer for ZshHistDb {
     /// Creates a new ZshHistDb and populates the history based on the pre-populated data
     /// structure.
     async fn new() -> Result<Self> {
-
-        let dbpath = ZshHistDb::histpath()?; 
+        let dbpath = ZshHistDb::histpath()?;
         let histdb_entry_vec = hist_from_db(dbpath).await?;
         Ok(Self {
             histdb: histdb_entry_vec,
@@ -136,18 +139,19 @@ impl Importer for ZshHistDb {
         Ok(self.histdb.len())
     }
     async fn load(self, h: &mut impl Loader) -> Result<()> {
-        for i in self.histdb { h.push(i.into()).await?; }
+        for i in self.histdb {
+            h.push(i.into()).await?;
+        }
         Ok(())
     }
 }
-
 
 #[cfg(test)]
 mod test {
 
     use super::*;
-    use std::env;
     use sqlx::sqlite::SqlitePoolOptions;
+    use std::env;
     #[tokio::test(flavor = "multi_thread")]
     async fn test_env_vars() {
         let test_env_db = "nonstd-zsh-history.db";
@@ -159,7 +163,7 @@ mod test {
 
         // test histdb returns the proper db from previous step
         let histdb_path = ZshHistDb::histpath_candidate();
-        assert_eq!(histdb_path.to_str().unwrap() , test_env_db);
+        assert_eq!(histdb_path.to_str().unwrap(), test_env_db);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -169,7 +173,6 @@ mod test {
             .connect(":memory:")
             .await
             .unwrap();
-
 
         // sql dump directly from a test database.
         let db_sql = r#"
@@ -201,14 +204,7 @@ mod test {
         CREATE INDEX history_command_place on history(command_id, place_id);
         COMMIT; "#;
 
-
-        sqlx::query(db_sql)
-            .execute(&pool)
-            .await
-            .unwrap();
-
-
-
+        sqlx::query(db_sql).execute(&pool).await.unwrap();
 
         // test histdb iterator
         let histdb_vec = hist_from_db_conn(pool).await.unwrap();

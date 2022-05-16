@@ -8,7 +8,9 @@ use indicatif::ProgressBar;
 use atuin_client::{
     database::Database,
     history::History,
-    import::{bash::Bash, fish::Fish, resh::Resh, zsh::Zsh, zsh_histdb::ZshHistDb, Importer, Loader},
+    import::{
+        bash::Bash, fish::Fish, resh::Resh, zsh::Zsh, zsh_histdb::ZshHistDb, Importer, Loader,
+    },
 };
 
 #[derive(Parser)]
@@ -46,7 +48,10 @@ impl Cmd {
                 let shell = env::var("SHELL").unwrap_or_else(|_| String::from("NO_SHELL"));
                 if shell.ends_with("/zsh") {
                     if ZshHistDb::histpath().is_ok() {
-                        println!("Detected Zsh-HistDb, using :{}", ZshHistDb::histpath().unwrap().to_str().unwrap());
+                        println!(
+                            "Detected Zsh-HistDb, using :{}",
+                            ZshHistDb::histpath().unwrap().to_str().unwrap()
+                        );
                         import::<ZshHistDb, DB>(db).await
                     } else {
                         println!("Detected ZSH");
