@@ -1,16 +1,16 @@
-use std::collections::HashMap;
-
 use async_trait::async_trait;
-use chrono::{Datelike, TimeZone};
-use chronoutil::RelativeDuration;\
-use sqlx::{any::AnyPoolOptions, Result};
+use std::collections::HashMap;
 use tracing::{debug, instrument};
 
-use super::{
-    calendar::{TimePeriod, TimePeriodInfo},
-    models::{History, NewHistory, NewSession, NewUser, Session, User},
-};
+use sqlx::{any::AnyPoolOptions, Result};
+
 use crate::settings::HISTORY_PAGE_SIZE;
+
+use super::calendar::{TimePeriod, TimePeriodInfo};
+use super::models::{History, NewHistory, NewSession, NewUser, Session, User};
+
+use chrono::{Datelike, TimeZone};
+use chronoutil::RelativeDuration;
 
 use atuin_common::utils::get_days_from_month;
 
@@ -64,15 +64,15 @@ pub struct Any {
 }
 
 impl Any {
-    pub async fn new(uri: &str, db: &str) -> Result<Self> {
+    pub async fn new(uri: &str, db_type: &str) -> Result<Self> {
         let pool = AnyPoolOptions::new()
             .max_connections(100)
             .connect(uri)
             .await?;
-        if db == "sqlite" {
+        if db_type == "sqlite" {
             sqlx::migrate!("./migrations/sqlite").run(&pool).await?;
-        } else {
-            sqlx::migrate!("./migrations/postgresql").run(&pool).await?;
+        } else if db_type == "postgres" {
+            sqlx::migrate!("./migrations/sqlite").run(&pool).await?;
         }
 
         Ok(Self { pool })
