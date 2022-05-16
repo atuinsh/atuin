@@ -58,7 +58,7 @@ itertools = "0.10.3"
 tokio = { version = "1", features = ["full"] }
 async-trait = "0.1.49"
 chrono-english = "0.1.4"
-cli-table = "0.4"
+cli-table = { version = "0.4", default-features = false }
 base64 = "0.13.0"
 humantime = "2.1.0"
 crossbeam-channel = "0.5.1"
