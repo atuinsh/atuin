@@ -306,12 +306,12 @@ async fn key_handler(
                     .map_or(app.input.clone(), |h| h.command.clone()),
             );
         }
-        Key::Right | Key::Ctrl('h') => {
+        Key::Left | Key::Ctrl('h') => {
             if app.cursor_index != 0 {
                 app.cursor_index -= 1;
             }
         }
-        Key::Left | Key::Ctrl('l') => {
+        Key::Right | Key::Ctrl('l') => {
             if app.cursor_index < app.input.width() {
                 app.cursor_index += 1;
             }
