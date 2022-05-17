@@ -328,17 +328,25 @@ async fn key_handler(
             query_results(app, search_mode, db).await.unwrap();
         }
         Key::Backspace => {
-            if app.cursor_index == 0 { return None; }
-            app.input.remove(app.cursor_index-1);
+            if app.cursor_index == 0 {
+                return None;
+            }
+            app.input.remove(app.cursor_index - 1);
             app.cursor_index -= 1;
             query_results(app, search_mode, db).await.unwrap();
         }
         Key::Ctrl('w') => {
             let mut stop_on_next_whitespace = false;
             loop {
-                if app.cursor_index == 0 { break; }
-                if app.input.chars().nth(app.cursor_index-1) == Some(' ') && stop_on_next_whitespace { break; }
-                if !app.input.remove(app.cursor_index-1).is_whitespace() {
+                if app.cursor_index == 0 {
+                    break;
+                }
+                if app.input.chars().nth(app.cursor_index - 1) == Some(' ')
+                    && stop_on_next_whitespace
+                {
+                    break;
+                }
+                if !app.input.remove(app.cursor_index - 1).is_whitespace() {
                     stop_on_next_whitespace = true;
                 }
                 app.cursor_index -= 1;
