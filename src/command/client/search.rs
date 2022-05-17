@@ -495,7 +495,13 @@ fn draw<T: Backend>(f: &mut Frame<'_, T>, history_count: i64, app: &mut State) {
     );
     f.render_widget(input, chunks[2]);
 
-    let width = UnicodeWidthStr::width(app.input.chars().take(app.cursor_index).collect::<String>().as_str());
+    let width = UnicodeWidthStr::width(
+        app.input
+            .chars()
+            .take(app.cursor_index)
+            .collect::<String>()
+            .as_str(),
+    );
     f.set_cursor(
         // Put cursor past the end of the input text
         chunks[2].x + width as u16 + 1,
@@ -568,7 +574,13 @@ fn draw_compact<T: Backend>(f: &mut Frame<'_, T>, history_count: i64, app: &mut 
     app.render_results(f, chunks[1], Block::default());
     f.render_widget(input, chunks[2]);
 
-    let extra_width = UnicodeWidthStr::width(app.input.chars().take(app.cursor_index).collect::<String>().as_str()) + filter_mode.len();
+    let extra_width = UnicodeWidthStr::width(
+        app.input
+            .chars()
+            .take(app.cursor_index)
+            .collect::<String>()
+            .as_str(),
+    ) + filter_mode.len();
 
     f.set_cursor(
         // Put cursor past the end of the input text
