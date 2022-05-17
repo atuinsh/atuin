@@ -279,6 +279,30 @@ async fn query_results(
     Ok(())
 }
 
+fn get_input_prefix(app: &mut State, i: usize) -> String {
+    return app.input.chars().take(i).collect();
+}
+fn get_input_suffix(app: &mut State, i: usize) -> String {
+    return app.input.chars().skip(i).collect();
+}
+
+fn insert_char_into_input(app: &mut State, i: usize, c: char) {
+    let mut result = String::from("");
+    result.push_str(&get_input_prefix(app, i));
+    result.push_str(&c.to_string());
+    result.push_str(&get_input_suffix(app, i));
+    app.input = result;
+}
+
+fn remove_char_from_input(app: &mut State, i: usize) -> char {
+    let mut result = String::from("");
+    result.push_str(&get_input_prefix(app, i - 1));
+    result.push_str(&get_input_suffix(app, i));
+    let c = app.input.chars().nth(i - 1).unwrap();
+    app.input = result;
+    return c;
+}
+
 async fn key_handler(
     input: Key,
     search_mode: SearchMode,
@@ -320,10 +344,10 @@ async fn key_handler(
             app.cursor_index = 0;
         }
         Key::Ctrl('e') => {
-            app.cursor_index = app.input.width();
+            app.cursor_index = app.input.chars().count();
         }
         Key::Char(c) => {
-            app.input.insert(app.cursor_index, c);
+            insert_char_into_input(app, app.cursor_index, c);
             app.cursor_index += 1;
             query_results(app, search_mode, db).await.unwrap();
         }
@@ -331,7 +355,7 @@ async fn key_handler(
             if app.cursor_index == 0 {
                 return None;
             }
-            app.input.remove(app.cursor_index - 1);
+            remove_char_from_input(app, app.cursor_index);
             app.cursor_index -= 1;
             query_results(app, search_mode, db).await.unwrap();
         }
@@ -346,7 +370,7 @@ async fn key_handler(
                 {
                     break;
                 }
-                if !app.input.remove(app.cursor_index - 1).is_whitespace() {
+                if !remove_char_from_input(app, app.cursor_index).is_whitespace() {
                     stop_on_next_whitespace = true;
                 }
                 app.cursor_index -= 1;
@@ -471,9 +495,10 @@ fn draw<T: Backend>(f: &mut Frame<'_, T>, history_count: i64, app: &mut State) {
     );
     f.render_widget(input, chunks[2]);
 
+    let width = UnicodeWidthStr::width(app.input.chars().take(app.cursor_index).collect::<String>().as_str());
     f.set_cursor(
         // Put cursor past the end of the input text
-        chunks[2].x + app.cursor_index as u16 + 1,
+        chunks[2].x + width as u16 + 1,
         // Move one line down, from the border to the input line
         chunks[2].y + 1,
     );
@@ -543,7 +568,7 @@ fn draw_compact<T: Backend>(f: &mut Frame<'_, T>, history_count: i64, app: &mut 
     app.render_results(f, chunks[1], Block::default());
     f.render_widget(input, chunks[2]);
 
-    let extra_width = app.cursor_index + filter_mode.len();
+    let extra_width = UnicodeWidthStr::width(app.input.chars().take(app.cursor_index).collect::<String>().as_str()) + filter_mode.len();
 
     f.set_cursor(
         // Put cursor past the end of the input text
@@ -575,7 +600,7 @@ async fn select_history(
 
     let input = query.join(" ");
     // Put the cursor at the end of the query by default
-    let cursor_index = input.width();
+    let cursor_index = input.chars().count();
     let mut app = State {
         input,
         cursor_index,
