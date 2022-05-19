@@ -131,12 +131,16 @@ toolchain, then you can run:
 ```
 cargo install atuin
 ```
+  
+And then follow [the shell setup](#shell-plugin)
 
 ### Homebrew
 
 ```
 brew install atuin
 ```
+  
+And then follow [the shell setup](#shell-plugin)
   
 ### MacPorts
 
@@ -145,6 +149,8 @@ Atuin is also available in [MacPorts](https://ports.macports.org/port/atuin/)
 ```
 sudo port install atuin
 ```
+  
+And then follow [the shell setup](#shell-plugin)
 
 ### Pacman
 
@@ -153,6 +159,8 @@ Atuin is available in the Arch Linux [community repository](https://archlinux.or
 ```
 pacman -S atuin
 ```
+  
+And then follow [the shell setup](#shell-plugin)
 
 ### From source
 
@@ -161,6 +169,8 @@ git clone https://github.com/ellie/atuin.git
 cd atuin
 cargo install --path .
 ```
+  
+And then follow [the shell setup](#shell-plugin)
 
 ## Shell plugin
 
