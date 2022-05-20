@@ -10,6 +10,7 @@ pub mod bash;
 pub mod fish;
 pub mod resh;
 pub mod zsh;
+pub mod zsh_histdb;
 
 #[async_trait]
 pub trait Importer: Sized {
