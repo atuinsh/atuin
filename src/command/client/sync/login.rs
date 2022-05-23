@@ -9,17 +9,7 @@ use atuin_common::api::LoginRequest;
 
 #[derive(Parser)]
 #[clap(setting(AppSettings::DeriveDisplayOrder))]
-pub struct Cmd {
-    #[clap(long, short)]
-    pub username: Option<String>,
-
-    #[clap(long, short)]
-    pub password: Option<String>,
-
-    /// The encryption key for your account
-    #[clap(long, short)]
-    pub key: Option<String>,
-}
+pub struct Cmd {}
 
 fn get_input() -> Result<String> {
     let mut input = String::new();
@@ -39,9 +29,9 @@ impl Cmd {
             return Ok(());
         }
 
-        let username = or_user_input(&self.username, "username");
-        let password = or_user_input(&self.password, "password");
-        let key = or_user_input(&self.key, "encryption key");
+        let username = read_user_input("username");
+        let password = read_user_password();
+        let key = read_user_input("encryption key");
 
         let session = api_client::login(
             settings.sync_address.as_str(),
@@ -63,11 +53,12 @@ impl Cmd {
     }
 }
 
-pub(super) fn or_user_input(value: &'_ Option<String>, name: &'static str) -> String {
-    value.clone().unwrap_or_else(|| read_user_input(name))
-}
-
-fn read_user_input(name: &'static str) -> String {
+pub(super) fn read_user_input(name: &'static str) -> String {
     eprint!("Please enter {}: ", name);
     get_input().expect("Failed to read from input")
+}
+
+pub(super) fn read_user_password() -> String {
+    let password = rpassword::prompt_password("Please enter password: ");
+    password.expect("Failed to read from input")
 }
