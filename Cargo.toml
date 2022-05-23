@@ -66,6 +66,7 @@ clap = { version = "3.1.18", features = ["derive"] }
 clap_complete = "3.1.4"
 fs-err = "2.7"
 whoami = "1.1.2"
+rpassword = "6.0"
 
 [dependencies.tracing-subscriber]
 version = "0.3"
