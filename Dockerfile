@@ -6,6 +6,10 @@ COPY . .
 RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
+
+# Ensure working C compile setup (not installed by default in arm64 images)
+RUN apt update && apt install build-essential -y
+
 COPY --from=planner /app/recipe.json recipe.json
 RUN cargo chef cook --release --recipe-path recipe.json
 

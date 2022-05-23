@@ -21,6 +21,7 @@ pub enum Cmd {
 }
 
 impl Cmd {
+    #[tokio::main]
     pub async fn run(self) -> Result<()> {
         tracing_subscriber::registry()
             .with(fmt::layer())

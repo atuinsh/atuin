@@ -1,6 +1,7 @@
 use clap::Subcommand;
 use eyre::Result;
 
+#[cfg(feature = "client")]
 mod client;
 
 #[cfg(feature = "server")]
@@ -9,6 +10,7 @@ mod server;
 #[derive(Subcommand)]
 #[clap(infer_subcommands = true)]
 pub enum AtuinCmd {
+    #[cfg(feature = "client")]
     #[clap(flatten)]
     Client(client::Cmd),
 
@@ -19,11 +21,12 @@ pub enum AtuinCmd {
 }
 
 impl AtuinCmd {
-    pub async fn run(self) -> Result<()> {
+    pub fn run(self) -> Result<()> {
         match self {
-            Self::Client(client) => client.run().await,
+            #[cfg(feature = "client")]
+            Self::Client(client) => client.run(),
             #[cfg(feature = "server")]
-            Self::Server(server) => server.run().await,
+            Self::Server(server) => server.run(),
         }
     }
 }

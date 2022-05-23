@@ -1,10 +1,12 @@
-<h1 align="center">
-  Atuin
-</h1>
+<p align="center">
+<img height="250" src="https://user-images.githubusercontent.com/53315310/167610618-284491ac-c5d3-4957-9e4b-604bb97e23e6.png"/>
+</p>
 
 <p align="center">
 <em>magical shell history</em>
 </p>
+
+<hr/>
 
 <p align="center">
   <a href="https://github.com/ellie/atuin/actions?query=workflow%3ARust"><img src="https://img.shields.io/github/workflow/status/ellie/atuin/Rust?style=flat-square" /></a>
@@ -14,6 +16,18 @@
   <a href="https://discord.gg/Fq8bJSKPHh"><img src="https://img.shields.io/discord/954121165239115808" /></a>
 </p>
 
+
+[English] | [简体中文]
+
+
+Atuin replaces your existing shell history with a SQLite database, and records
+additional context for your commands. Additionally, it provides optional and
+_fully encrypted_ synchronisation of your history between machines, via an Atuin
+server.  
+
+
+
+
 <p align="center">
   <img src="demo.gif" alt="animated" width="80%" />
 </p>
@@ -22,12 +36,9 @@
 <em>exit code, duration, time and command shown</em>
 </p>
 
-[English] | [简体中文]
 
-Atuin replaces your existing shell history with a SQLite database, and records
-additional context for your commands. Additionally, it provides optional and
-_fully encrypted_ synchronisation of your history between machines, via an Atuin
-server.
+
+
 
 As well as the search UI, it can do things like this:
 
@@ -120,12 +131,16 @@ toolchain, then you can run:
 ```
 cargo install atuin
 ```
+  
+And then follow [the shell setup](#shell-plugin)
 
 ### Homebrew
 
 ```
 brew install atuin
 ```
+  
+And then follow [the shell setup](#shell-plugin)
   
 ### MacPorts
 
@@ -134,6 +149,8 @@ Atuin is also available in [MacPorts](https://ports.macports.org/port/atuin/)
 ```
 sudo port install atuin
 ```
+  
+And then follow [the shell setup](#shell-plugin)
 
 ### Pacman
 
@@ -142,6 +159,8 @@ Atuin is available in the Arch Linux [community repository](https://archlinux.or
 ```
 pacman -S atuin
 ```
+  
+And then follow [the shell setup](#shell-plugin)
 
 ### From source
 
@@ -150,6 +169,8 @@ git clone https://github.com/ellie/atuin.git
 cd atuin
 cargo install --path .
 ```
+  
+And then follow [the shell setup](#shell-plugin)
 
 ## Shell plugin
 
