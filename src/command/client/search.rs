@@ -300,9 +300,10 @@ fn remove_char_from_input(app: &mut State, i: usize) -> char {
     result.push_str(&get_input_suffix(app, i));
     let c = app.input.chars().nth(i - 1).unwrap();
     app.input = result;
-    return c;
+    c
 }
 
+#[allow(clippy::too_many_lines)]
 async fn key_handler(
     input: Key,
     search_mode: SearchMode,
