@@ -14,6 +14,9 @@ pub struct Cmd {
     #[clap(long, short)]
     pub username: Option<String>,
 
+    #[clap(long, short)]
+    pub password: Option<String>,
+
     /// The encryption key for your account
     #[clap(long, short)]
     pub key: Option<String>,
@@ -38,9 +41,8 @@ impl Cmd {
         }
 
         let username = or_user_input(&self.username, "username");
-        let password = read_user_password();
         let key = or_user_input(&self.key, "encryption key");
-
+        let password = self.password.clone().unwrap_or_else(read_user_password);
         let session = api_client::login(
             settings.sync_address.as_str(),
             LoginRequest { username, password },
