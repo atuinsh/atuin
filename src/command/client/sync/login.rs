@@ -6,6 +6,7 @@ use tokio::{fs::File, io::AsyncWriteExt};
 
 use atuin_client::{api_client, settings::Settings};
 use atuin_common::api::LoginRequest;
+use rpassword::prompt_password;
 
 #[derive(Parser)]
 #[clap(setting(AppSettings::DeriveDisplayOrder))]
@@ -40,9 +41,8 @@ impl Cmd {
         }
 
         let username = or_user_input(&self.username, "username");
-        let password = or_user_input(&self.password, "password");
         let key = or_user_input(&self.key, "encryption key");
-
+        let password = self.password.clone().unwrap_or_else(read_user_password);
         let session = api_client::login(
             settings.sync_address.as_str(),
             LoginRequest { username, password },
@@ -65,6 +65,11 @@ impl Cmd {
 
 pub(super) fn or_user_input(value: &'_ Option<String>, name: &'static str) -> String {
     value.clone().unwrap_or_else(|| read_user_input(name))
+}
+
+pub(super) fn read_user_password() -> String {
+    let password = prompt_password("Please enter password: ");
+    password.expect("Failed to read from input")
 }
 
 fn read_user_input(name: &'static str) -> String {
