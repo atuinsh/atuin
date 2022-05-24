@@ -6,10 +6,18 @@ use tokio::{fs::File, io::AsyncWriteExt};
 
 use atuin_client::{api_client, settings::Settings};
 use atuin_common::api::LoginRequest;
+use rpassword::prompt_password;
 
 #[derive(Parser)]
 #[clap(setting(AppSettings::DeriveDisplayOrder))]
-pub struct Cmd {}
+pub struct Cmd {
+    #[clap(long, short)]
+    pub username: Option<String>,
+
+    /// The encryption key for your account
+    #[clap(long, short)]
+    pub key: Option<String>,
+}
 
 fn get_input() -> Result<String> {
     let mut input = String::new();
@@ -29,9 +37,9 @@ impl Cmd {
             return Ok(());
         }
 
-        let username = read_user_input("username");
+        let username = or_user_input(&self.username, "username");
         let password = read_user_password();
-        let key = read_user_input("encryption key");
+        let key = or_user_input(&self.key, "encryption key");
 
         let session = api_client::login(
             settings.sync_address.as_str(),
@@ -53,12 +61,16 @@ impl Cmd {
     }
 }
 
-pub(super) fn read_user_input(name: &'static str) -> String {
-    eprint!("Please enter {}: ", name);
-    get_input().expect("Failed to read from input")
+pub(super) fn or_user_input(value: &'_ Option<String>, name: &'static str) -> String {
+    value.clone().unwrap_or_else(|| read_user_input(name))
 }
 
 pub(super) fn read_user_password() -> String {
-    let password = rpassword::prompt_password("Please enter password: ");
+    let password = prompt_password("Please enter password: ");
     password.expect("Failed to read from input")
+}
+
+fn read_user_input(name: &'static str) -> String {
+    eprint!("Please enter {}: ", name);
+    get_input().expect("Failed to read from input")
 }
