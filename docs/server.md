@@ -325,7 +325,9 @@ spec:
       storage: 10Mi
 ```
 
-Note this configuration will store the database folder _outside_ the kubernetes cluster, in the folder `/Users/firstname.lastname/.kube/database` of the host system by configuring the `storageClassName` to be `manual`. In a real enterprise setup, you would probably want to store the database content permanently in the cluster, and not in the host system.
+Note that this configuration will store the database folder _outside_ the kubernetes cluster, in the folder `/Users/firstname.lastname/.kube/database` of the host system by configuring the `storageClassName` to be `manual`. In a real enterprise setup, you would probably want to store the database content permanently in the cluster, and not in the host system.
+
+You should also change the password string in the `secrets.yaml` file to a more secure one.
 
 Deploy the Atuin server using `kubectl`:
 
