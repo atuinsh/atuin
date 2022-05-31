@@ -25,7 +25,7 @@
   package = "netlify-plugin-submit-sitemap"
 
 	[plugins.inputs]
-    baseUrl = "https://doks-child-theme.netlify.app/"
+    baseUrl = "https://atuin.sh/"
     sitemapPath = "/sitemap.xml"
     ignorePeriod = 0
     providers = [

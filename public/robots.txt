@@ -1,4 +1,0 @@
-User-agent: *
-Allow: /
-
-Sitemap: https://doks-child-theme.netlify.app/sitemap.xml
