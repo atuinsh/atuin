@@ -1,223 +1,140 @@
 <p align="center">
-<img height="250" src="https://user-images.githubusercontent.com/53315310/167610618-284491ac-c5d3-4957-9e4b-604bb97e23e6.png"/>
+  <a href="https://getdoks.org/">
+    <img alt="Doks" src="https://doks.netlify.app/logo-doks.svg" width="60">
+  </a>
+</p>
+
+<h1 align="center">
+  Doks
+</h1>
+
+<h3 align="center">
+  Doks Child Theme
+</h3>
+
+<p align="center">
+  Doks is a Hugo theme for building secure, fast, and SEO-ready documentation websites, which you can easily update and customize.
 </p>
 
 <p align="center">
-<em>magical shell history</em>
+  <a href="https://github.com/h-enk/doks-child-theme/blob/master/LICENSE">
+    <img src="https://img.shields.io/github/license/h-enk/doks-child-theme?style=flat-square" alt="GitHub">
+  </a>
+  <a href="https://github.com/h-enk/doks-child-theme/releases">
+    <img src="https://img.shields.io/github/v/release/h-enk/doks-child-theme?include_prereleases&style=flat-square"alt="GitHub release (latest SemVer including pre-releases)">
+  </a>
+  <a href="https://github.com/h-enk/doks-child-theme/actions/workflows/codeql-analysis.yml">
+    <img src="https://img.shields.io/github/workflow/status/h-enk/doks-child-theme/CodeQL/master?style=flat-square" alt="GitHub Workflow Status (branch)">
+  </a>
+  <a href="https://app.netlify.com/sites/hyas-child-theme/deploys">
+    <img src="https://img.shields.io/netlify/75395a37-8537-4410-a8c3-d56bf27ec963?style=flat-square" alt="Netlify">
+  </a>
 </p>
 
-<hr/>
+![Doks — Modern Documentation Theme](https://raw.githubusercontent.com/h-enk/doks/master/images/tn.png)
 
-<p align="center">
-  <a href="https://github.com/ellie/atuin/actions?query=workflow%3ARust"><img src="https://img.shields.io/github/workflow/status/ellie/atuin/Rust?style=flat-square" /></a>
-  <a href="https://crates.io/crates/atuin"><img src="https://img.shields.io/crates/v/atuin.svg?style=flat-square" /></a>
-  <a href="https://crates.io/crates/atuin"><img src="https://img.shields.io/crates/d/atuin.svg?style=flat-square" /></a>
-  <a href="https://github.com/ellie/atuin/blob/main/LICENSE"><img src="https://img.shields.io/crates/l/atuin.svg?style=flat-square" /></a>
-  <a href="https://discord.gg/Fq8bJSKPHh"><img src="https://img.shields.io/discord/954121165239115808" /></a>
-</p>
+## Demo
 
+- [doks-child-theme.netlify.app](https://doks-child-theme.netlify.app/)
 
-[English] | [简体中文]
+## Why Doks?
 
+Nine main reasons why you should use Doks:
 
-Atuin replaces your existing shell history with a SQLite database, and records
-additional context for your commands. Additionally, it provides optional and
-_fully encrypted_ synchronisation of your history between machines, via an Atuin
-server.  
+1. __Security aware__. Get A+ scores on [Mozilla Observatory](https://observatory.mozilla.org/analyze/doks.netlify.app) out of the box. Easily change the default Security Headers to suit your needs.
 
+2. __Fast by default__. Get 100 scores on [Google Lighthouse](https://googlechrome.github.io/lighthouse/viewer/?gist=7731347bb8ce999eff7428a8e763b637) by default. Doks removes unused css, prefetches links, and lazy loads images.
 
+3. __SEO-ready__. Use sensible defaults for structured data, open graph, and Twitter cards. Or easily change the SEO settings to your liking.
 
+4. __Development tools__. Code with confidence. Check styles, scripts, and markdown for errors and fix automatically or manually.
 
-<p align="center">
-  <img src="demo.gif" alt="animated" width="80%" />
-</p>
+5. __Bootstrap framework__. Build robust, flexible, and intuitive websites with Bootstrap 5. Easily customize your Doks site with the source Sass files.
 
-<p align="center">
-<em>exit code, duration, time and command shown</em>
-</p>
+6. __Netlify-ready__. Deploy to Netlify with sensible defaults. Easily use Netlify Functions, Netlify Redirects, and Netlify Headers.
 
+7. __Full text search__. Search your Doks site with FlexSearch. Easily customize index settings and search options to your liking.
 
+8. __Page layouts__. Build pages with a landing page, blog, or documentation layout. Add custom sections and components to suit your needs.
 
+9. __Dark mode__. Switch to a low-light UI with the click of a button. Change colors with variables to match your branding.
 
+### Other features
 
-As well as the search UI, it can do things like this:
+- __Multilingual and i18n__ support
+- __Versioning__ documentation support
+- __KaTeX__ math typesetting
+- __Mermaid__ diagrams and visualization
+- __highlight.js__ syntax highlighting
 
+## Requirements
+
+Doks uses npm to centralize dependency management, making it [easy to update](https://getdoks.org/docs/help/how-to-update/) resources, build tooling, plugins, and build scripts:
+
+- Download and install [Node.js](https://nodejs.org/) (it includes npm) for your platform.
+
+## Get started
+
+Start a new Doks project in three steps:
+
+### 1. Create a new site
+
+Doks is available as a child theme, and a starter theme:
+
+- Use the Doks child theme, if you do __not__ plan to customize a lot, and/or need future Doks updates.
+- Use the Doks starter theme, if you plan to customize a lot, and/or do __not__ need future Doks updates.
+
+Not quite sure? Use the Doks child theme.
+
+#### Doks child theme
+
+```bash
+git clone https://github.com/h-enk/doks-child-theme.git my-doks-site && cd my-doks-site
 ```
-# search for all successful `make` commands, recorded after 3pm yesterday
-atuin search --exit 0 --after "yesterday 3pm" make
+
+#### Doks starter theme
+
+```bash
+git clone https://github.com/h-enk/doks.git my-doks-site && cd my-doks-site
 ```
 
-You may use either the server I host, or host your own! Or just don't use sync
-at all. As all history sync is encrypted, I couldn't access your data even if
-I wanted to. And I **really** don't want to.
+### 2. Install dependencies
 
-## Features
+```bash
+npm install
+```
 
-- rebind `up` and `ctrl-r` with a full screen history search UI
-- store shell history in a sqlite database
-- backup and sync **encrypted** shell history
-- the same history across terminals, across sessions, and across machines
-- log exit code, cwd, hostname, session, command duration, etc
-- calculate statistics such as "most used command"
-- old history file is not replaced
-- quick-jump to previous items with <kbd>Alt-\<num\></kbd>
-- switch filter modes via ctrl-r; search history just from the current session, directory, or globally
+### 3. Start development server
+
+```bash
+npm run start
+```
+
+## Other commands
+
+Doks comes with [commands](https://getdoks.org/docs/prologue/commands/) for common tasks.
 
 ## Documentation
 
-- [Quickstart](#quickstart)
-- [Install](#install)
-- [Import](docs/import.md)
-- [Configuration](docs/config.md)
-- [Searching history](docs/search.md)
-- [Cloud history sync](docs/sync.md)
-- [History stats](docs/stats.md)
-- [Running your own server](docs/server.md)
-- [Key binding](docs/key-binding.md)
-- [Shell completions](docs/shell-completions.md)
+- [Netlify](https://docs.netlify.com/)
+- [Hugo](https://gohugo.io/documentation/)
+- [Doks](https://getdoks.org/)
 
-## Supported Shells
+## Communities
 
-- zsh
-- bash
-- fish
- 
-## Community
+- [Netlify Community](https://community.netlify.com/)
+- [Hugo Forums](https://discourse.gohugo.io/)
+- [Doks Discussions](https://github.com/h-enk/doks/discussions)
 
-Atuin has a community Discord, available [here](https://discord.gg/Fq8bJSKPHh)
+## Sponsors
 
-# Quickstart
-  
-## With the default sync server
-  
-This will sign you up for the default sync server, hosted by me. Everything is end-to-end encrypted, so your secrets are safe!
-  
-Read more below for offline-only usage, or for hosting your own server.
+Support this project by becoming a sponsor. Your logo will show up here with a link to your website.
 
-```
-bash <(curl https://raw.githubusercontent.com/ellie/atuin/main/install.sh)
+[![OC sponsor 0](https://opencollective.com/doks/tiers/sponsor/0/avatar.svg)](https://opencollective.com/doks/tiers/sponsor/0/website)
+[![OC sponsor 1](https://opencollective.com/doks/tiers/sponsor/1/avatar.svg)](https://opencollective.com/doks/tiers/sponsor/1/website)
 
-atuin register -u <USERNAME> -e <EMAIL> -p <PASSWORD>
-atuin import auto
-atuin sync
-```
-  
-## Offline only (no sync)
-  
-```
-bash <(curl https://raw.githubusercontent.com/ellie/atuin/main/install.sh)
-            
-atuin import auto
-```
+## Backers
 
-## Install
+Support this project by becoming a backer. Your avatar will show up here.
 
-### Script (recommended)
-
-The install script will help you through the setup, ensuring your shell is
-properly configured. It will also use one of the below methods, preferring the
-system package manager where possible (pacman, homebrew, etc etc).
-
-```
-# do not run this as root, root will be asked for if required
-bash <(curl https://raw.githubusercontent.com/ellie/atuin/main/install.sh)
-```
-
-### With cargo
-
-It's best to use [rustup](https://rustup.rs/) to get setup with a Rust
-toolchain, then you can run:
-
-```
-cargo install atuin
-```
-  
-And then follow [the shell setup](#shell-plugin)
-
-### Homebrew
-
-```
-brew install atuin
-```
-  
-And then follow [the shell setup](#shell-plugin)
-  
-### MacPorts
-
-Atuin is also available in [MacPorts](https://ports.macports.org/port/atuin/)  
-  
-```
-sudo port install atuin
-```
-  
-And then follow [the shell setup](#shell-plugin)
-
-### Pacman
-
-Atuin is available in the Arch Linux [community repository](https://archlinux.org/packages/community/x86_64/atuin/):
-
-```
-pacman -S atuin
-```
-  
-And then follow [the shell setup](#shell-plugin)
-
-### From source
-
-```
-git clone https://github.com/ellie/atuin.git
-cd atuin
-cargo install --path .
-```
-  
-And then follow [the shell setup](#shell-plugin)
-
-## Shell plugin
-
-Once the binary is installed, the shell plugin requires installing. If you use
-the install script, this should all be done for you!
-
-### zsh
-
-```
-echo 'eval "$(atuin init zsh)"' >> ~/.zshrc
-```
-
-Or using a plugin manager:
-
-```
-zinit load ellie/atuin
-```
-
-### bash
-
-We need to setup some hooks, so first install bash-preexec:
-
-```
-curl https://raw.githubusercontent.com/rcaloras/bash-preexec/master/bash-preexec.sh -o ~/.bash-preexec.sh
-echo '[[ -f ~/.bash-preexec.sh ]] && source ~/.bash-preexec.sh' >> ~/.bashrc
-```
-
-Then setup Atuin
-
-```
-echo 'eval "$(atuin init bash)"' >> ~/.bashrc
-```
-
-### fish
-
-Add
-
-```
-atuin init fish | source
-```
-
-to your `is-interactive` block in your `~/.config/fish/config.fish` file
-
-## ...what's with the name?
-
-Atuin is named after "The Great A'Tuin", a giant turtle from Terry Pratchett's
-Discworld series of books.
-
-[English]: ./README.md
-[简体中文]: ./docs/zh-CN/README.md
+[![Backers](https://opencollective.com/doks/tiers/backer.svg)](https://opencollective.com/doks)

@@ -1,5 +1,5 @@
-/target
-*/target
-.env
-.idea/
-.vscode/
+node_modules
+public
+resources
+.netlify
+.hugo_build.lock

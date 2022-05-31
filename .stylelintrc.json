@@ -1,0 +1,48 @@
+{
+  "extends": "stylelint-config-standard-scss",
+  "rules": {
+    "no-empty-source": null,
+    "string-quotes": "double",
+    "scss/comment-no-empty": null,
+    "max-line-length": null,
+    "scss/at-extend-no-missing-placeholder": null,
+    "scss/dollar-variable-colon-space-after": null,
+    "scss/dollar-variable-empty-line-before": null,
+    "color-function-notation": null,
+    "alpha-value-notation": null,
+    "selector-id-pattern": null,
+    "selector-class-pattern": null,
+    "scss/no-global-function-names": null,
+    "number-max-precision": null,
+    "hue-degree-notation": null,
+    "value-no-vendor-prefix": null,
+    "property-no-vendor-prefix": null,
+    "at-rule-no-unknown": [
+      true,
+      {
+        "ignoreAtRules": [
+          "extend",
+          "at-root",
+          "debug",
+          "warn",
+          "error",
+          "if",
+          "else",
+          "for",
+          "each",
+          "while",
+          "mixin",
+          "include",
+          "content",
+          "return",
+          "function",
+          "tailwind",
+          "apply",
+          "responsive",
+          "variants",
+          "screen"
+        ]
+      }
+    ]
+  }
+}

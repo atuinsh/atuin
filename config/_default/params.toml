@@ -1,0 +1,95 @@
+# Meta Data for SEO
+
+## Homepage
+title = "Atuin"
+titleSeparator = "-"
+titleAddition = "Magical Shell History"
+description = "Atuin replaces your existing shell history with a SQLite database, recording additional context for your commands. It also provides optional and fully encrypted synchronisation of your history between machines"
+
+## Documentation
+# docsVersion = "0.3"
+
+## Open Graph
+images = ["screenshot.png"]
+ogLocale = "en_US"
+domainTLD = "atuin.sh"
+titleHome = "Atuin"
+
+## Twitter Cards
+twitterSite = "@ellie_huxtable"
+twitterCreator = "@ellie_huxtable"
+
+## JSON-LD
+# schemaType = "Person"
+schemaType = "Organization"
+schemaName = "Atuin"
+schemaAuthor = "Ellie Huxtable"
+schemaAuthorTwitter = "https://twitter.com/ellie_huxtable"
+schemaAuthorLinkedIn = "https://www.linkedin.com/in//"
+schemaAuthorGitHub = "https://github.com/ellie"
+schemaLocale = "en-US"
+schemaLogo = "logo-doks.png"
+schemaLogoWidth = 512
+schemaLogoHeight = 512
+schemaImage = "doks.png"
+schemaImageWidth = 1280
+schemaImageHeight = 640
+schemaTwitter = "https://twitter.com/ellie_huxtable"
+schemaLinkedIn = ""
+schemaGitHub = "https://github.com/ellie/atuin"
+schemaSection = "blog"
+
+## Sitelinks Search Box
+siteLinksSearchBox = false
+
+## Chrome Browser
+themeColor = "#fff"
+
+# Images
+quality = 85
+bgColor = "#fff"
+landscapePhotoWidths = [900, 800, 700, 600, 500]
+portraitPhotoWidths = [800, 700, 600, 500]
+lqipWidth = "20x"
+smallLimit = "300"
+
+# Footer
+footer = "Powered by ☕️ and 🦀. Made with ❤️ in London"
+
+# Feed
+copyRight = "Copyright (c) 2021-2022 Ellie Huxtable"
+
+# Alert
+alert = false
+alertDismissable = true
+# alertText = "Introducing the Doks child theme, several DX + UX updates, and more! <a class=\"alert-link stretched-link\" href=\"https://getdoks.org/blog/doks-v0.2/\" target=\"_blank\" rel=\"noopener\">Check out Doks v0.2</a>"
+alertText = "Introducing the Doks child theme, several DX + UX updates, and more! <a class=\"alert-link stretched-link\" href=\"https://getdoks.org/blog/doks-v0.2/\">Check out Doks v0.2</a>"
+
+# Edit Page
+# repoHost [Github | Gitea | GitLab | Bitbucket | BitbucketServer ] is used for building the edit link based on git hoster
+repoHost = "GitHub"
+#repoHost = "Gitea"
+docsRepo = "https://github.com/ellie/atuin"
+docsRepoBranch = "web"
+docsRepoSubPath = ""
+editPage = false
+lastMod = false
+
+[options]
+  lazySizes = true
+  clipBoard = true
+  instantPage = true
+  flexSearch = true
+  darkMode = true
+  bootStrapJs = true
+  breadCrumb = false
+  highLight = true
+  kaTex = false
+  multilingualMode = true
+  docsVersioning = false
+  fullWidth = false
+
+[menu]
+  [menu.section]
+    auto = true
+    collapsibleSidebar = true

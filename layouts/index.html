@@ -1,0 +1,78 @@
+{{ define "main" }}
+<section class="section container-fluid mt-n3 pb-3">
+  <div class="row justify-content-center">
+    <div class="col-lg-9 col-xl-8 text-center my-auto">
+		<img src="/logo.png" alt="{{ .Title }}" />
+      <p class="lead">{{ .Params.lead | safeHTML }}</p>
+      <a class="btn btn-primary btn-lg px-4 mb-2" href="/docs/{{ if .Site.Params.options.docsVersioning }}{{ .Site.Params.docsVersion }}/{{ end }}prologue/introduction/" role="button">Get Started</a>
+      <p class="meta">Open source, MIT Licensed. <a href="https://github.com/ellie/atuin">GitHub</a></p>
+    </div>
+	</div>
+  </div>
+	<hr/>
+</section>
+{{ end }}
+
+{{ define "sidebar-prefooter" }}
+<section class="section section-sm">
+  <div class="container">
+    <div class="row justify-content-center">
+      <div class="col-lg-6 my-auto">
+	    <img src="/screenshot.png" width="100%" />
+	  </div>
+      <div class="col-lg-6">
+		<h2 class="h4">Sync</h2>
+		<p>The same shell history everywhere! Atuin optionally syncs your shell history between all of your machines</p>
+        <h2 class="h4">Search</h2>
+        <p>Atuin supports multiple different types of search, from prefix to fuzzy</p>
+		<h2 class="h4">Store</h2>
+		<p>Log exit code, cwd, hostname, session, command duration, etc</p>
+	  </div>
+    </div>
+    <div class="row justify-content-center">
+      <div class="col-lg-6">
+        <h2 class="h4">Key bindings</h2>
+				<ul>
+					<li>rebind ctrl-r and up with a full-screen history search UI</li>
+					<li>all bindings are optional and configurable</li>
+				</ul>
+		<h2 class="h4">Filter modes</h2>
+		<p>Search shell history globally, from the current session, or current directory</p>
+        <h2 class="h4">Fast ⚡️</h2>
+        <p>Written in Rust, Atuin is faster than you are</p>
+      </div>
+      <div class="col-lg-6 my-auto">
+	    <img src="/demo.gif" width="100%" />
+	  </div>
+    </div>
+		<hr/>
+	<div class="row">
+		<div class="col-lg-8">
+		</div>
+	</div>
+  </div>
+</section>
+<section class="section">
+  <div class="container">
+    <div class="row justify-content-center">
+	  <div class="col-lg-9">
+        <img src="https://api.atuin.sh/img/ellie.png?token=0722830c382b42777bdb652da5b71efb61d8d387" width="100%" />
+	  </div>
+	  <div class="col-lg-3 my-auto">
+		<p>Use the official atuin.sh sync server and gain access to metrics and analysis</p>
+	  </div>
+    </div>
+  </div>
+</section>
+{{ end }}
+
+
+{{ define "sidebar-footer" }}
+<section class="section section-sm container-fluid">
+  <div class="row justify-content-center text-center">
+    <div class="col-lg-9">
+      {{- .Content -}}
+    </div>
+  </div>
+</section>
+{{ end }}
