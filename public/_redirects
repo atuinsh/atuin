@@ -1,0 +1,7 @@
+# /docs/1.0/prologue/   /docs/1.0/prologue/introduction/
+# /docs/1.0/help/       /docs/1.0/help/how-to-update/
+# /docs/1.0/            /docs/1.0/prologue/introduction/
+# /docs/                /docs/1.0/prologue/introduction/
+#
+# /docs/0.1/*           https://v0-1-0--doks-versioning-poc.netlify.app/docs/0.1/:splat  200
+# /docs/0.2/*           https://v0-2-0--doks-versioning-poc.netlify.app/docs/0.2/:splat  200
