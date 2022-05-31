@@ -53,8 +53,8 @@ pub struct HistDbEntryCount {
 pub struct HistDbEntry {
     pub id: i64,
     pub start_time: NaiveDateTime,
-    pub host: String,
-    pub dir: String,
+    pub host: Vec<u8>,
+    pub dir: Vec<u8>,
     pub argv: Vec<u8>,
     pub duration: i64,
 }
@@ -67,11 +67,17 @@ impl From<HistDbEntry> for History {
                 .unwrap_or_else(|_e| String::from(""))
                 .trim_end()
                 .to_string(),
-            histdb_item.dir,
+            String::from_utf8(histdb_item.dir)
+                .unwrap_or_else(|_e| String::from(""))
+                .trim_end()
+                .to_string(),
             0, // assume 0, we have no way of knowing :(
             histdb_item.duration,
             None,
-            Some(histdb_item.host),
+            Some(String::from_utf8(histdb_item.host)
+                .unwrap_or_else(|_e| String::from(""))
+                .trim_end()
+                .to_string()),
         )
     }
 }
