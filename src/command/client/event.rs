@@ -1,7 +1,7 @@
 use std::{thread, time::Duration};
 
-use crossbeam_channel::unbounded;
-use termion::{event::Key, input::TermRead};
+use crossbeam_channel::{bounded,TrySendError};
+use termion::{event::Key, event::Event as TermEvent, input::TermRead};
 
 pub enum Event<I> {
     Input(I),
@@ -11,7 +11,7 @@ pub enum Event<I> {
 /// A small event handler that wrap termion input and tick events. Each event
 /// type is handled in its own thread and returned to a common `Receiver`
 pub struct Events {
-    rx: crossbeam_channel::Receiver<Event<Key>>,
+    rx: crossbeam_channel::Receiver<Event<TermEvent>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -35,16 +35,22 @@ impl Events {
     }
 
     pub fn with_config(config: Config) -> Events {
-        let (tx, rx) = unbounded();
+        // Keep channel small so scroll events don't stack for ages.
+        let (tx, rx) = bounded(1);
 
         {
             let tx = tx.clone();
             thread::spawn(move || {
                 let tty = termion::get_tty().expect("Could not find tty");
-                for key in tty.keys().flatten() {
-                    if let Err(err) = tx.send(Event::Input(key)) {
-                        eprintln!("{}", err);
-                        return;
+                for event in tty.events().flatten() {
+                    if let Err(err) = tx.try_send(Event::Input(event)) {
+                        if let TrySendError::Full(_) = err {
+                            // Silently ignore send fails when buffer is full.
+                            // This will most likely be scroll wheel spam and we can drop some events.
+                        } else {
+                            eprintln!("{}", err);
+                            return;
+                        }
                     }
                 }
             })
@@ -60,7 +66,7 @@ impl Events {
         Events { rx }
     }
 
-    pub fn next(&self) -> Result<Event<Key>, crossbeam_channel::RecvError> {
+    pub fn next(&self) -> Result<Event<TermEvent>, crossbeam_channel::RecvError> {
         self.rx.recv()
     }
 }
