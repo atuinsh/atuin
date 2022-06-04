@@ -3,7 +3,10 @@ use std::{env, io::stdout, ops::Sub, time::Duration};
 use chrono::Utc;
 use clap::Parser;
 use eyre::Result;
-use termion::{event::Key, input::MouseTerminal, raw::IntoRawMode, screen::AlternateScreen};
+use termion::{
+    event::Event as TermEvent, event::Key, event::MouseButton, event::MouseEvent,
+    input::MouseTerminal, raw::IntoRawMode, screen::AlternateScreen,
+};
 use tui::{
     backend::{Backend, TermionBackend},
     layout::{Alignment, Constraint, Corner, Direction, Layout},
@@ -305,14 +308,14 @@ fn remove_char_from_input(app: &mut State, i: usize) -> char {
 
 #[allow(clippy::too_many_lines)]
 async fn key_handler(
-    input: Key,
+    input: TermEvent,
     search_mode: SearchMode,
     db: &mut impl Database,
     app: &mut State,
 ) -> Option<String> {
     match input {
-        Key::Esc | Key::Ctrl('c' | 'd' | 'g') => return Some(String::from("")),
-        Key::Char('\n') => {
+        TermEvent::Key(Key::Esc | Key::Ctrl('c' | 'd' | 'g')) => return Some(String::from("")),
+        TermEvent::Key(Key::Char('\n')) => {
             let i = app.results_state.selected().unwrap_or(0);
 
             return Some(
@@ -321,7 +324,7 @@ async fn key_handler(
                     .map_or(app.input.clone(), |h| h.command.clone()),
             );
         }
-        Key::Alt(c) if ('1'..='9').contains(&c) => {
+        TermEvent::Key(Key::Alt(c)) if ('1'..='9').contains(&c) => {
             let c = c.to_digit(10)? as usize;
             let i = app.results_state.selected()? + c;
 
@@ -331,28 +334,28 @@ async fn key_handler(
                     .map_or(app.input.clone(), |h| h.command.clone()),
             );
         }
-        Key::Left | Key::Ctrl('h') => {
+        TermEvent::Key(Key::Left | Key::Ctrl('h')) => {
             if app.cursor_index != 0 {
                 app.cursor_index -= 1;
             }
         }
-        Key::Right | Key::Ctrl('l') => {
+        TermEvent::Key(Key::Right | Key::Ctrl('l')) => {
             if app.cursor_index < app.input.width() {
                 app.cursor_index += 1;
             }
         }
-        Key::Ctrl('a') => {
+        TermEvent::Key(Key::Ctrl('a')) => {
             app.cursor_index = 0;
         }
-        Key::Ctrl('e') => {
+        TermEvent::Key(Key::Ctrl('e')) => {
             app.cursor_index = app.input.chars().count();
         }
-        Key::Char(c) => {
+        TermEvent::Key(Key::Char(c)) => {
             insert_char_into_input(app, app.cursor_index, c);
             app.cursor_index += 1;
             query_results(app, search_mode, db).await.unwrap();
         }
-        Key::Backspace => {
+        TermEvent::Key(Key::Backspace) => {
             if app.cursor_index == 0 {
                 return None;
             }
@@ -360,7 +363,7 @@ async fn key_handler(
             app.cursor_index -= 1;
             query_results(app, search_mode, db).await.unwrap();
         }
-        Key::Ctrl('w') => {
+        TermEvent::Key(Key::Ctrl('w')) => {
             let mut stop_on_next_whitespace = false;
             loop {
                 if app.cursor_index == 0 {
@@ -378,12 +381,12 @@ async fn key_handler(
             }
             query_results(app, search_mode, db).await.unwrap();
         }
-        Key::Ctrl('u') => {
+        TermEvent::Key(Key::Ctrl('u')) => {
             app.input = String::from("");
             app.cursor_index = 0;
             query_results(app, search_mode, db).await.unwrap();
         }
-        Key::Ctrl('r') => {
+        TermEvent::Key(Key::Ctrl('r')) => {
             app.filter_mode = match app.filter_mode {
                 FilterMode::Global => FilterMode::Host,
                 FilterMode::Host => FilterMode::Session,
@@ -393,7 +396,8 @@ async fn key_handler(
 
             query_results(app, search_mode, db).await.unwrap();
         }
-        Key::Down | Key::Ctrl('n' | 'j') => {
+        TermEvent::Key(Key::Down | Key::Ctrl('n' | 'j'))
+        | TermEvent::Mouse(MouseEvent::Press(MouseButton::WheelDown, _, _)) => {
             let i = match app.results_state.selected() {
                 Some(i) => {
                     if i == 0 {
@@ -406,7 +410,8 @@ async fn key_handler(
             };
             app.results_state.select(Some(i));
         }
-        Key::Up | Key::Ctrl('p' | 'k') => {
+        TermEvent::Key(Key::Up | Key::Ctrl('p' | 'k'))
+        | TermEvent::Mouse(MouseEvent::Press(MouseButton::WheelUp, _, _)) => {
             let i = match app.results_state.selected() {
                 Some(i) => {
                     if i >= app.results.len() - 1 {
