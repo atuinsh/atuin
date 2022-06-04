@@ -3,7 +3,10 @@ use std::{env, io::stdout, ops::Sub, time::Duration};
 use chrono::Utc;
 use clap::Parser;
 use eyre::Result;
-use termion::{event::Key, event::Event as TermEvent, event::MouseEvent, event::MouseButton, input::MouseTerminal, raw::IntoRawMode, screen::AlternateScreen};
+use termion::{
+    event::Event as TermEvent, event::Key, event::MouseButton, event::MouseEvent,
+    input::MouseTerminal, raw::IntoRawMode, screen::AlternateScreen,
+};
 use tui::{
     backend::{Backend, TermionBackend},
     layout::{Alignment, Constraint, Corner, Direction, Layout},
@@ -393,8 +396,8 @@ async fn key_handler(
 
             query_results(app, search_mode, db).await.unwrap();
         }
-        TermEvent::Key(Key::Down | Key::Ctrl('n' | 'j')) |
-TermEvent::Mouse(MouseEvent::Press(MouseButton::WheelDown, _, _)) => {
+        TermEvent::Key(Key::Down | Key::Ctrl('n' | 'j'))
+        | TermEvent::Mouse(MouseEvent::Press(MouseButton::WheelDown, _, _)) => {
             let i = match app.results_state.selected() {
                 Some(i) => {
                     if i == 0 {
@@ -407,8 +410,8 @@ TermEvent::Mouse(MouseEvent::Press(MouseButton::WheelDown, _, _)) => {
             };
             app.results_state.select(Some(i));
         }
-        TermEvent::Key(Key::Up | Key::Ctrl('p' | 'k')) |
-TermEvent::Mouse(MouseEvent::Press(MouseButton::WheelUp, _, _)) => {
+        TermEvent::Key(Key::Up | Key::Ctrl('p' | 'k'))
+        | TermEvent::Mouse(MouseEvent::Press(MouseButton::WheelUp, _, _)) => {
             let i = match app.results_state.selected() {
                 Some(i) => {
                     if i >= app.results.len() - 1 {

@@ -1,7 +1,7 @@
 use std::{thread, time::Duration};
 
-use crossbeam_channel::{bounded,TrySendError};
-use termion::{event::Key, event::Event as TermEvent, input::TermRead};
+use crossbeam_channel::{bounded, TrySendError};
+use termion::{event::Event as TermEvent, event::Key, input::TermRead};
 
 pub enum Event<I> {
     Input(I),
