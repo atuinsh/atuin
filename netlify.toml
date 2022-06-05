@@ -45,6 +45,4 @@
 [[headers]]
   for = "/*"
   [headers.values]
-    Content-Security-Policy = '''
-		img-src https://api.atuin.sh;
-		img-src https://atuin.sh;'''
+    Content-Security-Policy = "img-src https://atuin.sh https://api.atuin.sh;"
