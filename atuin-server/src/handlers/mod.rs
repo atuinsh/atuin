@@ -6,8 +6,21 @@ use serde::{Deserialize, Serialize};
 pub mod history;
 pub mod user;
 
-pub async fn index() -> &'static str {
-    "\"Through the fathomless deeps of space swims the star turtle Great A\u{2019}Tuin, bearing on its back the four giant elephants who carry on their shoulders the mass of the Discworld.\"\n\t-- Sir Terry Pratchett"
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct IndexResponse {
+    pub homage: String,
+    pub version: String,
+}
+
+pub async fn index() -> Json<IndexResponse> {
+    let homage = r#""Through the fathomless deeps of space swims the star turtle Great A'Tuin, bearing on its back the four giant elephants who carry on their shoulders the mass of the Discworld." -- Sir Terry Pratchett"#;
+
+    Json(IndexResponse {
+        homage: homage.to_string(),
+        version: VERSION.to_string(),
+    })
 }
 
 #[derive(Debug, Serialize, Deserialize)]
