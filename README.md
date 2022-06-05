@@ -102,6 +102,21 @@ atuin import auto
 atuin sync
 ```
   
+### Opt-in to activity graph
+Alongside the hosted Atuin server, there is also a service which generates activity graphs for your shell history! These are inspired by the GitHub graph.
+  
+For example, here is mine:
+  
+![](https://api.atuin.sh/img/ellie.png?token=0722830c382b42777bdb652da5b71efb61d8d387)
+  
+If you wish to get your own, after signing up for the sync server, run this
+  
+```
+curl https://api.atuin.sh/enable -d $(cat ~/.local/share/atuin/session)
+```
+  
+The response includes the URL to your graph. Feel free to share and/or embed this URL, the token is _not_ a secret, and simply prevents user enumeration. 
+  
 ## Offline only (no sync)
   
 ```
