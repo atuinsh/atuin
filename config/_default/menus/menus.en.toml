@@ -1,6 +1,6 @@
 [[main]]
   name = "Docs"
-  url = "/docs/introduction/"
+  url = "/docs/overview/introduction/"
   weight = 10
 
 [[social]]
