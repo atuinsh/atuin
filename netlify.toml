@@ -41,3 +41,8 @@
   port = 8888
   publish = "public"
   autoLaunch = false
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Content-Security-Policy = "img-src https://api.atuin.sh;"
