@@ -309,8 +309,6 @@ fn remove_char_from_input(app: &mut State, i: usize) -> char {
 #[allow(clippy::too_many_lines)]
 async fn key_handler(
     input: TermEvent,
-    search_mode: SearchMode,
-    db: &mut impl Database,
     app: &mut State,
 ) -> Option<String> {
     match input {
@@ -353,7 +351,6 @@ async fn key_handler(
         TermEvent::Key(Key::Char(c)) => {
             insert_char_into_input(app, app.cursor_index, c);
             app.cursor_index += 1;
-            query_results(app, search_mode, db).await.unwrap();
         }
         TermEvent::Key(Key::Backspace) => {
             if app.cursor_index == 0 {
@@ -361,7 +358,6 @@ async fn key_handler(
             }
             remove_char_from_input(app, app.cursor_index);
             app.cursor_index -= 1;
-            query_results(app, search_mode, db).await.unwrap();
         }
         TermEvent::Key(Key::Ctrl('w')) => {
             let mut stop_on_next_whitespace = false;
@@ -379,12 +375,10 @@ async fn key_handler(
                 }
                 app.cursor_index -= 1;
             }
-            query_results(app, search_mode, db).await.unwrap();
         }
         TermEvent::Key(Key::Ctrl('u')) => {
             app.input = String::from("");
             app.cursor_index = 0;
-            query_results(app, search_mode, db).await.unwrap();
         }
         TermEvent::Key(Key::Ctrl('r')) => {
             app.filter_mode = match app.filter_mode {
@@ -394,7 +388,6 @@ async fn key_handler(
                 FilterMode::Directory => FilterMode::Global,
             };
 
-            query_results(app, search_mode, db).await.unwrap();
         }
         TermEvent::Key(Key::Down | Key::Ctrl('n' | 'j'))
         | TermEvent::Mouse(MouseEvent::Press(MouseButton::WheelDown, _, _)) => {
@@ -632,11 +625,16 @@ async fn select_history(
 
     loop {
         let history_count = db.history_count().await?;
+        let initial_input = app.input.clone();
         // Handle input
-        if let Event::Input(input) = events.next()? {
-            if let Some(output) = key_handler(input, search_mode, db, &mut app).await {
+        while let Ok(Event::Input(input)) = events.next() {
+            if let Some(output) = key_handler(input, &mut app).await {
                 return Ok(output);
             }
+        }
+
+        if initial_input != app.input {
+            query_results(&mut app, search_mode, db).await?;
         }
 
         let compact = match style {
