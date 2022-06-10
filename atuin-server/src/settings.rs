@@ -13,6 +13,7 @@ pub struct Settings {
     pub port: u16,
     pub db_uri: String,
     pub open_registration: bool,
+    pub max_history_length: usize,
 }
 
 impl Settings {
@@ -33,6 +34,7 @@ impl Settings {
             .set_default("host", "127.0.0.1")?
             .set_default("port", 8888)?
             .set_default("open_registration", false)?
+            .set_default("max_history_length", 8192)?
             .add_source(
                 Environment::with_prefix("atuin")
                     .prefix_separator("_")

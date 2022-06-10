@@ -19,7 +19,7 @@ pub mod settings;
 pub async fn launch(settings: Settings, host: String, port: u16) -> Result<()> {
     let host = host.parse::<IpAddr>()?;
 
-    let postgres = Postgres::new(settings.db_uri.as_str())
+    let postgres = Postgres::new(settings.clone())
         .await
         .wrap_err_with(|| format!("failed to connect to db: {}", settings.db_uri))?;
 

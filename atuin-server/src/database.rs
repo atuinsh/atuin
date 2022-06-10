@@ -4,12 +4,13 @@ use async_trait::async_trait;
 use chrono::{Datelike, TimeZone};
 use chronoutil::RelativeDuration;
 use sqlx::{postgres::PgPoolOptions, Result};
-use tracing::{debug, instrument};
+use tracing::{debug, instrument, warn};
 
 use super::{
     calendar::{TimePeriod, TimePeriodInfo},
     models::{History, NewHistory, NewSession, NewUser, Session, User},
 };
+use crate::settings::Settings;
 use crate::settings::HISTORY_PAGE_SIZE;
 
 use atuin_common::utils::get_days_from_month;
@@ -61,18 +62,19 @@ pub trait Database {
 #[derive(Clone)]
 pub struct Postgres {
     pool: sqlx::Pool<sqlx::postgres::Postgres>,
+    settings: Settings,
 }
 
 impl Postgres {
-    pub async fn new(uri: &str) -> Result<Self> {
+    pub async fn new(settings: Settings) -> Result<Self> {
         let pool = PgPoolOptions::new()
             .max_connections(100)
-            .connect(uri)
+            .connect(settings.db_uri.as_str())
             .await?;
 
         sqlx::migrate!("./migrations").run(&pool).await?;
 
-        Ok(Self { pool })
+        Ok(Self { pool, settings })
     }
 }
 
@@ -251,6 +253,21 @@ impl Database for Postgres {
             let client_id: &str = &i.client_id;
             let hostname: &str = &i.hostname;
             let data: &str = &i.data;
+
+            if data.len() > self.settings.max_history_length
+                && self.settings.max_history_length != 0
+            {
+                // Don't return an error here. We want to insert as much of the
+                // history list as we can, so log the error and continue going.
+
+                warn!(
+                    "history too long, got length {}, max {}",
+                    data.len(),
+                    self.settings.max_history_length
+                );
+
+                continue;
+            }
 
             sqlx::query(
                 "insert into history
