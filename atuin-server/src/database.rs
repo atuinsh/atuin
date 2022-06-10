@@ -4,14 +4,14 @@ use async_trait::async_trait;
 use chrono::{Datelike, TimeZone};
 use chronoutil::RelativeDuration;
 use sqlx::{postgres::PgPoolOptions, Result};
-use tracing::{debug, warn, instrument};
+use tracing::{debug, instrument, warn};
 
 use super::{
     calendar::{TimePeriod, TimePeriodInfo},
     models::{History, NewHistory, NewSession, NewUser, Session, User},
 };
-use crate::settings::HISTORY_PAGE_SIZE;
 use crate::settings::Settings;
+use crate::settings::HISTORY_PAGE_SIZE;
 
 use atuin_common::utils::get_days_from_month;
 
@@ -254,11 +254,17 @@ impl Database for Postgres {
             let hostname: &str = &i.hostname;
             let data: &str = &i.data;
 
-            if data.len() > self.settings.max_history_length && self.settings.max_history_length != 0 {
+            if data.len() > self.settings.max_history_length
+                && self.settings.max_history_length != 0
+            {
                 // Don't return an error here. We want to insert as much of the
                 // history list as we can, so log the error and continue going.
-                
-                warn!("history too long, got length {}, max {}", data.len(), self.settings.max_history_length);
+
+                warn!(
+                    "history too long, got length {}, max {}",
+                    data.len(),
+                    self.settings.max_history_length
+                );
 
                 continue;
             }
