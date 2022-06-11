@@ -307,8 +307,8 @@ fn remove_char_from_input(app: &mut State, i: usize) -> char {
 }
 
 #[allow(clippy::too_many_lines)]
-async fn key_handler(
-    input: TermEvent,
+fn key_handler(
+    input: &TermEvent,
     app: &mut State,
 ) -> Option<String> {
     match input {
@@ -322,7 +322,7 @@ async fn key_handler(
                     .map_or(app.input.clone(), |h| h.command.clone()),
             );
         }
-        TermEvent::Key(Key::Alt(c)) if ('1'..='9').contains(&c) => {
+        TermEvent::Key(Key::Alt(c)) if ('1'..='9').contains(c) => {
             let c = c.to_digit(10)? as usize;
             let i = app.results_state.selected()? + c;
 
@@ -349,7 +349,7 @@ async fn key_handler(
             app.cursor_index = app.input.chars().count();
         }
         TermEvent::Key(Key::Char(c)) => {
-            insert_char_into_input(app, app.cursor_index, c);
+            insert_char_into_input(app, app.cursor_index, *c);
             app.cursor_index += 1;
         }
         TermEvent::Key(Key::Backspace) => {
@@ -628,7 +628,7 @@ async fn select_history(
         let initial_input = app.input.clone();
         // Handle input
         while let Ok(Event::Input(input)) = events.next() {
-            if let Some(output) = key_handler(input, &mut app).await {
+            if let Some(output) = key_handler(&input, &mut app) {
                 return Ok(output);
             }
         }
