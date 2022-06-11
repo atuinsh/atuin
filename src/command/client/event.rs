@@ -60,7 +60,11 @@ impl Events {
         Events { rx }
     }
 
-    pub fn next(&self) -> Result<Event<TermEvent>, crossbeam_channel::TryRecvError> {
+    pub fn next(&self) -> Result<Event<TermEvent>, crossbeam_channel::RecvError> {
+        self.rx.recv()
+    }
+
+    pub fn try_next(&self) -> Result<Event<TermEvent>, crossbeam_channel::TryRecvError> {
         self.rx.try_recv()
     }
 }

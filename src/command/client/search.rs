@@ -622,8 +622,16 @@ async fn select_history(
     loop {
         let history_count = db.history_count().await?;
         let initial_input = app.input.clone();
+
         // Handle input
-        while let Ok(Event::Input(input)) = events.next() {
+        if let Event::Input(input) = events.next()? {
+            if let Some(output) = key_handler(&input, &mut app) {
+                return Ok(output);
+            }
+        }
+
+        // After we receive input process the whole event channel before query/render.
+        while let Ok(Event::Input(input)) = events.try_next() {
             if let Some(output) = key_handler(&input, &mut app) {
                 return Ok(output);
             }
