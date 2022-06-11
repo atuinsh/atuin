@@ -622,6 +622,7 @@ async fn select_history(
     loop {
         let history_count = db.history_count().await?;
         let initial_input = app.input.clone();
+        let initial_filter_mode = app.filter_mode;
 
         // Handle input
         if let Event::Input(input) = events.next()? {
@@ -637,7 +638,7 @@ async fn select_history(
             }
         }
 
-        if initial_input != app.input {
+        if initial_input != app.input || initial_filter_mode != app.filter_mode {
             query_results(&mut app, search_mode, db).await?;
         }
 

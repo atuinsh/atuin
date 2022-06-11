@@ -24,7 +24,7 @@ pub enum SearchMode {
     Fuzzy,
 }
 
-#[derive(Clone, Debug, Deserialize, Copy)]
+#[derive(Clone, Debug, Deserialize, Copy, PartialEq)]
 pub enum FilterMode {
     #[serde(rename = "global")]
     Global,
