@@ -307,10 +307,7 @@ fn remove_char_from_input(app: &mut State, i: usize) -> char {
 }
 
 #[allow(clippy::too_many_lines)]
-fn key_handler(
-    input: &TermEvent,
-    app: &mut State,
-) -> Option<String> {
+fn key_handler(input: &TermEvent, app: &mut State) -> Option<String> {
     match input {
         TermEvent::Key(Key::Esc | Key::Ctrl('c' | 'd' | 'g')) => return Some(String::from("")),
         TermEvent::Key(Key::Char('\n')) => {
@@ -387,7 +384,6 @@ fn key_handler(
                 FilterMode::Session => FilterMode::Directory,
                 FilterMode::Directory => FilterMode::Global,
             };
-
         }
         TermEvent::Key(Key::Down | Key::Ctrl('n' | 'j'))
         | TermEvent::Mouse(MouseEvent::Press(MouseButton::WheelDown, _, _)) => {
