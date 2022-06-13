@@ -1,6 +1,6 @@
 use std::{thread, time::Duration};
 
-use crossbeam_channel::{bounded, TrySendError};
+use crossbeam_channel::unbounded;
 use termion::{event::Event as TermEvent, event::Key, input::TermRead};
 
 pub enum Event<I> {
@@ -35,22 +35,16 @@ impl Events {
     }
 
     pub fn with_config(config: Config) -> Events {
-        // Keep channel small so scroll events don't stack for ages.
-        let (tx, rx) = bounded(1);
+        let (tx, rx) = unbounded();
 
         {
             let tx = tx.clone();
             thread::spawn(move || {
                 let tty = termion::get_tty().expect("Could not find tty");
                 for event in tty.events().flatten() {
-                    if let Err(err) = tx.try_send(Event::Input(event)) {
-                        if let TrySendError::Full(_) = err {
-                            // Silently ignore send fails when buffer is full.
-                            // This will most likely be scroll wheel spam and we can drop some events.
-                        } else {
-                            eprintln!("{}", err);
-                            return;
-                        }
+                    if let Err(err) = tx.send(Event::Input(event)) {
+                        eprintln!("{}", err);
+                        return;
                     }
                 }
             })
@@ -68,5 +62,9 @@ impl Events {
 
     pub fn next(&self) -> Result<Event<TermEvent>, crossbeam_channel::RecvError> {
         self.rx.recv()
+    }
+
+    pub fn try_next(&self) -> Result<Event<TermEvent>, crossbeam_channel::TryRecvError> {
+        self.rx.try_recv()
     }
 }

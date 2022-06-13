@@ -307,12 +307,7 @@ fn remove_char_from_input(app: &mut State, i: usize) -> char {
 }
 
 #[allow(clippy::too_many_lines)]
-async fn key_handler(
-    input: TermEvent,
-    search_mode: SearchMode,
-    db: &mut impl Database,
-    app: &mut State,
-) -> Option<String> {
+fn key_handler(input: &TermEvent, app: &mut State) -> Option<String> {
     match input {
         TermEvent::Key(Key::Esc | Key::Ctrl('c' | 'd' | 'g')) => return Some(String::from("")),
         TermEvent::Key(Key::Char('\n')) => {
@@ -324,7 +319,7 @@ async fn key_handler(
                     .map_or(app.input.clone(), |h| h.command.clone()),
             );
         }
-        TermEvent::Key(Key::Alt(c)) if ('1'..='9').contains(&c) => {
+        TermEvent::Key(Key::Alt(c)) if ('1'..='9').contains(c) => {
             let c = c.to_digit(10)? as usize;
             let i = app.results_state.selected()? + c;
 
@@ -351,9 +346,8 @@ async fn key_handler(
             app.cursor_index = app.input.chars().count();
         }
         TermEvent::Key(Key::Char(c)) => {
-            insert_char_into_input(app, app.cursor_index, c);
+            insert_char_into_input(app, app.cursor_index, *c);
             app.cursor_index += 1;
-            query_results(app, search_mode, db).await.unwrap();
         }
         TermEvent::Key(Key::Backspace) => {
             if app.cursor_index == 0 {
@@ -361,7 +355,6 @@ async fn key_handler(
             }
             remove_char_from_input(app, app.cursor_index);
             app.cursor_index -= 1;
-            query_results(app, search_mode, db).await.unwrap();
         }
         TermEvent::Key(Key::Ctrl('w')) => {
             let mut stop_on_next_whitespace = false;
@@ -379,12 +372,10 @@ async fn key_handler(
                 }
                 app.cursor_index -= 1;
             }
-            query_results(app, search_mode, db).await.unwrap();
         }
         TermEvent::Key(Key::Ctrl('u')) => {
             app.input = String::from("");
             app.cursor_index = 0;
-            query_results(app, search_mode, db).await.unwrap();
         }
         TermEvent::Key(Key::Ctrl('r')) => {
             app.filter_mode = match app.filter_mode {
@@ -393,8 +384,6 @@ async fn key_handler(
                 FilterMode::Session => FilterMode::Directory,
                 FilterMode::Directory => FilterMode::Global,
             };
-
-            query_results(app, search_mode, db).await.unwrap();
         }
         TermEvent::Key(Key::Down | Key::Ctrl('n' | 'j'))
         | TermEvent::Mouse(MouseEvent::Press(MouseButton::WheelDown, _, _)) => {
@@ -632,11 +621,25 @@ async fn select_history(
 
     loop {
         let history_count = db.history_count().await?;
+        let initial_input = app.input.clone();
+        let initial_filter_mode = app.filter_mode;
+
         // Handle input
         if let Event::Input(input) = events.next()? {
-            if let Some(output) = key_handler(input, search_mode, db, &mut app).await {
+            if let Some(output) = key_handler(&input, &mut app) {
                 return Ok(output);
             }
+        }
+
+        // After we receive input process the whole event channel before query/render.
+        while let Ok(Event::Input(input)) = events.try_next() {
+            if let Some(output) = key_handler(&input, &mut app) {
+                return Ok(output);
+            }
+        }
+
+        if initial_input != app.input || initial_filter_mode != app.filter_mode {
+            query_results(&mut app, search_mode, db).await?;
         }
 
         let compact = match style {
