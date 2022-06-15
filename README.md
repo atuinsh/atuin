@@ -192,6 +192,14 @@ And then follow [the shell setup](#shell-plugin)
 Once the binary is installed, the shell plugin requires installing. If you use
 the install script, this should all be done for you!
 
+### Fig
+
+[Fig](https://fig.io) adds apps, shortcuts, and autocomplete to your existing terminal.
+
+Install `atuin` shell plugin in zsh, bash, or fish with just one click. 
+
+<a href="https://fig.io/plugins/other/atuin" target="_blank"><img src="https://fig.io/badges/install-with-fig.svg" /></a>
+
 ### zsh
 
 ```
