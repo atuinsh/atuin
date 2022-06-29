@@ -62,7 +62,7 @@ cli-table = { version = "0.4", default-features = false }
 base64 = "0.13.0"
 humantime = "2.1.0"
 crossbeam-channel = "0.5.1"
-clap = { version = "3.1.18", features = ["derive"] }
+clap = { version = "3.2.7", features = ["derive"] }
 clap_complete = "3.1.4"
 fs-err = "2.7"
 whoami = "1.1.2"
