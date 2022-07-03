@@ -282,20 +282,6 @@ async fn query_results(
     Ok(())
 }
 
-fn insert_char_into_input(app: &mut State, i: usize, c: char) {
-    match app.input.char_indices().nth(i) {
-        Some((i, _)) => app.input.insert(i, c),
-        None => app.input.push(c),
-    }
-}
-
-fn remove_char_from_input(app: &mut State, i: usize) -> char {
-    match app.input.char_indices().nth(i) {
-        Some((i, _)) => app.input.remove(i),
-        None => app.input.pop().unwrap(),
-    }
-}
-
 #[allow(clippy::too_many_lines)]
 fn key_handler(input: &TermEvent, app: &mut State) -> Option<String> {
     match input {
@@ -320,43 +306,72 @@ fn key_handler(input: &TermEvent, app: &mut State) -> Option<String> {
             );
         }
         TermEvent::Key(Key::Left | Key::Ctrl('h')) => {
-            if app.cursor_index != 0 {
-                app.cursor_index -= 1;
+            if app.cursor_index > 0 {
+                // find the prev utf8 char
+                loop {
+                    app.cursor_index -= 1;
+                    if app.input.is_char_boundary(app.cursor_index) {
+                        break;
+                    }
+                }
             }
         }
         TermEvent::Key(Key::Right | Key::Ctrl('l')) => {
-            if app.cursor_index < app.input.width() {
-                app.cursor_index += 1;
+            if app.cursor_index < app.input.len() {
+                // find the next utf8 char.
+                loop {
+                    app.cursor_index += 1;
+                    if app.input.is_char_boundary(app.cursor_index) {
+                        break;
+                    }
+                }
             }
         }
         TermEvent::Key(Key::Ctrl('a')) => {
             app.cursor_index = 0;
         }
         TermEvent::Key(Key::Ctrl('e')) => {
-            app.cursor_index = app.input.chars().count();
+            app.cursor_index = app.input.len();
         }
         TermEvent::Key(Key::Char(c)) => {
-            insert_char_into_input(app, app.cursor_index, *c);
-            app.cursor_index += 1;
+            app.input.insert(app.cursor_index, *c);
+            app.cursor_index += c.len_utf8();
         }
         TermEvent::Key(Key::Backspace) => {
-            app.cursor_index = app.cursor_index.checked_sub(1)?;
-            remove_char_from_input(app, app.cursor_index);
+            if app.cursor_index > 0 {
+                // find the prev utf8 char
+                loop {
+                    app.cursor_index -= 1;
+                    if app.input.is_char_boundary(app.cursor_index) {
+                        break;
+                    }
+                }
+                app.input.remove(app.cursor_index);
+            }
         }
         TermEvent::Key(Key::Ctrl('w')) => {
             let mut stop_on_next_whitespace = false;
-            while let Some(i) = app.cursor_index.checked_sub(1) {
-                if stop_on_next_whitespace && app.input.chars().nth(i) == Some(' ') {
+            while app.cursor_index > 0 {
+                // find the prev utf8 char
+                let mut i = app.cursor_index;
+                loop {
+                    i -= 1;
+                    if app.input.is_char_boundary(i) {
+                        break;
+                    }
+                }
+                if stop_on_next_whitespace && app.input[i..].chars().next().unwrap().is_whitespace()
+                {
                     break;
                 }
                 app.cursor_index = i;
-                if !remove_char_from_input(app, app.cursor_index).is_whitespace() {
+                if !app.input.remove(app.cursor_index).is_whitespace() {
                     stop_on_next_whitespace = true;
                 }
             }
         }
         TermEvent::Key(Key::Ctrl('u')) => {
-            app.input = String::from("");
+            app.input.clear();
             app.cursor_index = 0;
         }
         TermEvent::Key(Key::Ctrl('r')) => {
@@ -472,13 +487,7 @@ fn draw<T: Backend>(f: &mut Frame<'_, T>, history_count: i64, app: &mut State) {
     );
     f.render_widget(input, chunks[2]);
 
-    let width = UnicodeWidthStr::width(
-        app.input
-            .chars()
-            .take(app.cursor_index)
-            .collect::<String>()
-            .as_str(),
-    );
+    let width = UnicodeWidthStr::width(&app.input[..app.cursor_index]);
     f.set_cursor(
         // Put cursor past the end of the input text
         chunks[2].x + width as u16 + 1,
