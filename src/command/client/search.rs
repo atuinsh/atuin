@@ -713,10 +713,6 @@ impl Cursor {
         &self.source[..self.index]
     }
 
-    pub fn index(&self) -> usize {
-        self.index
-    }
-
     /// Returns the currently selected [`char`]
     pub fn char(&self) -> Option<char> {
         self.source[self.index..].chars().next()
@@ -787,7 +783,7 @@ mod cursor_tests {
         let mut c = Cursor::from(String::from("öaöböcödöeöfö"));
         let indices = [0, 2, 3, 5, 6, 8, 9, 11, 12, 14, 15, 17, 18, 20, 20, 20, 20];
         for i in indices {
-            assert_eq!(c.index(), i);
+            assert_eq!(c.index, i);
             c.right();
         }
     }
@@ -799,7 +795,7 @@ mod cursor_tests {
         c.end();
         let indices = [20, 18, 17, 15, 14, 12, 11, 9, 8, 6, 5, 3, 2, 0, 0, 0, 0];
         for i in indices {
-            assert_eq!(c.index(), i);
+            assert_eq!(c.index, i);
             c.left();
         }
     }
@@ -825,7 +821,7 @@ mod cursor_tests {
         let mut c = Cursor::from(String::from("öaöböcödöeöfö"));
         // move to                                 ^
         for _ in 0..4 {
-            c.right()
+            c.right();
         }
         assert_eq!(c.substring(), "öaöb");
         assert_eq!(c.back(), Some('b'));
@@ -841,7 +837,7 @@ mod cursor_tests {
         let mut c = Cursor::from(String::from("öaöböcödöeöfö"));
         // move to                                 ^
         for _ in 0..4 {
-            c.right()
+            c.right();
         }
         assert_eq!(c.substring(), "öaöb");
         c.insert('ö');
