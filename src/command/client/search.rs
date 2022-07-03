@@ -282,28 +282,18 @@ async fn query_results(
     Ok(())
 }
 
-fn get_input_prefix(app: &mut State, i: usize) -> String {
-    return app.input.chars().take(i).collect();
-}
-fn get_input_suffix(app: &mut State, i: usize) -> String {
-    return app.input.chars().skip(i).collect();
-}
-
 fn insert_char_into_input(app: &mut State, i: usize, c: char) {
-    let mut result = String::from("");
-    result.push_str(&get_input_prefix(app, i));
-    result.push_str(&c.to_string());
-    result.push_str(&get_input_suffix(app, i));
-    app.input = result;
+    match app.input.char_indices().nth(i) {
+        Some((i, _)) => app.input.insert(i, c),
+        None => app.input.push(c),
+    }
 }
 
 fn remove_char_from_input(app: &mut State, i: usize) -> char {
-    let mut result = String::from("");
-    result.push_str(&get_input_prefix(app, i - 1));
-    result.push_str(&get_input_suffix(app, i));
-    let c = app.input.chars().nth(i - 1).unwrap();
-    app.input = result;
-    c
+    match app.input.char_indices().nth(i) {
+        Some((i, _)) => app.input.remove(i),
+        None => app.input.pop().unwrap(),
+    }
 }
 
 #[allow(clippy::too_many_lines)]
@@ -350,27 +340,19 @@ fn key_handler(input: &TermEvent, app: &mut State) -> Option<String> {
             app.cursor_index += 1;
         }
         TermEvent::Key(Key::Backspace) => {
-            if app.cursor_index == 0 {
-                return None;
-            }
+            app.cursor_index = app.cursor_index.checked_sub(1)?;
             remove_char_from_input(app, app.cursor_index);
-            app.cursor_index -= 1;
         }
         TermEvent::Key(Key::Ctrl('w')) => {
             let mut stop_on_next_whitespace = false;
-            loop {
-                if app.cursor_index == 0 {
+            while let Some(i) = app.cursor_index.checked_sub(1) {
+                if stop_on_next_whitespace && app.input.chars().nth(i) == Some(' ') {
                     break;
                 }
-                if app.input.chars().nth(app.cursor_index - 1) == Some(' ')
-                    && stop_on_next_whitespace
-                {
-                    break;
-                }
+                app.cursor_index = i;
                 if !remove_char_from_input(app, app.cursor_index).is_whitespace() {
                     stop_on_next_whitespace = true;
                 }
-                app.cursor_index -= 1;
             }
         }
         TermEvent::Key(Key::Ctrl('u')) => {
