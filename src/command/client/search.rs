@@ -111,9 +111,7 @@ impl Cmd {
 }
 
 struct State {
-    input: String,
-
-    cursor_index: usize,
+    input: Cursor,
 
     filter_mode: FilterMode,
 
@@ -283,97 +281,50 @@ async fn query_results(
 }
 
 #[allow(clippy::too_many_lines)]
-fn key_handler(input: &TermEvent, app: &mut State) -> Option<String> {
+fn key_handler<'app>(input: &TermEvent, app: &'app mut State) -> Option<&'app str> {
     match input {
-        TermEvent::Key(Key::Esc | Key::Ctrl('c' | 'd' | 'g')) => return Some(String::from("")),
+        TermEvent::Key(Key::Esc | Key::Ctrl('c' | 'd' | 'g')) => return Some(""),
         TermEvent::Key(Key::Char('\n')) => {
             let i = app.results_state.selected().unwrap_or(0);
 
             return Some(
                 app.results
                     .get(i)
-                    .map_or(app.input.clone(), |h| h.command.clone()),
+                    .map_or(app.input.as_str(), |h| h.command.as_str()),
             );
         }
-        TermEvent::Key(Key::Alt(c)) if ('1'..='9').contains(c) => {
+        TermEvent::Key(Key::Alt(c @ '1'..='9')) => {
             let c = c.to_digit(10)? as usize;
             let i = app.results_state.selected()? + c;
 
             return Some(
                 app.results
                     .get(i)
-                    .map_or(app.input.clone(), |h| h.command.clone()),
+                    .map_or(app.input.as_str(), |h| h.command.as_str()),
             );
         }
         TermEvent::Key(Key::Left | Key::Ctrl('h')) => {
-            if app.cursor_index > 0 {
-                // find the prev utf8 char
-                loop {
-                    app.cursor_index -= 1;
-                    if app.input.is_char_boundary(app.cursor_index) {
-                        break;
-                    }
-                }
-            }
+            app.input.left();
         }
-        TermEvent::Key(Key::Right | Key::Ctrl('l')) => {
-            if app.cursor_index < app.input.len() {
-                // find the next utf8 char.
-                loop {
-                    app.cursor_index += 1;
-                    if app.input.is_char_boundary(app.cursor_index) {
-                        break;
-                    }
-                }
-            }
-        }
-        TermEvent::Key(Key::Ctrl('a')) => {
-            app.cursor_index = 0;
-        }
-        TermEvent::Key(Key::Ctrl('e')) => {
-            app.cursor_index = app.input.len();
-        }
-        TermEvent::Key(Key::Char(c)) => {
-            app.input.insert(app.cursor_index, *c);
-            app.cursor_index += c.len_utf8();
-        }
+        TermEvent::Key(Key::Right | Key::Ctrl('l')) => app.input.right(),
+        TermEvent::Key(Key::Ctrl('a')) => app.input.start(),
+        TermEvent::Key(Key::Ctrl('e')) => app.input.end(),
+        TermEvent::Key(Key::Char(c)) => app.input.insert(*c),
         TermEvent::Key(Key::Backspace) => {
-            if app.cursor_index > 0 {
-                // find the prev utf8 char
-                loop {
-                    app.cursor_index -= 1;
-                    if app.input.is_char_boundary(app.cursor_index) {
-                        break;
-                    }
-                }
-                app.input.remove(app.cursor_index);
-            }
+            app.input.back();
         }
         TermEvent::Key(Key::Ctrl('w')) => {
-            let mut stop_on_next_whitespace = false;
-            while app.cursor_index > 0 {
-                // find the prev utf8 char
-                let mut i = app.cursor_index;
-                loop {
-                    i -= 1;
-                    if app.input.is_char_boundary(i) {
-                        break;
-                    }
-                }
-                if stop_on_next_whitespace && app.input[i..].chars().next().unwrap().is_whitespace()
-                {
+            // remove the first batch of whitespace
+            while matches!(app.input.back(), Some(c) if c.is_whitespace()) {}
+            while app.input.left() {
+                if app.input.char().unwrap().is_whitespace() {
+                    app.input.right(); // found whitespace, go back right
                     break;
                 }
-                app.cursor_index = i;
-                if !app.input.remove(app.cursor_index).is_whitespace() {
-                    stop_on_next_whitespace = true;
-                }
+                app.input.remove();
             }
         }
-        TermEvent::Key(Key::Ctrl('u')) => {
-            app.input.clear();
-            app.cursor_index = 0;
-        }
+        TermEvent::Key(Key::Ctrl('u')) => app.input.clear(),
         TermEvent::Key(Key::Ctrl('r')) => {
             app.filter_mode = match app.filter_mode {
                 FilterMode::Global => FilterMode::Host,
@@ -467,7 +418,7 @@ fn draw<T: Backend>(f: &mut Frame<'_, T>, history_count: i64, app: &mut State) {
         FilterMode::Directory => "DIRECTORY",
     };
 
-    let input = Paragraph::new(app.input.clone())
+    let input = Paragraph::new(app.input.as_str().to_owned())
         .block(Block::default().borders(Borders::ALL).title(filter_mode));
 
     let stats = Paragraph::new(Text::from(Span::raw(format!(
@@ -487,7 +438,7 @@ fn draw<T: Backend>(f: &mut Frame<'_, T>, history_count: i64, app: &mut State) {
     );
     f.render_widget(input, chunks[2]);
 
-    let width = UnicodeWidthStr::width(&app.input[..app.cursor_index]);
+    let width = UnicodeWidthStr::width(app.input.substring());
     f.set_cursor(
         // Put cursor past the end of the input text
         chunks[2].x + width as u16 + 1,
@@ -551,7 +502,7 @@ fn draw_compact<T: Backend>(f: &mut Frame<'_, T>, history_count: i64, app: &mut 
     };
 
     let input =
-        Paragraph::new(format!("{}] {}", filter_mode, app.input.clone())).block(Block::default());
+        Paragraph::new(format!("{}] {}", filter_mode, app.input.as_str())).block(Block::default());
 
     f.render_widget(title, header_chunks[0]);
     f.render_widget(help, header_chunks[1]);
@@ -560,13 +511,7 @@ fn draw_compact<T: Backend>(f: &mut Frame<'_, T>, history_count: i64, app: &mut 
     app.render_results(f, chunks[1], Block::default());
     f.render_widget(input, chunks[2]);
 
-    let extra_width = UnicodeWidthStr::width(
-        app.input
-            .chars()
-            .take(app.cursor_index)
-            .collect::<String>()
-            .as_str(),
-    ) + filter_mode.len();
+    let extra_width = UnicodeWidthStr::width(app.input.substring()) + filter_mode.len();
 
     f.set_cursor(
         // Put cursor past the end of the input text
@@ -596,12 +541,11 @@ async fn select_history(
     // Setup event handlers
     let events = Events::new();
 
-    let input = query.join(" ");
+    let mut input = Cursor::from(query.join(" "));
     // Put the cursor at the end of the query by default
-    let cursor_index = input.chars().count();
+    input.end();
     let mut app = State {
         input,
-        cursor_index,
         results: Vec::new(),
         results_state: ListState::default(),
         context: current_context(),
@@ -612,24 +556,24 @@ async fn select_history(
 
     loop {
         let history_count = db.history_count().await?;
-        let initial_input = app.input.clone();
+        let initial_input = app.input.as_str().to_owned();
         let initial_filter_mode = app.filter_mode;
 
         // Handle input
         if let Event::Input(input) = events.next()? {
             if let Some(output) = key_handler(&input, &mut app) {
-                return Ok(output);
+                return Ok(output.to_owned());
             }
         }
 
         // After we receive input process the whole event channel before query/render.
         while let Ok(Event::Input(input)) = events.try_next() {
             if let Some(output) = key_handler(&input, &mut app) {
-                return Ok(output);
+                return Ok(output.to_owned());
             }
         }
 
-        if initial_input != app.input || initial_filter_mode != app.filter_mode {
+        if initial_input != app.input.as_str() || initial_filter_mode != app.filter_mode {
             query_results(&mut app, search_mode, db).await?;
         }
 
@@ -746,4 +690,161 @@ async fn run_non_interactive(
 
     super::history::print_list(&results, list_mode);
     Ok(())
+}
+
+struct Cursor {
+    source: String,
+    index: usize,
+}
+
+impl From<String> for Cursor {
+    fn from(source: String) -> Self {
+        Self { source, index: 0 }
+    }
+}
+
+impl Cursor {
+    pub fn as_str(&self) -> &str {
+        self.source.as_str()
+    }
+
+    /// Returns the string before the cursor
+    pub fn substring(&self) -> &str {
+        &self.source[..self.index]
+    }
+
+    pub fn index(&self) -> usize {
+        self.index
+    }
+
+    /// Returns the currently selected [`char`]
+    pub fn char(&self) -> Option<char> {
+        self.source[self.index..].chars().next()
+    }
+
+    pub fn right(&mut self) {
+        if self.index < self.source.len() {
+            loop {
+                self.index += 1;
+                if self.source.is_char_boundary(self.index) {
+                    break;
+                }
+            }
+        }
+    }
+
+    pub fn left(&mut self) -> bool {
+        if self.index > 0 {
+            loop {
+                self.index -= 1;
+                if self.source.is_char_boundary(self.index) {
+                    break true;
+                }
+            }
+        } else {
+            false
+        }
+    }
+
+    pub fn insert(&mut self, c: char) {
+        self.source.insert(self.index, c);
+        self.index += c.len_utf8();
+    }
+
+    pub fn remove(&mut self) -> char {
+        self.source.remove(self.index)
+    }
+
+    pub fn back(&mut self) -> Option<char> {
+        if self.left() {
+            Some(self.remove())
+        } else {
+            None
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.source.clear();
+        self.index = 0;
+    }
+
+    pub fn end(&mut self) {
+        self.index = self.source.len();
+    }
+
+    pub fn start(&mut self) {
+        self.index = 0;
+    }
+}
+
+#[cfg(test)]
+mod cursor_tests {
+    use super::Cursor;
+
+    #[test]
+    fn right() {
+        // ö is 2 bytes
+        let mut c = Cursor::from(String::from("öaöböcödöeöfö"));
+        let indices = [0, 2, 3, 5, 6, 8, 9, 11, 12, 14, 15, 17, 18, 20, 20, 20, 20];
+        for i in indices {
+            assert_eq!(c.index(), i);
+            c.right();
+        }
+    }
+
+    #[test]
+    fn left() {
+        // ö is 2 bytes
+        let mut c = Cursor::from(String::from("öaöböcödöeöfö"));
+        c.end();
+        let indices = [20, 18, 17, 15, 14, 12, 11, 9, 8, 6, 5, 3, 2, 0, 0, 0, 0];
+        for i in indices {
+            assert_eq!(c.index(), i);
+            c.left();
+        }
+    }
+
+    #[test]
+    fn pop() {
+        let mut s = String::from("öaöböcödöeöfö");
+        let mut c = Cursor::from(s.clone());
+        c.end();
+        while !s.is_empty() {
+            let c1 = s.pop();
+            let c2 = c.back();
+            assert_eq!(c1, c2);
+            assert_eq!(s.as_str(), c.substring());
+        }
+        let c1 = s.pop();
+        let c2 = c.back();
+        assert_eq!(c1, c2);
+    }
+
+    #[test]
+    fn back() {
+        let mut c = Cursor::from(String::from("öaöböcödöeöfö"));
+        // move to                                 ^
+        for _ in 0..4 { c.right() }
+        assert_eq!(c.substring(), "öaöb");
+        assert_eq!(c.back(), Some('b'));
+        assert_eq!(c.back(), Some('ö'));
+        assert_eq!(c.back(), Some('a'));
+        assert_eq!(c.back(), Some('ö'));
+        assert_eq!(c.back(), None);
+        assert_eq!(c.as_str(), "öcödöeöfö");
+    }
+
+    #[test]
+    fn insert() {
+        let mut c = Cursor::from(String::from("öaöböcödöeöfö"));
+        // move to                                 ^
+        for _ in 0..4 { c.right() }
+        assert_eq!(c.substring(), "öaöb");
+        c.insert('ö');
+        c.insert('g');
+        c.insert('ö');
+        c.insert('h');
+        assert_eq!(c.substring(), "öaöbögöh");
+        assert_eq!(c.as_str(), "öaöbögöhöcödöeöfö");
+    }
 }
