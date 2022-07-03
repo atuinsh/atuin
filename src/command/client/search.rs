@@ -824,7 +824,9 @@ mod cursor_tests {
     fn back() {
         let mut c = Cursor::from(String::from("öaöböcödöeöfö"));
         // move to                                 ^
-        for _ in 0..4 { c.right() }
+        for _ in 0..4 {
+            c.right()
+        }
         assert_eq!(c.substring(), "öaöb");
         assert_eq!(c.back(), Some('b'));
         assert_eq!(c.back(), Some('ö'));
@@ -838,7 +840,9 @@ mod cursor_tests {
     fn insert() {
         let mut c = Cursor::from(String::from("öaöböcödöeöfö"));
         // move to                                 ^
-        for _ in 0..4 { c.right() }
+        for _ in 0..4 {
+            c.right()
+        }
         assert_eq!(c.substring(), "öaöb");
         c.insert('ö');
         c.insert('g');
