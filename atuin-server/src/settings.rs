@@ -11,6 +11,7 @@ pub const HISTORY_PAGE_SIZE: i64 = 100;
 pub struct Settings {
     pub host: String,
     pub port: u16,
+    pub path: String,
     pub db_uri: String,
     pub open_registration: bool,
     pub max_history_length: usize,
@@ -35,6 +36,7 @@ impl Settings {
             .set_default("port", 8888)?
             .set_default("open_registration", false)?
             .set_default("max_history_length", 8192)?
+            .set_default("path", "")?
             .add_source(
                 Environment::with_prefix("atuin")
                     .prefix_separator("_")

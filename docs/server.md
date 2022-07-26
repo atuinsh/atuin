@@ -67,6 +67,12 @@ Defaults to `false`.
 
 A valid postgres URI, where the user and history data will be saved to.
 
+### path
+
+A path to prepend to all the routes of the server. Any empty string means that nothing will be prepended.
+
+Defaults to `""`
+
 ## Container deployment instructions
 
 You can deploy you own atuin server in a container:

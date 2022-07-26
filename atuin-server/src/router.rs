@@ -57,7 +57,7 @@ async fn teapot() -> impl IntoResponse {
     (http::StatusCode::IM_A_TEAPOT, "☕")
 }
 pub fn router(postgres: Postgres, settings: Settings) -> Router {
-    Router::new()
+    let routes = Router::new()
         .route("/", get(handlers::index))
         .route("/sync/count", get(handlers::history::count))
         .route("/sync/history", get(handlers::history::list))
@@ -65,12 +65,19 @@ pub fn router(postgres: Postgres, settings: Settings) -> Router {
         .route("/history", post(handlers::history::add))
         .route("/user/:username", get(handlers::user::get))
         .route("/register", post(handlers::user::register))
-        .route("/login", post(handlers::user::login))
-        .fallback(teapot.into_service())
-        .layer(
-            ServiceBuilder::new()
-                .layer(TraceLayer::new_for_http())
-                .layer(Extension(postgres))
-                .layer(Extension(settings)),
-        )
+        .route("/login", post(handlers::user::login));
+
+    let path = settings.path.as_str();
+    if path.is_empty() {
+        routes
+    } else {
+        Router::new().nest(path, routes)
+    }
+    .fallback(teapot.into_service())
+    .layer(
+        ServiceBuilder::new()
+            .layer(TraceLayer::new_for_http())
+            .layer(Extension(postgres))
+            .layer(Extension(settings)),
+    )
 }
