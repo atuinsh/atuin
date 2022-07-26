@@ -68,9 +68,11 @@ pub fn router(postgres: Postgres, settings: Settings) -> Router {
         .route("/login", post(handlers::user::login));
 
     let path = settings.path.as_str();
-    let valid_path = if !path.is_empty() {path} else {"/"};
-
-    Router::new().nest(valid_path, routes)
+    if path.is_empty() {
+        routes
+    } else {
+        Router::new().nest(path, routes)
+    }   
         .fallback(teapot.into_service())
         .layer(
             ServiceBuilder::new()
