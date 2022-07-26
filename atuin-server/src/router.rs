@@ -72,12 +72,12 @@ pub fn router(postgres: Postgres, settings: Settings) -> Router {
         routes
     } else {
         Router::new().nest(path, routes)
-    }   
-        .fallback(teapot.into_service())
-        .layer(
-            ServiceBuilder::new()
-                .layer(TraceLayer::new_for_http())
-                .layer(Extension(postgres))
-                .layer(Extension(settings)),
-        )
+    }
+    .fallback(teapot.into_service())
+    .layer(
+        ServiceBuilder::new()
+            .layer(TraceLayer::new_for_http())
+            .layer(Extension(postgres))
+            .layer(Extension(settings)),
+    )
 }
