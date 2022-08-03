@@ -8,12 +8,15 @@ use uuid::Uuid;
 
 use super::{ErrorResponse, ErrorResponseStatus};
 use crate::{
-    database::{Database, Postgres},
+    database::Database,
     models::{NewSession, NewUser},
     settings::Settings,
 };
 
 use atuin_common::api::*;
+
+pub trait DatabaseExtension: Database + Clone + Send + Sync + 'static {}
+impl<T> DatabaseExtension for T where T: Database + Clone + Send + Sync + 'static {}
 
 pub fn verify_str(secret: &str, verify: &str) -> bool {
     sodiumoxide::init().unwrap();
@@ -30,9 +33,9 @@ pub fn verify_str(secret: &str, verify: &str) -> bool {
 }
 
 #[instrument(skip_all, fields(user.username = username.as_str()))]
-pub async fn get(
+pub async fn get<T: DatabaseExtension>(
     Path(username): Path<String>,
-    db: Extension<Postgres>,
+    db: Extension<T>,
 ) -> Result<Json<UserResponse>, ErrorResponseStatus<'static>> {
     let user = match db.get_user(username.as_ref()).await {
         Ok(user) => user,
@@ -53,10 +56,10 @@ pub async fn get(
 }
 
 #[instrument(skip_all)]
-pub async fn register(
+pub async fn register<T: DatabaseExtension>(
     Json(register): Json<RegisterRequest>,
     settings: Extension<Settings>,
-    db: Extension<Postgres>,
+    db: Extension<T>,
 ) -> Result<Json<RegisterResponse>, ErrorResponseStatus<'static>> {
     if !settings.open_registration {
         return Err(
@@ -101,9 +104,9 @@ pub async fn register(
 }
 
 #[instrument(skip_all, fields(user.username = login.username.as_str()))]
-pub async fn login(
+pub async fn login<T: DatabaseExtension>(
     login: Json<LoginRequest>,
-    db: Extension<Postgres>,
+    db: Extension<T>,
 ) -> Result<Json<LoginResponse>, ErrorResponseStatus<'static>> {
     let user = match db.get_user(login.username.borrow()).await {
         Ok(u) => u,

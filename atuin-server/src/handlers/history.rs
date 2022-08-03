@@ -10,16 +10,19 @@ use tracing::{debug, error, instrument};
 use super::{ErrorResponse, ErrorResponseStatus};
 use crate::{
     calendar::{TimePeriod, TimePeriodInfo},
-    database::{Database, Postgres},
+    database::Database,
     models::{NewHistory, User},
 };
 
 use atuin_common::api::*;
 
+pub trait DatabaseExtension: Database + Clone + Send + Sync + 'static {}
+impl<T> DatabaseExtension for T where T: Database + Clone + Send + Sync + 'static {}
+
 #[instrument(skip_all, fields(user.id = user.id))]
-pub async fn count(
+pub async fn count<T: DatabaseExtension>(
     user: User,
-    db: Extension<Postgres>,
+    db: Extension<T>,
 ) -> Result<Json<CountResponse>, ErrorResponseStatus<'static>> {
     match db.count_history_cached(&user).await {
         // By default read out the cached value
@@ -36,10 +39,10 @@ pub async fn count(
 }
 
 #[instrument(skip_all, fields(user.id = user.id))]
-pub async fn list(
+pub async fn list<T: DatabaseExtension>(
     req: Query<SyncHistoryRequest>,
     user: User,
-    db: Extension<Postgres>,
+    db: Extension<T>,
 ) -> Result<Json<SyncHistoryResponse>, ErrorResponseStatus<'static>> {
     let history = db
         .list_history(
@@ -72,10 +75,10 @@ pub async fn list(
 }
 
 #[instrument(skip_all, fields(user.id = user.id))]
-pub async fn add(
+pub async fn add<T: DatabaseExtension>(
     Json(req): Json<Vec<AddHistoryRequest>>,
     user: User,
-    db: Extension<Postgres>,
+    db: Extension<T>,
 ) -> Result<(), ErrorResponseStatus<'static>> {
     debug!("request to add {} history items", req.len());
 
@@ -101,11 +104,11 @@ pub async fn add(
 }
 
 #[instrument(skip_all, fields(user.id = user.id))]
-pub async fn calendar(
+pub async fn calendar<T: DatabaseExtension>(
     Path(focus): Path<String>,
     Query(params): Query<HashMap<String, u64>>,
     user: User,
-    db: Extension<Postgres>,
+    db: Extension<T>,
 ) -> Result<Json<HashMap<u64, TimePeriodInfo>>, ErrorResponseStatus<'static>> {
     let focus = focus.as_str();
 
