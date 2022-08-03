@@ -24,7 +24,7 @@ impl Postgres {
             .connect(settings.db_uri.as_str())
             .await?;
 
-        sqlx::migrate!("./migrations").run(&pool).await?;
+        sqlx::migrate!("./migrations/postgres").run(&pool).await?;
 
         Ok(Self { pool, settings })
     }
