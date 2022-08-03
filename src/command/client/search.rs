@@ -757,5 +757,5 @@ async fn run_non_interactive(
         .collect();
 
     super::history::print_list(&results, list_mode);
-    Ok(results.len()) 
+    Ok(results.len())
 }
