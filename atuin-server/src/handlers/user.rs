@@ -8,15 +8,12 @@ use uuid::Uuid;
 
 use super::{ErrorResponse, ErrorResponseStatus};
 use crate::{
-    database::Database,
+    database::DatabaseExtension,
     models::{NewSession, NewUser},
     settings::Settings,
 };
 
 use atuin_common::api::*;
-
-pub trait DatabaseExtension: Database + Clone + Send + Sync + 'static {}
-impl<T> DatabaseExtension for T where T: Database + Clone + Send + Sync + 'static {}
 
 pub fn verify_str(secret: &str, verify: &str) -> bool {
     sodiumoxide::init().unwrap();

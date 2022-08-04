@@ -60,6 +60,9 @@ pub trait Database {
     ) -> Result<HashMap<u64, TimePeriodInfo>>;
 }
 
+pub trait DatabaseExtension: Database + Clone + Send + Sync + 'static {}
+impl<T> DatabaseExtension for T where T: Database + Clone + Send + Sync + 'static {}
+
 pub struct DatabaseWrapped<T, DB>
 where
     DB: Database,

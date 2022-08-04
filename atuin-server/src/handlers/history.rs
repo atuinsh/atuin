@@ -10,15 +10,11 @@ use tracing::{debug, error, instrument};
 use super::{ErrorResponse, ErrorResponseStatus};
 use crate::{
     calendar::{TimePeriod, TimePeriodInfo},
-    database::Database,
+    database::{DatabaseExtension, DatabaseWrapped},
     models::{NewHistory, User as ModelUser},
 };
 
-use crate::database::DatabaseWrapped;
 use atuin_common::api::*;
-
-pub trait DatabaseExtension: Database + Clone + Send + Sync + 'static {}
-impl<T> DatabaseExtension for T where T: Database + Clone + Send + Sync + 'static {}
 
 type User<T> = DatabaseWrapped<ModelUser, T>;
 

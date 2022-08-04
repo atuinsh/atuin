@@ -10,15 +10,17 @@ use eyre::Result;
 use tower::ServiceBuilder;
 use tower_http::trace::TraceLayer;
 
-use super::{database::Database, handlers};
-use crate::database::DatabaseWrapped;
+use super::{
+    database::{DatabaseExtension, DatabaseWrapped},
+    handlers,
+};
 use crate::{models::User, settings::Settings};
 
 #[async_trait]
 impl<B, T> FromRequest<B> for DatabaseWrapped<User, T>
 where
     B: Send,
-    T: Database + Send + Sync + 'static,
+    T: DatabaseExtension,
 {
     type Rejection = http::StatusCode;
 
@@ -55,10 +57,7 @@ where
 async fn teapot() -> impl IntoResponse {
     (http::StatusCode::IM_A_TEAPOT, "☕")
 }
-pub fn router<T: Database + Clone + Send + Sync + 'static>(
-    database: T,
-    settings: Settings,
-) -> Router {
+pub fn router<T: DatabaseExtension>(database: T, settings: Settings) -> Router {
     let routes = Router::new()
         .route("/", get(handlers::index))
         .route("/sync/count", get(handlers::history::count::<T>))
