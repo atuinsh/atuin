@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::marker::PhantomData;
+use std::ops::Deref;
 
 use async_trait::async_trait;
 use sqlx::Result;
@@ -9,7 +11,10 @@ use super::{
 };
 
 mod postgres;
+mod sqlite;
+
 pub use postgres::Postgres;
+pub use sqlite::Sqlite;
 
 #[async_trait]
 pub trait Database {
@@ -53,4 +58,35 @@ pub trait Database {
         year: u64,
         month: u64,
     ) -> Result<HashMap<u64, TimePeriodInfo>>;
+}
+
+pub struct DatabaseWrapped<T, DB>
+where
+    DB: Database,
+{
+    item: T,
+    phantom: PhantomData<DB>,
+}
+
+impl<T, DB> Deref for DatabaseWrapped<T, DB>
+where
+    DB: Database,
+{
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.item
+    }
+}
+
+impl<T, DB> From<T> for DatabaseWrapped<T, DB>
+where
+    DB: Database,
+{
+    fn from(item: T) -> Self {
+        DatabaseWrapped {
+            item,
+            phantom: Default::default(),
+        }
+    }
 }

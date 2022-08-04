@@ -10,23 +10,22 @@ use eyre::Result;
 use tower::ServiceBuilder;
 use tower_http::trace::TraceLayer;
 
-use super::{
-    database::{Database, Postgres},
-    handlers,
-};
+use super::{database::Database, handlers};
+use crate::database::DatabaseWrapped;
 use crate::{models::User, settings::Settings};
 
 #[async_trait]
-impl<B> FromRequest<B> for User
+impl<B, T> FromRequest<B> for DatabaseWrapped<User, T>
 where
     B: Send,
+    T: Database + Send + Sync + 'static,
 {
     type Rejection = http::StatusCode;
 
     async fn from_request(req: &mut RequestParts<B>) -> Result<Self, Self::Rejection> {
-        let postgres = req
+        let database = req
             .extensions()
-            .get::<Postgres>()
+            .get::<T>()
             .ok_or(http::StatusCode::INTERNAL_SERVER_ERROR)?;
 
         let auth_header = req
@@ -44,12 +43,12 @@ where
             return Err(http::StatusCode::FORBIDDEN);
         }
 
-        let user = postgres
+        let user = database
             .get_session_user(token)
             .await
             .map_err(|_| http::StatusCode::FORBIDDEN)?;
 
-        Ok(user)
+        Ok(user.into())
     }
 }
 

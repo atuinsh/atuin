@@ -11,17 +11,20 @@ use super::{ErrorResponse, ErrorResponseStatus};
 use crate::{
     calendar::{TimePeriod, TimePeriodInfo},
     database::Database,
-    models::{NewHistory, User},
+    models::{NewHistory, User as ModelUser},
 };
 
+use crate::database::DatabaseWrapped;
 use atuin_common::api::*;
 
 pub trait DatabaseExtension: Database + Clone + Send + Sync + 'static {}
 impl<T> DatabaseExtension for T where T: Database + Clone + Send + Sync + 'static {}
 
+type User<T> = DatabaseWrapped<ModelUser, T>;
+
 #[instrument(skip_all, fields(user.id = user.id))]
 pub async fn count<T: DatabaseExtension>(
-    user: User,
+    user: User<T>,
     db: Extension<T>,
 ) -> Result<Json<CountResponse>, ErrorResponseStatus<'static>> {
     match db.count_history_cached(&user).await {
@@ -41,7 +44,7 @@ pub async fn count<T: DatabaseExtension>(
 #[instrument(skip_all, fields(user.id = user.id))]
 pub async fn list<T: DatabaseExtension>(
     req: Query<SyncHistoryRequest>,
-    user: User,
+    user: User<T>,
     db: Extension<T>,
 ) -> Result<Json<SyncHistoryResponse>, ErrorResponseStatus<'static>> {
     let history = db
@@ -77,7 +80,7 @@ pub async fn list<T: DatabaseExtension>(
 #[instrument(skip_all, fields(user.id = user.id))]
 pub async fn add<T: DatabaseExtension>(
     Json(req): Json<Vec<AddHistoryRequest>>,
-    user: User,
+    user: User<T>,
     db: Extension<T>,
 ) -> Result<(), ErrorResponseStatus<'static>> {
     debug!("request to add {} history items", req.len());
@@ -107,7 +110,7 @@ pub async fn add<T: DatabaseExtension>(
 pub async fn calendar<T: DatabaseExtension>(
     Path(focus): Path<String>,
     Query(params): Query<HashMap<String, u64>>,
-    user: User,
+    user: User<T>,
     db: Extension<T>,
 ) -> Result<Json<HashMap<u64, TimePeriodInfo>>, ErrorResponseStatus<'static>> {
     let focus = focus.as_str();
