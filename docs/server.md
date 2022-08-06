@@ -34,6 +34,11 @@ open_registration = true
 db_uri="postgres://user:password@hostname/database"
 ```
 
+For Sqlite replace `db_uri` with:
+```toml
+db_uri="sqlite:///path/to/database.db"
+```
+
 Alternatively, configuration can also be provided with environment variables.
 
 ```sh
