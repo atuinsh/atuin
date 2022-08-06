@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use super::{ErrorResponse, ErrorResponseStatus};
 use crate::{
-    database::DatabaseExtension,
+    database::DynDatabase,
     models::{NewSession, NewUser},
     settings::Settings,
 };
@@ -30,9 +30,9 @@ pub fn verify_str(secret: &str, verify: &str) -> bool {
 }
 
 #[instrument(skip_all, fields(user.username = username.as_str()))]
-pub async fn get<T: DatabaseExtension>(
+pub async fn get(
     Path(username): Path<String>,
-    db: Extension<T>,
+    db: Extension<DynDatabase>,
 ) -> Result<Json<UserResponse>, ErrorResponseStatus<'static>> {
     let user = match db.get_user(username.as_ref()).await {
         Ok(user) => user,
@@ -53,10 +53,10 @@ pub async fn get<T: DatabaseExtension>(
 }
 
 #[instrument(skip_all)]
-pub async fn register<T: DatabaseExtension>(
+pub async fn register(
     Json(register): Json<RegisterRequest>,
     settings: Extension<Settings>,
-    db: Extension<T>,
+    db: Extension<DynDatabase>,
 ) -> Result<Json<RegisterResponse>, ErrorResponseStatus<'static>> {
     if !settings.open_registration {
         return Err(
@@ -101,9 +101,9 @@ pub async fn register<T: DatabaseExtension>(
 }
 
 #[instrument(skip_all, fields(user.username = login.username.as_str()))]
-pub async fn login<T: DatabaseExtension>(
+pub async fn login(
     login: Json<LoginRequest>,
-    db: Extension<T>,
+    db: Extension<DynDatabase>,
 ) -> Result<Json<LoginResponse>, ErrorResponseStatus<'static>> {
     let user = match db.get_user(login.username.borrow()).await {
         Ok(u) => u,

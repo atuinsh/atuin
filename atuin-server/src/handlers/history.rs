@@ -10,18 +10,16 @@ use tracing::{debug, error, instrument};
 use super::{ErrorResponse, ErrorResponseStatus};
 use crate::{
     calendar::{TimePeriod, TimePeriodInfo},
-    database::{DatabaseExtension, DatabaseWrapped},
-    models::{NewHistory, User as ModelUser},
+    database::DynDatabase,
+    models::{NewHistory, User},
 };
 
 use atuin_common::api::*;
 
-type User<T> = DatabaseWrapped<ModelUser, T>;
-
 #[instrument(skip_all, fields(user.id = user.id))]
-pub async fn count<T: DatabaseExtension>(
-    user: User<T>,
-    db: Extension<T>,
+pub async fn count(
+    user: User,
+    db: Extension<DynDatabase>,
 ) -> Result<Json<CountResponse>, ErrorResponseStatus<'static>> {
     match db.count_history_cached(&user).await {
         // By default read out the cached value
@@ -38,10 +36,10 @@ pub async fn count<T: DatabaseExtension>(
 }
 
 #[instrument(skip_all, fields(user.id = user.id))]
-pub async fn list<T: DatabaseExtension>(
+pub async fn list(
     req: Query<SyncHistoryRequest>,
-    user: User<T>,
-    db: Extension<T>,
+    user: User,
+    db: Extension<DynDatabase>,
 ) -> Result<Json<SyncHistoryResponse>, ErrorResponseStatus<'static>> {
     let history = db
         .list_history(
@@ -74,10 +72,10 @@ pub async fn list<T: DatabaseExtension>(
 }
 
 #[instrument(skip_all, fields(user.id = user.id))]
-pub async fn add<T: DatabaseExtension>(
+pub async fn add(
     Json(req): Json<Vec<AddHistoryRequest>>,
-    user: User<T>,
-    db: Extension<T>,
+    user: User,
+    db: Extension<DynDatabase>,
 ) -> Result<(), ErrorResponseStatus<'static>> {
     debug!("request to add {} history items", req.len());
 
@@ -103,11 +101,11 @@ pub async fn add<T: DatabaseExtension>(
 }
 
 #[instrument(skip_all, fields(user.id = user.id))]
-pub async fn calendar<T: DatabaseExtension>(
+pub async fn calendar(
     Path(focus): Path<String>,
     Query(params): Query<HashMap<String, u64>>,
-    user: User<T>,
-    db: Extension<T>,
+    user: User,
+    db: Extension<DynDatabase>,
 ) -> Result<Json<HashMap<u64, TimePeriodInfo>>, ErrorResponseStatus<'static>> {
     let focus = focus.as_str();
 

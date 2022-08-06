@@ -1,6 +1,5 @@
 use std::collections::HashMap;
-use std::marker::PhantomData;
-use std::ops::Deref;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use sqlx::Result;
@@ -60,36 +59,4 @@ pub trait Database {
     ) -> Result<HashMap<u64, TimePeriodInfo>>;
 }
 
-pub trait DatabaseExtension: Database + Clone + Send + Sync + 'static {}
-impl<T> DatabaseExtension for T where T: Database + Clone + Send + Sync + 'static {}
-
-pub struct DatabaseWrapped<T, DB>
-where
-    DB: Database,
-{
-    item: T,
-    phantom: PhantomData<DB>,
-}
-
-impl<T, DB> Deref for DatabaseWrapped<T, DB>
-where
-    DB: Database,
-{
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        &self.item
-    }
-}
-
-impl<T, DB> From<T> for DatabaseWrapped<T, DB>
-where
-    DB: Database,
-{
-    fn from(item: T) -> Self {
-        DatabaseWrapped {
-            item,
-            phantom: Default::default(),
-        }
-    }
-}
+pub type DynDatabase = Arc<dyn Database + Send + Sync>;
