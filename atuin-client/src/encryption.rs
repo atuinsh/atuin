@@ -74,7 +74,8 @@ pub fn encode_key(key: secretbox::Key) -> Result<String> {
 }
 
 pub fn decode_key(key: String) -> Result<secretbox::Key> {
-    let buf = base64::decode(key).wrap_err("encryption key is not a valid base64 encoding")?;
+    let buf =
+        base64::decode(key.trim_end()).wrap_err("encryption key is not a valid base64 encoding")?;
     let buf: secretbox::Key = rmp_serde::from_slice(&buf)
         .wrap_err("encryption key is not a valid message pack encoding")?;
 
