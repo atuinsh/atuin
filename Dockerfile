@@ -1,4 +1,4 @@
-FROM lukemathwalker/cargo-chef:latest-rust-1.59 AS chef
+FROM lukemathwalker/cargo-chef:latest-rust-1.63 AS chef
 WORKDIR app
 
 FROM chef AS planner
@@ -16,7 +16,7 @@ RUN cargo chef cook --release --recipe-path recipe.json
 COPY . .
 RUN cargo build --release --bin atuin
 
-FROM debian:bullseye-20211011-slim AS runtime
+FROM debian:bullseye-20220801-slim AS runtime
 WORKDIR app
 
 ENV TZ=Etc/UTC
