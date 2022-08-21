@@ -17,7 +17,11 @@ COPY . .
 RUN cargo build --release --bin atuin
 
 FROM debian:bullseye-20220801-slim AS runtime
+
+RUN useradd -c 'atuin user' atuin && mkdir /config && chown atuin:atuin /config
 WORKDIR app
+
+USER atuin
 
 ENV TZ=Etc/UTC
 ENV RUST_LOG=atuin::api=info
