@@ -13,7 +13,7 @@ export ATUIN_SESSION=$(atuin uuid)
 export ATUIN_HISTORY="atuin history list"
 
 _atuin_preexec(){
-	local id; id=$(atuin history start "$1")
+	local id; id=$(atuin history start -- "$1")
 	export ATUIN_HISTORY_ID="$id"
 }
 
@@ -23,7 +23,7 @@ _atuin_precmd(){
 	[[ -z "${ATUIN_HISTORY_ID}" ]] && return
 
 
-	(RUST_LOG=error atuin history end $ATUIN_HISTORY_ID --exit $EXIT &) > /dev/null 2>&1
+	(RUST_LOG=error atuin history end --exit $EXIT -- $ATUIN_HISTORY_ID &) > /dev/null 2>&1
 }
 
 _atuin_search(){
@@ -34,7 +34,7 @@ _atuin_search(){
 	echoti rmkx
 	# swap stderr and stdout, so that the tui stuff works
 	# TODO: not this
-	output=$(RUST_LOG=error atuin search -i $BUFFER 3>&1 1>&2 2>&3)
+	output=$(RUST_LOG=error atuin search -i -- $BUFFER 3>&1 1>&2 2>&3)
 	echoti smkx
 
 	if [[ -n $output ]] ; then
