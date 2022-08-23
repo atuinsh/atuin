@@ -9,8 +9,8 @@ use reqwest::{
 use sodiumoxide::crypto::secretbox;
 
 use atuin_common::api::{
-    AddHistoryRequest, CountResponse, LoginRequest, LoginResponse, RegisterResponse,
-    SyncHistoryResponse, ErrorResponse,
+    AddHistoryRequest, CountResponse, ErrorResponse, LoginRequest, LoginResponse, RegisterResponse,
+    SyncHistoryResponse,
 };
 
 use crate::{

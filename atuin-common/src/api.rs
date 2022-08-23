@@ -1,6 +1,6 @@
-use std::borrow::Cow;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UserResponse {
