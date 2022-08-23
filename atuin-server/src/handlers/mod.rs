@@ -1,5 +1,4 @@
-use std::borrow::Cow;
-
+use atuin_common::api::ErrorResponse;
 use axum::{response::IntoResponse, Json};
 use serde::{Deserialize, Serialize};
 
@@ -23,11 +22,6 @@ pub async fn index() -> Json<IndexResponse> {
     })
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ErrorResponse<'a> {
-    pub reason: Cow<'a, str>,
-}
-
 impl<'a> IntoResponse for ErrorResponseStatus<'a> {
     fn into_response(self) -> axum::response::Response {
         (self.status, Json(self.error)).into_response()
@@ -39,15 +33,20 @@ pub struct ErrorResponseStatus<'a> {
     pub status: http::StatusCode,
 }
 
-impl<'a> ErrorResponse<'a> {
-    pub fn with_status(self, status: http::StatusCode) -> ErrorResponseStatus<'a> {
+pub trait RespExt<'a> {
+    fn with_status(self, status: http::StatusCode) -> ErrorResponseStatus<'a>;
+    fn reply(reason: &'a str) -> Self;
+}
+
+impl<'a> RespExt<'a> for ErrorResponse<'a> {
+    fn with_status(self, status: http::StatusCode) -> ErrorResponseStatus<'a> {
         ErrorResponseStatus {
             error: self,
             status,
         }
     }
 
-    pub fn reply(reason: &'a str) -> ErrorResponse {
+    fn reply(reason: &'a str) -> ErrorResponse {
         Self {
             reason: reason.into(),
         }

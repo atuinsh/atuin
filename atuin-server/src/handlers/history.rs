@@ -7,7 +7,7 @@ use axum::{
 use http::StatusCode;
 use tracing::{debug, error, instrument};
 
-use super::{ErrorResponse, ErrorResponseStatus};
+use super::{ErrorResponse, ErrorResponseStatus, RespExt};
 use crate::{
     calendar::{TimePeriod, TimePeriodInfo},
     database::{Database, Postgres},

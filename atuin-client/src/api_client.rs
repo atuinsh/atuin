@@ -10,7 +10,7 @@ use sodiumoxide::crypto::secretbox;
 
 use atuin_common::api::{
     AddHistoryRequest, CountResponse, LoginRequest, LoginResponse, RegisterResponse,
-    SyncHistoryResponse,
+    SyncHistoryResponse, ErrorResponse,
 };
 
 use crate::{
@@ -58,7 +58,8 @@ pub async fn register(
         .await?;
 
     if !resp.status().is_success() {
-        bail!("failed to register user");
+        let error = resp.json::<ErrorResponse>().await?;
+        bail!("failed to register user: {}", error.reason);
     }
 
     let session = resp.json::<RegisterResponse>().await?;
@@ -77,7 +78,8 @@ pub async fn login(address: &str, req: LoginRequest) -> Result<LoginResponse> {
         .await?;
 
     if resp.status() != reqwest::StatusCode::OK {
-        bail!("invalid login details");
+        let error = resp.json::<ErrorResponse>().await?;
+        bail!("invalid login details: {}", error.reason);
     }
 
     let session = resp.json::<LoginResponse>().await?;
