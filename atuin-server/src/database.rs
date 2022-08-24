@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use async_trait::async_trait;
 use sqlx::Result;
@@ -16,7 +15,7 @@ pub use postgres::Postgres;
 pub use sqlite::Sqlite;
 
 #[async_trait]
-pub trait Database {
+pub trait Database: Send + Sync + Clone {
     async fn get_session(&self, token: &str) -> Result<Session>;
     async fn get_session_user(&self, token: &str) -> Result<User>;
     async fn add_session(&self, session: &NewSession) -> Result<()>;
@@ -58,5 +57,3 @@ pub trait Database {
         month: u64,
     ) -> Result<HashMap<u64, TimePeriodInfo>>;
 }
-
-pub type DynDatabase = Arc<dyn Database + Send + Sync>;

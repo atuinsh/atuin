@@ -1,9 +1,7 @@
 #![forbid(unsafe_code)]
 
 use std::net::{IpAddr, SocketAddr};
-use std::sync::Arc;
 
-use crate::database::DynDatabase;
 use axum::Server;
 use database::{Postgres, Sqlite};
 use eyre::{Context, Result};
@@ -21,21 +19,19 @@ pub mod settings;
 pub async fn launch(settings: Settings, host: String, port: u16) -> Result<()> {
     let host = host.parse::<IpAddr>()?;
 
-    let router = if settings.db_uri.starts_with("sqlite://") {
+    let server = Server::bind(&SocketAddr::new(host, port));
+
+    if settings.db_uri.starts_with("sqlite://") {
         let sqlite = Sqlite::new(settings.clone())
             .await
             .wrap_err_with(|| format!("failed to connect to db: {}", settings.db_uri))?;
-        router::router(Arc::new(sqlite) as DynDatabase, settings)
+        server.serve(router::router(sqlite, settings).into_make_service()).await?
     } else {
         let postgres = Postgres::new(settings.clone())
             .await
             .wrap_err_with(|| format!("failed to connect to db: {}", settings.db_uri))?;
-        router::router(Arc::new(postgres) as DynDatabase, settings)
-    };
-
-    Server::bind(&SocketAddr::new(host, port))
-        .serve(router.into_make_service())
-        .await?;
+        server.serve(router::router(postgres, settings).into_make_service()).await?
+    }
 
     Ok(())
 }

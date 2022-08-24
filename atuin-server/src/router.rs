@@ -1,34 +1,39 @@
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use axum::{
-    extract::{FromRequest, RequestParts},
-    handler::Handler,
+    extract::FromRequestParts,
     response::IntoResponse,
     routing::{get, post},
-    Extension, Router,
+    Router,
 };
 use eyre::Result;
-use tower::ServiceBuilder;
+use http::request::Parts;
 use tower_http::trace::TraceLayer;
 
 use super::handlers;
-use crate::database::DynDatabase;
+use crate::database::Database;
 use crate::{models::User, settings::Settings};
 
+#[derive(Clone, Debug)]
+pub struct AppState<DB> {
+    pub database: DB,
+    pub settings: Settings,
+}
+
 #[async_trait]
-impl<B> FromRequest<B> for User
+impl<DB> FromRequestParts<AppState<DB>> for User
 where
-    B: Send,
+    DB: Database,
 {
     type Rejection = http::StatusCode;
 
-    async fn from_request(req: &mut RequestParts<B>) -> Result<Self, Self::Rejection> {
-        let database = req
-            .extensions()
-            .get::<DynDatabase>()
-            .ok_or(http::StatusCode::INTERNAL_SERVER_ERROR)?;
-
+    async fn from_request_parts(
+        req: &mut Parts,
+        state: &AppState<DB>,
+    ) -> Result<Self, Self::Rejection> {
         let auth_header = req
-            .headers()
+            .headers
             .get(http::header::AUTHORIZATION)
             .ok_or(http::StatusCode::FORBIDDEN)?;
         let auth_header = auth_header
@@ -42,7 +47,8 @@ where
             return Err(http::StatusCode::FORBIDDEN);
         }
 
-        let user = database
+        let user = state
+            .database
             .get_session_user(token)
             .await
             .map_err(|_| http::StatusCode::FORBIDDEN)?;
@@ -54,28 +60,28 @@ where
 async fn teapot() -> impl IntoResponse {
     (http::StatusCode::IM_A_TEAPOT, "☕")
 }
-pub fn router(database: DynDatabase, settings: Settings) -> Router {
-    let routes = Router::new()
-        .route("/", get(handlers::index))
-        .route("/sync/count", get(handlers::history::count))
-        .route("/sync/history", get(handlers::history::list))
-        .route("/sync/calendar/:focus", get(handlers::history::calendar))
-        .route("/history", post(handlers::history::add))
-        .route("/user/:username", get(handlers::user::get))
-        .route("/register", post(handlers::user::register))
-        .route("/login", post(handlers::user::login));
+pub fn router<DB: Database + 'static>(database: DB, settings: Settings) -> Router<AppState<DB>> {
+    let path = settings.path.to_owned();
 
-    let path = settings.path.as_str();
+    let state = Arc::new(AppState { database, settings });
+    let routes = Router::with_state_arc(state.clone())
+        .route("/", get(handlers::index))
+        .route("/sync/count", get(handlers::history::count::<DB>))
+        .route("/sync/history", get(handlers::history::list::<DB>))
+        .route(
+            "/sync/calendar/:focus",
+            get(handlers::history::calendar::<DB>),
+        )
+        .route("/history", post(handlers::history::add::<DB>))
+        .route("/user/:username", get(handlers::user::get::<DB>))
+        .route("/register", post(handlers::user::register::<DB>))
+        .route("/login", post(handlers::user::login::<DB>));
+
     if path.is_empty() {
         routes
     } else {
-        Router::new().nest(path, routes)
+        Router::with_state_arc(state).nest(&path, routes)
     }
-    .fallback(teapot.into_service())
-    .layer(
-        ServiceBuilder::new()
-            .layer(TraceLayer::new_for_http())
-            .layer(Extension(database))
-            .layer(Extension(settings)),
-    )
+    .fallback(teapot)
+    .layer(TraceLayer::new_for_http())
 }

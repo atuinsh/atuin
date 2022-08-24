@@ -23,9 +23,9 @@ sodiumoxide = "0.2.6"
 base64 = "0.13.0"
 rand = "0.8.4"
 tokio = { version = "1", features = ["full"] }
-sqlx = { version = "0.5", features = [ "runtime-tokio-rustls", "chrono", "postgres" ] }
+sqlx = { version = "0.6", features = [ "runtime-tokio-rustls", "chrono", "postgres", "sqlite" ] }
 async-trait = "0.1.49"
-axum = "0.5"
+axum = "0.6.0-rc.1"
 http = "0.2"
 fs-err = "2.7"
 chronoutil = "0.2.3"

@@ -1,6 +1,9 @@
 use std::borrow::Borrow;
 
-use axum::{extract::Path, Extension, Json};
+use axum::{
+    extract::{Path, State},
+    Json,
+};
 use http::StatusCode;
 use sodiumoxide::crypto::pwhash::argon2id13;
 use tracing::{debug, error, instrument};
@@ -8,9 +11,9 @@ use uuid::Uuid;
 
 use super::{ErrorResponse, ErrorResponseStatus};
 use crate::{
-    database::DynDatabase,
+    database::Database,
     models::{NewSession, NewUser},
-    settings::Settings,
+    router::AppState,
 };
 
 use atuin_common::api::*;
@@ -30,11 +33,11 @@ pub fn verify_str(secret: &str, verify: &str) -> bool {
 }
 
 #[instrument(skip_all, fields(user.username = username.as_str()))]
-pub async fn get(
+pub async fn get<DB: Database>(
     Path(username): Path<String>,
-    db: Extension<DynDatabase>,
+    State(state): State<AppState<DB>>,
 ) -> Result<Json<UserResponse>, ErrorResponseStatus<'static>> {
-    let user = match db.get_user(username.as_ref()).await {
+    let user = match state.database.get_user(username.as_ref()).await {
         Ok(user) => user,
         Err(sqlx::Error::RowNotFound) => {
             debug!("user not found: {}", username);
@@ -53,12 +56,11 @@ pub async fn get(
 }
 
 #[instrument(skip_all)]
-pub async fn register(
+pub async fn register<DB: Database>(
+    State(state): State<AppState<DB>>,
     Json(register): Json<RegisterRequest>,
-    settings: Extension<Settings>,
-    db: Extension<DynDatabase>,
 ) -> Result<Json<RegisterResponse>, ErrorResponseStatus<'static>> {
-    if !settings.open_registration {
+    if !state.settings.open_registration {
         return Err(
             ErrorResponse::reply("this server is not open for registrations")
                 .with_status(StatusCode::BAD_REQUEST),
@@ -73,7 +75,7 @@ pub async fn register(
         password: hashed,
     };
 
-    let user_id = match db.add_user(&new_user).await {
+    let user_id = match state.database.add_user(&new_user).await {
         Ok(id) => id,
         Err(e) => {
             error!("failed to add user: {}", e);
@@ -90,7 +92,7 @@ pub async fn register(
         token: (&token).into(),
     };
 
-    match db.add_session(&new_session).await {
+    match state.database.add_session(&new_session).await {
         Ok(_) => Ok(Json(RegisterResponse { session: token })),
         Err(e) => {
             error!("failed to add session: {}", e);
@@ -101,11 +103,11 @@ pub async fn register(
 }
 
 #[instrument(skip_all, fields(user.username = login.username.as_str()))]
-pub async fn login(
+pub async fn login<DB: Database>(
+    State(state): State<AppState<DB>>,
     login: Json<LoginRequest>,
-    db: Extension<DynDatabase>,
 ) -> Result<Json<LoginResponse>, ErrorResponseStatus<'static>> {
-    let user = match db.get_user(login.username.borrow()).await {
+    let user = match state.database.get_user(login.username.borrow()).await {
         Ok(u) => u,
         Err(sqlx::Error::RowNotFound) => {
             return Err(ErrorResponse::reply("user not found").with_status(StatusCode::NOT_FOUND));
@@ -118,7 +120,7 @@ pub async fn login(
         }
     };
 
-    let session = match db.get_user_session(&user).await {
+    let session = match state.database.get_user_session(&user).await {
         Ok(u) => u,
         Err(sqlx::Error::RowNotFound) => {
             debug!("user session not found for user id={}", user.id);

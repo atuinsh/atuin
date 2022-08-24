@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use axum::{
-    extract::{Path, Query},
-    Extension, Json,
+    extract::{Path, Query, State},
+    Json,
 };
 use http::StatusCode;
 use tracing::{debug, error, instrument};
@@ -10,24 +10,25 @@ use tracing::{debug, error, instrument};
 use super::{ErrorResponse, ErrorResponseStatus};
 use crate::{
     calendar::{TimePeriod, TimePeriodInfo},
-    database::DynDatabase,
+    database::Database,
     models::{NewHistory, User},
+    router::AppState,
 };
 
 use atuin_common::api::*;
 
 #[instrument(skip_all, fields(user.id = user.id))]
-pub async fn count(
+pub async fn count<DB: Database>(
     user: User,
-    db: Extension<DynDatabase>,
+    State(state): State<AppState<DB>>,
 ) -> Result<Json<CountResponse>, ErrorResponseStatus<'static>> {
-    match db.count_history_cached(&user).await {
+    match state.database.count_history_cached(&user).await {
         // By default read out the cached value
         Ok(count) => Ok(Json(CountResponse { count })),
 
         // If that fails, fallback on a full COUNT. Cache is built on a POST
         // only
-        Err(_) => match db.count_history(&user).await {
+        Err(_) => match state.database.count_history(&user).await {
             Ok(count) => Ok(Json(CountResponse { count })),
             Err(_) => Err(ErrorResponse::reply("failed to query history count")
                 .with_status(StatusCode::INTERNAL_SERVER_ERROR)),
@@ -36,12 +37,13 @@ pub async fn count(
 }
 
 #[instrument(skip_all, fields(user.id = user.id))]
-pub async fn list(
+pub async fn list<DB: Database>(
     req: Query<SyncHistoryRequest>,
     user: User,
-    db: Extension<DynDatabase>,
+    State(state): State<AppState<DB>>,
 ) -> Result<Json<SyncHistoryResponse>, ErrorResponseStatus<'static>> {
-    let history = db
+    let history = state
+        .database
         .list_history(
             &user,
             req.sync_ts.naive_utc(),
@@ -72,10 +74,10 @@ pub async fn list(
 }
 
 #[instrument(skip_all, fields(user.id = user.id))]
-pub async fn add(
-    Json(req): Json<Vec<AddHistoryRequest>>,
+pub async fn add<DB: Database>(
     user: User,
-    db: Extension<DynDatabase>,
+    State(state): State<AppState<DB>>,
+    Json(req): Json<Vec<AddHistoryRequest>>,
 ) -> Result<(), ErrorResponseStatus<'static>> {
     debug!("request to add {} history items", req.len());
 
@@ -90,7 +92,7 @@ pub async fn add(
         })
         .collect();
 
-    if let Err(e) = db.add_history(&history).await {
+    if let Err(e) = state.database.add_history(&history).await {
         error!("failed to add history: {}", e);
 
         return Err(ErrorResponse::reply("failed to add history")
@@ -101,11 +103,11 @@ pub async fn add(
 }
 
 #[instrument(skip_all, fields(user.id = user.id))]
-pub async fn calendar(
+pub async fn calendar<DB: Database>(
     Path(focus): Path<String>,
     Query(params): Query<HashMap<String, u64>>,
     user: User,
-    db: Extension<DynDatabase>,
+    State(state): State<AppState<DB>>,
 ) -> Result<Json<HashMap<u64, TimePeriodInfo>>, ErrorResponseStatus<'static>> {
     let focus = focus.as_str();
 
@@ -113,7 +115,8 @@ pub async fn calendar(
     let month = params.get("month").unwrap_or(&1);
 
     let focus = match focus {
-        "year" => db
+        "year" => state
+            .database
             .calendar(&user, TimePeriod::YEAR, *year, *month)
             .await
             .map_err(|_| {
@@ -121,7 +124,8 @@ pub async fn calendar(
                     .with_status(StatusCode::INTERNAL_SERVER_ERROR)
             }),
 
-        "month" => db
+        "month" => state
+            .database
             .calendar(&user, TimePeriod::MONTH, *year, *month)
             .await
             .map_err(|_| {
@@ -129,7 +133,8 @@ pub async fn calendar(
                     .with_status(StatusCode::INTERNAL_SERVER_ERROR)
             }),
 
-        "day" => db
+        "day" => state
+            .database
             .calendar(&user, TimePeriod::DAY, *year, *month)
             .await
             .map_err(|_| {
