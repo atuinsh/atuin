@@ -25,12 +25,16 @@ pub async fn launch(settings: Settings, host: String, port: u16) -> Result<()> {
         let sqlite = Sqlite::new(settings.clone())
             .await
             .wrap_err_with(|| format!("failed to connect to db: {}", settings.db_uri))?;
-        server.serve(router::router(sqlite, settings).into_make_service()).await?
+        server
+            .serve(router::router(sqlite, settings).into_make_service())
+            .await?
     } else {
         let postgres = Postgres::new(settings.clone())
             .await
             .wrap_err_with(|| format!("failed to connect to db: {}", settings.db_uri))?;
-        server.serve(router::router(postgres, settings).into_make_service()).await?
+        server
+            .serve(router::router(postgres, settings).into_make_service())
+            .await?
     }
 
     Ok(())
