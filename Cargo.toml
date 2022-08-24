@@ -10,6 +10,11 @@ homepage = "https://atuin.sh"
 repository = "https://github.com/ellie/atuin"
 readme = "README.md"
 
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-v{ version  }-{ target }.tar.gz"
+bin-dir = "{ name }-v{ version }-{ target }/{ bin }{ binary-ext }"
+pkg-fmt = "tgz"
+
 [package.metadata.deb]
 maintainer = "Ellie Huxtable <ellie@elliehuxtable.com>"
 copyright = "2021, Ellie Huxtable <ellie@elliehuxtable.com>"
