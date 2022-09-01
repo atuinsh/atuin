@@ -381,6 +381,15 @@ fn key_handler(input: &TermEvent, app: &mut State) -> Option<String> {
                 FilterMode::Directory => FilterMode::Global,
             };
         }
+        // shift-tab
+        TermEvent::Key(Key::BackTab) => {
+            app.filter_mode = match app.filter_mode {
+                FilterMode::Host => FilterMode::Global,
+                FilterMode::Session => FilterMode::Host,
+                FilterMode::Directory => FilterMode::Session,
+                FilterMode::Global => FilterMode::Directory,
+            };
+        }
         TermEvent::Key(Key::Down | Key::Ctrl('n' | 'j'))
         | TermEvent::Mouse(MouseEvent::Press(MouseButton::WheelDown, _, _)) => {
             let i = match app.results_state.selected() {
