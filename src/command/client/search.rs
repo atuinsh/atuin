@@ -345,10 +345,6 @@ fn key_handler(input: &TermEvent, app: &mut State) -> Option<String> {
         TermEvent::Key(Key::Ctrl('e')) => {
             app.cursor_index = app.input.chars().count();
         }
-        TermEvent::Key(Key::Char(c)) => {
-            insert_char_into_input(app, app.cursor_index, *c);
-            app.cursor_index += 1;
-        }
         TermEvent::Key(Key::Backspace) => {
             if app.cursor_index == 0 {
                 return None;
@@ -377,7 +373,7 @@ fn key_handler(input: &TermEvent, app: &mut State) -> Option<String> {
             app.input = String::from("");
             app.cursor_index = 0;
         }
-        TermEvent::Key(Key::Ctrl('r')) => {
+        TermEvent::Key(Key::Ctrl('r') | Key::Char('\t')) => {
             app.filter_mode = match app.filter_mode {
                 FilterMode::Global => FilterMode::Host,
                 FilterMode::Host => FilterMode::Session,
@@ -412,6 +408,10 @@ fn key_handler(input: &TermEvent, app: &mut State) -> Option<String> {
                 None => 0,
             };
             app.results_state.select(Some(i));
+        }
+        TermEvent::Key(Key::Char(c)) => {
+            insert_char_into_input(app, app.cursor_index, *c);
+            app.cursor_index += 1;
         }
         _ => {}
     };
