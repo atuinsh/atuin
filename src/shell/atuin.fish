@@ -7,7 +7,7 @@ end
 function _atuin_postexec --on-event fish_postexec
     set s $status
     if test -n "$ATUIN_HISTORY_ID"
-        RUST_LOG=error atuin history end --exit $s -- $ATUIN_HISTORY_ID &
+        RUST_LOG=error atuin history end --exit $s -- $ATUIN_HISTORY_ID &>/dev/null &
         disown
     end
 end
