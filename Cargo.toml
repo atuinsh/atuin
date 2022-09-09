@@ -65,7 +65,6 @@ async-trait = "0.1.49"
 chrono-english = "0.1.4"
 cli-table = { version = "0.4", default-features = false }
 base64 = "0.13.0"
-humantime = "2.1.0"
 crossbeam-channel = "0.5.1"
 clap = { version = "3.1.18", features = ["derive"] }
 clap_complete = "3.1.4"

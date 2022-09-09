@@ -1,4 +1,10 @@
-use std::{env, io::stdout, ops::Sub, time::Duration};
+use std::{
+    convert::TryFrom,
+    env,
+    io::stdout,
+    ops::{ControlFlow, Sub},
+    time::Duration,
+};
 
 use chrono::Utc;
 use clap::Parser;
@@ -124,55 +130,75 @@ struct State {
     context: Context,
 }
 
+pub fn format_duration(f: Duration) -> String {
+    fn item(name: &str, value: u64) -> ControlFlow<String> {
+        if value > 0 {
+            ControlFlow::Break(format!("{}{}", value, name))
+        } else {
+            ControlFlow::Continue(())
+        }
+    }
+
+    // impl taken and modified from
+    // https://github.com/tailhook/humantime/blob/master/src/duration.rs#L295-L331
+    // Copyright (c) 2016 The humantime Developers
+    fn fmt(f: Duration) -> ControlFlow<String, ()> {
+        let secs = f.as_secs();
+        let nanos = f.subsec_nanos();
+
+        let years = secs / 31_557_600; // 365.25d
+        let year_days = secs % 31_557_600;
+        let months = year_days / 2_630_016; // 30.44d
+        let month_days = year_days % 2_630_016;
+        let days = month_days / 86400;
+        let day_secs = month_days % 86400;
+        let hours = day_secs / 3600;
+        let minutes = day_secs % 3600 / 60;
+        let seconds = day_secs % 60;
+
+        let millis = nanos / 1_000_000;
+
+        // a difference from our impl than the original is that
+        // we only care about the most-significant segment of the duration.
+        // If the item call returns `Break`, then the `?` will early-return.
+        // This allows for a very consise impl
+        item("y", years)?;
+        item("mo", months)?;
+        item("d", days)?;
+        item("h", hours)?;
+        item("m", minutes)?;
+        item("s", seconds)?;
+        item("ms", u64::from(millis))?;
+        ControlFlow::Continue(())
+    }
+
+    match fmt(f) {
+        ControlFlow::Break(b) => b,
+        ControlFlow::Continue(()) => String::from("0s"),
+    }
+}
+
+fn duration(h: &History) -> String {
+    let duration = Duration::from_nanos(u64::try_from(h.duration).unwrap_or(0));
+    format_duration(duration)
+}
+
+fn ago(h: &History) -> String {
+    let ago = chrono::Utc::now().sub(h.timestamp);
+
+    // Account for the chance that h.timestamp is "in the future"
+    // This would mean that "ago" is negative, and the unwrap here
+    // would fail.
+    // If the timestamp would otherwise be in the future, display
+    // the time ago as 0.
+    let ago = ago.to_std().unwrap_or_default();
+    format_duration(ago) + " ago"
+}
+
 impl State {
     #[allow(clippy::cast_sign_loss)]
     fn durations(&self) -> Vec<(String, String)> {
-        self.results
-            .iter()
-            .map(|h| {
-                let duration =
-                    Duration::from_millis(std::cmp::max(h.duration, 0) as u64 / 1_000_000);
-                let duration = humantime::format_duration(duration).to_string();
-                let duration: Vec<&str> = duration.split(' ').collect();
-
-                let ago = chrono::Utc::now().sub(h.timestamp);
-
-                // Account for the chance that h.timestamp is "in the future"
-                // This would mean that "ago" is negative, and the unwrap here
-                // would fail.
-                // If the timestamp would otherwise be in the future, display
-                // the time ago as 0.
-                let ago = humantime::format_duration(
-                    ago.to_std().unwrap_or_else(|_| Duration::new(0, 0)),
-                )
-                .to_string();
-                let ago: Vec<&str> = ago.split(' ').collect();
-
-                (
-                    duration[0]
-                        .to_string()
-                        .replace("days", "d")
-                        .replace("day", "d")
-                        .replace("weeks", "w")
-                        .replace("week", "w")
-                        .replace("months", "mo")
-                        .replace("month", "mo")
-                        .replace("years", "y")
-                        .replace("year", "y"),
-                    ago[0]
-                        .to_string()
-                        .replace("days", "d")
-                        .replace("day", "d")
-                        .replace("weeks", "w")
-                        .replace("week", "w")
-                        .replace("months", "mo")
-                        .replace("month", "mo")
-                        .replace("years", "y")
-                        .replace("year", "y")
-                        + " ago",
-                )
-            })
-            .collect()
+        self.results.iter().map(|h| (duration(h), ago(h))).collect()
     }
 
     fn render_results<T: tui::backend::Backend>(
@@ -195,11 +221,8 @@ impl State {
 
                 let mut command = Span::raw(command);
 
-                let (duration, mut ago) = durations[i].clone();
-
-                while (duration.len() + ago.len()) < max_length {
-                    ago = format!(" {}", ago);
-                }
+                let (mut duration, ago) = durations[i].clone();
+                duration = format!("{:width$}", duration, width = max_length - ago.len());
 
                 let selected_index = match self.results_state.selected() {
                     None => Span::raw("   "),

@@ -16,6 +16,8 @@ use atuin_client::{
 #[cfg(feature = "sync")]
 use atuin_client::sync;
 
+use super::search::format_duration;
+
 #[derive(Subcommand)]
 #[clap(infer_subcommands = true)]
 pub enum Cmd {
@@ -92,12 +94,7 @@ pub fn print_list(h: &[History], list_mode: ListMode) {
 #[allow(clippy::cast_sign_loss)]
 pub fn print_human_list(w: &mut StdoutLock, h: &[History]) {
     for h in h.iter().rev() {
-        let duration =
-            humantime::format_duration(Duration::from_nanos(std::cmp::max(h.duration, 0) as u64))
-                .to_string();
-        let duration: Vec<&str> = duration.split(' ').collect();
-        let duration = duration[0];
-
+        let duration = format_duration(Duration::from_nanos(std::cmp::max(h.duration, 0) as u64));
         let time = h.timestamp.format("%Y-%m-%d %H:%M:%S");
         let cmd = h.command.trim();
 
@@ -108,12 +105,7 @@ pub fn print_human_list(w: &mut StdoutLock, h: &[History]) {
 #[allow(clippy::cast_sign_loss)]
 pub fn print_regular(w: &mut StdoutLock, h: &[History]) {
     for h in h.iter().rev() {
-        let duration =
-            humantime::format_duration(Duration::from_nanos(std::cmp::max(h.duration, 0) as u64))
-                .to_string();
-        let duration: Vec<&str> = duration.split(' ').collect();
-        let duration = duration[0];
-
+        let duration = format_duration(Duration::from_nanos(std::cmp::max(h.duration, 0) as u64));
         let time = h.timestamp.format("%Y-%m-%d %H:%M:%S");
         let cmd = h.command.trim();
 
