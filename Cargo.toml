@@ -2,7 +2,7 @@
 name = "atuin"
 version = "0.10.0"
 authors = ["Ellie Huxtable <ellie@elliehuxtable.com>"]
-edition = "2018"
+edition = "2021"
 rust-version = "1.59"
 license = "MIT"
 description = "atuin - magical shell history"
@@ -53,10 +53,10 @@ pretty_env_logger = "0.4"
 chrono = { version = "0.4", features = ["serde"] }
 eyre = "0.6"
 directories = "4"
-indicatif = "0.16.2"
+indicatif = "0.17.0"
 serde = { version = "1.0.137", features = ["derive"] }
 serde_json = "1.0.81"
-tui = { version = "0.18", default-features = false, features = ["termion"] }
+tui = { version = "0.19", default-features = false, features = ["termion"] }
 termion = "1.5"
 unicode-width = "0.1"
 itertools = "0.10.3"
@@ -70,7 +70,7 @@ clap = { version = "3.1.18", features = ["derive"] }
 clap_complete = "3.1.4"
 fs-err = "2.7"
 whoami = "1.1.2"
-rpassword = "6.0"
+rpassword = "7.0"
 
 [dependencies.tracing-subscriber]
 version = "0.3"

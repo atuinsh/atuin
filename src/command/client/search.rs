@@ -1,10 +1,4 @@
-use std::{
-    convert::TryFrom,
-    env,
-    io::stdout,
-    ops::{ControlFlow, Sub},
-    time::Duration,
-};
+use std::{io::stdout, ops::ControlFlow, time::Duration};
 
 use chrono::Utc;
 use clap::Parser;
@@ -36,7 +30,7 @@ use super::{
     history::ListMode,
 };
 
-const VERSION: &str = env!("CARGO_PKG_VERSION");
+const VERSION: &str = std::env!("CARGO_PKG_VERSION");
 
 #[derive(Parser)]
 pub struct Cmd {
@@ -184,7 +178,7 @@ fn duration(h: &History) -> String {
 }
 
 fn ago(h: &History) -> String {
-    let ago = chrono::Utc::now().sub(h.timestamp);
+    let ago = chrono::Utc::now() - h.timestamp;
 
     // Account for the chance that h.timestamp is "in the future"
     // This would mean that "ago" is negative, and the unwrap here
