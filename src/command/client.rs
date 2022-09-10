@@ -10,7 +10,6 @@ use atuin_common::utils::uuid_v4;
 #[cfg(feature = "sync")]
 mod sync;
 
-mod event;
 mod history;
 mod import;
 mod init;
