@@ -253,272 +253,253 @@ impl State {
     }
 }
 
-async fn query_results(
-    app: &mut State,
-    search_mode: SearchMode,
-    db: &mut impl Database,
-) -> Result<()> {
-    let results = match app.input.as_str() {
-        "" => {
-            db.list(app.filter_mode, &app.context, Some(200), true)
+impl State {
+    async fn query_results(
+        &mut self,
+        search_mode: SearchMode,
+        db: &mut impl Database,
+    ) -> Result<()> {
+        let i = self.input.as_str();
+        let results = if i.is_empty() {
+            db.list(self.filter_mode, &self.context, Some(200), true)
                 .await?
-        }
-        i => {
-            db.search(Some(200), search_mode, app.filter_mode, &app.context, i)
+        } else {
+            db.search(Some(200), search_mode, self.filter_mode, &self.context, i)
                 .await?
+        };
+
+        self.results = results;
+
+        if self.results.is_empty() {
+            self.results_state.select(None);
+        } else {
+            self.results_state.select(Some(0));
         }
-    };
 
-    app.results = results;
-
-    if app.results.is_empty() {
-        app.results_state.select(None);
-    } else {
-        app.results_state.select(Some(0));
+        Ok(())
     }
 
-    Ok(())
-}
+    fn handle_input(&mut self, input: &TermEvent) -> Option<&str> {
+        match input {
+            TermEvent::Key(Key::Esc | Key::Ctrl('c' | 'd' | 'g')) => return Some(""),
+            TermEvent::Key(Key::Char('\n')) => {
+                let i = self.results_state.selected().unwrap_or(0);
 
-#[allow(clippy::too_many_lines)]
-fn key_handler<'app>(input: &TermEvent, app: &'app mut State) -> Option<&'app str> {
-    match input {
-        TermEvent::Key(Key::Esc | Key::Ctrl('c' | 'd' | 'g')) => return Some(""),
-        TermEvent::Key(Key::Char('\n')) => {
-            let i = app.results_state.selected().unwrap_or(0);
-
-            return Some(
-                app.results
-                    .get(i)
-                    .map_or(app.input.as_str(), |h| h.command.as_str()),
-            );
-        }
-        TermEvent::Key(Key::Alt(c @ '1'..='9')) => {
-            let c = c.to_digit(10)? as usize;
-            let i = app.results_state.selected()? + c;
-
-            return Some(
-                app.results
-                    .get(i)
-                    .map_or(app.input.as_str(), |h| h.command.as_str()),
-            );
-        }
-        TermEvent::Key(Key::Left | Key::Ctrl('h')) => {
-            app.input.left();
-        }
-        TermEvent::Key(Key::Right | Key::Ctrl('l')) => app.input.right(),
-        TermEvent::Key(Key::Ctrl('a')) => app.input.start(),
-        TermEvent::Key(Key::Ctrl('e')) => app.input.end(),
-        TermEvent::Key(Key::Char(c)) => app.input.insert(*c),
-        TermEvent::Key(Key::Backspace) => {
-            app.input.back();
-        }
-        TermEvent::Key(Key::Ctrl('w')) => {
-            // remove the first batch of whitespace
-            while matches!(app.input.back(), Some(c) if c.is_whitespace()) {}
-            while app.input.left() {
-                if app.input.char().unwrap().is_whitespace() {
-                    app.input.right(); // found whitespace, go back right
-                    break;
-                }
-                app.input.remove();
+                return Some(
+                    self.results
+                        .get(i)
+                        .map_or(self.input.as_str(), |h| h.command.as_str()),
+                );
             }
-        }
-        TermEvent::Key(Key::Ctrl('u')) => app.input.clear(),
-        TermEvent::Key(Key::Ctrl('r')) => {
-            app.filter_mode = match app.filter_mode {
-                FilterMode::Global => FilterMode::Host,
-                FilterMode::Host => FilterMode::Session,
-                FilterMode::Session => FilterMode::Directory,
-                FilterMode::Directory => FilterMode::Global,
-            };
-        }
-        TermEvent::Key(Key::Down | Key::Ctrl('n' | 'j'))
-        | TermEvent::Mouse(MouseEvent::Press(MouseButton::WheelDown, _, _)) => {
-            let i = match app.results_state.selected() {
-                Some(i) => {
-                    if i == 0 {
-                        0
-                    } else {
-                        i - 1
+            TermEvent::Key(Key::Alt(c @ '1'..='9')) => {
+                let c = c.to_digit(10)? as usize;
+                let i = self.results_state.selected()? + c;
+
+                return Some(
+                    self.results
+                        .get(i)
+                        .map_or(self.input.as_str(), |h| h.command.as_str()),
+                );
+            }
+            TermEvent::Key(Key::Left | Key::Ctrl('h')) => {
+                self.input.left();
+            }
+            TermEvent::Key(Key::Right | Key::Ctrl('l')) => self.input.right(),
+            TermEvent::Key(Key::Ctrl('a')) => self.input.start(),
+            TermEvent::Key(Key::Ctrl('e')) => self.input.end(),
+            TermEvent::Key(Key::Char(c)) => self.input.insert(*c),
+            TermEvent::Key(Key::Backspace) => {
+                self.input.back();
+            }
+            TermEvent::Key(Key::Ctrl('w')) => {
+                // remove the first batch of whitespace
+                while matches!(self.input.back(), Some(c) if c.is_whitespace()) {}
+                while self.input.left() {
+                    if self.input.char().unwrap().is_whitespace() {
+                        self.input.right(); // found whitespace, go back right
+                        break;
                     }
+                    self.input.remove();
                 }
-                None => 0,
-            };
-            app.results_state.select(Some(i));
-        }
-        TermEvent::Key(Key::Up | Key::Ctrl('p' | 'k'))
-        | TermEvent::Mouse(MouseEvent::Press(MouseButton::WheelUp, _, _)) => {
-            let i = match app.results_state.selected() {
-                Some(i) => {
-                    if i >= app.results.len() - 1 {
-                        app.results.len() - 1
-                    } else {
-                        i + 1
-                    }
-                }
-                None => 0,
-            };
-            app.results_state.select(Some(i));
-        }
-        _ => {}
-    };
+            }
+            TermEvent::Key(Key::Ctrl('u')) => self.input.clear(),
+            TermEvent::Key(Key::Ctrl('r')) => {
+                pub static FILTER_MODES: [FilterMode; 4] = [
+                    FilterMode::Global,
+                    FilterMode::Host,
+                    FilterMode::Session,
+                    FilterMode::Directory,
+                ];
+                let i = self.filter_mode as usize;
+                let i = (i + 1) % FILTER_MODES.len();
+                self.filter_mode = FILTER_MODES[i];
+            }
+            TermEvent::Key(Key::Down | Key::Ctrl('n' | 'j'))
+            | TermEvent::Mouse(MouseEvent::Press(MouseButton::WheelDown, _, _)) => {
+                let i = self
+                    .results_state
+                    .selected() // try get current selection
+                    .map_or(0, |i| i.saturating_sub(1)); // subtract 1 if possible
+                self.results_state.select(Some(i));
+            }
+            TermEvent::Key(Key::Up | Key::Ctrl('p' | 'k'))
+            | TermEvent::Mouse(MouseEvent::Press(MouseButton::WheelUp, _, _)) => {
+                let i = self
+                    .results_state
+                    .selected()
+                    .map_or(0, |i| i + 1) // increment the selected index
+                    .min(self.results.len() - 1); // clamp it to the last entry
+                self.results_state.select(Some(i));
+            }
+            _ => {}
+        };
 
-    None
-}
+        None
+    }
 
-#[allow(clippy::cast_possible_truncation)]
-fn draw<T: Backend>(f: &mut Frame<'_, T>, history_count: i64, app: &mut State) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .margin(1)
-        .constraints(
-            [
-                Constraint::Length(2),
-                Constraint::Min(1),
-                Constraint::Length(3),
-            ]
-            .as_ref(),
-        )
-        .split(f.size());
+    #[allow(clippy::cast_possible_truncation)]
+    fn draw<T: Backend>(&mut self, f: &mut Frame<'_, T>, history_count: i64) {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .margin(1)
+            .constraints(
+                [
+                    Constraint::Length(2),
+                    Constraint::Min(1),
+                    Constraint::Length(3),
+                ]
+                .as_ref(),
+            )
+            .split(f.size());
 
-    let top_chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)].as_ref())
-        .split(chunks[0]);
+        let top_chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)].as_ref())
+            .split(chunks[0]);
 
-    let top_left_chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Length(1)].as_ref())
-        .split(top_chunks[0]);
+        let top_left_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(1), Constraint::Length(1)].as_ref())
+            .split(top_chunks[0]);
 
-    let top_right_chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Length(1)].as_ref())
-        .split(top_chunks[1]);
+        let top_right_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(1), Constraint::Length(1)].as_ref())
+            .split(top_chunks[1]);
 
-    let title = Paragraph::new(Text::from(Span::styled(
-        format!("Atuin v{}", VERSION),
-        Style::default().add_modifier(Modifier::BOLD),
-    )));
+        let title = Paragraph::new(Text::from(Span::styled(
+            format!("Atuin v{}", VERSION),
+            Style::default().add_modifier(Modifier::BOLD),
+        )));
 
-    let help = vec![
-        Span::raw("Press "),
-        Span::styled("Esc", Style::default().add_modifier(Modifier::BOLD)),
-        Span::raw(" to exit."),
-    ];
+        let help = vec![
+            Span::raw("Press "),
+            Span::styled("Esc", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(" to exit."),
+        ];
 
-    let help = Text::from(Spans::from(help));
-    let help = Paragraph::new(help);
+        let help = Text::from(Spans::from(help));
+        let help = Paragraph::new(help);
 
-    let filter_mode = match app.filter_mode {
-        FilterMode::Global => "GLOBAL",
-        FilterMode::Host => "HOST",
-        FilterMode::Session => "SESSION",
-        FilterMode::Directory => "DIRECTORY",
-    };
+        let input = Paragraph::new(self.input.as_str().to_owned()).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(self.filter_mode.as_str()),
+        );
 
-    let input = Paragraph::new(app.input.as_str().to_owned())
-        .block(Block::default().borders(Borders::ALL).title(filter_mode));
+        let stats = Paragraph::new(Text::from(Span::raw(format!(
+            "history count: {}",
+            history_count,
+        ))))
+        .alignment(Alignment::Right);
 
-    let stats = Paragraph::new(Text::from(Span::raw(format!(
-        "history count: {}",
-        history_count,
-    ))))
-    .alignment(Alignment::Right);
+        f.render_widget(title, top_left_chunks[0]);
+        f.render_widget(help, top_left_chunks[1]);
+        f.render_widget(stats, top_right_chunks[0]);
 
-    f.render_widget(title, top_left_chunks[0]);
-    f.render_widget(help, top_left_chunks[1]);
-    f.render_widget(stats, top_right_chunks[0]);
+        self.render_results(
+            f,
+            chunks[1],
+            Block::default().borders(Borders::ALL).title("History"),
+        );
+        f.render_widget(input, chunks[2]);
 
-    app.render_results(
-        f,
-        chunks[1],
-        Block::default().borders(Borders::ALL).title("History"),
-    );
-    f.render_widget(input, chunks[2]);
+        let width = UnicodeWidthStr::width(self.input.substring());
+        f.set_cursor(
+            // Put cursor past the end of the input text
+            chunks[2].x + width as u16 + 1,
+            // Move one line down, from the border to the input line
+            chunks[2].y + 1,
+        );
+    }
 
-    let width = UnicodeWidthStr::width(app.input.substring());
-    f.set_cursor(
-        // Put cursor past the end of the input text
-        chunks[2].x + width as u16 + 1,
-        // Move one line down, from the border to the input line
-        chunks[2].y + 1,
-    );
-}
+    #[allow(clippy::cast_possible_truncation)]
+    fn draw_compact<T: Backend>(&mut self, f: &mut Frame<'_, T>, history_count: i64) {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .margin(0)
+            .horizontal_margin(1)
+            .constraints(
+                [
+                    Constraint::Length(1),
+                    Constraint::Min(1),
+                    Constraint::Length(1),
+                ]
+                .as_ref(),
+            )
+            .split(f.size());
 
-#[allow(clippy::cast_possible_truncation)]
-fn draw_compact<T: Backend>(f: &mut Frame<'_, T>, history_count: i64, app: &mut State) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .margin(0)
-        .horizontal_margin(1)
-        .constraints(
-            [
-                Constraint::Length(1),
-                Constraint::Min(1),
-                Constraint::Length(1),
-            ]
-            .as_ref(),
-        )
-        .split(f.size());
+        let header_chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints(
+                [
+                    Constraint::Ratio(1, 3),
+                    Constraint::Ratio(1, 3),
+                    Constraint::Ratio(1, 3),
+                ]
+                .as_ref(),
+            )
+            .split(chunks[0]);
 
-    let header_chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints(
-            [
-                Constraint::Ratio(1, 3),
-                Constraint::Ratio(1, 3),
-                Constraint::Ratio(1, 3),
-            ]
-            .as_ref(),
-        )
-        .split(chunks[0]);
+        let title = Paragraph::new(Text::from(Span::styled(
+            format!("Atuin v{}", VERSION),
+            Style::default().fg(Color::DarkGray),
+        )));
 
-    let title = Paragraph::new(Text::from(Span::styled(
-        format!("Atuin v{}", VERSION),
-        Style::default().fg(Color::DarkGray),
-    )));
+        let help = Paragraph::new(Text::from(Spans::from(vec![
+            Span::styled("Esc", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(" to exit"),
+        ])))
+        .style(Style::default().fg(Color::DarkGray))
+        .alignment(Alignment::Center);
 
-    let help = Paragraph::new(Text::from(Spans::from(vec![
-        Span::styled("Esc", Style::default().add_modifier(Modifier::BOLD)),
-        Span::raw(" to exit"),
-    ])))
-    .style(Style::default().fg(Color::DarkGray))
-    .alignment(Alignment::Center);
+        let stats = Paragraph::new(Text::from(Span::raw(format!(
+            "history count: {}",
+            history_count,
+        ))))
+        .style(Style::default().fg(Color::DarkGray))
+        .alignment(Alignment::Right);
 
-    let stats = Paragraph::new(Text::from(Span::raw(format!(
-        "history count: {}",
-        history_count,
-    ))))
-    .style(Style::default().fg(Color::DarkGray))
-    .alignment(Alignment::Right);
+        let filter_mode = self.filter_mode.as_str();
+        let input = Paragraph::new(format!("{}] {}", filter_mode, self.input.as_str()))
+            .block(Block::default());
 
-    let filter_mode = match app.filter_mode {
-        FilterMode::Global => "GLOBAL",
-        FilterMode::Host => "HOST",
-        FilterMode::Session => "SESSION",
-        FilterMode::Directory => "DIRECTORY",
-    };
+        f.render_widget(title, header_chunks[0]);
+        f.render_widget(help, header_chunks[1]);
+        f.render_widget(stats, header_chunks[2]);
 
-    let input =
-        Paragraph::new(format!("{}] {}", filter_mode, app.input.as_str())).block(Block::default());
+        self.render_results(f, chunks[1], Block::default());
+        f.render_widget(input, chunks[2]);
 
-    f.render_widget(title, header_chunks[0]);
-    f.render_widget(help, header_chunks[1]);
-    f.render_widget(stats, header_chunks[2]);
+        let extra_width = UnicodeWidthStr::width(self.input.substring()) + filter_mode.len();
 
-    app.render_results(f, chunks[1], Block::default());
-    f.render_widget(input, chunks[2]);
-
-    let extra_width = UnicodeWidthStr::width(app.input.substring()) + filter_mode.len();
-
-    f.set_cursor(
-        // Put cursor past the end of the input text
-        chunks[2].x + extra_width as u16 + 2,
-        // Move one line down, from the border to the input line
-        chunks[2].y + 1,
-    );
+        f.set_cursor(
+            // Put cursor past the end of the input text
+            chunks[2].x + extra_width as u16 + 2,
+            // Move one line down, from the border to the input line
+            chunks[2].y + 1,
+        );
+    }
 }
 
 // this is a big blob of horrible! clean it up!
@@ -552,7 +533,7 @@ async fn select_history(
         filter_mode,
     };
 
-    query_results(&mut app, search_mode, db).await?;
+    app.query_results(search_mode, db).await?;
 
     loop {
         let history_count = db.history_count().await?;
@@ -561,20 +542,20 @@ async fn select_history(
 
         // Handle input
         if let Event::Input(input) = events.next()? {
-            if let Some(output) = key_handler(&input, &mut app) {
+            if let Some(output) = app.handle_input(&input) {
                 return Ok(output.to_owned());
             }
         }
 
         // After we receive input process the whole event channel before query/render.
         while let Ok(Event::Input(input)) = events.try_next() {
-            if let Some(output) = key_handler(&input, &mut app) {
+            if let Some(output) = app.handle_input(&input) {
                 return Ok(output.to_owned());
             }
         }
 
         if initial_input != app.input.as_str() || initial_filter_mode != app.filter_mode {
-            query_results(&mut app, search_mode, db).await?;
+            app.query_results(search_mode, db).await?;
         }
 
         let compact = match style {
@@ -585,9 +566,9 @@ async fn select_history(
             atuin_client::settings::Style::Full => false,
         };
         if compact {
-            terminal.draw(|f| draw_compact(f, history_count, &mut app))?;
+            terminal.draw(|f| app.draw_compact(f, history_count))?;
         } else {
-            terminal.draw(|f| draw(f, history_count, &mut app))?;
+            terminal.draw(|f| app.draw(f, history_count))?;
         }
     }
 }
