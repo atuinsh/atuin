@@ -10,7 +10,7 @@ use tui::{
     layout::{Alignment, Constraint, Corner, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Span, Spans, Text},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
+    widgets::{Block, BorderType, Borders, List, ListItem, ListState, Paragraph},
     Frame, Terminal,
 };
 use unicode_width::UnicodeWidthStr;
@@ -99,9 +99,10 @@ impl State {
         b: tui::widgets::Block,
     ) {
         let durations = self.durations();
-        let max_length = durations.iter().fold(0, |largest, i| {
-            std::cmp::max(largest, i.0.len() + i.1.len())
-        });
+        // let max_length = durations.iter().fold(0, |largest, i| {
+        //     std::cmp::max(largest, i.0.len() + i.1.len())
+        // });
+        let max_length = 12; // '123ms' + '59s ago'
 
         let results: Vec<ListItem> = self
             .results
@@ -163,10 +164,7 @@ impl State {
             })
             .collect();
 
-        let results = List::new(results)
-            .block(b)
-            .start_corner(Corner::BottomLeft)
-            .highlight_symbol(">> ");
+        let results = List::new(results).block(b).start_corner(Corner::BottomLeft);
 
         f.render_stateful_widget(results, r, &mut self.results_state);
     }
@@ -280,73 +278,78 @@ impl State {
     fn draw<T: Backend>(&mut self, f: &mut Frame<'_, T>, history_count: i64) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .margin(1)
-            .constraints(
-                [
-                    Constraint::Length(2),
-                    Constraint::Min(1),
-                    Constraint::Length(3),
-                ]
-                .as_ref(),
-            )
+            .margin(0)
+            .constraints([
+                Constraint::Length(3),
+                Constraint::Min(1),
+                Constraint::Length(3),
+            ])
             .split(f.size());
 
         let top_chunks = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)].as_ref())
+            .constraints([Constraint::Percentage(50); 2])
             .split(chunks[0]);
 
         let top_left_chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Length(1), Constraint::Length(1)].as_ref())
+            .constraints([Constraint::Length(1); 3])
             .split(top_chunks[0]);
 
         let top_right_chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Length(1), Constraint::Length(1)].as_ref())
+            .constraints([Constraint::Length(1); 3])
             .split(top_chunks[1]);
 
         let title = Paragraph::new(Text::from(Span::styled(
-            format!("Atuin v{}", VERSION),
+            format!(" Atuin v{VERSION}"),
             Style::default().add_modifier(Modifier::BOLD),
         )));
 
         let help = vec![
-            Span::raw("Press "),
+            Span::raw(" Press "),
             Span::styled("Esc", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw(" to exit."),
         ];
 
-        let help = Text::from(Spans::from(help));
-        let help = Paragraph::new(help);
-
-        let input = Paragraph::new(self.input.as_str().to_owned()).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(self.filter_mode.as_str()),
-        );
-
+        let help = Paragraph::new(Text::from(Spans::from(help)));
         let stats = Paragraph::new(Text::from(Span::raw(format!(
-            "history count: {}",
-            history_count,
-        ))))
-        .alignment(Alignment::Right);
+            "history count: {history_count} ",
+        ))));
 
-        f.render_widget(title, top_left_chunks[0]);
-        f.render_widget(help, top_left_chunks[1]);
-        f.render_widget(stats, top_right_chunks[0]);
+        f.render_widget(title, top_left_chunks[1]);
+        f.render_widget(help, top_left_chunks[2]);
+        f.render_widget(stats.alignment(Alignment::Right), top_right_chunks[1]);
 
         self.render_results(
             f,
             chunks[1],
-            Block::default().borders(Borders::ALL).title("History"),
+            Block::default()
+                .borders(Borders::TOP | Borders::LEFT | Borders::RIGHT)
+                .border_type(BorderType::Rounded), // .title("History"),
+        );
+
+        let input = format!(
+            "[{:^14}] {}",
+            self.filter_mode.as_str(),
+            self.input.as_str(),
+        );
+        let input = Paragraph::new(input).block(
+            Block::default()
+                .borders(Borders::BOTTOM | Borders::LEFT | Borders::RIGHT)
+                .border_type(BorderType::Rounded)
+                .title(format!(
+                    "{:─>width$}",
+                    "",
+                    width = chunks[2].width as usize - 2
+                )),
         );
         f.render_widget(input, chunks[2]);
 
         let width = UnicodeWidthStr::width(self.input.substring());
         f.set_cursor(
             // Put cursor past the end of the input text
-            chunks[2].x + width as u16 + 1,
+            chunks[2].x + width as u16 + 18,
             // Move one line down, from the border to the input line
             chunks[2].y + 1,
         );
@@ -399,22 +402,25 @@ impl State {
         .style(Style::default().fg(Color::DarkGray))
         .alignment(Alignment::Right);
 
-        let filter_mode = self.filter_mode.as_str();
-        let input = Paragraph::new(format!("{}] {}", filter_mode, self.input.as_str()))
-            .block(Block::default());
-
         f.render_widget(title, header_chunks[0]);
         f.render_widget(help, header_chunks[1]);
         f.render_widget(stats, header_chunks[2]);
 
         self.render_results(f, chunks[1], Block::default());
+
+        let input = format!(
+            "[{:^14}] {}",
+            self.filter_mode.as_str(),
+            self.input.as_str(),
+        );
+        let input = Paragraph::new(input).block(Block::default());
         f.render_widget(input, chunks[2]);
 
-        let extra_width = UnicodeWidthStr::width(self.input.substring()) + filter_mode.len();
+        let extra_width = UnicodeWidthStr::width(self.input.substring());
 
         f.set_cursor(
             // Put cursor past the end of the input text
-            chunks[2].x + extra_width as u16 + 2,
+            chunks[2].x + extra_width as u16 + 17,
             // Move one line down, from the border to the input line
             chunks[2].y + 1,
         );
