@@ -27,16 +27,27 @@ pub enum SearchMode {
 #[derive(Clone, Debug, Deserialize, Copy, PartialEq, Eq)]
 pub enum FilterMode {
     #[serde(rename = "global")]
-    Global,
+    Global = 0,
 
     #[serde(rename = "host")]
-    Host,
+    Host = 1,
 
     #[serde(rename = "session")]
-    Session,
+    Session = 2,
 
     #[serde(rename = "directory")]
-    Directory,
+    Directory = 3,
+}
+
+impl FilterMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            FilterMode::Global => "GLOBAL",
+            FilterMode::Host => "HOST",
+            FilterMode::Session => "SESSION",
+            FilterMode::Directory => "DIRECTORY",
+        }
+    }
 }
 
 // FIXME: Can use upstream Dialect enum if https://github.com/stevedonovan/chrono-english/pull/16 is merged

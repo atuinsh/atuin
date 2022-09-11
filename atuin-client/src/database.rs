@@ -461,7 +461,7 @@ mod test {
             Some("beep boop".to_string()),
             Some("booop".to_string()),
         );
-        return db.save(&history).await;
+        db.save(&history).await
     }
 
     #[tokio::test(flavor = "multi_thread")]
