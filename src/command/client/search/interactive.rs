@@ -1,4 +1,4 @@
-use std::{io::stdout, ops::Sub, time::Duration};
+use std::io::stdout;
 
 use eyre::Result;
 use termion::{
@@ -7,10 +7,10 @@ use termion::{
 };
 use tui::{
     backend::{Backend, TermionBackend},
-    layout::{Alignment, Constraint, Corner, Direction, Layout},
+    layout::{Alignment, Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Span, Spans, Text},
-    widgets::{Block, BorderType, Borders, List, ListItem, ListState, Paragraph},
+    widgets::{Block, BorderType, Borders, Paragraph},
     Frame, Terminal,
 };
 use unicode_width::UnicodeWidthStr;
@@ -26,90 +26,16 @@ use atuin_client::{
 use super::{
     cursor::Cursor,
     event::{Event, Events},
-    format_duration,
+    history_list::{HistoryList, ListState, PREFIX_LENGTH},
 };
 use crate::VERSION;
 
 struct State {
+    history_count: i64,
     input: Cursor,
-
     filter_mode: FilterMode,
-
-    results: Vec<History>,
-
     results_state: ListState,
-
     context: Context,
-}
-
-fn duration(h: &History) -> String {
-    let duration = Duration::from_nanos(u64::try_from(h.duration).unwrap_or(0));
-    format_duration(duration)
-}
-
-fn ago(h: &History) -> String {
-    let ago = chrono::Utc::now().sub(h.timestamp);
-
-    // Account for the chance that h.timestamp is "in the future"
-    // This would mean that "ago" is negative, and the unwrap here
-    // would fail.
-    // If the timestamp would otherwise be in the future, display
-    // the time ago as 0.
-    let ago = ago.to_std().unwrap_or_default();
-    format_duration(ago) + " ago"
-}
-
-impl State {
-    fn render_results<T: tui::backend::Backend>(
-        &mut self,
-        f: &mut tui::Frame<T>,
-        r: tui::layout::Rect,
-        b: tui::widgets::Block,
-    ) {
-        let max_length = 12; // '123ms' + '59s ago'
-
-        let results: Vec<ListItem> = self
-            .results
-            .iter()
-            .enumerate()
-            .map(|(i, m)| {
-                // these encode the slices of `" > "`, `" {n} "`, or `"   "` in a compact form.
-                // Yes, this is a hack, but it makes me feel happy
-                let slices = " > 1 2 3 4 5 6 7 8 9   ";
-                let index = self.results_state.selected().and_then(|s| i.checked_sub(s));
-                let slice_index = index.unwrap_or(10).min(10) * 2;
-
-                let status_colour = if m.success() {
-                    Color::Green
-                } else {
-                    Color::Red
-                };
-                let ago = ago(m);
-                let duration = format!("{:width$}", duration(m), width = max_length - ago.len());
-
-                let command = m.command.replace(['\n', '\t'], " ");
-                let mut command = Span::raw(command);
-                if slice_index == 0 {
-                    command.style = Style::default().fg(Color::Red).add_modifier(Modifier::BOLD);
-                }
-
-                let spans = Spans::from(vec![
-                    Span::raw(&slices[slice_index..slice_index + 3]),
-                    Span::styled(duration, Style::default().fg(status_colour)),
-                    Span::raw(" "),
-                    Span::styled(ago, Style::default().fg(Color::Blue)),
-                    Span::raw(" "),
-                    command,
-                ]);
-
-                ListItem::new(spans)
-            })
-            .collect();
-
-        let results = List::new(results).block(b).start_corner(Corner::BottomLeft);
-
-        f.render_stateful_widget(results, r, &mut self.results_state);
-    }
 }
 
 impl State {
@@ -117,7 +43,7 @@ impl State {
         &mut self,
         search_mode: SearchMode,
         db: &mut impl Database,
-    ) -> Result<()> {
+    ) -> Result<Vec<History>> {
         let i = self.input.as_str();
         let results = if i.is_empty() {
             db.list(self.filter_mode, &self.context, Some(200), true)
@@ -127,38 +53,19 @@ impl State {
                 .await?
         };
 
-        self.results = results;
-
-        if self.results.is_empty() {
-            self.results_state.select(None);
-        } else {
-            self.results_state.select(Some(0));
-        }
-
-        Ok(())
+        self.results_state.select(0);
+        Ok(results)
     }
 
-    fn handle_input(&mut self, input: &TermEvent) -> Option<&str> {
+    fn handle_input(&mut self, input: &TermEvent, len: usize) -> Option<usize> {
         match input {
-            TermEvent::Key(Key::Esc | Key::Ctrl('c' | 'd' | 'g')) => return Some(""),
+            TermEvent::Key(Key::Esc | Key::Ctrl('c' | 'd' | 'g')) => return Some(usize::MAX),
             TermEvent::Key(Key::Char('\n')) => {
-                let i = self.results_state.selected().unwrap_or(0);
-
-                return Some(
-                    self.results
-                        .get(i)
-                        .map_or(self.input.as_str(), |h| h.command.as_str()),
-                );
+                return Some(self.results_state.selected());
             }
             TermEvent::Key(Key::Alt(c @ '1'..='9')) => {
                 let c = c.to_digit(10)? as usize;
-                let i = self.results_state.selected()? + c;
-
-                return Some(
-                    self.results
-                        .get(i)
-                        .map_or(self.input.as_str(), |h| h.command.as_str()),
-                );
+                return Some(self.results_state.selected() + c);
             }
             TermEvent::Key(Key::Left | Key::Ctrl('h')) => {
                 self.input.left();
@@ -195,20 +102,13 @@ impl State {
             }
             TermEvent::Key(Key::Down | Key::Ctrl('n' | 'j'))
             | TermEvent::Mouse(MouseEvent::Press(MouseButton::WheelDown, _, _)) => {
-                let i = self
-                    .results_state
-                    .selected() // try get current selection
-                    .map_or(0, |i| i.saturating_sub(1)); // subtract 1 if possible
-                self.results_state.select(Some(i));
+                let i = self.results_state.selected().saturating_sub(1);
+                self.results_state.select(i);
             }
             TermEvent::Key(Key::Up | Key::Ctrl('p' | 'k'))
             | TermEvent::Mouse(MouseEvent::Press(MouseButton::WheelUp, _, _)) => {
-                let i = self
-                    .results_state
-                    .selected()
-                    .map_or(0, |i| i + 1) // increment the selected index
-                    .min(self.results.len() - 1); // clamp it to the last entry
-                self.results_state.select(Some(i));
+                let i = self.results_state.selected() + 1;
+                self.results_state.select(i.min(len - 1));
             }
             _ => {}
         };
@@ -217,7 +117,7 @@ impl State {
     }
 
     #[allow(clippy::cast_possible_truncation)]
-    fn draw<T: Backend>(&mut self, f: &mut Frame<'_, T>, history_count: i64) {
+    fn draw<T: Backend>(&mut self, f: &mut Frame<'_, T>, results: &[History]) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .margin(0)
@@ -256,20 +156,21 @@ impl State {
 
         let help = Paragraph::new(Text::from(Spans::from(help)));
         let stats = Paragraph::new(Text::from(Span::raw(format!(
-            "history count: {history_count} ",
+            "history count: {} ",
+            self.history_count
         ))));
 
         f.render_widget(title, top_left_chunks[1]);
         f.render_widget(help, top_left_chunks[2]);
         f.render_widget(stats.alignment(Alignment::Right), top_right_chunks[1]);
 
-        self.render_results(
-            f,
-            chunks[1],
+        let results = HistoryList::new(results).block(
             Block::default()
                 .borders(Borders::TOP | Borders::LEFT | Borders::RIGHT)
-                .border_type(BorderType::Rounded), // .title("History"),
+                .border_type(BorderType::Rounded),
         );
+
+        f.render_stateful_widget(results, chunks[1], &mut self.results_state);
 
         let input = format!(
             "[{:^14}] {}",
@@ -291,14 +192,14 @@ impl State {
         let width = UnicodeWidthStr::width(self.input.substring());
         f.set_cursor(
             // Put cursor past the end of the input text
-            chunks[2].x + width as u16 + 18,
+            chunks[2].x + width as u16 + PREFIX_LENGTH + 2,
             // Move one line down, from the border to the input line
             chunks[2].y + 1,
         );
     }
 
     #[allow(clippy::cast_possible_truncation)]
-    fn draw_compact<T: Backend>(&mut self, f: &mut Frame<'_, T>, history_count: i64) {
+    fn draw_compact<T: Backend>(&mut self, f: &mut Frame<'_, T>, results: &[History]) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .margin(0)
@@ -339,7 +240,7 @@ impl State {
 
         let stats = Paragraph::new(Text::from(Span::raw(format!(
             "history count: {}",
-            history_count,
+            self.history_count,
         ))))
         .style(Style::default().fg(Color::DarkGray))
         .alignment(Alignment::Right);
@@ -348,21 +249,22 @@ impl State {
         f.render_widget(help, header_chunks[1]);
         f.render_widget(stats, header_chunks[2]);
 
-        self.render_results(f, chunks[1], Block::default());
+        let results = HistoryList::new(results);
+        f.render_stateful_widget(results, chunks[1], &mut self.results_state);
 
         let input = format!(
             "[{:^14}] {}",
             self.filter_mode.as_str(),
             self.input.as_str(),
         );
-        let input = Paragraph::new(input).block(Block::default());
+        let input = Paragraph::new(input);
         f.render_widget(input, chunks[2]);
 
         let extra_width = UnicodeWidthStr::width(self.input.substring());
 
         f.set_cursor(
             // Put cursor past the end of the input text
-            chunks[2].x + extra_width as u16 + 17,
+            chunks[2].x + extra_width as u16 + PREFIX_LENGTH + 1,
             // Move one line down, from the border to the input line
             chunks[2].y + 1,
         );
@@ -393,36 +295,35 @@ pub async fn history(
     // Put the cursor at the end of the query by default
     input.end();
     let mut app = State {
+        history_count: db.history_count().await?,
         input,
-        results: Vec::new(),
         results_state: ListState::default(),
         context: current_context(),
         filter_mode,
     };
 
-    app.query_results(search_mode, db).await?;
+    let mut results = app.query_results(search_mode, db).await?;
 
-    loop {
-        let history_count = db.history_count().await?;
+    let index = 'render: loop {
         let initial_input = app.input.as_str().to_owned();
         let initial_filter_mode = app.filter_mode;
 
         // Handle input
         if let Event::Input(input) = events.next()? {
-            if let Some(output) = app.handle_input(&input) {
-                return Ok(output.to_owned());
+            if let Some(i) = app.handle_input(&input, results.len()) {
+                break 'render i;
             }
         }
 
         // After we receive input process the whole event channel before query/render.
         while let Ok(Event::Input(input)) = events.try_next() {
-            if let Some(output) = app.handle_input(&input) {
-                return Ok(output.to_owned());
+            if let Some(i) = app.handle_input(&input, results.len()) {
+                break 'render i;
             }
         }
 
         if initial_input != app.input.as_str() || initial_filter_mode != app.filter_mode {
-            app.query_results(search_mode, db).await?;
+            results = app.query_results(search_mode, db).await?;
         }
 
         let compact = match style {
@@ -433,9 +334,20 @@ pub async fn history(
             atuin_client::settings::Style::Full => false,
         };
         if compact {
-            terminal.draw(|f| app.draw_compact(f, history_count))?;
+            terminal.draw(|f| app.draw_compact(f, &results))?;
         } else {
-            terminal.draw(|f| app.draw(f, history_count))?;
+            terminal.draw(|f| app.draw(f, &results))?;
         }
+    };
+
+    if index < results.len() {
+        // index is in bounds so we return that entry
+        Ok(results.swap_remove(index).command)
+    } else if index == usize::MAX {
+        // index is max which implies an early exit
+        Ok(String::new())
+    } else {
+        // out of bounds usually implies no selected entry so we return the input
+        Ok(app.input.into_inner())
     }
 }
