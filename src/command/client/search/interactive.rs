@@ -249,7 +249,7 @@ impl State {
         f.render_widget(help, header_chunks[1]);
         f.render_widget(stats, header_chunks[2]);
 
-        let results = HistoryList::new(results).block(Block::default());
+        let results = HistoryList::new(results);
         f.render_stateful_widget(results, chunks[1], &mut self.results_state);
 
         let input = format!(
@@ -257,7 +257,7 @@ impl State {
             self.filter_mode.as_str(),
             self.input.as_str(),
         );
-        let input = Paragraph::new(input).block(Block::default());
+        let input = Paragraph::new(input);
         f.render_widget(input, chunks[2]);
 
         let extra_width = UnicodeWidthStr::width(self.input.substring());

@@ -13,8 +13,6 @@ use super::format_duration;
 pub struct HistoryList<'a> {
     history: &'a [History],
     block: Option<Block<'a>>,
-    /// Style used as a base style for the widget
-    style: Style,
 }
 
 #[derive(Default)]
@@ -37,7 +35,6 @@ impl<'a> StatefulWidget for HistoryList<'a> {
     type State = ListState;
 
     fn render(mut self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
-        buf.set_style(area, self.style);
         let list_area = match self.block.take() {
             Some(b) => {
                 let inner_area = b.inner(area);
@@ -81,7 +78,6 @@ impl<'a> HistoryList<'a> {
         Self {
             history,
             block: None,
-            style: Style::default(),
         }
     }
 
@@ -93,8 +89,10 @@ impl<'a> HistoryList<'a> {
     fn get_items_bounds(&self, selected: usize, offset: usize, height: usize) -> (usize, usize) {
         let offset = offset.min(self.history.len().saturating_sub(1));
 
-        if offset + height < selected + 10 {
-            (selected + 10 - height, selected + 10)
+        let max_scroll_space = height.min(10);
+        if offset + height < selected + max_scroll_space {
+            let end = selected + max_scroll_space;
+            (end - height, end)
         } else if selected < offset {
             (selected, selected + height)
         } else {
