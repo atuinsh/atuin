@@ -110,7 +110,8 @@ struct DrawState<'a> {
 }
 
 // longest line prefix I could come up with
-const PREFIX_LENGTH: usize = " > 123ms 59s ago".len();
+#[allow(clippy::cast_possible_truncation)] // we know that this is <65536 length
+pub const PREFIX_LENGTH: u16 = " > 123ms 59s ago".len() as u16;
 
 impl DrawState<'_> {
     fn index(&mut self) {
@@ -130,19 +131,27 @@ impl DrawState<'_> {
         } else {
             Color::Red
         });
-        let dur = duration(h);
-        self.draw(&dur, status);
+        let duration = Duration::from_nanos(u64::try_from(h.duration).unwrap_or(0));
+        self.draw(&format_duration(duration), status);
     }
 
-    #[allow(clippy::cast_possible_truncation)] // we do not expect PREFIX_LENGTH or ago.len() to overflow a u16
+    #[allow(clippy::cast_possible_truncation)] // we know that time.len() will be <6
     fn time(&mut self, h: &History) {
-        let status = Style::default().fg(Color::Blue);
-        let time = time(h);
+        let style = Style::default().fg(Color::Blue);
+
+        // Account for the chance that h.timestamp is "in the future"
+        // This would mean that "since" is negative, and the unwrap here
+        // would fail.
+        // If the timestamp would otherwise be in the future, display
+        // the time since as 0.
+        let since = chrono::Utc::now() - h.timestamp;
+        let time = format_duration(since.to_std().unwrap_or_default());
 
         // pad the time a little bit before we write. this aligns things nicely
-        self.x = (PREFIX_LENGTH - time.len()) as u16;
+        self.x = PREFIX_LENGTH - 4 - time.len() as u16;
 
-        self.draw(&time, status);
+        self.draw(&time, style);
+        self.draw(" ago", style);
     }
 
     fn command(&mut self, h: &History) {
@@ -163,21 +172,4 @@ impl DrawState<'_> {
         let w = (self.list_area.width - self.x) as usize;
         self.x += self.buf.set_stringn(cx, cy, s, w, style).0 - cx;
     }
-}
-
-fn duration(h: &History) -> String {
-    let duration = Duration::from_nanos(u64::try_from(h.duration).unwrap_or(0));
-    format_duration(duration)
-}
-
-fn time(h: &History) -> String {
-    let ago = chrono::Utc::now() - h.timestamp;
-
-    // Account for the chance that h.timestamp is "in the future"
-    // This would mean that "ago" is negative, and the unwrap here
-    // would fail.
-    // If the timestamp would otherwise be in the future, display
-    // the time ago as 0.
-    let ago = ago.to_std().unwrap_or_default();
-    format_duration(ago) + " ago"
 }

@@ -26,7 +26,7 @@ use atuin_client::{
 use super::{
     cursor::Cursor,
     event::{Event, Events},
-    history_list::{HistoryList, ListState},
+    history_list::{HistoryList, ListState, PREFIX_LENGTH},
 };
 use crate::VERSION;
 
@@ -192,7 +192,7 @@ impl State {
         let width = UnicodeWidthStr::width(self.input.substring());
         f.set_cursor(
             // Put cursor past the end of the input text
-            chunks[2].x + width as u16 + 18,
+            chunks[2].x + width as u16 + PREFIX_LENGTH + 2,
             // Move one line down, from the border to the input line
             chunks[2].y + 1,
         );
@@ -264,7 +264,7 @@ impl State {
 
         f.set_cursor(
             // Put cursor past the end of the input text
-            chunks[2].x + extra_width as u16 + 17,
+            chunks[2].x + extra_width as u16 + PREFIX_LENGTH + 1,
             // Move one line down, from the border to the input line
             chunks[2].y + 1,
         );
