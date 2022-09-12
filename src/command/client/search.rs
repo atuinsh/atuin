@@ -61,7 +61,7 @@ pub struct Cmd {
 }
 
 impl Cmd {
-    pub async fn run(self, db: &mut impl Database, settings: &Settings) -> Result<()> {
+    pub fn run(self, db: &mut impl Database, settings: &Settings) -> Result<()> {
         if self.interactive {
             let item = interactive::history(
                 &self.query,
@@ -69,8 +69,7 @@ impl Cmd {
                 settings.filter_mode,
                 settings.style,
                 db,
-            )
-            .await?;
+            )?;
             eprintln!("{}", item);
         } else {
             let list_mode = ListMode::from_flags(self.human, self.cmd_only);
@@ -86,8 +85,7 @@ impl Cmd {
                 self.limit,
                 &self.query,
                 db,
-            )
-            .await?;
+            )?;
         };
         Ok(())
     }
@@ -96,7 +94,7 @@ impl Cmd {
 // This is supposed to more-or-less mirror the command line version, so ofc
 // it is going to have a lot of args
 #[allow(clippy::too_many_arguments)]
-async fn run_non_interactive(
+fn run_non_interactive(
     settings: &Settings,
     list_mode: ListMode,
     cwd: Option<String>,
@@ -121,15 +119,13 @@ async fn run_non_interactive(
 
     let context = current_context();
 
-    let results = db
-        .search(
-            limit,
-            settings.search_mode,
-            settings.filter_mode,
-            &context,
-            query.join(" ").as_str(),
-        )
-        .await?;
+    let results = db.search(
+        limit,
+        settings.search_mode,
+        settings.filter_mode,
+        &context,
+        query.join(" ").as_str(),
+    )?;
 
     // TODO: This filtering would be better done in the SQL query, I just
     // need a nice way of building queries.

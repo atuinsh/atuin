@@ -2,16 +2,13 @@ use std::collections::HashMap;
 
 use chrono::Utc;
 use eyre::{bail, Result};
-use reqwest::{
-    header::{HeaderMap, AUTHORIZATION, USER_AGENT},
-    StatusCode, Url,
-};
 use sodiumoxide::crypto::secretbox;
 
 use atuin_common::api::{
     AddHistoryRequest, CountResponse, LoginRequest, LoginResponse, RegisterResponse,
     SyncHistoryResponse,
 };
+use ureq::{MiddlewareNext, Request};
 
 use crate::{
     encryption::{decode_key, decrypt},
@@ -27,10 +24,10 @@ static APP_USER_AGENT: &str = concat!("atuin/", env!("CARGO_PKG_VERSION"),);
 pub struct Client<'a> {
     sync_addr: &'a str,
     key: secretbox::Key,
-    client: reqwest::Client,
+    client: ureq::Agent,
 }
 
-pub async fn register(
+pub fn register(
     address: &str,
     username: &str,
     email: &str,
@@ -42,79 +39,71 @@ pub async fn register(
     map.insert("password", password);
 
     let url = format!("{}/user/{}", address, username);
-    let resp = reqwest::get(url).await?;
+    let resp = ureq::get(&url).call()?;
 
-    if resp.status().is_success() {
+    if matches!(resp.status(), 200..=299) {
         bail!("username already in use");
     }
 
     let url = format!("{}/register", address);
-    let client = reqwest::Client::new();
-    let resp = client
-        .post(url)
-        .header(USER_AGENT, APP_USER_AGENT)
-        .json(&map)
-        .send()
-        .await?;
+    let resp = ureq::post(&url)
+        .set("User-Agent", APP_USER_AGENT)
+        .send_json(map)?;
 
-    if !resp.status().is_success() {
+    if !matches!(resp.status(), 200..=299) {
         bail!("failed to register user");
     }
 
-    let session = resp.json::<RegisterResponse>().await?;
+    let session = resp.into_json::<RegisterResponse>()?;
     Ok(session)
 }
 
-pub async fn login(address: &str, req: LoginRequest) -> Result<LoginResponse> {
+pub fn login(address: &str, req: LoginRequest) -> Result<LoginResponse> {
     let url = format!("{}/login", address);
-    let client = reqwest::Client::new();
 
-    let resp = client
-        .post(url)
-        .header(USER_AGENT, APP_USER_AGENT)
-        .json(&req)
-        .send()
-        .await?;
+    let resp = ureq::post(&url)
+        .set("User-Agent", APP_USER_AGENT)
+        .send_json(req)?;
 
-    if resp.status() != reqwest::StatusCode::OK {
+    if resp.status() != 200 {
         bail!("invalid login details");
     }
 
-    let session = resp.json::<LoginResponse>().await?;
+    let session = resp.into_json::<LoginResponse>()?;
     Ok(session)
 }
 
 impl<'a> Client<'a> {
     pub fn new(sync_addr: &'a str, session_token: &'a str, key: String) -> Result<Self> {
-        let mut headers = HeaderMap::new();
-        headers.insert(AUTHORIZATION, format!("Token {}", session_token).parse()?);
+        let token = format!("Token {}", session_token);
 
         Ok(Client {
             sync_addr,
             key: decode_key(key)?,
-            client: reqwest::Client::builder()
+            client: ureq::builder()
                 .user_agent(APP_USER_AGENT)
-                .default_headers(headers)
-                .build()?,
+                .middleware(move |req: Request, next: MiddlewareNext<'_>| {
+                    next.handle(req.set("Authorization", &token))
+                })
+                .build(),
         })
     }
 
-    pub async fn count(&self) -> Result<i64> {
+    pub fn count(&self) -> Result<i64> {
         let url = format!("{}/sync/count", self.sync_addr);
-        let url = Url::parse(url.as_str())?;
 
-        let resp = self.client.get(url).send().await?;
+        let resp = self.client.get(&url).call()?;
 
-        if resp.status() != StatusCode::OK {
+        if resp.status() != 200 {
             bail!("failed to get count (are you logged in?)");
         }
 
-        let count = resp.json::<CountResponse>().await?;
+        let count = resp.into_json::<CountResponse>()?;
 
         Ok(count.count)
     }
 
-    pub async fn get_history(
+    pub fn get_history(
         &self,
         sync_ts: chrono::DateTime<Utc>,
         history_ts: chrono::DateTime<Utc>,
@@ -133,9 +122,9 @@ impl<'a> Client<'a> {
             host,
         );
 
-        let resp = self.client.get(url).send().await?;
+        let resp = self.client.get(&url).call()?;
 
-        let history = resp.json::<SyncHistoryResponse>().await?;
+        let history = resp.into_json::<SyncHistoryResponse>()?;
         let history = history
             .history
             .iter()
@@ -146,11 +135,10 @@ impl<'a> Client<'a> {
         Ok(history)
     }
 
-    pub async fn post_history(&self, history: &[AddHistoryRequest]) -> Result<()> {
+    pub fn post_history(&self, history: &[AddHistoryRequest]) -> Result<()> {
         let url = format!("{}/history", self.sync_addr);
-        let url = Url::parse(url.as_str())?;
 
-        self.client.post(url).json(history).send().await?;
+        self.client.post(&url).send_json(history)?;
 
         Ok(())
     }

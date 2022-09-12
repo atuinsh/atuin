@@ -3,7 +3,6 @@
 
 use std::{fs::File, io::Read, path::PathBuf};
 
-use async_trait::async_trait;
 use chrono::{prelude::*, Utc};
 use directories::UserDirs;
 use eyre::{eyre, Result};
@@ -37,11 +36,10 @@ fn default_histpath() -> Result<PathBuf> {
     }
 }
 
-#[async_trait]
 impl Importer for Zsh {
     const NAME: &'static str = "bash";
 
-    async fn new() -> Result<Self> {
+    fn new() -> Result<Self> {
         let mut bytes = Vec::new();
         let path = get_histpath(default_histpath)?;
         let mut f = File::open(path)?;
@@ -49,11 +47,11 @@ impl Importer for Zsh {
         Ok(Self { bytes })
     }
 
-    async fn entries(&mut self) -> Result<usize> {
+    fn entries(&mut self) -> Result<usize> {
         Ok(super::count_lines(&self.bytes))
     }
 
-    async fn load(self, h: &mut impl Loader) -> Result<()> {
+    fn load(self, h: &mut impl Loader) -> Result<()> {
         let now = chrono::Utc::now();
         let mut line = String::new();
 
@@ -73,7 +71,7 @@ impl Importer for Zsh {
 
                 if let Some(command) = command.strip_prefix(": ") {
                     counter += 1;
-                    h.push(parse_extended(command, counter)).await?;
+                    h.push(parse_extended(command, counter))?;
                 } else {
                     let offset = chrono::Duration::seconds(counter);
                     counter += 1;
@@ -86,8 +84,7 @@ impl Importer for Zsh {
                         -1,
                         None,
                         None,
-                    ))
-                    .await?;
+                    ))?;
                 }
             }
         }
@@ -159,8 +156,8 @@ mod test {
         assert_eq!(parsed.timestamp, Utc.timestamp(1_613_322_469, 0));
     }
 
-    #[tokio::test]
-    async fn test_parse_file() {
+    #[test]
+    fn test_parse_file() {
         let bytes = r": 1613322469:0;cargo install atuin
 : 1613322469:10;cargo install atuin; \
 cargo update
@@ -170,10 +167,10 @@ cargo update
         .to_owned();
 
         let mut zsh = Zsh { bytes };
-        assert_eq!(zsh.entries().await.unwrap(), 4);
+        assert_eq!(zsh.entries().unwrap(), 4);
 
         let mut loader = TestLoader::default();
-        zsh.load(&mut loader).await.unwrap();
+        zsh.load(&mut loader).unwrap();
 
         assert_equal(
             loader.buf.iter().map(|h| h.command.as_str()),

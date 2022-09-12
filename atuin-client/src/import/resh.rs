@@ -1,6 +1,5 @@
 use std::{fs::File, io::Read, path::PathBuf};
 
-use async_trait::async_trait;
 use chrono::{TimeZone, Utc};
 use directories::UserDirs;
 use eyre::{eyre, Result};
@@ -79,11 +78,10 @@ fn default_histpath() -> Result<PathBuf> {
     Ok(home_dir.join(".resh_history.json"))
 }
 
-#[async_trait]
 impl Importer for Resh {
     const NAME: &'static str = "resh";
 
-    async fn new() -> Result<Self> {
+    fn new() -> Result<Self> {
         let mut bytes = Vec::new();
         let path = get_histpath(default_histpath)?;
         let mut f = File::open(path)?;
@@ -91,11 +89,11 @@ impl Importer for Resh {
         Ok(Self { bytes })
     }
 
-    async fn entries(&mut self) -> Result<usize> {
+    fn entries(&mut self) -> Result<usize> {
         Ok(super::count_lines(&self.bytes))
     }
 
-    async fn load(self, h: &mut impl Loader) -> Result<()> {
+    fn load(self, h: &mut impl Loader) -> Result<()> {
         for b in unix_byte_lines(&self.bytes) {
             let s = match std::str::from_utf8(b) {
                 Ok(s) => s,
@@ -131,8 +129,7 @@ impl Importer for Resh {
                 cwd: entry.pwd,
                 session: uuid_v4(),
                 hostname: entry.host,
-            })
-            .await?;
+            })?;
         }
 
         Ok(())

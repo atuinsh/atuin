@@ -57,24 +57,23 @@ pub enum Cmd {
 }
 
 impl Cmd {
-    #[tokio::main(flavor = "current_thread")]
-    pub async fn run(self) -> Result<()> {
+    pub fn run(self) -> Result<()> {
         pretty_env_logger::init();
 
         let settings = Settings::new().wrap_err("could not load client settings")?;
 
         let db_path = PathBuf::from(settings.db_path.as_str());
-        let mut db = Sqlite::new(db_path).await?;
+        let mut db = Sqlite::new(db_path)?;
 
         match self {
-            Self::History(history) => history.run(&settings, &mut db).await,
-            Self::Import(import) => import.run(&mut db).await,
-            Self::Stats(stats) => stats.run(&mut db, &settings).await,
+            Self::History(history) => history.run(&settings, &mut db),
+            Self::Import(import) => import.run(&mut db),
+            Self::Stats(stats) => stats.run(&mut db, &settings),
             Self::Init(init) => {
                 init.run();
                 Ok(())
             }
-            Self::Search(search) => search.run(&mut db, &settings).await,
+            Self::Search(search) => search.run(&mut db, &settings),
             Self::Uuid => {
                 println!("{}", uuid_v4());
                 Ok(())
@@ -99,7 +98,7 @@ impl Cmd {
                 Ok(())
             }
             #[cfg(feature = "sync")]
-            Self::Sync(sync) => sync.run(settings, &mut db).await,
+            Self::Sync(sync) => sync.run(settings, &mut db),
         }
     }
 }

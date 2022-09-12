@@ -30,16 +30,16 @@ pub fn hash_str(string: &str) -> String {
 
 // Check if remote has things we don't, and if so, download them.
 // Returns (num downloaded, total local)
-async fn sync_download(
+fn sync_download(
     force: bool,
     client: &api_client::Client<'_>,
-    db: &mut (impl Database + Send),
+    db: &mut impl Database,
 ) -> Result<(i64, i64)> {
     debug!("starting sync download");
 
-    let remote_count = client.count().await?;
+    let remote_count = client.count()?;
 
-    let initial_local = db.history_count().await?;
+    let initial_local = db.history_count()?;
     let mut local_count = initial_local;
 
     let mut last_sync = if force {
@@ -53,13 +53,11 @@ async fn sync_download(
     let host = if force { Some(String::from("")) } else { None };
 
     while remote_count > local_count {
-        let page = client
-            .get_history(last_sync, last_timestamp, host.clone())
-            .await?;
+        let page = client.get_history(last_sync, last_timestamp, host.clone())?;
 
-        db.save_bulk(&page).await?;
+        db.save_bulk(&page)?;
 
-        local_count = db.history_count().await?;
+        local_count = db.history_count()?;
 
         if page.len() < HISTORY_PAGE_SIZE.try_into().unwrap() {
             break;
@@ -85,18 +83,18 @@ async fn sync_download(
 }
 
 // Check if we have things remote doesn't, and if so, upload them
-async fn sync_upload(
+fn sync_upload(
     settings: &Settings,
     _force: bool,
     client: &api_client::Client<'_>,
-    db: &mut (impl Database + Send),
+    db: &mut impl Database,
 ) -> Result<()> {
     debug!("starting sync upload");
 
-    let initial_remote_count = client.count().await?;
+    let initial_remote_count = client.count()?;
     let mut remote_count = initial_remote_count;
 
-    let local_count = db.history_count().await?;
+    let local_count = db.history_count()?;
 
     debug!("remote has {}, we have {}", remote_count, local_count);
 
@@ -107,7 +105,7 @@ async fn sync_upload(
     let mut cursor = Utc::now();
 
     while local_count > remote_count {
-        let last = db.before(cursor, HISTORY_PAGE_SIZE).await?;
+        let last = db.before(cursor, HISTORY_PAGE_SIZE)?;
         let mut buffer = Vec::new();
 
         if last.is_empty() {
@@ -129,9 +127,9 @@ async fn sync_upload(
         }
 
         // anything left over outside of the 100 block size
-        client.post_history(&buffer).await?;
+        client.post_history(&buffer)?;
         cursor = buffer.last().unwrap().timestamp;
-        remote_count = client.count().await?;
+        remote_count = client.count()?;
 
         debug!("upload cursor: {:?}", cursor);
     }
@@ -139,16 +137,16 @@ async fn sync_upload(
     Ok(())
 }
 
-pub async fn sync(settings: &Settings, force: bool, db: &mut (impl Database + Send)) -> Result<()> {
+pub fn sync(settings: &Settings, force: bool, db: &mut impl Database) -> Result<()> {
     let client = api_client::Client::new(
         &settings.sync_address,
         &settings.session_token,
         load_encoded_key(settings)?,
     )?;
 
-    sync_upload(settings, force, &client, db).await?;
+    sync_upload(settings, force, &client, db)?;
 
-    let download = sync_download(force, &client, db).await?;
+    let download = sync_download(force, &client, db)?;
 
     debug!("sync downloaded {}", download.0);
 

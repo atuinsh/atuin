@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use atuin_common::utils::uuid_v4;
 
 // Any new fields MUST be Optional<>!
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct History {
     pub id: String,
     pub timestamp: chrono::DateTime<Utc>,

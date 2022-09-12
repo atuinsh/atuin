@@ -39,18 +39,16 @@ struct State {
 }
 
 impl State {
-    async fn query_results(
+    fn query_results(
         &mut self,
         search_mode: SearchMode,
         db: &mut impl Database,
     ) -> Result<Vec<History>> {
         let i = self.input.as_str();
         let results = if i.is_empty() {
-            db.list(self.filter_mode, &self.context, Some(200), true)
-                .await?
+            db.list(self.filter_mode, &self.context, Some(200), true)?
         } else {
-            db.search(Some(200), search_mode, self.filter_mode, &self.context, i)
-                .await?
+            db.search(Some(200), search_mode, self.filter_mode, &self.context, i)?
         };
 
         self.results_state.select(0);
@@ -275,7 +273,7 @@ impl State {
 // for now, it works. But it'd be great if it were more easily readable, and
 // modular. I'd like to add some more stats and stuff at some point
 #[allow(clippy::cast_possible_truncation)]
-pub async fn history(
+pub fn history(
     query: &[String],
     search_mode: SearchMode,
     filter_mode: FilterMode,
@@ -295,14 +293,14 @@ pub async fn history(
     // Put the cursor at the end of the query by default
     input.end();
     let mut app = State {
-        history_count: db.history_count().await?,
+        history_count: db.history_count()?,
         input,
         results_state: ListState::default(),
         context: current_context(),
         filter_mode,
     };
 
-    let mut results = app.query_results(search_mode, db).await?;
+    let mut results = app.query_results(search_mode, db)?;
 
     let index = 'render: loop {
         let initial_input = app.input.as_str().to_owned();
@@ -323,7 +321,7 @@ pub async fn history(
         }
 
         if initial_input != app.input.as_str() || initial_filter_mode != app.filter_mode {
-            results = app.query_results(search_mode, db).await?;
+            results = app.query_results(search_mode, db)?;
         }
 
         let compact = match style {

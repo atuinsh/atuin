@@ -1,11 +1,11 @@
-use std::io;
+use std::io::{self, Write};
 
 use clap::{AppSettings, Parser};
 use eyre::Result;
-use tokio::{fs::File, io::AsyncWriteExt};
 
 use atuin_client::{api_client, settings::Settings};
 use atuin_common::api::LoginRequest;
+use fs_err::File;
 use rpassword::prompt_password;
 
 #[derive(Parser)]
@@ -29,7 +29,7 @@ fn get_input() -> Result<String> {
 }
 
 impl Cmd {
-    pub async fn run(&self, settings: &Settings) -> Result<()> {
+    pub fn run(&self, settings: &Settings) -> Result<()> {
         let session_path = atuin_common::utils::data_dir().join("session");
 
         if session_path.exists() {
@@ -46,16 +46,15 @@ impl Cmd {
         let session = api_client::login(
             settings.sync_address.as_str(),
             LoginRequest { username, password },
-        )
-        .await?;
+        )?;
 
         let session_path = settings.session_path.as_str();
-        let mut file = File::create(session_path).await?;
-        file.write_all(session.session.as_bytes()).await?;
+        let mut file = File::create(session_path)?;
+        file.write_all(session.session.as_bytes())?;
 
         let key_path = settings.key_path.as_str();
-        let mut file = File::create(key_path).await?;
-        file.write_all(key.as_bytes()).await?;
+        let mut file = File::create(key_path)?;
+        file.write_all(key.as_bytes())?;
 
         println!("Logged in!");
 

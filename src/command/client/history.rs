@@ -122,7 +122,7 @@ pub fn print_cmd_only(w: &mut StdoutLock, h: &[History]) {
 }
 
 impl Cmd {
-    pub async fn run(&self, settings: &Settings, db: &mut impl Database) -> Result<()> {
+    pub fn run(&self, settings: &Settings, db: &mut impl Database) -> Result<()> {
         let context = current_context();
 
         match self {
@@ -145,7 +145,7 @@ impl Cmd {
                 // print the ID
                 // we use this as the key for calling end
                 println!("{}", h.id);
-                db.save(&h).await?;
+                db.save(&h)?;
                 Ok(())
             }
 
@@ -154,7 +154,7 @@ impl Cmd {
                     return Ok(());
                 }
 
-                let mut h = db.load(id).await?;
+                let mut h = db.load(id)?;
 
                 if h.duration > 0 {
                     debug!("cannot end history - already has duration");
@@ -166,13 +166,13 @@ impl Cmd {
                 h.exit = *exit;
                 h.duration = chrono::Utc::now().timestamp_nanos() - h.timestamp.timestamp_nanos();
 
-                db.update(&h).await?;
+                db.update(&h)?;
 
                 if settings.should_sync()? {
                     #[cfg(feature = "sync")]
                     {
                         debug!("running periodic background sync");
-                        sync::sync(settings, false, db).await?;
+                        sync::sync(settings, false, db)?;
                     }
                     #[cfg(not(feature = "sync"))]
                     debug!("not compiled with sync support");
@@ -201,21 +201,21 @@ impl Cmd {
                 };
 
                 let history = match (session, cwd) {
-                    (None, None) => db.list(settings.filter_mode, &context, None, false).await?,
+                    (None, None) => db.list(settings.filter_mode, &context, None, false)?,
                     (None, Some(cwd)) => {
                         let query = format!("select * from history where cwd = '{}';", cwd);
-                        db.query_history(&query).await?
+                        db.query_history(&query)?
                     }
                     (Some(session), None) => {
                         let query = format!("select * from history where session = {};", session);
-                        db.query_history(&query).await?
+                        db.query_history(&query)?
                     }
                     (Some(session), Some(cwd)) => {
                         let query = format!(
                             "select * from history where cwd = '{}' and session = {};",
                             cwd, session
                         );
-                        db.query_history(&query).await?
+                        db.query_history(&query)?
                     }
                 };
 
@@ -225,7 +225,7 @@ impl Cmd {
             }
 
             Self::Last { human, cmd_only } => {
-                let last = db.last().await?;
+                let last = db.last()?;
                 print_list(&[last], ListMode::from_flags(*human, *cmd_only));
 
                 Ok(())

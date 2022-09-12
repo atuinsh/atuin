@@ -1,16 +1,12 @@
-use std::{env, path::Path, str::FromStr};
+use std::{env, path::Path};
 
-use async_trait::async_trait;
 use chrono::{prelude::*, Utc};
 use fs_err as fs;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use regex::Regex;
+use rusqlite::{Connection, Result, Row, Transaction};
 use sql_builder::{esc, quote, SqlBuilder, SqlName};
-use sqlx::{
-    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteRow},
-    Result, Row,
-};
 
 use super::{
     history::History,
@@ -40,52 +36,57 @@ pub fn current_context() -> Context {
     }
 }
 
-#[async_trait]
-pub trait Database: Send + Sync {
-    async fn save(&mut self, h: &History) -> Result<()>;
-    async fn save_bulk(&mut self, h: &[History]) -> Result<()>;
+pub trait Database {
+    type Error: std::error::Error + Send + Sync + 'static;
 
-    async fn load(&self, id: &str) -> Result<History>;
-    async fn list(
+    fn save(&mut self, h: &History) -> Result<(), Self::Error>;
+    fn save_bulk(&mut self, h: &[History]) -> Result<(), Self::Error>;
+
+    fn load(&self, id: &str) -> Result<History, Self::Error>;
+    fn list(
         &self,
         filter: FilterMode,
         context: &Context,
         max: Option<usize>,
         unique: bool,
-    ) -> Result<Vec<History>>;
-    async fn range(
+    ) -> Result<Vec<History>, Self::Error>;
+    fn range(
         &self,
         from: chrono::DateTime<Utc>,
         to: chrono::DateTime<Utc>,
-    ) -> Result<Vec<History>>;
+    ) -> Result<Vec<History>, Self::Error>;
 
-    async fn update(&self, h: &History) -> Result<()>;
-    async fn history_count(&self) -> Result<i64>;
+    fn update(&self, h: &History) -> Result<(), Self::Error>;
+    fn history_count(&self) -> Result<i64, Self::Error>;
 
-    async fn first(&self) -> Result<History>;
-    async fn last(&self) -> Result<History>;
-    async fn before(&self, timestamp: chrono::DateTime<Utc>, count: i64) -> Result<Vec<History>>;
+    fn first(&self) -> Result<History, Self::Error>;
+    fn last(&self) -> Result<History, Self::Error>;
+    fn before(
+        &self,
+        timestamp: chrono::DateTime<Utc>,
+        count: i64,
+    ) -> Result<Vec<History>, Self::Error>;
 
-    async fn search(
+    fn search(
         &self,
         limit: Option<i64>,
         search_mode: SearchMode,
         filter: FilterMode,
         context: &Context,
         query: &str,
-    ) -> Result<Vec<History>>;
+    ) -> Result<Vec<History>, Self::Error>;
 
-    async fn query_history(&self, query: &str) -> Result<Vec<History>>;
+    fn query_history(&self, query: &str) -> Result<Vec<History>, Self::Error>;
 }
 
 // Intended for use on a developer machine and not a sync server.
 // TODO: implement IntoIterator
 pub struct Sqlite {
-    pool: SqlitePool,
+    conn: Connection,
 }
 
 impl Sqlite {
-    pub async fn new(path: impl AsRef<Path>) -> Result<Self> {
+    pub fn new(path: impl AsRef<Path>) -> eyre::Result<Self> {
         let path = path.as_ref();
         debug!("opening sqlite database at {:?}", path);
 
@@ -96,120 +97,114 @@ impl Sqlite {
             }
         }
 
-        let opts = SqliteConnectOptions::from_str(path.as_os_str().to_str().unwrap())?
-            .journal_mode(SqliteJournalMode::Wal)
-            .create_if_missing(true);
+        let conn = Connection::open(path)?;
+        conn.execute("PRAGMA journal_mode = 'wal'", [])?;
 
-        let pool = SqlitePoolOptions::new().connect_with(opts).await?;
+        Self::setup_db(&conn)?;
 
-        Self::setup_db(&pool).await?;
-
-        Ok(Self { pool })
+        Ok(Self { conn })
     }
 
-    async fn setup_db(pool: &SqlitePool) -> Result<()> {
+    fn setup_db(pool: &Connection) -> Result<()> {
         debug!("running sqlite database setup");
 
-        sqlx::migrate!("./migrations").run(pool).await?;
+        // TODO: migrations
+        // sqlx::migrate!("./migrations").run(pool)?;
 
         Ok(())
     }
 
-    async fn save_raw(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, h: &History) -> Result<()> {
-        sqlx::query(
+    fn save_raw(tx: &mut Transaction, h: &History) -> Result<()> {
+        tx.execute(
             "insert or ignore into history(id, timestamp, duration, exit, command, cwd, session, hostname)
                 values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-        )
-        .bind(h.id.as_str())
-        .bind(h.timestamp.timestamp_nanos())
-        .bind(h.duration)
-        .bind(h.exit)
-        .bind(h.command.as_str())
-        .bind(h.cwd.as_str())
-        .bind(h.session.as_str())
-        .bind(h.hostname.as_str())
-        .execute(tx)
-        .await?;
+
+        (h.id.as_str(),
+        h.timestamp.timestamp_nanos(),
+        h.duration,
+        h.exit,
+        h.command.as_str(),
+        h.cwd.as_str(),
+        h.session.as_str(),
+        h.hostname.as_str(),))?;
 
         Ok(())
     }
 
-    fn query_history(row: SqliteRow) -> History {
-        History {
-            id: row.get("id"),
-            timestamp: Utc.timestamp_nanos(row.get("timestamp")),
-            duration: row.get("duration"),
-            exit: row.get("exit"),
-            command: row.get("command"),
-            cwd: row.get("cwd"),
-            session: row.get("session"),
-            hostname: row.get("hostname"),
-        }
+    fn query_history(row: &Row<'_>) -> Result<History> {
+        Ok(History {
+            id: row.get("id")?,
+            timestamp: Utc.timestamp_nanos(row.get("timestamp")?),
+            duration: row.get("duration")?,
+            exit: row.get("exit")?,
+            command: row.get("command")?,
+            cwd: row.get("cwd")?,
+            session: row.get("session")?,
+            hostname: row.get("hostname")?,
+        })
     }
 }
 
-#[async_trait]
 impl Database for Sqlite {
-    async fn save(&mut self, h: &History) -> Result<()> {
+    type Error = rusqlite::Error;
+    fn save(&mut self, h: &History) -> Result<()> {
         debug!("saving history to sqlite");
 
-        let mut tx = self.pool.begin().await?;
-        Self::save_raw(&mut tx, h).await?;
-        tx.commit().await?;
+        let mut tx = self.conn.transaction()?;
+        Self::save_raw(&mut tx, h)?;
+        tx.commit()?;
 
         Ok(())
     }
 
-    async fn save_bulk(&mut self, h: &[History]) -> Result<()> {
+    fn save_bulk(&mut self, h: &[History]) -> Result<()> {
         debug!("saving history to sqlite");
 
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.conn.transaction()?;
 
         for i in h {
-            Self::save_raw(&mut tx, i).await?
+            Self::save_raw(&mut tx, i)?
         }
 
-        tx.commit().await?;
+        tx.commit()?;
 
         Ok(())
     }
 
-    async fn load(&self, id: &str) -> Result<History> {
+    fn load(&self, id: &str) -> Result<History> {
         debug!("loading history item {}", id);
 
-        let res = sqlx::query("select * from history where id = ?1")
-            .bind(id)
-            .map(Self::query_history)
-            .fetch_one(&self.pool)
-            .await?;
-
-        Ok(res)
+        self.conn.query_row(
+            "select * from history where id = ?1",
+            (id,),
+            Self::query_history,
+        )
     }
 
-    async fn update(&self, h: &History) -> Result<()> {
+    fn update(&self, h: &History) -> Result<()> {
         debug!("updating sqlite history");
 
-        sqlx::query(
+        self.conn.execute(
             "update history
                 set timestamp = ?2, duration = ?3, exit = ?4, command = ?5, cwd = ?6, session = ?7, hostname = ?8
                 where id = ?1",
-        )
-        .bind(h.id.as_str())
-        .bind(h.timestamp.timestamp_nanos())
-        .bind(h.duration)
-        .bind(h.exit)
-        .bind(h.command.as_str())
-        .bind(h.cwd.as_str())
-        .bind(h.session.as_str())
-        .bind(h.hostname.as_str())
-        .execute(&self.pool)
-        .await?;
+
+    (
+        h.id.as_str(),
+        h.timestamp.timestamp_nanos(),
+        h.duration,
+        h.exit,
+        h.command.as_str(),
+        h.cwd.as_str(),
+        h.session.as_str(),
+        h.hostname.as_str()))
+        ?;
 
         Ok(())
     }
 
     // make a unique list, that only shows the *newest* version of things
-    async fn list(
+    fn list(
         &self,
         filter: FilterMode,
         context: &Context,
@@ -241,76 +236,53 @@ impl Database for Sqlite {
 
         let query = query.sql().expect("bug in list query. please report");
 
-        let res = sqlx::query(&query)
-            .map(Self::query_history)
-            .fetch_all(&self.pool)
-            .await?;
-
-        Ok(res)
+        self.conn
+            .prepare(&query)?
+            .query_map((), Self::query_history)?
+            .collect()
     }
 
-    async fn range(
+    fn range(
         &self,
         from: chrono::DateTime<Utc>,
         to: chrono::DateTime<Utc>,
     ) -> Result<Vec<History>> {
         debug!("listing history from {:?} to {:?}", from, to);
 
-        let res = sqlx::query(
+        self.conn.prepare(
             "select * from history where timestamp >= ?1 and timestamp <= ?2 order by timestamp asc",
+        )?.query_map((from.timestamp_nanos(), to.timestamp_nanos()), Self::query_history)?.collect()
+    }
+
+    fn first(&self) -> Result<History> {
+        self.conn.query_row(
+            "select * from history where duration >= 0 order by timestamp asc limit 1",
+            (),
+            Self::query_history,
         )
-        .bind(from.timestamp_nanos())
-        .bind(to.timestamp_nanos())
-            .map(Self::query_history)
-        .fetch_all(&self.pool)
-        .await?;
-
-        Ok(res)
     }
 
-    async fn first(&self) -> Result<History> {
-        let res =
-            sqlx::query("select * from history where duration >= 0 order by timestamp asc limit 1")
-                .map(Self::query_history)
-                .fetch_one(&self.pool)
-                .await?;
-
-        Ok(res)
-    }
-
-    async fn last(&self) -> Result<History> {
-        let res = sqlx::query(
+    fn last(&self) -> Result<History> {
+        self.conn.query_row(
             "select * from history where duration >= 0 order by timestamp desc limit 1",
+            (),
+            Self::query_history,
         )
-        .map(Self::query_history)
-        .fetch_one(&self.pool)
-        .await?;
-
-        Ok(res)
     }
 
-    async fn before(&self, timestamp: chrono::DateTime<Utc>, count: i64) -> Result<Vec<History>> {
-        let res = sqlx::query(
-            "select * from history where timestamp < ?1 order by timestamp desc limit ?2",
-        )
-        .bind(timestamp.timestamp_nanos())
-        .bind(count)
-        .map(Self::query_history)
-        .fetch_all(&self.pool)
-        .await?;
-
-        Ok(res)
+    fn before(&self, timestamp: chrono::DateTime<Utc>, count: i64) -> Result<Vec<History>> {
+        self.conn
+            .prepare("select * from history where timestamp < ?1 order by timestamp desc limit ?2")?
+            .query_map((timestamp.timestamp_nanos(), count), Self::query_history)?
+            .collect()
     }
 
-    async fn history_count(&self) -> Result<i64> {
-        let res: (i64,) = sqlx::query_as("select count(1) from history")
-            .fetch_one(&self.pool)
-            .await?;
-
-        Ok(res.0)
+    fn history_count(&self) -> Result<i64> {
+        self.conn
+            .query_row("select count(1) from history", (), |r| r.get(0))
     }
 
-    async fn search(
+    fn search(
         &self,
         limit: Option<i64>,
         search_mode: SearchMode,
@@ -389,21 +361,16 @@ impl Database for Sqlite {
 
         let query = sql.sql().expect("bug in search query. please report");
 
-        let res = sqlx::query(&query)
-            .map(Self::query_history)
-            .fetch_all(&self.pool)
-            .await?;
+        let res = self.query_history(&query)?;
 
         Ok(ordering::reorder_fuzzy(search_mode, orig_query, res))
     }
 
-    async fn query_history(&self, query: &str) -> Result<Vec<History>> {
-        let res = sqlx::query(query)
-            .map(Self::query_history)
-            .fetch_all(&self.pool)
-            .await?;
-
-        Ok(res)
+    fn query_history(&self, query: &str) -> Result<Vec<History>> {
+        self.conn
+            .prepare(query)?
+            .query_map((), Self::query_history)?
+            .collect()
     }
 }
 
@@ -412,8 +379,8 @@ mod test {
     use super::*;
     use std::time::{Duration, Instant};
 
-    async fn assert_search_eq<'a>(
-        db: &impl Database,
+    fn assert_search_eq(
+        db: &Sqlite,
         mode: SearchMode,
         filter_mode: FilterMode,
         query: &str,
@@ -425,7 +392,7 @@ mod test {
             cwd: "/home/ellie".to_string(),
         };
 
-        let results = db.search(None, mode, filter_mode, &context, query).await?;
+        let results = db.search(None, mode, filter_mode, &context, query)?;
 
         assert_eq!(
             results.len(),
@@ -437,21 +404,20 @@ mod test {
         Ok(results)
     }
 
-    async fn assert_search_commands(
-        db: &impl Database,
+    fn assert_search_commands(
+        db: &Sqlite,
         mode: SearchMode,
         filter_mode: FilterMode,
         query: &str,
         expected_commands: Vec<&str>,
     ) {
-        let results = assert_search_eq(db, mode, filter_mode, query, expected_commands.len())
-            .await
-            .unwrap();
+        let results =
+            assert_search_eq(db, mode, filter_mode, query, expected_commands.len()).unwrap();
         let commands: Vec<&str> = results.iter().map(|a| a.command.as_str()).collect();
         assert_eq!(commands, expected_commands);
     }
 
-    async fn new_history_item(db: &mut impl Database, cmd: &str) -> Result<()> {
+    fn new_history_item(db: &mut Sqlite, cmd: &str) -> Result<()> {
         let history = History::new(
             chrono::Utc::now(),
             cmd.to_string(),
@@ -461,106 +427,58 @@ mod test {
             Some("beep boop".to_string()),
             Some("booop".to_string()),
         );
-        db.save(&history).await
+        db.save(&history)
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_search_prefix() {
-        let mut db = Sqlite::new("sqlite::memory:").await.unwrap();
-        new_history_item(&mut db, "ls /home/ellie").await.unwrap();
+    #[test]
+    fn test_search_prefix() {
+        let mut db = Sqlite::new("sqlite::memory:").unwrap();
+        new_history_item(&mut db, "ls /home/ellie").unwrap();
 
-        assert_search_eq(&db, SearchMode::Prefix, FilterMode::Global, "ls", 1)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::Prefix, FilterMode::Global, "/home", 0)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::Prefix, FilterMode::Global, "ls  ", 0)
-            .await
-            .unwrap();
+        assert_search_eq(&db, SearchMode::Prefix, FilterMode::Global, "ls", 1).unwrap();
+        assert_search_eq(&db, SearchMode::Prefix, FilterMode::Global, "/home", 0).unwrap();
+        assert_search_eq(&db, SearchMode::Prefix, FilterMode::Global, "ls  ", 0).unwrap();
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_search_fulltext() {
-        let mut db = Sqlite::new("sqlite::memory:").await.unwrap();
-        new_history_item(&mut db, "ls /home/ellie").await.unwrap();
+    #[test]
+    fn test_search_fulltext() {
+        let mut db = Sqlite::new("sqlite::memory:").unwrap();
+        new_history_item(&mut db, "ls /home/ellie").unwrap();
 
-        assert_search_eq(&db, SearchMode::FullText, FilterMode::Global, "ls", 1)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::FullText, FilterMode::Global, "/home", 1)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::FullText, FilterMode::Global, "ls  ", 0)
-            .await
-            .unwrap();
+        assert_search_eq(&db, SearchMode::FullText, FilterMode::Global, "ls", 1).unwrap();
+        assert_search_eq(&db, SearchMode::FullText, FilterMode::Global, "/home", 1).unwrap();
+        assert_search_eq(&db, SearchMode::FullText, FilterMode::Global, "ls  ", 0).unwrap();
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_search_fuzzy() {
-        let mut db = Sqlite::new("sqlite::memory:").await.unwrap();
-        new_history_item(&mut db, "ls /home/ellie").await.unwrap();
-        new_history_item(&mut db, "ls /home/frank").await.unwrap();
-        new_history_item(&mut db, "cd /home/Ellie").await.unwrap();
-        new_history_item(&mut db, "/home/ellie/.bin/rustup")
-            .await
-            .unwrap();
+    #[test]
+    fn test_search_fuzzy() {
+        let mut db = Sqlite::new("sqlite::memory:").unwrap();
+        new_history_item(&mut db, "ls /home/ellie").unwrap();
+        new_history_item(&mut db, "ls /home/frank").unwrap();
+        new_history_item(&mut db, "cd /home/Ellie").unwrap();
+        new_history_item(&mut db, "/home/ellie/.bin/rustup").unwrap();
 
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "ls /", 3)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "ls/", 2)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "l/h/", 2)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "/h/e", 3)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "/hmoe/", 0)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "ellie/home", 0)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "lsellie", 1)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, " ", 4)
-            .await
-            .unwrap();
+        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "ls /", 3).unwrap();
+        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "ls/", 2).unwrap();
+        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "l/h/", 2).unwrap();
+        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "/h/e", 3).unwrap();
+        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "/hmoe/", 0).unwrap();
+        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "ellie/home", 0).unwrap();
+        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "lsellie", 1).unwrap();
+        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, " ", 4).unwrap();
 
         // single term operators
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "^ls", 2)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "'ls", 2)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "ellie$", 2)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "!^ls", 2)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "!ellie", 1)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "!ellie$", 2)
-            .await
-            .unwrap();
+        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "^ls", 2).unwrap();
+        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "'ls", 2).unwrap();
+        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "ellie$", 2).unwrap();
+        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "!^ls", 2).unwrap();
+        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "!ellie", 1).unwrap();
+        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "!ellie$", 2).unwrap();
 
         // multiple terms
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "ls !ellie", 1)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "^ls !e$", 1)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "home !^ls", 2)
-            .await
-            .unwrap();
+        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "ls !ellie", 1).unwrap();
+        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "^ls !e$", 1).unwrap();
+        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "home !^ls", 2).unwrap();
         assert_search_eq(
             &db,
             SearchMode::Fuzzy,
@@ -568,7 +486,6 @@ mod test {
             "'frank | 'rustup",
             2,
         )
-        .await
         .unwrap();
         assert_search_eq(
             &db,
@@ -577,22 +494,19 @@ mod test {
             "'frank | 'rustup 'ls",
             1,
         )
-        .await
         .unwrap();
 
         // case matching
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "Ellie", 1)
-            .await
-            .unwrap();
+        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "Ellie", 1).unwrap();
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_search_reordered_fuzzy() {
-        let mut db = Sqlite::new("sqlite::memory:").await.unwrap();
+    #[test]
+    fn test_search_reordered_fuzzy() {
+        let mut db = Sqlite::new("sqlite::memory:").unwrap();
         // test ordering of results: we should choose the first, even though it happened longer ago.
 
-        new_history_item(&mut db, "curl").await.unwrap();
-        new_history_item(&mut db, "corburl").await.unwrap();
+        new_history_item(&mut db, "curl").unwrap();
+        new_history_item(&mut db, "corburl").unwrap();
 
         // if fuzzy reordering is on, it should come back in a more sensible order
         assert_search_commands(
@@ -601,35 +515,27 @@ mod test {
             FilterMode::Global,
             "curl",
             vec!["curl", "corburl"],
-        )
-        .await;
+        );
 
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "xxxx", 0)
-            .await
-            .unwrap();
-        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "", 2)
-            .await
-            .unwrap();
+        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "xxxx", 0).unwrap();
+        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "", 2).unwrap();
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_search_bench_dupes() {
+    #[test]
+    fn test_search_bench_dupes() {
         let context = Context {
             hostname: "test:host".to_string(),
             session: "beepboopiamasession".to_string(),
             cwd: "/home/ellie".to_string(),
         };
 
-        let mut db = Sqlite::new("sqlite::memory:").await.unwrap();
+        let mut db = Sqlite::new("sqlite::memory:").unwrap();
         for _i in 1..10000 {
-            new_history_item(&mut db, "i am a duplicated command")
-                .await
-                .unwrap();
+            new_history_item(&mut db, "i am a duplicated command").unwrap();
         }
         let start = Instant::now();
         let _results = db
             .search(None, SearchMode::Fuzzy, FilterMode::Global, &context, "")
-            .await
             .unwrap();
         let duration = start.elapsed();
 

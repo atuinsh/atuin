@@ -62,7 +62,7 @@ fn compute_stats(history: &[History]) -> Result<()> {
 }
 
 impl Cmd {
-    pub async fn run(&self, db: &mut impl Database, settings: &Settings) -> Result<()> {
+    pub fn run(&self, db: &mut impl Database, settings: &Settings) -> Result<()> {
         let context = current_context();
         let words = if self.period.is_empty() {
             String::from("all")
@@ -70,11 +70,11 @@ impl Cmd {
             self.period.join(" ")
         };
         let history = if words.as_str() == "all" {
-            db.list(FilterMode::Global, &context, None, false).await?
+            db.list(FilterMode::Global, &context, None, false)?
         } else {
             let start = parse_date_string(&words, Local::now(), settings.dialect.into())?;
             let end = start + Duration::days(1);
-            db.range(start.into(), end.into()).await?
+            db.range(start.into(), end.into())?
         };
         compute_stats(&history)?;
         Ok(())

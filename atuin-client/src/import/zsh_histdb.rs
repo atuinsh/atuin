@@ -34,22 +34,16 @@
 
 use std::path::{Path, PathBuf};
 
-use async_trait::async_trait;
 use chrono::{prelude::*, Utc};
 use directories::UserDirs;
 use eyre::{eyre, Result};
-use sqlx::{sqlite::SqlitePool, Pool};
+use rusqlite::{Connection, OpenFlags};
 
 use super::Importer;
 use crate::history::History;
 use crate::import::Loader;
 
-#[derive(sqlx::FromRow, Debug)]
-pub struct HistDbEntryCount {
-    pub count: usize,
-}
-
-#[derive(sqlx::FromRow, Debug)]
+#[derive(Debug)]
 pub struct HistDbEntry {
     pub id: i64,
     pub start_time: NaiveDateTime,
@@ -90,17 +84,25 @@ pub struct ZshHistDb {
 }
 
 /// Read db at given file, return vector of entries.
-async fn hist_from_db(dbpath: PathBuf) -> Result<Vec<HistDbEntry>> {
-    let pool = SqlitePool::connect(dbpath.to_str().unwrap()).await?;
-    hist_from_db_conn(pool).await
+fn hist_from_db(dbpath: PathBuf) -> rusqlite::Result<Vec<HistDbEntry>> {
+    let conn = Connection::open_with_flags(dbpath, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    hist_from_db_conn(conn)
 }
 
-async fn hist_from_db_conn(pool: Pool<sqlx::Sqlite>) -> Result<Vec<HistDbEntry>> {
+fn hist_from_db_conn(conn: Connection) -> rusqlite::Result<Vec<HistDbEntry>> {
     let query = "select history.id,history.start_time,history.duration,places.host,places.dir,commands.argv from history left join commands on history.command_id = commands.rowid left join places on history.place_id = places.rowid order by history.start_time";
-    let histdb_vec: Vec<HistDbEntry> = sqlx::query_as::<_, HistDbEntry>(query)
-        .fetch_all(&pool)
-        .await?;
-    Ok(histdb_vec)
+    let mut stmt = conn.prepare(query)?;
+    let res = stmt.query_map([], |row| {
+        Ok(HistDbEntry {
+            id: row.get(0)?,
+            start_time: NaiveDateTime::from_timestamp(row.get::<_, i64>(1)?, 0),
+            duration: row.get(2)?,
+            host: row.get(3)?,
+            dir: row.get(4)?,
+            argv: row.get(5)?,
+        })
+    })?;
+    res.collect()
 }
 
 impl ZshHistDb {
@@ -129,26 +131,25 @@ impl ZshHistDb {
     }
 }
 
-#[async_trait]
 impl Importer for ZshHistDb {
     // Not sure how this is used
     const NAME: &'static str = "zsh_histdb";
 
     /// Creates a new ZshHistDb and populates the history based on the pre-populated data
     /// structure.
-    async fn new() -> Result<Self> {
+    fn new() -> Result<Self> {
         let dbpath = ZshHistDb::histpath()?;
-        let histdb_entry_vec = hist_from_db(dbpath).await?;
+        let histdb_entry_vec = hist_from_db(dbpath)?;
         Ok(Self {
             histdb: histdb_entry_vec,
         })
     }
-    async fn entries(&mut self) -> Result<usize> {
+    fn entries(&mut self) -> Result<usize> {
         Ok(self.histdb.len())
     }
-    async fn load(self, h: &mut impl Loader) -> Result<()> {
+    fn load(self, h: &mut impl Loader) -> Result<()> {
         for i in self.histdb {
-            h.push(i.into()).await?;
+            h.push(i.into())?;
         }
         Ok(())
     }
@@ -158,10 +159,10 @@ impl Importer for ZshHistDb {
 mod test {
 
     use super::*;
-    use sqlx::sqlite::SqlitePoolOptions;
     use std::env;
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_env_vars() {
+
+    #[test]
+    fn test_env_vars() {
         let test_env_db = "nonstd-zsh-history.db";
         let key = "HISTDB_FILE";
         env::set_var(key, test_env_db);
@@ -174,13 +175,9 @@ mod test {
         assert_eq!(histdb_path.to_str().unwrap(), test_env_db);
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_import() {
-        let pool: SqlitePool = SqlitePoolOptions::new()
-            .min_connections(2)
-            .connect(":memory:")
-            .await
-            .unwrap();
+    #[test]
+    fn test_import() {
+        let conn = Connection::open_in_memory().unwrap();
 
         // sql dump directly from a test database.
         let db_sql = r#"
@@ -212,10 +209,10 @@ mod test {
         CREATE INDEX history_command_place on history(command_id, place_id);
         COMMIT; "#;
 
-        sqlx::query(db_sql).execute(&pool).await.unwrap();
+        conn.execute(db_sql, []).unwrap();
 
         // test histdb iterator
-        let histdb_vec = hist_from_db_conn(pool).await.unwrap();
+        let histdb_vec = hist_from_db_conn(conn).unwrap();
         let histdb = ZshHistDb { histdb: histdb_vec };
 
         println!("h: {:#?}", histdb.histdb);

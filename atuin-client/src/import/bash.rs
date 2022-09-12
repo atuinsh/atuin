@@ -1,6 +1,5 @@
 use std::{fs::File, io::Read, path::PathBuf};
 
-use async_trait::async_trait;
 use directories::UserDirs;
 use eyre::{eyre, Result};
 
@@ -19,11 +18,10 @@ fn default_histpath() -> Result<PathBuf> {
     Ok(home_dir.join(".bash_history"))
 }
 
-#[async_trait]
 impl Importer for Bash {
     const NAME: &'static str = "bash";
 
-    async fn new() -> Result<Self> {
+    fn new() -> Result<Self> {
         let mut bytes = Vec::new();
         let path = get_histpath(default_histpath)?;
         let mut f = File::open(path)?;
@@ -31,11 +29,11 @@ impl Importer for Bash {
         Ok(Self { bytes })
     }
 
-    async fn entries(&mut self) -> Result<usize> {
+    fn entries(&mut self) -> Result<usize> {
         Ok(super::count_lines(&self.bytes))
     }
 
-    async fn load(self, h: &mut impl Loader) -> Result<()> {
+    fn load(self, h: &mut impl Loader) -> Result<()> {
         let now = chrono::Utc::now();
         let mut line = String::new();
 
@@ -61,8 +59,7 @@ impl Importer for Bash {
                     -1,
                     None,
                     None,
-                ))
-                .await?;
+                ))?;
             }
         }
 
@@ -78,8 +75,8 @@ mod tests {
 
     use super::Bash;
 
-    #[tokio::test]
-    async fn test_parse_file() {
+    #[test]
+    fn test_parse_file() {
         let bytes = r"cargo install atuin
 cargo install atuin; \
 cargo update
@@ -89,10 +86,10 @@ cargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷
         .to_owned();
 
         let mut bash = Bash { bytes };
-        assert_eq!(bash.entries().await.unwrap(), 4);
+        assert_eq!(bash.entries().unwrap(), 4);
 
         let mut loader = TestLoader::default();
-        bash.load(&mut loader).await.unwrap();
+        bash.load(&mut loader).unwrap();
 
         assert_equal(
             loader.buf.iter().map(|h| h.command.as_str()),

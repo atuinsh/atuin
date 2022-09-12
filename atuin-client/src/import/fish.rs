@@ -3,7 +3,6 @@
 
 use std::{fs::File, io::Read, path::PathBuf};
 
-use async_trait::async_trait;
 use chrono::{prelude::*, Utc};
 use directories::BaseDirs;
 use eyre::{eyre, Result};
@@ -40,11 +39,10 @@ fn default_histpath() -> Result<PathBuf> {
     }
 }
 
-#[async_trait]
 impl Importer for Fish {
     const NAME: &'static str = "fish";
 
-    async fn new() -> Result<Self> {
+    fn new() -> Result<Self> {
         let mut bytes = Vec::new();
         let path = get_histpath(default_histpath)?;
         let mut f = File::open(path)?;
@@ -52,11 +50,11 @@ impl Importer for Fish {
         Ok(Self { bytes })
     }
 
-    async fn entries(&mut self) -> Result<usize> {
+    fn entries(&mut self) -> Result<usize> {
         Ok(super::count_lines(&self.bytes))
     }
 
-    async fn load(self, loader: &mut impl Loader) -> Result<()> {
+    fn load(self, loader: &mut impl Loader) -> Result<()> {
         let now = Utc::now();
         let mut time: Option<DateTime<Utc>> = None;
         let mut cmd: Option<String> = None;
@@ -72,17 +70,15 @@ impl Importer for Fish {
                 if let Some(cmd) = cmd.take() {
                     let time = time.unwrap_or(now);
 
-                    loader
-                        .push(History::new(
-                            time,
-                            cmd,
-                            "unknown".into(),
-                            -1,
-                            -1,
-                            None,
-                            None,
-                        ))
-                        .await?;
+                    loader.push(History::new(
+                        time,
+                        cmd,
+                        "unknown".into(),
+                        -1,
+                        -1,
+                        None,
+                        None,
+                    ))?;
                 }
 
                 // using raw strings to avoid needing escaping.
@@ -107,17 +103,15 @@ impl Importer for Fish {
         if let Some(cmd) = cmd.take() {
             let time = time.unwrap_or(now);
 
-            loader
-                .push(History::new(
-                    time,
-                    cmd,
-                    "unknown".into(),
-                    -1,
-                    -1,
-                    None,
-                    None,
-                ))
-                .await?;
+            loader.push(History::new(
+                time,
+                cmd,
+                "unknown".into(),
+                -1,
+                -1,
+                None,
+                None,
+            ))?;
         }
 
         Ok(())
@@ -131,8 +125,8 @@ mod test {
 
     use super::Fish;
 
-    #[tokio::test]
-    async fn parse_complex() {
+    #[test]
+    fn parse_complex() {
         // complicated input with varying contents and escaped strings.
         let bytes = r#"- cmd: history --help
   when: 1639162832
@@ -172,7 +166,7 @@ ERROR
         let fish = Fish { bytes };
 
         let mut loader = TestLoader::default();
-        fish.load(&mut loader).await.unwrap();
+        fish.load(&mut loader).unwrap();
         let mut history = loader.buf.into_iter();
 
         // simple wrapper for fish history entry

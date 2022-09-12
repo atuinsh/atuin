@@ -1,6 +1,5 @@
 use std::path::PathBuf;
 
-use async_trait::async_trait;
 use eyre::{bail, Result};
 use memchr::Memchr;
 
@@ -12,17 +11,15 @@ pub mod resh;
 pub mod zsh;
 pub mod zsh_histdb;
 
-#[async_trait]
 pub trait Importer: Sized {
     const NAME: &'static str;
-    async fn new() -> Result<Self>;
-    async fn entries(&mut self) -> Result<usize>;
-    async fn load(self, loader: &mut impl Loader) -> Result<()>;
+    fn new() -> Result<Self>;
+    fn entries(&mut self) -> Result<usize>;
+    fn load(self, loader: &mut impl Loader) -> Result<()>;
 }
 
-#[async_trait]
-pub trait Loader: Sync + Send {
-    async fn push(&mut self, hist: History) -> eyre::Result<()>;
+pub trait Loader {
+    fn push(&mut self, hist: History) -> eyre::Result<()>;
 }
 
 fn unix_byte_lines(input: &[u8]) -> impl Iterator<Item = &[u8]> {
@@ -89,9 +86,8 @@ mod tests {
         pub buf: Vec<History>,
     }
 
-    #[async_trait]
     impl Loader for TestLoader {
-        async fn push(&mut self, hist: History) -> Result<()> {
+        fn push(&mut self, hist: History) -> Result<()> {
             self.buf.push(hist);
             Ok(())
         }

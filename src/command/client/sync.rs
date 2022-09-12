@@ -31,12 +31,12 @@ pub enum Cmd {
 }
 
 impl Cmd {
-    pub async fn run(self, settings: Settings, db: &mut impl Database) -> Result<()> {
+    pub fn run(self, settings: Settings, db: &mut impl Database) -> Result<()> {
         match self {
-            Self::Sync { force } => run(&settings, force, db).await,
-            Self::Login(l) => l.run(&settings).await,
+            Self::Sync { force } => run(&settings, force, db),
+            Self::Login(l) => l.run(&settings),
             Self::Logout => logout::run(),
-            Self::Register(r) => r.run(&settings).await,
+            Self::Register(r) => r.run(&settings),
             Self::Key => {
                 use atuin_client::encryption::{encode_key, load_key};
                 let key = load_key(&settings).wrap_err("could not load encryption key")?;
@@ -48,11 +48,11 @@ impl Cmd {
     }
 }
 
-async fn run(settings: &Settings, force: bool, db: &mut impl Database) -> Result<()> {
-    atuin_client::sync::sync(settings, force, db).await?;
+fn run(settings: &Settings, force: bool, db: &mut impl Database) -> Result<()> {
+    atuin_client::sync::sync(settings, force, db)?;
     println!(
         "Sync complete! {} items in database, force: {}",
-        db.history_count().await?,
+        db.history_count()?,
         force
     );
     Ok(())
