@@ -73,50 +73,31 @@ impl State {
             .iter()
             .enumerate()
             .map(|(i, m)| {
-                let command = m.command.to_string().replace('\n', " ").replace('\t', " ");
+                // these encode the slices of `" > "`, `" {n} "`, or `"   "` in a compact form.
+                // Yes, this is a hack, but it makes me feel happy
+                let slices = " > 1 2 3 4 5 6 7 8 9   ";
+                let index = self.results_state.selected().and_then(|s| i.checked_sub(s));
+                let slice_index = index.unwrap_or(10).min(10) * 2;
 
-                let mut command = Span::raw(command);
-
+                let status_colour = if m.success() {
+                    Color::Green
+                } else {
+                    Color::Red
+                };
                 let ago = ago(m);
                 let duration = format!("{:width$}", duration(m), width = max_length - ago.len());
 
-                let selected_index = match self.results_state.selected() {
-                    None => Span::raw("   "),
-                    Some(selected) => match i.checked_sub(selected) {
-                        None => Span::raw("   "),
-                        Some(diff) => {
-                            if 0 < diff && diff < 10 {
-                                Span::raw(format!(" {} ", diff))
-                            } else {
-                                Span::raw("   ")
-                            }
-                        }
-                    },
-                };
-
-                let duration = Span::styled(
-                    duration,
-                    Style::default().fg(if m.success() {
-                        Color::Green
-                    } else {
-                        Color::Red
-                    }),
-                );
-
-                let ago = Span::styled(ago, Style::default().fg(Color::Blue));
-
-                if let Some(selected) = self.results_state.selected() {
-                    if selected == i {
-                        command.style =
-                            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD);
-                    }
+                let command = m.command.replace(['\n', '\t'], " ");
+                let mut command = Span::raw(command);
+                if slice_index == 0 {
+                    command.style = Style::default().fg(Color::Red).add_modifier(Modifier::BOLD);
                 }
 
                 let spans = Spans::from(vec![
-                    selected_index,
-                    duration,
+                    Span::raw(&slices[slice_index..slice_index + 3]),
+                    Span::styled(duration, Style::default().fg(status_colour)),
                     Span::raw(" "),
-                    ago,
+                    Span::styled(ago, Style::default().fg(Color::Blue)),
                     Span::raw(" "),
                     command,
                 ]);
