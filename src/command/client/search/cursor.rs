@@ -14,6 +14,10 @@ impl Cursor {
         self.source.as_str()
     }
 
+    pub fn into_inner(self) -> String {
+        self.source
+    }
+
     /// Returns the string before the cursor
     pub fn substring(&self) -> &str {
         &self.source[..self.index]

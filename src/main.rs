@@ -1,5 +1,8 @@
 #![warn(clippy::pedantic, clippy::nursery)]
-#![allow(clippy::use_self)] // not 100% reliable
+#![allow(
+    clippy::use_self,
+    clippy::missing_const_for_fn,
+)] // not 100% reliable
 
 use clap::{AppSettings, Parser};
 use eyre::Result;

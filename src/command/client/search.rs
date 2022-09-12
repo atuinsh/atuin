@@ -12,6 +12,7 @@ mod cursor;
 mod duration;
 mod event;
 mod interactive;
+mod history_list;
 pub use duration::format_duration;
 
 #[derive(Parser)]
