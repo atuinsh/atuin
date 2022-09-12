@@ -69,6 +69,7 @@ impl<'a> StatefulWidget for HistoryList<'a> {
             s.time(item);
             s.command(item);
 
+            // reset line
             s.y += 1;
             s.x = 0;
         }
@@ -118,7 +119,9 @@ impl DrawState<'_> {
         // these encode the slices of `" > "`, `" {n} "`, or `"   "` in a compact form.
         // Yes, this is a hack, but it makes me feel happy
         static SLICES: &str = " > 1 2 3 4 5 6 7 8 9   ";
-        let i = (self.y as usize).checked_sub(self.state.selected);
+
+        let i = self.y as usize + self.state.offset;
+        let i = i.checked_sub(self.state.selected);
         let i = i.unwrap_or(10).min(10) * 2;
         self.draw(&SLICES[i..i + 3], Style::default());
     }
@@ -146,7 +149,7 @@ impl DrawState<'_> {
 
     fn command(&mut self, h: &History) {
         let mut style = Style::default();
-        if self.y as usize == self.state.selected {
+        if self.y as usize + self.state.offset == self.state.selected {
             style = style.fg(Color::Red).add_modifier(Modifier::BOLD);
         }
 
