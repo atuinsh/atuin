@@ -95,7 +95,7 @@ fn hist_from_db_conn(conn: Connection) -> rusqlite::Result<Vec<HistDbEntry>> {
     let res = stmt.query_map([], |row| {
         Ok(HistDbEntry {
             id: row.get(0)?,
-            start_time: NaiveDateTime::from_timestamp(row.get::<_, i64>(1)?, 0),
+            start_time: row.get(1)?,
             duration: row.get(2)?,
             host: row.get(3)?,
             dir: row.get(4)?,

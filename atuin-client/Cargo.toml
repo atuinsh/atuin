@@ -44,7 +44,8 @@ fs-err = "2.7"
 sql-builder = "3"
 lazy_static = "1"
 memchr = "2.5"
-rusqlite = "0.28"
+rusqlite = { version = "0.28", features = ["chrono"] }
+fallible-iterator = "0.2.0"
 
 # sync
 urlencoding = { version = "2.1.0", optional = true }

@@ -1,11 +1,13 @@
-use std::{env, path::Path};
+use std::{collections::HashMap, env, path::Path, time::Instant};
 
 use chrono::{prelude::*, Utc};
+use fallible_iterator::FallibleIterator;
 use fs_err as fs;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use regex::Regex;
 use rusqlite::{Connection, Result, Row, Transaction};
+use sha2::{Digest, Sha384};
 use sql_builder::{esc, quote, SqlBuilder, SqlName};
 
 use super::{
@@ -97,19 +99,94 @@ impl Sqlite {
             }
         }
 
-        let conn = Connection::open(path)?;
-        conn.execute("PRAGMA journal_mode = 'wal'", [])?;
+        let mut conn = Connection::open(path)?;
+        conn.pragma_update(None, "journal_mode", "wal")?;
 
-        Self::setup_db(&conn)?;
+        Self::setup_db(&mut conn)?;
 
         Ok(Self { conn })
     }
 
-    fn setup_db(pool: &Connection) -> Result<()> {
+    fn setup_db(conn: &mut Connection) -> eyre::Result<()> {
         debug!("running sqlite database setup");
 
-        // TODO: migrations
-        // sqlx::migrate!("./migrations").run(pool)?;
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS _sqlx_migrations (
+            version BIGINT PRIMARY KEY,
+            description TEXT NOT NULL,
+            installed_on TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            success BOOLEAN NOT NULL,
+            checksum BLOB NOT NULL,
+            execution_time BIGINT NOT NULL
+        );",
+            [],
+        )?;
+
+        let dirty_version: Option<i64> = conn.prepare(
+            "SELECT version FROM _sqlx_migrations WHERE success = false ORDER BY version LIMIT 1"
+        )?.query([])?.map(|r| r.get(0)).next()?;
+        if dirty_version.is_some() {
+            eyre::bail!("dirty");
+        }
+
+        let applied_versions: Result<HashMap<i64, Vec<u8>>> = conn
+            .prepare("SELECT version, checksum FROM _sqlx_migrations ORDER BY version")?
+            .query_map((), |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect();
+        let applied_versions = applied_versions?;
+
+        struct Mig {
+            version: i64,
+            desc: &'static str,
+            query: &'static str,
+        }
+        // Add new migrations here
+        let migrations = [
+            Mig {
+                version: 20210422143411,
+                desc: "create history",
+                query: include_str!("../migrations/20210422143411_create_history.sql"),
+            },
+            Mig {
+                version: 20220806155627,
+                desc: "interactive search index",
+                query: include_str!("../migrations/20220806155627_interactive_search_index.sql"),
+            },
+        ];
+        for m in migrations {
+            let checksum = Sha384::digest(m.query.as_bytes());
+            match applied_versions.get(&m.version) {
+                Some(chck) => {
+                    if chck != checksum.as_slice() {
+                        eyre::bail!("invalid version {}", m.version);
+                    }
+                }
+                None => {
+                    let tx = conn.transaction()?;
+                    let start = Instant::now();
+
+                    let _ = tx.execute(m.query, [])?;
+
+                    tx.commit()?;
+
+                    let elapsed = start.elapsed();
+
+                    // language=SQL
+                    let _ = conn.execute(
+                        r#"
+    INSERT INTO _sqlx_migrations ( version, description, success, checksum, execution_time )
+    VALUES ( ?1, ?2, TRUE, ?3, ?4 )
+                "#,
+                        (
+                            m.version,
+                            m.desc,
+                            checksum.as_slice(),
+                            elapsed.as_nanos() as i64,
+                        ),
+                    )?;
+                }
+            }
+        }
 
         Ok(())
     }
