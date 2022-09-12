@@ -47,11 +47,7 @@ impl<'a> StatefulWidget for HistoryList<'a> {
             None => area,
         };
 
-        if list_area.width < 1 || list_area.height < 1 {
-            return;
-        }
-
-        if self.history.is_empty() {
+        if list_area.width < 1 || list_area.height < 1 || self.history.is_empty() {
             return;
         }
         let list_height = list_area.height as usize;
@@ -59,28 +55,22 @@ impl<'a> StatefulWidget for HistoryList<'a> {
         let (start, end) = self.get_items_bounds(state.selected, state.offset, list_height);
         state.offset = start;
 
-        let mut y = list_area.bottom();
-        for (i, item) in self
-            .history
-            .iter()
-            .enumerate()
-            .skip(state.offset)
-            .take(end - start)
-        {
-            y += 1;
-            let mut s = DrawState {
-                buf,
-                width: list_area.width as usize,
-                x: list_area.left(),
-                y,
-                i,
-                state,
-            };
+        let mut s = DrawState {
+            buf,
+            list_area,
+            x: 0,
+            y: 0,
+            state,
+        };
 
+        for item in self.history.iter().skip(state.offset).take(end - start) {
             s.index();
             s.duration(item);
-            s.time(list_area.left(), item);
+            s.time(item);
             s.command(item);
+
+            s.y += 1;
+            s.x = 0;
         }
     }
 }
@@ -114,10 +104,9 @@ impl<'a> HistoryList<'a> {
 
 struct DrawState<'a> {
     buf: &'a mut Buffer,
-    width: usize,
+    list_area: Rect,
     x: u16,
     y: u16,
-    i: usize,
     state: &'a ListState,
 }
 
@@ -129,7 +118,7 @@ impl DrawState<'_> {
         // these encode the slices of `" > "`, `" {n} "`, or `"   "` in a compact form.
         // Yes, this is a hack, but it makes me feel happy
         static SLICES: &str = " > 1 2 3 4 5 6 7 8 9   ";
-        let i = self.i.checked_sub(self.state.selected);
+        let i = (self.y as usize).checked_sub(self.state.selected);
         let i = i.unwrap_or(10).min(10) * 2;
         self.draw(&SLICES[i..i + 3], Style::default());
     }
@@ -145,35 +134,33 @@ impl DrawState<'_> {
     }
 
     #[allow(clippy::cast_possible_truncation)] // we do not expect PREFIX_LENGTH or ago.len() to overflow a u16
-    fn time(&mut self, left: u16, h: &History) {
+    fn time(&mut self, h: &History) {
         let status = Style::default().fg(Color::Blue);
         let time = time(h);
 
         // pad the time a little bit before we write. this aligns things nicely
-        let x = left + (PREFIX_LENGTH - time.len()) as u16;
-        self.width -= (x - self.x) as usize;
-        self.x = x;
+        self.x = (PREFIX_LENGTH - time.len()) as u16;
 
         self.draw(&time, status);
     }
 
     fn command(&mut self, h: &History) {
         let mut style = Style::default();
-        if self.i == self.state.selected {
+        if self.y as usize == self.state.selected {
             style = style.fg(Color::Red).add_modifier(Modifier::BOLD);
         }
 
         for section in h.command.split_ascii_whitespace() {
             self.x += 1;
-            self.width -= 1;
             self.draw(section, style);
         }
     }
 
     fn draw(&mut self, s: &str, style: Style) {
-        let x = self.buf.set_stringn(self.x, self.y, s, self.width, style).0;
-        self.width -= (x - self.x) as usize;
-        self.x = x;
+        let cx = self.list_area.left() + self.x;
+        let cy = self.list_area.bottom() - self.y - 1;
+        let w = (self.list_area.width - self.x) as usize;
+        self.x += self.buf.set_stringn(cx, cy, s, w, style).0 - cx;
     }
 }
 
