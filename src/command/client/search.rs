@@ -9,9 +9,9 @@ use atuin_client::{
 use super::history::ListMode;
 
 mod cursor;
+mod duration;
 mod event;
 mod interactive;
-mod duration;
 pub use duration::format_duration;
 
 #[derive(Parser)]
