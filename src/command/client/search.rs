@@ -9,8 +9,10 @@ use atuin_client::{
 use super::history::ListMode;
 
 mod cursor;
+mod duration;
 mod event;
 mod interactive;
+pub use duration::format_duration;
 
 #[derive(Parser)]
 pub struct Cmd {

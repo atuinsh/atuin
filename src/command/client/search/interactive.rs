@@ -10,7 +10,7 @@ use tui::{
     layout::{Alignment, Constraint, Corner, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Span, Spans, Text},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
+    widgets::{Block, BorderType, Borders, List, ListItem, ListState, Paragraph},
     Frame, Terminal,
 };
 use unicode_width::UnicodeWidthStr;
@@ -26,6 +26,7 @@ use atuin_client::{
 use super::{
     cursor::Cursor,
     event::{Event, Events},
+    format_duration,
 };
 use crate::VERSION;
 
@@ -41,120 +42,62 @@ struct State {
     context: Context,
 }
 
+fn duration(h: &History) -> String {
+    let duration = Duration::from_nanos(u64::try_from(h.duration).unwrap_or(0));
+    format_duration(duration)
+}
+
+fn ago(h: &History) -> String {
+    let ago = chrono::Utc::now().sub(h.timestamp);
+
+    // Account for the chance that h.timestamp is "in the future"
+    // This would mean that "ago" is negative, and the unwrap here
+    // would fail.
+    // If the timestamp would otherwise be in the future, display
+    // the time ago as 0.
+    let ago = ago.to_std().unwrap_or_default();
+    format_duration(ago) + " ago"
+}
+
 impl State {
-    #[allow(clippy::cast_sign_loss)]
-    fn durations(&self) -> Vec<(String, String)> {
-        self.results
-            .iter()
-            .map(|h| {
-                let duration =
-                    Duration::from_millis(std::cmp::max(h.duration, 0) as u64 / 1_000_000);
-                let duration = humantime::format_duration(duration).to_string();
-                let duration: Vec<&str> = duration.split(' ').collect();
-
-                let ago = chrono::Utc::now().sub(h.timestamp);
-
-                // Account for the chance that h.timestamp is "in the future"
-                // This would mean that "ago" is negative, and the unwrap here
-                // would fail.
-                // If the timestamp would otherwise be in the future, display
-                // the time ago as 0.
-                let ago = humantime::format_duration(
-                    ago.to_std().unwrap_or_else(|_| Duration::new(0, 0)),
-                )
-                .to_string();
-                let ago: Vec<&str> = ago.split(' ').collect();
-
-                (
-                    duration[0]
-                        .to_string()
-                        .replace("days", "d")
-                        .replace("day", "d")
-                        .replace("weeks", "w")
-                        .replace("week", "w")
-                        .replace("months", "mo")
-                        .replace("month", "mo")
-                        .replace("years", "y")
-                        .replace("year", "y"),
-                    ago[0]
-                        .to_string()
-                        .replace("days", "d")
-                        .replace("day", "d")
-                        .replace("weeks", "w")
-                        .replace("week", "w")
-                        .replace("months", "mo")
-                        .replace("month", "mo")
-                        .replace("years", "y")
-                        .replace("year", "y")
-                        + " ago",
-                )
-            })
-            .collect()
-    }
-
     fn render_results<T: tui::backend::Backend>(
         &mut self,
         f: &mut tui::Frame<T>,
         r: tui::layout::Rect,
         b: tui::widgets::Block,
     ) {
-        let durations = self.durations();
-        let max_length = durations.iter().fold(0, |largest, i| {
-            std::cmp::max(largest, i.0.len() + i.1.len())
-        });
+        let max_length = 12; // '123ms' + '59s ago'
 
         let results: Vec<ListItem> = self
             .results
             .iter()
             .enumerate()
             .map(|(i, m)| {
-                let command = m.command.to_string().replace('\n', " ").replace('\t', " ");
+                // these encode the slices of `" > "`, `" {n} "`, or `"   "` in a compact form.
+                // Yes, this is a hack, but it makes me feel happy
+                let slices = " > 1 2 3 4 5 6 7 8 9   ";
+                let index = self.results_state.selected().and_then(|s| i.checked_sub(s));
+                let slice_index = index.unwrap_or(10).min(10) * 2;
 
-                let mut command = Span::raw(command);
-
-                let (duration, mut ago) = durations[i].clone();
-
-                while (duration.len() + ago.len()) < max_length {
-                    ago = format!(" {}", ago);
-                }
-
-                let selected_index = match self.results_state.selected() {
-                    None => Span::raw("   "),
-                    Some(selected) => match i.checked_sub(selected) {
-                        None => Span::raw("   "),
-                        Some(diff) => {
-                            if 0 < diff && diff < 10 {
-                                Span::raw(format!(" {} ", diff))
-                            } else {
-                                Span::raw("   ")
-                            }
-                        }
-                    },
+                let status_colour = if m.success() {
+                    Color::Green
+                } else {
+                    Color::Red
                 };
+                let ago = ago(m);
+                let duration = format!("{:width$}", duration(m), width = max_length - ago.len());
 
-                let duration = Span::styled(
-                    duration,
-                    Style::default().fg(if m.success() {
-                        Color::Green
-                    } else {
-                        Color::Red
-                    }),
-                );
-
-                let ago = Span::styled(ago, Style::default().fg(Color::Blue));
-
-                if let Some(selected) = self.results_state.selected() {
-                    if selected == i {
-                        command.style =
-                            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD);
-                    }
+                let command = m.command.replace(['\n', '\t'], " ");
+                let mut command = Span::raw(command);
+                if slice_index == 0 {
+                    command.style = Style::default().fg(Color::Red).add_modifier(Modifier::BOLD);
                 }
 
                 let spans = Spans::from(vec![
-                    selected_index,
-                    duration,
+                    Span::raw(&slices[slice_index..slice_index + 3]),
+                    Span::styled(duration, Style::default().fg(status_colour)),
                     Span::raw(" "),
-                    ago,
+                    Span::styled(ago, Style::default().fg(Color::Blue)),
                     Span::raw(" "),
                     command,
                 ]);
@@ -163,10 +106,7 @@ impl State {
             })
             .collect();
 
-        let results = List::new(results)
-            .block(b)
-            .start_corner(Corner::BottomLeft)
-            .highlight_symbol(">> ");
+        let results = List::new(results).block(b).start_corner(Corner::BottomLeft);
 
         f.render_stateful_widget(results, r, &mut self.results_state);
     }
@@ -280,73 +220,78 @@ impl State {
     fn draw<T: Backend>(&mut self, f: &mut Frame<'_, T>, history_count: i64) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .margin(1)
-            .constraints(
-                [
-                    Constraint::Length(2),
-                    Constraint::Min(1),
-                    Constraint::Length(3),
-                ]
-                .as_ref(),
-            )
+            .margin(0)
+            .constraints([
+                Constraint::Length(3),
+                Constraint::Min(1),
+                Constraint::Length(3),
+            ])
             .split(f.size());
 
         let top_chunks = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)].as_ref())
+            .constraints([Constraint::Percentage(50); 2])
             .split(chunks[0]);
 
         let top_left_chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Length(1), Constraint::Length(1)].as_ref())
+            .constraints([Constraint::Length(1); 3])
             .split(top_chunks[0]);
 
         let top_right_chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Length(1), Constraint::Length(1)].as_ref())
+            .constraints([Constraint::Length(1); 3])
             .split(top_chunks[1]);
 
         let title = Paragraph::new(Text::from(Span::styled(
-            format!("Atuin v{}", VERSION),
+            format!(" Atuin v{VERSION}"),
             Style::default().add_modifier(Modifier::BOLD),
         )));
 
         let help = vec![
-            Span::raw("Press "),
+            Span::raw(" Press "),
             Span::styled("Esc", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw(" to exit."),
         ];
 
-        let help = Text::from(Spans::from(help));
-        let help = Paragraph::new(help);
-
-        let input = Paragraph::new(self.input.as_str().to_owned()).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(self.filter_mode.as_str()),
-        );
-
+        let help = Paragraph::new(Text::from(Spans::from(help)));
         let stats = Paragraph::new(Text::from(Span::raw(format!(
-            "history count: {}",
-            history_count,
-        ))))
-        .alignment(Alignment::Right);
+            "history count: {history_count} ",
+        ))));
 
-        f.render_widget(title, top_left_chunks[0]);
-        f.render_widget(help, top_left_chunks[1]);
-        f.render_widget(stats, top_right_chunks[0]);
+        f.render_widget(title, top_left_chunks[1]);
+        f.render_widget(help, top_left_chunks[2]);
+        f.render_widget(stats.alignment(Alignment::Right), top_right_chunks[1]);
 
         self.render_results(
             f,
             chunks[1],
-            Block::default().borders(Borders::ALL).title("History"),
+            Block::default()
+                .borders(Borders::TOP | Borders::LEFT | Borders::RIGHT)
+                .border_type(BorderType::Rounded), // .title("History"),
+        );
+
+        let input = format!(
+            "[{:^14}] {}",
+            self.filter_mode.as_str(),
+            self.input.as_str(),
+        );
+        let input = Paragraph::new(input).block(
+            Block::default()
+                .borders(Borders::BOTTOM | Borders::LEFT | Borders::RIGHT)
+                .border_type(BorderType::Rounded)
+                .title(format!(
+                    "{:─>width$}",
+                    "",
+                    width = chunks[2].width as usize - 2
+                )),
         );
         f.render_widget(input, chunks[2]);
 
         let width = UnicodeWidthStr::width(self.input.substring());
         f.set_cursor(
             // Put cursor past the end of the input text
-            chunks[2].x + width as u16 + 1,
+            chunks[2].x + width as u16 + 18,
             // Move one line down, from the border to the input line
             chunks[2].y + 1,
         );
@@ -399,22 +344,25 @@ impl State {
         .style(Style::default().fg(Color::DarkGray))
         .alignment(Alignment::Right);
 
-        let filter_mode = self.filter_mode.as_str();
-        let input = Paragraph::new(format!("{}] {}", filter_mode, self.input.as_str()))
-            .block(Block::default());
-
         f.render_widget(title, header_chunks[0]);
         f.render_widget(help, header_chunks[1]);
         f.render_widget(stats, header_chunks[2]);
 
         self.render_results(f, chunks[1], Block::default());
+
+        let input = format!(
+            "[{:^14}] {}",
+            self.filter_mode.as_str(),
+            self.input.as_str(),
+        );
+        let input = Paragraph::new(input).block(Block::default());
         f.render_widget(input, chunks[2]);
 
-        let extra_width = UnicodeWidthStr::width(self.input.substring()) + filter_mode.len();
+        let extra_width = UnicodeWidthStr::width(self.input.substring());
 
         f.set_cursor(
             // Put cursor past the end of the input text
-            chunks[2].x + extra_width as u16 + 2,
+            chunks[2].x + extra_width as u16 + 17,
             // Move one line down, from the border to the input line
             chunks[2].y + 1,
         );
