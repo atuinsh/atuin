@@ -26,6 +26,7 @@ use atuin_client::{
 use super::{
     cursor::Cursor,
     event::{Event, Events},
+    format_duration,
 };
 use crate::VERSION;
 
@@ -41,67 +42,30 @@ struct State {
     context: Context,
 }
 
+fn duration(h: &History) -> String {
+    let duration = Duration::from_nanos(u64::try_from(h.duration).unwrap_or(0));
+    format_duration(duration)
+}
+
+fn ago(h: &History) -> String {
+    let ago = chrono::Utc::now().sub(h.timestamp);
+
+    // Account for the chance that h.timestamp is "in the future"
+    // This would mean that "ago" is negative, and the unwrap here
+    // would fail.
+    // If the timestamp would otherwise be in the future, display
+    // the time ago as 0.
+    let ago = ago.to_std().unwrap_or_default();
+    format_duration(ago) + " ago"
+}
+
 impl State {
-    #[allow(clippy::cast_sign_loss)]
-    fn durations(&self) -> Vec<(String, String)> {
-        self.results
-            .iter()
-            .map(|h| {
-                let duration =
-                    Duration::from_millis(std::cmp::max(h.duration, 0) as u64 / 1_000_000);
-                let duration = humantime::format_duration(duration).to_string();
-                let duration: Vec<&str> = duration.split(' ').collect();
-
-                let ago = chrono::Utc::now().sub(h.timestamp);
-
-                // Account for the chance that h.timestamp is "in the future"
-                // This would mean that "ago" is negative, and the unwrap here
-                // would fail.
-                // If the timestamp would otherwise be in the future, display
-                // the time ago as 0.
-                let ago = humantime::format_duration(
-                    ago.to_std().unwrap_or_else(|_| Duration::new(0, 0)),
-                )
-                .to_string();
-                let ago: Vec<&str> = ago.split(' ').collect();
-
-                (
-                    duration[0]
-                        .to_string()
-                        .replace("days", "d")
-                        .replace("day", "d")
-                        .replace("weeks", "w")
-                        .replace("week", "w")
-                        .replace("months", "mo")
-                        .replace("month", "mo")
-                        .replace("years", "y")
-                        .replace("year", "y"),
-                    ago[0]
-                        .to_string()
-                        .replace("days", "d")
-                        .replace("day", "d")
-                        .replace("weeks", "w")
-                        .replace("week", "w")
-                        .replace("months", "mo")
-                        .replace("month", "mo")
-                        .replace("years", "y")
-                        .replace("year", "y")
-                        + " ago",
-                )
-            })
-            .collect()
-    }
-
     fn render_results<T: tui::backend::Backend>(
         &mut self,
         f: &mut tui::Frame<T>,
         r: tui::layout::Rect,
         b: tui::widgets::Block,
     ) {
-        let durations = self.durations();
-        // let max_length = durations.iter().fold(0, |largest, i| {
-        //     std::cmp::max(largest, i.0.len() + i.1.len())
-        // });
         let max_length = 12; // '123ms' + '59s ago'
 
         let results: Vec<ListItem> = self
@@ -113,11 +77,8 @@ impl State {
 
                 let mut command = Span::raw(command);
 
-                let (duration, mut ago) = durations[i].clone();
-
-                while (duration.len() + ago.len()) < max_length {
-                    ago = format!(" {}", ago);
-                }
+                let ago = ago(m);
+                let duration = format!("{:width$}", duration(m), width = max_length - ago.len());
 
                 let selected_index = match self.results_state.selected() {
                     None => Span::raw("   "),

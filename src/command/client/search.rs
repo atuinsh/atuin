@@ -11,6 +11,8 @@ use super::history::ListMode;
 mod cursor;
 mod event;
 mod interactive;
+mod duration;
+pub use duration::format_duration;
 
 #[derive(Parser)]
 pub struct Cmd {
