@@ -16,6 +16,7 @@ pub mod models;
 pub mod router;
 pub mod settings;
 
+#[tokio::main]
 pub async fn launch(settings: Settings, host: String, port: u16) -> Result<()> {
     let host = host.parse::<IpAddr>()?;
 

@@ -21,8 +21,7 @@ pub enum Cmd {
 }
 
 impl Cmd {
-    #[tokio::main]
-    pub async fn run(self) -> Result<()> {
+    pub fn run(self) -> Result<()> {
         tracing_subscriber::registry()
             .with(fmt::layer())
             .with(EnvFilter::from_default_env())
@@ -37,7 +36,7 @@ impl Cmd {
                     .map_or(settings.host.clone(), std::string::ToString::to_string);
                 let port = port.map_or(settings.port, |p| p);
 
-                launch(settings, host, port).await
+                launch(settings, host, port)
             }
         }
     }

@@ -87,7 +87,6 @@ dependencies = [
 name = "atuin"
 version = "11.0.0"
 dependencies = [
- "async-trait",
  "atuin-client",
  "atuin-common",
  "atuin-server",
@@ -109,7 +108,6 @@ dependencies = [
  "serde",
  "serde_json",
  "termion",
- "tokio",
  "tracing-subscriber",
  "tui",
  "unicode-width",
