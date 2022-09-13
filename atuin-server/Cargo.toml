@@ -1,6 +1,6 @@
 [package]
 name = "atuin-server"
-version = "0.10.0"
+version = "11.0.0"
 authors = ["Ellie Huxtable <ellie@elliehuxtable.com>"]
 edition = "2018"
 license = "MIT"
@@ -9,7 +9,7 @@ homepage = "https://atuin.sh"
 repository = "https://github.com/ellie/atuin"
 
 [dependencies]
-atuin-common = { path = "../atuin-common", version = "0.10.0" }
+atuin-common = { path = "../atuin-common", version = "11.0.0" }
 
 tracing = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
@@ -23,7 +23,11 @@ sodiumoxide = "0.2.6"
 base64 = "0.13.0"
 rand = "0.8.4"
 tokio = { version = "1", features = ["full"] }
-sqlx = { version = "0.5", features = [ "runtime-tokio-rustls", "chrono", "postgres" ] }
+sqlx = { version = "0.5", features = [
+  "runtime-tokio-rustls",
+  "chrono",
+  "postgres",
+] }
 async-trait = "0.1.49"
 axum = "0.5"
 http = "0.2"
