@@ -1,5 +1,8 @@
-use std::{collections::HashMap, env, path::Path, time::Instant};
-
+use super::{
+    history::History,
+    ordering,
+    settings::{FilterMode, SearchMode},
+};
 use chrono::{prelude::*, Utc};
 use fallible_iterator::FallibleIterator;
 use fs_err as fs;
@@ -9,12 +12,7 @@ use regex::Regex;
 use rusqlite::{Connection, Result, Row, Transaction};
 use sha2::{Digest, Sha384};
 use sql_builder::{esc, quote, SqlBuilder, SqlName};
-
-use super::{
-    history::History,
-    ordering,
-    settings::{FilterMode, SearchMode},
-};
+use std::{collections::HashMap, env, path::Path, time::Instant};
 
 pub struct Context {
     session: String,
@@ -22,19 +20,20 @@ pub struct Context {
     hostname: String,
 }
 
-pub fn current_context() -> Context {
-    let session =
-        env::var("ATUIN_SESSION").expect("failed to find ATUIN_SESSION - check your shell setup");
-    let hostname = format!("{}:{}", whoami::hostname(), whoami::username());
-    let cwd = match env::current_dir() {
-        Ok(dir) => dir.display().to_string(),
-        Err(_) => String::from(""),
-    };
-
-    Context {
-        session,
-        hostname,
-        cwd,
+impl Default for Context {
+    fn default() -> Self {
+        let session = env::var("ATUIN_SESSION")
+            .expect("failed to find ATUIN_SESSION - check your shell setup");
+        let hostname = format!("{}:{}", whoami::hostname(), whoami::username());
+        let cwd = match env::current_dir() {
+            Ok(dir) => dir.display().to_string(),
+            Err(_) => String::from(""),
+        };
+        Self {
+            session,
+            hostname,
+            cwd,
+        }
     }
 }
 
@@ -122,9 +121,13 @@ impl Sqlite {
             [],
         )?;
 
-        let dirty_version: Option<i64> = conn.prepare(
-            "SELECT version FROM _sqlx_migrations WHERE success = false ORDER BY version LIMIT 1"
-        )?.query([])?.map(|r| r.get(0)).next()?;
+        let dirty_version: Option<i64> = conn
+            .prepare(
+                "SELECT version FROM _sqlx_migrations WHERE success = false ORDER BY version LIMIT 1",
+            )?
+            .query([])?
+            .map(|r| r.get(0))
+            .next()?;
         if dirty_version.is_some() {
             eyre::bail!("dirty");
         }
@@ -140,6 +143,7 @@ impl Sqlite {
             desc: &'static str,
             query: &'static str,
         }
+
         // Add new migrations here
         let migrations = [
             Mig {
@@ -195,16 +199,17 @@ impl Sqlite {
         tx.execute(
             "insert or ignore into history(id, timestamp, duration, exit, command, cwd, session, hostname)
                 values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-
-        (h.id.as_str(),
-        h.timestamp.timestamp_nanos(),
-        h.duration,
-        h.exit,
-        h.command.as_str(),
-        h.cwd.as_str(),
-        h.session.as_str(),
-        h.hostname.as_str(),))?;
-
+            (
+                h.id.as_str(),
+                h.timestamp.timestamp_nanos(),
+                h.duration,
+                h.exit,
+                h.command.as_str(),
+                h.cwd.as_str(),
+                h.session.as_str(),
+                h.hostname.as_str(),
+            ),
+        )?;
         Ok(())
     }
 
@@ -260,23 +265,22 @@ impl Database for Sqlite {
 
     fn update(&self, h: &History) -> Result<()> {
         debug!("updating sqlite history");
-
-        self.conn.execute(
-            "update history
+        self.conn
+            .execute(
+                "update history
                 set timestamp = ?2, duration = ?3, exit = ?4, command = ?5, cwd = ?6, session = ?7, hostname = ?8
                 where id = ?1",
-
-    (
-        h.id.as_str(),
-        h.timestamp.timestamp_nanos(),
-        h.duration,
-        h.exit,
-        h.command.as_str(),
-        h.cwd.as_str(),
-        h.session.as_str(),
-        h.hostname.as_str()))
-        ?;
-
+                (
+                    h.id.as_str(),
+                    h.timestamp.timestamp_nanos(),
+                    h.duration,
+                    h.exit,
+                    h.command.as_str(),
+                    h.cwd.as_str(),
+                    h.session.as_str(),
+                    h.hostname.as_str(),
+                ),
+            )?;
         Ok(())
     }
 
@@ -313,10 +317,7 @@ impl Database for Sqlite {
 
         let query = query.sql().expect("bug in list query. please report");
 
-        self.conn
-            .prepare(&query)?
-            .query_map((), Self::query_history)?
-            .collect()
+        self.query_history(&query)
     }
 
     fn range(
@@ -325,10 +326,15 @@ impl Database for Sqlite {
         to: chrono::DateTime<Utc>,
     ) -> Result<Vec<History>> {
         debug!("listing history from {:?} to {:?}", from, to);
-
-        self.conn.prepare(
-            "select * from history where timestamp >= ?1 and timestamp <= ?2 order by timestamp asc",
-        )?.query_map((from.timestamp_nanos(), to.timestamp_nanos()), Self::query_history)?.collect()
+        self.conn
+            .prepare(
+                "select * from history where timestamp >= ?1 and timestamp <= ?2 order by timestamp asc",
+            )?
+            .query_map(
+                (from.timestamp_nanos(), to.timestamp_nanos()),
+                Self::query_history,
+            )?
+            .collect()
     }
 
     fn first(&self) -> Result<History> {

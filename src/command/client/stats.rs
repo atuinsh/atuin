@@ -7,7 +7,7 @@ use cli_table::{format::Justify, print_stdout, Cell, Style, Table};
 use eyre::{bail, Result};
 
 use atuin_client::{
-    database::{current_context, Database},
+    database::{Context, Database},
     history::History,
     settings::{FilterMode, Settings},
 };
@@ -63,7 +63,7 @@ fn compute_stats(history: &[History]) -> Result<()> {
 
 impl Cmd {
     pub fn run(&self, db: &mut impl Database, settings: &Settings) -> Result<()> {
-        let context = current_context();
+        let context = Context::default();
         let words = if self.period.is_empty() {
             String::from("all")
         } else {

@@ -16,7 +16,6 @@ use tui::{
 use unicode_width::UnicodeWidthStr;
 
 use atuin_client::{
-    database::current_context,
     database::Context,
     database::Database,
     history::History,
@@ -296,7 +295,7 @@ pub fn history(
         history_count: db.history_count()?,
         input,
         results_state: ListState::default(),
-        context: current_context(),
+        context: Context::default(),
         filter_mode,
     };
 

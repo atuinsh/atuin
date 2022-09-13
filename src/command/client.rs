@@ -98,7 +98,7 @@ impl Cmd {
                 Ok(())
             }
             #[cfg(feature = "sync")]
-            Self::Sync(sync) => sync.run(settings, &mut db),
+            Self::Sync(sync) => sync.run(&settings, &mut db),
         }
     }
 }

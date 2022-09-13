@@ -8,7 +8,7 @@ use clap::Subcommand;
 use eyre::Result;
 
 use atuin_client::{
-    database::{current_context, Database},
+    database::{Context, Database},
     history::History,
     settings::Settings,
 };
@@ -123,7 +123,7 @@ pub fn print_cmd_only(w: &mut StdoutLock, h: &[History]) {
 
 impl Cmd {
     pub fn run(&self, settings: &Settings, db: &mut impl Database) -> Result<()> {
-        let context = current_context();
+        let context = Context::default();
 
         match self {
             Self::Start { command: words } => {

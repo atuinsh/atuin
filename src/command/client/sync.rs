@@ -31,15 +31,15 @@ pub enum Cmd {
 }
 
 impl Cmd {
-    pub fn run(self, settings: Settings, db: &mut impl Database) -> Result<()> {
+    pub fn run(self, settings: &Settings, db: &mut impl Database) -> Result<()> {
         match self {
-            Self::Sync { force } => run(&settings, force, db),
-            Self::Login(l) => l.run(&settings),
+            Self::Sync { force } => run(settings, force, db),
+            Self::Login(l) => l.run(settings),
             Self::Logout => logout::run(),
-            Self::Register(r) => r.run(&settings),
+            Self::Register(r) => r.run(settings),
             Self::Key => {
                 use atuin_client::encryption::{encode_key, load_key};
-                let key = load_key(&settings).wrap_err("could not load encryption key")?;
+                let key = load_key(settings).wrap_err("could not load encryption key")?;
                 let encode = encode_key(key).wrap_err("could not encode encryption key")?;
                 println!("{}", encode);
                 Ok(())

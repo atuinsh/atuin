@@ -2,9 +2,7 @@ use chrono::Utc;
 use clap::Parser;
 use eyre::Result;
 
-use atuin_client::{
-    database::current_context, database::Database, history::History, settings::Settings,
-};
+use atuin_client::{database::Context, database::Database, history::History, settings::Settings};
 
 use super::history::ListMode;
 
@@ -79,9 +77,9 @@ impl Cmd {
                 self.cwd,
                 self.exit,
                 self.exclude_exit,
-                self.exclude_cwd,
-                self.before,
-                self.after,
+                self.exclude_cwd.as_deref(),
+                self.before.as_deref(),
+                self.after.as_deref(),
                 self.limit,
                 &self.query,
                 db,
@@ -100,9 +98,9 @@ fn run_non_interactive(
     cwd: Option<String>,
     exit: Option<i64>,
     exclude_exit: Option<i64>,
-    exclude_cwd: Option<String>,
-    before: Option<String>,
-    after: Option<String>,
+    exclude_cwd: Option<&str>,
+    before: Option<&str>,
+    after: Option<&str>,
     limit: Option<i64>,
     query: &[String],
     db: &mut impl Database,
@@ -117,7 +115,7 @@ fn run_non_interactive(
         cwd
     };
 
-    let context = current_context();
+    let context = Context::default();
 
     let results = db.search(
         limit,
@@ -144,8 +142,8 @@ fn run_non_interactive(
                 }
             }
 
-            if let Some(cwd) = &exclude_cwd {
-                if h.cwd.as_str() == cwd.as_str() {
+            if let Some(cwd) = exclude_cwd {
+                if h.cwd.as_str() == cwd {
                     return false;
                 }
             }
@@ -156,9 +154,9 @@ fn run_non_interactive(
                 }
             }
 
-            if let Some(before) = &before {
+            if let Some(before) = before {
                 let before = chrono_english::parse_date_string(
-                    before.as_str(),
+                    before,
                     Utc::now(),
                     chrono_english::Dialect::Uk,
                 );
@@ -168,9 +166,9 @@ fn run_non_interactive(
                 }
             }
 
-            if let Some(after) = &after {
+            if let Some(after) = after {
                 let after = chrono_english::parse_date_string(
-                    after.as_str(),
+                    after,
                     Utc::now(),
                     chrono_english::Dialect::Uk,
                 );
