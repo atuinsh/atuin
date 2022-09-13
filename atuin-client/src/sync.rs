@@ -75,7 +75,7 @@ async fn sync_download(
         // timestamps
         if page_last == last_timestamp {
             last_timestamp = Utc.timestamp_millis(0);
-            last_sync = last_sync - chrono::Duration::hours(1);
+            last_sync -= chrono::Duration::hours(1);
         } else {
             last_timestamp = page_last;
         }
