@@ -200,6 +200,8 @@ impl Cmd {
                     None
                 };
 
+                // TODO: this isn't great if we want some more fancy DBs like a full-text search database
+                // like [tantivy](https://github.com/quickwit-oss/tantivy)
                 let history = match (session, cwd) {
                     (None, None) => db.list(settings.filter_mode, &context, None, false)?,
                     (None, Some(cwd)) => {
