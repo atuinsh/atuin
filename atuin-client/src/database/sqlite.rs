@@ -441,7 +441,7 @@ mod test {
 
     #[test]
     fn test_search_prefix() {
-        let mut db = Sqlite::new("sqlite::memory:").unwrap();
+        let mut db = Sqlite::new(":memory:").unwrap();
         new_history_item(&mut db, "ls /home/ellie").unwrap();
 
         assert_search_eq(&db, SearchMode::Prefix, FilterMode::Global, "ls", 1).unwrap();
@@ -451,7 +451,7 @@ mod test {
 
     #[test]
     fn test_search_fulltext() {
-        let mut db = Sqlite::new("sqlite::memory:").unwrap();
+        let mut db = Sqlite::new(":memory:").unwrap();
         new_history_item(&mut db, "ls /home/ellie").unwrap();
 
         assert_search_eq(&db, SearchMode::FullText, FilterMode::Global, "ls", 1).unwrap();
@@ -461,7 +461,7 @@ mod test {
 
     #[test]
     fn test_search_fuzzy() {
-        let mut db = Sqlite::new("sqlite::memory:").unwrap();
+        let mut db = Sqlite::new(":memory:").unwrap();
         new_history_item(&mut db, "ls /home/ellie").unwrap();
         new_history_item(&mut db, "ls /home/frank").unwrap();
         new_history_item(&mut db, "cd /home/Ellie").unwrap();
@@ -511,7 +511,7 @@ mod test {
 
     #[test]
     fn test_search_reordered_fuzzy() {
-        let mut db = Sqlite::new("sqlite::memory:").unwrap();
+        let mut db = Sqlite::new(":memory:").unwrap();
         new_history_item(&mut db, "curl").unwrap();
         new_history_item(&mut db, "corburl").unwrap();
 
@@ -533,7 +533,7 @@ mod test {
             session: "beepboopiamasession".to_string(),
             cwd: "/home/ellie".to_string(),
         };
-        let mut db = Sqlite::new("sqlite::memory:").unwrap();
+        let mut db = Sqlite::new(":memory:").unwrap();
         for _i in 1..10000 {
             new_history_item(&mut db, "i am a duplicated command").unwrap();
         }
