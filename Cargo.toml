@@ -79,3 +79,6 @@ version = "0.3"
 default-features = false
 features = ["ansi", "fmt", "registry", "env-filter"]
 optional = true
+
+[patch.crates-io]
+crossterm = { git = "https://github.com/yyogo/crossterm", branch = "use-select-in-unix" }

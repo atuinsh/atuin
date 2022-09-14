@@ -4,7 +4,7 @@ use std::{
 };
 
 use crossterm::{
-    event::{self, KeyCode, KeyEvent, KeyModifiers, MouseEvent},
+    event::{self, Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent},
     execute, terminal,
 };
 use eyre::Result;
@@ -64,7 +64,15 @@ impl State {
         Ok(results)
     }
 
-    fn handle_mouse_input(&mut self, input: MouseEvent, len: usize) {
+    fn handle_input(&mut self, settings: &Settings, input: &Event, len: usize) -> Option<usize> {
+        match input {
+            Event::Key(k) => self.handle_key_input(settings, k, len),
+            Event::Mouse(m) => self.handle_mouse_input(*m, len),
+            _ => None,
+        }
+    }
+
+    fn handle_mouse_input(&mut self, input: MouseEvent, len: usize) -> Option<usize> {
         match input.kind {
             event::MouseEventKind::ScrollDown => {
                 let i = self.results_state.selected().saturating_sub(1);
@@ -76,6 +84,7 @@ impl State {
             }
             _ => {}
         }
+        None
     }
 
     fn handle_key_input(
@@ -85,6 +94,7 @@ impl State {
         len: usize,
     ) -> Option<usize> {
         let ctrl = input.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = input.modifiers.contains(KeyModifiers::ALT);
         match input.code {
             KeyCode::Char('c' | 'd' | 'g') if ctrl => return Some(RETURN_ORIGINAL),
             KeyCode::Esc => {
@@ -96,7 +106,7 @@ impl State {
             KeyCode::Enter => {
                 return Some(self.results_state.selected());
             }
-            KeyCode::Char(c @ '1'..='9') if input.modifiers.contains(KeyModifiers::ALT) => {
+            KeyCode::Char(c @ '1'..='9') if alt => {
                 let c = c.to_digit(10)? as usize;
                 return Some(self.results_state.selected() + c);
             }
@@ -401,27 +411,6 @@ pub async fn history(
     let mut results = app.query_results(settings.search_mode, db).await?;
 
     let index = 'render: loop {
-        let initial_input = app.input.as_str().to_owned();
-        let initial_filter_mode = app.filter_mode;
-
-        if event::poll(Duration::from_millis(250))? {
-            while event::poll(Duration::ZERO)? {
-                match event::read()? {
-                    event::Event::Key(input) => {
-                        if let Some(i) = app.handle_key_input(settings, &input, results.len()) {
-                            break 'render i;
-                        }
-                    }
-                    event::Event::Mouse(input) => app.handle_mouse_input(input, results.len()),
-                    _ => {}
-                }
-            }
-        }
-
-        if initial_input != app.input.as_str() || initial_filter_mode != app.filter_mode {
-            results = app.query_results(settings.search_mode, db).await?;
-        }
-
         let compact = match settings.style {
             atuin_client::settings::Style::Auto => {
                 terminal.size().map(|size| size.height < 14).unwrap_or(true)
@@ -433,6 +422,21 @@ pub async fn history(
             terminal.draw(|f| app.draw_compact(f, &results))?;
         } else {
             terminal.draw(|f| app.draw(f, &results))?;
+        }
+
+        let initial_input = app.input.as_str().to_owned();
+        let initial_filter_mode = app.filter_mode;
+
+        if event::poll(Duration::from_millis(250))? {
+            while event::poll(Duration::ZERO)? {
+                if let Some(i) = app.handle_input(settings, &event::read()?, results.len()) {
+                    break 'render i;
+                }
+            }
+        }
+
+        if initial_input != app.input.as_str() || initial_filter_mode != app.filter_mode {
+            results = app.query_results(settings.search_mode, db).await?;
         }
     };
 

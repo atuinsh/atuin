@@ -487,16 +487,13 @@ dependencies = [
 [[package]]
 name = "crossterm"
 version = "0.25.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e64e6c0fbe2c17357405f7c758c1ef960fce08bdfb2c03d88d2a18d7e09c4b67"
+source = "git+https://github.com/yyogo/crossterm?branch=use-select-in-unix#673699d4961552199d00df5a694b11e8286db599"
 dependencies = [
  "bitflags",
  "crossterm_winapi",
  "libc",
- "mio",
  "parking_lot 0.12.1",
  "signal-hook",
- "signal-hook-mio",
  "winapi",
 ]
 
@@ -1881,17 +1878,6 @@ checksum = "a253b5e89e2698464fc26b545c9edceb338e18a89effeeecfea192c3025be29d"
 dependencies = [
  "libc",
  "signal-hook-registry",
-]
-
-[[package]]
-name = "signal-hook-mio"
-version = "0.2.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "29ad2e15f37ec9a6cc544097b78a1ec90001e9f71b81338ca39f430adaca99af"
-dependencies = [
- "libc",
- "mio",
- "signal-hook",
 ]
 
 [[package]]
