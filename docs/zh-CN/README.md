@@ -102,7 +102,7 @@ atuin sync
 curl https://api.atuin.sh/enable -d $(cat ~/.local/share/atuin/session)
 ```
 
-执行结果为你的活跃图 URL 地址。可以共享或嵌入这个 URL 地址，令牌（token）并<i>不是</i>加密的，只是用来阻止被枚举攻击。
+执行结果为你的活跃图 URL 地址。可以共享或嵌入这个 URL 地址，令牌（token）并<i>不是</i>加密的，只是用来防止被枚举攻击。
 
 ## 仅离线 (不同步)
   
