@@ -60,7 +60,7 @@ atuin search --exit 0 --after "yesterday 3pm" make
 - [历史记录统计](./stats.md)
 - [运行你自己的服务器](./server.md)
 - [键绑定](./key-binding.md)
-- [shell补全](./shell-completions.md)
+- [shell 补全](./shell-completions.md)
 
 ## 支持的 Shells
 
