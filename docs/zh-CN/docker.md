@@ -1,4 +1,4 @@
-## Docker
+# Docker
 
 Atuin 提供了一个 docker 镜像（image），可以更轻松地将服务器部署为容器（container）。
 
@@ -6,7 +6,7 @@ Atuin 提供了一个 docker 镜像（image），可以更轻松地将服务器�
 docker run -d -v "$USER/.config/atuin:/config" ghcr.io/ellie/atuin:latest server start
 ```
 
-## Docker Compose
+# Docker Compose
 
 使用已有的 docker 镜像（image）来托管你自己的 Atuin，可以使用提供的 docker-compose 文件来完成
 
@@ -54,7 +54,7 @@ services:
 docker-compose up -d
 ```
 
-### 使用 systemd 管理你的 atuin 服务器
+## 使用 systemd 管理你的 atuin 服务器
 
 以下 `systemd` 的配置文件用来管理你的 `docker-compose` 托管服务：
 

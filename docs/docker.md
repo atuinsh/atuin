@@ -1,4 +1,4 @@
-## Docker
+# Docker
 
 There is a supplied docker image to make deploying a server as a container easier.
 
@@ -6,7 +6,7 @@ There is a supplied docker image to make deploying a server as a container easie
 docker run -d -v "$USER/.config/atuin:/config" ghcr.io/ellie/atuin:latest server start
 ```
 
-## Docker Compose
+# Docker Compose
 
 Using the already build docker image hosting your own Atuin can be done using the supplied docker-compose file.
 
@@ -54,7 +54,7 @@ Start the services using `docker-compose`:
 docker-compose up -d
 ```
 
-### Using systemd to manage your atuin server
+## Using systemd to manage your atuin server
 
 The following `systemd` unit file to manage your `docker-compose` managed service:
 
