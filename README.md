@@ -177,6 +177,16 @@ pacman -S atuin
   
 And then follow [the shell setup](#shell-plugin)
 
+### Termux
+
+Atuin is available in the Termux package repository:
+
+```
+pkg install atuin
+```
+  
+And then follow [the shell setup](#shell-plugin)
+
 ### From source
 
 ```
