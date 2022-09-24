@@ -20,19 +20,11 @@ function _atuin_search
     end
 end
 
-function _atuin_suppress_tui
-    set -gx ATUIN_SUPPRESS_TUI "true"
-end
-
-function _atuin_unsuppress_tui
-    set -ge ATUIN_SUPPRESS_TUI
-end
-
 function _atuin_bind_up
-    if test -z $ATUIN_SUPPRESS_TUI
-        _atuin_search
-    else
+    if commandline -P
         up-or-search
+    else
+        _atuin_search
     end
 end
 
@@ -41,10 +33,6 @@ if test -z $ATUIN_NOBIND
     bind -k up _atuin_bind_up
     bind \eOA _atuin_bind_up
     bind \e\[A _atuin_bind_up
-    bind \t 'commandline -f complete && _atuin_suppress_tui'
-    bind \e 'commandline -f cancel && _atuin_unsuppress_tui'
-    bind \r 'commandline -f execute && _atuin_unsuppress_tui'
-    bind \n 'commandline -f execute && _atuin_unsuppress_tui'
 
 
     if bind -M insert > /dev/null 2>&1
@@ -52,9 +40,5 @@ if test -z $ATUIN_NOBIND
         bind -M insert -k up _atuin_bind_up
         bind -M insert \eOA _atuin_bind_up
         bind -M insert \e\[A _atuin_bind_up
-        bind -M insert \t 'commandline -f complete && _atuin_suppress_tui'
-        bind -M insert \e 'commandline -f cancel && _atuin_unsuppress_tui'
-        bind -M insert \r 'commandline -f execute && _atuin_unsuppress_tui'
-        bind -M insert \n 'commandline -f execute && _atuin_unsuppress_tui'
     end
 end
