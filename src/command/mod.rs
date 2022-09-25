@@ -11,6 +11,7 @@ mod server;
 mod init;
 
 #[derive(Subcommand)]
+#[clap(infer_subcommands = true)]
 pub enum AtuinCmd {
     #[cfg(feature = "client")]
     #[clap(flatten)]
