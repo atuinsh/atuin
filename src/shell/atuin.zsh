@@ -38,6 +38,7 @@ _atuin_search(){
 	echoti smkx
 
 	if [[ -n $output ]] ; then
+		RBUFFER=""
 		LBUFFER=$output
 	fi
 
