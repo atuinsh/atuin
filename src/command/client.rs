@@ -1,18 +1,15 @@
 use std::path::PathBuf;
 
-use clap::{CommandFactory, Subcommand};
-use clap_complete::{generate, generate_to, Shell};
+use clap::Subcommand;
 use eyre::{Result, WrapErr};
 
 use atuin_client::{database::Sqlite, settings::Settings};
-use atuin_common::utils::uuid_v4;
 
 #[cfg(feature = "sync")]
 mod sync;
 
 mod history;
 mod import;
-mod init;
 mod search;
 mod stats;
 
@@ -30,26 +27,8 @@ pub enum Cmd {
     /// Calculate statistics for your history
     Stats(stats::Cmd),
 
-    /// Output shell setup
-    #[clap(subcommand)]
-    Init(init::Cmd),
-
-    /// Generate a UUID
-    Uuid,
-
     /// Interactive history search
     Search(search::Cmd),
-
-    /// Generate shell completions
-    GenCompletions {
-        /// Set the shell for generating completions
-        #[clap(long, short)]
-        shell: Shell,
-
-        /// Set the output directory
-        #[clap(long, short)]
-        out_dir: Option<String>,
-    },
 
     #[cfg(feature = "sync")]
     #[clap(flatten)]
@@ -70,34 +49,7 @@ impl Cmd {
             Self::History(history) => history.run(&settings, &mut db).await,
             Self::Import(import) => import.run(&mut db).await,
             Self::Stats(stats) => stats.run(&mut db, &settings).await,
-            Self::Init(init) => {
-                init.run();
-                Ok(())
-            }
             Self::Search(search) => search.run(&mut db, &settings).await,
-            Self::Uuid => {
-                println!("{}", uuid_v4());
-                Ok(())
-            }
-            Self::GenCompletions { shell, out_dir } => {
-                let mut cli = crate::Atuin::command();
-
-                match out_dir {
-                    Some(out_dir) => {
-                        generate_to(shell, &mut cli, env!("CARGO_PKG_NAME"), &out_dir)?;
-                    }
-                    None => {
-                        generate(
-                            shell,
-                            &mut cli,
-                            env!("CARGO_PKG_NAME"),
-                            &mut std::io::stdout(),
-                        );
-                    }
-                }
-
-                Ok(())
-            }
             #[cfg(feature = "sync")]
             Self::Sync(sync) => sync.run(settings, &mut db).await,
         }
