@@ -118,6 +118,18 @@ __atuin_install_mac(){
 
 }
 
+__atuin_install_termux(){
+	echo "Termux detected!"
+
+	if command -v pkg &> /dev/null; then
+		echo "Installing with pkg"
+		pkg install atuin
+	else
+		echo "Could not find pkg"
+		__atuin_install_unsupported
+	fi
+}
+
 __atuin_install_cargo(){
 	echo "Attempting install with cargo"
 
@@ -157,12 +169,13 @@ __atuin_install_unsupported(){
 
 # TODO: would be great to support others!
 case "$OSTYPE" in
-  linux*)   __atuin_install_linux ;;
-  darwin*)  __atuin_install_mac ;;
-  msys*)    __atuin_install_unsupported ;;
-  solaris*) __atuin_install_unsupported ;;
-  bsd*)     __atuin_install_unsupported ;;
-  *)        __atuin_install_unsupported ;;
+  linux-android*) __atuin_install_termux ;;
+  linux*)         __atuin_install_linux ;;
+  darwin*)        __atuin_install_mac ;;
+  msys*)          __atuin_install_unsupported ;;
+  solaris*)       __atuin_install_unsupported ;;
+  bsd*)           __atuin_install_unsupported ;;
+  *)              __atuin_install_unsupported ;;
 esac
 
 # TODO: Check which shell is in use
