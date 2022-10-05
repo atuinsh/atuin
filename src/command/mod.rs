@@ -10,6 +10,8 @@ mod server;
 
 mod init;
 
+mod contributors;
+
 #[derive(Subcommand)]
 #[clap(infer_subcommands = true)]
 pub enum AtuinCmd {
@@ -28,6 +30,8 @@ pub enum AtuinCmd {
 
     /// Generate a UUID
     Uuid,
+
+    Contributors,
 
     /// Generate shell completions
     GenCompletions {
@@ -48,6 +52,10 @@ impl AtuinCmd {
             Self::Client(client) => client.run(),
             #[cfg(feature = "server")]
             Self::Server(server) => server.run(),
+            Self::Contributors => {
+                contributors::run();
+                Ok(())
+            }
             Self::Init(init) => {
                 init.run();
                 Ok(())
