@@ -26,3 +26,7 @@
 ## which search mode to use
 ## possible values: prefix, fulltext, fuzzy
 # search_mode = "prefix"
+
+## which style to use
+## possible values: auto, full, compact
+style = "auto"
