@@ -102,6 +102,20 @@ the search syntax [described below](#fuzzy-search-syntax).
 
 Defaults to "prefix"
 
+### `style`
+
+Which style to use. Possible values: `auto`, `full` and `compact`.
+
+- `compact`:
+
+![image](https://user-images.githubusercontent.com/1710904/161623659-4fec047f-ea4b-471c-9581-861d2eb701a9.png)
+
+- `full`:
+
+![image](https://user-images.githubusercontent.com/1710904/161623547-42afbfa7-a3ef-4820-bacd-fcaf1e324969.png)
+
+Defaults to `auto`.
+
 ### `filter_mode`
 
 The default filter to use when searching
