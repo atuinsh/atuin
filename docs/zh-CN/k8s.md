@@ -1,8 +1,8 @@
 # Kubernetes
 
-You could host your own Atuin server using the Kubernetes platform.
+你可以使用 Kubernetes 来托管你的 Atuin 服务器。
 
-Create a [`secrets.yaml`](../k8s/secrets.yaml) file for the database credentials:
+为数据库凭证创建 [`secrets.yaml`](../../k8s/secrets.yaml) 文件：
 
 ```yaml
 apiVersion: v1
@@ -20,7 +20,8 @@ stringData:
 immutable: true
 ```
 
-Create a [`atuin.yaml`](../k8s/atuin.yaml) file for the Atuin server:
+为 Atuin 服务器创建 [`atuin.yaml`](../../k8s/atuin.yaml) 文件：
+
 
 ```yaml
 ---
@@ -165,7 +166,7 @@ spec:
       storage: 10Mi
 ```
 
-Finally, you may want to use a separate namespace for atuin, by creating a [`namespace.yaml`](../k8s/namespaces.yaml) file:
+最后，你可能想让 atuin 使用单独的命名空间（namespace），创建 [`namespace.yaml`](../../k8s/namespaces.yaml) 文件：
 
 ```yaml
 apiVersion: v1
@@ -176,13 +177,13 @@ metadata:
     name: atuin
 ```
 
-Note that this configuration will store the database folder _outside_ the kubernetes cluster, in the folder `/Users/firstname.lastname/.kube/database` of the host system by configuring the `storageClassName` to be `manual`. In a real enterprise setup, you would probably want to store the database content permanently in the cluster, and not in the host system.
+在企业级安装部署时，你可能想要数据库内容永久存储在集群中，而不是在主机系统中。在上述配置中，`storageClassName` 配置为 `manual`，主机系统的挂载目录配置为 `/Users/firstname.lastname/.kube/database`，请注意，这些配置将会使得数据库内容存储在 kubernetes 集群<i>外部</i>中。
 
-You should also change the password string in `ATUIN_DB_PASSWORD` and `ATUIN_DB_URI` in the`secrets.yaml` file to a more secure one.
+你还应该将 `secrets.yaml` 文件中的 `ATUIN_DB_PASSWORD` 和 `ATUIN_DB_URI` 修改为更安全的加密字符串。
 
-The atuin service on the port `30530` of the host system. That is configured by the `nodePort` property. Kubernetes has a strict rule that you are not allowed to expose a port numbered lower than 30000. To make the clients work, you can simply set the port in in your `config.toml` file, e.g. `sync_address = "http://192.168.1.10:30530"`.
+Atuin 运行在主机系统的 `30530` 端口上。这是通过 `nodePort` 属性进行陪你的。Kubernetes 有一个严格规则，即不允许暴露小于 30000 的端口号。为了使客户端能够正常工作，你需要在你的 `config.toml` 文件中设置端口号，例如 `sync_address = "http://192.168.1.10:30530"`。
 
-Deploy the Atuin server using `kubectl`:
+使用 `kubectl` 部署 Atuin 服务器：
 
 ```shell
   kubectl apply -f ./namespaces.yaml
@@ -191,4 +192,4 @@ Deploy the Atuin server using `kubectl`:
                 -f ./atuin.yaml
 ```
 
-The sample files above are also in the [k8s](../k8s) folder of the atuin repository.
+上面示例同时也位于 atuin 仓库（repository）的 [k8s](../../k8s) 目录下。

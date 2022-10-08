@@ -1,6 +1,6 @@
 # Docker
 
-There is a supplied docker image to make deploying a server as a container easier.
+Atuin 提供了一个 docker 镜像（image），可以更轻松地将服务器部署为容器（container）。
 
 ```sh
 docker run -d -v "$USER/.config/atuin:/config" ghcr.io/ellie/atuin:latest server start
@@ -8,17 +8,17 @@ docker run -d -v "$USER/.config/atuin:/config" ghcr.io/ellie/atuin:latest server
 
 # Docker Compose
 
-Using the already build docker image hosting your own Atuin can be done using the supplied docker-compose file.
+使用已有的 docker 镜像（image）来托管你自己的 Atuin，可以使用提供的 docker-compose 文件来完成
 
-Create a `.env` file next to `docker-compose.yml` with contents like this:
+在 docker-compose.yml 同级目录下创建一个 .env 文件，内容如下:
 
 ```
 ATUIN_DB_USERNAME=atuin
-# Choose your own secure password
+# 填写你的密码
 ATUIN_DB_PASSWORD=really-insecure
 ```
 
-Create a `docker-compose.yml`:
+创建 `docker-compose.yml` 文件：
 
 ```yaml
 version: '3.5'
@@ -40,7 +40,7 @@ services:
   postgresql:
     image: postgres:14
     restart: unless-stopped
-    volumes: # Don't remove permanent storage for index database files!
+    volumes: # 不要删除索引数据库文件的永久存储空间!
       - "./database:/var/lib/postgresql/data/"
     environment:
       POSTGRES_USER: $ATUIN_DB_USERNAME
@@ -48,15 +48,15 @@ services:
       POSTGRES_DB: atuin
 ```
 
-Start the services using `docker-compose`:
+使用 `docker-compose` 启动服务：
 
 ```sh
 docker-compose up -d
 ```
 
-## Using systemd to manage your atuin server
+## 使用 systemd 管理你的 atuin 服务器
 
-The following `systemd` unit file to manage your `docker-compose` managed service:
+以下 `systemd` 的配置文件用来管理你的 `docker-compose` 托管服务：
 
 ```
 [Unit]
@@ -77,13 +77,13 @@ StartLimitBurst=3
 WantedBy=multi-user.target
 ```
 
-Start and enable the service with:
+启用服务：
 
 ```sh
 systemctl enable --now atuin
 ```
 
-Check if its running with:
+检查服务是否正常运行:
 
 ```sh
 systemctl status atuin

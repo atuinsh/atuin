@@ -32,6 +32,6 @@ atuin search --exit 0 cargo
 # 从当前目录中搜索所有在2021年4月1日之前运行且失败的命令。
 atuin search --exclude-exit 0 --before 01/04/2021 --cwd .
 
-#搜索所有以 cargo 开头，成功退出且是在昨天下午3点之后运行的命令。
+# 搜索所有以 cargo 开头，成功退出且是在昨天下午3点之后运行的命令。
 atuin search --exit 0 --after "yesterday 3pm" cargo
 ```

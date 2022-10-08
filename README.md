@@ -108,7 +108,7 @@ Alongside the hosted Atuin server, there is also a service which generates activ
 For example, here is mine:
   
 ![](https://api.atuin.sh/img/ellie.png?token=0722830c382b42777bdb652da5b71efb61d8d387)
-  
+
 If you wish to get your own, after signing up for the sync server, run this
   
 ```
@@ -137,6 +137,8 @@ system package manager where possible (pacman, homebrew, etc etc).
 # do not run this as root, root will be asked for if required
 bash <(curl https://raw.githubusercontent.com/ellie/atuin/main/install.sh)
 ```
+
+And then follow [the shell setup](#shell-plugin)
 
 ### With cargo
 
