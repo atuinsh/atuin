@@ -1,5 +1,6 @@
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UserResponse {
@@ -52,4 +53,9 @@ pub struct SyncHistoryRequest {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SyncHistoryResponse {
     pub history: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ErrorResponse<'a> {
+    pub reason: Cow<'a, str>,
 }

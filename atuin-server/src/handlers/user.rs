@@ -6,7 +6,7 @@ use sodiumoxide::crypto::pwhash::argon2id13;
 use tracing::{debug, error, instrument};
 use uuid::Uuid;
 
-use super::{ErrorResponse, ErrorResponseStatus};
+use super::{ErrorResponse, ErrorResponseStatus, RespExt};
 use crate::{
     database::{Database, Postgres},
     models::{NewSession, NewUser},
