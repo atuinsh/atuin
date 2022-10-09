@@ -208,7 +208,7 @@ the install script, this should all be done for you!
 echo 'eval "$(atuin init zsh)"' >> ~/.zshrc
 ```
 
-#### Or using a plugin manager: Zinit
+#### Zinit
 
 ```sh
 zinit load ellie/atuin
