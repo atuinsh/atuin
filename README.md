@@ -214,7 +214,7 @@ echo 'eval "$(atuin init zsh)"' >> ~/.zshrc
 zinit load ellie/atuin
 ```
 
-Or using a plugin manager: Antigen  
+#### Antigen  
   
 ```sh  
 antigen bundle ellie/atuin@main
