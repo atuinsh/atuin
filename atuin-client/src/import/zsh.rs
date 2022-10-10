@@ -39,7 +39,7 @@ fn default_histpath() -> Result<PathBuf> {
 
 #[async_trait]
 impl Importer for Zsh {
-    const NAME: &'static str = "bash";
+    const NAME: &'static str = "zsh";
 
     async fn new() -> Result<Self> {
         let mut bytes = Vec::new();
