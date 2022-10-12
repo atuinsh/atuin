@@ -92,6 +92,7 @@ pub struct Settings {
     pub dialect: Dialect,
     pub style: Style,
     pub auto_sync: bool,
+    pub update_check: bool,
     pub sync_address: String,
     pub sync_frequency: String,
     pub db_path: String,
@@ -219,6 +220,10 @@ impl Settings {
 
     // Return Some(latest version) if an update is needed. Otherwise, none.
     pub async fn needs_update(&self) -> Option<Version> {
+        if !self.update_check {
+            return None;
+        }
+
         let current =
             Version::parse(env!("CARGO_PKG_VERSION")).unwrap_or(Version::new(100000, 0, 0));
 
@@ -267,6 +272,7 @@ impl Settings {
             .set_default("session_path", session_path.to_str())?
             .set_default("dialect", "us")?
             .set_default("auto_sync", true)?
+            .set_default("update_check", true)?
             .set_default("sync_frequency", "1h")?
             .set_default("sync_address", "https://api.atuin.sh")?
             .set_default("search_mode", "prefix")?
