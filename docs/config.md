@@ -47,6 +47,15 @@ true
 auto_sync = true/false
 ```
 
+### `update_check`
+
+Configures whether or not to automatically check for updates. Defaults to 
+true.
+
+```
+auto_sync = true/false
+```
+
 ### `sync_address`
 
 The address of the server to sync with! Defaults to `https://api.atuin.sh`.
