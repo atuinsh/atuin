@@ -1,6 +1,5 @@
 use atuin_common::api::{ErrorResponse, IndexResponse};
 use axum::{response::IntoResponse, Json};
-use serde::{Deserialize, Serialize};
 
 pub mod history;
 pub mod user;
