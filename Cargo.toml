@@ -1,6 +1,6 @@
 [package]
 name = "atuin"
-version = "11.0.0"
+version = "5.0.0"
 authors = ["Ellie Huxtable <ellie@elliehuxtable.com>"]
 edition = "2021"
 rust-version = "1.59"
@@ -71,6 +71,7 @@ clap_complete = "3.1.4"
 fs-err = "2.7"
 whoami = "1.1.2"
 rpassword = "6.0"
+semver = "1.0.14"
 
 [dependencies.tracing-subscriber]
 version = "0.3"

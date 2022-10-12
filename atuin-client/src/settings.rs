@@ -8,9 +8,15 @@ use config::{Config, Environment, File as ConfigFile, FileFormat};
 use eyre::{eyre, Context, Result};
 use fs_err::{create_dir_all, File};
 use parse_duration::parse;
+use semver::Version;
 use serde::Deserialize;
 
+use crate::api_client::latest_version;
+
 pub const HISTORY_PAGE_SIZE: i64 = 100;
+pub const LAST_SYNC_FILENAME: &str = "last_sync_time";
+pub const LAST_VERSION_CHECK_FILENAME: &str = "last_version_check_time";
+pub const LATEST_VERSION_FILENAME: &str = "latest_version";
 
 #[derive(Clone, Debug, Deserialize, Copy)]
 pub enum SearchMode {
@@ -99,31 +105,68 @@ pub struct Settings {
 }
 
 impl Settings {
-    pub fn save_sync_time() -> Result<()> {
+    fn save_to_data_dir(filename: &str, value: &str) -> Result<()> {
         let data_dir = atuin_common::utils::data_dir();
         let data_dir = data_dir.as_path();
 
-        let sync_time_path = data_dir.join("last_sync_time");
+        let path = data_dir.join(filename);
 
-        fs_err::write(sync_time_path, Utc::now().to_rfc3339())?;
+        fs_err::write(path, value)?;
 
         Ok(())
     }
 
-    pub fn last_sync() -> Result<chrono::DateTime<Utc>> {
+    fn read_from_data_dir(filename: &str) -> Option<String> {
         let data_dir = atuin_common::utils::data_dir();
         let data_dir = data_dir.as_path();
 
-        let sync_time_path = data_dir.join("last_sync_time");
+        let path = data_dir.join(filename);
 
-        if !sync_time_path.exists() {
-            return Ok(Utc.ymd(1970, 1, 1).and_hms(0, 0, 0));
+        if !path.exists() {
+            return None;
         }
 
-        let time = fs_err::read_to_string(sync_time_path)?;
-        let time = chrono::DateTime::parse_from_rfc3339(time.as_str())?;
+        let value = fs_err::read_to_string(path);
 
-        Ok(time.with_timezone(&Utc))
+        match value {
+            Ok(v) => Some(v),
+            Err(_) => None,
+        }
+    }
+
+    fn save_current_time(filename: &str) -> Result<()> {
+        Settings::save_to_data_dir(filename, Utc::now().to_rfc3339().as_str())?;
+
+        Ok(())
+    }
+
+    fn load_time_from_file(filename: &str) -> Result<chrono::DateTime<Utc>> {
+        let value = Settings::read_from_data_dir(filename);
+
+        match value {
+            Some(v) => {
+                let time = chrono::DateTime::parse_from_rfc3339(v.as_str())?;
+
+                Ok(time.with_timezone(&Utc))
+            }
+            None => Ok(Utc.ymd(1970, 1, 1).and_hms(0, 0, 0)),
+        }
+    }
+
+    pub fn save_sync_time() -> Result<()> {
+        Settings::save_current_time(LAST_SYNC_FILENAME)
+    }
+
+    pub fn save_version_check_time() -> Result<()> {
+        Settings::save_current_time(LAST_VERSION_CHECK_FILENAME)
+    }
+
+    pub fn last_sync() -> Result<chrono::DateTime<Utc>> {
+        Settings::load_time_from_file(LAST_SYNC_FILENAME)
+    }
+
+    pub fn last_version_check() -> Result<chrono::DateTime<Utc>> {
+        Settings::load_time_from_file(LAST_VERSION_CHECK_FILENAME)
     }
 
     pub fn should_sync(&self) -> Result<bool> {
@@ -140,6 +183,58 @@ impl Settings {
             }
             Err(e) => Err(eyre!("failed to check sync: {}", e)),
         }
+    }
+
+    fn needs_update_check(&self) -> Result<bool> {
+        let last_check = Settings::last_version_check()?;
+        let diff = Utc::now() - last_check;
+
+        // Check a max of once per hour
+        return Ok(diff.num_hours() >= 1);
+    }
+
+    async fn latest_version(&self) -> Result<Version> {
+        // Default to the current version, and if that doesn't parse, a version so high it's unlikely to ever
+        // suggest upgrading.
+        let current =
+            Version::parse(env!("CARGO_PKG_VERSION")).unwrap_or(Version::new(100000, 0, 0));
+
+        if !self.needs_update_check()? {
+            // Worst case, we don't want Atuin to fail to start because something funky is going on with
+            // version checking.
+            let version = Settings::read_from_data_dir(LATEST_VERSION_FILENAME)
+                .unwrap_or(String::from(env!("CARGO_PKG_VERSION")));
+            let version = Version::parse(version.as_str()).unwrap_or(current.clone());
+
+            return Ok(version);
+        }
+
+        let latest = latest_version().await.unwrap_or(current.clone());
+
+        Settings::save_version_check_time()?;
+        Settings::save_to_data_dir(LATEST_VERSION_FILENAME, latest.to_string().as_str())?;
+
+        return Ok(latest);
+    }
+
+    // Return Some(latest version) if an update is needed. Otherwise, none.
+    pub async fn needs_update(&self) -> Option<Version> {
+        let current =
+            Version::parse(env!("CARGO_PKG_VERSION")).unwrap_or(Version::new(100000, 0, 0));
+
+        let latest = self.latest_version().await;
+
+        if latest.is_err() {
+            return None;
+        }
+
+        let latest = latest.unwrap();
+
+        if latest > current {
+            return Some(latest);
+        }
+
+        return None;
     }
 
     pub fn new() -> Result<Self> {

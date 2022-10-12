@@ -1,6 +1,7 @@
 use std::io::stdout;
 
 use eyre::Result;
+use semver::Version;
 use termion::{
     event::Event as TermEvent, event::Key, event::MouseButton, event::MouseEvent,
     input::MouseTerminal, raw::IntoRawMode, screen::AlternateScreen,
@@ -20,7 +21,7 @@ use atuin_client::{
     database::Context,
     database::Database,
     history::History,
-    settings::{FilterMode, SearchMode},
+    settings::{FilterMode, SearchMode, Settings},
 };
 
 use super::{
@@ -36,6 +37,7 @@ struct State {
     filter_mode: FilterMode,
     results_state: ListState,
     context: Context,
+    update_needed: Option<Version>,
 }
 
 impl State {
@@ -143,10 +145,19 @@ impl State {
             .constraints([Constraint::Length(1); 3])
             .split(top_chunks[1]);
 
-        let title = Paragraph::new(Text::from(Span::styled(
-            format!(" Atuin v{VERSION}"),
-            Style::default().add_modifier(Modifier::BOLD),
-        )));
+        let title = if self.update_needed.is_some() {
+            let version = self.update_needed.clone().unwrap();
+
+            Paragraph::new(Text::from(Span::styled(
+                format!(" Atuin v{VERSION} - UPDATE AVAILABLE {version}"),
+                Style::default().add_modifier(Modifier::BOLD).fg(Color::Red),
+            )))
+        } else {
+            Paragraph::new(Text::from(Span::styled(
+                format!(" Atuin v{VERSION}"),
+                Style::default().add_modifier(Modifier::BOLD),
+            )))
+        };
 
         let help = vec![
             Span::raw(" Press "),
@@ -277,9 +288,7 @@ impl State {
 #[allow(clippy::cast_possible_truncation)]
 pub async fn history(
     query: &[String],
-    search_mode: SearchMode,
-    filter_mode: FilterMode,
-    style: atuin_client::settings::Style,
+    settings: &Settings,
     db: &mut impl Database,
 ) -> Result<String> {
     let stdout = stdout().into_raw_mode()?;
@@ -294,15 +303,19 @@ pub async fn history(
     let mut input = Cursor::from(query.join(" "));
     // Put the cursor at the end of the query by default
     input.end();
+
+    let update_needed = settings.needs_update().await;
+
     let mut app = State {
         history_count: db.history_count().await?,
         input,
         results_state: ListState::default(),
         context: current_context(),
-        filter_mode,
+        filter_mode: settings.filter_mode,
+        update_needed,
     };
 
-    let mut results = app.query_results(search_mode, db).await?;
+    let mut results = app.query_results(settings.search_mode, db).await?;
 
     let index = 'render: loop {
         let initial_input = app.input.as_str().to_owned();
@@ -323,10 +336,10 @@ pub async fn history(
         }
 
         if initial_input != app.input.as_str() || initial_filter_mode != app.filter_mode {
-            results = app.query_results(search_mode, db).await?;
+            results = app.query_results(settings.search_mode, db).await?;
         }
 
-        let compact = match style {
+        let compact = match settings.style {
             atuin_client::settings::Style::Auto => {
                 terminal.size().map(|size| size.height < 14).unwrap_or(true)
             }
