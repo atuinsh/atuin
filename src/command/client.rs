@@ -41,7 +41,6 @@ impl Cmd {
         pretty_env_logger::init();
 
         let settings = Settings::new().wrap_err("could not load client settings")?;
-        settings.needs_update().await;
 
         let db_path = PathBuf::from(settings.db_path.as_str());
         let mut db = Sqlite::new(db_path).await?;
