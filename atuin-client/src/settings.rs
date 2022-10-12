@@ -191,7 +191,7 @@ impl Settings {
         let diff = Utc::now() - last_check;
 
         // Check a max of once per hour
-        return Ok(diff.num_hours() >= 1);
+        Ok(diff.num_hours() >= 1)
     }
 
     async fn latest_version(&self) -> Result<Version> {
@@ -204,18 +204,18 @@ impl Settings {
             // Worst case, we don't want Atuin to fail to start because something funky is going on with
             // version checking.
             let version = Settings::read_from_data_dir(LATEST_VERSION_FILENAME)
-                .unwrap_or(String::from(env!("CARGO_PKG_VERSION")));
-            let version = Version::parse(version.as_str()).unwrap_or(current.clone());
+                .unwrap_or_else(|| String::from(env!("CARGO_PKG_VERSION")));
+            let version = Version::parse(version.as_str()).unwrap_or_else(|_| current.clone());
 
             return Ok(version);
         }
 
-        let latest = latest_version().await.unwrap_or(current.clone());
+        let latest = latest_version().await.unwrap_or_else(|_| current.clone());
 
         Settings::save_version_check_time()?;
         Settings::save_to_data_dir(LATEST_VERSION_FILENAME, latest.to_string().as_str())?;
 
-        return Ok(latest);
+        Ok(latest)
     }
 
     // Return Some(latest version) if an update is needed. Otherwise, none.
@@ -239,7 +239,7 @@ impl Settings {
             return Some(latest);
         }
 
-        return None;
+        None
     }
 
     pub fn new() -> Result<Self> {
