@@ -1,6 +1,6 @@
 [package]
 name = "atuin"
-version = "5.0.0"
+version = "11.0.0"
 authors = ["Ellie Huxtable <ellie@elliehuxtable.com>"]
 edition = "2021"
 rust-version = "1.59"
