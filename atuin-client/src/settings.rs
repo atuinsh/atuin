@@ -129,10 +129,7 @@ impl Settings {
 
         let value = fs_err::read_to_string(path);
 
-        match value {
-            Ok(v) => Some(v),
-            Err(_) => None,
-        }
+        value.ok()
     }
 
     fn save_current_time(filename: &str) -> Result<()> {
