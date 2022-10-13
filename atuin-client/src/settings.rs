@@ -11,8 +11,6 @@ use parse_duration::parse;
 use semver::Version;
 use serde::Deserialize;
 
-use crate::api_client::latest_version;
-
 pub const HISTORY_PAGE_SIZE: i64 = 100;
 pub const LAST_SYNC_FILENAME: &str = "last_sync_time";
 pub const LAST_VERSION_CHECK_FILENAME: &str = "last_version_check_time";
@@ -200,14 +198,19 @@ impl Settings {
         if !self.needs_update_check()? {
             // Worst case, we don't want Atuin to fail to start because something funky is going on with
             // version checking.
-            let version = Settings::read_from_data_dir(LATEST_VERSION_FILENAME)
-                .unwrap_or_else(|| String::from(env!("CARGO_PKG_VERSION")));
-            let version = Version::parse(version.as_str()).unwrap_or_else(|_| current.clone());
+            let version = match Settings::read_from_data_dir(LATEST_VERSION_FILENAME) {
+                Some(v) => Version::parse(&v).unwrap_or(current),
+                None => current,
+            };
 
             return Ok(version);
         }
 
-        let latest = latest_version().await.unwrap_or_else(|_| current.clone());
+        #[cfg(feature = "sync")]
+        let latest = crate::api_client::latest_version().await.unwrap_or(current);
+
+        #[cfg(not(feature = "sync"))]
+        let latest = current;
 
         Settings::save_version_check_time()?;
         Settings::save_to_data_dir(LATEST_VERSION_FILENAME, latest.to_string().as_str())?;

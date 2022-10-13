@@ -4,9 +4,6 @@
 use clap::{AppSettings, Parser};
 use eyre::Result;
 
-#[macro_use]
-extern crate log;
-
 use command::AtuinCmd;
 mod command;
 
