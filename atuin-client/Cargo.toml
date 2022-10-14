@@ -34,7 +34,7 @@ whoami = "1.1.2"
 chrono-english = "0.1.4"
 config = { version = "0.13", default-features = false, features = ["toml"] }
 serde = { version = "1.0.137", features = ["derive"] }
-serde_json = "1.0.81"
+serde_json = "1.0.86"
 parse_duration = "2.1.1"
 async-trait = "0.1.49"
 itertools = "0.10.3"
