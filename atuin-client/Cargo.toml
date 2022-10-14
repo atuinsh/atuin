@@ -37,7 +37,7 @@ serde = { version = "1.0.137", features = ["derive"] }
 serde_json = "1.0.81"
 parse_duration = "2.1.1"
 async-trait = "0.1.49"
-itertools = "0.10.3"
+itertools = "0.10.5"
 shellexpand = "2"
 sqlx = { version = "0.6", features = [
   "runtime-tokio-rustls",
