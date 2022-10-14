@@ -20,7 +20,7 @@ use log::debug;
 use super::search::format_duration;
 
 #[derive(Subcommand)]
-#[clap(infer_subcommands = true)]
+#[command(infer_subcommands = true)]
 pub enum Cmd {
     /// Begins a new command in the history
     Start { command: Vec<String> },
@@ -28,33 +28,33 @@ pub enum Cmd {
     /// Finishes a new command in the history (adds time, exit code)
     End {
         id: String,
-        #[clap(long, short)]
+        #[arg(long, short)]
         exit: i64,
     },
 
     /// List all items in history
     List {
-        #[clap(long, short)]
+        #[arg(long, short)]
         cwd: bool,
 
-        #[clap(long, short)]
+        #[arg(long, short)]
         session: bool,
 
-        #[clap(long)]
+        #[arg(long)]
         human: bool,
 
         /// Show only the text of the command
-        #[clap(long)]
+        #[arg(long)]
         cmd_only: bool,
     },
 
     /// Get the last command ran
     Last {
-        #[clap(long)]
+        #[arg(long)]
         human: bool,
 
         /// Show only the text of the command
-        #[clap(long)]
+        #[arg(long)]
         cmd_only: bool,
     },
 }

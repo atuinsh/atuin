@@ -1,11 +1,10 @@
-use clap::{AppSettings, Parser};
+use clap::Parser;
 use eyre::Result;
 use tokio::{fs::File, io::AsyncWriteExt};
 
 use atuin_client::{api_client, settings::Settings};
 
 #[derive(Parser)]
-#[clap(setting(AppSettings::DeriveDisplayOrder))]
 pub struct Cmd {
     #[clap(long, short)]
     pub username: Option<String>,

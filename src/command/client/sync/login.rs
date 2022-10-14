@@ -1,6 +1,6 @@
 use std::io;
 
-use clap::{AppSettings, Parser};
+use clap::Parser;
 use eyre::Result;
 use tokio::{fs::File, io::AsyncWriteExt};
 
@@ -9,7 +9,6 @@ use atuin_common::api::LoginRequest;
 use rpassword::prompt_password;
 
 #[derive(Parser)]
-#[clap(setting(AppSettings::DeriveDisplayOrder))]
 pub struct Cmd {
     #[clap(long, short)]
     pub username: Option<String>,

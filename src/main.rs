@@ -1,7 +1,7 @@
 #![warn(clippy::pedantic, clippy::nursery)]
 #![allow(clippy::use_self, clippy::missing_const_for_fn)] // not 100% reliable
 
-use clap::{AppSettings, Parser};
+use clap::Parser;
 use eyre::Result;
 
 use command::AtuinCmd;
@@ -9,15 +9,25 @@ mod command;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+static HELP_TEMPLATE: &str = "\
+{before-help}{name} {version}
+{author}
+{about}
+
+{usage-heading}
+  {usage}
+
+{all-args}{after-help}";
+
 /// Magical shell history
 #[derive(Parser)]
-#[clap(
+#[command(
     author = "Ellie Huxtable <e@elm.sh>",
     version = VERSION,
-    global_setting(AppSettings::DeriveDisplayOrder),
+    help_template(HELP_TEMPLATE),
 )]
 struct Atuin {
-    #[clap(subcommand)]
+    #[command(subcommand)]
     atuin: AtuinCmd,
 }
 

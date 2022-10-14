@@ -13,19 +13,19 @@ mod init;
 mod contributors;
 
 #[derive(Subcommand)]
-#[clap(infer_subcommands = true)]
+#[command(infer_subcommands = true)]
 pub enum AtuinCmd {
     #[cfg(feature = "client")]
-    #[clap(flatten)]
+    #[command(flatten)]
     Client(client::Cmd),
 
     /// Start an atuin server
     #[cfg(feature = "server")]
-    #[clap(subcommand)]
+    #[command(subcommand)]
     Server(server::Cmd),
 
     /// Output shell setup
-    #[clap(subcommand)]
+    #[command(subcommand)]
     Init(init::Cmd),
 
     /// Generate a UUID
@@ -36,11 +36,11 @@ pub enum AtuinCmd {
     /// Generate shell completions
     GenCompletions {
         /// Set the shell for generating completions
-        #[clap(long, short)]
+        #[arg(long, short)]
         shell: Shell,
 
         /// Set the output directory
-        #[clap(long, short)]
+        #[arg(long, short)]
         out_dir: Option<String>,
     },
 }
