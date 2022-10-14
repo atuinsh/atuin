@@ -12,5 +12,5 @@ repository = "https://github.com/ellie/atuin"
 
 [dependencies]
 chrono = { version = "0.4", features = ["serde"] }
-serde = { version = "1.0.137", features = ["derive"] }
+serde = { version = "1.0.145", features = ["derive"] }
 uuid = { version = "1.2", features = ["v4"] }
