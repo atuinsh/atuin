@@ -71,6 +71,7 @@ clap_complete = "3.1.4"
 fs-err = "2.7"
 whoami = "1.1.2"
 rpassword = "6.0"
+semver = "1.0.14"
 
 [dependencies.tracing-subscriber]
 version = "0.3"

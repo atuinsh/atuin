@@ -9,9 +9,10 @@ use reqwest::{
 use sodiumoxide::crypto::secretbox;
 
 use atuin_common::api::{
-    AddHistoryRequest, CountResponse, ErrorResponse, LoginRequest, LoginResponse, RegisterResponse,
-    SyncHistoryResponse,
+    AddHistoryRequest, CountResponse, ErrorResponse, IndexResponse, LoginRequest, LoginResponse,
+    RegisterResponse, SyncHistoryResponse,
 };
+use semver::Version;
 
 use crate::{
     encryption::{decode_key, decrypt},
@@ -84,6 +85,27 @@ pub async fn login(address: &str, req: LoginRequest) -> Result<LoginResponse> {
 
     let session = resp.json::<LoginResponse>().await?;
     Ok(session)
+}
+
+pub async fn latest_version() -> Result<Version> {
+    let url = "https://api.atuin.sh";
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .get(url)
+        .header(USER_AGENT, APP_USER_AGENT)
+        .send()
+        .await?;
+
+    if resp.status() != reqwest::StatusCode::OK {
+        let error = resp.json::<ErrorResponse>().await?;
+        bail!("failed to check latest version: {}", error.reason);
+    }
+
+    let index = resp.json::<IndexResponse>().await?;
+    let version = Version::parse(index.version.as_str())?;
+
+    Ok(version)
 }
 
 impl<'a> Client<'a> {

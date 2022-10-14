@@ -59,3 +59,9 @@ pub struct SyncHistoryResponse {
 pub struct ErrorResponse<'a> {
     pub reason: Cow<'a, str>,
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct IndexResponse {
+    pub homage: String,
+    pub version: String,
+}

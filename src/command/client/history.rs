@@ -15,6 +15,7 @@ use atuin_client::{
 
 #[cfg(feature = "sync")]
 use atuin_client::sync;
+use log::debug;
 
 use super::search::format_duration;
 

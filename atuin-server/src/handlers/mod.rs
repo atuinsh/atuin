@@ -1,17 +1,10 @@
-use atuin_common::api::ErrorResponse;
+use atuin_common::api::{ErrorResponse, IndexResponse};
 use axum::{response::IntoResponse, Json};
-use serde::{Deserialize, Serialize};
 
 pub mod history;
 pub mod user;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct IndexResponse {
-    pub homage: String,
-    pub version: String,
-}
 
 pub async fn index() -> Json<IndexResponse> {
     let homage = r#""Through the fathomless deeps of space swims the star turtle Great A'Tuin, bearing on its back the four giant elephants who carry on their shoulders the mass of the Discworld." -- Sir Terry Pratchett"#;
