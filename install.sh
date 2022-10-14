@@ -188,3 +188,30 @@ printf '\n[[ -f ~/.bash-preexec.sh ]] && source ~/.bash-preexec.sh\n' >> ~/.bash
 # Use of single quotes around $() is intentional here
 # shellcheck disable=SC2016
 echo 'eval "$(atuin init bash)"' >> ~/.bashrc
+
+cat << EOF
+
+
+
+ _______  __   __  _______  __    _  ___   _    __   __  _______  __   __ 
+|       ||  | |  ||   _   ||  |  | ||   | | |  |  | |  ||       ||  | |  |
+|_     _||  |_|  ||  |_|  ||   |_| ||   |_| |  |  |_|  ||   _   ||  | |  |
+  |   |  |       ||       ||       ||      _|  |       ||  | |  ||  |_|  |
+  |   |  |       ||       ||  _    ||     |_   |_     _||  |_|  ||       |
+  |   |  |   _   ||   _   || | |   ||    _  |    |   |  |       ||       |
+  |___|  |__| |__||__| |__||_|  |__||___| |_|    |___|  |_______||_______|
+
+
+
+Thanks for installing Atuin! I really hope you like it.
+
+If you have any issues, please open an issue on GitHub or visit our Discord (https://discord.gg/dPhv2B3x)!
+
+Otherwise, Atuin is a hobby project - if you find it valuable, you can help us out!
+
+- ⭐️ Give us a star on GitHub (https://github.com/ellie/atuin)
+- 🚀 Contribute! We would love more regular contributors (https://github.com/ellie/atuin)
+- 🤑 Sponsor me! If you value the project + want to help keep the hosted sync server free (https://github.com/sponsors/ellie)
+
+~ Ellie 🐢💖
+EOF
