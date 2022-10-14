@@ -39,7 +39,7 @@ parse_duration = "2.1.1"
 async-trait = "0.1.49"
 itertools = "0.10.3"
 shellexpand = "2"
-sqlx = { version = "0.5", features = [
+sqlx = { version = "0.6", features = [
   "runtime-tokio-rustls",
   "chrono",
   "sqlite",

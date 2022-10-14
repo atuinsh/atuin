@@ -23,7 +23,7 @@ sodiumoxide = "0.2.6"
 base64 = "0.13.0"
 rand = "0.8.4"
 tokio = { version = "1", features = ["full"] }
-sqlx = { version = "0.5", features = [
+sqlx = { version = "0.6", features = [
   "runtime-tokio-rustls",
   "chrono",
   "postgres",
