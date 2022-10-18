@@ -8,7 +8,7 @@ use chrono::{prelude::*, Utc};
 use directories::BaseDirs;
 use eyre::{eyre, Result};
 
-use super::{get_histpath, unix_byte_lines, Importer, Loader};
+use super::{unix_byte_lines, Importer, Loader};
 use crate::history::History;
 
 #[derive(Debug)]
@@ -36,7 +36,7 @@ fn default_histpath() -> Result<PathBuf> {
     if histpath.exists() {
         Ok(histpath)
     } else {
-        Err(eyre!("Could not find history file. Try setting $HISTFILE"))
+        Err(eyre!("Could not find history file."))
     }
 }
 
@@ -46,8 +46,7 @@ impl Importer for Fish {
 
     async fn new() -> Result<Self> {
         let mut bytes = Vec::new();
-        let path = get_histpath(default_histpath)?;
-        let mut f = File::open(path)?;
+        let mut f = File::open(default_histpath()?)?;
         f.read_to_end(&mut bytes)?;
         Ok(Self { bytes })
     }
