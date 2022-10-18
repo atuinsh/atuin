@@ -18,45 +18,45 @@ pub use duration::format_duration;
 #[derive(Parser)]
 pub struct Cmd {
     /// Filter search result by directory
-    #[clap(long, short)]
+    #[arg(long, short)]
     cwd: Option<String>,
 
     /// Exclude directory from results
-    #[clap(long = "exclude-cwd")]
+    #[arg(long = "exclude-cwd")]
     exclude_cwd: Option<String>,
 
     /// Filter search result by exit code
-    #[clap(long, short)]
+    #[arg(long, short)]
     exit: Option<i64>,
 
     /// Exclude results with this exit code
-    #[clap(long = "exclude-exit")]
+    #[arg(long = "exclude-exit")]
     exclude_exit: Option<i64>,
 
     /// Only include results added before this date
-    #[clap(long, short)]
+    #[arg(long, short)]
     before: Option<String>,
 
     /// Only include results after this date
-    #[clap(long)]
+    #[arg(long)]
     after: Option<String>,
 
     /// How many entries to return at most
-    #[clap(long)]
+    #[arg(long)]
     limit: Option<i64>,
 
     /// Open interactive search UI
-    #[clap(long, short)]
+    #[arg(long, short)]
     interactive: bool,
 
     /// Use human-readable formatting for time
-    #[clap(long)]
+    #[arg(long)]
     human: bool,
 
     query: Vec<String>,
 
     /// Show only the text of the command
-    #[clap(long)]
+    #[arg(long)]
     cmd_only: bool,
 }
 

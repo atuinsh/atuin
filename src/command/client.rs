@@ -14,14 +14,14 @@ mod search;
 mod stats;
 
 #[derive(Subcommand)]
-#[clap(infer_subcommands = true)]
+#[command(infer_subcommands = true)]
 pub enum Cmd {
     /// Manipulate shell history
-    #[clap(subcommand)]
+    #[command(subcommand)]
     History(history::Cmd),
 
     /// Import shell history from file
-    #[clap(subcommand)]
+    #[command(subcommand)]
     Import(import::Cmd),
 
     /// Calculate statistics for your history
@@ -31,7 +31,7 @@ pub enum Cmd {
     Search(search::Cmd),
 
     #[cfg(feature = "sync")]
-    #[clap(flatten)]
+    #[command(flatten)]
     Sync(sync::Cmd),
 }
 

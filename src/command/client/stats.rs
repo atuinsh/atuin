@@ -13,7 +13,7 @@ use atuin_client::{
 };
 
 #[derive(Parser)]
-#[clap(infer_subcommands = true)]
+#[command(infer_subcommands = true)]
 pub struct Cmd {
     /// compute statistics for the specified period, leave blank for statistics since the beginning
     period: Vec<String>,

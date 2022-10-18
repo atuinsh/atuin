@@ -8,12 +8,12 @@ mod logout;
 mod register;
 
 #[derive(Subcommand)]
-#[clap(infer_subcommands = true)]
+#[command(infer_subcommands = true)]
 pub enum Cmd {
     /// Sync with the configured server
     Sync {
         /// Force re-download everything
-        #[clap(long, short)]
+        #[arg(long, short)]
         force: bool,
     },
 
