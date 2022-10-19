@@ -61,7 +61,7 @@ termion = "1.5"
 unicode-width = "0.1"
 itertools = "0.10.5"
 tokio = { version = "1", features = ["full"] }
-async-trait = "0.1.49"
+async-trait = "0.1.58"
 chrono-english = "0.1.4"
 cli-table = { version = "0.4", default-features = false }
 base64 = "0.13.0"
