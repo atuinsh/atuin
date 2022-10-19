@@ -28,7 +28,7 @@ sqlx = { version = "0.6", features = [
   "chrono",
   "postgres",
 ] }
-async-trait = "0.1.49"
+async-trait = "0.1.58"
 axum = "0.5"
 http = "0.2"
 fs-err = "2.7"
