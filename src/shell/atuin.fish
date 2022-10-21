@@ -1,7 +1,9 @@
 set -gx ATUIN_SESSION (atuin uuid)
 
 function _atuin_preexec --on-event fish_preexec
-    set -gx ATUIN_HISTORY_ID (atuin history start -- "$argv[1]")
+    if not test -n "$fish_private_mode"
+        set -gx ATUIN_HISTORY_ID (atuin history start -- "$argv[1]")
+    end
 end
 
 function _atuin_postexec --on-event fish_postexec
