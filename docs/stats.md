@@ -6,10 +6,10 @@ little basic, but more features to come.
 ## 1-day stats
 
 You provide the starting point, and Atuin computes the stats for 24h from that point.
-Date parsing is provided by `chrono_english`, which supports different formats
+Date parsing is provided by `interim`, which supports different formats
 for full or relative dates. Certain formats rely on the dialect option in your
 [configuration](config.md#dialect) to differentiate day from month.
-Refer to [the module's documentation](https://docs.rs/chrono-english/0.1.4/chrono_english/#supported-formats) for more details on the supported date formats.
+Refer to [the module's documentation](https://docs.rs/interim/0.1.0/interim/#supported-formats) for more details on the supported date formats.
 
 ```
 $ atuin stats last friday
