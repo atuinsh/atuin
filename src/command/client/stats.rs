@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 
 use chrono::{prelude::*, Duration};
-use chrono_english::parse_date_string;
 use clap::Parser;
 use cli_table::{format::Justify, print_stdout, Cell, Style, Table};
 use eyre::{bail, Result};
+use interim::parse_date_string;
 
 use atuin_client::{
     database::{current_context, Database},

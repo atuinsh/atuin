@@ -55,6 +55,7 @@ impl FilterMode {
 }
 
 // FIXME: Can use upstream Dialect enum if https://github.com/stevedonovan/chrono-english/pull/16 is merged
+// FIXME: Above PR was merged, but dependency was changed to interim (fork of chrono-english) in the ... interim
 #[derive(Clone, Debug, Deserialize, Copy)]
 pub enum Dialect {
     #[serde(rename = "us")]
@@ -64,11 +65,11 @@ pub enum Dialect {
     Uk,
 }
 
-impl From<Dialect> for chrono_english::Dialect {
-    fn from(d: Dialect) -> chrono_english::Dialect {
+impl From<Dialect> for interim::Dialect {
+    fn from(d: Dialect) -> interim::Dialect {
         match d {
-            Dialect::Uk => chrono_english::Dialect::Uk,
-            Dialect::Us => chrono_english::Dialect::Us,
+            Dialect::Uk => interim::Dialect::Uk,
+            Dialect::Us => interim::Dialect::Us,
         }
     }
 }

@@ -154,11 +154,8 @@ async fn run_non_interactive(
             }
 
             if let Some(before) = &before {
-                let before = chrono_english::parse_date_string(
-                    before.as_str(),
-                    Utc::now(),
-                    chrono_english::Dialect::Uk,
-                );
+                let before =
+                    interim::parse_date_string(before.as_str(), Utc::now(), interim::Dialect::Uk);
 
                 if before.is_err() || h.timestamp.gt(&before.unwrap()) {
                     return false;
@@ -166,11 +163,8 @@ async fn run_non_interactive(
             }
 
             if let Some(after) = &after {
-                let after = chrono_english::parse_date_string(
-                    after.as_str(),
-                    Utc::now(),
-                    chrono_english::Dialect::Uk,
-                );
+                let after =
+                    interim::parse_date_string(after.as_str(), Utc::now(), interim::Dialect::Uk);
 
                 if after.is_err() || h.timestamp.lt(&after.unwrap()) {
                     return false;
