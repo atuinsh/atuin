@@ -67,7 +67,7 @@ cli-table = { version = "0.4", default-features = false }
 base64 = "0.13.0"
 crossbeam-channel = "0.5.1"
 clap = { version = "4.0.18", features = ["derive"] }
-clap_complete = "4.0.2"
+clap_complete = "4.0.3"
 fs-err = "2.7"
 whoami = "1.1.2"
 rpassword = "7.0"
