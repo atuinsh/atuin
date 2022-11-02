@@ -67,7 +67,7 @@ impl Cmd {
             eprintln!("{}", item);
         } else {
             let list_mode = ListMode::from_flags(self.human, self.cmd_only);
-            run_non_interactive(
+            let entries = run_non_interactive(
                 settings,
                 list_mode,
                 self.cwd,
@@ -81,6 +81,9 @@ impl Cmd {
                 db,
             )
             .await?;
+            if entries == 0 {
+                std::process::exit(1)
+            }
         };
         Ok(())
     }
@@ -101,7 +104,7 @@ async fn run_non_interactive(
     limit: Option<i64>,
     query: &[String],
     db: &mut impl Database,
-) -> Result<()> {
+) -> Result<usize> {
     let dir = if cwd.as_deref() == Some(".") {
         let current = std::env::current_dir()?;
         let current = current.as_os_str();
@@ -177,5 +180,5 @@ async fn run_non_interactive(
         .collect();
 
     super::history::print_list(&results, list_mode);
-    Ok(())
+    Ok(results.len())
 }
