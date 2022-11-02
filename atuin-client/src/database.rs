@@ -345,17 +345,18 @@ impl Database for Sqlite {
         // events, and the only time this could happen is if someone is upgrading from an old Atuin version
         // from before we stored events.
         let history_count = self.history_count().await?;
+        let event_count = self.event_count().await?;
 
-        if history_count > self.event_count().await? {
-            // We're just gonna load everything into memory here. That sucks, I know, sorry.
-            // But also even if you have a LOT of history that should be fine, and we're only going to be doing this once EVER.
+        if history_count > event_count {
+            // pass an empty context, because with global listing we don't care
             let no_context = Context {
                 cwd: String::from(""),
                 session: String::from(""),
                 hostname: String::from(""),
             };
 
-            // pass an empty context, because with global listing we don't care
+            // We're just gonna load everything into memory here. That sucks, I know, sorry.
+            // But also even if you have a LOT of history that should be fine, and we're only going to be doing this once EVER.
             let all_the_history = self
                 .list(FilterMode::Global, &no_context, None, false)
                 .await?;
