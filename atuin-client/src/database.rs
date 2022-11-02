@@ -13,10 +13,10 @@ use sqlx::{
 };
 
 use super::{
+    event::{Event, EventType},
     history::History,
     ordering,
     settings::{FilterMode, SearchMode},
-    event::{Event, EventType},
 };
 
 pub struct Context {
@@ -62,6 +62,8 @@ pub trait Database: Send + Sync {
 
     async fn update(&self, h: &History) -> Result<()>;
     async fn history_count(&self) -> Result<i64>;
+    async fn event_count(&self) -> Result<i64>;
+    async fn merge_events(&self) -> Result<i64>;
 
     async fn first(&self) -> Result<History>;
     async fn last(&self) -> Result<History>;
@@ -326,6 +328,48 @@ impl Database for Sqlite {
         .await?;
 
         Ok(res)
+    }
+
+    async fn event_count(&self) -> Result<i64> {
+        let res: (i64,) = sqlx::query_as("select count(1) from events")
+            .fetch_one(&self.pool)
+            .await?;
+
+        Ok(res.0)
+    }
+
+    // Ensure that we have correctly merged the event log
+    async fn merge_events(&self) -> Result<i64> {
+        // Ensure that we do not have more history locally than we do events.
+        // We can think of history as the merged log of events. There should never be more history than
+        // events, and the only time this could happen is if someone is upgrading from an old Atuin version
+        // from before we stored events.
+        let history_count = self.history_count().await?;
+
+        if history_count > self.event_count().await? {
+            // We're just gonna load everything into memory here. That sucks, I know, sorry.
+            // But also even if you have a LOT of history that should be fine, and we're only going to be doing this once EVER.
+            let no_context = Context {
+                cwd: String::from(""),
+                session: String::from(""),
+                hostname: String::from(""),
+            };
+
+            // pass an empty context, because with global listing we don't care
+            let all_the_history = self
+                .list(FilterMode::Global, &no_context, None, false)
+                .await?;
+
+            let mut tx = self.pool.begin().await?;
+            for i in all_the_history.iter() {
+                // A CREATE for every single history item is to be expected.
+                let event = Event::new_create(i);
+                Self::save_event(&mut tx, &event).await?;
+            }
+            tx.commit().await?;
+        }
+
+        Ok(0)
     }
 
     async fn history_count(&self) -> Result<i64> {

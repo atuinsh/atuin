@@ -140,6 +140,8 @@ async fn sync_upload(
 }
 
 pub async fn sync(settings: &Settings, force: bool, db: &mut (impl Database + Send)) -> Result<()> {
+    db.merge_events().await?;
+
     let client = api_client::Client::new(
         &settings.sync_address,
         &settings.session_token,
