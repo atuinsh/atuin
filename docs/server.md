@@ -11,11 +11,11 @@ USAGE:
     atuin server start [OPTIONS]
 
 FLAGS:
-        --help       Prints help information
+    -h, --help       Prints help information
     -V, --version    Prints version information
 
 OPTIONS:
-    -h, --host <host>
+        --host <host>
     -p, --port <port>
 ```
 
