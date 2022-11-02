@@ -1,17 +1,16 @@
 use chrono::Utc;
-use eyre::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::history::History;
 use atuin_common::utils::uuid_v4;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum EventType {
     Create,
     Delete,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, sqlx::FromRow)]
 pub struct Event {
     pub id: String,
     pub timestamp: chrono::DateTime<Utc>,

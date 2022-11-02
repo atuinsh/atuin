@@ -176,7 +176,7 @@ impl Sqlite {
 impl Database for Sqlite {
     async fn save(&mut self, h: &History) -> Result<()> {
         debug!("saving history to sqlite");
-        let event = Event::new_create(h).expect("failed to create event from history");
+        let event = Event::new_create(h);
 
         let mut tx = self.pool.begin().await?;
         Self::save_raw(&mut tx, h).await?;
@@ -192,7 +192,7 @@ impl Database for Sqlite {
         let mut tx = self.pool.begin().await?;
 
         for i in h {
-            let event = Event::new_create(i).expect("failed to create event from history");
+            let event = Event::new_create(i);
             Self::save_raw(&mut tx, i).await?;
             Self::save_event(&mut tx, &event).await?;
         }
