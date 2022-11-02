@@ -8,7 +8,7 @@ create table events (
 	timestamp timestamp not null,   -- one of the few non-encrypted metadatas
 
 	event_type event_type,
-	data varchar(100000) not null,    -- store the actual history data, encrypted. I don't wanna know!
+	data text not null,    -- store the actual history data, encrypted. I don't wanna know!
 
 	created_at timestamp not null default current_timestamp
 );
