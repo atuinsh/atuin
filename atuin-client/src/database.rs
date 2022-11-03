@@ -331,7 +331,7 @@ impl Database for Sqlite {
     }
 
     async fn event_count(&self) -> Result<i64> {
-        let res: (i64,) = sqlx::query_as("select count(1) from events")
+        let res: i64 = sqlx::query_scalar("select count(1) from events")
             .fetch_one(&self.pool)
             .await?;
 
