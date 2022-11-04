@@ -35,14 +35,11 @@ impl<'a> StatefulWidget for HistoryList<'a> {
     type State = ListState;
 
     fn render(mut self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
-        let list_area = match self.block.take() {
-            Some(b) => {
-                let inner_area = b.inner(area);
-                b.render(area, buf);
-                inner_area
-            }
-            None => area,
-        };
+        let list_area = self.block.take().map_or(area, |b| {
+            let inner_area = b.inner(area);
+            b.render(area, buf);
+            inner_area
+        });
 
         if list_area.width < 1 || list_area.height < 1 || self.history.is_empty() {
             return;

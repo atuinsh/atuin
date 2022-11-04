@@ -136,10 +136,8 @@ impl Cmd {
 
                 // It's better for atuin to silently fail here and attempt to
                 // store whatever is ran, than to throw an error to the terminal
-                let cwd = match env::current_dir() {
-                    Ok(dir) => dir.display().to_string(),
-                    Err(_) => String::from(""),
-                };
+                let cwd = env::current_dir()
+                    .map_or_else(|_| String::new(), |dir| dir.display().to_string());
 
                 let h = History::new(chrono::Utc::now(), command, cwd, -1, -1, None, None);
 
