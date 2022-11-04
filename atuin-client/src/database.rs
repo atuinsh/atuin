@@ -121,7 +121,7 @@ impl Sqlite {
     async fn save_event(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, e: &Event) -> Result<()> {
         let event_type = match e.event_type {
             EventType::Create => "create",
-            EventType::Delete => "create",
+            EventType::Delete => "delete",
         };
 
         sqlx::query(
