@@ -335,7 +335,7 @@ impl Database for Sqlite {
             .fetch_one(&self.pool)
             .await?;
 
-        Ok(res.0)
+        Ok(res)
     }
 
     // Ensure that we have correctly merged the event log
