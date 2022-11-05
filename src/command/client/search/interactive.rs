@@ -372,10 +372,10 @@ pub async fn history(
         Ok(results.swap_remove(index).command)
     } else if index == RETURN_ORIGINAL {
         Ok(String::new())
-    } else if index == RETURN_QUERY {
-        Ok(app.input.into_inner())
     } else {
-        // out of bounds usually implies no selected entry so we return the input
+        // Either:
+        // * index == RETURN_QUERY, in which case we should return the input
+        // * out of bounds -> usually implies no selected entry so we return the input
         Ok(app.input.into_inner())
     }
 }
