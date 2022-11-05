@@ -54,6 +54,15 @@ impl FilterMode {
     }
 }
 
+#[derive(Clone, Debug, Deserialize, Copy)]
+pub enum ExitMode {
+    #[serde(rename = "return-original")]
+    ReturnOriginal,
+
+    #[serde(rename = "return-query")]
+    ReturnQuery,
+}
+
 // FIXME: Can use upstream Dialect enum if https://github.com/stevedonovan/chrono-english/pull/16 is merged
 // FIXME: Above PR was merged, but dependency was changed to interim (fork of chrono-english) in the ... interim
 #[derive(Clone, Debug, Deserialize, Copy)]
@@ -99,6 +108,7 @@ pub struct Settings {
     pub session_path: String,
     pub search_mode: SearchMode,
     pub filter_mode: FilterMode,
+    pub exit_mode: ExitMode,
     // This is automatically loaded when settings is created. Do not set in
     // config! Keep secrets and settings apart.
     pub session_token: String,
@@ -278,6 +288,7 @@ impl Settings {
             .set_default("sync_address", "https://api.atuin.sh")?
             .set_default("search_mode", "fuzzy")?
             .set_default("filter_mode", "global")?
+            .set_default("exit_mode", "return-original")?
             .set_default("session_token", "")?
             .set_default("style", "auto")?
             .add_source(
