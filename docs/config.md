@@ -53,7 +53,7 @@ Configures whether or not to automatically check for updates. Defaults to
 true.
 
 ```
-auto_sync = true/false
+update_check = true/false
 ```
 
 ### `sync_address`
