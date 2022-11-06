@@ -21,7 +21,7 @@ use atuin_client::{
     database::Context,
     database::Database,
     history::History,
-    settings::{FilterMode, SearchMode, Settings},
+    settings::{ExitMode, FilterMode, SearchMode, Settings},
 };
 
 use super::{
@@ -30,6 +30,9 @@ use super::{
     history_list::{HistoryList, ListState, PREFIX_LENGTH},
 };
 use crate::VERSION;
+
+const RETURN_ORIGINAL: usize = usize::MAX;
+const RETURN_QUERY: usize = usize::MAX - 1;
 
 struct State {
     history_count: i64,
@@ -59,9 +62,20 @@ impl State {
         Ok(results)
     }
 
-    fn handle_input(&mut self, input: &TermEvent, len: usize) -> Option<usize> {
+    fn handle_input(
+        &mut self,
+        settings: &Settings,
+        input: &TermEvent,
+        len: usize,
+    ) -> Option<usize> {
         match input {
-            TermEvent::Key(Key::Esc | Key::Ctrl('c' | 'd' | 'g')) => return Some(usize::MAX),
+            TermEvent::Key(Key::Ctrl('c' | 'd' | 'g')) => return Some(RETURN_ORIGINAL),
+            TermEvent::Key(Key::Esc) => {
+                return Some(match settings.exit_mode {
+                    ExitMode::ReturnOriginal => RETURN_ORIGINAL,
+                    ExitMode::ReturnQuery => RETURN_QUERY,
+                })
+            }
             TermEvent::Key(Key::Char('\n')) => {
                 return Some(self.results_state.selected());
             }
@@ -323,14 +337,14 @@ pub async fn history(
 
         // Handle input
         if let Event::Input(input) = events.next()? {
-            if let Some(i) = app.handle_input(&input, results.len()) {
+            if let Some(i) = app.handle_input(settings, &input, results.len()) {
                 break 'render i;
             }
         }
 
         // After we receive input process the whole event channel before query/render.
         while let Ok(Event::Input(input)) = events.try_next() {
-            if let Some(i) = app.handle_input(&input, results.len()) {
+            if let Some(i) = app.handle_input(settings, &input, results.len()) {
                 break 'render i;
             }
         }
@@ -356,11 +370,12 @@ pub async fn history(
     if index < results.len() {
         // index is in bounds so we return that entry
         Ok(results.swap_remove(index).command)
-    } else if index == usize::MAX {
-        // index is max which implies an early exit
+    } else if index == RETURN_ORIGINAL {
         Ok(String::new())
     } else {
-        // out of bounds usually implies no selected entry so we return the input
+        // Either:
+        // * index == RETURN_QUERY, in which case we should return the input
+        // * out of bounds -> usually implies no selected entry so we return the input
         Ok(app.input.into_inner())
     }
 }

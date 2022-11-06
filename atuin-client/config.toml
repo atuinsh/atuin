@@ -33,3 +33,7 @@
 ## which style to use
 ## possible values: auto, full, compact
 #style = "auto"
+
+## what to do when the escape key is pressed when searching
+## possible values: return-original, return-query
+# exit_mode = "return-original"

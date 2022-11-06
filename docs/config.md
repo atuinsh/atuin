@@ -143,6 +143,21 @@ Filter modes can still be toggled via ctrl-r
 search_mode = "fulltext"
 ```
 
+### `exit_mode`
+
+What to do when the escape key is pressed when searching
+
+| Value                    | Behaviour	     |
+|------------------------- | --------------- |
+| return-original (default) | Set the command-line to the value it had before starting search |
+| return-query              | Set the command-line to the search query you have entered so far |
+
+Pressing ctrl+c or ctrl+d will always return the original command-line value.
+
+```
+exit_mode = "return-query"
+```
+
 #### `fuzzy` search syntax
 
 The "fuzzy" search syntax is based on the
