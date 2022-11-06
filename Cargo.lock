@@ -79,7 +79,7 @@ dependencies = [
 
 [[package]]
 name = "atuin"
-version = "11.0.0"
+version = "12.0.0"
 dependencies = [
  "async-trait",
  "atuin-client",
@@ -113,7 +113,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-client"
-version = "11.0.0"
+version = "12.0.0"
 dependencies = [
  "async-trait",
  "atuin-common",
@@ -150,7 +150,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-common"
-version = "11.0.0"
+version = "12.0.0"
 dependencies = [
  "chrono",
  "serde",
@@ -159,7 +159,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-server"
-version = "11.0.0"
+version = "12.0.0"
 dependencies = [
  "async-trait",
  "atuin-common",
