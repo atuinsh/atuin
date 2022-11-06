@@ -159,6 +159,11 @@ impl DrawState<'_> {
 
         for section in h.command.split_ascii_whitespace() {
             self.x += 1;
+            if self.x > self.list_area.width {
+                // Avoid attempting to draw a command section beyond the width
+                // of the list
+                return;
+            }
             self.draw(section, style);
         }
     }
