@@ -19,7 +19,8 @@ pub struct Fish {
 /// see https://fishshell.com/docs/current/interactive.html#searchable-command-history
 fn default_histpath() -> Result<PathBuf> {
     let base = BaseDirs::new().ok_or_else(|| eyre!("could not determine data directory"))?;
-    let data = base.data_local_dir();
+    let data = std::env::var("XDG_DATA_HOME")
+        .map_or_else(|_| base.home_dir().join(".local").join("share"), PathBuf::from);
 
     // fish supports multiple history sessions
     // If `fish_history` var is missing, or set to `default`, use `fish` as the session
