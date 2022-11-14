@@ -2,7 +2,7 @@ ATUIN_SESSION=$(atuin uuid)
 export ATUIN_SESSION
 
 _atuin_preexec() {
-    local id; id=$(atuin history start -- "$1")
+    local id; id=$(RUST_LOG=error atuin history start -- "$1")
     export ATUIN_HISTORY_ID="${id}"
 }
 
