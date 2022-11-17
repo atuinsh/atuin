@@ -140,7 +140,7 @@ Filter modes can still be toggled via ctrl-r
 
 
 ```
-search_mode = "fulltext"
+filter_mode = "host"
 ```
 
 ### `exit_mode`
