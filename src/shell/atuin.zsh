@@ -9,11 +9,11 @@
 # Source this in your ~/.zshrc
 autoload -U add-zsh-hook
 
-export ATUIN_SESSION=$(atuin uuid)
+export ATUIN_SESSION=$(RUST_LOG=error atuin uuid)
 export ATUIN_HISTORY="atuin history list"
 
 _atuin_preexec(){
-	local id; id=$(atuin history start -- "$1")
+	local id; id=$(RUST_LOG=error atuin history start -- "$1")
 	export ATUIN_HISTORY_ID="$id"
 }
 

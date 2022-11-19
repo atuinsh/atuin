@@ -1,4 +1,4 @@
-ATUIN_SESSION=$(atuin uuid)
+ATUIN_SESSION=$(RUST_LOG=error atuin uuid)
 export ATUIN_SESSION
 
 _atuin_preexec() {
