@@ -25,6 +25,17 @@ pub struct Context {
     pub hostname: String,
 }
 
+#[derive(Default, Clone)]
+pub struct OptFilters {
+    pub exit: Option<i64>,
+    pub exclude_exit: Option<i64>,
+    pub cwd: Option<String>,
+    pub exclude_cwd: Option<String>,
+    pub before: Option<String>,
+    pub after: Option<String>,
+    pub limit: Option<i64>,
+}
+
 pub fn current_context() -> Context {
     let Ok(session) = env::var("ATUIN_SESSION") else {
         eprintln!("ERROR: Failed to find $ATUIN_SESSION in the environment. Check that you have correctly set up your shell.");
@@ -79,9 +90,7 @@ pub trait Database: Send + Sync + 'static {
         filter: FilterMode,
         context: &Context,
         query: &str,
-        limit: Option<i64>,
-        before: Option<i64>,
-        after: Option<i64>,
+        filter_options: OptFilters,
     ) -> Result<Vec<History>>;
 
     async fn query_history(&self, query: &str) -> Result<Vec<History>>;
@@ -340,9 +349,7 @@ impl Database for Sqlite {
         filter: FilterMode,
         context: &Context,
         query: &str,
-        limit: Option<i64>,
-        before: Option<i64>,
-        after: Option<i64>,
+        filter_options: OptFilters,
     ) -> Result<Vec<History>> {
         let mut sql = SqlBuilder::select_from("history");
 
@@ -350,16 +357,8 @@ impl Database for Sqlite {
             .having("max(timestamp)")
             .order_desc("timestamp");
 
-        if let Some(limit) = limit {
+        if let Some(limit) = filter_options.limit {
             sql.limit(limit);
-        }
-
-        if let Some(after) = after {
-            sql.and_where_gt("timestamp", after);
-        }
-
-        if let Some(before) = before {
-            sql.and_where_lt("timestamp", before);
         }
 
         match filter {
@@ -420,6 +419,32 @@ impl Database for Sqlite {
                 &mut sql
             }
         };
+
+        filter_options
+            .exit
+            .map(|exit| sql.and_where_eq("exit", exit));
+
+        filter_options
+            .exclude_exit
+            .map(|exclude_exit| sql.and_where_ne("exit", exclude_exit));
+
+        filter_options
+            .cwd
+            .map(|cwd| sql.and_where_eq("cwd", quote(cwd)));
+
+        filter_options
+            .exclude_cwd
+            .map(|exclude_cwd| sql.and_where_ne("cwd", quote(exclude_cwd)));
+
+        filter_options.before.map(|before| {
+            interim::parse_date_string(before.as_str(), Utc::now(), interim::Dialect::Uk)
+                .map(|before| sql.and_where_lt("timestamp", quote(before.timestamp_nanos())))
+        });
+
+        filter_options.after.map(|after| {
+            interim::parse_date_string(after.as_str(), Utc::now(), interim::Dialect::Uk)
+                .map(|after| sql.and_where_gt("timestamp", quote(after.timestamp_nanos())))
+        });
 
         let query = sql.sql().expect("bug in search query. please report");
 
@@ -508,7 +533,15 @@ mod test {
         };
 
         let results = db
-            .search(mode, filter_mode, &context, query, None, None, None)
+            .search(
+                mode,
+                filter_mode,
+                &context,
+                query,
+                OptFilters {
+                    ..Default::default()
+                },
+            )
             .await?;
 
         assert_eq!(
@@ -718,9 +751,9 @@ mod test {
                 FilterMode::Global,
                 &context,
                 "",
-                None,
-                None,
-                None,
+                OptFilters {
+                    ..Default::default()
+                },
             )
             .await
             .unwrap();
