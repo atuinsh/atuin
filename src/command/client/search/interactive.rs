@@ -2,10 +2,12 @@ use std::io::stdout;
 
 use eyre::Result;
 use semver::Version;
+#[cfg(any(target_os = "macos", target_family = "unix"))]
 use termion::{
     event::Event as TermEvent, event::Key, event::MouseButton, event::MouseEvent,
     input::MouseTerminal, raw::IntoRawMode, screen::AlternateScreen,
 };
+#[cfg(any(target_os = "macos", target_family = "unix"))]
 use tui::{
     backend::{Backend, TermionBackend},
     layout::{Alignment, Constraint, Direction, Layout},

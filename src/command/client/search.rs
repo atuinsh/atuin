@@ -8,10 +8,14 @@ use atuin_client::{
 
 use super::history::ListMode;
 
+#[cfg(any(target_os = "macos", target_family = "unix"))]
 mod cursor;
 mod duration;
+#[cfg(any(target_os = "macos", target_family = "unix"))]
 mod event;
+#[cfg(any(target_os = "macos", target_family = "unix"))]
 mod history_list;
+#[cfg(any(target_os = "macos", target_family = "unix"))]
 mod interactive;
 pub use duration::format_duration;
 
@@ -46,7 +50,8 @@ pub struct Cmd {
     limit: Option<i64>,
 
     /// Open interactive search UI
-    #[arg(long, short)]
+    #[cfg_attr(any(target_os = "macos", target_family = "unix"), arg(long, short))]
+    #[cfg(any(target_os = "macos", target_family = "unix"))]
     interactive: bool,
 
     /// Use human-readable formatting for time
@@ -62,29 +67,31 @@ pub struct Cmd {
 
 impl Cmd {
     pub async fn run(self, db: &mut impl Database, settings: &Settings) -> Result<()> {
+        #[cfg(any(target_os = "macos", target_family = "unix"))]
         if self.interactive {
             let item = interactive::history(&self.query, settings, db).await?;
             eprintln!("{}", item);
-        } else {
-            let list_mode = ListMode::from_flags(self.human, self.cmd_only);
-            let entries = run_non_interactive(
-                settings,
-                list_mode,
-                self.cwd,
-                self.exit,
-                self.exclude_exit,
-                self.exclude_cwd,
-                self.before,
-                self.after,
-                self.limit,
-                &self.query,
-                db,
-            )
-            .await?;
-            if entries == 0 {
-                std::process::exit(1)
-            }
-        };
+        }
+
+        let list_mode = ListMode::from_flags(self.human, self.cmd_only);
+        let entries = run_non_interactive(
+            settings,
+            list_mode,
+            self.cwd,
+            self.exit,
+            self.exclude_exit,
+            self.exclude_cwd,
+            self.before,
+            self.after,
+            self.limit,
+            &self.query,
+            db,
+        )
+        .await?;
+        if entries == 0 {
+            std::process::exit(1)
+        }
+
         Ok(())
     }
 }

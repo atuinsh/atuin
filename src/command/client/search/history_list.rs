@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use atuin_client::history::History;
+#[cfg(any(target_os = "macos", target_family = "unix"))]
 use tui::{
     buffer::Buffer,
     layout::Rect,

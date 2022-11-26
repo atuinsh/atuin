@@ -11,7 +11,10 @@ pub fn uuid_v4() -> String {
 // I don't want to use ProjectDirs, it puts config in awkward places on
 // mac. Data too. Seems to be more intended for GUI apps.
 pub fn home_dir() -> PathBuf {
+    #[cfg(any(target_os = "macos", target_family = "unix"))]
     let home = std::env::var("HOME").expect("$HOME not found");
+    #[cfg(windows)]
+    let home = std::env::var("LOCALAPPDATA").expect("$LOCALAPPDATA not found");
     PathBuf::from(home)
 }
 

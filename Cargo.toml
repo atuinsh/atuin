@@ -56,8 +56,6 @@ directories = "4"
 indicatif = "0.17.1"
 serde = { version = "1.0.145", features = ["derive"] }
 serde_json = "1.0.86"
-tui = { version = "0.19", default-features = false, features = ["termion"] }
-termion = "1.5"
 unicode-width = "0.1"
 itertools = "0.10.5"
 tokio = { version = "1", features = ["full"] }
@@ -72,6 +70,10 @@ fs-err = "2.7"
 whoami = "1.1.2"
 rpassword = "7.0"
 semver = "1.0.14"
+
+[target.'cfg(any(target_os = "macos", target_family = "unix"))'.dependencies]
+tui = { version = "0.19", default-features = false, features = ["termion"] }
+termion = "1.5"
 
 [dependencies.tracing-subscriber]
 version = "0.3"

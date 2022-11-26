@@ -1,6 +1,7 @@
 use std::{thread, time::Duration};
 
 use crossbeam_channel::unbounded;
+#[cfg(any(target_os = "macos", target_family = "unix"))]
 use termion::{event::Event as TermEvent, event::Key, input::TermRead};
 
 pub enum Event<I> {
