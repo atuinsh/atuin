@@ -71,6 +71,7 @@ impl Cmd {
         if self.interactive {
             let item = interactive::history(&self.query, settings, db).await?;
             eprintln!("{}", item);
+            return Ok(());
         }
 
         let list_mode = ListMode::from_flags(self.human, self.cmd_only);
