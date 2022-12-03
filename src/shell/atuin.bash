@@ -17,7 +17,7 @@ _atuin_precmd() {
 __atuin_history ()
 {
     tput rmkx
-    HISTORY="$(RUST_LOG=error atuin search -i -- "${READLINE_LINE}" 3>&1 1>&2 2>&3)"
+    HISTORY="$(RUST_LOG=error atuin search $* -i -- "${READLINE_LINE}" 3>&1 1>&2 2>&3)"
     tput smkx
 
     READLINE_LINE=${HISTORY}
@@ -34,6 +34,6 @@ fi
 
 if [[ -z ${ATUIN_NOBIND} ]]; then
     bind -x '"\C-r": __atuin_history'
-    bind -x '"\e[A": __atuin_history'
-    bind -x '"\eOA": __atuin_history'
+    bind -x '"\e[A": __atuin_history --filter-mode session'
+    bind -x '"\eOA": __atuin_history --filter-mode session'
 fi
