@@ -94,6 +94,9 @@ impl State {
             TermEvent::Key(Key::Backspace) => {
                 self.input.back();
             }
+            TermEvent::Key(Key::Delete) => {
+                self.input.remove();
+            }
             TermEvent::Key(Key::Ctrl('w')) => {
                 // remove the first batch of whitespace
                 while matches!(self.input.back(), Some(c) if c.is_whitespace()) {}

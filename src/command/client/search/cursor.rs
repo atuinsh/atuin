@@ -57,13 +57,17 @@ impl Cursor {
         self.index += c.len_utf8();
     }
 
-    pub fn remove(&mut self) -> char {
-        self.source.remove(self.index)
+    pub fn remove(&mut self) -> Option<char> {
+        if self.index < self.source.len() {
+            Some(self.source.remove(self.index))
+        } else {
+            None
+        }
     }
 
     pub fn back(&mut self) -> Option<char> {
         if self.left() {
-            Some(self.remove())
+            self.remove()
         } else {
             None
         }
