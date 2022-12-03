@@ -69,6 +69,7 @@ impl State {
         len: usize,
     ) -> Option<usize> {
         match input {
+            TermEvent::Key(Key::Char('\t')) => {}
             TermEvent::Key(Key::Ctrl('c' | 'd' | 'g')) => return Some(RETURN_ORIGINAL),
             TermEvent::Key(Key::Esc) => {
                 return Some(match settings.exit_mode {
