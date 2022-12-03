@@ -88,8 +88,8 @@ impl State {
                 self.input.left();
             }
             TermEvent::Key(Key::Right | Key::Ctrl('l')) => self.input.right(),
-            TermEvent::Key(Key::Ctrl('a')) => self.input.start(),
-            TermEvent::Key(Key::Ctrl('e')) => self.input.end(),
+            TermEvent::Key(Key::Ctrl('a') | Key::Home) => self.input.start(),
+            TermEvent::Key(Key::Ctrl('e') | Key::End) => self.input.end(),
             TermEvent::Key(Key::Char(c)) => self.input.insert(*c),
             TermEvent::Key(Key::Backspace) => {
                 self.input.back();
