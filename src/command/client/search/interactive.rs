@@ -69,6 +69,7 @@ impl State {
         len: usize,
     ) -> Option<usize> {
         match input {
+            TermEvent::Key(Key::Char('\t')) => {}
             TermEvent::Key(Key::Ctrl('c' | 'd' | 'g')) => return Some(RETURN_ORIGINAL),
             TermEvent::Key(Key::Esc) => {
                 return Some(match settings.exit_mode {
@@ -87,11 +88,14 @@ impl State {
                 self.input.left();
             }
             TermEvent::Key(Key::Right | Key::Ctrl('l')) => self.input.right(),
-            TermEvent::Key(Key::Ctrl('a')) => self.input.start(),
-            TermEvent::Key(Key::Ctrl('e')) => self.input.end(),
+            TermEvent::Key(Key::Ctrl('a') | Key::Home) => self.input.start(),
+            TermEvent::Key(Key::Ctrl('e') | Key::End) => self.input.end(),
             TermEvent::Key(Key::Char(c)) => self.input.insert(*c),
             TermEvent::Key(Key::Backspace) => {
                 self.input.back();
+            }
+            TermEvent::Key(Key::Delete) => {
+                self.input.remove();
             }
             TermEvent::Key(Key::Ctrl('w')) => {
                 // remove the first batch of whitespace
