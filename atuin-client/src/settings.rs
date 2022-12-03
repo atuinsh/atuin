@@ -4,6 +4,7 @@ use std::{
 };
 
 use chrono::{prelude::*, Utc};
+use clap::ValueEnum;
 use config::{Config, Environment, File as ConfigFile, FileFormat};
 use eyre::{eyre, Context, Result};
 use fs_err::{create_dir_all, File};
@@ -16,7 +17,7 @@ pub const LAST_SYNC_FILENAME: &str = "last_sync_time";
 pub const LAST_VERSION_CHECK_FILENAME: &str = "last_version_check_time";
 pub const LATEST_VERSION_FILENAME: &str = "latest_version";
 
-#[derive(Clone, Debug, Deserialize, Copy)]
+#[derive(Clone, Debug, Deserialize, Copy, ValueEnum)]
 pub enum SearchMode {
     #[serde(rename = "prefix")]
     Prefix,
@@ -28,7 +29,7 @@ pub enum SearchMode {
     Fuzzy,
 }
 
-#[derive(Clone, Debug, Deserialize, Copy, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Copy, PartialEq, Eq, ValueEnum)]
 pub enum FilterMode {
     #[serde(rename = "global")]
     Global = 0,

@@ -3,7 +3,10 @@ use clap::Parser;
 use eyre::Result;
 
 use atuin_client::{
-    database::current_context, database::Database, history::History, settings::Settings,
+    database::current_context,
+    database::Database,
+    history::History,
+    settings::{FilterMode, SearchMode, Settings},
 };
 
 use super::history::ListMode;
@@ -49,6 +52,14 @@ pub struct Cmd {
     #[arg(long, short)]
     interactive: bool,
 
+    /// Allow overriding filter mode over config
+    #[arg(long = "filter-mode")]
+    filter_mode: Option<FilterMode>,
+
+    /// Allow overriding search mode over config
+    #[arg(long = "search-mode")]
+    search_mode: Option<SearchMode>,
+
     /// Use human-readable formatting for time
     #[arg(long)]
     human: bool,
@@ -61,7 +72,13 @@ pub struct Cmd {
 }
 
 impl Cmd {
-    pub async fn run(self, db: &mut impl Database, settings: &Settings) -> Result<()> {
+    pub async fn run(self, db: &mut impl Database, settings: &mut Settings) -> Result<()> {
+        if self.search_mode.is_some() {
+            settings.search_mode = self.search_mode.unwrap();
+        }
+        if self.filter_mode.is_some() {
+            settings.filter_mode = self.filter_mode.unwrap();
+        }
         if self.interactive {
             let item = interactive::history(&self.query, settings, db).await?;
             eprintln!("{item}");
