@@ -87,8 +87,9 @@ __atuin_install_linux(){
     else
         if ! command -v lsb_release &> /dev/null; then
             echo "lsb_release could not be found, unable to determine your distribution"
-            echo "If you are using Arch Linux, please get community/lsb-release"
-            exit 1
+            echo "If you are using Arch Linux, please get community/lsb-release or install Atuin using pacman"
+            echo
+            __atuin_install_unsupported
         fi
         OS=$(lsb_release -i | awk '{ print $3 }')
     fi
@@ -158,7 +159,7 @@ __atuin_install_unsupported(){
 	echo "If you have any problems, please open an issue!"
 
 	while true; do
-		read -r -p "Do you wish to attempt an install with 'cargo'?" yn
+		read -r -p "Do you wish to attempt an install with 'cargo'? [Y/N] " yn
 		case $yn in
 			[Yy]* ) __atuin_install_cargo; break;;
 			[Nn]* ) exit;;
