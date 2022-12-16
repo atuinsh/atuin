@@ -68,7 +68,7 @@ base64 = "0.13.0"
 crossbeam-channel = "0.5.1"
 clap = { version = "4.0.18", features = ["derive"] }
 clap_complete = "4.0.3"
-fs-err = "2.7"
+fs-err = "2.9"
 whoami = "1.1.2"
 rpassword = "7.0"
 semver = "1.0.14"
