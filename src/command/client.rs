@@ -4,6 +4,7 @@ use clap::Subcommand;
 use eyre::{Result, WrapErr};
 
 use atuin_client::{database::Sqlite, settings::Settings};
+use env_logger::Builder;
 
 #[cfg(feature = "sync")]
 mod sync;
@@ -38,7 +39,10 @@ pub enum Cmd {
 impl Cmd {
     #[tokio::main(flavor = "current_thread")]
     pub async fn run(self) -> Result<()> {
-        pretty_env_logger::init();
+        Builder::new()
+            .filter_level(log::LevelFilter::Off)
+            .parse_env("ATUIN_LOG")
+            .init();
 
         let settings = Settings::new().wrap_err("could not load client settings")?;
 
