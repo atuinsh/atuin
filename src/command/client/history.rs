@@ -206,12 +206,12 @@ impl Cmd {
                         db.query_history(&query).await?
                     }
                     (Some(session), None) => {
-                        let query = format!("select * from history where session = {};", session);
+                        let query = format!("select * from history where session = '{}';", session);
                         db.query_history(&query).await?
                     }
                     (Some(session), Some(cwd)) => {
                         let query = format!(
-                            "select * from history where cwd = '{}' and session = {};",
+                            "select * from history where cwd = '{}' and session = '{}';",
                             cwd, session
                         );
                         db.query_history(&query).await?
