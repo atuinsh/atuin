@@ -738,7 +738,7 @@ impl SqlBuilderExt for SqlBuilder {
         } else {
             cond.push_str(" LIKE '");
         }
-        cond.push_str(&esc(&mask.to_string()));
+        cond.push_str(&esc(mask.to_string()));
         cond.push('\'');
         if is_or {
             self.or_where(cond)

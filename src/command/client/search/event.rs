@@ -43,7 +43,7 @@ impl Events {
                 let tty = termion::get_tty().expect("Could not find tty");
                 for event in tty.events().flatten() {
                     if let Err(err) = tx.send(Event::Input(event)) {
-                        eprintln!("{}", err);
+                        eprintln!("{err}");
                         return;
                     }
                 }

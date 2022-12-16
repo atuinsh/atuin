@@ -256,7 +256,7 @@ impl State {
             .split(chunks[0]);
 
         let title = Paragraph::new(Text::from(Span::styled(
-            format!("Atuin v{}", VERSION),
+            format!("Atuin v{VERSION}"),
             Style::default().fg(Color::DarkGray),
         )));
 

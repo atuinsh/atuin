@@ -64,7 +64,7 @@ impl Cmd {
                     println!("Detected Bash");
                     import::<Bash, DB>(db).await
                 } else {
-                    println!("cannot import {} history", shell);
+                    println!("cannot import {shell} history");
                     Ok(())
                 }
             }
