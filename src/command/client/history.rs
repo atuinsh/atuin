@@ -202,11 +202,11 @@ impl Cmd {
                 let history = match (session, cwd) {
                     (None, None) => db.list(settings.filter_mode, &context, None, false).await?,
                     (None, Some(cwd)) => {
-                        let query = format!("select * from history where cwd = '{}';", cwd);
+                        let query = format!("select * from history where cwd = '{cwd}';");
                         db.query_history(&query).await?
                     }
                     (Some(session), None) => {
-                        let query = format!("select * from history where session = '{}';", session);
+                        let query = format!("select * from history where session = '{session}';");
                         db.query_history(&query).await?
                     }
                     (Some(session), Some(cwd)) => {

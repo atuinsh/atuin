@@ -4,7 +4,7 @@ use std::{ops::ControlFlow, time::Duration};
 pub fn format_duration(f: Duration) -> String {
     fn item(name: &str, value: u64) -> ControlFlow<String> {
         if value > 0 {
-            ControlFlow::Break(format!("{}{}", value, name))
+            ControlFlow::Break(format!("{value}{name}"))
         } else {
             ControlFlow::Continue(())
         }

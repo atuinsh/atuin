@@ -72,6 +72,6 @@ pub(super) fn read_user_password() -> String {
 }
 
 fn read_user_input(name: &'static str) -> String {
-    eprint!("Please enter {}: ", name);
+    eprint!("Please enter {name}: ");
     get_input().expect("Failed to read from input")
 }

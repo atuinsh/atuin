@@ -61,5 +61,5 @@ ZhiHong Li (@OnePieceJoker)
 "#;
 
 pub fn run() {
-    println!("{}", CONTRIBUTORS);
+    println!("{CONTRIBUTORS}");
 }

@@ -64,7 +64,7 @@ impl Cmd {
     pub async fn run(self, db: &mut impl Database, settings: &Settings) -> Result<()> {
         if self.interactive {
             let item = interactive::history(&self.query, settings, db).await?;
-            eprintln!("{}", item);
+            eprintln!("{item}");
         } else {
             let list_mode = ListMode::from_flags(self.human, self.cmd_only);
             let entries = run_non_interactive(
