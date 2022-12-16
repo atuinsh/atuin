@@ -45,7 +45,7 @@ sqlx = { version = "0.6", features = [
   "sqlite",
 ] }
 minspan = "0.1.1"
-regex = "1.5.4"
+regex = "1.7.0"
 fs-err = "2.7"
 sql-builder = "3"
 lazy_static = "1"
