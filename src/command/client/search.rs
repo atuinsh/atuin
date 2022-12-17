@@ -18,6 +18,7 @@ mod history_list;
 mod interactive;
 pub use duration::format_duration;
 
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Parser)]
 pub struct Cmd {
     /// Filter search result by directory
@@ -60,6 +61,10 @@ pub struct Cmd {
     #[arg(long = "search-mode")]
     search_mode: Option<SearchMode>,
 
+    /// Marker argument used to inform atuin that it was invoked from a shell up-key binding (hidden from help to avoid confusion)
+    #[arg(long = "shell-up-key-binding", hide = true)]
+    shell_up_key_binding: bool,
+
     /// Use human-readable formatting for time
     #[arg(long)]
     human: bool,
@@ -79,6 +84,7 @@ impl Cmd {
         if self.filter_mode.is_some() {
             settings.filter_mode = self.filter_mode.unwrap();
         }
+        settings.shell_up_key_binding = self.shell_up_key_binding;
         if self.interactive {
             let item = interactive::history(&self.query, settings, db).await?;
             eprintln!("{item}");

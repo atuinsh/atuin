@@ -35,6 +35,6 @@ fi
 
 if [[ -z ${ATUIN_NOBIND} ]]; then
     bind -x '"\C-r": __atuin_history'
-    bind -x '"\e[A": __atuin_history --filter-mode session'
-    bind -x '"\eOA": __atuin_history --filter-mode session'
+    bind -x '"\e[A": __atuin_history --shell-up-key-binding'
+    bind -x '"\eOA": __atuin_history --shell-up-key-binding'
 fi

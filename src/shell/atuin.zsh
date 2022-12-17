@@ -34,7 +34,8 @@ _atuin_search(){
 	echoti rmkx
 	# swap stderr and stdout, so that the tui stuff works
 	# TODO: not this
-	output=$(RUST_LOG=error atuin search -i -- $BUFFER 3>&1 1>&2 2>&3)
+    # shellcheck disable=SC2048
+	output=$(RUST_LOG=error atuin search $* -i -- $BUFFER 3>&1 1>&2 2>&3)
 	echoti smkx
 
 	if [[ -n $output ]] ; then
@@ -54,6 +55,6 @@ if [[ -z $ATUIN_NOBIND ]]; then
 	bindkey '^r' _atuin_search_widget
 
 	# depends on terminal mode
-	bindkey '^[[A' _atuin_search_widget
-	bindkey '^[OA' _atuin_search_widget
+	bindkey '^[[A' _atuin_search_widget --shell-up-key-binding
+	bindkey '^[OA' _atuin_search_widget --shell-up-key-binding
 fi

@@ -49,7 +49,7 @@ auto_sync = true/false
 
 ### `update_check`
 
-Configures whether or not to automatically check for updates. Defaults to 
+Configures whether or not to automatically check for updates. Defaults to
 true.
 
 ```
@@ -141,6 +141,16 @@ Filter modes can still be toggled via ctrl-r
 
 ```
 filter_mode = "host"
+```
+
+### `filter_mode_shell_up_key_binding`
+
+The default filter to use when searching and being invoked from a shell up-key binding.
+
+Accepts exactly the same options as `filter_mode` above
+
+```
+filter_mode_shell_up_key_binding = "session"
 ```
 
 ### `exit_mode`

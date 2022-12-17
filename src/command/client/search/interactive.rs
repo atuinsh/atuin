@@ -329,7 +329,11 @@ pub async fn history(
         input,
         results_state: ListState::default(),
         context: current_context(),
-        filter_mode: settings.filter_mode,
+        filter_mode: if settings.shell_up_key_binding {
+            settings.filter_mode_shell_up_key_binding
+        } else {
+            settings.filter_mode
+        },
         update_needed,
     };
 
