@@ -277,6 +277,7 @@ impl State {
                     Constraint::Length(u16::from(show_help)),
                     Constraint::Min(1),
                     Constraint::Length(1),
+                    Constraint::Length(2),
                 ]
                 .as_ref(),
             )
@@ -317,8 +318,8 @@ impl State {
         f.render_widget(help, header_chunks[1]);
         f.render_widget(stats, header_chunks[2]);
 
-        let results = HistoryList::new(results);
-        f.render_stateful_widget(results, chunks[1], &mut self.results_state);
+        let results_list = HistoryList::new(results);
+        f.render_stateful_widget(results_list, chunks[1], &mut self.results_state);
 
         let input = format!(
             "[{:^14}] {}",
@@ -327,6 +328,22 @@ impl State {
         );
         let input = Paragraph::new(input);
         f.render_widget(input, chunks[2]);
+
+        let selected = self.results_state.selected();
+        let command = if results.is_empty() {
+            ""
+        } else {
+            &results[selected].command
+        }
+        .chars()
+        .collect::<Vec<char>>()
+        .chunks((f.size().width - 2).into())
+        .map(|chunk| chunk.iter().collect::<String>())
+        .collect::<Vec<String>>()
+        .join("\n");
+        let preview = command;
+        let preview = Paragraph::new(preview).style(Style::default().fg(Color::DarkGray));
+        f.render_widget(preview, chunks[3]);
 
         let extra_width = UnicodeWidthStr::width(self.input.substring());
 
