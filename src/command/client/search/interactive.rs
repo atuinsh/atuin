@@ -267,13 +267,14 @@ impl State {
 
     #[allow(clippy::cast_possible_truncation)]
     fn draw_compact<T: Backend>(&mut self, f: &mut Frame<'_, T>, results: &[History]) {
+        let show_help = f.size().height > 1;
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .margin(0)
             .horizontal_margin(1)
             .constraints(
                 [
-                    Constraint::Length(1),
+                    Constraint::Length(u16::from(show_help)),
                     Constraint::Min(1),
                     Constraint::Length(1),
                 ]
