@@ -333,8 +333,7 @@ impl State {
         f.set_cursor(
             // Put cursor past the end of the input text
             chunks[2].x + extra_width as u16 + PREFIX_LENGTH + 1,
-            // Move one line down, from the border to the input line
-            chunks[2].y + 1,
+            chunks[2].y,
         );
     }
 }
