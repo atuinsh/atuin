@@ -46,15 +46,20 @@ _atuin_search(){
 	zle reset-prompt
 }
 
+_atuin_up_search(){
+  _atuin_search --shell-up-key-binding
+}
+
 add-zsh-hook preexec _atuin_preexec
 add-zsh-hook precmd _atuin_precmd
 
 zle -N _atuin_search_widget _atuin_search
+zle -N _atuin_up_search_widget _atuin_up_search
 
 if [[ -z $ATUIN_NOBIND ]]; then
 	bindkey '^r' _atuin_search_widget
 
 	# depends on terminal mode
-	bindkey '^[[A' _atuin_search_widget --shell-up-key-binding
-	bindkey '^[OA' _atuin_search_widget --shell-up-key-binding
+  bindkey '^[[A' _atuin_up_search_widget
+  bindkey '^[OA' _atuin_up_search_widget
 fi
