@@ -110,6 +110,7 @@ dependencies = [
  "atuin-common",
  "base64 0.20.0",
  "chrono",
+ "clap",
  "config",
  "directories",
  "eyre",

@@ -4,6 +4,7 @@ use std::{
 };
 
 use chrono::{prelude::*, Utc};
+use clap::ValueEnum;
 use config::{Config, Environment, File as ConfigFile, FileFormat};
 use eyre::{eyre, Context, Result};
 use fs_err::{create_dir_all, File};
@@ -16,7 +17,7 @@ pub const LAST_SYNC_FILENAME: &str = "last_sync_time";
 pub const LAST_VERSION_CHECK_FILENAME: &str = "last_version_check_time";
 pub const LATEST_VERSION_FILENAME: &str = "latest_version";
 
-#[derive(Clone, Debug, Deserialize, Copy)]
+#[derive(Clone, Debug, Deserialize, Copy, ValueEnum)]
 pub enum SearchMode {
     #[serde(rename = "prefix")]
     Prefix,
@@ -28,7 +29,7 @@ pub enum SearchMode {
     Fuzzy,
 }
 
-#[derive(Clone, Debug, Deserialize, Copy, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Copy, PartialEq, Eq, ValueEnum)]
 pub enum FilterMode {
     #[serde(rename = "global")]
     Global = 0,
@@ -108,6 +109,8 @@ pub struct Settings {
     pub session_path: String,
     pub search_mode: SearchMode,
     pub filter_mode: FilterMode,
+    pub filter_mode_shell_up_key_binding: FilterMode,
+    pub shell_up_key_binding: bool,
     pub exit_mode: ExitMode,
     // This is automatically loaded when settings is created. Do not set in
     // config! Keep secrets and settings apart.
@@ -288,6 +291,8 @@ impl Settings {
             .set_default("sync_address", "https://api.atuin.sh")?
             .set_default("search_mode", "fuzzy")?
             .set_default("filter_mode", "global")?
+            .set_default("filter_mode_shell_up_key_binding", "global")?
+            .set_default("shell_up_key_binding", false)?
             .set_default("exit_mode", "return-original")?
             .set_default("session_token", "")?
             .set_default("style", "auto")?

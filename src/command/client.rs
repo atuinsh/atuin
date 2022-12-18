@@ -44,7 +44,7 @@ impl Cmd {
             .parse_env("ATUIN_LOG")
             .init();
 
-        let settings = Settings::new().wrap_err("could not load client settings")?;
+        let mut settings = Settings::new().wrap_err("could not load client settings")?;
 
         let db_path = PathBuf::from(settings.db_path.as_str());
         let mut db = Sqlite::new(db_path).await?;
@@ -53,7 +53,7 @@ impl Cmd {
             Self::History(history) => history.run(&settings, &mut db).await,
             Self::Import(import) => import.run(&mut db).await,
             Self::Stats(stats) => stats.run(&mut db, &settings).await,
-            Self::Search(search) => search.run(&mut db, &settings).await,
+            Self::Search(search) => search.run(&mut db, &mut settings).await,
             #[cfg(feature = "sync")]
             Self::Sync(sync) => sync.run(settings, &mut db).await,
         }

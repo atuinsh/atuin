@@ -27,6 +27,7 @@ atuin-common = { path = "../atuin-common", version = "12.0.0" }
 
 log = "0.4"
 chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4.0.18", features = ["derive"] }
 eyre = "0.6"
 directories = "4"
 uuid = { version = "1.2", features = ["v4"] }

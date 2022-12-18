@@ -15,7 +15,7 @@ function _atuin_postexec --on-event fish_postexec
 end
 
 function _atuin_search
-    set h (RUST_LOG=error atuin search -i -- (commandline -b) 3>&1 1>&2 2>&3)
+    set h (RUST_LOG=error atuin search $* -i -- (commandline -b) 3>&1 1>&2 2>&3)
     commandline -f repaint
     if test -n "$h"
         commandline -r $h
@@ -33,7 +33,7 @@ function _atuin_bind_up
     set -l lineno (commandline --line)
     switch $lineno
         case 1
-            _atuin_search
+            _atuin_search --shell-up-key-binding
         case '*'
             up-or-search
     end
