@@ -29,7 +29,7 @@ pub fn data_dir() -> PathBuf {
 }
 
 pub fn get_days_from_month(year: i32, month: u32) -> i64 {
-    NaiveDate::from_ymd(
+    NaiveDate::from_ymd_opt(
         match month {
             12 => year + 1,
             _ => year,
@@ -40,7 +40,8 @@ pub fn get_days_from_month(year: i32, month: u32) -> i64 {
         },
         1,
     )
-    .signed_duration_since(NaiveDate::from_ymd(year, month, 1))
+    .expect("Invalid month")
+    .signed_duration_since(NaiveDate::from_ymd_opt(year, month, 1).expect("Invalid month"))
     .num_days()
 }
 
