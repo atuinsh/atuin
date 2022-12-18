@@ -33,7 +33,7 @@ use ratatui::{
     style::{Color, Modifier, Style},
     text::{Span, Spans, Text},
     widgets::{Block, BorderType, Borders, Paragraph},
-    Frame, Terminal,
+    Frame, Terminal, TerminalOptions, Viewport,
 };
 
 const RETURN_ORIGINAL: usize = usize::MAX;
@@ -474,7 +474,7 @@ impl Stdout {
         let mut stdout = stdout();
         execute!(
             stdout,
-            terminal::EnterAlternateScreen,
+            // terminal::EnterAlternateScreen,
             event::EnableMouseCapture,
             event::EnableBracketedPaste
         )?;
@@ -486,7 +486,7 @@ impl Drop for Stdout {
     fn drop(&mut self) {
         execute!(
             self.stdout,
-            terminal::LeaveAlternateScreen,
+            // terminal::LeaveAlternateScreen,
             event::DisableMouseCapture,
             event::DisableBracketedPaste
         )
@@ -533,7 +533,12 @@ pub async fn history(
 ) -> Result<String> {
     let stdout = Stdout::new()?;
     let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
+    let mut terminal = Terminal::with_options(
+        backend,
+        TerminalOptions {
+            viewport: Viewport::Inline(24),
+        },
+    )?;
 
     let mut input = Cursor::from(query.join(" "));
     // Put the cursor at the end of the query by default
@@ -608,6 +613,9 @@ pub async fn history(
             results = app.query_results(db).await?;
         }
     };
+
+    terminal.clear()?;
+
     if index < results.len() {
         // index is in bounds so we return that entry
         Ok(results.swap_remove(index).command.clone())

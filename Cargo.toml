@@ -81,3 +81,6 @@ version = "0.3"
 default-features = false
 features = ["ansi", "fmt", "registry", "env-filter"]
 optional = true
+
+[patch.crates-io]
+ratatui = { git = "https://github.com/conradludgate/tui-rs-revival", branch = "inline" }
