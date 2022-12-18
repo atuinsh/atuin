@@ -46,7 +46,7 @@ sqlx = { version = "0.6", features = [
 ] }
 minspan = "0.1.1"
 regex = "1.5.4"
-fs-err = "2.7"
+fs-err = "2.9"
 sql-builder = "3"
 lazy_static = "1"
 memchr = "2.5"
