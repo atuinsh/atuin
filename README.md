@@ -255,18 +255,24 @@ Install `atuin` shell plugin in zsh, bash, or fish with [Fig](https://fig.io) in
 
 ## Uninstall
   
-To remove Atuin you can use your distribution package manager. Example for Ubuntu 20.04:
+To remove Atuin you can use your distribution package manager, then you have to reverse the steps you applied in [shell-plugin](#shell-plugin) section.
+
+
+### Example for Ubuntu 20.04 and Bash Shell
 
 ```
 sudo apt remove atuin
 ```
-Then you have to comment out these two lines from your `~/.bashrc` file:
+
+Then comment out these two lines from your `~/.bashrc` file:
   
 ```
 [[ -f ~/.bash-preexec.sh ]] && source ~/.bash-preexec.sh
 eval "$(atuin init bash)"
 ```
-You can do it by just adding `#` infront of each line. Now, new terminals will have the standard `history` behaviour.
+You can do it by just adding `#` infront of each line, and remove `~/.bash-preexec.sh` file if not used by other software.
+
+Now, new terminals will have the standard `history` behaviour.
 
 ## ...what's with the name?
 
