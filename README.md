@@ -66,7 +66,7 @@ I wanted to. And I **really** don't want to.
 ## Documentation
 
 - [Quickstart](#quickstart)
-- [Install](#install)
+- [Install](#install) / [Uninstall](#Uninstall)
 - [Import](docs/import.md)
 - [Configuration](docs/config.md)
 - [Searching history](docs/search.md)
@@ -252,6 +252,21 @@ to your `is-interactive` block in your `~/.config/fish/config.fish` file
 Install `atuin` shell plugin in zsh, bash, or fish with [Fig](https://fig.io) in one click. 
 
 <a href="https://fig.io/plugins/other/atuin" target="_blank"><img src="https://fig.io/badges/install-with-fig.svg" /></a>
+
+## Uninstall
+  
+To remove Atuin you can use your distribution package manager. Example for Ubuntu 20.04:
+
+```
+sudo apt remove atuin
+```
+Then you have to comment out these two lines from your `~/.bashrc` file:
+  
+```
+[[ -f ~/.bash-preexec.sh ]] && source ~/.bash-preexec.sh
+eval "$(atuin init bash)"
+```
+You can do it by just adding `#` infront of each line. Now, new terminals will have the standard `history` behaviour.
 
 ## ...what's with the name?
 
