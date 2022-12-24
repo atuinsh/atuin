@@ -2,8 +2,8 @@
 
 By default, Atuin will rebind both <kbd>Ctrl-r</kbd> and the up arrow.
 
-You can also disable either the up-arrow or <kbd>Ctrl-r</kbd> bindings indivdually, by passing
-`--disable-up-arrow` or `-disable-ctrl-r` to the call to `atui init`:
+You can also disable either the up-arrow or <kbd>Ctrl-r</kbd> bindings individually, by passing
+`--disable-up-arrow` or `-disable-ctrl-r` to the call to `atuin init`:
 
 ```
 # Bind ctrl-r but not up arrow
