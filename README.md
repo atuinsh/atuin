@@ -53,7 +53,7 @@ I wanted to. And I **really** don't want to.
 
 ## Features
 
-- rebind `up` and `ctrl-r` with a full screen history search UI
+- rebind `ctrl-r` and `up` (configurable) to a full screen history search UI
 - store shell history in a sqlite database
 - backup and sync **encrypted** shell history
 - the same history across terminals, across sessions, and across machines

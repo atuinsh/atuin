@@ -25,7 +25,6 @@ pub enum AtuinCmd {
     Server(server::Cmd),
 
     /// Output shell setup
-    #[command(subcommand)]
     Init(init::Cmd),
 
     /// Generate a UUID
