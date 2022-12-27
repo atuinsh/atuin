@@ -26,8 +26,10 @@ pub struct Context {
 }
 
 pub fn current_context() -> Context {
-    let session =
-        env::var("ATUIN_SESSION").expect("failed to find ATUIN_SESSION - check your shell setup");
+    let Ok(session) = env::var("ATUIN_SESSION") else {
+        eprintln!("ERROR: Failed to find $ATUIN_SESSION in the environment. Check that you have correctly set up your shell.");
+        std::process::exit(1);
+    };
     let hostname = format!("{}:{}", whoami::hostname(), whoami::username());
     let cwd = match env::current_dir() {
         Ok(dir) => dir.display().to_string(),
