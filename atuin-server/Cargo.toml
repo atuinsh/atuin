@@ -29,7 +29,7 @@ sqlx = { version = "0.6", features = [
   "postgres",
 ] }
 async-trait = "0.1.58"
-axum = "0.5"
+axum = "0.6"
 http = "0.2"
 fs-err = "2.7"
 chronoutil = "0.2.3"
