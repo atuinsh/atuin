@@ -122,6 +122,9 @@ impl State {
             }
             TermEvent::Key(Key::Down | Key::Ctrl('n' | 'j'))
             | TermEvent::Mouse(MouseEvent::Press(MouseButton::WheelDown, _, _)) => {
+                if self.results_state.selected() == 0 && input.eq(&TermEvent::Key(Key::Down)) {
+                    return Some(RETURN_ORIGINAL);
+                }
                 let i = self.results_state.selected().saturating_sub(1);
                 self.results_state.select(i);
             }
