@@ -17,7 +17,7 @@ appended with a wildcard).
 | `--before`         | Only include commands ran before this time(default: none)                     |
 | `--after`          | Only include commands ran after this time(default: none)                      |
 | `--interactive/-i` | Open the interactive search UI (default: false)                               |
-| `--human/-h`       | Use human-readable formatting for the timestamp and duration (default: false) |
+| `--human`          | Use human-readable formatting for the timestamp and duration (default: false) |
 
 ## Examples
 
