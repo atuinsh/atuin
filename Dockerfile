@@ -16,7 +16,7 @@ RUN cargo chef cook --release --recipe-path recipe.json
 COPY . .
 RUN cargo build --release --bin atuin
 
-FROM debian:bullseye-20221205-slim AS runtime
+FROM debian:bullseye-20230109-slim AS runtime
 
 RUN useradd -c 'atuin user' atuin && mkdir /config && chown atuin:atuin /config
 WORKDIR app
