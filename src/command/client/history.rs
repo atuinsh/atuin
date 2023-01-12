@@ -7,6 +7,9 @@ use std::{
 use clap::Subcommand;
 use eyre::Result;
 
+use std::collections::HashMap;
+use strfmt::strfmt;
+
 use atuin_client::{
     database::{current_context, Database},
     history::History,
@@ -46,6 +49,11 @@ pub enum Cmd {
         /// Show only the text of the command
         #[arg(long)]
         cmd_only: bool,
+
+        /// Available variables: {command}, {directory}, {duration} and {time}.
+        /// Example: --format "{time} - [{duration}] - {directory}$\t{command}"
+        #[arg(long, short)]
+        format: Option<String>,
     },
 
     /// Get the last command ran
@@ -56,6 +64,11 @@ pub enum Cmd {
         /// Show only the text of the command
         #[arg(long)]
         cmd_only: bool,
+
+        /// Available variables: {command}, {directory}, {duration} and {time}.
+        /// Example: --format "{time} - [{duration}] - {directory}$\t{command}"
+        #[arg(long, short)]
+        format: Option<String>,
     },
 }
 
@@ -79,40 +92,58 @@ impl ListMode {
 }
 
 #[allow(clippy::cast_sign_loss)]
-pub fn print_list(h: &[History], list_mode: ListMode) {
+pub fn print_list(h: &[History], list_mode: ListMode, format: Option<String>) {
     let w = std::io::stdout();
     let mut w = w.lock();
 
     match list_mode {
-        ListMode::Human => print_human_list(&mut w, h),
+        ListMode::Human => print_human_list(&mut w, h, format),
         ListMode::CmdOnly => print_cmd_only(&mut w, h),
-        ListMode::Regular => print_regular(&mut w, h),
+        ListMode::Regular => print_regular(&mut w, h, format),
     }
 
     w.flush().expect("failed to flush history");
 }
 
 #[allow(clippy::cast_sign_loss)]
-pub fn print_human_list(w: &mut StdoutLock, h: &[History]) {
+pub fn format_line(h: &History, format: &str) -> String {
+    let mut vars = HashMap::new();
+    vars.insert("command".to_string(), h.command.trim().to_string());
+    vars.insert("directory".to_string(), h.cwd.trim().to_string());
+    vars.insert(
+        "duration".to_string(),
+        format_duration(Duration::from_nanos(std::cmp::max(h.duration, 0) as u64)),
+    );
+    vars.insert(
+        "time".to_string(),
+        h.timestamp.format("%Y-%m-%d %H:%M:%S").to_string(),
+    );
+    let res = strfmt(format, &vars);
+
+    res.unwrap_or_else(|e| {
+        eprintln!("ERROR: History formatting failed with the following error: {e}");
+        println!("If your formatting string contains curly braces (eg: {{var}}) you need to escape them this way: {{{{var}}}}.");
+        std::process::exit(1)
+    })
+}
+
+pub fn print_human_list(w: &mut StdoutLock, h: &[History], format: Option<String>) {
+    let format = format
+        .unwrap_or_else(|| "{time} · {duration}\t{command}".to_string())
+        .replace("\\t", "\t");
     for h in h.iter().rev() {
-        let duration = format_duration(Duration::from_nanos(std::cmp::max(h.duration, 0) as u64));
-
-        let time = h.timestamp.format("%Y-%m-%d %H:%M:%S");
-        let cmd = h.command.trim();
-
-        writeln!(w, "{time} · {duration}\t{cmd}").expect("failed to write history");
+        let line = format_line(h, &format);
+        writeln!(w, "{line}").expect("failed to write history");
     }
 }
 
-#[allow(clippy::cast_sign_loss)]
-pub fn print_regular(w: &mut StdoutLock, h: &[History]) {
+pub fn print_regular(w: &mut StdoutLock, h: &[History], format: Option<String>) {
+    let format = format
+        .unwrap_or_else(|| "{time}\t{command}\t{duration}".to_string())
+        .replace("\\t", "\t");
     for h in h.iter().rev() {
-        let duration = format_duration(Duration::from_nanos(std::cmp::max(h.duration, 0) as u64));
-
-        let time = h.timestamp.format("%Y-%m-%d %H:%M:%S");
-        let cmd = h.command.trim();
-
-        writeln!(w, "{time}\t{cmd}\t{duration}").expect("failed to write history");
+        let line = format_line(h, &format);
+        writeln!(w, "{line}").expect("failed to write history");
     }
 }
 
@@ -187,6 +218,7 @@ impl Cmd {
                 cwd,
                 human,
                 cmd_only,
+                format,
             } => {
                 let session = if *session {
                     Some(env::var("ATUIN_SESSION")?)
@@ -218,14 +250,26 @@ impl Cmd {
                     }
                 };
 
-                print_list(&history, ListMode::from_flags(*human, *cmd_only));
+                print_list(
+                    &history,
+                    ListMode::from_flags(*human, *cmd_only),
+                    format.clone(),
+                );
 
                 Ok(())
             }
 
-            Self::Last { human, cmd_only } => {
+            Self::Last {
+                human,
+                cmd_only,
+                format,
+            } => {
                 let last = db.last().await?;
-                print_list(&[last], ListMode::from_flags(*human, *cmd_only));
+                print_list(
+                    &[last],
+                    ListMode::from_flags(*human, *cmd_only),
+                    format.clone(),
+                );
 
                 Ok(())
             }
