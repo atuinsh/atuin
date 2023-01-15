@@ -65,7 +65,7 @@ atuin search --exit 0 --after "yesterday 3pm" make
 ## 支持的 Shells
 
 - zsh
-- bas
+- bash
 - fish
  
 ## 社区
