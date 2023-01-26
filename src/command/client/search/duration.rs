@@ -1,10 +1,11 @@
+use core::fmt;
 use std::{ops::ControlFlow, time::Duration};
 
 #[allow(clippy::module_name_repetitions)]
-pub fn format_duration(f: Duration) -> String {
-    fn item(name: &str, value: u64) -> ControlFlow<String> {
+pub fn format_duration_into(dur: Duration, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn item(unit: &'static str, value: u64) -> ControlFlow<(&'static str, u64)> {
         if value > 0 {
-            ControlFlow::Break(format!("{value}{name}"))
+            ControlFlow::Break((unit, value))
         } else {
             ControlFlow::Continue(())
         }
@@ -13,7 +14,7 @@ pub fn format_duration(f: Duration) -> String {
     // impl taken and modified from
     // https://github.com/tailhook/humantime/blob/master/src/duration.rs#L295-L331
     // Copyright (c) 2016 The humantime Developers
-    fn fmt(f: Duration) -> ControlFlow<String, ()> {
+    fn fmt(f: Duration) -> ControlFlow<(&'static str, u64), ()> {
         let secs = f.as_secs();
         let nanos = f.subsec_nanos();
 
@@ -43,8 +44,19 @@ pub fn format_duration(f: Duration) -> String {
         ControlFlow::Continue(())
     }
 
-    match fmt(f) {
-        ControlFlow::Break(b) => b,
-        ControlFlow::Continue(()) => String::from("0s"),
+    match fmt(dur) {
+        ControlFlow::Break((unit, value)) => write!(f, "{value}{unit}"),
+        ControlFlow::Continue(()) => write!(f, "0s"),
     }
+}
+
+#[allow(clippy::module_name_repetitions)]
+pub fn format_duration(f: Duration) -> String {
+    struct F(Duration);
+    impl fmt::Display for F {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            format_duration_into(self.0, f)
+        }
+    }
+    F(f).to_string()
 }

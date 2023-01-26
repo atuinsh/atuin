@@ -16,7 +16,7 @@ mod duration;
 mod event;
 mod history_list;
 mod interactive;
-pub use duration::format_duration;
+pub use duration::{format_duration, format_duration_into};
 
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Parser)]
@@ -74,6 +74,11 @@ pub struct Cmd {
     /// Show only the text of the command
     #[arg(long)]
     cmd_only: bool,
+
+    /// Available variables: {command}, {directory}, {duration}, {user}, {host} and {time}.
+    /// Example: --format "{time} - [{duration}] - {directory}$\t{command}"
+    #[arg(long, short)]
+    format: Option<String>,
 }
 
 impl Cmd {
@@ -97,6 +102,7 @@ impl Cmd {
                 self.exit,
                 self.exclude_exit,
                 self.exclude_cwd,
+                self.format,
                 self.before,
                 self.after,
                 self.limit,
@@ -122,6 +128,7 @@ async fn run_non_interactive(
     exit: Option<i64>,
     exclude_exit: Option<i64>,
     exclude_cwd: Option<String>,
+    format: Option<String>,
     before: Option<String>,
     after: Option<String>,
     limit: Option<i64>,
@@ -202,6 +209,6 @@ async fn run_non_interactive(
         .map(std::borrow::ToOwned::to_owned)
         .collect();
 
-    super::history::print_list(&results, list_mode);
+    super::history::print_list(&results, list_mode, format.as_deref());
     Ok(results.len())
 }

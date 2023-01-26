@@ -72,6 +72,7 @@ fs-err = "2.7"
 whoami = "1.1.2"
 rpassword = "7.0"
 semver = "1.0.14"
+runtime-format = "0.1.2"
 
 [dependencies.tracing-subscriber]
 version = "0.3"
