@@ -119,6 +119,13 @@ impl FormatKey for FmtHistory<'_> {
                 format_duration_into(dur, f)?;
             }
             "time" => self.0.timestamp.format("%Y-%m-%d %H:%M:%S").fmt(f)?,
+            "host" => f.write_str(
+                self.0
+                    .hostname
+                    .split_once(':')
+                    .map_or(&self.0.hostname, |(host, _)| host),
+            )?,
+            "user" => f.write_str(self.0.hostname.split_once(':').map_or("", |(_, user)| user))?,
             _ => return Err(FormatKeyError::UnknownKey),
         }
         Ok(())
