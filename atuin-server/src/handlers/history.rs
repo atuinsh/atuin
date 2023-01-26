@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use axum::{
-    extract::{Path, Query},
-    Extension, Json,
+    extract::{Path, Query, State},
+    Json,
 };
 use http::StatusCode;
 use tracing::{debug, error, instrument};
@@ -10,8 +10,9 @@ use tracing::{debug, error, instrument};
 use super::{ErrorResponse, ErrorResponseStatus, RespExt};
 use crate::{
     calendar::{TimePeriod, TimePeriodInfo},
-    database::{Database, Postgres},
+    database::Database,
     models::{NewHistory, User},
+    router::AppState,
 };
 
 use atuin_common::api::*;
@@ -19,8 +20,9 @@ use atuin_common::api::*;
 #[instrument(skip_all, fields(user.id = user.id))]
 pub async fn count(
     user: User,
-    db: Extension<Postgres>,
+    state: State<AppState>,
 ) -> Result<Json<CountResponse>, ErrorResponseStatus<'static>> {
+    let db = &state.0.postgres;
     match db.count_history_cached(&user).await {
         // By default read out the cached value
         Ok(count) => Ok(Json(CountResponse { count })),
@@ -39,8 +41,9 @@ pub async fn count(
 pub async fn list(
     req: Query<SyncHistoryRequest>,
     user: User,
-    db: Extension<Postgres>,
+    state: State<AppState>,
 ) -> Result<Json<SyncHistoryResponse>, ErrorResponseStatus<'static>> {
+    let db = &state.0.postgres;
     let history = db
         .list_history(
             &user,
@@ -73,9 +76,9 @@ pub async fn list(
 
 #[instrument(skip_all, fields(user.id = user.id))]
 pub async fn add(
-    Json(req): Json<Vec<AddHistoryRequest>>,
     user: User,
-    db: Extension<Postgres>,
+    state: State<AppState>,
+    Json(req): Json<Vec<AddHistoryRequest>>,
 ) -> Result<(), ErrorResponseStatus<'static>> {
     debug!("request to add {} history items", req.len());
 
@@ -90,6 +93,7 @@ pub async fn add(
         })
         .collect();
 
+    let db = &state.0.postgres;
     if let Err(e) = db.add_history(&history).await {
         error!("failed to add history: {}", e);
 
@@ -105,13 +109,14 @@ pub async fn calendar(
     Path(focus): Path<String>,
     Query(params): Query<HashMap<String, u64>>,
     user: User,
-    db: Extension<Postgres>,
+    state: State<AppState>,
 ) -> Result<Json<HashMap<u64, TimePeriodInfo>>, ErrorResponseStatus<'static>> {
     let focus = focus.as_str();
 
     let year = params.get("year").unwrap_or(&0);
     let month = params.get("month").unwrap_or(&1);
 
+    let db = &state.0.postgres;
     let focus = match focus {
         "year" => db
             .calendar(&user, TimePeriod::YEAR, *year, *month)
