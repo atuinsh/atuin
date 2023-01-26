@@ -487,13 +487,16 @@ dependencies = [
 [[package]]
 name = "crossterm"
 version = "0.25.0"
-source = "git+https://github.com/yyogo/crossterm?branch=use-select-in-unix#673699d4961552199d00df5a694b11e8286db599"
+source = "git+https://github.com/crossterm-rs/crossterm?rev=a993a982912ae7741ca2a988e5abf08388c942aa#a993a982912ae7741ca2a988e5abf08388c942aa"
 dependencies = [
  "bitflags",
  "crossterm_winapi",
+ "filedescriptor",
  "libc",
+ "mio",
  "parking_lot 0.12.1",
  "signal-hook",
+ "signal-hook-mio",
  "winapi",
 ]
 
@@ -643,6 +646,17 @@ checksum = "4c2b6b5a29c02cdc822728b7d7b8ae1bab3e3b05d44522770ddd49722eeac7eb"
 dependencies = [
  "indenter",
  "once_cell",
+]
+
+[[package]]
+name = "filedescriptor"
+version = "0.8.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7199d965852c3bac31f779ef99cbb4537f80e952e2d6aa0ffeb30cce00f4f46e"
+dependencies = [
+ "libc",
+ "thiserror",
+ "winapi",
 ]
 
 [[package]]
@@ -1878,6 +1892,17 @@ checksum = "a253b5e89e2698464fc26b545c9edceb338e18a89effeeecfea192c3025be29d"
 dependencies = [
  "libc",
  "signal-hook-registry",
+]
+
+[[package]]
+name = "signal-hook-mio"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "29ad2e15f37ec9a6cc544097b78a1ec90001e9f71b81338ca39f430adaca99af"
+dependencies = [
+ "libc",
+ "mio",
+ "signal-hook",
 ]
 
 [[package]]

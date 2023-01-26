@@ -57,7 +57,7 @@ indicatif = "0.17.1"
 serde = { version = "1.0.145", features = ["derive"] }
 serde_json = "1.0.86"
 tui = "0.19"
-crossterm = "0.25"
+crossterm = { version = "0.25", features = ["use-dev-tty"] }
 unicode-width = "0.1"
 itertools = "0.10.5"
 tokio = { version = "1", features = ["full"] }
@@ -81,4 +81,4 @@ features = ["ansi", "fmt", "registry", "env-filter"]
 optional = true
 
 [patch.crates-io]
-crossterm = { git = "https://github.com/yyogo/crossterm", branch = "use-select-in-unix" }
+crossterm = { git = "https://github.com/crossterm-rs/crossterm", rev = "a993a982912ae7741ca2a988e5abf08388c942aa" }

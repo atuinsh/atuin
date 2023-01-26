@@ -428,9 +428,12 @@ pub async fn history(
         let initial_filter_mode = app.filter_mode;
 
         if event::poll(Duration::from_millis(250))? {
-            while event::poll(Duration::ZERO)? {
+            loop {
                 if let Some(i) = app.handle_input(settings, &event::read()?, results.len()) {
                     break 'render i;
+                }
+                if !event::poll(Duration::ZERO)? {
+                    break
                 }
             }
         }
