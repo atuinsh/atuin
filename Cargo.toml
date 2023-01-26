@@ -56,15 +56,15 @@ directories = "4"
 indicatif = "0.17.1"
 serde = { version = "1.0.145", features = ["derive"] }
 serde_json = "1.0.86"
-tui = { version = "0.19", default-features = false, features = ["termion"] }
-termion = "1.5"
+tui = "0.19"
+crossterm = "0.25"
 unicode-width = "0.1"
 itertools = "0.10.5"
 tokio = { version = "1", features = ["full"] }
 async-trait = "0.1.58"
 interim = { version = "0.1.0", features = ["chrono"] }
 cli-table = { version = "0.4", default-features = false }
-base64 = "0.20.0"
+base64 = "0.21.0"
 crossbeam-channel = "0.5.1"
 clap = { version = "4.0.18", features = ["derive"] }
 clap_complete = "4.0.3"
