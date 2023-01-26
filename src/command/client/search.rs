@@ -16,7 +16,7 @@ mod duration;
 mod event;
 mod history_list;
 mod interactive;
-pub use duration::format_duration;
+pub use duration::{format_duration, format_duration_into};
 
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Parser)]
@@ -209,6 +209,6 @@ async fn run_non_interactive(
         .map(std::borrow::ToOwned::to_owned)
         .collect();
 
-    super::history::print_list(&results, list_mode, format.clone());
+    super::history::print_list(&results, list_mode, format.as_deref());
     Ok(results.len())
 }

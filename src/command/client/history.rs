@@ -1,14 +1,13 @@
 use std::{
     env,
+    fmt::{self, Display},
     io::{StdoutLock, Write},
     time::Duration,
 };
 
 use clap::Subcommand;
 use eyre::Result;
-
-use std::collections::HashMap;
-use strfmt::strfmt;
+use runtime_format::{FormatKey, FormatKeyError, ParsedFmt};
 
 use atuin_client::{
     database::{current_context, Database},
@@ -20,7 +19,7 @@ use atuin_client::{
 use atuin_client::sync;
 use log::debug;
 
-use super::search::format_duration;
+use super::search::format_duration_into;
 
 #[derive(Subcommand)]
 #[command(infer_subcommands = true)]
@@ -92,7 +91,7 @@ impl ListMode {
 }
 
 #[allow(clippy::cast_sign_loss)]
-pub fn print_list(h: &[History], list_mode: ListMode, format: Option<String>) {
+pub fn print_list(h: &[History], list_mode: ListMode, format: Option<&str>) {
     let w = std::io::stdout();
     let mut w = w.lock();
 
@@ -105,46 +104,54 @@ pub fn print_list(h: &[History], list_mode: ListMode, format: Option<String>) {
     w.flush().expect("failed to flush history");
 }
 
-#[allow(clippy::cast_sign_loss)]
-pub fn format_line(h: &History, format: &str) -> String {
-    let mut vars = HashMap::new();
-    vars.insert("command".to_string(), h.command.trim().to_string());
-    vars.insert("directory".to_string(), h.cwd.trim().to_string());
-    vars.insert(
-        "duration".to_string(),
-        format_duration(Duration::from_nanos(std::cmp::max(h.duration, 0) as u64)),
-    );
-    vars.insert(
-        "time".to_string(),
-        h.timestamp.format("%Y-%m-%d %H:%M:%S").to_string(),
-    );
-    let res = strfmt(format, &vars);
+/// type wrapper around `History` so we can implement traits
+struct FmtHistory<'a>(&'a History);
 
-    res.unwrap_or_else(|e| {
-        eprintln!("ERROR: History formatting failed with the following error: {e}");
-        println!("If your formatting string contains curly braces (eg: {{var}}) you need to escape them this way: {{{{var}}}}.");
-        std::process::exit(1)
-    })
-}
-
-pub fn print_human_list(w: &mut StdoutLock, h: &[History], format: Option<String>) {
-    let format = format
-        .unwrap_or_else(|| "{time} · {duration}\t{command}".to_string())
-        .replace("\\t", "\t");
-    for h in h.iter().rev() {
-        let line = format_line(h, &format);
-        writeln!(w, "{line}").expect("failed to write history");
+/// defines how to format the history
+impl FormatKey for FmtHistory<'_> {
+    #[allow(clippy::cast_sign_loss)]
+    fn fmt(&self, key: &str, f: &mut fmt::Formatter<'_>) -> Result<(), FormatKeyError> {
+        match key {
+            "command" => f.write_str(self.0.command.trim())?,
+            "directory" => f.write_str(self.0.cwd.trim())?,
+            "duration" => {
+                let dur = Duration::from_nanos(std::cmp::max(self.0.duration, 0) as u64);
+                format_duration_into(dur, f)?;
+            }
+            "time" => self.0.timestamp.format("%Y-%m-%d %H:%M:%S").fmt(f)?,
+            _ => return Err(FormatKeyError::UnknownKey),
+        }
+        Ok(())
     }
 }
 
-pub fn print_regular(w: &mut StdoutLock, h: &[History], format: Option<String>) {
-    let format = format
-        .unwrap_or_else(|| "{time}\t{command}\t{duration}".to_string())
-        .replace("\\t", "\t");
+fn print_list_with(w: &mut StdoutLock, h: &[History], format: &str) {
+    let fmt = match ParsedFmt::new(format) {
+        Ok(fmt) => fmt,
+        Err(err) => {
+            eprintln!("ERROR: History formatting failed with the following error: {err}");
+            println!("If your formatting string contains curly braces (eg: {{var}}) you need to escape them this way: {{{{var}}.");
+            std::process::exit(1)
+        }
+    };
+
     for h in h.iter().rev() {
-        let line = format_line(h, &format);
-        writeln!(w, "{line}").expect("failed to write history");
+        writeln!(w, "{}", fmt.with_args(&FmtHistory(h))).expect("failed to write history");
     }
+}
+
+pub fn print_human_list(w: &mut StdoutLock, h: &[History], format: Option<&str>) {
+    let format = format
+        .unwrap_or("{time} · {duration}\t{command}")
+        .replace("\\t", "\t");
+    print_list_with(w, h, &format);
+}
+
+pub fn print_regular(w: &mut StdoutLock, h: &[History], format: Option<&str>) {
+    let format = format
+        .unwrap_or("{time}\t{command}\t{duration}")
+        .replace("\\t", "\t");
+    print_list_with(w, h, &format);
 }
 
 pub fn print_cmd_only(w: &mut StdoutLock, h: &[History]) {
@@ -253,7 +260,7 @@ impl Cmd {
                 print_list(
                     &history,
                     ListMode::from_flags(*human, *cmd_only),
-                    format.clone(),
+                    format.as_deref(),
                 );
 
                 Ok(())
@@ -268,7 +275,7 @@ impl Cmd {
                 print_list(
                     &[last],
                     ListMode::from_flags(*human, *cmd_only),
-                    format.clone(),
+                    format.as_deref(),
                 );
 
                 Ok(())
