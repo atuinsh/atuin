@@ -448,7 +448,8 @@ impl Database for Sqlite {
                     } else if let Some(term) = query_part.strip_prefix('\'') {
                         format!("{glob}{term}{glob}")
                     } else if is_inverse {
-                        format!("{glob}{term}{glob}", term = query_part)
+                        let term = query_part;
+                        format!("{glob}{term}{glob}")
                     } else {
                         query_part.split("").join(glob)
                     };

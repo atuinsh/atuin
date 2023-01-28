@@ -76,7 +76,7 @@ dependencies = [
  "atuin-client",
  "atuin-common",
  "atuin-server",
- "base64 0.21.0",
+ "base64 0.20.0",
  "bitflags",
  "cassowary",
  "chrono",
@@ -243,12 +243,6 @@ name = "base64"
 version = "0.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ea22880d78093b0cbe17c89f64a7d457941e65759157ec6cb31a31d652b05e5"
-
-[[package]]
-name = "base64"
-version = "0.21.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a4a4ddaa51a5bc52a6948f74c06d20aaaddb71924eab79b8c97a8c556e942d6a"
 
 [[package]]
 name = "beef"
