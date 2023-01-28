@@ -3,13 +3,7 @@ use std::{
     time::Duration,
 };
 
-use crossterm::{
-    event::{self, Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent},
-    execute, terminal,
-};
-use eyre::Result;
-use semver::Version;
-use tui::{
+use crate::tui::{
     backend::{Backend, CrosstermBackend},
     layout::{Alignment, Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
@@ -17,6 +11,12 @@ use tui::{
     widgets::{Block, BorderType, Borders, Paragraph},
     Frame, Terminal,
 };
+use crossterm::{
+    event::{self, Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent},
+    execute, terminal,
+};
+use eyre::Result;
+use semver::Version;
 use unicode_width::UnicodeWidthStr;
 
 use atuin_client::{
@@ -433,7 +433,7 @@ pub async fn history(
                     break 'render i;
                 }
                 if !event::poll(Duration::ZERO)? {
-                    break
+                    break;
                 }
             }
         }
