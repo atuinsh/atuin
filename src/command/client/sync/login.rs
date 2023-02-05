@@ -44,7 +44,7 @@ impl Cmd {
         }
 
         let username = or_user_input(&self.username, "username");
-        let key = or_user_input(&self.key, "encryption key");
+        let key = or_user_input(&self.key, "encryption key [blank to use existing key file]");
         let password = self.password.clone().unwrap_or_else(read_user_password);
         let session = api_client::login(
             settings.sync_address.as_str(),
@@ -56,34 +56,39 @@ impl Cmd {
         let mut file = File::create(session_path).await?;
         file.write_all(session.session.as_bytes()).await?;
 
-        let key_path = settings.key_path.as_str();
-        let mut file = File::create(key_path).await?;
+        if !key.is_empty() {
+            let key_path = settings.key_path.as_str();
+            let mut file = File::create(key_path).await?;
 
-        // try parse the key as a mnemonic...
-        let key = match bip39::Mnemonic::from_phrase(&key, bip39::Language::English) {
-            Ok(mnemonic) => encode_key(
-                Key::from_slice(mnemonic.entropy()).context("key was not the correct length")?,
-            )?,
-            Err(err) => {
-                if let Some(err) = err.downcast_ref::<bip39::ErrorKind>() {
-                    match err {
-                        // assume they copied in the base64 key
-                        bip39::ErrorKind::InvalidWord => key,
-                        bip39::ErrorKind::InvalidChecksum => bail!("key mnemonic was not valid"),
-                        bip39::ErrorKind::InvalidKeysize(_)
-                        | bip39::ErrorKind::InvalidWordLength(_)
-                        | bip39::ErrorKind::InvalidEntropyLength(_, _) => {
-                            bail!("key was not the correct length")
+            // try parse the key as a mnemonic...
+            let key = match bip39::Mnemonic::from_phrase(&key, bip39::Language::English) {
+                Ok(mnemonic) => encode_key(
+                    Key::from_slice(mnemonic.entropy())
+                        .context("key was not the correct length")?,
+                )?,
+                Err(err) => {
+                    if let Some(err) = err.downcast_ref::<bip39::ErrorKind>() {
+                        match err {
+                            // assume they copied in the base64 key
+                            bip39::ErrorKind::InvalidWord => key,
+                            bip39::ErrorKind::InvalidChecksum => {
+                                bail!("key mnemonic was not valid")
+                            }
+                            bip39::ErrorKind::InvalidKeysize(_)
+                            | bip39::ErrorKind::InvalidWordLength(_)
+                            | bip39::ErrorKind::InvalidEntropyLength(_, _) => {
+                                bail!("key was not the correct length")
+                            }
                         }
+                    } else {
+                        // unknown error. assume they copied the base64 key
+                        key
                     }
-                } else {
-                    // unknown error. assume they copied the base64 key
-                    key
                 }
-            }
-        };
+            };
 
-        file.write_all(key.as_bytes()).await?;
+            file.write_all(key.as_bytes()).await?;
+        }
 
         println!("Logged in!");
 
