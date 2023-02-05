@@ -1,7 +1,7 @@
 use std::io;
 
 use clap::Parser;
-use eyre::{bail, ContextCompat, Result};
+use eyre::{bail, Context, ContextCompat, Result};
 use tokio::{fs::File, io::AsyncWriteExt};
 
 use atuin_client::{
@@ -46,20 +46,17 @@ impl Cmd {
         let username = or_user_input(&self.username, "username");
         let key = or_user_input(&self.key, "encryption key [blank to use existing key file]");
         let password = self.password.clone().unwrap_or_else(read_user_password);
-        let session = api_client::login(
-            settings.sync_address.as_str(),
-            LoginRequest { username, password },
-        )
-        .await?;
 
-        let session_path = settings.session_path.as_str();
-        let mut file = File::create(session_path).await?;
-        file.write_all(session.session.as_bytes()).await?;
+        let key_path = settings.key_path.as_str();
+        if key.is_empty() {
+            let bytes = tokio::fs::read(key_path)
+                .await
+                .context("key file couldn't be opened, key must be specified")?;
 
-        if !key.is_empty() {
-            let key_path = settings.key_path.as_str();
-            let mut file = File::create(key_path).await?;
-
+            if bytes.is_empty() {
+                bail!("key file empty, key must be specified");
+            }
+        } else {
             // try parse the key as a mnemonic...
             let key = match bip39::Mnemonic::from_phrase(&key, bip39::Language::English) {
                 Ok(mnemonic) => encode_key(
@@ -87,8 +84,19 @@ impl Cmd {
                 }
             };
 
+            let mut file = File::create(key_path).await?;
             file.write_all(key.as_bytes()).await?;
         }
+
+        let session = api_client::login(
+            settings.sync_address.as_str(),
+            LoginRequest { username, password },
+        )
+        .await?;
+
+        let session_path = settings.session_path.as_str();
+        let mut file = File::create(session_path).await?;
+        file.write_all(session.session.as_bytes()).await?;
 
         println!("Logged in!");
 
