@@ -31,7 +31,7 @@ fn default_histpath() -> Result<PathBuf> {
     };
 
     let mut histpath = data.join("fish");
-    histpath.push(format!("{}_history", session));
+    histpath.push(format!("{session}_history"));
 
     if histpath.exists() {
         Ok(histpath)

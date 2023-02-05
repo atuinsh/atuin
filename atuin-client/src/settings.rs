@@ -262,9 +262,9 @@ impl Settings {
         let data_dir = atuin_common::utils::data_dir();
 
         create_dir_all(&config_dir)
-            .wrap_err_with(|| format!("could not create dir {:?}", config_dir))?;
+            .wrap_err_with(|| format!("could not create dir {config_dir:?}"))?;
         create_dir_all(&data_dir)
-            .wrap_err_with(|| format!("could not create dir {:?}", data_dir))?;
+            .wrap_err_with(|| format!("could not create dir {data_dir:?}"))?;
 
         let mut config_file = if let Ok(p) = std::env::var("ATUIN_CONFIG_DIR") {
             PathBuf::from(p)
