@@ -1,10 +1,14 @@
 use std::io;
 
 use clap::Parser;
-use eyre::Result;
+use eyre::{bail, ContextCompat, Result};
 use tokio::{fs::File, io::AsyncWriteExt};
 
-use atuin_client::{api_client, settings::Settings};
+use atuin_client::{
+    api_client,
+    encryption::{encode_key, Key},
+    settings::Settings,
+};
 use atuin_common::api::LoginRequest;
 use rpassword::prompt_password;
 
@@ -54,6 +58,31 @@ impl Cmd {
 
         let key_path = settings.key_path.as_str();
         let mut file = File::create(key_path).await?;
+
+        // try parse the key as a mnemonic...
+        let key = match bip39::Mnemonic::from_phrase(&key, bip39::Language::English) {
+            Ok(mnemonic) => encode_key(
+                Key::from_slice(mnemonic.entropy()).context("key was not the correct length")?,
+            )?,
+            Err(err) => {
+                if let Some(err) = err.downcast_ref::<bip39::ErrorKind>() {
+                    match err {
+                        // assume they copied in the base64 key
+                        bip39::ErrorKind::InvalidWord => key,
+                        bip39::ErrorKind::InvalidChecksum => bail!("key mnemonic was not valid"),
+                        bip39::ErrorKind::InvalidKeysize(_)
+                        | bip39::ErrorKind::InvalidWordLength(_)
+                        | bip39::ErrorKind::InvalidEntropyLength(_, _) => {
+                            bail!("key was not the correct length")
+                        }
+                    }
+                } else {
+                    // unknown error. assume they copied the base64 key
+                    key
+                }
+            }
+        };
+
         file.write_all(key.as_bytes()).await?;
 
         println!("Logged in!");
@@ -74,4 +103,25 @@ pub(super) fn read_user_password() -> String {
 fn read_user_input(name: &'static str) -> String {
     eprint!("Please enter {name}: ");
     get_input().expect("Failed to read from input")
+}
+
+#[cfg(test)]
+mod tests {
+    use atuin_client::encryption::Key;
+
+    #[test]
+    fn mnemonic_round_trip() {
+        let key = Key {
+            0: [
+                3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8, 9, 7, 9, 3, 2, 3, 8, 4, 6, 2, 6, 4, 3, 3, 8, 3,
+                2, 7, 9, 5,
+            ],
+        };
+        let phrase = bip39::Mnemonic::from_entropy(&key.0, bip39::Language::English)
+            .unwrap()
+            .into_phrase();
+        let mnemonic = bip39::Mnemonic::from_phrase(&phrase, bip39::Language::English).unwrap();
+        assert_eq!(mnemonic.entropy(), &key.0);
+        assert_eq!(phrase, "adapt amused able anxiety mother adapt beef gaze amount else seat alcohol cage lottery avoid scare alcohol cactus school avoid coral adjust catch pink");
+    }
 }
