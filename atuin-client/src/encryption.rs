@@ -66,6 +66,7 @@ pub fn load_encoded_key(settings: &Settings) -> Result<String> {
     }
 }
 
+pub type Key = secretbox::Key;
 pub fn encode_key(key: secretbox::Key) -> Result<String> {
     let buf = rmp_serde::to_vec(&key).wrap_err("could not encode key to message pack")?;
     let buf = base64::encode(buf);
