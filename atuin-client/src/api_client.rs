@@ -42,14 +42,14 @@ pub async fn register(
     map.insert("email", email);
     map.insert("password", password);
 
-    let url = format!("{}/user/{}", address, username);
+    let url = format!("{address}/user/{username}");
     let resp = reqwest::get(url).await?;
 
     if resp.status().is_success() {
         bail!("username already in use");
     }
 
-    let url = format!("{}/register", address);
+    let url = format!("{address}/register");
     let client = reqwest::Client::new();
     let resp = client
         .post(url)
@@ -68,7 +68,7 @@ pub async fn register(
 }
 
 pub async fn login(address: &str, req: LoginRequest) -> Result<LoginResponse> {
-    let url = format!("{}/login", address);
+    let url = format!("{address}/login");
     let client = reqwest::Client::new();
 
     let resp = client
@@ -111,7 +111,7 @@ pub async fn latest_version() -> Result<Version> {
 impl<'a> Client<'a> {
     pub fn new(sync_addr: &'a str, session_token: &'a str, key: String) -> Result<Self> {
         let mut headers = HeaderMap::new();
-        headers.insert(AUTHORIZATION, format!("Token {}", session_token).parse()?);
+        headers.insert(AUTHORIZATION, format!("Token {session_token}").parse()?);
 
         Ok(Client {
             sync_addr,
