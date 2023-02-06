@@ -257,7 +257,7 @@ impl Cmd {
                     }
                     (Some(session), Some(cwd)) => {
                         let query = format!(
-                            "select * from history where cwd = '{cwd}' and session = '{session}';"
+                            "select * from history where cwd = '{cwd}' and session = '{session}';",
                         );
                         db.query_history(&query).await?
                     }

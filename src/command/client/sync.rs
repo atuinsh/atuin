@@ -27,7 +27,11 @@ pub enum Cmd {
     Register(register::Cmd),
 
     /// Print the encryption key for transfer to another machine
-    Key,
+    Key {
+        /// Switch to base64 output of the key
+        #[arg(long)]
+        base64: bool,
+    },
 }
 
 impl Cmd {
@@ -37,11 +41,18 @@ impl Cmd {
             Self::Login(l) => l.run(&settings).await,
             Self::Logout => logout::run(),
             Self::Register(r) => r.run(&settings).await,
-            Self::Key => {
+            Self::Key { base64 } => {
                 use atuin_client::encryption::{encode_key, load_key};
                 let key = load_key(&settings).wrap_err("could not load encryption key")?;
-                let encode = encode_key(key).wrap_err("could not encode encryption key")?;
-                println!("{encode}");
+
+                if base64 {
+                    let encode = encode_key(key).wrap_err("could not encode encryption key")?;
+                    println!("{encode}");
+                } else {
+                    let mnemonic = bip39::Mnemonic::from_entropy(&key.0, bip39::Language::English)
+                        .map_err(|_| eyre::eyre!("invalid key"))?;
+                    println!("{mnemonic}");
+                }
                 Ok(())
             }
         }
