@@ -20,9 +20,9 @@ use super::{
 };
 
 pub struct Context {
-    session: String,
-    cwd: String,
-    hostname: String,
+    pub session: String,
+    pub cwd: String,
+    pub hostname: String,
 }
 
 pub fn current_context() -> Context {
