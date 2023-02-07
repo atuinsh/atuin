@@ -62,7 +62,6 @@ itertools = "0.10.5"
 tokio = { version = "1", features = ["full"] }
 async-trait = "0.1.58"
 interim = { version = "0.1.0", features = ["chrono"] }
-cli-table = { version = "0.4", default-features = false }
 base64 = "0.20.0"
 crossbeam-channel = "0.5.1"
 clap = { version = "4.0.18", features = ["derive"] }
