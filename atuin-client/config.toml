@@ -10,7 +10,7 @@
 # session_path = "~/.key"
 
 ## date format used, either "us" or "uk"
-# dialect = "uk" 								
+# dialect = "uk"
 
 ## enable or disable automatic sync
 # auto_sync = true
