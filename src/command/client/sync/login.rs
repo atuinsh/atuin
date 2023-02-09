@@ -1,4 +1,4 @@
-use std::io;
+use std::{io, path::PathBuf};
 
 use clap::Parser;
 use eyre::{bail, Context, ContextCompat, Result};
@@ -6,7 +6,7 @@ use tokio::{fs::File, io::AsyncWriteExt};
 
 use atuin_client::{
     api_client,
-    encryption::{encode_key, Key},
+    encryption::{decode_key, encode_key, new_key, Key},
     settings::Settings,
 };
 use atuin_common::api::LoginRequest;
@@ -49,12 +49,15 @@ impl Cmd {
 
         let key_path = settings.key_path.as_str();
         if key.is_empty() {
-            let bytes = tokio::fs::read(key_path)
-                .await
-                .context("key file couldn't be opened, key must be specified")?;
-
-            if bytes.is_empty() {
-                bail!("key file empty, key must be specified");
+            if PathBuf::from(key_path).exists() {
+                let bytes = fs_err::read_to_string(key_path)
+                    .context("existing key file couldn't be read")?;
+                if decode_key(bytes).is_err() {
+                    bail!("the key in existing key file was invalid");
+                }
+            } else {
+                println!("No key file exists, creating a new");
+                let _key = new_key(settings)?;
             }
         } else {
             // try parse the key as a mnemonic...
@@ -83,6 +86,10 @@ impl Cmd {
                     }
                 }
             };
+
+            if decode_key(key.clone()).is_err() {
+                bail!("the specified key was invalid");
+            }
 
             let mut file = File::create(key_path).await?;
             file.write_all(key.as_bytes()).await?;
