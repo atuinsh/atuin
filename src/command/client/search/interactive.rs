@@ -94,7 +94,6 @@ impl State {
         len: usize,
     ) -> Option<usize> {
         let ctrl = input.modifiers.contains(KeyModifiers::CONTROL);
-        let alt = input.modifiers.contains(KeyModifiers::ALT);
         match input.code {
             KeyCode::Char('c' | 'd' | 'g') if ctrl => return Some(RETURN_ORIGINAL),
             KeyCode::Esc => {
@@ -105,10 +104,6 @@ impl State {
             }
             KeyCode::Enter => {
                 return Some(self.results_state.selected());
-            }
-            KeyCode::Char(c @ '1'..='9') if alt => {
-                let c = c.to_digit(10)? as usize;
-                return Some(self.results_state.selected() + c);
             }
             KeyCode::Left => {
                 self.input.left();
