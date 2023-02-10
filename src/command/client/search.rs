@@ -13,7 +13,6 @@ use super::history::ListMode;
 
 mod cursor;
 mod duration;
-mod event;
 mod history_list;
 mod interactive;
 pub use duration::{format_duration, format_duration_into};

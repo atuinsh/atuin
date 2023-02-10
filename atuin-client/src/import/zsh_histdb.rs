@@ -221,7 +221,7 @@ mod test {
         println!("h: {:#?}", histdb.histdb);
         println!("counter: {:?}", histdb.histdb.len());
         for i in histdb.histdb {
-            println!("{:?}", i);
+            println!("{i:?}");
         }
     }
 }

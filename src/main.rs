@@ -6,6 +6,7 @@ use eyre::Result;
 
 use command::AtuinCmd;
 mod command;
+mod tui;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 

@@ -1,19 +1,22 @@
-use std::io::stdout;
-
-use eyre::Result;
-use semver::Version;
-use termion::{
-    event::Event as TermEvent, event::Key, event::MouseButton, event::MouseEvent,
-    input::MouseTerminal, raw::IntoRawMode, screen::AlternateScreen,
+use std::{
+    io::{stdout, Write},
+    time::Duration,
 };
-use tui::{
-    backend::{Backend, TermionBackend},
+
+use crate::tui::{
+    backend::{Backend, CrosstermBackend},
     layout::{Alignment, Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Span, Spans, Text},
     widgets::{Block, BorderType, Borders, Paragraph},
     Frame, Terminal,
 };
+use crossterm::{
+    event::{self, Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent},
+    execute, terminal,
+};
+use eyre::Result;
+use semver::Version;
 use unicode_width::UnicodeWidthStr;
 
 use atuin_client::{
@@ -26,7 +29,6 @@ use atuin_client::{
 
 use super::{
     cursor::Cursor,
-    event::{Event, Events},
     history_list::{HistoryList, ListState, PREFIX_LENGTH},
 };
 use crate::VERSION;
@@ -62,42 +64,69 @@ impl State {
         Ok(results)
     }
 
-    fn handle_input(
+    fn handle_input(&mut self, settings: &Settings, input: &Event, len: usize) -> Option<usize> {
+        match input {
+            Event::Key(k) => self.handle_key_input(settings, k, len),
+            Event::Mouse(m) => self.handle_mouse_input(*m, len),
+            _ => None,
+        }
+    }
+
+    fn handle_mouse_input(&mut self, input: MouseEvent, len: usize) -> Option<usize> {
+        match input.kind {
+            event::MouseEventKind::ScrollDown => {
+                let i = self.results_state.selected().saturating_sub(1);
+                self.results_state.select(i);
+            }
+            event::MouseEventKind::ScrollUp => {
+                let i = self.results_state.selected() + 1;
+                self.results_state.select(i.min(len - 1));
+            }
+            _ => {}
+        }
+        None
+    }
+
+    fn handle_key_input(
         &mut self,
         settings: &Settings,
-        input: &TermEvent,
+        input: &KeyEvent,
         len: usize,
     ) -> Option<usize> {
-        match input {
-            TermEvent::Key(Key::Char('\t')) => {}
-            TermEvent::Key(Key::Ctrl('c' | 'd' | 'g')) => return Some(RETURN_ORIGINAL),
-            TermEvent::Key(Key::Esc) => {
+        let ctrl = input.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = input.modifiers.contains(KeyModifiers::ALT);
+        match input.code {
+            KeyCode::Char('c' | 'd' | 'g') if ctrl => return Some(RETURN_ORIGINAL),
+            KeyCode::Esc => {
                 return Some(match settings.exit_mode {
                     ExitMode::ReturnOriginal => RETURN_ORIGINAL,
                     ExitMode::ReturnQuery => RETURN_QUERY,
                 })
             }
-            TermEvent::Key(Key::Char('\n')) => {
+            KeyCode::Enter => {
                 return Some(self.results_state.selected());
             }
-            TermEvent::Key(Key::Alt(c @ '1'..='9')) => {
+            KeyCode::Char(c @ '1'..='9') if alt => {
                 let c = c.to_digit(10)? as usize;
                 return Some(self.results_state.selected() + c);
             }
-            TermEvent::Key(Key::Left | Key::Ctrl('h')) => {
+            KeyCode::Left => {
                 self.input.left();
             }
-            TermEvent::Key(Key::Right | Key::Ctrl('l')) => self.input.right(),
-            TermEvent::Key(Key::Ctrl('a') | Key::Home) => self.input.start(),
-            TermEvent::Key(Key::Ctrl('e') | Key::End) => self.input.end(),
-            TermEvent::Key(Key::Char(c)) => self.input.insert(*c),
-            TermEvent::Key(Key::Backspace) => {
+            KeyCode::Char('h') if ctrl => {
+                self.input.left();
+            }
+            KeyCode::Right => self.input.right(),
+            KeyCode::Char('l') if ctrl => self.input.right(),
+            KeyCode::Char('a') if ctrl => self.input.start(),
+            KeyCode::Char('e') if ctrl => self.input.end(),
+            KeyCode::Backspace => {
                 self.input.back();
             }
-            TermEvent::Key(Key::Delete) => {
+            KeyCode::Delete => {
                 self.input.remove();
             }
-            TermEvent::Key(Key::Ctrl('w')) => {
+            KeyCode::Char('w') if ctrl => {
                 // remove the first batch of whitespace
                 while matches!(self.input.back(), Some(c) if c.is_whitespace()) {}
                 while self.input.left() {
@@ -108,8 +137,8 @@ impl State {
                     self.input.remove();
                 }
             }
-            TermEvent::Key(Key::Ctrl('u')) => self.input.clear(),
-            TermEvent::Key(Key::Ctrl('r')) => {
+            KeyCode::Char('u') if ctrl => self.input.clear(),
+            KeyCode::Char('r') if ctrl => {
                 pub static FILTER_MODES: [FilterMode; 4] = [
                     FilterMode::Global,
                     FilterMode::Host,
@@ -120,19 +149,24 @@ impl State {
                 let i = (i + 1) % FILTER_MODES.len();
                 self.filter_mode = FILTER_MODES[i];
             }
-            TermEvent::Key(Key::Down | Key::Ctrl('n' | 'j'))
-            | TermEvent::Mouse(MouseEvent::Press(MouseButton::WheelDown, _, _)) => {
-                if self.results_state.selected() == 0 && input.eq(&TermEvent::Key(Key::Down)) {
-                    return Some(RETURN_ORIGINAL);
-                }
+            KeyCode::Down if self.results_state.selected() == 0 => return Some(RETURN_ORIGINAL),
+            KeyCode::Down => {
                 let i = self.results_state.selected().saturating_sub(1);
                 self.results_state.select(i);
             }
-            TermEvent::Key(Key::Up | Key::Ctrl('p' | 'k'))
-            | TermEvent::Mouse(MouseEvent::Press(MouseButton::WheelUp, _, _)) => {
+            KeyCode::Char('n' | 'j') if ctrl => {
+                let i = self.results_state.selected().saturating_sub(1);
+                self.results_state.select(i);
+            }
+            KeyCode::Up => {
                 let i = self.results_state.selected() + 1;
                 self.results_state.select(i.min(len - 1));
             }
+            KeyCode::Char('p' | 'k') if ctrl => {
+                let i = self.results_state.selected() + 1;
+                self.results_state.select(i.min(len - 1));
+            }
+            KeyCode::Char(c) => self.input.insert(c),
             _ => {}
         };
 
@@ -303,6 +337,45 @@ impl State {
     }
 }
 
+struct Stdout {
+    stdout: std::io::Stdout,
+}
+
+impl Stdout {
+    pub fn new() -> std::io::Result<Self> {
+        terminal::enable_raw_mode()?;
+        let mut stdout = stdout();
+        execute!(
+            stdout,
+            terminal::EnterAlternateScreen,
+            event::EnableMouseCapture
+        )?;
+        Ok(Self { stdout })
+    }
+}
+
+impl Drop for Stdout {
+    fn drop(&mut self) {
+        execute!(
+            self.stdout,
+            terminal::LeaveAlternateScreen,
+            event::DisableMouseCapture
+        )
+        .unwrap();
+        terminal::disable_raw_mode().unwrap();
+    }
+}
+
+impl Write for Stdout {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.stdout.write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.stdout.flush()
+    }
+}
+
 // this is a big blob of horrible! clean it up!
 // for now, it works. But it'd be great if it were more easily readable, and
 // modular. I'd like to add some more stats and stuff at some point
@@ -312,14 +385,9 @@ pub async fn history(
     settings: &Settings,
     db: &mut impl Database,
 ) -> Result<String> {
-    let stdout = stdout().into_raw_mode()?;
-    let stdout = MouseTerminal::from(stdout);
-    let stdout = AlternateScreen::from(stdout);
-    let backend = TermionBackend::new(stdout);
+    let stdout = Stdout::new()?;
+    let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
-
-    // Setup event handlers
-    let events = Events::new();
 
     let mut input = Cursor::from(query.join(" "));
     // Put the cursor at the end of the query by default
@@ -343,27 +411,6 @@ pub async fn history(
     let mut results = app.query_results(settings.search_mode, db).await?;
 
     let index = 'render: loop {
-        let initial_input = app.input.as_str().to_owned();
-        let initial_filter_mode = app.filter_mode;
-
-        // Handle input
-        if let Event::Input(input) = events.next()? {
-            if let Some(i) = app.handle_input(settings, &input, results.len()) {
-                break 'render i;
-            }
-        }
-
-        // After we receive input process the whole event channel before query/render.
-        while let Ok(Event::Input(input)) = events.try_next() {
-            if let Some(i) = app.handle_input(settings, &input, results.len()) {
-                break 'render i;
-            }
-        }
-
-        if initial_input != app.input.as_str() || initial_filter_mode != app.filter_mode {
-            results = app.query_results(settings.search_mode, db).await?;
-        }
-
         let compact = match settings.style {
             atuin_client::settings::Style::Auto => {
                 terminal.size().map(|size| size.height < 14).unwrap_or(true)
@@ -375,6 +422,24 @@ pub async fn history(
             terminal.draw(|f| app.draw_compact(f, &results))?;
         } else {
             terminal.draw(|f| app.draw(f, &results))?;
+        }
+
+        let initial_input = app.input.as_str().to_owned();
+        let initial_filter_mode = app.filter_mode;
+
+        if event::poll(Duration::from_millis(250))? {
+            loop {
+                if let Some(i) = app.handle_input(settings, &event::read()?, results.len()) {
+                    break 'render i;
+                }
+                if !event::poll(Duration::ZERO)? {
+                    break;
+                }
+            }
+        }
+
+        if initial_input != app.input.as_str() || initial_filter_mode != app.filter_mode {
+            results = app.query_results(settings.search_mode, db).await?;
         }
     };
 
