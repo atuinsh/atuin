@@ -1,6 +1,9 @@
 use std::borrow::Borrow;
 
-use axum::{extract::Path, Extension, Json};
+use axum::{
+    extract::{Path, State},
+    Extension, Json,
+};
 use http::StatusCode;
 use sodiumoxide::crypto::pwhash::argon2id13;
 use tracing::{debug, error, instrument};
@@ -8,8 +11,9 @@ use uuid::Uuid;
 
 use super::{ErrorResponse, ErrorResponseStatus, RespExt};
 use crate::{
-    database::{Database, Postgres},
+    database::Database,
     models::{NewSession, NewUser},
+    router::AppState,
     settings::Settings,
 };
 
@@ -32,8 +36,9 @@ pub fn verify_str(secret: &str, verify: &str) -> bool {
 #[instrument(skip_all, fields(user.username = username.as_str()))]
 pub async fn get(
     Path(username): Path<String>,
-    db: Extension<Postgres>,
+    state: State<AppState>,
 ) -> Result<Json<UserResponse>, ErrorResponseStatus<'static>> {
+    let db = &state.0.postgres;
     let user = match db.get_user(username.as_ref()).await {
         Ok(user) => user,
         Err(sqlx::Error::RowNotFound) => {
@@ -54,9 +59,9 @@ pub async fn get(
 
 #[instrument(skip_all)]
 pub async fn register(
-    Json(register): Json<RegisterRequest>,
     settings: Extension<Settings>,
-    db: Extension<Postgres>,
+    state: State<AppState>,
+    Json(register): Json<RegisterRequest>,
 ) -> Result<Json<RegisterResponse>, ErrorResponseStatus<'static>> {
     if !settings.open_registration {
         return Err(
@@ -73,6 +78,7 @@ pub async fn register(
         password: hashed,
     };
 
+    let db = &state.0.postgres;
     let user_id = match db.add_user(&new_user).await {
         Ok(id) => id,
         Err(e) => {
@@ -102,9 +108,10 @@ pub async fn register(
 
 #[instrument(skip_all, fields(user.username = login.username.as_str()))]
 pub async fn login(
+    state: State<AppState>,
     login: Json<LoginRequest>,
-    db: Extension<Postgres>,
 ) -> Result<Json<LoginResponse>, ErrorResponseStatus<'static>> {
+    let db = &state.0.postgres;
     let user = match db.get_user(login.username.borrow()).await {
         Ok(u) => u,
         Err(sqlx::Error::RowNotFound) => {
