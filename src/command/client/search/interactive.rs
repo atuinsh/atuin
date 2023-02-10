@@ -16,6 +16,7 @@ use crossterm::{
     execute, terminal,
 };
 use eyre::Result;
+use futures_util::FutureExt;
 use semver::Version;
 use unicode_width::UnicodeWidthStr;
 
@@ -393,7 +394,8 @@ pub async fn history(
     // Put the cursor at the end of the query by default
     input.end();
 
-    let update_needed = settings.needs_update().await;
+    let update_needed = settings.needs_update().fuse();
+    tokio::pin!(update_needed);
 
     let mut app = State {
         history_count: db.history_count().await?,
@@ -405,7 +407,7 @@ pub async fn history(
         } else {
             settings.filter_mode
         },
-        update_needed,
+        update_needed: None,
     };
 
     let mut results = app.query_results(settings.search_mode, db).await?;
@@ -427,14 +429,23 @@ pub async fn history(
         let initial_input = app.input.as_str().to_owned();
         let initial_filter_mode = app.filter_mode;
 
-        if event::poll(Duration::from_millis(250))? {
-            loop {
-                if let Some(i) = app.handle_input(settings, &event::read()?, results.len()) {
-                    break 'render i;
+        let event_ready = tokio::task::spawn_blocking(|| event::poll(Duration::from_millis(250)));
+
+        tokio::select! {
+            event_ready = event_ready => {
+                if event_ready?? {
+                    loop {
+                        if let Some(i) = app.handle_input(settings, &event::read()?, results.len()) {
+                            break 'render i;
+                        }
+                        if !event::poll(Duration::ZERO)? {
+                            break;
+                        }
+                    }
                 }
-                if !event::poll(Duration::ZERO)? {
-                    break;
-                }
+            }
+            update_needed = &mut update_needed => {
+                app.update_needed = update_needed;
             }
         }
 
