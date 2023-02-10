@@ -4,6 +4,7 @@ use std::{
     time::Duration,
 };
 
+use chrono::Utc;
 use crossterm::{
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent},
     execute, terminal,
@@ -12,6 +13,7 @@ use eyre::Result;
 use futures_util::FutureExt;
 use semver::Version;
 use skim::{prelude::ExactOrFuzzyEngineFactory, MatchEngineFactory, SkimItem};
+use tokio::task::yield_now;
 use unicode_width::UnicodeWidthStr;
 
 use atuin_client::{
@@ -50,10 +52,13 @@ struct State {
 }
 
 impl State {
-    fn query_results(&mut self, db: &[Arc<SkimHistory>]) -> Vec<Arc<SkimHistory>> {
+    async fn query_results(&mut self, db: &[Arc<SkimHistory>]) -> Vec<Arc<SkimHistory>> {
         let mut set = Vec::with_capacity(200);
         if self.input.as_str().is_empty() {
-            for item in db {
+            for (i, item) in db.iter().enumerate() {
+                if i % 256 == 0 {
+                    yield_now().await;
+                }
                 match self.filter_mode {
                     FilterMode::Global => set.push(item.clone()),
                     FilterMode::Host if item.0.hostname == self.context.hostname => {
@@ -76,9 +81,30 @@ impl State {
             let engine =
                 ExactOrFuzzyEngineFactory::builder().fuzzy_algorithm(skim::FuzzyAlgorithm::SkimV2);
             let engine = engine.create_engine(self.input.as_str());
-            for item in db {
+            let now = Utc::now();
+            for (i, item) in db.iter().enumerate() {
+                if i % 256 == 0 {
+                    yield_now().await;
+                }
+                match self.filter_mode {
+                    FilterMode::Global => {}
+                    FilterMode::Host if item.0.hostname == self.context.hostname => {}
+                    FilterMode::Session if item.0.session == self.context.session => {}
+                    FilterMode::Directory if item.0.cwd == self.context.cwd => {}
+                    _ => continue,
+                }
                 if let Some(res) = engine.match_item(item.clone()) {
-                    let (Ok(i) | Err(i)) = ranks.binary_search(&res.rank);
+                    let mut rank = res.rank;
+                    let duration = now - item.0.timestamp;
+                    if duration < chrono::Duration::hours(1) {
+                        rank = rank.map(|x| x * 16);
+                    } else if duration < chrono::Duration::days(1) {
+                        rank = rank.map(|x| x * 8);
+                    } else if duration < chrono::Duration::days(7) {
+                        rank = rank.map(|x| x * 4);
+                    }
+
+                    let (Ok(i) | Err(i)) = ranks.binary_search(&rank);
                     if i >= 200 {
                         continue;
                     }
@@ -86,7 +112,7 @@ impl State {
                         set.pop();
                         ranks.pop();
                     }
-                    ranks.insert(i, res.rank);
+                    ranks.insert(i, rank);
                     set.insert(i, item.clone());
                 }
             }
@@ -406,7 +432,7 @@ impl Write for Stdout {
     }
 }
 
-pub struct SkimHistory(pub History);
+pub struct SkimHistory(pub History, pub i32);
 impl SkimItem for SkimHistory {
     fn text(&self) -> std::borrow::Cow<str> {
         std::borrow::Cow::Borrowed(self.0.command.as_str())
@@ -430,17 +456,18 @@ pub async fn history(
     // Put the cursor at the end of the query by default
     input.end();
 
-    let update_needed = settings.needs_update().fuse();
+    let settings2 = settings.clone();
+    let update_needed = tokio::spawn(async move { settings2.needs_update().await }).fuse();
     tokio::pin!(update_needed);
 
     let context = current_context();
 
     let all_entries = db
-        .list(FilterMode::Global, &context, None, true)
+        .all_with_count()
         .await
         .unwrap()
         .into_iter()
-        .map(SkimHistory)
+        .map(|(h, c)| SkimHistory(h, c))
         .map(Arc::new)
         .collect::<Vec<_>>();
 
@@ -457,7 +484,7 @@ pub async fn history(
         update_needed: None,
     };
 
-    let mut results = app.query_results(&all_entries);
+    let mut results = app.query_results(&all_entries).await;
 
     let index = 'render: loop {
         let compact = match settings.style {
@@ -492,12 +519,12 @@ pub async fn history(
                 }
             }
             update_needed = &mut update_needed => {
-                app.update_needed = update_needed;
+                app.update_needed = update_needed?;
             }
         }
 
         if initial_input != app.input.as_str() || initial_filter_mode != app.filter_mode {
-            results = app.query_results(&all_entries);
+            results = app.query_results(&all_entries).await;
         }
     };
 
