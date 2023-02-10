@@ -81,22 +81,17 @@ __atuin_install_ubuntu(){
 __atuin_install_linux(){
 	echo "Detected Linux!"
 	echo "Checking distro..."
-
 	if (uname -a | grep -qi "Microsoft"); then
-        OS="UbuntuWSL"
-    else
-        if ! command -v lsb_release &> /dev/null; then
-            echo "lsb_release could not be found, unable to determine your distribution"
-            echo "If you are using Arch Linux, please get community/lsb-release or install Atuin using pacman"
-            echo
-            __atuin_install_unsupported
-        fi
-        OS=$(lsb_release -i | awk '{ print $3 }')
-    fi
-
+    OS="UbuntuWSL"
+  elif ! command -v lsb_release &> /dev/null; then
+    echo "lsb_release could not be found. Falling back to /etc/os-release"
+    OS="$(grep -Po '(?<=^ID=).*$' /etc/os-release)" 2>/dev/null
+  else
+    OS=$(lsb_release -i | awk '{ print $3 }')
+  fi
 	if [ "$OS" == "Arch" ] || [ "$OS" == "ManjaroLinux" ]; then
 		__atuin_install_arch
-    elif [ "$OS" == "Ubuntu" ] || [ "$OS" == "UbuntuWSL" ] || [ "$OS" == "Debian" ] || [ "$OS" == "Linuxmint" ] || [ "$OS" == "Parrot" ] || [ "$OS" == "Kali" ] || [ "$OS" == "Elementary" ] || [ "$OS" == "Pop" ]; then
+  elif [ "$OS" == "Ubuntu" ] || [ "$OS" == "UbuntuWSL" ] || [ "$OS" == "Debian" ] || [ "$OS" == "Linuxmint" ] || [ "$OS" == "Parrot" ] || [ "$OS" == "Kali" ] || [ "$OS" == "Elementary" ] || [ "$OS" == "Pop" ]; then
 		__atuin_install_ubuntu
 	else
 		# TODO: download a binary or smth
