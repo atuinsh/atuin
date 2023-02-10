@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use chrono::{prelude::*, Duration};
 use clap::Parser;
-use cli_table::{format::Justify, print_stdout, Cell, Style, Table};
+use crossterm::style::{Color, ResetColor, SetAttribute, SetForegroundColor};
 use eyre::{bail, Result};
 use interim::parse_date_string;
 
@@ -17,46 +17,54 @@ use atuin_client::{
 pub struct Cmd {
     /// compute statistics for the specified period, leave blank for statistics since the beginning
     period: Vec<String>,
+
+    /// How many top commands to list
+    #[arg(long, short, default_value = "10")]
+    count: usize,
 }
 
-fn compute_stats(history: &[History]) -> Result<()> {
-    let mut commands = HashMap::<String, i64>::new();
-
+fn compute_stats(history: &[History], count: usize) -> Result<()> {
+    let mut commands = HashMap::<&str, usize>::new();
     for i in history {
-        *commands.entry(i.command.clone()).or_default() += 1;
+        *commands
+            .entry(i.command.split_ascii_whitespace().next().unwrap())
+            .or_default() += 1;
     }
-    let most_common_command = commands.iter().max_by(|a, b| a.1.cmp(b.1));
-
-    if most_common_command.is_none() {
+    let unique = commands.len();
+    let mut top = commands.into_iter().collect::<Vec<_>>();
+    top.sort_unstable_by_key(|x| std::cmp::Reverse(x.1));
+    top.truncate(count);
+    if top.is_empty() {
         bail!("No commands found");
     }
 
-    let table = vec![
-        vec![
-            "Most used command".cell(),
-            most_common_command
-                .unwrap()
-                .0
-                .cell()
-                .justify(Justify::Right),
-        ],
-        vec![
-            "Commands ran".cell(),
-            history.len().to_string().cell().justify(Justify::Right),
-        ],
-        vec![
-            "Unique commands ran".cell(),
-            commands.len().to_string().cell().justify(Justify::Right),
-        ],
-    ]
-    .table()
-    .title(vec![
-        "Statistic".cell().bold(true),
-        "Value".cell().bold(true),
-    ])
-    .bold(true);
+    let max = top.iter().map(|x| x.1).max().unwrap();
+    let num_pad = max.ilog10() as usize + 1;
 
-    print_stdout(table)?;
+    for (command, count) in top {
+        let gray = SetForegroundColor(Color::Grey);
+        let bold = SetAttribute(crossterm::style::Attribute::Bold);
+
+        let in_ten = 10 * count / max;
+        print!("[");
+        print!("{}", SetForegroundColor(Color::Red));
+        for i in 0..in_ten {
+            if i == 2 {
+                print!("{}", SetForegroundColor(Color::Yellow));
+            }
+            if i == 5 {
+                print!("{}", SetForegroundColor(Color::Green));
+            }
+            print!("▮");
+        }
+        for _ in in_ten..10 {
+            print!(" ");
+        }
+
+        println!("{ResetColor}] {gray}{count:num_pad$}{ResetColor} {bold}{command}{ResetColor}");
+    }
+    println!("Total commands:   {}", history.len());
+    println!("Unique commands:  {unique}");
 
     Ok(())
 }
@@ -76,7 +84,7 @@ impl Cmd {
             let end = start + Duration::days(1);
             db.range(start.into(), end.into()).await?
         };
-        compute_stats(&history)?;
+        compute_stats(&history, self.count)?;
         Ok(())
     }
 }

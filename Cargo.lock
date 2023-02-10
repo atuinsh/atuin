@@ -82,7 +82,6 @@ dependencies = [
  "chrono",
  "clap",
  "clap_complete",
- "cli-table",
  "crossbeam-channel",
  "crossterm",
  "directories",
@@ -381,16 +380,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0d4198f73e42b4936b35b5bb248d81d2b595ecb170da0bac7655c54eedfa8da8"
 dependencies = [
  "os_str_bytes",
-]
-
-[[package]]
-name = "cli-table"
-version = "0.4.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "adfbb116d9e2c4be7011360d0c0bee565712c11e969c9609b25b619366dc379d"
-dependencies = [
- "termcolor",
- "unicode-width",
 ]
 
 [[package]]
