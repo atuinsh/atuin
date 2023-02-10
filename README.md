@@ -101,6 +101,8 @@ atuin register -u <USERNAME> -e <EMAIL> -p <PASSWORD>
 atuin import auto
 atuin sync
 ```
+
+Then restart your shell!
   
 ### Opt-in to activity graph
 Alongside the hosted Atuin server, there is also a service which generates activity graphs for your shell history! These are inspired by the GitHub graph.
@@ -124,6 +126,8 @@ bash <(curl https://raw.githubusercontent.com/ellie/atuin/main/install.sh)
             
 atuin import auto
 ```
+
+Then restart your shell!
 
 ## Install
 
@@ -202,7 +206,7 @@ And then follow [the shell setup](#shell-plugin)
 ## Shell plugin
 
 Once the binary is installed, the shell plugin requires installing. If you use
-the install script, this should all be done for you!
+the install script, this should all be done for you! After installing, remember to restart your shell.
 
 ### zsh
 
