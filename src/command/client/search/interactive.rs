@@ -344,16 +344,18 @@ impl State {
 
         let selected = self.results_state.selected();
         let command = if results.is_empty() {
-            ""
+            String::new()
         } else {
-            &results[selected].command
-        }
-        .chars()
-        .collect::<Vec<char>>()
-        .chunks(preview_width.into())
-        .map(|chunk| chunk.iter().collect::<String>())
-        .collect::<Vec<String>>()
-        .join("\n");
+            use itertools::Itertools as _;
+            let s = &results[selected].command;
+            s.char_indices()
+                .step_by(preview_width.into())
+                .map(|(i, _)| i)
+                .chain(Some(s.len()))
+                .tuple_windows()
+                .map(|(a, b)| &s[a..b])
+                .join("\n")
+        };
         let preview = command;
         let preview = Paragraph::new(preview).style(Style::default().fg(Color::DarkGray));
         f.render_widget(preview, chunks[3]);
