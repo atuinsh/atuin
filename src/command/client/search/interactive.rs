@@ -271,15 +271,12 @@ impl State {
             .iter()
             .max_by(|h1, h2| h1.command.len().cmp(&h2.command.len()));
         let preview_width = f.size().width - 2;
-        let preview_height = if longest_command.is_none() {
-            0
-        } else {
+        let preview_height = longest_command.map_or(0, |v| {
             std::cmp::min(
                 4,
-                (longest_command.unwrap().command.len() + preview_width as usize - 1)
-                    / preview_width as usize,
+                (v.command.len() + preview_width as usize - 1) / preview_width as usize,
             )
-        };
+        });
         let show_help = f.size().height > 1;
         let chunks = Layout::default()
             .direction(Direction::Vertical)
