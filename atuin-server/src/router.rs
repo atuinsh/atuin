@@ -10,19 +10,19 @@ use http::request::Parts;
 use tower::ServiceBuilder;
 use tower_http::trace::TraceLayer;
 
-use super::{
-    database::{Database, Postgres},
-    handlers,
-};
+use super::{database::Database, handlers};
 use crate::{models::User, settings::Settings};
 
 #[async_trait]
-impl FromRequestParts<AppState> for User {
+impl<DB: Send + Sync> FromRequestParts<AppState<DB>> for User
+where
+    DB: Database,
+{
     type Rejection = http::StatusCode;
 
     async fn from_request_parts(
         req: &mut Parts,
-        state: &AppState,
+        state: &AppState<DB>,
     ) -> Result<Self, Self::Rejection> {
         let auth_header = req
             .headers
@@ -40,7 +40,7 @@ impl FromRequestParts<AppState> for User {
         }
 
         let user = state
-            .postgres
+            .database
             .get_session_user(token)
             .await
             .map_err(|_| http::StatusCode::FORBIDDEN)?;
@@ -54,12 +54,15 @@ async fn teapot() -> impl IntoResponse {
 }
 
 #[derive(Clone)]
-pub struct AppState {
-    pub postgres: Postgres,
+pub struct AppState<DB> {
+    pub database: DB,
     pub settings: Settings,
 }
 
-pub fn router(postgres: Postgres, settings: Settings) -> Router {
+pub fn router<DB: Database + Clone + Send + Sync + 'static>(
+    database: DB,
+    settings: Settings,
+) -> Router {
     let routes = Router::new()
         .route("/", get(handlers::index))
         .route("/sync/count", get(handlers::history::count))
@@ -77,6 +80,6 @@ pub fn router(postgres: Postgres, settings: Settings) -> Router {
         Router::new().nest(path, routes)
     }
     .fallback(teapot)
-    .with_state(AppState { postgres, settings })
+    .with_state(AppState { database, settings })
     .layer(ServiceBuilder::new().layer(TraceLayer::new_for_http()))
 }
