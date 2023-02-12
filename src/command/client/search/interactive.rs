@@ -80,7 +80,9 @@ impl State {
             let mut ranks = Vec::with_capacity(200);
             let engine =
                 ExactOrFuzzyEngineFactory::builder().fuzzy_algorithm(skim::FuzzyAlgorithm::SkimV2);
-            let engine = engine.create_engine(self.input.as_str());
+            let query = self.input.as_str();
+            let engine = engine.create_engine(query);
+            let first_word = query.split_whitespace().next().unwrap();
             let now = Utc::now();
             for (i, item) in db.iter().enumerate() {
                 if i % 256 == 0 {
@@ -96,6 +98,9 @@ impl State {
                 if let Some(res) = engine.match_item(item.clone()) {
                     let mut rank = res.rank;
                     let duration = now - item.0.timestamp;
+                    if &item.0.command[..first_word.len()] == first_word {
+                        rank = rank.map(|x| x * 16);
+                    }
                     if duration < chrono::Duration::hours(1) {
                         rank = rank.map(|x| x * 16);
                     } else if duration < chrono::Duration::days(1) {
