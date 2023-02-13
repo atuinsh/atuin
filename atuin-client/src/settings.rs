@@ -9,6 +9,7 @@ use config::{Config, Environment, File as ConfigFile, FileFormat};
 use eyre::{eyre, Context, Result};
 use fs_err::{create_dir_all, File};
 use parse_duration::parse;
+use regex::RegexSet;
 use semver::Version;
 use serde::Deserialize;
 
@@ -112,6 +113,9 @@ pub struct Settings {
     pub filter_mode_shell_up_key_binding: FilterMode,
     pub shell_up_key_binding: bool,
     pub exit_mode: ExitMode,
+    #[serde(with = "serde_regex", default = "RegexSet::empty")]
+    pub history_filter: RegexSet,
+
     // This is automatically loaded when settings is created. Do not set in
     // config! Keep secrets and settings apart.
     pub session_token: String,
