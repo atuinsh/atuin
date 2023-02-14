@@ -175,7 +175,7 @@ impl Cmd {
             Self::Start { command: words } => {
                 let command = words.join(" ");
 
-                if command.starts_with(' ') {
+                if command.starts_with(' ') || settings.history_filter.is_match(&command) {
                     return Ok(());
                 }
 
