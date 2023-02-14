@@ -26,9 +26,13 @@ pub struct Cmd {
 fn compute_stats(history: &[History], count: usize) -> Result<()> {
     let mut commands = HashMap::<&str, usize>::new();
     for i in history {
-        *commands
-            .entry(i.command.split_ascii_whitespace().next().unwrap())
-            .or_default() += 1;
+        let command = i.command.split_ascii_whitespace().next();
+
+        if command.is_none() {
+            continue;
+        }
+
+        *commands.entry(command.unwrap()).or_default() += 1;
     }
     let unique = commands.len();
     let mut top = commands.into_iter().collect::<Vec<_>>();
