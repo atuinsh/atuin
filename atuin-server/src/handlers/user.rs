@@ -34,11 +34,11 @@ pub fn verify_str(secret: &str, verify: &str) -> bool {
 }
 
 #[instrument(skip_all, fields(user.username = username.as_str()))]
-pub async fn get(
+pub async fn get<DB: Database>(
     Path(username): Path<String>,
-    state: State<AppState>,
+    state: State<AppState<DB>>,
 ) -> Result<Json<UserResponse>, ErrorResponseStatus<'static>> {
-    let db = &state.0.postgres;
+    let db = &state.0.database;
     let user = match db.get_user(username.as_ref()).await {
         Ok(user) => user,
         Err(sqlx::Error::RowNotFound) => {
@@ -58,9 +58,9 @@ pub async fn get(
 }
 
 #[instrument(skip_all)]
-pub async fn register(
+pub async fn register<DB: Database>(
     settings: Extension<Settings>,
-    state: State<AppState>,
+    state: State<AppState<DB>>,
     Json(register): Json<RegisterRequest>,
 ) -> Result<Json<RegisterResponse>, ErrorResponseStatus<'static>> {
     if !settings.open_registration {
@@ -78,7 +78,7 @@ pub async fn register(
         password: hashed,
     };
 
-    let db = &state.0.postgres;
+    let db = &state.0.database;
     let user_id = match db.add_user(&new_user).await {
         Ok(id) => id,
         Err(e) => {
@@ -107,11 +107,11 @@ pub async fn register(
 }
 
 #[instrument(skip_all, fields(user.username = login.username.as_str()))]
-pub async fn login(
-    state: State<AppState>,
+pub async fn login<DB: Database>(
+    state: State<AppState<DB>>,
     login: Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>, ErrorResponseStatus<'static>> {
-    let db = &state.0.postgres;
+    let db = &state.0.database;
     let user = match db.get_user(login.username.borrow()).await {
         Ok(u) => u,
         Err(sqlx::Error::RowNotFound) => {

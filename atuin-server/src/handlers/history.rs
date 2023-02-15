@@ -18,11 +18,11 @@ use crate::{
 use atuin_common::api::*;
 
 #[instrument(skip_all, fields(user.id = user.id))]
-pub async fn count(
+pub async fn count<DB: Database>(
     user: User,
-    state: State<AppState>,
+    state: State<AppState<DB>>,
 ) -> Result<Json<CountResponse>, ErrorResponseStatus<'static>> {
-    let db = &state.0.postgres;
+    let db = &state.0.database;
     match db.count_history_cached(&user).await {
         // By default read out the cached value
         Ok(count) => Ok(Json(CountResponse { count })),
@@ -38,12 +38,12 @@ pub async fn count(
 }
 
 #[instrument(skip_all, fields(user.id = user.id))]
-pub async fn list(
+pub async fn list<DB: Database>(
     req: Query<SyncHistoryRequest>,
     user: User,
-    state: State<AppState>,
+    state: State<AppState<DB>>,
 ) -> Result<Json<SyncHistoryResponse>, ErrorResponseStatus<'static>> {
-    let db = &state.0.postgres;
+    let db = &state.0.database;
     let history = db
         .list_history(
             &user,
@@ -75,9 +75,9 @@ pub async fn list(
 }
 
 #[instrument(skip_all, fields(user.id = user.id))]
-pub async fn add(
+pub async fn add<DB: Database>(
     user: User,
-    state: State<AppState>,
+    state: State<AppState<DB>>,
     Json(req): Json<Vec<AddHistoryRequest>>,
 ) -> Result<(), ErrorResponseStatus<'static>> {
     debug!("request to add {} history items", req.len());
@@ -93,7 +93,7 @@ pub async fn add(
         })
         .collect();
 
-    let db = &state.0.postgres;
+    let db = &state.0.database;
     if let Err(e) = db.add_history(&history).await {
         error!("failed to add history: {}", e);
 
@@ -105,18 +105,18 @@ pub async fn add(
 }
 
 #[instrument(skip_all, fields(user.id = user.id))]
-pub async fn calendar(
+pub async fn calendar<DB: Database>(
     Path(focus): Path<String>,
     Query(params): Query<HashMap<String, u64>>,
     user: User,
-    state: State<AppState>,
+    state: State<AppState<DB>>,
 ) -> Result<Json<HashMap<u64, TimePeriodInfo>>, ErrorResponseStatus<'static>> {
     let focus = focus.as_str();
 
     let year = params.get("year").unwrap_or(&0);
     let month = params.get("month").unwrap_or(&1);
 
-    let db = &state.0.postgres;
+    let db = &state.0.database;
     let focus = match focus {
         "year" => db
             .calendar(&user, TimePeriod::YEAR, *year, *month)
