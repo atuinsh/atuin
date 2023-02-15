@@ -173,6 +173,21 @@ sudo port install atuin
   
 And then follow [the shell setup](#shell-plugin)
 
+### Nix
+
+This repository is a flake, and can be installed using `nix profile`:
+
+```
+nix profile install "github:ellie/atuin"
+```
+
+Atuin is also available in [nixpkgs](https://github.com/NixOS/nixpkgs):
+
+```
+nix-env -f '<nixpkgs>' -iA atuin
+```
+
+And then follow [the shell setup](#shell-plugin)
 ### Pacman
 
 Atuin is available in the Arch Linux [community repository](https://archlinux.org/packages/community/x86_64/atuin/):
