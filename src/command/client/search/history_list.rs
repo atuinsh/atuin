@@ -112,14 +112,11 @@ pub const PREFIX_LENGTH: u16 = " > 123ms 59s ago".len() as u16;
 
 impl DrawState<'_> {
     fn index(&mut self) {
-        // these encode the slices of `" > "`, `" {n} "`, or `"   "` in a compact form.
-        // Yes, this is a hack, but it makes me feel happy
-        static SLICES: &str = " > 1 2 3 4 5 6 7 8 9   ";
-
-        let i = self.y as usize + self.state.offset;
-        let i = i.checked_sub(self.state.selected);
-        let i = i.unwrap_or(10).min(10) * 2;
-        self.draw(&SLICES[i..i + 3], Style::default());
+        if self.y as usize + self.state.offset == self.state.selected {
+            self.draw(" >> ", Style::default());
+        } else {
+            self.draw("    ", Style::default());
+        }
     }
 
     fn duration(&mut self, h: &History) {
