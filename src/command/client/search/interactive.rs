@@ -175,19 +175,29 @@ impl State {
     }
 
     #[allow(clippy::cast_possible_truncation)]
-    fn draw<T: Backend>(&mut self, f: &mut Frame<'_, T>, results: &[History], compact: bool) {
+    fn draw<T: Backend>(
+        &mut self,
+        f: &mut Frame<'_, T>,
+        results: &[History],
+        compact: bool,
+        show_preview: bool,
+    ) {
         let border_size = u16::from(!compact);
-        let longest_command = results
-            .iter()
-            .max_by(|h1, h2| h1.command.len().cmp(&h2.command.len()));
         let preview_width = f.size().width - 2;
-        let preview_height = longest_command.map_or(0, |v| {
-            std::cmp::min(
-                4,
-                (v.command.len() as u16 + preview_width - 1 - border_size)
-                    / (preview_width - border_size),
-            )
-        });
+        let preview_height = if show_preview {
+            let longest_command = results
+                .iter()
+                .max_by(|h1, h2| h1.command.len().cmp(&h2.command.len()));
+            longest_command.map_or(0, |v| {
+                std::cmp::min(
+                    4,
+                    (v.command.len() as u16 + preview_width - 1 - border_size)
+                        / (preview_width - border_size),
+                )
+            }) + border_size * 2
+        } else {
+            u16::from(!compact)
+        };
         let show_help = !compact || f.size().height > 1;
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -198,7 +208,7 @@ impl State {
                     Constraint::Length(u16::from(show_help)),
                     Constraint::Min(1),
                     Constraint::Length(1 + border_size),
-                    Constraint::Length(preview_height + border_size * 2),
+                    Constraint::Length(preview_height),
                 ]
                 .as_ref(),
             )
@@ -431,7 +441,7 @@ pub async fn history(
             atuin_client::settings::Style::Compact => true,
             atuin_client::settings::Style::Full => false,
         };
-        terminal.draw(|f| app.draw(f, &results, compact))?;
+        terminal.draw(|f| app.draw(f, &results, compact, settings.show_preview))?;
 
         let initial_input = app.input.as_str().to_owned();
         let initial_filter_mode = app.filter_mode;

@@ -112,6 +112,7 @@ pub struct Settings {
     pub filter_mode: FilterMode,
     pub filter_mode_shell_up_key_binding: FilterMode,
     pub shell_up_key_binding: bool,
+    pub show_preview: bool,
     pub exit_mode: ExitMode,
     #[serde(with = "serde_regex", default = "RegexSet::empty")]
     pub history_filter: RegexSet,
@@ -296,6 +297,7 @@ impl Settings {
             .set_default("filter_mode", "global")?
             .set_default("filter_mode_shell_up_key_binding", "global")?
             .set_default("shell_up_key_binding", false)?
+            .set_default("show_preview", false)?
             .set_default("exit_mode", "return-original")?
             .set_default("session_token", "")?
             .set_default("style", "auto")?
