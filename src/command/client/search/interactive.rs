@@ -175,98 +175,8 @@ impl State {
     }
 
     #[allow(clippy::cast_possible_truncation)]
-    fn draw<T: Backend>(&mut self, f: &mut Frame<'_, T>, results: &[History]) {
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .margin(0)
-            .constraints([
-                Constraint::Length(3),
-                Constraint::Min(1),
-                Constraint::Length(3),
-            ])
-            .split(f.size());
-
-        let top_chunks = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(50); 2])
-            .split(chunks[0]);
-
-        let top_left_chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(1); 3])
-            .split(top_chunks[0]);
-
-        let top_right_chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(1); 3])
-            .split(top_chunks[1]);
-
-        let title = if self.update_needed.is_some() {
-            let version = self.update_needed.clone().unwrap();
-
-            Paragraph::new(Text::from(Span::styled(
-                format!(" Atuin v{VERSION} - UPDATE AVAILABLE {version}"),
-                Style::default().add_modifier(Modifier::BOLD).fg(Color::Red),
-            )))
-        } else {
-            Paragraph::new(Text::from(Span::styled(
-                format!(" Atuin v{VERSION}"),
-                Style::default().add_modifier(Modifier::BOLD),
-            )))
-        };
-
-        let help = vec![
-            Span::raw(" Press "),
-            Span::styled("Esc", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw(" to exit."),
-        ];
-
-        let help = Paragraph::new(Text::from(Spans::from(help)));
-        let stats = Paragraph::new(Text::from(Span::raw(format!(
-            "history count: {} ",
-            self.history_count
-        ))));
-
-        f.render_widget(title, top_left_chunks[1]);
-        f.render_widget(help, top_left_chunks[2]);
-        f.render_widget(stats.alignment(Alignment::Right), top_right_chunks[1]);
-
-        let results = HistoryList::new(results).block(
-            Block::default()
-                .borders(Borders::TOP | Borders::LEFT | Borders::RIGHT)
-                .border_type(BorderType::Rounded),
-        );
-
-        f.render_stateful_widget(results, chunks[1], &mut self.results_state);
-
-        let input = format!(
-            "[{:^14}] {}",
-            self.filter_mode.as_str(),
-            self.input.as_str(),
-        );
-        let input = Paragraph::new(input).block(
-            Block::default()
-                .borders(Borders::BOTTOM | Borders::LEFT | Borders::RIGHT)
-                .border_type(BorderType::Rounded)
-                .title(format!(
-                    "{:─>width$}",
-                    "",
-                    width = chunks[2].width as usize - 2
-                )),
-        );
-        f.render_widget(input, chunks[2]);
-
-        let width = UnicodeWidthStr::width(self.input.substring());
-        f.set_cursor(
-            // Put cursor past the end of the input text
-            chunks[2].x + width as u16 + PREFIX_LENGTH + 2,
-            // Move one line down, from the border to the input line
-            chunks[2].y + 1,
-        );
-    }
-
-    #[allow(clippy::cast_possible_truncation)]
-    fn draw_compact<T: Backend>(&mut self, f: &mut Frame<'_, T>, results: &[History]) {
+    fn draw<T: Backend>(&mut self, f: &mut Frame<'_, T>, results: &[History], compact: bool) {
+        let border_size = u16::from(!compact);
         let longest_command = results
             .iter()
             .max_by(|h1, h2| h1.command.len().cmp(&h2.command.len()));
@@ -274,10 +184,11 @@ impl State {
         let preview_height = longest_command.map_or(0, |v| {
             std::cmp::min(
                 4,
-                (v.command.len() + preview_width as usize - 1) / preview_width as usize,
+                (v.command.len() as u16 + preview_width - 1 - border_size)
+                    / (preview_width - border_size),
             )
         });
-        let show_help = f.size().height > 1;
+        let show_help = !compact || f.size().height > 1;
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .margin(0)
@@ -286,8 +197,8 @@ impl State {
                 [
                     Constraint::Length(u16::from(show_help)),
                     Constraint::Min(1),
-                    Constraint::Length(1),
-                    Constraint::Length(preview_height as u16),
+                    Constraint::Length(1 + border_size),
+                    Constraint::Length(preview_height + border_size * 2),
                 ]
                 .as_ref(),
             )
@@ -305,40 +216,111 @@ impl State {
             )
             .split(chunks[0]);
 
-        let title = Paragraph::new(Text::from(Span::styled(
-            format!("Atuin v{VERSION}"),
-            Style::default().fg(Color::DarkGray),
-        )));
+        let title = self.build_title();
+        f.render_widget(title, header_chunks[0]);
 
+        let help = self.build_help();
+        f.render_widget(help, header_chunks[1]);
+
+        let stats = self.build_stats();
+        f.render_widget(stats, header_chunks[2]);
+
+        let results_list = Self::build_results_list(compact, results);
+        f.render_stateful_widget(results_list, chunks[1], &mut self.results_state);
+
+        let input = self.build_input(compact, chunks[2].width.into());
+        f.render_widget(input, chunks[2]);
+
+        let preview = self.build_preview(results, compact, preview_width, chunks[3].width.into());
+        f.render_widget(preview, chunks[3]);
+
+        let extra_width = UnicodeWidthStr::width(self.input.substring());
+
+        let cursor_offset = u16::from(!compact);
+        f.set_cursor(
+            // Put cursor past the end of the input text
+            chunks[2].x + extra_width as u16 + PREFIX_LENGTH + 1 + cursor_offset,
+            chunks[2].y + cursor_offset,
+        );
+    }
+
+    fn build_title(&mut self) -> Paragraph {
+        let title = if self.update_needed.is_some() {
+            let version = self.update_needed.clone().unwrap();
+
+            Paragraph::new(Text::from(Span::styled(
+                format!(" Atuin v{VERSION} - UPDATE AVAILABLE {version}"),
+                Style::default().add_modifier(Modifier::BOLD).fg(Color::Red),
+            )))
+        } else {
+            Paragraph::new(Text::from(Span::styled(
+                format!(" Atuin v{VERSION}"),
+                Style::default().add_modifier(Modifier::BOLD),
+            )))
+        };
+        title
+    }
+
+    #[allow(clippy::unused_self)]
+    fn build_help(&mut self) -> Paragraph {
         let help = Paragraph::new(Text::from(Spans::from(vec![
             Span::styled("Esc", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw(" to exit"),
         ])))
         .style(Style::default().fg(Color::DarkGray))
         .alignment(Alignment::Center);
+        help
+    }
 
+    fn build_stats(&mut self) -> Paragraph {
         let stats = Paragraph::new(Text::from(Span::raw(format!(
             "history count: {}",
             self.history_count,
         ))))
         .style(Style::default().fg(Color::DarkGray))
         .alignment(Alignment::Right);
+        stats
+    }
 
-        f.render_widget(title, header_chunks[0]);
-        f.render_widget(help, header_chunks[1]);
-        f.render_widget(stats, header_chunks[2]);
+    fn build_results_list(compact: bool, results: &[History]) -> HistoryList {
+        let results_list = if compact {
+            HistoryList::new(results)
+        } else {
+            HistoryList::new(results).block(
+                Block::default()
+                    .borders(Borders::TOP | Borders::LEFT | Borders::RIGHT)
+                    .border_type(BorderType::Rounded),
+            )
+        };
+        results_list
+    }
 
-        let results_list = HistoryList::new(results);
-        f.render_stateful_widget(results_list, chunks[1], &mut self.results_state);
-
+    fn build_input(&mut self, compact: bool, chunk_width: usize) -> Paragraph {
         let input = format!(
             "[{:^14}] {}",
             self.filter_mode.as_str(),
             self.input.as_str(),
         );
-        let input = Paragraph::new(input);
-        f.render_widget(input, chunks[2]);
+        let input = if compact {
+            Paragraph::new(input)
+        } else {
+            Paragraph::new(input).block(
+                Block::default()
+                    .borders(Borders::LEFT | Borders::RIGHT)
+                    .border_type(BorderType::Rounded)
+                    .title(format!("{:─>width$}", "", width = chunk_width - 2)),
+            )
+        };
+        input
+    }
 
+    fn build_preview(
+        &mut self,
+        results: &[History],
+        compact: bool,
+        preview_width: u16,
+        chunk_width: usize,
+    ) -> Paragraph {
         let selected = self.results_state.selected();
         let command = if results.is_empty() {
             String::new()
@@ -353,17 +335,17 @@ impl State {
                 .map(|(a, b)| &s[a..b])
                 .join("\n")
         };
-        let preview = command;
-        let preview = Paragraph::new(preview).style(Style::default().fg(Color::DarkGray));
-        f.render_widget(preview, chunks[3]);
-
-        let extra_width = UnicodeWidthStr::width(self.input.substring());
-
-        f.set_cursor(
-            // Put cursor past the end of the input text
-            chunks[2].x + extra_width as u16 + PREFIX_LENGTH + 1,
-            chunks[2].y,
-        );
+        let preview = if compact {
+            Paragraph::new(command).style(Style::default().fg(Color::DarkGray))
+        } else {
+            Paragraph::new(command).block(
+                Block::default()
+                    .borders(Borders::BOTTOM | Borders::LEFT | Borders::RIGHT)
+                    .border_type(BorderType::Rounded)
+                    .title(format!("{:─>width$}", "", width = chunk_width - 2)),
+            )
+        };
+        preview
     }
 }
 
@@ -449,11 +431,7 @@ pub async fn history(
             atuin_client::settings::Style::Compact => true,
             atuin_client::settings::Style::Full => false,
         };
-        if compact {
-            terminal.draw(|f| app.draw_compact(f, &results))?;
-        } else {
-            terminal.draw(|f| app.draw(f, &results))?;
-        }
+        terminal.draw(|f| app.draw(f, &results, compact))?;
 
         let initial_input = app.input.as_str().to_owned();
         let initial_filter_mode = app.filter_mode;
