@@ -9,6 +9,48 @@ impl From<String> for Cursor {
     }
 }
 
+static WORD_SEPARATORS: &str = "./\\()\"'-:,.;<>~!@#$%^&*|+=[]{}`~?";
+
+fn is_word_boundary(c: char, next_c: char) -> bool {
+    (c.is_whitespace() && !next_c.is_whitespace())
+        || (!c.is_whitespace() && next_c.is_whitespace())
+        || (WORD_SEPARATORS.contains(c) && !WORD_SEPARATORS.contains(next_c))
+        || (!WORD_SEPARATORS.contains(c) && WORD_SEPARATORS.contains(next_c))
+}
+
+fn get_next_word_pos(source: &str, index: usize) -> usize {
+    let index = (index..source.len().saturating_sub(1)).find(|&i| {
+        is_word_boundary(
+            source.chars().nth(i).unwrap(),
+            source.chars().nth(i + 1).unwrap(),
+        )
+    });
+    if index.is_none() {
+        return source.len();
+    }
+    (index.unwrap() + 1..source.len())
+        .find(|&i| !source.chars().nth(i).unwrap().is_whitespace())
+        .unwrap_or(source.len())
+}
+
+fn get_prev_word_pos(source: &str, index: usize) -> usize {
+    let index = (1..index)
+        .rev()
+        .find(|&i| !source.chars().nth(i).unwrap().is_whitespace());
+    if index.is_none() {
+        return 0;
+    }
+    (1..index.unwrap())
+        .rev()
+        .find(|&i| {
+            is_word_boundary(
+                source.chars().nth(i - 1).unwrap(),
+                source.chars().nth(i).unwrap(),
+            )
+        })
+        .unwrap_or(0)
+}
+
 impl Cursor {
     pub fn as_str(&self) -> &str {
         self.source.as_str()
@@ -52,6 +94,14 @@ impl Cursor {
         }
     }
 
+    pub fn next_word(&mut self) {
+        self.index = get_next_word_pos(&self.source, self.index);
+    }
+
+    pub fn prev_word(&mut self) {
+        self.index = get_prev_word_pos(&self.source, self.index);
+    }
+
     pub fn insert(&mut self, c: char) {
         self.source.insert(self.index, c);
         self.index += c.len_utf8();
@@ -63,6 +113,17 @@ impl Cursor {
         } else {
             None
         }
+    }
+
+    pub fn remove_next_word(&mut self) {
+        let next_index = get_next_word_pos(&self.source, self.index);
+        self.source.replace_range(self.index..next_index, "");
+    }
+
+    pub fn remove_prev_word(&mut self) {
+        let next_index = get_prev_word_pos(&self.source, self.index);
+        self.source.replace_range(next_index..self.index, "");
+        self.index = next_index;
     }
 
     pub fn back(&mut self) -> Option<char> {
@@ -90,6 +151,7 @@ impl Cursor {
 #[cfg(test)]
 mod cursor_tests {
     use super::Cursor;
+    use super::*;
 
     #[test]
     fn right() {
@@ -112,6 +174,26 @@ mod cursor_tests {
             assert_eq!(c.index, i);
             c.left();
         }
+    }
+
+    #[test]
+    fn test_get_next_word_pos() {
+        let s = String::from("   aaa   ((()))bbb   ((()))   ");
+        let indices = [(0, 3), (1, 3), (3, 9), (9, 15), (15, 21), (21, 30)];
+        for (i_src, i_dest) in indices {
+            assert_eq!(get_next_word_pos(&s, i_src), i_dest);
+        }
+        assert_eq!(get_next_word_pos("", 0), 0);
+    }
+
+    #[test]
+    fn test_get_prev_word_pos() {
+        let s = String::from("   aaa   ((()))bbb   ((()))   ");
+        let indices = [(30, 21), (21, 15), (15, 9), (9, 3), (3, 0)];
+        for (i_src, i_dest) in indices {
+            assert_eq!(get_prev_word_pos(&s, i_src), i_dest);
+        }
+        assert_eq!(get_prev_word_pos("", 0), 0);
     }
 
     #[test]

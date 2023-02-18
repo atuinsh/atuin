@@ -111,19 +111,25 @@ impl State {
                 let c = c.to_digit(10)? as usize;
                 return Some(self.results_state.selected() + c);
             }
+            KeyCode::Left if ctrl => self.input.prev_word(),
             KeyCode::Left => {
                 self.input.left();
             }
             KeyCode::Char('h') if ctrl => {
                 self.input.left();
             }
+            KeyCode::Right if ctrl => self.input.next_word(),
             KeyCode::Right => self.input.right(),
             KeyCode::Char('l') if ctrl => self.input.right(),
             KeyCode::Char('a') if ctrl => self.input.start(),
+            KeyCode::Home => self.input.start(),
             KeyCode::Char('e') if ctrl => self.input.end(),
+            KeyCode::End => self.input.end(),
+            KeyCode::Backspace if ctrl => self.input.remove_prev_word(),
             KeyCode::Backspace => {
                 self.input.back();
             }
+            KeyCode::Delete if ctrl => self.input.remove_next_word(),
             KeyCode::Delete => {
                 self.input.remove();
             }
