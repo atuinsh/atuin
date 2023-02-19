@@ -175,6 +175,7 @@ impl State {
     }
 
     #[allow(clippy::cast_possible_truncation)]
+    #[allow(clippy::bool_to_int_with_if)]
     fn draw<T: Backend>(
         &mut self,
         f: &mut Frame<'_, T>,
@@ -182,7 +183,7 @@ impl State {
         compact: bool,
         show_preview: bool,
     ) {
-        let border_size = u16::from(!compact);
+        let border_size = if compact { 0 } else { 1 };
         let preview_width = f.size().width - 2;
         let preview_height = if show_preview {
             let longest_command = results
@@ -195,8 +196,10 @@ impl State {
                         / (preview_width - border_size),
                 )
             }) + border_size * 2
+        } else if compact {
+            0
         } else {
-            u16::from(!compact)
+            1
         };
         let show_help = !compact || f.size().height > 1;
         let chunks = Layout::default()
@@ -205,7 +208,7 @@ impl State {
             .horizontal_margin(1)
             .constraints(
                 [
-                    Constraint::Length(u16::from(show_help)),
+                    Constraint::Length(if show_help { 1 } else { 0 }),
                     Constraint::Min(1),
                     Constraint::Length(1 + border_size),
                     Constraint::Length(preview_height),
@@ -246,7 +249,7 @@ impl State {
 
         let extra_width = UnicodeWidthStr::width(self.input.substring());
 
-        let cursor_offset = u16::from(!compact);
+        let cursor_offset = if compact { 0 } else { 1 };
         f.set_cursor(
             // Put cursor past the end of the input text
             chunks[2].x + extra_width as u16 + PREFIX_LENGTH + 1 + cursor_offset,
