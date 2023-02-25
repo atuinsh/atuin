@@ -1,10 +1,11 @@
+---
+title: Searching History
+---
+
 # `atuin search`
 
-```
-atuin search <query>
-```
 
-Atuin search also supports wildcards, with either the `*` or `%` character. By
+Atuin search supports wildcards, with either the `*` or `%` character. By
 default, a prefix search is performed (ie, all queries are automatically
 appended with a wildcard).
 

@@ -1,3 +1,8 @@
+---
+title: Import History
+sidebar_position: 2
+---
+
 # `atuin import`
 
 Atuin can import your history from your "old" history file
@@ -24,4 +29,6 @@ This supports both the simple and extended format
 
 # bash
 
-TODO
+```
+atuin import bash
+```

@@ -1,8 +1,9 @@
-# Listing history
+---
+title: Listing History
+---
 
-```
-atuin history list
-```
+# `atuin history list`
+
 
 | Arg            | Description                                                                   |
 | -------------- | ----------------------------------------------------------------------------- |
