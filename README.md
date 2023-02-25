@@ -67,14 +67,14 @@ I wanted to. And I **really** don't want to.
 
 - [Quickstart](#quickstart)
 - [Install](#install)
-- [Import](docs/import.md)
-- [Configuration](docs/config.md)
-- [Searching history](docs/search.md)
-- [Cloud history sync](docs/sync.md)
-- [History stats](docs/stats.md)
-- [Running your own server](docs/server.md)
-- [Key binding](docs/key-binding.md)
-- [Shell completions](docs/shell-completions.md)
+- [Import](https://atuin.sh/docs/commands/import)
+- [Configuration](https://atuin.sh/docs/config)
+- [Searching history](https://atuin.sh/docs/commands/search)
+- [Cloud history sync](https://atuin.sh/docs/commands/sync)
+- [History stats](https://atuin.sh/docs/commands/stats)
+- [Self host Atuin server](https://atuin.sh/docs/self-hosting)
+- [Key binding](https://atuin.sh/docs/config/key-binding)
+- [Shell completions](https://atuin.sh/docs/commands/shell-completions)
 
 ## Supported Shells
 
