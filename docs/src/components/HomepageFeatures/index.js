@@ -4,16 +4,15 @@ import styles from './styles.module.css';
 
 const FeatureList = [
   {
-    title: 'The same history, everywhere',
+    title: 'History sync',
     Svg: require('@site/static/img/undraw_docusaurus_mountain.svg').default,
     description: (
       <>
-        <p>
-          Atuin syncs your shell history between every single machine you own. Never write the same command twice!
-        </p>
-        <p>
-
-        </p>
+        <ul>
+          <li>Sync your shell history to all of your machines, wherever they are</li>
+          <li>End-to-end encrypted - nobody can see your data but you</li>
+          <li>Securely backed up - never lose a command again</li>
+        </ul>
       </>
     ),
   },
@@ -22,51 +21,34 @@ const FeatureList = [
     Svg: require('@site/static/img/undraw_docusaurus_tree.svg').default,
     description: (
       <>
-        Atuin gives you a speedy terminal search UI for your history, powered by configurable fuzzy search.
+        <ul>
+          <li>Speedy terminal search UI</li>
+          <li>Configurable search method - fuzzy, prefix, etc</li>
+          <li>Easily search and filter by session, directory, or machine</li>
+          <li>Powerful command line search for integration with other tools</li>
+        </ul>
       </>
     ),
   },
   {
-    title: 'Importers',
+    title: 'All the data',
     Svg: require('@site/static/img/undraw_docusaurus_react.svg').default,
     description: (
       <>
-        With importers for several shells + other history tools, you won't forget your past switching to Atuin
+        <ul>
+          <li>History stored in a SQLite DB, making stats and analysis easy</li>
+          <li>Log exit code, directory, hostname, session, command duration, etc</li>
+          <li>Import old history from a number of shells or history tools</li>
+        </ul>
       </>
     ),
   },
 ];
 
-const FeatureListBottom = [
-  {
-    title: 'Super Secure',
-    offset: true,
-    Svg: require('@site/static/img/undraw_docusaurus_mountain.svg').default,
-    description: (
-      <>
-        With end-to-end encryption everywhere, nobody else can see your shell history
-      </>
-    ),
-  },
-  {
-    title: 'No limits',
-    Svg: require('@site/static/img/undraw_docusaurus_tree.svg').default,
-    description: (
-      <>
-        Atuin handles anything from 1000 lines of history to a 1/4 million and beyond!
-      </>
-    ),
-  },
-];
-
-
-function Feature({ Svg, title, description, offset }) {
+function Feature({ Svg, title, description }) {
   return (
-    <div className={clsx('col col--4', offset && 'col--offset-2')}>
-      <div className="text--center">
-        <Svg className={styles.featureSvg} role="img" />
-      </div>
-      <div className="text--center padding-horiz--md">
+    <div className={clsx('col col--4')}>
+      <div className={"padding-horiz--md", styles.whatisfeature}>
         <h3>{title}</h3>
         <p>{description}</p>
       </div>
@@ -77,14 +59,9 @@ function Feature({ Svg, title, description, offset }) {
 export default function HomepageFeatures() {
   return (
     <section className={styles.features}>
-      <div className="container">
+      <div className={"container"}>
         <div className="row">
           {FeatureList.map((props, idx) => (
-            <Feature key={idx} {...props} />
-          ))}
-        </div>
-        <div className="row">
-          {FeatureListBottom.map((props, idx) => (
             <Feature key={idx} {...props} />
           ))}
         </div>

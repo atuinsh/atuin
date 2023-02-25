@@ -9,3 +9,9 @@
   height: 200px;
   width: 200px;
 }
+
+.whatisfeature {
+  background-color: var(--ifm-hero-background-color);
+  padding: 2rem;
+}
+

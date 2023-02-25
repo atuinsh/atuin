@@ -32,6 +32,8 @@ const config = {
     locales: ['en'],
   },
 
+  plugins: [],
+
   presets: [
     [
       'classic',
@@ -64,15 +66,11 @@ const config = {
       // Replace with your project's social card
       image: 'img/docusaurus-social-card.jpg',
       navbar: {
-        title: 'Atuin',
-        logo: {
-          alt: 'My Site Logo',
-          src: 'https://user-images.githubusercontent.com/53315310/171035743-53991112-9477-4f3d-8811-5deee40c7879.png',
-        },
+        title: '🐢 Atuin',
         items: [
           {
             type: 'doc',
-            docId: 'intro',
+            docId: 'setup/setup',
             position: 'left',
             label: 'Docs',
           },
@@ -91,8 +89,8 @@ const config = {
             title: 'Docs',
             items: [
               {
-                label: 'Intro',
-                to: '/docs/intro',
+                label: 'Setup',
+                to: '/docs/setup',
               },
             ],
           },
@@ -116,10 +114,14 @@ const config = {
                 label: 'GitHub',
                 href: 'https://github.com/ellie/atuin',
               },
+              {
+                label: 'Twitter',
+                href: 'https://twitter.com/atuinsh'
+              },
             ],
           },
         ],
-        copyright: `Copyright © ${new Date().getFullYear()} Atuin. Built with Docusaurus.`,
+        copyright: `Copyright © ${new Date().getFullYear()} Atuin.`,
       },
       prism: {
         theme: lightCodeTheme,

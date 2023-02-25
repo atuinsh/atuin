@@ -1,85 +1,16 @@
 ---
-title: Intro
+title: Getting Started
 sidebar_position: 1
 ---
-
-<p align="center">
-<img height="250" src="https://user-images.githubusercontent.com/53315310/171035743-53991112-9477-4f3d-8811-5deee40c7879.png"/>
-</p>
-
-<p align="center">
-<em>magical shell history</em>
-</p>
-
-<hr/>
-
-<p align="center">
-  <a href="https://github.com/ellie/atuin/actions?query=workflow%3ARust"><img src="https://img.shields.io/github/actions/workflow/status/ellie/atuin/rust.yml?style=flat-square" /></a>
-  <a href="https://crates.io/crates/atuin"><img src="https://img.shields.io/crates/v/atuin.svg?style=flat-square" /></a>
-  <a href="https://crates.io/crates/atuin"><img src="https://img.shields.io/crates/d/atuin.svg?style=flat-square" /></a>
-  <a href="https://github.com/ellie/atuin/blob/main/LICENSE"><img src="https://img.shields.io/crates/l/atuin.svg?style=flat-square" /></a>
-  <a href="https://discord.gg/Fq8bJSKPHh"><img src="https://img.shields.io/discord/954121165239115808" /></a>
-</p>
-
-
-[English] | [简体中文]
-
 
 Atuin replaces your existing shell history with a SQLite database, and records
 additional context for your commands. Additionally, it provides optional and
 _fully encrypted_ synchronisation of your history between machines, via an Atuin
 server.  
 
-
-
-
-<p align="center">
-  <img src="demo.gif" alt="animated" width="80%" />
-</p>
-
-<p align="center">
-<em>exit code, duration, time and command shown</em>
-</p>
-
-
-
-
-
-As well as the search UI, it can do things like this:
-
-```
-# search for all successful `make` commands, recorded after 3pm yesterday
-atuin search --exit 0 --after "yesterday 3pm" make
-```
-
 You may use either the server I host, or host your own! Or just don't use sync
 at all. As all history sync is encrypted, I couldn't access your data even if
 I wanted to. And I **really** don't want to.
-
-## Features
-
-- rebind `ctrl-r` and `up` (configurable) to a full screen history search UI
-- store shell history in a sqlite database
-- backup and sync **encrypted** shell history
-- the same history across terminals, across sessions, and across machines
-- log exit code, cwd, hostname, session, command duration, etc
-- calculate statistics such as "most used command"
-- old history file is not replaced
-- quick-jump to previous items with <kbd>Alt-\<num\></kbd>
-- switch filter modes via ctrl-r; search history just from the current session, directory, or globally
-
-## Documentation
-
-- [Quickstart](#quickstart)
-- [Install](#install)
-- [Import](docs/import.md)
-- [Configuration](docs/config.md)
-- [Searching history](docs/search.md)
-- [Cloud history sync](docs/sync.md)
-- [History stats](docs/stats.md)
-- [Running your own server](docs/server.md)
-- [Key binding](docs/key-binding.md)
-- [Shell completions](docs/shell-completions.md)
 
 ## Supported Shells
 
@@ -89,11 +20,9 @@ I wanted to. And I **really** don't want to.
  
 ## Community
 
-Atuin has a community Discord, available [here](https://discord.gg/Fq8bJSKPHh)
+Atuin has a community Discord, available [here](https://discord.gg/Fq8bJSKPHh)! Please do come and say hi 😊
 
 # Quickstart
-  
-## With the default sync server
   
 This will sign you up for the default sync server, hosted by me. Everything is end-to-end encrypted, so your secrets are safe!
   
