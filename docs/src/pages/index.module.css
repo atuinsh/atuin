@@ -18,6 +18,20 @@
   .heroBanner {
     padding: 2rem;
   }
+
+  .whatis {
+    padding-top: 2rem;
+  }
+
+  .whatisfeatureblock {
+    margin-top: 2rem;
+  }
+}
+
+@media screen and (min-width: 996px) {
+  .whatis {
+    padding: 4rem;
+  }
 }
 
 .buttons {
@@ -34,11 +48,6 @@
   -moz-background-clip: text;
   -webkit-text-fill-color: transparent; 
   -moz-text-fill-color: transparent;
-}
-
-.whatis {
-  padding: 4rem;
-
 }
 
 .whatis h1 {

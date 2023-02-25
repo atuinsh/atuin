@@ -16,7 +16,7 @@ const FeatureList = [
     ),
   },
   {
-    title: 'Find it fast',
+    title: 'Speedy search',
     description: (
       <>
         <ul>
@@ -24,12 +24,13 @@ const FeatureList = [
           <li>Configurable search method - fuzzy, prefix, etc</li>
           <li>Easily search and filter by session, directory, or machine</li>
           <li>Powerful command line search for integration with other tools</li>
+          <li>Written in Rust, so it's fast <em>and</em> safe 🦀</li>
         </ul>
       </>
     ),
   },
   {
-    title: 'All the data',
+    title: 'Extra context',
     description: (
       <>
         <ul>
@@ -44,7 +45,7 @@ const FeatureList = [
 
 function Feature({ Svg, title, description }) {
   return (
-    <div className={clsx('col col--4')}>
+    <div className={clsx('col col--4', styles.whatisfeatureblock)}>
       <div className={"padding-horiz--md", styles.whatisfeature}>
         <h3>{title}</h3>
         <p>{description}</p>
