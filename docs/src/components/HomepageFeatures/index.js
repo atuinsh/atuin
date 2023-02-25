@@ -5,7 +5,6 @@ import styles from './styles.module.css';
 const FeatureList = [
   {
     title: 'History sync',
-    Svg: require('@site/static/img/undraw_docusaurus_mountain.svg').default,
     description: (
       <>
         <ul>
@@ -18,7 +17,6 @@ const FeatureList = [
   },
   {
     title: 'Find it fast',
-    Svg: require('@site/static/img/undraw_docusaurus_tree.svg').default,
     description: (
       <>
         <ul>
@@ -32,7 +30,6 @@ const FeatureList = [
   },
   {
     title: 'All the data',
-    Svg: require('@site/static/img/undraw_docusaurus_react.svg').default,
     description: (
       <>
         <ul>
