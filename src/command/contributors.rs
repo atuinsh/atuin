@@ -1,63 +1,73 @@
 const CONTRIBUTORS: &str = r#"
-avinassh (@avinassh)
-b3nj5m1n (@b3nj5m1n)
-bl-ue (@bl-ue)
-Benjamin Vergnaud (@bvergnaud)
-Brad Robel-Forrest (@bradrf)
-Bruce Huang (@helbing)
-c-14 (@c-14)
-ConradLudgate (@conradludgate)
-CosmicHorror  (@LovecraftianHorror)
-Daniel (@daniel0611)
-DanielAtCosmicDNA (@DanielAtCosmicDNA)
-Ellie Huxtable (@ellie)
-Eric Crosson (@EricCrosson)
-Frank Hamand (@frankh)
-Herby Gillot (@herbygillot)
-Ian Smith (@ismith)
-Ilkin Bayramli (@ibayramli)
-Jakob Schrettenbrunner (@schrej)
-Jakub Jirutka (@jirutka)
-Jakub Panek (@panekj)
-Jamie Quigley (@Sciencentistguy)
-Jannik (@mozzieongit)
-jean-santos (@jean-santos)
-Jerome Ducret (@DucretJe)
-Klas Mellbourn (@Mellbourn)
-Laurent le Beau-Martin (@laurentlbm)
-lchausmann (@lchausmann)
-Lucas Burns (@lmburns)
-Lucy (@Absolucy)
-Luke Baker (@lukebaker)
-Manel Vilar (@manelvf)
-Mark Wotton (@mwotton)
-Martin Indra  (@Indy2222)
-Mat Jones (@mrjones2014)
-mb6ockatf (@mb6ockatf)
-Michael Bianco (@iloveitaly)
-Michael Mior (@michaelmior)
-morguldir (@morguldir)
-mundry (@mundry)
-networkException (@networkException)
-Noyzen (@noyez)
-Omer Katz (@thedrow)
-Orhun Parmaksız (@orhun)
-Patrick (@pmarschik)
-Patrick Jackson (@patricksjackson)
-Plamen Dimitrov (@pevogam)
-Sam Edwards  (@dotsam)
-Sam Lanning (@s0)
-Sandro (@SuperSandro2000)
-Satyarth Sampath (@notsatyarth)
-Simon Elsbrock (@elsbrock)
-TymanWasTaken  (@TymanWasTaken)
-Ubiquitous Photon  (@UbiquitousPhoton)
-Violet (@shreve)
-Will Fancher (@ElvishJerricco)
-wpbrz (@wpbrz)
-xfzv (@xfzv)
-Yuvi Panda (@yuvipanda)
-ZhiHong Li (@OnePieceJoker)
+Baptiste 
+Benjamin Vergnaud 
+Brad Robel-Forrest <brad@bitpony.com>
+Bruce Huang <helbingxxx@gmail.com>
+Conrad Ludgate <conradludgate@gmail.com>
+CosmicHorror <LovecraftianHorror@pm.me>
+Daniel <daniel.hub@outlook.de>
+Ellie Huxtable <ellie@elliehuxtable.com>
+Eric Crosson 
+Eric Ripa <eric@ripa.io>
+Erwin Kroon 
+Evan Purkhiser <evanpurkhiser@gmail.com>
+Frank Hamand <frankhamand@gmail.com>
+Herby Gillot <herby.gillot@gmail.com>
+Ian Smith <ismith@mit.edu>
+Ilkin Bayramli 
+Violet Shreve <github@shreve.io>
+Jakob Schrettenbrunner <dev@schrej.net>
+Jakob-Niklas See <github@nwex.de>
+Jakub Jirutka <jakub@jirutka.cz>
+Jakub Panek <me@panekj.dev>
+Jamie Quigley <jamie@quigley.xyz>
+Jannik <jannik.peters@posteo.de>
+Jerome Ducret <jdiphone34@gmail.com>
+Johannes Baiter <johannes.baiter@gmail.com>
+Klas Mellbourn <klas@mellbourn.net>
+Laurent le Beau-Martin
+Lucas Burns 
+Lucy <lucy@absolucy.moe>
+Luke Baker <lukebaker@gmail.com>
+Manel Vilar <manelvf@gmail.com>
+Mark Wotton <mwotton@gmail.com>
+Martin Indra <martin.indra@mgn.cz>
+Martin Junghanns <m.junghanns@mailbox.org>
+Mat Jones <mat@mjones.network>
+Michael Bianco <iloveitaly@gmail.com>
+Michael Mior <michael.mior@gmail.com>
+Omer Katz <omer.drow@gmail.com>
+Orhun Parmaksız <orhunparmaksiz@gmail.com>
+Patrick 
+Patrick Decat <pdecat@gmail.com>
+Patrick Jackson <patrick@jackson.dev>
+Plamen Dimitrov <pdimitrov@pevogam.com>
+Sam Edwards <sam@samedwards.ca>
+Sam Lanning <sam@samlanning.com>
+Sandro <sandro.jaeckel@gmail.com>
+Satyarth Sampath <satyarth.23@gmail.com>
+Simon Elsbrock <simon@iodev.org>
+Tobias Hunger <tobias.hunger@gmail.com>
+Trygve Aaberge <trygveaa@gmail.com>
+TymanWasTaken <tbeckman530@gmail.com>
+Ubiquitous Photon 
+Webmaster At Cosmic DNA 
+Will Fancher <elvishjerricco@gmail.com>
+Yolo <noah.chang@outlook.com>
+Yuvi Panda <yuvipanda@gmail.com>
+ZhiHong Li <joker_lizhih@163.com>
+avinassh 
+b3nj5m1n 
+c-14 <git@c-14.de>
+frukto <fruktopus@gmail.com>
+jean-santos <jeanpnsantos@gmail.com>
+lchausmann <jazz-github@zqz.dk>
+mb6ockatf 
+morguldir <morguldir@protonmail.com>
+mundry
+noyez <noyez@ithryn.net>
+wpbrz 
+xfzv
 "#;
 
 pub fn run() {
