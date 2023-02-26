@@ -191,6 +191,17 @@ or `py`.
 ^core go$ | rb$ | py$
 ```
 
-## Server config
+### history_filter
 
-`// TODO`
+The history filter allows you to exclude commands from history tracking - maybe you want to keep ALL of your `curl` commands totally out of your shell history, or maybe just some matching a pattern. 
+
+This supports regular expressions, so you can hide pretty much whatever you want! 
+
+```
+## Note that these regular expressions are unanchored, i.e. if they don't start
+## with ^ or end with $, they'll match anywhere in the command.
+history_filter = [
+   "^secret-cmd",
+   "^innocuous-cmd .*--secret=.+"
+]
+```
