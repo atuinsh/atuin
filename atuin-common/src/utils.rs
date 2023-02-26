@@ -10,8 +10,16 @@ pub fn uuid_v4() -> String {
 // TODO: more reliable, more tested
 // I don't want to use ProjectDirs, it puts config in awkward places on
 // mac. Data too. Seems to be more intended for GUI apps.
+
+#[cfg(other)]
 pub fn home_dir() -> PathBuf {
     let home = std::env::var("HOME").expect("$HOME not found");
+    PathBuf::from(home)
+}
+
+#[cfg(target_os = "windows")]
+pub fn home_dir() -> PathBuf {
+    let home = std::env::var("USERPROFILE").expect("%userprofile% not found");
     PathBuf::from(home)
 }
 
