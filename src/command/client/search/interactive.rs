@@ -377,6 +377,14 @@ impl Write for Stdout {
     }
 }
 
+#[cfg(target_os = "windows")]
+fn win_handle_enter() {
+    let _ = event::read();
+}
+
+#[cfg(other)]
+fn win_handle_enter() {}
+
 // this is a big blob of horrible! clean it up!
 // for now, it works. But it'd be great if it were more easily readable, and
 // modular. I'd like to add some more stats and stuff at some point
@@ -429,6 +437,7 @@ pub async fn history(
         let initial_input = app.input.as_str().to_owned();
         let initial_filter_mode = app.filter_mode;
 
+        win_handle_enter();
         let event_ready = tokio::task::spawn_blocking(|| event::poll(Duration::from_millis(250)));
 
         tokio::select! {
@@ -453,7 +462,6 @@ pub async fn history(
             results = app.query_results(settings.search_mode, db).await?;
         }
     };
-
     if index < results.len() {
         // index is in bounds so we return that entry
         Ok(results.swap_remove(index).command)
