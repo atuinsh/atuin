@@ -6,13 +6,13 @@ server operator can _never_ see your data!
 
 Anyone can host a server (try `atuin server start`, more docs to follow), but I
 host one at https://api.atuin.sh. This is the default server address, which can
-be changed in the [config](config.md). Again, I _cannot_ see your data, and
+be changed in the [config](/docs/config/config.md#sync_address). Again, I _cannot_ see your data, and
 do not want to.
 
 ## Sync frequency
 
 Syncing will happen automatically, unless configured otherwise. The sync
-frequency is configurable in [config](config.md)
+frequency is configurable in [config](/docs/config/config.md#sync_frequency)
 
 ## Sync
 
