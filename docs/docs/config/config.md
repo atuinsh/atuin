@@ -23,7 +23,7 @@ See [config.toml](../atuin-client/config.toml) for an example
 
 ### `dialect`
 
-This configures how the [stats](stats.md) command parses dates. It has two
+This configures how the [stats](/docs/commands/stats.md) command parses dates. It has two
 possible values
 
 ```
@@ -193,9 +193,9 @@ or `py`.
 
 ### history_filter
 
-The history filter allows you to exclude commands from history tracking - maybe you want to keep ALL of your `curl` commands totally out of your shell history, or maybe just some matching a pattern. 
+The history filter allows you to exclude commands from history tracking - maybe you want to keep ALL of your `curl` commands totally out of your shell history, or maybe just some matching a pattern.
 
-This supports regular expressions, so you can hide pretty much whatever you want! 
+This supports regular expressions, so you can hide pretty much whatever you want!
 
 ```
 ## Note that these regular expressions are unanchored, i.e. if they don't start

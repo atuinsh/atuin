@@ -8,7 +8,7 @@ little basic, but more features to come.
 You provide the starting point, and Atuin computes the stats for 24h from that point.
 Date parsing is provided by `interim`, which supports different formats
 for full or relative dates. Certain formats rely on the dialect option in your
-[configuration](config.md#dialect) to differentiate day from month.
+[configuration](/docs/config/config.md#dialect) to differentiate day from month.
 Refer to [the module's documentation](https://docs.rs/interim/0.1.0/interim/#supported-formats) for more details on the supported date formats.
 
 ```
