@@ -2,13 +2,8 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 use crate::history::History;
+use atuin_common::api::EventType;
 use atuin_common::utils::uuid_v4;
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum EventType {
-    Create,
-    Delete,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, sqlx::FromRow)]
 pub struct Event {

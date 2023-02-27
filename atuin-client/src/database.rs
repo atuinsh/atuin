@@ -13,11 +13,13 @@ use sqlx::{
 };
 
 use super::{
-    event::{Event, EventType},
+    event::Event,
     history::History,
     ordering,
     settings::{FilterMode, SearchMode},
 };
+
+use atuin_common::api::EventType;
 
 pub struct Context {
     session: String,

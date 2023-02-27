@@ -94,3 +94,9 @@ pub struct SyncEventRequest {
 pub struct SyncEventResponse {
     pub events: Vec<String>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum EventType {
+    Create,
+    Delete,
+}
