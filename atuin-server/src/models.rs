@@ -1,5 +1,7 @@
 use chrono::prelude::*;
 
+use atuin_common::api::EventType;
+
 #[derive(sqlx::FromRow)]
 pub struct History {
     pub id: i64,
@@ -18,6 +20,16 @@ pub struct NewHistory {
     pub user_id: i64,
     pub hostname: String,
     pub timestamp: chrono::NaiveDateTime,
+
+    pub data: String,
+}
+
+pub struct NewEvent {
+    pub client_id: String,
+    pub user_id: i64,
+    pub hostname: String,
+    pub timestamp: chrono::NaiveDateTime,
+    pub event_type: EventType,
 
     pub data: String,
 }
