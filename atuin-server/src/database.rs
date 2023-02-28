@@ -28,6 +28,8 @@ pub trait Database {
     async fn count_history(&self, user: &User) -> Result<i64>;
     async fn count_history_cached(&self, user: &User) -> Result<i64>;
 
+    async fn count_event_cached(&self, user: &User) -> Result<i64>;
+
     async fn count_history_range(
         &self,
         user: &User,
@@ -132,6 +134,19 @@ impl Database for Postgres {
     async fn count_history_cached(&self, user: &User) -> Result<i64> {
         let res: (i32,) = sqlx::query_as(
             "select total from total_history_count_user
+            where user_id = $1",
+        )
+        .bind(user.id)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(res.0 as i64)
+    }
+
+    #[instrument(skip_all)]
+    async fn count_event_cached(&self, user: &User) -> Result<i64> {
+        let res: (i32,) = sqlx::query_as(
+            "select total from total_event_count_user
             where user_id = $1",
         )
         .bind(user.id)
