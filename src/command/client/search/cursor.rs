@@ -9,20 +9,19 @@ impl From<String> for Cursor {
     }
 }
 
-static WORD_SEPARATORS: &str = "./\\()\"'-:,.;<>~!@#$%^&*|+=[]{}`~?";
-
-fn is_word_boundary(c: char, next_c: char) -> bool {
+fn is_word_boundary(c: char, next_c: char, word_chars: &str) -> bool {
     (c.is_whitespace() && !next_c.is_whitespace())
         || (!c.is_whitespace() && next_c.is_whitespace())
-        || (WORD_SEPARATORS.contains(c) && !WORD_SEPARATORS.contains(next_c))
-        || (!WORD_SEPARATORS.contains(c) && WORD_SEPARATORS.contains(next_c))
+        || (word_chars.contains(c) && !word_chars.contains(next_c))
+        || (!word_chars.contains(c) && word_chars.contains(next_c))
 }
 
-fn get_next_word_pos(source: &str, index: usize) -> usize {
+fn get_next_word_pos(source: &str, index: usize, word_chars: &str) -> usize {
     let index = (index..source.len().saturating_sub(1)).find(|&i| {
         is_word_boundary(
             source.chars().nth(i).unwrap(),
             source.chars().nth(i + 1).unwrap(),
+            word_chars,
         )
     });
     if index.is_none() {
@@ -33,7 +32,7 @@ fn get_next_word_pos(source: &str, index: usize) -> usize {
         .unwrap_or(source.len())
 }
 
-fn get_prev_word_pos(source: &str, index: usize) -> usize {
+fn get_prev_word_pos(source: &str, index: usize, word_chars: &str) -> usize {
     let index = (1..index)
         .rev()
         .find(|&i| !source.chars().nth(i).unwrap().is_whitespace());
@@ -46,6 +45,7 @@ fn get_prev_word_pos(source: &str, index: usize) -> usize {
             is_word_boundary(
                 source.chars().nth(i - 1).unwrap(),
                 source.chars().nth(i).unwrap(),
+                word_chars,
             )
         })
         .unwrap_or(0)
@@ -94,12 +94,12 @@ impl Cursor {
         }
     }
 
-    pub fn next_word(&mut self) {
-        self.index = get_next_word_pos(&self.source, self.index);
+    pub fn next_word(&mut self, word_chars: &str) {
+        self.index = get_next_word_pos(&self.source, self.index, word_chars);
     }
 
-    pub fn prev_word(&mut self) {
-        self.index = get_prev_word_pos(&self.source, self.index);
+    pub fn prev_word(&mut self, word_chars: &str) {
+        self.index = get_prev_word_pos(&self.source, self.index, word_chars);
     }
 
     pub fn insert(&mut self, c: char) {
@@ -115,13 +115,13 @@ impl Cursor {
         }
     }
 
-    pub fn remove_next_word(&mut self) {
-        let next_index = get_next_word_pos(&self.source, self.index);
+    pub fn remove_next_word(&mut self, word_chars: &str) {
+        let next_index = get_next_word_pos(&self.source, self.index, word_chars);
         self.source.replace_range(self.index..next_index, "");
     }
 
-    pub fn remove_prev_word(&mut self) {
-        let next_index = get_prev_word_pos(&self.source, self.index);
+    pub fn remove_prev_word(&mut self, word_chars: &str) {
+        let next_index = get_prev_word_pos(&self.source, self.index, word_chars);
         self.source.replace_range(next_index..self.index, "");
         self.index = next_index;
     }
@@ -153,6 +153,8 @@ mod cursor_tests {
     use super::Cursor;
     use super::*;
 
+    static WORD_SEPARATORS: &str = "./\\()\"'-:,.;<>~!@#$%^&*|+=[]{}`~?";
+
     #[test]
     fn right() {
         // ö is 2 bytes
@@ -181,9 +183,9 @@ mod cursor_tests {
         let s = String::from("   aaa   ((()))bbb   ((()))   ");
         let indices = [(0, 3), (1, 3), (3, 9), (9, 15), (15, 21), (21, 30)];
         for (i_src, i_dest) in indices {
-            assert_eq!(get_next_word_pos(&s, i_src), i_dest);
+            assert_eq!(get_next_word_pos(&s, i_src, WORD_SEPARATORS), i_dest);
         }
-        assert_eq!(get_next_word_pos("", 0), 0);
+        assert_eq!(get_next_word_pos("", 0, WORD_SEPARATORS), 0);
     }
 
     #[test]
@@ -191,9 +193,9 @@ mod cursor_tests {
         let s = String::from("   aaa   ((()))bbb   ((()))   ");
         let indices = [(30, 21), (21, 15), (15, 9), (9, 3), (3, 0)];
         for (i_src, i_dest) in indices {
-            assert_eq!(get_prev_word_pos(&s, i_src), i_dest);
+            assert_eq!(get_prev_word_pos(&s, i_src, WORD_SEPARATORS), i_dest);
         }
-        assert_eq!(get_prev_word_pos("", 0), 0);
+        assert_eq!(get_prev_word_pos("", 0, WORD_SEPARATORS), 0);
     }
 
     #[test]

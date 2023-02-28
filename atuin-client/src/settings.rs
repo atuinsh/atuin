@@ -113,6 +113,7 @@ pub struct Settings {
     pub filter_mode_shell_up_key_binding: FilterMode,
     pub shell_up_key_binding: bool,
     pub exit_mode: ExitMode,
+    pub word_chars: String,
     #[serde(with = "serde_regex", default = "RegexSet::empty")]
     pub history_filter: RegexSet,
 
@@ -299,6 +300,7 @@ impl Settings {
             .set_default("exit_mode", "return-original")?
             .set_default("session_token", "")?
             .set_default("style", "auto")?
+            .set_default("word_chars", "./\\()\"'-:,.;<>~!@#$%^&*|+=[]{}`~?")?
             .add_source(
                 Environment::with_prefix("atuin")
                     .prefix_separator("_")
