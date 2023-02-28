@@ -2,7 +2,7 @@ use std::borrow::Borrow;
 
 use axum::{
     extract::{Path, State},
-    Extension, Json,
+    Json,
 };
 use http::StatusCode;
 use sodiumoxide::crypto::pwhash::argon2id13;
@@ -14,7 +14,6 @@ use crate::{
     database::Database,
     models::{NewSession, NewUser},
     router::AppState,
-    settings::Settings,
 };
 
 use atuin_common::api::*;
@@ -59,12 +58,10 @@ pub async fn get<DB: Database>(
 
 #[instrument(skip_all)]
 pub async fn register<DB: Database>(
-    // settings: Extension<Settings>,
     state: State<AppState<DB>>,
     Json(register): Json<RegisterRequest>,
 ) -> Result<Json<RegisterResponse>, ErrorResponseStatus<'static>> {
-    let settings = &state.settings;
-    if !settings.open_registration {
+    if !state.settings.open_registration {
         return Err(
             ErrorResponse::reply("this server is not open for registrations")
                 .with_status(StatusCode::BAD_REQUEST),

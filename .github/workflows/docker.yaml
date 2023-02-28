@@ -54,9 +54,10 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64 #,linux/arm64
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          build-args: RUST_BACKTRACE=1
 
       - name: Image digest
         run: echo ${{ steps.docker_build.outputs.digest }}

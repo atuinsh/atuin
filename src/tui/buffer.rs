@@ -480,6 +480,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(debug_assertions)]
     #[should_panic(expected = "outside the buffer")]
     fn pos_of_panics_on_out_of_bounds() {
         let rect = Rect::new(0, 0, 10, 10);
@@ -490,6 +491,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(debug_assertions)]
     #[should_panic(expected = "outside the buffer")]
     fn index_of_panics_on_out_of_bounds() {
         let rect = Rect::new(0, 0, 10, 10);
