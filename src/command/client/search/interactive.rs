@@ -377,14 +377,6 @@ impl Write for Stdout {
     }
 }
 
-#[cfg(target_os = "windows")]
-fn win_handle_enter() {
-    let _ = event::read();
-}
-
-#[cfg(not(target_os="windows"))]
-fn win_handle_enter() {}
-
 // this is a big blob of horrible! clean it up!
 // for now, it works. But it'd be great if it were more easily readable, and
 // modular. I'd like to add some more stats and stuff at some point
@@ -420,6 +412,11 @@ pub async fn history(
 
     let mut results = app.query_results(settings.search_mode, db).await?;
 
+    {
+        #[cfg(target_os = "windows")]
+        let _ = event::read();
+    };
+
     let index = 'render: loop {
         let compact = match settings.style {
             atuin_client::settings::Style::Auto => {
@@ -437,7 +434,6 @@ pub async fn history(
         let initial_input = app.input.as_str().to_owned();
         let initial_filter_mode = app.filter_mode;
 
-        win_handle_enter();
         let event_ready = tokio::task::spawn_blocking(|| event::poll(Duration::from_millis(250)));
 
         tokio::select! {
