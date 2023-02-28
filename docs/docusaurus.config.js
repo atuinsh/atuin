@@ -80,6 +80,16 @@ const config = {
             label: 'GitHub',
             position: 'right',
           },
+          {
+            href: 'https://hachyderm.io/@atuin',
+            label: 'Mastodon',
+            position: 'right',
+          },
+          {
+            href: 'https://twitter.com/atuinsh',
+            label: 'Twitter',
+            position: 'right',
+          }
         ],
       },
       footer: {
