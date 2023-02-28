@@ -6,11 +6,14 @@ authors: [ellie]
 tags: [release]
 ---
 
+> We have since released patch v13.0.1. v13 had a regression exposed when trying to register a new user. This would only affect people self-hosting Atuin Server. Please update!
+
 Announcing a new release of Atuin! v13 is out now. Atuin allows you to easily search and sync your shell history across many machines.
 
 You can update your installation via your system package manager, or by downloading the latest release from the [release page](https://github.com/ellie/atuin/releases).
 
 We had a lot of changes in this release - I'll call out a few, but this is not exhaustive.
+
 
 ## Crossterm
 
