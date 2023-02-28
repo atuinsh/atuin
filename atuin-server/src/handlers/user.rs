@@ -59,10 +59,11 @@ pub async fn get<DB: Database>(
 
 #[instrument(skip_all)]
 pub async fn register<DB: Database>(
-    settings: Extension<Settings>,
+    // settings: Extension<Settings>,
     state: State<AppState<DB>>,
     Json(register): Json<RegisterRequest>,
 ) -> Result<Json<RegisterResponse>, ErrorResponseStatus<'static>> {
+    let settings = &state.settings;
     if !settings.open_registration {
         return Err(
             ErrorResponse::reply("this server is not open for registrations")

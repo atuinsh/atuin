@@ -382,7 +382,7 @@ fn win_handle_enter() {
     let _ = event::read();
 }
 
-#[cfg(other)]
+#[cfg(not(target_os="windows"))]
 fn win_handle_enter() {}
 
 // this is a big blob of horrible! clean it up!

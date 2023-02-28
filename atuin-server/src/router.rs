@@ -82,4 +82,5 @@ pub fn router<DB: Database + Clone + Send + Sync + 'static>(
     .fallback(teapot)
     .with_state(AppState { database, settings })
     .layer(ServiceBuilder::new().layer(TraceLayer::new_for_http()))
+    // .layer(axum::Extension(settings))
 }
