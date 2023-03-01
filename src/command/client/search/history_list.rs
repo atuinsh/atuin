@@ -19,11 +19,16 @@ pub struct HistoryList<'a> {
 pub struct ListState {
     offset: usize,
     selected: usize,
+    max_entries: usize,
 }
 
 impl ListState {
     pub fn selected(&self) -> usize {
         self.selected
+    }
+
+    pub fn max_entries(&self) -> usize {
+        self.max_entries
     }
 
     pub fn select(&mut self, index: usize) {
@@ -48,6 +53,7 @@ impl<'a> StatefulWidget for HistoryList<'a> {
 
         let (start, end) = self.get_items_bounds(state.selected, state.offset, list_height);
         state.offset = start;
+        state.max_entries = end - start;
 
         let mut s = DrawState {
             buf,

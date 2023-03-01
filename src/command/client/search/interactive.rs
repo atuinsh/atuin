@@ -182,6 +182,16 @@ impl State {
                 self.results_state.select(i.min(len - 1));
             }
             KeyCode::Char(c) => self.input.insert(c),
+            KeyCode::PageDown => {
+                let scroll_len = self.results_state.max_entries() - settings.scroll_context_lines;
+                let i = self.results_state.selected().saturating_sub(scroll_len);
+                self.results_state.select(i);
+            }
+            KeyCode::PageUp => {
+                let scroll_len = self.results_state.max_entries() - settings.scroll_context_lines;
+                let i = self.results_state.selected() + scroll_len;
+                self.results_state.select(i.min(len - 1));
+            }
             _ => {}
         };
 

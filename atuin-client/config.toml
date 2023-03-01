@@ -44,6 +44,9 @@
 ## characters that count as a part of a word
 # word_chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 
+## number of context lines to show when scrolling by pages
+# scroll_context_lines = 1
+
 ## prevent commands matching any of these regexes from being written to history.
 ## Note that these regular expressions are unanchored, i.e. if they don't start
 ## with ^ or end with $, they'll match anywhere in the command.

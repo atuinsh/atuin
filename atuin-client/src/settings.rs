@@ -124,6 +124,7 @@ pub struct Settings {
     pub exit_mode: ExitMode,
     pub word_jump_mode: WordJumpMode,
     pub word_chars: String,
+    pub scroll_context_lines: usize,
     #[serde(with = "serde_regex", default = "RegexSet::empty")]
     pub history_filter: RegexSet,
 
@@ -315,6 +316,7 @@ impl Settings {
                 "word_chars",
                 "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
             )?
+            .set_default("scroll_context_lines", 1)?
             .add_source(
                 Environment::with_prefix("atuin")
                     .prefix_separator("_")
