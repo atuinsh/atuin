@@ -38,8 +38,11 @@
 ## possible values: return-original, return-query
 # exit_mode = "return-original"
 
+## possible values: emacs, subl
+# word_jump_mode = "emacs"
+
 ## characters that count as a part of a word
-# word_chars = "./\\()\"'-:,.;<>~!@#$%^&*|+=[]{}`~?"
+# word_chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 
 ## prevent commands matching any of these regexes from being written to history.
 ## Note that these regular expressions are unanchored, i.e. if they don't start

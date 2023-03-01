@@ -97,6 +97,15 @@ pub enum Style {
     Compact,
 }
 
+#[derive(Clone, Debug, Deserialize, Copy)]
+pub enum WordJumpMode {
+    #[serde(rename = "emacs")]
+    Emacs,
+
+    #[serde(rename = "subl")]
+    Subl,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct Settings {
     pub dialect: Dialect,
@@ -113,6 +122,7 @@ pub struct Settings {
     pub filter_mode_shell_up_key_binding: FilterMode,
     pub shell_up_key_binding: bool,
     pub exit_mode: ExitMode,
+    pub word_jump_mode: WordJumpMode,
     pub word_chars: String,
     #[serde(with = "serde_regex", default = "RegexSet::empty")]
     pub history_filter: RegexSet,
@@ -300,7 +310,11 @@ impl Settings {
             .set_default("exit_mode", "return-original")?
             .set_default("session_token", "")?
             .set_default("style", "auto")?
-            .set_default("word_chars", "./\\()\"'-:,.;<>~!@#$%^&*|+=[]{}`~?")?
+            .set_default("word_jump_mode", "emacs")?
+            .set_default(
+                "word_chars",
+                "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+            )?
             .add_source(
                 Environment::with_prefix("atuin")
                     .prefix_separator("_")
