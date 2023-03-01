@@ -50,6 +50,14 @@ mod tests {
     use std::env;
 
     #[test]
+    fn test_dirs() {
+        // these tests need to be run sequentially to prevent race condition
+        test_config_dir_xdg();
+        test_config_dir();
+        test_data_dir_xdg();
+        test_data_dir();
+    }
+
     fn test_config_dir_xdg() {
         env::remove_var("HOME");
         env::set_var("XDG_CONFIG_HOME", "/home/user/custom_config");
@@ -60,7 +68,6 @@ mod tests {
         env::remove_var("XDG_CONFIG_HOME");
     }
 
-    #[test]
     fn test_config_dir() {
         env::set_var("HOME", "/home/user");
         env::remove_var("XDG_CONFIG_HOME");
@@ -68,7 +75,6 @@ mod tests {
         env::remove_var("HOME");
     }
 
-    #[test]
     fn test_data_dir_xdg() {
         env::remove_var("HOME");
         env::set_var("XDG_DATA_HOME", "/home/user/custom_data");
@@ -76,7 +82,6 @@ mod tests {
         env::remove_var("XDG_DATA_HOME");
     }
 
-    #[test]
     fn test_data_dir() {
         env::set_var("HOME", "/home/user");
         env::remove_var("XDG_DATA_HOME");
