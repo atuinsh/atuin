@@ -412,11 +412,6 @@ pub async fn history(
 
     let mut results = app.query_results(settings.search_mode, db).await?;
 
-    {
-        #[cfg(target_os = "windows")]
-        let _ = event::read();
-    };
-
     let index = 'render: loop {
         let compact = match settings.style {
             atuin_client::settings::Style::Auto => {
@@ -433,6 +428,11 @@ pub async fn history(
 
         let initial_input = app.input.as_str().to_owned();
         let initial_filter_mode = app.filter_mode;
+
+        {
+            #[cfg(target_os = "windows")]
+            let _ = event::read();
+        };
 
         let event_ready = tokio::task::spawn_blocking(|| event::poll(Duration::from_millis(250)));
 
