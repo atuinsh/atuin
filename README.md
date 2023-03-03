@@ -111,7 +111,7 @@ Alongside the hosted Atuin server, there is also a service which generates activ
   
 For example, here is mine:
   
-![Activity Graph Example](docs/activity-graph-example.png)
+![Activity Graph Example](docs/static/img/activity-graph-example.png)
 
 If you wish to get your own, after signing up for the sync server, run this
   
