@@ -430,6 +430,8 @@ pub async fn history(
         let initial_filter_mode = app.filter_mode;
 
         {
+            // We do this because windows does double inputs and catpues the `Enter` when running a
+            // command
             #[cfg(target_os = "windows")]
             let _ = event::read();
         };
