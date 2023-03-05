@@ -1,10 +1,12 @@
 use eyre::{Context, Result};
 use fs_err::remove_file;
 
-pub fn run() -> Result<()> {
-    let session_path = atuin_common::utils::data_dir().join("session");
+use atuin_client::{settings::Settings};
 
-    if session_path.exists() {
+pub fn run(settings: &Settings) -> Result<()> {
+    let session_path = settings.session_path.as_str();
+
+    if PathBuf::from(session_path).exists() {
         remove_file(session_path.as_path()).context("Failed to remove session file")?;
         println!("You have logged out!");
     } else {

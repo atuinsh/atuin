@@ -33,9 +33,9 @@ fn get_input() -> Result<String> {
 
 impl Cmd {
     pub async fn run(&self, settings: &Settings) -> Result<()> {
-        let session_path = atuin_common::utils::data_dir().join("session");
+        let session_path = settings.session_path.as_str();
 
-        if session_path.exists() {
+        if PathBuf::from(session_path).exists() {
             println!(
                 "You are already logged in! Please run 'atuin logout' if you wish to login again"
             );
