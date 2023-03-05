@@ -111,19 +111,33 @@ impl State {
                 let c = c.to_digit(10)? as usize;
                 return Some(self.results_state.selected() + c);
             }
+            KeyCode::Left if ctrl => self
+                .input
+                .prev_word(&settings.word_chars, settings.word_jump_mode),
             KeyCode::Left => {
                 self.input.left();
             }
             KeyCode::Char('h') if ctrl => {
                 self.input.left();
             }
+            KeyCode::Right if ctrl => self
+                .input
+                .next_word(&settings.word_chars, settings.word_jump_mode),
             KeyCode::Right => self.input.right(),
             KeyCode::Char('l') if ctrl => self.input.right(),
             KeyCode::Char('a') if ctrl => self.input.start(),
+            KeyCode::Home => self.input.start(),
             KeyCode::Char('e') if ctrl => self.input.end(),
+            KeyCode::End => self.input.end(),
+            KeyCode::Backspace if ctrl => self
+                .input
+                .remove_prev_word(&settings.word_chars, settings.word_jump_mode),
             KeyCode::Backspace => {
                 self.input.back();
             }
+            KeyCode::Delete if ctrl => self
+                .input
+                .remove_next_word(&settings.word_chars, settings.word_jump_mode),
             KeyCode::Delete => {
                 self.input.remove();
             }
@@ -168,6 +182,16 @@ impl State {
                 self.results_state.select(i.min(len - 1));
             }
             KeyCode::Char(c) => self.input.insert(c),
+            KeyCode::PageDown => {
+                let scroll_len = self.results_state.max_entries() - settings.scroll_context_lines;
+                let i = self.results_state.selected().saturating_sub(scroll_len);
+                self.results_state.select(i);
+            }
+            KeyCode::PageUp => {
+                let scroll_len = self.results_state.max_entries() - settings.scroll_context_lines;
+                let i = self.results_state.selected() + scroll_len;
+                self.results_state.select(i.min(len - 1));
+            }
             _ => {}
         };
 
