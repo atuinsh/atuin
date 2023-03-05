@@ -32,7 +32,7 @@
 //                       duration int);
 //
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use async_trait::async_trait;
 use chrono::{prelude::*, Utc};
@@ -104,26 +104,28 @@ async fn hist_from_db_conn(pool: Pool<sqlx::Sqlite>) -> Result<Vec<HistDbEntry>>
 }
 
 impl ZshHistDb {
-    pub fn histpath_candidate() -> PathBuf {
+    pub fn histpath_candidate() -> Result<PathBuf> {
         // By default histdb database is `${HOME}/.histdb/zsh-history.db`
         // This can be modified by ${HISTDB_FILE}
         //
         //  if [[ -z ${HISTDB_FILE} ]]; then
         //      typeset -g HISTDB_FILE="${HOME}/.histdb/zsh-history.db"
-        let user_dirs = UserDirs::new().unwrap(); // should catch error here?
-        let home_dir = user_dirs.home_dir();
-        std::env::var("HISTDB_FILE")
-            .as_ref()
-            .map(|x| Path::new(x).to_path_buf())
-            .unwrap_or_else(|_err| home_dir.join(".histdb/zsh-history.db"))
+        let home_dir = UserDirs::new()
+            .ok_or(eyre!("Cannot find a valid home directory."))?
+            .home_dir()
+            .to_owned();
+        let histdb_path = std::env::var("HISTDB_FILE")
+            .map(PathBuf::from)
+            .unwrap_or(home_dir.join(".histdb/zsh-history.db"));
+        Ok(histdb_path)
     }
     pub fn histpath() -> Result<PathBuf> {
-        let histdb_path = ZshHistDb::histpath_candidate();
+        let histdb_path = ZshHistDb::histpath_candidate()?;
         if histdb_path.exists() {
             Ok(histdb_path)
         } else {
             Err(eyre!(
-                "Could not find history file. Try setting $HISTDB_FILE"
+                "Could not find history file. Try setting $HISTDB_FILE."
             ))
         }
     }
@@ -159,7 +161,7 @@ mod test {
 
     use super::*;
     use sqlx::sqlite::SqlitePoolOptions;
-    use std::env;
+    use std::{env, path::Path};
     #[tokio::test(flavor = "multi_thread")]
     async fn test_env_vars() {
         let test_env_db = "nonstd-zsh-history.db";
@@ -170,8 +172,8 @@ mod test {
         assert_eq!(env::var(key).unwrap(), test_env_db.to_string());
 
         // test histdb returns the proper db from previous step
-        let histdb_path = ZshHistDb::histpath_candidate();
-        assert_eq!(histdb_path.to_str().unwrap(), test_env_db);
+        let histdb_path = ZshHistDb::histpath_candidate().unwrap();
+        assert_eq!(&histdb_path, Path::new(test_env_db));
     }
 
     #[tokio::test(flavor = "multi_thread")]

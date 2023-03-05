@@ -52,11 +52,8 @@ impl Cmd {
 
                 let shell = env::var("SHELL").unwrap_or_else(|_| String::from("NO_SHELL"));
                 if shell.ends_with("/zsh") {
-                    if ZshHistDb::histpath().is_ok() {
-                        println!(
-                            "Detected Zsh-HistDb, using :{}",
-                            ZshHistDb::histpath().unwrap().to_str().unwrap()
-                        );
+                    if let Ok(path) = ZshHistDb::histpath() {
+                        println!("Detected Zsh-HistDb, using {path:?}",);
                         import::<ZshHistDb, DB>(db).await
                     } else {
                         println!("Detected ZSH");
