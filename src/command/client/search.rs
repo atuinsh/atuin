@@ -88,7 +88,9 @@ impl Cmd {
         if self.filter_mode.is_some() {
             settings.filter_mode = self.filter_mode.unwrap();
         }
+
         settings.shell_up_key_binding = self.shell_up_key_binding;
+
         if self.interactive {
             let item = interactive::history(&self.query, settings, db).await?;
             eprintln!("{item}");

@@ -110,7 +110,7 @@ pub struct Settings {
     pub session_path: String,
     pub search_mode: SearchMode,
     pub filter_mode: FilterMode,
-    pub filter_mode_shell_up_key_binding: FilterMode,
+    pub filter_mode_shell_up_key_binding: Option<FilterMode>,
     pub shell_up_key_binding: bool,
     pub exit_mode: ExitMode,
     #[serde(with = "serde_regex", default = "RegexSet::empty")]
@@ -294,7 +294,6 @@ impl Settings {
             .set_default("sync_address", "https://api.atuin.sh")?
             .set_default("search_mode", "fuzzy")?
             .set_default("filter_mode", "global")?
-            .set_default("filter_mode_shell_up_key_binding", "global")?
             .set_default("shell_up_key_binding", false)?
             .set_default("exit_mode", "return-original")?
             .set_default("session_token", "")?
