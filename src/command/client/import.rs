@@ -1,8 +1,8 @@
-use std::env;
+use std::{env, path::PathBuf};
 
 use async_trait::async_trait;
 use clap::Parser;
-use eyre::Result;
+use eyre::{eyre, Result};
 use indicatif::ProgressBar;
 
 use atuin_client::{
@@ -45,29 +45,41 @@ impl Cmd {
 
         match self {
             Self::Auto => {
-                if cfg!(windows) {
-                    println!("This feature does not work on windows. Please run atuin import <SHELL>. To view a list of shells, run atuin import.");
-                    return Ok(());
-                }
-
-                let shell = env::var("SHELL").unwrap_or_else(|_| String::from("NO_SHELL"));
-                if shell.ends_with("/zsh") {
-                    if let Ok(path) = ZshHistDb::histpath() {
-                        println!("Detected Zsh-HistDb, using {path:?}",);
-                        import::<ZshHistDb, DB>(db).await
-                    } else {
-                        println!("Detected ZSH");
-                        import::<Zsh, DB>(db).await
+                let shell_path = {
+                    let sh = env::var("SHELL").map_err(|_| {
+                        eyre!("Cannot infer the current shell because $SHELL is unreadable.")
+                    })?;
+                    PathBuf::from(sh)
+                };
+                let shell = shell_path
+                    .file_name()
+                    .ok_or_else(|| eyre!("Unexpected value for $SHELL: {shell_path:?}."))?
+                    .to_str()
+                    .unwrap(); // infallible: env::var already guarantees UTF8
+                match shell {
+                    "bash" => {
+                        println!("Detected Bash");
+                        import::<Bash, DB>(db).await
                     }
-                } else if shell.ends_with("/fish") {
-                    println!("Detected Fish");
-                    import::<Fish, DB>(db).await
-                } else if shell.ends_with("/bash") {
-                    println!("Detected Bash");
-                    import::<Bash, DB>(db).await
-                } else {
-                    println!("cannot import {shell} history");
-                    Ok(())
+                    "fish" => {
+                        println!("Detected Fish");
+                        import::<Fish, DB>(db).await
+                    }
+                    "zsh" => {
+                        if let Ok(path) = ZshHistDb::histpath() {
+                            println!("Detected Zsh-HistDb, using {path:?}",);
+                            import::<ZshHistDb, DB>(db).await
+                        } else {
+                            println!("Detected ZSH");
+                            import::<Zsh, DB>(db).await
+                        }
+                    }
+                    other => {
+                        println!("Unknown shell: {other}.");
+                        Err(eyre!(
+                            "Failed to import: inferred shell type is unsupported."
+                        ))
+                    }
                 }
             }
 
