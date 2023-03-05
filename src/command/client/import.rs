@@ -45,6 +45,11 @@ impl Cmd {
 
         match self {
             Self::Auto => {
+                if cfg!(windows) {
+                    println!("This feature does not work on windows. Please run atuin import <SHELL>. To view a list of shells, run atuin import.");
+                    return Ok(());
+                }
+
                 let shell = env::var("SHELL").unwrap_or_else(|_| String::from("NO_SHELL"));
                 if shell.ends_with("/zsh") {
                     if ZshHistDb::histpath().is_ok() {

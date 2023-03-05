@@ -475,6 +475,13 @@ pub async fn history(
         let initial_input = app.input.as_str().to_owned();
         let initial_filter_mode = app.filter_mode;
 
+        {
+            // We do this because windows does double inputs and captures the `Enter` when running a
+            // command
+            #[cfg(target_os = "windows")]
+            let _ = event::read();
+        };
+
         let event_ready = tokio::task::spawn_blocking(|| event::poll(Duration::from_millis(250)));
 
         tokio::select! {
@@ -499,7 +506,6 @@ pub async fn history(
             results = app.query_results(settings.search_mode, db).await?;
         }
     };
-
     if index < results.len() {
         // index is in bounds so we return that entry
         Ok(results.swap_remove(index).command)
