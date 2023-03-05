@@ -39,7 +39,7 @@ impl Cmd {
         match self {
             Self::Sync { force } => run(&settings, force, db).await,
             Self::Login(l) => l.run(&settings).await,
-            Self::Logout => logout::run(),
+            Self::Logout => logout::run(&settings),
             Self::Register(r) => r.run(&settings).await,
             Self::Key { base64 } => {
                 use atuin_client::encryption::{encode_key, load_key};
