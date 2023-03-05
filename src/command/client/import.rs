@@ -46,7 +46,7 @@ impl Cmd {
         match self {
             Self::Auto => {
                 if cfg!(windows) {
-                    println!("This feature does not work on windows.");
+                    println!("This feature does not work on windows. Please run atuin import <SHELL>. To view a list of shells, run atuin import.");
                     return Ok(());
                 }
 
