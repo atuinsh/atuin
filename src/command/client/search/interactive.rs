@@ -427,7 +427,9 @@ pub async fn history(
         results_state: ListState::default(),
         context: current_context(),
         filter_mode: if settings.shell_up_key_binding {
-            settings.filter_mode_shell_up_key_binding
+            settings
+                .filter_mode_shell_up_key_binding
+                .unwrap_or(settings.filter_mode)
         } else {
             settings.filter_mode
         },
