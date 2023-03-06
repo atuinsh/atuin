@@ -34,7 +34,7 @@ impl Importer for Fish {
         // If `fish_history` var is missing, or set to `default`, use `fish` as the session
         let fish_history_var = std::env::var("fish_history");
         let session = match fish_history_var.as_ref().map(|s| s.as_str()) {
-            Err(_) | Ok("default") => "fish".into(),
+            Err(_) | Ok("default") => "fish",
             Ok(other) => other,
         };
 
