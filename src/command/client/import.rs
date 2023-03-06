@@ -28,7 +28,7 @@ pub enum Shell {
 
     /// Import history from the zsh history file
     Zsh,
-    /// Import history from the zsh history file
+    /// Import history from the zsh history SQL database file
     ZshHistDb,
     /// Import history from the bash history file
     Bash,
@@ -43,9 +43,17 @@ const BATCH_SIZE: usize = 100;
 #[derive(Clone, Debug, Parser)]
 pub struct Cmd {
     #[arg(long = "from-file", value_name = "PATH", value_hint = ValueHint::FilePath)]
+    /// Specify a custom file to import from, instead of the default locations
+    /// of each shell.
+    ///
+    /// When using this option, it's mandatory to explicitly specify the shell type.
+    ///
+    /// Alternatively, you can use the environment variable `$HISTFILE` to specify
+    /// the custom file too.
     custom_source: Option<PathBuf>,
 
     #[arg(index = 1)]
+    /// Which shell's history to import from.
     shell: Shell,
 }
 
