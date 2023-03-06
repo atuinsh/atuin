@@ -13,22 +13,19 @@ the correct importer
 Unfortunately these older files do not store as much information as Atuin does,
 so not all features are available with imported data.
 
-# zsh
+## Importing from history file at a non-default location
 
-```
-atuin import zsh
-```
+You can use the `--from-file` option to import from a file from any location.
+This is useful when for example, you are migrating your settings to a new machine.
 
-If you've set HISTFILE, this should be picked up! If not, try
-
-```
-HISTFILE=/path/to/history/file atuin import zsh
+```bash
+# Bash, for example
+atuin import bash --from-file "/path/to/your/.bash_history"
 ```
 
-This supports both the simple and extended format
+Alternatively, you can set the environment variable `$HISTFILE` to achieve
+the same effect.
 
-# bash
-
-```
-atuin import bash
+```bash
+HISTFILE="/path/to/your/.bash_history" atuin import bash
 ```
