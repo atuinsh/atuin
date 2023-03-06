@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 use eyre::{bail, Result};
@@ -12,10 +12,51 @@ pub mod resh;
 pub mod zsh;
 pub mod zsh_histdb;
 
+#[derive(Clone, Debug)]
+/// The path of the import source, along with how this path was specified.
+pub enum PathSource {
+    Cli(PathBuf),
+    Env(PathBuf),
+    Default(PathBuf),
+}
+impl PathSource {
+    pub fn path(&self) -> &Path {
+        use PathSource::*;
+        match self {
+            Cli(p) | Env(p) | Default(p) => p,
+        }
+    }
+}
+
 #[async_trait]
 pub trait Importer: Sized {
     const NAME: &'static str;
-    async fn new() -> Result<Self>;
+    fn default_source_path() -> Result<PathBuf>;
+    fn final_source_path(cli_custom_source: Option<impl AsRef<Path>>) -> Result<PathSource> {
+        let candidate = 'candidate: {
+            // CLI has highest precedence
+            if let Some(p) = cli_custom_source {
+                break 'candidate PathSource::Cli(p.as_ref().to_owned());
+            }
+            // Env var "HISTFILE" has second highest precedence
+            if let Ok(p) = std::env::var("HISTFILE") {
+                break 'candidate PathSource::Env(PathBuf::from(p));
+            }
+            // Default has lowest precedence
+            PathSource::Default(Self::default_source_path()?)
+        };
+
+        if candidate.path().canonicalize()?.is_file() {
+            Ok(candidate)
+        } else {
+            bail!(
+                "{p:?} is neither a file nor a symlink to a file.",
+                p = candidate.path()
+            );
+        }
+    }
+    /// `source` passed to this function is guaranteed to be an existing file.
+    async fn new(source: &Path) -> Result<Self>;
     async fn entries(&mut self) -> Result<usize>;
     async fn load(self, loader: &mut impl Loader) -> Result<()>;
 }
@@ -59,25 +100,6 @@ impl<'a> Iterator for UnixByteLines<'a> {
 
 fn count_lines(input: &[u8]) -> usize {
     unix_byte_lines(input).count()
-}
-
-fn get_histpath<D>(def: D) -> Result<PathBuf>
-where
-    D: FnOnce() -> Result<PathBuf>,
-{
-    if let Ok(p) = std::env::var("HISTFILE") {
-        is_file(PathBuf::from(p))
-    } else {
-        is_file(def()?)
-    }
-}
-
-fn is_file(p: PathBuf) -> Result<PathBuf> {
-    if p.is_file() {
-        Ok(p)
-    } else {
-        bail!("Could not find history file {:?}. Try setting $HISTFILE", p)
-    }
 }
 
 #[cfg(test)]

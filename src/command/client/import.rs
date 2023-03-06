@@ -1,21 +1,28 @@
-use std::{env, path::PathBuf};
+use std::{
+    env,
+    path::{Path, PathBuf},
+};
 
 use async_trait::async_trait;
-use clap::Parser;
-use eyre::{eyre, Result};
+use clap::{Parser, ValueEnum, ValueHint};
+use eyre::{bail, eyre, Result};
 use indicatif::ProgressBar;
 
 use atuin_client::{
     database::Database,
     history::History,
     import::{
-        bash::Bash, fish::Fish, resh::Resh, zsh::Zsh, zsh_histdb::ZshHistDb, Importer, Loader,
+        bash::Bash,
+        fish::Fish,
+        resh::Resh,
+        zsh::Zsh,
+        zsh_histdb::{can_connect_as_db, ZshHistDb},
+        Importer, Loader, PathSource,
     },
 };
 
-#[derive(Parser)]
-#[command(infer_subcommands = true)]
-pub enum Cmd {
+#[derive(Copy, Clone, Debug, ValueEnum)]
+pub enum Shell {
     /// Import history for the current shell
     Auto,
 
@@ -33,6 +40,15 @@ pub enum Cmd {
 
 const BATCH_SIZE: usize = 100;
 
+#[derive(Clone, Debug, Parser)]
+pub struct Cmd {
+    #[arg(long = "from-file", value_name = "PATH", value_hint = ValueHint::FilePath)]
+    custom_source: Option<PathBuf>,
+
+    #[arg(index = 1)]
+    shell: Shell,
+}
+
 impl Cmd {
     pub async fn run<DB: Database>(&self, db: &mut DB) -> Result<()> {
         println!("        Atuin         ");
@@ -43,12 +59,17 @@ impl Cmd {
         println!("======================");
         println!("Importing history...");
 
-        match self {
-            Self::Auto => {
+        let cli_custom_source = self.custom_source.as_deref();
+
+        match self.shell {
+            Shell::Auto if self.custom_source.is_some() => Err(eyre!(
+                "You must explicitly specify a shell type when importing from a custom path."
+            )),
+            Shell::Auto => {
                 let shell_path = {
-                    let sh = env::var("SHELL").map_err(|_| {
-                        eyre!("Cannot infer the current shell because $SHELL is unreadable.")
-                    })?;
+                    let Ok(sh) = env::var("SHELL") else {
+                        bail!("Cannot infer the current shell because $SHELL is unreadable.")
+                    };
                     PathBuf::from(sh)
                 };
                 let shell = shell_path
@@ -59,19 +80,36 @@ impl Cmd {
                 match shell {
                     "bash" => {
                         println!("Detected Bash");
-                        import::<Bash, DB>(db).await
+                        import::<Bash, DB>(db, None).await
                     }
                     "fish" => {
                         println!("Detected Fish");
-                        import::<Fish, DB>(db).await
+                        import::<Fish, DB>(db, None).await
                     }
                     "zsh" => {
-                        if let Ok(path) = ZshHistDb::histpath() {
-                            println!("Detected Zsh-HistDb, using {path:?}",);
-                            import::<ZshHistDb, DB>(db).await
-                        } else {
-                            println!("Detected ZSH");
-                            import::<Zsh, DB>(db).await
+                        println!("Detected Zsh");
+                        match ZshHistDb::final_source_path(Option::<&Path>::None) {
+                            Ok(PathSource::Cli(_)) => unreachable!(), // already filtered
+                            Ok(PathSource::Env(p)) if can_connect_as_db(&p).await => {
+                                println!("{p:?} seems to be a Zsh history db file");
+                                import::<ZshHistDb, DB>(db, None).await
+                            }
+                            Ok(PathSource::Default(p)) => {
+                                println!("Found Zsh history db at {p:?}");
+                                import::<ZshHistDb, DB>(db, None).await
+                            }
+                            Ok(PathSource::Env(p)) => {
+                                println!("{p:?} seems to be a plain text Zsh history file");
+                                import::<Zsh, DB>(db, None).await
+                            }
+                            Err(_) => {
+                                println!(
+                                    "No Zsh history db found; trying plain text Zsh history file"
+                                );
+                                let p = Zsh::final_source_path(Option::<&Path>::None)?;
+                                println!("Found plain text Zsh history file at {p:?}");
+                                import::<Zsh, DB>(db, None).await
+                            }
                         }
                     }
                     other => {
@@ -83,11 +121,11 @@ impl Cmd {
                 }
             }
 
-            Self::Zsh => import::<Zsh, DB>(db).await,
-            Self::ZshHistDb => import::<ZshHistDb, DB>(db).await,
-            Self::Bash => import::<Bash, DB>(db).await,
-            Self::Resh => import::<Resh, DB>(db).await,
-            Self::Fish => import::<Fish, DB>(db).await,
+            Shell::Zsh => import::<Zsh, DB>(db, cli_custom_source).await,
+            Shell::ZshHistDb => import::<ZshHistDb, DB>(db, cli_custom_source).await,
+            Shell::Bash => import::<Bash, DB>(db, cli_custom_source).await,
+            Shell::Resh => import::<Resh, DB>(db, cli_custom_source).await,
+            Shell::Fish => import::<Fish, DB>(db, cli_custom_source).await,
         }
     }
 }
@@ -129,15 +167,17 @@ impl<'db, DB: Database> Loader for HistoryImporter<'db, DB> {
     }
 }
 
-async fn import<I: Importer + Send, DB: Database>(db: &mut DB) -> Result<()> {
-    println!("Importing history from {}", I::NAME);
-
-    let mut importer = I::new().await?;
+async fn import<I: Importer + Send, DB: Database>(
+    db: &mut DB,
+    cli_custom_source: Option<&Path>,
+) -> Result<()> {
+    let final_source = I::final_source_path(cli_custom_source)?;
+    let mut importer = I::new(final_source.path()).await?;
     let len = importer.entries().await.unwrap();
     let mut loader = HistoryImporter::new(db, len);
     importer.load(&mut loader).await?;
     loader.flush().await?;
 
-    println!("Import complete!");
+    println!("Import from {p:?} complete!", p = final_source.path());
     Ok(())
 }

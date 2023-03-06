@@ -1,14 +1,17 @@
 // import old shell history!
 // automatically hoover up all that we can find
 
-use std::{fs::File, io::Read, path::PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use async_trait::async_trait;
 use chrono::{prelude::*, Utc};
 use directories::UserDirs;
-use eyre::{eyre, Result};
+use eyre::{bail, Result};
 
-use super::{get_histpath, unix_byte_lines, Importer, Loader};
+use super::{unix_byte_lines, Importer, Loader};
 use crate::history::History;
 
 #[derive(Debug)]
@@ -16,36 +19,31 @@ pub struct Zsh {
     bytes: Vec<u8>,
 }
 
-fn default_histpath() -> Result<PathBuf> {
-    // oh-my-zsh sets HISTFILE=~/.zhistory
-    // zsh has no default value for this var, but uses ~/.zhistory.
-    // we could maybe be smarter about this in the future :)
-    let user_dirs = UserDirs::new().ok_or_else(|| eyre!("could not find user directories"))?;
-    let home_dir = user_dirs.home_dir();
-
-    let mut candidates = [".zhistory", ".zsh_history"].iter();
-    loop {
-        match candidates.next() {
-            Some(candidate) => {
-                let histpath = home_dir.join(candidate);
-                if histpath.exists() {
-                    break Ok(histpath);
-                }
-            }
-            None => break Err(eyre!("Could not find history file. Try setting $HISTFILE")),
-        }
-    }
-}
-
 #[async_trait]
 impl Importer for Zsh {
     const NAME: &'static str = "zsh";
 
-    async fn new() -> Result<Self> {
-        let mut bytes = Vec::new();
-        let path = get_histpath(default_histpath)?;
-        let mut f = File::open(path)?;
-        f.read_to_end(&mut bytes)?;
+    fn default_source_path() -> Result<PathBuf> {
+        let Some(user_dirs) = UserDirs::new() else {
+            bail!("could not find user directories");
+        };
+        let home_dir = user_dirs.home_dir();
+
+        // oh-my-zsh sets HISTFILE=~/.zhistory
+        // zsh has no default value for this var, but uses ~/.zhistory.
+        // we could maybe be smarter about this in the future :)
+        let Some(path) = [".zhistory", ".zsh_history"].iter().find_map(|f| {
+            let path = home_dir.join(f);
+            path.exists().then_some(path)
+        }) else {
+            bail!("Found neither .zhistory nor .zsh_history");
+        };
+
+        Ok(path)
+    }
+
+    async fn new(source: &Path) -> Result<Self> {
+        let bytes = fs::read(source)?;
         Ok(Self { bytes })
     }
 

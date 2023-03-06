@@ -1,14 +1,17 @@
-use std::{fs::File, io::Read, path::PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use async_trait::async_trait;
 use chrono::{TimeZone, Utc};
 use directories::UserDirs;
-use eyre::{eyre, Result};
+use eyre::{bail, Result};
 use serde::Deserialize;
 
 use atuin_common::utils::uuid_v4;
 
-use super::{get_histpath, unix_byte_lines, Importer, Loader};
+use super::{unix_byte_lines, Importer, Loader};
 use crate::history::History;
 
 #[derive(Deserialize, Debug)]
@@ -72,22 +75,21 @@ pub struct Resh {
     bytes: Vec<u8>,
 }
 
-fn default_histpath() -> Result<PathBuf> {
-    let user_dirs = UserDirs::new().ok_or_else(|| eyre!("could not find user directories"))?;
-    let home_dir = user_dirs.home_dir();
-
-    Ok(home_dir.join(".resh_history.json"))
-}
-
 #[async_trait]
 impl Importer for Resh {
     const NAME: &'static str = "resh";
 
-    async fn new() -> Result<Self> {
-        let mut bytes = Vec::new();
-        let path = get_histpath(default_histpath)?;
-        let mut f = File::open(path)?;
-        f.read_to_end(&mut bytes)?;
+    fn default_source_path() -> Result<PathBuf> {
+        let Some(user_dirs) = UserDirs::new() else {
+            bail!("could not find user directories");
+        };
+        let path = user_dirs.home_dir().join(".resh_history.json");
+
+        Ok(path)
+    }
+
+    async fn new(source: &Path) -> Result<Self> {
+        let bytes = fs::read(source)?;
         Ok(Self { bytes })
     }
 

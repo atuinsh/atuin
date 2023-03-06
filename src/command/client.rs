@@ -22,7 +22,6 @@ pub enum Cmd {
     History(history::Cmd),
 
     /// Import shell history from file
-    #[command(subcommand)]
     Import(import::Cmd),
 
     /// Calculate statistics for your history

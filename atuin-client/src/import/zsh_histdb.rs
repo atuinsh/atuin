@@ -32,12 +32,12 @@
 //                       duration int);
 //
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 use chrono::{prelude::*, Utc};
 use directories::UserDirs;
-use eyre::{eyre, Result};
+use eyre::{bail, Result};
 use sqlx::{sqlite::SqlitePool, Pool};
 
 use super::Importer;
@@ -89,9 +89,55 @@ pub struct ZshHistDb {
     histdb: Vec<HistDbEntry>,
 }
 
+#[async_trait]
+impl Importer for ZshHistDb {
+    // Not sure how this is used
+    const NAME: &'static str = "zsh_histdb";
+
+    fn default_source_path() -> Result<PathBuf> {
+        let Some(user_dirs) = UserDirs::new() else {
+            bail!("could not find user directories");
+        };
+        let path = user_dirs.home_dir().join(".histdb/zsh-history.db");
+
+        Ok(path)
+    }
+
+    /// Creates a new ZshHistDb and populates the history based on the pre-populated data
+    /// structure.
+    async fn new(source: &Path) -> Result<Self> {
+        let histdb_entry_vec = hist_from_db(source).await?;
+        Ok(Self {
+            histdb: histdb_entry_vec,
+        })
+    }
+
+    async fn entries(&mut self) -> Result<usize> {
+        Ok(self.histdb.len())
+    }
+
+    async fn load(self, h: &mut impl Loader) -> Result<()> {
+        for i in self.histdb {
+            h.push(i.into()).await?;
+        }
+        Ok(())
+    }
+}
+
+/// Try to connect to this file as if it's a database, and see if it succeeds.
+pub async fn can_connect_as_db(path: impl AsRef<Path>) -> bool {
+    let Some(db_path_str) = path.as_ref().to_str() else {
+        return false;
+    };
+    SqlitePool::connect(db_path_str).await.is_ok()
+}
+
 /// Read db at given file, return vector of entries.
-async fn hist_from_db(dbpath: PathBuf) -> Result<Vec<HistDbEntry>> {
-    let pool = SqlitePool::connect(dbpath.to_str().unwrap()).await?;
+async fn hist_from_db(db_path: impl AsRef<Path>) -> Result<Vec<HistDbEntry>> {
+    let Some(db_path_str) = db_path.as_ref().to_str() else {
+        bail!("database path is not UTF8.");
+    };
+    let pool = SqlitePool::connect(db_path_str).await?;
     hist_from_db_conn(pool).await
 }
 
@@ -103,78 +149,10 @@ async fn hist_from_db_conn(pool: Pool<sqlx::Sqlite>) -> Result<Vec<HistDbEntry>>
     Ok(histdb_vec)
 }
 
-impl ZshHistDb {
-    pub fn histpath_candidate() -> Result<PathBuf> {
-        // By default histdb database is `${HOME}/.histdb/zsh-history.db`
-        // This can be modified by ${HISTDB_FILE}
-        //
-        //  if [[ -z ${HISTDB_FILE} ]]; then
-        //      typeset -g HISTDB_FILE="${HOME}/.histdb/zsh-history.db"
-        let home_dir = UserDirs::new()
-            .ok_or(eyre!("Cannot find a valid home directory."))?
-            .home_dir()
-            .to_owned();
-        let histdb_path = std::env::var("HISTDB_FILE")
-            .map(PathBuf::from)
-            .unwrap_or(home_dir.join(".histdb/zsh-history.db"));
-        Ok(histdb_path)
-    }
-    pub fn histpath() -> Result<PathBuf> {
-        let histdb_path = ZshHistDb::histpath_candidate()?;
-        if histdb_path.exists() {
-            Ok(histdb_path)
-        } else {
-            Err(eyre!(
-                "Could not find history file. Try setting $HISTDB_FILE."
-            ))
-        }
-    }
-}
-
-#[async_trait]
-impl Importer for ZshHistDb {
-    // Not sure how this is used
-    const NAME: &'static str = "zsh_histdb";
-
-    /// Creates a new ZshHistDb and populates the history based on the pre-populated data
-    /// structure.
-    async fn new() -> Result<Self> {
-        let dbpath = ZshHistDb::histpath()?;
-        let histdb_entry_vec = hist_from_db(dbpath).await?;
-        Ok(Self {
-            histdb: histdb_entry_vec,
-        })
-    }
-    async fn entries(&mut self) -> Result<usize> {
-        Ok(self.histdb.len())
-    }
-    async fn load(self, h: &mut impl Loader) -> Result<()> {
-        for i in self.histdb {
-            h.push(i.into()).await?;
-        }
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 mod test {
-
     use super::*;
     use sqlx::sqlite::SqlitePoolOptions;
-    use std::{env, path::Path};
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_env_vars() {
-        let test_env_db = "nonstd-zsh-history.db";
-        let key = "HISTDB_FILE";
-        env::set_var(key, test_env_db);
-
-        // test the env got set
-        assert_eq!(env::var(key).unwrap(), test_env_db.to_string());
-
-        // test histdb returns the proper db from previous step
-        let histdb_path = ZshHistDb::histpath_candidate().unwrap();
-        assert_eq!(&histdb_path, Path::new(test_env_db));
-    }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_import() {

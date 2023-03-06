@@ -1,12 +1,15 @@
 // import old shell history!
 // automatically hoover up all that we can find
 
-use std::{fs::File, io::Read, path::PathBuf};
+use std::{
+    fs::{self},
+    path::{Path, PathBuf},
+};
 
 use async_trait::async_trait;
 use chrono::{prelude::*, Utc};
 use directories::BaseDirs;
-use eyre::{eyre, Result};
+use eyre::{bail, Result};
 
 use super::{unix_byte_lines, Importer, Loader};
 use crate::history::History;
@@ -16,38 +19,31 @@ pub struct Fish {
     bytes: Vec<u8>,
 }
 
-/// see https://fishshell.com/docs/current/interactive.html#searchable-command-history
-fn default_histpath() -> Result<PathBuf> {
-    let base = BaseDirs::new().ok_or_else(|| eyre!("could not determine data directory"))?;
-    let data = base.data_local_dir();
-
-    // fish supports multiple history sessions
-    // If `fish_history` var is missing, or set to `default`, use `fish` as the session
-    let session = std::env::var("fish_history").unwrap_or_else(|_| String::from("fish"));
-    let session = if session == "default" {
-        String::from("fish")
-    } else {
-        session
-    };
-
-    let mut histpath = data.join("fish");
-    histpath.push(format!("{session}_history"));
-
-    if histpath.exists() {
-        Ok(histpath)
-    } else {
-        Err(eyre!("Could not find history file."))
-    }
-}
-
 #[async_trait]
 impl Importer for Fish {
     const NAME: &'static str = "fish";
 
-    async fn new() -> Result<Self> {
-        let mut bytes = Vec::new();
-        let mut f = File::open(default_histpath()?)?;
-        f.read_to_end(&mut bytes)?;
+    /// See https://fishshell.com/docs/current/interactive.html#searchable-command-history
+    fn default_source_path() -> Result<PathBuf> {
+        let Some(base_dir) = BaseDirs::new() else {
+            bail!("could not determine data directory");
+        };
+        let data_dir = base_dir.data_local_dir();
+
+        // fish supports multiple history sessions
+        // If `fish_history` var is missing, or set to `default`, use `fish` as the session
+        let fish_history_var = std::env::var("fish_history");
+        let session = match fish_history_var.as_ref().map(|s| s.as_str()) {
+            Err(_) | Ok("default") => "fish".into(),
+            Ok(other) => other,
+        };
+
+        let path = data_dir.join("fish").join(format!("{session}_history"));
+        Ok(path)
+    }
+
+    async fn new(source: &Path) -> Result<Self> {
+        let bytes = fs::read(source)?;
         Ok(Self { bytes })
     }
 
