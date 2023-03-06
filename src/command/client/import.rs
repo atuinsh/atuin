@@ -12,12 +12,8 @@ use atuin_client::{
     database::Database,
     history::History,
     import::{
-        bash::Bash,
-        fish::Fish,
-        resh::Resh,
-        zsh::Zsh,
-        zsh_histdb::{can_connect_as_db, ZshHistDb},
-        Importer, Loader, PathSource,
+        bash::Bash, fish::Fish, points_to_file, resh::Resh, zsh::Zsh, zsh_histdb::ZshHistDb,
+        Importer, Loader,
     },
 };
 
@@ -68,11 +64,15 @@ impl Cmd {
         println!("Importing history...");
 
         let cli_custom_source = self.custom_source.as_deref();
+        let env_custom_source_raw = std::env::var("HISTFILE").ok();
+        let env_custom_source = env_custom_source_raw.as_ref().map(Path::new);
 
         match self.shell {
-            Shell::Auto if self.custom_source.is_some() => Err(eyre!(
-                "You must explicitly specify a shell type when importing from a custom path."
-            )),
+            Shell::Auto if cli_custom_source.is_some() || env_custom_source.is_some() => {
+                Err(eyre!(
+                    "You must explicitly specify a shell type when importing from a custom path."
+                ))
+            }
             Shell::Auto => {
                 let shell_path = {
                     let Ok(sh) = env::var("SHELL") else {
@@ -88,35 +88,24 @@ impl Cmd {
                 match shell {
                     "bash" => {
                         println!("Detected Bash");
-                        import::<Bash, DB>(db, None).await
+                        import::<Bash, DB>(db, None, None).await
                     }
                     "fish" => {
                         println!("Detected Fish");
-                        import::<Fish, DB>(db, None).await
+                        import::<Fish, DB>(db, None, None).await
                     }
                     "zsh" => {
                         println!("Detected Zsh");
-                        match ZshHistDb::final_source_path(Option::<&Path>::None) {
-                            Ok(PathSource::Cli(_)) => unreachable!(), // already filtered
-                            Ok(PathSource::Env(p)) if can_connect_as_db(&p).await => {
-                                println!("{p:?} seems to be a Zsh history db file");
-                                import::<ZshHistDb, DB>(db, None).await
-                            }
-                            Ok(PathSource::Default(p)) => {
+                        match ZshHistDb::default_source_path() {
+                            Ok(p) if points_to_file(&p) => {
                                 println!("Found Zsh history db at {p:?}");
-                                import::<ZshHistDb, DB>(db, None).await
+                                import::<ZshHistDb, DB>(db, None, None).await
                             }
-                            Ok(PathSource::Env(p)) => {
-                                println!("{p:?} seems to be a plain text Zsh history file");
-                                import::<Zsh, DB>(db, None).await
-                            }
-                            Err(_) => {
+                            _ => {
                                 println!(
                                     "No Zsh history db found; trying plain text Zsh history file"
                                 );
-                                let p = Zsh::final_source_path(Option::<&Path>::None)?;
-                                println!("Found plain text Zsh history file at {p:?}");
-                                import::<Zsh, DB>(db, None).await
+                                import::<Zsh, DB>(db, None, None).await
                             }
                         }
                     }
@@ -129,11 +118,13 @@ impl Cmd {
                 }
             }
 
-            Shell::Zsh => import::<Zsh, DB>(db, cli_custom_source).await,
-            Shell::ZshHistDb => import::<ZshHistDb, DB>(db, cli_custom_source).await,
-            Shell::Bash => import::<Bash, DB>(db, cli_custom_source).await,
-            Shell::Resh => import::<Resh, DB>(db, cli_custom_source).await,
-            Shell::Fish => import::<Fish, DB>(db, cli_custom_source).await,
+            Shell::Zsh => import::<Zsh, DB>(db, cli_custom_source, env_custom_source).await,
+            Shell::ZshHistDb => {
+                import::<ZshHistDb, DB>(db, cli_custom_source, env_custom_source).await
+            }
+            Shell::Bash => import::<Bash, DB>(db, cli_custom_source, env_custom_source).await,
+            Shell::Resh => import::<Resh, DB>(db, cli_custom_source, env_custom_source).await,
+            Shell::Fish => import::<Fish, DB>(db, cli_custom_source, env_custom_source).await,
         }
     }
 }
@@ -178,14 +169,15 @@ impl<'db, DB: Database> Loader for HistoryImporter<'db, DB> {
 async fn import<I: Importer + Send, DB: Database>(
     db: &mut DB,
     cli_custom_source: Option<&Path>,
+    env_custom_source: Option<&Path>,
 ) -> Result<()> {
-    let final_source = I::final_source_path(cli_custom_source)?;
-    let mut importer = I::new(final_source.path()).await?;
+    let final_source = I::final_source_path(cli_custom_source, env_custom_source)?;
+    let mut importer = I::new(&final_source).await?;
     let len = importer.entries().await.unwrap();
     let mut loader = HistoryImporter::new(db, len);
     importer.load(&mut loader).await?;
     loader.flush().await?;
 
-    println!("Import from {p:?} complete!", p = final_source.path());
+    println!("Import from {final_source:?} complete!");
     Ok(())
 }

@@ -12,53 +12,45 @@ pub mod resh;
 pub mod zsh;
 pub mod zsh_histdb;
 
-#[derive(Clone, Debug)]
-/// The path of the import source, along with how this path was specified.
-pub enum PathSource {
-    Cli(PathBuf),
-    Env(PathBuf),
-    Default(PathBuf),
-}
-impl PathSource {
-    pub fn path(&self) -> &Path {
-        use PathSource::*;
-        match self {
-            Cli(p) | Env(p) | Default(p) => p,
-        }
-    }
-}
-
 #[async_trait]
 pub trait Importer: Sized {
     const NAME: &'static str;
     fn default_source_path() -> Result<PathBuf>;
-    fn final_source_path(cli_custom_source: Option<impl AsRef<Path>>) -> Result<PathSource> {
+    fn final_source_path(
+        cli_custom_source: Option<&Path>,
+        env_custom_source: Option<&Path>,
+    ) -> Result<PathBuf> {
         let candidate = 'candidate: {
             // CLI has highest precedence
             if let Some(p) = cli_custom_source {
-                break 'candidate PathSource::Cli(p.as_ref().to_owned());
+                break 'candidate p.to_owned();
             }
-            // Env var "HISTFILE" has second highest precedence
-            if let Ok(p) = std::env::var("HISTFILE") {
-                break 'candidate PathSource::Env(PathBuf::from(p));
+            // Env var has second highest precedence
+            if let Some(p) = env_custom_source {
+                break 'candidate p.to_owned();
             }
             // Default has lowest precedence
-            PathSource::Default(Self::default_source_path()?)
+            Self::default_source_path()?
         };
 
-        if candidate.path().canonicalize()?.is_file() {
+        if points_to_file(&candidate) {
             Ok(candidate)
         } else {
-            bail!(
-                "{p:?} is neither a file nor a symlink to a file.",
-                p = candidate.path()
-            );
+            bail!("{candidate:?} is neither a file nor a symlink to a file.");
         }
     }
     /// `source` passed to this function is guaranteed to be an existing file.
     async fn new(source: &Path) -> Result<Self>;
     async fn entries(&mut self) -> Result<usize>;
     async fn load(self, loader: &mut impl Loader) -> Result<()>;
+}
+
+/// Gets whether a path is a file, or is a symlink that eventually points to a file.
+pub fn points_to_file(path: impl AsRef<Path>) -> bool {
+    path.as_ref()
+        .canonicalize()
+        .map(|p| p.is_file())
+        .unwrap_or(false)
 }
 
 #[async_trait]

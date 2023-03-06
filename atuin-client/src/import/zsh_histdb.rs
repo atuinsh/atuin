@@ -124,14 +124,6 @@ impl Importer for ZshHistDb {
     }
 }
 
-/// Try to connect to this file as if it's a database, and see if it succeeds.
-pub async fn can_connect_as_db(path: impl AsRef<Path>) -> bool {
-    let Some(db_path_str) = path.as_ref().to_str() else {
-        return false;
-    };
-    SqlitePool::connect(db_path_str).await.is_ok()
-}
-
 /// Read db at given file, return vector of entries.
 async fn hist_from_db(db_path: impl AsRef<Path>) -> Result<Vec<HistDbEntry>> {
     let Some(db_path_str) = db_path.as_ref().to_str() else {
