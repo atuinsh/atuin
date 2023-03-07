@@ -15,6 +15,8 @@ pub struct Settings {
     pub db_uri: String,
     pub open_registration: bool,
     pub max_history_length: usize,
+    pub register_webhook_url: Option<String>,
+    pub register_webhook_username: String,
 }
 
 impl Settings {
@@ -37,6 +39,7 @@ impl Settings {
             .set_default("open_registration", false)?
             .set_default("max_history_length", 8192)?
             .set_default("path", "")?
+            .set_default("register_webhook_username", "")?
             .add_source(
                 Environment::with_prefix("atuin")
                     .prefix_separator("_")

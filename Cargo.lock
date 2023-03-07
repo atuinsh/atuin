@@ -169,6 +169,7 @@ dependencies = [
  "fs-err",
  "http",
  "rand",
+ "reqwest",
  "serde",
  "serde_json",
  "sodiumoxide",
