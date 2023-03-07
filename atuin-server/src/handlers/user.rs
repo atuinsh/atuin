@@ -1,4 +1,6 @@
 use std::borrow::Borrow;
+use std::collections::HashMap;
+use std::time::Duration;
 
 use axum::{
     extract::{Path, State},
@@ -6,7 +8,7 @@ use axum::{
 };
 use http::StatusCode;
 use sodiumoxide::crypto::pwhash::argon2id13;
-use tracing::{debug, error, instrument};
+use tracing::{debug, error, info, instrument};
 use uuid::Uuid;
 
 use super::{ErrorResponse, ErrorResponseStatus, RespExt};
@@ -15,6 +17,8 @@ use crate::{
     models::{NewSession, NewUser},
     router::AppState,
 };
+
+use reqwest::header::CONTENT_TYPE;
 
 use atuin_common::api::*;
 
@@ -29,6 +33,30 @@ pub fn verify_str(secret: &str, verify: &str) -> bool {
     match argon2id13::HashedPassword::from_slice(&padded) {
         Some(hp) => argon2id13::pwhash_verify(&hp, verify.as_bytes()),
         None => false,
+    }
+}
+
+// Try to send a Discord webhook once - if it fails, we don't retry. "At most once", and best effort.
+// Don't return the status because if this fails, we don't really care.
+async fn send_register_hook(url: &str, username: String, registered: String) {
+    let hook = HashMap::from([
+        ("username", username),
+        ("content", format!("{registered} has just signed up!")),
+    ]);
+
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(url)
+        .timeout(Duration::new(5, 0))
+        .header(CONTENT_TYPE, "application/json")
+        .json(&hook)
+        .send()
+        .await;
+
+    match resp {
+        Ok(_) => info!("register webhook sent ok!"),
+        Err(e) => error!("failed to send register webhook: {}", e),
     }
 }
 
@@ -71,8 +99,8 @@ pub async fn register<DB: Database>(
     let hashed = hash_secret(&register.password);
 
     let new_user = NewUser {
-        email: register.email,
-        username: register.username,
+        email: register.email.clone(),
+        username: register.username.clone(),
         password: hashed,
     };
 
@@ -93,6 +121,16 @@ pub async fn register<DB: Database>(
         user_id,
         token: (&token).into(),
     };
+
+    if let Some(url) = &state.settings.register_webhook_url {
+        // Could probs be run on another thread, but it's ok atm
+        send_register_hook(
+            url,
+            state.settings.register_webhook_username.clone(),
+            register.username,
+        )
+        .await;
+    }
 
     match db.add_session(&new_session).await {
         Ok(_) => Ok(Json(RegisterResponse { session: token })),

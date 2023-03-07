@@ -35,3 +35,7 @@ fs-err = "2.9"
 chronoutil = "0.2.3"
 tower = "0.4"
 tower-http = { version = "0.3", features = ["trace"] }
+reqwest = { version = "0.11", features = [
+  "json",
+  "rustls-tls-native-roots",
+], default-features = false }
