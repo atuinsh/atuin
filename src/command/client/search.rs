@@ -148,19 +148,15 @@ async fn run_non_interactive(
 
     let context = current_context();
 
-    let before = if let Some(before) = &before {
-        interim::parse_date_string(before.as_str(), Utc::now(), interim::Dialect::Uk)
+    let before = before.and_then(|b| {
+        interim::parse_date_string(b.as_str(), Utc::now(), interim::Dialect::Uk)
             .map_or(None, |d| Some(d.timestamp_nanos()))
-    } else {
-        None
-    };
+    });
 
-    let after = if let Some(after) = &after {
-        interim::parse_date_string(after.as_str(), Utc::now(), interim::Dialect::Uk)
+    let after = after.and_then(|a| {
+        interim::parse_date_string(a.as_str(), Utc::now(), interim::Dialect::Uk)
             .map_or(None, |d| Some(d.timestamp_nanos()))
-    } else {
-        None
-    };
+    });
 
     let results = db
         .search(
