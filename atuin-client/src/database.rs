@@ -73,11 +73,13 @@ pub trait Database: Send + Sync {
 
     async fn search(
         &self,
-        limit: Option<i64>,
         search_mode: SearchMode,
         filter: FilterMode,
         context: &Context,
         query: &str,
+        limit: Option<i64>,
+        before: Option<i64>,
+        after: Option<i64>,
     ) -> Result<Vec<History>>;
 
     async fn query_history(&self, query: &str) -> Result<Vec<History>>;
@@ -385,11 +387,13 @@ impl Database for Sqlite {
 
     async fn search(
         &self,
-        limit: Option<i64>,
         search_mode: SearchMode,
         filter: FilterMode,
         context: &Context,
         query: &str,
+        limit: Option<i64>,
+        before: Option<i64>,
+        after: Option<i64>,
     ) -> Result<Vec<History>> {
         let mut sql = SqlBuilder::select_from("history");
 
@@ -399,6 +403,14 @@ impl Database for Sqlite {
 
         if let Some(limit) = limit {
             sql.limit(limit);
+        }
+
+        if let Some(after) = after {
+            sql.and_where_gt("timestamp", after);
+        }
+
+        if let Some(before) = before {
+            sql.and_where_lt("timestamp", before);
         }
 
         match filter {
