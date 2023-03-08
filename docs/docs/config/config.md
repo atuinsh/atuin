@@ -153,6 +153,8 @@ Accepts exactly the same options as `filter_mode` above
 filter_mode_shell_up_key_binding = "session"
 ```
 
+Defaults to the value specified for filter_mode.
+
 ### `exit_mode`
 
 What to do when the escape key is pressed when searching
