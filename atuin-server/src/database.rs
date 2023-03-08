@@ -8,7 +8,7 @@ use tracing::{debug, instrument, warn};
 
 use super::{
     calendar::{TimePeriod, TimePeriodInfo},
-    models::{History, NewHistory, NewSession, NewUser, Session, User},
+    models::{Event, History, NewEvent, NewHistory, NewSession, NewUser, Session, User},
 };
 use crate::settings::Settings;
 use crate::settings::HISTORY_PAGE_SIZE;
@@ -28,6 +28,7 @@ pub trait Database {
     async fn count_history(&self, user: &User) -> Result<i64>;
     async fn count_history_cached(&self, user: &User) -> Result<i64>;
 
+    async fn count_event(&self, user: &User) -> Result<i64>;
     async fn count_event_cached(&self, user: &User) -> Result<i64>;
 
     async fn count_history_range(
@@ -48,7 +49,16 @@ pub trait Database {
         host: &str,
     ) -> Result<Vec<History>>;
 
+    async fn list_events(
+        &self,
+        user: &User,
+        created_after: chrono::NaiveDateTime,
+        since: chrono::NaiveDateTime,
+        host: &str,
+    ) -> Result<Vec<Event>>;
+
     async fn add_history(&self, history: &[NewHistory]) -> Result<()>;
+    async fn add_events(&self, events: &[NewEvent]) -> Result<()>;
 
     async fn oldest_history(&self, user: &User) -> Result<History>;
 
@@ -141,6 +151,23 @@ impl Database for Postgres {
         .await?;
 
         Ok(res.0 as i64)
+    }
+
+    #[instrument(skip_all)]
+    async fn count_event(&self, user: &User) -> Result<i64> {
+        // The cache is new, and the user might not yet have a cache value.
+        // They will have one as soon as they post up some new history, but handle that
+        // edge case.
+
+        let res: (i64,) = sqlx::query_as(
+            "select count(1) from events
+            where user_id = $1",
+        )
+        .bind(user.id)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(res.0)
     }
 
     #[instrument(skip_all)]
@@ -260,6 +287,33 @@ impl Database for Postgres {
         Ok(res)
     }
 
+    async fn list_events(
+        &self,
+        user: &User,
+        created_after: chrono::NaiveDateTime,
+        since: chrono::NaiveDateTime,
+        host: &str,
+    ) -> Result<Vec<Event>> {
+        let res = sqlx::query_as::<_, Event>(
+            "select id, client_id, user_id, hostname, timestamp, event_type, data, created_at from history 
+            where user_id = $1
+            and hostname != $2
+            and created_at >= $3
+            and timestamp >= $4
+            order by timestamp asc
+            limit $5",
+        )
+        .bind(user.id)
+        .bind(host)
+        .bind(created_after)
+        .bind(since)
+        .bind(HISTORY_PAGE_SIZE)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(res)
+    }
+
     #[instrument(skip_all)]
     async fn add_history(&self, history: &[NewHistory]) -> Result<()> {
         let mut tx = self.pool.begin().await?;
@@ -295,6 +349,52 @@ impl Database for Postgres {
             .bind(i.user_id)
             .bind(hostname)
             .bind(i.timestamp)
+            .bind(data)
+            .execute(&mut tx)
+            .await?;
+        }
+
+        tx.commit().await?;
+
+        Ok(())
+    }
+
+    #[instrument(skip_all)]
+    async fn add_events(&self, events: &[NewEvent]) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+
+        for i in events {
+            let client_id: &str = &i.client_id;
+            let hostname: &str = &i.hostname;
+            let data: &str = &i.data;
+
+            if data.len() > self.settings.max_history_length
+                && self.settings.max_history_length != 0
+            {
+                // Don't return an error here. We want to insert as much of the
+                // event list as we can, so log the error and continue going.
+
+                warn!(
+                    "event too long, got length {}, max {}",
+                    data.len(),
+                    self.settings.max_history_length
+                );
+
+                continue;
+            }
+
+            sqlx::query(
+                "insert into events
+                    (client_id, user_id, hostname, timestamp, event_type, data) 
+                values ($1, $2, $3, $4, $5, $6)
+                on conflict do nothing
+                ",
+            )
+            .bind(client_id)
+            .bind(i.user_id)
+            .bind(hostname)
+            .bind(i.timestamp)
+            .bind(i.event_type.to_string())
             .bind(data)
             .execute(&mut tx)
             .await?;

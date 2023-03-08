@@ -65,13 +65,15 @@ pub fn router<DB: Database + Clone + Send + Sync + 'static>(
 ) -> Router {
     let routes = Router::new()
         .route("/", get(handlers::index))
-        .route("/sync/count", get(handlers::history::count))
-        .route("/sync/history", get(handlers::history::list))
-        .route("/sync/calendar/:focus", get(handlers::history::calendar))
         .route("/history", post(handlers::history::add))
         .route("/user/:username", get(handlers::user::get))
         .route("/register", post(handlers::user::register))
-        .route("/login", post(handlers::user::login));
+        .route("/login", post(handlers::user::login))
+        .route("/sync/count", get(handlers::history::count))
+        .route("/sync/history", get(handlers::history::list))
+        .route("/sync/calendar/:focus", get(handlers::history::calendar))
+        .route("/sync/event", get(handlers::event::list))
+        .route("/sync/event", post(handlers::event::add));
 
     let path = settings.path.as_str();
     if path.is_empty() {

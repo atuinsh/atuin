@@ -66,21 +66,13 @@ pub struct IndexResponse {
     pub version: String,
 }
 
-// Doubled up with the history sync stuff, because atm we need to support BOTH.
-// People are still running old clients, and in some cases _very_ old clients.
 #[derive(Debug, Serialize, Deserialize)]
-pub enum AddEventRequest {
-    Create(AddHistoryRequest),
-
-    Delete {
-        id: String,
-        timestamp: chrono::DateTime<Utc>,
-        hostname: chrono::DateTime<Utc>,
-
-        // When we delete a history item, we push up an event marking its client
-        // id as being deleted.
-        history_id: String,
-    },
+pub struct AddEventRequest {
+    pub id: String,
+    pub timestamp: chrono::DateTime<Utc>,
+    pub data: String,
+    pub hostname: String,
+    pub event_type: EventType,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -99,4 +91,10 @@ pub struct SyncEventResponse {
 pub enum EventType {
     Create,
     Delete,
+}
+
+impl std::fmt::Display for EventType {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
 }

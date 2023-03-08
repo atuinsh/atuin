@@ -24,6 +24,20 @@ pub struct NewHistory {
     pub data: String,
 }
 
+#[derive(sqlx::FromRow)]
+pub struct Event {
+    pub id: i64,
+    pub client_id: String, // a client generated ID
+    pub user_id: i64,
+    pub hostname: String,
+    pub timestamp: NaiveDateTime,
+    pub event_type: String, // so that sqlx can unmarshal this ok 😔
+
+    pub data: String,
+
+    pub created_at: NaiveDateTime,
+}
+
 pub struct NewEvent {
     pub client_id: String,
     pub user_id: i64,

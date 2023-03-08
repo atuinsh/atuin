@@ -1,6 +1,7 @@
 use atuin_common::api::{ErrorResponse, IndexResponse};
 use axum::{response::IntoResponse, Json};
 
+pub mod event;
 pub mod history;
 pub mod user;
 
