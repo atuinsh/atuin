@@ -514,7 +514,9 @@ mod test {
             cwd: "/home/ellie".to_string(),
         };
 
-        let results = db.search(None, mode, filter_mode, &context, query).await?;
+        let results = db
+            .search(mode, filter_mode, &context, query, None, None, None)
+            .await?;
 
         assert_eq!(
             results.len(),
@@ -717,7 +719,15 @@ mod test {
         }
         let start = Instant::now();
         let _results = db
-            .search(None, SearchMode::Fuzzy, FilterMode::Global, &context, "")
+            .search(
+                SearchMode::Fuzzy,
+                FilterMode::Global,
+                &context,
+                "",
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
         let duration = start.elapsed();
