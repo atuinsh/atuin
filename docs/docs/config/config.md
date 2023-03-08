@@ -109,7 +109,7 @@ Which search mode to use. Atuin supports "prefix", fulltext and "fuzzy" search
 modes. The prefix searches for "query\*", fulltext "\*query\*", and fuzzy applies
 the search syntax [described below](#fuzzy-search-syntax).
 
-Defaults to "prefix"
+Defaults to "fuzzy"
 
 ### `style`
 
