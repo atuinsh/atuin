@@ -148,13 +148,25 @@ async fn run_non_interactive(
 
     let context = current_context();
 
+    let before = before.and_then(|b| {
+        interim::parse_date_string(b.as_str(), Utc::now(), interim::Dialect::Uk)
+            .map_or(None, |d| Some(d.timestamp_nanos()))
+    });
+
+    let after = after.and_then(|a| {
+        interim::parse_date_string(a.as_str(), Utc::now(), interim::Dialect::Uk)
+            .map_or(None, |d| Some(d.timestamp_nanos()))
+    });
+
     let results = db
         .search(
-            limit,
             settings.search_mode,
             settings.filter_mode,
             &context,
             query.join(" ").as_str(),
+            limit,
+            before,
+            after,
         )
         .await?;
 
@@ -183,24 +195,6 @@ async fn run_non_interactive(
 
             if let Some(cwd) = &dir {
                 if h.cwd.as_str() != cwd.as_str() {
-                    return false;
-                }
-            }
-
-            if let Some(before) = &before {
-                let before =
-                    interim::parse_date_string(before.as_str(), Utc::now(), interim::Dialect::Uk);
-
-                if before.is_err() || h.timestamp.gt(&before.unwrap()) {
-                    return false;
-                }
-            }
-
-            if let Some(after) = &after {
-                let after =
-                    interim::parse_date_string(after.as_str(), Utc::now(), interim::Dialect::Uk);
-
-                if after.is_err() || h.timestamp.lt(&after.unwrap()) {
                     return false;
                 }
             }

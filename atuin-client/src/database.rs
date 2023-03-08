@@ -71,13 +71,19 @@ pub trait Database: Send + Sync {
     async fn last(&self) -> Result<History>;
     async fn before(&self, timestamp: chrono::DateTime<Utc>, count: i64) -> Result<Vec<History>>;
 
+    // Yes I know, it's a lot.
+    // Could maybe break it down to a searchparams struct or smth but that feels a little... pointless.
+    // Been debating maybe a DSL for search? eg "before:time limit:1 the query"
+    #[allow(clippy::too_many_arguments)]
     async fn search(
         &self,
-        limit: Option<i64>,
         search_mode: SearchMode,
         filter: FilterMode,
         context: &Context,
         query: &str,
+        limit: Option<i64>,
+        before: Option<i64>,
+        after: Option<i64>,
     ) -> Result<Vec<History>>;
 
     async fn query_history(&self, query: &str) -> Result<Vec<History>>;
@@ -385,11 +391,13 @@ impl Database for Sqlite {
 
     async fn search(
         &self,
-        limit: Option<i64>,
         search_mode: SearchMode,
         filter: FilterMode,
         context: &Context,
         query: &str,
+        limit: Option<i64>,
+        before: Option<i64>,
+        after: Option<i64>,
     ) -> Result<Vec<History>> {
         let mut sql = SqlBuilder::select_from("history");
 
@@ -399,6 +407,14 @@ impl Database for Sqlite {
 
         if let Some(limit) = limit {
             sql.limit(limit);
+        }
+
+        if let Some(after) = after {
+            sql.and_where_gt("timestamp", after);
+        }
+
+        if let Some(before) = before {
+            sql.and_where_lt("timestamp", before);
         }
 
         match filter {
@@ -498,7 +514,9 @@ mod test {
             cwd: "/home/ellie".to_string(),
         };
 
-        let results = db.search(None, mode, filter_mode, &context, query).await?;
+        let results = db
+            .search(mode, filter_mode, &context, query, None, None, None)
+            .await?;
 
         assert_eq!(
             results.len(),
@@ -701,7 +719,15 @@ mod test {
         }
         let start = Instant::now();
         let _results = db
-            .search(None, SearchMode::Fuzzy, FilterMode::Global, &context, "")
+            .search(
+                SearchMode::Fuzzy,
+                FilterMode::Global,
+                &context,
+                "",
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
         let duration = start.elapsed();
