@@ -316,7 +316,6 @@ impl Write for Stdout {
     }
 }
 
-#[allow(clippy::bool_to_int_with_if, clippy::cast_possible_truncation)]
 pub async fn history(query: &[String], settings: &Settings, db: impl Database) -> Result<String> {
     let stdout = Stdout::new()?;
     let backend = CrosstermBackend::new(stdout);
@@ -332,7 +331,7 @@ pub async fn history(query: &[String], settings: &Settings, db: impl Database) -
 
     let mut app = core::State::new(query, settings.clone(), db).await?;
 
-    let longest_command = app
+    let mut longest_command = app
         .history
         .iter()
         .map(|h| h.command.len())
@@ -342,42 +341,16 @@ pub async fn history(query: &[String], settings: &Settings, db: impl Database) -
     let mut layout = None::<UILayout>;
 
     loop {
-        let compact = match settings.style {
-            atuin_client::settings::Style::Auto => {
-                terminal.size().map(|size| size.height < 14).unwrap_or(true)
-            }
-            atuin_client::settings::Style::Compact => true,
-            atuin_client::settings::Style::Full => false,
-        };
-
-        // render terminal
-        terminal.draw(|f| {
-            let view = app.view();
-            // recompute layout if resized
-            let border_size = if compact { 0 } else { 1 };
-            let preview_width = f.size().width - 2;
-            let preview_height = if settings.show_preview {
-                let width = preview_width - border_size;
-                std::cmp::min(4, (longest_command as u16 + width - 1) / width) + border_size * 2
-            } else {
-                border_size
-            };
-
-            // invalidate layout of size or preview height changes
-            if matches!(&layout, Some(l) if l.size != f.size()
-                || (settings.show_preview && l.preview.height != preview_height))
-            {
-                layout = None;
-            }
-
-            layout
-                .get_or_insert(UILayout::new(f.size(), compact, preview_height))
-                .render(f, view);
-        })?;
-
-        let event_ready = tokio::task::spawn_blocking(|| event::poll(Duration::from_millis(250)));
+        render(
+            &mut terminal,
+            &mut app,
+            settings,
+            &mut layout,
+            longest_command,
+        )?;
 
         // handle events
+        let event_ready = tokio::task::spawn_blocking(|| event::poll(Duration::from_millis(250)));
         let mut batch = app.start_batch();
 
         tokio::select! {
@@ -411,7 +384,58 @@ pub async fn history(query: &[String], settings: &Settings, db: impl Database) -
         (app, did_update) = batch.finish().await?;
 
         if did_update {
-            layout.take();
+            longest_command = app
+                .history
+                .iter()
+                .map(|h| h.command.len())
+                .max()
+                .unwrap_or_default();
         }
     }
+}
+
+#[allow(clippy::bool_to_int_with_if, clippy::cast_possible_truncation)]
+fn render(
+    terminal: &mut Terminal<impl Backend>,
+    app: &mut core::State<impl Database>,
+    settings: &Settings,
+    layout: &mut Option<UILayout>,
+    longest_command: usize,
+) -> std::io::Result<()> {
+    let compact = match settings.style {
+        atuin_client::settings::Style::Auto => {
+            terminal.size().map(|size| size.height < 14).unwrap_or(true)
+        }
+        atuin_client::settings::Style::Compact => true,
+        atuin_client::settings::Style::Full => false,
+    };
+
+    // render terminal
+    terminal.draw(|f| {
+        let view = app.view();
+        // recompute layout if resized
+        let border_size = if compact { 0 } else { 1 };
+        let preview_width = f.size().width - 2;
+        let preview_height = if settings.show_preview {
+            let width = preview_width - border_size;
+            // div_ceil
+            let height = (longest_command as u16 + width - 1) / width;
+            height.clamp(0, 4) + border_size * 2
+        } else {
+            border_size
+        };
+
+        // invalidate layout of size or preview height changes
+        if matches!(&layout, Some(l) if l.size != f.size()
+            || (settings.show_preview && l.preview.height != preview_height))
+        {
+            *layout = None;
+        }
+
+        layout
+            .get_or_insert(UILayout::new(f.size(), compact, preview_height))
+            .render(f, view);
+    })?;
+
+    Ok(())
 }

@@ -58,7 +58,7 @@ impl SkimItem for HistoryWrapper {
     }
 }
 
-pub struct Guard<DB: Database> {
+pub struct BatchGuard<DB: Database> {
     initial_input: String,
     initial_filter_mode: FilterMode,
     inner: State<DB>,
@@ -103,10 +103,7 @@ pub enum Event {
 }
 
 impl<DB: Database> State<DB> {
-    // this is a big blob of horrible! clean it up!
-    // for now, it works. But it'd be great if it were more easily readable, and
-    // modular. I'd like to add some more stats and stuff at some point
-    #[allow(clippy::cast_possible_truncation)]
+    /// Create a new core state
     pub async fn new(query: &[String], settings: Settings, db: DB) -> Result<Self> {
         let mut input = Cursor::from(query.join(" "));
         // Put the cursor at the end of the query by default
@@ -286,14 +283,16 @@ impl<DB: Database> State<DB> {
         ControlFlow::Continue(self)
     }
 
-    pub fn start_batch(self) -> Guard<DB> {
-        Guard {
+    /// Start a batch process of events
+    pub fn start_batch(self) -> BatchGuard<DB> {
+        BatchGuard {
             initial_input: self.search.input.as_str().to_owned(),
             initial_filter_mode: self.search.filter_mode,
             inner: self,
         }
     }
 
+    /// Get the view of the state for rendering
     pub fn view(&mut self) -> View<'_> {
         View {
             history_count: self.history_count,
@@ -305,7 +304,8 @@ impl<DB: Database> State<DB> {
     }
 }
 
-impl<DB: Database> Guard<DB> {
+impl<DB: Database> BatchGuard<DB> {
+    /// Handle an event in the batch
     pub fn handle(mut self, event: Event) -> ControlFlow<String, Self> {
         match self.inner.handle(event) {
             ControlFlow::Continue(inner) => self.inner = inner,
@@ -314,6 +314,7 @@ impl<DB: Database> Guard<DB> {
         ControlFlow::Continue(self)
     }
 
+    /// Finish processing a batch of events, maybe refreshing the DB in the process
     pub async fn finish(self) -> Result<(State<DB>, bool)> {
         let Self {
             initial_input,
@@ -330,6 +331,7 @@ impl<DB: Database> Guard<DB> {
     }
 }
 
+/// A view of the state for rendering
 pub struct View<'a> {
     pub history_count: i64,
     pub results_state: &'a mut ListState,
