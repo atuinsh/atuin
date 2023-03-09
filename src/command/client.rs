@@ -53,7 +53,7 @@ impl Cmd {
             Self::History(history) => history.run(&settings, &mut db).await,
             Self::Import(import) => import.run(&mut db).await,
             Self::Stats(stats) => stats.run(&mut db, &settings).await,
-            Self::Search(search) => search.run(&mut db, &mut settings).await,
+            Self::Search(search) => search.run(db, &mut settings).await,
             #[cfg(feature = "sync")]
             Self::Sync(sync) => sync.run(settings, &mut db).await,
         }

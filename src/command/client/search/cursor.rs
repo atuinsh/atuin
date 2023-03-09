@@ -106,11 +106,6 @@ impl Cursor {
         &self.source[..self.index]
     }
 
-    /// Returns the currently selected [`char`]
-    pub fn char(&self) -> Option<char> {
-        self.source[self.index..].chars().next()
-    }
-
     pub fn right(&mut self) {
         if self.index < self.source.len() {
             loop {

@@ -8,14 +8,14 @@ use ratatui::{
     widgets::{Block, StatefulWidget, Widget},
 };
 
-use super::{format_duration, interactive::HistoryWrapper};
+use super::{format_duration, interactive::core::HistoryWrapper};
 
 pub struct HistoryList<'a> {
     history: &'a [Arc<HistoryWrapper>],
     block: Option<Block<'a>>,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 pub struct ListState {
     offset: usize,
     selected: usize,

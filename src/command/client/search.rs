@@ -87,7 +87,7 @@ pub struct Cmd {
 }
 
 impl Cmd {
-    pub async fn run(self, db: &mut impl Database, settings: &mut Settings) -> Result<()> {
+    pub async fn run(self, mut db: impl Database, settings: &mut Settings) -> Result<()> {
         if self.search_mode.is_some() {
             settings.search_mode = self.search_mode.unwrap();
         }
@@ -98,7 +98,7 @@ impl Cmd {
         settings.shell_up_key_binding = self.shell_up_key_binding;
 
         if self.interactive {
-            let item = interactive::history(&self.query, settings, db).await?;
+            let item = interactive::tui_shell::history(&self.query, settings, db).await?;
             eprintln!("{item}");
         } else {
             let list_mode = ListMode::from_flags(self.human, self.cmd_only);
@@ -112,7 +112,7 @@ impl Cmd {
                 self.after,
                 self.limit,
                 &self.query,
-                db,
+                &mut db,
             )
             .await?;
 
