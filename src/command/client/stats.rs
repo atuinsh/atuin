@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use chrono::{prelude::*, Duration};
 use clap::Parser;
@@ -24,18 +24,19 @@ pub struct Cmd {
 }
 
 fn compute_stats(history: &[History], count: usize) -> Result<()> {
-    let mut commands = HashMap::<&str, usize>::new();
+    let mut commands = HashSet::<&str>::with_capacity(history.len());
+    let mut prefixes = HashMap::<&str, usize>::with_capacity(history.len());
     for i in history {
-        let command = i.command.split_ascii_whitespace().next();
+        commands.insert(i.command.as_str());
 
-        if command.is_none() {
-            continue;
-        }
+        let Some(command) = i.command.split_ascii_whitespace().next() else {
+            continue
+        };
 
-        *commands.entry(command.unwrap()).or_default() += 1;
+        *prefixes.entry(command).or_default() += 1;
     }
     let unique = commands.len();
-    let mut top = commands.into_iter().collect::<Vec<_>>();
+    let mut top = prefixes.into_iter().collect::<Vec<_>>();
     top.sort_unstable_by_key(|x| std::cmp::Reverse(x.1));
     top.truncate(count);
     if top.is_empty() {
