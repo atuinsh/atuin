@@ -92,52 +92,6 @@ impl Cmd {
     }
 }
 
-#[test]
-fn foo() {
-    // just in case it somehow has a leading tab or space or something (legacy atuin didn't ignore space prefixes)
-    let mut command = "sudo cargo floobles boobles";
-    // commands.insert(command);
-
-    // compute command prefix
-    // we loop here because we might be working with a common command prefix (eg sudo) that we want to trim off
-    let (i, prefix) = loop {
-        let i = first_whitespace(command);
-        let prefix = &command[..i];
-
-        // is it a common prefix
-        if COMMON_COMMAND_PREFIX.contains(&prefix) {
-            let Some(c) = command.get(i..) else {
-                // no commands following, just ignore this one
-                dbg!(prefix);
-                return;
-            };
-            command = c.trim_start();
-        } else {
-            break (i, prefix);
-        }
-    };
-
-    // compute subcommand
-    let subcommand_indices = command
-        // after the end of the command prefix
-        .get(i..)
-        // find the first non whitespace character (start of subcommand)
-        .and_then(first_non_whitespace)
-        // then find the end of that subcommand
-        .map(|j| i + j + first_whitespace(&command[i + j..]));
-
-    match subcommand_indices {
-        // if there is a subcommand and it's a common one, then count the full prefix + subcommand
-        Some(end) if COMMON_SUBCOMMAND_PREFIX.contains(&prefix) => {
-            dbg!(&command[..end]);
-        }
-        // otherwise just count the main command
-        _ => {
-            dbg!(prefix);
-        }
-    }
-}
-
 // TODO: make this configurable?
 static COMMON_COMMAND_PREFIX: &[&str] = &["sudo"];
 static COMMON_SUBCOMMAND_PREFIX: &[&str] = &["cargo", "go", "git", "npm", "yarn", "pnpm"];
