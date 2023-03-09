@@ -119,7 +119,7 @@ pub async fn calendar<DB: Database>(
     let db = &state.0.database;
     let focus = match focus {
         "year" => db
-            .calendar(&user, TimePeriod::YEAR, *year, *month)
+            .calendar(&user, TimePeriod::Year, *year, *month)
             .await
             .map_err(|_| {
                 ErrorResponse::reply("failed to query calendar")
@@ -127,7 +127,7 @@ pub async fn calendar<DB: Database>(
             }),
 
         "month" => db
-            .calendar(&user, TimePeriod::MONTH, *year, *month)
+            .calendar(&user, TimePeriod::Month, *year, *month)
             .await
             .map_err(|_| {
                 ErrorResponse::reply("failed to query calendar")
@@ -135,7 +135,7 @@ pub async fn calendar<DB: Database>(
             }),
 
         "day" => db
-            .calendar(&user, TimePeriod::DAY, *year, *month)
+            .calendar(&user, TimePeriod::Day, *year, *month)
             .await
             .map_err(|_| {
                 ErrorResponse::reply("failed to query calendar")

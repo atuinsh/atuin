@@ -3,9 +3,9 @@
 use serde::{Deserialize, Serialize};
 
 pub enum TimePeriod {
-    YEAR,
-    MONTH,
-    DAY,
+    Year,
+    Month,
+    Day,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

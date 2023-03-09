@@ -100,7 +100,6 @@ dependencies = [
  "serde_json",
  "tiny-bip39",
  "tokio",
- "tracing-subscriber",
  "unicode-segmentation",
  "unicode-width",
  "whoami",
@@ -164,6 +163,7 @@ dependencies = [
  "base64 0.21.0",
  "chrono",
  "chronoutil",
+ "clap",
  "config",
  "eyre",
  "fs-err",
@@ -178,6 +178,7 @@ dependencies = [
  "tower",
  "tower-http",
  "tracing",
+ "tracing-subscriber",
  "uuid",
  "whoami",
 ]

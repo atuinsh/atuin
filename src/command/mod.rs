@@ -5,9 +5,6 @@ use eyre::Result;
 #[cfg(feature = "client")]
 mod client;
 
-#[cfg(feature = "server")]
-mod server;
-
 mod init;
 
 mod contributors;
@@ -22,7 +19,7 @@ pub enum AtuinCmd {
     /// Start an atuin server
     #[cfg(feature = "server")]
     #[command(subcommand)]
-    Server(server::Cmd),
+    Server(atuin_server::Cmd),
 
     /// Output shell setup
     Init(init::Cmd),

@@ -364,7 +364,7 @@ impl Database for Postgres {
         // interpret the stored date with a different TZ
 
         match period {
-            TimePeriod::YEAR => {
+            TimePeriod::Year => {
                 let mut ret = HashMap::new();
                 // First we need to work out how far back to calculate. Get the
                 // oldest history item
@@ -390,7 +390,7 @@ impl Database for Postgres {
                 Ok(ret)
             }
 
-            TimePeriod::MONTH => {
+            TimePeriod::Month => {
                 let mut ret = HashMap::new();
 
                 for month in 1..13 {
@@ -413,7 +413,7 @@ impl Database for Postgres {
                 Ok(ret)
             }
 
-            TimePeriod::DAY => {
+            TimePeriod::Day => {
                 let mut ret = HashMap::new();
 
                 for day in 1..get_days_from_month(year as i32, month as u32) {
