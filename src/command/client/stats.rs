@@ -140,8 +140,7 @@ fn foo() {
 
 // TODO: make this configurable?
 static COMMON_COMMAND_PREFIX: &[&str] = &["sudo"];
-static COMMON_SUBCOMMAND_PREFIX: &[&str] =
-    &["cargo", "go", "git", "npm", "yarn", "pnpm"];
+static COMMON_SUBCOMMAND_PREFIX: &[&str] = &["cargo", "go", "git", "npm", "yarn", "pnpm"];
 
 fn first_non_whitespace(s: &str) -> Option<usize> {
     s.char_indices()
