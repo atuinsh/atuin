@@ -24,6 +24,7 @@ pub enum SearchMode {
     Prefix,
 
     #[serde(rename = "fulltext")]
+    #[clap(aliases = &["fulltext"])]
     FullText,
 
     #[serde(rename = "fuzzy")]
