@@ -28,7 +28,7 @@ use crate::command::client::search::{
 };
 use crate::VERSION;
 
-use super::core;
+use super::core::{self, For, Line, To, Towards};
 
 pub struct Skip;
 impl TryFrom<Event> for core::Event {
@@ -46,8 +46,8 @@ impl TryFrom<MouseEvent> for core::Event {
     type Error = Skip;
     fn try_from(value: MouseEvent) -> Result<Self, Skip> {
         match value.kind {
-            event::MouseEventKind::ScrollDown => Ok(Self::ListDown),
-            event::MouseEventKind::ScrollUp => Ok(Self::ListUp),
+            event::MouseEventKind::ScrollDown => Ok(Self::Selection(Line::Down, For::SingleLine)),
+            event::MouseEventKind::ScrollUp => Ok(Self::Selection(Line::Up, For::SingleLine)),
             _ => Err(Skip),
         }
     }
@@ -58,35 +58,38 @@ impl TryFrom<KeyEvent> for core::Event {
         let ctrl = input.modifiers.contains(KeyModifiers::CONTROL);
         let alt = input.modifiers.contains(KeyModifiers::ALT);
         match input.code {
+            KeyCode::Down => Ok(Self::Selection(Line::Down, For::SingleLine)),
+            KeyCode::Char('n' | 'j') if ctrl => Ok(Self::Selection(Line::Down, For::SingleLine)),
+            KeyCode::Up => Ok(Self::Selection(Line::Up, For::SingleLine)),
+            KeyCode::Char('p' | 'k') if ctrl => Ok(Self::Selection(Line::Up, For::SingleLine)),
+            KeyCode::PageDown => Ok(Self::Selection(Line::Down, For::Page)),
+            KeyCode::PageUp => Ok(Self::Selection(Line::Up, For::Page)),
+
+            KeyCode::Left if ctrl => Ok(Self::Cursor(Towards::Left, To::Word)),
+            KeyCode::Left => Ok(Self::Cursor(Towards::Left, To::Char)),
+            KeyCode::Char('h') if ctrl => Ok(Self::Cursor(Towards::Left, To::Char)),
+            KeyCode::Right if ctrl => Ok(Self::Cursor(Towards::Right, To::Word)),
+            KeyCode::Right => Ok(Self::Cursor(Towards::Right, To::Char)),
+            KeyCode::Char('l') if ctrl => Ok(Self::Cursor(Towards::Right, To::Char)),
+            KeyCode::Char('a') if ctrl => Ok(Self::Cursor(Towards::Left, To::Edge)),
+            KeyCode::Home => Ok(Self::Cursor(Towards::Left, To::Edge)),
+            KeyCode::Char('e') if ctrl => Ok(Self::Cursor(Towards::Right, To::Edge)),
+            KeyCode::End => Ok(Self::Cursor(Towards::Right, To::Edge)),
+
+            KeyCode::Backspace if ctrl => Ok(Self::Delete(Towards::Left, To::Word)),
+            KeyCode::Backspace => Ok(Self::Delete(Towards::Left, To::Char)),
+            KeyCode::Delete if ctrl => Ok(Self::Delete(Towards::Right, To::Word)),
+            KeyCode::Delete => Ok(Self::Delete(Towards::Right, To::Char)),
+            KeyCode::Char('w') if ctrl => Ok(Self::Delete(Towards::Left, To::Word)),
+            KeyCode::Char('u') if ctrl => Ok(Self::Clear),
+
             KeyCode::Char('c' | 'd' | 'g') if ctrl => Ok(Self::Cancel),
             KeyCode::Esc => Ok(Self::Exit),
             KeyCode::Enter => Ok(Self::SelectN(0)),
             KeyCode::Char(c @ '1'..='9') if alt => Ok(Self::SelectN(c.to_digit(10).unwrap())),
-            KeyCode::Left if ctrl => Ok(Self::PrevWord),
-            KeyCode::Left => Ok(Self::CursorLeft),
-            KeyCode::Char('h') if ctrl => Ok(Self::CursorLeft),
-            KeyCode::Right if ctrl => Ok(Self::NextWord),
-            KeyCode::Right => Ok(Self::CursorRight),
-            KeyCode::Char('l') if ctrl => Ok(Self::CursorRight),
-            KeyCode::Char('a') if ctrl => Ok(Self::CursorStart),
-            KeyCode::Home => Ok(Self::CursorStart),
-            KeyCode::Char('e') if ctrl => Ok(Self::CursorEnd),
-            KeyCode::End => Ok(Self::CursorEnd),
-            KeyCode::Backspace if ctrl => Ok(Self::DeletePrevWord),
-            KeyCode::Backspace => Ok(Self::DeletePrevChar),
-            KeyCode::Delete if ctrl => Ok(Self::DeleteNextWord),
-            KeyCode::Delete => Ok(Self::DeleteNextChar),
-            KeyCode::Char('w') if ctrl => Ok(Self::DeletePrevWord),
-            KeyCode::Char('u') if ctrl => Ok(Self::Clear),
             KeyCode::Char('s') if ctrl => Ok(Self::CycleSearchMode),
             KeyCode::Char('r') if ctrl => Ok(Self::CycleFilterMode),
-            KeyCode::Down => Ok(Self::ListDown),
-            KeyCode::Char('n' | 'j') if ctrl => Ok(Self::ListDown),
-            KeyCode::Up => Ok(Self::ListUp),
-            KeyCode::Char('p' | 'k') if ctrl => Ok(Self::ListUp),
             KeyCode::Char(c) => Ok(Self::Input(c)),
-            KeyCode::PageDown => Ok(Self::ListDownPage),
-            KeyCode::PageUp => Ok(Self::ListUpPage),
             _ => Err(Skip),
         }
     }

@@ -151,11 +151,9 @@ impl Cursor {
         self.index += c.len_utf8();
     }
 
-    pub fn remove(&mut self) -> Option<char> {
+    pub fn remove(&mut self) {
         if self.index < self.source.len() {
-            Some(self.source.remove(self.index))
-        } else {
-            None
+            self.source.remove(self.index);
         }
     }
 
@@ -178,16 +176,23 @@ impl Cursor {
         self.index = next_index;
     }
 
-    pub fn back(&mut self) -> Option<char> {
+    pub fn back(&mut self) {
         if self.left() {
-            self.remove()
-        } else {
-            None
+            self.remove();
         }
     }
 
     pub fn clear(&mut self) {
         self.source.clear();
+        self.index = 0;
+    }
+
+    pub fn clear_to_end(&mut self) {
+        self.source.truncate(self.index);
+    }
+
+    pub fn clear_from_start(&mut self) {
+        self.source.replace_range(..self.index, "");
         self.index = 0;
     }
 
@@ -284,14 +289,12 @@ mod cursor_tests {
         let mut c = Cursor::from(s.clone());
         c.end();
         while !s.is_empty() {
-            let c1 = s.pop();
-            let c2 = c.back();
-            assert_eq!(c1, c2);
+            s.pop();
+            c.back();
             assert_eq!(s.as_str(), c.substring());
         }
-        let c1 = s.pop();
-        let c2 = c.back();
-        assert_eq!(c1, c2);
+        s.pop();
+        c.back();
     }
 
     #[test]
@@ -302,11 +305,9 @@ mod cursor_tests {
             c.right();
         }
         assert_eq!(c.substring(), "öaöb");
-        assert_eq!(c.back(), Some('b'));
-        assert_eq!(c.back(), Some('ö'));
-        assert_eq!(c.back(), Some('a'));
-        assert_eq!(c.back(), Some('ö'));
-        assert_eq!(c.back(), None);
+        for _ in 0..4 {
+            c.back();
+        }
         assert_eq!(c.as_str(), "öcödöeöfö");
     }
 
