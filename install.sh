@@ -82,16 +82,16 @@ __atuin_install_linux(){
 	echo "Detected Linux!"
 	echo "Checking distro..."
 	if (uname -a | grep -qi "Microsoft"); then
-    OS="UbuntuWSL"
+    OS="ubuntuwsl"
   elif ! command -v lsb_release &> /dev/null; then
     echo "lsb_release could not be found. Falling back to /etc/os-release"
-    OS="$(grep -Po '(?<=^ID=).*$' /etc/os-release)" 2>/dev/null
+    OS="$(grep -Po '(?<=^ID=).*$' /etc/os-release | tr '[:upper:]' '[:lower:]')" 2>/dev/null
   else
-    OS=$(lsb_release -i | awk '{ print $3 }')
+    OS=$(lsb_release -i | awk '{ print $3 }' | tr '[:upper:]' '[:lower:]')
   fi
-	if [ "$OS" == "Arch" ] || [ "$OS" == "ManjaroLinux" ]; then
+	if [ "$OS" == "arch" ] || [ "$OS" == "manjarolinux" ]; then
 		__atuin_install_arch
-  elif [ "$OS" == "Ubuntu" ] || [ "$OS" == "UbuntuWSL" ] || [ "$OS" == "Debian" ] || [ "$OS" == "Linuxmint" ] || [ "$OS" == "Parrot" ] || [ "$OS" == "Kali" ] || [ "$OS" == "Elementary" ] || [ "$OS" == "Pop" ]; then
+  elif [ "$OS" == "ubuntu" ] || [ "$OS" == "ubuntuwsl" ] || [ "$OS" == "debian" ] || [ "$OS" == "linuxmint" ] || [ "$OS" == "parrot" ] || [ "$OS" == "kali" ] || [ "$OS" == "elementary" ] || [ "$OS" == "pop" ]; then
 		__atuin_install_ubuntu
 	else
 		# TODO: download a binary or smth
