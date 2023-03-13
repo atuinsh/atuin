@@ -27,14 +27,12 @@ fn compute_stats(history: &[History], count: usize) -> Result<()> {
     let mut commands = HashSet::<&str>::with_capacity(history.len());
     let mut prefixes = HashMap::<&str, usize>::with_capacity(history.len());
     for i in history {
-        commands.insert(i.command.as_str());
-
-        let Some(command) = i.command.split_ascii_whitespace().next() else {
-            continue
-        };
-
-        *prefixes.entry(command).or_default() += 1;
+        // just in case it somehow has a leading tab or space or something (legacy atuin didn't ignore space prefixes)
+        let command = i.command.trim();
+        commands.insert(command);
+        *prefixes.entry(interesting_command(command)).or_default() += 1;
     }
+
     let unique = commands.len();
     let mut top = prefixes.into_iter().collect::<Vec<_>>();
     top.sort_unstable_by_key(|x| std::cmp::Reverse(x.1));
@@ -91,5 +89,77 @@ impl Cmd {
         };
         compute_stats(&history, self.count)?;
         Ok(())
+    }
+}
+
+// TODO: make this configurable?
+static COMMON_COMMAND_PREFIX: &[&str] = &["sudo"];
+static COMMON_SUBCOMMAND_PREFIX: &[&str] = &["cargo", "go", "git", "npm", "yarn", "pnpm"];
+
+fn first_non_whitespace(s: &str) -> Option<usize> {
+    s.char_indices()
+        // find the first non whitespace char
+        .find(|(_, c)| !c.is_ascii_whitespace())
+        // return the index of that char
+        .map(|(i, _)| i)
+}
+
+fn first_whitespace(s: &str) -> usize {
+    s.char_indices()
+        // find the first whitespace char
+        .find(|(_, c)| c.is_ascii_whitespace())
+        // return the index of that char, (or the max length of the string)
+        .map_or(s.len(), |(i, _)| i)
+}
+
+fn interesting_command(mut command: &str) -> &str {
+    // compute command prefix
+    // we loop here because we might be working with a common command prefix (eg sudo) that we want to trim off
+    let (i, prefix) = loop {
+        let i = first_whitespace(command);
+        let prefix = &command[..i];
+
+        // is it a common prefix
+        if COMMON_COMMAND_PREFIX.contains(&prefix) {
+            command = command[i..].trim_start();
+            if command.is_empty() {
+                // no commands following, just use the prefix
+                return prefix;
+            }
+        } else {
+            break (i, prefix);
+        }
+    };
+
+    // compute subcommand
+    let subcommand_indices = command
+        // after the end of the command prefix
+        .get(i..)
+        // find the first non whitespace character (start of subcommand)
+        .and_then(first_non_whitespace)
+        // then find the end of that subcommand
+        .map(|j| i + j + first_whitespace(&command[i + j..]));
+
+    match subcommand_indices {
+        // if there is a subcommand and it's a common one, then count the full prefix + subcommand
+        Some(end) if COMMON_SUBCOMMAND_PREFIX.contains(&prefix) => &command[..end],
+        // otherwise just count the main command
+        _ => prefix,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::interesting_command;
+
+    #[test]
+    fn interesting_commands() {
+        assert_eq!(interesting_command("cargo"), "cargo");
+        assert_eq!(interesting_command("cargo build foo bar"), "cargo build");
+        assert_eq!(
+            interesting_command("sudo   cargo build foo bar"),
+            "cargo build"
+        );
+        assert_eq!(interesting_command("sudo"), "sudo");
     }
 }
