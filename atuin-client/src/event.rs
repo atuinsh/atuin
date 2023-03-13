@@ -2,7 +2,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 use crate::history::History;
-use atuin_common::utils::uuid_v4;
+use atuin_common::utils::uuid_v7;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum EventType {
@@ -23,7 +23,7 @@ pub struct Event {
 impl Event {
     pub fn new_create(history: &History) -> Event {
         Event {
-            id: uuid_v4(),
+            id: uuid_v7(),
             timestamp: history.timestamp,
             hostname: history.hostname.clone(),
             event_type: EventType::Create,
@@ -36,7 +36,7 @@ impl Event {
         let hostname = format!("{}:{}", whoami::hostname(), whoami::username());
 
         Event {
-            id: uuid_v4(),
+            id: uuid_v7(),
             timestamp: chrono::Utc::now(),
             hostname,
             event_type: EventType::Create,
