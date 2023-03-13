@@ -3,8 +3,19 @@ use std::path::PathBuf;
 use chrono::NaiveDate;
 use uuid::Uuid;
 
-pub fn uuid_v4() -> String {
-    Uuid::new_v4().as_simple().to_string()
+pub fn uuid_v7() -> String {
+    Uuid::now_v7().as_simple().to_string()
+}
+
+pub fn hash_str(string: &str) -> String {
+    hash_bytes(string.as_bytes())
+}
+
+pub fn hash_bytes(buf: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(buf);
+    hex::encode(hasher.finalize())
 }
 
 // TODO: more reliable, more tested
