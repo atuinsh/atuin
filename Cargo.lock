@@ -159,9 +159,7 @@ name = "atuin-common"
 version = "13.0.1"
 dependencies = [
  "chrono",
- "hex",
  "serde",
- "sha2",
  "uuid",
 ]
 
