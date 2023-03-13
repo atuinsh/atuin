@@ -89,8 +89,8 @@ pub struct SyncEventResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum EventType {
-    Create,
-    Delete,
+    CreateHistory,
+    DeleteHistory,
 }
 
 impl std::fmt::Display for EventType {

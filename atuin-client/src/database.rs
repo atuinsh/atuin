@@ -130,19 +130,21 @@ impl Sqlite {
 
     async fn save_event(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, e: &Event) -> Result<()> {
         let event_type = match e.event_type {
-            EventType::Create => "create",
-            EventType::Delete => "delete",
+            EventType::CreateHistory => "create_history",
+            EventType::DeleteHistory => "delete_history",
         };
 
         sqlx::query(
-            "insert or ignore into events(id, timestamp, hostname, event_type, history_id)
-                values(?1, ?2, ?3, ?4, ?5)",
+            "insert or ignore into events(id, timestamp, hostname, event_type, data, checksum, previous)
+                values(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         )
         .bind(e.id.as_str())
         .bind(e.timestamp.timestamp_nanos())
         .bind(e.hostname.as_str())
         .bind(event_type)
-        .bind(e.history_id.as_str())
+        .bind(e.data.as_str())
+        .bind(e.checksum.as_str())
+        .bind(e.previous.as_str())
         .execute(tx)
         .await?;
 
@@ -354,6 +356,7 @@ impl Database for Sqlite {
         // We can think of history as the merged log of events. There should never be more history than
         // events, and the only time this could happen is if someone is upgrading from an old Atuin version
         // from before we stored events.
+
         let history_count = self.history_count().await?;
         let event_count = self.event_count().await?;
 

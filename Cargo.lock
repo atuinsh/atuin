@@ -58,6 +58,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "atomic"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b88d82667eca772c4aa12f0f1348b3ae643424c8876448f3f7bd5787032e234c"
+dependencies = [
+ "autocfg",
+]
+
+[[package]]
 name = "atty"
 version = "0.2.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -119,7 +128,6 @@ dependencies = [
  "directories",
  "eyre",
  "fs-err",
- "hex",
  "interim",
  "itertools",
  "lazy_static",
@@ -134,7 +142,6 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_regex",
- "sha2",
  "shellexpand",
  "sodiumoxide",
  "sql-builder",
@@ -150,7 +157,9 @@ name = "atuin-common"
 version = "13.0.1"
 dependencies = [
  "chrono",
+ "hex",
  "serde",
+ "sha2",
  "uuid",
 ]
 
@@ -2540,10 +2549,11 @@ checksum = "e8db7427f936968176eaa7cdf81b7f98b980b18495ec28f1b5791ac3bfe3eea9"
 
 [[package]]
 name = "uuid"
-version = "1.2.1"
+version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "feb41e78f93363bb2df8b0e86a2ca30eed7806ea16ea0c790d757cf93f79be83"
+checksum = "1674845326ee10d37ca60470760d4288a6f80f304007d92e5c53bab78c9cfd79"
 dependencies = [
+ "atomic",
  "getrandom",
 ]
 

@@ -3,7 +3,7 @@ use std::convert::TryInto;
 use chrono::prelude::*;
 use eyre::Result;
 
-use atuin_common::{api::AddHistoryRequest, utils::hash_str};
+use atuin_common::api::AddHistoryRequest;
 
 use crate::{
     api_client,
@@ -32,7 +32,7 @@ async fn sync_download(
 
     let remote_count = client.count().await?;
 
-    let initial_local = db.history_count().await?;
+    let initial_local = db.event_count().await?;
     let mut local_count = initial_local;
 
     let mut last_sync = if force {
@@ -47,7 +47,7 @@ async fn sync_download(
 
     while remote_count > local_count {
         let page = client
-            .get_history(last_sync, last_timestamp, host.clone())
+            .get_event(last_sync, last_timestamp, host.clone())
             .await?;
 
         db.save_bulk(&page).await?;

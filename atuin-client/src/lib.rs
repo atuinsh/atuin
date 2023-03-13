@@ -9,6 +9,8 @@ pub mod api_client;
 pub mod encryption;
 #[cfg(feature = "sync")]
 pub mod sync;
+#[cfg(feature = "sync")]
+pub mod sync_event;
 
 pub mod database;
 pub mod event;
