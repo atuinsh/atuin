@@ -6,8 +6,6 @@
 // place - it will never change, and will one day be deprecated. So let's just
 // move forward :)
 
-use std::collections::HashMap;
-
 use axum::{
     extract::{Path, Query, State},
     Json,

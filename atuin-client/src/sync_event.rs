@@ -3,7 +3,7 @@ use std::convert::TryInto;
 use chrono::prelude::*;
 use eyre::Result;
 
-use atuin_common::api::AddHistoryRequest;
+use atuin_common::{api::AddHistoryRequest, utils::hash_str};
 
 use crate::{
     api_client,

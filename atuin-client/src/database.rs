@@ -8,6 +8,7 @@ use lazy_static::lazy_static;
 use regex::Regex;
 use sql_builder::{esc, quote, SqlBuilder, SqlName};
 use sqlx::{
+    error::DatabaseError,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteRow},
     Result, Row,
 };
@@ -142,7 +143,7 @@ impl Sqlite {
         .bind(e.timestamp.timestamp_nanos())
         .bind(e.hostname.as_str())
         .bind(event_type)
-        .bind(e.data.as_str())
+        .bind(e.data.clone())
         .bind(e.checksum.as_str())
         .bind(e.previous.as_str())
         .execute(tx)
@@ -188,7 +189,10 @@ impl Sqlite {
 impl Database for Sqlite {
     async fn save(&mut self, h: &History) -> Result<()> {
         debug!("saving history to sqlite");
-        let event = Event::new_create(h);
+
+        // TODO: link that list
+        // also I think this should basically never be an err
+        let event = Event::new_create_history(h, String::from(""));
 
         let mut tx = self.pool.begin().await?;
         Self::save_raw(&mut tx, h).await?;
@@ -204,7 +208,7 @@ impl Database for Sqlite {
         let mut tx = self.pool.begin().await?;
 
         for i in h {
-            let event = Event::new_create(i);
+            let event = Event::new_create_history(i, String::from(""));
             Self::save_raw(&mut tx, i).await?;
             Self::save_event(&mut tx, &event).await?;
         }
@@ -377,7 +381,7 @@ impl Database for Sqlite {
             let mut tx = self.pool.begin().await?;
             for i in all_the_history.iter() {
                 // A CREATE for every single history item is to be expected.
-                let event = Event::new_create(i);
+                let event = Event::new_create_history(i, String::from(""));
                 Self::save_event(&mut tx, &event).await?;
             }
             tx.commit().await?;

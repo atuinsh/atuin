@@ -12,12 +12,13 @@ use atuin_common::api::{
     AddHistoryRequest, CountResponse, ErrorResponse, IndexResponse, LoginRequest, LoginResponse,
     RegisterResponse, SyncHistoryResponse,
 };
+use atuin_common::utils::hash_str;
+
 use semver::Version;
 
 use crate::{
     encryption::{decode_key, decrypt},
     history::History,
-    sync::hash_str,
 };
 
 static APP_USER_AGENT: &str = concat!("atuin/", env!("CARGO_PKG_VERSION"),);
@@ -139,6 +140,38 @@ impl<'a> Client<'a> {
     }
 
     pub async fn get_history(
+        &self,
+        sync_ts: chrono::DateTime<Utc>,
+        history_ts: chrono::DateTime<Utc>,
+        host: Option<String>,
+    ) -> Result<Vec<History>> {
+        let host = match host {
+            None => hash_str(&format!("{}:{}", whoami::hostname(), whoami::username())),
+            Some(h) => h,
+        };
+
+        let url = format!(
+            "{}/sync/history?sync_ts={}&history_ts={}&host={}",
+            self.sync_addr,
+            urlencoding::encode(sync_ts.to_rfc3339().as_str()),
+            urlencoding::encode(history_ts.to_rfc3339().as_str()),
+            host,
+        );
+
+        let resp = self.client.get(url).send().await?;
+
+        let history = resp.json::<SyncHistoryResponse>().await?;
+        let history = history
+            .history
+            .iter()
+            .map(|h| serde_json::from_str(h).expect("invalid base64"))
+            .map(|h| decrypt(&h, &self.key).expect("failed to decrypt history! check your key"))
+            .collect();
+
+        Ok(history)
+    }
+
+    pub async fn get_event(
         &self,
         sync_ts: chrono::DateTime<Utc>,
         history_ts: chrono::DateTime<Utc>,

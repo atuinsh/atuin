@@ -1,5 +1,3 @@
--- CLIENT
-
 create table if not exists events (
 	id text primary key,
 	timestamp integer not null,
