@@ -88,7 +88,7 @@ impl State {
         None
     }
 
-    #[allow(clippy::to_many_lines)]
+    #[allow(clippy::too_many_lines)]
     fn handle_key_input(
         &mut self,
         settings: &Settings,
