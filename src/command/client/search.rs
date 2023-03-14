@@ -1,3 +1,4 @@
+use atuin_common::utils;
 use chrono::Utc;
 use clap::Parser;
 use eyre::Result;
@@ -137,11 +138,7 @@ async fn run_non_interactive(
     db: &mut impl Database,
 ) -> Result<usize> {
     let dir = if cwd.as_deref() == Some(".") {
-        let current = std::env::current_dir()?;
-        let current = current.as_os_str();
-        let current = current.to_str().unwrap();
-
-        Some(current.to_owned())
+        Some(utils::get_current_dir())
     } else {
         cwd
     };

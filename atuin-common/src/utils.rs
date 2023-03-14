@@ -1,3 +1,4 @@
+use std::env;
 use std::path::PathBuf;
 
 use chrono::NaiveDate;
@@ -34,6 +35,17 @@ pub fn data_dir() -> PathBuf {
         .map_or_else(|_| home_dir().join(".local").join("share"), PathBuf::from);
 
     data_dir.join("atuin")
+}
+
+pub fn get_current_dir() -> String {
+    // Prefer PWD environment variable over cwd if available to better support symbolic links
+    match env::var("PWD") {
+        Ok(v) => v,
+        Err(_) => match env::current_dir() {
+            Ok(dir) => dir.display().to_string(),
+            Err(_) => String::from(""),
+        },
+    }
 }
 
 pub fn get_days_from_month(year: i32, month: u32) -> i64 {

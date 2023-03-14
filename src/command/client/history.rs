@@ -5,6 +5,7 @@ use std::{
     time::Duration,
 };
 
+use atuin_common::utils;
 use clap::Subcommand;
 use eyre::Result;
 use runtime_format::{FormatKey, FormatKeyError, ParsedFmt};
@@ -181,8 +182,7 @@ impl Cmd {
 
                 // It's better for atuin to silently fail here and attempt to
                 // store whatever is ran, than to throw an error to the terminal
-                let cwd = env::current_dir()
-                    .map_or_else(|_| String::new(), |dir| dir.display().to_string());
+                let cwd = utils::get_current_dir();
 
                 let h = History::new(chrono::Utc::now(), command, cwd, -1, -1, None, None);
 
@@ -240,7 +240,7 @@ impl Cmd {
                     None
                 };
                 let cwd = if *cwd {
-                    Some(env::current_dir()?.display().to_string())
+                    Some(utils::get_current_dir())
                 } else {
                     None
                 };
