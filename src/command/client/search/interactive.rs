@@ -94,6 +94,10 @@ impl State {
         input: &KeyEvent,
         len: usize,
     ) -> Option<usize> {
+        if input.kind == event::KeyEventKind::Release {
+            return None;
+        }
+
         let ctrl = input.modifiers.contains(KeyModifiers::CONTROL);
         let alt = input.modifiers.contains(KeyModifiers::ALT);
         match input.code {
@@ -474,13 +478,6 @@ pub async fn history(
 
         let initial_input = app.input.as_str().to_owned();
         let initial_filter_mode = app.filter_mode;
-
-        {
-            // We do this because windows does double inputs and captures the `Enter` when running a
-            // command
-            #[cfg(target_os = "windows")]
-            let _ = event::read();
-        };
 
         let event_ready = tokio::task::spawn_blocking(|| event::poll(Duration::from_millis(250)));
 
