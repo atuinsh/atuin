@@ -1,6 +1,7 @@
 use std::{env, path::Path, str::FromStr};
 
 use async_trait::async_trait;
+use atuin_common::utils;
 use chrono::{prelude::*, Utc};
 use fs_err as fs;
 use itertools::Itertools;
@@ -31,10 +32,7 @@ pub fn current_context() -> Context {
         std::process::exit(1);
     };
     let hostname = format!("{}:{}", whoami::hostname(), whoami::username());
-    let cwd = match env::current_dir() {
-        Ok(dir) => dir.display().to_string(),
-        Err(_) => String::from(""),
-    };
+    let cwd = utils::get_current_dir();
 
     Context {
         session,
