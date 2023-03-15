@@ -3,7 +3,7 @@ use std::convert::TryInto;
 use chrono::prelude::*;
 use eyre::Result;
 
-use atuin_common::{api::AddHistoryRequest, utils::hash_str};
+use atuin_common::{api::AddEventRequest, utils::hash_str};
 
 use crate::{
     api_client,
@@ -23,14 +23,14 @@ use crate::{
 
 // Check if remote has things we don't, and if so, download them.
 // Returns (num downloaded, total local)
-async fn sync_download(
+async fn sync_event_download(
     force: bool,
     client: &api_client::Client<'_>,
     db: &mut (impl Database + Send),
 ) -> Result<(i64, i64)> {
     debug!("starting sync download");
 
-    let remote_count = client.count().await?;
+    let remote_count = client.event_count().await?;
 
     let initial_local = db.event_count().await?;
     let mut local_count = initial_local;
@@ -52,7 +52,7 @@ async fn sync_download(
 
         db.save_bulk(&page).await?;
 
-        local_count = db.history_count().await?;
+        local_count = db.event_count().await?;
 
         if page.len() < HISTORY_PAGE_SIZE.try_into().unwrap() {
             break;
@@ -78,7 +78,7 @@ async fn sync_download(
 }
 
 // Check if we have things remote doesn't, and if so, upload them
-async fn sync_upload(
+async fn sync_event_upload(
     settings: &Settings,
     _force: bool,
     client: &api_client::Client<'_>,
@@ -89,7 +89,7 @@ async fn sync_upload(
     let initial_remote_count = client.count().await?;
     let mut remote_count = initial_remote_count;
 
-    let local_count = db.history_count().await?;
+    let local_count = db.event_count().await?;
 
     debug!("remote has {}, we have {}", remote_count, local_count);
 
@@ -111,18 +111,19 @@ async fn sync_upload(
             let data = encrypt(&i, &key)?;
             let data = serde_json::to_string(&data)?;
 
-            let add_hist = AddHistoryRequest {
+            let add_hist = AddEventRequest {
                 id: i.id,
                 timestamp: i.timestamp,
                 data,
                 hostname: hash_str(&i.hostname),
+                event_type: i.event_type,
             };
 
             buffer.push(add_hist);
         }
 
         // anything left over outside of the 100 block size
-        client.post_history(&buffer).await?;
+        client.post_event(&buffer).await?;
         cursor = buffer.last().unwrap().timestamp;
         remote_count = client.count().await?;
 
@@ -132,7 +133,11 @@ async fn sync_upload(
     Ok(())
 }
 
-pub async fn sync(settings: &Settings, force: bool, db: &mut (impl Database + Send)) -> Result<()> {
+pub async fn sync_event(
+    settings: &Settings,
+    force: bool,
+    db: &mut (impl Database + Send),
+) -> Result<()> {
     db.merge_events().await?;
 
     let client = api_client::Client::new(

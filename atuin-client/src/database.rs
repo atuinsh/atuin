@@ -67,6 +67,7 @@ pub trait Database: Send + Sync {
 
     async fn update(&self, h: &History) -> Result<()>;
     async fn history_count(&self) -> Result<i64>;
+
     async fn event_count(&self) -> Result<i64>;
     async fn merge_events(&self) -> Result<i64>;
 

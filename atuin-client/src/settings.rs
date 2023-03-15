@@ -129,6 +129,7 @@ pub struct Settings {
     pub scroll_context_lines: usize,
     #[serde(with = "serde_regex", default = "RegexSet::empty")]
     pub history_filter: RegexSet,
+    pub sync_events: bool,
 
     // This is automatically loaded when settings is created. Do not set in
     // config! Keep secrets and settings apart.
@@ -317,6 +318,7 @@ impl Settings {
                 "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
             )?
             .set_default("scroll_context_lines", 1)?
+            .set_default("sync_events", false)?
             .add_source(
                 Environment::with_prefix("atuin")
                     .prefix_separator("_")

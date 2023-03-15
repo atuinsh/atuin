@@ -139,6 +139,21 @@ impl<'a> Client<'a> {
         Ok(count.count)
     }
 
+    pub async fn event_count(&self) -> Result<i64> {
+        let url = format!("{}/event/count", self.sync_addr);
+        let url = Url::parse(url.as_str())?;
+
+        let resp = self.client.get(url).send().await?;
+
+        if resp.status() != StatusCode::OK {
+            bail!("failed to get count (are you logged in?)");
+        }
+
+        let count = resp.json::<CountResponse>().await?;
+
+        Ok(count.count)
+    }
+
     pub async fn get_history(
         &self,
         sync_ts: chrono::DateTime<Utc>,

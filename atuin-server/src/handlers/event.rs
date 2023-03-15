@@ -65,17 +65,9 @@ pub async fn list<DB: Database>(
             .with_status(StatusCode::INTERNAL_SERVER_ERROR));
     }
 
-    let events: Vec<String> = events
-        .unwrap()
-        .iter()
-        .map(|i| i.data.to_string())
-        .collect();
+    let events: Vec<String> = events.unwrap().iter().map(|i| i.data.to_string()).collect();
 
-    debug!(
-        "loaded {} events for user {}",
-        events.len(),
-        user.id
-    );
+    debug!("loaded {} events for user {}", events.len(), user.id);
 
     Ok(Json(SyncEventResponse { events }))
 }
@@ -90,7 +82,7 @@ pub async fn add<DB: Database>(
 
     let events: Vec<NewEvent> = req
         .into_iter()
-        .map(|h| NewEvent{
+        .map(|h| NewEvent {
             client_id: h.id,
             user_id: user.id,
             hostname: h.hostname,

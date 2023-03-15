@@ -60,7 +60,12 @@ impl Cmd {
 }
 
 async fn run(settings: &Settings, force: bool, db: &mut impl Database) -> Result<()> {
-    atuin_client::sync::sync(settings, force, db).await?;
+    if settings.sync_events {
+        atuin_client::sync_event::sync_event(settings, force, db).await?;
+    } else {
+        atuin_client::sync::sync(settings, force, db).await?;
+    }
+
     println!(
         "Sync complete! {} items in database, force: {}",
         db.history_count().await?,

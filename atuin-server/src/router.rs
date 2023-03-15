@@ -72,8 +72,9 @@ pub fn router<DB: Database + Clone + Send + Sync + 'static>(
         .route("/sync/count", get(handlers::history::count))
         .route("/sync/history", get(handlers::history::list))
         .route("/sync/calendar/:focus", get(handlers::history::calendar))
-        .route("/sync/event", get(handlers::event::list))
-        .route("/sync/event", post(handlers::event::add));
+        .route("/event/count", get(handlers::event::count))
+        .route("/event/sync", get(handlers::event::list))
+        .route("/event/sync", post(handlers::event::add));
 
     let path = settings.path.as_str();
     if path.is_empty() {
