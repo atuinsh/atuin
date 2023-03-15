@@ -152,6 +152,7 @@ impl Sqlite {
             cwd: row.get("cwd"),
             session: row.get("session"),
             hostname: row.get("hostname"),
+            deleted_at: row.get("deleted_at"),
         }
     }
 }
@@ -513,6 +514,7 @@ mod test {
             1,
             Some("beep boop".to_string()),
             Some("booop".to_string()),
+            None,
         );
         db.save(&history).await
     }

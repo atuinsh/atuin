@@ -80,6 +80,7 @@ impl From<HistDbEntry> for History {
                     .trim_end()
                     .to_string(),
             ),
+            None,
         )
     }
 }

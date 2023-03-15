@@ -68,6 +68,7 @@ pub fn router<DB: Database + Clone + Send + Sync + 'static>(
         .route("/sync/count", get(handlers::history::count))
         .route("/sync/history", get(handlers::history::list))
         .route("/sync/calendar/:focus", get(handlers::history::calendar))
+        .route("/sync/status", get(handlers::status::status))
         .route("/history", post(handlers::history::add))
         .route("/user/:username", get(handlers::user::get))
         .route("/register", post(handlers::user::register))

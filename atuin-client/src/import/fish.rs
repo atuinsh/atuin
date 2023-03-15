@@ -80,6 +80,7 @@ impl Importer for Fish {
                             -1,
                             None,
                             None,
+                            None,
                         ))
                         .await?;
                 }
@@ -113,6 +114,7 @@ impl Importer for Fish {
                     "unknown".into(),
                     -1,
                     -1,
+                    None,
                     None,
                     None,
                 ))

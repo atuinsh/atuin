@@ -78,6 +78,7 @@ impl Importer for Bash {
                         -1,
                         None,
                         None,
+                        None,
                     );
                     h.push(entry).await?;
                     next_timestamp += timestamp_increment;
