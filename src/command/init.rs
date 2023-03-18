@@ -21,6 +21,8 @@ pub enum Shell {
     Bash,
     /// Fish setup
     Fish,
+    /// Nu setup
+    Nu,
 }
 
 impl Cmd {
@@ -90,11 +92,41 @@ bind -M insert \e\[A _atuin_bind_up";
             println!("end");
         }
     }
+
+    fn init_nu(&self) {
+        let full = include_str!("../shell/atuin.nu");
+        println!("{full}");
+
+        if std::env::var("ATUIN_NOBIND").is_err() {
+            const BIND_CTRL_R: &str = r#"let-env config = (
+    $env.config | upsert keybindings (
+        $env.config.keybindings
+        | append {
+            name: atuin
+            modifier: control
+            keycode: char_r
+            mode: emacs
+            event: {
+                send: executehostcommand
+                cmd:
+                    'RUST_LOG=error atuin search -i err> /tmp/atuin_res.nu
+                    commandline (open /tmp/atuin_res.nu | str trim --right --char "\n")'
+            }
+        }
+    )
+)"#;
+            if !self.disable_ctrl_r {
+                println!("{BIND_CTRL_R}");
+            }
+        }
+    }
+
     pub fn run(self) {
         match self.shell {
             Shell::Zsh => self.init_zsh(),
             Shell::Bash => self.init_bash(),
             Shell::Fish => self.init_fish(),
+            Shell::Nu => self.init_nu(),
         }
     }
 }

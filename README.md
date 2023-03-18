@@ -274,6 +274,21 @@ Install `atuin` shell plugin in zsh, bash, or fish with [Fig](https://fig.io) in
 
 <a href="https://fig.io/plugins/other/atuin" target="_blank"><img src="https://fig.io/badges/install-with-fig.svg" /></a>
 
+### Nushell
+
+Run in *Nushell*:
+
+```
+mkdir ~/.local/share/atuin/
+atuin init nu | save ~/.local/share/atuin/init.nu
+```
+
+Add to `config.nu`:
+
+```
+source ~/.local/share/atuin/init.nu
+```
+
 ## ...what's with the name?
 
 Atuin is named after "The Great A'Tuin", a giant turtle from Terry Pratchett's
