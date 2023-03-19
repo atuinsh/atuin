@@ -12,11 +12,12 @@ use atuin_client::{
 
 use super::history::ListMode;
 
+mod core;
 mod cursor;
 mod duration;
 mod history_list;
-mod interactive;
 mod skim_impl;
+mod tui_shell;
 pub use duration::{format_duration, format_duration_into};
 
 #[allow(clippy::struct_excessive_bools)]
@@ -98,7 +99,7 @@ impl Cmd {
         settings.shell_up_key_binding = self.shell_up_key_binding;
 
         if self.interactive {
-            let item = interactive::tui_shell::history(&self.query, settings, db).await?;
+            let item = tui_shell::history(&self.query, settings, db).await?;
             eprintln!("{item}");
         } else {
             let list_mode = ListMode::from_flags(self.human, self.cmd_only);

@@ -14,7 +14,7 @@ use atuin_client::{
 };
 use skim::SkimItem;
 
-use super::super::{cursor::Cursor, history_list::ListState};
+use super::{cursor::Cursor, history_list::ListState};
 
 pub struct State<DB: Database> {
     pub db: DB,
@@ -163,7 +163,7 @@ impl<DB: Database> State<DB> {
                     .collect::<Vec<_>>();
             }
 
-            super::super::skim_impl::fuzzy_search(&self.search, &self.all_history).await
+            super::skim_impl::fuzzy_search(&self.search, &self.all_history).await
         } else {
             self.db
                 .search(
@@ -222,10 +222,12 @@ impl<DB: Database> State<DB> {
             }
             Event::Cursor(Towards::Right, To::Char) => self.search.input.right(),
             Event::Cursor(Towards::Left, To::Word) => self
-                .search.input
+                .search
+                .input
                 .prev_word(&self.settings.word_chars, self.settings.word_jump_mode),
             Event::Cursor(Towards::Right, To::Word) => self
-                .search.input
+                .search
+                .input
                 .next_word(&self.settings.word_chars, self.settings.word_jump_mode),
             Event::Cursor(Towards::Left, To::Edge) => self.search.input.start(),
             Event::Cursor(Towards::Right, To::Edge) => self.search.input.end(),
@@ -234,12 +236,14 @@ impl<DB: Database> State<DB> {
             Event::Input(c) => self.search.input.insert(c),
             Event::InputStr(s) => s.chars().for_each(|c| self.search.input.insert(c)),
             Event::Delete(Towards::Left, To::Word) => self
-                .search.input
+                .search
+                .input
                 .remove_prev_word(&self.settings.word_chars, self.settings.word_jump_mode),
             Event::Delete(Towards::Left, To::Char) => self.search.input.back(),
             Event::Delete(Towards::Left, To::Edge) => self.search.input.clear_from_start(),
             Event::Delete(Towards::Right, To::Word) => self
-                .search.input
+                .search
+                .input
                 .remove_next_word(&self.settings.word_chars, self.settings.word_jump_mode),
             Event::Delete(Towards::Right, To::Char) => self.search.input.remove(),
             Event::Delete(Towards::Right, To::Edge) => self.search.input.clear_to_end(),

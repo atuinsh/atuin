@@ -5,7 +5,7 @@ use chrono::Utc;
 use skim::{prelude::ExactOrFuzzyEngineFactory, MatchEngineFactory};
 use tokio::task::yield_now;
 
-use super::interactive::core::{HistoryWrapper, SearchState};
+use super::core::{HistoryWrapper, SearchState};
 
 pub async fn fuzzy_search(
     state: &SearchState,

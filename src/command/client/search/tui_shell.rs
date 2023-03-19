@@ -23,7 +23,6 @@ use unicode_width::UnicodeWidthStr;
 use atuin_client::{database::Database, settings::Settings};
 
 use crate::command::client::search::{
-    cursor::Cursor,
     history_list::{HistoryList, PREFIX_LENGTH},
 };
 use crate::VERSION;
@@ -320,10 +319,6 @@ pub async fn history(query: &[String], settings: &Settings, db: impl Database) -
     let stdout = Stdout::new()?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
-
-    let mut input = Cursor::from(query.join(" "));
-    // Put the cursor at the end of the query by default
-    input.end();
 
     // start request for version
     let update_needed = settings.needs_update().fuse();
