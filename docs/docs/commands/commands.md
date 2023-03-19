@@ -2,4 +2,4 @@
 title: Commands
 ---
 
-- [`atuin import`](/docs/commands/import)
+- [`atuin import`](../../docs/commands/import)

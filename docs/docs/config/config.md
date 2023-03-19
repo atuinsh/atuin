@@ -19,11 +19,11 @@ export ATUIN_CONFIG_DIR = /home/ellie/.atuin
 The client runs on a user's machine, and unless you're running a server, this
 is what you care about.
 
-See [config.toml](../atuin-client/config.toml) for an example
+See [config.toml](../../../atuin-client/config.toml) for an example
 
 ### `dialect`
 
-This configures how the [stats](/docs/commands/stats.md) command parses dates. It has two
+This configures how the [stats](../commands/stats.md) command parses dates. It has two
 possible values
 
 ```
