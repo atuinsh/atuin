@@ -50,7 +50,7 @@ atuin-common = { path = "atuin-common", version = "13.0.1" }
 
 log = "0.4"
 env_logger = "0.10.0"
-chrono = { version = "0.4", features = ["serde"] }
+chrono = { version = "0.4.24", features = ["serde"] }
 eyre = "0.6"
 directories = "4"
 indicatif = "0.17.1"
@@ -73,8 +73,8 @@ semver = "1.0.14"
 runtime-format = "0.1.2"
 tiny-bip39 = "1"
 futures-util = "0.3"
-skim = { version = "0.10.2", default-features = false }
 ratatui = "0.20.1"
+fuzzy-matcher = "0.3.7"
 
 [dependencies.tracing-subscriber]
 version = "0.3"
