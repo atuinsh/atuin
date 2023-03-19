@@ -32,6 +32,9 @@ pub enum SearchMode {
 
     #[serde(rename = "skim")]
     Skim,
+
+    #[serde(rename = "tantivy")]
+    Tantivy,
 }
 
 impl SearchMode {
@@ -41,21 +44,26 @@ impl SearchMode {
             SearchMode::FullText => "FULLTXT",
             SearchMode::Fuzzy => "FUZZY",
             SearchMode::Skim => "SKIM",
+            SearchMode::Tantivy => "TANTIVY",
         }
     }
     pub fn next(&self, settings: &Settings) -> Self {
         match self {
-            SearchMode::Prefix => SearchMode::FullText,
-            SearchMode::FullText => {
-                // if the user is using skim, we go to skim, otherwise fuzzy.
-                if settings.search_mode == SearchMode::Skim {
-                    SearchMode::Skim
-                } else {
-                    SearchMode::Fuzzy
-                }
+            // if the user is using tantivy, we go to tantivy
+            SearchMode::Prefix if settings.search_mode == SearchMode::Tantivy => {
+                SearchMode::Tantivy
             }
-            SearchMode::Fuzzy => SearchMode::Prefix,
-            SearchMode::Skim => SearchMode::Prefix,
+            // otherwise fulltext.
+            SearchMode::Prefix => SearchMode::FullText,
+            // if the user is using skim, we go to skim
+            SearchMode::FullText | SearchMode::Tantivy
+                if settings.search_mode == SearchMode::Skim =>
+            {
+                SearchMode::Skim
+            }
+            // otherwise fuzzy.
+            SearchMode::FullText | SearchMode::Tantivy => SearchMode::Fuzzy,
+            SearchMode::Fuzzy | SearchMode::Skim => SearchMode::Prefix,
         }
     }
 }

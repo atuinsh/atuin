@@ -1,11 +1,46 @@
 use std::sync::Arc;
 
-use atuin_client::settings::FilterMode;
+use async_trait::async_trait;
+use atuin_client::{database::Database, settings::FilterMode};
 use chrono::Utc;
+use eyre::Result;
 use skim::{prelude::ExactOrFuzzyEngineFactory, MatchEngineFactory};
 use tokio::task::yield_now;
 
-use super::interactive::{HistoryWrapper, SearchState};
+use super::interactive::{HistoryWrapper, SearchEngine, SearchState};
+
+#[derive(Default)]
+pub struct Search {
+    all_history: Vec<Arc<HistoryWrapper>>,
+}
+
+impl Search {
+    pub fn new() -> Self {
+        Search::default()
+    }
+}
+
+#[async_trait]
+impl SearchEngine for Search {
+    async fn query(
+        &mut self,
+        state: &SearchState,
+        db: &mut dyn Database,
+    ) -> Result<Vec<Arc<HistoryWrapper>>> {
+        if self.all_history.is_empty() {
+            self.all_history = db
+                .all_with_count()
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|(history, count)| HistoryWrapper { history, count })
+                .map(Arc::new)
+                .collect::<Vec<_>>();
+        }
+
+        Ok(fuzzy_search(state, &self.all_history).await)
+    }
+}
 
 pub async fn fuzzy_search(
     state: &SearchState,

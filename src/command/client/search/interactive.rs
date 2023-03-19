@@ -5,6 +5,7 @@ use std::{
     time::Duration,
 };
 
+use async_trait::async_trait;
 use crossterm::{
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent},
     execute, terminal,
@@ -45,8 +46,7 @@ struct State {
     results_state: ListState,
     search: SearchState,
 
-    // only allocated if using skim
-    all_history: Vec<Arc<HistoryWrapper>>,
+    engine: Box<dyn SearchEngine>,
 }
 
 pub struct SearchState {
@@ -58,6 +58,15 @@ pub struct SearchState {
     /// of the filter mode until user starts typing again.
     switched_search_mode: bool,
     pub context: Context,
+}
+
+#[async_trait]
+pub trait SearchEngine: Send + Sync + 'static {
+    async fn query(
+        &mut self,
+        state: &SearchState,
+        db: &mut dyn Database,
+    ) -> Result<Vec<Arc<HistoryWrapper>>>;
 }
 
 impl State {
@@ -75,34 +84,8 @@ impl State {
             .map(|history| HistoryWrapper { history, count: 1 })
             .map(Arc::new)
             .collect::<Vec<_>>()
-        } else if self.search.search_mode == SearchMode::Skim {
-            if self.all_history.is_empty() {
-                self.all_history = db
-                    .all_with_count()
-                    .await
-                    .unwrap()
-                    .into_iter()
-                    .map(|(history, count)| HistoryWrapper { history, count })
-                    .map(Arc::new)
-                    .collect::<Vec<_>>();
-            }
-
-            super::skim_impl::fuzzy_search(&self.search, &self.all_history).await
         } else {
-            db.search(
-                self.search.search_mode,
-                self.search.filter_mode,
-                &self.search.context,
-                i,
-                Some(200),
-                None,
-                None,
-            )
-            .await?
-            .into_iter()
-            .map(|history| HistoryWrapper { history, count: 1 })
-            .map(Arc::new)
-            .collect::<Vec<_>>()
+            self.engine.query(&self.search, db).await?
         };
 
         self.results_state.select(0);
@@ -501,7 +484,7 @@ impl Write for Stdout {
 }
 
 pub struct HistoryWrapper {
-    history: History,
+    pub history: History,
     pub count: i32,
 }
 impl Deref for HistoryWrapper {
@@ -540,6 +523,12 @@ pub async fn history(
 
     let context = current_context();
 
+    let engine = match settings.search_mode {
+        SearchMode::Skim => Box::new(super::skim_impl::Search::new()) as Box<_>,
+        SearchMode::Tantivy => Box::new(super::tantivy_impl::Search::new()?) as Box<_>,
+        mode => Box::new(super::db_impl::Search(mode)) as Box<_>,
+    };
+
     let mut app = State {
         history_count: db.history_count().await?,
         results_state: ListState::default(),
@@ -557,7 +546,7 @@ pub async fn history(
             search_mode: settings.search_mode,
             switched_search_mode: false,
         },
-        all_history: Vec::new(),
+        engine,
     };
 
     let mut results = app.query_results(db).await?;

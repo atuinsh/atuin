@@ -31,6 +31,9 @@ pub enum Cmd {
     /// Interactive history search
     Search(search::Cmd),
 
+    /// Interactive history search
+    RefreshTantivyIndex(search::tantivy_impl::Cmd),
+
     #[cfg(feature = "sync")]
     #[command(flatten)]
     Sync(sync::Cmd),
@@ -54,6 +57,7 @@ impl Cmd {
             Self::Import(import) => import.run(&mut db).await,
             Self::Stats(stats) => stats.run(&mut db, &settings).await,
             Self::Search(search) => search.run(&mut db, &mut settings).await,
+            Self::RefreshTantivyIndex(refresh) => refresh.run(&mut db).await,
             #[cfg(feature = "sync")]
             Self::Sync(sync) => sync.run(settings, &mut db).await,
         }
