@@ -8,10 +8,10 @@ use crate::tui::{
 };
 use atuin_client::history::History;
 
-use super::{format_duration, interactive::SkimHistory};
+use super::{format_duration, interactive::HistoryWrapper};
 
 pub struct HistoryList<'a> {
-    history: &'a [Arc<SkimHistory>],
+    history: &'a [Arc<HistoryWrapper>],
     block: Option<Block<'a>>,
 }
 
@@ -65,9 +65,9 @@ impl<'a> StatefulWidget for HistoryList<'a> {
 
         for item in self.history.iter().skip(state.offset).take(end - start) {
             s.index();
-            s.duration(&item.0);
-            s.time(&item.0);
-            s.command(&item.0);
+            s.duration(item);
+            s.time(item);
+            s.command(item);
 
             // reset line
             s.y += 1;
@@ -77,7 +77,7 @@ impl<'a> StatefulWidget for HistoryList<'a> {
 }
 
 impl<'a> HistoryList<'a> {
-    pub fn new(history: &'a [Arc<SkimHistory>]) -> Self {
+    pub fn new(history: &'a [Arc<HistoryWrapper>]) -> Self {
         Self {
             history,
             block: None,
