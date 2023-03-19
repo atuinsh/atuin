@@ -2,7 +2,7 @@
 
 You could host your own Atuin server using the Kubernetes platform.
 
-Create a [`secrets.yaml`](../k8s/secrets.yaml) file for the database credentials:
+Create a [`secrets.yaml`](../../../k8s/secrets.yaml) file for the database credentials:
 
 ```yaml
 apiVersion: v1
@@ -20,7 +20,7 @@ stringData:
 immutable: true
 ```
 
-Create a [`atuin.yaml`](../k8s/atuin.yaml) file for the Atuin server:
+Create a [`atuin.yaml`](../../../k8s/atuin.yaml) file for the Atuin server:
 
 ```yaml
 ---
@@ -165,7 +165,7 @@ spec:
       storage: 10Mi
 ```
 
-Finally, you may want to use a separate namespace for atuin, by creating a [`namespace.yaml`](../k8s/namespaces.yaml) file:
+Finally, you may want to use a separate namespace for atuin, by creating a [`namespaces.yaml`](../../../k8s/namespaces.yaml) file:
 
 ```yaml
 apiVersion: v1
@@ -191,4 +191,4 @@ Deploy the Atuin server using `kubectl`:
                 -f ./atuin.yaml
 ```
 
-The sample files above are also in the [k8s](../k8s) folder of the atuin repository.
+The sample files above are also in the [k8s](../../../k8s/) folder of the atuin repository.
