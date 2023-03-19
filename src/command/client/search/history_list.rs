@@ -8,7 +8,7 @@ use ratatui::{
     widgets::{Block, StatefulWidget, Widget},
 };
 
-use super::{format_duration, interactive::HistoryWrapper};
+use super::{engines::HistoryWrapper, format_duration};
 
 pub struct HistoryList<'a> {
     history: &'a [Arc<HistoryWrapper>],

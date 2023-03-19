@@ -1,73 +1,22 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use atuin_client::{database::Database, history::History, settings::FilterMode};
+use atuin_client::{
+    database::Database,
+    history::History,
+    settings::FilterMode,
+    tantivy::{index, schema, HistorySchema},
+};
 use chrono::{TimeZone, Utc};
-use clap::Parser;
 use eyre::Result;
 use tantivy::{
     collector::TopDocs,
-    directory::MmapDirectory,
-    doc,
     query::{BooleanQuery, ConstScoreQuery, FuzzyTermQuery, Occur, Query, TermQuery},
-    schema::{Field, Schema, Value, FAST, STORED, STRING, TEXT},
-    DateTime, Index, IndexWriter, Searcher, Term,
+    schema::Value,
+    Searcher, Term,
 };
 
-use super::interactive::{HistoryWrapper, SearchEngine, SearchState};
-
-fn schema() -> (HistorySchema, Schema) {
-    let mut schema_builder = Schema::builder();
-
-    (
-        HistorySchema {
-            id: schema_builder.add_text_field("id", STRING),
-            command: schema_builder.add_text_field("command", TEXT | STORED),
-            cwd: schema_builder.add_text_field("cwd", STRING | FAST),
-            session: schema_builder.add_text_field("session", STRING | FAST),
-            hostname: schema_builder.add_text_field("hostname", STRING | FAST),
-            timestamp: schema_builder.add_date_field("timestamp", STORED),
-            duration: schema_builder.add_i64_field("duration", STORED),
-            exit: schema_builder.add_i64_field("exit", STORED),
-        },
-        schema_builder.build(),
-    )
-}
-
-struct HistorySchema {
-    id: Field,
-    command: Field,
-    cwd: Field,
-    session: Field,
-    hostname: Field,
-    timestamp: Field,
-    duration: Field,
-    exit: Field,
-}
-
-fn index(schema: Schema) -> Result<Index> {
-    let data_dir = atuin_common::utils::data_dir();
-    let tantivy_dir = data_dir.join("tantivy");
-
-    fs_err::create_dir_all(&tantivy_dir)?;
-    let dir = MmapDirectory::open(tantivy_dir)?;
-
-    Ok(Index::open_or_create(dir, schema)?)
-}
-
-pub fn write_history(h: impl IntoIterator<Item = History>) -> Result<()> {
-    let (hs, schema) = schema();
-    let index = index(schema)?;
-    let mut writer = index.writer(3_000_000)?;
-
-    for h in h {
-        write_single_history(&mut writer, &hs, h)?;
-    }
-
-    writer.commit()?;
-
-    Ok(())
-}
+use super::{HistoryWrapper, SearchEngine, SearchState};
 
 pub struct Search {
     schema: HistorySchema,
@@ -91,7 +40,7 @@ impl Search {
 
 #[async_trait]
 impl SearchEngine for Search {
-    async fn query(
+    async fn full_query(
         &mut self,
         state: &SearchState,
         _: &mut dyn Database,
@@ -180,45 +129,5 @@ impl SearchEngine for Search {
         }
 
         Ok(output)
-    }
-}
-
-fn write_single_history(
-    writer: &mut IndexWriter,
-    schema: &HistorySchema,
-    h: History,
-) -> Result<()> {
-    let timestamp = DateTime::from_timestamp_millis(h.timestamp.timestamp_millis());
-    writer.add_document(doc!(
-        schema.id => h.id,
-        schema.command => h.command,
-        schema.cwd => h.cwd,
-        schema.session => h.session,
-        schema.hostname => h.hostname,
-        schema.timestamp => timestamp,
-        schema.duration => h.duration,
-        schema.exit => h.exit,
-    ))?;
-
-    Ok(())
-}
-
-#[allow(clippy::struct_excessive_bools)]
-#[derive(Parser)]
-pub struct Cmd {}
-
-impl Cmd {
-    pub async fn run(self, db: &mut impl Database) -> Result<()> {
-        let history = db.all_with_count().await?;
-
-        // delete the index
-        let data_dir = atuin_common::utils::data_dir();
-        let tantivy_dir = dbg!(data_dir.join("tantivy"));
-        fs_err::remove_dir_all(tantivy_dir)?;
-
-        tokio::task::spawn_blocking(|| write_history(history.into_iter().map(|(h, _)| h)))
-            .await??;
-
-        Ok(())
     }
 }

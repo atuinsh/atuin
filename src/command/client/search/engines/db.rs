@@ -4,13 +4,13 @@ use async_trait::async_trait;
 use atuin_client::{database::Database, settings::SearchMode};
 use eyre::Result;
 
-use super::interactive::{HistoryWrapper, SearchEngine, SearchState};
+use super::{HistoryWrapper, SearchEngine, SearchState};
 
 pub struct Search(pub SearchMode);
 
 #[async_trait]
 impl SearchEngine for Search {
-    async fn query(
+    async fn full_query(
         &mut self,
         state: &SearchState,
         db: &mut dyn Database,

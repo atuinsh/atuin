@@ -58,6 +58,10 @@ async fn sync_download(
 
     let host = if force { Some(String::from("")) } else { None };
 
+    let (hs, schema) = crate::tantivy::schema();
+    let index = crate::tantivy::index(schema)?;
+    let mut writer = index.writer(3_000_000)?;
+
     while remote_count > local_count {
         let page = client
             .get_history(
@@ -90,6 +94,8 @@ async fn sync_download(
         } else {
             last_timestamp = page_last;
         }
+
+        crate::tantivy::bulk_write_history(&mut writer, &hs, page)?;
     }
 
     for i in remote_status.deleted {

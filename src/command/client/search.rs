@@ -14,11 +14,9 @@ use super::history::ListMode;
 
 mod cursor;
 mod duration;
+mod engines;
 mod history_list;
 mod interactive;
-mod skim_impl;
-mod db_impl;
-pub mod tantivy_impl;
 pub use duration::{format_duration, format_duration_into};
 
 #[allow(clippy::struct_excessive_bools)]
@@ -89,7 +87,7 @@ pub struct Cmd {
 }
 
 impl Cmd {
-    pub async fn run(self, db: &mut impl Database, settings: &mut Settings) -> Result<()> {
+    pub async fn run(self, mut db: impl Database, settings: &mut Settings) -> Result<()> {
         if self.search_mode.is_some() {
             settings.search_mode = self.search_mode.unwrap();
         }
@@ -114,7 +112,7 @@ impl Cmd {
                 self.after,
                 self.limit,
                 &self.query,
-                db,
+                &mut db,
             )
             .await?;
 

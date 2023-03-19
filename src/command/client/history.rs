@@ -211,6 +211,7 @@ impl Cmd {
                 h.duration = chrono::Utc::now().timestamp_nanos() - h.timestamp.timestamp_nanos();
 
                 db.update(&h).await?;
+                atuin_client::tantivy::write_history([h])?;
 
                 if settings.should_sync()? {
                     #[cfg(feature = "sync")]

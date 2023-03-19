@@ -4,25 +4,26 @@ use async_trait::async_trait;
 use atuin_client::{database::Database, settings::FilterMode};
 use chrono::Utc;
 use eyre::Result;
-use skim::{prelude::ExactOrFuzzyEngineFactory, MatchEngineFactory};
+use skim::{prelude::ExactOrFuzzyEngineFactory, MatchEngineFactory, SkimItem};
 use tokio::task::yield_now;
 
-use super::interactive::{HistoryWrapper, SearchEngine, SearchState};
+use super::{HistoryWrapper, SearchEngine, SearchState};
 
-#[derive(Default)]
 pub struct Search {
     all_history: Vec<Arc<HistoryWrapper>>,
 }
 
 impl Search {
     pub fn new() -> Self {
-        Search::default()
+        Search {
+            all_history: vec![],
+        }
     }
 }
 
 #[async_trait]
 impl SearchEngine for Search {
-    async fn query(
+    async fn full_query(
         &mut self,
         state: &SearchState,
         db: &mut dyn Database,
@@ -124,4 +125,10 @@ pub async fn fuzzy_search(
     }
 
     set
+}
+
+impl SkimItem for HistoryWrapper {
+    fn text(&self) -> std::borrow::Cow<str> {
+        std::borrow::Cow::Borrowed(self.history.command.as_str())
+    }
 }

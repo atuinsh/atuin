@@ -1,11 +1,9 @@
 use std::{
     io::{stdout, Write},
-    ops::Deref,
     sync::Arc,
     time::Duration,
 };
 
-use async_trait::async_trait;
 use crossterm::{
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent},
     execute, terminal,
@@ -13,21 +11,20 @@ use crossterm::{
 use eyre::Result;
 use futures_util::FutureExt;
 use semver::Version;
-use skim::SkimItem;
 use unicode_width::UnicodeWidthStr;
 
 use atuin_client::{
+    database::current_context,
     database::Database,
-    database::{current_context, Context},
-    history::History,
     settings::{ExitMode, FilterMode, SearchMode, Settings},
 };
 
 use super::{
     cursor::Cursor,
+    engines::{HistoryWrapper, SearchEngine, SearchState},
     history_list::{HistoryList, ListState, PREFIX_LENGTH},
 };
-use crate::VERSION;
+use crate::{command::client::search::engines, VERSION};
 use ratatui::{
     backend::{Backend, CrosstermBackend},
     layout::{Alignment, Constraint, Direction, Layout},
@@ -44,50 +41,16 @@ struct State {
     history_count: i64,
     update_needed: Option<Version>,
     results_state: ListState,
-    search: SearchState,
+    switched_search_mode: bool,
+    search_mode: SearchMode,
 
+    search: SearchState,
     engine: Box<dyn SearchEngine>,
 }
 
-pub struct SearchState {
-    pub input: Cursor,
-    pub filter_mode: FilterMode,
-    pub search_mode: SearchMode,
-    /// Store if the user has _just_ changed the search mode.
-    /// If so, we change the UI to show the search mode instead
-    /// of the filter mode until user starts typing again.
-    switched_search_mode: bool,
-    pub context: Context,
-}
-
-#[async_trait]
-pub trait SearchEngine: Send + Sync + 'static {
-    async fn query(
-        &mut self,
-        state: &SearchState,
-        db: &mut dyn Database,
-    ) -> Result<Vec<Arc<HistoryWrapper>>>;
-}
-
 impl State {
-    async fn query_results(&mut self, db: &mut impl Database) -> Result<Vec<Arc<HistoryWrapper>>> {
-        let i = self.search.input.as_str();
-        let results = if i.is_empty() {
-            db.list(
-                self.search.filter_mode,
-                &self.search.context,
-                Some(200),
-                true,
-            )
-            .await?
-            .into_iter()
-            .map(|history| HistoryWrapper { history, count: 1 })
-            .map(Arc::new)
-            .collect::<Vec<_>>()
-        } else {
-            self.engine.query(&self.search, db).await?
-        };
-
+    async fn query_results(&mut self, db: &mut dyn Database) -> Result<Vec<Arc<HistoryWrapper>>> {
+        let results = self.engine.query(&self.search, db).await?;
         self.results_state.select(0);
         Ok(results)
     }
@@ -137,7 +100,7 @@ impl State {
         let ctrl = input.modifiers.contains(KeyModifiers::CONTROL);
         let alt = input.modifiers.contains(KeyModifiers::ALT);
         // reset the state, will be set to true later if user really did change it
-        self.search.switched_search_mode = false;
+        self.switched_search_mode = false;
         match input.code {
             KeyCode::Char('c' | 'd' | 'g') if ctrl => return Some(RETURN_ORIGINAL),
             KeyCode::Esc => {
@@ -211,8 +174,10 @@ impl State {
                 self.search.filter_mode = FILTER_MODES[i];
             }
             KeyCode::Char('s') if ctrl => {
-                self.search.switched_search_mode = true;
-                self.search.search_mode = self.search.search_mode.next(settings);
+                self.switched_search_mode = true;
+                self.search_mode = self.search_mode.next(settings);
+                self.engine =
+                    engines::engine(self.search_mode).expect("could not switch search engine");
             }
             KeyCode::Down if self.results_state.selected() == 0 => return Some(RETURN_ORIGINAL),
             KeyCode::Down => {
@@ -385,8 +350,8 @@ impl State {
     fn build_input(&mut self, compact: bool, chunk_width: usize) -> Paragraph {
         /// Max width of the UI box showing current mode
         const MAX_WIDTH: usize = 14;
-        let (pref, mode) = if self.search.switched_search_mode {
-            (" SRCH:", self.search.search_mode.as_str())
+        let (pref, mode) = if self.switched_search_mode {
+            (" SRCH:", self.search_mode.as_str())
         } else {
             ("", self.search.filter_mode.as_str())
         };
@@ -483,23 +448,6 @@ impl Write for Stdout {
     }
 }
 
-pub struct HistoryWrapper {
-    pub history: History,
-    pub count: i32,
-}
-impl Deref for HistoryWrapper {
-    type Target = History;
-
-    fn deref(&self) -> &Self::Target {
-        &self.history
-    }
-}
-impl SkimItem for HistoryWrapper {
-    fn text(&self) -> std::borrow::Cow<str> {
-        std::borrow::Cow::Borrowed(self.history.command.as_str())
-    }
-}
-
 // this is a big blob of horrible! clean it up!
 // for now, it works. But it'd be great if it were more easily readable, and
 // modular. I'd like to add some more stats and stuff at some point
@@ -507,7 +455,7 @@ impl SkimItem for HistoryWrapper {
 pub async fn history(
     query: &[String],
     settings: &Settings,
-    db: &mut impl Database,
+    mut db: impl Database,
 ) -> Result<String> {
     let stdout = Stdout::new()?;
     let backend = CrosstermBackend::new(stdout);
@@ -523,16 +471,14 @@ pub async fn history(
 
     let context = current_context();
 
-    let engine = match settings.search_mode {
-        SearchMode::Skim => Box::new(super::skim_impl::Search::new()) as Box<_>,
-        SearchMode::Tantivy => Box::new(super::tantivy_impl::Search::new()?) as Box<_>,
-        mode => Box::new(super::db_impl::Search(mode)) as Box<_>,
-    };
+    let history_count = db.history_count().await?;
 
     let mut app = State {
-        history_count: db.history_count().await?,
+        history_count,
         results_state: ListState::default(),
         update_needed: None,
+        switched_search_mode: false,
+        search_mode: settings.search_mode,
         search: SearchState {
             input,
             context,
@@ -543,13 +489,11 @@ pub async fn history(
             } else {
                 settings.filter_mode
             },
-            search_mode: settings.search_mode,
-            switched_search_mode: false,
         },
-        engine,
+        engine: engines::engine(settings.search_mode)?,
     };
 
-    let mut results = app.query_results(db).await?;
+    let mut results = app.query_results(&mut db).await?;
 
     let index = 'render: loop {
         let compact = match settings.style {
@@ -563,7 +507,7 @@ pub async fn history(
 
         let initial_input = app.search.input.as_str().to_owned();
         let initial_filter_mode = app.search.filter_mode;
-        let initial_search_mode = app.search.search_mode;
+        let initial_search_mode = app.search_mode;
 
         let event_ready = tokio::task::spawn_blocking(|| event::poll(Duration::from_millis(250)));
 
@@ -587,9 +531,9 @@ pub async fn history(
 
         if initial_input != app.search.input.as_str()
             || initial_filter_mode != app.search.filter_mode
-            || initial_search_mode != app.search.search_mode
+            || initial_search_mode != app.search_mode
         {
-            results = app.query_results(db).await?;
+            results = app.query_results(&mut db).await?;
         }
     };
     if index < results.len() {
