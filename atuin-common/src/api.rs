@@ -71,3 +71,13 @@ pub struct StatusResponse {
     pub count: i64,
     pub deleted: Vec<String>,
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DeleteHistoryRequest {
+    pub client_id: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct MessageResponse {
+    pub message: String,
+}

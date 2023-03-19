@@ -66,6 +66,9 @@ pub trait Database: Send + Sync {
     async fn last(&self) -> Result<History>;
     async fn before(&self, timestamp: chrono::DateTime<Utc>, count: i64) -> Result<Vec<History>>;
 
+    async fn delete(&self, mut h: History) -> Result<()>;
+    async fn deleted(&self) -> Result<Vec<History>>;
+
     // Yes I know, it's a lot.
     // Could maybe break it down to a searchparams struct or smth but that feels a little... pointless.
     // Been debating maybe a DSL for search? eg "before:time limit:1 the query"
@@ -125,8 +128,8 @@ impl Sqlite {
 
     async fn save_raw(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, h: &History) -> Result<()> {
         sqlx::query(
-            "insert or ignore into history(id, timestamp, duration, exit, command, cwd, session, hostname)
-                values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "insert or ignore into history(id, timestamp, duration, exit, command, cwd, session, hostname, deleted_at)
+                values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         )
         .bind(h.id.as_str())
         .bind(h.timestamp.timestamp_nanos())
@@ -136,6 +139,7 @@ impl Sqlite {
         .bind(h.cwd.as_str())
         .bind(h.session.as_str())
         .bind(h.hostname.as_str())
+        .bind(h.deleted_at.map(|t|t.timestamp_nanos()))
         .execute(tx)
         .await?;
 
@@ -143,6 +147,8 @@ impl Sqlite {
     }
 
     fn query_history(row: SqliteRow) -> History {
+        let deleted_at: Option<i64> = row.get("deleted_at");
+
         History {
             id: row.get("id"),
             timestamp: Utc.timestamp_nanos(row.get("timestamp")),
@@ -152,7 +158,7 @@ impl Sqlite {
             cwd: row.get("cwd"),
             session: row.get("session"),
             hostname: row.get("hostname"),
-            deleted_at: row.get("deleted_at"),
+            deleted_at: deleted_at.map(|t| Utc.timestamp_nanos(t)),
         }
     }
 }
@@ -199,7 +205,7 @@ impl Database for Sqlite {
 
         sqlx::query(
             "update history
-                set timestamp = ?2, duration = ?3, exit = ?4, command = ?5, cwd = ?6, session = ?7, hostname = ?8
+                set timestamp = ?2, duration = ?3, exit = ?4, command = ?5, cwd = ?6, session = ?7, hostname = ?8, deleted_at = ?9
                 where id = ?1",
         )
         .bind(h.id.as_str())
@@ -210,6 +216,7 @@ impl Database for Sqlite {
         .bind(h.cwd.as_str())
         .bind(h.session.as_str())
         .bind(h.hostname.as_str())
+        .bind(h.deleted_at.map(|t|t.timestamp_nanos()))
         .execute(&self.pool)
         .await?;
 
@@ -306,6 +313,15 @@ impl Database for Sqlite {
         .map(Self::query_history)
         .fetch_all(&self.pool)
         .await?;
+
+        Ok(res)
+    }
+
+    async fn deleted(&self) -> Result<Vec<History>> {
+        let res = sqlx::query("select * from history where deleted_at is not null")
+            .map(Self::query_history)
+            .fetch_all(&self.pool)
+            .await?;
 
         Ok(res)
     }
@@ -456,6 +472,18 @@ impl Database for Sqlite {
             .await?;
 
         Ok(res)
+    }
+
+    // deleted_at doesn't mean the actual time that the user deleted it,
+    // but the time that the system marks it as deleted
+    async fn delete(&self, mut h: History) -> Result<()> {
+        let now = chrono::Utc::now();
+        h.command = String::from(""); // blank it
+        h.deleted_at = Some(now); // delete it
+
+        self.update(&h).await?; // save it
+
+        Ok(())
     }
 }
 

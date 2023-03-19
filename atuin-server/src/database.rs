@@ -32,6 +32,8 @@ pub trait Database {
 
     async fn count_history(&self, user: &User) -> Result<i64>;
     async fn count_history_cached(&self, user: &User) -> Result<i64>;
+
+    async fn delete_history(&self, user: &User, id: String) -> Result<()>;
     async fn deleted_history(&self, user: &User) -> Result<Vec<String>>;
 
     async fn count_history_range(
@@ -145,6 +147,23 @@ impl Database for Postgres {
         .await?;
 
         Ok(res.0 as i64)
+    }
+
+    async fn delete_history(&self, user: &User, id: String) -> Result<()> {
+        sqlx::query(
+            "update history
+            set deleted_at = $3
+            where user_id = $1
+            and client_id = $2
+            and deleted_at is null", // don't just keep setting it
+        )
+        .bind(user.id)
+        .bind(id)
+        .bind(chrono::Utc::now().naive_utc())
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(())
     }
 
     #[instrument(skip_all)]

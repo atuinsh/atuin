@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use axum::{
     extract::FromRequestParts,
     response::IntoResponse,
-    routing::{get, post},
+    routing::{delete, get, post},
     Router,
 };
 use eyre::Result;
@@ -70,6 +70,7 @@ pub fn router<DB: Database + Clone + Send + Sync + 'static>(
         .route("/sync/calendar/:focus", get(handlers::history::calendar))
         .route("/sync/status", get(handlers::status::status))
         .route("/history", post(handlers::history::add))
+        .route("/history", delete(handlers::history::delete))
         .route("/user/:username", get(handlers::user::get))
         .route("/register", post(handlers::user::register))
         .route("/login", post(handlers::user::login));
