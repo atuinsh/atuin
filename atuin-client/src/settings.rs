@@ -18,7 +18,7 @@ pub const LAST_SYNC_FILENAME: &str = "last_sync_time";
 pub const LAST_VERSION_CHECK_FILENAME: &str = "last_version_check_time";
 pub const LATEST_VERSION_FILENAME: &str = "latest_version";
 
-#[derive(Clone, Debug, Deserialize, Copy, ValueEnum)]
+#[derive(Clone, Debug, Deserialize, Copy, ValueEnum, PartialEq)]
 pub enum SearchMode {
     #[serde(rename = "prefix")]
     Prefix,
@@ -29,6 +29,9 @@ pub enum SearchMode {
 
     #[serde(rename = "fuzzy")]
     Fuzzy,
+
+    #[serde(rename = "skim")]
+    Skim,
 }
 
 #[derive(Clone, Debug, Deserialize, Copy, PartialEq, Eq, ValueEnum)]

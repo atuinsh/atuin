@@ -1,16 +1,10 @@
 use std::{
     io::{stdout, Write},
+    ops::Deref,
+    sync::Arc,
     time::Duration,
 };
 
-use crate::tui::{
-    backend::{Backend, CrosstermBackend},
-    layout::{Alignment, Constraint, Direction, Layout},
-    style::{Color, Modifier, Style},
-    text::{Span, Spans, Text},
-    widgets::{Block, BorderType, Borders, Paragraph},
-    Frame, Terminal,
-};
 use crossterm::{
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent},
     execute, terminal,
@@ -18,12 +12,12 @@ use crossterm::{
 use eyre::Result;
 use futures_util::FutureExt;
 use semver::Version;
+use skim::SkimItem;
 use unicode_width::UnicodeWidthStr;
 
 use atuin_client::{
-    database::current_context,
-    database::Context,
     database::Database,
+    database::{current_context, Context},
     history::History,
     settings::{ExitMode, FilterMode, SearchMode, Settings},
 };
@@ -32,18 +26,35 @@ use super::{
     cursor::Cursor,
     history_list::{HistoryList, ListState, PREFIX_LENGTH},
 };
-use crate::VERSION;
+use crate::{
+    tui::{
+        backend::{Backend, CrosstermBackend},
+        layout::{Alignment, Constraint, Direction, Layout},
+        style::{Color, Modifier, Style},
+        text::{Span, Spans, Text},
+        widgets::{Block, BorderType, Borders, Paragraph},
+        Frame, Terminal,
+    },
+    VERSION,
+};
 
 const RETURN_ORIGINAL: usize = usize::MAX;
 const RETURN_QUERY: usize = usize::MAX - 1;
 
 struct State {
     history_count: i64,
-    input: Cursor,
-    filter_mode: FilterMode,
-    results_state: ListState,
-    context: Context,
     update_needed: Option<Version>,
+    results_state: ListState,
+    search: SearchState,
+
+    // only allocated if using skim
+    all_history: Vec<Arc<HistoryWrapper>>,
+}
+
+pub struct SearchState {
+    pub input: Cursor,
+    pub filter_mode: FilterMode,
+    pub context: Context,
 }
 
 impl State {
@@ -51,22 +62,48 @@ impl State {
         &mut self,
         search_mode: SearchMode,
         db: &mut impl Database,
-    ) -> Result<Vec<History>> {
-        let i = self.input.as_str();
+    ) -> Result<Vec<Arc<HistoryWrapper>>> {
+        let i = self.search.input.as_str();
         let results = if i.is_empty() {
-            db.list(self.filter_mode, &self.context, Some(200), true)
-                .await?
+            db.list(
+                self.search.filter_mode,
+                &self.search.context,
+                Some(200),
+                true,
+            )
+            .await?
+            .into_iter()
+            .map(|history| HistoryWrapper { history, count: 1 })
+            .map(Arc::new)
+            .collect::<Vec<_>>()
+        } else if search_mode == SearchMode::Skim {
+            if self.all_history.is_empty() {
+                self.all_history = db
+                    .all_with_count()
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .map(|(history, count)| HistoryWrapper { history, count })
+                    .map(Arc::new)
+                    .collect::<Vec<_>>();
+            }
+
+            super::skim_impl::fuzzy_search(&self.search, &self.all_history).await
         } else {
             db.search(
                 search_mode,
-                self.filter_mode,
-                &self.context,
+                self.search.filter_mode,
+                &self.search.context,
                 i,
                 Some(200),
                 None,
                 None,
             )
             .await?
+            .into_iter()
+            .map(|history| HistoryWrapper { history, count: 1 })
+            .map(Arc::new)
+            .collect::<Vec<_>>()
         };
 
         self.results_state.select(0);
@@ -125,47 +162,51 @@ impl State {
                 return Some(self.results_state.selected() + c);
             }
             KeyCode::Left if ctrl => self
+                .search
                 .input
                 .prev_word(&settings.word_chars, settings.word_jump_mode),
             KeyCode::Left => {
-                self.input.left();
+                self.search.input.left();
             }
             KeyCode::Char('h') if ctrl => {
-                self.input.left();
+                self.search.input.left();
             }
             KeyCode::Right if ctrl => self
+                .search
                 .input
                 .next_word(&settings.word_chars, settings.word_jump_mode),
-            KeyCode::Right => self.input.right(),
-            KeyCode::Char('l') if ctrl => self.input.right(),
-            KeyCode::Char('a') if ctrl => self.input.start(),
-            KeyCode::Home => self.input.start(),
-            KeyCode::Char('e') if ctrl => self.input.end(),
-            KeyCode::End => self.input.end(),
+            KeyCode::Right => self.search.input.right(),
+            KeyCode::Char('l') if ctrl => self.search.input.right(),
+            KeyCode::Char('a') if ctrl => self.search.input.start(),
+            KeyCode::Home => self.search.input.start(),
+            KeyCode::Char('e') if ctrl => self.search.input.end(),
+            KeyCode::End => self.search.input.end(),
             KeyCode::Backspace if ctrl => self
+                .search
                 .input
                 .remove_prev_word(&settings.word_chars, settings.word_jump_mode),
             KeyCode::Backspace => {
-                self.input.back();
+                self.search.input.back();
             }
             KeyCode::Delete if ctrl => self
+                .search
                 .input
                 .remove_next_word(&settings.word_chars, settings.word_jump_mode),
             KeyCode::Delete => {
-                self.input.remove();
+                self.search.input.remove();
             }
             KeyCode::Char('w') if ctrl => {
                 // remove the first batch of whitespace
-                while matches!(self.input.back(), Some(c) if c.is_whitespace()) {}
-                while self.input.left() {
-                    if self.input.char().unwrap().is_whitespace() {
-                        self.input.right(); // found whitespace, go back right
+                while matches!(self.search.input.back(), Some(c) if c.is_whitespace()) {}
+                while self.search.input.left() {
+                    if self.search.input.char().unwrap().is_whitespace() {
+                        self.search.input.right(); // found whitespace, go back right
                         break;
                     }
-                    self.input.remove();
+                    self.search.input.remove();
                 }
             }
-            KeyCode::Char('u') if ctrl => self.input.clear(),
+            KeyCode::Char('u') if ctrl => self.search.input.clear(),
             KeyCode::Char('r') if ctrl => {
                 pub static FILTER_MODES: [FilterMode; 4] = [
                     FilterMode::Global,
@@ -173,9 +214,9 @@ impl State {
                     FilterMode::Session,
                     FilterMode::Directory,
                 ];
-                let i = self.filter_mode as usize;
+                let i = self.search.filter_mode as usize;
                 let i = (i + 1) % FILTER_MODES.len();
-                self.filter_mode = FILTER_MODES[i];
+                self.search.filter_mode = FILTER_MODES[i];
             }
             KeyCode::Down if self.results_state.selected() == 0 => return Some(RETURN_ORIGINAL),
             KeyCode::Down => {
@@ -194,7 +235,7 @@ impl State {
                 let i = self.results_state.selected() + 1;
                 self.results_state.select(i.min(len - 1));
             }
-            KeyCode::Char(c) => self.input.insert(c),
+            KeyCode::Char(c) => self.search.input.insert(c),
             KeyCode::PageDown => {
                 let scroll_len = self.results_state.max_entries() - settings.scroll_context_lines;
                 let i = self.results_state.selected().saturating_sub(scroll_len);
@@ -216,7 +257,7 @@ impl State {
     fn draw<T: Backend>(
         &mut self,
         f: &mut Frame<'_, T>,
-        results: &[History],
+        results: &[Arc<HistoryWrapper>],
         compact: bool,
         show_preview: bool,
     ) {
@@ -284,7 +325,7 @@ impl State {
         let preview = self.build_preview(results, compact, preview_width, chunks[3].width.into());
         f.render_widget(preview, chunks[3]);
 
-        let extra_width = UnicodeWidthStr::width(self.input.substring());
+        let extra_width = UnicodeWidthStr::width(self.search.input.substring());
 
         let cursor_offset = if compact { 0 } else { 1 };
         f.set_cursor(
@@ -332,7 +373,7 @@ impl State {
         stats
     }
 
-    fn build_results_list(compact: bool, results: &[History]) -> HistoryList {
+    fn build_results_list(compact: bool, results: &[Arc<HistoryWrapper>]) -> HistoryList {
         let results_list = if compact {
             HistoryList::new(results)
         } else {
@@ -348,8 +389,8 @@ impl State {
     fn build_input(&mut self, compact: bool, chunk_width: usize) -> Paragraph {
         let input = format!(
             "[{:^14}] {}",
-            self.filter_mode.as_str(),
-            self.input.as_str(),
+            self.search.filter_mode.as_str(),
+            self.search.input.as_str(),
         );
         let input = if compact {
             Paragraph::new(input)
@@ -366,7 +407,7 @@ impl State {
 
     fn build_preview(
         &mut self,
-        results: &[History],
+        results: &[Arc<HistoryWrapper>],
         compact: bool,
         preview_width: u16,
         chunk_width: usize,
@@ -438,6 +479,23 @@ impl Write for Stdout {
     }
 }
 
+pub struct HistoryWrapper {
+    history: History,
+    pub count: i32,
+}
+impl Deref for HistoryWrapper {
+    type Target = History;
+
+    fn deref(&self) -> &Self::Target {
+        &self.history
+    }
+}
+impl SkimItem for HistoryWrapper {
+    fn text(&self) -> std::borrow::Cow<str> {
+        std::borrow::Cow::Borrowed(self.history.command.as_str())
+    }
+}
+
 // this is a big blob of horrible! clean it up!
 // for now, it works. But it'd be great if it were more easily readable, and
 // modular. I'd like to add some more stats and stuff at some point
@@ -455,22 +513,28 @@ pub async fn history(
     // Put the cursor at the end of the query by default
     input.end();
 
-    let update_needed = settings.needs_update().fuse();
+    let settings2 = settings.clone();
+    let update_needed = tokio::spawn(async move { settings2.needs_update().await }).fuse();
     tokio::pin!(update_needed);
+
+    let context = current_context();
 
     let mut app = State {
         history_count: db.history_count().await?,
-        input,
         results_state: ListState::default(),
-        context: current_context(),
-        filter_mode: if settings.shell_up_key_binding {
-            settings
-                .filter_mode_shell_up_key_binding
-                .unwrap_or(settings.filter_mode)
-        } else {
-            settings.filter_mode
-        },
         update_needed: None,
+        search: SearchState {
+            input,
+            context,
+            filter_mode: if settings.shell_up_key_binding {
+                settings
+                    .filter_mode_shell_up_key_binding
+                    .unwrap_or(settings.filter_mode)
+            } else {
+                settings.filter_mode
+            },
+        },
+        all_history: Vec::new(),
     };
 
     let mut results = app.query_results(settings.search_mode, db).await?;
@@ -485,8 +549,8 @@ pub async fn history(
         };
         terminal.draw(|f| app.draw(f, &results, compact, settings.show_preview))?;
 
-        let initial_input = app.input.as_str().to_owned();
-        let initial_filter_mode = app.filter_mode;
+        let initial_input = app.search.input.as_str().to_owned();
+        let initial_filter_mode = app.search.filter_mode;
 
         let event_ready = tokio::task::spawn_blocking(|| event::poll(Duration::from_millis(250)));
 
@@ -504,23 +568,25 @@ pub async fn history(
                 }
             }
             update_needed = &mut update_needed => {
-                app.update_needed = update_needed;
+                app.update_needed = update_needed?;
             }
         }
 
-        if initial_input != app.input.as_str() || initial_filter_mode != app.filter_mode {
+        if initial_input != app.search.input.as_str()
+            || initial_filter_mode != app.search.filter_mode
+        {
             results = app.query_results(settings.search_mode, db).await?;
         }
     };
     if index < results.len() {
         // index is in bounds so we return that entry
-        Ok(results.swap_remove(index).command)
+        Ok(results.swap_remove(index).command.clone())
     } else if index == RETURN_ORIGINAL {
         Ok(String::new())
     } else {
         // Either:
         // * index == RETURN_QUERY, in which case we should return the input
         // * out of bounds -> usually implies no selected entry so we return the input
-        Ok(app.input.into_inner())
+        Ok(app.search.input.into_inner())
     }
 }

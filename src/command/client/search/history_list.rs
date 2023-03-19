@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use crate::tui::{
     buffer::Buffer,
@@ -8,10 +8,10 @@ use crate::tui::{
 };
 use atuin_client::history::History;
 
-use super::format_duration;
+use super::{format_duration, interactive::HistoryWrapper};
 
 pub struct HistoryList<'a> {
-    history: &'a [History],
+    history: &'a [Arc<HistoryWrapper>],
     block: Option<Block<'a>>,
 }
 
@@ -77,7 +77,7 @@ impl<'a> StatefulWidget for HistoryList<'a> {
 }
 
 impl<'a> HistoryList<'a> {
-    pub fn new(history: &'a [History]) -> Self {
+    pub fn new(history: &'a [Arc<HistoryWrapper>]) -> Self {
         Self {
             history,
             block: None,

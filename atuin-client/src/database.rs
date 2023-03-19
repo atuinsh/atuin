@@ -21,9 +21,9 @@ use super::{
 };
 
 pub struct Context {
-    session: String,
-    cwd: String,
-    hostname: String,
+    pub session: String,
+    pub cwd: String,
+    pub hostname: String,
 }
 
 pub fn current_context() -> Context {
@@ -85,6 +85,8 @@ pub trait Database: Send + Sync {
     ) -> Result<Vec<History>>;
 
     async fn query_history(&self, query: &str) -> Result<Vec<History>>;
+
+    async fn all_with_count(&self) -> Result<Vec<(History, i32)>>;
 }
 
 // Intended for use on a developer machine and not a sync server.
@@ -428,7 +430,7 @@ impl Database for Sqlite {
         match search_mode {
             SearchMode::Prefix => sql.and_where_like_left("command", query),
             SearchMode::FullText => sql.and_where_like_any("command", query),
-            SearchMode::Fuzzy => {
+            SearchMode::Skim | SearchMode::Fuzzy => {
                 // don't recompile the regex on successive calls!
                 lazy_static! {
                     static ref SPLIT_REGEX: Regex = Regex::new(r" +").unwrap();
@@ -487,6 +489,40 @@ impl Database for Sqlite {
     async fn query_history(&self, query: &str) -> Result<Vec<History>> {
         let res = sqlx::query(query)
             .map(Self::query_history)
+            .fetch_all(&self.pool)
+            .await?;
+
+        Ok(res)
+    }
+
+    async fn all_with_count(&self) -> Result<Vec<(History, i32)>> {
+        debug!("listing history");
+
+        let mut query = SqlBuilder::select_from(SqlName::new("history").alias("h").baquoted());
+
+        query
+            .fields(&[
+                "id",
+                "max(timestamp) as timestamp",
+                "max(duration) as duration",
+                "exit",
+                "command",
+                "group_concat(cwd, ':') as cwd",
+                "group_concat(session) as session",
+                "group_concat(hostname, ',') as hostname",
+                "count(*) as count",
+            ])
+            .group_by("command")
+            .group_by("exit")
+            .order_desc("timestamp");
+
+        let query = query.sql().expect("bug in list query. please report");
+
+        let res = sqlx::query(&query)
+            .map(|row: SqliteRow| {
+                let count: i32 = row.get("count");
+                (Self::query_history(row), count)
+            })
             .fetch_all(&self.pool)
             .await?;
 

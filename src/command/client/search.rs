@@ -16,6 +16,7 @@ mod cursor;
 mod duration;
 mod history_list;
 mod interactive;
+mod skim_impl;
 pub use duration::{format_duration, format_duration_into};
 
 #[allow(clippy::struct_excessive_bools)]
