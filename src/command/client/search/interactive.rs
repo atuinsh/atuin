@@ -54,25 +54,26 @@ struct State {
 
 impl State {
     async fn query_results(&mut self, db: &[Arc<SkimHistory>]) -> Vec<Arc<SkimHistory>> {
-        let mut set = Vec::with_capacity(200);
+        let mut set = Vec::<Arc<SkimHistory>>::with_capacity(200);
         if self.input.as_str().is_empty() {
             for (i, item) in db.iter().enumerate() {
                 if i % 256 == 0 {
                     yield_now().await;
                 }
-                match self.filter_mode {
-                    FilterMode::Global => set.push(item.clone()),
-                    FilterMode::Host if item.0.hostname == self.context.hostname => {
-                        set.push(item.clone());
-                    }
-                    FilterMode::Session if item.0.session == self.context.session => {
-                        set.push(item.clone());
-                    }
-                    FilterMode::Directory if item.0.cwd == self.context.cwd => {
-                        set.push(item.clone());
-                    }
-                    _ => {}
+                // skip if already found this command
+                if set.iter().any(|x| x.command == item.command) {
+                    continue;
                 }
+                match self.filter_mode {
+                    FilterMode::Global => {}
+                    FilterMode::Host if item.0.hostname == self.context.hostname => {}
+                    FilterMode::Session if item.0.session == self.context.session => {}
+                    FilterMode::Directory if item.0.cwd == self.context.cwd => {}
+                    _ => {
+                        continue;
+                    }
+                }
+                set.push(item.clone());
                 if set.len() == 200 {
                     break;
                 }
@@ -83,7 +84,6 @@ impl State {
                 ExactOrFuzzyEngineFactory::builder().fuzzy_algorithm(skim::FuzzyAlgorithm::SkimV2);
             let query = self.input.as_str();
             let engine = engine.create_engine(query);
-            let first_word = query.split_whitespace().next().unwrap();
             let now = Utc::now();
             for (i, item) in db.iter().enumerate() {
                 if i % 256 == 0 {
@@ -96,30 +96,55 @@ impl State {
                     FilterMode::Directory if item.0.cwd == self.context.cwd => {}
                     _ => continue,
                 }
+                #[allow(clippy::cast_lossless, clippy::cast_precision_loss)]
                 if let Some(res) = engine.match_item(item.clone()) {
-                    let mut rank = res.rank;
-                    let duration = now - item.0.timestamp;
-                    if &item.0.command[..first_word.len()] == first_word {
-                        rank = rank.map(|x| x * 16);
-                    }
-                    if duration < chrono::Duration::hours(1) {
-                        rank = rank.map(|x| x * 16);
-                    } else if duration < chrono::Duration::days(1) {
-                        rank = rank.map(|x| x * 8);
-                    } else if duration < chrono::Duration::days(7) {
-                        rank = rank.map(|x| x * 4);
-                    }
+                    let [score, begin, _, _] = res.rank;
 
-                    let (Ok(i) | Err(i)) = ranks.binary_search(&rank);
-                    if i >= 200 {
-                        continue;
+                    let mut duration = ((now - item.0.timestamp).num_seconds() as f64).log2();
+                    if !duration.is_finite() || duration <= 1.0 {
+                        duration = 1.0;
                     }
-                    if set.len() == 200 {
-                        set.pop();
-                        ranks.pop();
+                    let count = (item.1 as f64 + 16.0).log2();
+                    let begin = (begin as f64 + 16.0).log2();
+
+                    // reduce longer durations, raise higher counts, raise matches close to the start
+                    let score = (score as f64) * count / duration / begin;
+
+                    'insert: {
+                        for i in 0..set.len() {
+                            if ranks[i] > score {
+                                ranks.insert(i, score);
+                                set.insert(i, item.clone());
+                                let mut j = i + 1;
+                                while j < set.len() {
+                                    // remove duplicates that have a worse score
+                                    if set[j].command == item.command {
+                                        ranks.remove(j);
+                                        set.remove(j);
+                                    } else {
+                                        j += 1;
+                                    }
+                                }
+
+                                // keep it limited
+                                if ranks.len() > 200 {
+                                    ranks.pop();
+                                    set.pop();
+                                }
+
+                                break 'insert;
+                            }
+                            // don't continue if this command has a better score already
+                            if set[i].command == item.command {
+                                break 'insert;
+                            }
+                        }
+
+                        if set.len() < 200 {
+                            ranks.push(score);
+                            set.push(item.clone());
+                        }
                     }
-                    ranks.insert(i, rank);
-                    set.insert(i, item.clone());
                 }
             }
         }
