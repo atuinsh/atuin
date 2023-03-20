@@ -117,9 +117,9 @@ pub fn decrypt(encrypted_history: &EncryptedHistory, key: &secretbox::Key) -> Re
             timestamp: history.timestamp,
             deleted_at: None,
         });
-    }
+    };
 
-    Ok(history.unwrap())
+    Ok(history)
 }
 
 #[cfg(test)]
