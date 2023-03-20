@@ -114,6 +114,7 @@ impl State {
         match input {
             Event::Key(k) => self.handle_key_input(settings, k, len),
             Event::Mouse(m) => self.handle_mouse_input(*m, len),
+            Event::Paste(d) => self.handle_paste_input(d),
             _ => None,
         }
     }
@@ -129,6 +130,13 @@ impl State {
                 self.results_state.select(i.min(len - 1));
             }
             _ => {}
+        }
+        None
+    }
+
+    fn handle_paste_input(&mut self, input: &str) -> Option<usize> {
+        for i in input.chars() {
+            self.search.input.insert(i);
         }
         None
     }
@@ -451,7 +459,8 @@ impl Stdout {
         execute!(
             stdout,
             terminal::EnterAlternateScreen,
-            event::EnableMouseCapture
+            event::EnableMouseCapture,
+            event::EnableBracketedPaste
         )?;
         Ok(Self { stdout })
     }
@@ -462,7 +471,8 @@ impl Drop for Stdout {
         execute!(
             self.stdout,
             terminal::LeaveAlternateScreen,
-            event::DisableMouseCapture
+            event::DisableMouseCapture,
+            event::DisableBracketedPaste
         )
         .unwrap();
         terminal::disable_raw_mode().unwrap();
