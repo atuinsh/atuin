@@ -103,7 +103,7 @@ pub fn decrypt(encrypted_history: &EncryptedHistory, key: &secretbox::Key) -> Re
 
     let history = rmp_serde::from_slice(&plaintext);
 
-    if history.is_err() {
+    let Ok(history) = history else {
         let history: HistoryWithoutDelete = rmp_serde::from_slice(&plaintext)?;
 
         return Ok(History {
