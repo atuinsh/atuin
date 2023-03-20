@@ -15,7 +15,10 @@ use fs_err as fs;
 use serde::{Deserialize, Serialize};
 use sodiumoxide::crypto::secretbox;
 
-use crate::{history::History, settings::Settings};
+use crate::{
+    history::{History, HistoryWithoutDelete},
+    settings::Settings,
+};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct EncryptedHistory {
@@ -98,9 +101,25 @@ pub fn decrypt(encrypted_history: &EncryptedHistory, key: &secretbox::Key) -> Re
     let plaintext = secretbox::open(&encrypted_history.ciphertext, &encrypted_history.nonce, key)
         .map_err(|_| eyre!("failed to open secretbox - invalid key?"))?;
 
-    let history = rmp_serde::from_slice(&plaintext)?;
+    let history = rmp_serde::from_slice(&plaintext);
 
-    Ok(history)
+    if history.is_err() {
+        let history: HistoryWithoutDelete = rmp_serde::from_slice(&plaintext)?;
+
+        return Ok(History {
+            id: history.id,
+            cwd: history.cwd,
+            exit: history.exit,
+            command: history.command,
+            session: history.session,
+            duration: history.duration,
+            hostname: history.hostname,
+            timestamp: history.timestamp,
+            deleted_at: None,
+        });
+    }
+
+    Ok(history.unwrap())
 }
 
 #[cfg(test)]
