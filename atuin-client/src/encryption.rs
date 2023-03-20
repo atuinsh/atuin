@@ -124,6 +124,7 @@ mod test {
             1,
             Some("beep boop".to_string()),
             Some("booop".to_string()),
+            None,
         );
 
         let e1 = encrypt(&history, &key1).unwrap();
