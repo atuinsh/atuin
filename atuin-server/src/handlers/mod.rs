@@ -2,6 +2,7 @@ use atuin_common::api::{ErrorResponse, IndexResponse};
 use axum::{response::IntoResponse, Json};
 
 pub mod history;
+pub mod status;
 pub mod user;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");

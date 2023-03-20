@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 
 use chrono::Utc;
 use eyre::{bail, Result};
@@ -9,8 +10,8 @@ use reqwest::{
 use sodiumoxide::crypto::secretbox;
 
 use atuin_common::api::{
-    AddHistoryRequest, CountResponse, ErrorResponse, IndexResponse, LoginRequest, LoginResponse,
-    RegisterResponse, SyncHistoryResponse,
+    AddHistoryRequest, CountResponse, DeleteHistoryRequest, ErrorResponse, IndexResponse,
+    LoginRequest, LoginResponse, RegisterResponse, StatusResponse, SyncHistoryResponse,
 };
 use semver::Version;
 
@@ -138,11 +139,27 @@ impl<'a> Client<'a> {
         Ok(count.count)
     }
 
+    pub async fn status(&self) -> Result<StatusResponse> {
+        let url = format!("{}/sync/status", self.sync_addr);
+        let url = Url::parse(url.as_str())?;
+
+        let resp = self.client.get(url).send().await?;
+
+        if resp.status() != StatusCode::OK {
+            bail!("failed to get status (are you logged in?)");
+        }
+
+        let status = resp.json::<StatusResponse>().await?;
+
+        Ok(status)
+    }
+
     pub async fn get_history(
         &self,
         sync_ts: chrono::DateTime<Utc>,
         history_ts: chrono::DateTime<Utc>,
         host: Option<String>,
+        deleted: HashSet<String>,
     ) -> Result<Vec<History>> {
         let host = match host {
             None => hash_str(&format!("{}:{}", whoami::hostname(), whoami::username())),
@@ -163,8 +180,17 @@ impl<'a> Client<'a> {
         let history = history
             .history
             .iter()
+            // TODO: handle deletion earlier in this chain
             .map(|h| serde_json::from_str(h).expect("invalid base64"))
             .map(|h| decrypt(&h, &self.key).expect("failed to decrypt history! check your key"))
+            .map(|mut h| {
+                if deleted.contains(&h.id) {
+                    h.deleted_at = Some(chrono::Utc::now());
+                    h.command = String::from("");
+                }
+
+                h
+            })
             .collect();
 
         Ok(history)
@@ -175,6 +201,19 @@ impl<'a> Client<'a> {
         let url = Url::parse(url.as_str())?;
 
         self.client.post(url).json(history).send().await?;
+
+        Ok(())
+    }
+
+    pub async fn delete_history(&self, h: History) -> Result<()> {
+        let url = format!("{}/history", self.sync_addr);
+        let url = Url::parse(url.as_str())?;
+
+        self.client
+            .delete(url)
+            .json(&DeleteHistoryRequest { client_id: h.id })
+            .send()
+            .await?;
 
         Ok(())
     }

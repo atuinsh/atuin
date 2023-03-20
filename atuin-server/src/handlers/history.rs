@@ -75,6 +75,28 @@ pub async fn list<DB: Database>(
 }
 
 #[instrument(skip_all, fields(user.id = user.id))]
+pub async fn delete<DB: Database>(
+    user: User,
+    state: State<AppState<DB>>,
+    Json(req): Json<DeleteHistoryRequest>,
+) -> Result<Json<MessageResponse>, ErrorResponseStatus<'static>> {
+    let db = &state.0.database;
+
+    // user_id is the ID of the history, as set by the user (the server has its own ID)
+    let deleted = db.delete_history(&user, req.client_id).await;
+
+    if let Err(e) = deleted {
+        error!("failed to delete history: {}", e);
+        return Err(ErrorResponse::reply("failed to delete history")
+            .with_status(StatusCode::INTERNAL_SERVER_ERROR));
+    }
+
+    Ok(Json(MessageResponse {
+        message: String::from("deleted OK"),
+    }))
+}
+
+#[instrument(skip_all, fields(user.id = user.id))]
 pub async fn add<DB: Database>(
     user: User,
     state: State<AppState<DB>>,

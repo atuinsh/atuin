@@ -4,6 +4,9 @@ use async_trait::async_trait;
 use chrono::{Datelike, TimeZone};
 use chronoutil::RelativeDuration;
 use sqlx::{postgres::PgPoolOptions, Result};
+
+use sqlx::Row;
+
 use tracing::{debug, instrument, warn};
 
 use super::{
@@ -27,6 +30,9 @@ pub trait Database {
 
     async fn count_history(&self, user: &User) -> Result<i64>;
     async fn count_history_cached(&self, user: &User) -> Result<i64>;
+
+    async fn delete_history(&self, user: &User, id: String) -> Result<()>;
+    async fn deleted_history(&self, user: &User) -> Result<Vec<String>>;
 
     async fn count_history_range(
         &self,
@@ -139,6 +145,46 @@ impl Database for Postgres {
         .await?;
 
         Ok(res.0 as i64)
+    }
+
+    async fn delete_history(&self, user: &User, id: String) -> Result<()> {
+        sqlx::query(
+            "update history
+            set deleted_at = $3
+            where user_id = $1
+            and client_id = $2
+            and deleted_at is null", // don't just keep setting it
+        )
+        .bind(user.id)
+        .bind(id)
+        .bind(chrono::Utc::now().naive_utc())
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    #[instrument(skip_all)]
+    async fn deleted_history(&self, user: &User) -> Result<Vec<String>> {
+        // The cache is new, and the user might not yet have a cache value.
+        // They will have one as soon as they post up some new history, but handle that
+        // edge case.
+
+        let res = sqlx::query(
+            "select client_id from history 
+            where user_id = $1
+            and deleted_at is not null",
+        )
+        .bind(user.id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let res = res
+            .iter()
+            .map(|row| row.get::<String, _>("client_id"))
+            .collect();
+
+        Ok(res)
     }
 
     #[instrument(skip_all)]

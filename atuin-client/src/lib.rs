@@ -11,7 +11,6 @@ pub mod encryption;
 pub mod sync;
 
 pub mod database;
-pub mod event;
 pub mod history;
 pub mod import;
 pub mod ordering;

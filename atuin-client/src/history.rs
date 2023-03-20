@@ -16,9 +16,11 @@ pub struct History {
     pub cwd: String,
     pub session: String,
     pub hostname: String,
+    pub deleted_at: Option<chrono::DateTime<Utc>>,
 }
 
 impl History {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         timestamp: chrono::DateTime<Utc>,
         command: String,
@@ -27,6 +29,7 @@ impl History {
         duration: i64,
         session: Option<String>,
         hostname: Option<String>,
+        deleted_at: Option<chrono::DateTime<Utc>>,
     ) -> Self {
         let session = session
             .or_else(|| env::var("ATUIN_SESSION").ok())
@@ -43,6 +46,7 @@ impl History {
             duration,
             session,
             hostname,
+            deleted_at,
         }
     }
 

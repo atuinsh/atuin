@@ -1,4 +1,6 @@
+use std::collections::HashSet;
 use std::convert::TryInto;
+use std::iter::FromIterator;
 
 use chrono::prelude::*;
 use eyre::Result;
@@ -37,7 +39,11 @@ async fn sync_download(
 ) -> Result<(i64, i64)> {
     debug!("starting sync download");
 
-    let remote_count = client.count().await?;
+    let remote_status = client.status().await?;
+    let remote_count = remote_status.count;
+
+    // useful to ensure we don't even save something that hasn't yet been synced + deleted
+    let remote_deleted = HashSet::from_iter(remote_status.deleted.clone());
 
     let initial_local = db.history_count().await?;
     let mut local_count = initial_local;
@@ -54,7 +60,12 @@ async fn sync_download(
 
     while remote_count > local_count {
         let page = client
-            .get_history(last_sync, last_timestamp, host.clone())
+            .get_history(
+                last_sync,
+                last_timestamp,
+                host.clone(),
+                remote_deleted.clone(),
+            )
             .await?;
 
         db.save_bulk(&page).await?;
@@ -79,6 +90,13 @@ async fn sync_download(
         } else {
             last_timestamp = page_last;
         }
+    }
+
+    for i in remote_status.deleted {
+        // we will update the stored history to have this data
+        // pretty much everything can be nullified
+        let h = db.load(i.as_str()).await?;
+        db.delete(h).await?;
     }
 
     Ok((local_count - initial_local, local_count))
@@ -136,12 +154,17 @@ async fn sync_upload(
         debug!("upload cursor: {:?}", cursor);
     }
 
+    let deleted = db.deleted().await?;
+
+    for i in deleted {
+        info!("deleting {} on remote", i.id);
+        client.delete_history(i).await?;
+    }
+
     Ok(())
 }
 
 pub async fn sync(settings: &Settings, force: bool, db: &mut (impl Database + Send)) -> Result<()> {
-    db.merge_events().await?;
-
     let client = api_client::Client::new(
         &settings.sync_address,
         &settings.session_token,

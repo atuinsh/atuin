@@ -131,6 +131,7 @@ impl Importer for Resh {
                 cwd: entry.pwd,
                 session: uuid_v4(),
                 hostname: entry.host,
+                deleted_at: None,
             })
             .await?;
         }

@@ -86,6 +86,7 @@ impl Importer for Zsh {
                         -1,
                         None,
                         None,
+                        None,
                     ))
                     .await?;
                 }
@@ -117,6 +118,7 @@ fn parse_extended(line: &str, counter: i64) -> History {
         String::from("unknown"),
         0, // assume 0, we have no way of knowing :(
         duration,
+        None,
         None,
         None,
     )

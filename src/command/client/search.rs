@@ -76,6 +76,10 @@ pub struct Cmd {
     #[arg(long)]
     cmd_only: bool,
 
+    // Delete anything matching this query. Will not print out the match
+    #[arg(long)]
+    delete: bool,
+
     /// Available variables: {command}, {directory}, {duration}, {user}, {host} and {time}.
     /// Example: --format "{time} - [{duration}] - {directory}$\t{command}"
     #[arg(long, short)]
@@ -100,12 +104,10 @@ impl Cmd {
             let list_mode = ListMode::from_flags(self.human, self.cmd_only);
             let entries = run_non_interactive(
                 settings,
-                list_mode,
                 self.cwd,
                 self.exit,
                 self.exclude_exit,
                 self.exclude_cwd,
-                self.format,
                 self.before,
                 self.after,
                 self.limit,
@@ -113,8 +115,21 @@ impl Cmd {
                 db,
             )
             .await?;
-            if entries == 0 {
+
+            if entries.is_empty() {
                 std::process::exit(1)
+            }
+
+            // if we aren't deleting, print it all
+            if self.delete {
+                // delete it
+                // it only took me _years_ to add this
+                // sorry
+                for entry in entries {
+                    db.delete(entry).await?;
+                }
+            } else {
+                super::history::print_list(&entries, list_mode, self.format.as_deref());
             }
         };
         Ok(())
@@ -126,18 +141,16 @@ impl Cmd {
 #[allow(clippy::too_many_arguments)]
 async fn run_non_interactive(
     settings: &Settings,
-    list_mode: ListMode,
     cwd: Option<String>,
     exit: Option<i64>,
     exclude_exit: Option<i64>,
     exclude_cwd: Option<String>,
-    format: Option<String>,
     before: Option<String>,
     after: Option<String>,
     limit: Option<i64>,
     query: &[String],
     db: &mut impl Database,
-) -> Result<usize> {
+) -> Result<Vec<History>> {
     let dir = if cwd.as_deref() == Some(".") {
         Some(utils::get_current_dir())
     } else {
@@ -202,6 +215,5 @@ async fn run_non_interactive(
         .map(std::borrow::ToOwned::to_owned)
         .collect();
 
-    super::history::print_list(&results, list_mode, format.as_deref());
-    Ok(results.len())
+    Ok(results)
 }

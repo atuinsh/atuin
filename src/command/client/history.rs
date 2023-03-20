@@ -184,7 +184,7 @@ impl Cmd {
                 // store whatever is ran, than to throw an error to the terminal
                 let cwd = utils::get_current_dir();
 
-                let h = History::new(chrono::Utc::now(), command, cwd, -1, -1, None, None);
+                let h = History::new(chrono::Utc::now(), command, cwd, -1, -1, None, None, None);
 
                 // print the ID
                 // we use this as the key for calling end
