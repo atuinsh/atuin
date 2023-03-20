@@ -20,6 +20,7 @@ pub struct History {
 }
 
 impl History {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         timestamp: chrono::DateTime<Utc>,
         command: String,

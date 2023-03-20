@@ -22,8 +22,8 @@ pub async fn status<DB: Database>(
             .with_status(StatusCode::INTERNAL_SERVER_ERROR));
     }
 
-    return Ok(Json(StatusResponse {
+    Ok(Json(StatusResponse {
         count: history_count.unwrap(),
         deleted: deleted.unwrap(),
-    }));
+    }))
 }

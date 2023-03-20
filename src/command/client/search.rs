@@ -116,20 +116,20 @@ impl Cmd {
             )
             .await?;
 
-            if entries.len() == 0 {
+            if entries.is_empty() {
                 std::process::exit(1)
             }
 
             // if we aren't deleting, print it all
-            if !self.delete {
-                super::history::print_list(&entries, list_mode, self.format.as_deref());
-            } else {
+            if self.delete {
                 // delete it
                 // it only took me _years_ to add this
                 // sorry
                 for entry in entries {
                     db.delete(entry).await?;
                 }
+            } else {
+                super::history::print_list(&entries, list_mode, self.format.as_deref());
             }
         };
         Ok(())

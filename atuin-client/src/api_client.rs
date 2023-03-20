@@ -11,8 +11,7 @@ use sodiumoxide::crypto::secretbox;
 
 use atuin_common::api::{
     AddHistoryRequest, CountResponse, DeleteHistoryRequest, ErrorResponse, IndexResponse,
-    LoginRequest, LoginResponse, MessageResponse, RegisterResponse, StatusResponse,
-    SyncHistoryResponse,
+    LoginRequest, LoginResponse, RegisterResponse, StatusResponse, SyncHistoryResponse,
 };
 use semver::Version;
 

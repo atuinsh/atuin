@@ -5,9 +5,7 @@ use chrono::{Datelike, TimeZone};
 use chronoutil::RelativeDuration;
 use sqlx::{postgres::PgPoolOptions, Result};
 
-use sqlx::postgres::PgRow;
-
-use sqlx::{FromRow, Row};
+use sqlx::Row;
 
 use tracing::{debug, instrument, warn};
 
