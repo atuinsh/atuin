@@ -135,8 +135,7 @@ impl State {
     }
 
     fn handle_paste_input(&mut self, input: &str) -> Option<usize> {
-        let n = input.chars();
-        for i in n {
+        for i in input.chars() {
             self.search.input.insert(i);
         }
         None
