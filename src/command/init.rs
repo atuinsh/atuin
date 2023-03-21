@@ -108,9 +108,10 @@ bind -M insert \e\[A _atuin_bind_up";
             mode: emacs
             event: {
                 send: executehostcommand
-                cmd:
-                    'RUST_LOG=error atuin search -i err> /tmp/atuin_res.nu
-                    commandline (open /tmp/atuin_res.nu | str trim --right --char "\n")'
+                cmd: `commandline (
+                    sh -c 'RUST_LOG=error atuin search $* -i -- 3>&1 1>&2 2>&3'
+                    | str trim --right --char "\n"
+                )`
             }
         }
     )
