@@ -452,6 +452,7 @@ impl Database for Sqlite {
                 "max(duration) as duration",
                 "exit",
                 "command",
+                "deleted_at",
                 "group_concat(cwd, ':') as cwd",
                 "group_concat(session) as session",
                 "group_concat(hostname, ',') as hostname",
