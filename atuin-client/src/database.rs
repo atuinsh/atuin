@@ -460,6 +460,7 @@ impl Database for Sqlite {
             ])
             .group_by("command")
             .group_by("exit")
+            .and_where("deleted_at is null")
             .order_desc("timestamp");
 
         let query = query.sql().expect("bug in list query. please report");
