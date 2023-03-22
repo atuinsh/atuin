@@ -55,14 +55,15 @@ pub struct SearchState {
     pub input: Cursor,
     pub filter_mode: FilterMode,
     pub search_mode: SearchMode,
+    /// Store if the user has _just_ changed the search mode.
+    /// If so, we change the UI to show the search mode instead
+    /// of the filter mode until user starts typing again.
+    switched_search_mode: bool,
     pub context: Context,
 }
 
 impl State {
-    async fn query_results(
-        &mut self,
-        db: &mut impl Database,
-    ) -> Result<Vec<Arc<HistoryWrapper>>> {
+    async fn query_results(&mut self, db: &mut impl Database) -> Result<Vec<Arc<HistoryWrapper>>> {
         let i = self.search.input.as_str();
         let results = if i.is_empty() {
             db.list(
@@ -154,6 +155,10 @@ impl State {
 
         let ctrl = input.modifiers.contains(KeyModifiers::CONTROL);
         let alt = input.modifiers.contains(KeyModifiers::ALT);
+        if !(input.code == KeyCode::Char('s') && ctrl) {
+            // reset the state when not changing search mode
+            self.search.switched_search_mode = false;
+        }
         match input.code {
             KeyCode::Char('c' | 'd' | 'g') if ctrl => return Some(RETURN_ORIGINAL),
             KeyCode::Esc => {
@@ -225,6 +230,10 @@ impl State {
                 let i = self.search.filter_mode as usize;
                 let i = (i + 1) % FILTER_MODES.len();
                 self.search.filter_mode = FILTER_MODES[i];
+            }
+            KeyCode::Char('s') if ctrl => {
+                self.search.switched_search_mode = true;
+                self.search.search_mode = self.search.search_mode.next(settings);
             }
             KeyCode::Down if self.results_state.selected() == 0 => return Some(RETURN_ORIGINAL),
             KeyCode::Down => {
@@ -395,9 +404,13 @@ impl State {
     }
 
     fn build_input(&mut self, compact: bool, chunk_width: usize) -> Paragraph {
+        let (pref, main, main_width) = if self.search.switched_search_mode {
+            ("SRCH:", self.search.search_mode.as_str(), 9)
+        } else {
+            ("", self.search.filter_mode.as_str(), 14)
+        };
         let input = format!(
-            "[{:^14}] {}",
-            self.search.filter_mode.as_str(),
+            "[{pref:>}{main:^main_width$}] {}",
             self.search.input.as_str(),
         );
         let input = if compact {
@@ -544,6 +557,7 @@ pub async fn history(
                 settings.filter_mode
             },
             search_mode: settings.search_mode,
+            switched_search_mode: false,
         },
         all_history: Vec::new(),
     };
