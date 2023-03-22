@@ -411,7 +411,7 @@ impl State {
         const MAX_WIDTH: usize = 14;
         let mode_width = MAX_WIDTH - pref.len();
         // sanity check to ensure we don't exceed the layout limits
-        debug_assert!(mode_width >= mode.len(), "mode string is too wide!");
+        debug_assert!(mode_width >= mode.len(), "mode name '{mode}' is too long!");
         let input = format!(
             "[{pref}{mode:^mode_width$}] {}",
             self.search.input.as_str(),
