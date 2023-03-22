@@ -402,15 +402,18 @@ impl State {
     }
 
     fn build_input(&mut self, compact: bool, chunk_width: usize) -> Paragraph {
-        let (pref, pref_width, mode, mode_width) = if self.search.switched_search_mode {
-            ("SRCH:", 6, self.search.search_mode.as_str(), 8)
+        let (pref, mode) = if self.search.switched_search_mode {
+            (" SRCH:", self.search.search_mode.as_str())
         } else {
-            ("", 0, self.search.filter_mode.as_str(), 14)
+            ("", self.search.filter_mode.as_str())
         };
-        // just a sanity check to ensure we don't exceed the layout limits
-        debug_assert_eq!(pref_width + mode_width, 14);
+        /// Max width of the UI box showing current mode
+        const MAX_WIDTH: usize = 14;
+        let mode_width = MAX_WIDTH - pref.len();
+        // sanity check to ensure we don't exceed the layout limits
+        debug_assert!(mode_width >= mode.len(), "mode string is too wide!");
         let input = format!(
-            "[{pref:>pref_width$}{mode:^mode_width$}] {}",
+            "[{pref}{mode:^mode_width$}] {}",
             self.search.input.as_str(),
         );
         let input = if compact {
