@@ -155,10 +155,8 @@ impl State {
 
         let ctrl = input.modifiers.contains(KeyModifiers::CONTROL);
         let alt = input.modifiers.contains(KeyModifiers::ALT);
-        if !(input.code == KeyCode::Char('s') && ctrl) {
-            // reset the state when not changing search mode
-            self.search.switched_search_mode = false;
-        }
+        // reset the state, will be set to true later if user really did change it
+        self.search.switched_search_mode = false;
         match input.code {
             KeyCode::Char('c' | 'd' | 'g') if ctrl => return Some(RETURN_ORIGINAL),
             KeyCode::Esc => {
