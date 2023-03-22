@@ -38,7 +38,7 @@ impl SearchMode {
     pub fn as_str(&self) -> &'static str {
         match self {
             SearchMode::Prefix => "PREFIX",
-            SearchMode::FullText => "FULLTEXT",
+            SearchMode::FullText => "FULLTXT",
             SearchMode::Fuzzy => "FUZZY",
             SearchMode::Skim => "SKIM",
         }
