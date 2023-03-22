@@ -54,13 +54,13 @@ struct State {
 pub struct SearchState {
     pub input: Cursor,
     pub filter_mode: FilterMode,
+    pub search_mode: SearchMode,
     pub context: Context,
 }
 
 impl State {
     async fn query_results(
         &mut self,
-        search_mode: SearchMode,
         db: &mut impl Database,
     ) -> Result<Vec<Arc<HistoryWrapper>>> {
         let i = self.search.input.as_str();
@@ -76,7 +76,7 @@ impl State {
             .map(|history| HistoryWrapper { history, count: 1 })
             .map(Arc::new)
             .collect::<Vec<_>>()
-        } else if search_mode == SearchMode::Skim {
+        } else if self.search.search_mode == SearchMode::Skim {
             if self.all_history.is_empty() {
                 self.all_history = db
                     .all_with_count()
@@ -91,7 +91,7 @@ impl State {
             super::skim_impl::fuzzy_search(&self.search, &self.all_history).await
         } else {
             db.search(
-                search_mode,
+                self.search.search_mode,
                 self.search.filter_mode,
                 &self.search.context,
                 i,
@@ -543,11 +543,12 @@ pub async fn history(
             } else {
                 settings.filter_mode
             },
+            search_mode: settings.search_mode,
         },
         all_history: Vec::new(),
     };
 
-    let mut results = app.query_results(settings.search_mode, db).await?;
+    let mut results = app.query_results(db).await?;
 
     let index = 'render: loop {
         let compact = match settings.style {
@@ -561,6 +562,7 @@ pub async fn history(
 
         let initial_input = app.search.input.as_str().to_owned();
         let initial_filter_mode = app.search.filter_mode;
+        let initial_search_mode = app.search.search_mode;
 
         let event_ready = tokio::task::spawn_blocking(|| event::poll(Duration::from_millis(250)));
 
@@ -584,8 +586,9 @@ pub async fn history(
 
         if initial_input != app.search.input.as_str()
             || initial_filter_mode != app.search.filter_mode
+            || initial_search_mode != app.search.search_mode
         {
-            results = app.query_results(settings.search_mode, db).await?;
+            results = app.query_results(db).await?;
         }
     };
     if index < results.len() {
