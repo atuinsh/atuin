@@ -1,6 +1,5 @@
 name: Release
 
-
 env:
   MIN_SUPPORTED_RUST_VERSION: "1.51.0"
   CICD_INTERMEDIATES_DIR: "_cicd-intermediates"
@@ -21,6 +20,7 @@ jobs:
       fail-fast: false
       matrix:
         job:
+          - { os: ubuntu-20.04 , target: x86_64-unknown-linux-musl    }
           - { os: ubuntu-20.04 , target: x86_64-unknown-linux-gnu    }
           - { os: ubuntu-20.04 , target: aarch64-unknown-linux-gnu    }
           - { os: macos-12     , target: x86_64-apple-darwin         }
@@ -35,6 +35,7 @@ jobs:
         case ${{ matrix.job.target }} in
           arm-unknown-linux-gnueabihf) sudo apt-get -y update ; sudo apt-get -y install gcc-arm-linux-gnueabihf ;;
           aarch64-unknown-linux-gnu) sudo apt-get -y update ; sudo apt-get -y install gcc-aarch64-linux-gnu ;;
+          x86_64-unknown-linux-musl) sudo apt-get -y update ; sudo apt-get -y install musl-tools ;;
         esac
 
     - name: Extract crate information
@@ -81,6 +82,7 @@ jobs:
         esac;
 
         # Figure out what strip tool to use if any
+        # musl builds use the default strip
         STRIP="strip"
         case ${{ matrix.job.target }} in
           arm-unknown-linux-gnueabihf) STRIP="arm-linux-gnueabihf-strip" ;;
@@ -92,7 +94,7 @@ jobs:
         BIN_DIR="${{ env.CICD_INTERMEDIATES_DIR }}/stripped-release-bin/"
         mkdir -p "${BIN_DIR}"
         BIN_NAME="${{ env.PROJECT_NAME }}${EXE_suffix}"
-        BIN_PATH="${BIN_DIR}/${BIN_NAME}"
+        BIN_PATH="${BIN_DIR}${BIN_NAME}"
 
         # Copy the release build binary to the result location
         cp "target/${{ matrix.job.target }}/release/${BIN_NAME}" "${BIN_DIR}"
