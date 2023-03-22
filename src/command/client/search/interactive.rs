@@ -54,15 +54,16 @@ struct State {
 pub struct SearchState {
     pub input: Cursor,
     pub filter_mode: FilterMode,
+    pub search_mode: SearchMode,
+    /// Store if the user has _just_ changed the search mode.
+    /// If so, we change the UI to show the search mode instead
+    /// of the filter mode until user starts typing again.
+    switched_search_mode: bool,
     pub context: Context,
 }
 
 impl State {
-    async fn query_results(
-        &mut self,
-        search_mode: SearchMode,
-        db: &mut impl Database,
-    ) -> Result<Vec<Arc<HistoryWrapper>>> {
+    async fn query_results(&mut self, db: &mut impl Database) -> Result<Vec<Arc<HistoryWrapper>>> {
         let i = self.search.input.as_str();
         let results = if i.is_empty() {
             db.list(
@@ -76,7 +77,7 @@ impl State {
             .map(|history| HistoryWrapper { history, count: 1 })
             .map(Arc::new)
             .collect::<Vec<_>>()
-        } else if search_mode == SearchMode::Skim {
+        } else if self.search.search_mode == SearchMode::Skim {
             if self.all_history.is_empty() {
                 self.all_history = db
                     .all_with_count()
@@ -91,7 +92,7 @@ impl State {
             super::skim_impl::fuzzy_search(&self.search, &self.all_history).await
         } else {
             db.search(
-                search_mode,
+                self.search.search_mode,
                 self.search.filter_mode,
                 &self.search.context,
                 i,
@@ -154,6 +155,8 @@ impl State {
 
         let ctrl = input.modifiers.contains(KeyModifiers::CONTROL);
         let alt = input.modifiers.contains(KeyModifiers::ALT);
+        // reset the state, will be set to true later if user really did change it
+        self.search.switched_search_mode = false;
         match input.code {
             KeyCode::Char('c' | 'd' | 'g') if ctrl => return Some(RETURN_ORIGINAL),
             KeyCode::Esc => {
@@ -225,6 +228,10 @@ impl State {
                 let i = self.search.filter_mode as usize;
                 let i = (i + 1) % FILTER_MODES.len();
                 self.search.filter_mode = FILTER_MODES[i];
+            }
+            KeyCode::Char('s') if ctrl => {
+                self.search.switched_search_mode = true;
+                self.search.search_mode = self.search.search_mode.next(settings);
             }
             KeyCode::Down if self.results_state.selected() == 0 => return Some(RETURN_ORIGINAL),
             KeyCode::Down => {
@@ -395,11 +402,17 @@ impl State {
     }
 
     fn build_input(&mut self, compact: bool, chunk_width: usize) -> Paragraph {
-        let input = format!(
-            "[{:^14}] {}",
-            self.search.filter_mode.as_str(),
-            self.search.input.as_str(),
-        );
+        /// Max width of the UI box showing current mode
+        const MAX_WIDTH: usize = 14;
+        let (pref, mode) = if self.search.switched_search_mode {
+            (" SRCH:", self.search.search_mode.as_str())
+        } else {
+            ("", self.search.filter_mode.as_str())
+        };
+        let mode_width = MAX_WIDTH - pref.len();
+        // sanity check to ensure we don't exceed the layout limits
+        debug_assert!(mode_width >= mode.len(), "mode name '{mode}' is too long!");
+        let input = format!("[{pref}{mode:^mode_width$}] {}", self.search.input.as_str(),);
         let input = if compact {
             Paragraph::new(input)
         } else {
@@ -543,11 +556,13 @@ pub async fn history(
             } else {
                 settings.filter_mode
             },
+            search_mode: settings.search_mode,
+            switched_search_mode: false,
         },
         all_history: Vec::new(),
     };
 
-    let mut results = app.query_results(settings.search_mode, db).await?;
+    let mut results = app.query_results(db).await?;
 
     let index = 'render: loop {
         let compact = match settings.style {
@@ -561,6 +576,7 @@ pub async fn history(
 
         let initial_input = app.search.input.as_str().to_owned();
         let initial_filter_mode = app.search.filter_mode;
+        let initial_search_mode = app.search.search_mode;
 
         let event_ready = tokio::task::spawn_blocking(|| event::poll(Duration::from_millis(250)));
 
@@ -584,8 +600,9 @@ pub async fn history(
 
         if initial_input != app.search.input.as_str()
             || initial_filter_mode != app.search.filter_mode
+            || initial_search_mode != app.search.search_mode
         {
-            results = app.query_results(settings.search_mode, db).await?;
+            results = app.query_results(db).await?;
         }
     };
     if index < results.len() {
