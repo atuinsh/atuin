@@ -106,18 +106,29 @@ bind -M insert \e\[A _atuin_bind_up";
             modifier: control
             keycode: char_r
             mode: emacs
-            event: {
-                send: executehostcommand
-                cmd: `commandline (
-                    sh -c 'RUST_LOG=error atuin search $* -i -- 3>&1 1>&2 2>&3'
-                    | str trim --right --char "\n"
-                )`
-            }
+            event: { send: executehostcommand cmd: (_atuin_search_cmd) }
         }
     )
-)"#;
+)
+"#;
+            const BIND_UP_ARROW: &str = r#"let-env config = (
+    $env.config | upsert keybindings (
+        $env.config.keybindings
+        | append {
+            name: atuin
+            modifier: none
+            keycode: up
+            mode: emacs
+            event: { send: executehostcommand cmd: (_atuin_search_cmd '--shell-up-key-binding') }
+        }
+    )
+)
+"#;
             if !self.disable_ctrl_r {
                 println!("{BIND_CTRL_R}");
+            }
+            if !self.disable_up_arrow {
+                println!("{BIND_UP_ARROW}");
             }
         }
     }
