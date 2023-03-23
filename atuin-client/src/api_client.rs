@@ -7,13 +7,13 @@ use reqwest::{
     header::{HeaderMap, AUTHORIZATION, USER_AGENT},
     StatusCode, Url,
 };
-use sodiumoxide::crypto::secretbox;
 
 use atuin_common::api::{
     AddHistoryRequest, CountResponse, DeleteHistoryRequest, ErrorResponse, IndexResponse,
     LoginRequest, LoginResponse, RegisterResponse, StatusResponse, SyncHistoryResponse,
 };
 use semver::Version;
+use xsalsa20poly1305::Key;
 
 use crate::{
     encryption::{decode_key, decrypt},
@@ -28,7 +28,7 @@ static APP_USER_AGENT: &str = concat!("atuin/", env!("CARGO_PKG_VERSION"),);
 
 pub struct Client<'a> {
     sync_addr: &'a str,
-    key: secretbox::Key,
+    key: Key,
     client: reqwest::Client,
 }
 

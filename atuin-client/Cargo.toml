@@ -15,12 +15,13 @@ repository = { workspace = true }
 default = ["sync"]
 sync = [
   "urlencoding",
-  "sodiumoxide",
   "reqwest",
   "sha2",
   "hex",
   "rmp-serde",
   "base64",
+  "generic-array",
+  "xsalsa20poly1305",
 ]
 
 [dependencies]
@@ -60,6 +61,8 @@ rmp-serde = { version = "1.1.1", optional = true }
 base64 = { workspace = true, optional = true }
 tokio = { workspace = true }
 semver = { workspace = true }
+xsalsa20poly1305 = { version = "0.9.0", optional = true }
+generic-array = { version = "0.14", optional = true, features = ["serde"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
