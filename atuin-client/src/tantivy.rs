@@ -119,7 +119,7 @@ pub async fn refresh(db: &mut dyn Database) -> Result<()> {
 
     // delete the index
     let data_dir = atuin_common::utils::data_dir();
-    let tantivy_dir = dbg!(data_dir.join("tantivy"));
+    let tantivy_dir = data_dir.join("tantivy");
     fs_err::remove_dir_all(tantivy_dir)?;
 
     tokio::task::spawn_blocking(|| {
