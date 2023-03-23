@@ -11,7 +11,7 @@ use super::{SearchEngine, SearchState};
 
 pub struct Search {
     all_history: Vec<(History, i32)>,
-    engine: SkimMatcherV2
+    engine: SkimMatcherV2,
 }
 
 impl Search {
@@ -31,17 +31,18 @@ impl SearchEngine for Search {
         db: &mut dyn Database,
     ) -> Result<Vec<History>> {
         if self.all_history.is_empty() {
-            self.all_history = db
-                .all_with_count()
-                .await
-                .unwrap();
+            self.all_history = db.all_with_count().await.unwrap();
         }
 
         Ok(fuzzy_search(&self.engine, state, &self.all_history).await)
     }
 }
 
-async fn fuzzy_search(engine: &SkimMatcherV2, state: &SearchState, all_history: &[(History, i32)]) -> Vec<History> {
+async fn fuzzy_search(
+    engine: &SkimMatcherV2,
+    state: &SearchState,
+    all_history: &[(History, i32)],
+) -> Vec<History> {
     let mut set = Vec::with_capacity(200);
     let mut ranks = Vec::with_capacity(200);
     let query = state.input.as_str();
