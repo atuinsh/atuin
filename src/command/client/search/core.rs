@@ -260,9 +260,9 @@ impl<DB: Database> State<DB> {
             Event::SelectN(n) => {
                 let i = self.results_state.selected().saturating_add(n as usize);
                 return ControlFlow::Break(if i < self.history.len() {
-                    self.search.input.into_inner()
-                } else {
                     self.history.swap_remove(i).command.clone()
+                } else {
+                    self.search.input.into_inner()
                 });
             }
 

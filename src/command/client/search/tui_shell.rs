@@ -287,7 +287,8 @@ impl Stdout {
         execute!(
             stdout,
             terminal::EnterAlternateScreen,
-            event::EnableMouseCapture
+            event::EnableMouseCapture,
+            event::EnableBracketedPaste,
         )?;
         Ok(Self { stdout })
     }
@@ -298,7 +299,8 @@ impl Drop for Stdout {
         execute!(
             self.stdout,
             terminal::LeaveAlternateScreen,
-            event::DisableMouseCapture
+            event::DisableMouseCapture,
+            event::DisableBracketedPaste,
         )
         .unwrap();
         terminal::disable_raw_mode().unwrap();
