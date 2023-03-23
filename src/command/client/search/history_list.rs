@@ -1,12 +1,12 @@
 use std::{sync::Arc, time::Duration};
 
-use crate::tui::{
+use atuin_client::history::History;
+use ratatui::{
     buffer::Buffer,
     layout::Rect,
     style::{Color, Modifier, Style},
     widgets::{Block, StatefulWidget, Widget},
 };
-use atuin_client::history::History;
 
 use super::{format_duration, interactive::HistoryWrapper};
 

@@ -26,16 +26,14 @@ use super::{
     cursor::Cursor,
     history_list::{HistoryList, ListState, PREFIX_LENGTH},
 };
-use crate::{
-    tui::{
-        backend::{Backend, CrosstermBackend},
-        layout::{Alignment, Constraint, Direction, Layout},
-        style::{Color, Modifier, Style},
-        text::{Span, Spans, Text},
-        widgets::{Block, BorderType, Borders, Paragraph},
-        Frame, Terminal,
-    },
-    VERSION,
+use crate::VERSION;
+use ratatui::{
+    backend::{Backend, CrosstermBackend},
+    layout::{Alignment, Constraint, Direction, Layout},
+    style::{Color, Modifier, Style},
+    text::{Span, Spans, Text},
+    widgets::{Block, BorderType, Borders, Paragraph},
+    Frame, Terminal,
 };
 
 const RETURN_ORIGINAL: usize = usize::MAX;

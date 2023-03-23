@@ -83,8 +83,6 @@ dependencies = [
  "atuin-common",
  "atuin-server",
  "base64 0.20.0",
- "bitflags",
- "cassowary",
  "chrono",
  "clap",
  "clap_complete",
@@ -99,6 +97,7 @@ dependencies = [
  "interim",
  "itertools",
  "log",
+ "ratatui",
  "rpassword",
  "runtime-format",
  "semver",
@@ -108,7 +107,6 @@ dependencies = [
  "tiny-bip39",
  "tokio",
  "tracing-subscriber",
- "unicode-segmentation",
  "unicode-width",
  "whoami",
 ]
@@ -1764,6 +1762,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "ratatui"
+version = "0.20.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dcc0d032bccba900ee32151ec0265667535c230169f5a011154cdcd984e16829"
+dependencies = [
+ "bitflags",
+ "cassowary",
+ "crossterm",
+ "unicode-segmentation",
+ "unicode-width",
+]
+
+[[package]]
 name = "rayon"
 version = "1.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2790,9 +2801,9 @@ dependencies = [
 
 [[package]]
 name = "unicode-segmentation"
-version = "1.9.0"
+version = "1.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7e8820f5d777f6224dc4be3632222971ac30164d4a258d595640799554ebfd99"
+checksum = "1dd624098567895118886609431a7c3b8f516e41d30e0643f03d94592a147e36"
 
 [[package]]
 name = "unicode-width"
