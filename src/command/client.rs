@@ -13,6 +13,7 @@ mod history;
 mod import;
 mod search;
 mod stats;
+mod tantivy;
 
 #[derive(Subcommand)]
 #[command(infer_subcommands = true)]
@@ -31,8 +32,9 @@ pub enum Cmd {
     /// Interactive history search
     Search(search::Cmd),
 
-    /// Interactive history search
-    RefreshTantivyIndex,
+    /// Manage the tantivy search engine index
+    #[command(subcommand)]
+    Tantivy(tantivy::Cmd),
 
     #[cfg(feature = "sync")]
     #[command(flatten)]
@@ -57,7 +59,7 @@ impl Cmd {
             Self::Import(import) => import.run(&mut db).await,
             Self::Stats(stats) => stats.run(&mut db, &settings).await,
             Self::Search(search) => search.run(db, &mut settings).await,
-            Self::RefreshTantivyIndex => atuin_client::tantivy::refresh(&mut db).await,
+            Self::Tantivy(tantivy) => tantivy.run(&mut db).await,
             #[cfg(feature = "sync")]
             Self::Sync(sync) => sync.run(settings, &mut db).await,
         }

@@ -98,6 +98,8 @@ async fn sync_download(
         crate::tantivy::bulk_write_history(&mut writer, &hs, page)?;
     }
 
+    // delete from tantivy index
+    crate::tantivy::delete_history(remote_status.deleted.iter().map(String::as_str))?;
     for i in remote_status.deleted {
         // we will update the stored history to have this data
         // pretty much everything can be nullified

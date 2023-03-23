@@ -4,7 +4,7 @@ use tantivy::{
     directory::MmapDirectory,
     doc,
     schema::{Field, Schema, FAST, STORED, STRING, TEXT},
-    DateTime, Index, IndexWriter,
+    DateTime, Index, IndexWriter, Term,
 };
 
 pub fn schema() -> (HistorySchema, Schema) {
@@ -47,11 +47,36 @@ pub fn index(schema: Schema) -> Result<Index> {
 }
 
 pub fn write_history(h: impl IntoIterator<Item = History>) -> Result<()> {
+    write_history_internal(h, false)
+}
+
+pub fn delete_history<'a>(ids: impl IntoIterator<Item = &'a str>) -> Result<()> {
     let (hs, schema) = schema();
     let index = index(schema)?;
     let mut writer = index.writer(3_000_000)?;
 
+    for id in ids {
+        writer.delete_term(Term::from_field_text(hs.id, id));
+    }
+
+    writer.commit()?;
+    writer.wait_merging_threads()?;
+
+    Ok(())
+}
+
+fn write_history_internal(h: impl IntoIterator<Item = History>, delete: bool) -> Result<()> {
+    let (hs, schema) = schema();
+    let index = index(schema)?;
+    let mut writer = index.writer(3_000_000)?;
+
+    if delete {
+        writer.delete_all_documents()?;
+    }
+
     bulk_write_history(&mut writer, &hs, h)?;
+
+    writer.wait_merging_threads()?;
 
     Ok(())
 }
@@ -89,7 +114,7 @@ fn write_single_history(
     Ok(())
 }
 
-pub async fn refresh(db: &mut impl Database) -> Result<()> {
+pub async fn refresh(db: &mut dyn Database) -> Result<()> {
     let history = db.all_with_count().await?;
 
     // delete the index
@@ -97,7 +122,22 @@ pub async fn refresh(db: &mut impl Database) -> Result<()> {
     let tantivy_dir = dbg!(data_dir.join("tantivy"));
     fs_err::remove_dir_all(tantivy_dir)?;
 
-    tokio::task::spawn_blocking(|| write_history(history.into_iter().map(|(h, _)| h))).await??;
+    tokio::task::spawn_blocking(|| {
+        write_history_internal(history.into_iter().map(|(h, _)| h), true)
+    })
+    .await??;
+
+    Ok(())
+}
+
+pub async fn garbage_collect() -> Result<()> {
+    let (_, schema) = schema();
+    let index = index(schema)?;
+
+    let writer = index.writer(3_000_000)?;
+    writer.garbage_collect_files().await?;
+
+    tokio::task::spawn_blocking(|| writer.wait_merging_threads()).await??;
 
     Ok(())
 }

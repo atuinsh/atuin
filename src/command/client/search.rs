@@ -125,6 +125,7 @@ impl Cmd {
                 // delete it
                 // it only took me _years_ to add this
                 // sorry
+                atuin_client::tantivy::delete_history(entries.iter().map(|e| e.id.as_str()))?;
                 for entry in entries {
                     db.delete(entry).await?;
                 }
