@@ -172,24 +172,4 @@ mod test {
         // this should err
         let _ = decrypt(&e2, &key1).expect_err("expected an error decrypting with invalid key");
     }
-
-    // #[test]
-    // fn test_encrypt_decrypt_cryptobox() {
-    //     let key1 = XSalsa20Poly1305::generate_key(&mut OsRng);
-    //     let key2 = secretbox::Key::from_slice(&key1).unwrap();
-
-    //     let payload = "blahblahblahblahblahblahblahblahb".repeat(20);
-
-    //     let nonce1 = XSalsa20Poly1305::generate_nonce(&mut OsRng);
-    //     let nonce2 = secretbox::Nonce::from_slice(&nonce1).unwrap();
-
-    //     let sealed = secretbox::seal(payload.as_bytes(), &nonce2, &key2);
-
-    //     let output = XSalsa20Poly1305::new(&key1)
-    //         .decrypt(&nonce1, sealed.as_slice())
-    //         .unwrap();
-
-    //     // let output = crypto_box::seal_open(&key1, &sealed).unwrap();
-    //     assert_eq!(output, payload.as_bytes());
-    // }
 }
