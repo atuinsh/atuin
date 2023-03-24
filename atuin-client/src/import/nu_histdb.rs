@@ -4,10 +4,10 @@
 use std::path::PathBuf;
 
 use async_trait::async_trait;
-use chrono::{prelude::*, Utc};
 use directories::BaseDirs;
 use eyre::{eyre, Result};
 use sqlx::{sqlite::SqlitePool, Pool};
+use time::{Duration, OffsetDateTime};
 
 use super::Importer;
 use crate::history::History;
@@ -31,10 +31,10 @@ impl From<HistDbEntry> for History {
         let ts_secs = histdb_item.start_timestamp / 1000;
         let ts_ns = (histdb_item.start_timestamp % 1000) * 1_000_000;
         let imported = History::import()
-            .timestamp(DateTime::from_utc(
-                NaiveDateTime::from_timestamp(ts_secs, ts_ns as u32),
-                Utc,
-            ))
+            .timestamp(
+                OffsetDateTime::from_unix_timestamp(ts_secs).unwrap()
+                    + Duration::nanoseconds(ts_ns),
+            )
             .command(String::from_utf8(histdb_item.command_line).unwrap())
             .cwd(String::from_utf8(histdb_item.cwd).unwrap())
             .exit(histdb_item.exit_status)

@@ -2,10 +2,10 @@ use std::path::Path;
 
 use async_trait::async_trait;
 use atuin_client::{database::Database, history::History, settings::FilterMode};
-use chrono::Utc;
 use eyre::Result;
 use fuzzy_matcher::{skim::SkimMatcherV2, FuzzyMatcher};
 use itertools::Itertools;
+use time::OffsetDateTime;
 use tokio::task::yield_now;
 
 use super::{SearchEngine, SearchState};
@@ -47,7 +47,7 @@ async fn fuzzy_search(
     let mut set = Vec::with_capacity(200);
     let mut ranks = Vec::with_capacity(200);
     let query = state.input.as_str();
-    let now = Utc::now();
+    let now = OffsetDateTime::now_utc();
 
     for (i, (history, count)) in all_history.iter().enumerate() {
         if i % 256 == 0 {
@@ -78,7 +78,7 @@ async fn fuzzy_search(
         if let Some((score, indices)) = engine.fuzzy_indices(&history.command, query) {
             let begin = indices.first().copied().unwrap_or_default();
 
-            let mut duration = ((now - history.timestamp).num_seconds() as f64).log2();
+            let mut duration = (now - history.timestamp).as_seconds_f64().log2();
             if !duration.is_finite() || duration <= 1.0 {
                 duration = 1.0;
             }

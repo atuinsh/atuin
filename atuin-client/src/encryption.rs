@@ -11,7 +11,6 @@
 use std::{io::prelude::*, path::PathBuf};
 
 use base64::prelude::{Engine, BASE64_STANDARD};
-use chrono::{DateTime, Utc};
 pub use crypto_secretbox::Key;
 use crypto_secretbox::{
     aead::{Nonce, OsRng},
@@ -21,6 +20,7 @@ use eyre::{bail, ensure, eyre, Context, Result};
 use fs_err as fs;
 use rmp::{decode::Bytes, Marker};
 use serde::{Deserialize, Serialize};
+use time::{format_description::well_known::Rfc3339, macros::format_description, OffsetDateTime};
 
 use crate::{history::History, settings::Settings};
 
@@ -137,6 +137,28 @@ pub fn decrypt(mut encrypted_history: EncryptedHistory, key: &Key) -> Result<His
     Ok(history)
 }
 
+fn format_rfc3339(ts: OffsetDateTime) -> Result<String> {
+    // horrible hack. chrono AutoSI limits to 0, 3, 6, or 9 decimal places for nanoseconds.
+    // time does not have this functionality.
+    static PARTIAL_RFC3339_0: &[time::format_description::FormatItem<'static>] =
+        format_description!("[year]-[month]-[day]T[hour]:[minute]:[second]Z");
+    static PARTIAL_RFC3339_3: &[time::format_description::FormatItem<'static>] =
+        format_description!("[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z");
+    static PARTIAL_RFC3339_6: &[time::format_description::FormatItem<'static>] =
+        format_description!("[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:6]Z");
+    static PARTIAL_RFC3339_9: &[time::format_description::FormatItem<'static>] =
+        format_description!("[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:9]Z");
+
+    let fmt = match ts.nanosecond() {
+        0 => PARTIAL_RFC3339_0,
+        ns if ns % 1_000_000 == 0 => PARTIAL_RFC3339_3,
+        ns if ns % 1_000 == 0 => PARTIAL_RFC3339_6,
+        _ => PARTIAL_RFC3339_9,
+    };
+
+    Ok(ts.format(fmt)?)
+}
+
 fn encode(h: &History) -> Result<Vec<u8>> {
     use rmp::encode;
 
@@ -145,11 +167,7 @@ fn encode(h: &History) -> Result<Vec<u8>> {
     encode::write_array_len(&mut output, 9)?;
 
     encode::write_str(&mut output, &h.id)?;
-    encode::write_str(
-        &mut output,
-        &(h.timestamp
-            .to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)),
-    )?;
+    encode::write_str(&mut output, &(format_rfc3339(h.timestamp)?))?;
     encode::write_sint(&mut output, h.duration)?;
     encode::write_sint(&mut output, h.exit)?;
     encode::write_str(&mut output, &h.command)?;
@@ -157,10 +175,7 @@ fn encode(h: &History) -> Result<Vec<u8>> {
     encode::write_str(&mut output, &h.session)?;
     encode::write_str(&mut output, &h.hostname)?;
     match h.deleted_at {
-        Some(d) => encode::write_str(
-            &mut output,
-            &d.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true),
-        )?,
+        Some(d) => encode::write_str(&mut output, &format_rfc3339(d)?)?,
         None => encode::write_nil(&mut output)?,
     }
 
@@ -220,7 +235,7 @@ fn decode(bytes: &[u8]) -> Result<History> {
 
     Ok(History {
         id: id.to_owned(),
-        timestamp: DateTime::parse_from_rfc3339(timestamp)?.with_timezone(&Utc),
+        timestamp: OffsetDateTime::parse(timestamp, &Rfc3339)?,
         duration,
         exit,
         command: command.to_owned(),
@@ -228,9 +243,8 @@ fn decode(bytes: &[u8]) -> Result<History> {
         session: session.to_owned(),
         hostname: hostname.to_owned(),
         deleted_at: deleted_at
-            .map(DateTime::parse_from_rfc3339)
-            .transpose()?
-            .map(|dt| dt.with_timezone(&Utc)),
+            .map(|t| OffsetDateTime::parse(t, &Rfc3339))
+            .transpose()?,
     })
 }
 
@@ -241,6 +255,8 @@ fn error_report<E: std::fmt::Debug>(err: E) -> eyre::Report {
 #[cfg(test)]
 mod test {
     use crypto_secretbox::{aead::OsRng, KeyInit, XSalsa20Poly1305};
+    use pretty_assertions::assert_eq;
+    use time::{macros::datetime, OffsetDateTime};
 
     use crate::history::History;
 
@@ -253,7 +269,7 @@ mod test {
 
         let history = History::from_db()
             .id("1".into())
-            .timestamp(chrono::Utc::now())
+            .timestamp(OffsetDateTime::now_utc())
             .command("ls".into())
             .cwd("/home/ellie".into())
             .exit(0)
@@ -297,7 +313,7 @@ mod test {
         ];
         let history = History {
             id: "66d16cbee7cd47538e5c5b8b44e9006e".to_owned(),
-            timestamp: "2023-05-28T18:35:40.633872Z".parse().unwrap(),
+            timestamp: datetime!(2023-05-28 18:35:40.633872 +00:00),
             duration: 49206000,
             exit: 0,
             command: "git status".to_owned(),
@@ -318,14 +334,14 @@ mod test {
     fn test_decode_deleted() {
         let history = History {
             id: "66d16cbee7cd47538e5c5b8b44e9006e".to_owned(),
-            timestamp: "2023-05-28T18:35:40.633872Z".parse().unwrap(),
+            timestamp: datetime!(2023-05-28 18:35:40.633872 +00:00),
             duration: 49206000,
             exit: 0,
             command: "git status".to_owned(),
             cwd: "/Users/conrad.ludgate/Documents/code/atuin".to_owned(),
             session: "b97d9a306f274473a203d2eba41f9457".to_owned(),
             hostname: "fvfg936c0kpf:conrad.ludgate".to_owned(),
-            deleted_at: Some("2023-05-28T18:35:40.633872Z".parse().unwrap()),
+            deleted_at: Some(datetime!(2023-05-28 18:35:40.633872 +00:00)),
         };
 
         let b = encode(&history).unwrap();
@@ -349,7 +365,7 @@ mod test {
         ];
         let history = History {
             id: "66d16cbee7cd47538e5c5b8b44e9006e".to_owned(),
-            timestamp: "2023-05-28T18:35:40.633872Z".parse().unwrap(),
+            timestamp: datetime!(2023-05-28 18:35:40.633872 +00:00),
             duration: 49206000,
             exit: 0,
             command: "git status".to_owned(),

@@ -4,9 +4,9 @@
 use std::{fs::File, io::Read, path::PathBuf};
 
 use async_trait::async_trait;
-use chrono::{prelude::*, Utc};
 use directories::BaseDirs;
 use eyre::{eyre, Result};
+use time::OffsetDateTime;
 
 use super::{unix_byte_lines, Importer, Loader};
 use crate::history::History;
@@ -59,8 +59,8 @@ impl Importer for Fish {
     }
 
     async fn load(self, loader: &mut impl Loader) -> Result<()> {
-        let now = Utc::now();
-        let mut time: Option<DateTime<Utc>> = None;
+        let now = OffsetDateTime::now_utc();
+        let mut time: Option<OffsetDateTime> = None;
         let mut cmd: Option<String> = None;
 
         for b in unix_byte_lines(&self.bytes) {
@@ -89,7 +89,7 @@ impl Importer for Fish {
             } else if let Some(t) = s.strip_prefix("  when: ") {
                 // if t is not an int, just ignore this line
                 if let Ok(t) = t.parse::<i64>() {
-                    time = Some(Utc.timestamp(t, 0));
+                    time = Some(OffsetDateTime::from_unix_timestamp(t)?);
                 }
             } else {
                 // ... ignore paths lines
@@ -164,7 +164,7 @@ ERROR
             ($timestamp:expr, $command:expr) => {
                 let h = history.next().expect("missing entry in history");
                 assert_eq!(h.command.as_str(), $command);
-                assert_eq!(h.timestamp.timestamp(), $timestamp);
+                assert_eq!(h.timestamp.unix_timestamp(), $timestamp);
             };
         }
 

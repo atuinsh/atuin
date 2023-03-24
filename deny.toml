@@ -26,8 +26,6 @@ unmaintained = "warn"
 yanked = "warn"
 notice = "warn"
 ignore = [
-    # time 0.1 - code path not taken
-    "RUSTSEC-2020-0071",
     # potential to misuse ed25519-dalek 1.0
     # used by rusty-paseto. not in a vulnerable way
     # and we don't even use paseto public key crypto so we don't use this

@@ -1,11 +1,11 @@
 use std::{
+    convert::TryFrom,
     io::prelude::*,
     path::{Path, PathBuf},
     str::FromStr,
 };
 
 use atuin_common::record::HostId;
-use chrono::{prelude::*, Utc};
 use clap::ValueEnum;
 use config::{Config, Environment, File as ConfigFile, FileFormat};
 use eyre::{eyre, Context, Result};
@@ -14,6 +14,7 @@ use parse_duration::parse;
 use regex::RegexSet;
 use semver::Version;
 use serde::Deserialize;
+use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use uuid::Uuid;
 
 pub const HISTORY_PAGE_SIZE: i64 = 100;
@@ -204,21 +205,20 @@ impl Settings {
     }
 
     fn save_current_time(filename: &str) -> Result<()> {
-        Settings::save_to_data_dir(filename, Utc::now().to_rfc3339().as_str())?;
+        Settings::save_to_data_dir(
+            filename,
+            OffsetDateTime::now_utc().format(&Rfc3339)?.as_str(),
+        )?;
 
         Ok(())
     }
 
-    fn load_time_from_file(filename: &str) -> Result<chrono::DateTime<Utc>> {
+    fn load_time_from_file(filename: &str) -> Result<OffsetDateTime> {
         let value = Settings::read_from_data_dir(filename);
 
         match value {
-            Some(v) => {
-                let time = chrono::DateTime::parse_from_rfc3339(v.as_str())?;
-
-                Ok(time.with_timezone(&Utc))
-            }
-            None => Ok(Utc.ymd(1970, 1, 1).and_hms(0, 0, 0)),
+            Some(v) => Ok(OffsetDateTime::parse(v.as_str(), &Rfc3339)?),
+            None => Ok(OffsetDateTime::UNIX_EPOCH),
         }
     }
 
@@ -230,11 +230,11 @@ impl Settings {
         Settings::save_current_time(LAST_VERSION_CHECK_FILENAME)
     }
 
-    pub fn last_sync() -> Result<chrono::DateTime<Utc>> {
+    pub fn last_sync() -> Result<OffsetDateTime> {
         Settings::load_time_from_file(LAST_SYNC_FILENAME)
     }
 
-    pub fn last_version_check() -> Result<chrono::DateTime<Utc>> {
+    pub fn last_version_check() -> Result<OffsetDateTime> {
         Settings::load_time_from_file(LAST_VERSION_CHECK_FILENAME)
     }
 
@@ -262,8 +262,8 @@ impl Settings {
 
         match parse(self.sync_frequency.as_str()) {
             Ok(d) => {
-                let d = chrono::Duration::from_std(d).unwrap();
-                Ok(Utc::now() - Settings::last_sync()? >= d)
+                let d = time::Duration::try_from(d).unwrap();
+                Ok(OffsetDateTime::now_utc() - Settings::last_sync()? >= d)
             }
             Err(e) => Err(eyre!("failed to check sync: {}", e)),
         }
@@ -271,10 +271,10 @@ impl Settings {
 
     fn needs_update_check(&self) -> Result<bool> {
         let last_check = Settings::last_version_check()?;
-        let diff = Utc::now() - last_check;
+        let diff = OffsetDateTime::now_utc() - last_check;
 
         // Check a max of once per hour
-        Ok(diff.num_hours() >= 1)
+        Ok(diff.whole_hours() >= 1)
     }
 
     async fn latest_version(&self) -> Result<Version> {
