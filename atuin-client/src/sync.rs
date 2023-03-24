@@ -111,6 +111,9 @@ async fn sync_upload(
 ) -> Result<()> {
     debug!("starting sync upload");
 
+    let remote_status = client.status().await?;
+    let remote_deleted: HashSet<String> = HashSet::from_iter(remote_status.deleted.clone());
+
     let initial_remote_count = client.count().await?;
     let mut remote_count = initial_remote_count;
 
@@ -157,6 +160,10 @@ async fn sync_upload(
     let deleted = db.deleted().await?;
 
     for i in deleted {
+        if remote_deleted.contains(&i.id) {
+            continue;
+        }
+
         info!("deleting {} on remote", i.id);
         client.delete_history(i).await?;
     }

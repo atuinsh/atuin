@@ -102,14 +102,15 @@ impl Cmd {
             eprintln!("{item}");
         } else {
             let list_mode = ListMode::from_flags(self.human, self.cmd_only);
-            let entries = run_non_interactive(
+
+            let mut entries = run_non_interactive(
                 settings,
-                self.cwd,
+                self.cwd.clone(),
                 self.exit,
                 self.exclude_exit,
-                self.exclude_cwd,
-                self.before,
-                self.after,
+                self.exclude_cwd.clone(),
+                self.before.clone(),
+                self.after.clone(),
                 self.limit,
                 &self.query,
                 db,
@@ -125,8 +126,25 @@ impl Cmd {
                 // delete it
                 // it only took me _years_ to add this
                 // sorry
-                for entry in entries {
-                    db.delete(entry).await?;
+                while !entries.is_empty() {
+                    for entry in &entries {
+                        eprintln!("deleting {}", entry.id);
+                        db.delete(entry.clone()).await?;
+                    }
+
+                    entries = run_non_interactive(
+                        settings,
+                        self.cwd.clone(),
+                        self.exit,
+                        self.exclude_exit,
+                        self.exclude_cwd.clone(),
+                        self.before.clone(),
+                        self.after.clone(),
+                        self.limit,
+                        &self.query,
+                        db,
+                    )
+                    .await?;
                 }
             } else {
                 super::history::print_list(&entries, list_mode, self.format.as_deref());
