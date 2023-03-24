@@ -1,12 +1,12 @@
 use std::{fs::File, io::Read, path::PathBuf};
 
 use async_trait::async_trait;
-use chrono::{TimeZone, Utc};
 use directories::UserDirs;
 use eyre::{eyre, Result};
 use serde::Deserialize;
 
 use atuin_common::utils::uuid_v7;
+use time::OffsetDateTime;
 
 use super::{get_histpath, unix_byte_lines, Importer, Loader};
 use crate::history::History;
@@ -110,16 +110,18 @@ impl Importer for Resh {
             #[allow(clippy::cast_sign_loss)]
             let timestamp = {
                 let secs = entry.realtime_before.floor() as i64;
-                let nanosecs = (entry.realtime_before.fract() * 1_000_000_000_f64).round() as u32;
-                Utc.timestamp(secs, nanosecs)
+                let nanosecs = (entry.realtime_before.fract() * 1_000_000_000_f64).round() as i64;
+                OffsetDateTime::from_unix_timestamp(secs)? + time::Duration::nanoseconds(nanosecs)
             };
             #[allow(clippy::cast_possible_truncation)]
             #[allow(clippy::cast_sign_loss)]
             let duration = {
                 let secs = entry.realtime_after.floor() as i64;
-                let nanosecs = (entry.realtime_after.fract() * 1_000_000_000_f64).round() as u32;
-                let difference = Utc.timestamp(secs, nanosecs) - timestamp;
-                difference.num_nanoseconds().unwrap_or(0)
+                let nanosecs = (entry.realtime_after.fract() * 1_000_000_000_f64).round() as i64;
+                let base = OffsetDateTime::from_unix_timestamp(secs)?
+                    + time::Duration::nanoseconds(nanosecs);
+                let difference = base - timestamp;
+                difference.whole_nanoseconds() as i64
             };
 
             let imported = History::import()

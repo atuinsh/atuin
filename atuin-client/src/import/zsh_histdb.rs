@@ -35,10 +35,10 @@
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
-use chrono::{prelude::*, Utc};
 use directories::UserDirs;
 use eyre::{eyre, Result};
 use sqlx::{sqlite::SqlitePool, Pool};
+use time::PrimitiveDateTime;
 
 use super::Importer;
 use crate::history::History;
@@ -52,7 +52,7 @@ pub struct HistDbEntryCount {
 #[derive(sqlx::FromRow, Debug)]
 pub struct HistDbEntry {
     pub id: i64,
-    pub start_time: NaiveDateTime,
+    pub start_time: PrimitiveDateTime,
     pub host: Vec<u8>,
     pub dir: Vec<u8>,
     pub argv: Vec<u8>,
@@ -62,7 +62,7 @@ pub struct HistDbEntry {
 impl From<HistDbEntry> for History {
     fn from(histdb_item: HistDbEntry) -> Self {
         let imported = History::import()
-            .timestamp(DateTime::from_utc(histdb_item.start_time, Utc))
+            .timestamp(histdb_item.start_time.assume_utc())
             .command(
                 String::from_utf8(histdb_item.argv)
                     .unwrap_or_else(|_e| String::from(""))

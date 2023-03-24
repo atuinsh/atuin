@@ -6,6 +6,7 @@ use std::{fs::File, io::Read, path::PathBuf};
 use async_trait::async_trait;
 use directories::BaseDirs;
 use eyre::{eyre, Result};
+use time::OffsetDateTime;
 
 use super::{unix_byte_lines, Importer, Loader};
 use crate::history::History;
@@ -44,7 +45,7 @@ impl Importer for Nu {
     }
 
     async fn load(self, h: &mut impl Loader) -> Result<()> {
-        let now = chrono::Utc::now();
+        let now = OffsetDateTime::now_utc();
 
         let mut counter = 0;
         for b in unix_byte_lines(&self.bytes) {
@@ -55,7 +56,7 @@ impl Importer for Nu {
 
             let cmd: String = s.replace("<\\n>", "\n");
 
-            let offset = chrono::Duration::nanoseconds(counter);
+            let offset = time::Duration::nanoseconds(counter);
             counter += 1;
 
             let entry = History::import().timestamp(now - offset).command(cmd);

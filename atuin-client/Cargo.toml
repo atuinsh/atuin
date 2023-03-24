@@ -3,6 +3,7 @@ name = "atuin-client"
 edition = "2021"
 description = "client library for atuin"
 
+rust-version = { workspace = true }
 version = { workspace = true }
 authors = { workspace = true }
 license = { workspace = true }
@@ -20,7 +21,7 @@ atuin-common = { path = "../atuin-common", version = "16.0.0" }
 
 log = { workspace = true }
 base64 = { workspace = true }
-chrono = { workspace = true }
+time = { workspace = true }
 clap = { workspace = true }
 eyre = { workspace = true }
 directories = { workspace = true }

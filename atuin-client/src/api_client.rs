@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::env;
 
-use chrono::Utc;
 use eyre::{bail, Result};
 use reqwest::{
     header::{HeaderMap, AUTHORIZATION, USER_AGENT},
@@ -17,6 +16,8 @@ use atuin_common::{
     record::RecordIndex,
 };
 use semver::Version;
+use time::format_description::well_known::Rfc3339;
+use time::OffsetDateTime;
 
 use crate::{history::History, sync::hash_str};
 
@@ -150,8 +151,8 @@ impl<'a> Client<'a> {
 
     pub async fn get_history(
         &self,
-        sync_ts: chrono::DateTime<Utc>,
-        history_ts: chrono::DateTime<Utc>,
+        sync_ts: OffsetDateTime,
+        history_ts: OffsetDateTime,
         host: Option<String>,
     ) -> Result<SyncHistoryResponse> {
         let host = host.unwrap_or_else(|| {
@@ -165,8 +166,8 @@ impl<'a> Client<'a> {
         let url = format!(
             "{}/sync/history?sync_ts={}&history_ts={}&host={}",
             self.sync_addr,
-            urlencoding::encode(sync_ts.to_rfc3339().as_str()),
-            urlencoding::encode(history_ts.to_rfc3339().as_str()),
+            urlencoding::encode(sync_ts.format(&Rfc3339)?.as_str()),
+            urlencoding::encode(history_ts.format(&Rfc3339)?.as_str()),
             host,
         );
 

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, convert::TryFrom};
 
 use axum::{
     extract::{Path, Query, State},
@@ -6,6 +6,7 @@ use axum::{
     Json,
 };
 use http::StatusCode;
+use time::Month;
 use tracing::{debug, error, instrument};
 
 use super::{ErrorResponse, ErrorResponseStatus, RespExt};
@@ -63,16 +64,10 @@ pub async fn list<DB: Database>(
     };
 
     let history = db
-        .list_history(
-            &user,
-            req.sync_ts.naive_utc(),
-            req.history_ts.naive_utc(),
-            &req.host,
-            page_size,
-        )
+        .list_history(&user, req.sync_ts, req.history_ts, &req.host, page_size)
         .await;
 
-    if req.sync_ts.timestamp_nanos() < 0 || req.history_ts.timestamp_nanos() < 0 {
+    if req.sync_ts.unix_timestamp_nanos() < 0 || req.history_ts.unix_timestamp_nanos() < 0 {
         error!("client asked for history from < epoch 0");
         return Err(
             ErrorResponse::reply("asked for history from before epoch 0")
@@ -139,7 +134,7 @@ pub async fn add<DB: Database>(
             client_id: h.id,
             user_id: user.id,
             hostname: h.hostname,
-            timestamp: h.timestamp.naive_utc(),
+            timestamp: h.timestamp,
             data: h.data,
         })
         .collect();
@@ -182,11 +177,17 @@ pub async fn calendar<DB: Database>(
 
     let year = params.get("year").unwrap_or(&0);
     let month = params.get("month").unwrap_or(&1);
+    let month = Month::try_from(*month as u8).map_err(|e| ErrorResponseStatus {
+        error: ErrorResponse {
+            reason: e.to_string().into(),
+        },
+        status: http::StatusCode::BAD_REQUEST,
+    })?;
 
     let db = &state.0.database;
     let focus = match focus {
         "year" => db
-            .calendar(&user, TimePeriod::YEAR, *year, *month)
+            .calendar(&user, TimePeriod::YEAR, *year, month)
             .await
             .map_err(|_| {
                 ErrorResponse::reply("failed to query calendar")
@@ -194,7 +195,7 @@ pub async fn calendar<DB: Database>(
             }),
 
         "month" => db
-            .calendar(&user, TimePeriod::MONTH, *year, *month)
+            .calendar(&user, TimePeriod::MONTH, *year, month)
             .await
             .map_err(|_| {
                 ErrorResponse::reply("failed to query calendar")
@@ -202,7 +203,7 @@ pub async fn calendar<DB: Database>(
             }),
 
         "day" => db
-            .calendar(&user, TimePeriod::DAY, *year, *month)
+            .calendar(&user, TimePeriod::DAY, *year, month)
             .await
             .map_err(|_| {
                 ErrorResponse::reply("failed to query calendar")
