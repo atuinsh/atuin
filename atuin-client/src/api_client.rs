@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
-use chrono::Utc;
 use eyre::{bail, Result};
 use reqwest::{
     header::{HeaderMap, AUTHORIZATION, USER_AGENT},
@@ -14,6 +13,8 @@ use atuin_common::api::{
 };
 use semver::Version;
 use xsalsa20poly1305::Key;
+use time::format_description::well_known::Rfc3339;
+use time::OffsetDateTime;
 
 use crate::{
     encryption::{decode_key, decrypt},
@@ -156,8 +157,8 @@ impl<'a> Client<'a> {
 
     pub async fn get_history(
         &self,
-        sync_ts: chrono::DateTime<Utc>,
-        history_ts: chrono::DateTime<Utc>,
+        sync_ts: OffsetDateTime,
+        history_ts: OffsetDateTime,
         host: Option<String>,
         deleted: HashSet<String>,
     ) -> Result<Vec<History>> {
@@ -169,8 +170,8 @@ impl<'a> Client<'a> {
         let url = format!(
             "{}/sync/history?sync_ts={}&history_ts={}&host={}",
             self.sync_addr,
-            urlencoding::encode(sync_ts.to_rfc3339().as_str()),
-            urlencoding::encode(history_ts.to_rfc3339().as_str()),
+            urlencoding::encode(sync_ts.format(&Rfc3339)?.as_str()),
+            urlencoding::encode(history_ts.format(&Rfc3339)?.as_str()),
             host,
         );
 
@@ -185,7 +186,7 @@ impl<'a> Client<'a> {
             .map(|h| decrypt(h, &self.key).expect("failed to decrypt history! check your key"))
             .map(|mut h| {
                 if deleted.contains(&h.id) {
-                    h.deleted_at = Some(chrono::Utc::now());
+                    h.deleted_at = Some(OffsetDateTime::now_utc());
                     h.command = String::from("");
                 }
 

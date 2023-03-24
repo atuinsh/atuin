@@ -178,7 +178,7 @@ impl Cmd {
 
 // This is supposed to more-or-less mirror the command line version, so ofc
 // it is going to have a lot of args
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::cast_possible_truncation)]
 async fn run_non_interactive(
     settings: &Settings,
     filter_options: OptFilters,

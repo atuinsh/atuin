@@ -1,8 +1,9 @@
 [package]
 name = "atuin-client"
-edition = "2018"
+edition = "2021"
 description = "client library for atuin"
 
+rust-version = { workspace = true }
 version = { workspace = true }
 authors = { workspace = true }
 license = { workspace = true }
@@ -28,7 +29,7 @@ sync = [
 atuin-common = { path = "../atuin-common", version = "14.0.1" }
 
 log = { workspace = true }
-chrono = { workspace = true }
+time = { workspace = true }
 clap = { workspace = true }
 eyre = { workspace = true }
 directories = { workspace = true }

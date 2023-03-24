@@ -64,14 +64,17 @@ pub async fn get<DB: Database>(
     let db = &state.0.database;
     let user = match db.get_user(username.as_ref()).await {
         Ok(user) => user,
-        Err(sqlx::Error::RowNotFound) => {
-            debug!("user not found: {}", username);
-            return Err(ErrorResponse::reply("user not found").with_status(StatusCode::NOT_FOUND));
-        }
         Err(err) => {
-            error!("database error: {}", err);
-            return Err(ErrorResponse::reply("database error")
-                .with_status(StatusCode::INTERNAL_SERVER_ERROR));
+            if let Some(sqlx::Error::RowNotFound) = err.root_cause().downcast_ref() {
+                debug!("user not found: {}", username);
+                return Err(
+                    ErrorResponse::reply("user not found").with_status(StatusCode::NOT_FOUND)
+                );
+            } else {
+                error!("database error: {}", err);
+                return Err(ErrorResponse::reply("database error")
+                    .with_status(StatusCode::INTERNAL_SERVER_ERROR));
+            }
         }
     };
 
@@ -175,27 +178,33 @@ pub async fn login<DB: Database>(
     let db = &state.0.database;
     let user = match db.get_user(login.username.borrow()).await {
         Ok(u) => u,
-        Err(sqlx::Error::RowNotFound) => {
-            return Err(ErrorResponse::reply("user not found").with_status(StatusCode::NOT_FOUND));
-        }
-        Err(e) => {
-            error!("failed to get user {}: {}", login.username.clone(), e);
+        Err(err) => {
+            if let Some(sqlx::Error::RowNotFound) = err.root_cause().downcast_ref() {
+                return Err(
+                    ErrorResponse::reply("user not found").with_status(StatusCode::NOT_FOUND)
+                );
+            } else {
+                error!("failed to get user {}: {}", login.username.clone(), err);
 
-            return Err(ErrorResponse::reply("database error")
-                .with_status(StatusCode::INTERNAL_SERVER_ERROR));
+                return Err(ErrorResponse::reply("database error")
+                    .with_status(StatusCode::INTERNAL_SERVER_ERROR));
+            }
         }
     };
 
     let session = match db.get_user_session(&user).await {
         Ok(u) => u,
-        Err(sqlx::Error::RowNotFound) => {
-            debug!("user session not found for user id={}", user.id);
-            return Err(ErrorResponse::reply("user not found").with_status(StatusCode::NOT_FOUND));
-        }
         Err(err) => {
-            error!("database error for user {}: {}", login.username, err);
-            return Err(ErrorResponse::reply("database error")
-                .with_status(StatusCode::INTERNAL_SERVER_ERROR));
+            if let Some(sqlx::Error::RowNotFound) = err.root_cause().downcast_ref() {
+                debug!("user session not found for user id={}", user.id);
+                return Err(
+                    ErrorResponse::reply("user not found").with_status(StatusCode::NOT_FOUND)
+                );
+            } else {
+                error!("database error for user {}: {}", login.username, err);
+                return Err(ErrorResponse::reply("database error")
+                    .with_status(StatusCode::INTERNAL_SERVER_ERROR));
+            }
         }
     };
 

@@ -1,4 +1,4 @@
-use chrono::prelude::*;
+use sqlx::types::time::OffsetDateTime;
 
 #[derive(sqlx::FromRow)]
 pub struct History {
@@ -6,18 +6,18 @@ pub struct History {
     pub client_id: String, // a client generated ID
     pub user_id: i64,
     pub hostname: String,
-    pub timestamp: NaiveDateTime,
+    pub timestamp: OffsetDateTime,
 
     pub data: String,
 
-    pub created_at: NaiveDateTime,
+    pub created_at: OffsetDateTime,
 }
 
 pub struct NewHistory {
     pub client_id: String,
     pub user_id: i64,
     pub hostname: String,
-    pub timestamp: chrono::NaiveDateTime,
+    pub timestamp: OffsetDateTime,
 
     pub data: String,
 }

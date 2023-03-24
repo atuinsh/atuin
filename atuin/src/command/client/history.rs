@@ -19,8 +19,8 @@ use atuin_client::{
 #[cfg(feature = "sync")]
 use atuin_client::sync;
 use log::debug;
+use time::{macros::format_description, OffsetDateTime};
 
-use super::search::format_duration;
 use super::search::format_duration_into;
 
 #[derive(Subcommand)]
@@ -141,6 +141,9 @@ pub fn print_list(h: &[History], list_mode: ListMode, format: Option<&str>) {
 /// type wrapper around `History` so we can implement traits
 struct FmtHistory<'a>(&'a History);
 
+static TIME_FMT: &[time::format_description::FormatItem<'static>] =
+    format_description!("[year]-[month]-[day] [hour repr:24]:[minute]:[second]");
+
 /// defines how to format the history
 impl FormatKey for FmtHistory<'_> {
     #[allow(clippy::cast_sign_loss)]
@@ -153,11 +156,17 @@ impl FormatKey for FmtHistory<'_> {
                 let dur = Duration::from_nanos(std::cmp::max(self.0.duration, 0) as u64);
                 format_duration_into(dur, f)?;
             }
-            "time" => self.0.timestamp.format("%Y-%m-%d %H:%M:%S").fmt(f)?,
+            "time" => {
+                self.0
+                    .timestamp
+                    .format(TIME_FMT)
+                    .map_err(|_| fmt::Error)?
+                    .fmt(f)?;
+            }
             "relativetime" => {
-                let since = chrono::Utc::now() - self.0.timestamp;
-                let time = format_duration(since.to_std().unwrap_or_default());
-                f.write_str(&time)?;
+                let since = OffsetDateTime::now_utc() - self.0.timestamp;
+                let d = Duration::try_from(since).unwrap_or_default();
+                format_duration_into(d, f)?;
             }
             "host" => f.write_str(
                 self.0
@@ -184,6 +193,7 @@ fn parse_fmt(format: &str) -> ParsedFmt {
 }
 
 impl Cmd {
+    #[allow(clippy::too_many_lines, clippy::cast_possible_truncation)]
     pub async fn run(&self, settings: &Settings, db: &mut impl Database) -> Result<()> {
         let context = current_context();
 
@@ -202,7 +212,16 @@ impl Cmd {
                     return Ok(());
                 }
 
-                let h = History::new(chrono::Utc::now(), command, cwd, -1, -1, None, None, None);
+                let h = History::new(
+                    OffsetDateTime::now_utc(),
+                    command,
+                    cwd,
+                    -1,
+                    -1,
+                    None,
+                    None,
+                    None,
+                );
 
                 // print the ID
                 // we use this as the key for calling end
@@ -226,7 +245,7 @@ impl Cmd {
                 }
 
                 h.exit = *exit;
-                h.duration = chrono::Utc::now().timestamp_nanos() - h.timestamp.timestamp_nanos();
+                h.duration = (OffsetDateTime::now_utc() - h.timestamp).whole_nanoseconds() as i64;
 
                 db.update(&h).await?;
 

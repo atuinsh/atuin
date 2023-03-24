@@ -2,10 +2,10 @@ use std::collections::HashSet;
 use std::convert::TryInto;
 use std::iter::FromIterator;
 
-use chrono::prelude::*;
 use eyre::Result;
 
 use atuin_common::api::AddHistoryRequest;
+use time::OffsetDateTime;
 
 use crate::{
     api_client,
@@ -49,12 +49,12 @@ async fn sync_download(
     let mut local_count = initial_local;
 
     let mut last_sync = if force {
-        Utc.timestamp_millis(0)
+        OffsetDateTime::UNIX_EPOCH
     } else {
         Settings::last_sync()?
     };
 
-    let mut last_timestamp = Utc.timestamp_millis(0);
+    let mut last_timestamp = OffsetDateTime::UNIX_EPOCH;
 
     let host = if force { Some(String::from("")) } else { None };
 
@@ -85,8 +85,8 @@ async fn sync_download(
         // be "lost" between syncs. In this case we need to rewind the sync
         // timestamps
         if page_last == last_timestamp {
-            last_timestamp = Utc.timestamp_millis(0);
-            last_sync -= chrono::Duration::hours(1);
+            last_timestamp = OffsetDateTime::UNIX_EPOCH;
+            last_sync -= time::Duration::hours(1);
         } else {
             last_timestamp = page_last;
         }
@@ -131,7 +131,7 @@ async fn sync_upload(
 
     // first just try the most recent set
 
-    let mut cursor = Utc::now();
+    let mut cursor = OffsetDateTime::now_utc();
 
     while local_count > remote_count {
         let last = db.before(cursor, remote_status.page_size).await?;

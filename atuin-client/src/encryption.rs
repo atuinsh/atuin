@@ -149,6 +149,7 @@ pub fn decrypt(mut encrypted_history: EncryptedHistory, key: &Key) -> Result<His
 #[cfg(test)]
 mod test {
     use xsalsa20poly1305::{aead::OsRng, KeyInit, XSalsa20Poly1305};
+    use time::OffsetDateTime;
 
     use crate::history::History;
 
@@ -160,7 +161,7 @@ mod test {
         let key2 = XSalsa20Poly1305::generate_key(&mut OsRng);
 
         let history = History::new(
-            chrono::Utc::now(),
+            OffsetDateTime::now_utc(),
             "ls".to_string(),
             "/home/ellie".to_string(),
             0,

@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 
 use async_trait::async_trait;
-use chrono::{Datelike, TimeZone};
-use chronoutil::RelativeDuration;
-use sqlx::{postgres::PgPoolOptions, Result};
+use eyre::Result;
+use sqlx::postgres::PgPoolOptions;
 
 use sqlx::Row;
 
+use time::{Date, Duration, Month, OffsetDateTime, PrimitiveDateTime, Time};
 use tracing::{debug, instrument, warn};
 
 use super::{
@@ -14,8 +14,6 @@ use super::{
     models::{History, NewHistory, NewSession, NewUser, Session, User},
 };
 use crate::settings::Settings;
-
-use atuin_common::utils::get_days_from_month;
 
 #[async_trait]
 pub trait Database {
@@ -37,18 +35,18 @@ pub trait Database {
     async fn count_history_range(
         &self,
         user: &User,
-        start: chrono::NaiveDateTime,
-        end: chrono::NaiveDateTime,
+        start: PrimitiveDateTime,
+        end: PrimitiveDateTime,
     ) -> Result<i64>;
-    async fn count_history_day(&self, user: &User, date: chrono::NaiveDate) -> Result<i64>;
-    async fn count_history_month(&self, user: &User, date: chrono::NaiveDate) -> Result<i64>;
+    async fn count_history_day(&self, user: &User, date: Date) -> Result<i64>;
+    async fn count_history_month(&self, user: &User, year: i32, month: Month) -> Result<i64>;
     async fn count_history_year(&self, user: &User, year: i32) -> Result<i64>;
 
     async fn list_history(
         &self,
         user: &User,
-        created_after: chrono::NaiveDateTime,
-        since: chrono::NaiveDateTime,
+        created_after: OffsetDateTime,
+        since: OffsetDateTime,
         host: &str,
         page_size: i64,
     ) -> Result<Vec<History>>;
@@ -62,7 +60,7 @@ pub trait Database {
         user: &User,
         period: TimePeriod,
         year: u64,
-        month: u64,
+        month: Month,
     ) -> Result<HashMap<u64, TimePeriodInfo>>;
 }
 
@@ -89,33 +87,37 @@ impl Postgres {
 impl Database for Postgres {
     #[instrument(skip_all)]
     async fn get_session(&self, token: &str) -> Result<Session> {
-        sqlx::query_as::<_, Session>("select id, user_id, token from sessions where token = $1")
+        Ok(
+            sqlx::query_as::<_, Session>(
+                "select id, user_id, token from sessions where token = $1",
+            )
             .bind(token)
             .fetch_one(&self.pool)
-            .await
+            .await?,
+        )
     }
 
     #[instrument(skip_all)]
     async fn get_user(&self, username: &str) -> Result<User> {
-        sqlx::query_as::<_, User>(
+        Ok(sqlx::query_as::<_, User>(
             "select id, username, email, password from users where username = $1",
         )
         .bind(username)
         .fetch_one(&self.pool)
-        .await
+        .await?)
     }
 
     #[instrument(skip_all)]
     async fn get_session_user(&self, token: &str) -> Result<User> {
-        sqlx::query_as::<_, User>(
+        Ok(sqlx::query_as::<_, User>(
             "select users.id, users.username, users.email, users.password from users 
-            inner join sessions 
-            on users.id = sessions.user_id 
+            inner join sessions
+            on users.id = sessions.user_id
             and sessions.token = $1",
         )
         .bind(token)
         .fetch_one(&self.pool)
-        .await
+        .await?)
     }
 
     #[instrument(skip_all)]
@@ -158,7 +160,7 @@ impl Database for Postgres {
         )
         .bind(user.id)
         .bind(id)
-        .bind(chrono::Utc::now().naive_utc())
+        .bind(OffsetDateTime::now_utc())
         .fetch_all(&self.pool)
         .await?;
 
@@ -192,8 +194,8 @@ impl Database for Postgres {
     async fn count_history_range(
         &self,
         user: &User,
-        start: chrono::NaiveDateTime,
-        end: chrono::NaiveDateTime,
+        start: PrimitiveDateTime,
+        end: PrimitiveDateTime,
     ) -> Result<i64> {
         let res: (i64,) = sqlx::query_as(
             "select count(1) from history
@@ -213,53 +215,49 @@ impl Database for Postgres {
     // Count the history for a given year
     #[instrument(skip_all)]
     async fn count_history_year(&self, user: &User, year: i32) -> Result<i64> {
-        let start = chrono::Utc.ymd(year, 1, 1).and_hms_nano(0, 0, 0, 0);
-        let end = start + RelativeDuration::years(1);
+        let start = Date::from_calendar_date(year, time::Month::January, 1)?;
+        let end = Date::from_calendar_date(year + 1, time::Month::January, 1)?;
 
         let res = self
-            .count_history_range(user, start.naive_utc(), end.naive_utc())
+            .count_history_range(
+                user,
+                start.with_time(Time::MIDNIGHT),
+                end.with_time(Time::MIDNIGHT),
+            )
             .await?;
         Ok(res)
     }
 
     // Count the history for a given month
     #[instrument(skip_all)]
-    async fn count_history_month(&self, user: &User, month: chrono::NaiveDate) -> Result<i64> {
-        let start = chrono::Utc
-            .ymd(month.year(), month.month(), 1)
-            .and_hms_nano(0, 0, 0, 0);
-
-        // ofc...
-        let end = if month.month() < 12 {
-            chrono::Utc
-                .ymd(month.year(), month.month() + 1, 1)
-                .and_hms_nano(0, 0, 0, 0)
-        } else {
-            chrono::Utc
-                .ymd(month.year() + 1, 1, 1)
-                .and_hms_nano(0, 0, 0, 0)
-        };
+    async fn count_history_month(&self, user: &User, year: i32, month: Month) -> Result<i64> {
+        let start = Date::from_calendar_date(year, month, 1)?;
+        let days = time::util::days_in_year_month(year, month);
+        let end = start + Duration::days(days as i64);
 
         debug!("start: {}, end: {}", start, end);
 
         let res = self
-            .count_history_range(user, start.naive_utc(), end.naive_utc())
+            .count_history_range(
+                user,
+                start.with_time(Time::MIDNIGHT),
+                end.with_time(Time::MIDNIGHT),
+            )
             .await?;
         Ok(res)
     }
 
     // Count the history for a given day
     #[instrument(skip_all)]
-    async fn count_history_day(&self, user: &User, day: chrono::NaiveDate) -> Result<i64> {
-        let start = chrono::Utc
-            .ymd(day.year(), day.month(), day.day())
-            .and_hms_nano(0, 0, 0, 0);
-        let end = chrono::Utc
-            .ymd(day.year(), day.month(), day.day() + 1)
-            .and_hms_nano(0, 0, 0, 0);
+    async fn count_history_day(&self, user: &User, day: Date) -> Result<i64> {
+        let end = day.next_day().ok_or_else(|| eyre::eyre!("no next day?"))?;
 
         let res = self
-            .count_history_range(user, start.naive_utc(), end.naive_utc())
+            .count_history_range(
+                user,
+                day.with_time(Time::MIDNIGHT),
+                end.with_time(Time::MIDNIGHT),
+            )
             .await?;
         Ok(res)
     }
@@ -268,8 +266,8 @@ impl Database for Postgres {
     async fn list_history(
         &self,
         user: &User,
-        created_after: chrono::NaiveDateTime,
-        since: chrono::NaiveDateTime,
+        created_after: OffsetDateTime,
+        since: OffsetDateTime,
         host: &str,
         page_size: i64,
     ) -> Result<Vec<History>> {
@@ -398,10 +396,12 @@ impl Database for Postgres {
 
     #[instrument(skip_all)]
     async fn get_user_session(&self, u: &User) -> Result<Session> {
-        sqlx::query_as::<_, Session>("select id, user_id, token from sessions where user_id = $1")
-            .bind(u.id)
-            .fetch_one(&self.pool)
-            .await
+        Ok(sqlx::query_as::<_, Session>(
+            "select id, user_id, token from sessions where user_id = $1",
+        )
+        .bind(u.id)
+        .fetch_one(&self.pool)
+        .await?)
     }
 
     #[instrument(skip_all)]
@@ -425,7 +425,7 @@ impl Database for Postgres {
         user: &User,
         period: TimePeriod,
         year: u64,
-        month: u64,
+        month: Month,
     ) -> Result<HashMap<u64, TimePeriodInfo>> {
         // TODO: Support different timezones. Right now we assume UTC and
         // everything is stored as such. But it _should_ be possible to
@@ -437,7 +437,7 @@ impl Database for Postgres {
                 // First we need to work out how far back to calculate. Get the
                 // oldest history item
                 let oldest = self.oldest_history(user).await?.timestamp.year();
-                let current_year = chrono::Utc::now().year();
+                let current_year = OffsetDateTime::now_utc().year();
 
                 // All the years we need to get data for
                 // The upper bound is exclusive, so include current +1
@@ -461,13 +461,10 @@ impl Database for Postgres {
             TimePeriod::MONTH => {
                 let mut ret = HashMap::new();
 
-                for month in 1..13 {
-                    let count = self
-                        .count_history_month(
-                            user,
-                            chrono::Utc.ymd(year as i32, month, 1).naive_utc(),
-                        )
-                        .await?;
+                let months =
+                    std::iter::successors(Some(Month::January), |m| Some(m.next())).take(12);
+                for month in months {
+                    let count = self.count_history_month(user, year as i32, month).await?;
 
                     ret.insert(
                         month as u64,
@@ -484,14 +481,9 @@ impl Database for Postgres {
             TimePeriod::DAY => {
                 let mut ret = HashMap::new();
 
-                for day in 1..get_days_from_month(year as i32, month as u32) {
+                for day in 1..time::util::days_in_year_month(year as i32, month) {
                     let count = self
-                        .count_history_day(
-                            user,
-                            chrono::Utc
-                                .ymd(year as i32, month as u32, day as u32)
-                                .naive_utc(),
-                        )
+                        .count_history_day(user, Date::from_calendar_date(year as i32, month, day)?)
                         .await?;
 
                     ret.insert(
