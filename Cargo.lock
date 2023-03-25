@@ -1764,8 +1764,7 @@ dependencies = [
 [[package]]
 name = "ratatui"
 version = "0.20.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dcc0d032bccba900ee32151ec0265667535c230169f5a011154cdcd984e16829"
+source = "git+https://github.com/conradludgate/tui-rs-revival?branch=inline#6ed61959ecfc560e4e6a00a1410bb5fcbf0eda91"
 dependencies = [
  "bitflags",
  "cassowary",

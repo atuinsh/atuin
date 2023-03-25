@@ -151,6 +151,7 @@ pub struct Settings {
     pub filter_mode: FilterMode,
     pub filter_mode_shell_up_key_binding: Option<FilterMode>,
     pub shell_up_key_binding: bool,
+    pub inline_height: u16,
     pub show_preview: bool,
     pub exit_mode: ExitMode,
     pub word_jump_mode: WordJumpMode,
@@ -336,6 +337,7 @@ impl Settings {
             .set_default("search_mode", "fuzzy")?
             .set_default("filter_mode", "global")?
             .set_default("shell_up_key_binding", false)?
+            .set_default("inline_height", 0)?
             .set_default("show_preview", false)?
             .set_default("exit_mode", "return-original")?
             .set_default("session_token", "")?

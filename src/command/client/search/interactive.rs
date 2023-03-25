@@ -33,7 +33,7 @@ use ratatui::{
     style::{Color, Modifier, Style},
     text::{Span, Spans, Text},
     widgets::{Block, BorderType, Borders, Paragraph},
-    Frame, Terminal,
+    Frame, Terminal, TerminalOptions, Viewport,
 };
 
 const RETURN_ORIGINAL: usize = usize::MAX;
@@ -466,29 +466,37 @@ impl State {
 
 struct Stdout {
     stdout: std::io::Stdout,
+    inline_mode: bool,
 }
 
 impl Stdout {
-    pub fn new() -> std::io::Result<Self> {
+    pub fn new(inline_mode: bool) -> std::io::Result<Self> {
         terminal::enable_raw_mode()?;
         let mut stdout = stdout();
+        if !inline_mode {
+            execute!(stdout, terminal::EnterAlternateScreen)?;
+        }
         execute!(
             stdout,
-            terminal::EnterAlternateScreen,
             event::EnableMouseCapture,
-            event::EnableBracketedPaste
+            event::EnableBracketedPaste,
         )?;
-        Ok(Self { stdout })
+        Ok(Self {
+            stdout,
+            inline_mode,
+        })
     }
 }
 
 impl Drop for Stdout {
     fn drop(&mut self) {
+        if !self.inline_mode {
+            execute!(self.stdout, terminal::LeaveAlternateScreen).unwrap();
+        }
         execute!(
             self.stdout,
-            terminal::LeaveAlternateScreen,
             event::DisableMouseCapture,
-            event::DisableBracketedPaste
+            event::DisableBracketedPaste,
         )
         .unwrap();
         terminal::disable_raw_mode().unwrap();
@@ -531,9 +539,18 @@ pub async fn history(
     settings: &Settings,
     db: &mut impl Database,
 ) -> Result<String> {
-    let stdout = Stdout::new()?;
+    let stdout = Stdout::new(settings.inline_height > 0)?;
     let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
+    let mut terminal = Terminal::with_options(
+        backend,
+        TerminalOptions {
+            viewport: if settings.inline_height > 0 {
+                Viewport::Inline(settings.inline_height)
+            } else {
+                Viewport::Fullscreen
+            },
+        },
+    )?;
 
     let mut input = Cursor::from(query.join(" "));
     // Put the cursor at the end of the query by default
@@ -608,6 +625,11 @@ pub async fn history(
             results = app.query_results(db).await?;
         }
     };
+
+    if settings.inline_height > 0 {
+        terminal.clear()?;
+    }
+
     if index < results.len() {
         // index is in bounds so we return that entry
         Ok(results.swap_remove(index).command.clone())
