@@ -237,6 +237,7 @@ impl State {
         results: &[History],
         compact: bool,
         show_preview: bool,
+        inline_mode: bool,
     ) {
         let border_size = if compact { 0 } else { 1 };
         let preview_width = f.size().width - 2;
@@ -262,15 +263,28 @@ impl State {
             .margin(0)
             .horizontal_margin(1)
             .constraints(
-                [
-                    Constraint::Length(if show_help { 1 } else { 0 }),
-                    Constraint::Min(1),
-                    Constraint::Length(1 + border_size),
-                    Constraint::Length(preview_height),
-                ]
+                if inline_mode {
+                    [
+                        Constraint::Length(1 + border_size),               // input
+                        Constraint::Min(1),                                // results list
+                        Constraint::Length(preview_height),                // preview
+                        Constraint::Length(if show_help { 1 } else { 0 }), // header (sic)
+                    ]
+                } else {
+                    [
+                        Constraint::Length(if show_help { 1 } else { 0 }), // header
+                        Constraint::Min(1),                                // results list
+                        Constraint::Length(1 + border_size),               // input
+                        Constraint::Length(preview_height),                // preview
+                    ]
+                }
                 .as_ref(),
             )
             .split(f.size());
+        let input_chunk = if inline_mode { chunks[0] } else { chunks[2] };
+        let results_list_chunk = chunks[1];
+        let preview_chunk = if inline_mode { chunks[2] } else { chunks[3] };
+        let header_chunk = if inline_mode { chunks[3] } else { chunks[0] };
 
         let header_chunks = Layout::default()
             .direction(Direction::Horizontal)
@@ -282,7 +296,7 @@ impl State {
                 ]
                 .as_ref(),
             )
-            .split(chunks[0]);
+            .split(header_chunk);
 
         let title = self.build_title();
         f.render_widget(title, header_chunks[0]);
@@ -294,21 +308,22 @@ impl State {
         f.render_widget(stats, header_chunks[2]);
 
         let results_list = Self::build_results_list(compact, results);
-        f.render_stateful_widget(results_list, chunks[1], &mut self.results_state);
+        f.render_stateful_widget(results_list, results_list_chunk, &mut self.results_state);
 
-        let input = self.build_input(compact, chunks[2].width.into());
-        f.render_widget(input, chunks[2]);
+        let input = self.build_input(compact, input_chunk.width.into());
+        f.render_widget(input, input_chunk);
 
-        let preview = self.build_preview(results, compact, preview_width, chunks[3].width.into());
-        f.render_widget(preview, chunks[3]);
+        let preview =
+            self.build_preview(results, compact, preview_width, preview_chunk.width.into());
+        f.render_widget(preview, preview_chunk);
 
         let extra_width = UnicodeWidthStr::width(self.search.input.substring());
 
         let cursor_offset = if compact { 0 } else { 1 };
         f.set_cursor(
             // Put cursor past the end of the input text
-            chunks[2].x + extra_width as u16 + PREFIX_LENGTH + 1 + cursor_offset,
-            chunks[2].y + cursor_offset,
+            input_chunk.x + extra_width as u16 + PREFIX_LENGTH + 1 + cursor_offset,
+            input_chunk.y + cursor_offset,
         );
     }
 
@@ -536,7 +551,15 @@ pub async fn history(
             atuin_client::settings::Style::Compact => true,
             atuin_client::settings::Style::Full => false,
         };
-        terminal.draw(|f| app.draw(f, &results, compact, settings.show_preview))?;
+        terminal.draw(|f| {
+            app.draw(
+                f,
+                &results,
+                compact,
+                settings.show_preview,
+                settings.inline_height > 0,
+            );
+        })?;
 
         let initial_input = app.search.input.as_str().to_owned();
         let initial_filter_mode = app.search.filter_mode;
