@@ -231,7 +231,12 @@ impl State {
                 self.search.switched_search_mode = true;
                 self.search.search_mode = self.search.search_mode.next(settings);
             }
-            KeyCode::Down if self.results_state.selected() == 0 => return Some(RETURN_ORIGINAL),
+            KeyCode::Down if self.results_state.selected() == 0 => {
+                return Some(match settings.exit_mode {
+                    ExitMode::ReturnOriginal => RETURN_ORIGINAL,
+                    ExitMode::ReturnQuery => RETURN_QUERY,
+                })
+            }
             KeyCode::Down => {
                 let i = self.results_state.selected().saturating_sub(1);
                 self.results_state.select(i);
