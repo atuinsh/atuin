@@ -50,7 +50,7 @@ atuin-common = { path = "atuin-common", version = "13.0.1" }
 
 log = "0.4"
 env_logger = "0.10.0"
-chrono = { version = "0.4.24", features = ["serde"] }
+chrono = { version = "0.4", features = ["serde"] }
 eyre = "0.6"
 directories = "4"
 indicatif = "0.17.1"
