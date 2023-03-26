@@ -14,16 +14,22 @@ pub async fn status<DB: Database>(
 ) -> Result<Json<StatusResponse>, ErrorResponseStatus<'static>> {
     let db = &state.0.database;
 
-    let history_count = db.count_history_cached(&user).await;
-    let deleted = db.deleted_history(&user).await;
+    let deleted = db.deleted_history(&user).await.unwrap_or(vec![]);
 
-    if history_count.is_err() || deleted.is_err() {
-        return Err(ErrorResponse::reply("failed to query history count")
-            .with_status(StatusCode::INTERNAL_SERVER_ERROR));
-    }
+    let count = match db.count_history_cached(&user).await {
+        // By default read out the cached value
+        Ok(count) => count,
 
-    Ok(Json(StatusResponse {
-        count: history_count.unwrap(),
-        deleted: deleted.unwrap(),
-    }))
+        // If that fails, fallback on a full COUNT. Cache is built on a POST
+        // only
+        Err(_) => match db.count_history(&user).await {
+            Ok(count) => count,
+            Err(_) => {
+                return Err(ErrorResponse::reply("failed to query history count")
+                    .with_status(StatusCode::INTERNAL_SERVER_ERROR))
+            }
+        },
+    };
+
+    Ok(Json(StatusResponse { count, deleted }))
 }
