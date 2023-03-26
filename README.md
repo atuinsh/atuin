@@ -83,6 +83,7 @@ I wanted to. And I **really** don't want to.
 - zsh
 - bash
 - fish
+- nushell
  
 ## Community
 
@@ -273,6 +274,21 @@ to your `is-interactive` block in your `~/.config/fish/config.fish` file
 Install `atuin` shell plugin in zsh, bash, or fish with [Fig](https://fig.io) in one click. 
 
 <a href="https://fig.io/plugins/other/atuin" target="_blank"><img src="https://fig.io/badges/install-with-fig.svg" /></a>
+
+### Nushell
+
+Run in *Nushell*:
+
+```
+mkdir ~/.local/share/atuin/
+atuin init nu | save ~/.local/share/atuin/init.nu
+```
+
+Add to `config.nu`:
+
+```
+source ~/.local/share/atuin/init.nu
+```
 
 ## ...what's with the name?
 

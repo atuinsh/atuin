@@ -1,7 +1,7 @@
 use std::env;
 use std::path::PathBuf;
 
-use chrono::NaiveDate;
+use chrono::{Months, NaiveDate};
 use uuid::Uuid;
 
 pub fn uuid_v4() -> String {
@@ -49,19 +49,9 @@ pub fn get_current_dir() -> String {
 }
 
 pub fn get_days_from_month(year: i32, month: u32) -> i64 {
-    NaiveDate::from_ymd(
-        match month {
-            12 => year + 1,
-            _ => year,
-        },
-        match month {
-            12 => 1,
-            _ => month + 1,
-        },
-        1,
-    )
-    .signed_duration_since(NaiveDate::from_ymd(year, month, 1))
-    .num_days()
+    let Some(start) = NaiveDate::from_ymd_opt(year, month, 1) else { return 30 };
+    let Some(end) = start.checked_add_months(Months::new(1)) else { return 30 };
+    end.signed_duration_since(start).num_days()
 }
 
 #[cfg(test)]
@@ -107,5 +97,24 @@ mod tests {
         env::remove_var("XDG_DATA_HOME");
         assert_eq!(data_dir(), PathBuf::from("/home/user/.local/share/atuin"));
         env::remove_var("HOME");
+    }
+
+    #[test]
+    fn days_from_month() {
+        assert_eq!(get_days_from_month(2023, 1), 31);
+        assert_eq!(get_days_from_month(2023, 2), 28);
+        assert_eq!(get_days_from_month(2023, 3), 31);
+        assert_eq!(get_days_from_month(2023, 4), 30);
+        assert_eq!(get_days_from_month(2023, 5), 31);
+        assert_eq!(get_days_from_month(2023, 6), 30);
+        assert_eq!(get_days_from_month(2023, 7), 31);
+        assert_eq!(get_days_from_month(2023, 8), 31);
+        assert_eq!(get_days_from_month(2023, 9), 30);
+        assert_eq!(get_days_from_month(2023, 10), 31);
+        assert_eq!(get_days_from_month(2023, 11), 30);
+        assert_eq!(get_days_from_month(2023, 12), 31);
+
+        // leap years
+        assert_eq!(get_days_from_month(2024, 2), 29);
     }
 }

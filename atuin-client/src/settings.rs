@@ -46,16 +46,11 @@ impl SearchMode {
     pub fn next(&self, settings: &Settings) -> Self {
         match self {
             SearchMode::Prefix => SearchMode::FullText,
-            SearchMode::FullText => {
-                // if the user is using skim, we go to skim, otherwise fuzzy.
-                if settings.search_mode == SearchMode::Skim {
-                    SearchMode::Skim
-                } else {
-                    SearchMode::Fuzzy
-                }
-            }
-            SearchMode::Fuzzy => SearchMode::Prefix,
-            SearchMode::Skim => SearchMode::Prefix,
+            // if the user is using skim, we go to skim
+            SearchMode::FullText if settings.search_mode == SearchMode::Skim => SearchMode::Skim,
+            // otherwise fuzzy.
+            SearchMode::FullText => SearchMode::Fuzzy,
+            SearchMode::Fuzzy | SearchMode::Skim => SearchMode::Prefix,
         }
     }
 }

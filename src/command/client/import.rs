@@ -9,7 +9,8 @@ use atuin_client::{
     database::Database,
     history::History,
     import::{
-        bash::Bash, fish::Fish, resh::Resh, zsh::Zsh, zsh_histdb::ZshHistDb, Importer, Loader,
+        bash::Bash, fish::Fish, nu::Nu, nu_histdb::NuHistDb, resh::Resh, zsh::Zsh,
+        zsh_histdb::ZshHistDb, Importer, Loader,
     },
 };
 
@@ -29,6 +30,10 @@ pub enum Cmd {
     Resh,
     /// Import history from the fish history file
     Fish,
+    /// Import history from the nu history file
+    Nu,
+    /// Import history from the nu history file
+    NuHistDb,
 }
 
 const BATCH_SIZE: usize = 100;
@@ -68,6 +73,17 @@ impl Cmd {
                 } else if shell.ends_with("/bash") {
                     println!("Detected Bash");
                     import::<Bash, DB>(db).await
+                } else if shell.ends_with("/nu") {
+                    if NuHistDb::histpath().is_ok() {
+                        println!(
+                            "Detected Nu-HistDb, using :{}",
+                            NuHistDb::histpath().unwrap().to_str().unwrap()
+                        );
+                        import::<NuHistDb, DB>(db).await
+                    } else {
+                        println!("Detected Nushell");
+                        import::<Nu, DB>(db).await
+                    }
                 } else {
                     println!("cannot import {shell} history");
                     Ok(())
@@ -79,6 +95,8 @@ impl Cmd {
             Self::Bash => import::<Bash, DB>(db).await,
             Self::Resh => import::<Resh, DB>(db).await,
             Self::Fish => import::<Fish, DB>(db).await,
+            Self::Nu => import::<Nu, DB>(db).await,
+            Self::NuHistDb => import::<NuHistDb, DB>(db).await,
         }
     }
 }
