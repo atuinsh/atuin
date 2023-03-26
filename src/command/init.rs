@@ -105,7 +105,7 @@ bind -M insert \e\[A _atuin_bind_up";
             name: atuin
             modifier: control
             keycode: char_r
-            mode: emacs
+            mode: [emacs, vi_normal, vi_insert]
             event: { send: executehostcommand cmd: (_atuin_search_cmd) }
         }
     )
@@ -118,7 +118,7 @@ bind -M insert \e\[A _atuin_bind_up";
             name: atuin
             modifier: none
             keycode: up
-            mode: emacs
+            mode: [emacs, vi_normal, vi_insert]
             event: { send: executehostcommand cmd: (_atuin_search_cmd '--shell-up-key-binding') }
         }
     )
