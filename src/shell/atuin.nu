@@ -6,6 +6,9 @@ let ATUIN_KEYBINDING_TOKEN = $"# (random uuid)"
 
 let _atuin_pre_execution = {||
     let cmd = (commandline)
+    if ($cmd | is-empty) {
+        return
+    }
     if not ($cmd | str starts-with $ATUIN_KEYBINDING_TOKEN) {
         let-env ATUIN_HISTORY_ID = (atuin history start -- $cmd)
     }
