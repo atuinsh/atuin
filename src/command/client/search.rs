@@ -142,7 +142,7 @@ impl Cmd {
                         self.after.clone(),
                         self.limit,
                         &self.query,
-                        db,
+                        &mut db,
                     )
                     .await?;
                 }
