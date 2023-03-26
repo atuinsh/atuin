@@ -24,13 +24,12 @@ pub async fn status<DB: Database>(
         // only
         Err(_) => match db.count_history(&user).await {
             Ok(count) => count,
-            Err(_) => return Err(ErrorResponse::reply("failed to query history count")
-                .with_status(StatusCode::INTERNAL_SERVER_ERROR)),
+            Err(_) => {
+                return Err(ErrorResponse::reply("failed to query history count")
+                    .with_status(StatusCode::INTERNAL_SERVER_ERROR))
+            }
         },
     };
 
-    Ok(Json(StatusResponse {
-        count: count,
-        deleted: deleted,
-    }))
+    Ok(Json(StatusResponse { count, deleted }))
 }
