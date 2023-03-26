@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 
 use atuin_client::history::History;
 use ratatui::{
@@ -8,10 +8,10 @@ use ratatui::{
     widgets::{Block, StatefulWidget, Widget},
 };
 
-use super::{format_duration, interactive::HistoryWrapper};
+use super::format_duration;
 
 pub struct HistoryList<'a> {
-    history: &'a [Arc<HistoryWrapper>],
+    history: &'a [History],
     block: Option<Block<'a>>,
 }
 
@@ -77,7 +77,7 @@ impl<'a> StatefulWidget for HistoryList<'a> {
 }
 
 impl<'a> HistoryList<'a> {
-    pub fn new(history: &'a [Arc<HistoryWrapper>]) -> Self {
+    pub fn new(history: &'a [History]) -> Self {
         Self {
             history,
             block: None,
