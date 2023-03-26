@@ -83,6 +83,7 @@ I wanted to. And I **really** don't want to.
 - zsh
 - bash
 - fish
+- nushell
  
 ## Community
 
