@@ -16,6 +16,10 @@ let _atuin_pre_execution = {||
 
 let _atuin_pre_prompt = {||
     let last_exit = $env.LAST_EXIT_CODE
+    if $last_exit == -1 {
+        # Aborted with `Ctrl + C` before command finished
+        return
+    }
     if 'ATUIN_HISTORY_ID' not-in $env {
         return
     }
