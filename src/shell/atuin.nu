@@ -20,7 +20,7 @@ let _atuin_pre_prompt = {||
         return
     }
     with-env { RUST_LOG: error } {
-        atuin history end --exit $last_exit -- $env.ATUIN_HISTORY_ID | null
+        atuin history end $'--exit=($last_exit)' -- $env.ATUIN_HISTORY_ID | null
     }
 }
 
