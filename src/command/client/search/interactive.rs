@@ -13,8 +13,7 @@ use semver::Version;
 use unicode_width::UnicodeWidthStr;
 
 use atuin_client::{
-    database::current_context,
-    database::Database,
+    database::{current_context, Database},
     history::History,
     settings::{ExitMode, FilterMode, SearchMode, Settings},
 };

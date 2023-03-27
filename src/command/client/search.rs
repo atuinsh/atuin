@@ -1,11 +1,10 @@
 use atuin_common::utils;
-use chrono::Utc;
 use clap::Parser;
 use eyre::Result;
 
 use atuin_client::{
-    database::current_context,
     database::Database,
+    database::{current_context, OptFilters},
     history::History,
     settings::{FilterMode, SearchMode, Settings},
 };
@@ -103,19 +102,18 @@ impl Cmd {
         } else {
             let list_mode = ListMode::from_flags(self.human, self.cmd_only);
 
-            let mut entries = run_non_interactive(
-                settings,
-                self.cwd.clone(),
-                self.exit,
-                self.exclude_exit,
-                self.exclude_cwd.clone(),
-                self.before.clone(),
-                self.after.clone(),
-                self.limit,
-                &self.query,
-                &mut db,
-            )
-            .await?;
+            let opt_filter = OptFilters {
+                exit: self.exit,
+                exclude_exit: self.exclude_exit,
+                cwd: self.cwd,
+                exclude_cwd: self.exclude_cwd,
+                before: self.before,
+                after: self.after,
+                limit: self.limit,
+            };
+
+            let mut entries =
+                run_non_interactive(settings, opt_filter.clone(), &self.query, &mut db).await?;
 
             if entries.is_empty() {
                 std::process::exit(1)
@@ -132,19 +130,9 @@ impl Cmd {
                         db.delete(entry.clone()).await?;
                     }
 
-                    entries = run_non_interactive(
-                        settings,
-                        self.cwd.clone(),
-                        self.exit,
-                        self.exclude_exit,
-                        self.exclude_cwd.clone(),
-                        self.before.clone(),
-                        self.after.clone(),
-                        self.limit,
-                        &self.query,
-                        &mut db,
-                    )
-                    .await?;
+                    entries =
+                        run_non_interactive(settings, opt_filter.clone(), &self.query, &mut db)
+                            .await?;
                 }
             } else {
                 super::history::print_list(&entries, list_mode, self.format.as_deref());
@@ -159,33 +147,22 @@ impl Cmd {
 #[allow(clippy::too_many_arguments)]
 async fn run_non_interactive(
     settings: &Settings,
-    cwd: Option<String>,
-    exit: Option<i64>,
-    exclude_exit: Option<i64>,
-    exclude_cwd: Option<String>,
-    before: Option<String>,
-    after: Option<String>,
-    limit: Option<i64>,
+    filter_options: OptFilters,
     query: &[String],
     db: &mut impl Database,
 ) -> Result<Vec<History>> {
-    let dir = if cwd.as_deref() == Some(".") {
+    let dir = if filter_options.cwd.as_deref() == Some(".") {
         Some(utils::get_current_dir())
     } else {
-        cwd
+        filter_options.cwd
     };
 
     let context = current_context();
 
-    let before = before.and_then(|b| {
-        interim::parse_date_string(b.as_str(), Utc::now(), interim::Dialect::Uk)
-            .map_or(None, |d| Some(d.timestamp_nanos()))
-    });
-
-    let after = after.and_then(|a| {
-        interim::parse_date_string(a.as_str(), Utc::now(), interim::Dialect::Uk)
-            .map_or(None, |d| Some(d.timestamp_nanos()))
-    });
+    let opt_filter = OptFilters {
+        cwd: dir,
+        ..filter_options
+    };
 
     let results = db
         .search(
@@ -193,45 +170,9 @@ async fn run_non_interactive(
             settings.filter_mode,
             &context,
             query.join(" ").as_str(),
-            limit,
-            before,
-            after,
+            opt_filter,
         )
         .await?;
-
-    // TODO: This filtering would be better done in the SQL query, I just
-    // need a nice way of building queries.
-    let results: Vec<History> = results
-        .iter()
-        .filter(|h| {
-            if let Some(exit) = exit {
-                if h.exit != exit {
-                    return false;
-                }
-            }
-
-            if let Some(exit) = exclude_exit {
-                if h.exit == exit {
-                    return false;
-                }
-            }
-
-            if let Some(cwd) = &exclude_cwd {
-                if h.cwd.as_str() == cwd.as_str() {
-                    return false;
-                }
-            }
-
-            if let Some(cwd) = &dir {
-                if h.cwd.as_str() != cwd.as_str() {
-                    return false;
-                }
-            }
-
-            true
-        })
-        .map(std::borrow::ToOwned::to_owned)
-        .collect();
 
     Ok(results)
 }

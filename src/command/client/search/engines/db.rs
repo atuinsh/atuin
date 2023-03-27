@@ -1,5 +1,7 @@
 use async_trait::async_trait;
-use atuin_client::{database::Database, history::History, settings::SearchMode};
+use atuin_client::{
+    database::Database, database::OptFilters, history::History, settings::SearchMode,
+};
 use eyre::Result;
 
 use super::{SearchEngine, SearchState};
@@ -19,9 +21,10 @@ impl SearchEngine for Search {
                 state.filter_mode,
                 &state.context,
                 state.input.as_str(),
-                Some(200),
-                None,
-                None,
+                OptFilters {
+                    limit: Some(200),
+                    ..Default::default()
+                },
             )
             .await?
             .into_iter()
