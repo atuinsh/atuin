@@ -20,6 +20,7 @@ use atuin_client::{
 use atuin_client::sync;
 use log::debug;
 
+use super::search::format_duration;
 use super::search::format_duration_into;
 
 #[derive(Subcommand)]
@@ -115,11 +116,17 @@ impl FormatKey for FmtHistory<'_> {
         match key {
             "command" => f.write_str(self.0.command.trim())?,
             "directory" => f.write_str(self.0.cwd.trim())?,
+            "exit" => f.write_str(&self.0.exit.to_string())?,
             "duration" => {
                 let dur = Duration::from_nanos(std::cmp::max(self.0.duration, 0) as u64);
                 format_duration_into(dur, f)?;
             }
             "time" => self.0.timestamp.format("%Y-%m-%d %H:%M:%S").fmt(f)?,
+            "relativetime" => {
+                let since = chrono::Utc::now() - self.0.timestamp;
+                let time = format_duration(since.to_std().unwrap_or_default());
+                f.write_str(&time)?;
+            }
             "host" => f.write_str(
                 self.0
                     .hostname

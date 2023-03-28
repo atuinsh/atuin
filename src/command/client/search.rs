@@ -79,7 +79,8 @@ pub struct Cmd {
     #[arg(long)]
     delete: bool,
 
-    /// Available variables: {command}, {directory}, {duration}, {user}, {host} and {time}.
+    /// Available variables: {command}, {directory}, {duration}, {user}, {host}, {time}, {exit} and
+    /// {relativetime}.
     /// Example: --format "{time} - [{duration}] - {directory}$\t{command}"
     #[arg(long, short)]
     format: Option<String>,
