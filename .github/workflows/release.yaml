@@ -27,7 +27,7 @@ jobs:
           - { os: macos-12     , target: aarch64-apple-darwin         }
     steps:
     - name: Checkout source code
-      uses: actions/checkout@v2
+      uses: actions/checkout@v3
 
     - name: Install prerequisites
       shell: bash
@@ -47,10 +47,10 @@ jobs:
         echo "PROJECT_HOMEPAGE=$(sed -n 's/^homepage = "\(.*\)"/\1/p' Cargo.toml)" >> $GITHUB_ENV
 
     - name: Install Rust toolchain
-      uses: actions-rs/toolchain@v1
+      uses: dtolnay/rust-toolchain@master
       with:
         toolchain: stable
-        target: ${{ matrix.job.target }}
+        targets: ${{ matrix.job.target }}
         override: true
         profile: minimal # minimal component installation (ie, no documentation)
 
@@ -65,11 +65,7 @@ jobs:
         rustc -V
 
     - name: Build
-      uses: actions-rs/cargo@v1
-      with:
-        use-cross: ${{ matrix.job.use-cross }}
-        command: build
-        args: --locked --release --target=${{ matrix.job.target }}
+      run: cargo build --locked --release --target=${{ matrix.job.target }}
 
     - name: Strip debug information from executable
       id: strip
@@ -105,8 +101,8 @@ jobs:
         fi
 
         # Let subsequent steps know where to find the (stripped) bin
-        echo ::set-output name=BIN_PATH::${BIN_PATH}
-        echo ::set-output name=BIN_NAME::${BIN_NAME}
+        echo "BIN_PATH=${BIN_PATH}" >> "$GITHUB_OUTPUT"
+        echo "BIN_NAME=${BIN_NAME}" >> "$GITHUB_OUTPUT"
 
     - name: Create tarball
       id: package
@@ -115,7 +111,7 @@ jobs:
         PKG_suffix=".tar.gz" ; case ${{ matrix.job.target }} in *-pc-windows-*) PKG_suffix=".zip" ;; esac;
         PKG_BASENAME=${PROJECT_NAME}-v${PROJECT_VERSION}-${{ matrix.job.target }}
         PKG_NAME=${PKG_BASENAME}${PKG_suffix}
-        echo ::set-output name=PKG_NAME::${PKG_NAME}
+        echo "PKG_NAME=${PKG_NAME}" >> "$GITHUB_OUTPUT"
 
         PKG_STAGING="${{ env.CICD_INTERMEDIATES_DIR }}/package"
         ARCHIVE_DIR="${PKG_STAGING}/${PKG_BASENAME}/"
@@ -142,7 +138,7 @@ jobs:
         popd >/dev/null
 
         # Let subsequent steps know where to find the compressed package
-        echo ::set-output name=PKG_PATH::"${PKG_STAGING}/${PKG_NAME}"
+        echo "PKG_PATH=${PKG_STAGING}/${PKG_NAME}" >> "$GITHUB_OUTPUT"
 
     - name: Create Debian package
       id: debian-package
@@ -164,8 +160,8 @@ jobs:
         DPKG_PATH="target/debian/${PKG_BASENAME}.deb"
         DPKG_PATH="target/debian/${DPKG_NAME}"
 
-        echo ::set-output name=DPKG_NAME::${DPKG_NAME}
-        echo ::set-output name=DPKG_PATH::${DPKG_PATH}
+        echo DPKG_NAME=${DPKG_NAME} >> $GITHUB_OUTPUT
+        echo DPKG_PATH=${DPKG_PATH} >> $GITHUB_OUTPUT
 
     - name: "Artifact upload: tarball"
       uses: actions/upload-artifact@master
@@ -185,7 +181,7 @@ jobs:
       shell: bash
       run: |
         unset IS_RELEASE ; if [[ $GITHUB_REF =~ ^refs/tags/v[0-9].* ]]; then IS_RELEASE='true' ; fi
-        echo ::set-output name=IS_RELEASE::${IS_RELEASE}
+        echo "IS_RELEASE=${IS_RELEASE}" >> $GITHUB_OUTPUT
 
     - name: Publish archives and packages
       uses: softprops/action-gh-release@v1
