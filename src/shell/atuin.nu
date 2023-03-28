@@ -28,9 +28,9 @@ def _atuin_search_cmd [...flags: string] {
     [
         $ATUIN_KEYBINDING_TOKEN,
         ([
-            `commandline (sh -c 'RUST_LOG=error atuin search`,
-            $flags,
-            `-i -- "$0" 3>&1 1>&2 2>&3' (commandline))`,
+            `commandline (RUST_LOG=error run-external --redirect-stderr atuin search`,
+            ($flags | append [--interactive, --] | each {|e| $'"($e)"'}),
+            `(commandline) | complete | $in.stderr | str substring ',-1')`,
         ] | flatten | str join ' '),
     ] | str join "\n"
 }
