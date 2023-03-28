@@ -28,10 +28,10 @@ def _atuin_search_cmd [...flags: string] {
     [
         $ATUIN_KEYBINDING_TOKEN,
         ([
-            `commandline (sh -c 'RUST_LOG=error atuin search `,
+            `commandline (sh -c 'RUST_LOG=error atuin search`,
             $flags,
-            ` -i -- "$0" 3>&1 1>&2 2>&3' (commandline))`,
-        ] | flatten | str join ''),
+            `-i -- "$0" 3>&1 1>&2 2>&3' (commandline))`,
+        ] | flatten | str join ' '),
     ] | str join "\n"
 }
 
