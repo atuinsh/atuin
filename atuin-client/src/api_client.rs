@@ -182,7 +182,7 @@ impl<'a> Client<'a> {
             .iter()
             // TODO: handle deletion earlier in this chain
             .map(|h| serde_json::from_str(h).expect("invalid base64"))
-            .map(|h| decrypt(&h, &self.key).expect("failed to decrypt history! check your key"))
+            .map(|h| decrypt(h, &self.key).expect("failed to decrypt history! check your key"))
             .map(|mut h| {
                 if deleted.contains(&h.id) {
                     h.deleted_at = Some(chrono::Utc::now());

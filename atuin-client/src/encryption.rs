@@ -16,8 +16,8 @@ use fs_err as fs;
 use serde::{Deserialize, Serialize};
 pub use xsalsa20poly1305::Key;
 use xsalsa20poly1305::{
-    aead::{Aead, Nonce, OsRng},
-    KeyInit, XSalsa20Poly1305,
+    aead::{Nonce, OsRng},
+    AeadInPlace, KeyInit, XSalsa20Poly1305,
 };
 
 use crate::{
@@ -93,23 +93,28 @@ pub fn decode_key(key: String) -> Result<Key> {
 
 pub fn encrypt(history: &History, key: &Key) -> Result<EncryptedHistory> {
     // serialize with msgpack
-    let buf = rmp_serde::to_vec(history)?;
+    let mut buf = rmp_serde::to_vec(history)?;
 
     let nonce = XSalsa20Poly1305::generate_nonce(&mut OsRng);
-    let ciphertext = XSalsa20Poly1305::new(key)
-        .encrypt(&nonce, buf.as_slice())
+    XSalsa20Poly1305::new(key)
+        .encrypt_in_place(&nonce, &[], &mut buf)
         .map_err(|_| eyre!("could not encrypt"))?;
 
-    Ok(EncryptedHistory { ciphertext, nonce })
+    Ok(EncryptedHistory {
+        ciphertext: buf,
+        nonce,
+    })
 }
 
-pub fn decrypt(encrypted_history: &EncryptedHistory, key: &Key) -> Result<History> {
-    let plaintext = XSalsa20Poly1305::new(key)
-        .decrypt(
+pub fn decrypt(mut encrypted_history: EncryptedHistory, key: &Key) -> Result<History> {
+    XSalsa20Poly1305::new(key)
+        .decrypt_in_place(
             &encrypted_history.nonce,
-            encrypted_history.ciphertext.as_slice(),
+            &[],
+            &mut encrypted_history.ciphertext,
         )
         .map_err(|_| eyre!("could not encrypt"))?;
+    let plaintext = encrypted_history.ciphertext;
 
     let history = rmp_serde::from_slice(&plaintext);
 
@@ -164,12 +169,12 @@ mod test {
 
         // test decryption works
         // this should pass
-        match decrypt(&e1, &key1) {
+        match decrypt(e1, &key1) {
             Err(e) => panic!("failed to decrypt, got {}", e),
             Ok(h) => assert_eq!(h, history),
         };
 
         // this should err
-        let _ = decrypt(&e2, &key1).expect_err("expected an error decrypting with invalid key");
+        let _ = decrypt(e2, &key1).expect_err("expected an error decrypting with invalid key");
     }
 }
