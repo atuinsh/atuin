@@ -49,6 +49,10 @@ pub struct Cmd {
     #[arg(long)]
     limit: Option<i64>,
 
+    /// Offset from the start of the results
+    #[arg(long)]
+    offset: Option<i64>,
+
     /// Open interactive search UI
     #[arg(long, short)]
     interactive: bool,
@@ -111,6 +115,7 @@ impl Cmd {
                 before: self.before,
                 after: self.after,
                 limit: self.limit,
+                offset: self.offset,
             };
 
             let mut entries =

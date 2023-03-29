@@ -34,6 +34,7 @@ pub struct OptFilters {
     pub before: Option<String>,
     pub after: Option<String>,
     pub limit: Option<i64>,
+    pub offset: Option<i64>,
 }
 
 pub fn current_context() -> Context {
@@ -359,6 +360,10 @@ impl Database for Sqlite {
 
         if let Some(limit) = filter_options.limit {
             sql.limit(limit);
+        }
+
+        if let Some(offset) = filter_options.offset {
+            sql.offset(offset);
         }
 
         match filter {
