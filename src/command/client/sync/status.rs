@@ -1,7 +1,7 @@
 use atuin_client::{
     api_client, database::Database, encryption::load_encoded_key, settings::Settings,
 };
-use colored::*;
+use colored::Colorize;
 use eyre::Result;
 
 pub async fn run(settings: &Settings, db: &impl Database) -> Result<()> {
@@ -19,10 +19,10 @@ pub async fn run(settings: &Settings, db: &impl Database) -> Result<()> {
 
     if settings.auto_sync {
         println!("Sync frequency: {}", settings.sync_frequency);
-        println!("Last sync: {}", last_sync);
+        println!("Last sync: {last_sync}");
     }
 
-    println!("History count: {}\n", local_count);
+    println!("History count: {local_count}\n");
 
     if settings.auto_sync {
         println!("{}", "[Remote]".green());
