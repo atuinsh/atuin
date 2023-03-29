@@ -8,6 +8,11 @@ use serde::{Deserialize, Serialize};
 pub const HISTORY_PAGE_SIZE: i64 = 100;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Monitoring {
+    loki_address: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Settings {
     pub host: String,
     pub port: u16,
@@ -17,6 +22,7 @@ pub struct Settings {
     pub max_history_length: usize,
     pub register_webhook_url: Option<String>,
     pub register_webhook_username: String,
+    pub monitoring: Option<Monitoring>,
 }
 
 impl Settings {

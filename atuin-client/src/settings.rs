@@ -132,6 +132,17 @@ pub enum WordJumpMode {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+pub struct Daemon {
+    pub enabled: bool,
+}
+
+impl Default for Daemon {
+    fn default() -> Self {
+        return Self { enabled: false };
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
 pub struct Settings {
     pub dialect: Dialect,
     pub style: Style,
@@ -154,8 +165,9 @@ pub struct Settings {
     pub scroll_context_lines: usize,
     #[serde(with = "serde_regex", default = "RegexSet::empty")]
     pub history_filter: RegexSet,
-    #[serde(with = "serde_regex", default = "RegexSet::empty")]
+
     pub cwd_filter: RegexSet,
+    pub daemon: Daemon,
 
     // This is automatically loaded when settings is created. Do not set in
     // config! Keep secrets and settings apart.
@@ -345,6 +357,7 @@ impl Settings {
             .set_default("scroll_context_lines", 1)?
             .set_default("shell_up_key_binding", false)?
             .set_default("session_token", "")?
+            .set_default("daemon.enabled", false)?
             .add_source(
                 Environment::with_prefix("atuin")
                     .prefix_separator("_")

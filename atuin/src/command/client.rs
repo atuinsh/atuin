@@ -12,6 +12,7 @@ mod sync;
 #[cfg(feature = "sync")]
 mod account;
 
+mod daemon;
 mod history;
 mod import;
 mod search;
@@ -40,6 +41,8 @@ pub enum Cmd {
 
     #[cfg(feature = "sync")]
     Account(account::Cmd),
+
+    Daemon,
 }
 
 impl Cmd {
@@ -66,6 +69,8 @@ impl Cmd {
 
             #[cfg(feature = "sync")]
             Self::Account(account) => account.run(settings).await,
+
+            Self::Daemon => daemon::start(settings),
         }
     }
 }
