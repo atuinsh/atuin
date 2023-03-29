@@ -89,7 +89,7 @@ __atuin_install_linux(){
   else
     OS=$(lsb_release -i | awk '{ print $3 }' | tr '[:upper:]' '[:lower:]')
   fi
-	if [ "$OS" == "arch" ] || [ "$OS" == "manjarolinux" ]; then
+	if [ "$OS" == "arch" ] || [ "$OS" == "manjarolinux" ] || [ "$OS" == "endeavouros" ]; then
 		__atuin_install_arch
   elif [ "$OS" == "ubuntu" ] || [ "$OS" == "ubuntuwsl" ] || [ "$OS" == "debian" ] || [ "$OS" == "linuxmint" ] || [ "$OS" == "parrot" ] || [ "$OS" == "kali" ] || [ "$OS" == "elementary" ] || [ "$OS" == "pop" ]; then
 		__atuin_install_ubuntu
