@@ -19,6 +19,8 @@ appended with a wildcard).
 | `--after`          | Only include commands ran after this time(default: none)                      |
 | `--interactive/-i` | Open the interactive search UI (default: false)                               |
 | `--human`          | Use human-readable formatting for the timestamp and duration (default: false) |
+| `--limit`          | Limit the number of results (default: none)                                   |
+| `--offset`         | Offset from the start of the results (default: none)                          |
 
 ## Examples
 
@@ -37,4 +39,10 @@ atuin search --exclude-exit 0 --before 01/04/2021 --cwd .
 
 # Search for all commands, beginning with cargo, that exited successfully, and were ran after yesterday at 3pm
 atuin search --exit 0 --after "yesterday 3pm" cargo
+
+# Search for a command beginning with cargo, return exactly one result.
+atuin search --limit 1 cargo
+
+# Search for a single result for a command beginning with cargo, skipping (offsetting) one result
+atuin search --offset 1 --limit cargo
 ```
