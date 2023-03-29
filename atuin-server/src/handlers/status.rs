@@ -31,5 +31,9 @@ pub async fn status<DB: Database>(
         },
     };
 
-    Ok(Json(StatusResponse { count, deleted }))
+    Ok(Json(StatusResponse {
+        count,
+        deleted,
+        username: user.username,
+    }))
 }

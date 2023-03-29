@@ -6,6 +6,7 @@ use atuin_client::{database::Database, settings::Settings};
 mod login;
 mod logout;
 mod register;
+mod status;
 
 #[derive(Subcommand)]
 #[command(infer_subcommands = true)]
@@ -32,6 +33,8 @@ pub enum Cmd {
         #[arg(long)]
         base64: bool,
     },
+
+    Status,
 }
 
 impl Cmd {
@@ -41,6 +44,7 @@ impl Cmd {
             Self::Login(l) => l.run(&settings).await,
             Self::Logout => logout::run(&settings),
             Self::Register(r) => r.run(&settings).await,
+            Self::Status => status::run(&settings, db).await,
             Self::Key { base64 } => {
                 use atuin_client::encryption::{encode_key, load_key};
                 let key = load_key(&settings).wrap_err("could not load encryption key")?;
