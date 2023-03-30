@@ -69,6 +69,7 @@ pub struct IndexResponse {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct StatusResponse {
     pub count: i64,
+    pub username: String,
     pub deleted: Vec<String>,
 }
 
