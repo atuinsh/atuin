@@ -1,0 +1,30 @@
+# Verify the Nix build is working
+# Failures will usually occur due to an out of date Rust version
+# That can be updated to the latest version in nixpkgs-unstable with `nix flake update`
+name: Nix
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3.5.0
+      - uses: cachix/install-nix-action@v20
+
+      - name: Run nix flake check
+        run: nix flake check --print-build-logs
+
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3.5.0
+      - uses: cachix/install-nix-action@v20
+
+      - name: Run nix build
+        run: nix build --print-build-logs
