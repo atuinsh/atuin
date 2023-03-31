@@ -1,11 +1,4 @@
-#![allow(
-    clippy::module_name_repetitions,
-    clippy::bool_to_int_with_if,
-    clippy::similar_names,
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    dead_code
-)]
+#![allow(clippy::all)]
 
 //! [ratatui](https://github.com/tui-rs-revival/ratatui) is a library used to build rich
 //! terminal users interfaces and dashboards.

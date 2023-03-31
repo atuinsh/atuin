@@ -240,7 +240,7 @@ impl<'a> Widget for Block<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::layout::Rect;
+    use crate::ratatui::layout::Rect;
 
     #[test]
     fn inner_takes_into_account_the_borders() {

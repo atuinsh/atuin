@@ -281,7 +281,7 @@ mod tests {
 
     #[test]
     fn combine_individual_modifiers() {
-        use crate::{buffer::Buffer, layout::Rect};
+        use crate::ratatui::{buffer::Buffer, layout::Rect};
 
         let mods = vec![
             Modifier::BOLD,
