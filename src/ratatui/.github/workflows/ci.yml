@@ -1,0 +1,76 @@
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+name: CI
+
+env:
+  CI_CARGO_MAKE_VERSION: 0.35.16
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        rust: ["1.59.0", "stable"]
+        include:
+          - os: ubuntu-latest
+            triple: x86_64-unknown-linux-musl
+          - os: windows-latest
+            triple: x86_64-pc-windows-msvc
+          - os: macos-latest
+            triple: x86_64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: hecrj/setup-rust-action@50a120e4d34903c2c1383dec0e9b1d349a9cc2b1
+        with:
+          rust-version: ${{ matrix.rust }}
+          components: rustfmt,clippy
+      - uses: actions/checkout@v3
+      - name: Install cargo-make on Linux or macOS
+        if: ${{ runner.os != 'windows' }}
+        shell: bash
+        run: |
+          curl -LO 'https://github.com/sagiegurari/cargo-make/releases/download/${{ env.CI_CARGO_MAKE_VERSION }}/cargo-make-v${{ env.CI_CARGO_MAKE_VERSION }}-${{ matrix.triple }}.zip'
+          unzip 'cargo-make-v${{ env.CI_CARGO_MAKE_VERSION }}-${{ matrix.triple }}.zip'
+          cp 'cargo-make-v${{ env.CI_CARGO_MAKE_VERSION }}-${{ matrix.triple }}/cargo-make' ~/.cargo/bin/
+          cargo make --version
+      - name: Install cargo-make on Windows
+        if: ${{ runner.os == 'windows' }}
+        shell: bash
+        run: |
+          # `cargo-make-v0.35.16-{target}/` directory is created on Linux and macOS, but it is not creatd on Windows.
+          mkdir cargo-make-temporary
+          cd cargo-make-temporary
+          curl -LO 'https://github.com/sagiegurari/cargo-make/releases/download/${{ env.CI_CARGO_MAKE_VERSION }}/cargo-make-v${{ env.CI_CARGO_MAKE_VERSION }}-${{ matrix.triple }}.zip'
+          unzip 'cargo-make-v${{ env.CI_CARGO_MAKE_VERSION }}-${{ matrix.triple }}.zip'
+          cp cargo-make.exe ~/.cargo/bin/
+          cd ..
+          cargo make --version
+      - name: "Format / Build / Test"
+        run: cargo make ci
+        env:
+          RUST_BACKTRACE: full
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        if: github.event_name != 'pull_request'
+        uses: actions/checkout@v3
+      - name: Checkout
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@v3
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: "Check conventional commits"
+        uses: crate-ci/committed@master
+        with:
+          args: "-vv"
+          commits: "HEAD"
+      - name: "Check typos"
+        uses: crate-ci/typos@master

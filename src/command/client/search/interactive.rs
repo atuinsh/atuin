@@ -23,8 +23,7 @@ use super::{
     engines::{SearchEngine, SearchState},
     history_list::{HistoryList, ListState, PREFIX_LENGTH},
 };
-use crate::{command::client::search::engines, VERSION};
-use ratatui::{
+use crate::ratatui::{
     backend::{Backend, CrosstermBackend},
     layout::{Alignment, Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
@@ -32,6 +31,7 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Paragraph},
     Frame, Terminal, TerminalOptions, Viewport,
 };
+use crate::{command::client::search::engines, VERSION};
 
 const RETURN_ORIGINAL: usize = usize::MAX;
 const RETURN_QUERY: usize = usize::MAX - 1;

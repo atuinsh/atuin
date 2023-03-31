@@ -73,15 +73,16 @@ semver = "1.0.14"
 runtime-format = "0.1.2"
 tiny-bip39 = "1"
 futures-util = "0.3"
-ratatui = "0.20.1"
 fuzzy-matcher = "0.3.7"
 colored = "2.0.0"
+
+# ratatui
+bitflags = "1.3"
+cassowary = "0.3"
+unicode-segmentation = "1.2"
 
 [dependencies.tracing-subscriber]
 version = "0.3"
 default-features = false
 features = ["ansi", "fmt", "registry", "env-filter"]
 optional = true
-
-[patch.crates-io]
-ratatui = { git = "https://github.com/conradludgate/tui-rs-revival", branch = "inline" }
