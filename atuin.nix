@@ -1,19 +1,28 @@
+# Atuin package definition
+#
+# This file will be similar to the package definition in nixpkgs:
+#     https://github.com/NixOS/nixpkgs/blob/master/pkgs/tools/misc/atuin/default.nix
+#
+# Helpful documentation: https://github.com/NixOS/nixpkgs/blob/master/doc/languages-frameworks/rust.section.md
 {
   lib,
   stdenv,
-  fetchFromGitHub,
   installShellFiles,
   rustPlatform,
   libiconv,
   Security,
   SystemConfiguration,
 }:
-rustPlatform.buildRustPackage rec {
+rustPlatform.buildRustPackage {
   name = "atuin";
 
   src = lib.cleanSource ./.;
 
-  cargoLock.lockFile = ./Cargo.lock;
+  cargoLock = {
+    lockFile = ./Cargo.lock;
+    # Allow dependencies to be fetched from git and avoid having to set the outputHashes manually
+    allowBuiltinFetchGit = true;
+  };
 
   nativeBuildInputs = [installShellFiles];
 
