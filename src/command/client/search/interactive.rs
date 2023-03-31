@@ -25,7 +25,7 @@ use super::{
 };
 use crate::ratatui::{
     backend::{Backend, CrosstermBackend},
-    layout::{Alignment, Constraint, Direction, Layout},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Span, Spans, Text},
     widgets::{Block, BorderType, Borders, Paragraph},
@@ -301,6 +301,9 @@ impl State {
         let results_list = Self::build_results_list(compact, results);
         f.render_stateful_widget(results_list, chunks[1], &mut self.results_state);
 
+        let selected_history = results[self.results_state.selected()].clone();
+        self.render_bar(f, &selected_history, chunks[2], compact);
+
         let input = self.build_input(compact, chunks[3].width.into());
         f.render_widget(input, chunks[3]);
 
@@ -366,6 +369,32 @@ impl State {
             )
         };
         results_list
+    }
+
+    fn render_bar<T: Backend>(
+        &mut self,
+        f: &mut Frame<'_, T>,
+        history: &History,
+        chunk: Rect,
+        compact: bool,
+    ) {
+        let bar = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Ratio(9, 10), Constraint::Ratio(1, 10)].as_ref())
+            .split(chunk);
+
+        let mut directory = Paragraph::new(Text::from(Span::raw(format!("{}", history.cwd,))))
+            .style(Style::default().bg(Color::White).fg(Color::Black));
+
+        if !compact {
+            directory = directory.block(
+                Block::default()
+                    .borders(Borders::LEFT)
+                    .border_type(BorderType::Rounded),
+            );
+        }
+
+        f.render_widget(directory, bar[0]);
     }
 
     fn build_input(&mut self, compact: bool, chunk_width: usize) -> Paragraph {
