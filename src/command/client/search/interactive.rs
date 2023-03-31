@@ -239,11 +239,13 @@ impl State {
         show_preview: bool,
     ) {
         let border_size = if compact { 0 } else { 1 };
+
         let preview_width = f.size().width - 2;
         let preview_height = if show_preview {
             let longest_command = results
                 .iter()
                 .max_by(|h1, h2| h1.command.len().cmp(&h2.command.len()));
+
             longest_command.map_or(0, |v| {
                 std::cmp::min(
                     4,
@@ -256,7 +258,9 @@ impl State {
         } else {
             1
         };
+
         let show_help = !compact || f.size().height > 1;
+
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .margin(0)
@@ -265,6 +269,7 @@ impl State {
                 [
                     Constraint::Length(if show_help { 1 } else { 0 }),
                     Constraint::Min(1),
+                    Constraint::Length(1),
                     Constraint::Length(1 + border_size),
                     Constraint::Length(preview_height),
                 ]
@@ -296,19 +301,19 @@ impl State {
         let results_list = Self::build_results_list(compact, results);
         f.render_stateful_widget(results_list, chunks[1], &mut self.results_state);
 
-        let input = self.build_input(compact, chunks[2].width.into());
-        f.render_widget(input, chunks[2]);
+        let input = self.build_input(compact, chunks[3].width.into());
+        f.render_widget(input, chunks[3]);
 
         let preview = self.build_preview(results, compact, preview_width, chunks[3].width.into());
-        f.render_widget(preview, chunks[3]);
+        f.render_widget(preview, chunks[4]);
 
         let extra_width = UnicodeWidthStr::width(self.search.input.substring());
 
         let cursor_offset = if compact { 0 } else { 1 };
         f.set_cursor(
             // Put cursor past the end of the input text
-            chunks[2].x + extra_width as u16 + PREFIX_LENGTH + 1 + cursor_offset,
-            chunks[2].y + cursor_offset,
+            chunks[3].x + extra_width as u16 + PREFIX_LENGTH + 1 + cursor_offset,
+            chunks[3].y + cursor_offset,
         );
     }
 
@@ -366,15 +371,19 @@ impl State {
     fn build_input(&mut self, compact: bool, chunk_width: usize) -> Paragraph {
         /// Max width of the UI box showing current mode
         const MAX_WIDTH: usize = 14;
+
         let (pref, mode) = if self.switched_search_mode {
             (" SRCH:", self.search_mode.as_str())
         } else {
             ("", self.search.filter_mode.as_str())
         };
+
         let mode_width = MAX_WIDTH - pref.len();
         // sanity check to ensure we don't exceed the layout limits
         debug_assert!(mode_width >= mode.len(), "mode name '{mode}' is too long!");
+
         let input = format!("[{pref}{mode:^mode_width$}] {}", self.search.input.as_str(),);
+
         let input = if compact {
             Paragraph::new(input)
         } else {

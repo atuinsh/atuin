@@ -91,8 +91,8 @@ impl<'a> HistoryList<'a> {
 
     fn get_items_bounds(&self, selected: usize, offset: usize, height: usize) -> (usize, usize) {
         let offset = offset.min(self.history.len().saturating_sub(1));
-
         let max_scroll_space = height.min(10);
+
         if offset + height < selected + max_scroll_space {
             let end = selected + max_scroll_space;
             (end - height, end)
@@ -125,6 +125,7 @@ impl DrawState<'_> {
         let i = self.y as usize + self.state.offset;
         let i = i.checked_sub(self.state.selected);
         let i = i.unwrap_or(10).min(10) * 2;
+
         self.draw(&SLICES[i..i + 3], Style::default());
     }
 
@@ -134,7 +135,9 @@ impl DrawState<'_> {
         } else {
             Color::Red
         });
+
         let duration = Duration::from_nanos(u64::try_from(h.duration).unwrap_or(0));
+
         self.draw(&format_duration(duration), status);
     }
 
