@@ -10,7 +10,7 @@ Announcing a new release of Atuin! v14 is out now. Atuin allows you to easily se
 
 You can update your installation via your system package manager, or by downloading the latest release from the [release page](https://github.com/ellie/atuin/releases).
 
-This release introduces some breaking changes, so please ensure all Atuin clients and servers are updated or sync may not complete.
+This release introduces some breaking changes, so please ensure all Atuin clients and servers are updated or sync may not complete. If you have any issues, please try `atuin sync --force`
 
 We had a lot of changes in this release - I'll call out a few, but this is not exhaustive. Read the changelog below for the full list!
 
