@@ -17,15 +17,18 @@ I wanted to. And I **really** don't want to.
 - zsh
 - bash
 - fish
-
+- nushell
+ 
 ## Community
 
-Atuin has a community Discord, available [here](https://discord.gg/Fq8bJSKPHh)! Please do come and say hi 😊
+Atuin has a community Discord, available [here](https://discord.gg/Fq8bJSKPHh)
 
 # Quickstart
-
+  
+## With the default sync server
+  
 This will sign you up for the default sync server, hosted by me. Everything is end-to-end encrypted, so your secrets are safe!
-
+  
 Read more below for offline-only usage, or for hosting your own server.
 
 ```
@@ -37,27 +40,27 @@ atuin sync
 ```
 
 Then restart your shell!
-
+  
 ### Opt-in to activity graph
 Alongside the hosted Atuin server, there is also a service which generates activity graphs for your shell history! These are inspired by the GitHub graph.
-
+  
 For example, here is mine:
-
+  
 ![Activity Graph Example](/img/activity-graph-example.png)
 
 If you wish to get your own, after signing up for the sync server, run this
-
+  
 ```
 curl https://api.atuin.sh/enable -d $(cat ~/.local/share/atuin/session)
 ```
-
-The response includes the URL to your graph. Feel free to share and/or embed this URL, the token is _not_ a secret, and simply prevents user enumeration.
-
+  
+The response includes the URL to your graph. Feel free to share and/or embed this URL, the token is _not_ a secret, and simply prevents user enumeration. 
+  
 ## Offline only (no sync)
-
+  
 ```
 bash <(curl https://raw.githubusercontent.com/ellie/atuin/main/install.sh)
-
+            
 atuin import auto
 ```
 
@@ -86,7 +89,7 @@ toolchain, then you can run:
 ```
 cargo install atuin
 ```
-
+  
 And then follow [the shell setup](#shell-plugin)
 
 ### Homebrew
@@ -94,17 +97,17 @@ And then follow [the shell setup](#shell-plugin)
 ```
 brew install atuin
 ```
-
+  
 And then follow [the shell setup](#shell-plugin)
-
+  
 ### MacPorts
 
-Atuin is also available in [MacPorts](https://ports.macports.org/port/atuin/)
-
+Atuin is also available in [MacPorts](https://ports.macports.org/port/atuin/)  
+  
 ```
 sudo port install atuin
 ```
-
+  
 And then follow [the shell setup](#shell-plugin)
 
 ### Nix
@@ -129,7 +132,7 @@ Atuin is available in the Arch Linux [community repository](https://archlinux.or
 ```
 pacman -S atuin
 ```
-
+  
 And then follow [the shell setup](#shell-plugin)
 
 ### Termux
@@ -139,7 +142,7 @@ Atuin is available in the Termux package repository:
 ```
 pkg install atuin
 ```
-
+  
 And then follow [the shell setup](#shell-plugin)
 
 ### From source
@@ -149,7 +152,7 @@ git clone https://github.com/ellie/atuin.git
 cd atuin
 cargo install --path .
 ```
-
+  
 And then follow [the shell setup](#shell-plugin)
 
 ## Shell plugin
@@ -169,9 +172,9 @@ echo 'eval "$(atuin init zsh)"' >> ~/.zshrc
 zinit load ellie/atuin
 ```
 
-#### Antigen
-
-```sh
+#### Antigen  
+  
+```sh  
 antigen bundle ellie/atuin@main
 ```
 
@@ -199,17 +202,24 @@ atuin init fish | source
 ```
 
 to your `is-interactive` block in your `~/.config/fish/config.fish` file
-
+  
 ### Fig
 
-Install `atuin` shell plugin in zsh, bash, or fish with [Fig](https://fig.io) in one click.
+Install `atuin` shell plugin in zsh, bash, or fish with [Fig](https://fig.io) in one click. 
 
 <a href="https://fig.io/plugins/other/atuin" target="_blank"><img src="https://fig.io/badges/install-with-fig.svg" /></a>
 
-## ...what's with the name?
+### Nushell
 
-Atuin is named after "The Great A'Tuin", a giant turtle from Terry Pratchett's
-Discworld series of books.
+Run in *Nushell*:
 
-[English]: ../README.md
-[简体中文]: ../../docs/zh-CN/README.md
+```
+mkdir ~/.local/share/atuin/
+atuin init nu | save ~/.local/share/atuin/init.nu
+```
+
+Add to `config.nu`:
+
+```
+source ~/.local/share/atuin/init.nu
+```
