@@ -289,11 +289,3 @@ Add to `config.nu`:
 ```
 source ~/.local/share/atuin/init.nu
 ```
-
-## ...what's with the name?
-
-Atuin is named after "The Great A'Tuin", a giant turtle from Terry Pratchett's
-Discworld series of books.
-
-[English]: ./README.md
-[简体中文]: ./docs/zh-CN/README.md
