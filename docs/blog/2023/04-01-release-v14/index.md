@@ -6,7 +6,7 @@ authors: [ellie]
 tags: [release]
 ---
 
-Announcing a new release of Atuin! v14 is out now. Atuin allows you to easily search and sync your shell history across many machines.
+Announcing a new release of Atuin! v14 is out now. Atuin allows you to easily search and sync your shell history across many machines. Get started [here](https://atuin.sh/docs/)
 
 You can update your installation via your system package manager, or by downloading the latest release from the [release page](https://github.com/ellie/atuin/releases).
 
