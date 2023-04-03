@@ -10,7 +10,7 @@
 # session_path = "~/.key"
 
 ## date format used, either "us" or "uk"
-# dialect = "uk"
+# dialect = "us"
 
 ## enable or disable automatic sync
 # auto_sync = true
@@ -18,21 +18,38 @@
 ## enable or disable automatic update checks
 # update_check = true
 
-## how often to sync history. note that this is only triggered when a command 
-## is ran, so sync intervals may well be longer
-## set it to 0 to sync after every command
-# sync_frequency = "5m"
-
 ## address of the sync server
 # sync_address = "https://api.atuin.sh"
 
+## how often to sync history. note that this is only triggered when a command 
+## is ran, so sync intervals may well be longer
+## set it to 0 to sync after every command
+# sync_frequency = "1h"
+
 ## which search mode to use
-## possible values: prefix, fulltext, fuzzy
-# search_mode = "prefix"
+## possible values: prefix, fulltext, fuzzy, skim
+# search_mode = "fuzzy"
+
+## which filter mode to use
+## possible values: global, host, session, directory
+# filter_mode = "global"
+
+## which filter mode to use when atuin is invoked from a shell up-key binding
+## the accepted values are identical to those of "filter_mode"
+## leave unspecified to use same mode set in "filter_mode"
+# filter_mode_shell_up_keybinding = "global"
 
 ## which style to use
 ## possible values: auto, full, compact
-#style = "auto"
+# style = "auto"
+
+## the maximum number of lines the interface should take up
+## set it to 0 to always go full screen
+# inline_height = 0
+
+## enable or disable showing a preview of the selected command
+## useful when the command is longer than the terminal width and is cut off
+# show_preview = false
 
 ## what to do when the escape key is pressed when searching
 ## possible values: return-original, return-query

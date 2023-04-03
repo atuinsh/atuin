@@ -21,6 +21,33 @@ is what you care about.
 
 See [config.toml](../../../atuin-client/config.toml) for an example
 
+### `db_path`
+
+The path to the Atuin SQlite database. Defaults to
+`~/.local/share/atuin/history.db`.
+
+```
+db_path = "~/.history.db"
+```
+
+### `key_path`
+
+The path to the Atuin encryption key. Defaults to
+`~/.local/share/atuin/key`.
+
+```
+key = "~/.atuin-key"
+```
+
+### `session_path`
+
+The path to the Atuin server session file. Defaults to
+`~/.local/share/atuin/session`. This is essentially just an API token
+
+```
+key = "~/.atuin-session"
+```
+
 ### `dialect`
 
 This configures how the [stats](../commands/stats.md) command parses dates. It has two
@@ -76,68 +103,52 @@ rate limit, which won't cause any issues.
 sync_frequency = "1h"
 ```
 
-### `db_path`
-
-The path to the Atuin SQlite database. Defaults to
-`~/.local/share/atuin/history.db`.
-
-```
-db_path = "~/.history.db"
-```
-
-### `key_path`
-
-The path to the Atuin encryption key. Defaults to
-`~/.local/share/atuin/key`.
-
-```
-key = "~/.atuin-key"
-```
-
-### `session_path`
-
-The path to the Atuin server session file. Defaults to
-`~/.local/share/atuin/session`. This is essentially just an API token
-
-```
-key = "~/.atuin-session"
-```
-
 ### `search_mode`
 
-Which search mode to use. Atuin supports "prefix", fulltext and "fuzzy" search
-modes. The prefix searches for "query\*", fulltext "\*query\*", and fuzzy applies
-the search syntax [described below](#fuzzy-search-syntax).
+Which search mode to use. Atuin supports "prefix", "fulltext", "fuzzy", and
+"skim" search modes.
 
-Defaults to "fuzzy"
+Prefix mode searches for "query\*"; fulltext mode searches for "\*query\*";
+"fuzzy" applies the [fuzzy search syntax](#fuzzy-search-syntax);
+"skim" applies the [skim search syntax](https://github.com/lotabout/skim#search-syntax).
 
-### `style`
+Defaults to "fuzzy".
 
-Which style to use. Possible values: `auto`, `full` and `compact`.
+#### `fuzzy` search syntax
 
-- `compact`:
+The "fuzzy" search syntax is based on the
+[fzf search syntax](https://github.com/junegunn/fzf#search-syntax).
 
-![image](https://user-images.githubusercontent.com/1710904/161623659-4fec047f-ea4b-471c-9581-861d2eb701a9.png)
+| Token     | Match type                 | Description                          |
+|-----------|----------------------------|--------------------------------------|
+| `sbtrkt`  | fuzzy-match                | Items that match `sbtrkt`            |
+| `'wild`   | exact-match (quoted)       | Items that include `wild`            |
+| `^music`  | prefix-exact-match         | Items that start with `music`        |
+| `.mp3$`   | suffix-exact-match         | Items that end with `.mp3`           |
+| `!fire`   | inverse-exact-match        | Items that do not include `fire`     |
+| `!^music` | inverse-prefix-exact-match | Items that do not start with `music` |
+| `!.mp3$`  | inverse-suffix-exact-match | Items that do not end with `.mp3`    |
 
-- `full`:
+A single bar character term acts as an OR operator. For example, the following
+query matches entries that start with `core` and end with either `go`, `rb`,
+or `py`.
 
-![image](https://user-images.githubusercontent.com/1710904/161623547-42afbfa7-a3ef-4820-bacd-fcaf1e324969.png)
-
-Defaults to `auto`.
+```
+^core go$ | rb$ | py$
+```
 
 ### `filter_mode`
 
 The default filter to use when searching
 
-| Column1   | Column2	|
-|--------------- | --------------- |
-| global (default)   | Search history from all hosts, all sessions, all directories  |
-| host   | Search history just from this host   |
-| session   | Search history just from the current session   |
-| directory | Search history just from the current directory|
+| Column1          | Column2                                                      |
+|------------------|--------------------------------------------------------------|
+| global (default) | Search history from all hosts, all sessions, all directories |
+| host             | Search history just from this host                           |
+| session          | Search history just from the current session                 |
+| directory        | Search history just from the current directory               |
 
 Filter modes can still be toggled via ctrl-r
-
 
 ```
 filter_mode = "host"
@@ -155,42 +166,49 @@ filter_mode_shell_up_key_binding = "session"
 
 Defaults to the value specified for filter_mode.
 
+### `style`
+
+Which style to use. Possible values: `auto`, `full` and `compact`.
+
+- `compact`:
+
+![compact](https://user-images.githubusercontent.com/1710904/161623659-4fec047f-ea4b-471c-9581-861d2eb701a9.png)
+
+- `full`:
+
+![full](https://user-images.githubusercontent.com/1710904/161623547-42afbfa7-a3ef-4820-bacd-fcaf1e324969.png)
+
+Defaults to `auto`.
+
+### `inline_height`
+
+Set the maximum number of lines Atuin's interface should take up.
+
+![inline_height](../../blog/2023/04-01-release-v14/inline.png)
+
+If set to `0` (default), Atuin will always take up as many lines as available (full screen).
+
+### `show_preview`
+
+Configure whether or not to show a preview of the selected command.
+
+![show_preview](../../blog/2023/04-01-release-v14/preview.png)
+
+Useful when the command is longer than the terminal width and is cut off.
+
 ### `exit_mode`
 
 What to do when the escape key is pressed when searching
 
-| Value                    | Behaviour	     |
-|------------------------- | --------------- |
-| return-original (default) | Set the command-line to the value it had before starting search |
+| Value                     | Behaviour                                                        |
+|---------------------------|------------------------------------------------------------------|
+| return-original (default) | Set the command-line to the value it had before starting search  |
 | return-query              | Set the command-line to the search query you have entered so far |
 
 Pressing ctrl+c or ctrl+d will always return the original command-line value.
 
 ```
 exit_mode = "return-query"
-```
-
-#### `fuzzy` search syntax
-
-The "fuzzy" search syntax is based on the
-[fzf search syntax](https://github.com/junegunn/fzf#search-syntax).
-
-| Token     | Match type                 | Description                          |
-| --------- | -------------------------- | ------------------------------------ |
-| `sbtrkt`  | fuzzy-match                | Items that match `sbtrkt`            |
-| `'wild`   | exact-match (quoted)       | Items that include `wild`            |
-| `^music`  | prefix-exact-match         | Items that start with `music`        |
-| `.mp3$`   | suffix-exact-match         | Items that end with `.mp3`           |
-| `!fire`   | inverse-exact-match        | Items that do not include `fire`     |
-| `!^music` | inverse-prefix-exact-match | Items that do not start with `music` |
-| `!.mp3$`  | inverse-suffix-exact-match | Items that do not end with `.mp3`    |
-
-A single bar character term acts as an OR operator. For example, the following
-query matches entries that start with `core` and end with either `go`, `rb`,
-or `py`.
-
-```
-^core go$ | rb$ | py$
 ```
 
 ### history_filter
