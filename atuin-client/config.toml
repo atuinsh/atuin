@@ -21,7 +21,7 @@
 ## address of the sync server
 # sync_address = "https://api.atuin.sh"
 
-## how often to sync history. note that this is only triggered when a command 
+## how often to sync history. note that this is only triggered when a command
 ## is ran, so sync intervals may well be longer
 ## set it to 0 to sync after every command
 # sync_frequency = "1h"
