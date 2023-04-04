@@ -166,9 +166,7 @@ cargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷
                 "cargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷",
             ],
         );
-        assert!(is_strictly_sorted(
-            loader.buf.iter().map(|h| h.timestamp.timestamp())
-        ))
+        assert!(is_strictly_sorted(loader.buf.iter().map(|h| h.timestamp)))
     }
 
     #[tokio::test]
@@ -217,9 +215,7 @@ cd ../
             loader.buf.iter().map(|h| h.command.as_str()),
             ["git reset", "git clean -dxf", "cd ../"],
         );
-        assert!(is_strictly_sorted(
-            loader.buf.iter().map(|h| h.timestamp.timestamp())
-        ))
+        assert!(is_strictly_sorted(loader.buf.iter().map(|h| h.timestamp)))
     }
 
     fn is_strictly_sorted<T>(iter: impl IntoIterator<Item = T>) -> bool
