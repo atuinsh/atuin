@@ -327,22 +327,22 @@ impl Settings {
             .set_default("dialect", "us")?
             .set_default("auto_sync", true)?
             .set_default("update_check", true)?
-            .set_default("sync_frequency", "1h")?
             .set_default("sync_address", "https://api.atuin.sh")?
+            .set_default("sync_frequency", "1h")?
             .set_default("search_mode", "fuzzy")?
             .set_default("filter_mode", "global")?
-            .set_default("shell_up_key_binding", false)?
+            .set_default("style", "auto")?
             .set_default("inline_height", 0)?
             .set_default("show_preview", false)?
             .set_default("exit_mode", "return-original")?
-            .set_default("session_token", "")?
-            .set_default("style", "auto")?
             .set_default("word_jump_mode", "emacs")?
             .set_default(
                 "word_chars",
                 "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
             )?
             .set_default("scroll_context_lines", 1)?
+            .set_default("shell_up_key_binding", false)?
+            .set_default("session_token", "")?
             .add_source(
                 Environment::with_prefix("atuin")
                     .prefix_separator("_")
