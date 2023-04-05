@@ -59,7 +59,11 @@ impl Importer for Bash {
 
         // if no timestamp is recorded, then use this increment to set an arbitrary timestamp
         // to preserve ordering
-        let timestamp_increment = Duration::seconds(1);
+        // this increment is deliberately very small to prevent particularly fast fingers
+        // causing ordering issues; it also helps in handling the "here document" syntax,
+        // where several lines are recorded in succession without individual timestamps
+        let timestamp_increment = Duration::nanoseconds(1);
+
         // make sure there is a minimum amount of time before the first known timestamp
         // to fit all commands, given the default increment
         let mut next_timestamp =
@@ -68,7 +72,13 @@ impl Importer for Bash {
         for line in lines.into_iter() {
             match line {
                 LineType::NotUtf8 => unreachable!(), // already filtered
-                LineType::Timestamp(t) => next_timestamp = t,
+                LineType::Empty => {}                // do nothing
+                LineType::Timestamp(t) => {
+                    if t < next_timestamp {
+                        warn!("Time reversal detected in Bash history! Commands may be ordered incorrectly.");
+                    }
+                    next_timestamp = t;
+                }
                 LineType::Command(c) => {
                     let entry = History::new(
                         next_timestamp,
@@ -93,10 +103,12 @@ impl Importer for Bash {
 #[derive(Debug, Clone)]
 enum LineType<'a> {
     NotUtf8,
+    /// Can happen when using the "here document" syntax.
+    Empty,
     /// A timestamp line start with a '#', followed immediately by an integer
     /// that represents seconds since UNIX epoch.
     Timestamp(DateTime<Utc>),
-    /// Anything that doesn't look like a timestamp.
+    /// Anything else.
     Command(&'a str),
 }
 impl<'a> From<&'a [u8]> for LineType<'a> {
@@ -104,6 +116,9 @@ impl<'a> From<&'a [u8]> for LineType<'a> {
         let Ok(line) = str::from_utf8(bytes) else {
             return LineType::NotUtf8;
         };
+        if line.is_empty() {
+            return LineType::Empty;
+        }
         let parsed = match try_parse_line_as_timestamp(line) {
             Some(time) => LineType::Timestamp(time),
             None => LineType::Command(line),
@@ -151,9 +166,7 @@ cargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷
                 "cargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷",
             ],
         );
-        assert!(is_strictly_sorted(
-            loader.buf.iter().map(|h| h.timestamp.timestamp())
-        ))
+        assert!(is_strictly_sorted(loader.buf.iter().map(|h| h.timestamp)))
     }
 
     #[tokio::test]
@@ -202,9 +215,7 @@ cd ../
             loader.buf.iter().map(|h| h.command.as_str()),
             ["git reset", "git clean -dxf", "cd ../"],
         );
-        assert!(is_strictly_sorted(
-            loader.buf.iter().map(|h| h.timestamp.timestamp())
-        ))
+        assert!(is_strictly_sorted(loader.buf.iter().map(|h| h.timestamp)))
     }
 
     fn is_strictly_sorted<T>(iter: impl IntoIterator<Item = T>) -> bool
