@@ -7,18 +7,21 @@ use std::{
 
 use atuin_common::utils;
 use clap::Subcommand;
+use crossterm::style::Stylize;
 use eyre::Result;
 use runtime_format::{FormatKey, FormatKeyError, ParsedFmt};
 
 use atuin_client::{
     database::{current_context, Database},
     history::History,
-    settings::Settings,
+    settings::{SearchMode, Settings},
 };
 
 #[cfg(feature = "sync")]
 use atuin_client::sync;
 use log::debug;
+
+use crate::ratatui::style::Color as RColor;
 
 use super::search::format_duration;
 use super::search::format_duration_into;
@@ -93,54 +96,169 @@ impl ListMode {
 }
 
 #[allow(clippy::cast_sign_loss)]
-pub fn print_list(h: &[History], list_mode: ListMode, format: Option<&str>) {
+pub fn print_list(
+    h: &[History],
+    list_mode: ListMode,
+    format: Option<&str>,
+    query: Option<&str>,
+    search_mode: Option<SearchMode>,
+) {
     let w = std::io::stdout();
     let mut w = w.lock();
 
     match list_mode {
-        ListMode::Human => print_human_list(&mut w, h, format),
-        ListMode::CmdOnly => print_cmd_only(&mut w, h),
-        ListMode::Regular => print_regular(&mut w, h, format),
+        ListMode::Human => print_human_list(&mut w, h, format, query, search_mode),
+        ListMode::CmdOnly => print_cmd_only(&mut w, h, query, search_mode),
+        ListMode::Regular => print_regular(&mut w, h, format, query, search_mode),
     }
 
     w.flush().expect("failed to flush history");
 }
 
 /// type wrapper around `History` so we can implement traits
-struct FmtHistory<'a>(&'a History);
+pub struct FmtHistory<'a> {
+    pub history: &'a History,
+    pub query: Option<&'a str>,
+    pub search_mode: Option<SearchMode>,
+}
+
+#[derive(Debug)]
+pub struct CommandFormatDetails {
+    pub pos_start: usize,
+    pub pos_end: usize,
+    pub fg: Option<RColor>,
+    pub bg: Option<RColor>,
+}
+
+pub struct CommandFormat {
+    pub command: String,
+    pub format_list: Vec<CommandFormatDetails>,
+}
+
+impl FmtHistory<'_> {
+    pub fn get_command_format(&self) -> CommandFormat {
+        let command = self.history.command.trim();
+        let mut format_list = vec![];
+
+        if self.search_mode.is_some() && self.query.is_some() {
+            let query = self.query.unwrap();
+
+            // let search_mode = self.search_mode.unwrap();
+
+            // Planning to color it based on the search_mode
+            // match search_mode {
+            //     SearchMode::Prefix => todo!(),
+            //     SearchMode::FullText => todo!(),
+            //     SearchMode::Fuzzy => todo!(),
+            //     SearchMode::Skim => todo!(),
+            // }
+            let command_len = command.len();
+
+            if let Some(pos) = command.find(query) {
+                let query_len = query.len();
+                format_list.push(CommandFormatDetails {
+                    pos_start: 0,
+                    pos_end: pos,
+                    fg: None,
+                    bg: None,
+                });
+
+                format_list.push(CommandFormatDetails {
+                    pos_start: pos,
+                    pos_end: pos + query_len,
+                    fg: Some(RColor::Red),
+                    bg: Some(RColor::White),
+                });
+
+                format_list.push(CommandFormatDetails {
+                    pos_start: pos + query_len,
+                    pos_end: command_len,
+                    fg: None,
+                    bg: None,
+                });
+            } else {
+                format_list.push(CommandFormatDetails {
+                    pos_start: 0,
+                    pos_end: command_len,
+                    fg: None,
+                    bg: None,
+                });
+            }
+        }
+        CommandFormat {
+            command: command.to_string(),
+            format_list,
+        }
+    }
+}
 
 /// defines how to format the history
 impl FormatKey for FmtHistory<'_> {
     #[allow(clippy::cast_sign_loss)]
     fn fmt(&self, key: &str, f: &mut fmt::Formatter<'_>) -> Result<(), FormatKeyError> {
         match key {
-            "command" => f.write_str(self.0.command.trim())?,
-            "directory" => f.write_str(self.0.cwd.trim())?,
-            "exit" => f.write_str(&self.0.exit.to_string())?,
+            "command" => {
+                let mut formated_string = String::new();
+                let formatted_chunks = self.get_command_format();
+                let command = self.history.command.trim();
+
+                for command_format_details in formatted_chunks.format_list {
+                    let mut formatted_chunk = command
+                        [command_format_details.pos_start..command_format_details.pos_end]
+                        .to_string();
+
+                    if let Some(bg) = command_format_details.bg {
+                        let bg = crossterm::style::Color::from(bg);
+                        formatted_chunk = formatted_chunk.on(bg).to_string();
+                    }
+
+                    if let Some(fg) = command_format_details.fg {
+                        let fg = crossterm::style::Color::from(fg);
+                        formatted_chunk = formatted_chunk.with(fg).to_string();
+                    }
+
+                    formated_string.push_str(&formatted_chunk);
+                }
+
+                f.write_str(&formated_string)?;
+            }
+            "directory" => f.write_str(self.history.cwd.trim())?,
+            "exit" => f.write_str(&self.history.exit.to_string())?,
             "duration" => {
-                let dur = Duration::from_nanos(std::cmp::max(self.0.duration, 0) as u64);
+                let dur = Duration::from_nanos(std::cmp::max(self.history.duration, 0) as u64);
                 format_duration_into(dur, f)?;
             }
-            "time" => self.0.timestamp.format("%Y-%m-%d %H:%M:%S").fmt(f)?,
+            "time" => self.history.timestamp.format("%Y-%m-%d %H:%M:%S").fmt(f)?,
             "relativetime" => {
-                let since = chrono::Utc::now() - self.0.timestamp;
+                let since = chrono::Utc::now() - self.history.timestamp;
                 let time = format_duration(since.to_std().unwrap_or_default());
                 f.write_str(&time)?;
             }
             "host" => f.write_str(
-                self.0
+                self.history
                     .hostname
                     .split_once(':')
-                    .map_or(&self.0.hostname, |(host, _)| host),
+                    .map_or(&self.history.hostname, |(host, _)| host),
             )?,
-            "user" => f.write_str(self.0.hostname.split_once(':').map_or("", |(_, user)| user))?,
+            "user" => f.write_str(
+                self.history
+                    .hostname
+                    .split_once(':')
+                    .map_or("", |(_, user)| user),
+            )?,
             _ => return Err(FormatKeyError::UnknownKey),
         }
         Ok(())
     }
 }
 
-fn print_list_with(w: &mut StdoutLock, h: &[History], format: &str) {
+fn print_list_with(
+    w: &mut StdoutLock,
+    h: &[History],
+    format: &str,
+    query: Option<&str>,
+    search_mode: Option<SearchMode>,
+) {
     let fmt = match ParsedFmt::new(format) {
         Ok(fmt) => fmt,
         Err(err) => {
@@ -151,27 +269,72 @@ fn print_list_with(w: &mut StdoutLock, h: &[History], format: &str) {
     };
 
     for h in h.iter().rev() {
-        writeln!(w, "{}", fmt.with_args(&FmtHistory(h))).expect("failed to write history");
+        writeln!(
+            w,
+            "{}",
+            fmt.with_args(&FmtHistory {
+                history: h,
+                query,
+                search_mode
+            })
+        )
+        .expect("failed to write history");
     }
 }
 
-pub fn print_human_list(w: &mut StdoutLock, h: &[History], format: Option<&str>) {
+pub fn print_human_list(
+    w: &mut StdoutLock,
+    h: &[History],
+    format: Option<&str>,
+    query: Option<&str>,
+    search_mode: Option<SearchMode>,
+) {
     let format = format
         .unwrap_or("{time} · {duration}\t{command}")
         .replace("\\t", "\t");
-    print_list_with(w, h, &format);
+    print_list_with(w, h, &format, query, search_mode);
 }
 
-pub fn print_regular(w: &mut StdoutLock, h: &[History], format: Option<&str>) {
+pub fn print_regular(
+    w: &mut StdoutLock,
+    h: &[History],
+    format: Option<&str>,
+    query: Option<&str>,
+    search_mode: Option<SearchMode>,
+) {
     let format = format
         .unwrap_or("{time}\t{command}\t{duration}")
         .replace("\\t", "\t");
-    print_list_with(w, h, &format);
+    print_list_with(w, h, &format, query, search_mode);
 }
 
-pub fn print_cmd_only(w: &mut StdoutLock, h: &[History]) {
+pub fn print_cmd_only(
+    w: &mut StdoutLock,
+    h: &[History],
+    query: Option<&str>,
+    search_mode: Option<SearchMode>,
+) {
+    let fmt = match ParsedFmt::new("{command}") {
+        Ok(fmt) => fmt,
+        Err(err) => {
+            eprintln!("ERROR: History formatting failed with the following error: {err}");
+            println!("If your formatting string contains curly braces (eg: {{var}}) you need to escape them this way: {{{{var}}.");
+            std::process::exit(1)
+        }
+    };
+
     for h in h.iter().rev() {
-        writeln!(w, "{}", h.command.trim()).expect("failed to write history");
+        writeln!(
+            w,
+            "{}",
+            fmt.with_args(&FmtHistory {
+                history: h,
+                query,
+                search_mode
+            })
+        )
+        .expect("failed to write history");
+        // writeln!(w, "{}", h.command.trim()).expect("failed to write history");
     }
 }
 
@@ -274,6 +437,8 @@ impl Cmd {
                     &history,
                     ListMode::from_flags(*human, *cmd_only),
                     format.as_deref(),
+                    None,
+                    None,
                 );
 
                 Ok(())
@@ -289,6 +454,8 @@ impl Cmd {
                     &[last],
                     ListMode::from_flags(*human, *cmd_only),
                     format.as_deref(),
+                    None,
+                    None,
                 );
 
                 Ok(())

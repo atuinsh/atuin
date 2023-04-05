@@ -1,18 +1,23 @@
 use std::time::Duration;
 
-use crate::ratatui::{
-    buffer::Buffer,
-    layout::Rect,
-    style::{Color, Modifier, Style},
-    widgets::{Block, StatefulWidget, Widget},
+use crate::{
+    command::client::history::FmtHistory,
+    ratatui::{
+        buffer::Buffer,
+        layout::Rect,
+        style::{Color, Modifier, Style},
+        widgets::{Block, StatefulWidget, Widget},
+    },
 };
-use atuin_client::history::History;
+use atuin_client::{history::History, settings::SearchMode};
 
 use super::format_duration;
 
 pub struct HistoryList<'a> {
     history: &'a [History],
     block: Option<Block<'a>>,
+    query: &'a str,
+    search_mode: SearchMode,
 }
 
 #[derive(Default)]
@@ -67,7 +72,7 @@ impl<'a> StatefulWidget for HistoryList<'a> {
             s.index();
             s.duration(item);
             s.time(item);
-            s.command(item);
+            s.command(item, self.query, self.search_mode);
 
             // reset line
             s.y += 1;
@@ -77,10 +82,12 @@ impl<'a> StatefulWidget for HistoryList<'a> {
 }
 
 impl<'a> HistoryList<'a> {
-    pub fn new(history: &'a [History]) -> Self {
+    pub fn new(history: &'a [History], query: &'a str, search_mode: SearchMode) -> Self {
         Self {
             history,
             block: None,
+            query,
+            search_mode,
         }
     }
 
@@ -157,20 +164,59 @@ impl DrawState<'_> {
         self.draw(" ago", style);
     }
 
-    fn command(&mut self, h: &History) {
-        let mut style = Style::default();
-        if self.y as usize + self.state.offset == self.state.selected {
-            style = style.fg(Color::Red).add_modifier(Modifier::BOLD);
-        }
+    fn command(&mut self, h: &History, query: &str, search_mode: SearchMode) {
+        let query = query.to_string();
 
-        for section in h.command.split_ascii_whitespace() {
-            self.x += 1;
-            if self.x > self.list_area.width {
-                // Avoid attempting to draw a command section beyond the width
-                // of the list
-                return;
+        let fmt_history = FmtHistory {
+            history: h,
+            query: Some(&query),
+            search_mode: Some(search_mode),
+        };
+
+        let command_format = fmt_history.get_command_format();
+
+        let is_selected = self.y as usize + self.state.offset == self.state.selected;
+
+        let command = command_format.command;
+        self.x += 1;
+
+        for command_format_details in command_format.format_list {
+            // if self.x > self.list_area.width {
+            //     // Avoid attempting to draw a command section beyond the width
+            //     // of the list
+            //     return;
+            // }
+
+            let cx = self.list_area.left() + self.x;
+            let cy = self.list_area.bottom() - self.y - 1;
+            let w = (self.list_area.width - self.x) as usize;
+
+            let mut style = Style::default();
+
+            if let Some(bg) = command_format_details.bg {
+                style = style.bg(bg);
             }
-            self.draw(section, style);
+
+            if let Some(fg) = command_format_details.fg {
+                style = style.fg(fg);
+            }
+
+            if is_selected {
+                style = style.add_modifier(Modifier::BOLD);
+            }
+
+            if command_format_details.pos_end > command.len() {
+                eprintln!(
+                    "err, shouldnt happen : {:?} > {:?} ",
+                    command_format_details.pos_end,
+                    command.len()
+                );
+            } else {
+                let chunk = command
+                    [command_format_details.pos_start..command_format_details.pos_end]
+                    .to_string();
+                self.x += self.buf.set_stringn(cx, cy, chunk, w, style).0 - cx;
+            }
         }
     }
 

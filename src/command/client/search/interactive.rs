@@ -280,7 +280,12 @@ impl State {
         let stats = self.build_stats();
         f.render_widget(stats, header_chunks[2]);
 
-        let results_list = Self::build_results_list(compact, results);
+        let results_list = Self::build_results_list(
+            compact,
+            results,
+            self.search.input.as_str(),
+            self.search_mode,
+        );
         f.render_stateful_widget(results_list, chunks[1], &mut self.results_state);
 
         let input = self.build_input(compact, chunks[2].width.into());
@@ -337,11 +342,16 @@ impl State {
         stats
     }
 
-    fn build_results_list(compact: bool, results: &[History]) -> HistoryList {
+    fn build_results_list<'a>(
+        compact: bool,
+        results: &'a [History],
+        query: &'a str,
+        search_mode: SearchMode,
+    ) -> HistoryList<'a> {
         let results_list = if compact {
-            HistoryList::new(results)
+            HistoryList::new(results, query, search_mode)
         } else {
-            HistoryList::new(results).block(
+            HistoryList::new(results, query, search_mode).block(
                 Block::default()
                     .borders(Borders::TOP | Borders::LEFT | Borders::RIGHT)
                     .border_type(BorderType::Rounded),

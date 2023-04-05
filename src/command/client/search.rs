@@ -141,7 +141,20 @@ impl Cmd {
                             .await?;
                 }
             } else {
-                super::history::print_list(&entries, list_mode, self.format.as_deref());
+                let search_mode = {
+                    if let Some(search_mode) = self.search_mode {
+                        Some(search_mode)
+                    } else {
+                        Some(settings.search_mode)
+                    }
+                };
+                super::history::print_list(
+                    &entries,
+                    list_mode,
+                    self.format.as_deref(),
+                    Some(&self.query.join(" ")),
+                    search_mode,
+                );
             }
         };
         Ok(())
