@@ -133,8 +133,15 @@ pub enum WordJumpMode {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct Bar {
+    pub enabled: bool,
     pub background_colour: String,
-    pub foreground_colour: String,
+    pub text_colour: String,
+
+    // parsed at load time from the above
+    #[serde(skip_deserializing)]
+    pub background_colour_parsed: (f32, f32, f32),
+    #[serde(skip_deserializing)]
+    pub text_colour_parsed: (f32, f32, f32),
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -355,6 +362,9 @@ impl Settings {
             .set_default("scroll_context_lines", 1)?
             .set_default("shell_up_key_binding", false)?
             .set_default("session_token", "")?
+            .set_default("ui.bar.enabled", true)?
+            .set_default("ui.bar.background_colour", "#ffffff")?
+            .set_default("ui.bar.text_colour", "#000000")?
             .add_source(
                 Environment::with_prefix("atuin")
                     .prefix_separator("_")
@@ -392,6 +402,16 @@ impl Settings {
         let session_path = settings.session_path;
         let session_path = shellexpand::full(&session_path)?;
         settings.session_path = session_path.to_string();
+
+        // take the colours, parse them, whack the RGB into the settings
+        settings.ui.bar.background_colour_parsed = atuin_common::utils::parse_colour(
+            settings.ui.bar.background_colour.as_str(),
+        )
+        .expect("background_colour expects format rgb(r, g, b), hsl(h, s, l), or hex: #ffffff");
+
+        settings.ui.bar.text_colour_parsed =
+            atuin_common::utils::parse_colour(settings.ui.bar.text_colour.as_str())
+                .expect("text_colour expects format rgb(r, g, b), hsl(h, s, l), or hex: #ffffff");
 
         // Finally, set the auth token
         if Path::new(session_path.to_string().as_str()).exists() {

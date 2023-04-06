@@ -99,6 +99,7 @@ impl State {
 
         let ctrl = input.modifiers.contains(KeyModifiers::CONTROL);
         let alt = input.modifiers.contains(KeyModifiers::ALT);
+
         // reset the state, will be set to true later if user really did change it
         self.switched_search_mode = false;
         match input.code {
@@ -236,12 +237,12 @@ impl State {
         f: &mut Frame<'_, T>,
         results: &[History],
         compact: bool,
-        show_preview: bool,
+        settings: &Settings,
     ) {
         let border_size = if compact { 0 } else { 1 };
 
         let preview_width = f.size().width - 2;
-        let preview_height = if show_preview {
+        let preview_height = if settings.show_preview {
             let longest_command = results
                 .iter()
                 .max_by(|h1, h2| h1.command.len().cmp(&h2.command.len()));
@@ -269,9 +270,9 @@ impl State {
                 [
                     Constraint::Length(if show_help { 1 } else { 0 }),
                     Constraint::Min(1),
-                    Constraint::Length(1),
                     Constraint::Length(1 + border_size),
                     Constraint::Length(preview_height),
+                    Constraint::Length(if settings.ui.bar.enabled { 1 } else { 0 }),
                 ]
                 .as_ref(),
             )
@@ -301,14 +302,14 @@ impl State {
         let results_list = Self::build_results_list(compact, results);
         f.render_stateful_widget(results_list, chunks[1], &mut self.results_state);
 
+        let input = self.build_input(compact, chunks[2].width.into());
+        f.render_widget(input, chunks[2]);
+
+        let preview = self.build_preview(results, compact, preview_width, chunks[2].width.into());
+        f.render_widget(preview, chunks[3]);
+
         let selected_history = results[self.results_state.selected()].clone();
-        self.render_bar(f, &selected_history, chunks[2], compact);
-
-        let input = self.build_input(compact, chunks[3].width.into());
-        f.render_widget(input, chunks[3]);
-
-        let preview = self.build_preview(results, compact, preview_width, chunks[3].width.into());
-        f.render_widget(preview, chunks[4]);
+        self.render_bar(f, &selected_history, chunks[4], settings);
 
         let extra_width = UnicodeWidthStr::width(self.search.input.substring());
 
@@ -376,25 +377,43 @@ impl State {
         f: &mut Frame<'_, T>,
         history: &History,
         chunk: Rect,
-        compact: bool,
+        settings: &Settings,
     ) {
         let bar = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Ratio(9, 10), Constraint::Ratio(1, 10)].as_ref())
             .split(chunk);
 
-        let mut directory = Paragraph::new(Text::from(Span::raw(format!("{}", history.cwd,))))
-            .style(Style::default().bg(Color::White).fg(Color::Black));
+        let directory = Paragraph::new(Text::from(Span::raw(format!("{}", history.cwd,)))).style(
+            Style::default()
+                .bg(Color::Rgb(
+                    settings.ui.bar.background_colour_parsed.0 as u8,
+                    settings.ui.bar.background_colour_parsed.1 as u8,
+                    settings.ui.bar.background_colour_parsed.2 as u8,
+                ))
+                .fg(Color::Rgb(
+                    settings.ui.bar.text_colour_parsed.0 as u8,
+                    settings.ui.bar.text_colour_parsed.1 as u8,
+                    settings.ui.bar.text_colour_parsed.2 as u8,
+                )),
+        );
 
-        if !compact {
-            directory = directory.block(
-                Block::default()
-                    .borders(Borders::LEFT)
-                    .border_type(BorderType::Rounded),
-            );
-        }
+        let count = Paragraph::new(Text::from(Span::raw(format!("x{}", 0,)))).style(
+            Style::default()
+                .bg(Color::Rgb(
+                    settings.ui.bar.background_colour_parsed.0 as u8,
+                    settings.ui.bar.background_colour_parsed.1 as u8,
+                    settings.ui.bar.background_colour_parsed.2 as u8,
+                ))
+                .fg(Color::Rgb(
+                    settings.ui.bar.text_colour_parsed.0 as u8,
+                    settings.ui.bar.text_colour_parsed.1 as u8,
+                    settings.ui.bar.text_colour_parsed.2 as u8,
+                )),
+        );
 
         f.render_widget(directory, bar[0]);
+        f.render_widget(count, bar[1]);
     }
 
     fn build_input(&mut self, compact: bool, chunk_width: usize) -> Paragraph {
@@ -574,7 +593,7 @@ pub async fn history(
             atuin_client::settings::Style::Compact => true,
             atuin_client::settings::Style::Full => false,
         };
-        terminal.draw(|f| app.draw(f, &results, compact, settings.show_preview))?;
+        terminal.draw(|f| app.draw(f, &results, compact, settings))?;
 
         let initial_input = app.search.input.as_str().to_owned();
         let initial_filter_mode = app.search.filter_mode;

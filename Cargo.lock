@@ -83,6 +83,7 @@ dependencies = [
  "clap",
  "clap_complete",
  "colored",
+ "colors-transform",
  "crossbeam-channel",
  "crossterm",
  "directories",
@@ -152,6 +153,7 @@ name = "atuin-common"
 version = "14.0.0"
 dependencies = [
  "chrono",
+ "colors-transform",
  "serde",
  "uuid",
 ]
@@ -396,6 +398,12 @@ dependencies = [
  "lazy_static",
  "winapi",
 ]
+
+[[package]]
+name = "colors-transform"
+version = "0.2.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9226dbc05df4fb986f48d730b001532580883c4c06c5d1c213f4b34c1c157178"
 
 [[package]]
 name = "config"
