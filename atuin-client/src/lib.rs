@@ -10,6 +10,7 @@ pub mod encryption;
 #[cfg(feature = "sync")]
 pub mod sync;
 
+pub mod daemon;
 pub mod database;
 pub mod history;
 pub mod import;

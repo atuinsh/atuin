@@ -6,7 +6,7 @@ use tracing_subscriber::FmtSubscriber;
 
 use daemonize::Daemonize;
 
-use atuin_client::settings::Settings;
+use atuin_client::{daemon, settings::Settings};
 use tracing::{error, info, Level};
 
 pub fn start(settings: Settings) -> Result<()> {

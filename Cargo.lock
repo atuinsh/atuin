@@ -135,6 +135,7 @@ version = "14.0.1"
 dependencies = [
  "async-trait",
  "atuin-common",
+ "axum",
  "base64 0.21.0",
  "chrono",
  "clap",
