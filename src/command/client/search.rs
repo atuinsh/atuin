@@ -79,7 +79,7 @@ pub struct Cmd {
     #[arg(long)]
     cmd_only: bool,
 
-    // Delete anything matching this query. Will not print out the match
+    /// Delete anything matching this query. Will not print out the match
     #[arg(long)]
     delete: bool,
 
