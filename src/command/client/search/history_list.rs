@@ -7,17 +7,18 @@ use crate::ratatui::{
     widgets::{Block, StatefulWidget, Widget},
 };
 use atuin_client::history::History;
-use syntect::{
-    highlighting::{FontStyle, HighlightIterator, HighlightState, Highlighter},
-    parsing::ScopeStack,
-};
+use syntect::parsing::{BasicScopeStackOp, Scope, ScopeStack};
 
-use super::{format_duration, interactive::ParsedSyntax};
+use super::{
+    format_duration,
+    interactive::ParsedSyntax,
+    syntax::{Theme, ThemeRule},
+};
 
 pub struct HistoryList<'a> {
     history: &'a [History],
     history_parsed: &'a HashMap<String, ParsedSyntax>,
-    highlighter: &'a Highlighter<'a>,
+    theme: &'a Theme,
     block: Option<Block<'a>>,
 }
 
@@ -75,7 +76,7 @@ impl<'a> StatefulWidget for HistoryList<'a> {
             s.index();
             s.duration(item);
             s.time(item);
-            s.command(item, parsed, self.highlighter);
+            s.command(item, parsed, self.theme);
 
             // reset line
             s.y += 1;
@@ -88,12 +89,12 @@ impl<'a> HistoryList<'a> {
     pub fn new(
         history: &'a [History],
         history_parsed: &'a HashMap<String, ParsedSyntax>,
-        highlighter: &'a Highlighter<'a>,
+        theme: &'a Theme,
     ) -> Self {
         Self {
             history,
             history_parsed,
-            highlighter,
+            theme,
             block: None,
         }
     }
@@ -171,53 +172,53 @@ impl DrawState<'_> {
         self.draw(" ago", style);
     }
 
-    fn command(
-        &mut self,
-        h: &History,
-        parsed: Option<&ParsedSyntax>,
-        highlighter: &Highlighter<'_>,
-    ) {
+    fn command(&mut self, h: &History, parsed: Option<&ParsedSyntax>, theme: &Theme) {
         let selected = self.y as usize + self.state.offset == self.state.selected;
-        match parsed {
-            Some(parsed) if !selected => {
-                let mut state = HighlightState::new(highlighter, ScopeStack::default());
-                for (line, parsed_line) in h.command.lines().zip(parsed) {
-                    self.x += 1;
-                    let hl = HighlightIterator::new(&mut state, parsed_line, line, highlighter);
-                    for (s, text) in hl {
-                        let fg = s.foreground;
-                        let bg = s.background;
-                        let style = Style::default()
-                            .fg(Color::Rgb(fg.r, fg.g, fg.b))
-                            .bg(Color::Rgb(bg.r, bg.g, bg.b));
-                        let style = match s.font_style {
-                            FontStyle::BOLD => style.add_modifier(Modifier::BOLD),
-                            FontStyle::ITALIC => style.add_modifier(Modifier::ITALIC),
-                            FontStyle::UNDERLINE => style.add_modifier(Modifier::UNDERLINED),
-                            _ => style,
-                        };
-                        self.draw(text, style);
-                    }
-                }
+        let with_select = move |style: Style| {
+            if selected {
+                style.bg(theme.selection).add_modifier(Modifier::BOLD)
+            } else {
+                style
             }
-            // if this line is the currently selected line,
-            // or if we failed to parse the synax,
-            // fallback to default rendered
-            _ => {
-                let mut style = Style::default();
-                if selected {
-                    style = style.fg(Color::Red).add_modifier(Modifier::BOLD);
-                }
+        };
 
-                for section in h.command.split_ascii_whitespace() {
-                    self.x += 1;
-                    if self.x > self.list_area.width {
-                        // Avoid attempting to draw a command section beyond the width
-                        // of the list
-                        return;
-                    }
-                    self.draw(section, style);
+        if let Some(parsed) = parsed {
+            // this is a manual/simpler implementation of
+            // syntect::highlight::HighlightIterator
+            // to use a custom theme using `ratatui::Style`.
+            // This is so we don't have to care about RGB and can instead use
+            // terminal colours
+
+            let mut stack = ScopeStack::default();
+            let mut styles: Vec<(f64, Style)> = vec![];
+            for (line, parsed_line) in h.command.lines().zip(parsed) {
+                self.x += 1;
+
+                let mut last = 0;
+                for &(index, ref op) in parsed_line {
+                    let style = styles.last().copied().unwrap_or_default().1;
+                    stack
+                        .apply_with_hook(op, |op, stack| {
+                            highlight_hook(&op, stack, &theme.rules, &mut styles);
+                        })
+                        .unwrap();
+
+                    self.draw(&line[last..index], with_select(style));
+                    last = index;
                 }
+                let style = styles.last().copied().unwrap_or_default().1;
+                self.draw(&line[last..], with_select(style));
+            }
+        } else {
+            let style = with_select(Style::default());
+            for section in h.command.split_ascii_whitespace() {
+                self.x += 1;
+                if self.x > self.list_area.width {
+                    // Avoid attempting to draw a command section beyond the width
+                    // of the list
+                    return;
+                }
+                self.draw(section, style);
             }
         }
     }
@@ -227,5 +228,37 @@ impl DrawState<'_> {
         let cy = self.list_area.bottom() - self.y - 1;
         let w = (self.list_area.width - self.x) as usize;
         self.x += self.buf.set_stringn(cx, cy, s, w, style).0 - cx;
+    }
+}
+
+#[allow(clippy::cast_possible_truncation)]
+fn highlight_hook(
+    op: &BasicScopeStackOp,
+    stack: &[Scope],
+    rules: &[ThemeRule],
+    styles: &mut Vec<(f64, Style)>,
+) {
+    match op {
+        BasicScopeStackOp::Push(scope) => {
+            let mut scored_style = styles
+                .last()
+                .copied()
+                .unwrap_or_else(|| (-1.0, Style::default()));
+
+            for rule in rules.iter().filter(|a| a.scope.is_prefix_of(*scope)) {
+                let single_score =
+                    f64::from(rule.scope.len()) * f64::from(3 * ((stack.len() - 1) as u32)).exp2();
+
+                if single_score > scored_style.0 {
+                    scored_style.0 = single_score;
+                    scored_style.1 = rule.style;
+                }
+            }
+
+            styles.push(scored_style);
+        }
+        BasicScopeStackOp::Pop => {
+            styles.pop();
+        }
     }
 }

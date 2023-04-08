@@ -13,7 +13,7 @@ use futures_util::FutureExt;
 use semver::Version;
 use syntect::{
     dumps::{from_binary, from_uncompressed_data},
-    highlighting::{Highlighter, ThemeSet},
+    highlighting::Highlighter,
     parsing::{ScopeStackOp, SyntaxReference, SyntaxSet},
 };
 use unicode_width::UnicodeWidthStr;
@@ -28,16 +28,20 @@ use super::{
     cursor::Cursor,
     engines::{SearchEngine, SearchState},
     history_list::{HistoryList, ListState, PREFIX_LENGTH},
-};
-use crate::ratatui::{
-    backend::{Backend, CrosstermBackend},
-    layout::{Alignment, Constraint, Direction, Layout},
-    style::{Color, Modifier, Style},
-    text::{Span, Spans, Text},
-    widgets::{Block, BorderType, Borders, Paragraph},
-    Frame, Terminal, TerminalOptions, Viewport,
+    syntax::Theme,
 };
 use crate::{command::client::search::engines, VERSION};
+use crate::{
+    command::client::search::syntax::get_theme,
+    ratatui::{
+        backend::{Backend, CrosstermBackend},
+        layout::{Alignment, Constraint, Direction, Layout},
+        style::{Color, Modifier, Style},
+        text::{Span, Spans, Text},
+        widgets::{Block, BorderType, Borders, Paragraph},
+        Frame, Terminal, TerminalOptions, Viewport,
+    },
+};
 
 const RETURN_ORIGINAL: usize = usize::MAX;
 const RETURN_QUERY: usize = usize::MAX - 1;
@@ -56,7 +60,7 @@ struct State<'s> {
 
     // highlighting
     results_parsed: HashMap<String, ParsedSyntax>,
-    highlighter: Highlighter<'s>,
+    theme: Theme,
     syntax: ShellSyntax<'s>,
 }
 
@@ -312,7 +316,7 @@ impl State<'_> {
         f.render_widget(stats, header_chunks[2]);
 
         let results_list =
-            Self::build_results_list(compact, results, &self.results_parsed, &self.highlighter);
+            Self::build_results_list(compact, results, &self.results_parsed, &self.theme);
         f.render_stateful_widget(results_list, chunks[1], &mut self.results_state);
 
         let input = self.build_input(compact, chunks[2].width.into());
@@ -373,9 +377,9 @@ impl State<'_> {
         compact: bool,
         results: &'a [History],
         history_parsed: &'a HashMap<String, ParsedSyntax>,
-        highlighter: &'a Highlighter<'a>,
+        theme: &'a Theme,
     ) -> HistoryList<'a> {
-        let list = HistoryList::new(results, history_parsed, highlighter);
+        let list = HistoryList::new(results, history_parsed, theme);
         if compact {
             list
         } else {
@@ -531,9 +535,9 @@ pub async fn history(
     let history_count = db.history_count().await?;
 
     let syntax: SyntaxSet =
-        from_uncompressed_data(include_bytes!("default_nonewlines.packdump")).unwrap();
-    let themes: ThemeSet = from_binary(include_bytes!("default.themedump"));
-    let highlighter = Highlighter::new(&themes.themes["base16-ocean.dark"]);
+        from_uncompressed_data(include_bytes!("syntax/default_nonewlines.packdump")).unwrap();
+    // let themes: ThemeSet = from_binary(include_bytes!("syntax/default.themedump"));
+    // let highlighter = Highlighter::new(&themes.themes["base16-ocean.dark"]);
 
     // let syntax = SyntaxSet::load_defaults_nonewlines();
     // let mut themes = ThemeSet::load_defaults();
@@ -558,7 +562,7 @@ pub async fn history(
         engine: engines::engine(settings.search_mode),
 
         results_parsed: HashMap::new(),
-        highlighter,
+        theme: get_theme().unwrap(),
         syntax: ShellSyntax {
             syntaxs: &syntax,
             sh: syntax.find_syntax_by_extension("sh").unwrap(),
