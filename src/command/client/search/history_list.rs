@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 
 use crate::ratatui::{
     buffer::Buffer,
@@ -7,11 +7,17 @@ use crate::ratatui::{
     widgets::{Block, StatefulWidget, Widget},
 };
 use atuin_client::history::History;
+use syntect::{
+    highlighting::{FontStyle, HighlightIterator, HighlightState, Highlighter},
+    parsing::ScopeStack,
+};
 
-use super::format_duration;
+use super::{format_duration, interactive::ParsedSyntax};
 
 pub struct HistoryList<'a> {
     history: &'a [History],
+    history_parsed: &'a HashMap<String, ParsedSyntax>,
+    highlighter: &'a Highlighter<'a>,
     block: Option<Block<'a>>,
 }
 
@@ -64,10 +70,12 @@ impl<'a> StatefulWidget for HistoryList<'a> {
         };
 
         for item in self.history.iter().skip(state.offset).take(end - start) {
+            let parsed = self.history_parsed.get(item.id.as_str());
+
             s.index();
             s.duration(item);
             s.time(item);
-            s.command(item);
+            s.command(item, parsed, self.highlighter);
 
             // reset line
             s.y += 1;
@@ -77,9 +85,15 @@ impl<'a> StatefulWidget for HistoryList<'a> {
 }
 
 impl<'a> HistoryList<'a> {
-    pub fn new(history: &'a [History]) -> Self {
+    pub fn new(
+        history: &'a [History],
+        history_parsed: &'a HashMap<String, ParsedSyntax>,
+        highlighter: &'a Highlighter<'a>,
+    ) -> Self {
         Self {
             history,
+            history_parsed,
+            highlighter,
             block: None,
         }
     }
@@ -157,20 +171,54 @@ impl DrawState<'_> {
         self.draw(" ago", style);
     }
 
-    fn command(&mut self, h: &History) {
-        let mut style = Style::default();
-        if self.y as usize + self.state.offset == self.state.selected {
-            style = style.fg(Color::Red).add_modifier(Modifier::BOLD);
-        }
-
-        for section in h.command.split_ascii_whitespace() {
-            self.x += 1;
-            if self.x > self.list_area.width {
-                // Avoid attempting to draw a command section beyond the width
-                // of the list
-                return;
+    fn command(
+        &mut self,
+        h: &History,
+        parsed: Option<&ParsedSyntax>,
+        highlighter: &Highlighter<'_>,
+    ) {
+        let selected = self.y as usize + self.state.offset == self.state.selected;
+        match parsed {
+            Some(parsed) if !selected => {
+                let mut state = HighlightState::new(highlighter, ScopeStack::default());
+                for (line, parsed_line) in h.command.lines().zip(parsed) {
+                    self.x += 1;
+                    let hl = HighlightIterator::new(&mut state, parsed_line, line, highlighter);
+                    for (s, text) in hl {
+                        let fg = s.foreground;
+                        let bg = s.background;
+                        let style = Style::default()
+                            .fg(Color::Rgb(fg.r, fg.g, fg.b))
+                            .bg(Color::Rgb(bg.r, bg.g, bg.b));
+                        let style = match s.font_style {
+                            FontStyle::BOLD => style.add_modifier(Modifier::BOLD),
+                            FontStyle::ITALIC => style.add_modifier(Modifier::ITALIC),
+                            FontStyle::UNDERLINE => style.add_modifier(Modifier::UNDERLINED),
+                            _ => style,
+                        };
+                        self.draw(text, style);
+                    }
+                }
             }
-            self.draw(section, style);
+            // if this line is the currently selected line,
+            // or if we failed to parse the synax,
+            // fallback to default rendered
+            _ => {
+                let mut style = Style::default();
+                if selected {
+                    style = style.fg(Color::Red).add_modifier(Modifier::BOLD);
+                }
+
+                for section in h.command.split_ascii_whitespace() {
+                    self.x += 1;
+                    if self.x > self.list_area.width {
+                        // Avoid attempting to draw a command section beyond the width
+                        // of the list
+                        return;
+                    }
+                    self.draw(section, style);
+                }
+            }
         }
     }
 

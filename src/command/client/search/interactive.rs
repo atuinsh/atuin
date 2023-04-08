@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     io::{stdout, Write},
     time::Duration,
 };
@@ -10,6 +11,11 @@ use crossterm::{
 use eyre::Result;
 use futures_util::FutureExt;
 use semver::Version;
+use syntect::{
+    dumps::{from_binary, from_uncompressed_data},
+    highlighting::{Highlighter, ThemeSet},
+    parsing::{ScopeStackOp, SyntaxReference, SyntaxSet},
+};
 use unicode_width::UnicodeWidthStr;
 
 use atuin_client::{
@@ -36,7 +42,9 @@ use crate::{command::client::search::engines, VERSION};
 const RETURN_ORIGINAL: usize = usize::MAX;
 const RETURN_QUERY: usize = usize::MAX - 1;
 
-struct State {
+pub type ParsedSyntax = Vec<Vec<(usize, ScopeStackOp)>>;
+
+struct State<'s> {
     history_count: i64,
     update_needed: Option<Version>,
     results_state: ListState,
@@ -45,12 +53,22 @@ struct State {
 
     search: SearchState,
     engine: Box<dyn SearchEngine>,
+
+    // highlighting
+    results_parsed: HashMap<String, ParsedSyntax>,
+    highlighter: Highlighter<'s>,
+    syntax: ShellSyntax<'s>,
 }
 
-impl State {
+impl State<'_> {
     async fn query_results(&mut self, db: &mut dyn Database) -> Result<Vec<History>> {
         let results = self.engine.query(&self.search, db).await?;
         self.results_state.select(0);
+        for h in &results {
+            self.results_parsed
+                .entry(h.id.clone())
+                .or_insert_with(|| parse_shell(h, self.syntax));
+        }
         Ok(results)
     }
 
@@ -293,7 +311,8 @@ impl State {
         let stats = self.build_stats();
         f.render_widget(stats, header_chunks[2]);
 
-        let results_list = Self::build_results_list(compact, results);
+        let results_list =
+            Self::build_results_list(compact, results, &self.results_parsed, &self.highlighter);
         f.render_stateful_widget(results_list, chunks[1], &mut self.results_state);
 
         let input = self.build_input(compact, chunks[2].width.into());
@@ -350,17 +369,22 @@ impl State {
         stats
     }
 
-    fn build_results_list(compact: bool, results: &[History]) -> HistoryList {
-        let results_list = if compact {
-            HistoryList::new(results)
+    fn build_results_list<'a>(
+        compact: bool,
+        results: &'a [History],
+        history_parsed: &'a HashMap<String, ParsedSyntax>,
+        highlighter: &'a Highlighter<'a>,
+    ) -> HistoryList<'a> {
+        let list = HistoryList::new(results, history_parsed, highlighter);
+        if compact {
+            list
         } else {
-            HistoryList::new(results).block(
+            list.block(
                 Block::default()
                     .borders(Borders::TOP | Borders::LEFT | Borders::RIGHT)
                     .border_type(BorderType::Rounded),
             )
-        };
-        results_list
+        }
     }
 
     fn build_input(&mut self, compact: bool, chunk_width: usize) -> Paragraph {
@@ -475,7 +499,7 @@ impl Write for Stdout {
 // this is a big blob of horrible! clean it up!
 // for now, it works. But it'd be great if it were more easily readable, and
 // modular. I'd like to add some more stats and stuff at some point
-#[allow(clippy::cast_possible_truncation)]
+#[allow(clippy::cast_possible_truncation, clippy::too_many_lines)]
 pub async fn history(
     query: &[String],
     settings: &Settings,
@@ -506,6 +530,14 @@ pub async fn history(
 
     let history_count = db.history_count().await?;
 
+    let syntax: SyntaxSet =
+        from_uncompressed_data(include_bytes!("default_nonewlines.packdump")).unwrap();
+    let themes: ThemeSet = from_binary(include_bytes!("default.themedump"));
+    let highlighter = Highlighter::new(&themes.themes["base16-ocean.dark"]);
+
+    // let syntax = SyntaxSet::load_defaults_nonewlines();
+    // let mut themes = ThemeSet::load_defaults();
+
     let mut app = State {
         history_count,
         results_state: ListState::default(),
@@ -524,7 +556,18 @@ pub async fn history(
             },
         },
         engine: engines::engine(settings.search_mode),
+
+        results_parsed: HashMap::new(),
+        highlighter,
+        syntax: ShellSyntax {
+            syntaxs: &syntax,
+            sh: syntax.find_syntax_by_extension("sh").unwrap(),
+            fish: syntax.find_syntax_by_extension("fish").unwrap(),
+            nu: syntax.find_syntax_by_extension("nu").unwrap(),
+        },
     };
+
+    // let mut hi = HighlightLines::new(syntax, &ts.themes["base16-ocean.dark"]);
 
     let mut results = app.query_results(&mut db).await?;
 
@@ -574,7 +617,7 @@ pub async fn history(
         terminal.clear()?;
     }
 
-    if index < results.len() {
+    let res = if index < results.len() {
         // index is in bounds so we return that entry
         Ok(results.swap_remove(index).command)
     } else if index == RETURN_ORIGINAL {
@@ -584,5 +627,37 @@ pub async fn history(
         // * index == RETURN_QUERY, in which case we should return the input
         // * out of bounds -> usually implies no selected entry so we return the input
         Ok(app.search.input.into_inner())
+    };
+
+    // awkward lifetime rule that clippy isn't sure of
+    #[allow(clippy::let_and_return)]
+    res
+}
+
+#[derive(Clone, Copy)]
+struct ShellSyntax<'s> {
+    syntaxs: &'s SyntaxSet,
+    sh: &'s SyntaxReference,
+    fish: &'s SyntaxReference,
+    nu: &'s SyntaxReference,
+}
+
+fn parse_shell(h: &History, syntax: ShellSyntax<'_>) -> ParsedSyntax {
+    let mut sh = syntect::parsing::ParseState::new(syntax.sh);
+    let mut fish = syntect::parsing::ParseState::new(syntax.fish);
+    let mut nu = syntect::parsing::ParseState::new(syntax.nu);
+
+    let mut lines = vec![];
+    for line in h.command.lines() {
+        if let Ok(line) = sh.parse_line(line, syntax.syntaxs) {
+            lines.push(line);
+        } else if let Ok(line) = fish.parse_line(line, syntax.syntaxs) {
+            lines.push(line);
+        } else if let Ok(line) = nu.parse_line(line, syntax.syntaxs) {
+            lines.push(line);
+        } else {
+            lines.push(Vec::new());
+        }
     }
+    lines
 }
