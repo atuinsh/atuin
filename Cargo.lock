@@ -82,6 +82,7 @@ dependencies = [
  "atuin-client",
  "atuin-common",
  "atuin-server",
+ "atuin-syntect",
  "base64 0.20.0",
  "bitflags",
  "cassowary",
@@ -105,7 +106,6 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
- "syntect",
  "tiny-bip39",
  "tokio",
  "tracing-subscriber",
@@ -187,6 +187,14 @@ dependencies = [
  "tracing",
  "uuid",
  "whoami",
+]
+
+[[package]]
+name = "atuin-syntect"
+version = "14.0.0"
+dependencies = [
+ "once_cell",
+ "syntect",
 ]
 
 [[package]]

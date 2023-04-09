@@ -16,7 +16,6 @@ mod duration;
 mod engines;
 mod history_list;
 mod interactive;
-mod syntax;
 pub use duration::{format_duration, format_duration_into};
 
 #[allow(clippy::struct_excessive_bools)]

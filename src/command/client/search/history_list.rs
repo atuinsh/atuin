@@ -7,13 +7,9 @@ use crate::ratatui::{
     widgets::{Block, StatefulWidget, Widget},
 };
 use atuin_client::history::History;
-use syntect::parsing::{BasicScopeStackOp, Scope, ScopeStack};
+use atuin_syntect::{ParsedSyntax, Theme};
 
-use super::{
-    format_duration,
-    interactive::ParsedSyntax,
-    syntax::{Theme, ThemeRule},
-};
+use super::format_duration;
 
 pub struct HistoryList<'a> {
     history: &'a [History],
@@ -176,39 +172,22 @@ impl DrawState<'_> {
         let selected = self.y as usize + self.state.offset == self.state.selected;
         let with_select = move |style: Style| {
             if selected {
-                style.bg(theme.selection).add_modifier(Modifier::BOLD)
+                style
+                    .bg(map_color(theme.selection))
+                    .add_modifier(Modifier::BOLD)
             } else {
                 style
             }
         };
 
         if let Some(parsed) = parsed {
-            // this is a manual/simpler implementation of
-            // syntect::highlight::HighlightIterator
-            // to use a custom theme using `ratatui::Style`.
-            // This is so we don't have to care about RGB and can instead use
-            // terminal colours
-
-            let mut stack = ScopeStack::default();
-            let mut styles: Vec<(f64, Style)> = vec![];
-            for (line, parsed_line) in h.command.lines().zip(parsed) {
-                self.x += 1;
-
-                let mut last = 0;
-                for &(index, ref op) in parsed_line {
-                    let style = styles.last().copied().unwrap_or_default().1;
-                    stack
-                        .apply_with_hook(op, |op, stack| {
-                            highlight_hook(&op, stack, &theme.rules, &mut styles);
-                        })
-                        .unwrap();
-
-                    self.draw(&line[last..index], with_select(style));
-                    last = index;
+            theme.highlight(&h.command, parsed, &mut |t, style| {
+                if t.is_empty() {
+                    self.x += 1;
+                } else {
+                    self.draw(t, with_select(map_style(style)));
                 }
-                let style = styles.last().copied().unwrap_or_default().1;
-                self.draw(&line[last..], with_select(style));
-            }
+            });
         } else {
             let style = with_select(Style::default());
             for section in h.command.split_ascii_whitespace() {
@@ -231,34 +210,33 @@ impl DrawState<'_> {
     }
 }
 
-#[allow(clippy::cast_possible_truncation)]
-fn highlight_hook(
-    op: &BasicScopeStackOp,
-    stack: &[Scope],
-    rules: &[ThemeRule],
-    styles: &mut Vec<(f64, Style)>,
-) {
-    match op {
-        BasicScopeStackOp::Push(scope) => {
-            let mut scored_style = styles
-                .last()
-                .copied()
-                .unwrap_or_else(|| (-1.0, Style::default()));
+fn map_color(c: atuin_syntect::Color) -> Color {
+    match c {
+        atuin_syntect::Color::Black => Color::Black,
+        atuin_syntect::Color::Red => Color::Red,
+        atuin_syntect::Color::Green => Color::Green,
+        atuin_syntect::Color::Yellow => Color::Yellow,
+        atuin_syntect::Color::Blue => Color::Blue,
+        atuin_syntect::Color::Magenta => Color::Magenta,
+        atuin_syntect::Color::Cyan => Color::Cyan,
+        atuin_syntect::Color::Gray => Color::Gray,
+        atuin_syntect::Color::DarkGray => Color::DarkGray,
+        atuin_syntect::Color::LightRed => Color::LightRed,
+        atuin_syntect::Color::LightGreen => Color::LightGreen,
+        atuin_syntect::Color::LightYellow => Color::LightYellow,
+        atuin_syntect::Color::LightBlue => Color::LightBlue,
+        atuin_syntect::Color::LightMagenta => Color::LightMagenta,
+        atuin_syntect::Color::LightCyan => Color::LightCyan,
+        atuin_syntect::Color::White => Color::White,
+        atuin_syntect::Color::Rgb(r, g, b) => Color::Rgb(r, g, b),
+    }
+}
 
-            for rule in rules.iter().filter(|a| a.scope.is_prefix_of(*scope)) {
-                let single_score =
-                    f64::from(rule.scope.len()) * f64::from(3 * ((stack.len() - 1) as u32)).exp2();
-
-                if single_score > scored_style.0 {
-                    scored_style.0 = single_score;
-                    scored_style.1 = rule.style;
-                }
-            }
-
-            styles.push(scored_style);
-        }
-        BasicScopeStackOp::Pop => {
-            styles.pop();
-        }
+fn map_style(c: atuin_syntect::Style) -> Style {
+    Style {
+        fg: c.fg.map(map_color),
+        bg: c.bg.map(map_color),
+        add_modifier: Modifier::empty(),
+        sub_modifier: Modifier::empty(),
     }
 }

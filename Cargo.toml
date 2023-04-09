@@ -32,7 +32,7 @@ buildflags = ["--release"]
 atuin = { path = "/usr/bin/atuin" }
 
 [workspace]
-members = ["./atuin-client", "./atuin-server", "./atuin-common"]
+members = ["./atuin-client", "./atuin-server", "./atuin-common", "./atuin-syntect"]
 
 [features]
 # TODO(conradludgate)
@@ -47,6 +47,7 @@ server = ["atuin-server", "tracing-subscriber"]
 atuin-server = { path = "atuin-server", version = "14.0.0", optional = true }
 atuin-client = { path = "atuin-client", version = "14.0.0", optional = true, default-features = false }
 atuin-common = { path = "atuin-common", version = "14.0.0" }
+atuin-syntect = { path = "atuin-syntect", version = "14.0.0" }
 
 log = "0.4"
 env_logger = "0.10.0"
@@ -74,7 +75,6 @@ tiny-bip39 = "1"
 futures-util = "0.3"
 fuzzy-matcher = "0.3.7"
 colored = "2.0.0"
-syntect = { version = "5.0.0", default-features = false, features = ["dump-load", "parsing", "regex-fancy"] }
 
 # ratatui
 bitflags = "1.3"

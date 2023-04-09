@@ -4,6 +4,7 @@ use std::{
     time::Duration,
 };
 
+use atuin_syntect::{ParsedSyntax, Theme, ShellSyntax, get_syntax, get_theme};
 use crossterm::{
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent},
     execute, terminal,
@@ -11,11 +12,10 @@ use crossterm::{
 use eyre::Result;
 use futures_util::FutureExt;
 use semver::Version;
-use syntect::{
-    dumps::{from_binary, from_uncompressed_data},
-    highlighting::Highlighter,
-    parsing::{ScopeStackOp, SyntaxReference, SyntaxSet},
-};
+// use syntect::{
+//     dumps::from_uncompressed_data,
+//     parsing::{ScopeStackOp, SyntaxReference, SyntaxSet},
+// };
 use unicode_width::UnicodeWidthStr;
 
 use atuin_client::{
@@ -28,11 +28,9 @@ use super::{
     cursor::Cursor,
     engines::{SearchEngine, SearchState},
     history_list::{HistoryList, ListState, PREFIX_LENGTH},
-    syntax::Theme,
 };
 use crate::{command::client::search::engines, VERSION};
 use crate::{
-    command::client::search::syntax::get_theme,
     ratatui::{
         backend::{Backend, CrosstermBackend},
         layout::{Alignment, Constraint, Direction, Layout},
@@ -46,9 +44,8 @@ use crate::{
 const RETURN_ORIGINAL: usize = usize::MAX;
 const RETURN_QUERY: usize = usize::MAX - 1;
 
-pub type ParsedSyntax = Vec<Vec<(usize, ScopeStackOp)>>;
 
-struct State<'s> {
+struct State {
     history_count: i64,
     update_needed: Option<Version>,
     results_state: ListState,
@@ -61,17 +58,17 @@ struct State<'s> {
     // highlighting
     results_parsed: HashMap<String, ParsedSyntax>,
     theme: Theme,
-    syntax: ShellSyntax<'s>,
+    syntax: ShellSyntax<'static>,
 }
 
-impl State<'_> {
+impl State {
     async fn query_results(&mut self, db: &mut dyn Database) -> Result<Vec<History>> {
         let results = self.engine.query(&self.search, db).await?;
         self.results_state.select(0);
         for h in &results {
             self.results_parsed
                 .entry(h.id.clone())
-                .or_insert_with(|| parse_shell(h, self.syntax));
+                .or_insert_with(|| self.syntax.parse_shell(&h.command));
         }
         Ok(results)
     }
@@ -534,14 +531,6 @@ pub async fn history(
 
     let history_count = db.history_count().await?;
 
-    let syntax: SyntaxSet =
-        from_uncompressed_data(include_bytes!("syntax/default_nonewlines.packdump")).unwrap();
-    // let themes: ThemeSet = from_binary(include_bytes!("syntax/default.themedump"));
-    // let highlighter = Highlighter::new(&themes.themes["base16-ocean.dark"]);
-
-    // let syntax = SyntaxSet::load_defaults_nonewlines();
-    // let mut themes = ThemeSet::load_defaults();
-
     let mut app = State {
         history_count,
         results_state: ListState::default(),
@@ -563,12 +552,7 @@ pub async fn history(
 
         results_parsed: HashMap::new(),
         theme: get_theme().unwrap(),
-        syntax: ShellSyntax {
-            syntaxs: &syntax,
-            sh: syntax.find_syntax_by_extension("sh").unwrap(),
-            fish: syntax.find_syntax_by_extension("fish").unwrap(),
-            nu: syntax.find_syntax_by_extension("nu").unwrap(),
-        },
+        syntax: get_syntax(),
     };
 
     // let mut hi = HighlightLines::new(syntax, &ts.themes["base16-ocean.dark"]);
@@ -638,30 +622,3 @@ pub async fn history(
     res
 }
 
-#[derive(Clone, Copy)]
-struct ShellSyntax<'s> {
-    syntaxs: &'s SyntaxSet,
-    sh: &'s SyntaxReference,
-    fish: &'s SyntaxReference,
-    nu: &'s SyntaxReference,
-}
-
-fn parse_shell(h: &History, syntax: ShellSyntax<'_>) -> ParsedSyntax {
-    let mut sh = syntect::parsing::ParseState::new(syntax.sh);
-    let mut fish = syntect::parsing::ParseState::new(syntax.fish);
-    let mut nu = syntect::parsing::ParseState::new(syntax.nu);
-
-    let mut lines = vec![];
-    for line in h.command.lines() {
-        if let Ok(line) = sh.parse_line(line, syntax.syntaxs) {
-            lines.push(line);
-        } else if let Ok(line) = fish.parse_line(line, syntax.syntaxs) {
-            lines.push(line);
-        } else if let Ok(line) = nu.parse_line(line, syntax.syntaxs) {
-            lines.push(line);
-        } else {
-            lines.push(Vec::new());
-        }
-    }
-    lines
-}
