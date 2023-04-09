@@ -86,6 +86,7 @@ impl State {
     }
 
     #[allow(clippy::too_many_lines)]
+    #[allow(clippy::cognitive_complexity)]
     fn handle_key_input(
         &mut self,
         settings: &Settings,
@@ -119,18 +120,30 @@ impl State {
                 .search
                 .input
                 .prev_word(&settings.word_chars, settings.word_jump_mode),
+            KeyCode::Char('b') if alt => self
+                .search
+                .input
+                .prev_word(&settings.word_chars, settings.word_jump_mode),
             KeyCode::Left => {
                 self.search.input.left();
             }
             KeyCode::Char('h') if ctrl => {
                 self.search.input.left();
             }
+            KeyCode::Char('b') if ctrl => {
+                self.search.input.left();
+            }
             KeyCode::Right if ctrl => self
+                .search
+                .input
+                .next_word(&settings.word_chars, settings.word_jump_mode),
+            KeyCode::Char('f') if alt => self
                 .search
                 .input
                 .next_word(&settings.word_chars, settings.word_jump_mode),
             KeyCode::Right => self.search.input.right(),
             KeyCode::Char('l') if ctrl => self.search.input.right(),
+            KeyCode::Char('f') if ctrl => self.search.input.right(),
             KeyCode::Char('a') if ctrl => self.search.input.start(),
             KeyCode::Home => self.search.input.start(),
             KeyCode::Char('e') if ctrl => self.search.input.end(),
