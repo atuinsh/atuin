@@ -100,7 +100,6 @@ impl State {
 
         let ctrl = input.modifiers.contains(KeyModifiers::CONTROL);
         let alt = input.modifiers.contains(KeyModifiers::ALT);
-
         // reset the state, will be set to true later if user really did change it
         self.switched_search_mode = false;
         match input.code {
@@ -238,12 +237,12 @@ impl State {
         f: &mut Frame<'_, T>,
         results: &[HistoryResult],
         compact: bool,
-        settings: &Settings,
+        show_preview: bool,
     ) {
         let border_size = if compact { 0 } else { 1 };
 
         let preview_width = f.size().width - 2;
-        let preview_height = if settings.show_preview {
+        let preview_height = if show_preview {
             let longest_command = results
                 .iter()
                 .max_by(|h1, h2| h1.history.command.len().cmp(&h2.history.command.len()));
@@ -273,7 +272,7 @@ impl State {
                     Constraint::Min(1),
                     Constraint::Length(1 + border_size),
                     Constraint::Length(preview_height),
-                    Constraint::Length(if settings.ui.bar.enabled { 1 } else { 0 }),
+                    Constraint::Length(1),
                 ]
                 .as_ref(),
             )
@@ -306,7 +305,7 @@ impl State {
         let input = self.build_input(compact, chunks[2].width.into());
         f.render_widget(input, chunks[2]);
 
-        let preview = self.build_preview(results, compact, preview_width, chunks[2].width.into());
+        let preview = self.build_preview(results, compact, preview_width, chunks[3].width.into());
         f.render_widget(preview, chunks[3]);
 
         let selected_history = results[self.results_state.selected()].clone();
@@ -391,7 +390,6 @@ impl State {
             .style(Style::default().bg(Color::White).fg(Color::Black));
 
         f.render_widget(directory, bar[0]);
-        f.render_widget(count, bar[1]);
     }
 
     fn build_input(&mut self, compact: bool, chunk_width: usize) -> Paragraph {
@@ -571,7 +569,7 @@ pub async fn history(
             atuin_client::settings::Style::Compact => true,
             atuin_client::settings::Style::Full => false,
         };
-        terminal.draw(|f| app.draw(f, &results, compact, settings))?;
+        terminal.draw(|f| app.draw(f, &results, compact, settings.show_preview))?;
 
         let initial_input = app.search.input.as_str().to_owned();
         let initial_filter_mode = app.search.filter_mode;

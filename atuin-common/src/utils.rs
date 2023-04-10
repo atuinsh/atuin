@@ -4,8 +4,6 @@ use std::path::PathBuf;
 use chrono::{Months, NaiveDate};
 use uuid::Uuid;
 
-use colors_transform::{Color, Hsl, Rgb};
-
 pub fn uuid_v4() -> String {
     Uuid::new_v4().as_simple().to_string()
 }
@@ -24,32 +22,6 @@ pub fn home_dir() -> PathBuf {
 pub fn home_dir() -> PathBuf {
     let home = std::env::var("USERPROFILE").expect("%userprofile% not found");
     PathBuf::from(home)
-}
-
-// Take a colour string as rgb, hsl, or hex and return the rgb. Allow fractional colours.
-pub fn parse_colour(colour: &str) -> Option<(f32, f32, f32)> {
-    // Try loading RGB, then from hex, then HSL
-
-    let rgb = colour.parse::<colors_transform::Rgb>();
-
-    if let Ok(rgb) = rgb {
-        return Some((rgb.get_red(), rgb.get_green(), rgb.get_blue()));
-    }
-
-    let rgb = Rgb::from_hex_str(colour);
-
-    if let Ok(rgb) = rgb {
-        return Some((rgb.get_red(), rgb.get_green(), rgb.get_blue()));
-    }
-
-    let hsl = colour.parse::<colors_transform::Hsl>();
-
-    if let Ok(hsl) = hsl {
-        let rgb = hsl.to_rgb();
-        return Some((rgb.get_red(), rgb.get_green(), rgb.get_blue()));
-    }
-
-    return None;
 }
 
 pub fn config_dir() -> PathBuf {
