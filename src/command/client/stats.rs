@@ -82,21 +82,21 @@ impl Cmd {
         };
         let history = if words.as_str() == "all" {
             db.list(FilterMode::Global, &context, None, false).await?
-        } else if words.trim() == "day" {
-            let start = parse_date_string(&Local::now().date().format("%Y-%m-%d").to_string(), Local::now(), settings.dialect.into())?;
+        } else if words.trim() == "today" {
+            let start = Local::now().date().and_hms(0, 0, 0);
             let end = start + Duration::days(1);
             db.range(start.into(), end.into()).await?
         } else if words.trim() == "month"  {
-            let end = parse_date_string(&Local::now().date().format("%Y-%m-%d").to_string(), Local::now(), settings.dialect.into())?;
+            let end = Local::now().date().and_hms(0, 0, 0);
             let start = end - Duration::days(31);
             db.range(start.into(), end.into()).await?
         } else if words.trim() == "week" {
-            let end = parse_date_string(&Local::now().date().format("%Y-%m-%d").to_string(), Local::now(), settings.dialect.into())?;
+            let end = Local::now().date().and_hms(0, 0, 0);
             let start = end - Duration::days(7);
             db.range(start.into(), end.into()).await?
         } else if words.trim() == "year" {
-            let start = parse_date_string(Local::now().year().to_string().as_str(), Local::now(), settings.dialect.into())?;
-            let end = start + Duration::days(365);
+            let end = Local::now().date().and_hms(0, 0, 0);
+            let start = end - Duration::days(365);
             db.range(start.into(), end.into()).await?
         } else {
             let start = parse_date_string(&words, Local::now(), settings.dialect.into())?;
