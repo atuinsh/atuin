@@ -82,6 +82,22 @@ impl Cmd {
         };
         let history = if words.as_str() == "all" {
             db.list(FilterMode::Global, &context, None, false).await?
+        } else if words.trim() == "today" {
+            let start = Local::now().date().and_hms(0, 0, 0);
+            let end = start + Duration::days(1);
+            db.range(start.into(), end.into()).await?
+        } else if words.trim() == "month" {
+            let end = Local::now().date().and_hms(0, 0, 0);
+            let start = end - Duration::days(31);
+            db.range(start.into(), end.into()).await?
+        } else if words.trim() == "week" {
+            let end = Local::now().date().and_hms(0, 0, 0);
+            let start = end - Duration::days(7);
+            db.range(start.into(), end.into()).await?
+        } else if words.trim() == "year" {
+            let end = Local::now().date().and_hms(0, 0, 0);
+            let start = end - Duration::days(365);
+            db.range(start.into(), end.into()).await?
         } else {
             let start = parse_date_string(&words, Local::now(), settings.dialect.into())?;
             let end = start + Duration::days(1);
