@@ -86,7 +86,7 @@ impl Cmd {
             let start = Local::now().date().and_hms(0, 0, 0);
             let end = start + Duration::days(1);
             db.range(start.into(), end.into()).await?
-        } else if words.trim() == "month"  {
+        } else if words.trim() == "month" {
             let end = Local::now().date().and_hms(0, 0, 0);
             let start = end - Duration::days(31);
             db.range(start.into(), end.into()).await?
