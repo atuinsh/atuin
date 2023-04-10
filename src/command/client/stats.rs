@@ -87,11 +87,11 @@ impl Cmd {
             let end = start + Duration::days(1);
             db.range(start.into(), end.into()).await?
         } else if words.trim() == "month"  {
-            let start = parse_date_string(&Local::now().date().format("%Y-%m-%d").to_string(), Local::now(), settings.dialect.into())?;
-            let end = start + Duration::days(31);
+            let end = parse_date_string(&Local::now().date().format("%Y-%m-%d").to_string(), Local::now(), settings.dialect.into())?;
+            let start = end - Duration::days(31);
             db.range(start.into(), end.into()).await?
         } else if words.trim() == "week" {
-            let end = parse_date_string(&Local::now().format("%b").to_string().as_str(), Local::now(), settings.dialect.into())?;
+            let end = parse_date_string(&Local::now().date().format("%Y-%m-%d").to_string(), Local::now(), settings.dialect.into())?;
             let start = end - Duration::days(7);
             db.range(start.into(), end.into()).await?
         } else if words.trim() == "year" {
