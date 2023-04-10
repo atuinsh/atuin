@@ -7,8 +7,7 @@ use syntect::{
     },
 };
 
-mod style;
-pub use style::*;
+use crate::ratatui::style::{Color, Style};
 
 impl Theme {
     // this is a manual/simpler implementation of

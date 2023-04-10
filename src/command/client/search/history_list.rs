@@ -1,5 +1,6 @@
 use std::{collections::HashMap, time::Duration};
 
+use super::search_syntect::{ParsedSyntax, Theme};
 use crate::ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -7,7 +8,6 @@ use crate::ratatui::{
     widgets::{Block, StatefulWidget, Widget},
 };
 use atuin_client::history::History;
-use atuin_syntect::{ParsedSyntax, Theme};
 
 use super::format_duration;
 
@@ -172,9 +172,7 @@ impl DrawState<'_> {
         let selected = self.y as usize + self.state.offset == self.state.selected;
         let with_select = move |style: Style| {
             if selected {
-                style
-                    .bg(map_color(theme.selection))
-                    .add_modifier(Modifier::BOLD)
+                style.bg(theme.selection).add_modifier(Modifier::BOLD)
             } else {
                 style
             }
@@ -185,7 +183,7 @@ impl DrawState<'_> {
                 if t.is_empty() {
                     self.x += 1;
                 } else {
-                    self.draw(t, with_select(map_style(style)));
+                    self.draw(t, with_select(style));
                 }
             });
         } else {
@@ -207,36 +205,5 @@ impl DrawState<'_> {
         let cy = self.list_area.bottom() - self.y - 1;
         let w = (self.list_area.width - self.x) as usize;
         self.x += self.buf.set_stringn(cx, cy, s, w, style).0 - cx;
-    }
-}
-
-fn map_color(c: atuin_syntect::Color) -> Color {
-    match c {
-        atuin_syntect::Color::Black => Color::Black,
-        atuin_syntect::Color::Red => Color::Red,
-        atuin_syntect::Color::Green => Color::Green,
-        atuin_syntect::Color::Yellow => Color::Yellow,
-        atuin_syntect::Color::Blue => Color::Blue,
-        atuin_syntect::Color::Magenta => Color::Magenta,
-        atuin_syntect::Color::Cyan => Color::Cyan,
-        atuin_syntect::Color::Gray => Color::Gray,
-        atuin_syntect::Color::DarkGray => Color::DarkGray,
-        atuin_syntect::Color::LightRed => Color::LightRed,
-        atuin_syntect::Color::LightGreen => Color::LightGreen,
-        atuin_syntect::Color::LightYellow => Color::LightYellow,
-        atuin_syntect::Color::LightBlue => Color::LightBlue,
-        atuin_syntect::Color::LightMagenta => Color::LightMagenta,
-        atuin_syntect::Color::LightCyan => Color::LightCyan,
-        atuin_syntect::Color::White => Color::White,
-        atuin_syntect::Color::Rgb(r, g, b) => Color::Rgb(r, g, b),
-    }
-}
-
-fn map_style(c: atuin_syntect::Style) -> Style {
-    Style {
-        fg: c.fg.map(map_color),
-        bg: c.bg.map(map_color),
-        add_modifier: Modifier::empty(),
-        sub_modifier: Modifier::empty(),
     }
 }

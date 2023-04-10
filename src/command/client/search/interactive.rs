@@ -4,7 +4,6 @@ use std::{
     time::Duration,
 };
 
-use atuin_syntect::{ParsedSyntax, Theme, ShellSyntax, get_syntax, get_theme};
 use crossterm::{
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent},
     execute, terminal,
@@ -12,10 +11,6 @@ use crossterm::{
 use eyre::Result;
 use futures_util::FutureExt;
 use semver::Version;
-// use syntect::{
-//     dumps::from_uncompressed_data,
-//     parsing::{ScopeStackOp, SyntaxReference, SyntaxSet},
-// };
 use unicode_width::UnicodeWidthStr;
 
 use atuin_client::{
@@ -28,22 +23,20 @@ use super::{
     cursor::Cursor,
     engines::{SearchEngine, SearchState},
     history_list::{HistoryList, ListState, PREFIX_LENGTH},
+    search_syntect::{get_syntax, get_theme, ParsedSyntax, ShellSyntax, Theme},
+};
+use crate::ratatui::{
+    backend::{Backend, CrosstermBackend},
+    layout::{Alignment, Constraint, Direction, Layout},
+    style::{Color, Modifier, Style},
+    text::{Span, Spans, Text},
+    widgets::{Block, BorderType, Borders, Paragraph},
+    Frame, Terminal, TerminalOptions, Viewport,
 };
 use crate::{command::client::search::engines, VERSION};
-use crate::{
-    ratatui::{
-        backend::{Backend, CrosstermBackend},
-        layout::{Alignment, Constraint, Direction, Layout},
-        style::{Color, Modifier, Style},
-        text::{Span, Spans, Text},
-        widgets::{Block, BorderType, Borders, Paragraph},
-        Frame, Terminal, TerminalOptions, Viewport,
-    },
-};
 
 const RETURN_ORIGINAL: usize = usize::MAX;
 const RETURN_QUERY: usize = usize::MAX - 1;
-
 
 struct State {
     history_count: i64,
@@ -621,4 +614,3 @@ pub async fn history(
     #[allow(clippy::let_and_return)]
     res
 }
-
