@@ -159,7 +159,7 @@ fn print_list_with<'h>(
     };
 
     for h in h.rev() {
-        writeln!(w, "{}", fmt.with_args(&FmtHistory(&h))).expect("failed to write history");
+        writeln!(w, "{}", fmt.with_args(&FmtHistory(h))).expect("failed to write history");
     }
 }
 
@@ -192,6 +192,7 @@ pub fn print_cmd_only<'h>(w: &mut StdoutLock, h: impl DoubleEndedIterator<Item =
 }
 
 impl Cmd {
+    #[allow(clippy::too_many_lines)]
     pub async fn run(&self, settings: &Settings, db: &mut impl Database) -> Result<()> {
         let context = current_context();
 

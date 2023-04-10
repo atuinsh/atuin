@@ -14,7 +14,6 @@ use unicode_width::UnicodeWidthStr;
 
 use atuin_client::{
     database::{current_context, Database},
-    history::History,
     result::HistoryResult,
     settings::{ExitMode, FilterMode, SearchMode, Settings},
 };
@@ -308,9 +307,9 @@ impl State {
         let preview = self.build_preview(results, compact, preview_width, chunks[3].width.into());
         f.render_widget(preview, chunks[3]);
 
-        if results.len() > 0 {
+        if !results.is_empty() {
             let selected_history = results[self.results_state.selected()].clone();
-            self.render_bar(f, &selected_history, chunks[4]);
+            Self::render_bar(f, &selected_history, chunks[4]);
         }
 
         let extra_width = UnicodeWidthStr::width(self.search.input.substring());
@@ -374,18 +373,13 @@ impl State {
         results_list
     }
 
-    fn render_bar<T: Backend>(
-        &mut self,
-        f: &mut Frame<'_, T>,
-        history: &HistoryResult,
-        chunk: Rect,
-    ) {
+    fn render_bar<T: Backend>(f: &mut Frame<'_, T>, history: &HistoryResult, chunk: Rect) {
         let bar = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Ratio(9, 10), Constraint::Ratio(1, 10)].as_ref())
             .split(chunk);
 
-        let directory = Paragraph::new(Text::from(Span::raw(format!("{}", history.history.cwd,))))
+        let directory = Paragraph::new(Text::from(Span::raw(history.history.cwd.to_string())))
             .style(Style::default().bg(Color::White).fg(Color::Black));
 
         let count = Paragraph::new(Text::from(Span::raw(format!("x{}", history.count,))))

@@ -1,7 +1,6 @@
 use async_trait::async_trait;
 use atuin_client::{
     database::{Context, Database},
-    history::History,
     result::HistoryResult,
     settings::{FilterMode, SearchMode},
 };

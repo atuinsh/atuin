@@ -5,7 +5,6 @@ use eyre::Result;
 use atuin_client::{
     database::Database,
     database::{current_context, OptFilters},
-    history::History,
     result::HistoryResult,
     settings::{FilterMode, SearchMode, Settings},
 };

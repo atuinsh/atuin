@@ -1,7 +1,6 @@
 use async_trait::async_trait;
 use atuin_client::{
-    database::Database, database::OptFilters, history::History, result::HistoryResult,
-    settings::SearchMode,
+    database::Database, database::OptFilters, result::HistoryResult, settings::SearchMode,
 };
 use eyre::Result;
 
