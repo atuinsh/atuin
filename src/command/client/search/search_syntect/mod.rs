@@ -19,7 +19,7 @@ impl Theme {
         let mut stack = ScopeStack::default();
         let mut styles: Vec<(f64, Style)> = vec![];
         for (line, parsed_line) in h.lines().zip(parsed) {
-            draw("", Style::default());
+            draw("\n", Style::default());
 
             let mut last = 0;
             for &(index, ref op) in parsed_line {

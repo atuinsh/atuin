@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     io::{stdout, Write},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use crossterm::{
@@ -58,12 +58,20 @@ impl State {
     async fn query_results(&mut self, db: &mut dyn Database) -> Result<Vec<History>> {
         let results = self.engine.query(&self.search, db).await?;
         self.results_state.select(0);
-        for h in &results {
+        Ok(results)
+    }
+
+    fn highlight_results(&mut self, results: &[History]) -> bool {
+        let start = Instant::now();
+        for h in results {
+            if start.elapsed() > Duration::from_millis(10) {
+                return true;
+            }
             self.results_parsed
                 .entry(h.id.clone())
                 .or_insert_with(|| self.syntax.parse_shell(&h.command));
         }
-        Ok(results)
+        false
     }
 
     fn handle_input(&mut self, settings: &Settings, input: &Event, len: usize) -> Option<usize> {
@@ -566,7 +574,20 @@ pub async fn history(
         let initial_filter_mode = app.search.filter_mode;
         let initial_search_mode = app.search_mode;
 
-        let event_ready = tokio::task::spawn_blocking(|| event::poll(Duration::from_millis(250)));
+        // highlight any new results found.
+        // this uses a cache internally so it is quick at skipping
+        // previously seen commands
+        let highlight_interrupted = app.highlight_results(&results);
+
+        // if we didn't get around to highlighting all the results, we should consider
+        // triggering a re-draw sooner.
+        let wait = if highlight_interrupted {
+            Duration::from_millis(10)
+        } else {
+            Duration::from_millis(250)
+        };
+
+        let event_ready = tokio::task::spawn_blocking(move || event::poll(wait));
 
         tokio::select! {
             event_ready = event_ready => {

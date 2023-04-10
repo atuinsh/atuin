@@ -180,7 +180,7 @@ impl DrawState<'_> {
 
         if let Some(parsed) = parsed {
             theme.highlight(&h.command, parsed, &mut |t, style| {
-                if t.is_empty() {
+                if t == "\n" {
                     self.x += 1;
                 } else {
                     self.draw(t, with_select(style));
