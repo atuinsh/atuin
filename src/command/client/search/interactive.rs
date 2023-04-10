@@ -15,6 +15,7 @@ use unicode_width::UnicodeWidthStr;
 use atuin_client::{
     database::{current_context, Database},
     history::History,
+    result::HistoryResult,
     settings::{ExitMode, FilterMode, SearchMode, Settings},
 };
 
@@ -48,7 +49,7 @@ struct State {
 }
 
 impl State {
-    async fn query_results(&mut self, db: &mut dyn Database) -> Result<Vec<History>> {
+    async fn query_results(&mut self, db: &mut dyn Database) -> Result<Vec<HistoryResult>> {
         let results = self.engine.query(&self.search, db).await?;
         self.results_state.select(0);
         Ok(results)
@@ -235,7 +236,7 @@ impl State {
     fn draw<T: Backend>(
         &mut self,
         f: &mut Frame<'_, T>,
-        results: &[History],
+        results: &[HistoryResult],
         compact: bool,
         settings: &Settings,
     ) {
@@ -245,12 +246,12 @@ impl State {
         let preview_height = if settings.show_preview {
             let longest_command = results
                 .iter()
-                .max_by(|h1, h2| h1.command.len().cmp(&h2.command.len()));
+                .max_by(|h1, h2| h1.history.command.len().cmp(&h2.history.command.len()));
 
             longest_command.map_or(0, |v| {
                 std::cmp::min(
                     4,
-                    (v.command.len() as u16 + preview_width - 1 - border_size)
+                    (v.history.command.len() as u16 + preview_width - 1 - border_size)
                         / (preview_width - border_size),
                 )
             }) + border_size * 2
@@ -309,15 +310,15 @@ impl State {
         f.render_widget(preview, chunks[3]);
 
         let selected_history = results[self.results_state.selected()].clone();
-        self.render_bar(f, &selected_history, chunks[4], settings);
+        self.render_bar(f, &selected_history, chunks[4]);
 
         let extra_width = UnicodeWidthStr::width(self.search.input.substring());
 
         let cursor_offset = if compact { 0 } else { 1 };
         f.set_cursor(
             // Put cursor past the end of the input text
-            chunks[3].x + extra_width as u16 + PREFIX_LENGTH + 1 + cursor_offset,
-            chunks[3].y + cursor_offset,
+            chunks[2].x + extra_width as u16 + PREFIX_LENGTH + 1 + cursor_offset,
+            chunks[2].y + cursor_offset,
         );
     }
 
@@ -359,7 +360,7 @@ impl State {
         stats
     }
 
-    fn build_results_list(compact: bool, results: &[History]) -> HistoryList {
+    fn build_results_list(compact: bool, results: &[HistoryResult]) -> HistoryList {
         let results_list = if compact {
             HistoryList::new(results)
         } else {
@@ -375,42 +376,19 @@ impl State {
     fn render_bar<T: Backend>(
         &mut self,
         f: &mut Frame<'_, T>,
-        history: &History,
+        history: &HistoryResult,
         chunk: Rect,
-        settings: &Settings,
     ) {
         let bar = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Ratio(9, 10), Constraint::Ratio(1, 10)].as_ref())
             .split(chunk);
 
-        let directory = Paragraph::new(Text::from(Span::raw(format!("{}", history.cwd,)))).style(
-            Style::default()
-                .bg(Color::Rgb(
-                    settings.ui.bar.background_colour_parsed.0 as u8,
-                    settings.ui.bar.background_colour_parsed.1 as u8,
-                    settings.ui.bar.background_colour_parsed.2 as u8,
-                ))
-                .fg(Color::Rgb(
-                    settings.ui.bar.text_colour_parsed.0 as u8,
-                    settings.ui.bar.text_colour_parsed.1 as u8,
-                    settings.ui.bar.text_colour_parsed.2 as u8,
-                )),
-        );
+        let directory = Paragraph::new(Text::from(Span::raw(format!("{}", history.history.cwd,))))
+            .style(Style::default().bg(Color::White).fg(Color::Black));
 
-        let count = Paragraph::new(Text::from(Span::raw(format!("x{}", 0,)))).style(
-            Style::default()
-                .bg(Color::Rgb(
-                    settings.ui.bar.background_colour_parsed.0 as u8,
-                    settings.ui.bar.background_colour_parsed.1 as u8,
-                    settings.ui.bar.background_colour_parsed.2 as u8,
-                ))
-                .fg(Color::Rgb(
-                    settings.ui.bar.text_colour_parsed.0 as u8,
-                    settings.ui.bar.text_colour_parsed.1 as u8,
-                    settings.ui.bar.text_colour_parsed.2 as u8,
-                )),
-        );
+        let count = Paragraph::new(Text::from(Span::raw(format!("x{}", history.count,))))
+            .style(Style::default().bg(Color::White).fg(Color::Black));
 
         f.render_widget(directory, bar[0]);
         f.render_widget(count, bar[1]);
@@ -447,7 +425,7 @@ impl State {
 
     fn build_preview(
         &mut self,
-        results: &[History],
+        results: &[HistoryResult],
         compact: bool,
         preview_width: u16,
         chunk_width: usize,
@@ -457,7 +435,7 @@ impl State {
             String::new()
         } else {
             use itertools::Itertools as _;
-            let s = &results[selected].command;
+            let s = &results[selected].history.command;
             s.char_indices()
                 .step_by(preview_width.into())
                 .map(|(i, _)| i)
@@ -633,7 +611,7 @@ pub async fn history(
 
     if index < results.len() {
         // index is in bounds so we return that entry
-        Ok(results.swap_remove(index).command)
+        Ok(results.swap_remove(index).history.command)
     } else if index == RETURN_ORIGINAL {
         Ok(String::new())
     } else {

@@ -93,7 +93,11 @@ impl ListMode {
 }
 
 #[allow(clippy::cast_sign_loss)]
-pub fn print_list(h: &[History], list_mode: ListMode, format: Option<&str>) {
+pub fn print_list<'h>(
+    h: impl DoubleEndedIterator<Item = &'h History>,
+    list_mode: ListMode,
+    format: Option<&str>,
+) {
     let w = std::io::stdout();
     let mut w = w.lock();
 
@@ -140,7 +144,11 @@ impl FormatKey for FmtHistory<'_> {
     }
 }
 
-fn print_list_with(w: &mut StdoutLock, h: &[History], format: &str) {
+fn print_list_with<'h>(
+    w: &mut StdoutLock,
+    h: impl DoubleEndedIterator<Item = &'h History>,
+    format: &str,
+) {
     let fmt = match ParsedFmt::new(format) {
         Ok(fmt) => fmt,
         Err(err) => {
@@ -150,27 +158,35 @@ fn print_list_with(w: &mut StdoutLock, h: &[History], format: &str) {
         }
     };
 
-    for h in h.iter().rev() {
-        writeln!(w, "{}", fmt.with_args(&FmtHistory(h))).expect("failed to write history");
+    for h in h.rev() {
+        writeln!(w, "{}", fmt.with_args(&FmtHistory(&h))).expect("failed to write history");
     }
 }
 
-pub fn print_human_list(w: &mut StdoutLock, h: &[History], format: Option<&str>) {
+pub fn print_human_list<'h>(
+    w: &mut StdoutLock,
+    h: impl DoubleEndedIterator<Item = &'h History>,
+    format: Option<&str>,
+) {
     let format = format
         .unwrap_or("{time} · {duration}\t{command}")
         .replace("\\t", "\t");
     print_list_with(w, h, &format);
 }
 
-pub fn print_regular(w: &mut StdoutLock, h: &[History], format: Option<&str>) {
+pub fn print_regular<'h>(
+    w: &mut StdoutLock,
+    h: impl DoubleEndedIterator<Item = &'h History>,
+    format: Option<&str>,
+) {
     let format = format
         .unwrap_or("{time}\t{command}\t{duration}")
         .replace("\\t", "\t");
     print_list_with(w, h, &format);
 }
 
-pub fn print_cmd_only(w: &mut StdoutLock, h: &[History]) {
-    for h in h.iter().rev() {
+pub fn print_cmd_only<'h>(w: &mut StdoutLock, h: impl DoubleEndedIterator<Item = &'h History>) {
+    for h in h.rev() {
         writeln!(w, "{}", h.command.trim()).expect("failed to write history");
     }
 }
@@ -253,7 +269,12 @@ impl Cmd {
                 };
 
                 let history = match (session, cwd) {
-                    (None, None) => db.list(settings.filter_mode, &context, None, false).await?,
+                    (None, None) => db
+                        .list(settings.filter_mode, &context, None, false)
+                        .await?
+                        .iter()
+                        .map(|h| h.history.clone())
+                        .collect(),
                     (None, Some(cwd)) => {
                         let query = format!("select * from history where cwd = '{cwd}';");
                         db.query_history(&query).await?
@@ -271,7 +292,7 @@ impl Cmd {
                 };
 
                 print_list(
-                    &history,
+                    history.iter(),
                     ListMode::from_flags(*human, *cmd_only),
                     format.as_deref(),
                 );
@@ -285,8 +306,9 @@ impl Cmd {
                 format,
             } => {
                 let last = db.last().await?;
+                let last = vec![last];
                 print_list(
-                    &[last],
+                    last.iter(),
                     ListMode::from_flags(*human, *cmd_only),
                     format.as_deref(),
                 );

@@ -1,7 +1,9 @@
 use std::path::Path;
 
 use async_trait::async_trait;
-use atuin_client::{database::Database, history::History, settings::FilterMode};
+use atuin_client::{
+    database::Database, history::History, result::HistoryResult, settings::FilterMode,
+};
 use chrono::Utc;
 use eyre::Result;
 use fuzzy_matcher::{skim::SkimMatcherV2, FuzzyMatcher};
@@ -10,7 +12,7 @@ use tokio::task::yield_now;
 use super::{SearchEngine, SearchState};
 
 pub struct Search {
-    all_history: Vec<(History, i32)>,
+    all_history: Vec<HistoryResult>,
     engine: SkimMatcherV2,
 }
 
@@ -29,7 +31,7 @@ impl SearchEngine for Search {
         &mut self,
         state: &SearchState,
         db: &mut dyn Database,
-    ) -> Result<Vec<History>> {
+    ) -> Result<Vec<HistoryResult>> {
         if self.all_history.is_empty() {
             self.all_history = db.all_with_count().await.unwrap();
         }
@@ -41,14 +43,17 @@ impl SearchEngine for Search {
 async fn fuzzy_search(
     engine: &SkimMatcherV2,
     state: &SearchState,
-    all_history: &[(History, i32)],
-) -> Vec<History> {
+    all_history: &[HistoryResult],
+) -> Vec<HistoryResult> {
     let mut set = Vec::with_capacity(200);
     let mut ranks = Vec::with_capacity(200);
     let query = state.input.as_str();
     let now = Utc::now();
 
-    for (i, (history, count)) in all_history.iter().enumerate() {
+    for (i, res) in all_history.iter().enumerate() {
+        let history = &res.history;
+        let count = &res.count;
+
         if i % 256 == 0 {
             yield_now().await;
         }
@@ -89,11 +94,11 @@ async fn fuzzy_search(
                     // do we out score the corrent position?
                     if ranks[i] > score {
                         ranks.insert(i, score);
-                        set.insert(i, history.clone());
+                        set.insert(i, res.clone());
                         let mut j = i + 1;
                         while j < set.len() {
                             // remove duplicates that have a worse score
-                            if set[j].command == history.command {
+                            if set[j].history.command == history.command {
                                 ranks.remove(j);
                                 set.remove(j);
 
@@ -113,14 +118,14 @@ async fn fuzzy_search(
                         break 'insert;
                     }
                     // don't continue if this command has a better score already
-                    if set[i].command == history.command {
+                    if set[i].history.command == history.command {
                         break 'insert;
                     }
                 }
 
                 if set.len() < 200 {
                     ranks.push(score);
-                    set.push(history.clone());
+                    set.push(res.clone());
                 }
             }
         }

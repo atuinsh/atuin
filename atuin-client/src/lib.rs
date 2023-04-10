@@ -14,4 +14,5 @@ pub mod database;
 pub mod history;
 pub mod import;
 pub mod ordering;
+pub mod result;
 pub mod settings;

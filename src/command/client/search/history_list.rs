@@ -6,12 +6,12 @@ use crate::ratatui::{
     style::{Color, Modifier, Style},
     widgets::{Block, StatefulWidget, Widget},
 };
-use atuin_client::history::History;
+use atuin_client::{history::History, result::HistoryResult};
 
 use super::format_duration;
 
 pub struct HistoryList<'a> {
-    history: &'a [History],
+    history: &'a [HistoryResult],
     block: Option<Block<'a>>,
 }
 
@@ -65,9 +65,9 @@ impl<'a> StatefulWidget for HistoryList<'a> {
 
         for item in self.history.iter().skip(state.offset).take(end - start) {
             s.index();
-            s.duration(item);
-            s.time(item);
-            s.command(item);
+            s.duration(&item.history);
+            s.time(&item.history);
+            s.command(&item.history);
 
             // reset line
             s.y += 1;
@@ -77,7 +77,7 @@ impl<'a> StatefulWidget for HistoryList<'a> {
 }
 
 impl<'a> HistoryList<'a> {
-    pub fn new(history: &'a [History]) -> Self {
+    pub fn new(history: &'a [HistoryResult]) -> Self {
         Self {
             history,
             block: None,

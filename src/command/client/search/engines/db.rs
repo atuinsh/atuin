@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use atuin_client::{
-    database::Database, database::OptFilters, history::History, settings::SearchMode,
+    database::Database, database::OptFilters, history::History, result::HistoryResult,
+    settings::SearchMode,
 };
 use eyre::Result;
 
@@ -14,7 +15,7 @@ impl SearchEngine for Search {
         &mut self,
         state: &SearchState,
         db: &mut dyn Database,
-    ) -> Result<Vec<History>> {
+    ) -> Result<Vec<HistoryResult>> {
         Ok(db
             .search(
                 self.0,

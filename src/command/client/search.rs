@@ -6,6 +6,7 @@ use atuin_client::{
     database::Database,
     database::{current_context, OptFilters},
     history::History,
+    result::HistoryResult,
     settings::{FilterMode, SearchMode, Settings},
 };
 
@@ -132,8 +133,8 @@ impl Cmd {
                 // sorry
                 while !entries.is_empty() {
                     for entry in &entries {
-                        eprintln!("deleting {}", entry.id);
-                        db.delete(entry.clone()).await?;
+                        eprintln!("deleting {}", entry.history.id);
+                        db.delete(entry.history.clone()).await?;
                     }
 
                     entries =
@@ -141,7 +142,8 @@ impl Cmd {
                             .await?;
                 }
             } else {
-                super::history::print_list(&entries, list_mode, self.format.as_deref());
+                let entries = entries.iter().map(|h| &h.history);
+                super::history::print_list(entries, list_mode, self.format.as_deref());
             }
         };
         Ok(())
@@ -156,7 +158,7 @@ async fn run_non_interactive(
     filter_options: OptFilters,
     query: &[String],
     db: &mut impl Database,
-) -> Result<Vec<History>> {
+) -> Result<Vec<HistoryResult>> {
     let dir = if filter_options.cwd.as_deref() == Some(".") {
         Some(utils::get_current_dir())
     } else {

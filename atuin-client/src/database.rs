@@ -1,3 +1,4 @@
+use std::convert::TryInto;
 use std::{env, path::Path, str::FromStr};
 
 use async_trait::async_trait;
@@ -16,6 +17,7 @@ use sqlx::{
 use super::{
     history::History,
     ordering,
+    result::HistoryResult,
     settings::{FilterMode, SearchMode},
 };
 
@@ -64,7 +66,7 @@ pub trait Database: Send + Sync + 'static {
         context: &Context,
         max: Option<usize>,
         unique: bool,
-    ) -> Result<Vec<History>>;
+    ) -> Result<Vec<HistoryResult>>;
     async fn range(
         &self,
         from: chrono::DateTime<Utc>,
@@ -92,11 +94,11 @@ pub trait Database: Send + Sync + 'static {
         context: &Context,
         query: &str,
         filter_options: OptFilters,
-    ) -> Result<Vec<History>>;
+    ) -> Result<Vec<HistoryResult>>;
 
     async fn query_history(&self, query: &str) -> Result<Vec<History>>;
 
-    async fn all_with_count(&self) -> Result<Vec<(History, i32)>>;
+    async fn all_with_count(&self) -> Result<Vec<HistoryResult>>;
 }
 
 // Intended for use on a developer machine and not a sync server.
@@ -240,11 +242,10 @@ impl Database for Sqlite {
         context: &Context,
         max: Option<usize>,
         unique: bool,
-    ) -> Result<Vec<History>> {
+    ) -> Result<Vec<HistoryResult>> {
         debug!("listing history");
 
         let mut query = SqlBuilder::select_from(SqlName::new("history").alias("h").baquoted());
-        query.field("*").order_desc("timestamp");
 
         match filter {
             FilterMode::Global => &mut query,
@@ -254,10 +255,14 @@ impl Database for Sqlite {
         };
 
         if unique {
-            query.and_where_eq(
-                "timestamp",
-                "(select max(timestamp) from history where h.command = history.command)",
-            );
+            query
+                .group_by("command")
+                .field("*")
+                .field("count(1) as history_count")
+                .having("max(timestamp)")
+                .order_desc("timestamp");
+        } else {
+            query.field("*").order_desc("timestamp");
         }
 
         if let Some(max) = max {
@@ -267,9 +272,18 @@ impl Database for Sqlite {
         let query = query.sql().expect("bug in list query. please report");
 
         let res = sqlx::query(&query)
-            .map(Self::query_history)
+            .map(|row: SqliteRow| {
+                let count: i32 = row.try_get("history_count").unwrap_or(1);
+
+                HistoryResult {
+                    history: Self::query_history(row),
+                    count: count.try_into().unwrap_or(1),
+                }
+            })
             .fetch_all(&self.pool)
             .await?;
+
+        // ew?
 
         Ok(res)
     }
@@ -351,10 +365,12 @@ impl Database for Sqlite {
         context: &Context,
         query: &str,
         filter_options: OptFilters,
-    ) -> Result<Vec<History>> {
+    ) -> Result<Vec<HistoryResult>> {
         let mut sql = SqlBuilder::select_from("history");
 
         sql.group_by("command")
+            .field("*")
+            .field("count(1) as history_count")
             .having("max(timestamp)")
             .order_desc("timestamp");
 
@@ -454,7 +470,13 @@ impl Database for Sqlite {
         let query = sql.sql().expect("bug in search query. please report");
 
         let res = sqlx::query(&query)
-            .map(Self::query_history)
+            .map(|row: SqliteRow| {
+                let count: i32 = row.try_get("history_count").unwrap_or(1);
+                HistoryResult {
+                    history: Self::query_history(row),
+                    count: count.try_into().unwrap_or(0),
+                }
+            })
             .fetch_all(&self.pool)
             .await?;
 
@@ -470,7 +492,7 @@ impl Database for Sqlite {
         Ok(res)
     }
 
-    async fn all_with_count(&self) -> Result<Vec<(History, i32)>> {
+    async fn all_with_count(&self) -> Result<Vec<HistoryResult>> {
         debug!("listing history");
 
         let mut query = SqlBuilder::select_from(SqlName::new("history").alias("h").baquoted());
@@ -498,7 +520,10 @@ impl Database for Sqlite {
         let res = sqlx::query(&query)
             .map(|row: SqliteRow| {
                 let count: i32 = row.get("count");
-                (Self::query_history(row), count)
+                HistoryResult {
+                    history: Self::query_history(row),
+                    count: count.try_into().unwrap_or(0),
+                }
             })
             .fetch_all(&self.pool)
             .await?;

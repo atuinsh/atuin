@@ -81,7 +81,11 @@ impl Cmd {
             self.period.join(" ")
         };
         let history = if words.as_str() == "all" {
-            db.list(FilterMode::Global, &context, None, false).await?
+            db.list(FilterMode::Global, &context, None, false)
+                .await?
+                .iter()
+                .map(|h| h.history.clone())
+                .collect()
         } else if words.trim() == "today" {
             let start = Local::now().date().and_hms(0, 0, 0);
             let end = start + Duration::days(1);
