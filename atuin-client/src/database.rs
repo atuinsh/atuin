@@ -555,7 +555,7 @@ mod test {
         filter_mode: FilterMode,
         query: &str,
         expected: usize,
-    ) -> Result<Vec<History>> {
+    ) -> Result<Vec<HistoryResult>> {
         let context = Context {
             hostname: "test:host".to_string(),
             session: "beepboopiamasession".to_string(),
@@ -579,8 +579,12 @@ mod test {
             expected,
             "query \"{}\", commands: {:?}",
             query,
-            results.iter().map(|a| &a.command).collect::<Vec<&String>>()
+            results
+                .iter()
+                .map(|a| &a.history.command)
+                .collect::<Vec<&String>>()
         );
+
         Ok(results)
     }
 
@@ -594,7 +598,7 @@ mod test {
         let results = assert_search_eq(db, mode, filter_mode, query, expected_commands.len())
             .await
             .unwrap();
-        let commands: Vec<&str> = results.iter().map(|a| a.command.as_str()).collect();
+        let commands: Vec<&str> = results.iter().map(|a| a.history.command.as_str()).collect();
         assert_eq!(commands, expected_commands);
     }
 

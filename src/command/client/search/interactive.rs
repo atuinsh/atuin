@@ -308,8 +308,10 @@ impl State {
         let preview = self.build_preview(results, compact, preview_width, chunks[3].width.into());
         f.render_widget(preview, chunks[3]);
 
-        let selected_history = results[self.results_state.selected()].clone();
-        self.render_bar(f, &selected_history, chunks[4]);
+        if results.len() > 0 {
+            let selected_history = results[self.results_state.selected()].clone();
+            self.render_bar(f, &selected_history, chunks[4]);
+        }
 
         let extra_width = UnicodeWidthStr::width(self.search.input.substring());
 
@@ -390,6 +392,7 @@ impl State {
             .style(Style::default().bg(Color::White).fg(Color::Black));
 
         f.render_widget(directory, bar[0]);
+        f.render_widget(count, bar[1]);
     }
 
     fn build_input(&mut self, compact: bool, chunk_width: usize) -> Paragraph {
