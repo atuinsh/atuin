@@ -83,6 +83,10 @@ pub struct Cmd {
     #[arg(long)]
     delete: bool,
 
+    /// Reverse the order of results, oldest first
+    #[arg(long, short)]
+    reverse: bool,
+
     /// Available variables: {command}, {directory}, {duration}, {user}, {host}, {time}, {exit} and
     /// {relativetime}.
     /// Example: --format "{time} - [{duration}] - {directory}$\t{command}"
@@ -116,6 +120,7 @@ impl Cmd {
                 after: self.after,
                 limit: self.limit,
                 offset: self.offset,
+                reverse: self.reverse,
             };
 
             let mut entries =
