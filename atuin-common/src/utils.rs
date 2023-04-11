@@ -99,6 +99,8 @@ mod tests {
     use super::*;
     use std::env;
 
+    use std::collections::HashSet;
+
     #[test]
     fn test_dirs() {
         // these tests need to be run sequentially to prevent race condition
@@ -156,5 +158,21 @@ mod tests {
 
         // leap years
         assert_eq!(get_days_from_month(2024, 2), 29);
+    }
+
+    #[test]
+    fn uuid_is_unique() {
+        let how_many: usize = 1000000;
+
+        // for peace of mind
+        let mut uuids: HashSet<Uuid> = HashSet::with_capacity(how_many);
+
+        // there will be many in the same millisecond
+        for _ in 0..how_many {
+            let uuid = uuid_v7();
+            uuids.insert(uuid);
+        }
+
+        assert_eq!(uuids.len(), how_many);
     }
 }
