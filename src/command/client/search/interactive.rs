@@ -64,7 +64,7 @@ impl State {
     fn highlight_results(&mut self, results: &[History]) -> bool {
         let start = Instant::now();
         for h in results {
-            if start.elapsed() > Duration::from_millis(10) {
+            if start.elapsed() > Duration::from_millis(5) {
                 return true;
             }
             self.results_parsed
@@ -582,7 +582,7 @@ pub async fn history(
         // if we didn't get around to highlighting all the results, we should consider
         // triggering a re-draw sooner.
         let wait = if highlight_interrupted {
-            Duration::from_millis(10)
+            Duration::from_millis(5)
         } else {
             Duration::from_millis(250)
         };

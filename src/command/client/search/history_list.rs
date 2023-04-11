@@ -172,7 +172,9 @@ impl DrawState<'_> {
         let selected = self.y as usize + self.state.offset == self.state.selected;
         let with_select = move |style: Style| {
             if selected {
-                style.bg(theme.selection).add_modifier(Modifier::BOLD)
+                style
+                    .add_modifier(Modifier::BOLD)
+                    .add_modifier(Modifier::UNDERLINED)
             } else {
                 style
             }
