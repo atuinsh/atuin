@@ -60,7 +60,7 @@ impl AtuinCmd {
                 Ok(())
             }
             Self::Uuid => {
-                println!("{}", atuin_common::utils::uuid_v7().as_simple().to_string());
+                println!("{}", atuin_common::utils::uuid_v7().as_simple());
                 Ok(())
             }
             Self::GenCompletions { shell, out_dir } => {

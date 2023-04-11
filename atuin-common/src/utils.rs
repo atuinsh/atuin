@@ -39,9 +39,7 @@ pub fn uuid_v7() -> Uuid {
     let bytes = random_bytes();
     let now: u64 = chrono::Utc::now().timestamp_millis() as u64;
 
-    let uuid = encode_unix_timestamp_millis(now, &bytes);
-
-    uuid
+    encode_unix_timestamp_millis(now, &bytes)
 }
 
 pub fn uuid_v4() -> String {
