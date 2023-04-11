@@ -22,6 +22,7 @@ appended with a wildcard).
 | `--limit`          | Limit the number of results (default: none)                                   |
 | `--offset`         | Offset from the start of the results (default: none)                          |
 | `--delete`         | Delete history matching this query                                            |
+| `--reverse`        | Reverse order of search results, oldest first |
 
 ## Examples
 
@@ -48,5 +49,8 @@ atuin search --delete --exit 0 --after "yesterday 3pm" cargo
 atuin search --limit 1 cargo
 
 # Search for a single result for a command beginning with cargo, skipping (offsetting) one result
-atuin search --offset 1 --limit cargo
+atuin search --offset 1 --limit 1 cargo
+
+# Find the oldest cargo command
+atuin search --limit 1 --reverse cargo
 ```

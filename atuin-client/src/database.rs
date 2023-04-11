@@ -35,6 +35,7 @@ pub struct OptFilters {
     pub after: Option<String>,
     pub limit: Option<i64>,
     pub offset: Option<i64>,
+    pub reverse: bool,
 }
 
 pub fn current_context() -> Context {
@@ -354,9 +355,7 @@ impl Database for Sqlite {
     ) -> Result<Vec<History>> {
         let mut sql = SqlBuilder::select_from("history");
 
-        sql.group_by("command")
-            .having("max(timestamp)")
-            .order_desc("timestamp");
+        sql.group_by("command").having("max(timestamp)");
 
         if let Some(limit) = filter_options.limit {
             sql.limit(limit);
@@ -364,6 +363,12 @@ impl Database for Sqlite {
 
         if let Some(offset) = filter_options.offset {
             sql.offset(offset);
+        }
+
+        if filter_options.reverse {
+            sql.order_asc("timestamp");
+        } else {
+            sql.order_desc("timestamp");
         }
 
         match filter {
