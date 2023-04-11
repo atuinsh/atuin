@@ -24,6 +24,16 @@ appended with a wildcard).
 | `--delete`         | Delete history matching this query                                            |
 | `--reverse`        | Reverse order of search results, oldest first |
 
+## `atuin search -i`
+
+Atuin's interactive search TUI allows you to fuzzy search through your history.
+
+![compact](https://user-images.githubusercontent.com/1710904/161623659-4fec047f-ea4b-471c-9581-861d2eb701a9.png)
+
+You can replay the `nth` command with `alt + #` where `#` is the line number of the command you would like to replay.
+
+Note: This is not yet supported on macOS.
+
 ## Examples
 
 ```
