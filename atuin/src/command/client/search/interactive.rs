@@ -99,6 +99,9 @@ impl State {
 
         let ctrl = input.modifiers.contains(KeyModifiers::CONTROL);
         let alt = input.modifiers.contains(KeyModifiers::ALT);
+
+        let invert = settings.inline_height > 0;
+
         // reset the state, will be set to true later if user really did change it
         self.switched_search_mode = false;
         match input.code {
@@ -190,13 +193,23 @@ impl State {
                 self.search_mode = self.search_mode.next(settings);
                 self.engine = engines::engine(self.search_mode);
             }
-            KeyCode::Down if self.results_state.selected() == 0 => {
+            KeyCode::Down if self.results_state.selected() == 0 && !invert => {
                 return Some(match settings.exit_mode {
                     ExitMode::ReturnOriginal => RETURN_ORIGINAL,
                     ExitMode::ReturnQuery => RETURN_QUERY,
                 })
             }
-            KeyCode::Down => {
+            KeyCode::Up if self.results_state.selected() == 0 && invert => {
+                return Some(match settings.exit_mode {
+                    ExitMode::ReturnOriginal => RETURN_ORIGINAL,
+                    ExitMode::ReturnQuery => RETURN_QUERY,
+                })
+            }
+            KeyCode::Down if !invert => {
+                let i = self.results_state.selected().saturating_sub(1);
+                self.results_state.select(i);
+            }
+            KeyCode::Up if invert => {
                 let i = self.results_state.selected().saturating_sub(1);
                 self.results_state.select(i);
             }
@@ -204,7 +217,11 @@ impl State {
                 let i = self.results_state.selected().saturating_sub(1);
                 self.results_state.select(i);
             }
-            KeyCode::Up => {
+            KeyCode::Up if !invert => {
+                let i = self.results_state.selected() + 1;
+                self.results_state.select(i.min(len - 1));
+            }
+            KeyCode::Down if invert => {
                 let i = self.results_state.selected() + 1;
                 self.results_state.select(i.min(len - 1));
             }
@@ -307,7 +324,7 @@ impl State {
         let stats = self.build_stats();
         f.render_widget(stats, header_chunks[2]);
 
-        let results_list = Self::build_results_list(compact, results);
+        let results_list = Self::build_results_list(compact, inline_mode, results);
         f.render_stateful_widget(results_list, results_list_chunk, &mut self.results_state);
 
         let input = self.build_input(compact, input_chunk.width.into());
@@ -365,11 +382,11 @@ impl State {
         stats
     }
 
-    fn build_results_list(compact: bool, results: &[History]) -> HistoryList {
+    fn build_results_list(compact: bool, inline_mode: bool, results: &[History]) -> HistoryList {
         let results_list = if compact {
-            HistoryList::new(results)
+            HistoryList::new(results, inline_mode)
         } else {
-            HistoryList::new(results).block(
+            HistoryList::new(results, inline_mode).block(
                 Block::default()
                     .borders(Borders::TOP | Borders::LEFT | Borders::RIGHT)
                     .border_type(BorderType::Rounded),
