@@ -6,7 +6,7 @@ use directories::UserDirs;
 use eyre::{eyre, Result};
 use serde::Deserialize;
 
-use atuin_common::utils::uuid_v4;
+use atuin_common::utils::uuid_v7;
 
 use super::{get_histpath, unix_byte_lines, Importer, Loader};
 use crate::history::History;
@@ -123,13 +123,13 @@ impl Importer for Resh {
             };
 
             h.push(History {
-                id: uuid_v4(),
+                id: uuid_v7().as_simple().to_string(),
                 timestamp,
                 duration,
                 exit: entry.exit_code,
                 command: entry.cmd_line,
                 cwd: entry.pwd,
-                session: uuid_v4(),
+                session: uuid_v7().as_simple().to_string(),
                 hostname: entry.host,
                 deleted_at: None,
             })

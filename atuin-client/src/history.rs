@@ -3,7 +3,7 @@ use std::env;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
-use atuin_common::utils::uuid_v4;
+use atuin_common::utils::uuid_v7;
 
 // Any new fields MUST be Optional<>!
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, sqlx::FromRow)]
@@ -48,12 +48,12 @@ impl History {
     ) -> Self {
         let session = session
             .or_else(|| env::var("ATUIN_SESSION").ok())
-            .unwrap_or_else(uuid_v4);
+            .unwrap_or_else(|| uuid_v7().as_simple().to_string());
         let hostname =
             hostname.unwrap_or_else(|| format!("{}:{}", whoami::hostname(), whoami::username()));
 
         Self {
-            id: uuid_v4(),
+            id: uuid_v7().as_simple().to_string(),
             timestamp,
             command,
             cwd,
