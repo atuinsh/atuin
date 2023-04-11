@@ -152,6 +152,7 @@ name = "atuin-common"
 version = "14.0.0"
 dependencies = [
  "chrono",
+ "rand",
  "serde",
  "uuid",
 ]
