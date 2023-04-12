@@ -202,7 +202,7 @@ impl Settings {
 
                 Ok(time.with_timezone(&Utc))
             }
-            None => Ok(Utc.ymd(1970, 1, 1).and_hms(0, 0, 0)),
+            None => Ok(Utc.timestamp_nanos(0)),
         }
     }
 

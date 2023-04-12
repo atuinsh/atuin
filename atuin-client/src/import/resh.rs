@@ -111,14 +111,20 @@ impl Importer for Resh {
             let timestamp = {
                 let secs = entry.realtime_before.floor() as i64;
                 let nanosecs = (entry.realtime_before.fract() * 1_000_000_000_f64).round() as u32;
-                Utc.timestamp(secs, nanosecs)
+                Utc.timestamp_opt(secs, nanosecs)
+                    .single()
+                    .expect("invalid timestamp")
             };
             #[allow(clippy::cast_possible_truncation)]
             #[allow(clippy::cast_sign_loss)]
             let duration = {
                 let secs = entry.realtime_after.floor() as i64;
                 let nanosecs = (entry.realtime_after.fract() * 1_000_000_000_f64).round() as u32;
-                let difference = Utc.timestamp(secs, nanosecs) - timestamp;
+                let difference = Utc
+                    .timestamp_opt(secs, nanosecs)
+                    .single()
+                    .expect("invalid timestamp")
+                    - timestamp;
                 difference.num_nanoseconds().unwrap_or(0)
             };
 

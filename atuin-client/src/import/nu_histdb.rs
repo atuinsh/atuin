@@ -30,8 +30,14 @@ impl From<HistDbEntry> for History {
     fn from(histdb_item: HistDbEntry) -> Self {
         let ts_secs = histdb_item.start_timestamp / 1000;
         let ts_ns = (histdb_item.start_timestamp % 1000) * 1_000_000;
+        let ts = NaiveDateTime::from_timestamp_opt(ts_secs, ts_ns as u32)
+            .expect("invalid timestamp")
+            .and_local_timezone(Utc)
+            .single()
+            .expect("failed timezone conversion");
+
         History::new(
-            DateTime::from_utc(NaiveDateTime::from_timestamp(ts_secs, ts_ns as u32), Utc),
+            ts,
             String::from_utf8(histdb_item.command_line).unwrap(),
             String::from_utf8(histdb_item.cwd).unwrap(),
             histdb_item.exit_status,

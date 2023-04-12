@@ -106,7 +106,10 @@ fn parse_extended(line: &str, counter: i64) -> History {
         .unwrap_or_else(|_| chrono::Utc::now().timestamp());
 
     let offset = chrono::Duration::milliseconds(counter);
-    let time = Utc.timestamp(time, 0);
+    let time = Utc
+        .timestamp_opt(time, 0)
+        .single()
+        .expect("invalid timestamp for history item");
     let time = time + offset;
 
     let duration = duration.parse::<i64>().map_or(-1, |t| t * 1_000_000_000);
@@ -140,25 +143,37 @@ mod test {
 
         assert_eq!(parsed.command, "cargo install atuin");
         assert_eq!(parsed.duration, 0);
-        assert_eq!(parsed.timestamp, Utc.timestamp(1_613_322_469, 0));
+        assert_eq!(
+            parsed.timestamp,
+            Utc.timestamp_opt(1_613_322_469, 0).unwrap()
+        );
 
         let parsed = parse_extended("1613322469:10;cargo install atuin;cargo update", 0);
 
         assert_eq!(parsed.command, "cargo install atuin;cargo update");
         assert_eq!(parsed.duration, 10_000_000_000);
-        assert_eq!(parsed.timestamp, Utc.timestamp(1_613_322_469, 0));
+        assert_eq!(
+            parsed.timestamp,
+            Utc.timestamp_opt(1_613_322_469, 0).unwrap()
+        );
 
         let parsed = parse_extended("1613322469:10;cargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷", 0);
 
         assert_eq!(parsed.command, "cargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷");
         assert_eq!(parsed.duration, 10_000_000_000);
-        assert_eq!(parsed.timestamp, Utc.timestamp(1_613_322_469, 0));
+        assert_eq!(
+            parsed.timestamp,
+            Utc.timestamp_opt(1_613_322_469, 0).unwrap()
+        );
 
         let parsed = parse_extended("1613322469:10;cargo install \\n atuin\n", 0);
 
         assert_eq!(parsed.command, "cargo install \\n atuin");
         assert_eq!(parsed.duration, 10_000_000_000);
-        assert_eq!(parsed.timestamp, Utc.timestamp(1_613_322_469, 0));
+        assert_eq!(
+            parsed.timestamp,
+            Utc.timestamp_opt(1_613_322_469, 0).unwrap()
+        );
     }
 
     #[tokio::test]

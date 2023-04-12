@@ -49,12 +49,12 @@ async fn sync_download(
     let mut local_count = initial_local;
 
     let mut last_sync = if force {
-        Utc.timestamp_millis(0)
+        Utc.timestamp_nanos(0)
     } else {
         Settings::last_sync()?
     };
 
-    let mut last_timestamp = Utc.timestamp_millis(0);
+    let mut last_timestamp = Utc.timestamp_nanos(0);
 
     let host = if force { Some(String::from("")) } else { None };
 
@@ -85,7 +85,7 @@ async fn sync_download(
         // be "lost" between syncs. In this case we need to rewind the sync
         // timestamps
         if page_last == last_timestamp {
-            last_timestamp = Utc.timestamp_millis(0);
+            last_timestamp = Utc.timestamp_nanos(0);
             last_sync -= chrono::Duration::hours(1);
         } else {
             last_timestamp = page_last;

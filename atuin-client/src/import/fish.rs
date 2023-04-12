@@ -99,7 +99,7 @@ impl Importer for Fish {
             } else if let Some(t) = s.strip_prefix("  when: ") {
                 // if t is not an int, just ignore this line
                 if let Ok(t) = t.parse::<i64>() {
-                    time = Some(Utc.timestamp(t, 0));
+                    time = Utc.timestamp_opt(t, 0).single();
                 }
             } else {
                 // ... ignore paths lines
