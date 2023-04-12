@@ -10,6 +10,7 @@
 
 use std::{io::prelude::*, path::PathBuf};
 
+use base64::prelude::{Engine, BASE64_STANDARD};
 use eyre::{eyre, Context, Result};
 use fs_err as fs;
 use serde::{Deserialize, Serialize};
@@ -72,14 +73,15 @@ pub fn load_encoded_key(settings: &Settings) -> Result<String> {
 pub type Key = secretbox::Key;
 pub fn encode_key(key: secretbox::Key) -> Result<String> {
     let buf = rmp_serde::to_vec(&key).wrap_err("could not encode key to message pack")?;
-    let buf = base64::encode(buf);
+    let buf = BASE64_STANDARD.encode(buf);
 
     Ok(buf)
 }
 
 pub fn decode_key(key: String) -> Result<secretbox::Key> {
-    let buf =
-        base64::decode(key.trim_end()).wrap_err("encryption key is not a valid base64 encoding")?;
+    let buf = BASE64_STANDARD
+        .decode(key.trim_end())
+        .wrap_err("encryption key is not a valid base64 encoding")?;
     let buf: secretbox::Key = rmp_serde::from_slice(&buf)
         .wrap_err("encryption key is not a valid message pack encoding")?;
 
