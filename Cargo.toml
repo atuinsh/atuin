@@ -1,2 +1,53 @@
 [workspace]
-members = ["./atuin-client", "./atuin-server", "./atuin-common"]
+members = [
+    "atuin",
+    "atuin-client",
+    "atuin-server",
+    "atuin-common",
+]
+
+[workspace.package]
+version = "14.0.0"
+authors = ["Ellie Huxtable <ellie@elliehuxtable.com>"]
+rust-version = "1.59"
+license = "MIT"
+homepage = "https://atuin.sh"
+repository = "https://github.com/ellie/atuin"
+readme = "README.md"
+
+[workspace.dependencies]
+async-trait = "0.1.58"
+base64 = "0.21"
+log = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4.0.18", features = ["derive"] }
+config = { version = "0.13", default-features = false, features = ["toml"] }
+directories = "4"
+eyre = "0.6"
+fs-err = "2.9"
+interim = { version = "0.1.0", features = ["chrono"] }
+itertools = "0.10.5"
+rand = { version = "0.8.5", features = ["std"] }
+semver = "1.0.14"
+serde = { version = "1.0.145", features = ["derive"] }
+serde_json = "1.0.86"
+sodiumoxide = "0.2.6"
+tokio = { version = "1", features = ["full"] }
+uuid = { version = "1.2", features = ["v4"] }
+whoami = "1.1.2"
+
+[workspace.dependencies.reqwest]
+version = "0.11"
+features = [
+  "json",
+  "rustls-tls-native-roots",
+]
+default-features = false
+
+[workspace.dependencies.sqlx]
+version = "0.6"
+features = [
+  "runtime-tokio-rustls",
+  "chrono",
+  "postgres",
+]

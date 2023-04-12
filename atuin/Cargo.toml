@@ -1,14 +1,15 @@
 [package]
 name = "atuin"
-version = "14.0.0"
-authors = ["Ellie Huxtable <ellie@elliehuxtable.com>"]
 edition = "2021"
 rust-version = "1.59"
-license = "MIT"
 description = "atuin - magical shell history"
-homepage = "https://atuin.sh"
-repository = "https://github.com/ellie/atuin"
-readme = "README.md"
+readme = "../README.md"
+
+version = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
 
 [package.metadata.binstall]
 pkg-url = "{ repo }/releases/download/v{ version }/{ name }-v{ version  }-{ target }.tar.gz"
@@ -41,32 +42,32 @@ sync = ["atuin-client/sync"]
 server = ["atuin-server", "tracing-subscriber"]
 
 [dependencies]
-atuin-server = { path = "atuin-server", version = "14.0.0", optional = true }
-atuin-client = { path = "atuin-client", version = "14.0.0", optional = true, default-features = false }
-atuin-common = { path = "atuin-common", version = "14.0.0" }
+atuin-server = { path = "../atuin-server", version = "14.0.0", optional = true }
+atuin-client = { path = "../atuin-client", version = "14.0.0", optional = true, default-features = false }
+atuin-common = { path = "../atuin-common", version = "14.0.0" }
 
-log = "0.4"
+log = { workspace = true }
 env_logger = "0.10.0"
 chrono = { version = "0.4", features = ["serde"] }
-eyre = "0.6"
-directories = "4"
+eyre = { workspace = true }
+directories = { workspace = true }
 indicatif = "0.17.1"
-serde = { version = "1.0.145", features = ["derive"] }
-serde_json = "1.0.86"
+serde = { workspace = true }
+serde_json = { workspace = true }
 crossterm = { version = "0.26", features = ["use-dev-tty"] }
 unicode-width = "0.1"
-itertools = "0.10.5"
-tokio = { version = "1", features = ["full"] }
-async-trait = "0.1.58"
-interim = { version = "0.1.0", features = ["chrono"] }
-base64 = "0.20.0"
+itertools = { workspace = true }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+interim = { workspace = true }
+base64 = { workspace = true }
 crossbeam-channel = "0.5.1"
-clap = { version = "4.0.18", features = ["derive"] }
+clap = { workspace = true }
 clap_complete = "4.0.3"
-fs-err = "2.9"
-whoami = "1.1.2"
+fs-err = { workspace = true }
+whoami = { workspace = true }
 rpassword = "7.0"
-semver = "1.0.14"
+semver = { workspace = true }
 runtime-format = "0.1.2"
 tiny-bip39 = "1"
 futures-util = "0.3"
