@@ -40,7 +40,7 @@ serde_json = { workspace = true }
 parse_duration = "2.1.1"
 async-trait = { workspace = true }
 itertools = { workspace = true }
-shellexpand = "3"
+shellexpand = "2"
 sqlx = { workspace = true, features = ["sqlite"] }
 minspan = "0.1.1"
 regex = "1.5.4"

@@ -129,7 +129,7 @@ impl<'a> From<&'a [u8]> for LineType<'a> {
 
 fn try_parse_line_as_timestamp(line: &str) -> Option<DateTime<Utc>> {
     let seconds = line.strip_prefix('#')?.parse().ok()?;
-    let time = NaiveDateTime::from_timestamp_opt(seconds, 0)?;
+    let time = NaiveDateTime::from_timestamp(seconds, 0);
     Some(DateTime::from_utc(time, Utc))
 }
 

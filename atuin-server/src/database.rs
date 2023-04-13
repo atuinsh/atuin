@@ -107,9 +107,9 @@ impl Database for Postgres {
     #[instrument(skip_all)]
     async fn get_session_user(&self, token: &str) -> Result<User> {
         sqlx::query_as::<_, User>(
-            "select users.id, users.username, users.email, users.password from users
-            inner join sessions
-            on users.id = sessions.user_id
+            "select users.id, users.username, users.email, users.password from users 
+            inner join sessions 
+            on users.id = sessions.user_id 
             and sessions.token = $1",
         )
         .bind(token)
@@ -171,7 +171,7 @@ impl Database for Postgres {
         // edge case.
 
         let res = sqlx::query(
-            "select client_id from history
+            "select client_id from history 
             where user_id = $1
             and deleted_at is not null",
         )
@@ -212,10 +212,7 @@ impl Database for Postgres {
     // Count the history for a given year
     #[instrument(skip_all)]
     async fn count_history_year(&self, user: &User, year: i32) -> Result<i64> {
-        let start = chrono::Utc
-            .with_ymd_and_hms(year, 1, 1, 0, 0, 0)
-            .single()
-            .expect("invalid year");
+        let start = chrono::Utc.ymd(year, 1, 1).and_hms_nano(0, 0, 0, 0);
         let end = start + RelativeDuration::years(1);
 
         let res = self
@@ -227,25 +224,42 @@ impl Database for Postgres {
     // Count the history for a given month
     #[instrument(skip_all)]
     async fn count_history_month(&self, user: &User, month: chrono::NaiveDate) -> Result<i64> {
-        let start = month
-            .with_day(1)
-            .unwrap() // should be unconditionally safe
-            .and_time(chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap()); // should be unconditionally safe also
-        let end = start.checked_add_months(chrono::Months::new(1)).unwrap(); // None in the case of overflow, which is kinda impossible here
+        let start = chrono::Utc
+            .ymd(month.year(), month.month(), 1)
+            .and_hms_nano(0, 0, 0, 0);
+
+        // ofc...
+        let end = if month.month() < 12 {
+            chrono::Utc
+                .ymd(month.year(), month.month() + 1, 1)
+                .and_hms_nano(0, 0, 0, 0)
+        } else {
+            chrono::Utc
+                .ymd(month.year() + 1, 1, 1)
+                .and_hms_nano(0, 0, 0, 0)
+        };
 
         debug!("start: {}, end: {}", start, end);
 
-        let res = self.count_history_range(user, start, end).await?;
+        let res = self
+            .count_history_range(user, start.naive_utc(), end.naive_utc())
+            .await?;
         Ok(res)
     }
 
     // Count the history for a given day
     #[instrument(skip_all)]
     async fn count_history_day(&self, user: &User, day: chrono::NaiveDate) -> Result<i64> {
-        let start = day.and_time(chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap());
-        let end = start.checked_add_days(chrono::Days::new(1)).unwrap();
+        let start = chrono::Utc
+            .ymd(day.year(), day.month(), day.day())
+            .and_hms_nano(0, 0, 0, 0);
+        let end = chrono::Utc
+            .ymd(day.year(), day.month(), day.day() + 1)
+            .and_hms_nano(0, 0, 0, 0);
 
-        let res = self.count_history_range(user, start, end).await?;
+        let res = self
+            .count_history_range(user, start.naive_utc(), end.naive_utc())
+            .await?;
         Ok(res)
     }
 
@@ -258,7 +272,7 @@ impl Database for Postgres {
         host: &str,
     ) -> Result<Vec<History>> {
         let res = sqlx::query_as::<_, History>(
-            "select id, client_id, user_id, hostname, timestamp, data, created_at from history
+            "select id, client_id, user_id, hostname, timestamp, data, created_at from history 
             where user_id = $1
             and hostname != $2
             and created_at >= $3
@@ -303,7 +317,7 @@ impl Database for Postgres {
 
             sqlx::query(
                 "insert into history
-                    (client_id, user_id, hostname, timestamp, data)
+                    (client_id, user_id, hostname, timestamp, data) 
                 values ($1, $2, $3, $4, $5)
                 on conflict do nothing
                 ",
@@ -371,7 +385,7 @@ impl Database for Postgres {
     #[instrument(skip_all)]
     async fn oldest_history(&self, user: &User) -> Result<History> {
         let res = sqlx::query_as::<_, History>(
-            "select id, client_id, user_id, hostname, timestamp, data, created_at from history
+            "select id, client_id, user_id, hostname, timestamp, data, created_at from history 
             where user_id = $1
             order by timestamp asc
             limit 1",
@@ -429,7 +443,7 @@ impl Database for Postgres {
                     let count = self
                         .count_history_month(
                             user,
-                            chrono::NaiveDate::from_ymd_opt(year as i32, month as u32, 1).unwrap(),
+                            chrono::Utc.ymd(year as i32, month, 1).naive_utc(),
                         )
                         .await?;
 
@@ -452,8 +466,9 @@ impl Database for Postgres {
                     let count = self
                         .count_history_day(
                             user,
-                            chrono::NaiveDate::from_ymd_opt(year as i32, month as u32, day as u32)
-                                .unwrap(),
+                            chrono::Utc
+                                .ymd(year as i32, month as u32, day as u32)
+                                .naive_utc(),
                         )
                         .await?;
 
