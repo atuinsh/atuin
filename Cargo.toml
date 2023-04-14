@@ -30,7 +30,7 @@ itertools = "0.10.5"
 rand = { version = "0.8.5", features = ["std"] }
 semver = "1.0.14"
 serde = { version = "1.0.145", features = ["derive"] }
-serde_json = "1.0.86"
+serde_json = "1.0.96"
 sodiumoxide = "0.2.6"
 tokio = { version = "1", features = ["full"] }
 uuid = { version = "1.2", features = ["v4"] }
