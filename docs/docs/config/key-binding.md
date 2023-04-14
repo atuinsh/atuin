@@ -71,7 +71,7 @@ bind -M insert \cr _atuin_search
 | Shortcut                                  | Action                                                                                                             |
 | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
 | ctrl + r                                  | Cycle through filter modes                                                                                         |
-| ctrl + s                                  | Switch the search mode, changes the engine and possibly other interface settings                                   |
+| ctrl + s                                  | Cycle through search modes                                   |
 | alt + 1 to alt + 9                        | Select item by the number located near it                                                                          |
 | ctrl + c / ctrl + d / ctrl + g / esc      | Return original                                                                                                    |
 | ctrl + ← / alt + b                        | Move the cursor to the previous word                                                                               |
