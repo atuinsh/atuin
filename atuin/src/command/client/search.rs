@@ -83,7 +83,7 @@ pub struct Cmd {
     #[arg(long)]
     delete: bool,
 
-    /// Delete anything matching this query. Will not print out the match
+    /// Delete EVERYTHING!
     #[arg(long)]
     delete_it_all: bool,
 
