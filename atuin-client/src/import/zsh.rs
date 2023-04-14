@@ -32,7 +32,11 @@ fn default_histpath() -> Result<PathBuf> {
                     break Ok(histpath);
                 }
             }
-            None => break Err(eyre!("Could not find history file. Try setting and exporting $HISTFILE")),
+            None => {
+                break Err(eyre!(
+                    "Could not find history file. Try setting and exporting $HISTFILE"
+                ))
+            }
         }
     }
 }
