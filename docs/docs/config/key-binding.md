@@ -81,17 +81,12 @@ bind -M insert \cr _atuin_search
 | ctrl + a / home                           | Move the cursor to the start of the line                                                                           |
 | ctrl + e / end                            | Move the cursor to the end of the line                                                                             |
 | ctrl + backspace / ctrl + alt + backspace | Remove the previous word / remove the word just before the cursor                                                  |
-| backspace                                 | Delete the character before the cursor                                                                             |
 | ctrl + delete / ctrl + alt + delete       | Remove the next word or the word just after the cursor                                                             |
-| delete                                    | Delete the character at the cursor                                                                                 |
 | ctrl + w                                  | Remove the word before the cursor even if it spans across the word boundaries                                      |
 | ctrl + u                                  | Clear the current line                                                                                             |
 | ctrl + n / ctrl + j                       | Select the next item on the list                                                                                   |
 | ctrl + p / ctrl + k / up arrow            | Select the previous item on the list                                                                               |
 | page down                                 | Scroll search results one page down                                                                                |
 | page up                                   | Scroll search results one page up                                                                                  |
-| letter                                    | Add the letter to the line                                                                                         |
 | enter                                     | Select highlighted item                                                                                            |
 | ↓                                         | Return original or return query depending on settings if no entries are found, or select the next item on the list |
-| ←                                         | Move the cursor to the left                                                                                        |
-| →                                         | Move the cursor to the right                                                                                       |
