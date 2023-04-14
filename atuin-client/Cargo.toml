@@ -1,12 +1,13 @@
 [package]
 name = "atuin-client"
-version = "14.0.0"
-authors = ["Ellie Huxtable <ellie@elliehuxtable.com>"]
 edition = "2018"
-license = "MIT"
 description = "client library for atuin"
-homepage = "https://atuin.sh"
-repository = "https://github.com/ellie/atuin"
+
+version = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -25,47 +26,40 @@ sync = [
 [dependencies]
 atuin-common = { path = "../atuin-common", version = "14.0.0" }
 
-log = "0.4"
-chrono = { version = "0.4", features = ["serde"] }
-clap = { version = "4.0.18", features = ["derive"] }
-eyre = "0.6"
-directories = "4"
-uuid = { version = "1.2", features = ["v4"] }
-whoami = "1.1.2"
-interim = { version = "0.1.0", features = ["chrono"] }
-config = { version = "0.13", default-features = false, features = ["toml"] }
-serde = { version = "1.0.145", features = ["derive"] }
-serde_json = "1.0.86"
+log = { workspace = true }
+chrono = { workspace = true }
+clap = { workspace = true }
+eyre = { workspace = true }
+directories = { workspace = true }
+uuid = { workspace = true }
+whoami = { workspace = true }
+interim = { workspace = true }
+config = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 parse_duration = "2.1.1"
-async-trait = "0.1.58"
-itertools = "0.10.5"
+async-trait = { workspace = true }
+itertools = { workspace = true }
 shellexpand = "2"
-sqlx = { version = "0.6", features = [
-  "runtime-tokio-rustls",
-  "chrono",
-  "sqlite",
-] }
+sqlx = { workspace = true, features = ["sqlite"] }
 minspan = "0.1.1"
 regex = "1.5.4"
 serde_regex = "1.1.0"
-fs-err = "2.9"
+fs-err = { workspace = true }
 sql-builder = "3"
 lazy_static = "1"
 memchr = "2.5"
 
 # sync
 urlencoding = { version = "2.1.0", optional = true }
-sodiumoxide = { version = "0.2.6", optional = true }
-reqwest = { version = "0.11", features = [
-  "json",
-  "rustls-tls-native-roots",
-], default-features = false, optional = true }
+sodiumoxide = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
 hex = { version = "0.4", optional = true }
 sha2 = { version = "0.10", optional = true }
 rmp-serde = { version = "1.1.1", optional = true }
-base64 = { version = "0.20.0", optional = true }
-tokio = { version = "1", features = ["full"] }
-semver = "1.0.14"
+base64 = { workspace = true, optional = true }
+tokio = { workspace = true }
+semver = { workspace = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }

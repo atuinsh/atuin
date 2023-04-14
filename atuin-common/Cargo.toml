@@ -1,17 +1,18 @@
 [package]
 name = "atuin-common"
-version = "14.0.0"
-authors = ["Ellie Huxtable <ellie@elliehuxtable.com>"]
 edition = "2018"
-license = "MIT"
 description = "common library for atuin"
-homepage = "https://atuin.sh"
-repository = "https://github.com/ellie/atuin"
+
+version = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-chrono = { version = "0.4", features = ["serde"] }
-serde = { version = "1.0.145", features = ["derive"] }
-uuid = { version = "1.2", features = ["v4"] }
-rand = { version = "0.8.5", features = ["std"] }
+chrono = { workspace = true }
+serde = { workspace = true }
+uuid = { workspace = true }
+rand = { workspace = true }
