@@ -83,6 +83,10 @@ pub struct Cmd {
     #[arg(long)]
     delete: bool,
 
+    /// Delete anything matching this query. Will not print out the match
+    #[arg(long)]
+    delete_it_all: bool,
+
     /// Reverse the order of results, oldest first
     #[arg(long, short)]
     reverse: bool,
@@ -96,6 +100,18 @@ pub struct Cmd {
 
 impl Cmd {
     pub async fn run(self, mut db: impl Database, settings: &mut Settings) -> Result<()> {
+        if self.delete && self.query.is_empty() {
+            println!("Please specify a query to match the items you wish to delete. If you wish to delete all history, pass --delete-it-all");
+            return Ok(());
+        }
+
+        if self.delete_it_all && !self.query.is_empty() {
+            println!(
+                "--delete-it-all will delete ALL of your history! It does not require a query."
+            );
+            return Ok(());
+        }
+
         if self.search_mode.is_some() {
             settings.search_mode = self.search_mode.unwrap();
         }
@@ -131,7 +147,7 @@ impl Cmd {
             }
 
             // if we aren't deleting, print it all
-            if self.delete {
+            if self.delete || self.delete_it_all {
                 // delete it
                 // it only took me _years_ to add this
                 // sorry
