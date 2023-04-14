@@ -89,4 +89,5 @@ bind -M insert \cr _atuin_search
 | page down                                 | Scroll search results one page down                                                                                |
 | page up                                   | Scroll search results one page up                                                                                  |
 | enter                                     | Select highlighted item                                                                                            |
-| ↓                                         | Return original or return query depending on settings if no entries are found, or select the next item on the list |
+| ↓ (with no entry selected)                | Return original or return query depending on settings                                                              |
+| ↓                                         | Select the next item on the list                                                              |
