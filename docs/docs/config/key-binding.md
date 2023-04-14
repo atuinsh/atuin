@@ -68,26 +68,26 @@ bind -M insert \cr _atuin_search
 
 ## Atuin UI shortcuts
 
-| Shortcut                                  | Action                                                                                                             |
-| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| ctrl + r                                  | Cycle through filter modes                                                                                         |
-| ctrl + s                                  | Cycle through search modes                                   |
-| alt + 1 to alt + 9                        | Select item by the number located near it                                                                          |
-| ctrl + c / ctrl + d / ctrl + g / esc      | Return original                                                                                                    |
-| ctrl + ← / alt + b                        | Move the cursor to the previous word                                                                               |
-| ctrl + h / ctrl + b / ←                   | Move the cursor to the left                                                                                        |
-| ctrl + → / alt + f                        | Move the cursor to the next word                                                                                   |
-| ctrl + l / ctrl + f / →                   | Move the cursor to the right                                                                                       |
-| ctrl + a / home                           | Move the cursor to the start of the line                                                                           |
-| ctrl + e / end                            | Move the cursor to the end of the line                                                                             |
-| ctrl + backspace / ctrl + alt + backspace | Remove the previous word / remove the word just before the cursor                                                  |
-| ctrl + delete / ctrl + alt + delete       | Remove the next word or the word just after the cursor                                                             |
-| ctrl + w                                  | Remove the word before the cursor even if it spans across the word boundaries                                      |
-| ctrl + u                                  | Clear the current line                                                                                             |
-| ctrl + n / ctrl + j                       | Select the next item on the list                                                                                   |
-| ctrl + p / ctrl + k / up arrow            | Select the previous item on the list                                                                               |
-| page down                                 | Scroll search results one page down                                                                                |
-| page up                                   | Scroll search results one page up                                                                                  |
-| enter                                     | Select highlighted item                                                                                            |
-| ↓ (with no entry selected)                | Return original or return query depending on settings                                                              |
-| ↓                                         | Select the next item on the list                                                              |
+| Shortcut                                  | Action                                                                        |
+| ----------------------------------------- | ----------------------------------------------------------------------------- |
+| ctrl + r                                  | Cycle through filter modes                                                    |
+| ctrl + s                                  | Cycle through search modes                                                    |
+| alt + 1 to alt + 9                        | Select item by the number located near it                                     |
+| ctrl + c / ctrl + d / ctrl + g / esc      | Return original                                                               |
+| ctrl + ⬅️ / alt + b                        | Move the cursor to the previous word                                          |
+| ctrl + ➡️ / alt + f                        | Move the cursor to the next word                                              |
+| ctrl + h / ctrl + b / ⬅️                   | Move the cursor to the left                                                   |
+| ctrl + l / ctrl + f / ➡️                   | Move the cursor to the right                                                  |
+| ctrl + a / home                           | Move the cursor to the start of the line                                      |
+| ctrl + e / end                            | Move the cursor to the end of the line                                        |
+| ctrl + backspace / ctrl + alt + backspace | Remove the previous word / remove the word just before the cursor             |
+| ctrl + delete / ctrl + alt + delete       | Remove the next word or the word just after the cursor                        |
+| ctrl + w                                  | Remove the word before the cursor even if it spans across the word boundaries |
+| ctrl + u                                  | Clear the current line                                                        |
+| ctrl + n / ctrl + j   ➡️                    | Select the next item on the list                                              |
+| ctrl + p / ctrl + k / ⬆️                   | Select the previous item on the list                                          |
+| page down                                 | Scroll search results one page down                                           |
+| page up                                   | Scroll search results one page up                                             |
+| enter                                     | Select highlighted item                                                       |
+| ⬇️ (with no entry selected)                | Return original or return query depending on settings                         |
+| ⬇️                                         | Select the next item on the list                                              |
