@@ -10,7 +10,8 @@ const FeatureList = [
         <ul>
           <li>Sync your shell history to all of your machines, wherever they are</li>
           <li>End-to-end encrypted - nobody can see your data but you</li>
-          <li>Securely backed up - never lose a command again</li>
+          <li>Securely backed up - never lose your history</li>
+          <li>Easily handles decades of history</li>
         </ul>
       </>
     ),
@@ -20,7 +21,7 @@ const FeatureList = [
     description: (
       <>
         <ul>
-          <li>Speedy terminal search UI</li>
+          <li>Full text or fuzzy search over your shell history</li>
           <li>Configurable search method - fuzzy, prefix, etc</li>
           <li>Easily search and filter by session, directory, or machine</li>
           <li>Powerful command line search for integration with other tools</li>
@@ -36,7 +37,7 @@ const FeatureList = [
         <ul>
           <li>History stored in a SQLite DB, making stats and analysis easy</li>
           <li>Log exit code, directory, hostname, session, command duration, etc</li>
-          <li>Import old history from a number of shells or history tools</li>
+          <li>Import existing history from a number of shells or history tools</li>
         </ul>
       </>
     ),

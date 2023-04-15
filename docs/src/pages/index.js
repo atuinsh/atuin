@@ -31,6 +31,7 @@ function HomepageHeader() {
 
 export default function Home() {
   const { siteConfig } = useDocusaurusContext();
+
   return (
     <Layout
       title={`Magical Shell History`}>
@@ -39,6 +40,23 @@ export default function Home() {
         <section className={styles.whatis}>
           <div className="container">
             <center><h1>What is <b>Atuin</b>?</h1></center>
+            <div className="row">
+              <img src="/img/screenshot.png" className="col col--8" />
+              <div className="col col--4">
+                <p>Atuin is a command-line tool that enables you to make better use of your shell, by giving ctrl-r superpowers.</p>
+                <p>Every line you write is stored - ready to be queried and ran again at any point, from any machine you wish. Never forget again!</p>
+                <p>Sync your history between all of your machines, and search it from anywhere</p>
+              </div>
+            </div>
+
+            <div className="row" style={{ paddingTop: "18px", alignItems: "center" }}>
+              <div className="col col--4">
+                <p>Generate statistics from your shell history, such as this activity graph</p>
+              </div>
+              <div className="col col--8">
+                <img src="https://api.atuin.sh/img/ellie.png?token=0722830c382b42777bdb652da5b71efb61d8d387" />
+              </div>
+            </div>
 
             <HomepageFeatures />
           </div>
