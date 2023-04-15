@@ -104,7 +104,7 @@ pub async fn add<DB: Database>(
 ) -> Result<(), ErrorResponseStatus<'static>> {
     debug!("request to add {} history items", req.len());
 
-    let history: Vec<NewHistory> = req
+    let history: Vec<_> = req
         .into_iter()
         .map(|h| NewHistory {
             client_id: h.id,

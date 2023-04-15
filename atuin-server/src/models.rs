@@ -8,6 +8,9 @@ pub struct History {
     pub hostname: String,
     pub timestamp: NaiveDateTime,
 
+    /// All the data we have about this command, encrypted.
+    ///
+    /// Currently this is an encrypted msgpack object, but this may change in the future.
     pub data: String,
 
     pub created_at: NaiveDateTime,
@@ -19,6 +22,9 @@ pub struct NewHistory {
     pub hostname: String,
     pub timestamp: chrono::NaiveDateTime,
 
+    /// All the data we have about this command, encrypted.
+    ///
+    /// Currently this is an encrypted msgpack object, but this may change in the future.
     pub data: String,
 }
 

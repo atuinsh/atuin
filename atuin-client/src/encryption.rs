@@ -20,10 +20,7 @@ use xsalsa20poly1305::{
     AeadInPlace, KeyInit, XSalsa20Poly1305,
 };
 
-use crate::{
-    history::{History, HistoryWithoutDelete},
-    settings::Settings,
-};
+use crate::{history::History, settings::Settings};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct EncryptedHistory {
@@ -116,23 +113,7 @@ pub fn decrypt(mut encrypted_history: EncryptedHistory, key: &Key) -> Result<His
         .map_err(|_| eyre!("could not encrypt"))?;
     let plaintext = encrypted_history.ciphertext;
 
-    let history = rmp_serde::from_slice(&plaintext);
-
-    let Ok(history) = history else {
-        let history: HistoryWithoutDelete = rmp_serde::from_slice(&plaintext)?;
-
-        return Ok(History {
-            id: history.id,
-            cwd: history.cwd,
-            exit: history.exit,
-            command: history.command,
-            session: history.session,
-            duration: history.duration,
-            hostname: history.hostname,
-            timestamp: history.timestamp,
-            deleted_at: None,
-        });
-    };
+    let history = rmp_serde::from_slice(&plaintext)?;
 
     Ok(history)
 }
