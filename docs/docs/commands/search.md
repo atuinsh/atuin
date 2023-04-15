@@ -22,6 +22,7 @@ appended with a wildcard).
 | `--limit`          | Limit the number of results (default: none)                                   |
 | `--offset`         | Offset from the start of the results (default: none)                          |
 | `--delete`         | Delete history matching this query                                            |
+| `--delete-it-all`         | Delete all shell history |
 | `--reverse`        | Reverse order of search results, oldest first |
 
 ## `atuin search -i`
