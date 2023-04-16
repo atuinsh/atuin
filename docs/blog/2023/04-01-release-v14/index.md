@@ -6,6 +6,8 @@ authors: [ellie]
 tags: [release]
 ---
 
+> We have since released v14.0.1 with some fixes, following a NuShell breaking change. A writeup of other included changes will be included in the next release notes!
+
 Announcing a new release of Atuin! v14 is out now. Atuin allows you to easily search and sync your shell history across many machines. Get started [here](https://atuin.sh/docs/)
 
 You can update your installation via your system package manager, or by downloading the latest release from the [release page](https://github.com/ellie/atuin/releases).
