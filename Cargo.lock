@@ -70,7 +70,7 @@ dependencies = [
 
 [[package]]
 name = "atuin"
-version = "14.0.0"
+version = "14.0.1"
 dependencies = [
  "async-trait",
  "atuin-client",
@@ -110,7 +110,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-client"
-version = "14.0.0"
+version = "14.0.1"
 dependencies = [
  "async-trait",
  "atuin-common",
@@ -149,7 +149,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-common"
-version = "14.0.0"
+version = "14.0.1"
 dependencies = [
  "chrono",
  "rand",
@@ -159,7 +159,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-server"
-version = "14.0.0"
+version = "14.0.1"
 dependencies = [
  "async-trait",
  "atuin-common",

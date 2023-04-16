@@ -24,7 +24,7 @@ sync = [
 ]
 
 [dependencies]
-atuin-common = { path = "../atuin-common", version = "14.0.0" }
+atuin-common = { path = "../atuin-common", version = "14.0.1" }
 
 log = { workspace = true }
 chrono = { workspace = true }
