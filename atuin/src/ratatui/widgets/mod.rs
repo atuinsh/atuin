@@ -5,39 +5,16 @@
 //!
 //! The available widgets are:
 //! - [`Block`]
-//! - [`Tabs`]
 //! - [`List`]
-//! - [`Table`]
 //! - [`Paragraph`]
-//! - [`Chart`]
-//! - [`BarChart`]
-//! - [`Gauge`]
-//! - [`Sparkline`]
 //! - [`Clear`]
 
-mod barchart;
 mod block;
-pub mod canvas;
-mod chart;
-mod clear;
-mod gauge;
-mod list;
 mod paragraph;
 mod reflow;
-mod sparkline;
-mod table;
-mod tabs;
 
-pub use self::barchart::BarChart;
 pub use self::block::{Block, BorderType};
-pub use self::chart::{Axis, Chart, Dataset, GraphType};
-pub use self::clear::Clear;
-pub use self::gauge::{Gauge, LineGauge};
-pub use self::list::{List, ListItem, ListState};
 pub use self::paragraph::{Paragraph, Wrap};
-pub use self::sparkline::Sparkline;
-pub use self::table::{Cell, Row, Table, TableState};
-pub use self::tabs::Tabs;
 
 use crate::ratatui::{buffer::Buffer, layout::Rect};
 use bitflags::bitflags;
@@ -64,7 +41,7 @@ bitflags! {
 pub trait Widget {
     /// Draws the current state of the widget in the given buffer. That is the only method required
     /// to implement a custom widget.
-    fn render(self, area: Rect, buf: &mut Buffer);
+    fn render(&self, area: Rect, buf: &mut Buffer);
 }
 
 /// A `StatefulWidget` is a widget that can take advantage of some local state to remember things
@@ -180,5 +157,5 @@ pub trait Widget {
 /// ```
 pub trait StatefulWidget {
     type State;
-    fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State);
+    fn render(&self, area: Rect, buf: &mut Buffer, state: &mut Self::State);
 }

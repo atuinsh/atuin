@@ -23,8 +23,6 @@ pub enum Direction {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Constraint {
-    // TODO: enforce range 0 - 100
-    Percentage(u16),
     Ratio(u32, u32),
     Length(u16),
     Max(u16),
@@ -34,7 +32,6 @@ pub enum Constraint {
 impl Constraint {
     pub fn apply(&self, length: u16) -> u16 {
         match *self {
-            Constraint::Percentage(p) => length * p / 100,
             Constraint::Ratio(num, den) => {
                 let r = num * u32::from(length) / den;
                 r as u16
@@ -253,9 +250,6 @@ fn split(area: Rect, layout: &Layout) -> Rc<[Rect]> {
                 ccs.push(elements[i].height | EQ(REQUIRED) | f64::from(dest_area.height));
                 ccs.push(match *size {
                     Constraint::Length(v) => elements[i].width | EQ(MEDIUM) | f64::from(v),
-                    Constraint::Percentage(v) => {
-                        elements[i].width | EQ(MEDIUM) | (f64::from(v * dest_area.width) / 100.0)
-                    }
                     Constraint::Ratio(n, d) => {
                         elements[i].width
                             | EQ(MEDIUM)
@@ -285,9 +279,6 @@ fn split(area: Rect, layout: &Layout) -> Rc<[Rect]> {
                 ccs.push(elements[i].width | EQ(REQUIRED) | f64::from(dest_area.width));
                 ccs.push(match *size {
                     Constraint::Length(v) => elements[i].height | EQ(MEDIUM) | f64::from(v),
-                    Constraint::Percentage(v) => {
-                        elements[i].height | EQ(MEDIUM) | (f64::from(v * dest_area.height) / 100.0)
-                    }
                     Constraint::Ratio(n, d) => {
                         elements[i].height
                             | EQ(MEDIUM)
@@ -502,7 +493,7 @@ mod tests {
             .direction(Direction::Vertical)
             .constraints(
                 [
-                    Constraint::Percentage(10),
+                    Constraint::Ratio(1, 10),
                     Constraint::Max(5),
                     Constraint::Min(1),
                 ]

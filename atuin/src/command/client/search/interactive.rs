@@ -23,6 +23,7 @@ use super::{
     engines::{SearchEngine, SearchState},
     history_list::{HistoryList, ListState, PREFIX_LENGTH},
 };
+use crate::command::client::search::engines;
 use crate::ratatui::{
     backend::{Backend, CrosstermBackend},
     layout::{Alignment, Constraint, Direction, Layout},
@@ -31,7 +32,6 @@ use crate::ratatui::{
     widgets::{Block, BorderType, Borders, Paragraph},
     Frame, Terminal, TerminalOptions, Viewport,
 };
-use crate::{command::client::search::engines, VERSION};
 
 const RETURN_ORIGINAL: usize = usize::MAX;
 const RETURN_QUERY: usize = usize::MAX - 1;
@@ -312,21 +312,19 @@ impl State {
         );
     }
 
-    fn build_title(&mut self) -> Paragraph {
-        let title = if self.update_needed.is_some() {
-            let version = self.update_needed.clone().unwrap();
+    fn build_title(&mut self) -> Paragraph<'static> {
+        static PREFIX: &str = concat!(" Atuin v", env!("CARGO_PKG_VERSION"));
 
-            Paragraph::new(Text::from(Span::styled(
-                format!(" Atuin v{VERSION} - UPDATE AVAILABLE {version}"),
-                Style::default().add_modifier(Modifier::BOLD).fg(Color::Red),
-            )))
-        } else {
-            Paragraph::new(Text::from(Span::styled(
-                format!(" Atuin v{VERSION}"),
-                Style::default().add_modifier(Modifier::BOLD),
-            )))
-        };
-        title
+        let span = self.update_needed.as_ref().map_or_else(
+            || Span::styled(PREFIX, Style::default().add_modifier(Modifier::BOLD)),
+            |update| {
+                Span::styled(
+                    format!("{PREFIX} - UPDATE AVAILABLE {update}"),
+                    Style::default().add_modifier(Modifier::BOLD).fg(Color::Red),
+                )
+            },
+        );
+        Paragraph::new(Text::from(span))
     }
 
     #[allow(clippy::unused_self)]

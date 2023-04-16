@@ -3,11 +3,6 @@ use std::io;
 use crate::ratatui::buffer::Cell;
 use crate::ratatui::layout::Rect;
 
-#[cfg(feature = "termion")]
-mod termion;
-#[cfg(feature = "termion")]
-pub use self::termion::TermionBackend;
-
 mod crossterm;
 pub use self::crossterm::CrosstermBackend;
 

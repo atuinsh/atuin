@@ -140,7 +140,7 @@ impl<'a> Block<'a> {
 }
 
 impl<'a> Widget for Block<'a> {
-    fn render(self, area: Rect, buf: &mut Buffer) {
+    fn render(&self, area: Rect, buf: &mut Buffer) {
         if area.area() == 0 {
             return;
         }
@@ -202,7 +202,7 @@ impl<'a> Widget for Block<'a> {
         }
 
         // Title
-        if let Some(title) = self.title {
+        if let Some(title) = self.title.as_ref() {
             let left_border_dx = if self.borders.intersects(Borders::LEFT) {
                 1
             } else {

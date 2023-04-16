@@ -48,6 +48,7 @@
 //! ```
 use crate::ratatui::style::Style;
 use std::borrow::Cow;
+use tinyvec::TinyVec;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
@@ -59,7 +60,7 @@ pub struct StyledGrapheme<'a> {
 }
 
 /// A string where all graphemes have the same style.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Span<'a> {
     pub content: Cow<'a, str>,
     pub style: Style,
@@ -195,7 +196,7 @@ impl<'a> From<&'a str> for Span<'a> {
 
 /// A string composed of clusters of graphemes, each with their own style.
 #[derive(Debug, Clone, PartialEq, Default, Eq)]
-pub struct Spans<'a>(pub Vec<Span<'a>>);
+pub struct Spans<'a>(pub TinyVec<[Span<'a>; 1]>);
 
 impl<'a> Spans<'a> {
     /// Returns the width of the underlying string.
@@ -218,25 +219,25 @@ impl<'a> Spans<'a> {
 
 impl<'a> From<String> for Spans<'a> {
     fn from(s: String) -> Spans<'a> {
-        Spans(vec![Span::from(s)])
+        Spans(TinyVec::from([Span::from(s)]))
     }
 }
 
 impl<'a> From<&'a str> for Spans<'a> {
     fn from(s: &'a str) -> Spans<'a> {
-        Spans(vec![Span::from(s)])
+        Spans(TinyVec::from([Span::from(s)]))
     }
 }
 
 impl<'a> From<Vec<Span<'a>>> for Spans<'a> {
     fn from(spans: Vec<Span<'a>>) -> Spans<'a> {
-        Spans(spans)
+        Spans(TinyVec::Heap(spans))
     }
 }
 
 impl<'a> From<Span<'a>> for Spans<'a> {
     fn from(span: Span<'a>) -> Spans<'a> {
-        Spans(vec![span])
+        Spans(TinyVec::from([span]))
     }
 }
 
@@ -275,7 +276,7 @@ impl<'a> From<Spans<'a>> for String {
 /// ```
 #[derive(Debug, Clone, PartialEq, Default, Eq)]
 pub struct Text<'a> {
-    pub lines: Vec<Spans<'a>>,
+    pub lines: TinyVec<[Spans<'a>; 4]>,
 }
 
 impl<'a> Text<'a> {
@@ -292,11 +293,12 @@ impl<'a> Text<'a> {
     where
         T: Into<Cow<'a, str>>,
     {
-        let lines: Vec<_> = match content.into() {
-            Cow::Borrowed("") => vec![Spans::from("")],
-            Cow::Borrowed(s) => s.lines().map(Spans::from).collect(),
-            Cow::Owned(s) if s.is_empty() => vec![Spans::from("")],
-            Cow::Owned(s) => s.lines().map(|l| Spans::from(l.to_owned())).collect(),
+        let mut lines = TinyVec::<[_; 4]>::new();
+        match content.into() {
+            Cow::Borrowed("") => lines.push(Spans::from("")),
+            Cow::Borrowed(s) => lines.extend(s.lines().map(Spans::from)),
+            Cow::Owned(s) if s.is_empty() => lines.push(Spans::from("")),
+            Cow::Owned(s) => lines.extend(s.lines().map(|l| Spans::from(l.to_owned()))),
         };
 
         Text { lines }
@@ -396,27 +398,31 @@ impl<'a> From<Cow<'a, str>> for Text<'a> {
 
 impl<'a> From<Span<'a>> for Text<'a> {
     fn from(span: Span<'a>) -> Text<'a> {
-        Text {
-            lines: vec![Spans::from(span)],
-        }
+        let mut lines = TinyVec::new();
+        lines.push(Spans::from(span));
+        Text { lines }
     }
 }
 
 impl<'a> From<Spans<'a>> for Text<'a> {
     fn from(spans: Spans<'a>) -> Text<'a> {
-        Text { lines: vec![spans] }
+        let mut lines = TinyVec::new();
+        lines.push(spans);
+        Text { lines }
     }
 }
 
 impl<'a> From<Vec<Spans<'a>>> for Text<'a> {
     fn from(lines: Vec<Spans<'a>>) -> Text<'a> {
-        Text { lines }
+        Text {
+            lines: TinyVec::Heap(lines),
+        }
     }
 }
 
 impl<'a> IntoIterator for Text<'a> {
     type Item = Spans<'a>;
-    type IntoIter = std::vec::IntoIter<Self::Item>;
+    type IntoIter = tinyvec::TinyVecIterator<[Self::Item; 4]>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.lines.into_iter()

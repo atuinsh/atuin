@@ -39,8 +39,8 @@ impl ListState {
 impl<'a> StatefulWidget for HistoryList<'a> {
     type State = ListState;
 
-    fn render(mut self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
-        let list_area = self.block.take().map_or(area, |b| {
+    fn render(&self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
+        let list_area = self.block.as_ref().map_or(area, |b| {
             let inner_area = b.inner(area);
             b.render(area, buf);
             inner_area
