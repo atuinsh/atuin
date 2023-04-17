@@ -7,13 +7,13 @@ use reqwest::{
     header::{HeaderMap, AUTHORIZATION, USER_AGENT},
     StatusCode, Url,
 };
-use sodiumoxide::crypto::secretbox;
 
 use atuin_common::api::{
     AddHistoryRequest, CountResponse, DeleteHistoryRequest, ErrorResponse, IndexResponse,
     LoginRequest, LoginResponse, RegisterResponse, StatusResponse, SyncHistoryResponse,
 };
 use semver::Version;
+use xsalsa20poly1305::Key;
 
 use crate::{
     encryption::{decode_key, decrypt},
@@ -28,7 +28,7 @@ static APP_USER_AGENT: &str = concat!("atuin/", env!("CARGO_PKG_VERSION"),);
 
 pub struct Client<'a> {
     sync_addr: &'a str,
-    key: secretbox::Key,
+    key: Key,
     client: reqwest::Client,
 }
 
@@ -182,7 +182,7 @@ impl<'a> Client<'a> {
             .iter()
             // TODO: handle deletion earlier in this chain
             .map(|h| serde_json::from_str(h).expect("invalid base64"))
-            .map(|h| decrypt(&h, &self.key).expect("failed to decrypt history! check your key"))
+            .map(|h| decrypt(h, &self.key).expect("failed to decrypt history! check your key"))
             .map(|mut h| {
                 if deleted.contains(&h.id) {
                     h.deleted_at = Some(chrono::Utc::now());

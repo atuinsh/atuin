@@ -2,12 +2,16 @@ use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::time::Duration;
 
+use argon2::{
+    password_hash::SaltString, Algorithm, Argon2, Params, PasswordHash, PasswordHasher,
+    PasswordVerifier, Version,
+};
 use axum::{
     extract::{Path, State},
     Json,
 };
 use http::StatusCode;
-use sodiumoxide::crypto::pwhash::argon2id13;
+use rand::rngs::OsRng;
 use tracing::{debug, error, info, instrument};
 use uuid::Uuid;
 
@@ -22,18 +26,10 @@ use reqwest::header::CONTENT_TYPE;
 
 use atuin_common::api::*;
 
-pub fn verify_str(secret: &str, verify: &str) -> bool {
-    sodiumoxide::init().unwrap();
-
-    let mut padded = [0_u8; 128];
-    secret.as_bytes().iter().enumerate().for_each(|(i, val)| {
-        padded[i] = *val;
-    });
-
-    match argon2id13::HashedPassword::from_slice(&padded) {
-        Some(hp) => argon2id13::pwhash_verify(&hp, verify.as_bytes()),
-        None => false,
-    }
+pub fn verify_str(hash: &str, password: &str) -> bool {
+    let arg2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, Params::default());
+    let Ok(hash) = PasswordHash::new(hash) else { return false };
+    arg2.verify_password(password.as_bytes(), &hash).is_ok()
 }
 
 // Try to send a Discord webhook once - if it fails, we don't retry. "At most once", and best effort.
@@ -185,16 +181,9 @@ pub async fn login<DB: Database>(
     }))
 }
 
-fn hash_secret(secret: &str) -> String {
-    sodiumoxide::init().unwrap();
-    let hash = argon2id13::pwhash(
-        secret.as_bytes(),
-        argon2id13::OPSLIMIT_INTERACTIVE,
-        argon2id13::MEMLIMIT_INTERACTIVE,
-    )
-    .unwrap();
-    let texthash = std::str::from_utf8(&hash.0).unwrap().to_string();
-
-    // postgres hates null chars. don't do that to postgres
-    texthash.trim_end_matches('\u{0}').to_string()
+fn hash_secret(password: &str) -> String {
+    let arg2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, Params::default());
+    let salt = SaltString::generate(&mut OsRng);
+    let hash = arg2.hash_password(password.as_bytes(), &salt).unwrap();
+    hash.to_string()
 }

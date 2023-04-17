@@ -14,7 +14,11 @@ use base64::prelude::{Engine, BASE64_STANDARD};
 use eyre::{eyre, Context, Result};
 use fs_err as fs;
 use serde::{Deserialize, Serialize};
-use sodiumoxide::crypto::secretbox;
+pub use xsalsa20poly1305::Key;
+use xsalsa20poly1305::{
+    aead::{Nonce, OsRng},
+    AeadInPlace, KeyInit, XSalsa20Poly1305,
+};
 
 use crate::{
     history::{History, HistoryWithoutDelete},
@@ -24,14 +28,14 @@ use crate::{
 #[derive(Debug, Serialize, Deserialize)]
 pub struct EncryptedHistory {
     pub ciphertext: Vec<u8>,
-    pub nonce: secretbox::Nonce,
+    pub nonce: Nonce<XSalsa20Poly1305>,
 }
 
-pub fn new_key(settings: &Settings) -> Result<secretbox::Key> {
+pub fn new_key(settings: &Settings) -> Result<Key> {
     let path = settings.key_path.as_str();
 
-    let key = secretbox::gen_key();
-    let encoded = encode_key(key.clone())?;
+    let key = XSalsa20Poly1305::generate_key(&mut OsRng);
+    let encoded = encode_key(&key)?;
 
     let mut file = fs::File::create(path)?;
     file.write_all(encoded.as_bytes())?;
@@ -40,7 +44,7 @@ pub fn new_key(settings: &Settings) -> Result<secretbox::Key> {
 }
 
 // Loads the secret key, will create + save if it doesn't exist
-pub fn load_key(settings: &Settings) -> Result<secretbox::Key> {
+pub fn load_key(settings: &Settings) -> Result<Key> {
     let path = settings.key_path.as_str();
 
     let key = if PathBuf::from(path).exists() {
@@ -60,8 +64,8 @@ pub fn load_encoded_key(settings: &Settings) -> Result<String> {
         let key = fs::read_to_string(path)?;
         Ok(key)
     } else {
-        let key = secretbox::gen_key();
-        let encoded = encode_key(key)?;
+        let key = XSalsa20Poly1305::generate_key(&mut OsRng);
+        let encoded = encode_key(&key)?;
 
         let mut file = fs::File::create(path)?;
         file.write_all(encoded.as_bytes())?;
@@ -70,38 +74,47 @@ pub fn load_encoded_key(settings: &Settings) -> Result<String> {
     }
 }
 
-pub type Key = secretbox::Key;
-pub fn encode_key(key: secretbox::Key) -> Result<String> {
-    let buf = rmp_serde::to_vec(&key).wrap_err("could not encode key to message pack")?;
+pub fn encode_key(key: &Key) -> Result<String> {
+    let buf = rmp_serde::to_vec(key.as_slice()).wrap_err("could not encode key to message pack")?;
     let buf = BASE64_STANDARD.encode(buf);
 
     Ok(buf)
 }
 
-pub fn decode_key(key: String) -> Result<secretbox::Key> {
+pub fn decode_key(key: String) -> Result<Key> {
     let buf = BASE64_STANDARD
         .decode(key.trim_end())
         .wrap_err("encryption key is not a valid base64 encoding")?;
-    let buf: secretbox::Key = rmp_serde::from_slice(&buf)
+    let buf: &[u8] = rmp_serde::from_slice(&buf)
         .wrap_err("encryption key is not a valid message pack encoding")?;
 
-    Ok(buf)
+    Ok(*Key::from_slice(buf))
 }
 
-pub fn encrypt(history: &History, key: &secretbox::Key) -> Result<EncryptedHistory> {
+pub fn encrypt(history: &History, key: &Key) -> Result<EncryptedHistory> {
     // serialize with msgpack
-    let buf = rmp_serde::to_vec(history)?;
+    let mut buf = rmp_serde::to_vec(history)?;
 
-    let nonce = secretbox::gen_nonce();
+    let nonce = XSalsa20Poly1305::generate_nonce(&mut OsRng);
+    XSalsa20Poly1305::new(key)
+        .encrypt_in_place(&nonce, &[], &mut buf)
+        .map_err(|_| eyre!("could not encrypt"))?;
 
-    let ciphertext = secretbox::seal(&buf, &nonce, key);
-
-    Ok(EncryptedHistory { ciphertext, nonce })
+    Ok(EncryptedHistory {
+        ciphertext: buf,
+        nonce,
+    })
 }
 
-pub fn decrypt(encrypted_history: &EncryptedHistory, key: &secretbox::Key) -> Result<History> {
-    let plaintext = secretbox::open(&encrypted_history.ciphertext, &encrypted_history.nonce, key)
-        .map_err(|_| eyre!("failed to open secretbox - invalid key?"))?;
+pub fn decrypt(mut encrypted_history: EncryptedHistory, key: &Key) -> Result<History> {
+    XSalsa20Poly1305::new(key)
+        .decrypt_in_place(
+            &encrypted_history.nonce,
+            &[],
+            &mut encrypted_history.ciphertext,
+        )
+        .map_err(|_| eyre!("could not encrypt"))?;
+    let plaintext = encrypted_history.ciphertext;
 
     let history = rmp_serde::from_slice(&plaintext);
 
@@ -126,7 +139,7 @@ pub fn decrypt(encrypted_history: &EncryptedHistory, key: &secretbox::Key) -> Re
 
 #[cfg(test)]
 mod test {
-    use sodiumoxide::crypto::secretbox;
+    use xsalsa20poly1305::{aead::OsRng, KeyInit, XSalsa20Poly1305};
 
     use crate::history::History;
 
@@ -134,8 +147,8 @@ mod test {
 
     #[test]
     fn test_encrypt_decrypt() {
-        let key1 = secretbox::gen_key();
-        let key2 = secretbox::gen_key();
+        let key1 = XSalsa20Poly1305::generate_key(&mut OsRng);
+        let key2 = XSalsa20Poly1305::generate_key(&mut OsRng);
 
         let history = History::new(
             chrono::Utc::now(),
@@ -156,12 +169,12 @@ mod test {
 
         // test decryption works
         // this should pass
-        match decrypt(&e1, &key1) {
+        match decrypt(e1, &key1) {
             Err(e) => panic!("failed to decrypt, got {}", e),
             Ok(h) => assert_eq!(h, history),
         };
 
         // this should err
-        let _ = decrypt(&e2, &key1).expect_err("expected an error decrypting with invalid key");
+        let _ = decrypt(e2, &key1).expect_err("expected an error decrypting with invalid key");
     }
 }
