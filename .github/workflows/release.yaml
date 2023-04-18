@@ -6,6 +6,11 @@ env:
 
 on:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build release binaries for'
+        required: true
+        type: string
   push:
     tags:
       - "v*"
@@ -27,8 +32,22 @@ jobs:
           - { os: macos-12     , target: x86_64-apple-darwin         }
           - { os: macos-12     , target: aarch64-apple-darwin         }
     steps:
+    - name: Check for release
+      id: is-release
+      shell: bash
+      run: |
+        unset IS_RELEASE ; if [[ $GITHUB_REF =~ ^refs/tags/v[0-9].* ]]; then IS_RELEASE='true' ; fi
+        echo "IS_RELEASE=${IS_RELEASE}" >> $GITHUB_OUTPUT
+
     - name: Checkout source code
+      if: steps.is-release.outputs.IS_RELEASE
       uses: actions/checkout@v3
+
+    - name: Checkout source code
+      if: ${{ !steps.is-release.outputs.IS_RELEASE }}
+      uses: actions/checkout@v3
+      with:
+        ref: ${{ inputs.tag }}
 
     - name: Install prerequisites
       shell: bash
@@ -177,12 +196,6 @@ jobs:
         name: ${{ steps.debian-package.outputs.DPKG_NAME }}
         path: ${{ steps.debian-package.outputs.DPKG_PATH }}
 
-    - name: Check for release
-      id: is-release
-      shell: bash
-      run: |
-        unset IS_RELEASE ; if [[ $GITHUB_REF =~ ^refs/tags/v[0-9].* ]]; then IS_RELEASE='true' ; fi
-        echo "IS_RELEASE=${IS_RELEASE}" >> $GITHUB_OUTPUT
 
     - name: Publish archives and packages
       uses: softprops/action-gh-release@v1
