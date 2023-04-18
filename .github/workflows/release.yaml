@@ -160,6 +160,12 @@ jobs:
         # Let subsequent steps know where to find the compressed package
         echo "PKG_PATH=${PKG_STAGING}/${PKG_NAME}" >> "$GITHUB_OUTPUT"
 
+    - name: "Artifact upload: tarball"
+      uses: actions/upload-artifact@master
+      with:
+        name: ${{ steps.package.outputs.PKG_NAME }}
+        path: ${{ steps.package.outputs.PKG_PATH }}
+
     - name: Create Debian package
       id: debian-package
       shell: bash
@@ -183,11 +189,6 @@ jobs:
         echo DPKG_NAME=${DPKG_NAME} >> $GITHUB_OUTPUT
         echo DPKG_PATH=${DPKG_PATH} >> $GITHUB_OUTPUT
 
-    - name: "Artifact upload: tarball"
-      uses: actions/upload-artifact@master
-      with:
-        name: ${{ steps.package.outputs.PKG_NAME }}
-        path: ${{ steps.package.outputs.PKG_PATH }}
 
     - name: "Artifact upload: Debian package"
       uses: actions/upload-artifact@master
