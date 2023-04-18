@@ -147,7 +147,7 @@ jobs:
       if: startsWith(matrix.job.os, 'ubuntu')
       run: |
         cargo install cargo-deb
-        cargo deb
+        cargo deb -p atuin
 
         case ${{ matrix.job.target }} in
           aarch64-*-linux-*) DPKG_ARCH=arm64 ;;
