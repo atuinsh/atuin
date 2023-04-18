@@ -3,7 +3,7 @@ name = "atuin"
 edition = "2021"
 rust-version = "1.59"
 description = "atuin - magical shell history"
-readme = "../README.md"
+readme = "./README.md"
 
 version = { workspace = true }
 authors = { workspace = true }
