@@ -44,7 +44,7 @@ itertools = { workspace = true }
 shellexpand = "2"
 sqlx = { workspace = true, features = ["sqlite"] }
 minspan = "0.1.1"
-regex = "1.5.4"
+regex = "1.8.0"
 serde_regex = "1.1.0"
 fs-err = { workspace = true }
 sql-builder = "3"
