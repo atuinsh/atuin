@@ -1,7 +1,7 @@
 use std::{io, path::PathBuf};
 
 use clap::Parser;
-use eyre::{bail, Context, ContextCompat, Result};
+use eyre::{bail, Context, Result};
 use tokio::{fs::File, io::AsyncWriteExt};
 
 use atuin_client::{
@@ -62,10 +62,7 @@ impl Cmd {
         } else {
             // try parse the key as a mnemonic...
             let key = match bip39::Mnemonic::from_phrase(&key, bip39::Language::English) {
-                Ok(mnemonic) => encode_key(
-                    Key::from_slice(mnemonic.entropy())
-                        .context("key was not the correct length")?,
-                )?,
+                Ok(mnemonic) => encode_key(Key::from_slice(mnemonic.entropy()))?,
                 Err(err) => {
                     if let Some(err) = err.downcast_ref::<bip39::ErrorKind>() {
                         match err {
@@ -131,17 +128,15 @@ mod tests {
 
     #[test]
     fn mnemonic_round_trip() {
-        let key = Key {
-            0: [
-                3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8, 9, 7, 9, 3, 2, 3, 8, 4, 6, 2, 6, 4, 3, 3, 8, 3,
-                2, 7, 9, 5,
-            ],
-        };
-        let phrase = bip39::Mnemonic::from_entropy(&key.0, bip39::Language::English)
+        let key = Key::from([
+            3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8, 9, 7, 9, 3, 2, 3, 8, 4, 6, 2, 6, 4, 3, 3, 8, 3, 2,
+            7, 9, 5,
+        ]);
+        let phrase = bip39::Mnemonic::from_entropy(&key, bip39::Language::English)
             .unwrap()
             .into_phrase();
         let mnemonic = bip39::Mnemonic::from_phrase(&phrase, bip39::Language::English).unwrap();
-        assert_eq!(mnemonic.entropy(), &key.0);
+        assert_eq!(mnemonic.entropy(), key.as_slice());
         assert_eq!(phrase, "adapt amused able anxiety mother adapt beef gaze amount else seat alcohol cage lottery avoid scare alcohol cactus school avoid coral adjust catch pink");
     }
 }

@@ -50,10 +50,10 @@ impl Cmd {
                 let key = load_key(&settings).wrap_err("could not load encryption key")?;
 
                 if base64 {
-                    let encode = encode_key(key).wrap_err("could not encode encryption key")?;
+                    let encode = encode_key(&key).wrap_err("could not encode encryption key")?;
                     println!("{encode}");
                 } else {
-                    let mnemonic = bip39::Mnemonic::from_entropy(&key.0, bip39::Language::English)
+                    let mnemonic = bip39::Mnemonic::from_entropy(&key, bip39::Language::English)
                         .map_err(|_| eyre::eyre!("invalid key"))?;
                     println!("{mnemonic}");
                 }
