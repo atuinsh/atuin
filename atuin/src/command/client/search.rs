@@ -1,5 +1,6 @@
 use atuin_common::utils;
 use clap::Parser;
+use execute::{shell, Execute};
 use eyre::Result;
 
 use atuin_client::{
@@ -8,7 +9,7 @@ use atuin_client::{
     history::History,
     settings::{ExitMode, FilterMode, SearchMode, Settings},
 };
-use tokio::process::Command;
+// use tokio::process::Command;
 
 use super::history::ListMode;
 
@@ -126,10 +127,12 @@ impl Cmd {
             let item = interactive::history(&self.query, settings, db).await?;
             if settings.exit_mode == ExitMode::ReturnExecute {
                 // This is a very basic command execution just to actually test this arm of the if
-                let (cmd, args) = item.split_once(' ').unwrap_or((&item, ""));
-                let (cmd, args) = (cmd, args.split_whitespace());
-                eprintln!("CMD: {:?}, ARGS: {:?}", &cmd, &args);
-                Command::new(cmd).args(args).spawn()?;
+                // let (cmd, args) = item.split_once(' ').unwrap_or((&item, ""));
+                // let (cmd, args) = (cmd, args.split_whitespace());
+                // eprintln!("CMD: {:?}, ARGS: {:?}", &cmd, &args);
+                // Command::new(cmd).args(args).spawn()?;
+                let mut cmd = shell(item);
+                cmd.execute_output()?;
             } else {
                 eprintln!("{item}");
             }
