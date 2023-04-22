@@ -8,6 +8,7 @@ use atuin_client::{
     history::History,
     settings::{ExitMode, FilterMode, SearchMode, Settings},
 };
+use tokio::process::Command;
 
 use super::history::ListMode;
 
@@ -124,9 +125,10 @@ impl Cmd {
         if self.interactive {
             let item = interactive::history(&self.query, settings, db).await?;
             if settings.exit_mode == ExitMode::ReturnExecute {
-                // this will evetually become the actual execution of the history item
-                // for now we do just return until resolved what would be the best way to run the command
-                eprintln!("{item}");
+                // This is a very basic command execution just to actually test this arm of the if
+                let (cmd, args) = item.split_once(' ').unwrap_or((&item, ""));
+                eprintln!("CMD: {:?}, ARGS: {:?}", &cmd, &args.split_whitespace());
+                Command::new(cmd).args(args.split_whitespace()).spawn()?;
             } else {
                 eprintln!("{item}");
             }
