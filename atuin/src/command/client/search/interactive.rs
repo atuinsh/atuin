@@ -206,8 +206,12 @@ impl State {
             // so we mirror the return Original behvior in this case
             KeyCode::Down if self.results_state.selected() == 0 => {
                 return Some(match settings.exit_mode {
-                    ExitMode::ReturnOriginal | ExitMode::ReturnExecute => RETURN_ORIGINAL,
+                    ExitMode::ReturnOriginal => RETURN_ORIGINAL,
                     ExitMode::ReturnQuery => RETURN_QUERY,
+                    ExitMode::ReturnExecute => {
+                        settings.change_exit_mode(ExitMode::ReturnOriginal);
+                        return Some(RETURN_ORIGINAL);
+                    }
                 });
             }
             KeyCode::Down => {

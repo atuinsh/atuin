@@ -127,8 +127,9 @@ impl Cmd {
             if settings.exit_mode == ExitMode::ReturnExecute {
                 // This is a very basic command execution just to actually test this arm of the if
                 let (cmd, args) = item.split_once(' ').unwrap_or((&item, ""));
-                eprintln!("CMD: {:?}, ARGS: {:?}", &cmd, &args.split_whitespace());
-                Command::new(cmd).args(args.split_whitespace()).spawn()?;
+                let (cmd, args) = (cmd, args.split_whitespace());
+                eprintln!("CMD: {:?}, ARGS: {:?}", &cmd, &args);
+                Command::new(cmd).args(args).spawn()?;
             } else {
                 eprintln!("{item}");
             }
