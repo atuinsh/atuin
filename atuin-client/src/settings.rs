@@ -81,13 +81,16 @@ impl FilterMode {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Copy)]
+#[derive(Clone, Debug, Deserialize, Copy, PartialEq)]
 pub enum ExitMode {
     #[serde(rename = "return-original")]
     ReturnOriginal,
 
     #[serde(rename = "return-query")]
     ReturnQuery,
+
+    #[serde(rename = "return-execute")]
+    ReturnExecute,
 }
 
 // FIXME: Can use upstream Dialect enum if https://github.com/stevedonovan/chrono-english/pull/16 is merged
@@ -295,6 +298,10 @@ impl Settings {
         }
 
         None
+    }
+
+    pub fn change_exit_mode(&mut self, new_mode: ExitMode) {
+        self.exit_mode = new_mode
     }
 
     pub fn new() -> Result<Self> {

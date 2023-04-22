@@ -1,12 +1,13 @@
 use atuin_common::utils;
 use clap::Parser;
+use crossterm::{Command, ExecutableCommand};
 use eyre::Result;
 
 use atuin_client::{
     database::Database,
     database::{current_context, OptFilters},
     history::History,
-    settings::{FilterMode, SearchMode, Settings},
+    settings::{ExitMode, FilterMode, SearchMode, Settings},
 };
 
 use super::history::ListMode;
@@ -123,7 +124,13 @@ impl Cmd {
 
         if self.interactive {
             let item = interactive::history(&self.query, settings, db).await?;
-            eprintln!("{item}");
+            if settings.exit_mode == ExitMode::ReturnExecute {
+                // this will evetually become the actual execution of the history item
+                // for now we do just return until resolved what would be the best way to run the command
+                eprintln!("{item}");
+            } else {
+                eprintln!("{item}");
+            }
         } else {
             let list_mode = ListMode::from_flags(self.human, self.cmd_only);
 

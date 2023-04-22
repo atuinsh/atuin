@@ -54,7 +54,12 @@ impl State {
         Ok(results)
     }
 
-    fn handle_input(&mut self, settings: &Settings, input: &Event, len: usize) -> Option<usize> {
+    fn handle_input(
+        &mut self,
+        settings: &mut Settings,
+        input: &Event,
+        len: usize,
+    ) -> Option<usize> {
         match input {
             Event::Key(k) => self.handle_key_input(settings, k, len),
             Event::Mouse(m) => self.handle_mouse_input(*m, len),
@@ -89,7 +94,7 @@ impl State {
     #[allow(clippy::cognitive_complexity)]
     fn handle_key_input(
         &mut self,
-        settings: &Settings,
+        settings: &mut Settings,
         input: &KeyEvent,
         len: usize,
     ) -> Option<usize> {
@@ -99,6 +104,7 @@ impl State {
 
         let ctrl = input.modifiers.contains(KeyModifiers::CONTROL);
         let alt = input.modifiers.contains(KeyModifiers::ALT);
+        let shift = input.modifiers.contains(KeyModifiers::SHIFT);
         // reset the state, will be set to true later if user really did change it
         self.switched_search_mode = false;
         match input.code {
@@ -107,7 +113,13 @@ impl State {
                 return Some(match settings.exit_mode {
                     ExitMode::ReturnOriginal => RETURN_ORIGINAL,
                     ExitMode::ReturnQuery => RETURN_QUERY,
-                })
+                    ExitMode::ReturnExecute => RETURN_ORIGINAL,
+                });
+            }
+            KeyCode::Enter if shift => {
+                // ExecutableCommand(self.results_state.select(RETURN_QUERY));
+                settings.change_exit_mode(ExitMode::ReturnExecute);
+                return Some(RETURN_ORIGINAL);
             }
             KeyCode::Enter => {
                 return Some(self.results_state.selected());
@@ -190,11 +202,15 @@ impl State {
                 self.search_mode = self.search_mode.next(settings);
                 self.engine = engines::engine(self.search_mode);
             }
+            // we don't want to execute on tha down arrow action as
+            // this would be very much unexpected from a user perspective
+            // so we mirror the return Original behvior in this case
             KeyCode::Down if self.results_state.selected() == 0 => {
                 return Some(match settings.exit_mode {
                     ExitMode::ReturnOriginal => RETURN_ORIGINAL,
                     ExitMode::ReturnQuery => RETURN_QUERY,
-                })
+                    ExitMode::ReturnExecute => RETURN_ORIGINAL,
+                });
             }
             KeyCode::Down => {
                 let i = self.results_state.selected().saturating_sub(1);
@@ -478,7 +494,7 @@ impl Write for Stdout {
 #[allow(clippy::cast_possible_truncation)]
 pub async fn history(
     query: &[String],
-    settings: &Settings,
+    settings: &mut Settings,
     mut db: impl Database,
 ) -> Result<String> {
     let stdout = Stdout::new(settings.inline_height > 0)?;

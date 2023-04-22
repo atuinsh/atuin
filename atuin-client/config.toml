@@ -52,7 +52,7 @@
 # show_preview = false
 
 ## what to do when the escape key is pressed when searching
-## possible values: return-original, return-query
+## possible values: return-original, return-query, return-execute
 # exit_mode = "return-original"
 
 ## possible values: emacs, subl
