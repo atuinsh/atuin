@@ -112,14 +112,13 @@ impl State {
             KeyCode::Esc => {
                 return Some(match settings.exit_mode {
                     ExitMode::ReturnOriginal => RETURN_ORIGINAL,
-                    ExitMode::ReturnQuery => RETURN_QUERY,
-                    ExitMode::ReturnExecute => RETURN_ORIGINAL,
+                    ExitMode::ReturnQuery | ExitMode::ReturnExecute => RETURN_QUERY,
                 });
             }
             KeyCode::Enter if shift => {
                 // ExecutableCommand(self.results_state.select(RETURN_QUERY));
                 settings.change_exit_mode(ExitMode::ReturnExecute);
-                return Some(RETURN_ORIGINAL);
+                return Some(RETURN_QUERY);
             }
             KeyCode::Enter => {
                 return Some(self.results_state.selected());
@@ -207,9 +206,8 @@ impl State {
             // so we mirror the return Original behvior in this case
             KeyCode::Down if self.results_state.selected() == 0 => {
                 return Some(match settings.exit_mode {
-                    ExitMode::ReturnOriginal => RETURN_ORIGINAL,
+                    ExitMode::ReturnOriginal | ExitMode::ReturnExecute => RETURN_ORIGINAL,
                     ExitMode::ReturnQuery => RETURN_QUERY,
-                    ExitMode::ReturnExecute => RETURN_ORIGINAL,
                 });
             }
             KeyCode::Down => {

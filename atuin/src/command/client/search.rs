@@ -1,6 +1,5 @@
 use atuin_common::utils;
 use clap::Parser;
-use crossterm::{Command, ExecutableCommand};
 use eyre::Result;
 
 use atuin_client::{

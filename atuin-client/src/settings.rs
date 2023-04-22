@@ -301,7 +301,7 @@ impl Settings {
     }
 
     pub fn change_exit_mode(&mut self, new_mode: ExitMode) {
-        self.exit_mode = new_mode
+        self.exit_mode = new_mode;
     }
 
     pub fn new() -> Result<Self> {
