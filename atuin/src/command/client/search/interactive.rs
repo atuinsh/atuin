@@ -614,7 +614,7 @@ pub async fn history(
             let query = &history
                 .command
                 .split(' ')
-                .map(|e| e.to_owned())
+                .map(std::borrow::ToOwned::to_owned)
                 .collect::<Vec<String>>();
 
             let mut entries =
