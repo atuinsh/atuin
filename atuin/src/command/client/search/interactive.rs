@@ -36,6 +36,11 @@ use crate::{command::client::search::engines, VERSION};
 const RETURN_ORIGINAL: usize = usize::MAX;
 const RETURN_QUERY: usize = usize::MAX - 1;
 
+enum ReturnState {
+    Select(usize),
+    Delete(usize),
+}
+
 struct State {
     history_count: i64,
     update_needed: Option<Version>,
@@ -54,11 +59,16 @@ impl State {
         Ok(results)
     }
 
-    fn handle_input(&mut self, settings: &Settings, input: &Event, len: usize) -> Option<usize> {
+    fn handle_input(
+        &mut self,
+        settings: &Settings,
+        input: &Event,
+        len: usize,
+    ) -> Option<ReturnState> {
         match input {
             Event::Key(k) => self.handle_key_input(settings, k, len),
-            Event::Mouse(m) => self.handle_mouse_input(*m, len),
-            Event::Paste(d) => self.handle_paste_input(d),
+            Event::Mouse(m) => Some(ReturnState::Select(self.handle_mouse_input(*m, len)?)),
+            Event::Paste(d) => Some(ReturnState::Select(self.handle_paste_input(d)?)),
             _ => None,
         }
     }
@@ -92,7 +102,7 @@ impl State {
         settings: &Settings,
         input: &KeyEvent,
         len: usize,
-    ) -> Option<usize> {
+    ) -> Option<ReturnState> {
         if input.kind == event::KeyEventKind::Release {
             return None;
         }
@@ -102,19 +112,21 @@ impl State {
         // reset the state, will be set to true later if user really did change it
         self.switched_search_mode = false;
         match input.code {
-            KeyCode::Char('c' | 'd' | 'g') if ctrl => return Some(RETURN_ORIGINAL),
+            KeyCode::Char('c' | 'd' | 'g') if ctrl => {
+                return Some(ReturnState::Select(RETURN_ORIGINAL))
+            }
             KeyCode::Esc => {
                 return Some(match settings.exit_mode {
-                    ExitMode::ReturnOriginal => RETURN_ORIGINAL,
-                    ExitMode::ReturnQuery => RETURN_QUERY,
+                    ExitMode::ReturnOriginal => ReturnState::Select(RETURN_ORIGINAL),
+                    ExitMode::ReturnQuery => ReturnState::Select(RETURN_QUERY),
                 })
             }
             KeyCode::Enter => {
-                return Some(self.results_state.selected());
+                return Some(ReturnState::Select(self.results_state.selected()));
             }
             KeyCode::Char(c @ '1'..='9') if alt => {
                 let c = c.to_digit(10)? as usize;
-                return Some(self.results_state.selected() + c);
+                return Some(ReturnState::Select(self.results_state.selected() + c));
             }
             KeyCode::Left if ctrl => self
                 .search
@@ -162,6 +174,9 @@ impl State {
             KeyCode::Delete => {
                 self.search.input.remove();
             }
+            KeyCode::Char('d') if alt => {
+                return Some(ReturnState::Delete(self.results_state.selected()));
+            }
             KeyCode::Char('w') if ctrl => {
                 // remove the first batch of whitespace
                 while matches!(self.search.input.back(), Some(c) if c.is_whitespace()) {}
@@ -192,8 +207,8 @@ impl State {
             }
             KeyCode::Down if self.results_state.selected() == 0 => {
                 return Some(match settings.exit_mode {
-                    ExitMode::ReturnOriginal => RETURN_ORIGINAL,
-                    ExitMode::ReturnQuery => RETURN_QUERY,
+                    ExitMode::ReturnOriginal => ReturnState::Select(RETURN_ORIGINAL),
+                    ExitMode::ReturnQuery => ReturnState::Select(RETURN_QUERY),
                 })
             }
             KeyCode::Down => {
@@ -528,7 +543,7 @@ pub async fn history(
 
     let mut results = app.query_results(&mut db).await?;
 
-    let index = 'render: loop {
+    let return_state = 'render: loop {
         let compact = match settings.style {
             atuin_client::settings::Style::Auto => {
                 terminal.size().map(|size| size.height < 14).unwrap_or(true)
@@ -574,15 +589,22 @@ pub async fn history(
         terminal.clear()?;
     }
 
-    if index < results.len() {
-        // index is in bounds so we return that entry
-        Ok(results.swap_remove(index).command)
-    } else if index == RETURN_ORIGINAL {
-        Ok(String::new())
-    } else {
-        // Either:
-        // * index == RETURN_QUERY, in which case we should return the input
-        // * out of bounds -> usually implies no selected entry so we return the input
-        Ok(app.search.input.into_inner())
+    match return_state {
+        ReturnState::Select(index) => {
+            if index < results.len() {
+                // index is in bounds so we return that entry
+                Ok(results.swap_remove(index).command)
+            } else if index == RETURN_ORIGINAL {
+                Ok(String::new())
+            } else {
+                // Either:
+                // * index == RETURN_QUERY, in which case we should return the input
+                // * out of bounds -> usually implies no selected entry so we return the input
+                Ok(app.search.input.into_inner())
+            }
+        }
+        ReturnState::Delete(_index) => {
+            Ok(String::from("Deleting"))
+        },
     }
 }
