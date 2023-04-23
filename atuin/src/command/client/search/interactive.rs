@@ -112,7 +112,8 @@ impl State {
             KeyCode::Esc => {
                 return Some(match settings.exit_mode {
                     ExitMode::ReturnOriginal => RETURN_ORIGINAL,
-                    ExitMode::ReturnQuery | ExitMode::ReturnExecute => RETURN_QUERY,
+                    ExitMode::ReturnQuery => RETURN_QUERY,
+                    ExitMode::ReturnExecute => RETURN_QUERY,
                 });
             }
             KeyCode::Enter if shift => {

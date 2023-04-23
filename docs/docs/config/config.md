@@ -200,10 +200,11 @@ Useful when the command is longer than the terminal width and is cut off.
 
 What to do when the escape key is pressed when searching
 
-| Value                     | Behaviour                                                        |
-|---------------------------|------------------------------------------------------------------|
-| return-original (default) | Set the command-line to the value it had before starting search  |
-| return-query              | Set the command-line to the search query you have entered so far |
+| Value                     | Behaviour                                                              |
+|---------------------------|------------------------------------------------------------------------|
+| return-original (default) | Set the command-line to the value it had before starting search        |
+| return-query              | Set the command-line to the search query you have entered so far       |
+| return-execute            | Execute the command-line with the search query you have entered so far |
 
 Pressing ctrl+c or ctrl+d will always return the original command-line value.
 

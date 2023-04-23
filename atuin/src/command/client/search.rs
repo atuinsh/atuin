@@ -125,12 +125,12 @@ impl Cmd {
 
         if self.interactive {
             let item = interactive::history(&self.query, settings, db).await?;
+
             if settings.exit_mode == ExitMode::ReturnExecute {
-                // This is a very basic command execution just to actually test this arm of the if
-                // let (cmd, args) = item.split_once(' ').unwrap_or((&item, ""));
-                // let (cmd, args) = (cmd, args.split_whitespace());
-                // eprintln!("CMD: {:?}, ARGS: {:?}", &cmd, &args);
-                // Command::new(cmd).args(args).spawn()?;
+                eprintln!(
+                    "Exit-Mode \"{:?}\" with command \"{:?}\".",
+                    settings.exit_mode, item
+                );
                 let mut cmd = shell(item);
                 cmd.execute_output()?;
             } else {
