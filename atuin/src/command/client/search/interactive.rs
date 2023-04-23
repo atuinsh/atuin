@@ -117,11 +117,13 @@ impl State {
                 });
             }
             KeyCode::Enter if shift => {
-                // ExecutableCommand(self.results_state.select(RETURN_QUERY));
                 settings.change_exit_mode(ExitMode::ReturnExecute);
                 return Some(RETURN_QUERY);
             }
             KeyCode::Enter => {
+                if settings.exit_mode == ExitMode::ReturnExecute {
+                    settings.change_exit_mode(ExitMode::ReturnQuery);
+                }
                 return Some(self.results_state.selected());
             }
             KeyCode::Char(c @ '1'..='9') if alt => {
