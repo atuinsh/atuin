@@ -27,6 +27,9 @@ pub enum SearchMode {
     #[clap(aliases = &["fulltext"])]
     FullText,
 
+    #[serde(rename = "strict")]
+    Strict,
+
     #[serde(rename = "fuzzy")]
     Fuzzy,
 
@@ -39,6 +42,7 @@ impl SearchMode {
         match self {
             SearchMode::Prefix => "PREFIX",
             SearchMode::FullText => "FULLTXT",
+            SearchMode::Strict => "STRICT",
             SearchMode::Fuzzy => "FUZZY",
             SearchMode::Skim => "SKIM",
         }
@@ -50,6 +54,7 @@ impl SearchMode {
             SearchMode::FullText if settings.search_mode == SearchMode::Skim => SearchMode::Skim,
             // otherwise fuzzy.
             SearchMode::FullText => SearchMode::Fuzzy,
+            SearchMode::Strict => SearchMode::Strict,
             SearchMode::Fuzzy | SearchMode::Skim => SearchMode::Prefix,
         }
     }

@@ -384,7 +384,8 @@ impl Database for Sqlite {
         match search_mode {
             SearchMode::Prefix => sql.and_where_like_left("command", query),
             SearchMode::FullText => sql.and_where_like_any("command", query),
-            _ => {
+            SearchMode::Strict => sql.and_where_eq("command", &quote(query)),
+                _ => {
                 // don't recompile the regex on successive calls!
                 lazy_static! {
                     static ref SPLIT_REGEX: Regex = Regex::new(r" +").unwrap();

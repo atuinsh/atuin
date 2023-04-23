@@ -13,7 +13,7 @@ use semver::Version;
 use unicode_width::UnicodeWidthStr;
 
 use atuin_client::{
-    database::{current_context, Database},
+    database::{current_context, Database, OptFilters},
     history::History,
     settings::{ExitMode, FilterMode, SearchMode, Settings},
 };
@@ -23,15 +23,18 @@ use super::{
     engines::{SearchEngine, SearchState},
     history_list::{HistoryList, ListState, PREFIX_LENGTH},
 };
-use crate::ratatui::{
-    backend::{Backend, CrosstermBackend},
-    layout::{Alignment, Constraint, Direction, Layout},
-    style::{Color, Modifier, Style},
-    text::{Span, Spans, Text},
-    widgets::{Block, BorderType, Borders, Paragraph},
-    Frame, Terminal, TerminalOptions, Viewport,
-};
 use crate::{command::client::search::engines, VERSION};
+use crate::{
+    command::client::search::run_non_interactive,
+    ratatui::{
+        backend::{Backend, CrosstermBackend},
+        layout::{Alignment, Constraint, Direction, Layout},
+        style::{Color, Modifier, Style},
+        text::{Span, Spans, Text},
+        widgets::{Block, BorderType, Borders, Paragraph},
+        Frame, Terminal, TerminalOptions, Viewport,
+    },
+};
 
 const RETURN_ORIGINAL: usize = usize::MAX;
 const RETURN_QUERY: usize = usize::MAX - 1;
@@ -490,7 +493,8 @@ impl Write for Stdout {
 // this is a big blob of horrible! clean it up!
 // for now, it works. But it'd be great if it were more easily readable, and
 // modular. I'd like to add some more stats and stuff at some point
-#[allow(clippy::cast_possible_truncation)]
+// TODO: split this up into multiple functions
+#[allow(clippy::cast_possible_truncation, clippy::too_many_lines)]
 pub async fn history(
     query: &[String],
     settings: &Settings,
@@ -603,8 +607,29 @@ pub async fn history(
                 Ok(app.search.input.into_inner())
             }
         }
-        ReturnState::Delete(_index) => {
-            Ok(String::from("Deleting"))
-        },
+        ReturnState::Delete(index) => {
+            let history = results.swap_remove(index);
+            let mut settings = settings.clone();
+            settings.search_mode = SearchMode::Strict;
+            let query = &history
+                .command
+                .split(' ')
+                .map(|e| e.to_owned())
+                .collect::<Vec<String>>();
+
+            let mut entries =
+                run_non_interactive(&settings, OptFilters::default(), query, &mut db).await?;
+
+            while !entries.is_empty() {
+                for entry in &entries {
+                    println!("deleting {}", entry.command);
+                    db.delete(entry.clone()).await?;
+                }
+
+                entries =
+                    run_non_interactive(&settings, OptFilters::default(), query, &mut db).await?;
+            }
+            Ok(String::new())
+        }
     }
 }
