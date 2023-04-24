@@ -202,7 +202,12 @@ impl Cmd {
                     return Ok(());
                 }
 
-                let h = History::new(chrono::Utc::now(), command, cwd, -1, -1, None, None, None);
+                let h: History = History::capture()
+                    .timestamp(chrono::Utc::now())
+                    .command(command)
+                    .cwd(cwd)
+                    .build()
+                    .into();
 
                 // print the ID
                 // we use this as the key for calling end

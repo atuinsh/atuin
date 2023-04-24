@@ -131,16 +131,18 @@ mod test {
         let key1 = XSalsa20Poly1305::generate_key(&mut OsRng);
         let key2 = XSalsa20Poly1305::generate_key(&mut OsRng);
 
-        let history = History::new(
-            chrono::Utc::now(),
-            "ls".to_string(),
-            "/home/ellie".to_string(),
-            0,
-            1,
-            Some("beep boop".to_string()),
-            Some("booop".to_string()),
-            None,
-        );
+        let history = History::from_db()
+            .id("1".into())
+            .timestamp(chrono::Utc::now())
+            .command("ls".into())
+            .cwd("/home/ellie".into())
+            .exit(0)
+            .duration(1)
+            .session("beep boop".into())
+            .hostname("booop".into())
+            .deleted_at(None)
+            .build()
+            .into();
 
         let e1 = encrypt(&history, &key1).unwrap();
         let e2 = encrypt(&history, &key2).unwrap();

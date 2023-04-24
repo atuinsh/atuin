@@ -5,6 +5,12 @@ use serde::{Deserialize, Serialize};
 
 use atuin_common::utils::uuid_v7;
 
+mod builder;
+
+/// A marker type used to seal the `History` struct, preventing it from being constructed directly.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(self) struct HistorySeal;
+
 /// Client-side history entry.
 ///
 /// Client stores data unencrypted, and only encrypts it before sending to the server.
@@ -32,14 +38,24 @@ pub struct History {
     pub session: String,
     /// The hostname of the machine the command was run on.
     pub hostname: String,
-    #[serde(default)]
+
     /// Timestamp, which is set when the entry is deleted, allowing a soft delete.
+    #[serde(default)]
     pub deleted_at: Option<chrono::DateTime<Utc>>,
+
+    /// Having this seal marker here we're ensuring that `History`
+    /// can only be constructed directly by the [`crate::history`] module.
+    ///
+    /// All users of `History` must use builders, such as
+    /// [`History::import()`], [`History::from_db()`] or [`History::capture()`].
+    #[doc(hidden)]
+    #[serde(skip)]
+    _seal: HistorySeal,
 }
 
 impl History {
     #[allow(clippy::too_many_arguments)]
-    pub fn new(
+    fn new(
         timestamp: chrono::DateTime<Utc>,
         command: String,
         cwd: String,
@@ -65,7 +81,111 @@ impl History {
             session,
             hostname,
             deleted_at,
+            _seal: HistorySeal,
         }
+    }
+
+    /// Builder for a history entry that is imported from shell history.
+    ///
+    /// The only two required fields are `timestamp` and `command`.
+    ///
+    /// ## Examples
+    /// ```
+    /// use atuin_client::history::History;
+    ///
+    /// let history: History = History::import()
+    ///     .timestamp(chrono::Utc::now())
+    ///     .command("ls -la")
+    ///     .build()
+    ///     .into();
+    /// ```
+    ///
+    /// If shell history contains more information, it can be added to the builder:
+    /// ```
+    /// use atuin_client::history::History;
+    ///
+    /// let history: History = History::import()
+    ///     .timestamp(chrono::Utc::now())
+    ///     .command("ls -la")
+    ///     .cwd("/home/user")
+    ///     .exit(0)
+    ///     .duration(100)
+    ///     .build()
+    ///     .into();
+    /// ```
+    ///
+    /// Unknown command or command without timestamp cannot be imported, which
+    /// is forced at compile time:
+    ///
+    /// ```compile_fail
+    /// use atuin_client::history::History;
+    ///
+    /// // this will not compile because timestamp is missing
+    /// let history: History = History::import()
+    ///     .command("ls -la")
+    ///     .build()
+    ///     .into();
+    /// ```
+    pub fn import() -> builder::HistoryImportedBuilder {
+        builder::HistoryImported::builder()
+    }
+
+    /// Builder for a history entry that is captured via hook.
+    ///
+    /// This builder is used only at the `start` step of the hook,
+    /// so it doesn't have any fields which are known only after
+    /// the command is finished, such as `exit` or `duration`.
+    ///
+    /// ## Examples
+    /// ```rust
+    /// use atuin_client::history::History;
+    ///
+    /// let history: History = History::capture()
+    ///     .timestamp(chrono::Utc::now())
+    ///     .command("ls -la")
+    ///     .cwd("/home/user")
+    ///     .build()
+    ///     .into();
+    /// ```
+    ///
+    /// Command without any required info cannot be captured, which is forced at compile time:
+    ///
+    /// ```compile_fail
+    /// use atuin_client::history::History;
+    ///
+    /// // this will not compile because `cwd` is missing
+    /// let history: History = History::capture()
+    ///     .timestamp(chrono::Utc::now())
+    ///     .command("ls -la")
+    ///     .build()
+    ///     .into();
+    /// ```
+    pub fn capture() -> builder::HistoryCapturedBuilder {
+        builder::HistoryCaptured::builder()
+    }
+
+    /// Builder for a history entry that is imported from the database.
+    ///
+    /// All fields are required, as they are all present in the database.
+    ///
+    /// ```compile_fail
+    /// use atuin_client::history::History;
+    ///
+    /// // this will not compile because `id` field is missing
+    /// let history: History = History::from_db()
+    ///     .timestamp(chrono::Utc::now())
+    ///     .command("ls -la".to_string())
+    ///     .cwd("/home/user".to_string())
+    ///     .exit(0)
+    ///     .duration(100)
+    ///     .session("somesession".to_string())
+    ///     .hostname("localhost".to_string())
+    ///     .deleted_at(None)
+    ///     .build()
+    ///     .into();
+    /// ```
+    pub fn from_db() -> builder::HistoryFromDbBuilder {
+        builder::HistoryFromDb::builder()
     }
 
     pub fn success(&self) -> bool {
@@ -79,9 +199,9 @@ mod tests {
 
     // @utter-step:
     // left it here just to show that it
-    // deserializing HistoryWithoutDelete into History is not a problem
+    // deserializing HistoryOld into History is not a problem
     #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, sqlx::FromRow)]
-    pub struct HistoryWithoutDelete {
+    pub struct HistoryOld {
         pub id: String,
         pub timestamp: chrono::DateTime<Utc>,
         pub duration: i64,
@@ -95,11 +215,11 @@ mod tests {
     #[test]
     fn test_backwards_compatibility() {
         // left it here just to show that it
-        // deserializing HistoryWithoutDelete into History is not a problem with
+        // deserializing HistoryOld into History is not a problem with
         // #[serde(default)] attribute set in History
 
         #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-        pub struct HistoryWithoutDelete {
+        pub struct HistoryOld {
             id: String,
             timestamp: chrono::DateTime<Utc>,
             duration: i64,
@@ -110,7 +230,7 @@ mod tests {
             hostname: String,
         }
 
-        let history_without_delete = HistoryWithoutDelete {
+        let history_without_delete = HistoryOld {
             id: "test".to_string(),
             timestamp: chrono::Utc::now(),
             duration: 0,
@@ -137,7 +257,7 @@ mod tests {
         // This should not be a problem with self-describing messages, such as JSON,
         // so we should consider switching to JSON/other self-describing formats in the future.
         #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-        struct HistoryWithoutDelete {
+        struct HistoryOld {
             id: String,
             timestamp: chrono::DateTime<Utc>,
             duration: i64,
@@ -158,11 +278,12 @@ mod tests {
             session: "test".to_string(),
             hostname: "test".to_string(),
             deleted_at: None,
+            _seal: HistorySeal,
         };
 
         let serialized = rmp_serde::to_vec(&history).expect("Failed to serialize");
         // this will panic
-        let _deserialized: HistoryWithoutDelete =
+        let _deserialized: HistoryOld =
             rmp_serde::from_slice(&serialized).expect("Failed to deserialize");
     }
 }

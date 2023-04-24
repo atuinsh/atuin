@@ -30,16 +30,19 @@ impl From<HistDbEntry> for History {
     fn from(histdb_item: HistDbEntry) -> Self {
         let ts_secs = histdb_item.start_timestamp / 1000;
         let ts_ns = (histdb_item.start_timestamp % 1000) * 1_000_000;
-        History::new(
-            DateTime::from_utc(NaiveDateTime::from_timestamp(ts_secs, ts_ns as u32), Utc),
-            String::from_utf8(histdb_item.command_line).unwrap(),
-            String::from_utf8(histdb_item.cwd).unwrap(),
-            histdb_item.exit_status,
-            histdb_item.duration_ms,
-            Some(format!("{:x}", histdb_item.session_id)),
-            Some(String::from_utf8(histdb_item.hostname).unwrap()),
-            None,
-        )
+        let imported = History::import()
+            .timestamp(DateTime::from_utc(
+                NaiveDateTime::from_timestamp(ts_secs, ts_ns as u32),
+                Utc,
+            ))
+            .command(String::from_utf8(histdb_item.command_line).unwrap())
+            .cwd(String::from_utf8(histdb_item.cwd).unwrap())
+            .exit(histdb_item.exit_status)
+            .duration(histdb_item.duration_ms)
+            .session(format!("{:x}", histdb_item.session_id))
+            .hostname(String::from_utf8(histdb_item.hostname).unwrap());
+
+        imported.build().into()
     }
 }
 
