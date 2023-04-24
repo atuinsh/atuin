@@ -517,7 +517,6 @@ impl Database for Sqlite {
     // but the time that the system marks it as deleted
     async fn delete(&self, mut h: History) -> Result<()> {
         let now = chrono::Utc::now();
-        h.command = String::from(""); // blank it
         h.deleted_at = Some(now); // delete it
 
         self.update(&h).await?; // save it
