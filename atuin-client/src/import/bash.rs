@@ -80,17 +80,9 @@ impl Importer for Bash {
                     next_timestamp = t;
                 }
                 LineType::Command(c) => {
-                    let entry = History::new(
-                        next_timestamp,
-                        c.into(),
-                        "unknown".into(),
-                        -1,
-                        -1,
-                        None,
-                        None,
-                        None,
-                    );
-                    h.push(entry).await?;
+                    let imported = History::import().timestamp(next_timestamp).command(c);
+
+                    h.push(imported.build().into()).await?;
                     next_timestamp += timestamp_increment;
                 }
             }

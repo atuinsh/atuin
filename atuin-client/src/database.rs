@@ -168,17 +168,18 @@ impl Sqlite {
     fn query_history(row: SqliteRow) -> History {
         let deleted_at: Option<i64> = row.get("deleted_at");
 
-        History {
-            id: row.get("id"),
-            timestamp: Utc.timestamp_nanos(row.get("timestamp")),
-            duration: row.get("duration"),
-            exit: row.get("exit"),
-            command: row.get("command"),
-            cwd: row.get("cwd"),
-            session: row.get("session"),
-            hostname: row.get("hostname"),
-            deleted_at: deleted_at.map(|t| Utc.timestamp_nanos(t)),
-        }
+        History::from_db()
+            .id(row.get("id"))
+            .timestamp(Utc.timestamp_nanos(row.get("timestamp")))
+            .duration(row.get("duration"))
+            .exit(row.get("exit"))
+            .command(row.get("command"))
+            .cwd(row.get("cwd"))
+            .session(row.get("session"))
+            .hostname(row.get("hostname"))
+            .deleted_at(deleted_at.map(|t| Utc.timestamp_nanos(t)))
+            .build()
+            .into()
     }
 }
 
@@ -594,17 +595,19 @@ mod test {
     }
 
     async fn new_history_item(db: &mut impl Database, cmd: &str) -> Result<()> {
-        let history = History::new(
-            chrono::Utc::now(),
-            cmd.to_string(),
-            "/home/ellie".to_string(),
-            0,
-            1,
-            Some("beep boop".to_string()),
-            Some("booop".to_string()),
-            None,
-        );
-        db.save(&history).await
+        let mut captured: History = History::capture()
+            .timestamp(chrono::Utc::now())
+            .command(cmd)
+            .cwd("/home/ellie")
+            .build()
+            .into();
+
+        captured.exit = 0;
+        captured.duration = 1;
+        captured.session = "beep boop".to_string();
+        captured.hostname = "booop".to_string();
+
+        db.save(&captured).await
     }
 
     #[tokio::test(flavor = "multi_thread")]

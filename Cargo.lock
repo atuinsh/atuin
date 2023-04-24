@@ -164,6 +164,7 @@ dependencies = [
  "sql-builder",
  "sqlx",
  "tokio",
+ "typed-builder",
  "urlencoding",
  "uuid",
  "whoami",
