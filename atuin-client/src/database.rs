@@ -456,6 +456,8 @@ impl Database for Sqlite {
                 .map(|after| sql.and_where_gt("timestamp", quote(after.timestamp_nanos())))
         });
 
+        sql.and_where_is_null("deleted_at");
+
         let query = sql.sql().expect("bug in search query. please report");
 
         let res = sqlx::query(&query)
