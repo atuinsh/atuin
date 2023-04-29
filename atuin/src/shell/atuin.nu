@@ -1,5 +1,6 @@
 # Source this in your ~/.config/nushell/config.nu
 let-env ATUIN_SESSION = (atuin uuid)
+let-env ATUIN_INTERPRETER = nu
 
 # Magic token to make sure we don't record commands run by keybindings
 let ATUIN_KEYBINDING_TOKEN = $"# (random uuid)"

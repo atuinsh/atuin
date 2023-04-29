@@ -11,6 +11,7 @@ autoload -U add-zsh-hook
 
 export ATUIN_SESSION=$(atuin uuid)
 export ATUIN_HISTORY="atuin history list"
+export ATUIN_INTERPRETER="zsh"
 
 _atuin_preexec() {
     local id

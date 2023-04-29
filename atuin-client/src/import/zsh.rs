@@ -83,6 +83,7 @@ impl Importer for Zsh {
                     counter += 1;
 
                     let imported = History::import()
+                        .interpreter(Self::NAME)
                         // preserve ordering
                         .timestamp(now - offset)
                         .command(command.trim_end().to_string());
@@ -112,6 +113,7 @@ fn parse_extended(line: &str, counter: i64) -> History {
     let duration = duration.parse::<i64>().map_or(-1, |t| t * 1_000_000_000);
 
     let imported = History::import()
+        .interpreter("zsh")
         .timestamp(time)
         .command(command.trim_end().to_string())
         .duration(duration);

@@ -123,6 +123,7 @@ impl Importer for Resh {
             };
 
             let imported = History::import()
+                .interpreter(Self::NAME)
                 .command(entry.cmd_line)
                 .timestamp(timestamp)
                 .duration(duration)

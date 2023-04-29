@@ -23,6 +23,7 @@ pub struct Context {
     pub session: String,
     pub cwd: String,
     pub hostname: String,
+    pub interpreter: Option<String>,
 }
 
 #[derive(Default, Clone)]
@@ -45,11 +46,13 @@ pub fn current_context() -> Context {
     };
     let hostname = format!("{}:{}", whoami::hostname(), whoami::username());
     let cwd = utils::get_current_dir();
+    let interpreter = env::var("ATUIN_INTERPRETER").ok();
 
     Context {
         session,
         hostname,
         cwd,
+        interpreter,
     }
 }
 
@@ -139,8 +142,8 @@ impl Sqlite {
 
     async fn save_raw(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, h: &History) -> Result<()> {
         sqlx::query(
-            "insert or ignore into history(id, timestamp, duration, exit, command, cwd, session, hostname, deleted_at)
-                values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            "insert or ignore into history(id, timestamp, duration, exit, command, cwd, session, hostname, deleted_at, interpreter)
+                values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         )
         .bind(h.id.as_str())
         .bind(h.timestamp.timestamp_nanos())
@@ -151,6 +154,7 @@ impl Sqlite {
         .bind(h.session.as_str())
         .bind(h.hostname.as_str())
         .bind(h.deleted_at.map(|t|t.timestamp_nanos()))
+        .bind(h.interpreter.as_ref())
         .execute(tx)
         .await?;
 
@@ -170,6 +174,7 @@ impl Sqlite {
             .session(row.get("session"))
             .hostname(row.get("hostname"))
             .deleted_at(deleted_at.map(|t| Utc.timestamp_nanos(t)))
+            .interpreter(row.get("interpreter"))
             .build()
             .into()
     }
@@ -217,7 +222,7 @@ impl Database for Sqlite {
 
         sqlx::query(
             "update history
-                set timestamp = ?2, duration = ?3, exit = ?4, command = ?5, cwd = ?6, session = ?7, hostname = ?8, deleted_at = ?9
+                set timestamp = ?2, duration = ?3, exit = ?4, command = ?5, cwd = ?6, session = ?7, hostname = ?8, deleted_at = ?9, interpreter = ?10
                 where id = ?1",
         )
         .bind(h.id.as_str())
@@ -229,6 +234,7 @@ impl Database for Sqlite {
         .bind(h.session.as_str())
         .bind(h.hostname.as_str())
         .bind(h.deleted_at.map(|t|t.timestamp_nanos()))
+        .bind(h.interpreter.as_ref())
         .execute(&self.pool)
         .await?;
 
@@ -253,6 +259,10 @@ impl Database for Sqlite {
             FilterMode::Host => query.and_where_eq("hostname", quote(&context.hostname)),
             FilterMode::Session => query.and_where_eq("session", quote(&context.session)),
             FilterMode::Directory => query.and_where_eq("cwd", quote(&context.cwd)),
+            FilterMode::Interpreter => match &context.interpreter {
+                Some(i) => query.and_where_eq("interpreter", quote(i)),
+                None => query.and_where_is_null("interpreter"),
+            },
         };
 
         if unique {
@@ -377,6 +387,10 @@ impl Database for Sqlite {
             FilterMode::Host => sql.and_where_eq("hostname", quote(&context.hostname)),
             FilterMode::Session => sql.and_where_eq("session", quote(&context.session)),
             FilterMode::Directory => sql.and_where_eq("cwd", quote(&context.cwd)),
+            FilterMode::Interpreter => match &context.interpreter {
+                Some(i) => sql.and_where_eq("interpreter", quote(i)),
+                None => sql.and_where_is_null("interpreter"),
+            },
         };
 
         let orig_query = query;
@@ -492,6 +506,7 @@ impl Database for Sqlite {
                 "group_concat(cwd, ':') as cwd",
                 "group_concat(session) as session",
                 "group_concat(hostname, ',') as hostname",
+                "group_concat(interpreter, ',') as interpreter",
                 "count(*) as count",
             ])
             .group_by("command")
@@ -541,6 +556,7 @@ mod test {
             hostname: "test:host".to_string(),
             session: "beepboopiamasession".to_string(),
             cwd: "/home/ellie".to_string(),
+            interpreter: Some("bash".to_string()),
         };
 
         let results = db
@@ -749,6 +765,7 @@ mod test {
             hostname: "test:host".to_string(),
             session: "beepboopiamasession".to_string(),
             cwd: "/home/ellie".to_string(),
+            interpreter: Some("bash".to_string()),
         };
 
         let mut db = Sqlite::new("sqlite::memory:").await.unwrap();

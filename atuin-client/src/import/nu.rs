@@ -58,7 +58,10 @@ impl Importer for Nu {
             let offset = chrono::Duration::nanoseconds(counter);
             counter += 1;
 
-            let entry = History::import().timestamp(now - offset).command(cmd);
+            let entry = History::import()
+                .interpreter(Self::NAME)
+                .timestamp(now - offset)
+                .command(cmd);
 
             h.push(entry.build().into()).await?;
         }

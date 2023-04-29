@@ -1,4 +1,5 @@
 set -gx ATUIN_SESSION (atuin uuid)
+set -gx ATUIN_INTERPRETER fish
 
 function _atuin_preexec --on-event fish_preexec
     if not test -n "$fish_private_mode"

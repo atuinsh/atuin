@@ -5,7 +5,7 @@ use super::History;
 
 /// Builder for a history entry that is imported from shell history.
 ///
-/// The only two required fields are `timestamp` and `command`.
+/// The only required fields are `timestamp`, `command` and `interpreter`.
 #[derive(Debug, Clone, TypedBuilder)]
 pub struct HistoryImported {
     timestamp: chrono::DateTime<Utc>,
@@ -21,6 +21,8 @@ pub struct HistoryImported {
     session: Option<String>,
     #[builder(default, setter(strip_option, into))]
     hostname: Option<String>,
+    #[builder(setter(into))]
+    interpreter: String,
 }
 
 impl From<HistoryImported> for History {
@@ -34,6 +36,7 @@ impl From<HistoryImported> for History {
             imported.session,
             imported.hostname,
             None,
+            Some(imported.interpreter),
         )
     }
 }
@@ -50,6 +53,8 @@ pub struct HistoryCaptured {
     command: String,
     #[builder(setter(into))]
     cwd: String,
+    #[builder(default, setter(into))]
+    interpreter: Option<String>,
 }
 
 impl From<HistoryCaptured> for History {
@@ -63,6 +68,7 @@ impl From<HistoryCaptured> for History {
             None,
             None,
             None,
+            captured.interpreter,
         )
     }
 }
@@ -81,6 +87,7 @@ pub struct HistoryFromDb {
     session: String,
     hostname: String,
     deleted_at: Option<chrono::DateTime<Utc>>,
+    interpreter: Option<String>,
 }
 
 impl From<HistoryFromDb> for History {
@@ -95,6 +102,7 @@ impl From<HistoryFromDb> for History {
             session: from_db.session,
             hostname: from_db.hostname,
             deleted_at: from_db.deleted_at,
+            interpreter: from_db.interpreter,
             _seal: super::HistorySeal,
         }
     }

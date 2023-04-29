@@ -31,6 +31,7 @@ impl From<HistDbEntry> for History {
         let ts_secs = histdb_item.start_timestamp / 1000;
         let ts_ns = (histdb_item.start_timestamp % 1000) * 1_000_000;
         let imported = History::import()
+            .interpreter("nu")
             .timestamp(DateTime::from_utc(
                 NaiveDateTime::from_timestamp(ts_secs, ts_ns as u32),
                 Utc,

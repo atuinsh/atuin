@@ -141,6 +141,7 @@ mod test {
             .session("beep boop".into())
             .hostname("booop".into())
             .deleted_at(None)
+            .interpreter(Some("zsh".into()))
             .build()
             .into();
 

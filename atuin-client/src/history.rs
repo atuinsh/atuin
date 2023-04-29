@@ -43,6 +43,10 @@ pub struct History {
     #[serde(default)]
     pub deleted_at: Option<chrono::DateTime<Utc>>,
 
+    /// Interpreter (usually some kind of shell) that was used to run the command.
+    #[serde(default)]
+    pub interpreter: Option<String>,
+
     /// Having this seal marker here we're ensuring that `History`
     /// can only be constructed directly by the [`crate::history`] module.
     ///
@@ -64,6 +68,7 @@ impl History {
         session: Option<String>,
         hostname: Option<String>,
         deleted_at: Option<chrono::DateTime<Utc>>,
+        interpreter: Option<String>,
     ) -> Self {
         let session = session
             .or_else(|| env::var("ATUIN_SESSION").ok())
@@ -81,19 +86,21 @@ impl History {
             session,
             hostname,
             deleted_at,
+            interpreter,
             _seal: HistorySeal,
         }
     }
 
     /// Builder for a history entry that is imported from shell history.
     ///
-    /// The only two required fields are `timestamp` and `command`.
+    /// The only required fields are `timestamp`, `command` and `interpreter`.
     ///
     /// ## Examples
     /// ```
     /// use atuin_client::history::History;
     ///
     /// let history: History = History::import()
+    ///     .interpreter("bash")
     ///     .timestamp(chrono::Utc::now())
     ///     .command("ls -la")
     ///     .build()
@@ -105,6 +112,7 @@ impl History {
     /// use atuin_client::history::History;
     ///
     /// let history: History = History::import()
+    ///     .interpreter("bash")
     ///     .timestamp(chrono::Utc::now())
     ///     .command("ls -la")
     ///     .cwd("/home/user")
@@ -114,14 +122,15 @@ impl History {
     ///     .into();
     /// ```
     ///
-    /// Unknown command or command without timestamp cannot be imported, which
-    /// is forced at compile time:
+    /// Command without all required info cannot be imported,
+    /// which is forced at compile time:
     ///
     /// ```compile_fail
     /// use atuin_client::history::History;
     ///
     /// // this will not compile because timestamp is missing
     /// let history: History = History::import()
+    ///     .interpreter("bash")
     ///     .command("ls -la")
     ///     .build()
     ///     .into();
@@ -278,6 +287,7 @@ mod tests {
             session: "test".to_string(),
             hostname: "test".to_string(),
             deleted_at: None,
+            interpreter: None,
             _seal: HistorySeal,
         };
 

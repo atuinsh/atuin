@@ -62,6 +62,7 @@ pub struct HistDbEntry {
 impl From<HistDbEntry> for History {
     fn from(histdb_item: HistDbEntry) -> Self {
         let imported = History::import()
+            .interpreter("zsh")
             .timestamp(DateTime::from_utc(histdb_item.start_time, Utc))
             .command(
                 String::from_utf8(histdb_item.argv)

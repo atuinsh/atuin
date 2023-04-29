@@ -31,7 +31,7 @@
 # search_mode = "fuzzy"
 
 ## which filter mode to use
-## possible values: global, host, session, directory
+## possible values: global, host, session, directory, interpreter
 # filter_mode = "global"
 
 ## which filter mode to use when atuin is invoked from a shell up-key binding

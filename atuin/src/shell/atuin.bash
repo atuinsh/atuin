@@ -1,5 +1,7 @@
 ATUIN_SESSION=$(atuin uuid)
+ATUIN_INTERPRETER=bash
 export ATUIN_SESSION
+export ATUIN_INTERPRETER
 
 _atuin_preexec() {
     local id

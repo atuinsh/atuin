@@ -56,18 +56,13 @@ impl SearchMode {
 }
 
 #[derive(Clone, Debug, Deserialize, Copy, PartialEq, Eq, ValueEnum)]
+#[serde(rename_all = "lowercase")]
 pub enum FilterMode {
-    #[serde(rename = "global")]
     Global = 0,
-
-    #[serde(rename = "host")]
     Host = 1,
-
-    #[serde(rename = "session")]
     Session = 2,
-
-    #[serde(rename = "directory")]
     Directory = 3,
+    Interpreter = 4,
 }
 
 impl FilterMode {
@@ -77,6 +72,7 @@ impl FilterMode {
             FilterMode::Host => "HOST",
             FilterMode::Session => "SESSION",
             FilterMode::Directory => "DIRECTORY",
+            FilterMode::Interpreter => "INTERPRETER",
         }
     }
 }
