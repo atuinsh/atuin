@@ -1,4 +1,4 @@
-use std::{env, path::Path, str::FromStr};
+use std::{collections::HashMap, env, path::Path, str::FromStr};
 
 use async_trait::async_trait;
 use atuin_common::utils;
@@ -13,6 +13,8 @@ use sqlx::{
     Result, Row,
 };
 
+use crate::{history::Context as HistoryContext, settings::Settings};
+
 use super::{
     history::History,
     ordering,
@@ -24,6 +26,7 @@ pub struct Context {
     pub cwd: String,
     pub hostname: String,
     pub interpreter: Option<String>,
+    pub env_vars: HashMap<String, String>,
 }
 
 #[derive(Default, Clone)]
@@ -39,7 +42,7 @@ pub struct OptFilters {
     pub reverse: bool,
 }
 
-pub fn current_context() -> Context {
+pub fn current_context(settings: &Settings) -> Context {
     let Ok(session) = env::var("ATUIN_SESSION") else {
         eprintln!("ERROR: Failed to find $ATUIN_SESSION in the environment. Check that you have correctly set up your shell.");
         std::process::exit(1);
@@ -47,12 +50,24 @@ pub fn current_context() -> Context {
     let hostname = format!("{}:{}", whoami::hostname(), whoami::username());
     let cwd = utils::get_current_dir();
     let interpreter = env::var("ATUIN_INTERPRETER").ok();
+    let env_vars = env::vars_os()
+        .filter_map(|(k, v)| {
+            let k = k.to_string_lossy().to_string();
+
+            if settings.env_filter.is_match(&k) {
+                None
+            } else {
+                Some((k, v.to_string_lossy().to_string()))
+            }
+        })
+        .collect();
 
     Context {
         session,
         hostname,
         cwd,
         interpreter,
+        env_vars,
     }
 }
 
@@ -141,10 +156,35 @@ impl Sqlite {
     }
 
     async fn save_raw(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, h: &History) -> Result<()> {
-        sqlx::query(
-            "insert or ignore into history(id, timestamp, duration, exit, command, cwd, session, hostname, deleted_at, interpreter)
-                values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-        )
+        sqlx::query(indoc::indoc! {
+            "
+            insert or ignore into history(
+                id,
+                timestamp,
+                duration,
+                exit,
+                command,
+                cwd,
+                session,
+                hostname,
+                deleted_at,
+                interpreter,
+                context
+            )
+            values(
+                ?1,
+                ?2,
+                ?3,
+                ?4,
+                ?5,
+                ?6,
+                ?7,
+                ?8,
+                ?9,
+                ?10,
+                ?11
+            )"
+        })
         .bind(h.id.as_str())
         .bind(h.timestamp.timestamp_nanos())
         .bind(h.duration)
@@ -153,16 +193,20 @@ impl Sqlite {
         .bind(h.cwd.as_str())
         .bind(h.session.as_str())
         .bind(h.hostname.as_str())
-        .bind(h.deleted_at.map(|t|t.timestamp_nanos()))
+        .bind(h.deleted_at.map(|t| t.timestamp_nanos()))
         .bind(h.interpreter.as_ref())
+        .bind(h.context.as_ref().map(|c| c.to_string()))
         .execute(tx)
         .await?;
 
         Ok(())
     }
 
-    fn query_history(row: SqliteRow) -> History {
+    fn history_from_row(row: SqliteRow) -> History {
         let deleted_at: Option<i64> = row.get("deleted_at");
+        let context: Option<String> = row.get("context");
+        // this currently ignores any invalid json quietly, maybe we should log it?
+        let context: Option<HistoryContext> = context.and_then(|c| serde_json::from_str(&c).ok());
 
         History::from_db()
             .id(row.get("id"))
@@ -175,6 +219,7 @@ impl Sqlite {
             .hostname(row.get("hostname"))
             .deleted_at(deleted_at.map(|t| Utc.timestamp_nanos(t)))
             .interpreter(row.get("interpreter"))
+            .context(context)
             .build()
             .into()
     }
@@ -210,7 +255,7 @@ impl Database for Sqlite {
 
         let res = sqlx::query("select * from history where id = ?1")
             .bind(id)
-            .map(Self::query_history)
+            .map(Self::history_from_row)
             .fetch_one(&self.pool)
             .await?;
 
@@ -220,11 +265,20 @@ impl Database for Sqlite {
     async fn update(&self, h: &History) -> Result<()> {
         debug!("updating sqlite history");
 
-        sqlx::query(
-            "update history
-                set timestamp = ?2, duration = ?3, exit = ?4, command = ?5, cwd = ?6, session = ?7, hostname = ?8, deleted_at = ?9, interpreter = ?10
-                where id = ?1",
-        )
+        sqlx::query(indoc::indoc! {"
+            update history
+                set timestamp = ?2,
+                duration = ?3,
+                exit = ?4,
+                command = ?5,
+                cwd = ?6,
+                session = ?7,
+                hostname = ?8,
+                deleted_at = ?9,
+                interpreter = ?10,
+                context = ?11,
+            where id = ?1",
+        })
         .bind(h.id.as_str())
         .bind(h.timestamp.timestamp_nanos())
         .bind(h.duration)
@@ -233,8 +287,9 @@ impl Database for Sqlite {
         .bind(h.cwd.as_str())
         .bind(h.session.as_str())
         .bind(h.hostname.as_str())
-        .bind(h.deleted_at.map(|t|t.timestamp_nanos()))
+        .bind(h.deleted_at.map(|t| t.timestamp_nanos()))
         .bind(h.interpreter.as_ref())
+        .bind(h.context.as_ref().map(|c| c.to_string()))
         .execute(&self.pool)
         .await?;
 
@@ -279,7 +334,7 @@ impl Database for Sqlite {
         let query = query.sql().expect("bug in list query. please report");
 
         let res = sqlx::query(&query)
-            .map(Self::query_history)
+            .map(Self::history_from_row)
             .fetch_all(&self.pool)
             .await?;
 
@@ -298,7 +353,7 @@ impl Database for Sqlite {
         )
         .bind(from.timestamp_nanos())
         .bind(to.timestamp_nanos())
-            .map(Self::query_history)
+            .map(Self::history_from_row)
         .fetch_all(&self.pool)
         .await?;
 
@@ -308,7 +363,7 @@ impl Database for Sqlite {
     async fn first(&self) -> Result<History> {
         let res =
             sqlx::query("select * from history where duration >= 0 order by timestamp asc limit 1")
-                .map(Self::query_history)
+                .map(Self::history_from_row)
                 .fetch_one(&self.pool)
                 .await?;
 
@@ -319,7 +374,7 @@ impl Database for Sqlite {
         let res = sqlx::query(
             "select * from history where duration >= 0 order by timestamp desc limit 1",
         )
-        .map(Self::query_history)
+        .map(Self::history_from_row)
         .fetch_one(&self.pool)
         .await?;
 
@@ -332,7 +387,7 @@ impl Database for Sqlite {
         )
         .bind(timestamp.timestamp_nanos())
         .bind(count)
-        .map(Self::query_history)
+        .map(Self::history_from_row)
         .fetch_all(&self.pool)
         .await?;
 
@@ -341,7 +396,7 @@ impl Database for Sqlite {
 
     async fn deleted(&self) -> Result<Vec<History>> {
         let res = sqlx::query("select * from history where deleted_at is not null")
-            .map(Self::query_history)
+            .map(Self::history_from_row)
             .fetch_all(&self.pool)
             .await?;
 
@@ -474,7 +529,7 @@ impl Database for Sqlite {
         let query = sql.sql().expect("bug in search query. please report");
 
         let res = sqlx::query(&query)
-            .map(Self::query_history)
+            .map(Self::history_from_row)
             .fetch_all(&self.pool)
             .await?;
 
@@ -483,7 +538,7 @@ impl Database for Sqlite {
 
     async fn query_history(&self, query: &str) -> Result<Vec<History>> {
         let res = sqlx::query(query)
-            .map(Self::query_history)
+            .map(Self::history_from_row)
             .fetch_all(&self.pool)
             .await?;
 
@@ -519,7 +574,7 @@ impl Database for Sqlite {
         let res = sqlx::query(&query)
             .map(|row: SqliteRow| {
                 let count: i32 = row.get("count");
-                (Self::query_history(row), count)
+                (Self::history_from_row(row), count)
             })
             .fetch_all(&self.pool)
             .await?;
@@ -557,6 +612,7 @@ mod test {
             session: "beepboopiamasession".to_string(),
             cwd: "/home/ellie".to_string(),
             interpreter: Some("bash".to_string()),
+            env_vars: Default::default(),
         };
 
         let results = db
@@ -597,9 +653,11 @@ mod test {
 
     async fn new_history_item(db: &mut impl Database, cmd: &str) -> Result<()> {
         let mut captured: History = History::capture()
+            .interpreter(Some("bash".into()))
             .timestamp(chrono::Utc::now())
             .command(cmd)
             .cwd("/home/ellie")
+            .env_vars(Default::default())
             .build()
             .into();
 
@@ -766,6 +824,7 @@ mod test {
             session: "beepboopiamasession".to_string(),
             cwd: "/home/ellie".to_string(),
             interpreter: Some("bash".to_string()),
+            env_vars: Default::default(),
         };
 
         let mut db = Sqlite::new("sqlite::memory:").await.unwrap();

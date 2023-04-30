@@ -208,6 +208,7 @@ impl Cmd {
             .timestamp(chrono::Utc::now())
             .command(command)
             .cwd(cwd)
+            .env_vars(context.env_vars)
             .build()
             .into();
 
@@ -301,7 +302,7 @@ impl Cmd {
     }
 
     pub async fn run(self, settings: &Settings, db: &mut impl Database) -> Result<()> {
-        let context = current_context();
+        let context = current_context(settings);
 
         match self {
             Self::Start { command } => Cmd::handle_start(db, settings, context, command).await,

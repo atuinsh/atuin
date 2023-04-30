@@ -153,6 +153,10 @@ pub struct Settings {
     #[serde(with = "serde_regex", default = "RegexSet::empty")]
     pub cwd_filter: RegexSet,
 
+    pub capture_env: bool,
+    #[serde(with = "serde_regex", default = "RegexSet::empty")]
+    pub env_filter: RegexSet,
+
     // This is automatically loaded when settings is created. Do not set in
     // config! Keep secrets and settings apart.
     pub session_token: String,

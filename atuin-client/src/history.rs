@@ -6,6 +6,9 @@ use serde::{Deserialize, Serialize};
 use atuin_common::utils::uuid_v7;
 
 mod builder;
+mod context;
+
+pub use context::Context;
 
 /// A marker type used to seal the `History` struct, preventing it from being constructed directly.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -18,7 +21,7 @@ pub(self) struct HistorySeal;
 /// ### Caution
 /// Any new fields MUST be `Optional<T>` and marked with `#[serde(default)]` to ensure backwards
 /// compatibility with older clients.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct History {
     /// A client-generated ID, used to identify the entry when syncing.
     ///
@@ -47,6 +50,9 @@ pub struct History {
     #[serde(default)]
     pub interpreter: Option<String>,
 
+    #[serde(default)]
+    pub context: Option<context::Context>,
+
     /// Having this seal marker here we're ensuring that `History`
     /// can only be constructed directly by the [`crate::history`] module.
     ///
@@ -69,6 +75,7 @@ impl History {
         hostname: Option<String>,
         deleted_at: Option<chrono::DateTime<Utc>>,
         interpreter: Option<String>,
+        context: Option<context::Context>,
     ) -> Self {
         let session = session
             .or_else(|| env::var("ATUIN_SESSION").ok())
@@ -87,6 +94,7 @@ impl History {
             hostname,
             deleted_at,
             interpreter,
+            context,
             _seal: HistorySeal,
         }
     }
@@ -150,9 +158,11 @@ impl History {
     /// use atuin_client::history::History;
     ///
     /// let history: History = History::capture()
+    ///     .interpreter("bash".to_string())
     ///     .timestamp(chrono::Utc::now())
     ///     .command("ls -la")
     ///     .cwd("/home/user")
+    ///     .env_vars(std::env::vars().collect())
     ///     .build()
     ///     .into();
     /// ```
@@ -164,8 +174,10 @@ impl History {
     ///
     /// // this will not compile because `cwd` is missing
     /// let history: History = History::capture()
+    ///     .interpreter("bash")
     ///     .timestamp(chrono::Utc::now())
     ///     .command("ls -la")
+    ///     .env_vars(std::env::vars().collect())
     ///     .build()
     ///     .into();
     /// ```
@@ -190,6 +202,27 @@ impl History {
     ///     .session("somesession".to_string())
     ///     .hostname("localhost".to_string())
     ///     .deleted_at(None)
+    ///     .env_vars(None)
+    ///     .build()
+    ///     .into();
+    /// ```
+    ///
+    /// All fields are present:
+    /// ```
+    /// use atuin_client::history::History;
+    ///
+    /// let history: History = History::from_db()
+    ///     .id("someid".to_string())
+    ///     .timestamp(chrono::Utc::now())
+    ///     .command("ls -la".to_string())
+    ///     .cwd("/home/user".to_string())
+    ///     .exit(0)
+    ///     .duration(100)
+    ///     .session("somesession".to_string())
+    ///     .hostname("localhost".to_string())
+    ///     .deleted_at(None)
+    ///     .interpreter(None)
+    ///     .context(None)
     ///     .build()
     ///     .into();
     /// ```
@@ -288,6 +321,7 @@ mod tests {
             hostname: "test".to_string(),
             deleted_at: None,
             interpreter: None,
+            context: None,
             _seal: HistorySeal,
         };
 

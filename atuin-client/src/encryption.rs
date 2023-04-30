@@ -142,6 +142,7 @@ mod test {
             .hostname("booop".into())
             .deleted_at(None)
             .interpreter(Some("zsh".into()))
+            .context(None)
             .build()
             .into();
 

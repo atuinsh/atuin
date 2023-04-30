@@ -82,3 +82,13 @@
 # cwd_filter = [
 #   "^/very/secret/area"
 # ]
+
+## should env-vars be captured in the history
+# capture_env = false
+
+## prevent env-vars matching any of these regexes from being written to history.
+## As with history_filter, these regexes are unanchored.
+# env_filter = [
+#   "^SECRET_.*",
+#   "^AWS_SECRET_ACCESS_KEY$"
+# ]

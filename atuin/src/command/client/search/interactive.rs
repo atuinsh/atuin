@@ -502,7 +502,7 @@ pub async fn history(
     let update_needed = tokio::spawn(async move { settings2.needs_update().await }).fuse();
     tokio::pin!(update_needed);
 
-    let context = current_context();
+    let context = current_context(settings);
 
     let history_count = db.history_count().await?;
 

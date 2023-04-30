@@ -191,7 +191,7 @@ async fn run_non_interactive(
         filter_options.cwd
     };
 
-    let context = current_context();
+    let context = current_context(settings);
 
     let opt_filter = OptFilters {
         cwd: dir,

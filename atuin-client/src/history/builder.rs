@@ -1,7 +1,9 @@
+use std::collections::HashMap;
+
 use chrono::Utc;
 use typed_builder::TypedBuilder;
 
-use super::History;
+use super::{context::Context, History};
 
 /// Builder for a history entry that is imported from shell history.
 ///
@@ -37,6 +39,7 @@ impl From<HistoryImported> for History {
             imported.hostname,
             None,
             Some(imported.interpreter),
+            None,
         )
     }
 }
@@ -53,12 +56,18 @@ pub struct HistoryCaptured {
     command: String,
     #[builder(setter(into))]
     cwd: String,
-    #[builder(default, setter(into))]
+    #[builder(setter(into))]
     interpreter: Option<String>,
+    #[builder(setter(strip_option))]
+    env_vars: Option<HashMap<String, String>>,
 }
 
 impl From<HistoryCaptured> for History {
     fn from(captured: HistoryCaptured) -> Self {
+        let context = Context {
+            env_vars: captured.env_vars,
+        };
+
         History::new(
             captured.timestamp,
             captured.command,
@@ -69,6 +78,7 @@ impl From<HistoryCaptured> for History {
             None,
             None,
             captured.interpreter,
+            Some(context),
         )
     }
 }
@@ -88,6 +98,7 @@ pub struct HistoryFromDb {
     hostname: String,
     deleted_at: Option<chrono::DateTime<Utc>>,
     interpreter: Option<String>,
+    context: Option<Context>,
 }
 
 impl From<HistoryFromDb> for History {
@@ -103,6 +114,8 @@ impl From<HistoryFromDb> for History {
             hostname: from_db.hostname,
             deleted_at: from_db.deleted_at,
             interpreter: from_db.interpreter,
+            context: from_db.context,
+
             _seal: super::HistorySeal,
         }
     }
