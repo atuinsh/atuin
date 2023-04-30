@@ -9,7 +9,6 @@ use atuin_client::{
     history::History,
     settings::{ExitMode, FilterMode, SearchMode, Settings},
 };
-// use tokio::process::Command;
 
 use super::history::ListMode;
 
