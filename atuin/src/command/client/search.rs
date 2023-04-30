@@ -127,10 +127,6 @@ impl Cmd {
             let item = interactive::history(&self.query, settings, db).await?;
 
             if settings.exit_mode == ExitMode::ReturnExecute {
-                eprintln!(
-                    "Exit-Mode \"{:?}\" with command \"{:?}\".",
-                    settings.exit_mode, item
-                );
                 let mut cmd = shell(item);
                 cmd.execute_output()?;
             } else {

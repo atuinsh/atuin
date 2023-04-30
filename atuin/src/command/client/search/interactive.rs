@@ -113,12 +113,14 @@ impl State {
                 return Some(match settings.exit_mode {
                     ExitMode::ReturnOriginal => RETURN_ORIGINAL,
                     ExitMode::ReturnQuery => RETURN_QUERY,
-                    ExitMode::ReturnExecute => RETURN_QUERY,
+                    ExitMode::ReturnExecute => self.results_state.selected(),
                 });
             }
             KeyCode::Enter if shift => {
-                settings.change_exit_mode(ExitMode::ReturnExecute);
-                return Some(RETURN_QUERY);
+                if settings.exit_mode != ExitMode::ReturnExecute {
+                    settings.change_exit_mode(ExitMode::ReturnExecute);
+                }
+                return Some(self.results_state.selected());
             }
             KeyCode::Enter => {
                 if settings.exit_mode == ExitMode::ReturnExecute {
