@@ -126,7 +126,7 @@ impl Cmd {
         if self.interactive {
             let item = interactive::history(&self.query, settings, db).await?;
 
-            if settings.exit_mode == ExitMode::ReturnExecute {
+            if settings.exit_mode == ExitMode::Execute {
                 let mut cmd = shell(item);
                 cmd.execute_output()?;
             } else {

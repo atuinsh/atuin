@@ -104,7 +104,6 @@ impl State {
 
         let ctrl = input.modifiers.contains(KeyModifiers::CONTROL);
         let alt = input.modifiers.contains(KeyModifiers::ALT);
-        let shift = input.modifiers.contains(KeyModifiers::SHIFT);
         // reset the state, will be set to true later if user really did change it
         self.switched_search_mode = false;
         match input.code {
@@ -113,17 +112,15 @@ impl State {
                 return Some(match settings.exit_mode {
                     ExitMode::ReturnOriginal => RETURN_ORIGINAL,
                     ExitMode::ReturnQuery => RETURN_QUERY,
-                    ExitMode::ReturnExecute => self.results_state.selected(),
+                    ExitMode::Execute => self.results_state.selected(),
                 });
             }
-            KeyCode::Enter if shift => {
-                if settings.exit_mode != ExitMode::ReturnExecute {
-                    settings.change_exit_mode(ExitMode::ReturnExecute);
-                }
+            KeyCode::Enter if alt => {
+                settings.change_exit_mode(ExitMode::Execute);
                 return Some(self.results_state.selected());
             }
             KeyCode::Enter => {
-                if settings.exit_mode == ExitMode::ReturnExecute {
+                if settings.exit_mode == ExitMode::Execute {
                     settings.change_exit_mode(ExitMode::ReturnQuery);
                 }
                 return Some(self.results_state.selected());
@@ -213,7 +210,7 @@ impl State {
                 return Some(match settings.exit_mode {
                     ExitMode::ReturnOriginal => RETURN_ORIGINAL,
                     ExitMode::ReturnQuery => RETURN_QUERY,
-                    ExitMode::ReturnExecute => {
+                    ExitMode::Execute => {
                         settings.change_exit_mode(ExitMode::ReturnOriginal);
                         return Some(RETURN_ORIGINAL);
                     }
