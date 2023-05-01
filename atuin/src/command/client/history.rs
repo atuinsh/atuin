@@ -1,7 +1,7 @@
 use std::{
     env,
     fmt::{self, Display},
-    io::{StdoutLock, Write},
+    io::{self, StdoutLock, Write},
     time::Duration,
 };
 
@@ -95,15 +95,13 @@ impl ListMode {
 #[allow(clippy::cast_sign_loss)]
 pub fn print_list(h: &[History], list_mode: ListMode, format: Option<&str>) {
     let w = std::io::stdout();
-    let mut w = w.lock();
+    let w = w.lock();
 
     match list_mode {
-        ListMode::Human => print_human_list(&mut w, h, format),
-        ListMode::CmdOnly => print_cmd_only(&mut w, h),
-        ListMode::Regular => print_regular(&mut w, h, format),
+        ListMode::Human => print_human_list(w, h, format),
+        ListMode::CmdOnly => print_cmd_only(w, h),
+        ListMode::Regular => print_regular(w, h, format),
     }
-
-    w.flush().expect("failed to flush history");
 }
 
 /// type wrapper around `History` so we can implement traits
@@ -140,7 +138,7 @@ impl FormatKey for FmtHistory<'_> {
     }
 }
 
-fn print_list_with(w: &mut StdoutLock, h: &[History], format: &str) {
+fn print_list_with(mut w: StdoutLock, h: &[History], format: &str) {
     let fmt = match ParsedFmt::new(format) {
         Ok(fmt) => fmt,
         Err(err) => {
@@ -151,28 +149,46 @@ fn print_list_with(w: &mut StdoutLock, h: &[History], format: &str) {
     };
 
     for h in h.iter().rev() {
-        writeln!(w, "{}", fmt.with_args(&FmtHistory(h))).expect("failed to write history");
+        match writeln!(w, "{}", fmt.with_args(&FmtHistory(h))) {
+            Ok(()) => {}
+            // ignore broken pipe (issue #626)
+            Err(e) if e.kind() == io::ErrorKind::BrokenPipe => {
+                return;
+            }
+            Err(err) => {
+                eprintln!("ERROR: History output failed with the following error: {err}");
+                std::process::exit(1);
+            }
+        }
+    }
+
+    match w.flush() {
+        Ok(()) => {}
+        // ignore broken pipe (issue #626)
+        Err(e) if e.kind() == io::ErrorKind::BrokenPipe => {}
+        Err(err) => {
+            eprintln!("ERROR: History output failed with the following error: {err}");
+            std::process::exit(1);
+        }
     }
 }
 
-pub fn print_human_list(w: &mut StdoutLock, h: &[History], format: Option<&str>) {
+pub fn print_human_list(w: StdoutLock, h: &[History], format: Option<&str>) {
     let format = format
         .unwrap_or("{time} · {duration}\t{command}")
         .replace("\\t", "\t");
     print_list_with(w, h, &format);
 }
 
-pub fn print_regular(w: &mut StdoutLock, h: &[History], format: Option<&str>) {
+pub fn print_regular(w: StdoutLock, h: &[History], format: Option<&str>) {
     let format = format
         .unwrap_or("{time}\t{command}\t{duration}")
         .replace("\\t", "\t");
     print_list_with(w, h, &format);
 }
 
-pub fn print_cmd_only(w: &mut StdoutLock, h: &[History]) {
-    for h in h.iter().rev() {
-        writeln!(w, "{}", h.command.trim()).expect("failed to write history");
-    }
+pub fn print_cmd_only(w: StdoutLock, h: &[History]) {
+    print_list_with(w, h, "{command}");
 }
 
 impl Cmd {
