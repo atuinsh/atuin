@@ -1,14 +1,14 @@
 use std::{
     env,
     fmt::{self, Display},
-    io::{self, StdoutLock, Write},
+    io::{self, Write},
     time::Duration,
 };
 
 use atuin_common::utils;
 use clap::Subcommand;
 use eyre::Result;
-use runtime_format::{FormatKey, FormatKeyError, ParsedFmt};
+use runtime_format::{FormatKey, FormatKeyError, ParseSegment, ParsedFmt};
 
 use atuin_client::{
     database::{current_context, Database},
@@ -95,12 +95,46 @@ impl ListMode {
 #[allow(clippy::cast_sign_loss)]
 pub fn print_list(h: &[History], list_mode: ListMode, format: Option<&str>) {
     let w = std::io::stdout();
-    let w = w.lock();
+    let mut w = w.lock();
 
-    match list_mode {
-        ListMode::Human => print_human_list(w, h, format),
-        ListMode::CmdOnly => print_cmd_only(w, h),
-        ListMode::Regular => print_regular(w, h, format),
+    let fmt_str = match list_mode {
+        ListMode::Human => format
+            .unwrap_or("{time} · {duration}\t{command}")
+            .replace("\\t", "\t"),
+        ListMode::Regular => format
+            .unwrap_or("{time}\t{command}\t{duration}")
+            .replace("\\t", "\t"),
+        // not used
+        ListMode::CmdOnly => String::new(),
+    };
+
+    let parsed_fmt = match list_mode {
+        ListMode::Human | ListMode::Regular => parse_fmt(&fmt_str),
+        ListMode::CmdOnly => std::iter::once(ParseSegment::Key("command")).collect(),
+    };
+
+    for h in h.iter().rev() {
+        match writeln!(w, "{}", parsed_fmt.with_args(&FmtHistory(h))) {
+            Ok(()) => {}
+            // ignore broken pipe (issue #626)
+            Err(e) if e.kind() == io::ErrorKind::BrokenPipe => {
+                return;
+            }
+            Err(err) => {
+                eprintln!("ERROR: History output failed with the following error: {err}");
+                std::process::exit(1);
+            }
+        }
+    }
+
+    match w.flush() {
+        Ok(()) => {}
+        // ignore broken pipe (issue #626)
+        Err(e) if e.kind() == io::ErrorKind::BrokenPipe => {}
+        Err(err) => {
+            eprintln!("ERROR: History output failed with the following error: {err}");
+            std::process::exit(1);
+        }
     }
 }
 
@@ -138,57 +172,15 @@ impl FormatKey for FmtHistory<'_> {
     }
 }
 
-fn print_list_with(mut w: StdoutLock, h: &[History], format: &str) {
-    let fmt = match ParsedFmt::new(format) {
+fn parse_fmt(format: &str) -> ParsedFmt {
+    match ParsedFmt::new(format) {
         Ok(fmt) => fmt,
         Err(err) => {
             eprintln!("ERROR: History formatting failed with the following error: {err}");
             println!("If your formatting string contains curly braces (eg: {{var}}) you need to escape them this way: {{{{var}}.");
             std::process::exit(1)
         }
-    };
-
-    for h in h.iter().rev() {
-        match writeln!(w, "{}", fmt.with_args(&FmtHistory(h))) {
-            Ok(()) => {}
-            // ignore broken pipe (issue #626)
-            Err(e) if e.kind() == io::ErrorKind::BrokenPipe => {
-                return;
-            }
-            Err(err) => {
-                eprintln!("ERROR: History output failed with the following error: {err}");
-                std::process::exit(1);
-            }
-        }
     }
-
-    match w.flush() {
-        Ok(()) => {}
-        // ignore broken pipe (issue #626)
-        Err(e) if e.kind() == io::ErrorKind::BrokenPipe => {}
-        Err(err) => {
-            eprintln!("ERROR: History output failed with the following error: {err}");
-            std::process::exit(1);
-        }
-    }
-}
-
-pub fn print_human_list(w: StdoutLock, h: &[History], format: Option<&str>) {
-    let format = format
-        .unwrap_or("{time} · {duration}\t{command}")
-        .replace("\\t", "\t");
-    print_list_with(w, h, &format);
-}
-
-pub fn print_regular(w: StdoutLock, h: &[History], format: Option<&str>) {
-    let format = format
-        .unwrap_or("{time}\t{command}\t{duration}")
-        .replace("\\t", "\t");
-    print_list_with(w, h, &format);
-}
-
-pub fn print_cmd_only(w: StdoutLock, h: &[History]) {
-    print_list_with(w, h, "{command}");
 }
 
 impl Cmd {
