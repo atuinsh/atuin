@@ -35,10 +35,14 @@ def _atuin_search_cmd [...flags: string] {
     ] | str join "\n"
 }
 
-let-env config = (
+$env.config = ($env | default {} config).config
+$env.config = ($env.config | default {} hooks)
+$env.config = (
     $env.config | upsert hooks (
         $env.config.hooks
-        | upsert pre_execution ($env.config.hooks.pre_execution | append $_atuin_pre_execution)
-        | upsert pre_prompt ($env.config.hooks.pre_prompt | append $_atuin_pre_prompt)
+        | upsert pre_execution (
+            $env.config.hooks | get -i pre_execution | default [] | append $_atuin_pre_execution)
+        | upsert pre_prompt (
+            $env.config.hooks | get -i pre_prompt | default [] | append $_atuin_pre_prompt)
     )
 )
