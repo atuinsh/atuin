@@ -18,6 +18,11 @@ pub(self) struct HistorySeal;
 ///
 /// Client stores data unencrypted, and only encrypts it before sending to the server.
 ///
+/// To create a new history entry, use one of the builders:
+/// - [`History::import()`] to import an entry from the shell history file
+/// - [`History::capture()`] to capture an entry via hook
+/// - [`History::from_db()`] to create an instance from the database entry
+///
 /// ### Caution
 /// Any new fields MUST be `Optional<T>` and marked with `#[serde(default)]` to ensure backwards
 /// compatibility with older clients.
