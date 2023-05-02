@@ -22,8 +22,11 @@ appended with a wildcard).
 | `--limit`          | Limit the number of results (default: none)                                   |
 | `--offset`         | Offset from the start of the results (default: none)                          |
 | `--delete`         | Delete history matching this query                                            |
-| `--delete-it-all`         | Delete all shell history |
-| `--reverse`        | Reverse order of search results, oldest first |
+| `--delete-it-all`  | Delete all shell history                                                      |
+| `--reverse`        | Reverse order of search results, oldest first                                 |
+| `--format/-f`      | Available vareables: {command}, {directory}, {duration}, {user}, {host}, {time}, {exit} and {relativetime}. Example: --format "{time} - [{duration}] - {directory}$\t{command}" |
+| `--inline-height`  | Set the maximum number of lines Atuin's interface should take up              |
+| `--help/-h`        | Print help                                                                    |
 
 ## `atuin search -i`
 
