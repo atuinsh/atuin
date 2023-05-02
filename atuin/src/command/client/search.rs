@@ -96,6 +96,10 @@ pub struct Cmd {
     /// Example: --format "{time} - [{duration}] - {directory}$\t{command}"
     #[arg(long, short)]
     format: Option<String>,
+
+    /// Set the maximum number of lines Atuin's interface should take up.
+    #[arg(long = "inline-height")]
+    inline_height: Option<u16>,
 }
 
 impl Cmd {
@@ -117,6 +121,9 @@ impl Cmd {
         }
         if self.filter_mode.is_some() {
             settings.filter_mode = self.filter_mode.unwrap();
+        }
+        if self.inline_height.is_some() {
+            settings.inline_height = self.inline_height.unwrap();
         }
 
         settings.shell_up_key_binding = self.shell_up_key_binding;
