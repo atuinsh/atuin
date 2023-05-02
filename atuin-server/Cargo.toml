@@ -10,7 +10,7 @@ homepage = { workspace = true }
 repository = { workspace = true }
 
 [dependencies]
-atuin-common = { path = "../atuin-common", version = "14.0.0" }
+atuin-common = { path = "../atuin-common", version = "14.0.1" }
 
 tracing = "0.1"
 chrono = { workspace = true }
@@ -33,3 +33,4 @@ chronoutil = "0.2.3"
 tower = "0.4"
 tower-http = { version = "0.3", features = ["trace"] }
 reqwest = { workspace = true }
+argon2 = "0.5.0"

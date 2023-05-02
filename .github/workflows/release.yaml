@@ -5,6 +5,12 @@ env:
   CICD_INTERMEDIATES_DIR: "_cicd-intermediates"
 
 on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build release binaries for'
+        required: true
+        type: string
   push:
     tags:
       - "v*"
@@ -26,8 +32,22 @@ jobs:
           - { os: macos-12     , target: x86_64-apple-darwin         }
           - { os: macos-12     , target: aarch64-apple-darwin         }
     steps:
+    - name: Check for release
+      id: is-release
+      shell: bash
+      run: |
+        unset IS_RELEASE ; if [[ $GITHUB_REF =~ ^refs/tags/v[0-9].* ]]; then IS_RELEASE='true' ; fi
+        echo "IS_RELEASE=${IS_RELEASE}" >> $GITHUB_OUTPUT
+
     - name: Checkout source code
+      if: steps.is-release.outputs.IS_RELEASE
       uses: actions/checkout@v3
+
+    - name: Checkout source code
+      if: ${{ !steps.is-release.outputs.IS_RELEASE }}
+      uses: actions/checkout@v3
+      with:
+        ref: ${{ inputs.tag }}
 
     - name: Install prerequisites
       shell: bash
@@ -41,7 +61,7 @@ jobs:
     - name: Extract crate information
       shell: bash
       run: |
-        echo "PROJECT_NAME=$(sed -n 's/^name = "\(.*\)"/\1/p' Cargo.toml)" >> $GITHUB_ENV
+        echo "PROJECT_NAME=$(sed -n 's/^name = "\(.*\)"/\1/p' atuin/Cargo.toml)" >> $GITHUB_ENV
         echo "PROJECT_VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)" >> $GITHUB_ENV
         echo "PROJECT_MAINTAINER=$(sed -n 's/^authors = \["\(.*\)"\]/\1/p' Cargo.toml)" >> $GITHUB_ENV
         echo "PROJECT_HOMEPAGE=$(sed -n 's/^homepage = "\(.*\)"/\1/p' Cargo.toml)" >> $GITHUB_ENV
@@ -140,13 +160,19 @@ jobs:
         # Let subsequent steps know where to find the compressed package
         echo "PKG_PATH=${PKG_STAGING}/${PKG_NAME}" >> "$GITHUB_OUTPUT"
 
+    - name: "Artifact upload: tarball"
+      uses: actions/upload-artifact@master
+      with:
+        name: ${{ steps.package.outputs.PKG_NAME }}
+        path: ${{ steps.package.outputs.PKG_PATH }}
+
     - name: Create Debian package
       id: debian-package
       shell: bash
       if: startsWith(matrix.job.os, 'ubuntu')
       run: |
         cargo install cargo-deb
-        cargo deb
+        cargo deb -p atuin
 
         case ${{ matrix.job.target }} in
           aarch64-*-linux-*) DPKG_ARCH=arm64 ;;
@@ -163,11 +189,6 @@ jobs:
         echo DPKG_NAME=${DPKG_NAME} >> $GITHUB_OUTPUT
         echo DPKG_PATH=${DPKG_PATH} >> $GITHUB_OUTPUT
 
-    - name: "Artifact upload: tarball"
-      uses: actions/upload-artifact@master
-      with:
-        name: ${{ steps.package.outputs.PKG_NAME }}
-        path: ${{ steps.package.outputs.PKG_PATH }}
 
     - name: "Artifact upload: Debian package"
       uses: actions/upload-artifact@master
@@ -176,12 +197,6 @@ jobs:
         name: ${{ steps.debian-package.outputs.DPKG_NAME }}
         path: ${{ steps.debian-package.outputs.DPKG_PATH }}
 
-    - name: Check for release
-      id: is-release
-      shell: bash
-      run: |
-        unset IS_RELEASE ; if [[ $GITHUB_REF =~ ^refs/tags/v[0-9].* ]]; then IS_RELEASE='true' ; fi
-        echo "IS_RELEASE=${IS_RELEASE}" >> $GITHUB_OUTPUT
 
     - name: Publish archives and packages
       uses: softprops/action-gh-release@v1
