@@ -289,3 +289,6 @@ Add to `config.nu`:
 ```
 source ~/.local/share/atuin/init.nu
 ```
+
+[English]: ./README.md
+[简体中文]: ./docs/zh-CN/README.md
