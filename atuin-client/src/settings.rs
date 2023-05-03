@@ -157,6 +157,8 @@ pub struct Settings {
     pub scroll_context_lines: usize,
     #[serde(with = "serde_regex", default = "RegexSet::empty")]
     pub history_filter: RegexSet,
+    #[serde(with = "serde_regex", default = "RegexSet::empty")]
+    pub cwd_filter: RegexSet,
 
     // This is automatically loaded when settings is created. Do not set in
     // config! Keep secrets and settings apart.

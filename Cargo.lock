@@ -1831,9 +1831,9 @@ dependencies = [
 
 [[package]]
 name = "runtime-format"
-version = "0.1.2"
+version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b035308411b1af4683acc4fc928366443f08b893bb73e235c85de4c2be572495"
+checksum = "09958d5b38bca768ede7928c767c89a08ba568144a7b61992aecae79b03c8c94"
 dependencies = [
  "tinyvec",
 ]

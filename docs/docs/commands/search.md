@@ -9,21 +9,24 @@ Atuin search supports wildcards, with either the `*` or `%` character. By
 default, a prefix search is performed (ie, all queries are automatically
 appended with a wildcard).
 
-| Arg                | Description                                                                   |
-| ------------------ | ----------------------------------------------------------------------------- |
-| `--cwd/-c`         | The directory to list history for (default: all dirs)                         |
-| `--exclude-cwd`    | Do not include commands that ran in this directory (default: none)            |
-| `--exit/-e`        | Filter by exit code (default: none)                                           |
-| `--exclude-exit`   | Do not include commands that exited with this value (default: none)           |
-| `--before`         | Only include commands ran before this time(default: none)                     |
-| `--after`          | Only include commands ran after this time(default: none)                      |
-| `--interactive/-i` | Open the interactive search UI (default: false)                               |
-| `--human`          | Use human-readable formatting for the timestamp and duration (default: false) |
-| `--limit`          | Limit the number of results (default: none)                                   |
-| `--offset`         | Offset from the start of the results (default: none)                          |
-| `--delete`         | Delete history matching this query                                            |
-| `--delete-it-all`         | Delete all shell history |
-| `--reverse`        | Reverse order of search results, oldest first |
+| Arg                  | Description                                                                   |
+| -------------------- | ----------------------------------------------------------------------------- |
+| `--cwd`/`-c`         | The directory to list history for (default: all dirs)                         |
+| `--exclude-cwd`      | Do not include commands that ran in this directory (default: none)            |
+| `--exit`/`-e`        | Filter by exit code (default: none)                                           |
+| `--exclude-exit`     | Do not include commands that exited with this value (default: none)           |
+| `--before`           | Only include commands ran before this time(default: none)                     |
+| `--after`            | Only include commands ran after this time(default: none)                      |
+| `--interactive`/`-i` | Open the interactive search UI (default: false)                               |
+| `--human`            | Use human-readable formatting for the timestamp and duration (default: false) |
+| `--limit`            | Limit the number of results (default: none)                                   |
+| `--offset`           | Offset from the start of the results (default: none)                          |
+| `--delete`           | Delete history matching this query                                            |
+| `--delete-it-all`    | Delete all shell history                                                      |
+| `--reverse`          | Reverse order of search results, oldest first                                 |
+| `--format`/`-f`      | Available vareables: {command}, {directory}, {duration}, {user}, {host}, {time}, {exit} and {relativetime}. Example: --format "{time} - [{duration}] - {directory}$\t{command}" |
+| `--inline-height`    | Set the maximum number of lines Atuin's interface should take up              |
+| `--help`/`-h`        | Print help                                                                    |
 
 ## `atuin search -i`
 
