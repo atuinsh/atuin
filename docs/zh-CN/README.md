@@ -167,7 +167,7 @@ pacman -S atuin
 
 ```
 git clone https://github.com/ellie/atuin.git
-cd atuin
+cd atuin/atuin
 cargo install --path .
 ```
 
