@@ -24,7 +24,7 @@ appended with a wildcard).
 | `--delete`           | Delete history matching this query                                            |
 | `--delete-it-all`    | Delete all shell history                                                      |
 | `--reverse`          | Reverse order of search results, oldest first                                 |
-| `--format`/`-f`      | Available vareables: {command}, {directory}, {duration}, {user}, {host}, {time}, {exit} and {relativetime}. Example: --format "{time} - [{duration}] - {directory}$\t{command}" |
+| `--format`/`-f`      | Available variables: {command}, {directory}, {duration}, {user}, {host}, {time}, {exit} and {relativetime}. Example: --format "{time} - [{duration}] - {directory}$\t{command}" |
 | `--inline-height`    | Set the maximum number of lines Atuin's interface should take up              |
 | `--help`/`-h`        | Print help                                                                    |
 
