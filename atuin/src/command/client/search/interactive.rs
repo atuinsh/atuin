@@ -112,15 +112,15 @@ impl State {
                 return Some(match settings.exit_mode {
                     ExitMode::ReturnOriginal => RETURN_ORIGINAL,
                     ExitMode::ReturnQuery => RETURN_QUERY,
-                    ExitMode::Execute => self.results_state.selected(),
+                    ExitMode::ReturnExecute => self.results_state.selected(),
                 });
             }
             KeyCode::Enter if alt => {
-                settings.change_exit_mode(ExitMode::Execute);
+                settings.change_exit_mode(ExitMode::ReturnExecute);
                 return Some(self.results_state.selected());
             }
             KeyCode::Enter => {
-                if settings.exit_mode == ExitMode::Execute {
+                if settings.exit_mode == ExitMode::ReturnExecute {
                     settings.change_exit_mode(ExitMode::ReturnQuery);
                 }
                 return Some(self.results_state.selected());
@@ -210,7 +210,7 @@ impl State {
                 return Some(match settings.exit_mode {
                     ExitMode::ReturnOriginal => RETURN_ORIGINAL,
                     ExitMode::ReturnQuery => RETURN_QUERY,
-                    ExitMode::Execute => {
+                    ExitMode::ReturnExecute => {
                         settings.change_exit_mode(ExitMode::ReturnOriginal);
                         return Some(RETURN_ORIGINAL);
                     }

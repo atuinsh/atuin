@@ -1,3 +1,5 @@
+use std::process::Stdio;
+
 use atuin_common::utils;
 use clap::Parser;
 use execute::{shell, Execute};
@@ -132,9 +134,16 @@ impl Cmd {
         if self.interactive {
             let item = interactive::history(&self.query, settings, db).await?;
 
-            if settings.exit_mode == ExitMode::Execute {
-                let mut cmd = shell(item);
-                cmd.execute_output()?;
+            if settings.exit_mode == ExitMode::ReturnExecute {
+                let mut cmd = shell(&item);
+                cmd.stdout(Stdio::piped());
+                cmd.stderr(Stdio::piped());
+                let output = cmd.execute_output().unwrap();
+
+                match output.status.code() {
+                    Some(0) => println!("{}", String::from_utf8(output.stdout).unwrap()),
+                    _ => eprintln!("{item}"),
+                };
             } else {
                 eprintln!("{item}");
             }

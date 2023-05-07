@@ -90,7 +90,7 @@ pub enum ExitMode {
     ReturnQuery,
 
     #[serde(rename = "return-execute")]
-    Execute,
+    ReturnExecute,
 }
 
 // FIXME: Can use upstream Dialect enum if https://github.com/stevedonovan/chrono-english/pull/16 is merged
