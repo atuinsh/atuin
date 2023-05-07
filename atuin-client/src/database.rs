@@ -6,6 +6,7 @@ use chrono::{prelude::*, Utc};
 use fs_err as fs;
 use itertools::Itertools;
 use lazy_static::lazy_static;
+use rand::{distributions::Alphanumeric, Rng};
 use regex::Regex;
 use sql_builder::{esc, quote, SqlBuilder, SqlName};
 use sqlx::{
@@ -517,6 +518,11 @@ impl Database for Sqlite {
     // but the time that the system marks it as deleted
     async fn delete(&self, mut h: History) -> Result<()> {
         let now = chrono::Utc::now();
+        h.command = rand::thread_rng()
+            .sample_iter(&Alphanumeric)
+            .take(32)
+            .map(char::from)
+            .collect(); // overwrite with random string
         h.deleted_at = Some(now); // delete it
 
         self.update(&h).await?; // save it
