@@ -44,7 +44,7 @@ export default function Home() {
               <img src="/img/screenshot.png" className="col col--8" />
               <div className="col col--4">
                 <p>Atuin is a command-line tool that enables you to make better use of your shell, by giving ctrl-r superpowers.</p>
-                <p>Every line you write is stored - ready to be queried and ran again at any point, from any machine you wish. Never forget again!</p>
+                <p>Every line you write is stored - ready to be queried and run again at any point, from any machine you wish. Never forget again!</p>
                 <p>Sync your history between all of your machines, and search it from anywhere</p>
               </div>
             </div>
