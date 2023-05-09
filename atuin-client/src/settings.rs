@@ -17,6 +17,7 @@ pub const HISTORY_PAGE_SIZE: i64 = 100;
 pub const LAST_SYNC_FILENAME: &str = "last_sync_time";
 pub const LAST_VERSION_CHECK_FILENAME: &str = "last_version_check_time";
 pub const LATEST_VERSION_FILENAME: &str = "latest_version";
+pub const HOST_ID_FILENAME: &str = "host_id";
 
 #[derive(Clone, Debug, Deserialize, Copy, ValueEnum, PartialEq)]
 pub enum SearchMode {
@@ -220,6 +221,21 @@ impl Settings {
 
     pub fn last_version_check() -> Result<chrono::DateTime<Utc>> {
         Settings::load_time_from_file(LAST_VERSION_CHECK_FILENAME)
+    }
+
+    pub fn host_id() -> Option<String> {
+        let id = Settings::read_from_data_dir(HOST_ID_FILENAME);
+
+        if id.is_some() {
+            return id;
+        }
+
+        let uuid = atuin_common::utils::uuid_v7();
+
+        Settings::save_to_data_dir(HOST_ID_FILENAME, uuid.as_simple().to_string().as_ref())
+            .expect("Could not write host ID to data dir");
+
+        Some(uuid.as_simple().to_string())
     }
 
     pub fn should_sync(&self) -> Result<bool> {
