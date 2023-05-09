@@ -130,6 +130,8 @@ bash <(curl https://raw.githubusercontent.com/ellie/atuin/main/install.sh)
 atuin import auto
 ```
 
+By default, Atuin will check for updates. You can [disable update checks by modifying](https://atuin.sh/docs/config/#update_check) `config.toml`.
+
 Then restart your shell!
 
 ## Install
