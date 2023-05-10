@@ -53,6 +53,14 @@ pub async fn list<DB: Database>(
         )
         .await;
 
+    if req.sync_ts.timestamp_nanos() < 0 || req.history_ts.timestamp_nanos() < 0 {
+        error!("client asked for history from < epoch 0");
+        return Err(
+            ErrorResponse::reply("asked for history from before epoch 0")
+                .with_status(StatusCode::BAD_REQUEST),
+        );
+    }
+
     if let Err(e) = history {
         error!("failed to load history: {}", e);
         return Err(ErrorResponse::reply("failed to load history")
