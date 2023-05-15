@@ -18,7 +18,7 @@ use uuid::Uuid;
 use super::{ErrorResponse, ErrorResponseStatus, RespExt};
 use crate::{
     database::Database,
-    models::{NewSession, NewUser},
+    models::{NewSession, NewUser, User},
     router::AppState,
 };
 
@@ -136,6 +136,16 @@ pub async fn register<DB: Database>(
                 .with_status(StatusCode::BAD_REQUEST))
         }
     }
+}
+
+#[instrument(skip_all, fields(user.id = user.id))]
+pub async fn unregister<DB: Database>(
+    user: User,
+    state: State<AppState<DB>>,
+) -> Result<Json<UnregisterResponse>, ErrorResponseStatus<'static>> {
+    debug!("request to remove user {}", user.id);
+
+    Ok(Json(UnregisterResponse { }))
 }
 
 #[instrument(skip_all, fields(user.username = login.username.as_str()))]
