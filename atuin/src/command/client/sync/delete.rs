@@ -17,7 +17,7 @@ pub async fn run(settings: &Settings) -> Result<()> {
         load_encoded_key(settings)?,
     )?;
 
-    client.unregister().await?;
+    client.delete().await?;
 
     println!("Your account is deleted");
 

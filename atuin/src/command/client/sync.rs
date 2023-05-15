@@ -6,7 +6,7 @@ use atuin_client::{database::Database, settings::Settings};
 mod login;
 mod logout;
 mod register;
-mod unregister;
+mod delete;
 mod status;
 
 #[derive(Subcommand)]
@@ -48,7 +48,7 @@ impl Cmd {
             Self::Login(l) => l.run(&settings).await,
             Self::Logout => logout::run(&settings),
             Self::Register(r) => r.run(&settings).await,
-            Self::Unregister => unregister::run(&settings).await,
+            Self::Unregister => delete::run(&settings).await,
             Self::Status => status::run(&settings, db).await,
             Self::Key { base64 } => {
                 use atuin_client::encryption::{encode_key, load_key};

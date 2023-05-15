@@ -218,7 +218,7 @@ impl<'a> Client<'a> {
         Ok(())
     }
 
-    pub async fn unregister(&self) -> Result<()> {
+    pub async fn delete(&self) -> Result<()> {
         let url = format!("{}/register", self.sync_addr);
         let url = Url::parse(url.as_str())?;
 

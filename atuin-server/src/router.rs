@@ -72,7 +72,7 @@ pub fn router<DB: Database + Clone + Send + Sync + 'static>(
         .route("/history", post(handlers::history::add))
         .route("/history", delete(handlers::history::delete))
         .route("/user/:username", get(handlers::user::get))
-        .route("/register", delete(handlers::user::unregister))
+        .route("/account", delete(handlers::user::delete))
         .route("/register", post(handlers::user::register))
         .route("/login", post(handlers::user::login));
 

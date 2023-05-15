@@ -20,7 +20,7 @@ pub struct RegisterResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct UnregisterResponse {
+pub struct DeleteUserResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize)]

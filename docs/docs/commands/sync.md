@@ -32,7 +32,7 @@ notifications (security breaches, changes to service, etc).
 Upon success, you are also logged in :) Syncing should happen automatically from
 here!
 
-## Unregister
+## Delete
 
 You can delete your sync account with
 

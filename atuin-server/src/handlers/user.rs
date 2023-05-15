@@ -139,20 +139,20 @@ pub async fn register<DB: Database>(
 }
 
 #[instrument(skip_all, fields(user.id = user.id))]
-pub async fn unregister<DB: Database>(
+pub async fn delete<DB: Database>(
     user: User,
     state: State<AppState<DB>>,
-) -> Result<Json<UnregisterResponse>, ErrorResponseStatus<'static>> {
-    debug!("request to remove user {}", user.id);
+) -> Result<Json<DeleteUserResponse>, ErrorResponseStatus<'static>> {
+    debug!("request to delete user {}", user.id);
 
     let db = &state.0.database;
-    if let Err(e) = db.remove_user(&user).await {
-        error!("failed to remove user: {}", e);
+    if let Err(e) = db.delete_user(&user).await {
+        error!("failed to delete user: {}", e);
 
-        return Err(ErrorResponse::reply("failed to add history")
+        return Err(ErrorResponse::reply("failed to delete user")
             .with_status(StatusCode::INTERNAL_SERVER_ERROR));
     };
-    Ok(Json(UnregisterResponse { }))
+    Ok(Json(DeleteUserResponse { }))
 }
 
 #[instrument(skip_all, fields(user.username = login.username.as_str()))]
