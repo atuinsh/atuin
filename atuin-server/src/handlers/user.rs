@@ -145,6 +145,13 @@ pub async fn unregister<DB: Database>(
 ) -> Result<Json<UnregisterResponse>, ErrorResponseStatus<'static>> {
     debug!("request to remove user {}", user.id);
 
+    let db = &state.0.database;
+    if let Err(e) = db.remove_user(&user).await {
+        error!("failed to remove user: {}", e);
+
+        return Err(ErrorResponse::reply("failed to add history")
+            .with_status(StatusCode::INTERNAL_SERVER_ERROR));
+    };
     Ok(Json(UnregisterResponse { }))
 }
 

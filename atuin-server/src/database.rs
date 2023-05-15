@@ -27,6 +27,7 @@ pub trait Database {
     async fn get_user(&self, username: &str) -> Result<User>;
     async fn get_user_session(&self, u: &User) -> Result<Session>;
     async fn add_user(&self, user: &NewUser) -> Result<i64>;
+    async fn remove_user(&self, u: &User) -> Result<()>;
 
     async fn count_history(&self, user: &User) -> Result<i64>;
     async fn count_history_cached(&self, user: &User) -> Result<i64>;
@@ -332,6 +333,26 @@ impl Database for Postgres {
         }
 
         tx.commit().await?;
+
+        Ok(())
+    }
+
+    #[instrument(skip_all)]
+    async fn remove_user(&self, u: &User) -> Result<()> {
+        sqlx::query_as::<_, Session>("delete from sessions where user_id = $1")
+            .bind(u.id)
+            .fetch_all(&self.pool)
+            .await?;
+
+        sqlx::query_as::<_, Session>("delete from users where id = $1")
+            .bind(u.id)
+            .fetch_all(&self.pool)
+            .await?;
+
+        sqlx::query_as::<_, Session>("delete from history where user_id = $1")
+            .bind(u.id)
+            .fetch_all(&self.pool)
+            .await?;
 
         Ok(())
     }
