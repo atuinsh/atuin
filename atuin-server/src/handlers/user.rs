@@ -152,7 +152,7 @@ pub async fn delete<DB: Database>(
         return Err(ErrorResponse::reply("failed to delete user")
             .with_status(StatusCode::INTERNAL_SERVER_ERROR));
     };
-    Ok(Json(DeleteUserResponse { }))
+    Ok(Json(DeleteUserResponse {}))
 }
 
 #[instrument(skip_all, fields(user.username = login.username.as_str()))]

@@ -1,8 +1,6 @@
-use std::path::PathBuf;
+use atuin_client::{api_client, encryption::load_encoded_key, settings::Settings};
 use eyre::{bail, Result};
-use atuin_client::{
-    api_client, encryption::load_encoded_key, settings::Settings,
-};
+use std::path::PathBuf;
 
 pub async fn run(settings: &Settings) -> Result<()> {
     let session_path = settings.session_path.as_str();

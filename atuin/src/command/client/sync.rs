@@ -3,10 +3,10 @@ use eyre::{Result, WrapErr};
 
 use atuin_client::{database::Database, settings::Settings};
 
+mod delete;
 mod login;
 mod logout;
 mod register;
-mod delete;
 mod status;
 
 #[derive(Subcommand)]
