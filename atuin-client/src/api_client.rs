@@ -51,7 +51,7 @@ pub async fn register(
         bail!("username already in use");
     }
 
-    let url = base.join(format!("/register").as_str())?;
+    let url = base.join("/register")?;
     let client = reqwest::Client::new();
     let resp = client
         .post(url)
