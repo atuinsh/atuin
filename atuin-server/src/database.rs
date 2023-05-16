@@ -339,19 +339,19 @@ impl Database for Postgres {
 
     #[instrument(skip_all)]
     async fn delete_user(&self, u: &User) -> Result<()> {
-        sqlx::query_as::<_, Session>("delete from sessions where user_id = $1")
+        sqlx::query("delete from sessions where user_id = $1")
             .bind(u.id)
-            .fetch_all(&self.pool)
+            .execute(&self.pool)
             .await?;
 
-        sqlx::query_as::<_, Session>("delete from users where id = $1")
+        sqlx::query("delete from users where id = $1")
             .bind(u.id)
-            .fetch_all(&self.pool)
+            .execute(&self.pool)
             .await?;
 
-        sqlx::query_as::<_, Session>("delete from history where user_id = $1")
+        sqlx::query("delete from history where user_id = $1")
             .bind(u.id)
-            .fetch_all(&self.pool)
+            .execute(&self.pool)
             .await?;
 
         Ok(())
