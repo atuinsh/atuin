@@ -9,6 +9,9 @@ use env_logger::Builder;
 #[cfg(feature = "sync")]
 mod sync;
 
+#[cfg(feature = "sync")]
+mod account;
+
 mod history;
 mod import;
 mod search;
@@ -34,6 +37,9 @@ pub enum Cmd {
     #[cfg(feature = "sync")]
     #[command(flatten)]
     Sync(sync::Cmd),
+
+    #[cfg(feature = "sync")]
+    Account(account::Cmd),
 }
 
 impl Cmd {
@@ -54,8 +60,12 @@ impl Cmd {
             Self::Import(import) => import.run(&mut db).await,
             Self::Stats(stats) => stats.run(&mut db, &settings).await,
             Self::Search(search) => search.run(db, &mut settings).await,
+
             #[cfg(feature = "sync")]
             Self::Sync(sync) => sync.run(settings, &mut db).await,
+
+            #[cfg(feature = "sync")]
+            Self::Account(account) => account.run(settings, &mut db).await,
         }
     }
 }

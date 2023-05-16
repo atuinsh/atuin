@@ -49,6 +49,7 @@ impl AtuinCmd {
         match self {
             #[cfg(feature = "client")]
             Self::Client(client) => client.run(),
+
             #[cfg(feature = "server")]
             Self::Server(server) => server.run(),
             Self::Contributors => {
