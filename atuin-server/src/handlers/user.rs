@@ -18,7 +18,7 @@ use uuid::Uuid;
 use super::{ErrorResponse, ErrorResponseStatus, RespExt};
 use crate::{
     database::Database,
-    models::{NewSession, NewUser},
+    models::{NewSession, NewUser, User},
     router::AppState,
 };
 
@@ -136,6 +136,23 @@ pub async fn register<DB: Database>(
                 .with_status(StatusCode::BAD_REQUEST))
         }
     }
+}
+
+#[instrument(skip_all, fields(user.id = user.id))]
+pub async fn delete<DB: Database>(
+    user: User,
+    state: State<AppState<DB>>,
+) -> Result<Json<DeleteUserResponse>, ErrorResponseStatus<'static>> {
+    debug!("request to delete user {}", user.id);
+
+    let db = &state.0.database;
+    if let Err(e) = db.delete_user(&user).await {
+        error!("failed to delete user: {}", e);
+
+        return Err(ErrorResponse::reply("failed to delete user")
+            .with_status(StatusCode::INTERNAL_SERVER_ERROR));
+    };
+    Ok(Json(DeleteUserResponse {}))
 }
 
 #[instrument(skip_all, fields(user.username = login.username.as_str()))]

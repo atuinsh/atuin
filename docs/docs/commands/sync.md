@@ -32,6 +32,14 @@ notifications (security breaches, changes to service, etc).
 Upon success, you are also logged in :) Syncing should happen automatically from
 here!
 
+## Delete
+
+You can delete your sync account with
+
+```
+atuin unregister
+```
+
 ## Key
 
 As all your data is encrypted, Atuin generates a key for you. It's stored in the

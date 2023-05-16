@@ -20,6 +20,9 @@ pub struct RegisterResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct DeleteUserResponse {}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct LoginRequest {
     pub username: String,
     pub password: String,

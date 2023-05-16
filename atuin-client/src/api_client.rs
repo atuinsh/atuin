@@ -217,4 +217,19 @@ impl<'a> Client<'a> {
 
         Ok(())
     }
+
+    pub async fn delete(&self) -> Result<()> {
+        let url = format!("{}/register", self.sync_addr);
+        let url = Url::parse(url.as_str())?;
+
+        let resp = self.client.delete(url).send().await?;
+
+        if resp.status() == 403 {
+            bail!("invalid login details");
+        } else if resp.status() == 200 {
+            Ok(())
+        } else {
+            bail!("Unknown error");
+        }
+    }
 }
