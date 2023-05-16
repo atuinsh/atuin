@@ -92,6 +92,18 @@ pub async fn register<DB: Database>(
         );
     }
 
+    for c in register.username.chars() {
+        match c {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' => {}
+            _ => {
+                return Err(ErrorResponse::reply(
+                    "Only alphanumeric and hyphens (-) are allowed in usernames",
+                )
+                .with_status(StatusCode::BAD_REQUEST))
+            }
+        }
+    }
+
     let hashed = hash_secret(&register.password);
 
     let new_user = NewUser {
@@ -173,7 +185,9 @@ pub async fn login<DB: Database>(
     let verified = verify_str(user.password.as_str(), login.password.borrow());
 
     if !verified {
-        return Err(ErrorResponse::reply("user not found").with_status(StatusCode::NOT_FOUND));
+        return Err(
+            ErrorResponse::reply("password is not correct").with_status(StatusCode::UNAUTHORIZED)
+        );
     }
 
     Ok(Json(LoginResponse {
