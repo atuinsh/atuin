@@ -26,9 +26,6 @@ pub enum Cmd {
     /// Register with the configured server
     Register(account::register::Cmd),
 
-    /// Unregister with the configured server
-    Unregister,
-
     /// Print the encryption key for transfer to another machine
     Key {
         /// Switch to base64 output of the key
@@ -46,7 +43,6 @@ impl Cmd {
             Self::Login(l) => l.run(&settings).await,
             Self::Logout => account::logout::run(&settings),
             Self::Register(r) => r.run(&settings).await,
-            Self::Unregister => delete::run(&settings).await,
             Self::Status => status::run(&settings, db).await,
             Self::Key { base64 } => {
                 use atuin_client::encryption::{encode_key, load_key};

@@ -219,7 +219,7 @@ impl<'a> Client<'a> {
     }
 
     pub async fn delete(&self) -> Result<()> {
-        let url = format!("{}/register", self.sync_addr);
+        let url = format!("{}/account", self.sync_addr);
         let url = Url::parse(url.as_str())?;
 
         let resp = self.client.delete(url).send().await?;

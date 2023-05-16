@@ -65,7 +65,7 @@ impl Cmd {
             Self::Sync(sync) => sync.run(settings, &mut db).await,
 
             #[cfg(feature = "sync")]
-            Self::Account(account) => account.run(settings, &mut db).await,
+            Self::Account(account) => account.run(settings).await,
         }
     }
 }
