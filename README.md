@@ -100,7 +100,7 @@ Read more below for offline-only usage, or for hosting your own server.
 ```
 bash <(curl https://raw.githubusercontent.com/ellie/atuin/main/install.sh)
 
-atuin register -u <USERNAME> -e <EMAIL> -p <PASSWORD>
+atuin register -u <USERNAME> -e <EMAIL>
 atuin import auto
 atuin sync
 ```

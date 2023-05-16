@@ -26,8 +26,11 @@ Register for a sync account with
 atuin register -u <USERNAME> -e <EMAIL> -p <PASSWORD>
 ```
 
-Usernames must be unique, and emails shall only be used for important
-notifications (security breaches, changes to service, etc).
+If you don't want to have your password be included in shell history, you can omit
+the password flag and you will be prompted to provide it through stdin.
+
+Usernames must be unique and only contain alphanumerics or hyphens,
+and emails shall only be used for important notifications (security breaches, changes to service, etc).
 
 Upon success, you are also logged in :) Syncing should happen automatically from
 here!
@@ -61,6 +64,9 @@ If you want to log in to a new machine, you will require your encryption key
 ```
 atuin login -u <USERNAME> -p <PASSWORD> -k <KEY>
 ```
+
+If you don't want to have your password be included in shell history, you can omit
+the password flag and you will be prompted to provide it through stdin.
 
 ## Logout
 
