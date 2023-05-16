@@ -193,6 +193,10 @@ Then setup Atuin
 echo 'eval "$(atuin init bash)"' >> ~/.bashrc
 ```
 
+**PLEASE NOTE**
+
+bash-preexec currently has an issue where it will stop honoring `ignorespace`. While Atuin will ignore commands prefixed with whitespace, they may still end up in your bash history. Please check your configuration! All other shells do not have this issue.
+
 ### fish
 
 Add
