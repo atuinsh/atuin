@@ -4,8 +4,11 @@ use std::{
 };
 
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent},
-    execute, terminal,
+    event::{
+        self, Event, KeyCode, KeyEvent, KeyModifiers, KeyboardEnhancementFlags, MouseEvent,
+        PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    },
+    execute, queue, terminal,
 };
 use eyre::Result;
 use futures_util::FutureExt;
@@ -15,7 +18,7 @@ use unicode_width::UnicodeWidthStr;
 use atuin_client::{
     database::{current_context, Database},
     history::History,
-    settings::{ExitMode, FilterMode, SearchMode, Settings},
+    settings::{ExitMode, FilterMode, KeyModifier, SearchMode, Settings},
 };
 
 use super::{
@@ -101,6 +104,8 @@ impl State {
 
         let ctrl = input.modifiers.contains(KeyModifiers::CONTROL);
         let alt = input.modifiers.contains(KeyModifiers::ALT);
+        let number_modifer_pressed = (ctrl && settings.number_jump_modifier == KeyModifier::Ctrl)
+            || (alt && settings.number_jump_modifier == KeyModifier::Alt);
 
         // reset the state, will be set to true later if user really did change it
         self.switched_search_mode = false;
@@ -115,7 +120,7 @@ impl State {
             KeyCode::Enter => {
                 return Some(self.results_state.selected());
             }
-            KeyCode::Char(c @ '1'..='9') if alt => {
+            KeyCode::Char(c @ '1'..='9') if number_modifer_pressed => {
                 let c = c.to_digit(10)? as usize;
                 return Some(self.results_state.selected() + c);
             }
@@ -498,12 +503,31 @@ impl State {
 struct Stdout {
     stdout: std::io::Stdout,
     inline_mode: bool,
+    keyboard_enhancements: bool,
 }
 
 impl Stdout {
     pub fn new(inline_mode: bool) -> std::io::Result<Self> {
         terminal::enable_raw_mode()?;
         let mut stdout = stdout();
+
+        let keyboard_enhancements = matches!(
+            crossterm::terminal::supports_keyboard_enhancement(),
+            Ok(true)
+        );
+
+        if keyboard_enhancements {
+            queue!(
+                stdout,
+                PushKeyboardEnhancementFlags(
+                    KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                        | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
+                        | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
+                        | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+                )
+            )?;
+        }
+
         if !inline_mode {
             execute!(stdout, terminal::EnterAlternateScreen)?;
         }
@@ -515,6 +539,7 @@ impl Stdout {
         Ok(Self {
             stdout,
             inline_mode,
+            keyboard_enhancements,
         })
     }
 }
@@ -524,6 +549,11 @@ impl Drop for Stdout {
         if !self.inline_mode {
             execute!(self.stdout, terminal::LeaveAlternateScreen).unwrap();
         }
+
+        if self.keyboard_enhancements {
+            queue!(self.stdout, PopKeyboardEnhancementFlags).unwrap();
+        }
+
         execute!(
             self.stdout,
             event::DisableMouseCapture,
