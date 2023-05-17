@@ -40,8 +40,10 @@ here!
 You can delete your sync account with
 
 ```
-atuin unregister
+atuin account delete
 ```
+
+This will remove your account and all synchronized history from the server. Local data will not be touched!
 
 ## Key
 
