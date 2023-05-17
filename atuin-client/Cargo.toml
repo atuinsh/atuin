@@ -66,6 +66,7 @@ generic-array = { version = "0.14", optional = true, features = ["serde"] }
 
 # daemon
 axum = "0.6.4"
+http = "0.2"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }

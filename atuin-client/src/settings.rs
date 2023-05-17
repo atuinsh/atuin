@@ -163,10 +163,13 @@ pub struct Settings {
     pub word_jump_mode: WordJumpMode,
     pub word_chars: String,
     pub scroll_context_lines: usize,
+
     #[serde(with = "serde_regex", default = "RegexSet::empty")]
     pub history_filter: RegexSet,
 
+    #[serde(with = "serde_regex", default = "RegexSet::empty")]
     pub cwd_filter: RegexSet,
+
     pub daemon: Daemon,
 
     // This is automatically loaded when settings is created. Do not set in

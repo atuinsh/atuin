@@ -145,6 +145,7 @@ dependencies = [
  "fs-err",
  "generic-array",
  "hex",
+ "http",
  "interim",
  "itertools",
  "lazy_static",
