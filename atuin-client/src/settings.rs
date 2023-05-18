@@ -337,6 +337,7 @@ impl Settings {
             .set_default("style", "auto")?
             .set_default("inline_height", 0)?
             .set_default("show_preview", false)?
+            .set_default("invert", false)?
             .set_default("exit_mode", "return-original")?
             .set_default("word_jump_mode", "emacs")?
             .set_default(

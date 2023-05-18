@@ -253,17 +253,16 @@ impl State {
 
     #[allow(clippy::cast_possible_truncation)]
     #[allow(clippy::bool_to_int_with_if)]
-    fn draw<T: Backend>(
-        &mut self,
-        f: &mut Frame<'_, T>,
-        results: &[History],
-        compact: bool,
-        show_preview: bool,
-        invert: bool,
-    ) {
+    fn draw<T: Backend>(&mut self, f: &mut Frame<'_, T>, results: &[History], settings: &Settings) {
+        let compact = match settings.style {
+            atuin_client::settings::Style::Auto => f.size().height < 14,
+            atuin_client::settings::Style::Compact => true,
+            atuin_client::settings::Style::Full => false,
+        };
+        let invert = settings.invert;
         let border_size = if compact { 0 } else { 1 };
         let preview_width = f.size().width - 2;
-        let preview_height = if show_preview {
+        let preview_height = if settings.show_preview {
             let longest_command = results
                 .iter()
                 .max_by(|h1, h2| h1.command.len().cmp(&h2.command.len()));
@@ -585,16 +584,7 @@ pub async fn history(
     let mut results = app.query_results(&mut db).await?;
 
     let index = 'render: loop {
-        let compact = match settings.style {
-            atuin_client::settings::Style::Auto => {
-                terminal.size().map(|size| size.height < 14).unwrap_or(true)
-            }
-            atuin_client::settings::Style::Compact => true,
-            atuin_client::settings::Style::Full => false,
-        };
-        terminal.draw(|f| {
-            app.draw(f, &results, compact, settings.show_preview, settings.invert);
-        })?;
+        terminal.draw(|f| app.draw(f, &results, settings))?;
 
         let initial_input = app.search.input.as_str().to_owned();
         let initial_filter_mode = app.search.filter_mode;
