@@ -147,6 +147,7 @@ pub struct Settings {
     pub filter_mode_shell_up_key_binding: Option<FilterMode>,
     pub shell_up_key_binding: bool,
     pub inline_height: u16,
+    pub invert: bool,
     pub show_preview: bool,
     pub exit_mode: ExitMode,
     pub word_jump_mode: WordJumpMode,

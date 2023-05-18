@@ -50,7 +50,7 @@ struct State {
 #[derive(Clone, Copy)]
 struct StyleState {
     compact: bool,
-    inline_mode: bool,
+    invert: bool,
     inner_width: usize,
 }
 
@@ -106,8 +106,6 @@ impl State {
 
         let ctrl = input.modifiers.contains(KeyModifiers::CONTROL);
         let alt = input.modifiers.contains(KeyModifiers::ALT);
-
-        let invert = settings.inline_height > 0;
 
         // reset the state, will be set to true later if user really did change it
         self.switched_search_mode = false;
@@ -200,23 +198,23 @@ impl State {
                 self.search_mode = self.search_mode.next(settings);
                 self.engine = engines::engine(self.search_mode);
             }
-            KeyCode::Down if self.results_state.selected() == 0 && !invert => {
+            KeyCode::Down if !settings.invert && self.results_state.selected() == 0 => {
                 return Some(match settings.exit_mode {
                     ExitMode::ReturnOriginal => RETURN_ORIGINAL,
                     ExitMode::ReturnQuery => RETURN_QUERY,
                 })
             }
-            KeyCode::Up if self.results_state.selected() == 0 && invert => {
+            KeyCode::Up if settings.invert && self.results_state.selected() == 0 => {
                 return Some(match settings.exit_mode {
                     ExitMode::ReturnOriginal => RETURN_ORIGINAL,
                     ExitMode::ReturnQuery => RETURN_QUERY,
                 })
             }
-            KeyCode::Down if !invert => {
+            KeyCode::Down if !settings.invert => {
                 let i = self.results_state.selected().saturating_sub(1);
                 self.results_state.select(i);
             }
-            KeyCode::Up if invert => {
+            KeyCode::Up if settings.invert => {
                 let i = self.results_state.selected().saturating_sub(1);
                 self.results_state.select(i);
             }
@@ -224,11 +222,11 @@ impl State {
                 let i = self.results_state.selected().saturating_sub(1);
                 self.results_state.select(i);
             }
-            KeyCode::Up if !invert => {
+            KeyCode::Up if !settings.invert => {
                 let i = self.results_state.selected() + 1;
                 self.results_state.select(i.min(len - 1));
             }
-            KeyCode::Down if invert => {
+            KeyCode::Down if settings.invert => {
                 let i = self.results_state.selected() + 1;
                 self.results_state.select(i.min(len - 1));
             }
@@ -261,7 +259,7 @@ impl State {
         results: &[History],
         compact: bool,
         show_preview: bool,
-        inline_mode: bool,
+        invert: bool,
     ) {
         let border_size = if compact { 0 } else { 1 };
         let preview_width = f.size().width - 2;
@@ -287,7 +285,7 @@ impl State {
             .margin(0)
             .horizontal_margin(1)
             .constraints(
-                if inline_mode {
+                if invert {
                     [
                         Constraint::Length(1 + border_size),               // input
                         Constraint::Min(1),                                // results list
@@ -305,14 +303,14 @@ impl State {
                 .as_ref(),
             )
             .split(f.size());
-        let input_chunk = if inline_mode { chunks[0] } else { chunks[2] };
+        let input_chunk = if invert { chunks[0] } else { chunks[2] };
         let results_list_chunk = chunks[1];
-        let preview_chunk = if inline_mode { chunks[2] } else { chunks[3] };
-        let header_chunk = if inline_mode { chunks[3] } else { chunks[0] };
+        let preview_chunk = if invert { chunks[2] } else { chunks[3] };
+        let header_chunk = if invert { chunks[3] } else { chunks[0] };
 
         let style = StyleState {
             compact,
-            inline_mode,
+            invert,
             inner_width: input_chunk.width.into(),
         };
 
@@ -396,10 +394,10 @@ impl State {
     }
 
     fn build_results_list(style: StyleState, results: &[History]) -> HistoryList {
-        let results_list = HistoryList::new(results, style.inline_mode);
+        let results_list = HistoryList::new(results, style.invert);
         if style.compact {
             results_list
-        } else if style.inline_mode {
+        } else if style.invert {
             results_list.block(
                 Block::default()
                     .borders(Borders::LEFT | Borders::RIGHT)
@@ -430,7 +428,7 @@ impl State {
         let input = Paragraph::new(input);
         if style.compact {
             input
-        } else if style.inline_mode {
+        } else if style.invert {
             input.block(
                 Block::default()
                     .borders(Borders::LEFT | Borders::RIGHT | Borders::TOP)
@@ -595,13 +593,7 @@ pub async fn history(
             atuin_client::settings::Style::Full => false,
         };
         terminal.draw(|f| {
-            app.draw(
-                f,
-                &results,
-                compact,
-                settings.show_preview,
-                settings.inline_height > 0,
-            );
+            app.draw(f, &results, compact, settings.show_preview, settings.invert);
         })?;
 
         let initial_input = app.search.input.as_str().to_owned();
