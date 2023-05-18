@@ -47,6 +47,13 @@ struct State {
     engine: Box<dyn SearchEngine>,
 }
 
+#[derive(Clone, Copy)]
+struct StyleState {
+    compact: bool,
+    inline_mode: bool,
+    inner_width: usize,
+}
+
 impl State {
     async fn query_results(&mut self, db: &mut dyn Database) -> Result<Vec<History>> {
         let results = self.engine.query(&self.search, db).await?;
@@ -303,6 +310,12 @@ impl State {
         let preview_chunk = if inline_mode { chunks[2] } else { chunks[3] };
         let header_chunk = if inline_mode { chunks[3] } else { chunks[0] };
 
+        let style = StyleState {
+            compact,
+            inline_mode,
+            inner_width: input_chunk.width.into(),
+        };
+
         let header_chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints(
@@ -324,10 +337,10 @@ impl State {
         let stats = self.build_stats();
         f.render_widget(stats, header_chunks[2]);
 
-        let results_list = Self::build_results_list(compact, inline_mode, results);
+        let results_list = Self::build_results_list(style, results);
         f.render_stateful_widget(results_list, results_list_chunk, &mut self.results_state);
 
-        let input = self.build_input(compact, input_chunk.width.into());
+        let input = self.build_input(style);
         f.render_widget(input, input_chunk);
 
         let preview =
@@ -382,20 +395,27 @@ impl State {
         stats
     }
 
-    fn build_results_list(compact: bool, inline_mode: bool, results: &[History]) -> HistoryList {
-        let results_list = if compact {
-            HistoryList::new(results, inline_mode)
+    fn build_results_list(style: StyleState, results: &[History]) -> HistoryList {
+        let results_list = HistoryList::new(results, style.inline_mode);
+        if style.compact {
+            results_list
+        } else if style.inline_mode {
+            results_list.block(
+                Block::default()
+                    .borders(Borders::LEFT | Borders::RIGHT)
+                    .border_type(BorderType::Rounded)
+                    .title(format!("{:─>width$}", "", width = style.inner_width - 2)),
+            )
         } else {
-            HistoryList::new(results, inline_mode).block(
+            results_list.block(
                 Block::default()
                     .borders(Borders::TOP | Borders::LEFT | Borders::RIGHT)
                     .border_type(BorderType::Rounded),
             )
-        };
-        results_list
+        }
     }
 
-    fn build_input(&mut self, compact: bool, chunk_width: usize) -> Paragraph {
+    fn build_input(&mut self, style: StyleState) -> Paragraph {
         /// Max width of the UI box showing current mode
         const MAX_WIDTH: usize = 14;
         let (pref, mode) = if self.switched_search_mode {
@@ -407,17 +427,23 @@ impl State {
         // sanity check to ensure we don't exceed the layout limits
         debug_assert!(mode_width >= mode.len(), "mode name '{mode}' is too long!");
         let input = format!("[{pref}{mode:^mode_width$}] {}", self.search.input.as_str(),);
-        let input = if compact {
-            Paragraph::new(input)
+        let input = Paragraph::new(input);
+        if style.compact {
+            input
+        } else if style.inline_mode {
+            input.block(
+                Block::default()
+                    .borders(Borders::LEFT | Borders::RIGHT | Borders::TOP)
+                    .border_type(BorderType::Rounded),
+            )
         } else {
-            Paragraph::new(input).block(
+            input.block(
                 Block::default()
                     .borders(Borders::LEFT | Borders::RIGHT)
                     .border_type(BorderType::Rounded)
-                    .title(format!("{:─>width$}", "", width = chunk_width - 2)),
+                    .title(format!("{:─>width$}", "", width = style.inner_width - 2)),
             )
-        };
-        input
+        }
     }
 
     fn build_preview(
