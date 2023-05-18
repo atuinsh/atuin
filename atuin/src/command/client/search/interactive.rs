@@ -279,17 +279,16 @@ impl State {
         let invert = settings.invert;
         let border_size = if compact { 0 } else { 1 };
         let preview_width = f.size().width - 2;
+
         let preview_height = if settings.show_preview {
-            let longest_command = results
-                .iter()
-                .max_by(|h1, h2| h1.command.len().cmp(&h2.command.len()));
-            longest_command.map_or(0, |v| {
-                std::cmp::min(
-                    4,
-                    (v.command.len() as u16 + preview_width - 1 - border_size)
-                        / (preview_width - border_size),
-                )
-            }) + border_size * 2
+            let selected_length = results
+                .get(self.results_state.selected())
+                .map_or(0, |v| v.command.len() as u16);
+
+            let row_width = preview_width - border_size;
+            let rows = (selected_length + preview_width - 1 - border_size) / row_width;
+
+            rows.min(4) + border_size * 2
         } else if compact {
             0
         } else {
