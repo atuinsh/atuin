@@ -148,6 +148,7 @@ pub struct Settings {
     pub shell_up_key_binding: bool,
     pub inline_height: u16,
     pub show_preview: bool,
+    pub show_help: bool,
     pub exit_mode: ExitMode,
     pub word_jump_mode: WordJumpMode,
     pub word_chars: String,
@@ -336,6 +337,7 @@ impl Settings {
             .set_default("style", "auto")?
             .set_default("inline_height", 0)?
             .set_default("show_preview", false)?
+            .set_default("show_help", true)?
             .set_default("exit_mode", "return-original")?
             .set_default("word_jump_mode", "emacs")?
             .set_default(

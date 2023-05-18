@@ -237,6 +237,7 @@ impl State {
         results: &[History],
         compact: bool,
         show_preview: bool,
+        show_help: bool,
     ) {
         let border_size = if compact { 0 } else { 1 };
         let preview_width = f.size().width - 2;
@@ -256,7 +257,7 @@ impl State {
         } else {
             1
         };
-        let show_help = !compact || f.size().height > 1;
+        let show_help = show_help && (!compact || f.size().height > 1);
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .margin(0)
@@ -536,7 +537,15 @@ pub async fn history(
             atuin_client::settings::Style::Compact => true,
             atuin_client::settings::Style::Full => false,
         };
-        terminal.draw(|f| app.draw(f, &results, compact, settings.show_preview))?;
+        terminal.draw(|f| {
+            app.draw(
+                f,
+                &results,
+                compact,
+                settings.show_preview,
+                settings.show_help,
+            )
+        })?;
 
         let initial_input = app.search.input.as_str().to_owned();
         let initial_filter_mode = app.search.filter_mode;
