@@ -7,6 +7,8 @@ use crate::{database::Database, models::User, router::AppState};
 
 use atuin_common::api::*;
 
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 #[instrument(skip_all, fields(user.id = user.id))]
 pub async fn status<DB: Database>(
     user: User,
@@ -35,5 +37,7 @@ pub async fn status<DB: Database>(
         count,
         deleted,
         username: user.username,
+        version: VERSION.to_string(),
+        page_size: state.settings.page_size,
     }))
 }

@@ -74,6 +74,12 @@ pub struct StatusResponse {
     pub count: i64,
     pub username: String,
     pub deleted: Vec<String>,
+
+    // These could/should also go on the index of the server
+    // However, we do not request the server index as a part of normal sync
+    // I'd rather slightly increase the size of this response, than add an extra HTTP request
+    pub page_size: i64, // max page size supported by the server
+    pub version: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

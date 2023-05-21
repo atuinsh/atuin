@@ -11,7 +11,7 @@ use crate::{
     api_client,
     database::Database,
     encryption::{encrypt, load_encoded_key, load_key},
-    settings::{Settings, HISTORY_PAGE_SIZE},
+    settings::Settings,
 };
 
 pub fn hash_str(string: &str) -> String {
@@ -72,7 +72,7 @@ async fn sync_download(
 
         local_count = db.history_count().await?;
 
-        if page.len() < HISTORY_PAGE_SIZE.try_into().unwrap() {
+        if page.len() < remote_status.page_size.try_into().unwrap() {
             break;
         }
 
@@ -134,7 +134,7 @@ async fn sync_upload(
     let mut cursor = Utc::now();
 
     while local_count > remote_count {
-        let last = db.before(cursor, HISTORY_PAGE_SIZE).await?;
+        let last = db.before(cursor, remote_status.page_size).await?;
         let mut buffer = Vec::new();
 
         if last.is_empty() {

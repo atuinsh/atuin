@@ -14,7 +14,6 @@ use super::{
     models::{History, NewHistory, NewSession, NewUser, Session, User},
 };
 use crate::settings::Settings;
-use crate::settings::HISTORY_PAGE_SIZE;
 
 use atuin_common::utils::get_days_from_month;
 
@@ -285,7 +284,7 @@ impl Database for Postgres {
         .bind(host)
         .bind(created_after)
         .bind(since)
-        .bind(HISTORY_PAGE_SIZE)
+        .bind(self.settings.page_size)
         .fetch_all(&self.pool)
         .await?;
 
