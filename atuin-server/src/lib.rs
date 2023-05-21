@@ -15,6 +15,7 @@ pub mod handlers;
 pub mod models;
 pub mod router;
 pub mod settings;
+pub mod utils;
 
 pub async fn launch(settings: Settings, host: String, port: u16) -> Result<()> {
     let host = host.parse::<IpAddr>()?;
