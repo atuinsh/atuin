@@ -3,7 +3,7 @@ members = ["atuin", "atuin-client", "atuin-server", "atuin-common"]
 
 [workspace.package]
 name = "atuin"
-version = "14.0.1"
+version = "15.0.0"
 authors = ["Ellie Huxtable <ellie@elliehuxtable.com>"]
 rust-version = "1.59"
 license = "MIT"
