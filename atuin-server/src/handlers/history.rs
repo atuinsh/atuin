@@ -49,8 +49,9 @@ pub async fn list<DB: Database>(
     let db = &state.0.database;
 
     let agent = headers
-        .get("user_agent")
+        .get("user-agent")
         .map_or("", |v| v.to_str().unwrap_or(""));
+
     let variable_page_size = client_version_min(agent, ">=15.0.0").unwrap_or(false);
 
     let page_size = if variable_page_size {
