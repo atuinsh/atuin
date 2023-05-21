@@ -13,6 +13,7 @@ use super::format_duration;
 pub struct HistoryList<'a> {
     history: &'a [History],
     block: Option<Block<'a>>,
+    inverted: bool,
 }
 
 #[derive(Default)]
@@ -61,6 +62,7 @@ impl<'a> StatefulWidget for HistoryList<'a> {
             x: 0,
             y: 0,
             state,
+            inverted: self.inverted,
         };
 
         for item in self.history.iter().skip(state.offset).take(end - start) {
@@ -77,10 +79,11 @@ impl<'a> StatefulWidget for HistoryList<'a> {
 }
 
 impl<'a> HistoryList<'a> {
-    pub fn new(history: &'a [History]) -> Self {
+    pub fn new(history: &'a [History], inverted: bool) -> Self {
         Self {
             history,
             block: None,
+            inverted,
         }
     }
 
@@ -110,6 +113,7 @@ struct DrawState<'a> {
     x: u16,
     y: u16,
     state: &'a ListState,
+    inverted: bool,
 }
 
 // longest line prefix I could come up with
@@ -176,7 +180,13 @@ impl DrawState<'_> {
 
     fn draw(&mut self, s: &str, style: Style) {
         let cx = self.list_area.left() + self.x;
-        let cy = self.list_area.bottom() - self.y - 1;
+
+        let cy = if self.inverted {
+            self.list_area.top() + self.y
+        } else {
+            self.list_area.bottom() - self.y - 1
+        };
+
         let w = (self.list_area.width - self.x) as usize;
         self.x += self.buf.set_stringn(cx, cy, s, w, style).0 - cx;
     }
