@@ -50,6 +50,7 @@ pub trait Database {
         created_after: chrono::NaiveDateTime,
         since: chrono::NaiveDateTime,
         host: &str,
+        page_size: i64,
     ) -> Result<Vec<History>>;
 
     async fn add_history(&self, history: &[NewHistory]) -> Result<()>;
@@ -270,6 +271,7 @@ impl Database for Postgres {
         created_after: chrono::NaiveDateTime,
         since: chrono::NaiveDateTime,
         host: &str,
+        page_size: i64,
     ) -> Result<Vec<History>> {
         let res = sqlx::query_as::<_, History>(
             "select id, client_id, user_id, hostname, timestamp, data, created_at from history 
@@ -284,7 +286,7 @@ impl Database for Postgres {
         .bind(host)
         .bind(created_after)
         .bind(since)
-        .bind(self.settings.page_size)
+        .bind(page_size)
         .fetch_all(&self.pool)
         .await?;
 
