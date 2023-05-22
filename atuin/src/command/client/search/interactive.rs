@@ -278,7 +278,7 @@ impl State {
         } else {
             1
         };
-        let show_help = !compact || f.size().height > 1;
+        let show_help = settings.show_help && (!compact || f.size().height > 1);
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .margin(0)

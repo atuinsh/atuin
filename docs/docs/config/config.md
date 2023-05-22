@@ -196,6 +196,12 @@ Configure whether or not to show a preview of the selected command.
 
 Useful when the command is longer than the terminal width and is cut off.
 
+### `show_help`
+
+Configure whether or not to show the help row, which includes the current Atuin version (and whether an update is available), a keymap hint, and the total amount of commands in your history.
+
+Defaults to `true`.
+
 ### `exit_mode`
 
 What to do when the escape key is pressed when searching
