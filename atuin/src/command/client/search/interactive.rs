@@ -47,6 +47,13 @@ struct State {
     engine: Box<dyn SearchEngine>,
 }
 
+#[derive(Clone, Copy)]
+struct StyleState {
+    compact: bool,
+    invert: bool,
+    inner_width: usize,
+}
+
 impl State {
     async fn query_results(&mut self, db: &mut dyn Database) -> Result<Vec<History>> {
         let results = self.engine.query(&self.search, db).await?;
@@ -99,6 +106,7 @@ impl State {
 
         let ctrl = input.modifiers.contains(KeyModifiers::CONTROL);
         let alt = input.modifiers.contains(KeyModifiers::ALT);
+
         // reset the state, will be set to true later if user really did change it
         self.switched_search_mode = false;
         match input.code {
@@ -190,13 +198,23 @@ impl State {
                 self.search_mode = self.search_mode.next(settings);
                 self.engine = engines::engine(self.search_mode);
             }
-            KeyCode::Down if self.results_state.selected() == 0 => {
+            KeyCode::Down if !settings.invert && self.results_state.selected() == 0 => {
                 return Some(match settings.exit_mode {
                     ExitMode::ReturnOriginal => RETURN_ORIGINAL,
                     ExitMode::ReturnQuery => RETURN_QUERY,
                 })
             }
-            KeyCode::Down => {
+            KeyCode::Up if settings.invert && self.results_state.selected() == 0 => {
+                return Some(match settings.exit_mode {
+                    ExitMode::ReturnOriginal => RETURN_ORIGINAL,
+                    ExitMode::ReturnQuery => RETURN_QUERY,
+                })
+            }
+            KeyCode::Down if !settings.invert => {
+                let i = self.results_state.selected().saturating_sub(1);
+                self.results_state.select(i);
+            }
+            KeyCode::Up if settings.invert => {
                 let i = self.results_state.selected().saturating_sub(1);
                 self.results_state.select(i);
             }
@@ -204,7 +222,11 @@ impl State {
                 let i = self.results_state.selected().saturating_sub(1);
                 self.results_state.select(i);
             }
-            KeyCode::Up => {
+            KeyCode::Up if !settings.invert => {
+                let i = self.results_state.selected() + 1;
+                self.results_state.select(i.min(len - 1));
+            }
+            KeyCode::Down if settings.invert => {
                 let i = self.results_state.selected() + 1;
                 self.results_state.select(i.min(len - 1));
             }
@@ -231,13 +253,13 @@ impl State {
 
     #[allow(clippy::cast_possible_truncation)]
     #[allow(clippy::bool_to_int_with_if)]
-    fn draw<T: Backend>(
-        &mut self,
-        f: &mut Frame<'_, T>,
-        results: &[History],
-        compact: bool,
-        settings: &Settings,
-    ) {
+    fn draw<T: Backend>(&mut self, f: &mut Frame<'_, T>, results: &[History], settings: &Settings) {
+        let compact = match settings.style {
+            atuin_client::settings::Style::Auto => f.size().height < 14,
+            atuin_client::settings::Style::Compact => true,
+            atuin_client::settings::Style::Full => false,
+        };
+        let invert = settings.invert;
         let border_size = if compact { 0 } else { 1 };
         let preview_width = f.size().width - 2;
         let preview_height = if settings.show_preview {
@@ -262,15 +284,34 @@ impl State {
             .margin(0)
             .horizontal_margin(1)
             .constraints(
-                [
-                    Constraint::Length(if show_help { 1 } else { 0 }),
-                    Constraint::Min(1),
-                    Constraint::Length(1 + border_size),
-                    Constraint::Length(preview_height),
-                ]
+                if invert {
+                    [
+                        Constraint::Length(1 + border_size),               // input
+                        Constraint::Min(1),                                // results list
+                        Constraint::Length(preview_height),                // preview
+                        Constraint::Length(if show_help { 1 } else { 0 }), // header (sic)
+                    ]
+                } else {
+                    [
+                        Constraint::Length(if show_help { 1 } else { 0 }), // header
+                        Constraint::Min(1),                                // results list
+                        Constraint::Length(1 + border_size),               // input
+                        Constraint::Length(preview_height),                // preview
+                    ]
+                }
                 .as_ref(),
             )
             .split(f.size());
+        let input_chunk = if invert { chunks[0] } else { chunks[2] };
+        let results_list_chunk = chunks[1];
+        let preview_chunk = if invert { chunks[2] } else { chunks[3] };
+        let header_chunk = if invert { chunks[3] } else { chunks[0] };
+
+        let style = StyleState {
+            compact,
+            invert,
+            inner_width: input_chunk.width.into(),
+        };
 
         let header_chunks = Layout::default()
             .direction(Direction::Horizontal)
@@ -282,7 +323,7 @@ impl State {
                 ]
                 .as_ref(),
             )
-            .split(chunks[0]);
+            .split(header_chunk);
 
         let title = self.build_title();
         f.render_widget(title, header_chunks[0]);
@@ -293,22 +334,23 @@ impl State {
         let stats = self.build_stats();
         f.render_widget(stats, header_chunks[2]);
 
-        let results_list = Self::build_results_list(compact, results);
-        f.render_stateful_widget(results_list, chunks[1], &mut self.results_state);
+        let results_list = Self::build_results_list(style, results);
+        f.render_stateful_widget(results_list, results_list_chunk, &mut self.results_state);
 
-        let input = self.build_input(compact, chunks[2].width.into());
-        f.render_widget(input, chunks[2]);
+        let input = self.build_input(style);
+        f.render_widget(input, input_chunk);
 
-        let preview = self.build_preview(results, compact, preview_width, chunks[3].width.into());
-        f.render_widget(preview, chunks[3]);
+        let preview =
+            self.build_preview(results, compact, preview_width, preview_chunk.width.into());
+        f.render_widget(preview, preview_chunk);
 
         let extra_width = UnicodeWidthStr::width(self.search.input.substring());
 
         let cursor_offset = if compact { 0 } else { 1 };
         f.set_cursor(
             // Put cursor past the end of the input text
-            chunks[2].x + extra_width as u16 + PREFIX_LENGTH + 1 + cursor_offset,
-            chunks[2].y + cursor_offset,
+            input_chunk.x + extra_width as u16 + PREFIX_LENGTH + 1 + cursor_offset,
+            input_chunk.y + cursor_offset,
         );
     }
 
@@ -350,20 +392,27 @@ impl State {
         stats
     }
 
-    fn build_results_list(compact: bool, results: &[History]) -> HistoryList {
-        let results_list = if compact {
-            HistoryList::new(results)
+    fn build_results_list(style: StyleState, results: &[History]) -> HistoryList {
+        let results_list = HistoryList::new(results, style.invert);
+        if style.compact {
+            results_list
+        } else if style.invert {
+            results_list.block(
+                Block::default()
+                    .borders(Borders::LEFT | Borders::RIGHT)
+                    .border_type(BorderType::Rounded)
+                    .title(format!("{:─>width$}", "", width = style.inner_width - 2)),
+            )
         } else {
-            HistoryList::new(results).block(
+            results_list.block(
                 Block::default()
                     .borders(Borders::TOP | Borders::LEFT | Borders::RIGHT)
                     .border_type(BorderType::Rounded),
             )
-        };
-        results_list
+        }
     }
 
-    fn build_input(&mut self, compact: bool, chunk_width: usize) -> Paragraph {
+    fn build_input(&mut self, style: StyleState) -> Paragraph {
         /// Max width of the UI box showing current mode
         const MAX_WIDTH: usize = 14;
         let (pref, mode) = if self.switched_search_mode {
@@ -375,17 +424,23 @@ impl State {
         // sanity check to ensure we don't exceed the layout limits
         debug_assert!(mode_width >= mode.len(), "mode name '{mode}' is too long!");
         let input = format!("[{pref}{mode:^mode_width$}] {}", self.search.input.as_str(),);
-        let input = if compact {
-            Paragraph::new(input)
+        let input = Paragraph::new(input);
+        if style.compact {
+            input
+        } else if style.invert {
+            input.block(
+                Block::default()
+                    .borders(Borders::LEFT | Borders::RIGHT | Borders::TOP)
+                    .border_type(BorderType::Rounded),
+            )
         } else {
-            Paragraph::new(input).block(
+            input.block(
                 Block::default()
                     .borders(Borders::LEFT | Borders::RIGHT)
                     .border_type(BorderType::Rounded)
-                    .title(format!("{:─>width$}", "", width = chunk_width - 2)),
+                    .title(format!("{:─>width$}", "", width = style.inner_width - 2)),
             )
-        };
-        input
+        }
     }
 
     fn build_preview(
@@ -529,14 +584,7 @@ pub async fn history(
     let mut results = app.query_results(&mut db).await?;
 
     let index = 'render: loop {
-        let compact = match settings.style {
-            atuin_client::settings::Style::Auto => {
-                terminal.size().map(|size| size.height < 14).unwrap_or(true)
-            }
-            atuin_client::settings::Style::Compact => true,
-            atuin_client::settings::Style::Full => false,
-        };
-        terminal.draw(|f| app.draw(f, &results, compact, settings))?;
+        terminal.draw(|f| app.draw(f, &results, settings))?;
 
         let initial_input = app.search.input.as_str().to_owned();
         let initial_filter_mode = app.search.filter_mode;

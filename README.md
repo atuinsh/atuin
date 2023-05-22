@@ -100,7 +100,7 @@ Read more below for offline-only usage, or for hosting your own server.
 ```
 bash <(curl https://raw.githubusercontent.com/ellie/atuin/main/install.sh)
 
-atuin register -u <USERNAME> -e <EMAIL> -p <PASSWORD>
+atuin register -u <USERNAME> -e <EMAIL>
 atuin import auto
 atuin sync
 ```
@@ -129,6 +129,8 @@ bash <(curl https://raw.githubusercontent.com/ellie/atuin/main/install.sh)
             
 atuin import auto
 ```
+
+By default, Atuin will check for updates. You can [disable update checks by modifying](https://atuin.sh/docs/config/#update_check) `config.toml`.
 
 Then restart your shell!
 
@@ -258,6 +260,10 @@ Then setup Atuin
 ```
 echo 'eval "$(atuin init bash)"' >> ~/.bashrc
 ```
+
+**PLEASE NOTE**
+
+bash-preexec currently has an issue where it will stop honoring `ignorespace`. While Atuin will ignore commands prefixed with whitespace, they may still end up in your bash history. Please check your configuration! All other shells do not have this issue.
 
 ### fish
 

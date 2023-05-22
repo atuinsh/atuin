@@ -197,6 +197,7 @@ dependencies = [
  "http",
  "rand",
  "reqwest",
+ "semver",
  "serde",
  "serde_json",
  "sodiumoxide",

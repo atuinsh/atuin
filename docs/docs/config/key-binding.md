@@ -16,7 +16,7 @@ eval "$(atuin init zsh --disable-ctrl-r)"
 ```
 
 If you do not want either key to be bound, either pass both `--disable` arguments, or set the
-environment varuable `ATUIN_NOBIND` to any value before the call to `atuin init`:
+environment variable `ATUIN_NOBIND` to any value before the call to `atuin init`:
 
 ```
 ## Do not bind any keys
