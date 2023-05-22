@@ -236,12 +236,11 @@ impl State {
         f: &mut Frame<'_, T>,
         results: &[History],
         compact: bool,
-        show_preview: bool,
-        show_help: bool,
+        settings: &Settings,
     ) {
         let border_size = if compact { 0 } else { 1 };
         let preview_width = f.size().width - 2;
-        let preview_height = if show_preview {
+        let preview_height = if settings.show_preview {
             let longest_command = results
                 .iter()
                 .max_by(|h1, h2| h1.command.len().cmp(&h2.command.len()));
@@ -257,7 +256,7 @@ impl State {
         } else {
             1
         };
-        let show_help = show_help && (!compact || f.size().height > 1);
+        let show_help = settings.show_help && (!compact || f.size().height > 1);
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .margin(0)
@@ -537,15 +536,7 @@ pub async fn history(
             atuin_client::settings::Style::Compact => true,
             atuin_client::settings::Style::Full => false,
         };
-        terminal.draw(|f| {
-            app.draw(
-                f,
-                &results,
-                compact,
-                settings.show_preview,
-                settings.show_help,
-            )
-        })?;
+        terminal.draw(|f| app.draw(f, &results, compact, settings))?;
 
         let initial_input = app.search.input.as_str().to_owned();
         let initial_filter_mode = app.search.filter_mode;
