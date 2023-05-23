@@ -45,11 +45,11 @@ impl Cmd {
             Self::Register(r) => r.run(&settings).await,
             Self::Status => status::run(&settings, db).await,
             Self::Key { base64 } => {
-                use atuin_client::encryption::{encode_key, load_key};
-                let key = load_key(&settings).wrap_err("could not load encryption key")?;
+                use atuin_client::encryption::key;
+                let key = key::load(&settings).wrap_err("could not load encryption key")?;
 
                 if base64 {
-                    let encode = encode_key(&key).wrap_err("could not encode encryption key")?;
+                    let encode = key::encode(&key).wrap_err("could not encode encryption key")?;
                     println!("{encode}");
                 } else {
                     let mnemonic = bip39::Mnemonic::from_entropy(&key, bip39::Language::English)

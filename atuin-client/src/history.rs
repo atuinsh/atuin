@@ -19,21 +19,6 @@ pub struct History {
     pub deleted_at: Option<chrono::DateTime<Utc>>,
 }
 
-// Forgive me, for I have sinned
-// I need to replace rmp with something that is more backwards-compatible.
-// Protobuf, or maybe just json
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, sqlx::FromRow)]
-pub struct HistoryWithoutDelete {
-    pub id: String,
-    pub timestamp: chrono::DateTime<Utc>,
-    pub duration: i64,
-    pub exit: i64,
-    pub command: String,
-    pub cwd: String,
-    pub session: String,
-    pub hostname: String,
-}
-
 impl History {
     #[allow(clippy::too_many_arguments)]
     pub fn new(

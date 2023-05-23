@@ -274,7 +274,7 @@ impl Database for Postgres {
         page_size: i64,
     ) -> Result<Vec<History>> {
         let res = sqlx::query_as::<_, History>(
-            "select id, client_id, user_id, hostname, timestamp, data, created_at from history 
+            "select id, client_id, user_id, hostname, timestamp, data, created_at, scheme from history
             where user_id = $1
             and hostname != $2
             and created_at >= $3

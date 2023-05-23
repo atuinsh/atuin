@@ -1,15 +1,9 @@
-use atuin_client::{
-    api_client, database::Database, encryption::load_encoded_key, settings::Settings,
-};
+use atuin_client::{api_client, database::Database, settings::Settings};
 use colored::Colorize;
 use eyre::Result;
 
 pub async fn run(settings: &Settings, db: &impl Database) -> Result<()> {
-    let client = api_client::Client::new(
-        &settings.sync_address,
-        &settings.session_token,
-        load_encoded_key(settings)?,
-    )?;
+    let client = api_client::Client::new(settings)?;
 
     let status = client.status().await?;
     let last_sync = Settings::last_sync()?;

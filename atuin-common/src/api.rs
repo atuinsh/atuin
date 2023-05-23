@@ -39,6 +39,56 @@ pub struct AddHistoryRequest {
     pub timestamp: chrono::DateTime<Utc>,
     pub data: String,
     pub hostname: String,
+    // the encryption scheme used
+    pub scheme: Option<EncryptionScheme>,
+}
+
+#[derive(Debug)]
+pub enum EncryptionScheme {
+    /// Encryption scheme using xsalsa20poly1305 (tweetnacl crypto_box) using the legacy system
+    /// with no additional data.
+    XSalsa20Poly1305Legacy,
+
+    /// Encryption scheme using xchacha20poly1305. Entry host+id+timestamp are saved in the additional data.
+    /// The key is derived from the original using the ID as info and "shell-history"+padded zeros as the salt
+    XChaCha20Poly1305,
+
+    Unknown(String),
+}
+
+impl EncryptionScheme {
+    pub fn to_str(&self) -> &str {
+        match self {
+            EncryptionScheme::XSalsa20Poly1305Legacy => "XSalsa20Poly1305Legacy",
+            EncryptionScheme::XChaCha20Poly1305 => "XChaCha20Poly1305",
+            EncryptionScheme::Unknown(x) => x,
+        }
+    }
+    pub fn from_string(s: String) -> Self {
+        match &*s {
+            "XSalsa20Poly1305Legacy" => EncryptionScheme::XSalsa20Poly1305Legacy,
+            "XChaCha20Poly1305" => EncryptionScheme::XChaCha20Poly1305,
+            _ => EncryptionScheme::Unknown(s),
+        }
+    }
+}
+
+impl Serialize for EncryptionScheme {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.to_str().serialize(serializer)
+    }
+}
+impl<'de> Deserialize<'de> for EncryptionScheme {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Ok(Self::from_string(s))
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -56,6 +106,7 @@ pub struct SyncHistoryRequest {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SyncHistoryResponse {
     pub history: Vec<String>,
+    pub more_history: Vec<AddHistoryRequest>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

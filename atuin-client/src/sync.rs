@@ -5,12 +5,12 @@ use std::iter::FromIterator;
 use chrono::prelude::*;
 use eyre::Result;
 
-use atuin_common::api::AddHistoryRequest;
+use atuin_common::api::{AddHistoryRequest, EncryptionScheme};
 
 use crate::{
     api_client,
     database::Database,
-    encryption::{encrypt, load_encoded_key, load_key},
+    encryption::{key, xsalsa20poly1305legacy},
     settings::Settings,
 };
 
@@ -127,7 +127,7 @@ async fn sync_upload(
 
     debug!("remote has {}, we have {}", remote_count, local_count);
 
-    let key = load_key(settings)?; // encryption key
+    let key = key::load(settings)?; // encryption key
 
     // first just try the most recent set
 
@@ -142,7 +142,7 @@ async fn sync_upload(
         }
 
         for i in last {
-            let data = encrypt(&i, &key)?;
+            let data = xsalsa20poly1305legacy::encrypt(&i, &key)?;
             let data = serde_json::to_string(&data)?;
 
             let add_hist = AddHistoryRequest {
@@ -150,6 +150,7 @@ async fn sync_upload(
                 timestamp: i.timestamp,
                 data,
                 hostname: hash_str(&i.hostname),
+                scheme: Some(EncryptionScheme::XSalsa20Poly1305Legacy),
             };
 
             buffer.push(add_hist);
@@ -178,11 +179,7 @@ async fn sync_upload(
 }
 
 pub async fn sync(settings: &Settings, force: bool, db: &mut (impl Database + Send)) -> Result<()> {
-    let client = api_client::Client::new(
-        &settings.sync_address,
-        &settings.session_token,
-        load_encoded_key(settings)?,
-    )?;
+    let client = api_client::Client::new(settings)?;
 
     sync_upload(settings, force, &client, db).await?;
 

@@ -7,6 +7,7 @@ pub struct History {
     pub user_id: i64,
     pub hostname: String,
     pub timestamp: NaiveDateTime,
+    pub scheme: Option<String>,
 
     pub data: String,
 

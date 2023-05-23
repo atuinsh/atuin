@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
+use atuin_common::api::EncryptionScheme;
 use chrono::Utc;
 use eyre::{bail, Result};
 use reqwest::{
@@ -13,13 +14,10 @@ use atuin_common::api::{
     LoginRequest, LoginResponse, RegisterResponse, StatusResponse, SyncHistoryResponse,
 };
 use semver::Version;
-use xsalsa20poly1305::Key;
 
-use crate::{
-    encryption::{decode_key, decrypt},
-    history::History,
-    sync::hash_str,
-};
+use crate::encryption::{key, xchacha20poly1305, xsalsa20poly1305legacy};
+use crate::settings::Settings;
+use crate::{history::History, sync::hash_str};
 
 static APP_USER_AGENT: &str = concat!("atuin/", env!("CARGO_PKG_VERSION"),);
 
@@ -28,7 +26,7 @@ static APP_USER_AGENT: &str = concat!("atuin/", env!("CARGO_PKG_VERSION"),);
 
 pub struct Client<'a> {
     sync_addr: &'a str,
-    key: Key,
+    key: key::Key,
     client: reqwest::Client,
 }
 
@@ -110,13 +108,16 @@ pub async fn latest_version() -> Result<Version> {
 }
 
 impl<'a> Client<'a> {
-    pub fn new(sync_addr: &'a str, session_token: &'a str, key: String) -> Result<Self> {
+    pub fn new(settings: &'a Settings) -> Result<Self> {
         let mut headers = HeaderMap::new();
-        headers.insert(AUTHORIZATION, format!("Token {session_token}").parse()?);
+        headers.insert(
+            AUTHORIZATION,
+            format!("Token {}", settings.session_token).parse()?,
+        );
 
         Ok(Client {
-            sync_addr,
-            key: decode_key(key)?,
+            sync_addr: &settings.sync_address,
+            key: key::load(settings)?,
             client: reqwest::Client::builder()
                 .user_agent(APP_USER_AGENT)
                 .default_headers(headers)
@@ -177,23 +178,28 @@ impl<'a> Client<'a> {
         let resp = self.client.get(url).send().await?;
 
         let history = resp.json::<SyncHistoryResponse>().await?;
-        let history = history
-            .history
-            .iter()
-            // TODO: handle deletion earlier in this chain
-            .map(|h| serde_json::from_str(h).expect("invalid base64"))
-            .map(|h| decrypt(h, &self.key).expect("failed to decrypt history! check your key"))
-            .map(|mut h| {
-                if deleted.contains(&h.id) {
-                    h.deleted_at = Some(chrono::Utc::now());
-                    h.command = String::from("");
+
+        let mut output = Vec::with_capacity(history.history.len());
+        for entry in history.more_history {
+            let mut history = match entry.scheme {
+                Some(EncryptionScheme::XSalsa20Poly1305Legacy) | None => {
+                    xsalsa20poly1305legacy::decrypt(entry.data, &self.key)?
                 }
+                Some(EncryptionScheme::XChaCha20Poly1305) => {
+                    xchacha20poly1305::decrypt(entry.data, &self.key, &entry.id)?
+                }
+                Some(EncryptionScheme::Unknown(x)) => {
+                    bail!("cannot decrypt '{x}' encryption scheme")
+                }
+            };
+            if deleted.contains(&entry.id) {
+                history.deleted_at = Some(Utc::now());
+                history.command.clear();
+            }
+            output.push(history);
+        }
 
-                h
-            })
-            .collect();
-
-        Ok(history)
+        Ok(output)
     }
 
     pub async fn post_history(&self, history: &[AddHistoryRequest]) -> Result<()> {

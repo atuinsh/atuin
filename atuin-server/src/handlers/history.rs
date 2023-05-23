@@ -5,6 +5,7 @@ use axum::{
     http::HeaderMap,
     Json,
 };
+use chrono::{TimeZone, Utc};
 use http::StatusCode;
 use tracing::{debug, error, instrument};
 
@@ -60,7 +61,7 @@ pub async fn list<DB: Database>(
         100
     };
 
-    let history = db
+    let entries = db
         .list_history(
             &user,
             req.sync_ts.naive_utc(),
@@ -78,16 +79,26 @@ pub async fn list<DB: Database>(
         );
     }
 
-    if let Err(e) = history {
-        error!("failed to load history: {}", e);
-        return Err(ErrorResponse::reply("failed to load history")
-            .with_status(StatusCode::INTERNAL_SERVER_ERROR));
-    }
+    let entries = match entries {
+        Ok(e) => e,
+        Err(e) => {
+            error!("failed to load history: {}", e);
+            return Err(ErrorResponse::reply("failed to load history")
+                .with_status(StatusCode::INTERNAL_SERVER_ERROR));
+        }
+    };
 
-    let history: Vec<String> = history
-        .unwrap()
-        .iter()
-        .map(|i| i.data.to_string())
+    let history: Vec<String> = entries.iter().map(|i| i.data.clone()).collect();
+
+    let more_history: Vec<AddHistoryRequest> = entries
+        .into_iter()
+        .map(|i| AddHistoryRequest {
+            id: i.client_id,
+            timestamp: Utc.from_utc_datetime(&i.timestamp),
+            data: i.data,
+            hostname: i.hostname,
+            scheme: i.scheme.map(EncryptionScheme::from_string),
+        })
         .collect();
 
     debug!(
@@ -96,7 +107,10 @@ pub async fn list<DB: Database>(
         user.id
     );
 
-    Ok(Json(SyncHistoryResponse { history }))
+    Ok(Json(SyncHistoryResponse {
+        history,
+        more_history,
+    }))
 }
 
 #[instrument(skip_all, fields(user.id = user.id))]

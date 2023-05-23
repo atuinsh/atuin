@@ -1,4 +1,4 @@
-use atuin_client::{api_client, encryption::load_encoded_key, settings::Settings};
+use atuin_client::{api_client, settings::Settings};
 use eyre::{bail, Result};
 use std::path::PathBuf;
 
@@ -9,11 +9,7 @@ pub async fn run(settings: &Settings) -> Result<()> {
         bail!("You are not logged in");
     }
 
-    let client = api_client::Client::new(
-        &settings.sync_address,
-        &settings.session_token,
-        load_encoded_key(settings)?,
-    )?;
+    let client = api_client::Client::new(settings)?;
 
     client.delete().await?;
 
