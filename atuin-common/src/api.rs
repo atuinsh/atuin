@@ -46,11 +46,12 @@ pub struct AddHistoryRequest {
 #[derive(Debug)]
 pub enum EncryptionScheme {
     /// Encryption scheme using xsalsa20poly1305 (tweetnacl crypto_box) using the legacy system
-    /// with no additional data.
+    /// with no additional data and the same key for each entry with random IV
     XSalsa20Poly1305Legacy,
 
-    /// Encryption scheme using xchacha20poly1305. Entry host+id+timestamp are saved in the additional data.
-    /// The key is derived from the original using the ID as info and "shell-history"+padded zeros as the salt
+    /// Encryption scheme using xchacha20poly1305. Entry id is used in the additional data.
+    /// The key is derived from the original using the ID as info and "history" as the salt.
+    /// Each entry uses a random IV too.
     XChaCha20Poly1305,
 
     Unknown(String),
