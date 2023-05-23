@@ -3,6 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use atuin_common::api::EncryptionScheme;
 use chrono::{prelude::*, Utc};
 use clap::ValueEnum;
 use config::{Config, Environment, File as ConfigFile, FileFormat};
@@ -158,6 +159,7 @@ pub struct Settings {
     pub history_filter: RegexSet,
     #[serde(with = "serde_regex", default = "RegexSet::empty")]
     pub cwd_filter: RegexSet,
+    pub encryption_scheme: EncryptionScheme,
 
     // This is automatically loaded when settings is created. Do not set in
     // config! Keep secrets and settings apart.
@@ -349,6 +351,7 @@ impl Settings {
             .set_default("scroll_context_lines", 1)?
             .set_default("shell_up_key_binding", false)?
             .set_default("session_token", "")?
+            .set_default("encryption_scheme", "XSalsa20Poly1305Legacy")?
             .add_source(
                 Environment::with_prefix("atuin")
                     .prefix_separator("_")

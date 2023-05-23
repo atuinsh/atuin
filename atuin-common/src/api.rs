@@ -43,7 +43,7 @@ pub struct AddHistoryRequest {
     pub scheme: Option<EncryptionScheme>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum EncryptionScheme {
     /// Encryption scheme using xsalsa20poly1305 (tweetnacl crypto_box) using the legacy system
     /// with no additional data and the same key for each entry with random IV

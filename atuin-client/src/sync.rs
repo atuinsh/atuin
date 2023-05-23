@@ -3,14 +3,14 @@ use std::convert::TryInto;
 use std::iter::FromIterator;
 
 use chrono::prelude::*;
-use eyre::Result;
+use eyre::{bail, Result};
 
 use atuin_common::api::{AddHistoryRequest, EncryptionScheme};
 
 use crate::{
     api_client,
     database::Database,
-    encryption::{key, xsalsa20poly1305legacy},
+    encryption::{key, xchacha20poly1305, xsalsa20poly1305legacy},
     settings::Settings,
 };
 
@@ -142,15 +142,20 @@ async fn sync_upload(
         }
 
         for i in last {
-            let data = xsalsa20poly1305legacy::encrypt(&i, &key)?;
-            let data = serde_json::to_string(&data)?;
-
             let add_hist = AddHistoryRequest {
-                id: i.id,
+                id: i.id.clone(),
                 timestamp: i.timestamp,
-                data,
                 hostname: hash_str(&i.hostname),
-                scheme: Some(EncryptionScheme::XSalsa20Poly1305Legacy),
+                scheme: Some(settings.encryption_scheme.clone()),
+                data: match &settings.encryption_scheme {
+                    EncryptionScheme::XSalsa20Poly1305Legacy => {
+                        xsalsa20poly1305legacy::encrypt(&i, &key)?
+                    }
+                    EncryptionScheme::XChaCha20Poly1305 => xchacha20poly1305::encrypt(i, &key)?,
+                    EncryptionScheme::Unknown(x) => {
+                        bail!("cannot encrypt with '{x}' encryption scheme")
+                    }
+                },
             };
 
             buffer.push(add_hist);

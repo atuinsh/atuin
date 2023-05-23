@@ -230,17 +230,17 @@ pub mod xchacha20poly1305 {
         Ok(content_key)
     }
 
-    pub fn encrypt(history: &History, key: &Key) -> Result<String> {
+    pub fn encrypt(history: History, key: &Key) -> Result<String> {
         // a unique encryption key for this entry
         let content_key = content_key(key, &history.id)?;
 
         let mut plaintext = rmp_serde::to_vec(&HistoryPlaintext {
             duration: history.duration,
             exit: history.exit,
-            command: history.command.to_owned(),
-            cwd: history.cwd.to_owned(),
-            session: history.session.to_owned(),
-            hostname: history.hostname.to_owned(),
+            command: history.command,
+            cwd: history.cwd,
+            session: history.session,
+            hostname: history.hostname,
             timestamp: history.timestamp,
         })?;
 
@@ -311,8 +311,8 @@ pub mod xchacha20poly1305 {
             };
 
             // same contents, different id, different encryption key
-            let e1 = encrypt(&history1, &key).unwrap();
-            let e2 = encrypt(&history2, &key).unwrap();
+            let e1 = encrypt(history1.clone(), &key).unwrap();
+            let e2 = encrypt(history2.clone(), &key).unwrap();
 
             assert_ne!(e1, e2);
 
