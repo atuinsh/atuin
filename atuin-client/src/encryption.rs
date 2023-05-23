@@ -215,10 +215,6 @@ pub mod xchacha20poly1305 {
         pub timestamp: chrono::DateTime<Utc>,
     }
     #[derive(Debug, Serialize, Deserialize)]
-    struct HistoryAdditionalData {
-        pub id: String,
-    }
-    #[derive(Debug, Serialize, Deserialize)]
     struct EncryptedHistory {
         pub ciphertext: Vec<u8>,
         pub nonce: Nonce<XChaCha20Poly1305>,
@@ -261,10 +257,10 @@ pub mod xchacha20poly1305 {
         Ok(record)
     }
 
-    pub fn decrypt(encrypted_history: String, key: &Key, id: &str) -> Result<History> {
+    pub fn decrypt(encrypted_history: &str, key: &Key, id: &str) -> Result<History> {
         let content_key = content_key(key, id)?;
 
-        let mut decoded: EncryptedHistory = serde_json::from_str(&encrypted_history)?;
+        let mut decoded: EncryptedHistory = serde_json::from_str(encrypted_history)?;
 
         XChaCha20Poly1305::new(&content_key)
             .decrypt_in_place(&decoded.nonce, id.as_bytes(), &mut decoded.ciphertext)
@@ -288,7 +284,8 @@ pub mod xchacha20poly1305 {
 
     #[cfg(test)]
     mod test {
-        use xsalsa20poly1305::{aead::OsRng, KeyInit, XSalsa20Poly1305};
+        use chacha20poly1305::{aead::OsRng, KeyInit};
+        use xsalsa20poly1305::XSalsa20Poly1305;
 
         use crate::history::History;
 
@@ -296,10 +293,9 @@ pub mod xchacha20poly1305 {
 
         #[test]
         fn test_encrypt_decrypt() {
-            let key1 = XSalsa20Poly1305::generate_key(&mut OsRng);
-            let key2 = XSalsa20Poly1305::generate_key(&mut OsRng);
+            let key = XSalsa20Poly1305::generate_key(&mut OsRng);
 
-            let history = History::new(
+            let history1 = History::new(
                 chrono::Utc::now(),
                 "ls".to_string(),
                 "/home/ellie".to_string(),
@@ -309,21 +305,30 @@ pub mod xchacha20poly1305 {
                 Some("booop".to_string()),
                 None,
             );
+            let history2 = History {
+                id: "another-id".to_owned(),
+                ..history1.clone()
+            };
 
-            let e1 = encrypt(&history, &key1).unwrap();
-            let e2 = encrypt(&history, &key2).unwrap();
+            // same contents, different id, different encryption key
+            let e1 = encrypt(&history1, &key).unwrap();
+            let e2 = encrypt(&history2, &key).unwrap();
 
             assert_ne!(e1, e2);
 
             // test decryption works
             // this should pass
-            match decrypt(e1, &key1, &history.id) {
+            match decrypt(&e1, &key, &history1.id) {
                 Err(e) => panic!("failed to decrypt, got {}", e),
-                Ok(h) => assert_eq!(h, history),
+                Ok(h) => assert_eq!(h, history1),
+            };
+            match decrypt(&e2, &key, &history2.id) {
+                Err(e) => panic!("failed to decrypt, got {}", e),
+                Ok(h) => assert_eq!(h, history2),
             };
 
             // this should err
-            let _ = decrypt(e2, &key1, &history.id)
+            let _ = decrypt(&e2, &key, &history1.id)
                 .expect_err("expected an error decrypting with invalid key");
         }
     }

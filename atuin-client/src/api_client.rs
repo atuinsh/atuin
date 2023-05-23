@@ -186,7 +186,7 @@ impl<'a> Client<'a> {
                     xsalsa20poly1305legacy::decrypt(entry.data, &self.key)?
                 }
                 Some(EncryptionScheme::XChaCha20Poly1305) => {
-                    xchacha20poly1305::decrypt(entry.data, &self.key, &entry.id)?
+                    xchacha20poly1305::decrypt(&entry.data, &self.key, &entry.id)?
                 }
                 Some(EncryptionScheme::Unknown(x)) => {
                     bail!("cannot decrypt '{x}' encryption scheme")
