@@ -9,6 +9,7 @@ use time::OffsetDateTime;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, sqlx::FromRow)]
 pub struct History {
     pub id: String,
+    #[serde(with = "time::serde::rfc3339")]
     pub timestamp: OffsetDateTime,
     pub duration: i64,
     pub exit: i64,
@@ -16,6 +17,7 @@ pub struct History {
     pub cwd: String,
     pub session: String,
     pub hostname: String,
+    #[serde(with = "time::serde::rfc3339::option")]
     pub deleted_at: Option<OffsetDateTime>,
 }
 
@@ -25,6 +27,7 @@ pub struct History {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, sqlx::FromRow)]
 pub struct HistoryWithoutDelete {
     pub id: String,
+    #[serde(with = "time::serde::rfc3339")]
     pub timestamp: OffsetDateTime,
     pub duration: i64,
     pub exit: i64,
