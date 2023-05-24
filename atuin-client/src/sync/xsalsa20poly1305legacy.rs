@@ -97,16 +97,14 @@ impl Client {
 
 #[cfg(test)]
 mod test {
-    use xsalsa20poly1305::{aead::OsRng, KeyInit, XSalsa20Poly1305};
-
-    use crate::history::History;
+    use crate::{history::History, sync::key};
 
     use super::Client;
 
     #[test]
     fn test_encrypt_decrypt() {
-        let key1 = Client::new(&XSalsa20Poly1305::generate_key(&mut OsRng));
-        let key2 = Client::new(&XSalsa20Poly1305::generate_key(&mut OsRng));
+        let key1 = Client::new(&key::random());
+        let key2 = Client::new(&key::random());
 
         let history = History::new(
             chrono::Utc::now(),

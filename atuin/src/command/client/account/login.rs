@@ -48,7 +48,7 @@ impl Cmd {
             if PathBuf::from(key_path).exists() {
                 let bytes = fs_err::read_to_string(key_path)
                     .context("existing key file couldn't be read")?;
-                if key::decode(&bytes).is_err() {
+                if key::decode_b64(&bytes).is_err() {
                     bail!("the key in existing key file was invalid");
                 }
             } else {
@@ -58,7 +58,7 @@ impl Cmd {
         } else {
             // try parse the key as a mnemonic...
             let key = match bip39::Mnemonic::from_phrase(&key, bip39::Language::English) {
-                Ok(mnemonic) => key::encode(key::Key::from_slice(mnemonic.entropy()))?,
+                Ok(mnemonic) => key::encode_b64(key::Key::from_slice(mnemonic.entropy()))?,
                 Err(err) => {
                     if let Some(err) = err.downcast_ref::<bip39::ErrorKind>() {
                         match err {
@@ -80,7 +80,7 @@ impl Cmd {
                 }
             };
 
-            if key::decode(&key).is_err() {
+            if key::decode_b64(&key).is_err() {
                 bail!("the specified key was invalid");
             }
 

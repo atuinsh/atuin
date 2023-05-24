@@ -19,35 +19,33 @@ pub fn new(settings: &Settings) -> Result<Key> {
     let path = settings.key_path.as_str();
 
     let key = random();
-    let encoded = encode(&key)?;
+    let encoded = encode_b64(&key)?;
 
     fs_err::write(path, encoded.as_bytes())?;
 
     Ok(key)
 }
 
-// Loads the secret key, will create + save if it doesn't exist
+/// Loads the secret key, will create + save if it doesn't exist
 pub fn load(settings: &Settings) -> Result<Key> {
     let path = settings.key_path.as_str();
 
-    let key = if Path::new(path).exists() {
+    if Path::new(path).exists() {
         let key = fs_err::read_to_string(path)?;
-        decode(&key)?
+        decode_b64(&key)
     } else {
-        new(settings)?
-    };
-
-    Ok(key)
+        new(settings)
+    }
 }
 
-pub fn encode(key: &Key) -> Result<String> {
+pub fn encode_b64(key: &Key) -> Result<String> {
     let buf = rmp_serde::to_vec(key.as_slice()).wrap_err("could not encode key to message pack")?;
     let buf = BASE64_STANDARD.encode(buf);
 
     Ok(buf)
 }
 
-pub fn decode(key: &str) -> Result<Key> {
+pub fn decode_b64(key: &str) -> Result<Key> {
     let buf = BASE64_STANDARD
         .decode(key.trim_end())
         .wrap_err("encryption key is not a valid base64 encoding")?;
