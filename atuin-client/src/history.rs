@@ -24,6 +24,7 @@ pub struct History {
 // Forgive me, for I have sinned
 // I need to replace rmp with something that is more backwards-compatible.
 // Protobuf, or maybe just json
+#[allow(clippy::module_name_repetitions)]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, sqlx::FromRow)]
 pub struct HistoryWithoutDelete {
     pub id: String,

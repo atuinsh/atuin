@@ -63,9 +63,8 @@ impl Importer for Zsh {
 
         let mut counter = 0;
         for b in unix_byte_lines(&self.bytes) {
-            let s = match std::str::from_utf8(b) {
-                Ok(s) => s,
-                Err(_) => continue, // we can skip past things like invalid utf8
+            let Ok(s) = std::str::from_utf8(b) else {
+                continue // we can skip past things like invalid utf8
             };
 
             if let Some(s) = s.strip_suffix('\\') {

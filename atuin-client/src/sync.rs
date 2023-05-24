@@ -56,7 +56,7 @@ async fn sync_download(
 
     let mut last_timestamp = OffsetDateTime::UNIX_EPOCH;
 
-    let host = if force { Some(String::from("")) } else { None };
+    let host = if force { Some(String::new()) } else { None };
 
     while remote_count > local_count {
         let page = client
@@ -181,7 +181,7 @@ pub async fn sync(settings: &Settings, force: bool, db: &mut (impl Database + Se
     let client = api_client::Client::new(
         &settings.sync_address,
         &settings.session_token,
-        load_encoded_key(settings)?,
+        &load_encoded_key(settings)?,
     )?;
 
     sync_upload(settings, force, &client, db).await?;

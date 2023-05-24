@@ -49,6 +49,8 @@ where
     }
 }
 
+// we allow unused async as `Router::new()` uses it
+#[allow(clippy::unused_async)]
 async fn teapot() -> impl IntoResponse {
     (http::StatusCode::IM_A_TEAPOT, "☕")
 }

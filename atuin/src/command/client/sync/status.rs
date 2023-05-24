@@ -8,7 +8,7 @@ pub async fn run(settings: &Settings, db: &impl Database) -> Result<()> {
     let client = api_client::Client::new(
         &settings.sync_address,
         &settings.session_token,
-        load_encoded_key(settings)?,
+        &load_encoded_key(settings)?,
     )?;
 
     let status = client.status().await?;

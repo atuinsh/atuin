@@ -7,6 +7,8 @@ pub mod user;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+// we allow unused async as `Router::new()` uses it
+#[allow(clippy::unused_async)]
 pub async fn index() -> Json<IndexResponse> {
     let homage = r#""Through the fathomless deeps of space swims the star turtle Great A'Tuin, bearing on its back the four giant elephants who carry on their shoulders the mass of the Discworld." -- Sir Terry Pratchett"#;
 

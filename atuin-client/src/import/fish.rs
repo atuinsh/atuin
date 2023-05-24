@@ -16,7 +16,7 @@ pub struct Fish {
     bytes: Vec<u8>,
 }
 
-/// see https://fishshell.com/docs/current/interactive.html#searchable-command-history
+/// see <https://fishshell.com/docs/current/interactive.html#searchable-command-history>
 fn default_histpath() -> Result<PathBuf> {
     let base = BaseDirs::new().ok_or_else(|| eyre!("could not determine data directory"))?;
     let data = std::env::var("XDG_DATA_HOME").map_or_else(
@@ -64,9 +64,8 @@ impl Importer for Fish {
         let mut cmd: Option<String> = None;
 
         for b in unix_byte_lines(&self.bytes) {
-            let s = match std::str::from_utf8(b) {
-                Ok(s) => s,
-                Err(_) => continue, // we can skip past things like invalid utf8
+            let Ok(s) = std::str::from_utf8(b) else {
+                continue // we can skip past things like invalid utf8
             };
 
             if let Some(c) = s.strip_prefix("- cmd: ") {
@@ -188,13 +187,13 @@ ERROR
             };
         }
 
-        fishtory!(1639162832, "history --help");
-        fishtory!(1639162851, "cat ~/.bash_history");
-        fishtory!(1639162890, "ls ~/.local/share/fish/fish_history");
-        fishtory!(1639162893, "cat ~/.local/share/fish/fish_history");
-        fishtory!(1639162933, "echo \"foo\" \\\n'bar' baz");
-        fishtory!(1639162939, "cat ~/.local/share/fish/fish_history");
-        fishtory!(1639163063, r#"echo "\"" \\ "\\""#);
-        fishtory!(1639163066, "cat ~/.local/share/fish/fish_history");
+        fishtory!(1_639_162_832, "history --help");
+        fishtory!(1_639_162_851, "cat ~/.bash_history");
+        fishtory!(1_639_162_890, "ls ~/.local/share/fish/fish_history");
+        fishtory!(1_639_162_893, "cat ~/.local/share/fish/fish_history");
+        fishtory!(1_639_162_933, "echo \"foo\" \\\n'bar' baz");
+        fishtory!(1_639_162_939, "cat ~/.local/share/fish/fish_history");
+        fishtory!(1_639_163_063, r#"echo "\"" \\ "\\""#);
+        fishtory!(1_639_163_066, "cat ~/.local/share/fish/fish_history");
     }
 }

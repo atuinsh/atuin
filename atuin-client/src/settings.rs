@@ -44,6 +44,7 @@ impl SearchMode {
             SearchMode::Skim => "SKIM",
         }
     }
+    #[must_use]
     pub fn next(&self, settings: &Settings) -> Self {
         match self {
             SearchMode::Prefix => SearchMode::FullText,
@@ -132,6 +133,7 @@ pub enum WordJumpMode {
     Subl,
 }
 
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Debug, Deserialize)]
 pub struct Settings {
     pub dialect: Dialect,
@@ -240,7 +242,7 @@ impl Settings {
         }
     }
 
-    fn needs_update_check(&self) -> Result<bool> {
+    fn needs_update_check() -> Result<bool> {
         let last_check = Settings::last_version_check()?;
         let diff = OffsetDateTime::now_utc() - last_check;
 
@@ -252,9 +254,9 @@ impl Settings {
         // Default to the current version, and if that doesn't parse, a version so high it's unlikely to ever
         // suggest upgrading.
         let current =
-            Version::parse(env!("CARGO_PKG_VERSION")).unwrap_or(Version::new(100000, 0, 0));
+            Version::parse(env!("CARGO_PKG_VERSION")).unwrap_or(Version::new(100_000, 0, 0));
 
-        if !self.needs_update_check()? {
+        if !Settings::needs_update_check()? {
             // Worst case, we don't want Atuin to fail to start because something funky is going on with
             // version checking.
             let version = match Settings::read_from_data_dir(LATEST_VERSION_FILENAME) {
@@ -284,7 +286,7 @@ impl Settings {
         }
 
         let current =
-            Version::parse(env!("CARGO_PKG_VERSION")).unwrap_or(Version::new(100000, 0, 0));
+            Version::parse(env!("CARGO_PKG_VERSION")).unwrap_or(Version::new(100_000, 0, 0));
 
         let latest = self.latest_version().await;
 

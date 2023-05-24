@@ -4,17 +4,17 @@ use super::{history::History, settings::SearchMode};
 
 pub fn reorder_fuzzy(mode: SearchMode, query: &str, res: Vec<History>) -> Vec<History> {
     match mode {
-        SearchMode::Fuzzy => reorder(query, |x| &x.command, res),
+        SearchMode::Fuzzy => reorder(query, |x| &x.command, &res),
         _ => res,
     }
 }
 
-fn reorder<F, A>(query: &str, f: F, res: Vec<A>) -> Vec<A>
+fn reorder<F, A>(query: &str, f: F, res: &[A]) -> Vec<A>
 where
     F: Fn(&A) -> &String,
     A: Clone,
 {
-    let mut r = res.clone();
+    let mut r = res.to_owned();
     let qvec = &query.chars().collect();
     r.sort_by_cached_key(|h| {
         // TODO for fzf search we should sum up scores for each matched term

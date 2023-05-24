@@ -49,7 +49,7 @@ pub fn load_key(settings: &Settings) -> Result<Key> {
 
     let key = if PathBuf::from(path).exists() {
         let key = fs_err::read_to_string(path)?;
-        decode_key(key)?
+        decode_key(&key)?
     } else {
         new_key(settings)?
     };
@@ -81,7 +81,8 @@ pub fn encode_key(key: &Key) -> Result<String> {
     Ok(buf)
 }
 
-pub fn decode_key(key: String) -> Result<Key> {
+#[allow(clippy::similar_names)]
+pub fn decode_key(key: &str) -> Result<Key> {
     let buf = BASE64_STANDARD
         .decode(key.trim_end())
         .wrap_err("encryption key is not a valid base64 encoding")?;
@@ -89,14 +90,13 @@ pub fn decode_key(key: String) -> Result<Key> {
     let mbuf: Result<[u8; 32]> =
         rmp_serde::from_slice(&buf).wrap_err("encryption key is not a valid message pack encoding");
 
-    match mbuf {
-        Ok(b) => Ok(*Key::from_slice(&b)),
-        Err(_) => {
-            let buf: &[u8] = rmp_serde::from_slice(&buf)
-                .wrap_err("encryption key is not a valid message pack encoding")?;
+    if let Ok(b) = mbuf {
+        Ok(*Key::from_slice(&b))
+    } else {
+        let buf: &[u8] = rmp_serde::from_slice(&buf)
+            .wrap_err("encryption key is not a valid message pack encoding")?;
 
-            Ok(*Key::from_slice(buf))
-        }
+        Ok(*Key::from_slice(buf))
     }
 }
 
@@ -148,8 +148,8 @@ pub fn decrypt(mut encrypted_history: EncryptedHistory, key: &Key) -> Result<His
 
 #[cfg(test)]
 mod test {
-    use xsalsa20poly1305::{aead::OsRng, KeyInit, XSalsa20Poly1305};
     use time::OffsetDateTime;
+    use xsalsa20poly1305::{aead::OsRng, KeyInit, XSalsa20Poly1305};
 
     use crate::history::History;
 
@@ -180,11 +180,11 @@ mod test {
         // test decryption works
         // this should pass
         match decrypt(e1, &key1) {
-            Err(e) => panic!("failed to decrypt, got {}", e),
+            Err(e) => panic!("failed to decrypt, got {e}"),
             Ok(h) => assert_eq!(h, history),
         };
 
         // this should err
-        let _ = decrypt(e2, &key1).expect_err("expected an error decrypting with invalid key");
+        _ = decrypt(e2, &key1).expect_err("expected an error decrypting with invalid key");
     }
 }

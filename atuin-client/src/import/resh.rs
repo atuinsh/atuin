@@ -11,6 +11,7 @@ use time::OffsetDateTime;
 use super::{get_histpath, unix_byte_lines, Importer, Loader};
 use crate::history::History;
 
+#[allow(clippy::module_name_repetitions)]
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct ReshEntry {
@@ -97,13 +98,11 @@ impl Importer for Resh {
 
     async fn load(self, h: &mut impl Loader) -> Result<()> {
         for b in unix_byte_lines(&self.bytes) {
-            let s = match std::str::from_utf8(b) {
-                Ok(s) => s,
-                Err(_) => continue, // we can skip past things like invalid utf8
+            let Ok(s) = std::str::from_utf8(b) else {
+                continue // we can skip past things like invalid utf8
             };
-            let entry = match serde_json::from_str::<ReshEntry>(s) {
-                Ok(e) => e,
-                Err(_) => continue, // skip invalid json :shrug:
+            let Ok(entry) = serde_json::from_str::<ReshEntry>(s) else {
+                continue // skip invalid json :shrug:
             };
 
             #[allow(clippy::cast_possible_truncation)]

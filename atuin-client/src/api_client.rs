@@ -12,9 +12,9 @@ use atuin_common::api::{
     LoginRequest, LoginResponse, RegisterResponse, StatusResponse, SyncHistoryResponse,
 };
 use semver::Version;
-use xsalsa20poly1305::Key;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
+use xsalsa20poly1305::Key;
 
 use crate::{
     encryption::{decode_key, decrypt},
@@ -111,7 +111,7 @@ pub async fn latest_version() -> Result<Version> {
 }
 
 impl<'a> Client<'a> {
-    pub fn new(sync_addr: &'a str, session_token: &'a str, key: String) -> Result<Self> {
+    pub fn new(sync_addr: &'a str, session_token: &'a str, key: &str) -> Result<Self> {
         let mut headers = HeaderMap::new();
         headers.insert(AUTHORIZATION, format!("Token {session_token}").parse()?);
 
@@ -187,7 +187,7 @@ impl<'a> Client<'a> {
             .map(|mut h| {
                 if deleted.contains(&h.id) {
                     h.deleted_at = Some(OffsetDateTime::now_utc());
-                    h.command = String::from("");
+                    h.command = String::new();
                 }
 
                 h

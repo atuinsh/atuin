@@ -52,7 +52,7 @@ impl Cmd {
             if PathBuf::from(key_path).exists() {
                 let bytes = fs_err::read_to_string(key_path)
                     .context("existing key file couldn't be read")?;
-                if decode_key(bytes).is_err() {
+                if decode_key(&bytes).is_err() {
                     bail!("the key in existing key file was invalid");
                 }
             } else {
@@ -84,7 +84,7 @@ impl Cmd {
                 }
             };
 
-            if decode_key(key.clone()).is_err() {
+            if decode_key(&key).is_err() {
                 bail!("the specified key was invalid");
             }
 

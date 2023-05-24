@@ -48,8 +48,8 @@ pub fn current_context() -> Context {
 
     Context {
         session,
-        hostname,
         cwd,
+        hostname,
     }
 }
 
@@ -153,14 +153,15 @@ impl Sqlite {
         Ok(())
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn query_history(row: SqliteRow) -> History {
         let deleted_at: Option<i64> = row.get("deleted_at");
 
         History {
             id: row.get("id"),
-            timestamp: OffsetDateTime::from_unix_timestamp_nanos(
-                row.get::<i64, _>("timestamp") as i128
-            )
+            timestamp: OffsetDateTime::from_unix_timestamp_nanos(i128::from(
+                row.get::<i64, _>("timestamp"),
+            ))
             .unwrap(),
             duration: row.get("duration"),
             exit: row.get("exit"),
@@ -169,7 +170,7 @@ impl Sqlite {
             session: row.get("session"),
             hostname: row.get("hostname"),
             deleted_at: deleted_at
-                .and_then(|t| OffsetDateTime::from_unix_timestamp_nanos(t as i128).ok()),
+                .and_then(|t| OffsetDateTime::from_unix_timestamp_nanos(i128::from(t)).ok()),
         }
     }
 }
@@ -401,11 +402,11 @@ impl Database for Sqlite {
                     };
 
                     let param = if query_part == "|" {
-                        if !is_or {
+                        if is_or {
+                            format!("{glob}|{glob}")
+                        } else {
                             is_or = true;
                             continue;
-                        } else {
-                            format!("{glob}|{glob}")
                         }
                     } else if let Some(term) = query_part.strip_prefix('^') {
                         format!("{term}{glob}")
@@ -521,7 +522,7 @@ impl Database for Sqlite {
     // but the time that the system marks it as deleted
     async fn delete(&self, mut h: History) -> Result<()> {
         let now = OffsetDateTime::now_utc();
-        h.command = String::from(""); // blank it
+        h.command = String::new(); // blank it
         h.deleted_at = Some(now); // delete it
 
         self.update(&h).await?; // save it

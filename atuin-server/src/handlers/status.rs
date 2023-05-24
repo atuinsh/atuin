@@ -5,7 +5,7 @@ use tracing::instrument;
 use super::{ErrorResponse, ErrorResponseStatus, RespExt};
 use crate::{database::Database, models::User, router::AppState};
 
-use atuin_common::api::*;
+use atuin_common::api::StatusResponse;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 

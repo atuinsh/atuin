@@ -64,11 +64,11 @@ impl From<HistDbEntry> for History {
         History::new(
             histdb_item.start_time.assume_utc(), // must assume UTC?
             String::from_utf8(histdb_item.argv)
-                .unwrap_or_else(|_e| String::from(""))
+                .unwrap_or_else(|_e| String::new())
                 .trim_end()
                 .to_string(),
             String::from_utf8(histdb_item.dir)
-                .unwrap_or_else(|_e| String::from(""))
+                .unwrap_or_else(|_e| String::new())
                 .trim_end()
                 .to_string(),
             0, // assume 0, we have no way of knowing :(
@@ -76,7 +76,7 @@ impl From<HistDbEntry> for History {
             None,
             Some(
                 String::from_utf8(histdb_item.host)
-                    .unwrap_or_else(|_e| String::from(""))
+                    .unwrap_or_else(|_e| String::new())
                     .trim_end()
                     .to_string(),
             ),
@@ -114,9 +114,7 @@ impl ZshHistDb {
         let user_dirs = UserDirs::new().unwrap(); // should catch error here?
         let home_dir = user_dirs.home_dir();
         std::env::var("HISTDB_FILE")
-            .as_ref()
-            .map(|x| Path::new(x).to_path_buf())
-            .unwrap_or_else(|_err| home_dir.join(".histdb/zsh-history.db"))
+            .as_ref().map_or_else(|_err| home_dir.join(".histdb/zsh-history.db"), |x| Path::new(x).to_path_buf())
     }
     pub fn histpath() -> Result<PathBuf> {
         let histdb_path = ZshHistDb::histpath_candidate();

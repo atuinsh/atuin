@@ -12,7 +12,7 @@ pub async fn run(settings: &Settings) -> Result<()> {
     let client = api_client::Client::new(
         &settings.sync_address,
         &settings.session_token,
-        load_encoded_key(settings)?,
+        &load_encoded_key(settings)?,
     )?;
 
     client.delete().await?;

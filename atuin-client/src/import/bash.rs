@@ -69,7 +69,7 @@ impl Importer for Bash {
         let mut next_timestamp =
             first_timestamp - timestamp_increment * commands_before_first_timestamp as i32;
 
-        for line in lines.into_iter() {
+        for line in lines {
             match line {
                 LineType::NotUtf8 => unreachable!(), // already filtered
                 LineType::Empty => {}                // do nothing
@@ -191,8 +191,8 @@ cd ../
         );
         assert_equal(
             loader.buf.iter().map(|h| h.timestamp.unix_timestamp()),
-            [1672918999, 1672919006, 1672919020],
-        )
+            [1_672_918_999, 1_672_919_006, 1_672_919_020],
+        );
     }
 
     #[tokio::test]
@@ -214,7 +214,7 @@ cd ../
             loader.buf.iter().map(|h| h.command.as_str()),
             ["git reset", "git clean -dxf", "cd ../"],
         );
-        assert!(is_strictly_sorted(loader.buf.iter().map(|h| h.timestamp)))
+        assert!(is_strictly_sorted(loader.buf.iter().map(|h| h.timestamp)));
     }
 
     fn is_strictly_sorted<T>(iter: impl IntoIterator<Item = T>) -> bool

@@ -24,7 +24,10 @@ use crate::{
 
 use reqwest::header::CONTENT_TYPE;
 
-use atuin_common::api::*;
+use atuin_common::api::{
+    DeleteUserResponse, LoginRequest, LoginResponse, RegisterRequest, RegisterResponse,
+    UserResponse,
+};
 
 pub fn verify_str(hash: &str, password: &str) -> bool {
     let arg2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, Params::default());
@@ -70,11 +73,10 @@ pub async fn get<DB: Database>(
                 return Err(
                     ErrorResponse::reply("user not found").with_status(StatusCode::NOT_FOUND)
                 );
-            } else {
-                error!("database error: {}", err);
-                return Err(ErrorResponse::reply("database error")
-                    .with_status(StatusCode::INTERNAL_SERVER_ERROR));
             }
+            error!("database error: {}", err);
+            return Err(ErrorResponse::reply("database error")
+                .with_status(StatusCode::INTERNAL_SERVER_ERROR));
         }
     };
 
@@ -183,12 +185,11 @@ pub async fn login<DB: Database>(
                 return Err(
                     ErrorResponse::reply("user not found").with_status(StatusCode::NOT_FOUND)
                 );
-            } else {
-                error!("failed to get user {}: {}", login.username.clone(), err);
-
-                return Err(ErrorResponse::reply("database error")
-                    .with_status(StatusCode::INTERNAL_SERVER_ERROR));
             }
+            error!("failed to get user {}: {}", login.username.clone(), err);
+
+            return Err(ErrorResponse::reply("database error")
+                .with_status(StatusCode::INTERNAL_SERVER_ERROR));
         }
     };
 
@@ -200,11 +201,10 @@ pub async fn login<DB: Database>(
                 return Err(
                     ErrorResponse::reply("user not found").with_status(StatusCode::NOT_FOUND)
                 );
-            } else {
-                error!("database error for user {}: {}", login.username, err);
-                return Err(ErrorResponse::reply("database error")
-                    .with_status(StatusCode::INTERNAL_SERVER_ERROR));
             }
+            error!("database error for user {}: {}", login.username, err);
+            return Err(ErrorResponse::reply("database error")
+                .with_status(StatusCode::INTERNAL_SERVER_ERROR));
         }
     };
 

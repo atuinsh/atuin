@@ -83,7 +83,7 @@ pub fn get_current_dir() -> String {
         Ok(v) => v,
         Err(_) => match env::current_dir() {
             Ok(dir) => dir.display().to_string(),
-            Err(_) => String::from(""),
+            Err(_) => String::new(),
         },
     }
 }
@@ -158,7 +158,7 @@ mod tests {
 
     #[test]
     fn uuid_is_unique() {
-        let how_many: usize = 1000000;
+        let how_many: usize = 1_000_000;
 
         // for peace of mind
         let mut uuids: HashSet<Uuid> = HashSet::with_capacity(how_many);

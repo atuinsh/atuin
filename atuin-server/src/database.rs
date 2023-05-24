@@ -147,7 +147,7 @@ impl Database for Postgres {
         .fetch_one(&self.pool)
         .await?;
 
-        Ok(res.0 as i64)
+        Ok(i64::from(res.0))
     }
 
     async fn delete_history(&self, user: &User, id: String) -> Result<()> {
@@ -233,7 +233,7 @@ impl Database for Postgres {
     async fn count_history_month(&self, user: &User, year: i32, month: Month) -> Result<i64> {
         let start = Date::from_calendar_date(year, month, 1)?;
         let days = time::util::days_in_year_month(year, month);
-        let end = start + Duration::days(days as i64);
+        let end = start + Duration::days(i64::from(days));
 
         debug!("start: {}, end: {}", start, end);
 
@@ -441,7 +441,7 @@ impl Database for Postgres {
 
                 // All the years we need to get data for
                 // The upper bound is exclusive, so include current +1
-                let years = oldest..current_year + 1;
+                let years = oldest..=current_year;
 
                 for year in years {
                     let count = self.count_history_year(user, year).await?;
@@ -450,7 +450,7 @@ impl Database for Postgres {
                         year as u64,
                         TimePeriodInfo {
                             count: count as u64,
-                            hash: "".to_string(),
+                            hash: String::new(),
                         },
                     );
                 }
@@ -470,7 +470,7 @@ impl Database for Postgres {
                         month as u64,
                         TimePeriodInfo {
                             count: count as u64,
-                            hash: "".to_string(),
+                            hash: String::new(),
                         },
                     );
                 }
@@ -487,10 +487,10 @@ impl Database for Postgres {
                         .await?;
 
                     ret.insert(
-                        day as u64,
+                        u64::from(day),
                         TimePeriodInfo {
                             count: count as u64,
-                            hash: "".to_string(),
+                            hash: String::new(),
                         },
                     );
                 }
