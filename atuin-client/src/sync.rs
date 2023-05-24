@@ -35,6 +35,7 @@ pub fn hash_str(string: &str) -> String {
 async fn sync_download(
     force: bool,
     client: &api_client::Client<'_>,
+    crypto: &Crypto,
     db: &mut (impl Database + Send),
 ) -> Result<(i64, i64)> {
     debug!("starting sync download");
@@ -43,7 +44,8 @@ async fn sync_download(
     let remote_count = remote_status.count;
 
     // useful to ensure we don't even save something that hasn't yet been synced + deleted
-    let remote_deleted = HashSet::from_iter(remote_status.deleted.clone());
+    let remote_deleted =
+        HashSet::<&str>::from_iter(remote_status.deleted.iter().map(String::as_str));
 
     let initial_local = db.history_count().await?;
     let mut local_count = initial_local;
@@ -58,15 +60,33 @@ async fn sync_download(
 
     let host = if force { Some(String::from("")) } else { None };
 
+    let mut page = Vec::new();
     while remote_count > local_count {
-        let page = client
-            .get_history(
-                last_sync,
-                last_timestamp,
-                host.clone(),
-                remote_deleted.clone(),
-            )
+        let encrypted_page = client
+            .get_history(last_sync, last_timestamp, host.clone())
             .await?;
+
+        page.clear();
+        page.reserve(encrypted_page.len());
+
+        for entry in encrypted_page {
+            let mut history = match entry.encryption {
+                Some(EncryptionScheme::XSalsa20Poly1305Legacy) | None => {
+                    crypto.salsa_legacy.decrypt(&entry.data, &entry.id)?
+                }
+                Some(EncryptionScheme::XChaCha20Poly1305) => {
+                    crypto.xchacha20.decrypt(&entry.data, &entry.id)?
+                }
+                Some(EncryptionScheme::Unknown(x)) => {
+                    bail!("cannot decrypt '{x}' encryption scheme")
+                }
+            };
+            if remote_deleted.contains(&*entry.id) {
+                history.deleted_at = Some(Utc::now());
+                history.command.clear();
+            }
+            page.push(history);
+        }
 
         db.save_bulk(&page).await?;
 
@@ -113,6 +133,7 @@ async fn sync_upload(
     settings: &Settings,
     _force: bool,
     client: &api_client::Client<'_>,
+    crypto: &Crypto,
     db: &mut (impl Database + Send),
 ) -> Result<()> {
     debug!("starting sync upload");
@@ -127,10 +148,7 @@ async fn sync_upload(
 
     debug!("remote has {}, we have {}", remote_count, local_count);
 
-    let key = key::load(settings)?; // encryption key
-
     // first just try the most recent set
-
     let mut cursor = Utc::now();
 
     while local_count > remote_count {
@@ -146,12 +164,10 @@ async fn sync_upload(
                 id: i.id.clone(),
                 timestamp: i.timestamp,
                 hostname: hash_str(&i.hostname),
-                scheme: Some(settings.encryption_scheme.clone()),
+                encryption: Some(settings.encryption_scheme.clone()),
                 data: match &settings.encryption_scheme {
-                    EncryptionScheme::XSalsa20Poly1305Legacy => {
-                        xsalsa20poly1305legacy::encrypt(&i, &key)?
-                    }
-                    EncryptionScheme::XChaCha20Poly1305 => xchacha20poly1305::encrypt(i, &key)?,
+                    EncryptionScheme::XSalsa20Poly1305Legacy => crypto.salsa_legacy.encrypt(&i)?,
+                    EncryptionScheme::XChaCha20Poly1305 => crypto.xchacha20.encrypt(i)?,
                     EncryptionScheme::Unknown(x) => {
                         bail!("cannot encrypt with '{x}' encryption scheme")
                     }
@@ -185,14 +201,29 @@ async fn sync_upload(
 
 pub async fn sync(settings: &Settings, force: bool, db: &mut (impl Database + Send)) -> Result<()> {
     let client = api_client::Client::new(settings)?;
+    let crypto = Crypto::new(&key::load(settings)?);
 
-    sync_upload(settings, force, &client, db).await?;
+    sync_upload(settings, force, &client, &crypto, db).await?;
 
-    let download = sync_download(force, &client, db).await?;
+    let download = sync_download(force, &client, &crypto, db).await?;
 
     debug!("sync downloaded {}", download.0);
 
     Settings::save_sync_time()?;
 
     Ok(())
+}
+
+struct Crypto {
+    salsa_legacy: xsalsa20poly1305legacy::Client,
+    xchacha20: xchacha20poly1305::Client,
+}
+
+impl Crypto {
+    fn new(key: &key::Key) -> Self {
+        Self {
+            salsa_legacy: xsalsa20poly1305legacy::Client::new(key),
+            xchacha20: xchacha20poly1305::Client::new(key),
+        }
+    }
 }

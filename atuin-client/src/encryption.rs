@@ -74,7 +74,7 @@ pub mod key {
 // DO NOT MODIFY. We can't change old encryption schemes, only add new ones.
 pub mod xsalsa20poly1305legacy {
     use chrono::Utc;
-    use eyre::{eyre, Result};
+    use eyre::{bail, eyre, Result};
     use serde::{Deserialize, Serialize};
     use xsalsa20poly1305::{
         aead::{Nonce, OsRng},
@@ -99,54 +99,73 @@ pub mod xsalsa20poly1305legacy {
         pub hostname: String,
     }
 
-    use crate::history::History;
-
-    pub fn encrypt(history: &History, key: &Key) -> Result<String> {
-        // serialize with msgpack
-        let mut buf = rmp_serde::to_vec(history)?;
-
-        let nonce = XSalsa20Poly1305::generate_nonce(&mut OsRng);
-        XSalsa20Poly1305::new(key)
-            .encrypt_in_place(&nonce, &[], &mut buf)
-            .map_err(|_| eyre!("could not encrypt"))?;
-
-        let record = serde_json::to_string(&EncryptedHistory {
-            ciphertext: buf,
-            nonce,
-        })?;
-
-        Ok(record)
+    pub struct Client {
+        inner: XSalsa20Poly1305,
     }
 
-    pub fn decrypt(encrypted_history: String, key: &Key) -> Result<History> {
-        let mut decoded: EncryptedHistory = serde_json::from_str(&encrypted_history)?;
+    use crate::history::History;
 
-        XSalsa20Poly1305::new(key)
-            .decrypt_in_place(&decoded.nonce, &[], &mut decoded.ciphertext)
-            .map_err(|_| eyre!("could not decrypt"))?;
-        let plaintext = decoded.ciphertext;
+    impl Client {
+        pub fn new(key: &Key) -> Self {
+            Self {
+                inner: XSalsa20Poly1305::new(key),
+            }
+        }
 
-        let history = rmp_serde::from_slice(&plaintext);
+        pub fn encrypt(&self, history: &History) -> Result<String> {
+            // serialize with msgpack
+            let mut buf = rmp_serde::to_vec(&history)?;
 
-        // ugly hack because we broke things
-        let Ok(history) = history else {
-            // fallback to without deleted_at
-            let history: HistoryWithoutDelete = rmp_serde::from_slice(&plaintext)?;
+            let nonce = XSalsa20Poly1305::generate_nonce(&mut OsRng);
+            self.inner
+                .encrypt_in_place(&nonce, &[], &mut buf)
+                .map_err(|_| eyre!("could not encrypt"))?;
 
-            return Ok(History {
-                id: history.id,
-                cwd: history.cwd,
-                exit: history.exit,
-                command: history.command,
-                session: history.session,
-                duration: history.duration,
-                hostname: history.hostname,
-                timestamp: history.timestamp,
-                deleted_at: None,
-            });
-        };
+            let record = serde_json::to_string(&EncryptedHistory {
+                ciphertext: buf,
+                nonce,
+            })?;
 
-        Ok(history)
+            Ok(record)
+        }
+
+        pub fn decrypt(&self, encrypted_history: &str, id: &str) -> Result<History> {
+            let mut decoded: EncryptedHistory = serde_json::from_str(encrypted_history)?;
+
+            self.inner
+                .decrypt_in_place(&decoded.nonce, &[], &mut decoded.ciphertext)
+                .map_err(|_| eyre!("could not decrypt"))?;
+            let plaintext = decoded.ciphertext;
+
+            let history = rmp_serde::from_slice(&plaintext);
+
+            // ugly hack because we broke things
+            let history = match history {
+                Ok(history) => history,
+                Err(_) => {
+                    // fallback to without deleted_at
+                    let history: HistoryWithoutDelete = rmp_serde::from_slice(&plaintext)?;
+
+                    History {
+                        id: history.id,
+                        cwd: history.cwd,
+                        exit: history.exit,
+                        command: history.command,
+                        session: history.session,
+                        duration: history.duration,
+                        hostname: history.hostname,
+                        timestamp: history.timestamp,
+                        deleted_at: None,
+                    }
+                }
+            };
+
+            if history.id != id {
+                bail!("encryption integrity check failed")
+            }
+
+            Ok(history)
+        }
     }
 
     #[cfg(test)]
@@ -155,12 +174,12 @@ pub mod xsalsa20poly1305legacy {
 
         use crate::history::History;
 
-        use super::{decrypt, encrypt};
+        use super::Client;
 
         #[test]
         fn test_encrypt_decrypt() {
-            let key1 = XSalsa20Poly1305::generate_key(&mut OsRng);
-            let key2 = XSalsa20Poly1305::generate_key(&mut OsRng);
+            let key1 = Client::new(&XSalsa20Poly1305::generate_key(&mut OsRng));
+            let key2 = Client::new(&XSalsa20Poly1305::generate_key(&mut OsRng));
 
             let history = History::new(
                 chrono::Utc::now(),
@@ -173,20 +192,27 @@ pub mod xsalsa20poly1305legacy {
                 None,
             );
 
-            let e1 = encrypt(&history, &key1).unwrap();
-            let e2 = encrypt(&history, &key2).unwrap();
+            let e1 = key1.encrypt(&history).unwrap();
+            let e2 = key2.encrypt(&history).unwrap();
 
             assert_ne!(e1, e2);
 
             // test decryption works
             // this should pass
-            match decrypt(e1, &key1) {
+            match key1.decrypt(&e1, &history.id) {
                 Err(e) => panic!("failed to decrypt, got {}", e),
                 Ok(h) => assert_eq!(h, history),
             };
 
             // this should err
-            let _ = decrypt(e2, &key1).expect_err("expected an error decrypting with invalid key");
+            let _ = key1
+                .decrypt(&e2, &history.id)
+                .expect_err("expected an error decrypting with invalid key");
+
+            // this should err
+            let _ = key2
+                .decrypt(&e2, "bad id")
+                .expect_err("expected an error decrypting with incorrect id");
         }
     }
 }
@@ -222,64 +248,73 @@ pub mod xchacha20poly1305 {
 
     use crate::history::History;
 
-    fn content_key(key: &Key, id: &str) -> Result<chacha20poly1305::Key> {
-        let mut content_key = chacha20poly1305::Key::default();
-        Hkdf::<Sha256>::new(Some(b"history"), key)
-            .expand(id.as_bytes(), &mut content_key)
-            .map_err(|_| eyre!("could not derive encryption key"))?;
-        Ok(content_key)
+    pub struct Client {
+        inner: Hkdf<Sha256>,
     }
 
-    pub fn encrypt(history: History, key: &Key) -> Result<String> {
-        // a unique encryption key for this entry
-        let content_key = content_key(key, &history.id)?;
+    impl Client {
+        pub fn new(key: &Key) -> Self {
+            Self {
+                // constant 'salt' is important and actually helps with security, while helping to improving performance
+                // <https://soatok.blog/2021/11/17/understanding-hkdf/>
+                inner: Hkdf::<Sha256>::new(Some(b"history"), key),
+            }
+        }
 
-        let mut plaintext = rmp_serde::to_vec(&HistoryPlaintext {
-            duration: history.duration,
-            exit: history.exit,
-            command: history.command,
-            cwd: history.cwd,
-            session: history.session,
-            hostname: history.hostname,
-            timestamp: history.timestamp,
-        })?;
+        fn cipher(&self, id: &str) -> Result<XChaCha20Poly1305> {
+            let mut content_key = chacha20poly1305::Key::default();
+            self.inner
+                .expand(id.as_bytes(), &mut content_key)
+                .map_err(|_| eyre!("could not derive encryption key"))?;
+            Ok(XChaCha20Poly1305::new(&content_key))
+        }
 
-        let nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
-        XChaCha20Poly1305::new(&content_key)
-            .encrypt_in_place(&nonce, history.id.as_bytes(), &mut plaintext)
-            .map_err(|_| eyre!("could not encrypt"))?;
+        pub fn encrypt(&self, history: History) -> Result<String> {
+            let mut plaintext = rmp_serde::to_vec(&HistoryPlaintext {
+                duration: history.duration,
+                exit: history.exit,
+                command: history.command,
+                cwd: history.cwd,
+                session: history.session,
+                hostname: history.hostname,
+                timestamp: history.timestamp,
+            })?;
 
-        let record = serde_json::to_string(&EncryptedHistory {
-            ciphertext: plaintext,
-            nonce,
-        })?;
+            let nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
+            self.cipher(&history.id)?
+                .encrypt_in_place(&nonce, history.id.as_bytes(), &mut plaintext)
+                .map_err(|_| eyre!("could not encrypt"))?;
 
-        Ok(record)
-    }
+            let record = serde_json::to_string(&EncryptedHistory {
+                ciphertext: plaintext,
+                nonce,
+            })?;
 
-    pub fn decrypt(encrypted_history: &str, key: &Key, id: &str) -> Result<History> {
-        let content_key = content_key(key, id)?;
+            Ok(record)
+        }
 
-        let mut decoded: EncryptedHistory = serde_json::from_str(encrypted_history)?;
+        pub fn decrypt(&self, encrypted_history: &str, id: &str) -> Result<History> {
+            let mut decoded: EncryptedHistory = serde_json::from_str(encrypted_history)?;
 
-        XChaCha20Poly1305::new(&content_key)
-            .decrypt_in_place(&decoded.nonce, id.as_bytes(), &mut decoded.ciphertext)
-            .map_err(|_| eyre!("could not decrypt"))?;
-        let plaintext = decoded.ciphertext;
+            self.cipher(id)?
+                .decrypt_in_place(&decoded.nonce, id.as_bytes(), &mut decoded.ciphertext)
+                .map_err(|_| eyre!("could not decrypt"))?;
+            let plaintext = decoded.ciphertext;
 
-        let history: HistoryPlaintext = rmp_serde::from_slice(&plaintext)?;
+            let history: HistoryPlaintext = rmp_serde::from_slice(&plaintext)?;
 
-        Ok(History {
-            id: id.to_owned(),
-            cwd: history.cwd,
-            exit: history.exit,
-            command: history.command,
-            session: history.session,
-            duration: history.duration,
-            hostname: history.hostname,
-            timestamp: history.timestamp,
-            deleted_at: None,
-        })
+            Ok(History {
+                id: id.to_owned(),
+                cwd: history.cwd,
+                exit: history.exit,
+                command: history.command,
+                session: history.session,
+                duration: history.duration,
+                hostname: history.hostname,
+                timestamp: history.timestamp,
+                deleted_at: None,
+            })
+        }
     }
 
     #[cfg(test)]
@@ -289,11 +324,11 @@ pub mod xchacha20poly1305 {
 
         use crate::history::History;
 
-        use super::{decrypt, encrypt};
+        use super::Client;
 
         #[test]
         fn test_encrypt_decrypt() {
-            let key = XSalsa20Poly1305::generate_key(&mut OsRng);
+            let key = Client::new(&XSalsa20Poly1305::generate_key(&mut OsRng));
 
             let history1 = History::new(
                 chrono::Utc::now(),
@@ -311,24 +346,25 @@ pub mod xchacha20poly1305 {
             };
 
             // same contents, different id, different encryption key
-            let e1 = encrypt(history1.clone(), &key).unwrap();
-            let e2 = encrypt(history2.clone(), &key).unwrap();
+            let e1 = key.encrypt(history1.clone()).unwrap();
+            let e2 = key.encrypt(history2.clone()).unwrap();
 
             assert_ne!(e1, e2);
 
             // test decryption works
             // this should pass
-            match decrypt(&e1, &key, &history1.id) {
+            match key.decrypt(&e1, &history1.id) {
                 Err(e) => panic!("failed to decrypt, got {}", e),
                 Ok(h) => assert_eq!(h, history1),
             };
-            match decrypt(&e2, &key, &history2.id) {
+            match key.decrypt(&e2, &history2.id) {
                 Err(e) => panic!("failed to decrypt, got {}", e),
                 Ok(h) => assert_eq!(h, history2),
             };
 
             // this should err
-            let _ = decrypt(&e2, &key, &history1.id)
+            let _ = key
+                .decrypt(&e2, &history1.id)
                 .expect_err("expected an error decrypting with invalid key");
         }
     }

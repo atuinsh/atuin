@@ -5,7 +5,6 @@ use axum::{
     http::HeaderMap,
     Json,
 };
-use chrono::{TimeZone, Utc};
 use http::StatusCode;
 use tracing::{debug, error, instrument};
 
@@ -90,14 +89,12 @@ pub async fn list<DB: Database>(
 
     let history: Vec<String> = entries.iter().map(|i| i.data.clone()).collect();
 
-    let more_history: Vec<AddHistoryRequest> = entries
+    let sync_history = entries
         .into_iter()
-        .map(|i| AddHistoryRequest {
+        .map(|i| SyncHistoryItem {
             id: i.client_id,
-            timestamp: Utc.from_utc_datetime(&i.timestamp),
             data: i.data,
-            hostname: i.hostname,
-            scheme: i.scheme.map(EncryptionScheme::from_string),
+            encryption: i.scheme.map(EncryptionScheme::from_string),
         })
         .collect();
 
@@ -109,7 +106,7 @@ pub async fn list<DB: Database>(
 
     Ok(Json(SyncHistoryResponse {
         history,
-        more_history,
+        sync_history,
     }))
 }
 

@@ -39,8 +39,7 @@ pub struct AddHistoryRequest {
     pub timestamp: chrono::DateTime<Utc>,
     pub data: String,
     pub hostname: String,
-    // the encryption scheme used
-    pub scheme: Option<EncryptionScheme>,
+    pub encryption: Option<EncryptionScheme>,
 }
 
 #[derive(Debug, Clone)]
@@ -106,8 +105,16 @@ pub struct SyncHistoryRequest {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SyncHistoryResponse {
+    /// deprecated
     pub history: Vec<String>,
-    pub more_history: Vec<AddHistoryRequest>,
+    pub sync_history: Vec<SyncHistoryItem>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SyncHistoryItem {
+    pub id: String,
+    pub data: String,
+    pub encryption: Option<EncryptionScheme>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

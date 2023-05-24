@@ -1,7 +1,5 @@
 use std::collections::HashMap;
-use std::collections::HashSet;
 
-use atuin_common::api::EncryptionScheme;
 use chrono::Utc;
 use eyre::{bail, Result};
 use reqwest::{
@@ -11,22 +9,18 @@ use reqwest::{
 
 use atuin_common::api::{
     AddHistoryRequest, CountResponse, DeleteHistoryRequest, ErrorResponse, IndexResponse,
-    LoginRequest, LoginResponse, RegisterResponse, StatusResponse, SyncHistoryResponse,
+    LoginRequest, LoginResponse, RegisterResponse, StatusResponse, SyncHistoryItem,
+    SyncHistoryResponse,
 };
 use semver::Version;
 
-use crate::encryption::{key, xchacha20poly1305, xsalsa20poly1305legacy};
 use crate::settings::Settings;
 use crate::{history::History, sync::hash_str};
 
 static APP_USER_AGENT: &str = concat!("atuin/", env!("CARGO_PKG_VERSION"),);
 
-// TODO: remove all references to the encryption key from this
-// It should be handled *elsewhere*
-
 pub struct Client<'a> {
     sync_addr: &'a str,
-    key: key::Key,
     client: reqwest::Client,
 }
 
@@ -117,7 +111,6 @@ impl<'a> Client<'a> {
 
         Ok(Client {
             sync_addr: &settings.sync_address,
-            key: key::load(settings)?,
             client: reqwest::Client::builder()
                 .user_agent(APP_USER_AGENT)
                 .default_headers(headers)
@@ -160,8 +153,7 @@ impl<'a> Client<'a> {
         sync_ts: chrono::DateTime<Utc>,
         history_ts: chrono::DateTime<Utc>,
         host: Option<String>,
-        deleted: HashSet<String>,
-    ) -> Result<Vec<History>> {
+    ) -> Result<Vec<SyncHistoryItem>> {
         let host = match host {
             None => hash_str(&format!("{}:{}", whoami::hostname(), whoami::username())),
             Some(h) => h,
@@ -179,27 +171,7 @@ impl<'a> Client<'a> {
 
         let history = resp.json::<SyncHistoryResponse>().await?;
 
-        let mut output = Vec::with_capacity(history.history.len());
-        for entry in history.more_history {
-            let mut history = match entry.scheme {
-                Some(EncryptionScheme::XSalsa20Poly1305Legacy) | None => {
-                    xsalsa20poly1305legacy::decrypt(entry.data, &self.key)?
-                }
-                Some(EncryptionScheme::XChaCha20Poly1305) => {
-                    xchacha20poly1305::decrypt(&entry.data, &self.key, &entry.id)?
-                }
-                Some(EncryptionScheme::Unknown(x)) => {
-                    bail!("cannot decrypt '{x}' encryption scheme")
-                }
-            };
-            if deleted.contains(&entry.id) {
-                history.deleted_at = Some(Utc::now());
-                history.command.clear();
-            }
-            output.push(history);
-        }
-
-        Ok(output)
+        Ok(history.sync_history)
     }
 
     pub async fn post_history(&self, history: &[AddHistoryRequest]) -> Result<()> {
