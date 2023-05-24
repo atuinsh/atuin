@@ -4,11 +4,7 @@ use clap::Parser;
 use eyre::{bail, Context, Result};
 use tokio::{fs::File, io::AsyncWriteExt};
 
-use atuin_client::{
-    api_client,
-    encryption::key::{decode, encode, new, Key},
-    settings::Settings,
-};
+use atuin_client::{api_client, settings::Settings, sync::key};
 use atuin_common::api::LoginRequest;
 use rpassword::prompt_password;
 
@@ -52,17 +48,17 @@ impl Cmd {
             if PathBuf::from(key_path).exists() {
                 let bytes = fs_err::read_to_string(key_path)
                     .context("existing key file couldn't be read")?;
-                if decode(bytes).is_err() {
+                if key::decode(&bytes).is_err() {
                     bail!("the key in existing key file was invalid");
                 }
             } else {
                 println!("No key file exists, creating a new");
-                let _key = new(settings)?;
+                let _key = key::new(settings)?;
             }
         } else {
             // try parse the key as a mnemonic...
             let key = match bip39::Mnemonic::from_phrase(&key, bip39::Language::English) {
-                Ok(mnemonic) => encode(Key::from_slice(mnemonic.entropy()))?,
+                Ok(mnemonic) => key::encode(key::Key::from_slice(mnemonic.entropy()))?,
                 Err(err) => {
                     if let Some(err) = err.downcast_ref::<bip39::ErrorKind>() {
                         match err {
@@ -84,7 +80,7 @@ impl Cmd {
                 }
             };
 
-            if decode(key.clone()).is_err() {
+            if key::decode(&key).is_err() {
                 bail!("the specified key was invalid");
             }
 
@@ -124,7 +120,7 @@ fn read_user_input(name: &'static str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use atuin_client::encryption::key::Key;
+    use atuin_client::sync::key::Key;
 
     #[test]
     fn mnemonic_round_trip() {

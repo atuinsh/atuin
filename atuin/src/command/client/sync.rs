@@ -1,7 +1,7 @@
 use clap::Subcommand;
 use eyre::{Result, WrapErr};
 
-use atuin_client::{database::Database, settings::Settings};
+use atuin_client::{database::Database, settings::Settings, sync::key};
 
 mod status;
 
@@ -45,7 +45,6 @@ impl Cmd {
             Self::Register(r) => r.run(&settings).await,
             Self::Status => status::run(&settings, db).await,
             Self::Key { base64 } => {
-                use atuin_client::encryption::key;
                 let key = key::load(&settings).wrap_err("could not load encryption key")?;
 
                 if base64 {

@@ -7,12 +7,11 @@ use eyre::{bail, Result};
 
 use atuin_common::api::{AddHistoryRequest, EncryptionScheme};
 
-use crate::{
-    api_client,
-    database::Database,
-    encryption::{key, xchacha20poly1305, xsalsa20poly1305legacy},
-    settings::Settings,
-};
+use crate::{api_client, database::Database, settings::Settings};
+
+pub mod key;
+mod xchacha20poly1305;
+mod xsalsa20poly1305legacy;
 
 pub fn hash_str(string: &str) -> String {
     use sha2::{Digest, Sha256};

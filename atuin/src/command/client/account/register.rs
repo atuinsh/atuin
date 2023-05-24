@@ -43,7 +43,7 @@ pub async fn run(
     file.write_all(session.session.as_bytes()).await?;
 
     // Create a new key, and save it to disk
-    let _key = atuin_client::encryption::key::new(settings)?;
+    let _key = atuin_client::sync::key::new(settings)?;
 
     Ok(())
 }
