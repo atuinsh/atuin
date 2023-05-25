@@ -113,8 +113,10 @@ impl ZshHistDb {
         //      typeset -g HISTDB_FILE="${HOME}/.histdb/zsh-history.db"
         let user_dirs = UserDirs::new().unwrap(); // should catch error here?
         let home_dir = user_dirs.home_dir();
-        std::env::var("HISTDB_FILE")
-            .as_ref().map_or_else(|_err| home_dir.join(".histdb/zsh-history.db"), |x| Path::new(x).to_path_buf())
+        std::env::var("HISTDB_FILE").as_ref().map_or_else(
+            |_err| home_dir.join(".histdb/zsh-history.db"),
+            |x| Path::new(x).to_path_buf(),
+        )
     }
     pub fn histpath() -> Result<PathBuf> {
         let histdb_path = ZshHistDb::histpath_candidate();

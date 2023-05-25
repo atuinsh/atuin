@@ -18,7 +18,10 @@ use crate::{
     utils::client_version_min,
 };
 
-use atuin_common::api::{AddHistoryRequest, CountResponse, DeleteHistoryRequest, MessageResponse, SyncHistoryRequest, SyncHistoryResponse};
+use atuin_common::api::{
+    AddHistoryRequest, CountResponse, DeleteHistoryRequest, MessageResponse, SyncHistoryRequest,
+    SyncHistoryResponse,
+};
 
 #[instrument(skip_all, fields(user.id = user.id))]
 pub async fn count<DB: Database>(
