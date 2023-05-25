@@ -136,7 +136,8 @@ dependencies = [
  "async-trait",
  "atuin-common",
  "base64 0.21.0",
- "chacha20poly1305",
+ "blake2",
+ "chacha20",
  "chrono",
  "clap",
  "config",
@@ -145,7 +146,6 @@ dependencies = [
  "fs-err",
  "generic-array",
  "hex",
- "hkdf",
  "interim",
  "itertools",
  "lazy_static",
@@ -361,19 +361,6 @@ dependencies = [
  "cfg-if",
  "cipher",
  "cpufeatures",
-]
-
-[[package]]
-name = "chacha20poly1305"
-version = "0.10.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "10cd79432192d1c0f4e1a0fef9527696cc039165d729fb41b3f4f4f354c2dc35"
-dependencies = [
- "aead",
- "chacha20",
- "cipher",
- "poly1305",
- "zeroize",
 ]
 
 [[package]]

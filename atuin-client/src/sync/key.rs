@@ -1,9 +1,9 @@
 use std::path::Path;
 
 use base64::prelude::{Engine, BASE64_STANDARD};
-use chacha20poly1305::aead::{rand_core::RngCore, OsRng};
 use eyre::{Context, Result};
 use generic_array::typenum::U32;
+use xsalsa20poly1305::aead::{rand_core::RngCore, OsRng};
 
 use crate::settings::Settings;
 

@@ -10,8 +10,8 @@ use atuin_common::api::{AddHistoryRequest, EncryptionScheme};
 use crate::{api_client, database::Database, settings::Settings};
 
 pub mod key;
-mod xchacha20poly1305;
-mod xsalsa20poly1305legacy;
+mod legacy;
+mod pasetov4;
 
 pub fn hash_str(string: &str) -> String {
     use sha2::{Digest, Sha256};
@@ -70,10 +70,10 @@ async fn sync_download(
 
         for entry in encrypted_page {
             let mut history = match entry.encryption {
-                Some(EncryptionScheme::XSalsa20Poly1305Legacy) | None => {
+                Some(EncryptionScheme::Legacy) | None => {
                     crypto.salsa_legacy.decrypt(&entry.data, &entry.id)?
                 }
-                Some(EncryptionScheme::XChaCha20Poly1305) => {
+                Some(EncryptionScheme::PasetoV4) => {
                     crypto.xchacha20.decrypt(&entry.data, &entry.id)?
                 }
                 Some(EncryptionScheme::Unknown(x)) => {
@@ -165,8 +165,8 @@ async fn sync_upload(
                 hostname: hash_str(&i.hostname),
                 encryption: Some(settings.encryption_scheme.clone()),
                 data: match &settings.encryption_scheme {
-                    EncryptionScheme::XSalsa20Poly1305Legacy => crypto.salsa_legacy.encrypt(&i)?,
-                    EncryptionScheme::XChaCha20Poly1305 => crypto.xchacha20.encrypt(i)?,
+                    EncryptionScheme::Legacy => crypto.salsa_legacy.encrypt(&i)?,
+                    EncryptionScheme::PasetoV4 => crypto.xchacha20.encrypt(i)?,
                     EncryptionScheme::Unknown(x) => {
                         bail!("cannot encrypt with '{x}' encryption scheme")
                     }
@@ -214,15 +214,15 @@ pub async fn sync(settings: &Settings, force: bool, db: &mut (impl Database + Se
 }
 
 struct Crypto {
-    salsa_legacy: xsalsa20poly1305legacy::Client,
-    xchacha20: xchacha20poly1305::Client,
+    salsa_legacy: legacy::Client,
+    xchacha20: pasetov4::Client,
 }
 
 impl Crypto {
     fn new(key: &key::Key) -> Self {
         Self {
-            salsa_legacy: xsalsa20poly1305legacy::Client::new(key),
-            xchacha20: xchacha20poly1305::Client::new(key),
+            salsa_legacy: legacy::Client::new(key),
+            xchacha20: pasetov4::Client::new(key),
         }
     }
 }

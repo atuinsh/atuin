@@ -46,12 +46,11 @@ pub struct AddHistoryRequest {
 pub enum EncryptionScheme {
     /// Encryption scheme using xsalsa20poly1305 (tweetnacl crypto_box) using the legacy system
     /// with no additional data and the same key for each entry with random IV
-    XSalsa20Poly1305Legacy,
+    Legacy,
 
-    /// Encryption scheme using xchacha20poly1305. Entry id is used in the additional data.
-    /// The key is derived from the original using the ID as info and "history" as the salt.
-    /// Each entry uses a random IV too.
-    XChaCha20Poly1305,
+    /// Following the PasetoV4 Specification for encryption:
+    /// <https://github.com/paseto-standard/paseto-spec/blob/master/docs/01-Protocol-Versions/Version4.md>
+    PasetoV4,
 
     Unknown(String),
 }
@@ -59,15 +58,15 @@ pub enum EncryptionScheme {
 impl EncryptionScheme {
     pub fn to_str(&self) -> &str {
         match self {
-            EncryptionScheme::XSalsa20Poly1305Legacy => "XSalsa20Poly1305Legacy",
-            EncryptionScheme::XChaCha20Poly1305 => "XChaCha20Poly1305",
+            EncryptionScheme::Legacy => "Legacy",
+            EncryptionScheme::PasetoV4 => "PasetoV4",
             EncryptionScheme::Unknown(x) => x,
         }
     }
     pub fn from_string(s: String) -> Self {
         match &*s {
-            "XSalsa20Poly1305Legacy" => EncryptionScheme::XSalsa20Poly1305Legacy,
-            "XChaCha20Poly1305" => EncryptionScheme::XChaCha20Poly1305,
+            "Legacy" => EncryptionScheme::Legacy,
+            "PasetoV4" => EncryptionScheme::PasetoV4,
             _ => EncryptionScheme::Unknown(s),
         }
     }
