@@ -53,7 +53,7 @@ impl Cmd {
         let mut settings = Settings::new().wrap_err("could not load client settings")?;
 
         let db_path = PathBuf::from(settings.db_path.as_str());
-        let mut db = Sqlite::new(db_path).await?;
+        let mut db = Sqlite::new(db_path, settings.db_fsync).await?;
 
         match self {
             Self::History(history) => history.run(&settings, &mut db).await,

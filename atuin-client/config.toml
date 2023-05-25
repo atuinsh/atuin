@@ -3,6 +3,10 @@
 ## linux: ~/.local/share/atuin/history.db
 # db_path = "~/.history.db"
 
+## whether SQlite should use fsync() when writing to the database, default is true
+## primarily intended to work around a ZFS bug which causes lag when fsync is enabled
+# db_fsync = true
+
 ## where to store your encryption key, default is your system data directory
 # key_path = "~/.key"
 

@@ -30,6 +30,19 @@ The path to the Atuin SQlite database. Defaults to
 db_path = "~/.history.db"
 ```
 
+### `db_fsync`
+
+Whether writes to the SQlite database use `fsync`. Defaults to
+true.
+
+Primarily intended to work around
+(a ZFS bug)[https://github.com/ellie/atuin/issues/952] where fsync is not
+needed to avoid corruption anyway.
+
+```
+db_fsync = true
+```
+
 ### `key_path`
 
 The path to the Atuin encryption key. Defaults to

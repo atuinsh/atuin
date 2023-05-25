@@ -140,6 +140,7 @@ pub struct Settings {
     pub sync_address: String,
     pub sync_frequency: String,
     pub db_path: String,
+    pub db_fsync: bool,
     pub key_path: String,
     pub session_path: String,
     pub search_mode: SearchMode,
@@ -326,6 +327,7 @@ impl Settings {
 
         let mut config_builder = Config::builder()
             .set_default("db_path", db_path.to_str())?
+            .set_default("db_fsync", true)?
             .set_default("key_path", key_path.to_str())?
             .set_default("session_path", session_path.to_str())?
             .set_default("dialect", "us")?
