@@ -8,11 +8,10 @@
 // clients must share the secret in order to be able to sync, as it is needed
 // to decrypt
 
-use std::{io::prelude::*, path::PathBuf};
+use std::path::Path;
 
 use base64::prelude::{Engine, BASE64_STANDARD};
 use eyre::{eyre, Context, Result};
-use fs_err as fs;
 use serde::{Deserialize, Serialize};
 pub use xsalsa20poly1305::Key;
 use xsalsa20poly1305::{
@@ -31,47 +30,55 @@ pub struct EncryptedHistory {
     pub nonce: Nonce<XSalsa20Poly1305>,
 }
 
-pub fn new_key(settings: &Settings) -> Result<Key> {
+pub fn new_key(username: &str, settings: &Settings) -> Result<Key> {
+    let entry = keyring::Entry::new("atuin", username).ok();
+    new_key_inner(entry, settings)
+}
+
+pub fn save_key(username: &str, settings: &Settings, key: &Key) -> Result<()> {
+    let entry = keyring::Entry::new("atuin", username).ok();
+    save_key_inner(entry, settings, key)
+}
+
+fn new_key_inner(entry: Option<keyring::Entry>, settings: &Settings) -> Result<Key> {
+    let key = XSalsa20Poly1305::generate_key(&mut OsRng);
+    save_key_inner(entry, settings, &key)?;
+    Ok(key)
+}
+
+fn save_key_inner(entry: Option<keyring::Entry>, settings: &Settings, key: &Key) -> Result<()> {
     let path = settings.key_path.as_str();
 
-    let key = XSalsa20Poly1305::generate_key(&mut OsRng);
-    let encoded = encode_key(&key)?;
+    let encoded = encode_key(key)?;
 
-    let mut file = fs::File::create(path)?;
-    file.write_all(encoded.as_bytes())?;
+    // prefer keyring
+    if let Some(entry) = entry {
+        entry.set_password(&encoded)?;
+    }
 
-    Ok(key)
+    // write to the file system too for now
+    fs_err::write(path, encoded.as_bytes())?;
+
+    Ok(())
 }
 
 // Loads the secret key, will create + save if it doesn't exist
-pub fn load_key(settings: &Settings) -> Result<Key> {
+pub fn load_key(username: &str, settings: &Settings) -> Result<Key> {
     let path = settings.key_path.as_str();
 
-    let key = if PathBuf::from(path).exists() {
-        let key = fs_err::read_to_string(path)?;
-        decode_key(key)?
-    } else {
-        new_key(settings)?
+    let entry = keyring::Entry::new("atuin", username).ok();
+    // prefer the keyring
+    let key = match entry.as_ref().map(|e| e.get_password()) {
+        Some(Ok(key)) => decode_key(key)?,
+        _ if Path::new(path).exists() => decode_key(fs_err::read_to_string(path)?)?,
+        _ => {
+            let key = XSalsa20Poly1305::generate_key(&mut OsRng);
+            save_key_inner(entry, settings, &key)?;
+            key
+        }
     };
 
     Ok(key)
-}
-
-pub fn load_encoded_key(settings: &Settings) -> Result<String> {
-    let path = settings.key_path.as_str();
-
-    if PathBuf::from(path).exists() {
-        let key = fs::read_to_string(path)?;
-        Ok(key)
-    } else {
-        let key = XSalsa20Poly1305::generate_key(&mut OsRng);
-        let encoded = encode_key(&key)?;
-
-        let mut file = fs::File::create(path)?;
-        file.write_all(encoded.as_bytes())?;
-
-        Ok(encoded)
-    }
 }
 
 pub fn encode_key(key: &Key) -> Result<String> {

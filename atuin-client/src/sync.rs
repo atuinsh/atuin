@@ -3,14 +3,14 @@ use std::convert::TryInto;
 use std::iter::FromIterator;
 
 use chrono::prelude::*;
-use eyre::Result;
+use eyre::{Context, Result};
 
 use atuin_common::api::AddHistoryRequest;
 
 use crate::{
     api_client,
     database::Database,
-    encryption::{encrypt, load_encoded_key, load_key},
+    encryption::{decrypt, encrypt, load_key},
     settings::Settings,
 };
 
@@ -33,17 +33,21 @@ pub fn hash_str(string: &str) -> String {
 // Check if remote has things we don't, and if so, download them.
 // Returns (num downloaded, total local)
 async fn sync_download(
+    settings: &Settings,
     force: bool,
     client: &api_client::Client<'_>,
     db: &mut (impl Database + Send),
-) -> Result<(i64, i64)> {
+) -> Result<()> {
     debug!("starting sync download");
 
     let remote_status = client.status().await?;
     let remote_count = remote_status.count;
 
+    let key = load_key(&remote_status.username, settings)?; // encryption key
+
     // useful to ensure we don't even save something that hasn't yet been synced + deleted
-    let remote_deleted = HashSet::from_iter(remote_status.deleted.clone());
+    let remote_deleted =
+        HashSet::<&str>::from_iter(remote_status.deleted.iter().map(|s| s.as_str()));
 
     let initial_local = db.history_count().await?;
     let mut local_count = initial_local;
@@ -60,23 +64,30 @@ async fn sync_download(
 
     while remote_count > local_count {
         let page = client
-            .get_history(
-                last_sync,
-                last_timestamp,
-                host.clone(),
-                remote_deleted.clone(),
-            )
+            .get_encrypted_history(last_sync, last_timestamp, host.clone())
             .await?;
 
-        db.save_bulk(&page).await?;
+        let mut history = Vec::with_capacity(page.len());
+        for entry in page {
+            let entry = serde_json::from_str(&entry).context("invalid base64")?;
+            let mut entry =
+                decrypt(entry, &key).context("failed to decrypt history! check your key")?;
+            if remote_deleted.contains(&entry.id.as_str()) {
+                entry.deleted_at = Some(chrono::Utc::now());
+                entry.command = String::from("");
+            }
+            history.push(entry);
+        }
+
+        db.save_bulk(&history).await?;
 
         local_count = db.history_count().await?;
 
-        if page.len() < remote_status.page_size.try_into().unwrap() {
+        if history.len() < remote_status.page_size.try_into().unwrap() {
             break;
         }
 
-        let page_last = page
+        let page_last = history
             .last()
             .expect("could not get last element of page")
             .timestamp;
@@ -104,8 +115,8 @@ async fn sync_download(
             );
         }
     }
-
-    Ok((local_count - initial_local, local_count))
+    debug!("sync downloaded {}", local_count - initial_local);
+    Ok(())
 }
 
 // Check if we have things remote doesn't, and if so, upload them
@@ -127,7 +138,7 @@ async fn sync_upload(
 
     debug!("remote has {}, we have {}", remote_count, local_count);
 
-    let key = load_key(settings)?; // encryption key
+    let key = load_key(&remote_status.username, settings)?; // encryption key
 
     // first just try the most recent set
 
@@ -178,17 +189,10 @@ async fn sync_upload(
 }
 
 pub async fn sync(settings: &Settings, force: bool, db: &mut (impl Database + Send)) -> Result<()> {
-    let client = api_client::Client::new(
-        &settings.sync_address,
-        &settings.session_token,
-        load_encoded_key(settings)?,
-    )?;
+    let client = api_client::Client::new(&settings.sync_address, &settings.session_token)?;
 
     sync_upload(settings, force, &client, db).await?;
-
-    let download = sync_download(force, &client, db).await?;
-
-    debug!("sync downloaded {}", download.0);
+    sync_download(settings, force, &client, db).await?;
 
     Settings::save_sync_time()?;
 

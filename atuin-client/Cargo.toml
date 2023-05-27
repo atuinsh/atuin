@@ -22,6 +22,7 @@ sync = [
   "base64",
   "generic-array",
   "xsalsa20poly1305",
+  "keyring",
 ]
 
 [dependencies]
@@ -63,6 +64,7 @@ tokio = { workspace = true }
 semver = { workspace = true }
 xsalsa20poly1305 = { version = "0.9.0", optional = true }
 generic-array = { version = "0.14", optional = true, features = ["serde"] }
+keyring = { version = "2", optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }

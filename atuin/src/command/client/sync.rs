@@ -46,7 +46,10 @@ impl Cmd {
             Self::Status => status::run(&settings, db).await,
             Self::Key { base64 } => {
                 use atuin_client::encryption::{encode_key, load_key};
-                let key = load_key(&settings).wrap_err("could not load encryption key")?;
+                // jank... we need the username to get the key, I guess we can store the username in a file at some point :D
+                // for now this should still load the key from the fs. This is the only place it's needed, alternatively we can
+                // require the user provide the username to this command. idk
+                let key = load_key("", &settings).wrap_err("could not load encryption key")?;
 
                 if base64 {
                     let encode = encode_key(&key).wrap_err("could not encode encryption key")?;
