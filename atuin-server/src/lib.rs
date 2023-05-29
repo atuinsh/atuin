@@ -22,9 +22,9 @@ pub mod utils;
 async fn shutdown_signal() {
     let terminate = async {
         signal::unix::signal(signal::unix::SignalKind::terminate())
-        .expect("failed to register signal handler")
-        .recv()
-        .await;
+            .expect("failed to register signal handler")
+            .recv()
+            .await;
     };
 
     tokio::select! {
