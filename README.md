@@ -195,7 +195,7 @@ nix-env -f '<nixpkgs>' -iA atuin
 And then follow [the shell setup](#shell-plugin)
 ### Pacman
 
-Atuin is available in the Arch Linux [community repository](https://archlinux.org/packages/community/x86_64/atuin/):
+Atuin is available in the Arch Linux [[extra] repository](https://archlinux.org/packages/extra/x86_64/atuin/):
 
 ```
 pacman -S atuin
