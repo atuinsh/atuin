@@ -91,7 +91,7 @@ dependencies = [
 
 [[package]]
 name = "atuin"
-version = "14.0.1"
+version = "15.0.0"
 dependencies = [
  "async-trait",
  "atuin-client",
@@ -131,7 +131,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-client"
-version = "14.0.1"
+version = "15.0.0"
 dependencies = [
  "async-trait",
  "atuin-common",
@@ -172,7 +172,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-common"
-version = "14.0.1"
+version = "15.0.0"
 dependencies = [
  "chrono",
  "rand",
@@ -182,7 +182,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-server"
-version = "14.0.1"
+version = "15.0.0"
 dependencies = [
  "argon2",
  "async-trait",
@@ -197,6 +197,7 @@ dependencies = [
  "http",
  "rand",
  "reqwest",
+ "semver",
  "serde",
  "serde_json",
  "sodiumoxide",

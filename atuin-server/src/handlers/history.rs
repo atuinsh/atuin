@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use axum::{
     extract::{Path, Query, State},
+    http::HeaderMap,
     Json,
 };
 use http::StatusCode;
@@ -13,6 +14,7 @@ use crate::{
     database::Database,
     models::{NewHistory, User},
     router::AppState,
+    utils::client_version_min,
 };
 
 use atuin_common::api::*;
@@ -41,15 +43,30 @@ pub async fn count<DB: Database>(
 pub async fn list<DB: Database>(
     req: Query<SyncHistoryRequest>,
     user: User,
+    headers: HeaderMap,
     state: State<AppState<DB>>,
 ) -> Result<Json<SyncHistoryResponse>, ErrorResponseStatus<'static>> {
     let db = &state.0.database;
+
+    let agent = headers
+        .get("user-agent")
+        .map_or("", |v| v.to_str().unwrap_or(""));
+
+    let variable_page_size = client_version_min(agent, ">=15.0.0").unwrap_or(false);
+
+    let page_size = if variable_page_size {
+        state.settings.page_size
+    } else {
+        100
+    };
+
     let history = db
         .list_history(
             &user,
             req.sync_ts.naive_utc(),
             req.history_ts.naive_utc(),
             &req.host,
+            page_size,
         )
         .await;
 

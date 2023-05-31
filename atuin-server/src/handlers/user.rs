@@ -18,7 +18,7 @@ use uuid::Uuid;
 use super::{ErrorResponse, ErrorResponseStatus, RespExt};
 use crate::{
     database::Database,
-    models::{NewSession, NewUser},
+    models::{NewSession, NewUser, User},
     router::AppState,
 };
 
@@ -92,6 +92,18 @@ pub async fn register<DB: Database>(
         );
     }
 
+    for c in register.username.chars() {
+        match c {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' => {}
+            _ => {
+                return Err(ErrorResponse::reply(
+                    "Only alphanumeric and hyphens (-) are allowed in usernames",
+                )
+                .with_status(StatusCode::BAD_REQUEST))
+            }
+        }
+    }
+
     let hashed = hash_secret(&register.password);
 
     let new_user = NewUser {
@@ -138,6 +150,23 @@ pub async fn register<DB: Database>(
     }
 }
 
+#[instrument(skip_all, fields(user.id = user.id))]
+pub async fn delete<DB: Database>(
+    user: User,
+    state: State<AppState<DB>>,
+) -> Result<Json<DeleteUserResponse>, ErrorResponseStatus<'static>> {
+    debug!("request to delete user {}", user.id);
+
+    let db = &state.0.database;
+    if let Err(e) = db.delete_user(&user).await {
+        error!("failed to delete user: {}", e);
+
+        return Err(ErrorResponse::reply("failed to delete user")
+            .with_status(StatusCode::INTERNAL_SERVER_ERROR));
+    };
+    Ok(Json(DeleteUserResponse {}))
+}
+
 #[instrument(skip_all, fields(user.username = login.username.as_str()))]
 pub async fn login<DB: Database>(
     state: State<AppState<DB>>,
@@ -173,7 +202,9 @@ pub async fn login<DB: Database>(
     let verified = verify_str(user.password.as_str(), login.password.borrow());
 
     if !verified {
-        return Err(ErrorResponse::reply("user not found").with_status(StatusCode::NOT_FOUND));
+        return Err(
+            ErrorResponse::reply("password is not correct").with_status(StatusCode::UNAUTHORIZED)
+        );
     }
 
     Ok(Json(LoginResponse {
