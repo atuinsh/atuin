@@ -10,6 +10,6 @@ use atuin_common::record::Record;
 #[async_trait]
 pub trait Store {
     async fn push(&self, record: Record) -> Result<Record>;
-    async fn get(&self, id: String) -> Result<Record>;
-    async fn len(&self, host: String, tag: String) -> Result<u64>;
+    async fn get(&self, id: &str) -> Result<Record>;
+    async fn len(&self, host: &str, tag: &str) -> Result<u64>;
 }

@@ -91,13 +91,15 @@ impl Store for SqliteStore {
         // TODO: batch inserts
         let mut tx = self.pool.begin().await?;
         Self::save_raw(&mut tx, &record).await?;
+        tx.commit().await?;
 
         Ok(record)
     }
 
-    async fn get(&self, id: String) -> Result<Record> {
+    async fn get(&self, id: &str) -> Result<Record> {
+        println!("querying {}", id);
         let res = sqlx::query("select * from records where id = ?1")
-            .bind(id.as_str())
+            .bind(id)
             .map(Self::query_row)
             .fetch_one(&self.pool)
             .await?;
@@ -105,11 +107,11 @@ impl Store for SqliteStore {
         Ok(res)
     }
 
-    async fn len(&self, host: String, tag: String) -> Result<u64> {
+    async fn len(&self, host: &str, tag: &str) -> Result<u64> {
         let res: (i64,) =
             sqlx::query_as("select count(1) from records where host = ?1 and tag = ?2")
-                .bind(host.as_str())
-                .bind(tag.as_str())
+                .bind(host)
+                .bind(tag)
                 .fetch_one(&self.pool)
                 .await?;
 
@@ -119,7 +121,20 @@ impl Store for SqliteStore {
 
 #[cfg(test)]
 mod tests {
+    use atuin_common::record::Record;
+
+    use crate::record::store::Store;
+
     use super::SqliteStore;
+
+    fn test_record() -> Record {
+        Record::new(
+            String::from(atuin_common::utils::uuid_v7().simple().to_string()),
+            String::from("v1"),
+            String::from(atuin_common::utils::uuid_v7().simple().to_string()),
+            vec![0, 1, 2, 3],
+        )
+    }
 
     #[tokio::test]
     async fn create_db() {
@@ -134,12 +149,72 @@ mod tests {
 
     #[tokio::test]
     async fn push_record() {
-        let db = SqliteStore::new(":memory:").await;
+        let db = SqliteStore::new(":memory:").await.unwrap();
+        let record = test_record();
+
+        let record = db.push(record).await;
 
         assert!(
-            db.is_ok(),
-            "db could not be created, {:?}",
-            db.err().unwrap()
+            record.is_ok(),
+            "failed to insert record: {:?}",
+            record.unwrap_err()
         );
+    }
+
+    #[tokio::test]
+    async fn get_record() {
+        let db = SqliteStore::new(":memory:").await.unwrap();
+        let record = test_record();
+        let record = db.push(record).await.unwrap();
+
+        let new_record = db.get(record.id.as_str()).await;
+
+        assert!(
+            new_record.is_ok(),
+            "failed to fetch record: {:?}",
+            new_record.unwrap_err()
+        );
+
+        assert_eq!(record, new_record.unwrap(), "records are not equal");
+    }
+
+    #[tokio::test]
+    async fn len() {
+        let db = SqliteStore::new(":memory:").await.unwrap();
+        let record = test_record();
+        let record = db.push(record).await.unwrap();
+
+        let len = db.len(record.host.as_str(), record.tag.as_str()).await;
+
+        assert!(
+            len.is_ok(),
+            "failed to get store len: {:?}",
+            len.unwrap_err()
+        );
+
+        assert_eq!(len.unwrap(), 1, "expected length of 1 after insert");
+    }
+
+    #[tokio::test]
+    async fn len_different_tags() {
+        let db = SqliteStore::new(":memory:").await.unwrap();
+
+        // these have different tags, so the len should be the same
+        // we model multiple stores within one database
+        // new store = new tag = independent length
+        let first = db.push(test_record()).await.unwrap();
+        let second = db.push(test_record()).await.unwrap();
+
+        let first_len = db
+            .len(first.host.as_str(), first.tag.as_str())
+            .await
+            .unwrap();
+        let second_len = db
+            .len(second.host.as_str(), second.tag.as_str())
+            .await
+            .unwrap();
+
+        assert_eq!(first_len, 1, "expected length of 1 after insert");
+        assert_eq!(second_len, 1, "expected length of 1 after insert");
     }
 }

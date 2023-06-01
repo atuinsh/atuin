@@ -543,6 +543,7 @@ mod test {
             hostname: "test:host".to_string(),
             session: "beepboopiamasession".to_string(),
             cwd: "/home/ellie".to_string(),
+            host_id: "test-host".to_string(),
         };
 
         let results = db
@@ -749,6 +750,7 @@ mod test {
             hostname: "test:host".to_string(),
             session: "beepboopiamasession".to_string(),
             cwd: "/home/ellie".to_string(),
+            host_id: "test-host".to_string(),
         };
 
         let mut db = Sqlite::new("sqlite::memory:").await.unwrap();
