@@ -1,4 +1,6 @@
-FROM lukemathwalker/cargo-chef:latest-rust-1.72.0-buster AS chef
+FROM rust:alpine as chef
+RUN apk add --no-cache musl-dev file make
+RUN cargo install cargo-chef 
 WORKDIR app
 
 FROM chef AS planner
@@ -6,22 +8,18 @@ COPY . .
 RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
-
-# Ensure working C compile setup (not installed by default in arm64 images)
-RUN apt update && apt install build-essential -y
-
 COPY --from=planner /app/recipe.json recipe.json
 RUN cargo chef cook --release --recipe-path recipe.json
-
 COPY . .
 RUN cargo build --release --bin atuin
 
-FROM debian:bullseye-20230919-slim AS runtime
-
-RUN useradd -c 'atuin user' atuin && mkdir /config && chown atuin:atuin /config
-# Install ca-certificates for webhooks to work
-RUN apt update && apt install ca-certificates -y && rm -rf /var/lib/apt/lists/*
-WORKDIR app
+FROM alpine:3.12 as runner
+RUN apk add shadow ca-certificates 
+RUN groupmod -g 1000 users \
+    && useradd -u 1000 -m atuin \
+    && usermod -G users atuin \
+    && mkdir /config \
+    && chown atuin:users /config
 
 USER atuin
 
@@ -30,4 +28,5 @@ ENV RUST_LOG=atuin::api=info
 ENV ATUIN_CONFIG_DIR=/config
 
 COPY --from=builder /app/target/release/atuin /usr/local/bin
-ENTRYPOINT ["/usr/local/bin/atuin"]
+CMD ["/usr/local/bin/atuin"]
+

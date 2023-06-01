@@ -24,8 +24,9 @@ Create a `docker-compose.yml`:
 version: '3.5'
 services:
   atuin:
-    restart: always
     image: ghcr.io/atuinsh/atuin:main
+    restart: always
+    user: ${UID:-1000}:${GID:-1000}
     command: server start
     volumes:
       - "./config:/config"
@@ -38,8 +39,9 @@ services:
       ATUIN_OPEN_REGISTRATION: "true"
       ATUIN_DB_URI: postgres://$ATUIN_DB_USERNAME:$ATUIN_DB_PASSWORD@db/atuin
   postgresql:
-    image: postgres:14
-    restart: unless-stopped
+    image: postgres:14-alpine
+    restart: always
+    user: ${UID:-1000}:${GID:-1000}
     volumes: # Don't remove permanent storage for index database files!
       - "./database:/var/lib/postgresql/data/"
     environment:
