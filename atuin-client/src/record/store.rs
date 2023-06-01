@@ -9,7 +9,7 @@ use atuin_common::record::Record;
 /// be shell history, kvs, etc.
 #[async_trait]
 pub trait Store {
-    async fn push(record: Record) -> Result<Record>;
-    async fn get(id: String) -> Result<Record>;
-    async fn len(host: String, tag: String) -> Result<usize>;
+    async fn push(&self, record: Record) -> Result<Record>;
+    async fn get(&self, id: String) -> Result<Record>;
+    async fn len(&self, host: String, tag: String) -> Result<u64>;
 }

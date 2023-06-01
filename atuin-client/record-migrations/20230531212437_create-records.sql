@@ -6,5 +6,9 @@ create table if not exists records (
 
   tag text not null,
   version text not null,
-  data blob not null,
+  data blob not null
 );
+
+create index host_idx on records (host);
+create index tag_idx on records (tag);
+create index host_tag_idx on records (host, tag);
