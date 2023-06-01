@@ -16,13 +16,14 @@ use sqlx::{
 use super::{
     history::History,
     ordering,
-    settings::{FilterMode, SearchMode},
+    settings::{FilterMode, SearchMode, Settings},
 };
 
 pub struct Context {
     pub session: String,
     pub cwd: String,
     pub hostname: String,
+    pub host_id: String,
 }
 
 #[derive(Default, Clone)]
@@ -45,11 +46,13 @@ pub fn current_context() -> Context {
     };
     let hostname = format!("{}:{}", whoami::hostname(), whoami::username());
     let cwd = utils::get_current_dir();
+    let host_id = Settings::host_id().expect("failed to load host ID");
 
     Context {
         session,
         hostname,
         cwd,
+        host_id,
     }
 }
 
