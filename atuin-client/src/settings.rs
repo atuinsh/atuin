@@ -141,6 +141,7 @@ pub struct Settings {
     pub sync_address: String,
     pub sync_frequency: String,
     pub db_path: String,
+    pub record_store_path: String,
     pub key_path: String,
     pub session_path: String,
     pub search_mode: SearchMode,
@@ -337,11 +338,14 @@ impl Settings {
         config_file.push("config.toml");
 
         let db_path = data_dir.join("history.db");
+        let record_store_path = data_dir.join("records.db");
+
         let key_path = data_dir.join("key");
         let session_path = data_dir.join("session");
 
         let mut config_builder = Config::builder()
             .set_default("db_path", db_path.to_str())?
+            .set_default("record_store_path", record_store_path.to_str())?
             .set_default("key_path", key_path.to_str())?
             .set_default("session_path", session_path.to_str())?
             .set_default("dialect", "us")?
