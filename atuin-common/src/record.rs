@@ -1,9 +1,17 @@
 /// A single record stored inside of our local database
 #[derive(Debug, Clone, PartialEq)]
 pub struct Record {
-    pub id: String,
+    pub id: String, // a unique ID
 
+    // TODO(ellie): Optimize the storage here. We use a bunch of IDs, and currently store
+    // as strings. I would rather avoid normalization, so store as UUID binary instead of
+    // encoding to a string and wasting much more storage.
     pub host: String,
+
+    // A store is technically just a double linked list
+    // We can do some cheating with the timestamps, but should not rely upon them.
+    // Clocks are tricksy.
+    pub parent: Option<String>,
 
     pub timestamp: u64,
 
@@ -18,13 +26,20 @@ pub struct Record {
 }
 
 impl Record {
-    pub fn new(host: String, version: String, tag: String, data: Vec<u8>) -> Record {
+    pub fn new(
+        host: String,
+        version: String,
+        tag: String,
+        parent: Option<String>,
+        data: Vec<u8>,
+    ) -> Record {
         let id = crate::utils::uuid_v7().as_simple().to_string();
         let timestamp = chrono::Utc::now();
 
         Record {
             id,
             host,
+            parent,
             timestamp: timestamp.timestamp_nanos() as u64,
             version,
             tag,

@@ -56,13 +56,14 @@ impl SqliteStore {
     async fn save_raw(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, r: &Record) -> Result<()> {
         // In sqlite, we are "limited" to i64. But that is still fine, until 2262.
         sqlx::query(
-            "insert or ignore into records(id, host, timestamp, tag, version, data)
-                values(?1, ?2, ?3, ?4, ?5, ?6)",
+            "insert or ignore into records(id, host, tag, timestamp, parent, version, data)
+                values(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         )
         .bind(r.id.as_str())
         .bind(r.host.as_str())
-        .bind(r.timestamp as i64)
         .bind(r.tag.as_str())
+        .bind(r.timestamp as i64)
+        .bind(r.parent.as_ref())
         .bind(r.version.as_str())
         .bind(r.data.as_slice())
         .execute(tx)
@@ -77,6 +78,7 @@ impl SqliteStore {
         Record {
             id: row.get("id"),
             host: row.get("host"),
+            parent: row.get("parent"),
             timestamp: timestamp as u64,
             tag: row.get("tag"),
             version: row.get("version"),
@@ -97,7 +99,6 @@ impl Store for SqliteStore {
     }
 
     async fn get(&self, id: &str) -> Result<Record> {
-        println!("querying {}", id);
         let res = sqlx::query("select * from records where id = ?1")
             .bind(id)
             .map(Self::query_row)
@@ -117,6 +118,32 @@ impl Store for SqliteStore {
 
         Ok(res.0 as u64)
     }
+
+    async fn first(&self, host: &str, tag: &str) -> Result<Record> {
+        let res = sqlx::query(
+            "select * from records where tag = ?1 and host = ?2 and parent is null limit 1",
+        )
+        .bind(host)
+        .bind(tag)
+        .map(Self::query_row)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(res)
+    }
+
+    async fn last(&self, host: &str, tag: &str) -> Result<Record> {
+        let res = sqlx::query(
+            "select * from records rp where tag=?1 and host=?2 and (select count(1) from records where parent=rp.id) = 0;",
+        )
+        .bind(tag)
+        .bind(host)
+        .map(Self::query_row)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(res)
+    }
 }
 
 #[cfg(test)]
@@ -132,6 +159,7 @@ mod tests {
             String::from(atuin_common::utils::uuid_v7().simple().to_string()),
             String::from("v1"),
             String::from(atuin_common::utils::uuid_v7().simple().to_string()),
+            None,
             vec![0, 1, 2, 3],
         )
     }
