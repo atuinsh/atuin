@@ -1,5 +1,5 @@
 use clap::Parser;
-use eyre::{Result, bail};
+use eyre::{bail, Result};
 use tokio::{fs::File, io::AsyncWriteExt};
 
 use atuin_client::{api_client, settings::Settings};
