@@ -1,5 +1,5 @@
 use clap::Parser;
-use eyre::Result;
+use eyre::{bail, Result};
 use tokio::{fs::File, io::AsyncWriteExt};
 
 use atuin_client::{api_client, settings::Settings};
@@ -34,6 +34,10 @@ pub async fn run(
     let password = password
         .clone()
         .unwrap_or_else(super::login::read_user_password);
+
+    if password.is_empty() {
+        bail!("please provide a password");
+    }
 
     let session =
         api_client::register(settings.sync_address.as_str(), &username, &email, &password).await?;
