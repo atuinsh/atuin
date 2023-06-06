@@ -35,10 +35,20 @@ impl Cmd {
                 };
 
                 let bytes = record.serialize()?;
+
+                let len = store.len(host_id.as_str(), kv_tag).await?;
+
+                let parent = if len > 0 {
+                    Some(store.last(host_id.as_str(), kv_tag).await?.id)
+                } else {
+                    None
+                };
+
                 let record = atuin_common::record::Record::new(
                     host_id,
                     kv_version.to_string(),
                     kv_tag.to_string(),
+                    parent,
                     bytes,
                 );
 

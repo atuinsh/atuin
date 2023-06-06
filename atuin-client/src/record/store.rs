@@ -12,4 +12,8 @@ pub trait Store {
     async fn push(&self, record: Record) -> Result<Record>;
     async fn get(&self, id: &str) -> Result<Record>;
     async fn len(&self, host: &str, tag: &str) -> Result<u64>;
+
+    // Get the first record for a given host and tag
+    async fn first(&self, host: &str, tag: &str) -> Result<Record>;
+    async fn last(&self, host: &str, tag: &str) -> Result<Record>;
 }
