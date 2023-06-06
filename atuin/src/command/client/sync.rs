@@ -3,10 +3,9 @@ use eyre::{Result, WrapErr};
 
 use atuin_client::{database::Database, settings::Settings};
 
-mod login;
-mod logout;
-mod register;
 mod status;
+
+use crate::command::client::account;
 
 #[derive(Subcommand)]
 #[command(infer_subcommands = true)]
@@ -19,13 +18,13 @@ pub enum Cmd {
     },
 
     /// Login to the configured server
-    Login(login::Cmd),
+    Login(account::login::Cmd),
 
     /// Log out
     Logout,
 
     /// Register with the configured server
-    Register(register::Cmd),
+    Register(account::register::Cmd),
 
     /// Print the encryption key for transfer to another machine
     Key {
@@ -42,7 +41,7 @@ impl Cmd {
         match self {
             Self::Sync { force } => run(&settings, force, db).await,
             Self::Login(l) => l.run(&settings).await,
-            Self::Logout => logout::run(&settings),
+            Self::Logout => account::logout::run(&settings),
             Self::Register(r) => r.run(&settings).await,
             Self::Status => status::run(&settings, db).await,
             Self::Key { base64 } => {

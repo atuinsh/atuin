@@ -1,14 +1,14 @@
 use std::{
     env,
     fmt::{self, Display},
-    io::{StdoutLock, Write},
+    io::{self, Write},
     time::Duration,
 };
 
 use atuin_common::utils;
 use clap::Subcommand;
 use eyre::Result;
-use runtime_format::{FormatKey, FormatKeyError, ParsedFmt};
+use runtime_format::{FormatKey, FormatKeyError, ParseSegment, ParsedFmt};
 
 use atuin_client::{
     database::{current_context, Database},
@@ -97,13 +97,45 @@ pub fn print_list(h: &[History], list_mode: ListMode, format: Option<&str>) {
     let w = std::io::stdout();
     let mut w = w.lock();
 
-    match list_mode {
-        ListMode::Human => print_human_list(&mut w, h, format),
-        ListMode::CmdOnly => print_cmd_only(&mut w, h),
-        ListMode::Regular => print_regular(&mut w, h, format),
+    let fmt_str = match list_mode {
+        ListMode::Human => format
+            .unwrap_or("{time} · {duration}\t{command}")
+            .replace("\\t", "\t"),
+        ListMode::Regular => format
+            .unwrap_or("{time}\t{command}\t{duration}")
+            .replace("\\t", "\t"),
+        // not used
+        ListMode::CmdOnly => String::new(),
+    };
+
+    let parsed_fmt = match list_mode {
+        ListMode::Human | ListMode::Regular => parse_fmt(&fmt_str),
+        ListMode::CmdOnly => std::iter::once(ParseSegment::Key("command")).collect(),
+    };
+
+    for h in h.iter().rev() {
+        match writeln!(w, "{}", parsed_fmt.with_args(&FmtHistory(h))) {
+            Ok(()) => {}
+            // ignore broken pipe (issue #626)
+            Err(e) if e.kind() == io::ErrorKind::BrokenPipe => {
+                return;
+            }
+            Err(err) => {
+                eprintln!("ERROR: History output failed with the following error: {err}");
+                std::process::exit(1);
+            }
+        }
     }
 
-    w.flush().expect("failed to flush history");
+    match w.flush() {
+        Ok(()) => {}
+        // ignore broken pipe (issue #626)
+        Err(e) if e.kind() == io::ErrorKind::BrokenPipe => {}
+        Err(err) => {
+            eprintln!("ERROR: History output failed with the following error: {err}");
+            std::process::exit(1);
+        }
+    }
 }
 
 /// type wrapper around `History` so we can implement traits
@@ -140,38 +172,14 @@ impl FormatKey for FmtHistory<'_> {
     }
 }
 
-fn print_list_with(w: &mut StdoutLock, h: &[History], format: &str) {
-    let fmt = match ParsedFmt::new(format) {
+fn parse_fmt(format: &str) -> ParsedFmt {
+    match ParsedFmt::new(format) {
         Ok(fmt) => fmt,
         Err(err) => {
             eprintln!("ERROR: History formatting failed with the following error: {err}");
             println!("If your formatting string contains curly braces (eg: {{var}}) you need to escape them this way: {{{{var}}.");
             std::process::exit(1)
         }
-    };
-
-    for h in h.iter().rev() {
-        writeln!(w, "{}", fmt.with_args(&FmtHistory(h))).expect("failed to write history");
-    }
-}
-
-pub fn print_human_list(w: &mut StdoutLock, h: &[History], format: Option<&str>) {
-    let format = format
-        .unwrap_or("{time} · {duration}\t{command}")
-        .replace("\\t", "\t");
-    print_list_with(w, h, &format);
-}
-
-pub fn print_regular(w: &mut StdoutLock, h: &[History], format: Option<&str>) {
-    let format = format
-        .unwrap_or("{time}\t{command}\t{duration}")
-        .replace("\\t", "\t");
-    print_list_with(w, h, &format);
-}
-
-pub fn print_cmd_only(w: &mut StdoutLock, h: &[History]) {
-    for h in h.iter().rev() {
-        writeln!(w, "{}", h.command.trim()).expect("failed to write history");
     }
 }
 
@@ -190,6 +198,9 @@ impl Cmd {
                 // It's better for atuin to silently fail here and attempt to
                 // store whatever is ran, than to throw an error to the terminal
                 let cwd = utils::get_current_dir();
+                if !cwd.is_empty() && settings.cwd_filter.is_match(&cwd) {
+                    return Ok(());
+                }
 
                 let h = History::new(chrono::Utc::now(), command, cwd, -1, -1, None, None, None);
 

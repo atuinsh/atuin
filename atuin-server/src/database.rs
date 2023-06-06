@@ -14,7 +14,6 @@ use super::{
     models::{History, NewHistory, NewSession, NewUser, Session, User},
 };
 use crate::settings::Settings;
-use crate::settings::HISTORY_PAGE_SIZE;
 
 use atuin_common::utils::get_days_from_month;
 
@@ -27,6 +26,7 @@ pub trait Database {
     async fn get_user(&self, username: &str) -> Result<User>;
     async fn get_user_session(&self, u: &User) -> Result<Session>;
     async fn add_user(&self, user: &NewUser) -> Result<i64>;
+    async fn delete_user(&self, u: &User) -> Result<()>;
 
     async fn count_history(&self, user: &User) -> Result<i64>;
     async fn count_history_cached(&self, user: &User) -> Result<i64>;
@@ -50,6 +50,7 @@ pub trait Database {
         created_after: chrono::NaiveDateTime,
         since: chrono::NaiveDateTime,
         host: &str,
+        page_size: i64,
     ) -> Result<Vec<History>>;
 
     async fn add_history(&self, history: &[NewHistory]) -> Result<()>;
@@ -270,6 +271,7 @@ impl Database for Postgres {
         created_after: chrono::NaiveDateTime,
         since: chrono::NaiveDateTime,
         host: &str,
+        page_size: i64,
     ) -> Result<Vec<History>> {
         let res = sqlx::query_as::<_, History>(
             "select id, client_id, user_id, hostname, timestamp, data, created_at from history 
@@ -284,7 +286,7 @@ impl Database for Postgres {
         .bind(host)
         .bind(created_after)
         .bind(since)
-        .bind(HISTORY_PAGE_SIZE)
+        .bind(page_size)
         .fetch_all(&self.pool)
         .await?;
 
@@ -332,6 +334,26 @@ impl Database for Postgres {
         }
 
         tx.commit().await?;
+
+        Ok(())
+    }
+
+    #[instrument(skip_all)]
+    async fn delete_user(&self, u: &User) -> Result<()> {
+        sqlx::query("delete from sessions where user_id = $1")
+            .bind(u.id)
+            .execute(&self.pool)
+            .await?;
+
+        sqlx::query("delete from users where id = $1")
+            .bind(u.id)
+            .execute(&self.pool)
+            .await?;
+
+        sqlx::query("delete from history where user_id = $1")
+            .bind(u.id)
+            .execute(&self.pool)
+            .await?;
 
         Ok(())
     }

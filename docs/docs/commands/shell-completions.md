@@ -16,4 +16,4 @@ Possible values for the `--shell` argument are the following:
 - `powershell`
 - `elvish`
 
-Also, see the [supported shells](./../README.md#supported-shells).
+Also, see the [supported shells](./../index.md#supported-shells).

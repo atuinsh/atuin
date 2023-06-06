@@ -85,10 +85,19 @@ pub fn decode_key(key: String) -> Result<Key> {
     let buf = BASE64_STANDARD
         .decode(key.trim_end())
         .wrap_err("encryption key is not a valid base64 encoding")?;
-    let buf: &[u8] = rmp_serde::from_slice(&buf)
-        .wrap_err("encryption key is not a valid message pack encoding")?;
 
-    Ok(*Key::from_slice(buf))
+    let mbuf: Result<[u8; 32]> =
+        rmp_serde::from_slice(&buf).wrap_err("encryption key is not a valid message pack encoding");
+
+    match mbuf {
+        Ok(b) => Ok(*Key::from_slice(&b)),
+        Err(_) => {
+            let buf: &[u8] = rmp_serde::from_slice(&buf)
+                .wrap_err("encryption key is not a valid message pack encoding")?;
+
+            Ok(*Key::from_slice(buf))
+        }
+    }
 }
 
 pub fn encrypt(history: &History, key: &Key) -> Result<EncryptedHistory> {

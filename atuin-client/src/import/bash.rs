@@ -62,7 +62,7 @@ impl Importer for Bash {
         // this increment is deliberately very small to prevent particularly fast fingers
         // causing ordering issues; it also helps in handling the "here document" syntax,
         // where several lines are recorded in succession without individual timestamps
-        let timestamp_increment = Duration::nanoseconds(1);
+        let timestamp_increment = Duration::milliseconds(1);
 
         // make sure there is a minimum amount of time before the first known timestamp
         // to fit all commands, given the default increment

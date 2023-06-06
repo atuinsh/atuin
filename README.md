@@ -100,7 +100,7 @@ Read more below for offline-only usage, or for hosting your own server.
 ```
 bash <(curl https://raw.githubusercontent.com/ellie/atuin/main/install.sh)
 
-atuin register -u <USERNAME> -e <EMAIL> -p <PASSWORD>
+atuin register -u <USERNAME> -e <EMAIL>
 atuin import auto
 atuin sync
 ```
@@ -129,6 +129,8 @@ bash <(curl https://raw.githubusercontent.com/ellie/atuin/main/install.sh)
             
 atuin import auto
 ```
+
+By default, Atuin will check for updates. You can [disable update checks by modifying](https://atuin.sh/docs/config/#update_check) `config.toml`.
 
 Then restart your shell!
 
@@ -193,7 +195,7 @@ nix-env -f '<nixpkgs>' -iA atuin
 And then follow [the shell setup](#shell-plugin)
 ### Pacman
 
-Atuin is available in the Arch Linux [community repository](https://archlinux.org/packages/community/x86_64/atuin/):
+Atuin is available in the Arch Linux [[extra] repository](https://archlinux.org/packages/extra/x86_64/atuin/):
 
 ```
 pacman -S atuin
@@ -215,7 +217,7 @@ And then follow [the shell setup](#shell-plugin)
 
 ```
 git clone https://github.com/ellie/atuin.git
-cd atuin
+cd atuin/atuin
 cargo install --path .
 ```
   
@@ -259,6 +261,10 @@ Then setup Atuin
 echo 'eval "$(atuin init bash)"' >> ~/.bashrc
 ```
 
+**PLEASE NOTE**
+
+bash-preexec currently has an issue where it will stop honoring `ignorespace`. While Atuin will ignore commands prefixed with whitespace, they may still end up in your bash history. Please check your configuration! All other shells do not have this issue.
+
 ### fish
 
 Add
@@ -273,7 +279,7 @@ to your `is-interactive` block in your `~/.config/fish/config.fish` file
 
 Install `atuin` shell plugin in zsh, bash, or fish with [Fig](https://fig.io) in one click. 
 
-<a href="https://fig.io/plugins/other/atuin" target="_blank"><img src="https://fig.io/badges/install-with-fig.svg" /></a>
+<a href="https://fig.io/plugins/shell/atuin" target="_blank"><img src="https://fig.io/badges/install-with-fig.svg" /></a>
 
 ### Nushell
 
@@ -289,3 +295,6 @@ Add to `config.nu`:
 ```
 source ~/.local/share/atuin/init.nu
 ```
+
+[English]: ./README.md
+[简体中文]: ./docs/zh-CN/README.md

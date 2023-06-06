@@ -16,7 +16,7 @@ eval "$(atuin init zsh --disable-ctrl-r)"
 ```
 
 If you do not want either key to be bound, either pass both `--disable` arguments, or set the
-environment varuable `ATUIN_NOBIND` to any value before the call to `atuin init`:
+environment variable `ATUIN_NOBIND` to any value before the call to `atuin init`:
 
 ```
 ## Do not bind any keys
@@ -66,6 +66,29 @@ bind \cr _atuin_search
 bind -M insert \cr _atuin_search
 ```
 
+# nu
+
+```
+set-env ATUIN_NOBIND = true
+atuin init nu | save -f ~/.local/share/atuin/init.nu #make sure you created the directory beforehand with `mkdir ~/.local/share/atuin/init.nu`
+source ~/.local/share/atuin/init.nu
+
+#bind to ctrl-r in emacs, vi_normal and vi_insert modes, add any other bindings you want here too
+let-env config = (
+    $env.config | upsert keybindings (
+        $env.config.keybindings
+        | append {
+            name: atuin
+            modifier: control
+            keycode: char_r
+            mode: [emacs, vi_normal, vi_insert]
+            event: { send: executehostcommand cmd: (_atuin_search_cmd) }
+        }
+    )
+)
+```
+
+
 ## Atuin UI shortcuts
 
 | Shortcut                                  | Action                                                                        |
@@ -91,3 +114,4 @@ bind -M insert \cr _atuin_search
 | enter                                     | Select highlighted item                                                       |
 | ⬇ (with no entry selected)               | Return original or return query depending on settings                         |
 | ⬇                                        | Select the next item on the list                                              |
+

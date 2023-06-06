@@ -147,13 +147,17 @@ pub struct Settings {
     pub filter_mode_shell_up_key_binding: Option<FilterMode>,
     pub shell_up_key_binding: bool,
     pub inline_height: u16,
+    pub invert: bool,
     pub show_preview: bool,
+    pub show_help: bool,
     pub exit_mode: ExitMode,
     pub word_jump_mode: WordJumpMode,
     pub word_chars: String,
     pub scroll_context_lines: usize,
     #[serde(with = "serde_regex", default = "RegexSet::empty")]
     pub history_filter: RegexSet,
+    #[serde(with = "serde_regex", default = "RegexSet::empty")]
+    pub cwd_filter: RegexSet,
 
     // This is automatically loaded when settings is created. Do not set in
     // config! Keep secrets and settings apart.
@@ -334,6 +338,8 @@ impl Settings {
             .set_default("style", "auto")?
             .set_default("inline_height", 0)?
             .set_default("show_preview", false)?
+            .set_default("show_help", true)?
+            .set_default("invert", false)?
             .set_default("exit_mode", "return-original")?
             .set_default("word_jump_mode", "emacs")?
             .set_default(

@@ -91,7 +91,7 @@ dependencies = [
 
 [[package]]
 name = "atuin"
-version = "14.0.1"
+version = "15.0.0"
 dependencies = [
  "async-trait",
  "atuin-client",
@@ -131,7 +131,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-client"
-version = "14.0.1"
+version = "15.0.0"
 dependencies = [
  "async-trait",
  "atuin-common",
@@ -172,7 +172,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-common"
-version = "14.0.1"
+version = "15.0.0"
 dependencies = [
  "chrono",
  "rand",
@@ -182,7 +182,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-server"
-version = "14.0.1"
+version = "15.0.0"
 dependencies = [
  "argon2",
  "async-trait",
@@ -197,6 +197,7 @@ dependencies = [
  "http",
  "rand",
  "reqwest",
+ "semver",
  "serde",
  "serde_json",
  "sodiumoxide",
@@ -1793,9 +1794,9 @@ dependencies = [
 
 [[package]]
 name = "runtime-format"
-version = "0.1.2"
+version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b035308411b1af4683acc4fc928366443f08b893bb73e235c85de4c2be572495"
+checksum = "09958d5b38bca768ede7928c767c89a08ba568144a7b61992aecae79b03c8c94"
 dependencies = [
  "tinyvec",
 ]
