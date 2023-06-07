@@ -24,7 +24,11 @@ $func$
 language plpgsql volatile -- pldfplplpflh
 cost 100; -- default value
 
-create or replace trigger tg_user_history_count 
-	after insert on history 
-	for each row 
-	execute procedure user_history_count();
+begin;
+drop trigger if exists tg_user_history_count on history;
+
+create trigger tg_user_history_count
+        after insert on history
+        for each row
+        execute procedure user_history_count();
+commit;
