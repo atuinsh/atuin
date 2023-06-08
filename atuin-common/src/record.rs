@@ -46,4 +46,14 @@ impl Record {
             data,
         }
     }
+
+    pub fn new_child(&self, data: Vec<u8>) -> Record {
+        Self::new(
+            self.host.clone(),
+            self.version.clone(),
+            self.tag.clone(),
+            Some(self.id.clone()),
+            data,
+        )
+    }
 }
