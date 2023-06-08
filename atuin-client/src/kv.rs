@@ -23,13 +23,24 @@ impl KvRecord {
 
 pub struct KvStore;
 
+impl Default for KvStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl KvStore {
     // will want to init the actual kv store when that is done
     pub fn new() -> KvStore {
         KvStore {}
     }
 
-    pub async fn set(&self, store: &mut impl Store, key: &str, value: &str) -> Result<()> {
+    pub async fn set(
+        &self,
+        store: &mut (impl Store + Send + Sync),
+        key: &str,
+        value: &str,
+    ) -> Result<()> {
         let host_id = Settings::host_id().expect("failed to get host_id");
 
         let record = KvRecord {
@@ -88,6 +99,6 @@ impl KvStore {
         }
 
         // if we get here, then... we didn't find the record with that key :(
-        return Ok(None);
+        Ok(None)
     }
 }

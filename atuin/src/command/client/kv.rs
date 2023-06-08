@@ -21,7 +21,11 @@ pub enum Cmd {
 }
 
 impl Cmd {
-    pub async fn run(&self, _settings: &Settings, store: &mut impl Store) -> Result<()> {
+    pub async fn run(
+        &self,
+        _settings: &Settings,
+        store: &mut (impl Store + Send + Sync),
+    ) -> Result<()> {
         let kv_store = KvStore::new();
 
         match self {

@@ -106,7 +106,7 @@ impl Store for SqliteStore {
         // If you push in a batch of nothing it does... nothing.
         let mut last: Option<Record> = None;
         for record in records {
-            Self::save_raw(&mut tx, &record).await?;
+            Self::save_raw(&mut tx, record).await?;
 
             last = Some(record.clone());
         }
