@@ -6,7 +6,7 @@ use std::path::Path;
 use std::str::FromStr;
 
 use async_trait::async_trait;
-use eyre::Result;
+use eyre::{eyre, Result};
 use fs_err as fs;
 use sqlx::{
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteRow},
@@ -142,9 +142,13 @@ impl Store for SqliteStore {
             .bind(record.id.clone())
             .map(Self::query_row)
             .fetch_one(&self.pool)
-            .await?;
+            .await;
 
-        Ok(Some(res))
+        match res {
+            Err(sqlx::Error::RowNotFound) => Ok(None),
+            Err(e) => Err(eyre!("an error occured: {}", e)),
+            Ok(v) => Ok(Some(v)),
+        }
     }
 
     async fn first(&self, host: &str, tag: &str) -> Result<Record> {
@@ -337,7 +341,7 @@ mod tests {
 
         let mut count = 1;
 
-        while let Some(next) = db.next(&record).await {
+        while let Some(next) = db.next(&record).await.unwrap() {
             assert_eq!(record.id, next.clone().parent.unwrap());
             record = next;
 
