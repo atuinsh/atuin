@@ -1,8 +1,7 @@
 use clap::Subcommand;
 use eyre::Result;
-use serde::{Deserialize, Serialize};
 
-use atuin_client::{kv::KvRecord, record::store::Store, settings::Settings};
+use atuin_client::{kv::KvStore, record::store::Store, settings::Settings};
 
 #[derive(Subcommand)]
 #[command(infer_subcommands = true)]
@@ -22,42 +21,21 @@ pub enum Cmd {
 }
 
 impl Cmd {
-    pub async fn run(&self, settings: &Settings, store: &mut impl Store) -> Result<()> {
-        let kv_version = "v0";
-        let kv_tag = "kv";
-        let host_id = Settings::host_id().expect("failed to get host_id");
+    pub async fn run(&self, _settings: &Settings, store: &mut impl Store) -> Result<()> {
+        let kv_store = KvStore::new();
 
         match self {
-            Self::Set { key, value } => {
-                let record = KvRecord {
-                    key: key.to_string(),
-                    value: value.to_string(),
-                };
+            Self::Set { key, value } => kv_store.set(store, key, value).await,
 
-                let bytes = record.serialize()?;
+            Self::Get { key } => {
+                let val = kv_store.get(store, key).await?;
 
-                let len = store.len(host_id.as_str(), kv_tag).await?;
-
-                let parent = if len > 0 {
-                    Some(store.last(host_id.as_str(), kv_tag).await?.id)
-                } else {
-                    None
-                };
-
-                let record = atuin_common::record::Record::new(
-                    host_id,
-                    kv_version.to_string(),
-                    kv_tag.to_string(),
-                    parent,
-                    bytes,
-                );
-
-                store.push(record).await?;
+                if let Some(kv) = val {
+                    println!("{}", kv.value);
+                }
 
                 Ok(())
             }
-
-            Self::Get { key } => Ok(()),
         }
     }
 }

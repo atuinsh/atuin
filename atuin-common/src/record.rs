@@ -1,5 +1,7 @@
+use serde::{Deserialize, Serialize};
+
 /// A single record stored inside of our local database
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Record {
     pub id: String, // a unique ID
 

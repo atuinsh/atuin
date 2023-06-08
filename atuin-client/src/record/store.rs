@@ -22,7 +22,7 @@ pub trait Store {
     async fn get(&self, id: &str) -> Result<Record>;
     async fn len(&self, host: &str, tag: &str) -> Result<u64>;
 
-    async fn next(&self, record: &Record) -> Option<Record>;
+    async fn next(&self, record: &Record) -> Result<Option<Record>>;
 
     // Get the first record for a given host and tag
     async fn first(&self, host: &str, tag: &str) -> Result<Record>;

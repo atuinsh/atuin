@@ -137,15 +137,14 @@ impl Store for SqliteStore {
         Ok(res.0 as u64)
     }
 
-    async fn next(&self, record: &Record) -> Option<Record> {
+    async fn next(&self, record: &Record) -> Result<Option<Record>> {
         let res = sqlx::query("select * from records where parent = ?1")
             .bind(record.id.clone())
             .map(Self::query_row)
             .fetch_one(&self.pool)
-            .await
-            .ok();
+            .await?;
 
-        res
+        Ok(Some(res))
     }
 
     async fn first(&self, host: &str, tag: &str) -> Result<Record> {
