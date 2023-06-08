@@ -214,8 +214,11 @@ impl State {
             KeyCode::Up if settings.invert => {
                 self.scroll_down(1);
             }
-            KeyCode::Char('n' | 'j') if ctrl => {
+            KeyCode::Char('n' | 'j') if ctrl && !settings.invert => {
                 self.scroll_down(1);
+            }
+            KeyCode::Char('n' | 'j') if ctrl && settings.invert => {
+                self.scroll_up(len, 1);
             }
             KeyCode::Up if !settings.invert => {
                 self.scroll_up(len, 1);
@@ -223,17 +226,28 @@ impl State {
             KeyCode::Down if settings.invert => {
                 self.scroll_up(len, 1);
             }
-            KeyCode::Char('p' | 'k') if ctrl => {
+            KeyCode::Char('p' | 'k') if ctrl && !settings.invert => {
                 self.scroll_up(len, 1);
             }
+            KeyCode::Char('p' | 'k') if ctrl && settings.invert => {
+                self.scroll_down(1);
+            }
             KeyCode::Char(c) => self.search.input.insert(c),
-            KeyCode::PageDown => {
+            KeyCode::PageDown if !settings.invert => {
                 let scroll_len = self.results_state.max_entries() - settings.scroll_context_lines;
                 self.scroll_down(scroll_len);
             }
-            KeyCode::PageUp => {
+            KeyCode::PageDown if settings.invert => {
                 let scroll_len = self.results_state.max_entries() - settings.scroll_context_lines;
                 self.scroll_up(len, scroll_len);
+            }
+            KeyCode::PageUp if !settings.invert => {
+                let scroll_len = self.results_state.max_entries() - settings.scroll_context_lines;
+                self.scroll_up(len, scroll_len);
+            }
+            KeyCode::PageUp if settings.invert => {
+                let scroll_len = self.results_state.max_entries() - settings.scroll_context_lines;
+                self.scroll_down(scroll_len);
             }
             _ => {}
         };
