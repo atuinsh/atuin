@@ -10,11 +10,14 @@ use http::request::Parts;
 use tower::ServiceBuilder;
 use tower_http::trace::TraceLayer;
 
-use super::{database::Database, handlers};
-use crate::{models::User, settings::Settings};
+use super::handlers;
+use crate::settings::Settings;
+use atuin_server_database::{models::User, Database};
+
+pub struct UserAuth(pub User);
 
 #[async_trait]
-impl<DB: Send + Sync> FromRequestParts<AppState<DB>> for User
+impl<DB: Send + Sync> FromRequestParts<AppState<DB>> for UserAuth
 where
     DB: Database,
 {
@@ -45,7 +48,7 @@ where
             .await
             .map_err(|_| http::StatusCode::FORBIDDEN)?;
 
-        Ok(user)
+        Ok(UserAuth(user))
     }
 }
 
@@ -54,18 +57,15 @@ async fn teapot() -> impl IntoResponse {
 }
 
 #[derive(Clone)]
-pub struct AppState<DB> {
+pub struct AppState<DB: Database> {
     pub database: DB,
-    pub settings: Settings,
+    pub settings: Settings<DB::Settings>,
 }
 
-pub fn router<DB: Database + Clone + Send + Sync + 'static>(
-    database: DB,
-    settings: Settings,
-) -> Router {
+pub fn router<DB: Database>(database: DB, settings: Settings<DB::Settings>) -> Router {
     let routes = Router::new()
         .route("/", get(handlers::index))
-        .route("/sync/count", get(handlers::history::count))
+        .route("/sync/count", get(handlers::history::count::<DB>))
         .route("/sync/history", get(handlers::history::list))
         .route("/sync/calendar/:focus", get(handlers::history::calendar))
         .route("/sync/status", get(handlers::status::status))

@@ -1,5 +1,12 @@
 [workspace]
-members = ["atuin", "atuin-client", "atuin-server", "atuin-common"]
+members = [
+    "atuin",
+    "atuin-client",
+    "atuin-server",
+    "atuin-server-postgres",
+    "atuin-server-database",
+    "atuin-common",
+]
 
 [workspace.package]
 name = "atuin"

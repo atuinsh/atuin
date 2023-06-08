@@ -10,18 +10,20 @@ use tracing::{debug, error, instrument};
 
 use super::{ErrorResponse, ErrorResponseStatus, RespExt};
 use crate::{
-    calendar::{TimePeriod, TimePeriodInfo},
-    database::Database,
-    models::{NewHistory, User},
-    router::AppState,
+    router::{AppState, UserAuth},
     utils::client_version_min,
+};
+use atuin_server_database::{
+    calendar::{TimePeriod, TimePeriodInfo},
+    models::NewHistory,
+    Database,
 };
 
 use atuin_common::api::*;
 
 #[instrument(skip_all, fields(user.id = user.id))]
 pub async fn count<DB: Database>(
-    user: User,
+    UserAuth(user): UserAuth,
     state: State<AppState<DB>>,
 ) -> Result<Json<CountResponse>, ErrorResponseStatus<'static>> {
     let db = &state.0.database;
@@ -42,7 +44,7 @@ pub async fn count<DB: Database>(
 #[instrument(skip_all, fields(user.id = user.id))]
 pub async fn list<DB: Database>(
     req: Query<SyncHistoryRequest>,
-    user: User,
+    UserAuth(user): UserAuth,
     headers: HeaderMap,
     state: State<AppState<DB>>,
 ) -> Result<Json<SyncHistoryResponse>, ErrorResponseStatus<'static>> {
@@ -101,7 +103,7 @@ pub async fn list<DB: Database>(
 
 #[instrument(skip_all, fields(user.id = user.id))]
 pub async fn delete<DB: Database>(
-    user: User,
+    UserAuth(user): UserAuth,
     state: State<AppState<DB>>,
     Json(req): Json<DeleteHistoryRequest>,
 ) -> Result<Json<MessageResponse>, ErrorResponseStatus<'static>> {
@@ -123,13 +125,15 @@ pub async fn delete<DB: Database>(
 
 #[instrument(skip_all, fields(user.id = user.id))]
 pub async fn add<DB: Database>(
-    user: User,
+    UserAuth(user): UserAuth,
     state: State<AppState<DB>>,
     Json(req): Json<Vec<AddHistoryRequest>>,
 ) -> Result<(), ErrorResponseStatus<'static>> {
+    let State(AppState { database, settings }) = state;
+
     debug!("request to add {} history items", req.len());
 
-    let history: Vec<NewHistory> = req
+    let mut history: Vec<NewHistory> = req
         .into_iter()
         .map(|h| NewHistory {
             client_id: h.id,
@@ -140,8 +144,24 @@ pub async fn add<DB: Database>(
         })
         .collect();
 
-    let db = &state.0.database;
-    if let Err(e) = db.add_history(&history).await {
+    history.retain(|h| {
+        // keep if within limit, or limit is 0 (unlimited)
+        let keep = h.data.len() <= settings.max_history_length || settings.max_history_length == 0;
+
+        // Don't return an error here. We want to insert as much of the
+        // history list as we can, so log the error and continue going.
+        if !keep {
+            tracing::warn!(
+                "history too long, got length {}, max {}",
+                h.data.len(),
+                settings.max_history_length
+            );
+        }
+
+        keep
+    });
+
+    if let Err(e) = database.add_history(&history).await {
         error!("failed to add history: {}", e);
 
         return Err(ErrorResponse::reply("failed to add history")
@@ -155,7 +175,7 @@ pub async fn add<DB: Database>(
 pub async fn calendar<DB: Database>(
     Path(focus): Path<String>,
     Query(params): Query<HashMap<String, u64>>,
-    user: User,
+    UserAuth(user): UserAuth,
     state: State<AppState<DB>>,
 ) -> Result<Json<HashMap<u64, TimePeriodInfo>>, ErrorResponseStatus<'static>> {
     let focus = focus.as_str();

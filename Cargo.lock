@@ -97,6 +97,7 @@ dependencies = [
  "atuin-client",
  "atuin-common",
  "atuin-server",
+ "atuin-server-postgres",
  "base64 0.21.0",
  "bitflags",
  "cassowary",
@@ -187,6 +188,7 @@ dependencies = [
  "argon2",
  "async-trait",
  "atuin-common",
+ "atuin-server-database",
  "axum",
  "base64 0.21.0",
  "chrono",
@@ -201,13 +203,40 @@ dependencies = [
  "serde",
  "serde_json",
  "sodiumoxide",
- "sqlx",
  "tokio",
  "tower",
  "tower-http",
  "tracing",
  "uuid",
  "whoami",
+]
+
+[[package]]
+name = "atuin-server-database"
+version = "15.0.0"
+dependencies = [
+ "async-trait",
+ "atuin-common",
+ "chrono",
+ "chronoutil",
+ "eyre",
+ "serde",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "atuin-server-postgres"
+version = "15.0.0"
+dependencies = [
+ "async-trait",
+ "atuin-common",
+ "atuin-server-database",
+ "chrono",
+ "futures-util",
+ "serde",
+ "sqlx",
+ "tracing",
 ]
 
 [[package]]
@@ -224,6 +253,7 @@ checksum = "e5694b64066a2459918d8074c2ce0d5a88f409431994c2356617c8ae0c4721fc"
 dependencies = [
  "async-trait",
  "axum-core",
+ "axum-macros",
  "bitflags",
  "bytes",
  "futures-util",
@@ -264,6 +294,18 @@ dependencies = [
  "rustversion",
  "tower-layer",
  "tower-service",
+]
+
+[[package]]
+name = "axum-macros"
+version = "0.3.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2bb524613be645939e280b7279f7b017f98cf7f5ef084ec374df373530e73277"
+dependencies = [
+ "heck",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.14",
 ]
 
 [[package]]

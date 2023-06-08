@@ -3,24 +3,24 @@ use std::{io::prelude::*, path::PathBuf};
 use config::{Config, Environment, File as ConfigFile, FileFormat};
 use eyre::{eyre, Result};
 use fs_err::{create_dir_all, File};
-use serde::{Deserialize, Serialize};
-
-pub const HISTORY_PAGE_SIZE: i64 = 100;
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct Settings {
+pub struct Settings<DbSettings> {
     pub host: String,
     pub port: u16,
     pub path: String,
-    pub db_uri: String,
     pub open_registration: bool,
     pub max_history_length: usize,
     pub page_size: i64,
     pub register_webhook_url: Option<String>,
     pub register_webhook_username: String,
+
+    #[serde(flatten)]
+    pub db_settings: DbSettings,
 }
 
-impl Settings {
+impl<DbSettings: DeserializeOwned> Settings<DbSettings> {
     pub fn new() -> Result<Self> {
         let mut config_file = if let Ok(p) = std::env::var("ATUIN_CONFIG_DIR") {
             PathBuf::from(p)
