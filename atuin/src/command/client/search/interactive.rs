@@ -42,6 +42,7 @@ struct State {
     results_state: ListState,
     switched_search_mode: bool,
     search_mode: SearchMode,
+    results_len: usize,
 
     search: SearchState,
     engine: Box<dyn SearchEngine>,
@@ -58,25 +59,26 @@ impl State {
     async fn query_results(&mut self, db: &mut dyn Database) -> Result<Vec<History>> {
         let results = self.engine.query(&self.search, db).await?;
         self.results_state.select(0);
+        self.results_len = results.len();
         Ok(results)
     }
 
-    fn handle_input(&mut self, settings: &Settings, input: &Event, len: usize) -> Option<usize> {
+    fn handle_input(&mut self, settings: &Settings, input: &Event) -> Option<usize> {
         match input {
-            Event::Key(k) => self.handle_key_input(settings, k, len),
-            Event::Mouse(m) => self.handle_mouse_input(*m, len),
+            Event::Key(k) => self.handle_key_input(settings, k),
+            Event::Mouse(m) => self.handle_mouse_input(*m),
             Event::Paste(d) => self.handle_paste_input(d),
             _ => None,
         }
     }
 
-    fn handle_mouse_input(&mut self, input: MouseEvent, len: usize) -> Option<usize> {
+    fn handle_mouse_input(&mut self, input: MouseEvent) -> Option<usize> {
         match input.kind {
             event::MouseEventKind::ScrollDown => {
                 self.scroll_down(1);
             }
             event::MouseEventKind::ScrollUp => {
-                self.scroll_up(len, 1);
+                self.scroll_up(1);
             }
             _ => {}
         }
@@ -92,12 +94,7 @@ impl State {
 
     #[allow(clippy::too_many_lines)]
     #[allow(clippy::cognitive_complexity)]
-    fn handle_key_input(
-        &mut self,
-        settings: &Settings,
-        input: &KeyEvent,
-        len: usize,
-    ) -> Option<usize> {
+    fn handle_key_input(&mut self, settings: &Settings, input: &KeyEvent) -> Option<usize> {
         if input.kind == event::KeyEventKind::Release {
             return None;
         }
@@ -218,16 +215,16 @@ impl State {
                 self.scroll_down(1);
             }
             KeyCode::Char('n' | 'j') if ctrl && settings.invert => {
-                self.scroll_up(len, 1);
+                self.scroll_up(1);
             }
             KeyCode::Up if !settings.invert => {
-                self.scroll_up(len, 1);
+                self.scroll_up(1);
             }
             KeyCode::Down if settings.invert => {
-                self.scroll_up(len, 1);
+                self.scroll_up(1);
             }
             KeyCode::Char('p' | 'k') if ctrl && !settings.invert => {
-                self.scroll_up(len, 1);
+                self.scroll_up(1);
             }
             KeyCode::Char('p' | 'k') if ctrl && settings.invert => {
                 self.scroll_down(1);
@@ -239,11 +236,11 @@ impl State {
             }
             KeyCode::PageDown if settings.invert => {
                 let scroll_len = self.results_state.max_entries() - settings.scroll_context_lines;
-                self.scroll_up(len, scroll_len);
+                self.scroll_up(scroll_len);
             }
             KeyCode::PageUp if !settings.invert => {
                 let scroll_len = self.results_state.max_entries() - settings.scroll_context_lines;
-                self.scroll_up(len, scroll_len);
+                self.scroll_up(scroll_len);
             }
             KeyCode::PageUp if settings.invert => {
                 let scroll_len = self.results_state.max_entries() - settings.scroll_context_lines;
@@ -260,9 +257,9 @@ impl State {
         self.results_state.select(i);
     }
 
-    fn scroll_up(&mut self, len: usize, scroll_len: usize) {
+    fn scroll_up(&mut self, scroll_len: usize) {
         let i = self.results_state.selected() + scroll_len;
-        self.results_state.select(i.min(len - 1));
+        self.results_state.select(i.min(self.results_len - 1));
     }
 
     #[allow(clippy::cast_possible_truncation)]
@@ -593,6 +590,7 @@ pub async fn history(
             },
         },
         engine: engines::engine(settings.search_mode),
+        results_len: 0,
     };
 
     let mut results = app.query_results(&mut db).await?;
@@ -610,7 +608,7 @@ pub async fn history(
             event_ready = event_ready => {
                 if event_ready?? {
                     loop {
-                        if let Some(i) = app.handle_input(settings, &event::read()?, results.len()) {
+                        if let Some(i) = app.handle_input(settings, &event::read()?) {
                             break 'render i;
                         }
                         if !event::poll(Duration::ZERO)? {
