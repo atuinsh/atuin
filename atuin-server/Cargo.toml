@@ -26,7 +26,7 @@ base64 = { workspace = true }
 rand = { workspace = true }
 tokio = { workspace = true }
 async-trait = { workspace = true }
-axum = { version = "0.6.4", features = ["macros"] }
+axum = "0.6.4"
 http = "0.2"
 fs-err = { workspace = true }
 chronoutil = "0.2.3"
