@@ -73,12 +73,10 @@ impl State {
     fn handle_mouse_input(&mut self, input: MouseEvent, len: usize) -> Option<usize> {
         match input.kind {
             event::MouseEventKind::ScrollDown => {
-                let i = self.results_state.selected().saturating_sub(1);
-                self.results_state.select(i);
+                self.scroll_down(1);
             }
             event::MouseEventKind::ScrollUp => {
-                let i = self.results_state.selected() + 1;
-                self.results_state.select(i.min(len - 1));
+                self.scroll_up(len, 1);
             }
             _ => {}
         }
@@ -211,44 +209,46 @@ impl State {
                 })
             }
             KeyCode::Down if !settings.invert => {
-                let i = self.results_state.selected().saturating_sub(1);
-                self.results_state.select(i);
+                self.scroll_down(1);
             }
             KeyCode::Up if settings.invert => {
-                let i = self.results_state.selected().saturating_sub(1);
-                self.results_state.select(i);
+                self.scroll_down(1);
             }
             KeyCode::Char('n' | 'j') if ctrl => {
-                let i = self.results_state.selected().saturating_sub(1);
-                self.results_state.select(i);
+                self.scroll_down(1);
             }
             KeyCode::Up if !settings.invert => {
-                let i = self.results_state.selected() + 1;
-                self.results_state.select(i.min(len - 1));
+                self.scroll_up(len, 1);
             }
             KeyCode::Down if settings.invert => {
-                let i = self.results_state.selected() + 1;
-                self.results_state.select(i.min(len - 1));
+                self.scroll_up(len, 1);
             }
             KeyCode::Char('p' | 'k') if ctrl => {
-                let i = self.results_state.selected() + 1;
-                self.results_state.select(i.min(len - 1));
+                self.scroll_up(len, 1);
             }
             KeyCode::Char(c) => self.search.input.insert(c),
             KeyCode::PageDown => {
                 let scroll_len = self.results_state.max_entries() - settings.scroll_context_lines;
-                let i = self.results_state.selected().saturating_sub(scroll_len);
-                self.results_state.select(i);
+                self.scroll_down(scroll_len);
             }
             KeyCode::PageUp => {
                 let scroll_len = self.results_state.max_entries() - settings.scroll_context_lines;
-                let i = self.results_state.selected() + scroll_len;
-                self.results_state.select(i.min(len - 1));
+                self.scroll_up(len, scroll_len);
             }
             _ => {}
         };
 
         None
+    }
+
+    fn scroll_down(&mut self, scroll_len: usize) {
+        let i = self.results_state.selected().saturating_sub(scroll_len);
+        self.results_state.select(i);
+    }
+
+    fn scroll_up(&mut self, len: usize, scroll_len: usize) {
+        let i = self.results_state.selected() + scroll_len;
+        self.results_state.select(i.min(len - 1));
     }
 
     #[allow(clippy::cast_possible_truncation)]
