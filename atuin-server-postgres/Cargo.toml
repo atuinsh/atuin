@@ -1,7 +1,7 @@
 [package]
 name = "atuin-server-postgres"
 edition = "2018"
-description = "server database library for atuin"
+description = "server postgres database library for atuin"
 
 version = { workspace = true }
 authors = { workspace = true }
