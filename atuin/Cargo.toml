@@ -59,7 +59,6 @@ tokio = { workspace = true }
 async-trait = { workspace = true }
 interim = { workspace = true }
 base64 = { workspace = true }
-crossbeam-channel = "0.5.1"
 clap = { workspace = true }
 clap_complete = "4.0.3"
 fs-err = { workspace = true }
