@@ -105,7 +105,7 @@ impl State {
         // reset the state, will be set to true later if user really did change it
         self.switched_search_mode = false;
         match input.code {
-            KeyCode::Char('c' | 'd' | 'g') if ctrl => return Some(RETURN_ORIGINAL),
+            KeyCode::Char('c' | 'g') if ctrl => return Some(RETURN_ORIGINAL),
             KeyCode::Esc => {
                 return Some(match settings.exit_mode {
                     ExitMode::ReturnOriginal => RETURN_ORIGINAL,
@@ -163,6 +163,12 @@ impl State {
                 .input
                 .remove_next_word(&settings.word_chars, settings.word_jump_mode),
             KeyCode::Delete => {
+                self.search.input.remove();
+            }
+            KeyCode::Char('d') if ctrl => {
+                if self.search.input.as_str().is_empty() {
+                    return Some(RETURN_ORIGINAL);
+                }
                 self.search.input.remove();
             }
             KeyCode::Char('w') if ctrl => {
