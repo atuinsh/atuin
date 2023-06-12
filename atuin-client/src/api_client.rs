@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::env;
 
 use chrono::Utc;
 use eyre::{bail, Result};
@@ -161,10 +162,13 @@ impl<'a> Client<'a> {
         host: Option<String>,
         deleted: HashSet<String>,
     ) -> Result<Vec<History>> {
-        let host = match host {
-            None => hash_str(&format!("{}:{}", whoami::hostname(), whoami::username())),
-            Some(h) => h,
-        };
+        let host = host.unwrap_or_else(|| {
+            hash_str(&format!(
+                "{}:{}",
+                env::var("ATUIN_HOST_NAME").unwrap_or_else(|_| whoami::hostname()),
+                env::var("ATUIN_HOST_USER").unwrap_or_else(|_| whoami::username())
+            ))
+        });
 
         let url = format!(
             "{}/sync/history?sync_ts={}&history_ts={}&host={}",
