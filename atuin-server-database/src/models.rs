@@ -1,6 +1,5 @@
 use chrono::prelude::*;
 
-#[derive(sqlx::FromRow)]
 pub struct History {
     pub id: i64,
     pub client_id: String, // a client generated ID
@@ -22,7 +21,6 @@ pub struct NewHistory {
     pub data: String,
 }
 
-#[derive(sqlx::FromRow)]
 pub struct User {
     pub id: i64,
     pub username: String,
@@ -30,7 +28,6 @@ pub struct User {
     pub password: String,
 }
 
-#[derive(sqlx::FromRow)]
 pub struct Session {
     pub id: i64,
     pub user_id: i64,

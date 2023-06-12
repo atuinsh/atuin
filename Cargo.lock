@@ -97,6 +97,7 @@ dependencies = [
  "atuin-client",
  "atuin-common",
  "atuin-server",
+ "atuin-server-postgres",
  "base64 0.21.0",
  "bitflags",
  "cassowary",
@@ -104,7 +105,6 @@ dependencies = [
  "clap",
  "clap_complete",
  "colored",
- "crossbeam-channel",
  "crossterm",
  "directories",
  "env_logger",
@@ -160,7 +160,6 @@ dependencies = [
  "serde_regex",
  "sha2",
  "shellexpand",
- "sodiumoxide",
  "sql-builder",
  "sqlx",
  "tokio",
@@ -187,6 +186,7 @@ dependencies = [
  "argon2",
  "async-trait",
  "atuin-common",
+ "atuin-server-database",
  "axum",
  "base64 0.21.0",
  "chrono",
@@ -200,14 +200,39 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
- "sodiumoxide",
- "sqlx",
  "tokio",
  "tower",
  "tower-http",
  "tracing",
  "uuid",
- "whoami",
+]
+
+[[package]]
+name = "atuin-server-database"
+version = "15.0.0"
+dependencies = [
+ "async-trait",
+ "atuin-common",
+ "chrono",
+ "chronoutil",
+ "eyre",
+ "serde",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "atuin-server-postgres"
+version = "15.0.0"
+dependencies = [
+ "async-trait",
+ "atuin-common",
+ "atuin-server-database",
+ "chrono",
+ "futures-util",
+ "serde",
+ "sqlx",
+ "tracing",
 ]
 
 [[package]]
@@ -516,16 +541,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2d0165d2900ae6778e36e80bbc4da3b5eefccee9ba939761f9c2882a5d9af3ff"
 
 [[package]]
-name = "crossbeam-channel"
-version = "0.5.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a33c2bf77f2df06183c3aa30d1e96c0695a313d4f9c453cc3762a6db39f99200"
-dependencies = [
- "cfg-if",
- "crossbeam-utils",
-]
-
-[[package]]
 name = "crossbeam-queue"
 version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -629,15 +644,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "da3db6fcad7c1fc4abdd99bf5276a4db30d6a819127903a709ed41e5ff016e84"
 dependencies = [
  "dirs",
-]
-
-[[package]]
-name = "ed25519"
-version = "1.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e9c280362032ea4203659fc489832d0204ef09f247a0506f170dafcac08c369"
-dependencies = [
- "signature",
 ]
 
 [[package]]
@@ -1174,18 +1180,6 @@ name = "libc"
 version = "0.2.141"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3304a64d199bb964be99741b7a14d26972741915b3649639149b2479bb46f4b5"
-
-[[package]]
-name = "libsodium-sys"
-version = "0.2.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6b779387cd56adfbc02ea4a668e704f729be8d6a6abd2c27ca5ee537849a92fd"
-dependencies = [
- "cc",
- "libc",
- "pkg-config",
- "walkdir",
-]
 
 [[package]]
 name = "libsqlite3-sys"
@@ -1876,15 +1870,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "same-file"
-version = "1.0.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "93fc1dc3aaa9bfed95e02e6eadabb4baf7e3078b0bd1b4d7b6b0b68378900502"
-dependencies = [
- "winapi-util",
-]
-
-[[package]]
 name = "schannel"
 version = "0.1.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2072,12 +2057,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "signature"
-version = "1.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e90531723b08e4d6d71b791108faf51f03e1b4a7784f96b2b87f852ebc247228"
-
-[[package]]
 name = "slab"
 version = "0.4.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2100,18 +2079,6 @@ checksum = "02e2d2db9033d13a1567121ddd7a095ee144db4e1ca1b1bda3419bc0da294ebd"
 dependencies = [
  "libc",
  "winapi",
-]
-
-[[package]]
-name = "sodiumoxide"
-version = "0.2.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e26be3acb6c2d9a7aac28482586a7856436af4cfe7100031d219de2d2ecb0028"
-dependencies = [
- "ed25519",
- "libc",
- "libsodium-sys",
- "serde",
 ]
 
 [[package]]
@@ -2658,17 +2625,6 @@ name = "version_check"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "49874b5167b65d7193b8aba1567f5c7d93d001cafc34600cee003eda787e483f"
-
-[[package]]
-name = "walkdir"
-version = "2.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "808cf2735cd4b6866113f648b791c6adc5714537bc222d9347bb203386ffda56"
-dependencies = [
- "same-file",
- "winapi",
- "winapi-util",
-]
 
 [[package]]
 name = "want"

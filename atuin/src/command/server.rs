@@ -1,9 +1,10 @@
+use atuin_server_postgres::Postgres;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 use clap::Parser;
 use eyre::{Context, Result};
 
-use atuin_server::{launch, settings::Settings};
+use atuin_server::{launch, Settings};
 
 #[derive(Parser)]
 #[clap(infer_subcommands = true)]
@@ -37,7 +38,7 @@ impl Cmd {
                     .map_or(settings.host.clone(), std::string::ToString::to_string);
                 let port = port.map_or(settings.port, |p| p);
 
-                launch(settings, host, port).await
+                launch::<Postgres>(settings, host, port).await
             }
         }
     }
