@@ -43,7 +43,11 @@ pub fn current_context() -> Context {
         eprintln!("ERROR: Failed to find $ATUIN_SESSION in the environment. Check that you have correctly set up your shell.");
         std::process::exit(1);
     };
-    let hostname = format!("{}:{}", whoami::hostname(), whoami::username());
+    let hostname = format!(
+        "{}:{}",
+        env::var("ATUIN_HOST_NAME").unwrap_or_else(|_| whoami::hostname()),
+        env::var("ATUIN_HOST_USER").unwrap_or_else(|_| whoami::username())
+    );
     let cwd = utils::get_current_dir();
 
     Context {

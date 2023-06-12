@@ -49,8 +49,13 @@ impl History {
         let session = session
             .or_else(|| env::var("ATUIN_SESSION").ok())
             .unwrap_or_else(|| uuid_v7().as_simple().to_string());
-        let hostname =
-            hostname.unwrap_or_else(|| format!("{}:{}", whoami::hostname(), whoami::username()));
+        let hostname = hostname.unwrap_or_else(|| {
+            format!(
+                "{}:{}",
+                env::var("ATUIN_HOST_NAME").unwrap_or_else(|_| whoami::hostname()),
+                env::var("ATUIN_HOST_USER").unwrap_or_else(|_| whoami::username())
+            )
+        });
 
         Self {
             id: uuid_v7().as_simple().to_string(),
