@@ -54,7 +54,7 @@ jobs:
       run: |
         case ${{ matrix.job.target }} in
           arm-unknown-linux-gnueabihf) sudo apt-get -y update ; sudo apt-get -y install gcc-arm-linux-gnueabihf ;;
-          aarch64-unknown-linux-gnu) sudo apt-get -y update ; sudo apt-get -y install gcc-aarch64-linux-gnu ;;
+          aarch64-unknown-linux-gnu) sudo apt-get -y update ; sudo apt-get -y install gcc-aarch64-linux-gnu qemu-user;;
           x86_64-unknown-linux-musl) sudo apt-get -y update ; sudo apt-get -y install musl-tools ;;
         esac
 
@@ -85,7 +85,11 @@ jobs:
         rustc -V
 
     - name: Build
-      run: cargo build --locked --release --target=${{ matrix.job.target }}
+      run: |
+        case ${{ matrix.job.target }} in
+          aarch64-unknown-linux-gnu) export RUSTFLAGS="-C linker=aarch64-linux-gnu-gcc";;
+        esac;
+        cargo build --locked --release --target=${{ matrix.job.target }}
 
     - name: Strip debug information from executable
       id: strip
@@ -144,9 +148,14 @@ jobs:
         # README, LICENSE and CHANGELOG files
         cp "README.md" "LICENSE" "$ARCHIVE_DIR"
 
+        QEMU_PREFIX=""
+        case ${{ matrix.job.target }} in
+          aarch64-unknown-linux-gnu) QEMU_PREFIX="qemu-aarch64 -L /usr/aarch64-linux-gnu" ;;
+        esac;
+
         # Shell completions
         for sh in 'bash' 'fish' 'zsh'; do
-          "${{ steps.strip.outputs.BIN_PATH }}" gen-completions -s $sh -o "${ARCHIVE_DIR}/completions"
+          $QEMU_PREFIX "${{ steps.strip.outputs.BIN_PATH }}" gen-completions -s $sh -o "${ARCHIVE_DIR}/completions"
         done
 
         # base compressed package
