@@ -50,23 +50,20 @@ impl KvStore {
 
         let bytes = record.serialize()?;
 
-        let len = store.len(host_id.as_str(), KV_TAG).await?;
+        let parent = store
+            .last(host_id.as_str(), KV_TAG)
+            .await?
+            .map(|entry| entry.id);
 
-        let parent = if len > 0 {
-            Some(store.last(host_id.as_str(), KV_TAG).await?.id)
-        } else {
-            None
-        };
+        let record = atuin_common::record::Record::builder()
+            .host(host_id)
+            .version(KV_VERSION.to_string())
+            .tag(KV_TAG.to_string())
+            .parent(parent)
+            .data(bytes)
+            .build();
 
-        let record = atuin_common::record::Record::new(
-            host_id,
-            KV_VERSION.to_string(),
-            KV_TAG.to_string(),
-            parent,
-            bytes,
-        );
-
-        store.push(record).await?;
+        store.push(&record).await?;
 
         Ok(())
     }
@@ -82,7 +79,9 @@ impl KvStore {
 
         // iterate records to find the value we want
         // start at the end, so we get the most recent version
-        let mut record = store.last(host_id.as_str(), KV_TAG).await?;
+        let Some(mut record) = store.last(host_id.as_str(), KV_TAG).await? else {
+            return Ok(None);
+        };
         let kv: KvRecord = rmp_serde::from_slice(&record.data)?;
 
         if kv.key == key {

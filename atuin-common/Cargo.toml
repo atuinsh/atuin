@@ -16,3 +16,4 @@ chrono = { workspace = true }
 serde = { workspace = true }
 uuid = { workspace = true }
 rand = { workspace = true }
+typed-builder = { workspace = true }

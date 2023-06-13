@@ -89,31 +89,16 @@ impl SqliteStore {
 
 #[async_trait]
 impl Store for SqliteStore {
-    async fn push(&self, record: Record) -> Result<Record> {
-        let mut tx = self.pool.begin().await?;
-        Self::save_raw(&mut tx, &record).await?;
-        tx.commit().await?;
-
-        Ok(record)
-    }
-
-    async fn push_batch(
-        &self,
-        records: impl Iterator<Item = &Record> + Send + Sync,
-    ) -> Result<Option<Record>> {
+    async fn push_batch(&self, records: impl Iterator<Item = &Record> + Send + Sync) -> Result<()> {
         let mut tx = self.pool.begin().await?;
 
-        // If you push in a batch of nothing it does... nothing.
-        let mut last: Option<Record> = None;
         for record in records {
             Self::save_raw(&mut tx, record).await?;
-
-            last = Some(record.clone());
         }
 
         tx.commit().await?;
 
-        Ok(last)
+        Ok(())
     }
 
     async fn get(&self, id: &str) -> Result<Record> {
@@ -151,27 +136,27 @@ impl Store for SqliteStore {
         }
     }
 
-    async fn first(&self, host: &str, tag: &str) -> Result<Record> {
+    async fn first(&self, host: &str, tag: &str) -> Result<Option<Record>> {
         let res = sqlx::query(
             "select * from records where host = ?1 and tag = ?2 and parent is null limit 1",
         )
         .bind(host)
         .bind(tag)
         .map(Self::query_row)
-        .fetch_one(&self.pool)
+        .fetch_optional(&self.pool)
         .await?;
 
         Ok(res)
     }
 
-    async fn last(&self, host: &str, tag: &str) -> Result<Record> {
+    async fn last(&self, host: &str, tag: &str) -> Result<Option<Record>> {
         let res = sqlx::query(
             "select * from records rp where tag=?1 and host=?2 and (select count(1) from records where parent=rp.id) = 0;",
         )
         .bind(tag)
         .bind(host)
         .map(Self::query_row)
-        .fetch_one(&self.pool)
+        .fetch_optional(&self.pool)
         .await?;
 
         Ok(res)
@@ -187,13 +172,12 @@ mod tests {
     use super::SqliteStore;
 
     fn test_record() -> Record {
-        Record::new(
-            String::from(atuin_common::utils::uuid_v7().simple().to_string()),
-            String::from("v1"),
-            String::from(atuin_common::utils::uuid_v7().simple().to_string()),
-            None,
-            vec![0, 1, 2, 3],
-        )
+        Record::builder()
+            .host(atuin_common::utils::uuid_v7().simple().to_string())
+            .version("v1".into())
+            .tag(atuin_common::utils::uuid_v7().simple().to_string())
+            .data(vec![0, 1, 2, 3])
+            .build()
     }
 
     #[tokio::test]
@@ -212,47 +196,35 @@ mod tests {
         let db = SqliteStore::new(":memory:").await.unwrap();
         let record = test_record();
 
-        let record = db.push(record).await;
-
-        assert!(
-            record.is_ok(),
-            "failed to insert record: {:?}",
-            record.unwrap_err()
-        );
+        db.push(&record).await.expect("failed to insert record");
     }
 
     #[tokio::test]
     async fn get_record() {
         let db = SqliteStore::new(":memory:").await.unwrap();
         let record = test_record();
-        let record = db.push(record).await.unwrap();
+        db.push(&record).await.unwrap();
 
-        let new_record = db.get(record.id.as_str()).await;
+        let new_record = db
+            .get(record.id.as_str())
+            .await
+            .expect("failed to fetch record");
 
-        assert!(
-            new_record.is_ok(),
-            "failed to fetch record: {:?}",
-            new_record.unwrap_err()
-        );
-
-        assert_eq!(record, new_record.unwrap(), "records are not equal");
+        assert_eq!(record, new_record, "records are not equal");
     }
 
     #[tokio::test]
     async fn len() {
         let db = SqliteStore::new(":memory:").await.unwrap();
         let record = test_record();
-        let record = db.push(record).await.unwrap();
+        db.push(&record).await.unwrap();
 
-        let len = db.len(record.host.as_str(), record.tag.as_str()).await;
+        let len = db
+            .len(record.host.as_str(), record.tag.as_str())
+            .await
+            .expect("failed to get store len");
 
-        assert!(
-            len.is_ok(),
-            "failed to get store len: {:?}",
-            len.unwrap_err()
-        );
-
-        assert_eq!(len.unwrap(), 1, "expected length of 1 after insert");
+        assert_eq!(len, 1, "expected length of 1 after insert");
     }
 
     #[tokio::test]
@@ -262,8 +234,11 @@ mod tests {
         // these have different tags, so the len should be the same
         // we model multiple stores within one database
         // new store = new tag = independent length
-        let first = db.push(test_record()).await.unwrap();
-        let second = db.push(test_record()).await.unwrap();
+        let first = test_record();
+        let second = test_record();
+
+        db.push(&first).await.unwrap();
+        db.push(&second).await.unwrap();
 
         let first_len = db
             .len(first.host.as_str(), first.tag.as_str())
@@ -282,10 +257,12 @@ mod tests {
     async fn append_a_bunch() {
         let db = SqliteStore::new(":memory:").await.unwrap();
 
-        let mut tail = db.push(test_record()).await.expect("failed to push record");
+        let mut tail = test_record();
+        db.push(&tail).await.expect("failed to push record");
 
         for _ in 1..100 {
-            tail = db.push(tail.new_child(vec![1, 2, 3, 4])).await.unwrap();
+            tail = tail.new_child(vec![1, 2, 3, 4]);
+            db.push(&tail).await.unwrap();
         }
 
         assert_eq!(
@@ -337,7 +314,8 @@ mod tests {
         let mut record = db
             .first(tail.host.as_str(), tail.tag.as_str())
             .await
-            .unwrap();
+            .expect("in memory sqlite should not fail")
+            .expect("entry exists");
 
         let mut count = 1;
 

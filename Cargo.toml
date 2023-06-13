@@ -31,6 +31,7 @@ sodiumoxide = "0.2.6"
 tokio = { version = "1", features = ["full"] }
 uuid = { version = "1.2", features = ["v4"] }
 whoami = "1.1.2"
+typed-builder = "0.14.0"
 
 [workspace.dependencies.reqwest]
 version = "0.11"
