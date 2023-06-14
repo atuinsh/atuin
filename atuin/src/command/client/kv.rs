@@ -11,12 +11,18 @@ pub enum Cmd {
         #[arg(long, short)]
         key: String,
 
+        #[arg(long, short, default_value = "global")]
+        namespace: String,
+
         value: String,
     },
 
     // atuin kv get foo => bar baz
     Get {
         key: String,
+
+        #[arg(long, short, default_value = "global")]
+        namespace: String,
     },
 }
 
@@ -29,10 +35,14 @@ impl Cmd {
         let kv_store = KvStore::new();
 
         match self {
-            Self::Set { key, value } => kv_store.set(store, key, value).await,
+            Self::Set {
+                key,
+                value,
+                namespace,
+            } => kv_store.set(store, namespace, key, value).await,
 
-            Self::Get { key } => {
-                let val = kv_store.get(store, key).await?;
+            Self::Get { key, namespace } => {
+                let val = kv_store.get(store, namespace, key).await?;
 
                 if let Some(kv) = val {
                     println!("{}", kv.value);

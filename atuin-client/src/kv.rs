@@ -9,6 +9,7 @@ const KV_TAG: &str = "kv";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct KvRecord {
+    pub namespace: String,
     pub key: String,
     pub value: String,
 }
@@ -38,12 +39,14 @@ impl KvStore {
     pub async fn set(
         &self,
         store: &mut (impl Store + Send + Sync),
+        namespace: &str,
         key: &str,
         value: &str,
     ) -> Result<()> {
         let host_id = Settings::host_id().expect("failed to get host_id");
 
         let record = KvRecord {
+            namespace: namespace.to_string(),
             key: key.to_string(),
             value: value.to_string(),
         };
@@ -70,7 +73,12 @@ impl KvStore {
 
     // TODO: setup an actual kv store, rebuild func, and do not pass the main store in here as
     // well.
-    pub async fn get(&self, store: &impl Store, key: &str) -> Result<Option<KvRecord>> {
+    pub async fn get(
+        &self,
+        store: &impl Store,
+        namespace: &str,
+        key: &str,
+    ) -> Result<Option<KvRecord>> {
         // TODO: don't load this from disk so much
         let host_id = Settings::host_id().expect("failed to get host_id");
 
@@ -84,7 +92,7 @@ impl KvStore {
         };
         let kv: KvRecord = rmp_serde::from_slice(&record.data)?;
 
-        if kv.key == key {
+        if kv.key == key && kv.namespace == namespace {
             return Ok(Some(kv));
         }
 
@@ -92,7 +100,7 @@ impl KvStore {
             record = store.get(parent.as_str()).await?;
             let kv: KvRecord = rmp_serde::from_slice(&record.data)?;
 
-            if kv.key == key {
+            if kv.key == key && kv.namespace == namespace {
                 return Ok(Some(kv));
             }
         }
