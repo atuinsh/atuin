@@ -17,6 +17,7 @@ pub const HISTORY_PAGE_SIZE: i64 = 100;
 pub const LAST_SYNC_FILENAME: &str = "last_sync_time";
 pub const LAST_VERSION_CHECK_FILENAME: &str = "last_version_check_time";
 pub const LATEST_VERSION_FILENAME: &str = "latest_version";
+pub const HOST_ID_FILENAME: &str = "host_id";
 
 #[derive(Clone, Debug, Deserialize, Copy, ValueEnum, PartialEq)]
 pub enum SearchMode {
@@ -140,6 +141,7 @@ pub struct Settings {
     pub sync_address: String,
     pub sync_frequency: String,
     pub db_path: String,
+    pub record_store_path: String,
     pub key_path: String,
     pub session_path: String,
     pub search_mode: SearchMode,
@@ -224,6 +226,21 @@ impl Settings {
 
     pub fn last_version_check() -> Result<chrono::DateTime<Utc>> {
         Settings::load_time_from_file(LAST_VERSION_CHECK_FILENAME)
+    }
+
+    pub fn host_id() -> Option<String> {
+        let id = Settings::read_from_data_dir(HOST_ID_FILENAME);
+
+        if id.is_some() {
+            return id;
+        }
+
+        let uuid = atuin_common::utils::uuid_v7();
+
+        Settings::save_to_data_dir(HOST_ID_FILENAME, uuid.as_simple().to_string().as_ref())
+            .expect("Could not write host ID to data dir");
+
+        Some(uuid.as_simple().to_string())
     }
 
     pub fn should_sync(&self) -> Result<bool> {
@@ -321,11 +338,14 @@ impl Settings {
         config_file.push("config.toml");
 
         let db_path = data_dir.join("history.db");
+        let record_store_path = data_dir.join("records.db");
+
         let key_path = data_dir.join("key");
         let session_path = data_dir.join("session");
 
         let mut config_builder = Config::builder()
             .set_default("db_path", db_path.to_str())?
+            .set_default("record_store_path", record_store_path.to_str())?
             .set_default("key_path", key_path.to_str())?
             .set_default("session_path", session_path.to_str())?
             .set_default("dialect", "us")?

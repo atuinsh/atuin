@@ -17,13 +17,14 @@ use sqlx::{
 use super::{
     history::History,
     ordering,
-    settings::{FilterMode, SearchMode},
+    settings::{FilterMode, SearchMode, Settings},
 };
 
 pub struct Context {
     pub session: String,
     pub cwd: String,
     pub hostname: String,
+    pub host_id: String,
 }
 
 #[derive(Default, Clone)]
@@ -50,11 +51,13 @@ pub fn current_context() -> Context {
         env::var("ATUIN_HOST_USER").unwrap_or_else(|_| whoami::username())
     );
     let cwd = utils::get_current_dir();
+    let host_id = Settings::host_id().expect("failed to load host ID");
 
     Context {
         session,
         hostname,
         cwd,
+        host_id,
     }
 }
 
@@ -551,6 +554,7 @@ mod test {
             hostname: "test:host".to_string(),
             session: "beepboopiamasession".to_string(),
             cwd: "/home/ellie".to_string(),
+            host_id: "test-host".to_string(),
         };
 
         let results = db
@@ -757,6 +761,7 @@ mod test {
             hostname: "test:host".to_string(),
             session: "beepboopiamasession".to_string(),
             cwd: "/home/ellie".to_string(),
+            host_id: "test-host".to_string(),
         };
 
         let mut db = Sqlite::new("sqlite::memory:").await.unwrap();

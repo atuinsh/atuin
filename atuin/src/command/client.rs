@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::Subcommand;
 use eyre::{Result, WrapErr};
 
-use atuin_client::{database::Sqlite, settings::Settings};
+use atuin_client::{database::Sqlite, record::sqlite_store::SqliteStore, settings::Settings};
 use env_logger::Builder;
 
 #[cfg(feature = "sync")]
@@ -14,6 +14,7 @@ mod account;
 
 mod history;
 mod import;
+mod kv;
 mod search;
 mod stats;
 
@@ -40,6 +41,9 @@ pub enum Cmd {
 
     #[cfg(feature = "sync")]
     Account(account::Cmd),
+
+    #[command(subcommand)]
+    Kv(kv::Cmd),
 }
 
 impl Cmd {
@@ -53,7 +57,10 @@ impl Cmd {
         let mut settings = Settings::new().wrap_err("could not load client settings")?;
 
         let db_path = PathBuf::from(settings.db_path.as_str());
+        let record_store_path = PathBuf::from(settings.record_store_path.as_str());
+
         let mut db = Sqlite::new(db_path).await?;
+        let mut store = SqliteStore::new(record_store_path).await?;
 
         match self {
             Self::History(history) => history.run(&settings, &mut db).await,
@@ -66,6 +73,8 @@ impl Cmd {
 
             #[cfg(feature = "sync")]
             Self::Account(account) => account.run(settings).await,
+
+            Self::Kv(kv) => kv.run(&settings, &mut store).await,
         }
     }
 }
