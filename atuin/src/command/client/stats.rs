@@ -21,16 +21,69 @@ pub struct Cmd {
     /// How many top commands to list
     #[arg(long, short, default_value = "10")]
     count: usize,
+
+    /// The number of consecutive commands to consider
+    #[arg(long, short, default_value = "1")]
+    ngram_size: usize,
 }
 
-fn compute_stats(history: &[History], count: usize) -> Result<()> {
+fn split_at_pipe(command: &str) -> Vec<&str> {
+    let mut result = vec![];
+    let mut quoted = false;
+    let mut start = 0;
+    let mut chars = command.chars().enumerate().peekable();
+    while let Some((i, c)) = chars.next() {
+        let current = i;
+        match c {
+            '"' => {
+                if command[start..current] != *"\"" {
+                    quoted = !quoted
+                }
+            }
+            '\'' => {
+                if command[start..current] != *"'" {
+                    quoted = !quoted
+                }
+            }
+            '\\' => if let Some(_) = chars.next() {},
+            '|' => {
+                if !quoted {
+                    if command[start..].starts_with('|') {
+                        start += 1;
+                    }
+                    result.push(&command[start..current]);
+                    start = current;
+                }
+            }
+            _ => {}
+        }
+    }
+    if command[start..].starts_with('|') {
+        start += 1;
+    }
+    result.push(&command[start..]);
+    result
+}
+
+fn compute_stats(history: &[History], count: usize, ngram_size: usize) -> Result<()> {
     let mut commands = HashSet::<&str>::with_capacity(history.len());
-    let mut prefixes = HashMap::<&str, usize>::with_capacity(history.len());
+    let mut prefixes = HashMap::<Vec<&str>, usize>::with_capacity(history.len());
     for i in history {
         // just in case it somehow has a leading tab or space or something (legacy atuin didn't ignore space prefixes)
-        let command = i.command.trim();
-        commands.insert(command);
-        *prefixes.entry(interesting_command(command)).or_default() += 1;
+        split_at_pipe(i.command.as_str())
+            .iter()
+            .map(|l| {
+                let command = l.trim();
+                commands.insert(command);
+                command
+            })
+            .collect::<Vec<_>>()
+            .windows(ngram_size)
+            .for_each(|w| {
+                *prefixes
+                    .entry(w.iter().map(|c| interesting_command(c)).collect())
+                    .or_default() += 1;
+            });
     }
 
     let unique = commands.len();
@@ -43,6 +96,17 @@ fn compute_stats(history: &[History], count: usize) -> Result<()> {
 
     let max = top.iter().map(|x| x.1).max().unwrap();
     let num_pad = max.ilog10() as usize + 1;
+
+    // Find the length of the longest command name for each column
+    let column_widths = top
+        .iter()
+        .map(|(commands, _)| commands.iter().map(|c| c.len()).collect::<Vec<usize>>())
+        .fold(vec![0; ngram_size], |acc, item| {
+            acc.iter()
+                .zip(item.iter())
+                .map(|(a, i)| *std::cmp::max(a, i))
+                .collect()
+        });
 
     for (command, count) in top {
         let gray = SetForegroundColor(Color::Grey);
@@ -64,7 +128,14 @@ fn compute_stats(history: &[History], count: usize) -> Result<()> {
             print!(" ");
         }
 
-        println!("{ResetColor}] {gray}{count:num_pad$}{ResetColor} {bold}{command}{ResetColor}");
+        let formatted_command = command
+            .iter()
+            .zip(column_widths.iter())
+            .map(|(cmd, width)| format!("{:width$}", cmd))
+            .collect::<Vec<_>>()
+            .join(" | ");
+
+        println!("{ResetColor}] {gray}{count:num_pad$}{ResetColor} {bold}{formatted_command}{ResetColor}");
     }
     println!("Total commands:   {}", history.len());
     println!("Unique commands:  {unique}");
@@ -103,7 +174,7 @@ impl Cmd {
             let end = start + Duration::days(1);
             db.range(start.into(), end.into()).await?
         };
-        compute_stats(&history, self.count)?;
+        compute_stats(&history, self.count, self.ngram_size)?;
         Ok(())
     }
 }
@@ -166,7 +237,7 @@ fn interesting_command(mut command: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
-    use super::interesting_command;
+    use super::{interesting_command, split_at_pipe};
 
     #[test]
     fn interesting_commands() {
@@ -177,5 +248,42 @@ mod tests {
             "cargo build"
         );
         assert_eq!(interesting_command("sudo"), "sudo");
+    }
+
+    #[test]
+    fn split_simple() {
+        assert_eq!(split_at_pipe("fd | rg"), ["fd ", " rg"]);
+    }
+
+    #[test]
+    fn split_multi() {
+        assert_eq!(
+            split_at_pipe("kubectl | jq | rg"),
+            ["kubectl ", " jq ", " rg"]
+        );
+    }
+
+    #[test]
+    fn split_simple_quoted() {
+        assert_eq!(
+            split_at_pipe("foo | bar 'baz {} | quux' | xyzzy"),
+            ["foo ", " bar 'baz {} | quux' ", " xyzzy"]
+        );
+    }
+
+    #[test]
+    fn split_multi_quoted() {
+        assert_eq!(
+            split_at_pipe("foo | bar 'baz \"{}\" | quux' | xyzzy"),
+            ["foo ", " bar 'baz \"{}\" | quux' ", " xyzzy"]
+        );
+    }
+
+    #[test]
+    fn escaped_pipes() {
+        assert_eq!(
+            split_at_pipe("foo | bar baz \\| quux"),
+            ["foo ", " bar baz \\| quux"]
+        );
     }
 }
