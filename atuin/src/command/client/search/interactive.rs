@@ -3,6 +3,7 @@ use std::{
     time::Duration,
 };
 
+use atuin_common::utils;
 use crossterm::{
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent},
     execute, terminal,
@@ -586,14 +587,16 @@ pub async fn history(
         search_mode: settings.search_mode,
         search: SearchState {
             input,
-            context,
-            filter_mode: if settings.shell_up_key_binding {
+            filter_mode: if settings.workspaces && context.git_root.is_some() {
+                FilterMode::Workspace
+            } else if settings.shell_up_key_binding {
                 settings
                     .filter_mode_shell_up_key_binding
                     .unwrap_or(settings.filter_mode)
             } else {
                 settings.filter_mode
             },
+            context,
         },
         engine: engines::engine(settings.search_mode),
         results_len: 0,

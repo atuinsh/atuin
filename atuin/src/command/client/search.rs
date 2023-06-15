@@ -194,14 +194,21 @@ async fn run_non_interactive(
     let context = current_context();
 
     let opt_filter = OptFilters {
-        cwd: dir,
+        cwd: dir.clone(),
         ..filter_options
+    };
+
+    let dir = dir.unwrap_or("/".to_string());
+    let filter_mode = if settings.workspaces && utils::has_git_dir(dir.as_str()) {
+        FilterMode::Workspace
+    } else {
+        settings.filter_mode
     };
 
     let results = db
         .search(
             settings.search_mode,
-            settings.filter_mode,
+            filter_mode,
             &context,
             query.join(" ").as_str(),
             opt_filter,

@@ -69,6 +69,9 @@ pub enum FilterMode {
 
     #[serde(rename = "directory")]
     Directory = 3,
+
+    #[serde(rename = "workspace")]
+    Workspace = 4,
 }
 
 impl FilterMode {
@@ -78,6 +81,7 @@ impl FilterMode {
             FilterMode::Host => "HOST",
             FilterMode::Session => "SESSION",
             FilterMode::Directory => "DIRECTORY",
+            FilterMode::Workspace => "WORKSPACE",
         }
     }
 }
@@ -160,6 +164,7 @@ pub struct Settings {
     pub history_filter: RegexSet,
     #[serde(with = "serde_regex", default = "RegexSet::empty")]
     pub cwd_filter: RegexSet,
+    pub workspaces: bool,
 
     // This is automatically loaded when settings is created. Do not set in
     // config! Keep secrets and settings apart.
@@ -369,6 +374,7 @@ impl Settings {
             .set_default("scroll_context_lines", 1)?
             .set_default("shell_up_key_binding", false)?
             .set_default("session_token", "")?
+            .set_default("workspaces", false)?
             .add_source(
                 Environment::with_prefix("atuin")
                     .prefix_separator("_")
