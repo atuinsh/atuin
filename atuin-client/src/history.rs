@@ -6,10 +6,6 @@ use atuin_common::utils::uuid_v7;
 
 mod builder;
 
-/// A marker type used to seal the `History` struct, preventing it from being constructed directly.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub(self) struct HistorySeal;
-
 /// Client-side history entry.
 ///
 /// Client stores data unencrypted, and only encrypts it before sending to the server.
@@ -18,10 +14,11 @@ pub(self) struct HistorySeal;
 /// - [`History::import()`] to import an entry from the shell history file
 /// - [`History::capture()`] to capture an entry via hook
 /// - [`History::from_db()`] to create an instance from the database entry
-///
-/// ### Caution
-/// Any new fields MUST be `Optional<T>` and marked with `#[serde(default)]` to ensure backwards
-/// compatibility with older clients.
+//
+// ## Implementation Notes
+//
+// New fields must should be added to `encryption::{encode, decode}` in a backwards
+// compatible way. (eg sensible defaults and updating the nfields parameter)
 #[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
 pub struct History {
     /// A client-generated ID, used to identify the entry when syncing.
