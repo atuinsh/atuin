@@ -58,17 +58,9 @@ impl Importer for Nu {
             let offset = chrono::Duration::nanoseconds(counter);
             counter += 1;
 
-            h.push(History::new(
-                now - offset, // preserve ordering
-                cmd,
-                String::from("unknown"),
-                -1,
-                -1,
-                None,
-                None,
-                None,
-            ))
-            .await?;
+            let entry = History::import().timestamp(now - offset).command(cmd);
+
+            h.push(entry.build().into()).await?;
         }
 
         Ok(())
