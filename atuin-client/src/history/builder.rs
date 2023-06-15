@@ -95,7 +95,6 @@ impl From<HistoryFromDb> for History {
             session: from_db.session,
             hostname: from_db.hostname,
             deleted_at: from_db.deleted_at,
-            _seal: super::HistorySeal,
         }
     }
 }
