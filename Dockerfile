@@ -19,7 +19,8 @@ RUN cargo build --release --bin atuin
 FROM debian:bullseye-20230612-slim AS runtime
 
 RUN useradd -c 'atuin user' atuin && mkdir /config && chown atuin:atuin /config
-RUN apt update && apt install ca-certificates -y # so that webhooks work
+# Install ca-certificates for webhooks to work
+RUN apt update && apt install ca-certificates -y && rm -rf /var/lib/apt/lists/*
 WORKDIR app
 
 USER atuin
