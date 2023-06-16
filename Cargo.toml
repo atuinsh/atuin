@@ -1,9 +1,16 @@
 [workspace]
-members = ["atuin", "atuin-client", "atuin-server", "atuin-common"]
+members = [
+    "atuin",
+    "atuin-client",
+    "atuin-server",
+    "atuin-server-postgres",
+    "atuin-server-database",
+    "atuin-common",
+]
 
 [workspace.package]
 name = "atuin"
-version = "14.0.1"
+version = "15.0.0"
 authors = ["Ellie Huxtable <ellie@elliehuxtable.com>"]
 rust-version = "1.59"
 license = "MIT"
@@ -27,10 +34,10 @@ rand = { version = "0.8.5", features = ["std"] }
 semver = "1.0.14"
 serde = { version = "1.0.145", features = ["derive"] }
 serde_json = "1.0.86"
-sodiumoxide = "0.2.6"
 tokio = { version = "1", features = ["full"] }
-uuid = { version = "1.2", features = ["v4"] }
+uuid = { version = "1.3", features = ["v4"] }
 whoami = "1.1.2"
+typed-builder = "0.14.0"
 
 [workspace.dependencies.reqwest]
 version = "0.11"

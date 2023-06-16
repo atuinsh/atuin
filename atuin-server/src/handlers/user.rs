@@ -16,10 +16,10 @@ use tracing::{debug, error, info, instrument};
 use uuid::Uuid;
 
 use super::{ErrorResponse, ErrorResponseStatus, RespExt};
-use crate::{
-    database::Database,
+use crate::router::{AppState, UserAuth};
+use atuin_server_database::{
     models::{NewSession, NewUser},
-    router::AppState,
+    Database, DbError,
 };
 
 use reqwest::header::CONTENT_TYPE;
@@ -64,11 +64,11 @@ pub async fn get<DB: Database>(
     let db = &state.0.database;
     let user = match db.get_user(username.as_ref()).await {
         Ok(user) => user,
-        Err(sqlx::Error::RowNotFound) => {
+        Err(DbError::NotFound) => {
             debug!("user not found: {}", username);
             return Err(ErrorResponse::reply("user not found").with_status(StatusCode::NOT_FOUND));
         }
-        Err(err) => {
+        Err(DbError::Other(err)) => {
             error!("database error: {}", err);
             return Err(ErrorResponse::reply("database error")
                 .with_status(StatusCode::INTERNAL_SERVER_ERROR));
@@ -90,6 +90,18 @@ pub async fn register<DB: Database>(
             ErrorResponse::reply("this server is not open for registrations")
                 .with_status(StatusCode::BAD_REQUEST),
         );
+    }
+
+    for c in register.username.chars() {
+        match c {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' => {}
+            _ => {
+                return Err(ErrorResponse::reply(
+                    "Only alphanumeric and hyphens (-) are allowed in usernames",
+                )
+                .with_status(StatusCode::BAD_REQUEST))
+            }
+        }
     }
 
     let hashed = hash_secret(&register.password);
@@ -138,6 +150,23 @@ pub async fn register<DB: Database>(
     }
 }
 
+#[instrument(skip_all, fields(user.id = user.id))]
+pub async fn delete<DB: Database>(
+    UserAuth(user): UserAuth,
+    state: State<AppState<DB>>,
+) -> Result<Json<DeleteUserResponse>, ErrorResponseStatus<'static>> {
+    debug!("request to delete user {}", user.id);
+
+    let db = &state.0.database;
+    if let Err(e) = db.delete_user(&user).await {
+        error!("failed to delete user: {}", e);
+
+        return Err(ErrorResponse::reply("failed to delete user")
+            .with_status(StatusCode::INTERNAL_SERVER_ERROR));
+    };
+    Ok(Json(DeleteUserResponse {}))
+}
+
 #[instrument(skip_all, fields(user.username = login.username.as_str()))]
 pub async fn login<DB: Database>(
     state: State<AppState<DB>>,
@@ -146,10 +175,10 @@ pub async fn login<DB: Database>(
     let db = &state.0.database;
     let user = match db.get_user(login.username.borrow()).await {
         Ok(u) => u,
-        Err(sqlx::Error::RowNotFound) => {
+        Err(DbError::NotFound) => {
             return Err(ErrorResponse::reply("user not found").with_status(StatusCode::NOT_FOUND));
         }
-        Err(e) => {
+        Err(DbError::Other(e)) => {
             error!("failed to get user {}: {}", login.username.clone(), e);
 
             return Err(ErrorResponse::reply("database error")
@@ -159,11 +188,11 @@ pub async fn login<DB: Database>(
 
     let session = match db.get_user_session(&user).await {
         Ok(u) => u,
-        Err(sqlx::Error::RowNotFound) => {
+        Err(DbError::NotFound) => {
             debug!("user session not found for user id={}", user.id);
             return Err(ErrorResponse::reply("user not found").with_status(StatusCode::NOT_FOUND));
         }
-        Err(err) => {
+        Err(DbError::Other(err)) => {
             error!("database error for user {}: {}", login.username, err);
             return Err(ErrorResponse::reply("database error")
                 .with_status(StatusCode::INTERNAL_SERVER_ERROR));
@@ -173,7 +202,9 @@ pub async fn login<DB: Database>(
     let verified = verify_str(user.password.as_str(), login.password.borrow());
 
     if !verified {
-        return Err(ErrorResponse::reply("user not found").with_status(StatusCode::NOT_FOUND));
+        return Err(
+            ErrorResponse::reply("password is not correct").with_status(StatusCode::UNAUTHORIZED)
+        );
     }
 
     Ok(Json(LoginResponse {

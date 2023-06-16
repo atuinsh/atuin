@@ -37,7 +37,7 @@
 ## which filter mode to use when atuin is invoked from a shell up-key binding
 ## the accepted values are identical to those of "filter_mode"
 ## leave unspecified to use same mode set in "filter_mode"
-# filter_mode_shell_up_keybinding = "global"
+# filter_mode_shell_up_key_binding = "global"
 
 ## which style to use
 ## possible values: auto, full, compact
@@ -76,7 +76,7 @@
 
 ## prevent commands run with cwd matching any of these regexes from being written
 ## to history. Note that these regular expressions are unanchored, i.e. if they don't
-## start with ^ or end with $, they'll match anyware in CWD.
+## start with ^ or end with $, they'll match anywhere in CWD.
 ## For details on the supported regular expression syntax, see
 ## https://docs.rs/regex/latest/regex/#syntax
 # cwd_filter = [

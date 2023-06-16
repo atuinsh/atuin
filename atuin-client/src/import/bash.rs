@@ -62,7 +62,7 @@ impl Importer for Bash {
         // this increment is deliberately very small to prevent particularly fast fingers
         // causing ordering issues; it also helps in handling the "here document" syntax,
         // where several lines are recorded in succession without individual timestamps
-        let timestamp_increment = Duration::nanoseconds(1);
+        let timestamp_increment = Duration::milliseconds(1);
 
         // make sure there is a minimum amount of time before the first known timestamp
         // to fit all commands, given the default increment
@@ -80,17 +80,9 @@ impl Importer for Bash {
                     next_timestamp = t;
                 }
                 LineType::Command(c) => {
-                    let entry = History::new(
-                        next_timestamp,
-                        c.into(),
-                        "unknown".into(),
-                        -1,
-                        -1,
-                        None,
-                        None,
-                        None,
-                    );
-                    h.push(entry).await?;
+                    let imported = History::import().timestamp(next_timestamp).command(c);
+
+                    h.push(imported.build().into()).await?;
                     next_timestamp += timestamp_increment;
                 }
             }

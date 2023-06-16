@@ -33,18 +33,16 @@ buildflags = ["--release"]
 atuin = { path = "/usr/bin/atuin" }
 
 [features]
-# TODO(conradludgate)
-# Currently, this keeps the same default built behaviour for v0.8
-# We should rethink this by the time we hit a new breaking change
 default = ["client", "sync", "server"]
 client = ["atuin-client"]
 sync = ["atuin-client/sync"]
-server = ["atuin-server", "tracing-subscriber"]
+server = ["atuin-server", "atuin-server-postgres", "tracing-subscriber"]
 
 [dependencies]
-atuin-server = { path = "../atuin-server", version = "14.0.1", optional = true }
-atuin-client = { path = "../atuin-client", version = "14.0.1", optional = true, default-features = false }
-atuin-common = { path = "../atuin-common", version = "14.0.1" }
+atuin-server-postgres = { path = "../atuin-server-postgres", version = "15.0.0", optional = true }
+atuin-server = { path = "../atuin-server", version = "15.0.0", optional = true }
+atuin-client = { path = "../atuin-client", version = "15.0.0", optional = true, default-features = false }
+atuin-common = { path = "../atuin-common", version = "15.0.0" }
 
 log = { workspace = true }
 env_logger = "0.10.0"
@@ -61,7 +59,6 @@ tokio = { workspace = true }
 async-trait = { workspace = true }
 interim = { workspace = true }
 base64 = { workspace = true }
-crossbeam-channel = "0.5.1"
 clap = { workspace = true }
 clap_complete = "4.0.3"
 fs-err = { workspace = true }

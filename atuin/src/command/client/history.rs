@@ -184,67 +184,126 @@ fn parse_fmt(format: &str) -> ParsedFmt {
 }
 
 impl Cmd {
-    pub async fn run(&self, settings: &Settings, db: &mut impl Database) -> Result<()> {
+    async fn handle_start(
+        db: &mut impl Database,
+        settings: &Settings,
+        command: &[String],
+    ) -> Result<()> {
+        let command = command.join(" ");
+
+        if command.starts_with(' ') || settings.history_filter.is_match(&command) {
+            return Ok(());
+        }
+
+        // It's better for atuin to silently fail here and attempt to
+        // store whatever is ran, than to throw an error to the terminal
+        let cwd = utils::get_current_dir();
+        if !cwd.is_empty() && settings.cwd_filter.is_match(&cwd) {
+            return Ok(());
+        }
+
+        let h: History = History::capture()
+            .timestamp(chrono::Utc::now())
+            .command(command)
+            .cwd(cwd)
+            .build()
+            .into();
+
+        // print the ID
+        // we use this as the key for calling end
+        println!("{}", h.id);
+        db.save(&h).await?;
+        Ok(())
+    }
+
+    async fn handle_end(
+        db: &mut impl Database,
+        settings: &Settings,
+        id: &str,
+        exit: i64,
+    ) -> Result<()> {
+        if id.trim() == "" {
+            return Ok(());
+        }
+
+        let mut h = db.load(id).await?;
+
+        if h.duration > 0 {
+            debug!("cannot end history - already has duration");
+
+            // returning OK as this can occur if someone Ctrl-c a prompt
+            return Ok(());
+        }
+
+        h.exit = exit;
+        h.duration = chrono::Utc::now().timestamp_nanos() - h.timestamp.timestamp_nanos();
+
+        db.update(&h).await?;
+
+        if settings.should_sync()? {
+            #[cfg(feature = "sync")]
+            {
+                debug!("running periodic background sync");
+                sync::sync(settings, false, db).await?;
+            }
+            #[cfg(not(feature = "sync"))]
+            debug!("not compiled with sync support");
+        } else {
+            debug!("sync disabled! not syncing");
+        }
+
+        Ok(())
+    }
+
+    async fn handle_list(
+        db: &mut impl Database,
+        settings: &Settings,
+        context: atuin_client::database::Context,
+        session: bool,
+        cwd: bool,
+        mode: ListMode,
+        format: Option<String>,
+    ) -> Result<()> {
+        let session = if session {
+            Some(env::var("ATUIN_SESSION")?)
+        } else {
+            None
+        };
+        let cwd = if cwd {
+            Some(utils::get_current_dir())
+        } else {
+            None
+        };
+
+        let history = match (session, cwd) {
+            (None, None) => db.list(settings.filter_mode, &context, None, false).await?,
+            (None, Some(cwd)) => {
+                let query = format!("select * from history where cwd = '{cwd}';");
+                db.query_history(&query).await?
+            }
+            (Some(session), None) => {
+                let query = format!("select * from history where session = '{session}';");
+                db.query_history(&query).await?
+            }
+            (Some(session), Some(cwd)) => {
+                let query = format!(
+                    "select * from history where cwd = '{cwd}' and session = '{session}';",
+                );
+                db.query_history(&query).await?
+            }
+        };
+
+        print_list(&history, mode, format.as_deref());
+
+        Ok(())
+    }
+
+    pub async fn run(self, settings: &Settings, db: &mut impl Database) -> Result<()> {
         let context = current_context();
 
         match self {
-            Self::Start { command: words } => {
-                let command = words.join(" ");
-
-                if command.starts_with(' ') || settings.history_filter.is_match(&command) {
-                    return Ok(());
-                }
-
-                // It's better for atuin to silently fail here and attempt to
-                // store whatever is ran, than to throw an error to the terminal
-                let cwd = utils::get_current_dir();
-                if !cwd.is_empty() && settings.cwd_filter.is_match(&cwd) {
-                    return Ok(());
-                }
-
-                let h = History::new(chrono::Utc::now(), command, cwd, -1, -1, None, None, None);
-
-                // print the ID
-                // we use this as the key for calling end
-                println!("{}", h.id);
-                db.save(&h).await?;
-                Ok(())
-            }
-
-            Self::End { id, exit } => {
-                if id.trim() == "" {
-                    return Ok(());
-                }
-
-                let mut h = db.load(id).await?;
-
-                if h.duration > 0 {
-                    debug!("cannot end history - already has duration");
-
-                    // returning OK as this can occur if someone Ctrl-c a prompt
-                    return Ok(());
-                }
-
-                h.exit = *exit;
-                h.duration = chrono::Utc::now().timestamp_nanos() - h.timestamp.timestamp_nanos();
-
-                db.update(&h).await?;
-
-                if settings.should_sync()? {
-                    #[cfg(feature = "sync")]
-                    {
-                        debug!("running periodic background sync");
-                        sync::sync(settings, false, db).await?;
-                    }
-                    #[cfg(not(feature = "sync"))]
-                    debug!("not compiled with sync support");
-                } else {
-                    debug!("sync disabled! not syncing");
-                }
-
-                Ok(())
-            }
-
+            Self::Start { command } => Self::handle_start(db, settings, &command).await,
+            Self::End { id, exit } => Self::handle_end(db, settings, &id, exit).await,
             Self::List {
                 session,
                 cwd,
@@ -252,42 +311,8 @@ impl Cmd {
                 cmd_only,
                 format,
             } => {
-                let session = if *session {
-                    Some(env::var("ATUIN_SESSION")?)
-                } else {
-                    None
-                };
-                let cwd = if *cwd {
-                    Some(utils::get_current_dir())
-                } else {
-                    None
-                };
-
-                let history = match (session, cwd) {
-                    (None, None) => db.list(settings.filter_mode, &context, None, false).await?,
-                    (None, Some(cwd)) => {
-                        let query = format!("select * from history where cwd = '{cwd}';");
-                        db.query_history(&query).await?
-                    }
-                    (Some(session), None) => {
-                        let query = format!("select * from history where session = '{session}';");
-                        db.query_history(&query).await?
-                    }
-                    (Some(session), Some(cwd)) => {
-                        let query = format!(
-                            "select * from history where cwd = '{cwd}' and session = '{session}';",
-                        );
-                        db.query_history(&query).await?
-                    }
-                };
-
-                print_list(
-                    &history,
-                    ListMode::from_flags(*human, *cmd_only),
-                    format.as_deref(),
-                );
-
-                Ok(())
+                let mode = ListMode::from_flags(human, cmd_only);
+                Self::handle_list(db, settings, context, session, cwd, mode, format).await
             }
 
             Self::Last {
@@ -298,7 +323,7 @@ impl Cmd {
                 let last = db.last().await?;
                 print_list(
                     &[last],
-                    ListMode::from_flags(*human, *cmd_only),
+                    ListMode::from_flags(human, cmd_only),
                     format.as_deref(),
                 );
 

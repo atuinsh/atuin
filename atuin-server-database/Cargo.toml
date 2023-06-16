@@ -1,0 +1,21 @@
+[package]
+name = "atuin-server-database"
+edition = "2021"
+description = "server database library for atuin"
+
+version = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+
+[dependencies]
+atuin-common = { path = "../atuin-common", version = "15.0.0" }
+
+tracing = "0.1"
+chrono = { workspace = true }
+eyre = { workspace = true }
+uuid = { workspace = true }
+serde = { workspace = true }
+async-trait = { workspace = true }
+chronoutil = "0.2.3"

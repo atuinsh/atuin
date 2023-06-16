@@ -10,21 +10,19 @@ homepage = { workspace = true }
 repository = { workspace = true }
 
 [dependencies]
-atuin-common = { path = "../atuin-common", version = "14.0.1" }
+atuin-common = { path = "../atuin-common", version = "15.0.0" }
+atuin-server-database = { path = "../atuin-server-database", version = "15.0.0" }
 
 tracing = "0.1"
 chrono = { workspace = true }
 eyre = { workspace = true }
 uuid = { workspace = true }
-whoami = { workspace = true }
 config = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-sodiumoxide = { workspace = true }
 base64 = { workspace = true }
 rand = { workspace = true }
 tokio = { workspace = true }
-sqlx = { workspace = true }
 async-trait = { workspace = true }
 axum = "0.6.4"
 http = "0.2"
@@ -34,3 +32,4 @@ tower = "0.4"
 tower-http = { version = "0.3", features = ["trace"] }
 reqwest = { workspace = true }
 argon2 = "0.5.0"
+semver = { workspace = true }

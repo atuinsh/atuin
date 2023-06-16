@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::env;
 
 use chrono::Utc;
 use eyre::{bail, Result};
@@ -161,10 +162,13 @@ impl<'a> Client<'a> {
         host: Option<String>,
         deleted: HashSet<String>,
     ) -> Result<Vec<History>> {
-        let host = match host {
-            None => hash_str(&format!("{}:{}", whoami::hostname(), whoami::username())),
-            Some(h) => h,
-        };
+        let host = host.unwrap_or_else(|| {
+            hash_str(&format!(
+                "{}:{}",
+                env::var("ATUIN_HOST_NAME").unwrap_or_else(|_| whoami::hostname()),
+                env::var("ATUIN_HOST_USER").unwrap_or_else(|_| whoami::username())
+            ))
+        });
 
         let url = format!(
             "{}/sync/history?sync_ts={}&history_ts={}&host={}",
@@ -216,5 +220,20 @@ impl<'a> Client<'a> {
             .await?;
 
         Ok(())
+    }
+
+    pub async fn delete(&self) -> Result<()> {
+        let url = format!("{}/account", self.sync_addr);
+        let url = Url::parse(url.as_str())?;
+
+        let resp = self.client.delete(url).send().await?;
+
+        if resp.status() == 403 {
+            bail!("invalid login details");
+        } else if resp.status() == 200 {
+            Ok(())
+        } else {
+            bail!("Unknown error");
+        }
     }
 }
