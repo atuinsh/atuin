@@ -2,7 +2,7 @@ use std::path::Path;
 
 use async_trait::async_trait;
 use atuin_client::{database::Database, history::History, settings::FilterMode};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use eyre::Result;
 use fuzzy_matcher::{skim::SkimMatcherV2, FuzzyMatcher};
 use tokio::task::yield_now;
@@ -12,6 +12,7 @@ use super::{SearchEngine, SearchState};
 pub struct Search {
     all_history: Vec<(History, i32)>,
     engine: SkimMatcherV2,
+    now: DateTime<Utc>,
 }
 
 impl Search {
@@ -19,6 +20,7 @@ impl Search {
         Search {
             all_history: vec![],
             engine: SkimMatcherV2::default(),
+            now: Utc::now(),
         }
     }
 }
@@ -34,7 +36,7 @@ impl SearchEngine for Search {
             self.all_history = db.all_with_count().await.unwrap();
         }
 
-        Ok(fuzzy_search(&self.engine, state, &self.all_history).await)
+        Ok(fuzzy_search(&self.engine, state, &self.all_history, self.now).await)
     }
 }
 
@@ -42,11 +44,11 @@ async fn fuzzy_search(
     engine: &SkimMatcherV2,
     state: &SearchState,
     all_history: &[(History, i32)],
+    now: DateTime<Utc>,
 ) -> Vec<History> {
     let mut set = Vec::with_capacity(200);
     let mut ranks = Vec::with_capacity(200);
     let query = state.input.as_str();
-    let now = Utc::now();
 
     for (i, (history, count)) in all_history.iter().enumerate() {
         if i % 256 == 0 {
@@ -142,4 +144,43 @@ fn path_dist(a: &Path, b: &Path) -> usize {
     }
 
     b.len() - a.len() + dist
+}
+
+#[cfg(test)]
+mod tests {
+    use atuin_client::{database::Context, settings::FilterMode};
+    use chrono::Utc;
+    use fuzzy_matcher::skim::SkimMatcherV2;
+    use insta::assert_debug_snapshot;
+
+    use crate::command::client::search::engines::{SearchEngine, SearchState};
+
+    use super::Search;
+
+    #[tokio::test]
+    async fn docker_postgres() {
+        let now = Utc::now();
+        let mut db = super::super::test_entries(now).await;
+
+        let mut skim = Search {
+            all_history: vec![],
+            engine: SkimMatcherV2::default(),
+            now,
+        };
+
+        let state = SearchState {
+            input: "docker postgres".to_owned().into(),
+            filter_mode: FilterMode::Global,
+            context: Context {
+                session: "1".into(),
+                cwd: "/Users/conrad/code/atuin".into(),
+                hostname: "host1:conrad".into(),
+                host_id: "".into(),
+            },
+        };
+
+        let results = skim.full_query(&state, &mut db).await.unwrap();
+
+        assert_debug_snapshot!(results);
+    }
 }

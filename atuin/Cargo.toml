@@ -81,3 +81,6 @@ version = "0.3"
 default-features = false
 features = ["ansi", "fmt", "registry", "env-filter"]
 optional = true
+
+[dev-dependencies]
+insta = "1.29.0"

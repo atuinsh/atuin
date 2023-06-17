@@ -1,0 +1,17 @@
+---
+source: atuin/src/command/client/search/engines/skim.rs
+expression: results
+---
+[
+    History {
+        id: "0188c93be81c7d4abc624033a2ba79d3",
+        timestamp: 2023-06-15T12:02:06.487065Z,
+        duration: -1,
+        exit: -1,
+        command: "docker run -e POSTGRES_USER=atuin -e POSTGRES_PASSWORD=pass -e POSTGRES_DB=atuin -p 5432:5432 -d --rm postgres:14-alpine",
+        cwd: "/Users/conrad/code/atuin",
+        session: "1",
+        hostname: "host1:conrad",
+        deleted_at: None,
+    },
+]

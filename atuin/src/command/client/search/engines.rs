@@ -44,3 +44,24 @@ pub trait SearchEngine: Send + Sync + 'static {
         }
     }
 }
+
+#[cfg(test)]
+async fn test_entries(since: chrono::DateTime<chrono::Utc>) -> atuin_client::database::Sqlite {
+    use atuin_client::database::Sqlite;
+    use chrono::Duration;
+
+    let mut db = Sqlite::new("sqlite::memory:").await.unwrap();
+
+    db.save_bulk(&[
+        History::import()
+            .timestamp(since - Duration::days(2))
+            .command("docker run -e POSTGRES_USER=atuin -e POSTGRES_PASSWORD=pass -e POSTGRES_DB=atuin -p 5432:5432 -d --rm postgres:14-alpine")
+            .session("1")
+            .cwd("/Users/conrad/code/atuin")
+            .hostname("host1:conrad")
+            .build()
+            .into(),
+    ]).await.unwrap();
+
+    db
+}
