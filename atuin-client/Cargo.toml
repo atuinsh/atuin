@@ -51,7 +51,6 @@ sql-builder = "3"
 lazy_static = "1"
 memchr = "2.5"
 rmp = { version = "0.8.11" }
-rmp-serde = { version = "1.1.1" }
 typed-builder = "0.14.0"
 
 # sync
