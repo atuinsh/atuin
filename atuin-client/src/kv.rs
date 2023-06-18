@@ -1,4 +1,4 @@
-use eyre::{bail, eyre, Result};
+use eyre::{bail, ensure, eyre, Result};
 
 use crate::record::store::Store;
 use crate::settings::Settings;
@@ -29,35 +29,41 @@ impl KvRecord {
         Ok(output)
     }
 
-    pub fn deserialize(data: &[u8]) -> Result<Self> {
+    pub fn deserialize(data: &[u8], version: &str) -> Result<Self> {
         use rmp::decode;
 
         fn error_report<E: std::fmt::Debug>(err: E) -> eyre::Report {
             eyre!("{err:?}")
         }
 
-        let mut bytes = decode::Bytes::new(data);
+        match version {
+            KV_VERSION => {
+                let mut bytes = decode::Bytes::new(data);
 
-        let nfields = decode::read_array_len(&mut bytes).map_err(error_report)?;
-        if !(3..=3).contains(&nfields) {
-            bail!("malformed kv record")
+                let nfields = decode::read_array_len(&mut bytes).map_err(error_report)?;
+                ensure!(nfields == 3, "too many entries in v0 kv record");
+
+                let bytes = bytes.remaining_slice();
+
+                let (namespace, bytes) =
+                    decode::read_str_from_slice(bytes).map_err(error_report)?;
+                let (key, bytes) = decode::read_str_from_slice(bytes).map_err(error_report)?;
+                let (value, bytes) = decode::read_str_from_slice(bytes).map_err(error_report)?;
+
+                if !bytes.is_empty() {
+                    bail!("trailing bytes in encoded kvrecord. malformed")
+                }
+
+                Ok(KvRecord {
+                    namespace: namespace.to_owned(),
+                    key: key.to_owned(),
+                    value: value.to_owned(),
+                })
+            }
+            _ => {
+                bail!("unknown version {version:?}")
+            }
         }
-
-        let bytes = bytes.remaining_slice();
-
-        let (namespace, bytes) = decode::read_str_from_slice(bytes).map_err(error_report)?;
-        let (key, bytes) = decode::read_str_from_slice(bytes).map_err(error_report)?;
-        let (value, bytes) = decode::read_str_from_slice(bytes).map_err(error_report)?;
-
-        if !bytes.is_empty() {
-            bail!("trailing bytes in encoded kvrecord. malformed")
-        }
-
-        Ok(KvRecord {
-            namespace: namespace.to_owned(),
-            key: key.to_owned(),
-            value: value.to_owned(),
-        })
     }
 }
 
@@ -131,7 +137,7 @@ impl KvStore {
         };
 
         loop {
-            let kv = KvRecord::deserialize(&record.data)?;
+            let kv = KvRecord::deserialize(&record.data, &record.version)?;
             if kv.key == key && kv.namespace == namespace {
                 return Ok(Some(kv));
             }
@@ -150,7 +156,7 @@ impl KvStore {
 
 #[cfg(test)]
 mod tests {
-    use super::KvRecord;
+    use super::{KvRecord, KV_VERSION};
 
     #[test]
     fn encode_decode() {
@@ -164,7 +170,7 @@ mod tests {
         ];
 
         let encoded = kv.serialize().unwrap();
-        let decoded = KvRecord::deserialize(&encoded).unwrap();
+        let decoded = KvRecord::deserialize(&encoded, KV_VERSION).unwrap();
 
         assert_eq!(encoded, &snapshot);
         assert_eq!(decoded, kv);
