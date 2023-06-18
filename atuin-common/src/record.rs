@@ -88,6 +88,11 @@ impl RecordIndex {
 
     /// Diff this index with another, likely remote index.
     /// The two diffs can then be reconciled, and the optimal change set calculated
+    /// Returns a tuple, with (host, tag, Option(OTHER))
+    /// OTHER is set to the value of the tail on the other machine. For example, if the
+    /// other machine has a different tail, it will be the differing tail. This is useful to
+    /// check if the other index is ahead of us, or behind.
+    /// If the other index does not have the (host, tag) pair, then the other value will be None.
     pub fn diff(&self, other: &Self) -> Vec<(String, String, Option<String>)> {
         let mut ret = Vec::new();
 
@@ -122,6 +127,7 @@ impl RecordIndex {
             }
         }
 
+        ret.sort();
         ret
     }
 }
@@ -129,6 +135,7 @@ impl RecordIndex {
 #[cfg(test)]
 mod tests {
     use super::{Record, RecordIndex};
+    use pretty_assertions::{assert_eq, assert_ne};
 
     fn test_record() -> Record {
         Record::builder()
@@ -211,6 +218,7 @@ mod tests {
 
     #[test]
     fn record_index_multi_diff() {
+        // A much more complex case, with a bunch more checks
         let mut index1 = RecordIndex::new();
         let mut index2 = RecordIndex::new();
 
@@ -236,9 +244,24 @@ mod tests {
         // index1 knows of a 4th store
         index1.set(store4record1);
 
-        let diff = index1.diff(&index2);
+        let diff1 = index1.diff(&index2);
+        let diff2 = index2.diff(&index1);
 
-        // all stores will require updating
-        assert_eq!(4, diff.len());
+        // both diffs the same length
+        assert_eq!(4, diff1.len());
+        assert_eq!(4, diff2.len());
+
+        // both diffs should be ALMOST the same. They will agree on which hosts and tags
+        // require updating, but the "other" value will not be the same.
+        let smol_diff_1: Vec<(String, String)> =
+            diff1.iter().map(|v| (v.0.clone(), v.1.clone())).collect();
+        let smol_diff_2: Vec<(String, String)> =
+            diff1.iter().map(|v| (v.0.clone(), v.1.clone())).collect();
+
+        assert_eq!(smol_diff_1, smol_diff_2);
+
+        // diffing with yourself = no diff
+        assert_eq!(index1.diff(&index1).len(), 0);
+        assert_eq!(index2.diff(&index2).len(), 0);
     }
 }
