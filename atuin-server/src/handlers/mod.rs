@@ -2,7 +2,6 @@ use atuin_common::api::{ErrorResponse, IndexResponse};
 use axum::{response::IntoResponse, Json};
 
 pub mod history;
-pub mod record;
 pub mod status;
 pub mod user;
 
