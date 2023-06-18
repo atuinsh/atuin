@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{hash_map::Entry, HashMap};
 
 use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
@@ -57,6 +57,12 @@ pub struct RecordIndex {
     pub hosts: HashMap<String, HashMap<String, String>>,
 }
 
+impl Default for RecordIndex {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RecordIndex {
     pub fn new() -> RecordIndex {
         RecordIndex {
@@ -66,27 +72,21 @@ impl RecordIndex {
 
     /// Insert a new tail record into the store
     pub fn set(&mut self, tail: Record) {
-        if self.hosts.contains_key(&tail.host) {
+        if let Entry::Vacant(e) = self.hosts.entry(tail.host.clone()) {
+            e.insert(HashMap::from([(tail.tag, tail.id)]));
+        } else {
             self.hosts
                 .get_mut(&tail.host)
                 .unwrap()
                 .insert(tail.tag, tail.id);
-        } else {
-            self.hosts
-                .insert(tail.host, HashMap::from([(tail.tag, tail.id)]));
         }
     }
 
     pub fn get(&self, host: String, tag: String) -> Option<String> {
-        self.hosts
-            .get(&host)
-            .and_then(|v| v.get(&tag))
-            .map(|v| v.clone())
+        self.hosts.get(&host).and_then(|v| v.get(&tag)).cloned()
     }
 
-    /// Diff this index with another, likely remote index. We simply compare the other index
-    /// with our local state, and for sync purposes a comparison from the opposite direction
-    /// should also run.
+    /// Diff this index with another, likely remote index.
     /// The two diffs can then be reconciled, and the optimal change set calculated
     pub fn diff(&self, other: &Self) -> Vec<(String, String, Option<String>)> {
         let mut ret = Vec::new();
@@ -122,7 +122,7 @@ impl RecordIndex {
             }
         }
 
-        return ret;
+        ret
     }
 }
 
@@ -239,6 +239,6 @@ mod tests {
         let diff = index1.diff(&index2);
 
         // all stores will require updating
-        assert_eq!(4, diff.len(), "expected 3 diffs");
+        assert_eq!(4, diff.len());
     }
 }
