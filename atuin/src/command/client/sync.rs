@@ -52,8 +52,9 @@ impl Cmd {
                     let encode = encode_key(&key).wrap_err("could not encode encryption key")?;
                     println!("{encode}");
                 } else {
-                    let mnemonic = bip39::Mnemonic::from_entropy(&key, bip39::Language::English)
-                        .map_err(|_| eyre::eyre!("invalid key"))?;
+                    let mnemonic =
+                        bip39::Mnemonic::from_entropy(key.as_slice(), bip39::Language::English)
+                            .map_err(|_| eyre::eyre!("invalid key"))?;
                     println!("{mnemonic}");
                 }
                 Ok(())

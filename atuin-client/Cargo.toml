@@ -53,6 +53,12 @@ memchr = "2.5"
 rmp = { version = "0.8.11" }
 typed-builder = "0.14.0"
 
+# encryption
+rusty_paseto = { version = "0.5.0", default-features = false, features = ["batteries_included", "v4_local"] }
+chacha20 = "0.9.1"
+blake2 = "0.10.6"
+subtle = "2.5.0"
+
 # sync
 urlencoding = { version = "2.1.0", optional = true }
 reqwest = { workspace = true, optional = true }
