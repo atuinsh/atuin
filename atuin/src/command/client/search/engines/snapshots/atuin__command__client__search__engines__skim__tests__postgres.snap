@@ -1,8 +1,19 @@
 ---
 source: atuin/src/command/client/search/engines/skim.rs
-expression: "engines::test::docker_postgres(Search::new()).await"
+expression: "engines::test::postgres(Search::new()).await"
 ---
 [
+    History {
+        id: "1",
+        timestamp: 2023-06-16T11:14:16Z,
+        duration: -1,
+        exit: -1,
+        command: "cargo sqlx prepare --database-url postgresql://user:pass@localhost/store",
+        cwd: "/Users/conrad/code/atuin",
+        session: "1",
+        hostname: "host1:conrad",
+        deleted_at: None,
+    },
     History {
         id: "0",
         timestamp: 2023-06-16T11:14:16Z,

@@ -1,6 +1,6 @@
 ---
-source: atuin/src/command/client/search/engines/skim.rs
-expression: "engines::test::docker_postgres(Search::new()).await"
+source: atuin/src/command/client/search/engines/db.rs
+expression: "engines::test::docker_postgres(Search(SearchMode::Fuzzy)).await"
 ---
 [
     History {

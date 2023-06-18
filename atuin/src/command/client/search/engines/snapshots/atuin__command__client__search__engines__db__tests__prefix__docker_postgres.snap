@@ -1,0 +1,5 @@
+---
+source: atuin/src/command/client/search/engines/db.rs
+expression: "engines::test::docker_postgres(Search(SearchMode::Prefix)).await"
+---
+[]

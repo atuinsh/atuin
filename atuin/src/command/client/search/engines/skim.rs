@@ -12,7 +12,6 @@ use super::{SearchEngine, SearchState};
 pub struct Search {
     all_history: Vec<(History, i32)>,
     engine: SkimMatcherV2,
-    now: DateTime<Utc>,
 }
 
 impl Search {
@@ -20,23 +19,23 @@ impl Search {
         Search {
             all_history: vec![],
             engine: SkimMatcherV2::default(),
-            now: Utc::now(),
         }
     }
 }
 
 #[async_trait]
 impl SearchEngine for Search {
-    async fn full_query(
+    async fn full_query_since(
         &mut self,
         state: &SearchState,
         db: &mut dyn Database,
+        now: DateTime<Utc>,
     ) -> Result<Vec<History>> {
         if self.all_history.is_empty() {
             self.all_history = db.all_with_count().await.unwrap();
         }
 
-        Ok(fuzzy_search(&self.engine, state, &self.all_history, self.now).await)
+        Ok(fuzzy_search(&self.engine, state, &self.all_history, now).await)
     }
 }
 
@@ -148,39 +147,17 @@ fn path_dist(a: &Path, b: &Path) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use atuin_client::{database::Context, settings::FilterMode};
-    use chrono::Utc;
-    use fuzzy_matcher::skim::SkimMatcherV2;
     use insta::assert_debug_snapshot;
 
-    use crate::command::client::search::engines::{SearchEngine, SearchState};
-
-    use super::Search;
+    use crate::command::client::search::engines::{self, skim::Search};
 
     #[tokio::test]
     async fn docker_postgres() {
-        let now = Utc::now();
-        let mut db = super::super::test_entries(now).await;
+        assert_debug_snapshot!(engines::test::docker_postgres(Search::new()).await);
+    }
 
-        let mut skim = Search {
-            all_history: vec![],
-            engine: SkimMatcherV2::default(),
-            now,
-        };
-
-        let state = SearchState {
-            input: "docker postgres".to_owned().into(),
-            filter_mode: FilterMode::Global,
-            context: Context {
-                session: "1".into(),
-                cwd: "/Users/conrad/code/atuin".into(),
-                hostname: "host1:conrad".into(),
-                host_id: "".into(),
-            },
-        };
-
-        let results = skim.full_query(&state, &mut db).await.unwrap();
-
-        assert_debug_snapshot!(results);
+    #[tokio::test]
+    async fn postgres() {
+        assert_debug_snapshot!(engines::test::postgres(Search::new()).await);
     }
 }

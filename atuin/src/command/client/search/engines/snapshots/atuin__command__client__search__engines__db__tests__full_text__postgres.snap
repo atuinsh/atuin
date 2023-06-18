@@ -1,0 +1,28 @@
+---
+source: atuin/src/command/client/search/engines/db.rs
+expression: "engines::test::postgres(Search(SearchMode::FullText)).await"
+---
+[
+    History {
+        id: "1",
+        timestamp: 2023-06-16T11:14:16Z,
+        duration: -1,
+        exit: -1,
+        command: "cargo sqlx prepare --database-url postgresql://user:pass@localhost/store",
+        cwd: "/Users/conrad/code/atuin",
+        session: "1",
+        hostname: "host1:conrad",
+        deleted_at: None,
+    },
+    History {
+        id: "0",
+        timestamp: 2023-06-16T11:14:16Z,
+        duration: -1,
+        exit: -1,
+        command: "docker run -e POSTGRES_USER=atuin -e POSTGRES_PASSWORD=pass -e POSTGRES_DB=atuin -p 5432:5432 -d --rm postgres:14-alpine",
+        cwd: "/Users/conrad/code/atuin",
+        session: "1",
+        hostname: "host1:conrad",
+        deleted_at: None,
+    },
+]
