@@ -1,9 +1,7 @@
 use atuin_common::record::DecryptedData;
 use eyre::{bail, ensure, eyre, Result};
-pub use rusty_paseto::prelude::{Key, PasetoSymmetricKey};
-use rusty_paseto::prelude::{Local, V4};
 
-use crate::record::encryption::{Decrypt, Encrypt};
+use crate::record::encryption::PASETO_V4_PIE;
 use crate::record::store::Store;
 use crate::settings::Settings;
 
@@ -88,7 +86,7 @@ impl KvStore {
     pub async fn set(
         &self,
         store: &mut (impl Store + Send + Sync),
-        encryption_key: &PasetoSymmetricKey<V4, Local>,
+        encryption_key: &[u8; 32],
         namespace: &str,
         key: &str,
         value: &str,
@@ -116,7 +114,9 @@ impl KvStore {
             .data(bytes)
             .build();
 
-        store.push(&record.encrypt(encryption_key)).await?;
+        store
+            .push(&record.encrypt::<PASETO_V4_PIE>(encryption_key))
+            .await?;
 
         Ok(())
     }
@@ -126,7 +126,7 @@ impl KvStore {
     pub async fn get(
         &self,
         store: &impl Store,
-        encryption_key: &PasetoSymmetricKey<V4, Local>,
+        encryption_key: &[u8; 32],
         namespace: &str,
         key: &str,
     ) -> Result<Option<KvRecord>> {
@@ -143,7 +143,10 @@ impl KvStore {
         };
 
         loop {
-            let decrypted = record.decrypt(encryption_key)?;
+            let decrypted = match record.version.as_str() {
+                KV_VERSION => record.decrypt::<PASETO_V4_PIE>(encryption_key)?,
+                version => bail!("unknown version {version:?}"),
+            };
 
             let kv = KvRecord::deserialize(&decrypted.data, &decrypted.version)?;
             if kv.key == key && kv.namespace == namespace {

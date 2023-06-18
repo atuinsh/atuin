@@ -1,12 +1,7 @@
 use clap::Subcommand;
 use eyre::{Context, Result};
 
-use atuin_client::{
-    encryption,
-    kv::{Key, KvStore, PasetoSymmetricKey},
-    record::store::Store,
-    settings::Settings,
-};
+use atuin_client::{encryption, kv::KvStore, record::store::Store, settings::Settings};
 
 #[derive(Subcommand)]
 #[command(infer_subcommands = true)]
@@ -42,7 +37,6 @@ impl Cmd {
         let encryption_key: [u8; 32] = encryption::load_key(settings)
             .context("could not load encryption key")?
             .into();
-        let encryption_key = PasetoSymmetricKey::from(Key::from(encryption_key));
 
         match self {
             Self::Set {

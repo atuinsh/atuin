@@ -1,10 +1,14 @@
 use std::collections::HashMap;
 
+use eyre::Result;
 use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct DecryptedData(pub Vec<u8>);
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EncryptedData(pub Vec<u8>);
 
 /// A single record stored inside of our local database
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TypedBuilder)]
@@ -128,6 +132,39 @@ impl RecordIndex {
 
         ret.sort();
         ret
+    }
+}
+
+pub trait Encryption {
+    fn encrypt(data: DecryptedData, key: &[u8; 32]) -> EncryptedData;
+    fn decrypt(data: EncryptedData, key: &[u8; 32]) -> Result<DecryptedData>;
+}
+
+impl Record<DecryptedData> {
+    pub fn encrypt<E: Encryption>(self, key: &[u8; 32]) -> Record<EncryptedData> {
+        Record {
+            id: self.id,
+            host: self.host,
+            parent: self.parent,
+            timestamp: self.timestamp,
+            version: self.version,
+            tag: self.tag,
+            data: E::encrypt(self.data, key),
+        }
+    }
+}
+
+impl Record<EncryptedData> {
+    pub fn decrypt<E: Encryption>(self, key: &[u8; 32]) -> Result<Record<DecryptedData>> {
+        Ok(Record {
+            id: self.id,
+            host: self.host,
+            parent: self.parent,
+            timestamp: self.timestamp,
+            version: self.version,
+            tag: self.tag,
+            data: E::decrypt(self.data, key)?,
+        })
     }
 }
 

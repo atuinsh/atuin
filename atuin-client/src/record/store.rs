@@ -1,9 +1,7 @@
 use async_trait::async_trait;
 use eyre::Result;
 
-use atuin_common::record::Record;
-
-use super::encryption::EncryptedData;
+use atuin_common::record::{EncryptedData, Record};
 
 /// A record store stores records
 /// In more detail - we tend to need to process this into _another_ format to actually query it.

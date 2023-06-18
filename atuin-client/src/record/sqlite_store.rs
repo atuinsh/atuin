@@ -13,9 +13,9 @@ use sqlx::{
     Row,
 };
 
-use atuin_common::record::Record;
+use atuin_common::record::{EncryptedData, Record};
 
-use super::{encryption::EncryptedData, store::Store};
+use super::store::Store;
 
 pub struct SqliteStore {
     pool: SqlitePool,
@@ -169,169 +169,175 @@ impl Store for SqliteStore {
     }
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use atuin_common::record::Record;
+#[cfg(test)]
+mod tests {
+    use atuin_common::record::{EncryptedData, Record};
 
-//     use crate::record::{encryption::EncryptedData, store::Store};
+    use crate::record::{encryption::PASETO_V4_PIE, store::Store};
 
-//     use super::SqliteStore;
+    use super::SqliteStore;
 
-//     fn test_record() -> Record<EncryptedData> {
-//         Record::builder()
-//             .host(atuin_common::utils::uuid_v7().simple().to_string())
-//             .version("v1".into())
-//             .tag(atuin_common::utils::uuid_v7().simple().to_string())
-//             .data(EncryptedData(vec![0, 1, 2, 3]))
-//             .build()
-//     }
+    fn test_record() -> Record<EncryptedData> {
+        Record::builder()
+            .host(atuin_common::utils::uuid_v7().simple().to_string())
+            .version("v1".into())
+            .tag(atuin_common::utils::uuid_v7().simple().to_string())
+            .data(EncryptedData(vec![0, 1, 2, 3]))
+            .build()
+    }
 
-//     #[tokio::test]
-//     async fn create_db() {
-//         let db = SqliteStore::new(":memory:").await;
+    #[tokio::test]
+    async fn create_db() {
+        let db = SqliteStore::new(":memory:").await;
 
-//         assert!(
-//             db.is_ok(),
-//             "db could not be created, {:?}",
-//             db.err().unwrap()
-//         );
-//     }
+        assert!(
+            db.is_ok(),
+            "db could not be created, {:?}",
+            db.err().unwrap()
+        );
+    }
 
-//     #[tokio::test]
-//     async fn push_record() {
-//         let db = SqliteStore::new(":memory:").await.unwrap();
-//         let record = test_record();
+    #[tokio::test]
+    async fn push_record() {
+        let db = SqliteStore::new(":memory:").await.unwrap();
+        let record = test_record();
 
-//         db.push(&record).await.expect("failed to insert record");
-//     }
+        db.push(&record).await.expect("failed to insert record");
+    }
 
-//     #[tokio::test]
-//     async fn get_record() {
-//         let db = SqliteStore::new(":memory:").await.unwrap();
-//         let record = test_record();
-//         db.push(&record).await.unwrap();
+    #[tokio::test]
+    async fn get_record() {
+        let db = SqliteStore::new(":memory:").await.unwrap();
+        let record = test_record();
+        db.push(&record).await.unwrap();
 
-//         let new_record = db
-//             .get(record.id.as_str())
-//             .await
-//             .expect("failed to fetch record");
+        let new_record = db
+            .get(record.id.as_str())
+            .await
+            .expect("failed to fetch record");
 
-//         assert_eq!(record, new_record, "records are not equal");
-//     }
+        assert_eq!(record, new_record, "records are not equal");
+    }
 
-//     #[tokio::test]
-//     async fn len() {
-//         let db = SqliteStore::new(":memory:").await.unwrap();
-//         let record = test_record();
-//         db.push(&record).await.unwrap();
+    #[tokio::test]
+    async fn len() {
+        let db = SqliteStore::new(":memory:").await.unwrap();
+        let record = test_record();
+        db.push(&record).await.unwrap();
 
-//         let len = db
-//             .len(record.host.as_str(), record.tag.as_str())
-//             .await
-//             .expect("failed to get store len");
+        let len = db
+            .len(record.host.as_str(), record.tag.as_str())
+            .await
+            .expect("failed to get store len");
 
-//         assert_eq!(len, 1, "expected length of 1 after insert");
-//     }
+        assert_eq!(len, 1, "expected length of 1 after insert");
+    }
 
-//     #[tokio::test]
-//     async fn len_different_tags() {
-//         let db = SqliteStore::new(":memory:").await.unwrap();
+    #[tokio::test]
+    async fn len_different_tags() {
+        let db = SqliteStore::new(":memory:").await.unwrap();
 
-//         // these have different tags, so the len should be the same
-//         // we model multiple stores within one database
-//         // new store = new tag = independent length
-//         let first = test_record();
-//         let second = test_record();
+        // these have different tags, so the len should be the same
+        // we model multiple stores within one database
+        // new store = new tag = independent length
+        let first = test_record();
+        let second = test_record();
 
-//         db.push(&first).await.unwrap();
-//         db.push(&second).await.unwrap();
+        db.push(&first).await.unwrap();
+        db.push(&second).await.unwrap();
 
-//         let first_len = db
-//             .len(first.host.as_str(), first.tag.as_str())
-//             .await
-//             .unwrap();
-//         let second_len = db
-//             .len(second.host.as_str(), second.tag.as_str())
-//             .await
-//             .unwrap();
+        let first_len = db
+            .len(first.host.as_str(), first.tag.as_str())
+            .await
+            .unwrap();
+        let second_len = db
+            .len(second.host.as_str(), second.tag.as_str())
+            .await
+            .unwrap();
 
-//         assert_eq!(first_len, 1, "expected length of 1 after insert");
-//         assert_eq!(second_len, 1, "expected length of 1 after insert");
-//     }
+        assert_eq!(first_len, 1, "expected length of 1 after insert");
+        assert_eq!(second_len, 1, "expected length of 1 after insert");
+    }
 
-//     #[tokio::test]
-//     async fn append_a_bunch() {
-//         let db = SqliteStore::new(":memory:").await.unwrap();
+    #[tokio::test]
+    async fn append_a_bunch() {
+        let db = SqliteStore::new(":memory:").await.unwrap();
 
-//         let mut tail = test_record();
-//         db.push(&tail).await.expect("failed to push record");
+        let mut tail = test_record();
+        db.push(&tail).await.expect("failed to push record");
 
-//         for _ in 1..100 {
-//             tail = tail.new_child(vec![1, 2, 3, 4]);
-//             db.push(&tail).await.unwrap();
-//         }
+        for _ in 1..100 {
+            tail = tail
+                .new_child(vec![1, 2, 3, 4])
+                .encrypt::<PASETO_V4_PIE>(&[0; 32]);
+            db.push(&tail).await.unwrap();
+        }
 
-//         assert_eq!(
-//             db.len(tail.host.as_str(), tail.tag.as_str()).await.unwrap(),
-//             100,
-//             "failed to insert 100 records"
-//         );
-//     }
+        assert_eq!(
+            db.len(tail.host.as_str(), tail.tag.as_str()).await.unwrap(),
+            100,
+            "failed to insert 100 records"
+        );
+    }
 
-//     #[tokio::test]
-//     async fn append_a_big_bunch() {
-//         let db = SqliteStore::new(":memory:").await.unwrap();
+    #[tokio::test]
+    async fn append_a_big_bunch() {
+        let db = SqliteStore::new(":memory:").await.unwrap();
 
-//         let mut records: Vec<Record<EncryptedData>> = Vec::with_capacity(10000);
+        let mut records: Vec<Record<EncryptedData>> = Vec::with_capacity(10000);
 
-//         let mut tail = test_record();
-//         records.push(tail.clone());
+        let mut tail = test_record();
+        records.push(tail.clone());
 
-//         for _ in 1..10000 {
-//             tail = tail.new_child(vec![1, 2, 3]);
-//             records.push(tail.clone());
-//         }
+        for _ in 1..10000 {
+            tail = tail
+                .new_child(vec![1, 2, 3])
+                .encrypt::<PASETO_V4_PIE>(&[0; 32]);
+            records.push(tail.clone());
+        }
 
-//         db.push_batch(records.iter()).await.unwrap();
+        db.push_batch(records.iter()).await.unwrap();
 
-//         assert_eq!(
-//             db.len(tail.host.as_str(), tail.tag.as_str()).await.unwrap(),
-//             10000,
-//             "failed to insert 10k records"
-//         );
-//     }
+        assert_eq!(
+            db.len(tail.host.as_str(), tail.tag.as_str()).await.unwrap(),
+            10000,
+            "failed to insert 10k records"
+        );
+    }
 
-//     #[tokio::test]
-//     async fn test_chain() {
-//         let db = SqliteStore::new(":memory:").await.unwrap();
+    #[tokio::test]
+    async fn test_chain() {
+        let db = SqliteStore::new(":memory:").await.unwrap();
 
-//         let mut records: Vec<Record<EncryptedData>> = Vec::with_capacity(1000);
+        let mut records: Vec<Record<EncryptedData>> = Vec::with_capacity(1000);
 
-//         let mut tail = test_record();
-//         records.push(tail.clone());
+        let mut tail = test_record();
+        records.push(tail.clone());
 
-//         for _ in 1..1000 {
-//             tail = tail.new_child(vec![1, 2, 3]);
-//             records.push(tail.clone());
-//         }
+        for _ in 1..1000 {
+            tail = tail
+                .new_child(vec![1, 2, 3])
+                .encrypt::<PASETO_V4_PIE>(&[0; 32]);
+            records.push(tail.clone());
+        }
 
-//         db.push_batch(records.iter()).await.unwrap();
+        db.push_batch(records.iter()).await.unwrap();
 
-//         let mut record = db
-//             .first(tail.host.as_str(), tail.tag.as_str())
-//             .await
-//             .expect("in memory sqlite should not fail")
-//             .expect("entry exists");
+        let mut record = db
+            .first(tail.host.as_str(), tail.tag.as_str())
+            .await
+            .expect("in memory sqlite should not fail")
+            .expect("entry exists");
 
-//         let mut count = 1;
+        let mut count = 1;
 
-//         while let Some(next) = db.next(&record).await.unwrap() {
-//             assert_eq!(record.id, next.clone().parent.unwrap());
-//             record = next;
+        while let Some(next) = db.next(&record).await.unwrap() {
+            assert_eq!(record.id, next.clone().parent.unwrap());
+            record = next;
 
-//             count += 1;
-//         }
+            count += 1;
+        }
 
-//         assert_eq!(count, 1000);
-//     }
-// }
+        assert_eq!(count, 1000);
+    }
+}
