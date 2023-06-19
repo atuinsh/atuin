@@ -14,8 +14,18 @@ mod utils;
 pub use settings::Settings;
 use tokio::signal;
 
+#[cfg(target_family = "unix")]
 async fn shutdown_signal() {
     signal::unix::signal(signal::unix::SignalKind::terminate())
+        .expect("failed to register signal handler")
+        .recv()
+        .await;
+    eprintln!("Shutting down gracefully...");
+}
+
+#[cfg(target_family = "windows")]
+async fn shutdown_signal() {
+    signal::windows::ctrl_c()
         .expect("failed to register signal handler")
         .recv()
         .await;
