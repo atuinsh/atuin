@@ -1,4 +1,4 @@
-use std::collections::{hash_map::Entry, HashMap};
+use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
@@ -72,14 +72,10 @@ impl RecordIndex {
 
     /// Insert a new tail record into the store
     pub fn set(&mut self, tail: Record) {
-        if let Entry::Vacant(e) = self.hosts.entry(tail.host.clone()) {
-            e.insert(HashMap::from([(tail.tag, tail.id)]));
-        } else {
-            self.hosts
-                .get_mut(&tail.host)
-                .unwrap()
-                .insert(tail.tag, tail.id);
-        }
+        self.hosts
+            .entry(tail.host)
+            .or_default()
+            .insert(tail.tag, tail.id);
     }
 
     pub fn get(&self, host: String, tag: String) -> Option<String> {
