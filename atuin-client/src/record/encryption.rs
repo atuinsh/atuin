@@ -152,6 +152,7 @@ struct Assertions<'a> {
     id: &'a str,
     version: &'a str,
     tag: &'a str,
+    host: &'a str,
 }
 
 impl<'a> From<AdditonalData<'a>> for Assertions<'a> {
@@ -160,6 +161,7 @@ impl<'a> From<AdditonalData<'a>> for Assertions<'a> {
             id: ad.id,
             version: ad.version,
             tag: ad.tag,
+            host: ad.host,
         }
     }
 }
@@ -182,6 +184,7 @@ mod tests {
             id: "foo",
             version: "v0",
             tag: "kv",
+            host: "1234",
         };
 
         let data = DecryptedData(vec![1, 2, 3, 4]);
@@ -199,6 +202,7 @@ mod tests {
             id: "foo",
             version: "v0",
             tag: "kv",
+            host: "1234",
         };
 
         let data = DecryptedData(vec![1, 2, 3, 4]);
@@ -221,6 +225,7 @@ mod tests {
             id: "foo",
             version: "v0",
             tag: "kv",
+            host: "1234",
         };
 
         let data = DecryptedData(vec![1, 2, 3, 4]);
@@ -237,6 +242,7 @@ mod tests {
             id: "foo",
             version: "v0",
             tag: "kv",
+            host: "1234",
         };
 
         let data = DecryptedData(vec![1, 2, 3, 4]);
@@ -247,6 +253,7 @@ mod tests {
             id: "foo1",
             version: "v0",
             tag: "kv",
+            host: "1234",
         };
         let _ = PASETO_V4::decrypt(encrypted, ad, &key).unwrap_err();
     }
@@ -260,6 +267,7 @@ mod tests {
             id: "foo",
             version: "v0",
             tag: "kv",
+            host: "1234",
         };
 
         let data = DecryptedData(vec![1, 2, 3, 4]);

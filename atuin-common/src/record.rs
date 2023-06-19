@@ -54,6 +54,7 @@ pub struct AdditonalData<'a> {
     pub id: &'a str,
     pub version: &'a str,
     pub tag: &'a str,
+    pub host: &'a str,
 }
 
 impl<Data> Record<Data> {
@@ -166,6 +167,7 @@ impl Record<DecryptedData> {
             id: &self.id,
             version: &self.version,
             tag: &self.tag,
+            host: &self.host,
         };
         Record {
             data: E::encrypt(self.data, ad, key),
@@ -185,6 +187,7 @@ impl Record<EncryptedData> {
             id: &self.id,
             version: &self.version,
             tag: &self.tag,
+            host: &self.host,
         };
         Ok(Record {
             data: E::decrypt(self.data, ad, key)?,
@@ -206,6 +209,7 @@ impl Record<EncryptedData> {
             id: &self.id,
             version: &self.version,
             tag: &self.tag,
+            host: &self.host,
         };
         Ok(Record {
             data: E::re_encrypt(self.data, ad, old_key, new_key)?,
