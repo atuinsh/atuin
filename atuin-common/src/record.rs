@@ -45,6 +45,14 @@ pub struct Record<Data> {
     pub data: Data,
 }
 
+/// Extra data from the record that should be encoded in the data
+#[derive(Debug, Copy, Clone)]
+pub struct AdditonalData<'a> {
+    pub id: &'a str,
+    pub version: &'a str,
+    pub tag: &'a str,
+}
+
 impl<Data> Record<Data> {
     pub fn new_child(&self, data: Vec<u8>) -> Record<DecryptedData> {
         Record::builder()
@@ -136,34 +144,44 @@ impl RecordIndex {
 }
 
 pub trait Encryption {
-    fn encrypt(data: DecryptedData, key: &[u8; 32]) -> EncryptedData;
-    fn decrypt(data: EncryptedData, key: &[u8; 32]) -> Result<DecryptedData>;
+    fn encrypt(data: DecryptedData, ad: AdditonalData, key: &[u8; 32]) -> EncryptedData;
+    fn decrypt(data: EncryptedData, ad: AdditonalData, key: &[u8; 32]) -> Result<DecryptedData>;
 }
 
 impl Record<DecryptedData> {
     pub fn encrypt<E: Encryption>(self, key: &[u8; 32]) -> Record<EncryptedData> {
+        let ad = AdditonalData {
+            id: &self.id,
+            version: &self.version,
+            tag: &self.tag,
+        };
         Record {
+            data: E::encrypt(self.data, ad, key),
             id: self.id,
             host: self.host,
             parent: self.parent,
             timestamp: self.timestamp,
             version: self.version,
             tag: self.tag,
-            data: E::encrypt(self.data, key),
         }
     }
 }
 
 impl Record<EncryptedData> {
     pub fn decrypt<E: Encryption>(self, key: &[u8; 32]) -> Result<Record<DecryptedData>> {
+        let ad = AdditonalData {
+            id: &self.id,
+            version: &self.version,
+            tag: &self.tag,
+        };
         Ok(Record {
+            data: E::decrypt(self.data, ad, key)?,
             id: self.id,
             host: self.host,
             parent: self.parent,
             timestamp: self.timestamp,
             version: self.version,
             tag: self.tag,
-            data: E::decrypt(self.data, key)?,
         })
     }
 }
