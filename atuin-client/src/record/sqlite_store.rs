@@ -59,8 +59,8 @@ impl SqliteStore {
     ) -> Result<()> {
         // In sqlite, we are "limited" to i64. But that is still fine, until 2262.
         sqlx::query(
-            "insert or ignore into records(id, host, tag, timestamp, parent, version, data)
-                values(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "insert or ignore into records(id, host, tag, timestamp, parent, version, data, cek)
+                values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         )
         .bind(r.id.as_str())
         .bind(r.host.as_str())
@@ -68,7 +68,8 @@ impl SqliteStore {
         .bind(r.timestamp as i64)
         .bind(r.parent.as_ref())
         .bind(r.version.as_str())
-        .bind(r.data.0.as_slice())
+        .bind(r.data.data.as_str())
+        .bind(r.data.content_encryption_key.as_str())
         .execute(tx)
         .await?;
 
@@ -85,7 +86,10 @@ impl SqliteStore {
             timestamp: timestamp as u64,
             tag: row.get("tag"),
             version: row.get("version"),
-            data: EncryptedData(row.get("data")),
+            data: EncryptedData {
+                data: row.get("data"),
+                content_encryption_key: row.get("cek"),
+            },
         }
     }
 }
@@ -173,7 +177,7 @@ impl Store for SqliteStore {
 mod tests {
     use atuin_common::record::{EncryptedData, Record};
 
-    use crate::record::{encryption::PASETO_V4_PIE, store::Store};
+    use crate::record::{encryption::PASETO_V4, store::Store};
 
     use super::SqliteStore;
 
@@ -182,7 +186,10 @@ mod tests {
             .host(atuin_common::utils::uuid_v7().simple().to_string())
             .version("v1".into())
             .tag(atuin_common::utils::uuid_v7().simple().to_string())
-            .data(EncryptedData(vec![0, 1, 2, 3]))
+            .data(EncryptedData {
+                data: "1234".into(),
+                content_encryption_key: "1234".into(),
+            })
             .build()
     }
 
@@ -269,7 +276,7 @@ mod tests {
         for _ in 1..100 {
             tail = tail
                 .new_child(vec![1, 2, 3, 4])
-                .encrypt::<PASETO_V4_PIE>(&[0; 32]);
+                .encrypt::<PASETO_V4>(&[0; 32]);
             db.push(&tail).await.unwrap();
         }
 
@@ -290,9 +297,7 @@ mod tests {
         records.push(tail.clone());
 
         for _ in 1..10000 {
-            tail = tail
-                .new_child(vec![1, 2, 3])
-                .encrypt::<PASETO_V4_PIE>(&[0; 32]);
+            tail = tail.new_child(vec![1, 2, 3]).encrypt::<PASETO_V4>(&[0; 32]);
             records.push(tail.clone());
         }
 
@@ -315,9 +320,7 @@ mod tests {
         records.push(tail.clone());
 
         for _ in 1..1000 {
-            tail = tail
-                .new_child(vec![1, 2, 3])
-                .encrypt::<PASETO_V4_PIE>(&[0; 32]);
+            tail = tail.new_child(vec![1, 2, 3]).encrypt::<PASETO_V4>(&[0; 32]);
             records.push(tail.clone());
         }
 

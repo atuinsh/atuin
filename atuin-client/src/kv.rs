@@ -1,7 +1,7 @@
 use atuin_common::record::DecryptedData;
 use eyre::{bail, ensure, eyre, Result};
 
-use crate::record::encryption::PASETO_V4_PIE;
+use crate::record::encryption::PASETO_V4;
 use crate::record::store::Store;
 use crate::settings::Settings;
 
@@ -115,7 +115,7 @@ impl KvStore {
             .build();
 
         store
-            .push(&record.encrypt::<PASETO_V4_PIE>(encryption_key))
+            .push(&record.encrypt::<PASETO_V4>(encryption_key))
             .await?;
 
         Ok(())
@@ -144,7 +144,7 @@ impl KvStore {
 
         loop {
             let decrypted = match record.version.as_str() {
-                KV_VERSION => record.decrypt::<PASETO_V4_PIE>(encryption_key)?,
+                KV_VERSION => record.decrypt::<PASETO_V4>(encryption_key)?,
                 version => bail!("unknown version {version:?}"),
             };
 

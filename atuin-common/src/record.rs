@@ -8,7 +8,10 @@ use typed_builder::TypedBuilder;
 pub struct DecryptedData(pub Vec<u8>);
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct EncryptedData(pub Vec<u8>);
+pub struct EncryptedData {
+    pub data: String,
+    pub content_encryption_key: String,
+}
 
 /// A single record stored inside of our local database
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TypedBuilder)]
@@ -144,6 +147,15 @@ impl RecordIndex {
 }
 
 pub trait Encryption {
+    fn re_encrypt(
+        data: EncryptedData,
+        ad: AdditonalData,
+        old_key: &[u8; 32],
+        new_key: &[u8; 32],
+    ) -> Result<EncryptedData> {
+        let data = Self::decrypt(data, ad, old_key)?;
+        Ok(Self::encrypt(data, ad, new_key))
+    }
     fn encrypt(data: DecryptedData, ad: AdditonalData, key: &[u8; 32]) -> EncryptedData;
     fn decrypt(data: EncryptedData, ad: AdditonalData, key: &[u8; 32]) -> Result<DecryptedData>;
 }
@@ -176,6 +188,27 @@ impl Record<EncryptedData> {
         };
         Ok(Record {
             data: E::decrypt(self.data, ad, key)?,
+            id: self.id,
+            host: self.host,
+            parent: self.parent,
+            timestamp: self.timestamp,
+            version: self.version,
+            tag: self.tag,
+        })
+    }
+
+    pub fn re_encrypt<E: Encryption>(
+        self,
+        old_key: &[u8; 32],
+        new_key: &[u8; 32],
+    ) -> Result<Record<EncryptedData>> {
+        let ad = AdditonalData {
+            id: &self.id,
+            version: &self.version,
+            tag: &self.tag,
+        };
+        Ok(Record {
+            data: E::re_encrypt(self.data, ad, old_key, new_key)?,
             id: self.id,
             host: self.host,
             parent: self.parent,

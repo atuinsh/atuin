@@ -1,36 +1,61 @@
 use atuin_common::record::{AdditonalData, DecryptedData, EncryptedData, Encryption};
 use base64::{engine::general_purpose, Engine};
-use eyre::{ensure, Context, ContextCompat, Result};
+use eyre::{ensure, Context, Result};
 use rusty_paserk::{
     id::EncodeId,
     wrap::{LocalWrapperExt, Pie},
 };
 use rusty_paseto::core::{
-    Footer, ImplicitAssertion, Key, Local, Paseto, PasetoNonce, PasetoSymmetricKey, Payload, V4,
+    ImplicitAssertion, Key, Local, Paseto, PasetoNonce, PasetoSymmetricKey, Payload, V4,
 };
 use serde::{Deserialize, Serialize};
 
-/// Use PASETO V4 Local encryption.
-/// Using a randomized key which is wrapped using PIE local-wrap and stored in the footer.
-/// Using the additional data as an implicit assertion.
+/// Use PASETO V4 Local encryption using the additional data as an implicit assertion.
 #[allow(non_camel_case_types)]
-pub struct PASETO_V4_PIE;
+pub struct PASETO_V4;
 
-impl Encryption for PASETO_V4_PIE {
+/*
+Why do we use a random content-encryption key?
+Originally I was planning on using a derived key for encryption based on additional data.
+This would be a lot more secure than using the master key directly.
+
+However, there's an established norm of using a random key. This scheme might be otherwise known as
+- client-side encryption
+- envelope encryption
+- key wrapping
+
+A HSM (Hardward security module) provider, eg AWS, Azure, GCP, or even a physical device like a yubikey
+will have some keys that they keep to themselves. These keys never leave their physical hardware.
+If they never leave the hardward, then encrypting large amounts of data means giving them the data and waiting.
+This is not a practical solution. Instead, generate a unique key for your data, encrypt that using your HSM
+and then store that with your data.
+
+See
+ - <https://docs.aws.amazon.com/wellarchitected/latest/financial-services-industry-lens/use-envelope-encryption-with-customer-master-keys.html>
+ - <https://cloud.google.com/kms/docs/envelope-encryption>
+ - <https://learn.microsoft.com/en-us/azure/storage/blobs/client-side-encryption?tabs=dotnet#encryption-and-decryption-via-the-envelope-technique>
+ - <https://www.yubico.com/gb/product/yubihsm-2-fips/>
+
+ Additionally, key rotations are much simpler using this scheme. Rotating a key is as simple as re-encrypting the CEK, and not the message contents.
+*/
+
+impl Encryption for PASETO_V4 {
+    fn re_encrypt(
+        mut data: EncryptedData,
+        _ad: AdditonalData,
+        old_key: &[u8; 32],
+        new_key: &[u8; 32],
+    ) -> Result<EncryptedData> {
+        let cek = Self::decrypt_cek(data.content_encryption_key, old_key)?;
+        data.content_encryption_key = Self::encrypt_cek(cek, new_key);
+        Ok(data)
+    }
+
     fn encrypt(data: DecryptedData, ad: AdditonalData, key: &[u8; 32]) -> EncryptedData {
-        let wrapping_key = PasetoSymmetricKey::from(Key::from(key));
-
         // generate a random key for this entry
+        // aka content-encryption-key (CEK)
         let random_key =
             PasetoSymmetricKey::from(Key::try_new_random().expect("could not source from random"));
-
-        // wrap the random key so we can decrypt it later
-        let key_nonce = Key::<32>::try_new_random().expect("could not source from random");
-        let footer = AtuinFooter {
-            wpk: Pie::wrap_local(&random_key, &wrapping_key, &key_nonce),
-            kid: wrapping_key.encode_id(),
-        };
-        let footer = serde_json::to_string(&footer).expect("could not serialize footer");
 
         // encode the implicit assertions
         let assertions = Assertions::from(ad).encode();
@@ -42,23 +67,43 @@ impl Encryption for PASETO_V4_PIE {
 
         let token = Paseto::<V4, Local>::builder()
             .set_payload(Payload::from(payload.as_str()))
-            .set_footer(Footer::from(footer.as_str()))
             .set_implicit_assertion(ImplicitAssertion::from(assertions.as_str()))
             .try_encrypt(&random_key, &nonce)
             .expect("error encrypting atuin data");
 
-        EncryptedData(token.into_bytes())
+        EncryptedData {
+            data: token,
+            content_encryption_key: Self::encrypt_cek(random_key, key),
+        }
     }
 
     fn decrypt(data: EncryptedData, ad: AdditonalData, key: &[u8; 32]) -> Result<DecryptedData> {
+        let token = data.data;
+        let cek = Self::decrypt_cek(data.content_encryption_key, key)?;
+
+        // encode the implicit assertions
+        let assertions = Assertions::from(ad).encode();
+
+        // decrypt the payload with the footer and implicit assertions
+        let payload = Paseto::<V4, Local>::try_decrypt(
+            &token,
+            &cek,
+            None,
+            ImplicitAssertion::from(&*assertions),
+        )
+        .context("could not decrypt entry")?;
+
+        let data = general_purpose::URL_SAFE_NO_PAD.decode(payload)?;
+        Ok(DecryptedData(data))
+    }
+}
+
+impl PASETO_V4 {
+    fn decrypt_cek(wrapped_cek: String, key: &[u8; 32]) -> Result<PasetoSymmetricKey<V4, Local>> {
         let wrapping_key = PasetoSymmetricKey::from(Key::from(key));
 
-        let token = String::from_utf8(data.0).context("token is not utf8")?;
-
-        // get the key info from the footer
-        let footer = Self::get_footer(&token)?;
-        let AtuinFooter { kid, wpk } =
-            serde_json::from_str(&footer).context("footer did not contain the correct contents")?;
+        let AtuinFooter { kid, wpk } = serde_json::from_str(&wrapped_cek)
+            .context("wrapped cek did not contain the correct contents")?;
 
         // check that the wrapping key matches the required key to decrypt.
         // In future, we could support multiple keys and use this key to
@@ -73,41 +118,25 @@ impl Encryption for PASETO_V4_PIE {
 
         // decrypt the random key
         let mut wrapped_key = wpk.into_bytes();
-        let random_key = Pie::unwrap_local(&mut wrapped_key, &wrapping_key)?;
-
-        // encode the implicit assertions
-        let assertions = Assertions::from(ad).encode();
-
-        // decrypt the payload with the footer and implicit assertions
-        let payload = Paseto::<V4, Local>::try_decrypt(
-            &token,
-            &random_key,
-            Footer::from(&*footer),
-            ImplicitAssertion::from(&*assertions),
-        )
-        .context("could not decrypt entry")?;
-
-        let data = general_purpose::URL_SAFE_NO_PAD.decode(payload)?;
-        Ok(DecryptedData(data))
+        Ok(Pie::unwrap_local(&mut wrapped_key, &wrapping_key)?)
     }
-}
 
-impl PASETO_V4_PIE {
-    /// parse the footer from the token.
-    fn get_footer(token: &str) -> Result<String> {
-        // I would have preferred if the paseto library would partially parse
-        // for you and give you the footer temporarily, but unfortunately
-        // if does not.
-        let (_, footer) = token.rsplit_once('.').context("token has no footer")?;
-        let footer = general_purpose::URL_SAFE_NO_PAD
-            .decode(footer)
-            .context("footer was not valid base64url")?;
-        String::from_utf8(footer).context("footer was not valid utf8")
+    fn encrypt_cek(cek: PasetoSymmetricKey<V4, Local>, key: &[u8; 32]) -> String {
+        // aka key-encryption-key (KEK)
+        let wrapping_key = PasetoSymmetricKey::from(Key::from(key));
+
+        // wrap the random key so we can decrypt it later
+        let key_nonce = Key::<32>::try_new_random().expect("could not source from random");
+        let wrapped_cek = AtuinFooter {
+            wpk: Pie::wrap_local(&cek, &wrapping_key, &key_nonce),
+            kid: wrapping_key.encode_id(),
+        };
+        serde_json::to_string(&wrapped_cek).expect("could not serialize wrapped cek")
     }
 }
 
 #[derive(Serialize, Deserialize)]
-/// Well-known footer claims for decrypting. This is not encrypted but is stored in the data blob.
+/// Well-known footer claims for decrypting. This is not encrypted but is stored in the record.
 /// <https://github.com/paseto-standard/paseto-spec/blob/master/docs/02-Implementation-Guide/04-Claims.md#optional-footer-claims>
 struct AtuinFooter {
     /// Wrapped key
@@ -157,8 +186,8 @@ mod tests {
 
         let data = DecryptedData(vec![1, 2, 3, 4]);
 
-        let encrypted = PASETO_V4_PIE::encrypt(data.clone(), ad, &key);
-        let decrypted = PASETO_V4_PIE::decrypt(encrypted, ad, &key).unwrap();
+        let encrypted = PASETO_V4::encrypt(data.clone(), ad, &key);
+        let decrypted = PASETO_V4::decrypt(encrypted, ad, &key).unwrap();
         assert_eq!(decrypted, data);
     }
 
@@ -174,11 +203,11 @@ mod tests {
 
         let data = DecryptedData(vec![1, 2, 3, 4]);
 
-        let encrypted = PASETO_V4_PIE::encrypt(data.clone(), ad, &key);
-        let encrypted2 = PASETO_V4_PIE::encrypt(data, ad, &key);
+        let encrypted = PASETO_V4::encrypt(data.clone(), ad, &key);
+        let encrypted2 = PASETO_V4::encrypt(data, ad, &key);
 
         assert_ne!(
-            encrypted, encrypted2,
+            encrypted.data, encrypted2.data,
             "re-encrypting the same contents should have different output due to key randomization"
         );
     }
@@ -196,8 +225,8 @@ mod tests {
 
         let data = DecryptedData(vec![1, 2, 3, 4]);
 
-        let encrypted = PASETO_V4_PIE::encrypt(data, ad, &key);
-        let _ = PASETO_V4_PIE::decrypt(encrypted, ad, &fake_key).unwrap_err();
+        let encrypted = PASETO_V4::encrypt(data, ad, &key);
+        let _ = PASETO_V4::decrypt(encrypted, ad, &fake_key).unwrap_err();
     }
 
     #[test]
@@ -212,13 +241,13 @@ mod tests {
 
         let data = DecryptedData(vec![1, 2, 3, 4]);
 
-        let encrypted = PASETO_V4_PIE::encrypt(data, ad, &key);
+        let encrypted = PASETO_V4::encrypt(data, ad, &key);
 
         let ad = AdditonalData {
             id: "foo1",
             version: "v0",
             tag: "kv",
         };
-        let _ = PASETO_V4_PIE::decrypt(encrypted, ad, &key).unwrap_err();
+        let _ = PASETO_V4::decrypt(encrypted, ad, &key).unwrap_err();
     }
 }
