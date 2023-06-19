@@ -250,4 +250,24 @@ mod tests {
         };
         let _ = PASETO_V4::decrypt(encrypted, ad, &key).unwrap_err();
     }
+
+    #[test]
+    fn re_encrypt_round_trip() {
+        let key1 = Key::try_new_random().unwrap();
+        let key2 = Key::try_new_random().unwrap();
+
+        let ad = AdditonalData {
+            id: "foo",
+            version: "v0",
+            tag: "kv",
+        };
+
+        let data = DecryptedData(vec![1, 2, 3, 4]);
+
+        let encrypted = PASETO_V4::encrypt(data.clone(), ad, &key1);
+        let encrypted = PASETO_V4::re_encrypt(encrypted, ad, &key1, &key2).unwrap();
+        let decrypted = PASETO_V4::decrypt(encrypted, ad, &key2).unwrap();
+
+        assert_eq!(decrypted, data);
+    }
 }
