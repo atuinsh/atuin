@@ -56,23 +56,6 @@ pub fn load_key(settings: &Settings) -> Result<Key> {
     Ok(key)
 }
 
-pub fn load_encoded_key(settings: &Settings) -> Result<String> {
-    let path = settings.key_path.as_str();
-
-    if PathBuf::from(path).exists() {
-        let key = fs::read_to_string(path)?;
-        Ok(key)
-    } else {
-        let key = XSalsa20Poly1305::generate_key(&mut OsRng);
-        let encoded = encode_key(&key)?;
-
-        let mut file = fs::File::create(path)?;
-        file.write_all(encoded.as_bytes())?;
-
-        Ok(encoded)
-    }
-}
-
 pub fn encode_key(key: &Key) -> Result<String> {
     let mut buf = vec![];
     rmp::encode::write_bin(&mut buf, key.as_slice())
