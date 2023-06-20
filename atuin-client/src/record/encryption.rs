@@ -35,8 +35,21 @@ See
  - <https://cloud.google.com/kms/docs/envelope-encryption>
  - <https://learn.microsoft.com/en-us/azure/storage/blobs/client-side-encryption?tabs=dotnet#encryption-and-decryption-via-the-envelope-technique>
  - <https://www.yubico.com/gb/product/yubihsm-2-fips/>
+ - <https://cheatsheetseries.owasp.org/cheatsheets/Cryptographic_Storage_Cheat_Sheet.html#encrypting-stored-keys>
 
- Additionally, key rotations are much simpler using this scheme. Rotating a key is as simple as re-encrypting the CEK, and not the message contents.
+Why would we care? In the past we have recieved some requests for company solutions. If in future we can configure a
+KMS service with little effort, then that would solve a lot of issues for their security team.
+
+Even for personal use, if a user is not comfortable with sharing keys between hosts,
+GCP HSM costs $1/month and $0.03 per 10,000 key operations. Assuming an active user runs
+1000 atuin records a day, that would only cost them $1 and 10 cent a month.
+
+Additionally, key rotations are much simpler using this scheme. Rotating a key is as simple as re-encrypting the CEK, and not the message contents.
+This makes it very fast to rotate a key in bulk.
+
+For future reference, with asymmetric encryption, you can encrypt the CEK without the HSM's involvement, but decrypting
+will need the HSM. This allows the encryption path to still be extremely fast (no network calls) but downloads/decryption
+that happens in the background can make the network calls to the HSM
 */
 
 impl Encryption for PASETO_V4 {
@@ -174,6 +187,8 @@ impl Assertions<'_> {
 
 #[cfg(test)]
 mod tests {
+    use atuin_common::record::Record;
+
     use super::*;
 
     #[test]
@@ -272,10 +287,70 @@ mod tests {
 
         let data = DecryptedData(vec![1, 2, 3, 4]);
 
-        let encrypted = PASETO_V4::encrypt(data.clone(), ad, &key1);
-        let encrypted = PASETO_V4::re_encrypt(encrypted, ad, &key1, &key2).unwrap();
-        let decrypted = PASETO_V4::decrypt(encrypted, ad, &key2).unwrap();
+        let encrypted1 = PASETO_V4::encrypt(data.clone(), ad, &key1);
+        let encrypted2 = PASETO_V4::re_encrypt(encrypted1.clone(), ad, &key1, &key2).unwrap();
+
+        // we only re-encrypt the content keys
+        assert_eq!(encrypted1.data, encrypted2.data);
+        assert_ne!(encrypted1.content_encryption_key, encrypted2.content_encryption_key);
+
+        let decrypted = PASETO_V4::decrypt(encrypted2, ad, &key2).unwrap();
 
         assert_eq!(decrypted, data);
+    }
+
+    #[test]
+    fn full_record_round_trip() {
+        let key = [0x55; 32];
+        let record = Record::builder()
+            .id("1".to_owned())
+            .version("v0".to_owned())
+            .tag("kv".to_owned())
+            .host("host1".to_owned())
+            .timestamp(1687244806000000)
+            .data(DecryptedData(vec![1, 2, 3, 4]))
+            .build();
+
+        let encrypted = record.encrypt::<PASETO_V4>(&key);
+
+        assert!(!encrypted.data.data.is_empty());
+        assert!(!encrypted.data.content_encryption_key.is_empty());
+        assert_eq!(encrypted.id, "1");
+        assert_eq!(encrypted.host, "host1");
+        assert_eq!(encrypted.version, "v0");
+        assert_eq!(encrypted.tag, "kv");
+        assert_eq!(encrypted.timestamp, 1687244806000000);
+
+        let decrypted = encrypted.decrypt::<PASETO_V4>(&key).unwrap();
+
+        assert_eq!(decrypted.data.0, [1, 2, 3, 4]);
+        assert_eq!(decrypted.id, "1");
+        assert_eq!(decrypted.host, "host1");
+        assert_eq!(decrypted.version, "v0");
+        assert_eq!(decrypted.tag, "kv");
+        assert_eq!(decrypted.timestamp, 1687244806000000);
+    }
+
+    #[test]
+    fn full_record_round_trip_fail() {
+        let key = [0x55; 32];
+        let record = Record::builder()
+            .id("1".to_owned())
+            .version("v0".to_owned())
+            .tag("kv".to_owned())
+            .host("host1".to_owned())
+            .timestamp(1687244806000000)
+            .data(DecryptedData(vec![1, 2, 3, 4]))
+            .build();
+
+        let encrypted = record.encrypt::<PASETO_V4>(&key);
+
+        let mut enc1 = encrypted.clone();
+        enc1.host = "host2".to_owned();
+        let _ = enc1.decrypt::<PASETO_V4>(&key).expect_err("tampering with the host should result in auth failure");
+
+        let mut enc2 = encrypted;
+        enc2.id = "2".to_owned();
+        let _ = enc2.decrypt::<PASETO_V4>(&key).expect_err("tampering with the id should result in auth failure");
     }
 }
