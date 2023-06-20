@@ -13,7 +13,6 @@ pub mod sync;
 pub mod database;
 pub mod history;
 pub mod import;
-pub mod kv;
 pub mod ordering;
 pub mod record;
 pub mod settings;

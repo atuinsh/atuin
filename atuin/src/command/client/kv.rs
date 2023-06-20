@@ -1,7 +1,14 @@
 use clap::Subcommand;
-use eyre::{Context, Result};
+use eyre::{bail, Result};
 
-use atuin_client::{encryption, kv::KvStore, record::store::Store, settings::Settings};
+use atuin_client::record::{
+    encodings::{
+        key::{EncryptionKey, KeyStore},
+        kv::KvStore,
+    },
+    store::Store,
+};
+use atuin_client::settings::Settings;
 
 #[derive(Subcommand)]
 #[command(infer_subcommands = true)]
@@ -32,11 +39,16 @@ impl Cmd {
         settings: &Settings,
         store: &mut (impl Store + Send + Sync),
     ) -> Result<()> {
-        let kv_store = KvStore::new();
+        let key_store = KeyStore::new();
+        // ensure this encryption key is the latest registered key before encrypting anything new.
+        let encryption_key = match key_store.validate_encryption_key(store, settings).await? {
+            EncryptionKey::Valid { encryption_key } => encryption_key,
+            EncryptionKey::Invalid { kid, host_id } => {
+                bail!("A new encryption key [id:{kid}] has been set by [host:{host_id}]. You must update to this encryption key to continue")
+            }
+        };
 
-        let encryption_key: [u8; 32] = encryption::load_key(settings)
-            .context("could not load encryption key")?
-            .into();
+        let kv_store = KvStore::new();
 
         match self {
             Self::Set {

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::Subcommand;
 use eyre::{Result, WrapErr};
 
-use atuin_client::{database::Sqlite, record::sqlite_store::SqliteStore, settings::Settings};
+use atuin_client::{database::Sqlite, record::store::sqlite::SqliteStore, settings::Settings};
 use env_logger::Builder;
 
 #[cfg(feature = "sync")]
