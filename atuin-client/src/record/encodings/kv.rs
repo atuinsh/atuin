@@ -1,7 +1,33 @@
+//! A key-value store.
+//!
+//! * `tag` = "kv"
+//! * `version`s:
+//!   - "v0"
+//!
+//! ## Encryption schemes
+//!
+//! ### v0
+//!
+//! [`PASETO_V4`]
+//!
+//! ## Encoding schemes
+//!
+//! ### v0
+//!
+//! Message pack encoding of
+//!
+//! ```text
+//! [
+//!     namespace,
+//!     key,
+//!     value,
+//! ]
+//! ```
+
 use atuin_common::record::DecryptedData;
 use eyre::{bail, ensure, eyre, Result};
 
-use crate::record::encryption::PASETO_V4;
+use crate::record::encryption::paseto_v4::PASETO_V4;
 use crate::record::store::Store;
 use crate::settings::Settings;
 

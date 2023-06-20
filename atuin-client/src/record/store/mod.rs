@@ -3,6 +3,8 @@ use eyre::Result;
 
 use atuin_common::record::{EncryptedData, HostId, Record, RecordId, RecordIndex};
 
+pub mod sqlite;
+
 /// A record store stores records
 /// In more detail - we tend to need to process this into _another_ format to actually query it.
 /// As is, the record store is intended as the source of truth for arbitratry data, which could

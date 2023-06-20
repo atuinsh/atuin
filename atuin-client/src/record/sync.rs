@@ -241,9 +241,8 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use crate::record::{
-        encryption::PASETO_V4,
-        sqlite_store::SqliteStore,
-        store::Store,
+        encryption::paseto_v4::PASETO_V4,
+        store::{sqlite::SqliteStore, Store},
         sync::{self, Operation},
     };
 

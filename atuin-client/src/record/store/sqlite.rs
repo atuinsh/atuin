@@ -17,7 +17,7 @@ use sqlx::{
 use atuin_common::record::{EncryptedData, HostId, Record, RecordId, RecordIndex};
 use uuid::Uuid;
 
-use super::store::Store;
+use super::Store;
 
 pub struct SqliteStore {
     pool: SqlitePool,
@@ -217,7 +217,7 @@ impl Store for SqliteStore {
 mod tests {
     use atuin_common::record::{EncryptedData, HostId, Record};
 
-    use crate::record::{encryption::PASETO_V4, store::Store};
+    use crate::record::{encryption::paseto_v4::PASETO_V4, store::Store};
 
     use super::SqliteStore;
 
