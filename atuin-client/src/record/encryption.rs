@@ -24,7 +24,7 @@ However, there's an established norm of using a random key. This scheme might be
 - envelope encryption
 - key wrapping
 
-A HSM (Hardward security module) provider, eg AWS, Azure, GCP, or even a physical device like a yubikey
+A HSM (Hardware Security Module) provider, eg: AWS, Azure, GCP, or even a physical device like a YubiKey
 will have some keys that they keep to themselves. These keys never leave their physical hardware.
 If they never leave the hardware, then encrypting large amounts of data means giving them the data and waiting.
 This is not a practical solution. Instead, generate a unique key for your data, encrypt that using your HSM
