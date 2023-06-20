@@ -292,7 +292,10 @@ mod tests {
 
         // we only re-encrypt the content keys
         assert_eq!(encrypted1.data, encrypted2.data);
-        assert_ne!(encrypted1.content_encryption_key, encrypted2.content_encryption_key);
+        assert_ne!(
+            encrypted1.content_encryption_key,
+            encrypted2.content_encryption_key
+        );
 
         let decrypted = PASETO_V4::decrypt(encrypted2, ad, &key2).unwrap();
 
@@ -347,10 +350,14 @@ mod tests {
 
         let mut enc1 = encrypted.clone();
         enc1.host = "host2".to_owned();
-        let _ = enc1.decrypt::<PASETO_V4>(&key).expect_err("tampering with the host should result in auth failure");
+        let _ = enc1
+            .decrypt::<PASETO_V4>(&key)
+            .expect_err("tampering with the host should result in auth failure");
 
         let mut enc2 = encrypted;
         enc2.id = "2".to_owned();
-        let _ = enc2.decrypt::<PASETO_V4>(&key).expect_err("tampering with the id should result in auth failure");
+        let _ = enc2
+            .decrypt::<PASETO_V4>(&key)
+            .expect_err("tampering with the id should result in auth failure");
     }
 }
