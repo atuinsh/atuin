@@ -26,7 +26,7 @@ However, there's an established norm of using a random key. This scheme might be
 
 A HSM (Hardward security module) provider, eg AWS, Azure, GCP, or even a physical device like a yubikey
 will have some keys that they keep to themselves. These keys never leave their physical hardware.
-If they never leave the hardward, then encrypting large amounts of data means giving them the data and waiting.
+If they never leave the hardware, then encrypting large amounts of data means giving them the data and waiting.
 This is not a practical solution. Instead, generate a unique key for your data, encrypt that using your HSM
 and then store that with your data.
 
