@@ -8,9 +8,9 @@
 // clients must share the secret in order to be able to sync, as it is needed
 // to decrypt
 
-use std::{io::prelude::*, path::PathBuf};
+use std::{io::Write, path::PathBuf};
 
-use base64::prelude::{Engine, BASE64_STANDARD};
+use base64::{prelude::BASE64_STANDARD, Engine};
 use chrono::{DateTime, Utc};
 use eyre::{bail, ensure, eyre, Context, Result};
 use fs_err as fs;
@@ -30,10 +30,12 @@ pub struct EncryptedHistory {
     pub nonce: Nonce<XSalsa20Poly1305>,
 }
 
-pub fn new_key(settings: &Settings) -> Result<Key> {
+pub type AtuinKey = [u8; 32];
+
+pub fn new_key(settings: &Settings) -> Result<AtuinKey> {
     let path = settings.key_path.as_str();
 
-    let key = XSalsa20Poly1305::generate_key(&mut OsRng);
+    let key: AtuinKey = XSalsa20Poly1305::generate_key(&mut OsRng).into();
     let encoded = encode_key(&key)?;
 
     let mut file = fs::File::create(path)?;
@@ -43,7 +45,7 @@ pub fn new_key(settings: &Settings) -> Result<Key> {
 }
 
 // Loads the secret key, will create + save if it doesn't exist
-pub fn load_key(settings: &Settings) -> Result<Key> {
+pub fn load_key(settings: &Settings) -> Result<AtuinKey> {
     let path = settings.key_path.as_str();
 
     let key = if PathBuf::from(path).exists() {
@@ -56,7 +58,7 @@ pub fn load_key(settings: &Settings) -> Result<Key> {
     Ok(key)
 }
 
-pub fn encode_key(key: &Key) -> Result<String> {
+pub fn encode_key(key: &AtuinKey) -> Result<String> {
     let mut buf = vec![];
     rmp::encode::write_array_len(&mut buf, key.len() as u32)
         .wrap_err("could not encode key to message pack")?;
@@ -69,7 +71,7 @@ pub fn encode_key(key: &Key) -> Result<String> {
     Ok(buf)
 }
 
-pub fn decode_key(key: String) -> Result<Key> {
+pub fn decode_key(key: String) -> Result<AtuinKey> {
     use rmp::decode;
 
     let buf = BASE64_STANDARD
@@ -79,7 +81,7 @@ pub fn decode_key(key: String) -> Result<Key> {
     // old code wrote the key as a fixed length array of 32 bytes
     // new code writes the key with a length prefix
     match <[u8; 32]>::try_from(&*buf) {
-        Ok(key) => Ok(key.into()),
+        Ok(key) => Ok(key),
         Err(_) => {
             let mut bytes = rmp::decode::Bytes::new(&buf);
 
@@ -89,13 +91,13 @@ pub fn decode_key(key: String) -> Result<Key> {
                     ensure!(len == 32, "encryption key is not the correct size");
                     let key = <[u8; 32]>::try_from(bytes.remaining_slice())
                         .context("could not decode encryption key")?;
-                    Ok(key.into())
+                    Ok(key)
                 }
                 Marker::Array16 => {
                     let len = decode::read_array_len(&mut bytes).map_err(|err| eyre!("{err:?}"))?;
                     ensure!(len == 32, "encryption key is not the correct size");
 
-                    let mut key = Key::default();
+                    let mut key = AtuinKey::default();
                     for i in &mut key {
                         *i = rmp::decode::read_int(&mut bytes).map_err(|err| eyre!("{err:?}"))?;
                     }
@@ -366,7 +368,7 @@ mod test {
 
     #[test]
     fn key_encodings() {
-        use super::{decode_key, encode_key, Key};
+        use super::{decode_key, encode_key};
 
         // a history of our key encodings.
         // v11.0.0 xCAbWypb0msJ2Kq+8j4GVEWUlDX7deKnrTRSIopuqXxc5Q==
@@ -381,10 +383,10 @@ mod test {
         // b8b57c8 xCAbWypb0msJ2Kq+8j4GVEWUlDX7deKnrTRSIopuqXxc5Q==                     (https://github.com/ellie/atuin/pull/1057)
         // 8c94d79 3AAgG1sqW8zSawnM2MyqzL7M8j4GVEXMlMyUNcz7dczizKfMrTRSIsyKbsypfFzM5Q== (https://github.com/ellie/atuin/pull/1089)
 
-        let key = Key::from([
+        let key = [
             27, 91, 42, 91, 210, 107, 9, 216, 170, 190, 242, 62, 6, 84, 69, 148, 148, 53, 251, 117,
             226, 167, 173, 52, 82, 34, 138, 110, 169, 124, 92, 229,
-        ]);
+        ];
 
         assert_eq!(
             encode_key(&key).unwrap(),

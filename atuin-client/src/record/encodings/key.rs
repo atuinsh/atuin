@@ -20,6 +20,7 @@ use atuin_common::record::{DecryptedData, HostId};
 use eyre::{bail, Context, Result};
 use rusty_paserk::{Key, KeyId, Local, V4};
 
+use crate::encryption::{load_key, AtuinKey};
 use crate::record::encryption::none::UnsafeNoEncryption;
 use crate::record::store::Store;
 use crate::settings::Settings;
@@ -40,7 +41,9 @@ impl KeyRecord {
         match version {
             KEY_VERSION => {
                 let lid = std::str::from_utf8(&data.0).context("key id was not utf8 encoded")?;
-                Ok(Self { id: lid.parse()? })
+                Ok(Self {
+                    id: lid.parse().context("invalid key id")?,
+                })
             }
             _ => {
                 bail!("unknown version {version:?}")
@@ -103,9 +106,8 @@ impl KeyStore {
         store: &mut (impl Store + Send + Sync),
         settings: &Settings,
     ) -> Result<EncryptionKey> {
-        let encryption_key: [u8; 32] = crate::encryption::load_key(settings)
-            .context("could not load encryption key")?
-            .into();
+        let encryption_key: [u8; 32] =
+            load_key(settings).context("could not load encryption key")?;
 
         // TODO: don't load this from disk so much
         let host_id = Settings::host_id().expect("failed to get host_id");
@@ -149,6 +151,6 @@ pub enum EncryptionKey {
         host_id: HostId,
     },
     Valid {
-        encryption_key: [u8; 32],
+        encryption_key: AtuinKey,
     },
 }
