@@ -6,12 +6,12 @@ use chrono::prelude::*;
 use eyre::Result;
 
 use atuin_common::api::AddHistoryRequest;
-use xsalsa20poly1305::Key;
 
 use crate::{
     api_client,
     database::Database,
-    encryption::{decrypt, encrypt, load_key},
+    encryption::{decrypt, encrypt},
+    record::encodings::key::{load_key, AtuinKey},
     settings::Settings,
 };
 
@@ -34,12 +34,13 @@ pub fn hash_str(string: &str) -> String {
 // Check if remote has things we don't, and if so, download them.
 // Returns (num downloaded, total local)
 async fn sync_download(
-    key: &Key,
+    key: &AtuinKey,
     force: bool,
     client: &api_client::Client<'_>,
     db: &mut (impl Database + Send),
 ) -> Result<(i64, i64)> {
     debug!("starting sync download");
+    let key = key.into();
 
     let remote_status = client.status().await?;
     let remote_count = remote_status.count;
@@ -124,12 +125,13 @@ async fn sync_download(
 
 // Check if we have things remote doesn't, and if so, upload them
 async fn sync_upload(
-    key: &Key,
+    key: &AtuinKey,
     _force: bool,
     client: &api_client::Client<'_>,
     db: &mut (impl Database + Send),
 ) -> Result<()> {
     debug!("starting sync upload");
+    let key = key.into();
 
     let remote_status = client.status().await?;
     let remote_deleted: HashSet<String> = HashSet::from_iter(remote_status.deleted.clone());

@@ -45,7 +45,7 @@ impl Cmd {
             Self::Register(r) => r.run(&settings).await,
             Self::Status => status::run(&settings, db).await,
             Self::Key { base64 } => {
-                use atuin_client::encryption::{encode_key, load_key};
+                use atuin_client::record::encodings::key::{encode_key, load_key};
                 let key = load_key(&settings).wrap_err("could not load encryption key")?;
 
                 if base64 {

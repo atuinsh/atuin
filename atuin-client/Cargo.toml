@@ -1,6 +1,6 @@
 [package]
 name = "atuin-client"
-edition = "2018"
+edition = "2021"
 description = "client library for atuin"
 
 version = { workspace = true }

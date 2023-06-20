@@ -16,10 +16,16 @@
 //!
 //! UTF8 encoding of the key ID, using the PASERK V4 `lid` (local-id) format.
 
+use std::io::Write;
+use std::path::PathBuf;
+
 use atuin_common::record::DecryptedData;
-use eyre::{bail, Context, Result};
-use rusty_paserk::id::EncodeId;
-use rusty_paseto::core::{Key, Local, PasetoSymmetricKey, V4};
+use base64::prelude::BASE64_STANDARD;
+use base64::Engine;
+use eyre::{bail, ensure, eyre, Context, Result};
+use rand::rngs::OsRng;
+use rand::RngCore;
+use rusty_paserk::{Key, KeyId, Local, V4};
 
 use crate::record::encryption::none::UnsafeNoEncryption;
 use crate::record::store::Store;
@@ -29,19 +35,21 @@ const KEY_VERSION: &str = "v0";
 const KEY_TAG: &str = "key";
 
 struct KeyRecord {
-    id: String,
+    id: KeyId<V4, Local>,
 }
 
 impl KeyRecord {
     pub fn serialize(&self) -> Result<DecryptedData> {
-        Ok(DecryptedData(self.id.as_bytes().to_owned()))
+        Ok(DecryptedData(self.id.to_string().into_bytes()))
     }
 
     pub fn deserialize(data: &DecryptedData, version: &str) -> Result<Self> {
         match version {
             KEY_VERSION => {
                 let lid = std::str::from_utf8(&data.0).context("key id was not utf8 encoded")?;
-                Ok(Self { id: lid.to_owned() })
+                Ok(Self {
+                    id: lid.parse().context("invalid key id")?,
+                })
             }
             _ => {
                 bail!("unknown version {version:?}")
@@ -72,7 +80,7 @@ impl KeyStore {
         let host_id = Settings::host_id().expect("failed to get host_id");
 
         // the local_id is a hashed version of the encryption key. safe to store unencrypted
-        let key_id = PasetoSymmetricKey::<V4, Local>::from(Key::from(encryption_key)).encode_id();
+        let key_id = Key::<V4, Local>::from_bytes(*encryption_key).to_id();
 
         let record = KeyRecord { id: key_id };
         let bytes = record.serialize()?;
@@ -107,9 +115,8 @@ impl KeyStore {
         store: &mut (impl Store + Send + Sync),
         settings: &Settings,
     ) -> Result<EncryptionKey> {
-        let encryption_key: [u8; 32] = crate::encryption::load_key(settings)
-            .context("could not load encryption key")?
-            .into();
+        let encryption_key: [u8; 32] =
+            load_key(settings).context("could not load encryption key")?;
 
         // TODO: don't load this from disk so much
         let host_id = Settings::host_id().expect("failed to get host_id");
@@ -128,9 +135,7 @@ impl KeyStore {
 
         // encode the current key to match the registered version
         let current_key_id = match decrypted.version.as_str() {
-            KEY_VERSION => {
-                PasetoSymmetricKey::<V4, Local>::from(Key::from(encryption_key)).encode_id()
-            }
+            KEY_VERSION => Key::<V4, Local>::from_bytes(encryption_key).to_id(),
             version => bail!("unknown version {version:?}"),
         };
 
@@ -150,11 +155,67 @@ pub enum EncryptionKey {
     /// The current key is invalid
     Invalid {
         /// the id of the key
-        kid: String,
+        kid: KeyId<V4, Local>,
         /// the id of the host that registered the key
         host_id: String,
     },
     Valid {
-        encryption_key: [u8; 32],
+        encryption_key: AtuinKey,
     },
+}
+pub type AtuinKey = [u8; 32];
+
+pub fn new_key(settings: &Settings) -> Result<AtuinKey> {
+    let path = settings.key_path.as_str();
+
+    let mut key = [0; 32];
+    OsRng.fill_bytes(&mut key);
+    let encoded = encode_key(&key)?;
+
+    let mut file = fs_err::File::create(path)?;
+    file.write_all(encoded.as_bytes())?;
+
+    Ok(key)
+}
+
+// Loads the secret key, will create + save if it doesn't exist
+pub fn load_key(settings: &Settings) -> Result<AtuinKey> {
+    let path = settings.key_path.as_str();
+
+    let key = if PathBuf::from(path).exists() {
+        let key = fs_err::read_to_string(path)?;
+        decode_key(key)?
+    } else {
+        new_key(settings)?
+    };
+
+    Ok(key)
+}
+
+pub fn encode_key(key: &AtuinKey) -> Result<String> {
+    let mut buf = vec![];
+    rmp::encode::write_bin(&mut buf, key.as_slice())
+        .wrap_err("could not encode key to message pack")?;
+    let buf = BASE64_STANDARD.encode(buf);
+
+    Ok(buf)
+}
+
+pub fn decode_key(key: String) -> Result<AtuinKey> {
+    let buf = BASE64_STANDARD
+        .decode(key.trim_end())
+        .wrap_err("encryption key is not a valid base64 encoding")?;
+
+    // old code wrote the key as a fixed length array of 32 bytes
+    // new code writes the key with a length prefix
+    match <[u8; 32]>::try_from(&*buf) {
+        Ok(key) => Ok(key),
+        Err(_) => {
+            let mut bytes = rmp::decode::Bytes::new(&buf);
+            let key_len = rmp::decode::read_bin_len(&mut bytes).map_err(|err| eyre!("{err:?}"))?;
+            ensure!(key_len == 32, "encryption key is not the correct size");
+            <[u8; 32]>::try_from(bytes.remaining_slice())
+                .context("encryption key is not the correct size")
+        }
+    }
 }

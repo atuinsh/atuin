@@ -1,6 +1,6 @@
 use std::io::Write;
 
-use atuin_common::record::{AdditonalData, DecryptedData, EncryptedData, Encryption};
+use atuin_common::record::{AdditionalData, DecryptedData, EncryptedData, Encryption};
 use base64::{engine::general_purpose, write::EncoderStringWriter, Engine};
 use eyre::{ensure, Context, ContextCompat, Result};
 
@@ -14,14 +14,14 @@ static CEK_HEADER: &str = "k0.none.";
 impl Encryption for UnsafeNoEncryption {
     fn re_encrypt(
         data: EncryptedData,
-        _ad: AdditonalData,
+        _ad: AdditionalData,
         _old_key: &[u8; 32],
         _new_key: &[u8; 32],
     ) -> Result<EncryptedData> {
         Ok(data)
     }
 
-    fn encrypt(data: DecryptedData, _ad: AdditonalData, _key: &[u8; 32]) -> EncryptedData {
+    fn encrypt(data: DecryptedData, _ad: AdditionalData, _key: &[u8; 32]) -> EncryptedData {
         let mut token = EncoderStringWriter::from_consumer(
             CONTENT_HEADER.to_owned(),
             &general_purpose::URL_SAFE_NO_PAD,
@@ -35,7 +35,7 @@ impl Encryption for UnsafeNoEncryption {
         }
     }
 
-    fn decrypt(data: EncryptedData, _ad: AdditonalData, _key: &[u8; 32]) -> Result<DecryptedData> {
+    fn decrypt(data: EncryptedData, _ad: AdditionalData, _key: &[u8; 32]) -> Result<DecryptedData> {
         ensure!(
             data.content_encryption_key == CEK_HEADER,
             "exected unencrypted data, found a content encryption key"
@@ -55,7 +55,7 @@ impl Encryption for UnsafeNoEncryption {
 mod tests {
     use super::*;
 
-    const AD: AdditonalData<'static> = AdditonalData {
+    const AD: AdditionalData<'static> = AdditionalData {
         id: "foo",
         version: "v0",
         tag: "kv",

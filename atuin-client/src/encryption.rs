@@ -8,12 +8,8 @@
 // clients must share the secret in order to be able to sync, as it is needed
 // to decrypt
 
-use std::{io::prelude::*, path::PathBuf};
-
-use base64::prelude::{Engine, BASE64_STANDARD};
 use chrono::{DateTime, Utc};
-use eyre::{bail, eyre, Context, Result};
-use fs_err as fs;
+use eyre::{bail, eyre, Result};
 use rmp::{decode::Bytes, Marker};
 use serde::{Deserialize, Serialize};
 pub use xsalsa20poly1305::Key;
@@ -22,66 +18,12 @@ use xsalsa20poly1305::{
     AeadInPlace, KeyInit, XSalsa20Poly1305,
 };
 
-use crate::{history::History, settings::Settings};
+use crate::history::History;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct EncryptedHistory {
     pub ciphertext: Vec<u8>,
     pub nonce: Nonce<XSalsa20Poly1305>,
-}
-
-pub fn new_key(settings: &Settings) -> Result<Key> {
-    let path = settings.key_path.as_str();
-
-    let key = XSalsa20Poly1305::generate_key(&mut OsRng);
-    let encoded = encode_key(&key)?;
-
-    let mut file = fs::File::create(path)?;
-    file.write_all(encoded.as_bytes())?;
-
-    Ok(key)
-}
-
-// Loads the secret key, will create + save if it doesn't exist
-pub fn load_key(settings: &Settings) -> Result<Key> {
-    let path = settings.key_path.as_str();
-
-    let key = if PathBuf::from(path).exists() {
-        let key = fs_err::read_to_string(path)?;
-        decode_key(key)?
-    } else {
-        new_key(settings)?
-    };
-
-    Ok(key)
-}
-
-pub fn encode_key(key: &Key) -> Result<String> {
-    let mut buf = vec![];
-    rmp::encode::write_bin(&mut buf, key.as_slice())
-        .wrap_err("could not encode key to message pack")?;
-    let buf = BASE64_STANDARD.encode(buf);
-
-    Ok(buf)
-}
-
-pub fn decode_key(key: String) -> Result<Key> {
-    let buf = BASE64_STANDARD
-        .decode(key.trim_end())
-        .wrap_err("encryption key is not a valid base64 encoding")?;
-
-    // old code wrote the key as a fixed length array of 32 bytes
-    // new code writes the key with a length prefix
-    if buf.len() == 32 {
-        Ok(*Key::from_slice(&buf))
-    } else {
-        let mut bytes = Bytes::new(&buf);
-        let key_len = rmp::decode::read_bin_len(&mut bytes).map_err(error_report)?;
-        if key_len != 32 || bytes.remaining_slice().len() != key_len as usize {
-            bail!("encryption key is not the correct size")
-        }
-        Ok(*Key::from_slice(bytes.remaining_slice()))
-    }
 }
 
 pub fn encrypt(history: &History, key: &Key) -> Result<EncryptedHistory> {

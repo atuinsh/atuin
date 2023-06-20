@@ -6,7 +6,7 @@ use tokio::{fs::File, io::AsyncWriteExt};
 
 use atuin_client::{
     api_client,
-    encryption::{decode_key, encode_key, new_key, Key},
+    record::encodings::key::{decode_key, encode_key, new_key},
     settings::Settings,
 };
 use atuin_common::api::LoginRequest;
@@ -62,7 +62,12 @@ impl Cmd {
         } else {
             // try parse the key as a mnemonic...
             let key = match bip39::Mnemonic::from_phrase(&key, bip39::Language::English) {
-                Ok(mnemonic) => encode_key(Key::from_slice(mnemonic.entropy()))?,
+                Ok(mnemonic) if mnemonic.entropy().len() == 32 => {
+                    encode_key(mnemonic.entropy().try_into().unwrap())?
+                }
+                Ok(_) => {
+                    bail!("key was not the correct length")
+                }
                 Err(err) => {
                     if let Some(err) = err.downcast_ref::<bip39::ErrorKind>() {
                         match err {
