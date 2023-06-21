@@ -6,11 +6,12 @@ use chrono::prelude::*;
 use eyre::Result;
 
 use atuin_common::api::AddHistoryRequest;
+use xsalsa20poly1305::Key;
 
 use crate::{
     api_client,
     database::Database,
-    encryption::{encrypt, load_encoded_key, load_key},
+    encryption::{decrypt, encrypt, load_key},
     settings::Settings,
 };
 
@@ -33,6 +34,7 @@ pub fn hash_str(string: &str) -> String {
 // Check if remote has things we don't, and if so, download them.
 // Returns (num downloaded, total local)
 async fn sync_download(
+    key: &Key,
     force: bool,
     client: &api_client::Client<'_>,
     db: &mut (impl Database + Send),
@@ -43,7 +45,8 @@ async fn sync_download(
     let remote_count = remote_status.count;
 
     // useful to ensure we don't even save something that hasn't yet been synced + deleted
-    let remote_deleted = HashSet::from_iter(remote_status.deleted.clone());
+    let remote_deleted =
+        HashSet::<&str>::from_iter(remote_status.deleted.iter().map(String::as_str));
 
     let initial_local = db.history_count().await?;
     let mut local_count = initial_local;
@@ -60,23 +63,34 @@ async fn sync_download(
 
     while remote_count > local_count {
         let page = client
-            .get_history(
-                last_sync,
-                last_timestamp,
-                host.clone(),
-                remote_deleted.clone(),
-            )
+            .get_history(last_sync, last_timestamp, host.clone())
             .await?;
 
-        db.save_bulk(&page).await?;
+        let history: Vec<_> = page
+            .history
+            .iter()
+            // TODO: handle deletion earlier in this chain
+            .map(|h| serde_json::from_str(h).expect("invalid base64"))
+            .map(|h| decrypt(h, key).expect("failed to decrypt history! check your key"))
+            .map(|mut h| {
+                if remote_deleted.contains(h.id.as_str()) {
+                    h.deleted_at = Some(chrono::Utc::now());
+                    h.command = String::from("");
+                }
+
+                h
+            })
+            .collect();
+
+        db.save_bulk(&history).await?;
 
         local_count = db.history_count().await?;
 
-        if page.len() < remote_status.page_size.try_into().unwrap() {
+        if history.len() < remote_status.page_size.try_into().unwrap() {
             break;
         }
 
-        let page_last = page
+        let page_last = history
             .last()
             .expect("could not get last element of page")
             .timestamp;
@@ -110,7 +124,7 @@ async fn sync_download(
 
 // Check if we have things remote doesn't, and if so, upload them
 async fn sync_upload(
-    settings: &Settings,
+    key: &Key,
     _force: bool,
     client: &api_client::Client<'_>,
     db: &mut (impl Database + Send),
@@ -127,10 +141,7 @@ async fn sync_upload(
 
     debug!("remote has {}, we have {}", remote_count, local_count);
 
-    let key = load_key(settings)?; // encryption key
-
     // first just try the most recent set
-
     let mut cursor = Utc::now();
 
     while local_count > remote_count {
@@ -142,7 +153,7 @@ async fn sync_upload(
         }
 
         for i in last {
-            let data = encrypt(&i, &key)?;
+            let data = encrypt(&i, key)?;
             let data = serde_json::to_string(&data)?;
 
             let add_hist = AddHistoryRequest {
@@ -178,15 +189,13 @@ async fn sync_upload(
 }
 
 pub async fn sync(settings: &Settings, force: bool, db: &mut (impl Database + Send)) -> Result<()> {
-    let client = api_client::Client::new(
-        &settings.sync_address,
-        &settings.session_token,
-        load_encoded_key(settings)?,
-    )?;
+    let client = api_client::Client::new(&settings.sync_address, &settings.session_token)?;
 
-    sync_upload(settings, force, &client, db).await?;
+    let key = load_key(settings)?; // encryption key
 
-    let download = sync_download(force, &client, db).await?;
+    sync_upload(&key, force, &client, db).await?;
+
+    let download = sync_download(&key, force, &client, db).await?;
 
     debug!("sync downloaded {}", download.0);
 
