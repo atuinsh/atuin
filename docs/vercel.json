@@ -1,0 +1,9 @@
+{
+  "redirects": [
+    {
+      "source": "/docs/",
+      "destination": "/docs/guide",
+      "permanent": true
+    }
+  ]
+}
