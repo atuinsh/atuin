@@ -4,6 +4,11 @@
       "source": "/docs/",
       "destination": "/docs/guide",
       "permanent": true
+    },
+    {
+      "source": "/docs/config/key-binding",
+      "destination": "/docs/key-binding",
+      "permanent": true
     }
   ]
 }
