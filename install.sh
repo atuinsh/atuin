@@ -105,7 +105,6 @@ __atuin_install_mac(){
 	if command -v brew &> /dev/null
 	then
 		echo "Installing with brew"
-		brew tap ellie/atuin
 		brew install atuin
 	else
 		echo "Could not find brew, installing with Cargo"
