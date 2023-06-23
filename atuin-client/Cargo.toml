@@ -57,7 +57,7 @@ semver = { workspace = true }
 
 # encryption
 rusty_paseto = { version = "0.5.0", default-features = false }
-rusty_paserk = { version = "0.1.0", default-features = false, features = ["v4_local"] }
+rusty_paserk = { version = "0.2.0", default-features = false, features = ["v4", "serde"] }
 
 # sync
 urlencoding = { version = "2.1.0", optional = true }

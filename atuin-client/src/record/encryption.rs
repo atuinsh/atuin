@@ -1,12 +1,9 @@
-use atuin_common::record::{AdditonalData, DecryptedData, EncryptedData, Encryption};
+use atuin_common::record::{AdditionalData, DecryptedData, EncryptedData, Encryption};
 use base64::{engine::general_purpose, Engine};
 use eyre::{ensure, Context, Result};
-use rusty_paserk::{
-    id::EncodeId,
-    wrap::{LocalWrapperExt, Pie},
-};
+use rusty_paserk::{Key, KeyId, Local, PieWrappedKey};
 use rusty_paseto::core::{
-    ImplicitAssertion, Key, Local, Paseto, PasetoNonce, PasetoSymmetricKey, Payload, V4,
+    ImplicitAssertion, Key as DataKey, Local as LocalPurpose, Paseto, PasetoNonce, Payload, V4,
 };
 use serde::{Deserialize, Serialize};
 
@@ -55,7 +52,7 @@ that happens in the background can make the network calls to the HSM
 impl Encryption for PASETO_V4 {
     fn re_encrypt(
         mut data: EncryptedData,
-        _ad: AdditonalData,
+        _ad: AdditionalData,
         old_key: &[u8; 32],
         new_key: &[u8; 32],
     ) -> Result<EncryptedData> {
@@ -64,24 +61,23 @@ impl Encryption for PASETO_V4 {
         Ok(data)
     }
 
-    fn encrypt(data: DecryptedData, ad: AdditonalData, key: &[u8; 32]) -> EncryptedData {
+    fn encrypt(data: DecryptedData, ad: AdditionalData, key: &[u8; 32]) -> EncryptedData {
         // generate a random key for this entry
         // aka content-encryption-key (CEK)
-        let random_key =
-            PasetoSymmetricKey::from(Key::try_new_random().expect("could not source from random"));
+        let random_key = Key::<V4, Local>::new_os_random();
 
         // encode the implicit assertions
         let assertions = Assertions::from(ad).encode();
 
         // build the payload and encrypt the token
         let payload = general_purpose::URL_SAFE_NO_PAD.encode(data.0);
-        let nonce = Key::<32>::try_new_random().expect("could not source from random");
-        let nonce = PasetoNonce::<V4, Local>::from(&nonce);
+        let nonce = DataKey::<32>::try_new_random().expect("could not source from random");
+        let nonce = PasetoNonce::<V4, LocalPurpose>::from(&nonce);
 
-        let token = Paseto::<V4, Local>::builder()
+        let token = Paseto::<V4, LocalPurpose>::builder()
             .set_payload(Payload::from(payload.as_str()))
             .set_implicit_assertion(ImplicitAssertion::from(assertions.as_str()))
-            .try_encrypt(&random_key, &nonce)
+            .try_encrypt(&random_key.into(), &nonce)
             .expect("error encrypting atuin data");
 
         EncryptedData {
@@ -90,7 +86,7 @@ impl Encryption for PASETO_V4 {
         }
     }
 
-    fn decrypt(data: EncryptedData, ad: AdditonalData, key: &[u8; 32]) -> Result<DecryptedData> {
+    fn decrypt(data: EncryptedData, ad: AdditionalData, key: &[u8; 32]) -> Result<DecryptedData> {
         let token = data.data;
         let cek = Self::decrypt_cek(data.content_encryption_key, key)?;
 
@@ -98,9 +94,9 @@ impl Encryption for PASETO_V4 {
         let assertions = Assertions::from(ad).encode();
 
         // decrypt the payload with the footer and implicit assertions
-        let payload = Paseto::<V4, Local>::try_decrypt(
+        let payload = Paseto::<V4, LocalPurpose>::try_decrypt(
             &token,
-            &cek,
+            &cek.into(),
             None,
             ImplicitAssertion::from(&*assertions),
         )
@@ -112,8 +108,10 @@ impl Encryption for PASETO_V4 {
 }
 
 impl PASETO_V4 {
-    fn decrypt_cek(wrapped_cek: String, key: &[u8; 32]) -> Result<PasetoSymmetricKey<V4, Local>> {
-        let wrapping_key = PasetoSymmetricKey::from(Key::from(key));
+    fn decrypt_cek(wrapped_cek: String, key: &[u8; 32]) -> Result<Key<V4, Local>> {
+        let wrapping_key = Key::<V4, Local>::from_bytes(*key);
+
+        // let wrapping_key = PasetoSymmetricKey::from(Key::from(key));
 
         let AtuinFooter { kid, wpk } = serde_json::from_str(&wrapped_cek)
             .context("wrapped cek did not contain the correct contents")?;
@@ -123,26 +121,24 @@ impl PASETO_V4 {
         // look up the key rather than only allow one key.
         // For now though we will only support the one key and key rotation will
         // have to be a hard reset
-        let current_kid = wrapping_key.encode_id();
+        let current_kid = wrapping_key.to_id();
         ensure!(
             current_kid == kid,
             "attempting to decrypt with incorrect key. currently using {current_kid}, expecting {kid}"
         );
 
         // decrypt the random key
-        let mut wrapped_key = wpk.into_bytes();
-        Ok(Pie::unwrap_local(&mut wrapped_key, &wrapping_key)?)
+        Ok(wpk.unwrap_key(&wrapping_key)?)
     }
 
-    fn encrypt_cek(cek: PasetoSymmetricKey<V4, Local>, key: &[u8; 32]) -> String {
+    fn encrypt_cek(cek: Key<V4, Local>, key: &[u8; 32]) -> String {
         // aka key-encryption-key (KEK)
-        let wrapping_key = PasetoSymmetricKey::from(Key::from(key));
+        let wrapping_key = Key::<V4, Local>::from_bytes(*key);
 
         // wrap the random key so we can decrypt it later
-        let key_nonce = Key::<32>::try_new_random().expect("could not source from random");
         let wrapped_cek = AtuinFooter {
-            wpk: Pie::wrap_local(&cek, &wrapping_key, &key_nonce),
-            kid: wrapping_key.encode_id(),
+            wpk: cek.wrap_pie(&wrapping_key),
+            kid: wrapping_key.to_id(),
         };
         serde_json::to_string(&wrapped_cek).expect("could not serialize wrapped cek")
     }
@@ -153,9 +149,9 @@ impl PASETO_V4 {
 /// <https://github.com/paseto-standard/paseto-spec/blob/master/docs/02-Implementation-Guide/04-Claims.md#optional-footer-claims>
 struct AtuinFooter {
     /// Wrapped key
-    wpk: String,
+    wpk: PieWrappedKey<V4, Local>,
     /// ID of the key which was used to wrap
-    kid: String,
+    kid: KeyId<V4, Local>,
 }
 
 /// Used in the implicit assertions. This is not encrypted and not stored in the data blob.
@@ -168,8 +164,8 @@ struct Assertions<'a> {
     host: &'a str,
 }
 
-impl<'a> From<AdditonalData<'a>> for Assertions<'a> {
-    fn from(ad: AdditonalData<'a>) -> Self {
+impl<'a> From<AdditionalData<'a>> for Assertions<'a> {
+    fn from(ad: AdditionalData<'a>) -> Self {
         Self {
             id: ad.id,
             version: ad.version,
@@ -193,9 +189,9 @@ mod tests {
 
     #[test]
     fn round_trip() {
-        let key = Key::try_new_random().unwrap();
+        let key = Key::<V4, Local>::new_os_random();
 
-        let ad = AdditonalData {
+        let ad = AdditionalData {
             id: "foo",
             version: "v0",
             tag: "kv",
@@ -204,16 +200,16 @@ mod tests {
 
         let data = DecryptedData(vec![1, 2, 3, 4]);
 
-        let encrypted = PASETO_V4::encrypt(data.clone(), ad, &key);
-        let decrypted = PASETO_V4::decrypt(encrypted, ad, &key).unwrap();
+        let encrypted = PASETO_V4::encrypt(data.clone(), ad, &key.to_bytes());
+        let decrypted = PASETO_V4::decrypt(encrypted, ad, &key.to_bytes()).unwrap();
         assert_eq!(decrypted, data);
     }
 
     #[test]
     fn same_entry_different_output() {
-        let key = Key::try_new_random().unwrap();
+        let key = Key::<V4, Local>::new_os_random();
 
-        let ad = AdditonalData {
+        let ad = AdditionalData {
             id: "foo",
             version: "v0",
             tag: "kv",
@@ -222,8 +218,8 @@ mod tests {
 
         let data = DecryptedData(vec![1, 2, 3, 4]);
 
-        let encrypted = PASETO_V4::encrypt(data.clone(), ad, &key);
-        let encrypted2 = PASETO_V4::encrypt(data, ad, &key);
+        let encrypted = PASETO_V4::encrypt(data.clone(), ad, &key.to_bytes());
+        let encrypted2 = PASETO_V4::encrypt(data, ad, &key.to_bytes());
 
         assert_ne!(
             encrypted.data, encrypted2.data,
@@ -233,10 +229,10 @@ mod tests {
 
     #[test]
     fn cannot_decrypt_different_key() {
-        let key = Key::try_new_random().unwrap();
-        let fake_key = Key::try_new_random().unwrap();
+        let key = Key::<V4, Local>::new_os_random();
+        let fake_key = Key::<V4, Local>::new_os_random();
 
-        let ad = AdditonalData {
+        let ad = AdditionalData {
             id: "foo",
             version: "v0",
             tag: "kv",
@@ -245,15 +241,15 @@ mod tests {
 
         let data = DecryptedData(vec![1, 2, 3, 4]);
 
-        let encrypted = PASETO_V4::encrypt(data, ad, &key);
-        let _ = PASETO_V4::decrypt(encrypted, ad, &fake_key).unwrap_err();
+        let encrypted = PASETO_V4::encrypt(data, ad, &key.to_bytes());
+        let _ = PASETO_V4::decrypt(encrypted, ad, &fake_key.to_bytes()).unwrap_err();
     }
 
     #[test]
     fn cannot_decrypt_different_id() {
-        let key = Key::try_new_random().unwrap();
+        let key = Key::<V4, Local>::new_os_random();
 
-        let ad = AdditonalData {
+        let ad = AdditionalData {
             id: "foo",
             version: "v0",
             tag: "kv",
@@ -262,23 +258,23 @@ mod tests {
 
         let data = DecryptedData(vec![1, 2, 3, 4]);
 
-        let encrypted = PASETO_V4::encrypt(data, ad, &key);
+        let encrypted = PASETO_V4::encrypt(data, ad, &key.to_bytes());
 
-        let ad = AdditonalData {
+        let ad = AdditionalData {
             id: "foo1",
             version: "v0",
             tag: "kv",
             host: "1234",
         };
-        let _ = PASETO_V4::decrypt(encrypted, ad, &key).unwrap_err();
+        let _ = PASETO_V4::decrypt(encrypted, ad, &key.to_bytes()).unwrap_err();
     }
 
     #[test]
     fn re_encrypt_round_trip() {
-        let key1 = Key::try_new_random().unwrap();
-        let key2 = Key::try_new_random().unwrap();
+        let key1 = Key::<V4, Local>::new_os_random();
+        let key2 = Key::<V4, Local>::new_os_random();
 
-        let ad = AdditonalData {
+        let ad = AdditionalData {
             id: "foo",
             version: "v0",
             tag: "kv",
@@ -287,8 +283,10 @@ mod tests {
 
         let data = DecryptedData(vec![1, 2, 3, 4]);
 
-        let encrypted1 = PASETO_V4::encrypt(data.clone(), ad, &key1);
-        let encrypted2 = PASETO_V4::re_encrypt(encrypted1.clone(), ad, &key1, &key2).unwrap();
+        let encrypted1 = PASETO_V4::encrypt(data.clone(), ad, &key1.to_bytes());
+        let encrypted2 =
+            PASETO_V4::re_encrypt(encrypted1.clone(), ad, &key1.to_bytes(), &key2.to_bytes())
+                .unwrap();
 
         // we only re-encrypt the content keys
         assert_eq!(encrypted1.data, encrypted2.data);
@@ -297,7 +295,7 @@ mod tests {
             encrypted2.content_encryption_key
         );
 
-        let decrypted = PASETO_V4::decrypt(encrypted2, ad, &key2).unwrap();
+        let decrypted = PASETO_V4::decrypt(encrypted2, ad, &key2.to_bytes()).unwrap();
 
         assert_eq!(decrypted, data);
     }

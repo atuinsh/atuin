@@ -50,7 +50,7 @@ pub struct Record<Data> {
 
 /// Extra data from the record that should be encoded in the data
 #[derive(Debug, Copy, Clone)]
-pub struct AdditonalData<'a> {
+pub struct AdditionalData<'a> {
     pub id: &'a str,
     pub version: &'a str,
     pub tag: &'a str,
@@ -150,20 +150,20 @@ impl RecordIndex {
 pub trait Encryption {
     fn re_encrypt(
         data: EncryptedData,
-        ad: AdditonalData,
+        ad: AdditionalData,
         old_key: &[u8; 32],
         new_key: &[u8; 32],
     ) -> Result<EncryptedData> {
         let data = Self::decrypt(data, ad, old_key)?;
         Ok(Self::encrypt(data, ad, new_key))
     }
-    fn encrypt(data: DecryptedData, ad: AdditonalData, key: &[u8; 32]) -> EncryptedData;
-    fn decrypt(data: EncryptedData, ad: AdditonalData, key: &[u8; 32]) -> Result<DecryptedData>;
+    fn encrypt(data: DecryptedData, ad: AdditionalData, key: &[u8; 32]) -> EncryptedData;
+    fn decrypt(data: EncryptedData, ad: AdditionalData, key: &[u8; 32]) -> Result<DecryptedData>;
 }
 
 impl Record<DecryptedData> {
     pub fn encrypt<E: Encryption>(self, key: &[u8; 32]) -> Record<EncryptedData> {
-        let ad = AdditonalData {
+        let ad = AdditionalData {
             id: &self.id,
             version: &self.version,
             tag: &self.tag,
@@ -183,7 +183,7 @@ impl Record<DecryptedData> {
 
 impl Record<EncryptedData> {
     pub fn decrypt<E: Encryption>(self, key: &[u8; 32]) -> Result<Record<DecryptedData>> {
-        let ad = AdditonalData {
+        let ad = AdditionalData {
             id: &self.id,
             version: &self.version,
             tag: &self.tag,
@@ -205,7 +205,7 @@ impl Record<EncryptedData> {
         old_key: &[u8; 32],
         new_key: &[u8; 32],
     ) -> Result<Record<EncryptedData>> {
-        let ad = AdditonalData {
+        let ad = AdditionalData {
             id: &self.id,
             version: &self.version,
             tag: &self.tag,
