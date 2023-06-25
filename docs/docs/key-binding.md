@@ -73,7 +73,7 @@ bind -M insert \cr _atuin_search
 # nu
 
 ```
-set-env ATUIN_NOBIND = true
+let-env ATUIN_NOBIND = true
 atuin init nu | save -f ~/.local/share/atuin/init.nu #make sure you created the directory beforehand with `mkdir ~/.local/share/atuin/init.nu`
 source ~/.local/share/atuin/init.nu
 
