@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use eyre::Result;
 use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
+use uuid::Uuid;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct DecryptedData(pub Vec<u8>);
@@ -17,21 +18,21 @@ pub struct EncryptedData {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TypedBuilder)]
 pub struct Record<Data> {
     /// a unique ID
-    #[builder(default = crate::utils::uuid_v7().as_simple().to_string())]
-    pub id: String,
+    #[builder(default = crate::utils::uuid_v7())]
+    pub id: Uuid,
 
     /// The unique ID of the host.
     // TODO(ellie): Optimize the storage here. We use a bunch of IDs, and currently store
     // as strings. I would rather avoid normalization, so store as UUID binary instead of
     // encoding to a string and wasting much more storage.
-    pub host: String,
+    pub host: Uuid,
 
     /// The ID of the parent entry
     // A store is technically just a double linked list
     // We can do some cheating with the timestamps, but should not rely upon them.
     // Clocks are tricksy.
     #[builder(default)]
-    pub parent: Option<String>,
+    pub parent: Option<Uuid>,
 
     /// The creation time in nanoseconds since unix epoch
     #[builder(default = chrono::Utc::now().timestamp_nanos() as u64)]
@@ -71,9 +72,10 @@ impl<Data> Record<Data> {
 
 /// An index representing the current state of the record stores
 /// This can be both remote, or local, and compared in either direction
+#[derive(Debug, Serialize, Deserialize)]
 pub struct RecordIndex {
     // A map of host -> tag -> tail
-    pub hosts: HashMap<String, HashMap<String, String>>,
+    pub hosts: HashMap<Uuid, HashMap<String, Uuid>>,
 }
 
 impl Default for RecordIndex {
@@ -97,7 +99,11 @@ impl RecordIndex {
             .insert(tail.tag, tail.id);
     }
 
-    pub fn get(&self, host: String, tag: String) -> Option<String> {
+    pub fn set_raw(&mut self, host: Uuid, tag: String, tail: Uuid) {
+        self.hosts.entry(host).or_default().insert(tag, tail);
+    }
+
+    pub fn get(&self, host: Uuid, tag: String) -> Option<Uuid> {
         self.hosts.get(&host).and_then(|v| v.get(&tag)).cloned()
     }
 
@@ -108,7 +114,7 @@ impl RecordIndex {
     /// other machine has a different tail, it will be the differing tail. This is useful to
     /// check if the other index is ahead of us, or behind.
     /// If the other index does not have the (host, tag) pair, then the other value will be None.
-    pub fn diff(&self, other: &Self) -> Vec<(String, String, Option<String>)> {
+    pub fn diff(&self, other: &Self) -> Vec<(Uuid, String, Option<Uuid>)> {
         let mut ret = Vec::new();
 
         // First, we check if other has everything that self has
@@ -227,10 +233,11 @@ impl Record<EncryptedData> {
 mod tests {
     use super::{DecryptedData, Record, RecordIndex};
     use pretty_assertions::assert_eq;
+    use uuid::Uuid;
 
     fn test_record() -> Record<DecryptedData> {
         Record::builder()
-            .host(crate::utils::uuid_v7().simple().to_string())
+            .host(crate::utils::uuid_v7())
             .version("v1".into())
             .tag(crate::utils::uuid_v7().simple().to_string())
             .data(DecryptedData(vec![0, 1, 2, 3]))
@@ -344,9 +351,9 @@ mod tests {
 
         // both diffs should be ALMOST the same. They will agree on which hosts and tags
         // require updating, but the "other" value will not be the same.
-        let smol_diff_1: Vec<(String, String)> =
+        let smol_diff_1: Vec<(Uuid, String)> =
             diff1.iter().map(|v| (v.0.clone(), v.1.clone())).collect();
-        let smol_diff_2: Vec<(String, String)> =
+        let smol_diff_2: Vec<(Uuid, String)> =
             diff1.iter().map(|v| (v.0.clone(), v.1.clone())).collect();
 
         assert_eq!(smol_diff_1, smol_diff_2);

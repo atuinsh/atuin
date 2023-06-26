@@ -12,6 +12,7 @@ use atuin_common::api::{
     AddHistoryRequest, CountResponse, DeleteHistoryRequest, ErrorResponse, IndexResponse,
     LoginRequest, LoginResponse, RegisterResponse, StatusResponse, SyncHistoryResponse,
 };
+use atuin_common::record::Record;
 use semver::Version;
 
 use crate::{history::History, sync::hash_str};
@@ -191,6 +192,15 @@ impl<'a> Client<'a> {
             .json(&DeleteHistoryRequest { client_id: h.id })
             .send()
             .await?;
+
+        Ok(())
+    }
+
+    pub async fn post_records(&self, records: &[Record]) -> Result<()> {
+        let url = format!("{}/record", self.sync_addr);
+        let url = Url::parse(url.as_str())?;
+
+        self.client.post(url).json(records).send().await?;
 
         Ok(())
     }

@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use eyre::Result;
 
 use atuin_common::record::{EncryptedData, Record};
+use uuid::Uuid;
 
 /// A record store stores records
 /// In more detail - we tend to need to process this into _another_ format to actually query it.
@@ -21,13 +22,13 @@ pub trait Store {
     ) -> Result<()>;
 
     async fn get(&self, id: &str) -> Result<Record<EncryptedData>>;
-    async fn len(&self, host: &str, tag: &str) -> Result<u64>;
+    async fn len(&self, host: Uuid, tag: &str) -> Result<u64>;
 
     /// Get the record that follows this record
     async fn next(&self, record: &Record<EncryptedData>) -> Result<Option<Record<EncryptedData>>>;
 
     /// Get the first record for a given host and tag
-    async fn first(&self, host: &str, tag: &str) -> Result<Option<Record<EncryptedData>>>;
+    async fn first(&self, host: Uuid, tag: &str) -> Result<Option<Record<EncryptedData>>>;
     /// Get the last record for a given host and tag
-    async fn last(&self, host: &str, tag: &str) -> Result<Option<Record<EncryptedData>>>;
+    async fn last(&self, host: Uuid, tag: &str) -> Result<Option<Record<EncryptedData>>>;
 }

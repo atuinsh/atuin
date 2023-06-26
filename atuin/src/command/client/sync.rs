@@ -1,7 +1,7 @@
 use clap::Subcommand;
 use eyre::{Result, WrapErr};
 
-use atuin_client::{database::Database, settings::Settings};
+use atuin_client::{api_client, database::Database, record::store::Store, settings::Settings};
 
 mod status;
 
@@ -37,9 +37,14 @@ pub enum Cmd {
 }
 
 impl Cmd {
-    pub async fn run(self, settings: Settings, db: &mut impl Database) -> Result<()> {
+    pub async fn run(
+        self,
+        settings: Settings,
+        db: &mut impl Database,
+        store: &mut impl Store,
+    ) -> Result<()> {
         match self {
-            Self::Sync { force } => run(&settings, force, db).await,
+            Self::Sync { force } => run(&settings, force, db, store).await,
             Self::Login(l) => l.run(&settings).await,
             Self::Logout => account::logout::run(&settings),
             Self::Register(r) => r.run(&settings).await,
@@ -62,12 +67,17 @@ impl Cmd {
     }
 }
 
-async fn run(settings: &Settings, force: bool, db: &mut impl Database) -> Result<()> {
-    atuin_client::sync::sync(settings, force, db).await?;
-    println!(
-        "Sync complete! {} items in database, force: {}",
-        db.history_count().await?,
-        force
-    );
+async fn run(
+    settings: &Settings,
+    force: bool,
+    db: &mut impl Database,
+    store: &mut impl Store,
+) -> Result<()> {
+    let host = Settings::host_id().expect("No host ID found");
+    // FOR TESTING ONLY!
+    let kv_tail = store.last(host, "kv").await?.expect("no kv found");
+    let client = api_client::Client::new(&settings.sync_address, &settings.session_token)?;
+    client.post_records(&[kv_tail]).await?;
+
     Ok(())
 }

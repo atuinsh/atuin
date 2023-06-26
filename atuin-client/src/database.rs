@@ -13,6 +13,7 @@ use sqlx::{
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteRow},
     Result, Row,
 };
+use uuid::Uuid;
 
 use super::{
     history::History,
@@ -57,7 +58,7 @@ pub fn current_context() -> Context {
         session,
         hostname,
         cwd,
-        host_id,
+        host_id: host_id.as_simple().to_string(),
     }
 }
 

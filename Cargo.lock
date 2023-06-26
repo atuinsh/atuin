@@ -240,6 +240,7 @@ dependencies = [
  "serde",
  "sqlx",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -2549,6 +2550,7 @@ dependencies = [
  "thiserror",
  "tokio-stream",
  "url",
+ "uuid",
  "webpki-roots",
  "whoami",
 ]
@@ -3019,6 +3021,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0fa2982af2eec27de306107c027578ff7f423d65f7250e40ce0fea8f45248b81"
 dependencies = [
  "getrandom 0.2.7",
+ "serde",
 ]
 
 [[package]]

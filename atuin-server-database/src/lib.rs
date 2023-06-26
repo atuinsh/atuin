@@ -18,6 +18,7 @@ use chrono::{Datelike, TimeZone};
 use chronoutil::RelativeDuration;
 use serde::{de::DeserializeOwned, Serialize};
 use tracing::instrument;
+use uuid::Uuid;
 
 #[derive(Debug)]
 pub enum DbError {
@@ -55,10 +56,10 @@ pub trait Database: Sized + Clone + Send + Sync + 'static {
     async fn delete_history(&self, user: &User, id: String) -> DbResult<()>;
     async fn deleted_history(&self, user: &User) -> DbResult<Vec<String>>;
 
-    async fn add_record(&self, user: &User, record: &[Record]) -> DbResult<()>;
+    async fn add_records(&self, user: &User, record: &[Record]) -> DbResult<()>;
 
     // Return the tail record ID for each store, so (HostID, Tag, TailRecordID)
-    async fn tail_records(&self, user: &User) -> DbResult<Vec<(String, String, String)>>;
+    async fn tail_records(&self, user: &User) -> DbResult<Vec<(Uuid, String, Uuid)>>;
 
     async fn count_history_range(
         &self,

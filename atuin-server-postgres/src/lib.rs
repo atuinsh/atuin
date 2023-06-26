@@ -1,3 +1,5 @@
+use std::str::FromStr;
+
 use async_trait::async_trait;
 use atuin_common::record::Record;
 use atuin_server_database::models::{History, NewHistory, NewSession, NewUser, Session, User};
@@ -5,8 +7,9 @@ use atuin_server_database::{Database, DbError, DbResult};
 use futures_util::TryStreamExt;
 use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgPoolOptions;
-
 use sqlx::Row;
+
+use sqlx::types::Uuid;
 
 use tracing::instrument;
 use wrappers::{DbHistory, DbSession, DbUser};
@@ -331,11 +334,11 @@ impl Database for Postgres {
         .map(|DbHistory(h)| h)
     }
 
-    async fn add_record(&self, user: &User, records: &[Record]) -> DbResult<()> {
+    async fn add_records(&self, user: &User, records: &[Record]) -> DbResult<()> {
         let mut tx = self.pool.begin().await.map_err(fix_error)?;
 
         for i in records {
-            let id = atuin_common::utils::uuid_v7().as_simple().to_string();
+            let id = atuin_common::utils::uuid_v7();
 
             sqlx::query(
                 "insert into records
@@ -345,9 +348,9 @@ impl Database for Postgres {
                 ",
             )
             .bind(id)
-            .bind(&i.id)
-            .bind(&i.host)
-            .bind(&i.parent)
+            .bind(i.id)
+            .bind(i.host)
+            .bind(id)
             .bind(i.timestamp as i64) // throwing away some data, but i64 is still big in terms of time
             .bind(&i.version)
             .bind(&i.tag)
@@ -363,8 +366,8 @@ impl Database for Postgres {
         Ok(())
     }
 
-    async fn tail_records(&self, user: &User) -> DbResult<Vec<(String, String, String)>> {
-        const TAIL_RECORDS_SQL: &str = "select host, tag, id from records rp where (select count(1) from records where parent=rp.id and user_id = $1) = 0 group by host, tag;";
+    async fn tail_records(&self, user: &User) -> DbResult<Vec<(Uuid, String, Uuid)>> {
+        const TAIL_RECORDS_SQL: &str = "select host, tag, id from records rp where (select count(1) from records where parent=rp.id and user_id = $1) = 0;";
 
         let res = sqlx::query_as(TAIL_RECORDS_SQL)
             .bind(user.id)
