@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use atuin_common::record::Record;
 use atuin_server_database::models::{History, NewHistory, NewSession, NewUser, Session, User};
 use atuin_server_database::{Database, DbError, DbResult};
 use futures_util::TryStreamExt;
@@ -328,5 +329,50 @@ impl Database for Postgres {
         .await
         .map_err(fix_error)
         .map(|DbHistory(h)| h)
+    }
+
+    async fn add_record(&self, user: &User, records: &[Record]) -> DbResult<()> {
+        let mut tx = self.pool.begin().await.map_err(fix_error)?;
+
+        for i in records {
+            let id = atuin_common::utils::uuid_v7().as_simple().to_string();
+
+            sqlx::query(
+                "insert into records
+                    (id, client_id, host, parent, timestamp, version, tag, data, user_id) 
+                values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                on conflict do nothing
+                ",
+            )
+            .bind(id)
+            .bind(&i.id)
+            .bind(&i.host)
+            .bind(&i.parent)
+            .bind(i.timestamp as i64) // throwing away some data, but i64 is still big in terms of time
+            .bind(&i.version)
+            .bind(&i.tag)
+            .bind(&i.data)
+            .bind(user.id)
+            .execute(&mut tx)
+            .await
+            .map_err(fix_error)?;
+        }
+
+        tx.commit().await.map_err(fix_error)?;
+
+        Ok(())
+    }
+
+    async fn tail_records(&self, user: &User) -> DbResult<Vec<(String, String, String)>> {
+        const TAIL_RECORDS_SQL: &str = "select host, tag, id from records rp where (select count(1) from records where parent=rp.id and user_id = $1) = 0 group by host, tag;";
+
+        let res = sqlx::query_as(TAIL_RECORDS_SQL)
+            .bind(user.id)
+            .fetch(&self.pool)
+            .try_collect()
+            .await
+            .map_err(fix_error)?;
+
+        Ok(res)
     }
 }

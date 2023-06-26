@@ -13,7 +13,7 @@ use self::{
     models::{History, NewHistory, NewSession, NewUser, Session, User},
 };
 use async_trait::async_trait;
-use atuin_common::utils::get_days_from_month;
+use atuin_common::{record::Record, utils::get_days_from_month};
 use chrono::{Datelike, TimeZone};
 use chronoutil::RelativeDuration;
 use serde::{de::DeserializeOwned, Serialize};
@@ -54,6 +54,11 @@ pub trait Database: Sized + Clone + Send + Sync + 'static {
 
     async fn delete_history(&self, user: &User, id: String) -> DbResult<()>;
     async fn deleted_history(&self, user: &User) -> DbResult<Vec<String>>;
+
+    async fn add_record(&self, user: &User, record: &[Record]) -> DbResult<()>;
+
+    // Return the tail record ID for each store, so (HostID, Tag, TailRecordID)
+    async fn tail_records(&self, user: &User) -> DbResult<Vec<(String, String, String)>>;
 
     async fn count_history_range(
         &self,
