@@ -1,7 +1,7 @@
 use clap::Subcommand;
-use eyre::Result;
+use eyre::{Context, Result};
 
-use atuin_client::{kv::KvStore, record::store::Store, settings::Settings};
+use atuin_client::{encryption, kv::KvStore, record::store::Store, settings::Settings};
 
 #[derive(Subcommand)]
 #[command(infer_subcommands = true)]
@@ -29,20 +29,28 @@ pub enum Cmd {
 impl Cmd {
     pub async fn run(
         &self,
-        _settings: &Settings,
+        settings: &Settings,
         store: &mut (impl Store + Send + Sync),
     ) -> Result<()> {
         let kv_store = KvStore::new();
+
+        let encryption_key: [u8; 32] = encryption::load_key(settings)
+            .context("could not load encryption key")?
+            .into();
 
         match self {
             Self::Set {
                 key,
                 value,
                 namespace,
-            } => kv_store.set(store, namespace, key, value).await,
+            } => {
+                kv_store
+                    .set(store, &encryption_key, namespace, key, value)
+                    .await
+            }
 
             Self::Get { key, namespace } => {
-                let val = kv_store.get(store, namespace, key).await?;
+                let val = kv_store.get(store, &encryption_key, namespace, key).await?;
 
                 if let Some(kv) = val {
                     println!("{}", kv.value);

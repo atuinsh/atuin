@@ -1,11 +1,21 @@
 use std::collections::HashMap;
 
+use eyre::Result;
 use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct DecryptedData(pub Vec<u8>);
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EncryptedData {
+    pub data: String,
+    pub content_encryption_key: String,
+}
+
 /// A single record stored inside of our local database
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TypedBuilder)]
-pub struct Record {
+pub struct Record<Data> {
     /// a unique ID
     #[builder(default = crate::utils::uuid_v7().as_simple().to_string())]
     pub id: String,
@@ -35,17 +45,26 @@ pub struct Record {
     pub tag: String,
 
     /// Some data. This can be anything you wish to store. Use the tag field to know how to handle it.
-    pub data: Vec<u8>,
+    pub data: Data,
 }
 
-impl Record {
-    pub fn new_child(&self, data: Vec<u8>) -> Record {
+/// Extra data from the record that should be encoded in the data
+#[derive(Debug, Copy, Clone)]
+pub struct AdditionalData<'a> {
+    pub id: &'a str,
+    pub version: &'a str,
+    pub tag: &'a str,
+    pub host: &'a str,
+}
+
+impl<Data> Record<Data> {
+    pub fn new_child(&self, data: Vec<u8>) -> Record<DecryptedData> {
         Record::builder()
             .host(self.host.clone())
             .version(self.version.clone())
             .parent(Some(self.id.clone()))
             .tag(self.tag.clone())
-            .data(data)
+            .data(DecryptedData(data))
             .build()
     }
 }
@@ -71,7 +90,7 @@ impl RecordIndex {
     }
 
     /// Insert a new tail record into the store
-    pub fn set(&mut self, tail: Record) {
+    pub fn set(&mut self, tail: Record<DecryptedData>) {
         self.hosts
             .entry(tail.host)
             .or_default()
@@ -128,17 +147,93 @@ impl RecordIndex {
     }
 }
 
+pub trait Encryption {
+    fn re_encrypt(
+        data: EncryptedData,
+        ad: AdditionalData,
+        old_key: &[u8; 32],
+        new_key: &[u8; 32],
+    ) -> Result<EncryptedData> {
+        let data = Self::decrypt(data, ad, old_key)?;
+        Ok(Self::encrypt(data, ad, new_key))
+    }
+    fn encrypt(data: DecryptedData, ad: AdditionalData, key: &[u8; 32]) -> EncryptedData;
+    fn decrypt(data: EncryptedData, ad: AdditionalData, key: &[u8; 32]) -> Result<DecryptedData>;
+}
+
+impl Record<DecryptedData> {
+    pub fn encrypt<E: Encryption>(self, key: &[u8; 32]) -> Record<EncryptedData> {
+        let ad = AdditionalData {
+            id: &self.id,
+            version: &self.version,
+            tag: &self.tag,
+            host: &self.host,
+        };
+        Record {
+            data: E::encrypt(self.data, ad, key),
+            id: self.id,
+            host: self.host,
+            parent: self.parent,
+            timestamp: self.timestamp,
+            version: self.version,
+            tag: self.tag,
+        }
+    }
+}
+
+impl Record<EncryptedData> {
+    pub fn decrypt<E: Encryption>(self, key: &[u8; 32]) -> Result<Record<DecryptedData>> {
+        let ad = AdditionalData {
+            id: &self.id,
+            version: &self.version,
+            tag: &self.tag,
+            host: &self.host,
+        };
+        Ok(Record {
+            data: E::decrypt(self.data, ad, key)?,
+            id: self.id,
+            host: self.host,
+            parent: self.parent,
+            timestamp: self.timestamp,
+            version: self.version,
+            tag: self.tag,
+        })
+    }
+
+    pub fn re_encrypt<E: Encryption>(
+        self,
+        old_key: &[u8; 32],
+        new_key: &[u8; 32],
+    ) -> Result<Record<EncryptedData>> {
+        let ad = AdditionalData {
+            id: &self.id,
+            version: &self.version,
+            tag: &self.tag,
+            host: &self.host,
+        };
+        Ok(Record {
+            data: E::re_encrypt(self.data, ad, old_key, new_key)?,
+            id: self.id,
+            host: self.host,
+            parent: self.parent,
+            timestamp: self.timestamp,
+            version: self.version,
+            tag: self.tag,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Record, RecordIndex};
-    use pretty_assertions::{assert_eq, assert_ne};
+    use super::{DecryptedData, Record, RecordIndex};
+    use pretty_assertions::assert_eq;
 
-    fn test_record() -> Record {
+    fn test_record() -> Record<DecryptedData> {
         Record::builder()
             .host(crate::utils::uuid_v7().simple().to_string())
             .version("v1".into())
             .tag(crate::utils::uuid_v7().simple().to_string())
-            .data(vec![0, 1, 2, 3])
+            .data(DecryptedData(vec![0, 1, 2, 3]))
             .build()
     }
 

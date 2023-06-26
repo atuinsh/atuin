@@ -17,4 +17,7 @@ serde = { workspace = true }
 uuid = { workspace = true }
 rand = { workspace = true }
 typed-builder = { workspace = true }
+eyre = { workspace = true }
+
+[dev-dependencies]
 pretty_assertions = "1.3.0"

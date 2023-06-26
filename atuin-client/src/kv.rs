@@ -1,5 +1,7 @@
+use atuin_common::record::DecryptedData;
 use eyre::{bail, ensure, eyre, Result};
 
+use crate::record::encryption::PASETO_V4;
 use crate::record::store::Store;
 use crate::settings::Settings;
 
@@ -14,7 +16,7 @@ pub struct KvRecord {
 }
 
 impl KvRecord {
-    pub fn serialize(&self) -> Result<Vec<u8>> {
+    pub fn serialize(&self) -> Result<DecryptedData> {
         use rmp::encode;
 
         let mut output = vec![];
@@ -26,10 +28,10 @@ impl KvRecord {
         encode::write_str(&mut output, &self.key)?;
         encode::write_str(&mut output, &self.value)?;
 
-        Ok(output)
+        Ok(DecryptedData(output))
     }
 
-    pub fn deserialize(data: &[u8], version: &str) -> Result<Self> {
+    pub fn deserialize(data: &DecryptedData, version: &str) -> Result<Self> {
         use rmp::decode;
 
         fn error_report<E: std::fmt::Debug>(err: E) -> eyre::Report {
@@ -38,7 +40,7 @@ impl KvRecord {
 
         match version {
             KV_VERSION => {
-                let mut bytes = decode::Bytes::new(data);
+                let mut bytes = decode::Bytes::new(&data.0);
 
                 let nfields = decode::read_array_len(&mut bytes).map_err(error_report)?;
                 ensure!(nfields == 3, "too many entries in v0 kv record");
@@ -84,6 +86,7 @@ impl KvStore {
     pub async fn set(
         &self,
         store: &mut (impl Store + Send + Sync),
+        encryption_key: &[u8; 32],
         namespace: &str,
         key: &str,
         value: &str,
@@ -111,7 +114,9 @@ impl KvStore {
             .data(bytes)
             .build();
 
-        store.push(&record).await?;
+        store
+            .push(&record.encrypt::<PASETO_V4>(encryption_key))
+            .await?;
 
         Ok(())
     }
@@ -121,6 +126,7 @@ impl KvStore {
     pub async fn get(
         &self,
         store: &impl Store,
+        encryption_key: &[u8; 32],
         namespace: &str,
         key: &str,
     ) -> Result<Option<KvRecord>> {
@@ -137,12 +143,17 @@ impl KvStore {
         };
 
         loop {
-            let kv = KvRecord::deserialize(&record.data, &record.version)?;
+            let decrypted = match record.version.as_str() {
+                KV_VERSION => record.decrypt::<PASETO_V4>(encryption_key)?,
+                version => bail!("unknown version {version:?}"),
+            };
+
+            let kv = KvRecord::deserialize(&decrypted.data, &decrypted.version)?;
             if kv.key == key && kv.namespace == namespace {
                 return Ok(Some(kv));
             }
 
-            if let Some(parent) = record.parent {
+            if let Some(parent) = decrypted.parent {
                 record = store.get(parent.as_str()).await?;
             } else {
                 break;
@@ -172,7 +183,7 @@ mod tests {
         let encoded = kv.serialize().unwrap();
         let decoded = KvRecord::deserialize(&encoded, KV_VERSION).unwrap();
 
-        assert_eq!(encoded, &snapshot);
+        assert_eq!(encoded.0, &snapshot);
         assert_eq!(decoded, kv);
     }
 }

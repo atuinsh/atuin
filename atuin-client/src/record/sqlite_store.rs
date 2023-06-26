@@ -13,7 +13,7 @@ use sqlx::{
     Row,
 };
 
-use atuin_common::record::Record;
+use atuin_common::record::{EncryptedData, Record};
 
 use super::store::Store;
 
@@ -53,11 +53,14 @@ impl SqliteStore {
         Ok(())
     }
 
-    async fn save_raw(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, r: &Record) -> Result<()> {
+    async fn save_raw(
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        r: &Record<EncryptedData>,
+    ) -> Result<()> {
         // In sqlite, we are "limited" to i64. But that is still fine, until 2262.
         sqlx::query(
-            "insert or ignore into records(id, host, tag, timestamp, parent, version, data)
-                values(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "insert or ignore into records(id, host, tag, timestamp, parent, version, data, cek)
+                values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         )
         .bind(r.id.as_str())
         .bind(r.host.as_str())
@@ -65,14 +68,15 @@ impl SqliteStore {
         .bind(r.timestamp as i64)
         .bind(r.parent.as_ref())
         .bind(r.version.as_str())
-        .bind(r.data.as_slice())
+        .bind(r.data.data.as_str())
+        .bind(r.data.content_encryption_key.as_str())
         .execute(tx)
         .await?;
 
         Ok(())
     }
 
-    fn query_row(row: SqliteRow) -> Record {
+    fn query_row(row: SqliteRow) -> Record<EncryptedData> {
         let timestamp: i64 = row.get("timestamp");
 
         Record {
@@ -82,14 +86,20 @@ impl SqliteStore {
             timestamp: timestamp as u64,
             tag: row.get("tag"),
             version: row.get("version"),
-            data: row.get("data"),
+            data: EncryptedData {
+                data: row.get("data"),
+                content_encryption_key: row.get("cek"),
+            },
         }
     }
 }
 
 #[async_trait]
 impl Store for SqliteStore {
-    async fn push_batch(&self, records: impl Iterator<Item = &Record> + Send + Sync) -> Result<()> {
+    async fn push_batch(
+        &self,
+        records: impl Iterator<Item = &Record<EncryptedData>> + Send + Sync,
+    ) -> Result<()> {
         let mut tx = self.pool.begin().await?;
 
         for record in records {
@@ -101,7 +111,7 @@ impl Store for SqliteStore {
         Ok(())
     }
 
-    async fn get(&self, id: &str) -> Result<Record> {
+    async fn get(&self, id: &str) -> Result<Record<EncryptedData>> {
         let res = sqlx::query("select * from records where id = ?1")
             .bind(id)
             .map(Self::query_row)
@@ -122,7 +132,7 @@ impl Store for SqliteStore {
         Ok(res.0 as u64)
     }
 
-    async fn next(&self, record: &Record) -> Result<Option<Record>> {
+    async fn next(&self, record: &Record<EncryptedData>) -> Result<Option<Record<EncryptedData>>> {
         let res = sqlx::query("select * from records where parent = ?1")
             .bind(record.id.clone())
             .map(Self::query_row)
@@ -136,7 +146,7 @@ impl Store for SqliteStore {
         }
     }
 
-    async fn first(&self, host: &str, tag: &str) -> Result<Option<Record>> {
+    async fn first(&self, host: &str, tag: &str) -> Result<Option<Record<EncryptedData>>> {
         let res = sqlx::query(
             "select * from records where host = ?1 and tag = ?2 and parent is null limit 1",
         )
@@ -149,7 +159,7 @@ impl Store for SqliteStore {
         Ok(res)
     }
 
-    async fn last(&self, host: &str, tag: &str) -> Result<Option<Record>> {
+    async fn last(&self, host: &str, tag: &str) -> Result<Option<Record<EncryptedData>>> {
         let res = sqlx::query(
             "select * from records rp where tag=?1 and host=?2 and (select count(1) from records where parent=rp.id) = 0;",
         )
@@ -165,18 +175,21 @@ impl Store for SqliteStore {
 
 #[cfg(test)]
 mod tests {
-    use atuin_common::record::Record;
+    use atuin_common::record::{EncryptedData, Record};
 
-    use crate::record::store::Store;
+    use crate::record::{encryption::PASETO_V4, store::Store};
 
     use super::SqliteStore;
 
-    fn test_record() -> Record {
+    fn test_record() -> Record<EncryptedData> {
         Record::builder()
             .host(atuin_common::utils::uuid_v7().simple().to_string())
             .version("v1".into())
             .tag(atuin_common::utils::uuid_v7().simple().to_string())
-            .data(vec![0, 1, 2, 3])
+            .data(EncryptedData {
+                data: "1234".into(),
+                content_encryption_key: "1234".into(),
+            })
             .build()
     }
 
@@ -261,7 +274,9 @@ mod tests {
         db.push(&tail).await.expect("failed to push record");
 
         for _ in 1..100 {
-            tail = tail.new_child(vec![1, 2, 3, 4]);
+            tail = tail
+                .new_child(vec![1, 2, 3, 4])
+                .encrypt::<PASETO_V4>(&[0; 32]);
             db.push(&tail).await.unwrap();
         }
 
@@ -276,13 +291,13 @@ mod tests {
     async fn append_a_big_bunch() {
         let db = SqliteStore::new(":memory:").await.unwrap();
 
-        let mut records: Vec<Record> = Vec::with_capacity(10000);
+        let mut records: Vec<Record<EncryptedData>> = Vec::with_capacity(10000);
 
         let mut tail = test_record();
         records.push(tail.clone());
 
         for _ in 1..10000 {
-            tail = tail.new_child(vec![1, 2, 3]);
+            tail = tail.new_child(vec![1, 2, 3]).encrypt::<PASETO_V4>(&[0; 32]);
             records.push(tail.clone());
         }
 
@@ -299,13 +314,13 @@ mod tests {
     async fn test_chain() {
         let db = SqliteStore::new(":memory:").await.unwrap();
 
-        let mut records: Vec<Record> = Vec::with_capacity(1000);
+        let mut records: Vec<Record<EncryptedData>> = Vec::with_capacity(1000);
 
         let mut tail = test_record();
         records.push(tail.clone());
 
         for _ in 1..1000 {
-            tail = tail.new_child(vec![1, 2, 3]);
+            tail = tail.new_child(vec![1, 2, 3]).encrypt::<PASETO_V4>(&[0; 32]);
             records.push(tail.clone());
         }
 
