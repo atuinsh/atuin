@@ -83,7 +83,7 @@ impl SqliteStore {
         // tbh at this point things are pretty fucked so just panic
         let id = Uuid::from_str(row.get("id")).expect("invalid id UUID format in sqlite DB");
         let host = Uuid::from_str(row.get("host")).expect("invalid host UUID format in sqlite DB");
-        let parent: Option<&str> = row.get("host");
+        let parent: Option<&str> = row.get("parent");
 
         let parent = if let Some(parent) = parent {
             Some(Uuid::from_str(parent).expect("invalid parent UUID format in sqlite DB"))
@@ -125,7 +125,7 @@ impl Store for SqliteStore {
 
     async fn get(&self, id: Uuid) -> Result<Record<EncryptedData>> {
         let res = sqlx::query("select * from records where id = ?1")
-            .bind(id)
+            .bind(id.as_simple().to_string())
             .map(Self::query_row)
             .fetch_one(&self.pool)
             .await?;
@@ -136,7 +136,7 @@ impl Store for SqliteStore {
     async fn len(&self, host: Uuid, tag: &str) -> Result<u64> {
         let res: (i64,) =
             sqlx::query_as("select count(1) from records where host = ?1 and tag = ?2")
-                .bind(host)
+                .bind(host.as_simple().to_string())
                 .bind(tag)
                 .fetch_one(&self.pool)
                 .await?;
@@ -146,7 +146,7 @@ impl Store for SqliteStore {
 
     async fn next(&self, record: &Record<EncryptedData>) -> Result<Option<Record<EncryptedData>>> {
         let res = sqlx::query("select * from records where parent = ?1")
-            .bind(record.id.clone())
+            .bind(record.id.as_simple().to_string())
             .map(Self::query_row)
             .fetch_one(&self.pool)
             .await;
@@ -162,7 +162,7 @@ impl Store for SqliteStore {
         let res = sqlx::query(
             "select * from records where host = ?1 and tag = ?2 and parent is null limit 1",
         )
-        .bind(host)
+        .bind(host.as_simple().to_string())
         .bind(tag)
         .map(Self::query_row)
         .fetch_optional(&self.pool)
@@ -179,6 +179,23 @@ impl Store for SqliteStore {
         .bind(host.as_simple().to_string())
         .map(Self::query_row)
         .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(res)
+    }
+
+    async fn tail_records(&self) -> Result<Vec<(Uuid, String, Uuid)>> {
+        let res = sqlx::query(
+            "select host, tag, id from records rp where (select count(1) from records where parent=rp.id) = 0;",
+        )
+        .map(|row: SqliteRow| {
+            let host: Uuid= Uuid::from_str(row.get("host")).expect("invalid uuid in db host");
+            let tag: String= row.get("tag");
+            let id: Uuid= Uuid::from_str(row.get("id")).expect("invalid uuid in db id");
+
+            (host, tag, id)
+        })
+        .fetch_all(&self.pool)
         .await?;
 
         Ok(res)

@@ -84,6 +84,17 @@ impl Default for RecordIndex {
     }
 }
 
+impl From<Vec<(Uuid, String, Uuid)>> for RecordIndex {
+    fn from(f: Vec<(Uuid, String, Uuid)>) -> RecordIndex {
+        let mut record_index = RecordIndex::new();
+
+        for row in f {
+            record_index.set_raw(row.0, row.1, row.2);
+        }
+        record_index
+    }
+}
+
 impl RecordIndex {
     pub fn new() -> RecordIndex {
         RecordIndex {
@@ -114,7 +125,7 @@ impl RecordIndex {
     /// other machine has a different tail, it will be the differing tail. This is useful to
     /// check if the other index is ahead of us, or behind.
     /// If the other index does not have the (host, tag) pair, then the other value will be None.
-    pub fn diff(&self, other: &Self) -> Vec<(Uuid, String, Option<Uuid>)> {
+    pub fn diff(&self, other: &Self) -> Vec<(Uuid, String, Uuid)> {
         let mut ret = Vec::new();
 
         // First, we check if other has everything that self has
@@ -125,10 +136,10 @@ impl RecordIndex {
                     Some(t) if t.eq(tail) => continue,
 
                     // The other store does exist, but it is either ahead or behind us. A diff regardless
-                    Some(t) => ret.push((host.clone(), tag.clone(), Some(t))),
+                    Some(t) => ret.push((host.clone(), tag.clone(), t)),
 
                     // The other store does not exist :O
-                    None => ret.push((host.clone(), tag.clone(), None)),
+                    None => ret.push((host.clone(), tag.clone(), tail.clone())),
                 };
             }
         }
@@ -143,7 +154,7 @@ impl RecordIndex {
                     // If we have this host/tag combo, the comparison and diff will have already happened above
                     Some(_) => continue,
 
-                    None => ret.push((host.clone(), tag.clone(), Some(tail.clone()))),
+                    None => ret.push((host.clone(), tag.clone(), tail.clone())),
                 };
             }
         }
@@ -311,7 +322,7 @@ mod tests {
         let diff = index1.diff(&index2);
 
         assert_eq!(1, diff.len(), "expected single diff");
-        assert_eq!(diff[0], (record2.host, record2.tag, Some(record2.id)));
+        assert_eq!(diff[0], (record2.host, record2.tag, record2.id));
     }
 
     #[test]

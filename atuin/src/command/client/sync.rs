@@ -1,7 +1,12 @@
 use clap::Subcommand;
 use eyre::{Result, WrapErr};
 
-use atuin_client::{api_client, database::Database, record::store::Store, settings::Settings};
+use atuin_client::{
+    api_client,
+    database::Database,
+    record::{store::Store, sync},
+    settings::Settings,
+};
 
 mod status;
 
@@ -73,11 +78,14 @@ async fn run(
     db: &mut impl Database,
     store: &mut impl Store,
 ) -> Result<()> {
-    let host = Settings::host_id().expect("No host ID found");
-    // FOR TESTING ONLY!
-    let kv_tail = store.last(host, "kv").await?.expect("no kv found");
-    let client = api_client::Client::new(&settings.sync_address, &settings.session_token)?;
-    client.post_records(&[kv_tail]).await?;
+    let diff = sync::diff(settings, store).await?;
+    println!("{:?}", diff);
 
+    atuin_client::sync::sync(settings, force, db).await?;
+    println!(
+        "Sync complete! {} items in database, force: {}",
+        db.history_count().await?,
+        force
+    );
     Ok(())
 }

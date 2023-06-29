@@ -8,11 +8,14 @@ use reqwest::{
     StatusCode, Url,
 };
 
-use atuin_common::api::{
-    AddHistoryRequest, CountResponse, DeleteHistoryRequest, ErrorResponse, IndexResponse,
-    LoginRequest, LoginResponse, RegisterResponse, StatusResponse, SyncHistoryResponse,
-};
 use atuin_common::record::Record;
+use atuin_common::{
+    api::{
+        AddHistoryRequest, CountResponse, DeleteHistoryRequest, ErrorResponse, IndexResponse,
+        LoginRequest, LoginResponse, RegisterResponse, StatusResponse, SyncHistoryResponse,
+    },
+    record::RecordIndex,
+};
 use semver::Version;
 
 use crate::{history::History, sync::hash_str};
@@ -203,6 +206,16 @@ impl<'a> Client<'a> {
         self.client.post(url).json(records).send().await?;
 
         Ok(())
+    }
+
+    pub async fn record_index(&self) -> Result<RecordIndex> {
+        let url = format!("{}/record", self.sync_addr);
+        let url = Url::parse(url.as_str())?;
+
+        let resp = self.client.get(url).send().await?;
+        let index = resp.json().await?;
+
+        Ok(index)
     }
 
     pub async fn delete(&self) -> Result<()> {
