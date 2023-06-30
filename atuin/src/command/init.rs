@@ -98,7 +98,7 @@ bind -M insert \e\[A _atuin_bind_up";
         println!("{full}");
 
         if std::env::var("ATUIN_NOBIND").is_err() {
-            const BIND_CTRL_R: &str = r#"let-env config = (
+            const BIND_CTRL_R: &str = r#"$env.config = (
     $env.config | upsert keybindings (
         $env.config.keybindings
         | append {
@@ -111,7 +111,7 @@ bind -M insert \e\[A _atuin_bind_up";
     )
 )
 "#;
-            const BIND_UP_ARROW: &str = r#"let-env config = (
+            const BIND_UP_ARROW: &str = r#"$env.config = (
     $env.config | upsert keybindings (
         $env.config.keybindings
         | append {
