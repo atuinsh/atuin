@@ -63,13 +63,13 @@ This is not an issue as none of our users are ever going to generate 10^25 entri
 
 ### We use the same key for each message
 
-Shell history is quite predicable. If you have a 2 byte history entry, it's quite likely that it's `ls`. Given the encrypted blob, you can start to brute force the key associated. A proof was published stating that no attack on Salsa20 with 128 bit key is possible with an average search time of less than 2^130 (about 10^39) random guesses.
+Shell history is quite predicable. If you have a 2 byte history entry, it's quite likely that it's `ls`. Given the encrypted blob, you can start to brute force the associated key. A proof was published stating that no attack on Salsa20 with 128 bit key is possible with an average search time of less than 2^130 (about 10^39) random guesses.
 
 To put that number into perspective. Performing 1 billion key operations per CPU core per second, and using a suite of 1 billion CPU cores, it will take roughly 10 trillion years.
 
 Atuin uses a 256 bit key which is even more secure, and therefore not at risk of a practical brute force attack. It follows that we are likely safe from a known plain-text attack.
 
-However, there is still the issue of key leaking. We have no key-upgrade policy. If a key is leaked, maybe through a side channel attack or through a social attack, then the only solution is to create a new account with a new key.
+However, there is still the issue of key leaking. We have no key-upgrade policy. If a key is leaked, maybe through a side-channel attack or through a social attack, then the only solution is to create a new account with a new key.
 
 This is partially an issue.
 
