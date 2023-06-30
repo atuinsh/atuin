@@ -1,5 +1,5 @@
 # Source this in your ~/.config/nushell/config.nu
-let-env ATUIN_SESSION = (atuin uuid)
+$env.ATUIN_SESSION = (atuin uuid)
 
 # Magic token to make sure we don't record commands run by keybindings
 let ATUIN_KEYBINDING_TOKEN = $"# (random uuid)"
@@ -10,7 +10,7 @@ let _atuin_pre_execution = {||
         return
     }
     if not ($cmd | str starts-with $ATUIN_KEYBINDING_TOKEN) {
-        let-env ATUIN_HISTORY_ID = (atuin history start -- $cmd)
+        $env.ATUIN_HISTORY_ID = (atuin history start -- $cmd)
     }
 }
 
@@ -35,7 +35,7 @@ def _atuin_search_cmd [...flags: string] {
     ] | str join "\n"
 }
 
-let-env config = (
+$env.config = (
     $env.config | upsert hooks (
         $env.config.hooks
         | upsert pre_execution ($env.config.hooks.pre_execution | append $_atuin_pre_execution)

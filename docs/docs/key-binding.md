@@ -87,12 +87,12 @@ bind -M insert \cr _atuin_search
 ## nu
 
 ```
-let-env ATUIN_NOBIND = true
+$env.ATUIN_NOBIND = true
 atuin init nu | save -f ~/.local/share/atuin/init.nu #make sure you created the directory beforehand with `mkdir ~/.local/share/atuin/init.nu`
 source ~/.local/share/atuin/init.nu
 
 #bind to ctrl-r in emacs, vi_normal and vi_insert modes, add any other bindings you want here too
-let-env config = (
+$env.config = (
     $env.config | upsert keybindings (
         $env.config.keybindings
         | append {
