@@ -69,3 +69,4 @@ generic-array = { version = "0.14", optional = true, features = ["serde"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
+pretty_assertions = { workspace = true }

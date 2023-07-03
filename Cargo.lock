@@ -151,7 +151,12 @@ dependencies = [
  "memchr",
  "minspan",
  "parse_duration",
+<<<<<<< HEAD
  "rand 0.8.5",
+=======
+ "pretty_assertions",
+ "rand",
+>>>>>>> f788279b (Add tests, all passing)
  "regex",
  "reqwest",
  "rmp",
