@@ -78,27 +78,6 @@ __atuin_install_ubuntu(){
 	rm -f "$TEMP_DEB"
 }
 
-__atuin_install_linux(){
-	echo "Detected Linux!"
-	echo "Checking distro..."
-	if (uname -a | grep -qi "Microsoft"); then
-    OS="ubuntuwsl"
-  elif ! command -v lsb_release &> /dev/null; then
-    echo "lsb_release could not be found. Falling back to /etc/os-release"
-    OS="$(grep -Po '(?<=^ID=).*$' /etc/os-release | tr '[:upper:]' '[:lower:]')" 2>/dev/null
-  else
-    OS=$(lsb_release -i | awk '{ print $3 }' | tr '[:upper:]' '[:lower:]')
-  fi
-	if [ "$OS" == "arch" ] || [ "$OS" == "manjarolinux" ] || [ "$OS" == "endeavouros" ]; then
-		__atuin_install_arch
-  elif [ "$OS" == "ubuntu" ] || [ "$OS" == "ubuntuwsl" ] || [ "$OS" == "debian" ] || [ "$OS" == "linuxmint" ] || [ "$OS" == "parrot" ] || [ "$OS" == "kali" ] || [ "$OS" == "elementary" ] || [ "$OS" == "pop" ]; then
-		__atuin_install_ubuntu
-	else
-		# TODO: download a binary or smth
-		__atuin_install_unsupported
-	fi
-}
-
 __atuin_install_mac(){
 	echo "Detected Mac!"
 
@@ -162,10 +141,80 @@ __atuin_install_unsupported(){
 	done
 }
 
+__get_os() {
+  if [ -f "/etc/os-release" ]; then
+    OS="$(grep -Po '(?<=^ID=).*$' /etc/os-release | tr '[:upper:]' '[:lower:]')" 2>/dev/null
+  elif [ -f "/etc/debian_version" ]; then
+    OS="debian"
+  elif [ -f "/etc/centos-release" ]; then
+    OS="centos"
+  elif [ -f "/etc/manjaro-release" ]; then
+    OS="manjarolinux"
+  elif [ -f "/etc/fedora-release" ]; then
+    OS="fedora"
+  elif [ -f "/etc/arch-release" ]; then
+    OS="arch"
+  elif [ -f "/etc/gentoo-release" ]; then
+    OS="gentoo"
+  else
+    if uname -r | grep -qi "microsoft"; then
+      if [ -f "/etc/os-release" ]; then
+        PRETTY_NAME="$(grep -Po '(?<=^PRETTY_NAME=).*$' /etc/os-release | tr -d '"' | tr '[:upper:]' '[:lower:]')"
+        case "$PRETTY_NAME" in
+          "ubuntu"* ) OS="ubuntu" ;;
+          "debian"* ) OS="debian" ;;
+          "fedora"* ) OS="fedora" ;;
+          # Add more distributions as needed
+          * ) OS="unknownwsl" ;;
+        esac
+      else
+        OS="unknownwsl"
+      fi
+    else
+      echo "Unknown"
+      exit 1
+    fi
+  fi
+}
+
+
+__atuin_install() {
+  case "$OSTYPE" in
+    linux-android*)
+      __atuin_install_termux
+      ;;
+    linux*)
+      OS=$(__get_os)
+      case "$OS" in
+        "arch"|"manjarolinux"|"endeavouros"|"artix"|"manjaro")
+          __atuin_install_arch
+          ;;
+        "ubuntu"|"ubuntuwsl"|"debian"|"linuxmint"|"parrot"|"kali"|"elementary"|"pop")
+          __atuin_install_ubuntu
+          ;;
+        *)
+          __atuin_install_unsupported
+          ;;
+      esac
+      ;;
+    darwin*)
+      __atuin_install_mac
+      ;;
+    msys*)
+      __atuin_install_unsupported
+      ;;
+    *)
+      __atuin_install_unsupported
+      ;;
+  esac
+}
+
+
+__get_os
 # TODO: would be great to support others!
 case "$OSTYPE" in
   linux-android*) __atuin_install_termux ;;
-  linux*)         __atuin_install_linux ;;
+  linux*)         __atuin_install ;;
   darwin*)        __atuin_install_mac ;;
   msys*)          __atuin_install_unsupported ;;
   solaris*)       __atuin_install_unsupported ;;
@@ -173,16 +222,37 @@ case "$OSTYPE" in
   *)              __atuin_install_unsupported ;;
 esac
 
-# TODO: Check which shell is in use
-# Use of single quotes around $() is intentional here
-# shellcheck disable=SC2016
-printf '\neval "$(atuin init zsh)"\n' >> ~/.zshrc
 
-curl https://raw.githubusercontent.com/rcaloras/bash-preexec/master/bash-preexec.sh -o ~/.bash-preexec.sh
-printf '\n[[ -f ~/.bash-preexec.sh ]] && source ~/.bash-preexec.sh\n' >> ~/.bashrc
-# Use of single quotes around $() is intentional here
-# shellcheck disable=SC2016
-echo 'eval "$(atuin init bash)"' >> ~/.bashrc
+
+case "$SHELL" in
+    *bash*)
+    		# shellcheck disable=SC2016
+        printf '\neval "$(atuin init zsh)"\n' >> ~/.bashrc
+        curl https://raw.githubusercontent.com/rcaloras/bash-preexec/master/bash-preexec.sh -o ~/.bash-preexec.sh
+        printf '\n[[ -f ~/.bash-preexec.sh ]] && source ~/.bash-preexec.sh\n' >> ~/.bashrc
+        # Use of single quotes around $() is intentional here
+        # shellcheck disable=SC2016
+        echo 'eval "$(atuin init bash)"' >> ~/.bashrc 
+        ;;
+    *zsh*)
+    		# shellcheck disable=SC2086,SC2016
+		    printf '\neval "$(atuin init zsh)"\n' >> ${ZDOTDIR:-$HOME}/.zshrc
+        echo "Running under zsh"
+        ;;
+    *)
+        echo "Unknown shell"	
+        # shellcheck disable=SC2016
+		    printf '\neval "$(atuin init zsh)"\n' >> ~/.zshrc
+        # shellcheck disable=SC2016
+        printf '\neval "$(atuin init zsh)"\n' >> ~/.bashrc
+		    curl https://raw.githubusercontent.com/rcaloras/bash-preexec/master/bash-preexec.sh -o ~/.bash-preexec.sh
+		    printf '\n[[ -f ~/.bash-preexec.sh ]] && source ~/.bash-preexec.sh\n' >> ~/.bashrc
+		    # Use of single quotes around $() is intentional here
+		    # shellcheck disable=SC2016
+		    echo 'eval "$(atuin init bash)"' >> ~/.bashrc 
+        ;;
+esac
+
 
 cat << EOF
 
