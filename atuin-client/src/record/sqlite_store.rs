@@ -158,7 +158,7 @@ impl Store for SqliteStore {
         }
     }
 
-    async fn first(&self, host: Uuid, tag: &str) -> Result<Option<Record<EncryptedData>>> {
+    async fn head(&self, host: Uuid, tag: &str) -> Result<Option<Record<EncryptedData>>> {
         let res = sqlx::query(
             "select * from records where host = ?1 and tag = ?2 and parent is null limit 1",
         )
@@ -171,7 +171,7 @@ impl Store for SqliteStore {
         Ok(res)
     }
 
-    async fn last(&self, host: Uuid, tag: &str) -> Result<Option<Record<EncryptedData>>> {
+    async fn tail(&self, host: Uuid, tag: &str) -> Result<Option<Record<EncryptedData>>> {
         let res = sqlx::query(
             "select * from records rp where tag=?1 and host=?2 and (select count(1) from records where parent=rp.id) = 0;",
         )
@@ -347,7 +347,7 @@ mod tests {
         db.push_batch(records.iter()).await.unwrap();
 
         let mut record = db
-            .first(tail.host, tail.tag.as_str())
+            .head(tail.host, tail.tag.as_str())
             .await
             .expect("in memory sqlite should not fail")
             .expect("entry exists");

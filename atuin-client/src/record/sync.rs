@@ -14,7 +14,7 @@ pub enum Operation {
     Download { tail: Uuid, host: Uuid, tag: String },
 }
 
-pub async fn diff(settings: &Settings, store: &mut impl Store) -> Result<Diff> {
+pub async fn diff(settings: &Settings, store: &mut impl Store) -> Result<(Diff, RecordIndex)> {
     let client = Client::new(&settings.sync_address, &settings.session_token)?;
 
     // First, build our own index
@@ -25,7 +25,7 @@ pub async fn diff(settings: &Settings, store: &mut impl Store) -> Result<Diff> {
 
     let diff = local_index.diff(&remote_index);
 
-    Ok(diff)
+    Ok((diff, remote_index))
 }
 
 // Take a diff, along with a local store, and resolve it into a set of operations.
@@ -49,7 +49,7 @@ pub async fn operations(diff: Diff, store: &impl Store) -> Result<Vec<Operation>
             // if local has the ID, then we should find the actual tail of this
             // store, so we know what we need to update the remote to.
             let tail = store
-                .last(host, tag.as_str())
+                .tail(host, tag.as_str())
                 .await?
                 .expect("failed to fetch last record, expected tag/host to exist");
 
@@ -80,6 +80,89 @@ pub async fn operations(diff: Diff, store: &impl Store) -> Result<Vec<Operation>
     });
 
     Ok(operations)
+}
+
+async fn sync_upload(
+    store: &mut impl Store,
+    remote_index: &RecordIndex,
+    client: &Client<'_>,
+    op: (Uuid, String, Uuid), // just easier to reason about this way imo
+) -> Result<i64> {
+    let mut total = 0;
+
+    // so. we have an upload operation, with the tail representing the state
+    // we want to get the remote to
+    let current_tail = remote_index.get(op.0, op.1.clone());
+
+    println!(
+        "Syncing local {:?}/{}/{:?}, remote has {:?}",
+        op.0, op.1, op.2, current_tail
+    );
+
+    let start = if let Some(current_tail) = current_tail {
+        current_tail
+    } else {
+        store
+            .head(op.0, op.1.as_str())
+            .await
+            .expect("failed to fetch host/tag head")
+            .expect("host/tag not in current index")
+            .id
+    };
+
+    // we have the start point for sync. it is either the head of the store if
+    // the remote has no data for it, or the tail that the remote has
+    // we need to iterate from the remote tail, and keep going until
+    // remote tail = current local tail
+
+    let mut record = Some(store.get(start).await.unwrap());
+
+    // don't try and upload the head again
+    if let Some(r) = record {
+        record = store.next(&r).await?;
+    }
+
+    // We are currently uploading them one at a time. Yes, this sucks. We are
+    // also processing all records in serial. That also sucks.
+    // Once sync works, we can then make it super fast.
+    while let Some(r) = record {
+        client.post_records(&[r.clone()]).await?;
+
+        record = store.next(&r).await?;
+        total += 1;
+    }
+
+    Ok(total)
+}
+fn sync_download(tail: Uuid, host: Uuid, tag: String) -> Result<i64> {
+    Ok(0)
+}
+
+pub async fn sync_remote(
+    operations: Vec<Operation>,
+    remote_index: &RecordIndex,
+    local_store: &mut impl Store,
+    settings: &Settings,
+) -> Result<(i64, i64)> {
+    let client = Client::new(&settings.sync_address, &settings.session_token)?;
+
+    let mut uploaded = 0;
+    let mut downloaded = 0;
+
+    // this can totally run in parallel, but lets get it working first
+    for i in operations {
+        match i {
+            Operation::Upload { tail, host, tag } => {
+                uploaded +=
+                    sync_upload(local_store, remote_index, &client, (host, tag, tail)).await?
+            }
+            Operation::Download { tail, host, tag } => {
+                downloaded += sync_download(tail, host, tag)?
+            }
+        }
+    }
+
+    Ok((uploaded, downloaded))
 }
 
 #[cfg(test)]
@@ -208,7 +291,7 @@ mod tests {
         let local_known = test_record();
 
         let second_shared = test_record();
-        let second_shared_remote_ahead = second_shared.new_child(vec![1, 2, 3]);
+        let second_shared_remote_aheparti;
 
         let local_ahead = shared_record.new_child(vec![1, 2, 3]);
 

@@ -5,7 +5,6 @@ use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 use uuid::Uuid;
 
-<<<<<<< HEAD
 #[derive(Clone, Debug, PartialEq)]
 pub struct DecryptedData(pub Vec<u8>);
 
@@ -14,9 +13,8 @@ pub struct EncryptedData {
     pub data: String,
     pub content_encryption_key: String,
 }
-=======
+
 pub type Diff = Vec<(Uuid, String, Uuid)>;
->>>>>>> f788279b (Add tests, all passing)
 
 /// A single record stored inside of our local database
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TypedBuilder)]

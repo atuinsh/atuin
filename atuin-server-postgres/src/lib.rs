@@ -350,7 +350,7 @@ impl Database for Postgres {
             .bind(id)
             .bind(i.id)
             .bind(i.host)
-            .bind(id)
+            .bind(i.parent)
             .bind(i.timestamp as i64) // throwing away some data, but i64 is still big in terms of time
             .bind(&i.version)
             .bind(&i.tag)
@@ -367,7 +367,7 @@ impl Database for Postgres {
     }
 
     async fn tail_records(&self, user: &User) -> DbResult<Vec<(Uuid, String, Uuid)>> {
-        const TAIL_RECORDS_SQL: &str = "select host, tag, id from records rp where (select count(1) from records where parent=rp.id and user_id = $1) = 0;";
+        const TAIL_RECORDS_SQL: &str = "select host, tag, client_id from records rp where (select count(1) from records where parent=rp.client_id and user_id = $1) = 0;";
 
         let res = sqlx::query_as(TAIL_RECORDS_SQL)
             .bind(user.id)

@@ -78,14 +78,12 @@ async fn run(
     db: &mut impl Database,
     store: &mut impl Store,
 ) -> Result<()> {
-    let diff = sync::diff(settings, store).await?;
-    println!("{:?}", diff);
+    let (diff, remote_index) = sync::diff(settings, store).await?;
+    let operations = sync::operations(diff, store).await?;
+    let (uploaded, downloaded) =
+        sync::sync_remote(operations, &remote_index, store, &settings).await?;
 
-    atuin_client::sync::sync(settings, force, db).await?;
-    println!(
-        "Sync complete! {} items in database, force: {}",
-        db.history_count().await?,
-        force
-    );
+    println!("{}/{} up/down to record store", uploaded, downloaded);
+
     Ok(())
 }

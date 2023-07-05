@@ -28,9 +28,9 @@ pub trait Store {
     async fn next(&self, record: &Record<EncryptedData>) -> Result<Option<Record<EncryptedData>>>;
 
     /// Get the first record for a given host and tag
-    async fn first(&self, host: Uuid, tag: &str) -> Result<Option<Record<EncryptedData>>>;
+    async fn head(&self, host: Uuid, tag: &str) -> Result<Option<Record<EncryptedData>>>;
     /// Get the last record for a given host and tag
-    async fn last(&self, host: Uuid, tag: &str) -> Result<Option<Record<EncryptedData>>>;
+    async fn tail(&self, host: Uuid, tag: &str) -> Result<Option<Record<EncryptedData>>>;
 
     async fn tail_records(&self) -> Result<Vec<(Uuid, String, Uuid)>>;
 }
