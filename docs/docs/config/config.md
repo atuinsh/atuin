@@ -196,6 +196,14 @@ Configure whether or not to show a preview of the selected command.
 
 Useful when the command is longer than the terminal width and is cut off.
 
+### `max_preview_height`
+
+Configure the maximum height of the preview to show.
+
+Useful when you have long scripts in your history that you want to distinguish by more than the first few lines.
+
+Defaults to `4`.
+
 ### `show_help`
 
 Configure whether or not to show the help row, which includes the current Atuin version (and whether an update is available), a keymap hint, and the total amount of commands in your history.
