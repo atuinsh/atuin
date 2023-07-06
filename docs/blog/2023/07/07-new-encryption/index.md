@@ -49,6 +49,7 @@ and implement this [XSalsa20 + Poly1305 system in Rust](https://github.com/ellie
 > NOTE: I didn't actually implement the underlying algorithms. we are using:
 > * [poly1305](https://github.com/RustCrypto/universal-hashes/tree/master/poly1305)
 > * [salsa20](https://github.com/RustCrypto/stream-ciphers/tree/master/salsa20)
+>
 > From the RustCrypto project.
 > These algorithms are not known to be vulnerable to software-based side-channel attacks.
 
