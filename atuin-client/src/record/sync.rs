@@ -110,17 +110,14 @@ async fn sync_upload(
             .id
     };
 
+    debug!("starting push to remote from: {}", start);
+
     // we have the start point for sync. it is either the head of the store if
     // the remote has no data for it, or the tail that the remote has
     // we need to iterate from the remote tail, and keep going until
     // remote tail = current local tail
 
     let mut record = Some(store.get(start).await.unwrap());
-
-    // don't try and upload the head again
-    if let Some(r) = record {
-        record = store.next(&r).await?;
-    }
 
     // We are currently uploading them one at a time. Yes, this sucks. We are
     // also processing all records in serial. That also sucks.
@@ -134,7 +131,15 @@ async fn sync_upload(
 
     Ok(total)
 }
-fn sync_download(tail: Uuid, host: Uuid, tag: String) -> Result<i64> {
+
+async fn sync_download(
+    store: &mut impl Store,
+    remote_index: &RecordIndex,
+    client: &Client<'_>,
+    op: (Uuid, String, Uuid),
+) -> Result<i64> {
+    let mut total = 0;
+
     Ok(0)
 }
 
@@ -157,7 +162,8 @@ pub async fn sync_remote(
                     sync_upload(local_store, remote_index, &client, (host, tag, tail)).await?
             }
             Operation::Download { tail, host, tag } => {
-                downloaded += sync_download(tail, host, tag)?
+                downloaded +=
+                    sync_download(local_store, remote_index, &client, (host, tag, tail)).await?
             }
         }
     }

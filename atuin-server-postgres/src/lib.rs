@@ -12,7 +12,7 @@ use sqlx::Row;
 use sqlx::types::Uuid;
 
 use tracing::instrument;
-use wrappers::{DbHistory, DbSession, DbUser};
+use wrappers::{DbHistory, DbRecord, DbSession, DbUser};
 
 mod wrappers;
 
@@ -334,6 +334,7 @@ impl Database for Postgres {
         .map(|DbHistory(h)| h)
     }
 
+    #[instrument(skip_all)]
     async fn add_records(&self, user: &User, records: &[Record]) -> DbResult<()> {
         let mut tx = self.pool.begin().await.map_err(fix_error)?;
 
@@ -364,6 +365,57 @@ impl Database for Postgres {
         tx.commit().await.map_err(fix_error)?;
 
         Ok(())
+    }
+
+    #[instrument(skip_all)]
+    async fn next_records(
+        &self,
+        user: &User,
+        host: Uuid,
+        tag: String,
+        start: Option<Uuid>,
+        count: u64,
+    ) -> DbResult<Vec<Record>> {
+        tracing::debug!("{:?} - {:?} - {:?}", host, tag, start);
+        let mut ret = Vec::with_capacity(count as usize);
+        let mut parent = start;
+
+        // yeah let's do something better
+        for _ in 0..count {
+            // a very much not ideal query. but it's simple at least?
+            // we are basically using postgres as a kv store here, so... maybe consider using an actual
+            // kv store?
+            let record: Result<DbRecord, DbError> = sqlx::query_as(
+                "select client_id, host, parent, timestamp, version, tag, data from records 
+                    where user_id = $1
+                    and tag = $2
+                    and host = $3
+                    and parent is not distinct from $4",
+            )
+            .bind(user.id)
+            .bind(tag.clone())
+            .bind(host)
+            .bind(parent)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(fix_error);
+
+            match record {
+                Ok(record) => {
+                    let record: Record = record.into();
+                    ret.push(record.clone());
+
+                    parent = Some(record.id);
+                }
+                Err(DbError::NotFound) => {
+                    tracing::debug!("hit tail of store: {:?}/{}", host, tag);
+                    return Ok(ret);
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        Ok(ret)
     }
 
     async fn tail_records(&self, user: &User) -> DbResult<Vec<(Uuid, String, Uuid)>> {

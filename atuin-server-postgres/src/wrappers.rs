@@ -1,10 +1,12 @@
 use ::sqlx::{FromRow, Result};
+use atuin_common::record::Record;
 use atuin_server_database::models::{History, Session, User};
 use sqlx::{postgres::PgRow, Row};
 
 pub struct DbUser(pub User);
 pub struct DbSession(pub Session);
 pub struct DbHistory(pub History);
+pub struct DbRecord(pub Record);
 
 impl<'a> FromRow<'a, PgRow> for DbUser {
     fn from_row(row: &'a PgRow) -> Result<Self> {
@@ -38,5 +40,27 @@ impl<'a> ::sqlx::FromRow<'a, PgRow> for DbHistory {
             data: row.try_get("data")?,
             created_at: row.try_get("created_at")?,
         }))
+    }
+}
+
+impl<'a> ::sqlx::FromRow<'a, PgRow> for DbRecord {
+    fn from_row(row: &'a PgRow) -> ::sqlx::Result<Self> {
+        let timestamp: i64 = row.try_get("timestamp")?;
+
+        Ok(Self(Record {
+            id: row.try_get("client_id")?,
+            host: row.try_get("host")?,
+            parent: row.try_get("parent")?,
+            timestamp: timestamp as u64,
+            version: row.try_get("version")?,
+            tag: row.try_get("tag")?,
+            data: row.try_get("data")?,
+        }))
+    }
+}
+
+impl Into<Record> for DbRecord {
+    fn into(self) -> Record {
+        Record { ..self.0 }
     }
 }

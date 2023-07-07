@@ -57,6 +57,14 @@ pub trait Database: Sized + Clone + Send + Sync + 'static {
     async fn deleted_history(&self, user: &User) -> DbResult<Vec<String>>;
 
     async fn add_records(&self, user: &User, record: &[Record]) -> DbResult<()>;
+    async fn next_records(
+        &self,
+        user: &User,
+        host: Uuid,
+        tag: String,
+        start: Option<Uuid>,
+        count: u64,
+    ) -> DbResult<Vec<Record>>;
 
     // Return the tail record ID for each store, so (HostID, Tag, TailRecordID)
     async fn tail_records(&self, user: &User) -> DbResult<Vec<(Uuid, String, Uuid)>>;

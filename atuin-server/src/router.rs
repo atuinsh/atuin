@@ -73,6 +73,7 @@ pub fn router<DB: Database>(database: DB, settings: Settings<DB::Settings>) -> R
         .route("/history", delete(handlers::history::delete))
         .route("/record", post(handlers::record::post))
         .route("/record", get(handlers::record::index))
+        .route("/record/next", get(handlers::record::next))
         .route("/user/:username", get(handlers::user::get))
         .route("/account", delete(handlers::user::delete))
         .route("/register", post(handlers::user::register))

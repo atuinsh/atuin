@@ -1,6 +1,8 @@
-use axum::{extract::State, Json};
+use axum::{extract::Query, extract::State, Json};
 use http::StatusCode;
+use serde::Deserialize;
 use tracing::{error, instrument};
+use uuid::Uuid;
 
 use super::{ErrorResponse, ErrorResponseStatus, RespExt};
 use crate::router::{AppState, UserAuth};
@@ -67,4 +69,37 @@ pub async fn index<DB: Database>(
     }
 
     Ok(Json(record_index))
+}
+
+#[derive(Deserialize)]
+pub struct NextParams {
+    host: Uuid,
+    tag: String,
+    start: Option<Uuid>,
+    count: u64,
+}
+
+#[instrument(skip_all, fields(user.id = user.id))]
+pub async fn next<DB: Database>(
+    params: Query<NextParams>,
+    UserAuth(user): UserAuth,
+    state: State<AppState<DB>>,
+) -> Result<Json<Vec<Record>>, ErrorResponseStatus<'static>> {
+    let State(AppState { database, settings }) = state;
+    let params = params.0;
+
+    let records = match database
+        .next_records(&user, params.host, params.tag, params.start, params.count)
+        .await
+    {
+        Ok(records) => records,
+        Err(e) => {
+            error!("failed to get record index: {}", e);
+
+            return Err(ErrorResponse::reply("failed to calculate record index")
+                .with_status(StatusCode::INTERNAL_SERVER_ERROR));
+        }
+    };
+
+    Ok(Json(records))
 }
