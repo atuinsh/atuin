@@ -12,7 +12,7 @@ use std::{io::prelude::*, path::PathBuf};
 
 use base64::prelude::{Engine, BASE64_STANDARD};
 use chrono::{DateTime, Utc};
-use eyre::{bail, eyre, Context, Result};
+use eyre::{bail, ensure, eyre, Context, Result};
 use fs_err as fs;
 use rmp::{decode::Bytes, Marker};
 use serde::{Deserialize, Serialize};
@@ -58,8 +58,12 @@ pub fn load_key(settings: &Settings) -> Result<Key> {
 
 pub fn encode_key(key: &Key) -> Result<String> {
     let mut buf = vec![];
-    rmp::encode::write_bin(&mut buf, key.as_slice())
+    rmp::encode::write_array_len(&mut buf, key.len() as u32)
         .wrap_err("could not encode key to message pack")?;
+    for b in key {
+        rmp::encode::write_uint(&mut buf, *b as u64)
+            .wrap_err("could not encode key to message pack")?;
+    }
     let buf = BASE64_STANDARD.encode(buf);
 
     Ok(buf)
@@ -72,15 +76,19 @@ pub fn decode_key(key: String) -> Result<Key> {
 
     // old code wrote the key as a fixed length array of 32 bytes
     // new code writes the key with a length prefix
-    if buf.len() == 32 {
-        Ok(*Key::from_slice(&buf))
-    } else {
-        let mut bytes = Bytes::new(&buf);
-        let key_len = rmp::decode::read_bin_len(&mut bytes).map_err(error_report)?;
-        if key_len != 32 || bytes.remaining_slice().len() != key_len as usize {
-            bail!("encryption key is not the correct size")
+    match <[u8; 32]>::try_from(&*buf) {
+        Ok(key) => Ok(key.into()),
+        Err(_) => {
+            let mut bytes = rmp::decode::Bytes::new(&buf);
+            let key_len =
+                rmp::decode::read_array_len(&mut bytes).map_err(|err| eyre!("{err:?}"))?;
+            ensure!(key_len == 32, "encryption key is not the correct size");
+            let mut key = Key::default();
+            for i in &mut key {
+                *i = rmp::decode::read_int(&mut bytes).map_err(|err| eyre!("{err:?}"))?;
+            }
+            Ok(key)
         }
-        Ok(*Key::from_slice(bytes.remaining_slice()))
     }
 }
 
