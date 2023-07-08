@@ -22,6 +22,7 @@ Please file an issue if you encounter any problems!
 
 EOF
 
+
 if ! command -v curl &> /dev/null; then
     echo "curl not installed. Please install curl."
     exit
@@ -140,6 +141,15 @@ __atuin_install_unsupported(){
 		esac
 	done
 }
+__atuin_check_gcc(){
+    OS=$(__get_os)
+    if command -v gcc &> /dev/null; then
+        echo "gcc is installed"
+    else
+        echo "gcc not installed. Please install gcc."
+        exit
+    fi
+}
 
 __get_os() {
   if [ -f "/etc/os-release" ]; then
@@ -152,6 +162,7 @@ __get_os() {
     OS="manjarolinux"
   elif [ -f "/etc/fedora-release" ]; then
     OS="fedora"
+    __atuin_check_gcc
   elif [ -f "/etc/arch-release" ]; then
     OS="arch"
   elif [ -f "/etc/gentoo-release" ]; then
