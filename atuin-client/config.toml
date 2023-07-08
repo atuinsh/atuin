@@ -1,13 +1,17 @@
 ## where to store your database, default is your system data directory
-## mac: ~/Library/Application Support/com.elliehuxtable.atuin/history.db
-## linux: ~/.local/share/atuin/history.db
+## linux/mac: ~/.local/share/atuin/history.db
+## windows: %USERPROFILE%/.local/share/atuin/history.db
 # db_path = "~/.history.db"
 
 ## where to store your encryption key, default is your system data directory
+## linux/mac: ~/.local/share/atuin/key
+## windows: %USERPROFILE%/.local/share/atuin/key
 # key_path = "~/.key"
 
 ## where to store your auth session token, default is your system data directory
-# session_path = "~/.key"
+## linux/mac: ~/.local/share/atuin/session
+## windows: %USERPROFILE%/.local/share/atuin/session
+# session_path = "~/.session"
 
 ## date format used, either "us" or "uk"
 # dialect = "us"
