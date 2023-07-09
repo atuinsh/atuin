@@ -88,6 +88,7 @@ async fn sync_upload(
     client: &Client<'_>,
     op: (Uuid, String, Uuid), // just easier to reason about this way imo
 ) -> Result<i64> {
+    let upload_page_size = 100;
     let mut total = 0;
 
     // so. we have an upload operation, with the tail representing the state
@@ -118,15 +119,26 @@ async fn sync_upload(
     // remote tail = current local tail
 
     let mut record = Some(store.get(start).await.unwrap());
+    record = store.next(&record.unwrap()).await?;
 
-    // We are currently uploading them one at a time. Yes, this sucks. We are
-    // also processing all records in serial. That also sucks.
-    // Once sync works, we can then make it super fast.
+    let mut buf = Vec::with_capacity(upload_page_size);
+
     while let Some(r) = record {
-        client.post_records(&[r.clone()]).await?;
+        if buf.len() < upload_page_size {
+            buf.push(r.clone());
+        } else {
+            client.post_records(&buf).await?;
 
+            // can we reset what we have? len = 0 but keep capacity
+            buf = Vec::with_capacity(upload_page_size);
+        }
         record = store.next(&r).await?;
+
         total += 1;
+    }
+
+    if buf.len() > 0 {
+        client.post_records(&buf).await?;
     }
 
     Ok(total)
