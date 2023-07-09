@@ -387,7 +387,7 @@ impl Database for Postgres {
             // we are basically using postgres as a kv store here, so... maybe consider using an actual
             // kv store?
             let record: Result<DbRecord, DbError> = sqlx::query_as(
-                "select client_id, host, parent, timestamp, version, tag, data from records 
+                "select client_id, host, parent, timestamp, version, tag, data, cek from records 
                     where user_id = $1
                     and tag = $2
                     and host = $3
