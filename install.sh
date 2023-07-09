@@ -152,7 +152,9 @@ __atuin_check_gcc(){
 }
 
 __get_os() {
-  if [ -f "/etc/os-release" ]; then
+  if [[ "$OSTYPE" == "darwin"* ]]; then
+    echo "darwin"
+  elif [ -f "/etc/os-release" ]; then
     OS="$(grep -Po '(?<=^ID=).*$' /etc/os-release | tr '[:upper:]' '[:lower:]')" 2>/dev/null
   elif [ -f "/etc/debian_version" ]; then
     OS="debian"
