@@ -49,7 +49,7 @@ pub async fn operations(diff: Diff, store: &impl Store) -> Result<Vec<Operation>
             // if local has the ID, then we should find the actual tail of this
             // store, so we know what we need to update the remote to.
             let tail = store
-                .tail(host, tag.as_str())
+                .tail(Some(host), tag.as_str())
                 .await?
                 .expect("failed to fetch last record, expected tag/host to exist");
 
@@ -163,7 +163,7 @@ async fn sync_download(
     let remote_tail = remote_index
         .get(op.0, op.1.clone())
         .expect("remote index does not contain expected tail during download");
-    let local_tail = store.tail(op.0, op.1.as_str()).await?;
+    let local_tail = store.tail(Some(op.0), op.1.as_str()).await?;
     //
     // We expect that the operations diff will represent the desired state
     // In this case, that contains the remote tail.

@@ -101,7 +101,10 @@ impl KvStore {
 
         let bytes = record.serialize()?;
 
-        let parent = store.tail(host_id, KV_TAG).await?.map(|entry| entry.id);
+        let parent = store
+            .tail(Some(host_id), KV_TAG)
+            .await?
+            .map(|entry| entry.id);
 
         let record = atuin_common::record::Record::builder()
             .host(host_id)
@@ -127,15 +130,12 @@ impl KvStore {
         namespace: &str,
         key: &str,
     ) -> Result<Option<KvRecord>> {
-        // TODO: don't load this from disk so much
-        let host_id = Settings::host_id().expect("failed to get host_id");
-
         // Currently, this is O(n). When we have an actual KV store, it can be better
         // Just a poc for now!
 
         // iterate records to find the value we want
         // start at the end, so we get the most recent version
-        let Some(mut record) = store.tail(host_id, KV_TAG).await? else {
+        let Some(mut record) = store.tail(None, KV_TAG).await? else {
             return Ok(None);
         };
 

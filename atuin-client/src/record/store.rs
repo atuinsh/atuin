@@ -30,7 +30,7 @@ pub trait Store {
     /// Get the first record for a given host and tag
     async fn head(&self, host: Uuid, tag: &str) -> Result<Option<Record<EncryptedData>>>;
     /// Get the last record for a given host and tag
-    async fn tail(&self, host: Uuid, tag: &str) -> Result<Option<Record<EncryptedData>>>;
+    async fn tail(&self, host: Option<Uuid>, tag: &str) -> Result<Option<Record<EncryptedData>>>;
 
     async fn tail_records(&self) -> Result<Vec<(Uuid, String, Uuid)>>;
 }
