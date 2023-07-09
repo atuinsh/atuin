@@ -139,7 +139,7 @@ async fn sync_download(
     op: (Uuid, String, Uuid),
 ) -> Result<i64> {
     // TODO(ellie): implement variable page sizing like on history sync
-    let download_page_size = 1;
+    let download_page_size = 1000;
 
     let mut total = 0;
 
@@ -161,20 +161,33 @@ async fn sync_download(
     println!("Downloading {:?}/{}/{:?} to local", op.0, op.1, op.2);
 
     let mut records = client
-        .next_records(op.0, op.1.clone(), local_tail.map(|r| r.id), 1)
+        .next_records(
+            op.0,
+            op.1.clone(),
+            local_tail.map(|r| r.id),
+            download_page_size,
+        )
         .await?;
 
     while records.len() > 0 {
+        total += std::cmp::min(download_page_size, records.len() as u64);
         store.push_batch(records.iter()).await?;
 
-        records = client
-            .next_records(op.0, op.1.clone(), records.last().map(|r| r.id), 1)
-            .await?;
+        if records.last().unwrap().id == remote_tail {
+            break;
+        }
 
-        total += download_page_size;
+        records = client
+            .next_records(
+                op.0,
+                op.1.clone(),
+                records.last().map(|r| r.id),
+                download_page_size,
+            )
+            .await?;
     }
 
-    Ok(total)
+    Ok(total as i64)
 }
 
 pub async fn sync_remote(
