@@ -171,28 +171,15 @@ impl Store for SqliteStore {
         Ok(res)
     }
 
-    // Get the tail for a given tag
-    // If a host is provided, get the tail for a tag for that host
-    // Otherwise, the latest record across hosts
-    async fn tail(&self, host: Option<Uuid>, tag: &str) -> Result<Option<Record<EncryptedData>>> {
-        let res = if let Some(host) = host {
-            sqlx::query(
+    async fn tail(&self, host: Uuid, tag: &str) -> Result<Option<Record<EncryptedData>>> {
+        let res = sqlx::query(
             "select * from records rp where tag=?1 and host=?2 and (select count(1) from records where parent=rp.id) = 0;",
         )
         .bind(tag)
         .bind(host.as_simple().to_string())
         .map(Self::query_row)
         .fetch_optional(&self.pool)
-        .await?
-        } else {
-            sqlx::query(
-            "select * from records rp where tag=?1 and (select count(1) from records where parent=rp.id) = 0;",
-        )
-        .bind(tag)
-        .map(Self::query_row)
-        .fetch_optional(&self.pool)
-        .await?
-        };
+        .await?;
 
         Ok(res)
     }
