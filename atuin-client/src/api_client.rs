@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::env;
+use uuid::Uuid;
 
 use chrono::Utc;
 use eyre::{bail, Result};
@@ -206,6 +207,32 @@ impl<'a> Client<'a> {
         self.client.post(url).json(records).send().await?;
 
         Ok(())
+    }
+
+    pub async fn next_records(
+        &self,
+        host: Uuid,
+        tag: String,
+        start: Option<Uuid>,
+        count: u64,
+    ) -> Result<Vec<Record>> {
+        let url = format!(
+            "{}/record/next?host={}&tag={}&count={}",
+            self.sync_addr, host, tag, count
+        );
+        let mut url = Url::parse(url.as_str())?;
+
+        if let Some(start) = start {
+            url.set_query(Some(
+                format!("host={}&tag={}&count={}&start={}", host, tag, count, start).as_str(),
+            ));
+        }
+
+        let resp = self.client.get(url).send().await?;
+
+        let records = resp.json::<Vec<Record>>().await?;
+
+        Ok(records)
     }
 
     pub async fn record_index(&self) -> Result<RecordIndex> {

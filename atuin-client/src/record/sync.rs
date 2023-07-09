@@ -138,9 +138,43 @@ async fn sync_download(
     client: &Client<'_>,
     op: (Uuid, String, Uuid),
 ) -> Result<i64> {
+    // TODO(ellie): implement variable page sizing like on history sync
+    let download_page_size = 1;
+
     let mut total = 0;
 
-    Ok(0)
+    // We know that the remote is ahead of us, so let's keep downloading until both
+    // 1) The remote stops returning full pages
+    // 2) The tail equals what we expect
+    //
+    // If (1) occurs without (2), then something is wrong with our index calculation
+    // and we should bail.
+    let remote_tail = remote_index
+        .get(op.0, op.1.clone())
+        .expect("remote index does not contain expected tail during download");
+    let local_tail = store.tail(op.0, op.1.as_str()).await?;
+    //
+    // We expect that the operations diff will represent the desired state
+    // In this case, that contains the remote tail.
+    assert_eq!(remote_tail, op.2);
+
+    println!("Downloading {:?}/{}/{:?} to local", op.0, op.1, op.2);
+
+    let mut records = client
+        .next_records(op.0, op.1.clone(), local_tail.map(|r| r.id), 1)
+        .await?;
+
+    while records.len() > 0 {
+        store.push_batch(records.iter()).await?;
+
+        records = client
+            .next_records(op.0, op.1.clone(), records.last().map(|r| r.id), 1)
+            .await?;
+
+        total += download_page_size;
+    }
+
+    Ok(total)
 }
 
 pub async fn sync_remote(
