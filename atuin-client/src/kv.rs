@@ -1,3 +1,5 @@
+use std::cmp;
+
 use atuin_common::record::DecryptedData;
 use eyre::{bail, ensure, eyre, Result};
 
@@ -127,17 +129,22 @@ impl KvStore {
         namespace: &str,
         key: &str,
     ) -> Result<Option<KvRecord>> {
-        // TODO: don't load this from disk so much
-        let host_id = Settings::host_id().expect("failed to get host_id");
-
         // Currently, this is O(n). When we have an actual KV store, it can be better
         // Just a poc for now!
 
         // iterate records to find the value we want
         // start at the end, so we get the most recent version
-        let Some(mut record) = store.tail(host_id, KV_TAG).await? else {
+        let tails = store.tag_tails(KV_TAG).await?;
+
+        if tails.len() == 0 {
             return Ok(None);
-        };
+        }
+
+        // first, decide on a record.
+        // try getting the newest first
+        // we always need a way of deciding the "winner" of a write
+        // TODO(ellie): something better than last-write-wins, what if two write at the same time?
+        let mut record = tails.iter().max_by_key(|r| r.timestamp).unwrap().clone();
 
         loop {
             let decrypted = match record.version.as_str() {

@@ -29,8 +29,14 @@ pub trait Store {
 
     /// Get the first record for a given host and tag
     async fn head(&self, host: Uuid, tag: &str) -> Result<Option<Record<EncryptedData>>>;
+
     /// Get the last record for a given host and tag
     async fn tail(&self, host: Uuid, tag: &str) -> Result<Option<Record<EncryptedData>>>;
 
+    // Get the last record for all hosts for a given tag, useful for the read path of apps.
+    async fn tag_tails(&self, tag: &str) -> Result<Vec<Record<EncryptedData>>>;
+
+    // Get the latest host/tag/record tuple for every set in the store. useful for building an
+    // index
     async fn tail_records(&self) -> Result<Vec<(Uuid, String, Uuid)>>;
 }

@@ -184,6 +184,18 @@ impl Store for SqliteStore {
         Ok(res)
     }
 
+    async fn tag_tails(&self, tag: &str) -> Result<Vec<Record<EncryptedData>>> {
+        let res = sqlx::query(
+            "select * from records rp where tag=?1 and (select count(1) from records where parent=rp.id) = 0;",
+        )
+        .bind(tag)
+        .map(Self::query_row)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(res)
+    }
+
     async fn tail_records(&self) -> Result<Vec<(Uuid, String, Uuid)>> {
         let res = sqlx::query(
             "select host, tag, id from records rp where (select count(1) from records where parent=rp.id) = 0;",
