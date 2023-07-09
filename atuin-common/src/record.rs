@@ -8,7 +8,7 @@ use uuid::Uuid;
 #[derive(Clone, Debug, PartialEq)]
 pub struct DecryptedData(pub Vec<u8>);
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EncryptedData {
     pub data: String,
     pub content_encryption_key: String,
@@ -54,10 +54,10 @@ pub struct Record<Data> {
 /// Extra data from the record that should be encoded in the data
 #[derive(Debug, Copy, Clone)]
 pub struct AdditionalData<'a> {
-    pub id: &'a str,
+    pub id: &'a Uuid,
     pub version: &'a str,
     pub tag: &'a str,
-    pub host: &'a str,
+    pub host: &'a Uuid,
 }
 
 impl<Data> Record<Data> {

@@ -21,7 +21,7 @@ pub trait Store {
         records: impl Iterator<Item = &Record<EncryptedData>> + Send + Sync,
     ) -> Result<()>;
 
-    async fn get(&self, id: &str) -> Result<Record<EncryptedData>>;
+    async fn get(&self, id: Uuid) -> Result<Record<EncryptedData>>;
     async fn len(&self, host: Uuid, tag: &str) -> Result<u64>;
 
     /// Get the record that follows this record

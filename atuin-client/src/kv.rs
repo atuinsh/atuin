@@ -151,7 +151,7 @@ impl KvStore {
             }
 
             if let Some(parent) = decrypted.parent {
-                record = store.get(parent.as_str()).await?;
+                record = store.get(parent).await?;
             } else {
                 break;
             }

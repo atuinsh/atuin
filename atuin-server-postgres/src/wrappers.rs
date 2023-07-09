@@ -1,12 +1,12 @@
 use ::sqlx::{FromRow, Result};
-use atuin_common::record::Record;
+use atuin_common::record::{EncryptedData, Record};
 use atuin_server_database::models::{History, Session, User};
 use sqlx::{postgres::PgRow, Row};
 
 pub struct DbUser(pub User);
 pub struct DbSession(pub Session);
 pub struct DbHistory(pub History);
-pub struct DbRecord(pub Record);
+pub struct DbRecord(pub Record<EncryptedData>);
 
 impl<'a> FromRow<'a, PgRow> for DbUser {
     fn from_row(row: &'a PgRow) -> Result<Self> {
@@ -47,6 +47,11 @@ impl<'a> ::sqlx::FromRow<'a, PgRow> for DbRecord {
     fn from_row(row: &'a PgRow) -> ::sqlx::Result<Self> {
         let timestamp: i64 = row.try_get("timestamp")?;
 
+        let data = EncryptedData {
+            data: row.try_get("data")?,
+            content_encryption_key: row.try_get("cek")?,
+        };
+
         Ok(Self(Record {
             id: row.try_get("client_id")?,
             host: row.try_get("host")?,
@@ -54,13 +59,13 @@ impl<'a> ::sqlx::FromRow<'a, PgRow> for DbRecord {
             timestamp: timestamp as u64,
             version: row.try_get("version")?,
             tag: row.try_get("tag")?,
-            data: row.try_get("data")?,
+            data,
         }))
     }
 }
 
-impl Into<Record> for DbRecord {
-    fn into(self) -> Record {
+impl Into<Record<EncryptedData>> for DbRecord {
+    fn into(self) -> Record<EncryptedData> {
         Record { ..self.0 }
     }
 }

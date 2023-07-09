@@ -1,7 +1,7 @@
 use std::str::FromStr;
 
 use async_trait::async_trait;
-use atuin_common::record::Record;
+use atuin_common::record::{EncryptedData, Record};
 use atuin_server_database::models::{History, NewHistory, NewSession, NewUser, Session, User};
 use atuin_server_database::{Database, DbError, DbResult};
 use futures_util::TryStreamExt;
@@ -335,7 +335,7 @@ impl Database for Postgres {
     }
 
     #[instrument(skip_all)]
-    async fn add_records(&self, user: &User, records: &[Record]) -> DbResult<()> {
+    async fn add_records(&self, user: &User, records: &[Record<EncryptedData>]) -> DbResult<()> {
         let mut tx = self.pool.begin().await.map_err(fix_error)?;
 
         for i in records {
@@ -343,8 +343,8 @@ impl Database for Postgres {
 
             sqlx::query(
                 "insert into records
-                    (id, client_id, host, parent, timestamp, version, tag, data, user_id) 
-                values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                    (id, client_id, host, parent, timestamp, version, tag, data, cek, user_id) 
+                values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                 on conflict do nothing
                 ",
             )
@@ -355,7 +355,8 @@ impl Database for Postgres {
             .bind(i.timestamp as i64) // throwing away some data, but i64 is still big in terms of time
             .bind(&i.version)
             .bind(&i.tag)
-            .bind(&i.data)
+            .bind(&i.data.data)
+            .bind(&i.data.content_encryption_key)
             .bind(user.id)
             .execute(&mut tx)
             .await
@@ -375,7 +376,7 @@ impl Database for Postgres {
         tag: String,
         start: Option<Uuid>,
         count: u64,
-    ) -> DbResult<Vec<Record>> {
+    ) -> DbResult<Vec<Record<EncryptedData>>> {
         tracing::debug!("{:?} - {:?} - {:?}", host, tag, start);
         let mut ret = Vec::with_capacity(count as usize);
         let mut parent = start;
@@ -402,7 +403,7 @@ impl Database for Postgres {
 
             match record {
                 Ok(record) => {
-                    let record: Record = record.into();
+                    let record: Record<EncryptedData> = record.into();
                     ret.push(record.clone());
 
                     parent = Some(record.id);

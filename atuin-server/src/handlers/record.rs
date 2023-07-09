@@ -8,13 +8,13 @@ use super::{ErrorResponse, ErrorResponseStatus, RespExt};
 use crate::router::{AppState, UserAuth};
 use atuin_server_database::Database;
 
-use atuin_common::record::{Record, RecordIndex};
+use atuin_common::record::{EncryptedData, Record, RecordIndex};
 
 #[instrument(skip_all, fields(user.id = user.id))]
 pub async fn post<DB: Database>(
     UserAuth(user): UserAuth,
     state: State<AppState<DB>>,
-    Json(records): Json<Vec<Record>>,
+    Json(records): Json<Vec<Record<EncryptedData>>>,
 ) -> Result<(), ErrorResponseStatus<'static>> {
     let State(AppState { database, settings }) = state;
 
@@ -26,7 +26,7 @@ pub async fn post<DB: Database>(
 
     let too_big = records
         .iter()
-        .any(|r| r.data.len() >= settings.max_record_size || settings.max_record_size == 0);
+        .any(|r| r.data.data.len() >= settings.max_record_size || settings.max_record_size == 0);
 
     if too_big {
         return Err(
@@ -84,7 +84,7 @@ pub async fn next<DB: Database>(
     params: Query<NextParams>,
     UserAuth(user): UserAuth,
     state: State<AppState<DB>>,
-) -> Result<Json<Vec<Record>>, ErrorResponseStatus<'static>> {
+) -> Result<Json<Vec<Record<EncryptedData>>>, ErrorResponseStatus<'static>> {
     let State(AppState { database, settings }) = state;
     let params = params.0;
 

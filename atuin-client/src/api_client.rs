@@ -9,7 +9,7 @@ use reqwest::{
     StatusCode, Url,
 };
 
-use atuin_common::record::Record;
+use atuin_common::record::{EncryptedData, Record};
 use atuin_common::{
     api::{
         AddHistoryRequest, CountResponse, DeleteHistoryRequest, ErrorResponse, IndexResponse,
@@ -200,7 +200,7 @@ impl<'a> Client<'a> {
         Ok(())
     }
 
-    pub async fn post_records(&self, records: &[Record]) -> Result<()> {
+    pub async fn post_records(&self, records: &[Record<EncryptedData>]) -> Result<()> {
         let url = format!("{}/record", self.sync_addr);
         let url = Url::parse(url.as_str())?;
 
@@ -215,7 +215,7 @@ impl<'a> Client<'a> {
         tag: String,
         start: Option<Uuid>,
         count: u64,
-    ) -> Result<Vec<Record>> {
+    ) -> Result<Vec<Record<EncryptedData>>> {
         let url = format!(
             "{}/record/next?host={}&tag={}&count={}",
             self.sync_addr, host, tag, count
@@ -230,7 +230,7 @@ impl<'a> Client<'a> {
 
         let resp = self.client.get(url).send().await?;
 
-        let records = resp.json::<Vec<Record>>().await?;
+        let records = resp.json::<Vec<Record<EncryptedData>>>().await?;
 
         Ok(records)
     }

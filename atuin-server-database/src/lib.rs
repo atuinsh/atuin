@@ -13,7 +13,10 @@ use self::{
     models::{History, NewHistory, NewSession, NewUser, Session, User},
 };
 use async_trait::async_trait;
-use atuin_common::{record::Record, utils::get_days_from_month};
+use atuin_common::{
+    record::{EncryptedData, Record},
+    utils::get_days_from_month,
+};
 use chrono::{Datelike, TimeZone};
 use chronoutil::RelativeDuration;
 use serde::{de::DeserializeOwned, Serialize};
@@ -56,7 +59,7 @@ pub trait Database: Sized + Clone + Send + Sync + 'static {
     async fn delete_history(&self, user: &User, id: String) -> DbResult<()>;
     async fn deleted_history(&self, user: &User) -> DbResult<Vec<String>>;
 
-    async fn add_records(&self, user: &User, record: &[Record]) -> DbResult<()>;
+    async fn add_records(&self, user: &User, record: &[Record<EncryptedData>]) -> DbResult<()>;
     async fn next_records(
         &self,
         user: &User,
@@ -64,7 +67,7 @@ pub trait Database: Sized + Clone + Send + Sync + 'static {
         tag: String,
         start: Option<Uuid>,
         count: u64,
-    ) -> DbResult<Vec<Record>>;
+    ) -> DbResult<Vec<Record<EncryptedData>>>;
 
     // Return the tail record ID for each store, so (HostID, Tag, TailRecordID)
     async fn tail_records(&self, user: &User) -> DbResult<Vec<(Uuid, String, Uuid)>>;

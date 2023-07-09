@@ -6,6 +6,7 @@ use rusty_paseto::core::{
     ImplicitAssertion, Key as DataKey, Local as LocalPurpose, Paseto, PasetoNonce, Payload, V4,
 };
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 /// Use PASETO V4 Local encryption using the additional data as an implicit assertion.
 #[allow(non_camel_case_types)]
@@ -158,10 +159,10 @@ struct AtuinFooter {
 // This cannot be changed, otherwise it breaks the authenticated encryption.
 #[derive(Debug, Copy, Clone, Serialize)]
 struct Assertions<'a> {
-    id: &'a str,
+    id: &'a Uuid,
     version: &'a str,
     tag: &'a str,
-    host: &'a str,
+    host: &'a Uuid,
 }
 
 impl<'a> From<AdditionalData<'a>> for Assertions<'a> {
