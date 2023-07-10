@@ -21,7 +21,7 @@ _atuin_preexec() {
 _atuin_precmd() {
     local EXIT="$?"
 
-    [[ -z "${ATUIN_HISTORY_ID}" ]] && return
+    [[ -z "${ATUIN_HISTORY_ID:-}" ]] && return
 
     (RUST_LOG=error atuin history end --exit $EXIT -- $ATUIN_HISTORY_ID &) >/dev/null 2>&1
 }
