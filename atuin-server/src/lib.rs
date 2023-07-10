@@ -2,45 +2,48 @@
 
 use std::net::{IpAddr, SocketAddr};
 
+use atuin_server_database::Database;
 use axum::Server;
-use database::Postgres;
 use eyre::{Context, Result};
 
-use crate::settings::Settings;
+mod handlers;
+mod router;
+mod settings;
+mod utils;
 
+pub use settings::Settings;
 use tokio::signal;
 
-pub mod auth;
-pub mod calendar;
-pub mod database;
-pub mod handlers;
-pub mod models;
-pub mod router;
-pub mod settings;
-pub mod utils;
-
+#[cfg(target_family = "unix")]
 async fn shutdown_signal() {
-    let terminate = async {
-        signal::unix::signal(signal::unix::SignalKind::terminate())
-            .expect("failed to register signal handler")
-            .recv()
-            .await;
-    };
-
-    tokio::select! {
-        _ = terminate => (),
-    }
+    signal::unix::signal(signal::unix::SignalKind::terminate())
+        .expect("failed to register signal handler")
+        .recv()
+        .await;
     eprintln!("Shutting down gracefully...");
 }
 
-pub async fn launch(settings: Settings, host: String, port: u16) -> Result<()> {
+#[cfg(target_family = "windows")]
+async fn shutdown_signal() {
+    signal::windows::ctrl_c()
+        .expect("failed to register signal handler")
+        .recv()
+        .await;
+    eprintln!("Shutting down gracefully...");
+}
+
+pub async fn launch<Db: Database>(
+    settings: Settings<Db::Settings>,
+    host: String,
+    port: u16,
+) -> Result<()> {
     let host = host.parse::<IpAddr>()?;
 
-    let postgres = Postgres::new(settings.clone())
+    let db = Db::new(&settings.db_settings)
         .await
-        .wrap_err_with(|| format!("failed to connect to db: {}", settings.db_uri))?;
+        .wrap_err_with(|| format!("failed to connect to db: {:?}", settings.db_settings))?;
 
-    let r = router::router(postgres, settings);
+    let r = router::router(db, settings);
 
     Server::bind(&SocketAddr::new(host, port))
         .serve(r.into_make_service())

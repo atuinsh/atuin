@@ -1,8 +1,24 @@
+---
+sidebar_position: 2
+---
+
 # Key binding
 
-## Shell
+Atuin does not yet have full key binding customization, though we do allow some changes.
 
-By default, Atuin will rebind both <kbd>Ctrl-r</kbd> and the up arrow.
+## Custom up arrow filter mode
+
+It can be useful to use a different filter mode on the up arrow. For example, you could use ctrl-r for searching globally, but the up arrow for searching history from the current directory only.
+
+Set your config like this:
+
+```
+filter_mode_shell_up_key_binding = "directory" # or global, host, directory, etc
+```
+
+## Disable up arrow
+
+Our default up-arrow binding can be a bit contentious. Some people love it, some people hate it. Many people who found it a bit jarring at first have since come to love it, so give it a try! Otherwise, if you don't like it, it's easy to disable.
 
 You can also disable either the up-arrow or <kbd>Ctrl-r</kbd> bindings individually, by passing
 `--disable-up-arrow` or `--disable-ctrl-r` to the call to `atuin init`:
@@ -30,7 +46,9 @@ eval "$(atuin init zsh)"
 
 You can then choose to bind Atuin if needed, do this after the call to init.
 
-### zsh
+## zsh
+
+If you'd like to customize your bindings further, it's possible to do so with custom shell config:
 
 Atuin defines the ZLE widget "\_atuin_search_widget"
 
@@ -45,7 +63,7 @@ bindkey '^[[A' _atuin_search_widget
 bindkey '^[OA' _atuin_search_widget
 ```
 
-### bash
+## bash
 
 ```
 export ATUIN_NOBIND="true"
@@ -55,7 +73,7 @@ eval "$(atuin init bash)"
 bind -x '"\C-r": __atuin_history'
 ```
 
-### fish
+## fish
 
 ```
 set -gx ATUIN_NOBIND "true"
@@ -66,15 +84,15 @@ bind \cr _atuin_search
 bind -M insert \cr _atuin_search
 ```
 
-# nu
+## nu
 
 ```
-set-env ATUIN_NOBIND = true
+$env.ATUIN_NOBIND = true
 atuin init nu | save -f ~/.local/share/atuin/init.nu #make sure you created the directory beforehand with `mkdir ~/.local/share/atuin/init.nu`
 source ~/.local/share/atuin/init.nu
 
 #bind to ctrl-r in emacs, vi_normal and vi_insert modes, add any other bindings you want here too
-let-env config = (
+$env.config = (
     $env.config | upsert keybindings (
         $env.config.keybindings
         | append {

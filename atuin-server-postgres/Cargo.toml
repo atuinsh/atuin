@@ -1,0 +1,21 @@
+[package]
+name = "atuin-server-postgres"
+edition = "2018"
+description = "server postgres database library for atuin"
+
+version = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+
+[dependencies]
+atuin-common = { path = "../atuin-common", version = "15.0.0" }
+atuin-server-database = { path = "../atuin-server-database", version = "15.0.0" }
+
+tracing = "0.1"
+chrono = { workspace = true }
+serde = { workspace = true }
+sqlx = { workspace = true }
+async-trait = { workspace = true }
+futures-util = "0.3"

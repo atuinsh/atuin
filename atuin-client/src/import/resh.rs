@@ -122,18 +122,17 @@ impl Importer for Resh {
                 difference.num_nanoseconds().unwrap_or(0)
             };
 
-            h.push(History {
-                id: uuid_v7().as_simple().to_string(),
-                timestamp,
-                duration,
-                exit: entry.exit_code,
-                command: entry.cmd_line,
-                cwd: entry.pwd,
-                session: uuid_v7().as_simple().to_string(),
-                hostname: entry.host,
-                deleted_at: None,
-            })
-            .await?;
+            let imported = History::import()
+                .command(entry.cmd_line)
+                .timestamp(timestamp)
+                .duration(duration)
+                .exit(entry.exit_code)
+                .cwd(entry.pwd)
+                .hostname(entry.host)
+                // CHECK: should we add uuid here? It's not set in the other importers
+                .session(uuid_v7().as_simple().to_string());
+
+            h.push(imported.build().into()).await?;
         }
 
         Ok(())

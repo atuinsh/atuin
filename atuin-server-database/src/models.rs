@@ -1,6 +1,5 @@
 use chrono::prelude::*;
 
-#[derive(sqlx::FromRow)]
 pub struct History {
     pub id: i64,
     pub client_id: String, // a client generated ID
@@ -8,6 +7,9 @@ pub struct History {
     pub hostname: String,
     pub timestamp: NaiveDateTime,
 
+    /// All the data we have about this command, encrypted.
+    ///
+    /// Currently this is an encrypted msgpack object, but this may change in the future.
     pub data: String,
 
     pub created_at: NaiveDateTime,
@@ -19,10 +21,12 @@ pub struct NewHistory {
     pub hostname: String,
     pub timestamp: chrono::NaiveDateTime,
 
+    /// All the data we have about this command, encrypted.
+    ///
+    /// Currently this is an encrypted msgpack object, but this may change in the future.
     pub data: String,
 }
 
-#[derive(sqlx::FromRow)]
 pub struct User {
     pub id: i64,
     pub username: String,
@@ -30,7 +34,6 @@ pub struct User {
     pub password: String,
 }
 
-#[derive(sqlx::FromRow)]
 pub struct Session {
     pub id: i64,
     pub user_id: i64,

@@ -82,17 +82,12 @@ impl Importer for Zsh {
                     let offset = chrono::Duration::seconds(counter);
                     counter += 1;
 
-                    h.push(History::new(
-                        now - offset, // preserve ordering
-                        command.trim_end().to_string(),
-                        String::from("unknown"),
-                        -1,
-                        -1,
-                        None,
-                        None,
-                        None,
-                    ))
-                    .await?;
+                    let imported = History::import()
+                        // preserve ordering
+                        .timestamp(now - offset)
+                        .command(command.trim_end().to_string());
+
+                    h.push(imported.build().into()).await?;
                 }
             }
         }
@@ -113,19 +108,15 @@ fn parse_extended(line: &str, counter: i64) -> History {
     let time = Utc.timestamp(time, 0);
     let time = time + offset;
 
+    // use nanos, because why the hell not? we won't display them.
     let duration = duration.parse::<i64>().map_or(-1, |t| t * 1_000_000_000);
 
-    // use nanos, because why the hell not? we won't display them.
-    History::new(
-        time,
-        command.trim_end().to_string(),
-        String::from("unknown"),
-        0, // assume 0, we have no way of knowing :(
-        duration,
-        None,
-        None,
-        None,
-    )
+    let imported = History::import()
+        .timestamp(time)
+        .command(command.trim_end().to_string())
+        .duration(duration);
+
+    imported.build().into()
 }
 
 #[cfg(test)]

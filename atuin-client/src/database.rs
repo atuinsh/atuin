@@ -6,6 +6,7 @@ use chrono::{prelude::*, Utc};
 use fs_err as fs;
 use itertools::Itertools;
 use lazy_static::lazy_static;
+use rand::{distributions::Alphanumeric, Rng};
 use regex::Regex;
 use sql_builder::{esc, quote, SqlBuilder, SqlName};
 use sqlx::{
@@ -16,13 +17,14 @@ use sqlx::{
 use super::{
     history::History,
     ordering,
-    settings::{FilterMode, SearchMode},
+    settings::{FilterMode, SearchMode, Settings},
 };
 
 pub struct Context {
     pub session: String,
     pub cwd: String,
     pub hostname: String,
+    pub host_id: String,
 }
 
 #[derive(Default, Clone)]
@@ -43,13 +45,19 @@ pub fn current_context() -> Context {
         eprintln!("ERROR: Failed to find $ATUIN_SESSION in the environment. Check that you have correctly set up your shell.");
         std::process::exit(1);
     };
-    let hostname = format!("{}:{}", whoami::hostname(), whoami::username());
+    let hostname = format!(
+        "{}:{}",
+        env::var("ATUIN_HOST_NAME").unwrap_or_else(|_| whoami::hostname()),
+        env::var("ATUIN_HOST_USER").unwrap_or_else(|_| whoami::username())
+    );
     let cwd = utils::get_current_dir();
+    let host_id = Settings::host_id().expect("failed to load host ID");
 
     Context {
         session,
         hostname,
         cwd,
+        host_id,
     }
 }
 
@@ -160,17 +168,18 @@ impl Sqlite {
     fn query_history(row: SqliteRow) -> History {
         let deleted_at: Option<i64> = row.get("deleted_at");
 
-        History {
-            id: row.get("id"),
-            timestamp: Utc.timestamp_nanos(row.get("timestamp")),
-            duration: row.get("duration"),
-            exit: row.get("exit"),
-            command: row.get("command"),
-            cwd: row.get("cwd"),
-            session: row.get("session"),
-            hostname: row.get("hostname"),
-            deleted_at: deleted_at.map(|t| Utc.timestamp_nanos(t)),
-        }
+        History::from_db()
+            .id(row.get("id"))
+            .timestamp(Utc.timestamp_nanos(row.get("timestamp")))
+            .duration(row.get("duration"))
+            .exit(row.get("exit"))
+            .command(row.get("command"))
+            .cwd(row.get("cwd"))
+            .session(row.get("session"))
+            .hostname(row.get("hostname"))
+            .deleted_at(deleted_at.map(|t| Utc.timestamp_nanos(t)))
+            .build()
+            .into()
     }
 }
 
@@ -456,6 +465,8 @@ impl Database for Sqlite {
                 .map(|after| sql.and_where_gt("timestamp", quote(after.timestamp_nanos())))
         });
 
+        sql.and_where_is_null("deleted_at");
+
         let query = sql.sql().expect("bug in search query. please report");
 
         let res = sqlx::query(&query)
@@ -515,7 +526,11 @@ impl Database for Sqlite {
     // but the time that the system marks it as deleted
     async fn delete(&self, mut h: History) -> Result<()> {
         let now = chrono::Utc::now();
-        h.command = String::from(""); // blank it
+        h.command = rand::thread_rng()
+            .sample_iter(&Alphanumeric)
+            .take(32)
+            .map(char::from)
+            .collect(); // overwrite with random string
         h.deleted_at = Some(now); // delete it
 
         self.update(&h).await?; // save it
@@ -540,6 +555,7 @@ mod test {
             hostname: "test:host".to_string(),
             session: "beepboopiamasession".to_string(),
             cwd: "/home/ellie".to_string(),
+            host_id: "test-host".to_string(),
         };
 
         let results = db
@@ -579,17 +595,19 @@ mod test {
     }
 
     async fn new_history_item(db: &mut impl Database, cmd: &str) -> Result<()> {
-        let history = History::new(
-            chrono::Utc::now(),
-            cmd.to_string(),
-            "/home/ellie".to_string(),
-            0,
-            1,
-            Some("beep boop".to_string()),
-            Some("booop".to_string()),
-            None,
-        );
-        db.save(&history).await
+        let mut captured: History = History::capture()
+            .timestamp(chrono::Utc::now())
+            .command(cmd)
+            .cwd("/home/ellie")
+            .build()
+            .into();
+
+        captured.exit = 0;
+        captured.duration = 1;
+        captured.session = "beep boop".to_string();
+        captured.hostname = "booop".to_string();
+
+        db.save(&captured).await
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -746,6 +764,7 @@ mod test {
             hostname: "test:host".to_string(),
             session: "beepboopiamasession".to_string(),
             cwd: "/home/ellie".to_string(),
+            host_id: "test-host".to_string(),
         };
 
         let mut db = Sqlite::new("sqlite::memory:").await.unwrap();

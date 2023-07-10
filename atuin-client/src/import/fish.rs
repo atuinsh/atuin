@@ -73,19 +73,9 @@ impl Importer for Fish {
                 // first, we must deal with the prev cmd
                 if let Some(cmd) = cmd.take() {
                     let time = time.unwrap_or(now);
+                    let entry = History::import().timestamp(time).command(cmd);
 
-                    loader
-                        .push(History::new(
-                            time,
-                            cmd,
-                            "unknown".into(),
-                            -1,
-                            -1,
-                            None,
-                            None,
-                            None,
-                        ))
-                        .await?;
+                    loader.push(entry.build().into()).await?;
                 }
 
                 // using raw strings to avoid needing escaping.
@@ -109,19 +99,9 @@ impl Importer for Fish {
         // we might have a trailing cmd
         if let Some(cmd) = cmd.take() {
             let time = time.unwrap_or(now);
+            let entry = History::import().timestamp(time).command(cmd);
 
-            loader
-                .push(History::new(
-                    time,
-                    cmd,
-                    "unknown".into(),
-                    -1,
-                    -1,
-                    None,
-                    None,
-                    None,
-                ))
-                .await?;
+            loader.push(entry.build().into()).await?;
         }
 
         Ok(())

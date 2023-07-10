@@ -3,7 +3,8 @@ use http::StatusCode;
 use tracing::instrument;
 
 use super::{ErrorResponse, ErrorResponseStatus, RespExt};
-use crate::{database::Database, models::User, router::AppState};
+use crate::router::{AppState, UserAuth};
+use atuin_server_database::Database;
 
 use atuin_common::api::*;
 
@@ -11,7 +12,7 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[instrument(skip_all, fields(user.id = user.id))]
 pub async fn status<DB: Database>(
-    user: User,
+    UserAuth(user): UserAuth,
     state: State<AppState<DB>>,
 ) -> Result<Json<StatusResponse>, ErrorResponseStatus<'static>> {
     let db = &state.0.database;

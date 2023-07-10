@@ -16,10 +16,10 @@ use tracing::{debug, error, info, instrument};
 use uuid::Uuid;
 
 use super::{ErrorResponse, ErrorResponseStatus, RespExt};
-use crate::{
-    database::Database,
-    models::{NewSession, NewUser, User},
-    router::AppState,
+use crate::router::{AppState, UserAuth};
+use atuin_server_database::{
+    models::{NewSession, NewUser},
+    Database, DbError,
 };
 
 use reqwest::header::CONTENT_TYPE;
@@ -64,11 +64,11 @@ pub async fn get<DB: Database>(
     let db = &state.0.database;
     let user = match db.get_user(username.as_ref()).await {
         Ok(user) => user,
-        Err(sqlx::Error::RowNotFound) => {
+        Err(DbError::NotFound) => {
             debug!("user not found: {}", username);
             return Err(ErrorResponse::reply("user not found").with_status(StatusCode::NOT_FOUND));
         }
-        Err(err) => {
+        Err(DbError::Other(err)) => {
             error!("database error: {}", err);
             return Err(ErrorResponse::reply("database error")
                 .with_status(StatusCode::INTERNAL_SERVER_ERROR));
@@ -152,7 +152,7 @@ pub async fn register<DB: Database>(
 
 #[instrument(skip_all, fields(user.id = user.id))]
 pub async fn delete<DB: Database>(
-    user: User,
+    UserAuth(user): UserAuth,
     state: State<AppState<DB>>,
 ) -> Result<Json<DeleteUserResponse>, ErrorResponseStatus<'static>> {
     debug!("request to delete user {}", user.id);
@@ -175,10 +175,10 @@ pub async fn login<DB: Database>(
     let db = &state.0.database;
     let user = match db.get_user(login.username.borrow()).await {
         Ok(u) => u,
-        Err(sqlx::Error::RowNotFound) => {
+        Err(DbError::NotFound) => {
             return Err(ErrorResponse::reply("user not found").with_status(StatusCode::NOT_FOUND));
         }
-        Err(e) => {
+        Err(DbError::Other(e)) => {
             error!("failed to get user {}: {}", login.username.clone(), e);
 
             return Err(ErrorResponse::reply("database error")
@@ -188,11 +188,11 @@ pub async fn login<DB: Database>(
 
     let session = match db.get_user_session(&user).await {
         Ok(u) => u,
-        Err(sqlx::Error::RowNotFound) => {
+        Err(DbError::NotFound) => {
             debug!("user session not found for user id={}", user.id);
             return Err(ErrorResponse::reply("user not found").with_status(StatusCode::NOT_FOUND));
         }
-        Err(err) => {
+        Err(DbError::Other(err)) => {
             error!("database error for user {}: {}", login.username, err);
             return Err(ErrorResponse::reply("database error")
                 .with_status(StatusCode::INTERNAL_SERVER_ERROR));

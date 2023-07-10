@@ -1,85 +1,16 @@
 ---
-title: Getting Started
-sidebar_position: 1
+title: Advanced Install
 ---
+Generally, we recommend using our install script. It ensures you use the most
+up-to-date Atuin, and that your shell plugin is correctly setup. It will prefer
+the system package manager wherever necessary!
 
-Atuin replaces your existing shell history with a SQLite database, and records
-additional context for your commands. Additionally, it provides optional and
-_fully encrypted_ synchronisation of your history between machines, via an Atuin
-server.
+However, I totally understand if you'd rather do things yourself and not run a
+script from the internet. If so, follow on!
 
-You may use either the server I host, or host your own! Or just don't use sync
-at all. As all history sync is encrypted, I couldn't access your data even if
-I wanted to. And I **really** don't want to.
+## Install Atuin
 
-## Supported Shells
-
-- zsh
-- bash
-- fish
-- nushell
- 
-## Community
-
-Atuin has a community Discord, available [here](https://discord.gg/Fq8bJSKPHh)
-
-# Quickstart
-  
-## With the default sync server
-  
-This will sign you up for the default sync server, hosted by me. Everything is end-to-end encrypted, so your secrets are safe!
-  
-Read more below for offline-only usage, or for hosting your own server.
-
-```
-bash <(curl https://raw.githubusercontent.com/ellie/atuin/main/install.sh)
-
-atuin register -u <USERNAME> -e <EMAIL> -p <PASSWORD>
-atuin import auto
-atuin sync
-```
-
-Then restart your shell!
-  
-### Opt-in to activity graph
-Alongside the hosted Atuin server, there is also a service which generates activity graphs for your shell history! These are inspired by the GitHub graph.
-  
-For example, here is mine:
-  
-![Activity Graph Example](/img/activity-graph-example.png)
-
-If you wish to get your own, after signing up for the sync server, run this
-  
-```
-curl https://api.atuin.sh/enable -d $(cat ~/.local/share/atuin/session)
-```
-  
-The response includes the URL to your graph. Feel free to share and/or embed this URL, the token is _not_ a secret, and simply prevents user enumeration. 
-  
-## Offline only (no sync)
-  
-```
-bash <(curl https://raw.githubusercontent.com/ellie/atuin/main/install.sh)
-            
-atuin import auto
-```
-
-Then restart your shell!
-
-## Install
-
-### Script (recommended)
-
-The install script will help you through the setup, ensuring your shell is
-properly configured. It will also use one of the below methods, preferring the
-system package manager where possible (pacman, homebrew, etc etc).
-
-```
-# do not run this as root, root will be asked for if required
-bash <(curl https://raw.githubusercontent.com/ellie/atuin/main/install.sh)
-```
-
-And then follow [the shell setup](#shell-plugin)
+Atuin is in a number of package repositories! Please choose whichever works best for you.
 
 ### With cargo
 
@@ -147,13 +78,14 @@ And then follow [the shell setup](#shell-plugin)
 
 ### From source
 
+Note: Atuin builds on the latest stable version of Rust, and we make no
+promises regarding older versions. We recommend using rustup.
+
 ```
 git clone https://github.com/ellie/atuin.git
 cd atuin/atuin
 cargo install --path .
 ```
-  
-And then follow [the shell setup](#shell-plugin)
 
 ## Shell plugin
 
