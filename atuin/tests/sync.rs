@@ -6,8 +6,22 @@ use atuin_server::{launch_with_listener, Settings as ServerSettings};
 use atuin_server_postgres::{Postgres, PostgresSettings};
 use futures_util::TryFutureExt;
 use tokio::{sync::oneshot, task::JoinHandle};
+use tracing::{dispatcher, Dispatch};
+use tracing_subscriber::{layer::SubscriberExt, EnvFilter};
 
 async fn start_server(path: &str) -> (String, oneshot::Sender<()>, JoinHandle<eyre::Result<()>>) {
+    let formatting_layer = tracing_tree::HierarchicalLayer::default()
+        .with_writer(tracing_subscriber::fmt::TestWriter::new())
+        .with_indent_lines(true)
+        .with_ansi(true)
+        .with_targets(true)
+        .with_indent_amount(2);
+
+    let dispatch: Dispatch = tracing_subscriber::registry()
+        .with(formatting_layer)
+        .with(EnvFilter::new("atuin_server=debug,info"))
+        .into();
+
     let server_settings = ServerSettings {
         host: "127.0.0.1".to_owned(),
         port: 0,
@@ -25,11 +39,19 @@ async fn start_server(path: &str) -> (String, oneshot::Sender<()>, JoinHandle<ey
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
-    let server = tokio::spawn(launch_with_listener::<Postgres>(
-        server_settings,
-        listener,
-        shutdown_rx.unwrap_or_else(|_| ()),
-    ));
+    let server = tokio::spawn(async move {
+        let _tracing_guard = dispatcher::set_default(&dispatch);
+
+        launch_with_listener::<Postgres>(
+            server_settings,
+            listener,
+            shutdown_rx.unwrap_or_else(|_| ()),
+        )
+        .await
+    });
+
+    // let the server come online
+    tokio::time::sleep(Duration::from_millis(200)).await;
 
     (format!("http://{addr}{path}"), shutdown_tx, server)
 }
