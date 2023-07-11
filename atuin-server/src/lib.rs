@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::net::{IpAddr, SocketAddr};
+use std::{net::{IpAddr, SocketAddr, TcpListener}, future::Future};
 
 use atuin_server_database::Database;
 use axum::Server;
@@ -16,10 +16,15 @@ use tokio::signal;
 
 #[cfg(target_family = "unix")]
 async fn shutdown_signal() {
-    signal::unix::signal(signal::unix::SignalKind::terminate())
-        .expect("failed to register signal handler")
-        .recv()
-        .await;
+    let mut term = signal::unix::signal(signal::unix::SignalKind::terminate())
+        .expect("failed to register signal handler");
+    let mut interrupt = signal::unix::signal(signal::unix::SignalKind::interrupt())
+        .expect("failed to register signal handler");
+
+    tokio::select! {
+        _ = term.recv() => {},
+        _ = interrupt.recv() => {},
+    };
     eprintln!("Shutting down gracefully...");
 }
 
@@ -38,16 +43,29 @@ pub async fn launch<Db: Database>(
     port: u16,
 ) -> Result<()> {
     let host = host.parse::<IpAddr>()?;
+    launch_with_listener::<Db>(
+        settings,
+        TcpListener::bind(SocketAddr::new(host, port)).context("could not connect to socket")?,
+        shutdown_signal(),
+    )
+    .await
+}
 
+pub async fn launch_with_listener<Db: Database>(
+    settings: Settings<Db::Settings>,
+    listener: TcpListener,
+    shutdown: impl Future<Output = ()>,
+) -> Result<()> {
     let db = Db::new(&settings.db_settings)
         .await
         .wrap_err_with(|| format!("failed to connect to db: {:?}", settings.db_settings))?;
 
     let r = router::router(db, settings);
 
-    Server::bind(&SocketAddr::new(host, port))
+    Server::from_tcp(listener)
+        .context("could not launch server")?
         .serve(r.into_make_service())
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(shutdown)
         .await?;
 
     Ok(())

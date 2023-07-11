@@ -44,6 +44,14 @@ jobs:
   test:
     runs-on: ubuntu-latest
 
+    services:
+      postgres:
+        image: postgres
+        env:
+          POSTGRES_USER: atuin
+          POSTGRES_PASSWORD: pass
+          POSTGRES_DB: atuin
+
     steps:
     - uses: actions/checkout@v3
 
