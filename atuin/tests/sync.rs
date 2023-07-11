@@ -1,4 +1,4 @@
-use std::{net::TcpListener, time::Duration};
+use std::{env, net::TcpListener, time::Duration};
 
 use atuin_client::api_client;
 use atuin_common::utils::uuid_v7;
@@ -22,6 +22,9 @@ async fn start_server(path: &str) -> (String, oneshot::Sender<()>, JoinHandle<()
         .with(EnvFilter::new("atuin_server=debug,info"))
         .into();
 
+    let db_uri = env::var("ATUIN_DB_URI")
+        .unwrap_or_else(|_| "postgres://atuin:pass@localhost:5432/atuin".to_owned());
+
     let server_settings = ServerSettings {
         host: "127.0.0.1".to_owned(),
         port: 0,
@@ -31,9 +34,7 @@ async fn start_server(path: &str) -> (String, oneshot::Sender<()>, JoinHandle<()
         page_size: 1100,
         register_webhook_url: None,
         register_webhook_username: String::new(),
-        db_settings: PostgresSettings {
-            db_uri: "postgres://atuin:pass@localhost:5432/atuin".to_owned(),
-        },
+        db_settings: PostgresSettings { db_uri },
     };
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
