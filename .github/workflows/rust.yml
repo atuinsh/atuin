@@ -50,7 +50,10 @@ jobs:
         env:
           POSTGRES_USER: atuin
           POSTGRES_PASSWORD: pass
-          POSTGRES_DB: atuin
+          POSTGRES_DB: atuin5
+        ports:
+          - 5432:5432
+
 
     steps:
     - uses: actions/checkout@v3
