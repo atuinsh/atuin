@@ -7,8 +7,8 @@ tags: [insights]
 ---
 
 <head>
-    <meta data-rh="true" property="og:image" content="https://atuin.sh/blog/new-encryption/og.jpg" />
-    <meta data-rh="true" property="twitter:image" content="https://atuin.sh/blog/new-encryption/og.jpg" />
+    <meta data-rh="true" property="og:image" content="https://atuin.sh/img/encryption-og.jpg" />
+    <meta data-rh="true" property="twitter:image" content="https://atuin.sh/img/encryption-og.jpg" />
 </head>
 
 End-to-end encryption is an essential component of Atuin.
