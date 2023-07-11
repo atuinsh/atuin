@@ -70,6 +70,8 @@ pub fn encode_key(key: &Key) -> Result<String> {
 }
 
 pub fn decode_key(key: String) -> Result<Key> {
+    use rmp::decode;
+
     let buf = BASE64_STANDARD
         .decode(key.trim_end())
         .wrap_err("encryption key is not a valid base64 encoding")?;
@@ -80,14 +82,27 @@ pub fn decode_key(key: String) -> Result<Key> {
         Ok(key) => Ok(key.into()),
         Err(_) => {
             let mut bytes = rmp::decode::Bytes::new(&buf);
-            let key_len =
-                rmp::decode::read_array_len(&mut bytes).map_err(|err| eyre!("{err:?}"))?;
-            ensure!(key_len == 32, "encryption key is not the correct size");
-            let mut key = Key::default();
-            for i in &mut key {
-                *i = rmp::decode::read_int(&mut bytes).map_err(|err| eyre!("{err:?}"))?;
+
+            match Marker::from_u8(buf[0]) {
+                Marker::Bin8 => {
+                    let len = decode::read_bin_len(&mut bytes).map_err(|err| eyre!("{err:?}"))?;
+                    ensure!(len == 32, "encryption key is not the correct size");
+                    let key = <[u8; 32]>::try_from(bytes.remaining_slice())
+                        .context("could not decode encryption key")?;
+                    Ok(key.into())
+                }
+                Marker::Array16 => {
+                    let len = decode::read_array_len(&mut bytes).map_err(|err| eyre!("{err:?}"))?;
+                    ensure!(len == 32, "encryption key is not the correct size");
+
+                    let mut key = Key::default();
+                    for i in &mut key {
+                        *i = rmp::decode::read_int(&mut bytes).map_err(|err| eyre!("{err:?}"))?;
+                    }
+                    Ok(key)
+                }
+                _ => bail!("could not decode encryption key"),
             }
-            Ok(key)
         }
     }
 }
@@ -347,5 +362,43 @@ mod test {
 
         let h = decode(&bytes).unwrap();
         assert_eq!(history, h);
+    }
+
+    #[test]
+    fn key_encodings() {
+        use super::{decode_key, encode_key, Key};
+
+        // a history of our key encodings.
+        // v11.0.0 xCAbWypb0msJ2Kq+8j4GVEWUlDX7deKnrTRSIopuqXxc5Q==
+        // v12.0.0 xCAbWypb0msJ2Kq+8j4GVEWUlDX7deKnrTRSIopuqXxc5Q==
+        // v13.0.0 xCAbWypb0msJ2Kq+8j4GVEWUlDX7deKnrTRSIopuqXxc5Q==
+        // v13.0.1 xCAbWypb0msJ2Kq+8j4GVEWUlDX7deKnrTRSIopuqXxc5Q==
+        // v14.0.0 xCAbWypb0msJ2Kq+8j4GVEWUlDX7deKnrTRSIopuqXxc5Q==
+        // v14.0.1 xCAbWypb0msJ2Kq+8j4GVEWUlDX7deKnrTRSIopuqXxc5Q==
+        // c7d89c1 3AAgG1sqW8zSawnM2MyqzL7M8j4GVEXMlMyUNcz7dczizKfMrTRSIsyKbsypfFzM5Q== (https://github.com/ellie/atuin/pull/805)
+        // b53ca35 3AAgG1sqW8zSawnM2MyqzL7M8j4GVEXMlMyUNcz7dczizKfMrTRSIsyKbsypfFzM5Q== (https://github.com/ellie/atuin/pull/974)
+        // v15.0.0 3AAgG1sqW8zSawnM2MyqzL7M8j4GVEXMlMyUNcz7dczizKfMrTRSIsyKbsypfFzM5Q==
+        // b8b57c8 xCAbWypb0msJ2Kq+8j4GVEWUlDX7deKnrTRSIopuqXxc5Q==                     (https://github.com/ellie/atuin/pull/1057)
+        // 8c94d79 3AAgG1sqW8zSawnM2MyqzL7M8j4GVEXMlMyUNcz7dczizKfMrTRSIsyKbsypfFzM5Q== (https://github.com/ellie/atuin/pull/1089)
+
+        let key = Key::from([
+            27, 91, 42, 91, 210, 107, 9, 216, 170, 190, 242, 62, 6, 84, 69, 148, 148, 53, 251, 117,
+            226, 167, 173, 52, 82, 34, 138, 110, 169, 124, 92, 229,
+        ]);
+
+        assert_eq!(
+            encode_key(&key).unwrap(),
+            "3AAgG1sqW8zSawnM2MyqzL7M8j4GVEXMlMyUNcz7dczizKfMrTRSIsyKbsypfFzM5Q=="
+        );
+
+        // key encodings we have to support
+        let valid_encodings = [
+            "xCAbWypb0msJ2Kq+8j4GVEWUlDX7deKnrTRSIopuqXxc5Q==",
+            "3AAgG1sqW8zSawnM2MyqzL7M8j4GVEXMlMyUNcz7dczizKfMrTRSIsyKbsypfFzM5Q==",
+        ];
+
+        for k in valid_encodings {
+            assert_eq!(decode_key(k.to_owned()).expect(k), key);
+        }
     }
 }
