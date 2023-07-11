@@ -85,11 +85,8 @@ impl SqliteStore {
         let host = Uuid::from_str(row.get("host")).expect("invalid host UUID format in sqlite DB");
         let parent: Option<&str> = row.get("parent");
 
-        let parent = if let Some(parent) = parent {
-            Some(Uuid::from_str(parent).expect("invalid parent UUID format in sqlite DB"))
-        } else {
-            None
-        };
+        let parent = parent
+            .map(|parent| Uuid::from_str(parent).expect("invalid parent UUID format in sqlite DB"));
 
         Record {
             id,

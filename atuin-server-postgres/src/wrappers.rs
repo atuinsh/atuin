@@ -64,8 +64,8 @@ impl<'a> ::sqlx::FromRow<'a, PgRow> for DbRecord {
     }
 }
 
-impl Into<Record<EncryptedData>> for DbRecord {
-    fn into(self) -> Record<EncryptedData> {
-        Record { ..self.0 }
+impl From<DbRecord> for Record<EncryptedData> {
+    fn from(other: DbRecord) -> Record<EncryptedData> {
+        Record { ..other.0 }
     }
 }

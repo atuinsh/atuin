@@ -13,7 +13,7 @@ use sqlx::{
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteRow},
     Result, Row,
 };
-use uuid::Uuid;
+
 
 use super::{
     history::History,

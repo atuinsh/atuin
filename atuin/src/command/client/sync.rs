@@ -2,7 +2,6 @@ use clap::Subcommand;
 use eyre::{Result, WrapErr};
 
 use atuin_client::{
-    api_client,
     database::Database,
     record::{store::Store, sync},
     settings::Settings,
@@ -46,7 +45,7 @@ impl Cmd {
         self,
         settings: Settings,
         db: &mut impl Database,
-        store: &mut impl Store,
+        store: &mut (impl Store + Send + Sync),
     ) -> Result<()> {
         match self {
             Self::Sync { force } => run(&settings, force, db, store).await,
@@ -76,14 +75,22 @@ async fn run(
     settings: &Settings,
     force: bool,
     db: &mut impl Database,
-    store: &mut impl Store,
+    store: &mut (impl Store + Send + Sync),
 ) -> Result<()> {
     let (diff, remote_index) = sync::diff(settings, store).await?;
     let operations = sync::operations(diff, store).await?;
     let (uploaded, downloaded) =
-        sync::sync_remote(operations, &remote_index, store, &settings).await?;
+        sync::sync_remote(operations, &remote_index, store, settings).await?;
 
-    println!("{}/{} up/down to record store", uploaded, downloaded);
+    println!("{uploaded}/{downloaded} up/down to record store");
+
+    atuin_client::sync::sync(settings, force, db).await?;
+
+    println!(
+        "Sync complete! {} items in history database, force: {}",
+        db.history_count().await?,
+        force
+    );
 
     Ok(())
 }

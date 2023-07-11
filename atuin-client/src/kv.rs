@@ -1,5 +1,3 @@
-use std::cmp;
-
 use atuin_common::record::DecryptedData;
 use eyre::{bail, ensure, eyre, Result};
 
@@ -136,7 +134,7 @@ impl KvStore {
         // start at the end, so we get the most recent version
         let tails = store.tag_tails(KV_TAG).await?;
 
-        if tails.len() == 0 {
+        if tails.is_empty() {
             return Ok(None);
         }
 

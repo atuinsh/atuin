@@ -233,9 +233,9 @@ impl Settings {
     pub fn host_id() -> Option<Uuid> {
         let id = Settings::read_from_data_dir(HOST_ID_FILENAME);
 
-        if id.is_some() {
-            let parsed = Uuid::from_str(id.unwrap().as_str())
-                .expect("failed to parse host ID from local directory");
+        if let Some(id) = id {
+            let parsed =
+                Uuid::from_str(id.as_str()).expect("failed to parse host ID from local directory");
             return Some(parsed);
         }
 

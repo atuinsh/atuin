@@ -63,9 +63,9 @@ pub struct AdditionalData<'a> {
 impl<Data> Record<Data> {
     pub fn new_child(&self, data: Vec<u8>) -> Record<DecryptedData> {
         Record::builder()
-            .host(self.host.clone())
+            .host(self.host)
             .version(self.version.clone())
-            .parent(Some(self.id.clone()))
+            .parent(Some(self.id))
             .tag(self.tag.clone())
             .data(DecryptedData(data))
             .build()
@@ -133,15 +133,15 @@ impl RecordIndex {
         // First, we check if other has everything that self has
         for (host, tag_map) in self.hosts.iter() {
             for (tag, tail) in tag_map.iter() {
-                match other.get(host.clone(), tag.clone()) {
+                match other.get(*host, tag.clone()) {
                     // The other store is all up to date! No diff.
                     Some(t) if t.eq(tail) => continue,
 
                     // The other store does exist, but it is either ahead or behind us. A diff regardless
-                    Some(t) => ret.push((host.clone(), tag.clone(), t)),
+                    Some(t) => ret.push((*host, tag.clone(), t)),
 
                     // The other store does not exist :O
-                    None => ret.push((host.clone(), tag.clone(), tail.clone())),
+                    None => ret.push((*host, tag.clone(), *tail)),
                 };
             }
         }
@@ -152,11 +152,11 @@ impl RecordIndex {
         // account for that!
         for (host, tag_map) in other.hosts.iter() {
             for (tag, tail) in tag_map.iter() {
-                match self.get(host.clone(), tag.clone()) {
+                match self.get(*host, tag.clone()) {
                     // If we have this host/tag combo, the comparison and diff will have already happened above
                     Some(_) => continue,
 
-                    None => ret.push((host.clone(), tag.clone(), tail.clone())),
+                    None => ret.push((*host, tag.clone(), *tail)),
                 };
             }
         }

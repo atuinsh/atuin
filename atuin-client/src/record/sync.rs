@@ -45,7 +45,7 @@ pub async fn operations(diff: Diff, store: &impl Store) -> Result<Vec<Operation>
         // Therefore, we need to download until our local tail matches
         let record = store.get(tail).await;
 
-        let op = if let Ok(_) = record {
+        let op = if record.is_ok() {
             // if local has the ID, then we should find the actual tail of this
             // store, so we know what we need to update the remote to.
             let tail = store
@@ -75,8 +75,8 @@ pub async fn operations(diff: Diff, store: &impl Store) -> Result<Vec<Operation>
     // with the same properties
 
     operations.sort_by_key(|op| match op {
-        Operation::Upload { tail, host, .. } => ("upload", host.clone(), tail.clone()),
-        Operation::Download { tail, host, .. } => ("download", host.clone(), tail.clone()),
+        Operation::Upload { tail, host, .. } => ("upload", *host, *tail),
+        Operation::Download { tail, host, .. } => ("download", *host, *tail),
     });
 
     Ok(operations)
@@ -136,7 +136,7 @@ async fn sync_upload(
         total += 1;
     }
 
-    if buf.len() > 0 {
+    if !buf.is_empty() {
         client.post_records(&buf).await?;
     }
 
@@ -180,7 +180,7 @@ async fn sync_download(
         )
         .await?;
 
-    while records.len() > 0 {
+    while !records.is_empty() {
         total += std::cmp::min(download_page_size, records.len() as u64);
         store.push_batch(records.iter()).await?;
 

@@ -1,4 +1,4 @@
-use std::str::FromStr;
+
 
 use async_trait::async_trait;
 use atuin_common::record::{EncryptedData, Record};
