@@ -3,18 +3,8 @@
 /// Defines a new UUID type wrapper
 macro_rules! new_uuid {
     ($name:ident) => {
-        #[derive(
-            Debug,
-            Copy,
-            Clone,
-            PartialEq,
-            Eq,
-            Hash,
-            PartialOrd,
-            Ord,
-            serde::Serialize,
-            serde::Deserialize,
-        )]
+        #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+        #[derive(serde::Serialize, serde::Deserialize)]
         #[serde(transparent)]
         pub struct $name(pub Uuid);
 
