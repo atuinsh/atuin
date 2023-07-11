@@ -1,6 +1,9 @@
 #![forbid(unsafe_code)]
 
-use std::{net::{IpAddr, SocketAddr, TcpListener}, future::Future};
+use std::{
+    future::Future,
+    net::{IpAddr, SocketAddr, TcpListener},
+};
 
 use atuin_server_database::Database;
 use axum::Server;

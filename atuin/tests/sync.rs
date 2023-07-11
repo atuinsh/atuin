@@ -69,4 +69,3 @@ async fn registration() {
     shutdown.send(()).unwrap();
     server.await.unwrap().unwrap();
 }
-
