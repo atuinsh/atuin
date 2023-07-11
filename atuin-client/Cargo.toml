@@ -54,6 +54,7 @@ rmp = { version = "0.8.11" }
 typed-builder = "0.14.0"
 tokio = { workspace = true }
 semver = { workspace = true }
+futures = "0.3"
 
 # encryption
 rusty_paseto = { version = "0.5.0", default-features = false }

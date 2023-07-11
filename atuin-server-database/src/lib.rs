@@ -14,14 +14,13 @@ use self::{
 };
 use async_trait::async_trait;
 use atuin_common::{
-    record::{EncryptedData, Record},
+    record::{EncryptedData, HostId, Record, RecordId, RecordIndex},
     utils::get_days_from_month,
 };
 use chrono::{Datelike, TimeZone};
 use chronoutil::RelativeDuration;
 use serde::{de::DeserializeOwned, Serialize};
 use tracing::instrument;
-use uuid::Uuid;
 
 #[derive(Debug)]
 pub enum DbError {
@@ -63,14 +62,14 @@ pub trait Database: Sized + Clone + Send + Sync + 'static {
     async fn next_records(
         &self,
         user: &User,
-        host: Uuid,
+        host: HostId,
         tag: String,
-        start: Option<Uuid>,
+        start: Option<RecordId>,
         count: u64,
     ) -> DbResult<Vec<Record<EncryptedData>>>;
 
     // Return the tail record ID for each store, so (HostID, Tag, TailRecordID)
-    async fn tail_records(&self, user: &User) -> DbResult<Vec<(Uuid, String, Uuid)>>;
+    async fn tail_records(&self, user: &User) -> DbResult<RecordIndex>;
 
     async fn count_history_range(
         &self,

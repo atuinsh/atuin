@@ -14,27 +14,27 @@ pub struct EncryptedData {
     pub content_encryption_key: String,
 }
 
-pub type Diff = Vec<(Uuid, String, Uuid)>;
+pub type Diff = Vec<(HostId, String, RecordId)>;
 
 /// A single record stored inside of our local database
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TypedBuilder)]
 pub struct Record<Data> {
     /// a unique ID
-    #[builder(default = crate::utils::uuid_v7())]
-    pub id: Uuid,
+    #[builder(default = RecordId(crate::utils::uuid_v7()))]
+    pub id: RecordId,
 
     /// The unique ID of the host.
     // TODO(ellie): Optimize the storage here. We use a bunch of IDs, and currently store
     // as strings. I would rather avoid normalization, so store as UUID binary instead of
     // encoding to a string and wasting much more storage.
-    pub host: Uuid,
+    pub host: HostId,
 
     /// The ID of the parent entry
     // A store is technically just a double linked list
     // We can do some cheating with the timestamps, but should not rely upon them.
     // Clocks are tricksy.
     #[builder(default)]
-    pub parent: Option<Uuid>,
+    pub parent: Option<RecordId>,
 
     /// The creation time in nanoseconds since unix epoch
     #[builder(default = chrono::Utc::now().timestamp_nanos() as u64)]
@@ -51,13 +51,17 @@ pub struct Record<Data> {
     pub data: Data,
 }
 
+new_uuid!(RecordId);
+new_uuid!(HostId);
+
 /// Extra data from the record that should be encoded in the data
 #[derive(Debug, Copy, Clone)]
 pub struct AdditionalData<'a> {
-    pub id: &'a Uuid,
+    pub id: &'a RecordId,
     pub version: &'a str,
     pub tag: &'a str,
-    pub host: &'a Uuid,
+    pub host: &'a HostId,
+    pub parent: Option<&'a RecordId>,
 }
 
 impl<Data> Record<Data> {
@@ -77,7 +81,7 @@ impl<Data> Record<Data> {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RecordIndex {
     // A map of host -> tag -> tail
-    pub hosts: HashMap<Uuid, HashMap<String, Uuid>>,
+    pub hosts: HashMap<HostId, HashMap<String, RecordId>>,
 }
 
 impl Default for RecordIndex {
@@ -86,14 +90,11 @@ impl Default for RecordIndex {
     }
 }
 
-impl From<Vec<(Uuid, String, Uuid)>> for RecordIndex {
-    fn from(f: Vec<(Uuid, String, Uuid)>) -> RecordIndex {
-        let mut record_index = RecordIndex::new();
-
-        for row in f {
-            record_index.set_raw(row.0, row.1, row.2);
+impl Extend<(HostId, String, RecordId)> for RecordIndex {
+    fn extend<T: IntoIterator<Item = (HostId, String, RecordId)>>(&mut self, iter: T) {
+        for (host, tag, tail_id) in iter {
+            self.set_raw(host, tag, tail_id);
         }
-        record_index
     }
 }
 
@@ -106,17 +107,14 @@ impl RecordIndex {
 
     /// Insert a new tail record into the store
     pub fn set(&mut self, tail: Record<DecryptedData>) {
-        self.hosts
-            .entry(tail.host)
-            .or_default()
-            .insert(tail.tag, tail.id);
+        self.set_raw(tail.host, tail.tag, tail.id)
     }
 
-    pub fn set_raw(&mut self, host: Uuid, tag: String, tail: Uuid) {
-        self.hosts.entry(host).or_default().insert(tag, tail);
+    pub fn set_raw(&mut self, host: HostId, tag: String, tail_id: RecordId) {
+        self.hosts.entry(host).or_default().insert(tag, tail_id);
     }
 
-    pub fn get(&self, host: Uuid, tag: String) -> Option<Uuid> {
+    pub fn get(&self, host: HostId, tag: String) -> Option<RecordId> {
         self.hosts.get(&host).and_then(|v| v.get(&tag)).cloned()
     }
 
@@ -187,6 +185,7 @@ impl Record<DecryptedData> {
             version: &self.version,
             tag: &self.tag,
             host: &self.host,
+            parent: self.parent.as_ref(),
         };
         Record {
             data: E::encrypt(self.data, ad, key),
@@ -207,6 +206,7 @@ impl Record<EncryptedData> {
             version: &self.version,
             tag: &self.tag,
             host: &self.host,
+            parent: self.parent.as_ref(),
         };
         Ok(Record {
             data: E::decrypt(self.data, ad, key)?,
@@ -229,6 +229,7 @@ impl Record<EncryptedData> {
             version: &self.version,
             tag: &self.tag,
             host: &self.host,
+            parent: self.parent.as_ref(),
         };
         Ok(Record {
             data: E::re_encrypt(self.data, ad, old_key, new_key)?,
@@ -244,13 +245,14 @@ impl Record<EncryptedData> {
 
 #[cfg(test)]
 mod tests {
+    use crate::record::HostId;
+
     use super::{DecryptedData, Record, RecordIndex};
     use pretty_assertions::assert_eq;
-    use uuid::Uuid;
 
     fn test_record() -> Record<DecryptedData> {
         Record::builder()
-            .host(crate::utils::uuid_v7())
+            .host(HostId(crate::utils::uuid_v7()))
             .version("v1".into())
             .tag(crate::utils::uuid_v7().simple().to_string())
             .data(DecryptedData(vec![0, 1, 2, 3]))
@@ -362,12 +364,12 @@ mod tests {
         assert_eq!(4, diff1.len());
         assert_eq!(4, diff2.len());
 
+        dbg!(&diff1, &diff2);
+
         // both diffs should be ALMOST the same. They will agree on which hosts and tags
         // require updating, but the "other" value will not be the same.
-        let smol_diff_1: Vec<(Uuid, String)> =
-            diff1.iter().map(|v| (v.0.clone(), v.1.clone())).collect();
-        let smol_diff_2: Vec<(Uuid, String)> =
-            diff1.iter().map(|v| (v.0.clone(), v.1.clone())).collect();
+        let smol_diff_1: Vec<(HostId, String)> = diff1.iter().map(|v| (v.0, v.1.clone())).collect();
+        let smol_diff_2: Vec<(HostId, String)> = diff1.iter().map(|v| (v.0, v.1.clone())).collect();
 
         assert_eq!(smol_diff_1, smol_diff_2);
 

@@ -1,26 +1,30 @@
 // do a sync :O
 use eyre::Result;
-use uuid::Uuid;
 
 use super::store::Store;
 use crate::{api_client::Client, settings::Settings};
 
-use atuin_common::record::{Diff, RecordIndex};
+use atuin_common::record::{Diff, HostId, RecordId, RecordIndex};
 
 #[derive(Debug, Eq, PartialEq)]
 pub enum Operation {
     // Either upload or download until the tail matches the below
-    Upload { tail: Uuid, host: Uuid, tag: String },
-    Download { tail: Uuid, host: Uuid, tag: String },
+    Upload {
+        tail: RecordId,
+        host: HostId,
+        tag: String,
+    },
+    Download {
+        tail: RecordId,
+        host: HostId,
+        tag: String,
+    },
 }
 
 pub async fn diff(settings: &Settings, store: &mut impl Store) -> Result<(Diff, RecordIndex)> {
     let client = Client::new(&settings.sync_address, &settings.session_token)?;
 
-    // First, build our own index
-    let local_tail = store.tail_records().await?;
-    let local_index = RecordIndex::from(local_tail);
-
+    let local_index = store.tail_records().await?;
     let remote_index = client.record_index().await?;
 
     let diff = local_index.diff(&remote_index);
@@ -86,7 +90,7 @@ async fn sync_upload(
     store: &mut impl Store,
     remote_index: &RecordIndex,
     client: &Client<'_>,
-    op: (Uuid, String, Uuid), // just easier to reason about this way imo
+    op: (HostId, String, RecordId),
 ) -> Result<i64> {
     let upload_page_size = 100;
     let mut total = 0;
@@ -111,7 +115,7 @@ async fn sync_upload(
             .id
     };
 
-    debug!("starting push to remote from: {}", start);
+    debug!("starting push to remote from: {:?}", start);
 
     // we have the start point for sync. it is either the head of the store if
     // the remote has no data for it, or the tail that the remote has
@@ -147,7 +151,7 @@ async fn sync_download(
     store: &mut impl Store,
     remote_index: &RecordIndex,
     client: &Client<'_>,
-    op: (Uuid, String, Uuid),
+    op: (HostId, String, RecordId),
 ) -> Result<i64> {
     // TODO(ellie): implement variable page sizing like on history sync
     let download_page_size = 1000;
@@ -231,24 +235,25 @@ pub async fn sync_remote(
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
-
-    use atuin_common::record::{Diff, Record, RecordIndex};
-    use pretty_assertions::{assert_eq, assert_ne};
-    use uuid::Uuid;
+    use atuin_common::record::{Diff, EncryptedData, HostId, Record};
+    use pretty_assertions::assert_eq;
 
     use crate::record::{
+        encryption::PASETO_V4,
         sqlite_store::SqliteStore,
         store::Store,
         sync::{self, Operation},
     };
 
-    fn test_record() -> Record {
+    fn test_record() -> Record<EncryptedData> {
         Record::builder()
-            .host(atuin_common::utils::uuid_v7())
+            .host(HostId(atuin_common::utils::uuid_v7()))
             .version("v1".into())
             .tag(atuin_common::utils::uuid_v7().simple().to_string())
-            .data(vec![0, 1, 2, 3])
+            .data(EncryptedData {
+                data: String::new(),
+                content_encryption_key: String::new(),
+            })
             .build()
     }
 
@@ -256,8 +261,8 @@ mod tests {
     // Return the local database, and a diff of local/remote, ready to build
     // ops
     async fn build_test_diff(
-        local_records: Vec<Record>,
-        remote_records: Vec<Record>,
+        local_records: Vec<Record<EncryptedData>>,
+        remote_records: Vec<Record<EncryptedData>>,
     ) -> (SqliteStore, Diff) {
         let local_store = SqliteStore::new(":memory:")
             .await
@@ -274,11 +279,8 @@ mod tests {
             remote_store.push(&i).await.unwrap();
         }
 
-        let local_tails = local_store.tail_records().await.unwrap();
-        let local_index = RecordIndex::from(local_tails);
-
-        let remote_tails = remote_store.tail_records().await.unwrap();
-        let remote_index = RecordIndex::from(remote_tails);
+        let local_index = local_store.tail_records().await.unwrap();
+        let remote_index = remote_store.tail_records().await.unwrap();
 
         let diff = local_index.diff(&remote_index);
 
@@ -316,7 +318,9 @@ mod tests {
         let shared_record = test_record();
 
         let remote_ahead = test_record();
-        let local_ahead = shared_record.new_child(vec![1, 2, 3]);
+        let local_ahead = shared_record
+            .new_child(vec![1, 2, 3])
+            .encrypt::<PASETO_V4>(&[0; 32]);
 
         let local = vec![shared_record.clone(), local_ahead.clone()]; // local knows about the already synced, and something newer in the same store
         let remote = vec![shared_record.clone(), remote_ahead.clone()]; // remote knows about the already-synced, and one new record in a new store
@@ -355,9 +359,13 @@ mod tests {
         let local_known = test_record();
 
         let second_shared = test_record();
-        let second_shared_remote_aheparti;
+        let second_shared_remote_ahead = second_shared
+            .new_child(vec![1, 2, 3])
+            .encrypt::<PASETO_V4>(&[0; 32]);
 
-        let local_ahead = shared_record.new_child(vec![1, 2, 3]);
+        let local_ahead = shared_record
+            .new_child(vec![1, 2, 3])
+            .encrypt::<PASETO_V4>(&[0; 32]);
 
         let local = vec![
             shared_record.clone(),

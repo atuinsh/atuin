@@ -2,13 +2,12 @@ use axum::{extract::Query, extract::State, Json};
 use http::StatusCode;
 use serde::Deserialize;
 use tracing::{error, instrument};
-use uuid::Uuid;
 
 use super::{ErrorResponse, ErrorResponseStatus, RespExt};
 use crate::router::{AppState, UserAuth};
 use atuin_server_database::Database;
 
-use atuin_common::record::{EncryptedData, Record, RecordIndex};
+use atuin_common::record::{EncryptedData, HostId, Record, RecordId, RecordIndex};
 
 #[instrument(skip_all, fields(user.id = user.id))]
 pub async fn post<DB: Database>(
@@ -50,9 +49,12 @@ pub async fn index<DB: Database>(
     UserAuth(user): UserAuth,
     state: State<AppState<DB>>,
 ) -> Result<Json<RecordIndex>, ErrorResponseStatus<'static>> {
-    let State(AppState { database, settings: _ }) = state;
+    let State(AppState {
+        database,
+        settings: _,
+    }) = state;
 
-    let index = match database.tail_records(&user).await {
+    let record_index = match database.tail_records(&user).await {
         Ok(index) => index,
         Err(e) => {
             error!("failed to get record index: {}", e);
@@ -62,20 +64,14 @@ pub async fn index<DB: Database>(
         }
     };
 
-    let mut record_index = RecordIndex::new();
-
-    for row in index {
-        record_index.set_raw(row.0, row.1, row.2);
-    }
-
     Ok(Json(record_index))
 }
 
 #[derive(Deserialize)]
 pub struct NextParams {
-    host: Uuid,
+    host: HostId,
     tag: String,
-    start: Option<Uuid>,
+    start: Option<RecordId>,
     count: u64,
 }
 
@@ -85,7 +81,10 @@ pub async fn next<DB: Database>(
     UserAuth(user): UserAuth,
     state: State<AppState<DB>>,
 ) -> Result<Json<Vec<Record<EncryptedData>>>, ErrorResponseStatus<'static>> {
-    let State(AppState { database, settings: _ }) = state;
+    let State(AppState {
+        database,
+        settings: _,
+    }) = state;
     let params = params.0;
 
     let records = match database

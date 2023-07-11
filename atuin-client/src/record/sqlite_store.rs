@@ -8,12 +8,13 @@ use std::str::FromStr;
 use async_trait::async_trait;
 use eyre::{eyre, Result};
 use fs_err as fs;
+use futures::TryStreamExt;
 use sqlx::{
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteRow},
     Row,
 };
 
-use atuin_common::record::{EncryptedData, Record};
+use atuin_common::record::{EncryptedData, HostId, Record, RecordId, RecordIndex};
 use uuid::Uuid;
 
 use super::store::Store;
@@ -63,11 +64,11 @@ impl SqliteStore {
             "insert or ignore into records(id, host, tag, timestamp, parent, version, data, cek)
                 values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         )
-        .bind(r.id.as_simple().to_string())
-        .bind(r.host.as_simple().to_string())
+        .bind(r.id.0.as_simple().to_string())
+        .bind(r.host.0.as_simple().to_string())
         .bind(r.tag.as_str())
         .bind(r.timestamp as i64)
-        .bind(r.parent.map(|p| p.as_simple().to_string()))
+        .bind(r.parent.map(|p| p.0.as_simple().to_string()))
         .bind(r.version.as_str())
         .bind(r.data.data.as_str())
         .bind(r.data.content_encryption_key.as_str())
@@ -89,9 +90,9 @@ impl SqliteStore {
             .map(|parent| Uuid::from_str(parent).expect("invalid parent UUID format in sqlite DB"));
 
         Record {
-            id,
-            host,
-            parent,
+            id: RecordId(id),
+            host: HostId(host),
+            parent: parent.map(RecordId),
             timestamp: timestamp as u64,
             tag: row.get("tag"),
             version: row.get("version"),
@@ -120,9 +121,9 @@ impl Store for SqliteStore {
         Ok(())
     }
 
-    async fn get(&self, id: Uuid) -> Result<Record<EncryptedData>> {
+    async fn get(&self, id: RecordId) -> Result<Record<EncryptedData>> {
         let res = sqlx::query("select * from records where id = ?1")
-            .bind(id.as_simple().to_string())
+            .bind(id.0.as_simple().to_string())
             .map(Self::query_row)
             .fetch_one(&self.pool)
             .await?;
@@ -130,10 +131,10 @@ impl Store for SqliteStore {
         Ok(res)
     }
 
-    async fn len(&self, host: Uuid, tag: &str) -> Result<u64> {
+    async fn len(&self, host: HostId, tag: &str) -> Result<u64> {
         let res: (i64,) =
             sqlx::query_as("select count(1) from records where host = ?1 and tag = ?2")
-                .bind(host.as_simple().to_string())
+                .bind(host.0.as_simple().to_string())
                 .bind(tag)
                 .fetch_one(&self.pool)
                 .await?;
@@ -143,7 +144,7 @@ impl Store for SqliteStore {
 
     async fn next(&self, record: &Record<EncryptedData>) -> Result<Option<Record<EncryptedData>>> {
         let res = sqlx::query("select * from records where parent = ?1")
-            .bind(record.id.as_simple().to_string())
+            .bind(record.id.0.as_simple().to_string())
             .map(Self::query_row)
             .fetch_one(&self.pool)
             .await;
@@ -155,11 +156,11 @@ impl Store for SqliteStore {
         }
     }
 
-    async fn head(&self, host: Uuid, tag: &str) -> Result<Option<Record<EncryptedData>>> {
+    async fn head(&self, host: HostId, tag: &str) -> Result<Option<Record<EncryptedData>>> {
         let res = sqlx::query(
             "select * from records where host = ?1 and tag = ?2 and parent is null limit 1",
         )
-        .bind(host.as_simple().to_string())
+        .bind(host.0.as_simple().to_string())
         .bind(tag)
         .map(Self::query_row)
         .fetch_optional(&self.pool)
@@ -168,12 +169,12 @@ impl Store for SqliteStore {
         Ok(res)
     }
 
-    async fn tail(&self, host: Uuid, tag: &str) -> Result<Option<Record<EncryptedData>>> {
+    async fn tail(&self, host: HostId, tag: &str) -> Result<Option<Record<EncryptedData>>> {
         let res = sqlx::query(
             "select * from records rp where tag=?1 and host=?2 and (select count(1) from records where parent=rp.id) = 0;",
         )
         .bind(tag)
-        .bind(host.as_simple().to_string())
+        .bind(host.0.as_simple().to_string())
         .map(Self::query_row)
         .fetch_optional(&self.pool)
         .await?;
@@ -193,7 +194,7 @@ impl Store for SqliteStore {
         Ok(res)
     }
 
-    async fn tail_records(&self) -> Result<Vec<(Uuid, String, Uuid)>> {
+    async fn tail_records(&self) -> Result<RecordIndex> {
         let res = sqlx::query(
             "select host, tag, id from records rp where (select count(1) from records where parent=rp.id) = 0;",
         )
@@ -202,9 +203,10 @@ impl Store for SqliteStore {
             let tag: String= row.get("tag");
             let id: Uuid= Uuid::from_str(row.get("id")).expect("invalid uuid in db id");
 
-            (host, tag, id)
+            (HostId(host), tag, RecordId(id))
         })
-        .fetch_all(&self.pool)
+        .fetch(&self.pool)
+        .try_collect()
         .await?;
 
         Ok(res)
@@ -213,7 +215,7 @@ impl Store for SqliteStore {
 
 #[cfg(test)]
 mod tests {
-    use atuin_common::record::{EncryptedData, Record};
+    use atuin_common::record::{EncryptedData, HostId, Record};
 
     use crate::record::{encryption::PASETO_V4, store::Store};
 
@@ -221,7 +223,7 @@ mod tests {
 
     fn test_record() -> Record<EncryptedData> {
         Record::builder()
-            .host(atuin_common::utils::uuid_v7())
+            .host(HostId(atuin_common::utils::uuid_v7()))
             .version("v1".into())
             .tag(atuin_common::utils::uuid_v7().simple().to_string())
             .data(EncryptedData {

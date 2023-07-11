@@ -14,7 +14,6 @@ use sqlx::{
     Result, Row,
 };
 
-
 use super::{
     history::History,
     ordering,
@@ -58,7 +57,7 @@ pub fn current_context() -> Context {
         session,
         hostname,
         cwd,
-        host_id: host_id.as_simple().to_string(),
+        host_id: host_id.0.as_simple().to_string(),
     }
 }
 

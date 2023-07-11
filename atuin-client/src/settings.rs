@@ -4,6 +4,7 @@ use std::{
     str::FromStr,
 };
 
+use atuin_common::record::HostId;
 use chrono::{prelude::*, Utc};
 use clap::ValueEnum;
 use config::{Config, Environment, File as ConfigFile, FileFormat};
@@ -230,13 +231,13 @@ impl Settings {
         Settings::load_time_from_file(LAST_VERSION_CHECK_FILENAME)
     }
 
-    pub fn host_id() -> Option<Uuid> {
+    pub fn host_id() -> Option<HostId> {
         let id = Settings::read_from_data_dir(HOST_ID_FILENAME);
 
         if let Some(id) = id {
             let parsed =
                 Uuid::from_str(id.as_str()).expect("failed to parse host ID from local directory");
-            return Some(parsed);
+            return Some(HostId(parsed));
         }
 
         let uuid = atuin_common::utils::uuid_v7();
@@ -244,7 +245,7 @@ impl Settings {
         Settings::save_to_data_dir(HOST_ID_FILENAME, uuid.as_simple().to_string().as_ref())
             .expect("Could not write host ID to data dir");
 
-        Some(uuid)
+        Some(HostId(uuid))
     }
 
     pub fn should_sync(&self) -> Result<bool> {

@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::env;
-use uuid::Uuid;
 
 use chrono::Utc;
 use eyre::{bail, Result};
@@ -9,7 +8,7 @@ use reqwest::{
     StatusCode, Url,
 };
 
-use atuin_common::record::{EncryptedData, Record};
+use atuin_common::record::{EncryptedData, HostId, Record, RecordId};
 use atuin_common::{
     api::{
         AddHistoryRequest, CountResponse, DeleteHistoryRequest, ErrorResponse, IndexResponse,
@@ -211,20 +210,24 @@ impl<'a> Client<'a> {
 
     pub async fn next_records(
         &self,
-        host: Uuid,
+        host: HostId,
         tag: String,
-        start: Option<Uuid>,
+        start: Option<RecordId>,
         count: u64,
     ) -> Result<Vec<Record<EncryptedData>>> {
         let url = format!(
             "{}/record/next?host={}&tag={}&count={}",
-            self.sync_addr, host, tag, count
+            self.sync_addr, host.0, tag, count
         );
         let mut url = Url::parse(url.as_str())?;
 
         if let Some(start) = start {
             url.set_query(Some(
-                format!("host={}&tag={}&count={}&start={}", host, tag, count, start).as_str(),
+                format!(
+                    "host={}&tag={}&count={}&start={}",
+                    host.0, tag, count, start.0
+                )
+                .as_str(),
             ));
         }
 
