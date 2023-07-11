@@ -9,7 +9,7 @@ use tokio::{sync::oneshot, task::JoinHandle};
 use tracing::{dispatcher, Dispatch};
 use tracing_subscriber::{layer::SubscriberExt, EnvFilter};
 
-async fn start_server(path: &str) -> (String, oneshot::Sender<()>, JoinHandle<eyre::Result<()>>) {
+async fn start_server(path: &str) -> (String, oneshot::Sender<()>, JoinHandle<()>) {
     let formatting_layer = tracing_tree::HierarchicalLayer::default()
         .with_writer(tracing_subscriber::fmt::TestWriter::new())
         .with_indent_lines(true)
@@ -42,12 +42,16 @@ async fn start_server(path: &str) -> (String, oneshot::Sender<()>, JoinHandle<ey
     let server = tokio::spawn(async move {
         let _tracing_guard = dispatcher::set_default(&dispatch);
 
-        launch_with_listener::<Postgres>(
+        if let Err(e) = launch_with_listener::<Postgres>(
             server_settings,
             listener,
             shutdown_rx.unwrap_or_else(|_| ()),
         )
         .await
+        {
+            tracing::error!(error=?e, "server error");
+            panic!("error running server: {e:?}");
+        }
     });
 
     // let the server come online
@@ -89,5 +93,5 @@ async fn registration() {
     assert_eq!(registration_response.session, login_response.session);
 
     shutdown.send(()).unwrap();
-    server.await.unwrap().unwrap();
+    server.await.unwrap();
 }
