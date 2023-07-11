@@ -1,0 +1,20 @@
+[package]
+name = "atuin-todo"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+atuin-common = { path = "../atuin-common", version = "15.0.0" }
+atuin-client = { path = "../atuin-client", version = "15.0.0" }
+
+eyre = { workspace = true }
+async-trait = { workspace = true }
+clap = { workspace = true }
+fs-err = { workspace = true }
+rmp = { version = "0.8.11" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tantivy = "0.20.2"
+tokio = { workspace = true }

@@ -6,6 +6,7 @@ members = [
   "atuin-server-postgres",
   "atuin-server-database",
   "atuin-common",
+  "atuin-todo",
 ]
 
 [workspace.package]

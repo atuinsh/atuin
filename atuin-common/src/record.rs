@@ -195,6 +195,20 @@ pub trait Encryption {
     fn decrypt(data: EncryptedData, ad: AdditionalData, key: &[u8; 32]) -> Result<DecryptedData>;
 }
 
+impl<T> Record<T> {
+    pub fn try_map<U, E>(self, f: impl FnOnce(T) -> Result<U, E>) -> Result<Record<U>, E> {
+        Ok(Record {
+            data: f(self.data)?,
+            id: self.id,
+            host: self.host,
+            parent: self.parent,
+            timestamp: self.timestamp,
+            version: self.version,
+            tag: self.tag,
+        })
+    }
+}
+
 impl Record<DecryptedData> {
     pub fn encrypt<E: Encryption>(self, key: &[u8; 32]) -> Record<EncryptedData> {
         let ad = AdditionalData {
