@@ -106,7 +106,7 @@ __atuin_install_cargo(){
 }
 
 __atuin_install_unsupported(){
-	echo $OS
+	echo "$OS"
 	echo "Unknown or unsupported OS"
 	echo "Please check the README at https://github.com/ellie/atuin for manual install instructions"
 	echo "If you have any problems, please open an issue!"
@@ -178,6 +178,7 @@ __atuin_install() {
     linux-android*)
       __atuin_install_termux
     ;;
+    # shellcheck disable=SC2221
     linux*)
       case "$OS" in
         "arch"|"manjarolinux"|"endeavouros"|"artix"|"manjaro")
@@ -197,6 +198,7 @@ __atuin_install() {
     "arch"|"manjarolinux"|"endeavouros"|"artix"|"manjaro")
       __atuin_install_arch
     ;;
+    # shellcheck disable=SC2222
     "ubuntu"|"ubuntuwsl"|"debian"|"linuxmint"|"parrot"|"kali"|"elementary"|"pop")
       __atuin_install_ubuntu
     ;;
