@@ -21,7 +21,7 @@ pub enum Operation {
     },
 }
 
-pub async fn diff(settings: &Settings, store: &mut impl Store) -> Result<(Diff, RecordIndex)> {
+pub async fn diff(settings: &Settings, store: &mut impl Store) -> Result<(Vec<Diff>, RecordIndex)> {
     let client = Client::new(&settings.sync_address, &settings.session_token)?;
 
     let local_index = store.tail_records().await?;
@@ -36,24 +36,22 @@ pub async fn diff(settings: &Settings, store: &mut impl Store) -> Result<(Diff, 
 // With the store as context, we can determine if a tail exists locally or not and therefore if it needs uploading or download.
 // In theory this could be done as a part of the diffing stage, but it's easier to reason
 // about and test this way
-pub async fn operations(diff: Diff, store: &impl Store) -> Result<Vec<Operation>> {
-    let mut operations = Vec::with_capacity(diff.len());
+pub async fn operations(diffs: Vec<Diff>, store: &impl Store) -> Result<Vec<Operation>> {
+    let mut operations = Vec::with_capacity(diffs.len());
 
-    for i in diff {
-        let (host, tag, tail) = i;
-
+    for diff in diffs {
         // First, try to fetch the tail
         // If it exists locally, then that means we need to update the remote
         // host until it has the same tail. Ie, upload.
         // If it does not exist locally, that means remote is ahead of us.
         // Therefore, we need to download until our local tail matches
-        let record = store.get(tail).await;
+        let record = store.get(diff.tail).await;
 
         let op = if record.is_ok() {
             // if local has the ID, then we should find the actual tail of this
             // store, so we know what we need to update the remote to.
             let tail = store
-                .tail(host, tag.as_str())
+                .tail(diff.host, diff.tag.as_str())
                 .await?
                 .expect("failed to fetch last record, expected tag/host to exist");
 
@@ -63,11 +61,15 @@ pub async fn operations(diff: Diff, store: &impl Store) -> Result<Vec<Operation>
 
             Operation::Upload {
                 tail: tail.id,
-                host,
-                tag,
+                host: diff.host,
+                tag: diff.tag,
             }
         } else {
-            Operation::Download { tail, host, tag }
+            Operation::Download {
+                tail: diff.tail,
+                host: diff.host,
+                tag: diff.tag,
+            }
         };
 
         operations.push(op);
@@ -263,7 +265,7 @@ mod tests {
     async fn build_test_diff(
         local_records: Vec<Record<EncryptedData>>,
         remote_records: Vec<Record<EncryptedData>>,
-    ) -> (SqliteStore, Diff) {
+    ) -> (SqliteStore, Vec<Diff>) {
         let local_store = SqliteStore::new(":memory:")
             .await
             .expect("failed to open in memory sqlite");

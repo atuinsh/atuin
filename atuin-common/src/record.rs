@@ -14,7 +14,12 @@ pub struct EncryptedData {
     pub content_encryption_key: String,
 }
 
-pub type Diff = Vec<(HostId, String, RecordId)>;
+#[derive(Eq, PartialEq, Ord, PartialOrd, Debug)]
+pub struct Diff {
+    pub host: HostId,
+    pub tag: String,
+    pub tail: RecordId,
+}
 
 /// A single record stored inside of our local database
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TypedBuilder)]
@@ -125,7 +130,7 @@ impl RecordIndex {
     /// other machine has a different tail, it will be the differing tail. This is useful to
     /// check if the other index is ahead of us, or behind.
     /// If the other index does not have the (host, tag) pair, then the other value will be None.
-    pub fn diff(&self, other: &Self) -> Diff {
+    pub fn diff(&self, other: &Self) -> Vec<Diff> {
         let mut ret = Vec::new();
 
         // First, we check if other has everything that self has
@@ -136,10 +141,18 @@ impl RecordIndex {
                     Some(t) if t.eq(tail) => continue,
 
                     // The other store does exist, but it is either ahead or behind us. A diff regardless
-                    Some(t) => ret.push((*host, tag.clone(), t)),
+                    Some(t) => ret.push(Diff {
+                        host: *host,
+                        tag: tag.clone(),
+                        tail: t,
+                    }),
 
                     // The other store does not exist :O
-                    None => ret.push((*host, tag.clone(), *tail)),
+                    None => ret.push(Diff {
+                        host: *host,
+                        tag: tag.clone(),
+                        tail: *tail,
+                    }),
                 };
             }
         }
@@ -154,7 +167,11 @@ impl RecordIndex {
                     // If we have this host/tag combo, the comparison and diff will have already happened above
                     Some(_) => continue,
 
-                    None => ret.push((*host, tag.clone(), *tail)),
+                    None => ret.push(Diff {
+                        host: *host,
+                        tag: tag.clone(),
+                        tail: *tail,
+                    }),
                 };
             }
         }
@@ -247,7 +264,7 @@ impl Record<EncryptedData> {
 mod tests {
     use crate::record::HostId;
 
-    use super::{DecryptedData, Record, RecordIndex};
+    use super::{DecryptedData, Diff, Record, RecordIndex};
     use pretty_assertions::assert_eq;
 
     fn test_record() -> Record<DecryptedData> {
@@ -326,7 +343,14 @@ mod tests {
         let diff = index1.diff(&index2);
 
         assert_eq!(1, diff.len(), "expected single diff");
-        assert_eq!(diff[0], (record2.host, record2.tag, record2.id));
+        assert_eq!(
+            diff[0],
+            Diff {
+                host: record2.host,
+                tag: record2.tag,
+                tail: record2.id
+            }
+        );
     }
 
     #[test]
@@ -368,8 +392,10 @@ mod tests {
 
         // both diffs should be ALMOST the same. They will agree on which hosts and tags
         // require updating, but the "other" value will not be the same.
-        let smol_diff_1: Vec<(HostId, String)> = diff1.iter().map(|v| (v.0, v.1.clone())).collect();
-        let smol_diff_2: Vec<(HostId, String)> = diff1.iter().map(|v| (v.0, v.1.clone())).collect();
+        let smol_diff_1: Vec<(HostId, String)> =
+            diff1.iter().map(|v| (v.host, v.tag.clone())).collect();
+        let smol_diff_2: Vec<(HostId, String)> =
+            diff1.iter().map(|v| (v.host, v.tag.clone())).collect();
 
         assert_eq!(smol_diff_1, smol_diff_2);
 
