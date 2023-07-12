@@ -14,7 +14,7 @@ pub struct EncryptedData {
     pub content_encryption_key: String,
 }
 
-#[derive(Eq, PartialEq, Ord, PartialOrd, Debug)]
+#[derive(Debug, PartialEq)]
 pub struct Diff {
     pub host: HostId,
     pub tag: String,
@@ -176,7 +176,7 @@ impl RecordIndex {
             }
         }
 
-        ret.sort();
+        ret.sort_by(|a, b| (a.host, a.tag.clone(), a.tail).cmp(&(b.host, b.tag.clone(), b.tail)));
         ret
     }
 }

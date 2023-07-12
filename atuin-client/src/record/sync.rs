@@ -388,30 +388,34 @@ mod tests {
 
         assert_eq!(operations.len(), 4);
 
-        assert_eq!(
-            operations,
-            vec![
-                Operation::Download {
-                    tail: remote_known.id,
-                    host: remote_known.host,
-                    tag: remote_known.tag,
-                },
-                Operation::Download {
-                    tail: second_shared_remote_ahead.id,
-                    host: second_shared.host,
-                    tag: second_shared.tag,
-                },
-                Operation::Upload {
-                    tail: local_ahead.id,
-                    host: local_ahead.host,
-                    tag: local_ahead.tag,
-                },
-                Operation::Upload {
-                    tail: local_known.id,
-                    host: local_known.host,
-                    tag: local_known.tag,
-                },
-            ]
-        );
+        let mut result_ops = vec![
+            Operation::Download {
+                tail: remote_known.id,
+                host: remote_known.host,
+                tag: remote_known.tag,
+            },
+            Operation::Download {
+                tail: second_shared_remote_ahead.id,
+                host: second_shared.host,
+                tag: second_shared.tag,
+            },
+            Operation::Upload {
+                tail: local_ahead.id,
+                host: local_ahead.host,
+                tag: local_ahead.tag,
+            },
+            Operation::Upload {
+                tail: local_known.id,
+                host: local_known.host,
+                tag: local_known.tag,
+            },
+        ];
+
+        result_ops.sort_by_key(|op| match op {
+            Operation::Upload { tail, host, .. } => ("upload", *host, *tail),
+            Operation::Download { tail, host, .. } => ("download", *host, *tail),
+        });
+
+        assert_eq!(operations, result_ops);
     }
 }
