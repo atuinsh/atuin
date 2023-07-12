@@ -174,11 +174,10 @@ __get_os() {
 __atuin_install() {
   __get_os
   echo "Detected OS: $OS"
-  case "$OS" in
+  case "$OSTYPE" in
     linux-android*)
       __atuin_install_termux
-    ;;
-    # shellcheck disable=SC2221
+      ;;
     linux*)
       case "$OS" in
         "arch"|"manjarolinux"|"endeavouros"|"artix"|"manjaro")
@@ -191,23 +190,16 @@ __atuin_install() {
           __atuin_install_unsupported
           ;;
       esac
-    ;;
+      ;;
     darwin*)
       __atuin_install_mac
-    ;;
-    "arch"|"manjarolinux"|"endeavouros"|"artix"|"manjaro")
-      __atuin_install_arch
-    ;;
-    # shellcheck disable=SC2222
-    "ubuntu"|"ubuntuwsl"|"debian"|"linuxmint"|"parrot"|"kali"|"elementary"|"pop")
-      __atuin_install_ubuntu
-    ;;
+      ;;
     msys*)
       __atuin_install_unsupported
-    ;;
+      ;;
     *)
       __atuin_install_unsupported
-    ;;
+      ;;
   esac
 }
 
@@ -240,10 +232,10 @@ cat << EOF
 Thanks for installing Atuin! I really hope you like it.
 If you have any issues, please open an issue on GitHub or visit our Discord (https://discord.gg/dPhv2B3x)!
 Otherwise, Atuin is a hobby project - if you find it valuable, you can help us out!
-- ⭐️ Give us a star on GitHub (https://github.com/ellie/atuin)
-- 🚀 Contribute! We would love more regular contributors (https://github.com/ellie/atuin)
-- 🤑 Sponsor me! If you value the project + want to help keep the hosted sync server free (https://github.com/sponsors/ellie)
-~ Ellie 🐢💖
+- Γ¡É∩╕Å Give us a star on GitHub (https://github.com/ellie/atuin)
+- ≡ƒÜÇ Contribute! We would love more regular contributors (https://github.com/ellie/atuin)
+- ≡ƒñæ Sponsor me! If you value the project + want to help keep the hosted sync server free (https://github.com/sponsors/ellie)
+~ Ellie ≡ƒÉó≡ƒÆû
 EOF
 }
 
@@ -254,6 +246,7 @@ check_command curl
 check_command sed
 __print_intro
 # TODO: would be great to support others!
+echo "$OSTYPE"
 case "$OSTYPE" in
   linux-android*) __atuin_install_termux ;;
   linux*)         __atuin_install ;;
