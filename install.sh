@@ -2,39 +2,23 @@
 
 set -euo pipefail
 
-cat << EOF
- _______  _______  __   __  ___   __    _
-|   _   ||       ||  | |  ||   | |  |  | |
-|  |_|  ||_     _||  | |  ||   | |   |_| |
-|       |  |   |  |  |_|  ||   | |       |
-|       |  |   |  |       ||   | |  _    |
-|   _   |  |   |  |       ||   | | | |   |
-|__| |__|  |___|  |_______||___| |_|  |__|
-
-Magical shell history
-
-Atuin setup
-https://github.com/ellie/atuin
-
-Please file an issue if you encounter any problems!
-
-===============================================================================
-
-EOF
-
-
-if ! command -v curl &> /dev/null; then
-    echo "curl not installed. Please install curl."
-    exit
-elif ! command -v sed &> /dev/null; then
-    echo "sed not installed. Please install sed."
-    exit
-fi
-
 LATEST_RELEASE=$(curl -L -s -H 'Accept: application/json' https://github.com/ellie/atuin/releases/latest)
 # Allow sed; sometimes it's more readable than ${variable//search/replace}
 # shellcheck disable=SC2001
 LATEST_VERSION=$(echo "$LATEST_RELEASE" | sed -e 's/.*"tag_name":"\([^"]*\)".*/\1/')
+
+
+#####################################################################
+######################  HELPER FUNCTIONS  ###########################
+#####################################################################
+
+check_command() {
+  if ! command -v "$1" &>/dev/null; then
+    echo "$1 not found. This tool is necessary for this script to work properly."
+    echo "Please install it using your package manager and rerun this script."
+    exit 1
+  fi
+}
 
 __atuin_install_arch(){
 	echo "Arch Linux detected!"
@@ -68,9 +52,8 @@ __atuin_install_ubuntu(){
 	echo "Ubuntu detected"
 	# TODO: select correct AARCH too
 	ARTIFACT_URL="https://github.com/ellie/atuin/releases/download/$LATEST_VERSION/atuin_${LATEST_VERSION//v/}_amd64.deb"
-
 	TEMP_DEB="$(mktemp)".deb &&
-	curl -Lo "$TEMP_DEB" "$ARTIFACT_URL"
+  curl -Lo "$TEMP_DEB" "$ARTIFACT_URL"
 	if command -v sudo &> /dev/null; then
 		sudo apt install "$TEMP_DEB"
 	else
@@ -111,23 +94,19 @@ __atuin_install_cargo(){
 	if ! command -v cargo &> /dev/null
 	then
 		echo "cargo not found! Attempting to install rustup"
-
 		if command -v rustup &> /dev/null
 		then
 			echo "rustup was found, but cargo wasn't. Something is up with your install"
 			exit 1
 		fi
-
 		curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -q
-
 		echo "rustup installed! Attempting cargo install"
-
 	fi
-
 	cargo install atuin
 }
 
 __atuin_install_unsupported(){
+	echo $OS
 	echo "Unknown or unsupported OS"
 	echo "Please check the README at https://github.com/ellie/atuin for manual install instructions"
 	echo "If you have any problems, please open an issue!"
@@ -177,27 +156,29 @@ __get_os() {
           "ubuntu"* ) OS="ubuntu" ;;
           "debian"* ) OS="debian" ;;
           "fedora"* ) OS="fedora" ;;
-          # Add more distributions as needed
+          "arch"*  ) OS="arch"    ;;
           * ) OS="unknownwsl" ;;
         esac
       else
         OS="unknownwsl"
+        echo "$OS"
       fi
     else
+      echo "$OS"
       echo "Unknown"
       exit 1
     fi
   fi
 }
 
-
 __atuin_install() {
-  case "$OSTYPE" in
+  __get_os
+  echo "Detected OS: $OS"
+  case "$OS" in
     linux-android*)
       __atuin_install_termux
-      ;;
+    ;;
     linux*)
-      OS=$(__get_os)
       case "$OS" in
         "arch"|"manjarolinux"|"endeavouros"|"artix"|"manjaro")
           __atuin_install_arch
@@ -209,21 +190,67 @@ __atuin_install() {
           __atuin_install_unsupported
           ;;
       esac
-      ;;
+    ;;
     darwin*)
       __atuin_install_mac
-      ;;
+    ;;
+    "arch"|"manjarolinux"|"endeavouros"|"artix"|"manjaro")
+      __atuin_install_arch
+    ;;
+    "ubuntu"|"ubuntuwsl"|"debian"|"linuxmint"|"parrot"|"kali"|"elementary"|"pop")
+      __atuin_install_ubuntu
+    ;;
     msys*)
       __atuin_install_unsupported
-      ;;
+    ;;
     *)
       __atuin_install_unsupported
-      ;;
+    ;;
   esac
 }
 
+__print_intro() {
+cat << EOF
+ _______  _______  __   __  ___   __    _
+|   _   ||       ||  | |  ||   | |  |  | |
+|  |_|  ||_     _||  | |  ||   | |   |_| |
+|       |  |   |  |  |_|  ||   | |       |
+|       |  |   |  |       ||   | |  _    |
+|   _   |  |   |  |       ||   | | | |   |
+|__| |__|  |___|  |_______||___| |_|  |__|
+Magical shell history
+Atuin setup
+https://github.com/ellie/atuin
+Please file an issue if you encounter any problems!
+===============================================================================
+EOF
+}
 
-__get_os
+__print_outro() {
+cat << EOF
+ _______  __   __  _______  __    _  ___   _    __   __  _______  __   __ 
+|       ||  | |  ||   _   ||  |  | ||   | | |  |  | |  ||       ||  | |  |
+|_     _||  |_|  ||  |_|  ||   |_| ||   |_| |  |  |_|  ||   _   ||  | |  |
+  |   |  |       ||       ||       ||      _|  |       ||  | |  ||  |_|  |
+  |   |  |       ||       ||  _    ||     |_   |_     _||  |_|  ||       |
+  |   |  |   _   ||   _   || | |   ||    _  |    |   |  |       ||       |
+  |___|  |__| |__||__| |__||_|  |__||___| |_|    |___|  |_______||_______|
+Thanks for installing Atuin! I really hope you like it.
+If you have any issues, please open an issue on GitHub or visit our Discord (https://discord.gg/dPhv2B3x)!
+Otherwise, Atuin is a hobby project - if you find it valuable, you can help us out!
+- ⭐️ Give us a star on GitHub (https://github.com/ellie/atuin)
+- 🚀 Contribute! We would love more regular contributors (https://github.com/ellie/atuin)
+- 🤑 Sponsor me! If you value the project + want to help keep the hosted sync server free (https://github.com/sponsors/ellie)
+~ Ellie 🐢💖
+EOF
+}
+
+#####################################################################
+##########################  SCRIPT START ############################
+#####################################################################
+check_command curl
+check_command sed
+__print_intro
 # TODO: would be great to support others!
 case "$OSTYPE" in
   linux-android*) __atuin_install_termux ;;
@@ -234,8 +261,6 @@ case "$OSTYPE" in
   bsd*)           __atuin_install_unsupported ;;
   *)              __atuin_install_unsupported ;;
 esac
-
-
 
 case "$SHELL" in
     *bash*)
@@ -265,31 +290,4 @@ case "$SHELL" in
 		    echo 'eval "$(atuin init bash)"' >> ~/.bashrc 
         ;;
 esac
-
-
-cat << EOF
-
-
-
- _______  __   __  _______  __    _  ___   _    __   __  _______  __   __ 
-|       ||  | |  ||   _   ||  |  | ||   | | |  |  | |  ||       ||  | |  |
-|_     _||  |_|  ||  |_|  ||   |_| ||   |_| |  |  |_|  ||   _   ||  | |  |
-  |   |  |       ||       ||       ||      _|  |       ||  | |  ||  |_|  |
-  |   |  |       ||       ||  _    ||     |_   |_     _||  |_|  ||       |
-  |   |  |   _   ||   _   || | |   ||    _  |    |   |  |       ||       |
-  |___|  |__| |__||__| |__||_|  |__||___| |_|    |___|  |_______||_______|
-
-
-
-Thanks for installing Atuin! I really hope you like it.
-
-If you have any issues, please open an issue on GitHub or visit our Discord (https://discord.gg/dPhv2B3x)!
-
-Otherwise, Atuin is a hobby project - if you find it valuable, you can help us out!
-
-- ⭐️ Give us a star on GitHub (https://github.com/ellie/atuin)
-- 🚀 Contribute! We would love more regular contributors (https://github.com/ellie/atuin)
-- 🤑 Sponsor me! If you value the project + want to help keep the hosted sync server free (https://github.com/sponsors/ellie)
-
-~ Ellie 🐢💖
-EOF
+__print_outro
