@@ -1,15 +1,11 @@
-
-
 use async_trait::async_trait;
-use atuin_common::record::{EncryptedData, Record};
+use atuin_common::record::{EncryptedData, HostId, Record, RecordId, RecordIndex};
 use atuin_server_database::models::{History, NewHistory, NewSession, NewUser, Session, User};
 use atuin_server_database::{Database, DbError, DbResult};
 use futures_util::TryStreamExt;
 use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::Row;
-
-use sqlx::types::Uuid;
 
 use tracing::instrument;
 use wrappers::{DbHistory, DbRecord, DbSession, DbUser};
@@ -372,9 +368,9 @@ impl Database for Postgres {
     async fn next_records(
         &self,
         user: &User,
-        host: Uuid,
+        host: HostId,
         tag: String,
-        start: Option<Uuid>,
+        start: Option<RecordId>,
         count: u64,
     ) -> DbResult<Vec<Record<EncryptedData>>> {
         tracing::debug!("{:?} - {:?} - {:?}", host, tag, start);
@@ -419,7 +415,7 @@ impl Database for Postgres {
         Ok(ret)
     }
 
-    async fn tail_records(&self, user: &User) -> DbResult<Vec<(Uuid, String, Uuid)>> {
+    async fn tail_records(&self, user: &User) -> DbResult<RecordIndex> {
         const TAIL_RECORDS_SQL: &str = "select host, tag, client_id from records rp where (select count(1) from records where parent=rp.client_id and user_id = $1) = 0;";
 
         let res = sqlx::query_as(TAIL_RECORDS_SQL)
