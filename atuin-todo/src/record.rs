@@ -21,19 +21,24 @@
 //!     state,
 //!     text,
 //!     [tag],
+//!     updates,
 //! ]
 //! ```
 
-use atuin_common::record::{DecryptedData, Record, RecordId};
-use eyre::{bail, ensure, eyre, Result};
+use atuin_common::record::{DecryptedData, EncryptedData, Record, RecordId};
+use eyre::{bail, ensure, eyre, Context, ContextCompat, Result};
 
 use atuin_client::record::encryption::paseto_v4::PASETO_V4;
 use atuin_client::record::store::Store;
 use atuin_client::settings::Settings;
 use serde::Serialize;
 use tantivy::{collector::TopDocs, query::QueryParser, Index};
+use uuid::Uuid;
 
-use crate::search::{self, TodoSchema};
+use crate::{
+    search::{self, TodoSchema},
+    TodoId,
+};
 
 const TODO_VERSION: &str = "v0";
 const TODO_TAG: &str = "todo";
@@ -43,6 +48,7 @@ pub struct TodoRecord {
     pub state: String,
     pub text: String,
     pub tags: Vec<String>,
+    pub updates: TodoId,
 }
 
 impl TodoRecord {
@@ -52,7 +58,7 @@ impl TodoRecord {
         let mut output = vec![];
 
         // INFO: ensure this is updated when adding new fields
-        encode::write_array_len(&mut output, 3)?;
+        encode::write_array_len(&mut output, 4)?;
 
         encode::write_str(&mut output, &self.state)?;
         encode::write_str(&mut output, &self.text)?;
@@ -61,6 +67,8 @@ impl TodoRecord {
         for tag in &self.tags {
             encode::write_str(&mut output, tag)?;
         }
+
+        encode::write_bin(&mut output, self.updates.uuid().as_bytes())?;
 
         Ok(DecryptedData(output))
     }
@@ -74,32 +82,39 @@ impl TodoRecord {
 
         match version {
             TODO_VERSION => {
-                let mut bytes = decode::Bytes::new(&data.0);
+                // let mut rd = decode::Bytes::new(&data.0);
+                let mut data = &*data.0;
 
-                let nfields = decode::read_array_len(&mut bytes).map_err(error_report)?;
-                ensure!(nfields == 3, "too many entries in v0 todo record");
+                let nfields = decode::read_array_len(&mut data)?;
+                ensure!(
+                    nfields == 4,
+                    "incorrect number of entries in v0 todo record"
+                );
 
-                let bytes = bytes.remaining_slice();
+                let (state, data) = decode::read_str_from_slice(data).map_err(error_report)?;
+                let (text, mut data) = decode::read_str_from_slice(data).map_err(error_report)?;
 
-                let (state, bytes) = decode::read_str_from_slice(bytes).map_err(error_report)?;
-                let (text, mut bytes) = decode::read_str_from_slice(bytes).map_err(error_report)?;
-
-                let ntags = decode::read_array_len(&mut bytes).map_err(error_report)?;
+                let ntags = decode::read_array_len(&mut data)?;
                 let mut tags = Vec::with_capacity(ntags as usize);
                 for _ in 0..ntags {
-                    let (value, b) = decode::read_str_from_slice(bytes).map_err(error_report)?;
-                    bytes = b;
+                    let (value, b) = decode::read_str_from_slice(data).map_err(error_report)?;
+                    data = b;
                     tags.push(value.to_owned())
                 }
 
-                if !bytes.is_empty() {
-                    bail!("trailing bytes in encoded todo record. malformed")
-                }
+                let updates_len = decode::read_bin_len(&mut data)?;
+                ensure!(updates_len == 16, "incorrect UUID encoding in todo record");
+                let updates: [u8; 16] = data
+                    .try_into()
+                    .context("incorrect UUID encoding in todo record")?;
+
+                let updates = TodoId::from_uuid(Uuid::from_bytes(updates));
 
                 Ok(TodoRecord {
                     state: state.to_owned(),
                     text: text.to_owned(),
                     tags,
+                    updates,
                 })
             }
             _ => {
@@ -132,13 +147,9 @@ impl TodoStore {
         &self,
         store: &mut (impl Store + Send + Sync),
         encryption_key: &[u8; 32],
-        state: String,
-        text: String,
-        tags: Vec<String>,
-    ) -> Result<()> {
+        record: TodoRecord,
+    ) -> Result<Record<EncryptedData>> {
         let host_id = Settings::host_id().expect("failed to get host_id");
-
-        let todo = TodoRecord { state, text, tags };
 
         let parent = store.tail(host_id, TODO_TAG).await?.map(|entry| entry.id);
 
@@ -147,7 +158,7 @@ impl TodoStore {
             .version(TODO_VERSION.to_string())
             .tag(TODO_TAG.to_owned())
             .parent(parent)
-            .data(todo)
+            .data(record)
             .build();
 
         let mut writer = self.index.writer(3_000_000)?;
@@ -162,16 +173,16 @@ impl TodoStore {
         let record = record.encrypt::<PASETO_V4>(encryption_key);
         store.push(&record).await?;
 
-        Ok(())
+        Ok(record)
     }
 
     pub async fn get(
         &self,
         store: &mut (impl Store + Send + Sync),
         encryption_key: &[u8; 32],
-        id: RecordId,
+        id: TodoId,
     ) -> Result<Record<TodoRecord>> {
-        let record = store.get(id).await?;
+        let record = store.get(RecordId(id.uuid())).await?;
         match &*record.version {
             "v0" => {
                 let record = record.decrypt::<PASETO_V4>(encryption_key)?;
@@ -182,7 +193,7 @@ impl TodoStore {
         }
     }
 
-    pub async fn search(&self, query: &str, limit: usize) -> Result<Vec<RecordId>> {
+    pub async fn search(&self, query: &str, limit: usize) -> Result<Vec<TodoId>> {
         let query_parser = QueryParser::new(
             self.index.schema(),
             vec![self.schema.text, self.schema.tag],
@@ -197,7 +208,12 @@ impl TodoStore {
         for (_, doc) in docs {
             let doc = searcher.doc(doc)?;
             let id = doc.get_first(self.schema.id);
-            output.push(RecordId(id.unwrap().as_text().unwrap().parse().unwrap()))
+            output.push(
+                id.context("missing id")?
+                    .as_text()
+                    .context("invalid id")?
+                    .parse()?,
+            )
         }
 
         Ok(output)
@@ -206,6 +222,10 @@ impl TodoStore {
 
 #[cfg(test)]
 mod tests {
+    use uuid::Uuid;
+
+    use crate::TodoId;
+
     use super::{TodoRecord, TODO_VERSION};
 
     #[test]
@@ -214,6 +234,7 @@ mod tests {
             state: "todo".to_owned(),
             text: "implement todo".to_owned(),
             tags: vec!["atuin".to_owned(), "rust".to_owned()],
+            updates: TodoId::from_uuid(Uuid::nil()),
         };
 
         let encoded = kv.serialize().unwrap();

@@ -76,6 +76,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "arrayvec"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "96d30a06541fbafbc7f82ed10c06164cfbd2c401138f6addd8404629c4b16711"
+
+[[package]]
 name = "async-trait"
 version = "0.1.58"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -270,6 +276,7 @@ dependencies = [
  "async-trait",
  "atuin-client",
  "atuin-common",
+ "chrono",
  "clap",
  "eyre",
  "fs-err",
@@ -278,6 +285,8 @@ dependencies = [
  "serde_json",
  "tantivy",
  "tokio",
+ "type-safe-id",
+ "uuid",
 ]
 
 [[package]]
@@ -3506,6 +3515,19 @@ name = "try-lock"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "59547bce71d9c38b83d9c0e92b6066c4253371f15005def0c30d9657f50c7642"
+
+[[package]]
+name = "type-safe-id"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bb1211a53644c6a5ae26c45bdd520d1533b07dab50dc6af1a15063772f9061ad"
+dependencies = [
+ "arrayvec",
+ "rand 0.8.5",
+ "serde",
+ "thiserror",
+ "uuid",
+]
 
 [[package]]
 name = "typed-builder"

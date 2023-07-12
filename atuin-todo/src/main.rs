@@ -8,12 +8,22 @@ use atuin_client::{
     settings::Settings,
 };
 use atuin_common::record::HostId;
+use chrono::{Local, TimeZone};
 use clap::Parser;
 use eyre::{bail, Context, Result};
-use record::TodoStore;
+use record::{TodoRecord, TodoStore};
+use type_safe_id::{StaticType, TypeSafeId};
+use uuid::Uuid;
 
 mod record;
 mod search;
+
+#[derive(Default, Copy, Clone, PartialEq, Eq)]
+pub struct Todo;
+impl StaticType for Todo {
+    const TYPE: &'static str = "todo";
+}
+pub type TodoId = TypeSafeId<Todo>;
 
 #[derive(clap::Parser)]
 #[command(author = "Conrad Ludgate <conradludgate@gmail.com>")]
@@ -30,12 +40,35 @@ enum Cmd {
         /// todo text
         text: String,
     },
+    Update {
+        #[arg(long)]
+        id: TodoId,
+
+        /// The state this todo item is in. eg "todo", "in progress", etc
+        #[arg(short = 's', long = "state")]
+        state: Option<String>,
+
+        /// Whether to append the new tags or overwrite the tags
+        #[arg(short, long)]
+        append: bool,
+
+        /// tags for this todo item
+        #[arg(short = 't', long = "tag")]
+        tags: Vec<String>,
+
+        /// todo text
+        text: Option<String>,
+    },
     Search {
         #[arg(long, default_value = "20")]
         limit: usize,
 
         /// search query
         query: String,
+    },
+    View {
+        #[arg(long)]
+        id: TodoId,
     },
 }
 
@@ -66,15 +99,74 @@ async fn main() -> Result<()> {
 
     match cmd {
         Cmd::Push { state, tags, text } => {
-            todo_store
-                .create_item(&mut store, &encryption_key, state, text, tags)
+            let record = TodoRecord {
+                tags,
+                state,
+                text,
+                updates: TodoId::from_uuid(Uuid::nil()),
+            };
+            let record = todo_store
+                .create_item(&mut store, &encryption_key, record)
                 .await?;
+
+            println!("created {}", TodoId::from_uuid(record.id.0));
+        }
+        Cmd::Update {
+            id,
+            state,
+            append,
+            mut tags,
+            text,
+        } => {
+            let mut record = todo_store.get(&mut store, &encryption_key, id).await?.data;
+            record.updates = id;
+            if append {
+                record.tags.append(&mut tags)
+            } else if !tags.is_empty() {
+                record.tags = tags;
+            }
+            if let Some(state) = state {
+                record.state = state;
+            }
+            if let Some(text) = text {
+                record.text = text;
+            }
+
+            let record = todo_store
+                .create_item(&mut store, &encryption_key, record)
+                .await?;
+
+            println!("updated from {} to {}", id, TodoId::from_uuid(record.id.0));
         }
         Cmd::Search { limit, query } => {
             let ids = todo_store.search(&query, limit).await?;
             for id in ids {
                 let record = todo_store.get(&mut store, &encryption_key, id).await?;
-                println!("{}", serde_json::to_string(&record).unwrap());
+                println!("{id} - [{}] {}", record.data.state, record.data.text);
+                if !record.data.tags.is_empty() {
+                    print!("\t");
+                    for tag in record.data.tags {
+                        print!("#{tag} ")
+                    }
+                    println!()
+                }
+            }
+        }
+        Cmd::View { mut id } => {
+            while !id.uuid().is_nil() {
+                let record = todo_store.get(&mut store, &encryption_key, id).await?;
+                id = record.data.updates;
+                let ts = Local
+                    .timestamp_nanos(record.timestamp as i64)
+                    .format("%Y %B %-d %R");
+                println!("{ts} - [{}] {}", record.data.state, record.data.text);
+                if !record.data.tags.is_empty() {
+                    print!("\t");
+                    for tag in record.data.tags {
+                        print!("#{tag} ")
+                    }
+                    println!()
+                }
             }
         }
     }

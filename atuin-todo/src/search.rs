@@ -4,10 +4,10 @@ use tantivy::{
     directory::MmapDirectory,
     doc,
     schema::{Field, Schema, STORED, STRING, TEXT},
-    DateTime, Index, IndexWriter,
+    DateTime, Index, IndexWriter, Term,
 };
 
-use crate::record::TodoRecord;
+use crate::{record::TodoRecord, TodoId};
 
 pub fn schema() -> (TodoSchema, Schema) {
     let mut schema_builder = Schema::builder();
@@ -47,7 +47,7 @@ pub fn write_record(
 ) -> Result<()> {
     let timestamp = DateTime::from_timestamp_nanos(record.timestamp as i64);
     let mut doc = doc!(
-        schema.id => record.id.0.to_string(),
+        schema.id => TodoId::from_uuid(record.id.0).to_string(),
         schema.text => record.data.text.clone(),
         schema.timestamp => timestamp,
     );
@@ -55,6 +55,13 @@ pub fn write_record(
         doc.add_field_value(schema.tag, tag)
     }
     writer.add_document(doc)?;
+
+    if !record.data.updates.uuid().is_nil() {
+        writer.delete_term(Term::from_field_text(
+            schema.id,
+            &record.data.updates.to_string(),
+        ));
+    }
 
     Ok(())
 }

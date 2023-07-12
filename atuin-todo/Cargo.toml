@@ -11,6 +11,7 @@ atuin-client = { path = "../atuin-client", version = "15.0.0" }
 
 eyre = { workspace = true }
 async-trait = { workspace = true }
+chrono = { workspace = true }
 clap = { workspace = true }
 fs-err = { workspace = true }
 rmp = { version = "0.8.11" }
@@ -18,3 +19,5 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tantivy = "0.20.2"
 tokio = { workspace = true }
+type-safe-id = { version = "0.2.1", features = ["serde"] }
+uuid = { workspace = true }
