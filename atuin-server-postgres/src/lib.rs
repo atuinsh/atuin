@@ -262,6 +262,12 @@ impl Database for Postgres {
             .await
             .map_err(fix_error)?;
 
+        sqlx::query("delete from total_history_count_user where user_id = $1")
+            .bind(u.id)
+            .execute(&self.pool)
+            .await
+            .map_err(fix_error)?;
+
         Ok(())
     }
 
