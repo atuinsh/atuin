@@ -101,10 +101,7 @@ impl KvStore {
 
         let bytes = record.serialize()?;
 
-        let parent = store
-            .last(host_id.as_str(), KV_TAG)
-            .await?
-            .map(|entry| entry.id);
+        let parent = store.tail(host_id, KV_TAG).await?.map(|entry| entry.id);
 
         let record = atuin_common::record::Record::builder()
             .host(host_id)
@@ -130,17 +127,22 @@ impl KvStore {
         namespace: &str,
         key: &str,
     ) -> Result<Option<KvRecord>> {
-        // TODO: don't load this from disk so much
-        let host_id = Settings::host_id().expect("failed to get host_id");
-
         // Currently, this is O(n). When we have an actual KV store, it can be better
         // Just a poc for now!
 
         // iterate records to find the value we want
         // start at the end, so we get the most recent version
-        let Some(mut record) = store.last(host_id.as_str(), KV_TAG).await? else {
+        let tails = store.tag_tails(KV_TAG).await?;
+
+        if tails.is_empty() {
             return Ok(None);
-        };
+        }
+
+        // first, decide on a record.
+        // try getting the newest first
+        // we always need a way of deciding the "winner" of a write
+        // TODO(ellie): something better than last-write-wins, what if two write at the same time?
+        let mut record = tails.iter().max_by_key(|r| r.timestamp).unwrap().clone();
 
         loop {
             let decrypted = match record.version.as_str() {
@@ -154,7 +156,7 @@ impl KvStore {
             }
 
             if let Some(parent) = decrypted.parent {
-                record = store.get(parent.as_str()).await?;
+                record = store.get(parent).await?;
             } else {
                 break;
             }

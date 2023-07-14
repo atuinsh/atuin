@@ -57,7 +57,7 @@ pub fn current_context() -> Context {
         session,
         hostname,
         cwd,
-        host_id,
+        host_id: host_id.0.as_simple().to_string(),
     }
 }
 
