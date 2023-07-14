@@ -23,15 +23,15 @@ use super::{
     engines::{SearchEngine, SearchState},
     history_list::{HistoryList, ListState, PREFIX_LENGTH},
 };
-use crate::ratatui::{
+use crate::{command::client::search::engines, VERSION};
+use ratatui::{
     backend::{Backend, CrosstermBackend},
     layout::{Alignment, Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
-    text::{Span, Spans, Text},
+    text::{Line, Span, Text},
     widgets::{Block, BorderType, Borders, Paragraph},
     Frame, Terminal, TerminalOptions, Viewport,
 };
-use crate::{command::client::search::engines, VERSION};
 
 const RETURN_ORIGINAL: usize = usize::MAX;
 const RETURN_QUERY: usize = usize::MAX - 1;
@@ -390,7 +390,7 @@ impl State {
 
     #[allow(clippy::unused_self)]
     fn build_help(&mut self) -> Paragraph {
-        let help = Paragraph::new(Text::from(Spans::from(vec![
+        let help = Paragraph::new(Text::from(Line::from(vec![
             Span::styled("Esc", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw(" to exit"),
         ])))
