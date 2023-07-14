@@ -8,9 +8,13 @@ use reqwest::{
     StatusCode, Url,
 };
 
-use atuin_common::api::{
-    AddHistoryRequest, CountResponse, DeleteHistoryRequest, ErrorResponse, IndexResponse,
-    LoginRequest, LoginResponse, RegisterResponse, StatusResponse, SyncHistoryResponse,
+use atuin_common::record::{EncryptedData, HostId, Record, RecordId};
+use atuin_common::{
+    api::{
+        AddHistoryRequest, CountResponse, DeleteHistoryRequest, ErrorResponse, IndexResponse,
+        LoginRequest, LoginResponse, RegisterResponse, StatusResponse, SyncHistoryResponse,
+    },
+    record::RecordIndex,
 };
 use semver::Version;
 
@@ -193,6 +197,55 @@ impl<'a> Client<'a> {
             .await?;
 
         Ok(())
+    }
+
+    pub async fn post_records(&self, records: &[Record<EncryptedData>]) -> Result<()> {
+        let url = format!("{}/record", self.sync_addr);
+        let url = Url::parse(url.as_str())?;
+
+        self.client.post(url).json(records).send().await?;
+
+        Ok(())
+    }
+
+    pub async fn next_records(
+        &self,
+        host: HostId,
+        tag: String,
+        start: Option<RecordId>,
+        count: u64,
+    ) -> Result<Vec<Record<EncryptedData>>> {
+        let url = format!(
+            "{}/record/next?host={}&tag={}&count={}",
+            self.sync_addr, host.0, tag, count
+        );
+        let mut url = Url::parse(url.as_str())?;
+
+        if let Some(start) = start {
+            url.set_query(Some(
+                format!(
+                    "host={}&tag={}&count={}&start={}",
+                    host.0, tag, count, start.0
+                )
+                .as_str(),
+            ));
+        }
+
+        let resp = self.client.get(url).send().await?;
+
+        let records = resp.json::<Vec<Record<EncryptedData>>>().await?;
+
+        Ok(records)
+    }
+
+    pub async fn record_index(&self) -> Result<RecordIndex> {
+        let url = format!("{}/record", self.sync_addr);
+        let url = Url::parse(url.as_str())?;
+
+        let resp = self.client.get(url).send().await?;
+        let index = resp.json().await?;
+
+        Ok(index)
     }
 
     pub async fn delete(&self) -> Result<()> {

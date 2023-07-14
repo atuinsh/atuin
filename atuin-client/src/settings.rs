@@ -1,8 +1,10 @@
 use std::{
     io::prelude::*,
     path::{Path, PathBuf},
+    str::FromStr,
 };
 
+use atuin_common::record::HostId;
 use chrono::{prelude::*, Utc};
 use clap::ValueEnum;
 use config::{Config, Environment, File as ConfigFile, FileFormat};
@@ -12,6 +14,7 @@ use parse_duration::parse;
 use regex::RegexSet;
 use semver::Version;
 use serde::Deserialize;
+use uuid::Uuid;
 
 pub const HISTORY_PAGE_SIZE: i64 = 100;
 pub const LAST_SYNC_FILENAME: &str = "last_sync_time";
@@ -233,11 +236,13 @@ impl Settings {
         Settings::load_time_from_file(LAST_VERSION_CHECK_FILENAME)
     }
 
-    pub fn host_id() -> Option<String> {
+    pub fn host_id() -> Option<HostId> {
         let id = Settings::read_from_data_dir(HOST_ID_FILENAME);
 
-        if id.is_some() {
-            return id;
+        if let Some(id) = id {
+            let parsed =
+                Uuid::from_str(id.as_str()).expect("failed to parse host ID from local directory");
+            return Some(HostId(parsed));
         }
 
         let uuid = atuin_common::utils::uuid_v7();
@@ -245,7 +250,7 @@ impl Settings {
         Settings::save_to_data_dir(HOST_ID_FILENAME, uuid.as_simple().to_string().as_ref())
             .expect("Could not write host ID to data dir");
 
-        Some(uuid.as_simple().to_string())
+        Some(HostId(uuid))
     }
 
     pub fn should_sync(&self) -> Result<bool> {

@@ -1,14 +1,14 @@
 use async_trait::async_trait;
+use atuin_common::record::{EncryptedData, HostId, Record, RecordId, RecordIndex};
 use atuin_server_database::models::{History, NewHistory, NewSession, NewUser, Session, User};
 use atuin_server_database::{Database, DbError, DbResult};
 use futures_util::TryStreamExt;
 use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgPoolOptions;
-
 use sqlx::Row;
 
 use tracing::instrument;
-use wrappers::{DbHistory, DbSession, DbUser};
+use wrappers::{DbHistory, DbRecord, DbSession, DbUser};
 
 mod wrappers;
 
@@ -96,6 +96,21 @@ impl Database for Postgres {
         .fetch_one(&self.pool)
         .await
         .map_err(fix_error)?;
+
+        Ok(res.0)
+    }
+
+    #[instrument(skip_all)]
+    async fn total_history(&self) -> DbResult<i64> {
+        // The cache is new, and the user might not yet have a cache value.
+        // They will have one as soon as they post up some new history, but handle that
+        // edge case.
+
+        let res: (i64,) = sqlx::query_as("select sum(total) from total_history_count_user")
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(fix_error)?
+            .unwrap_or((0,));
 
         Ok(res.0)
     }
@@ -262,6 +277,12 @@ impl Database for Postgres {
             .await
             .map_err(fix_error)?;
 
+        sqlx::query("delete from total_history_count_user where user_id = $1")
+            .bind(u.id)
+            .execute(&self.pool)
+            .await
+            .map_err(fix_error)?;
+
         Ok(())
     }
 
@@ -328,5 +349,103 @@ impl Database for Postgres {
         .await
         .map_err(fix_error)
         .map(|DbHistory(h)| h)
+    }
+
+    #[instrument(skip_all)]
+    async fn add_records(&self, user: &User, records: &[Record<EncryptedData>]) -> DbResult<()> {
+        let mut tx = self.pool.begin().await.map_err(fix_error)?;
+
+        for i in records {
+            let id = atuin_common::utils::uuid_v7();
+
+            sqlx::query(
+                "insert into records
+                    (id, client_id, host, parent, timestamp, version, tag, data, cek, user_id) 
+                values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                on conflict do nothing
+                ",
+            )
+            .bind(id)
+            .bind(i.id)
+            .bind(i.host)
+            .bind(i.parent)
+            .bind(i.timestamp as i64) // throwing away some data, but i64 is still big in terms of time
+            .bind(&i.version)
+            .bind(&i.tag)
+            .bind(&i.data.data)
+            .bind(&i.data.content_encryption_key)
+            .bind(user.id)
+            .execute(&mut tx)
+            .await
+            .map_err(fix_error)?;
+        }
+
+        tx.commit().await.map_err(fix_error)?;
+
+        Ok(())
+    }
+
+    #[instrument(skip_all)]
+    async fn next_records(
+        &self,
+        user: &User,
+        host: HostId,
+        tag: String,
+        start: Option<RecordId>,
+        count: u64,
+    ) -> DbResult<Vec<Record<EncryptedData>>> {
+        tracing::debug!("{:?} - {:?} - {:?}", host, tag, start);
+        let mut ret = Vec::with_capacity(count as usize);
+        let mut parent = start;
+
+        // yeah let's do something better
+        for _ in 0..count {
+            // a very much not ideal query. but it's simple at least?
+            // we are basically using postgres as a kv store here, so... maybe consider using an actual
+            // kv store?
+            let record: Result<DbRecord, DbError> = sqlx::query_as(
+                "select client_id, host, parent, timestamp, version, tag, data, cek from records 
+                    where user_id = $1
+                    and tag = $2
+                    and host = $3
+                    and parent is not distinct from $4",
+            )
+            .bind(user.id)
+            .bind(tag.clone())
+            .bind(host)
+            .bind(parent)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(fix_error);
+
+            match record {
+                Ok(record) => {
+                    let record: Record<EncryptedData> = record.into();
+                    ret.push(record.clone());
+
+                    parent = Some(record.id);
+                }
+                Err(DbError::NotFound) => {
+                    tracing::debug!("hit tail of store: {:?}/{}", host, tag);
+                    return Ok(ret);
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        Ok(ret)
+    }
+
+    async fn tail_records(&self, user: &User) -> DbResult<RecordIndex> {
+        const TAIL_RECORDS_SQL: &str = "select host, tag, client_id from records rp where (select count(1) from records where parent=rp.client_id and user_id = $1) = 0;";
+
+        let res = sqlx::query_as(TAIL_RECORDS_SQL)
+            .bind(user.id)
+            .fetch(&self.pool)
+            .try_collect()
+            .await
+            .map_err(fix_error)?;
+
+        Ok(res)
     }
 }

@@ -44,7 +44,7 @@ rand = { workspace = true }
 shellexpand = "2"
 sqlx = { workspace = true, features = ["sqlite"] }
 minspan = "0.1.1"
-regex = "1.5.4"
+regex = "1.9.1"
 serde_regex = "1.1.0"
 fs-err = { workspace = true }
 sql-builder = "3"
@@ -54,10 +54,14 @@ rmp = { version = "0.8.11" }
 typed-builder = "0.14.0"
 tokio = { workspace = true }
 semver = { workspace = true }
+futures = "0.3"
 
 # encryption
 rusty_paseto = { version = "0.5.0", default-features = false }
-rusty_paserk = { version = "0.2.0", default-features = false, features = ["v4", "serde"] }
+rusty_paserk = { version = "0.2.0", default-features = false, features = [
+  "v4",
+  "serde",
+] }
 
 # sync
 urlencoding = { version = "2.1.0", optional = true }
@@ -69,3 +73,4 @@ generic-array = { version = "0.14", optional = true, features = ["serde"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
+pretty_assertions = { workspace = true }
