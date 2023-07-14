@@ -1,5 +1,5 @@
 use std::env;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use chrono::{Months, NaiveDate};
 use rand::RngCore;
@@ -68,7 +68,7 @@ pub fn in_git_repo(path: &str) -> Option<PathBuf> {
         return Some(gitdir);
     }
 
-    return None;
+    None
 }
 
 // TODO: more reliable, more tested

@@ -13,7 +13,7 @@ use runtime_format::{FormatKey, FormatKeyError, ParseSegment, ParsedFmt};
 use atuin_client::{
     database::{current_context, Database},
     history::History,
-    settings::{FilterMode, Settings},
+    settings::Settings,
 };
 
 #[cfg(feature = "sync")]

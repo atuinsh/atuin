@@ -3,7 +3,6 @@ use std::{
     time::Duration,
 };
 
-use atuin_common::utils;
 use crossterm::{
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent},
     execute, terminal,
