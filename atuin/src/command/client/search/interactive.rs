@@ -184,15 +184,27 @@ impl State {
             }
             KeyCode::Char('u') if ctrl => self.search.input.clear(),
             KeyCode::Char('r') if ctrl => {
-                pub static FILTER_MODES: [FilterMode; 4] = [
-                    FilterMode::Global,
-                    FilterMode::Host,
-                    FilterMode::Session,
-                    FilterMode::Directory,
-                ];
+                let filter_modes = if settings.workspaces && self.search.context.git_root.is_some()
+                {
+                    vec![
+                        FilterMode::Global,
+                        FilterMode::Host,
+                        FilterMode::Session,
+                        FilterMode::Directory,
+                        FilterMode::Workspace,
+                    ]
+                } else {
+                    vec![
+                        FilterMode::Global,
+                        FilterMode::Host,
+                        FilterMode::Session,
+                        FilterMode::Directory,
+                    ]
+                };
+
                 let i = self.search.filter_mode as usize;
-                let i = (i + 1) % FILTER_MODES.len();
-                self.search.filter_mode = FILTER_MODES[i];
+                let i = (i + 1) % filter_modes.len();
+                self.search.filter_mode = filter_modes[i];
             }
             KeyCode::Char('s') if ctrl => {
                 self.switched_search_mode = true;
