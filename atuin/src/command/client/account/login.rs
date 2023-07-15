@@ -133,10 +133,10 @@ mod tests {
 
     #[test]
     fn mnemonic_round_trip() {
-        let key = Key::from([
+        let key = [
             3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8, 9, 7, 9, 3, 2, 3, 8, 4, 6, 2, 6, 4, 3, 3, 8, 3, 2,
             7, 9, 5,
-        ]);
+        ];
         let phrase = bip39::Mnemonic::from_entropy(&key, bip39::Language::English)
             .unwrap()
             .into_phrase();

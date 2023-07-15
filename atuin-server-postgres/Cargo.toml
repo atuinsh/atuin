@@ -16,7 +16,7 @@ atuin-server-database = { path = "../atuin-server-database", version = "15.0.0" 
 tracing = "0.1"
 chrono = { workspace = true }
 serde = { workspace = true }
-sqlx = { workspace = true }
+sqlx = { workspace = true, features = ["postgres"] }
 async-trait = { workspace = true }
 uuid = { workspace = true }
 futures-util = "0.3"

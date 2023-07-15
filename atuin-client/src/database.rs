@@ -166,7 +166,7 @@ impl Sqlite {
         .bind(h.session.as_str())
         .bind(h.hostname.as_str())
         .bind(h.deleted_at.map(|t|t.timestamp_nanos()))
-        .execute(tx)
+        .execute(&mut **tx)
         .await?;
 
         Ok(())

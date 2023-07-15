@@ -72,7 +72,7 @@ impl SqliteStore {
         .bind(r.version.as_str())
         .bind(r.data.data.as_str())
         .bind(r.data.content_encryption_key.as_str())
-        .execute(tx)
+        .execute(&mut **tx)
         .await?;
 
         Ok(())

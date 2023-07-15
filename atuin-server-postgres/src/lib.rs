@@ -247,7 +247,7 @@ impl Database for Postgres {
             .bind(hostname)
             .bind(i.timestamp)
             .bind(data)
-            .execute(&mut tx)
+            .execute(&mut *tx)
             .await
             .map_err(fix_error)?;
         }
@@ -375,7 +375,7 @@ impl Database for Postgres {
             .bind(&i.data.data)
             .bind(&i.data.content_encryption_key)
             .bind(user.id)
-            .execute(&mut tx)
+            .execute(&mut *tx)
             .await
             .map_err(fix_error)?;
         }
