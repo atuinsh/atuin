@@ -1,4 +1,5 @@
 use std::{
+    env,
     io::{stdout, Write},
     time::Duration,
 };
@@ -101,6 +102,12 @@ impl State {
 
         let ctrl = input.modifiers.contains(KeyModifiers::CONTROL);
         let alt = input.modifiers.contains(KeyModifiers::ALT);
+        // Use Ctrl-n instead of Alt-n on macOS:
+        let modfr = if env::consts::OS == "macos" {
+            ctrl
+        } else {
+            alt
+        };
 
         // reset the state, will be set to true later if user really did change it
         self.switched_search_mode = false;
@@ -115,7 +122,7 @@ impl State {
             KeyCode::Enter => {
                 return Some(self.results_state.selected());
             }
-            KeyCode::Char(c @ '1'..='9') if alt => {
+            KeyCode::Char(c @ '1'..='9') if modfr => {
                 let c = c.to_digit(10)? as usize;
                 return Some(self.results_state.selected() + c);
             }
