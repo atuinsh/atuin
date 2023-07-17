@@ -1,5 +1,4 @@
 use std::{
-    env,
     io::{stdout, Write},
     time::Duration,
 };
@@ -102,12 +101,9 @@ impl State {
 
         let ctrl = input.modifiers.contains(KeyModifiers::CONTROL);
         let alt = input.modifiers.contains(KeyModifiers::ALT);
-        // Use Ctrl-n instead of Alt-n on macOS:
-        let modfr = if env::consts::OS == "macos" {
-            ctrl
-        } else {
-            alt
-        };
+
+        // Use Ctrl-n instead of Alt-n?
+        let modfr = if settings.ctrl_n_shortcuts { ctrl } else { alt };
 
         // reset the state, will be set to true later if user really did change it
         self.switched_search_mode = false;
