@@ -7,9 +7,6 @@ use eyre::Result;
 use command::AtuinCmd;
 mod command;
 
-#[allow(clippy::all)]
-mod ratatui;
-
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 static HELP_TEMPLATE: &str = "\

@@ -99,8 +99,6 @@ dependencies = [
  "atuin-server",
  "atuin-server-postgres",
  "base64 0.21.0",
- "bitflags",
- "cassowary",
  "chrono",
  "clap",
  "clap_complete",
@@ -116,6 +114,7 @@ dependencies = [
  "interim",
  "itertools",
  "log",
+ "ratatui",
  "rpassword",
  "runtime-format",
  "semver",
@@ -124,7 +123,6 @@ dependencies = [
  "tiny-bip39",
  "tokio",
  "tracing-subscriber",
- "unicode-segmentation",
  "unicode-width",
  "whoami",
 ]
@@ -1972,6 +1970,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ca3129af7b92a17112d59ad498c6f81eaf463253766b90396d39ea7a39d6613c"
 dependencies = [
  "rand_core 0.5.1",
+]
+
+[[package]]
+name = "ratatui"
+version = "0.21.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ce841e0486e7c2412c3740168ede33adeba8e154a15107b879d8162d77c7174e"
+dependencies = [
+ "bitflags",
+ "cassowary",
+ "crossterm",
+ "unicode-segmentation",
+ "unicode-width",
 ]
 
 [[package]]
