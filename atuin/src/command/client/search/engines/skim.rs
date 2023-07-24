@@ -53,21 +53,25 @@ async fn fuzzy_search(
         if i % 256 == 0 {
             yield_now().await;
         }
+        let context = &state.context;
         match state.filter_mode {
             FilterMode::Global => {}
+            // we aggregate host by ',' separating them
             FilterMode::Host
                 if history
                     .hostname
                     .split(',')
-                    .contains(&state.context.hostname.as_str()) => {}
+                    .contains(&context.hostname.as_str()) => {}
+            // we aggregate session by concattenating them.
+            // sessions are 32 byte simple uuid formats
             FilterMode::Session
                 if history
                     .session
                     .as_bytes()
-                    .windows(32)
-                    .contains(&state.context.session.as_bytes()) => {}
-            FilterMode::Directory
-                if history.cwd.split(':').contains(&state.context.cwd.as_str()) => {}
+                    .chunks(32)
+                    .contains(&context.session.as_bytes()) => {}
+            // we aggregate directory by ':' separating them
+            FilterMode::Directory if history.cwd.split(':').contains(&context.cwd.as_str()) => {}
             _ => continue,
         }
         #[allow(clippy::cast_lossless, clippy::cast_precision_loss)]
