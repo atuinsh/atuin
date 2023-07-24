@@ -18,4 +18,5 @@ chrono = { workspace = true }
 serde = { workspace = true }
 sqlx = { workspace = true }
 async-trait = { workspace = true }
+uuid = { workspace = true }
 futures-util = "0.3"

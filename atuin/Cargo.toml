@@ -70,11 +70,7 @@ tiny-bip39 = "1"
 futures-util = "0.3"
 fuzzy-matcher = "0.3.7"
 colored = "2.0.0"
-
-# ratatui
-bitflags = "1.3"
-cassowary = "0.3"
-unicode-segmentation = "1.2"
+ratatui = "0.21"
 
 [dependencies.tracing-subscriber]
 version = "0.3"

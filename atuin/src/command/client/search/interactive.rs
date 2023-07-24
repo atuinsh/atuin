@@ -23,15 +23,15 @@ use super::{
     engines::{SearchEngine, SearchState},
     history_list::{HistoryList, ListState, PREFIX_LENGTH},
 };
-use crate::ratatui::{
+use crate::{command::client::search::engines, VERSION};
+use ratatui::{
     backend::{Backend, CrosstermBackend},
     layout::{Alignment, Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
-    text::{Span, Spans, Text},
+    text::{Line, Span, Text},
     widgets::{Block, BorderType, Borders, Paragraph},
     Frame, Terminal, TerminalOptions, Viewport,
 };
-use crate::{command::client::search::engines, VERSION};
 
 const RETURN_ORIGINAL: usize = usize::MAX;
 const RETURN_QUERY: usize = usize::MAX - 1;
@@ -184,15 +184,27 @@ impl State {
             }
             KeyCode::Char('u') if ctrl => self.search.input.clear(),
             KeyCode::Char('r') if ctrl => {
-                pub static FILTER_MODES: [FilterMode; 4] = [
-                    FilterMode::Global,
-                    FilterMode::Host,
-                    FilterMode::Session,
-                    FilterMode::Directory,
-                ];
+                let filter_modes = if settings.workspaces && self.search.context.git_root.is_some()
+                {
+                    vec![
+                        FilterMode::Global,
+                        FilterMode::Host,
+                        FilterMode::Session,
+                        FilterMode::Directory,
+                        FilterMode::Workspace,
+                    ]
+                } else {
+                    vec![
+                        FilterMode::Global,
+                        FilterMode::Host,
+                        FilterMode::Session,
+                        FilterMode::Directory,
+                    ]
+                };
+
                 let i = self.search.filter_mode as usize;
-                let i = (i + 1) % FILTER_MODES.len();
-                self.search.filter_mode = FILTER_MODES[i];
+                let i = (i + 1) % filter_modes.len();
+                self.search.filter_mode = filter_modes[i];
             }
             KeyCode::Char('s') if ctrl => {
                 self.switched_search_mode = true;
@@ -390,7 +402,7 @@ impl State {
 
     #[allow(clippy::unused_self)]
     fn build_help(&mut self) -> Paragraph {
-        let help = Paragraph::new(Text::from(Spans::from(vec![
+        let help = Paragraph::new(Text::from(Line::from(vec![
             Span::styled("Esc", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw(" to exit"),
         ])))
@@ -586,14 +598,16 @@ pub async fn history(
         search_mode: settings.search_mode,
         search: SearchState {
             input,
-            context,
-            filter_mode: if settings.shell_up_key_binding {
+            filter_mode: if settings.workspaces && context.git_root.is_some() {
+                FilterMode::Workspace
+            } else if settings.shell_up_key_binding {
                 settings
                     .filter_mode_shell_up_key_binding
                     .unwrap_or(settings.filter_mode)
             } else {
                 settings.filter_mode
             },
+            context,
         },
         engine: engines::engine(settings.search_mode),
         results_len: 0,

@@ -46,6 +46,31 @@ pub fn uuid_v4() -> String {
     Uuid::new_v4().as_simple().to_string()
 }
 
+pub fn has_git_dir(path: &str) -> bool {
+    let mut gitdir = PathBuf::from(path);
+    gitdir.push(".git");
+
+    gitdir.exists()
+}
+
+// detect if any parent dir has a git repo in it
+// I really don't want to bring in libgit for something simple like this
+// If we start to do anything more advanced, then perhaps
+pub fn in_git_repo(path: &str) -> Option<PathBuf> {
+    let mut gitdir = PathBuf::from(path);
+
+    while gitdir.parent().is_some() && !has_git_dir(gitdir.to_str().unwrap()) {
+        gitdir.pop();
+    }
+
+    // No parent? then we hit root, finding no git
+    if gitdir.parent().is_some() {
+        return Some(gitdir);
+    }
+
+    None
+}
+
 // TODO: more reliable, more tested
 // I don't want to use ProjectDirs, it puts config in awkward places on
 // mac. Data too. Seems to be more intended for GUI apps.

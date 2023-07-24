@@ -1,4 +1,8 @@
-use std::{env, path::Path, str::FromStr};
+use std::{
+    env,
+    path::{Path, PathBuf},
+    str::FromStr,
+};
 
 use async_trait::async_trait;
 use atuin_common::utils;
@@ -25,6 +29,7 @@ pub struct Context {
     pub cwd: String,
     pub hostname: String,
     pub host_id: String,
+    pub git_root: Option<PathBuf>,
 }
 
 #[derive(Default, Clone)]
@@ -52,12 +57,14 @@ pub fn current_context() -> Context {
     );
     let cwd = utils::get_current_dir();
     let host_id = Settings::host_id().expect("failed to load host ID");
+    let git_root = utils::in_git_repo(cwd.as_str());
 
     Context {
         session,
         hostname,
         cwd,
-        host_id,
+        git_root,
+        host_id: host_id.0.as_simple().to_string(),
     }
 }
 
@@ -261,6 +268,7 @@ impl Database for Sqlite {
             FilterMode::Host => query.and_where_eq("hostname", quote(&context.hostname)),
             FilterMode::Session => query.and_where_eq("session", quote(&context.session)),
             FilterMode::Directory => query.and_where_eq("cwd", quote(&context.cwd)),
+            FilterMode::Workspace => query.and_where_like_any("cwd", context.cwd.clone()),
         };
 
         if unique {
@@ -380,11 +388,18 @@ impl Database for Sqlite {
             sql.order_desc("timestamp");
         }
 
+        let git_root = if let Some(git_root) = context.git_root.clone() {
+            git_root.to_str().unwrap_or("/").to_string()
+        } else {
+            context.cwd.clone()
+        };
+
         match filter {
             FilterMode::Global => &mut sql,
             FilterMode::Host => sql.and_where_eq("hostname", quote(&context.hostname)),
             FilterMode::Session => sql.and_where_eq("session", quote(&context.session)),
             FilterMode::Directory => sql.and_where_eq("cwd", quote(&context.cwd)),
+            FilterMode::Workspace => sql.and_where_like_left("cwd", git_root),
         };
 
         let orig_query = query;
@@ -556,6 +571,7 @@ mod test {
             session: "beepboopiamasession".to_string(),
             cwd: "/home/ellie".to_string(),
             host_id: "test-host".to_string(),
+            git_root: None,
         };
 
         let results = db
@@ -765,6 +781,7 @@ mod test {
             session: "beepboopiamasession".to_string(),
             cwd: "/home/ellie".to_string(),
             host_id: "test-host".to_string(),
+            git_root: None,
         };
 
         let mut db = Sqlite::new("sqlite::memory:").await.unwrap();

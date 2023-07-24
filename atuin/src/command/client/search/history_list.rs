@@ -1,12 +1,12 @@
 use std::time::Duration;
 
-use crate::ratatui::{
+use atuin_client::history::History;
+use ratatui::{
     buffer::Buffer,
     layout::Rect,
     style::{Color, Modifier, Style},
     widgets::{Block, StatefulWidget, Widget},
 };
-use atuin_client::history::History;
 
 use super::format_duration;
 
