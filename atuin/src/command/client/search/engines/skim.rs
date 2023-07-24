@@ -5,6 +5,7 @@ use atuin_client::{database::Database, history::History, settings::FilterMode};
 use chrono::Utc;
 use eyre::Result;
 use fuzzy_matcher::{skim::SkimMatcherV2, FuzzyMatcher};
+use itertools::Itertools;
 use tokio::task::yield_now;
 
 use super::{SearchEngine, SearchState};
@@ -54,9 +55,19 @@ async fn fuzzy_search(
         }
         match state.filter_mode {
             FilterMode::Global => {}
-            FilterMode::Host if history.hostname == state.context.hostname => {}
-            FilterMode::Session if history.session == state.context.session => {}
-            FilterMode::Directory if history.cwd == state.context.cwd => {}
+            FilterMode::Host
+                if history
+                    .hostname
+                    .split(',')
+                    .contains(&state.context.hostname.as_str()) => {}
+            FilterMode::Session
+                if history
+                    .session
+                    .as_bytes()
+                    .windows(32)
+                    .contains(&state.context.session.as_bytes()) => {}
+            FilterMode::Directory
+                if history.cwd.split(':').contains(&state.context.cwd.as_str()) => {}
             _ => continue,
         }
         #[allow(clippy::cast_lossless, clippy::cast_precision_loss)]
