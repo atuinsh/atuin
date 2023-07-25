@@ -146,6 +146,8 @@ __get_os() {
     __atuin_check_gcc
   elif [ -f "/etc/arch-release" ]; then
     OS="arch"
+  elif [ -f "/etc/redhat-release" ]; then
+    OS="redhat"
   elif [ -f "/etc/gentoo-release" ]; then
     OS="gentoo"
   else
@@ -259,30 +261,70 @@ esac
 
 case "$SHELL" in
     *bash*)
-    		# shellcheck disable=SC2016
-        printf '\neval "$(atuin init zsh)"\n' >> ~/.bashrc
-        curl https://raw.githubusercontent.com/rcaloras/bash-preexec/master/bash-preexec.sh -o ~/.bash-preexec.sh
-        printf '\n[[ -f ~/.bash-preexec.sh ]] && source ~/.bash-preexec.sh\n' >> ~/.bashrc
-        # Use of single quotes around $() is intentional here
-        # shellcheck disable=SC2016
-        echo 'eval "$(atuin init bash)"' >> ~/.bashrc 
+        BASHRC_PATH="$HOME/.bashrc"
+        BASH_PREEXEC_PATH="$HOME/.bash-preexec.sh"
+
+        # Check if .bashrc exists and append the necessary lines
+        if [ -f "$BASHRC_PATH" ]; then
+            # shellcheck disable=SC2016
+            printf '\neval "$(atuin init zsh)"\n' >> "$BASHRC_PATH"
+            curl https://raw.githubusercontent.com/rcaloras/bash-preexec/master/bash-preexec.sh -o "$BASH_PREEXEC_PATH"
+            printf '\n[[ -f ~/.bash-preexec.sh ]] && source ~/.bash-preexec.sh\n' >> "$BASHRC_PATH"
+            # shellcheck disable=SC2016
+            echo 'eval "$(atuin init bash)"' >> "$BASHRC_PATH"
+        else
+            echo ".bashrc not found at $BASHRC_PATH"
+        fi
         ;;
     *zsh*)
-    		# shellcheck disable=SC2086,SC2016
-		    printf '\neval "$(atuin init zsh)"\n' >> ${ZDOTDIR:-$HOME}/.zshrc
-        echo "Running under zsh"
-        ;;
+      ZSHRC_PATH="${ZDOTDIR:-$HOME}/.zshrc"
+      ZSHRC_XDG_PATH="$HOME/.config/zsh/.zshrc"
+      
+      if [ -f "$ZSHRC_PATH" ]; then
+          # shellcheck disable=SC2086,SC2016
+          printf '\neval "$(atuin init zsh)"\n' >> "$ZSHRC_PATH"
+          echo "Running under zsh (traditional location)"
+      elif [ -f "$ZSHRC_XDG_PATH" ]; then
+          # shellcheck disable=SC2086,SC2016
+          printf '\neval "$(atuin init zsh)"\n' >> "$ZSHRC_XDG_PATH"
+          echo "Running under zsh (XDG location)"
+      else
+          echo ".zshrc not found at $ZSHRC_PATH or $ZSHRC_XDG_PATH"
+      fi
+      ;;
     *)
-        echo "Unknown shell"	
-        # shellcheck disable=SC2016
-		    printf '\neval "$(atuin init zsh)"\n' >> ~/.zshrc
-        # shellcheck disable=SC2016
-        printf '\neval "$(atuin init zsh)"\n' >> ~/.bashrc
-		    curl https://raw.githubusercontent.com/rcaloras/bash-preexec/master/bash-preexec.sh -o ~/.bash-preexec.sh
-		    printf '\n[[ -f ~/.bash-preexec.sh ]] && source ~/.bash-preexec.sh\n' >> ~/.bashrc
-		    # Use of single quotes around $() is intentional here
-		    # shellcheck disable=SC2016
-		    echo 'eval "$(atuin init bash)"' >> ~/.bashrc 
+        echo "Unknown shell"
+
+        BASHRC_PATH="$HOME/.bashrc"
+        ZSHRC_PATH="$HOME/.zshrc"
+        ZSHRC_XDG_PATH="$HOME/.config/zsh/.zshrc"
+        BASH_PREEXEC_PATH="$HOME/.bash-preexec.sh"
+
+        # Append to .zshrc in traditional location
+        if [ -f "$ZSHRC_PATH" ]; then
+            # shellcheck disable=SC2016
+            printf '\neval "$(atuin init zsh)"\n' >> "$ZSHRC_PATH"
+        # Append to .zshrc in XDG location
+        elif [ -f "$ZSHRC_XDG_PATH" ]; then
+            # shellcheck disable=SC2016
+            printf '\neval "$(atuin init zsh)"\n' >> "$ZSHRC_XDG_PATH"
+        else
+            echo ".zshrc not found at $ZSHRC_PATH or $ZSHRC_XDG_PATH"
+        fi
+
+        # Append to .bashrc and download bash-preexec.sh
+        if [ -f "$BASHRC_PATH" ]; then
+            # shellcheck disable=SC2016
+            printf '\neval "$(atuin init zsh)"\n' >> "$BASHRC_PATH"
+            curl https://raw.githubusercontent.com/rcaloras/bash-preexec/master/bash-preexec.sh -o "$BASH_PREEXEC_PATH"
+            printf '\n[[ -f ~/.bash-preexec.sh ]] && source ~/.bash-preexec.sh\n' >> "$BASHRC_PATH"
+            # shellcheck disable=SC2016
+            echo 'eval "$(atuin init bash)"' >> "$BASHRC_PATH"
+        else
+            echo ".bashrc not found at $BASHRC_PATH"
+        fi
         ;;
 esac
+
+
 __print_outro
