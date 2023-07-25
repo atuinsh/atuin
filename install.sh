@@ -148,6 +148,7 @@ __get_os() {
     OS="arch"
   elif [ -f "/etc/redhat-release" ]; then
     OS="redhat"
+    __atuin_check_gcc
   elif [ -f "/etc/gentoo-release" ]; then
     OS="gentoo"
   else
@@ -216,8 +217,8 @@ cat << EOF
 |__| |__|  |___|  |_______||___| |_|  |__|
 Magical shell history
 Atuin setup
-https://github.com/ellie/atuin
-Please file an issue if you encounter any problems!
+https://github.com/ellie/atuin 
+☝️Please file an issue if you encounter any problems!
 ===============================================================================
 EOF
 }
@@ -234,19 +235,22 @@ cat << EOF
 Thanks for installing Atuin! I really hope you like it.
 If you have any issues, please open an issue on GitHub or visit our Discord (https://discord.gg/dPhv2B3x)!
 Otherwise, Atuin is a hobby project - if you find it valuable, you can help us out!
-- Γ¡É∩╕Å Give us a star on GitHub (https://github.com/ellie/atuin)
-- ≡ƒÜÇ Contribute! We would love more regular contributors (https://github.com/ellie/atuin)
-- ≡ƒñæ Sponsor me! If you value the project + want to help keep the hosted sync server free (https://github.com/sponsors/ellie)
-~ Ellie ≡ƒÉó≡ƒÆû
+- ⭐️ Give us a star on GitHub (https://github.com/ellie/atuin)
+- 🚀 Contribute! We would love more regular contributors (https://github.com/ellie/atuin)
+- 🤑 Sponsor me! If you value the project + want to help keep the hosted sync server free (https://github.com/sponsors/ellie)
+~ Ellie 🐢💖
 EOF
 }
 
 #####################################################################
 ##########################  SCRIPT START ############################
 #####################################################################
+
 check_command curl
 check_command sed
+
 __print_intro
+
 # TODO: would be great to support others!
 echo "$OSTYPE"
 case "$OSTYPE" in
