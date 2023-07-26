@@ -66,31 +66,11 @@ const config = {
     ({
       // Replace with your project's social card
       navbar: {
-        title: '🐢 Atuin',
-        items: [
-          {
-            type: 'doc',
-            docId: 'guide/index',
-            position: 'left',
-            label: 'Docs',
-          },
-          { to: '/blog', label: 'Blog', position: 'left' },
-          {
-            href: 'https://github.com/ellie/atuin',
-            label: 'GitHub',
-            position: 'right',
-          },
-          {
-            href: 'https://hachyderm.io/@atuin',
-            label: 'Mastodon',
-            position: 'right',
-          },
-          {
-            href: 'https://twitter.com/atuinsh',
-            label: 'Twitter',
-            position: 'right',
-          }
-        ],
+        logo: {
+          href: "https://atuin.sh",
+          src: "/img/atuin.png"
+        }
+
       },
       footer: {
         style: 'dark',
