@@ -28,7 +28,7 @@ jobs:
         job:
           - { os: ubuntu-20.04 , target: x86_64-unknown-linux-musl    }
           - { os: ubuntu-20.04 , target: x86_64-unknown-linux-gnu    }
-          - { os: ubuntu-20.04 , target: aarch64-unknown-linux-gnu    }
+          - { os: buildjet-2vcpu-ubuntu-2204-arm, target: aarch64-unknown-linux-gnu    }
           - { os: macos-12     , target: x86_64-apple-darwin         }
           - { os: macos-12     , target: aarch64-apple-darwin         }
     steps:
