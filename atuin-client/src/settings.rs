@@ -168,6 +168,7 @@ pub struct Settings {
     #[serde(with = "serde_regex", default = "RegexSet::empty")]
     pub cwd_filter: RegexSet,
     pub workspaces: bool,
+    pub ctrl_n_shortcuts: bool,
 
     // This is automatically loaded when settings is created. Do not set in
     // config! Keep secrets and settings apart.
@@ -380,6 +381,7 @@ impl Settings {
             .set_default("shell_up_key_binding", false)?
             .set_default("session_token", "")?
             .set_default("workspaces", false)?
+            .set_default("ctrl_n_shortcuts", false)?
             .add_source(
                 Environment::with_prefix("atuin")
                     .prefix_separator("_")

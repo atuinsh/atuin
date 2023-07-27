@@ -46,6 +46,15 @@ eval "$(atuin init zsh)"
 
 You can then choose to bind Atuin if needed, do this after the call to init.
 
+## <kbd>Ctrl-n</kbd> key shortcuts
+
+macOS does not have an <kbd>Alt</kbd> key, although terminal emulators can often be configured to map the <kbd>Option</kbd> key to be used as <kbd>Alt</kbd>. *However*, remapping <kbd>Option</kbd> this way may prevent typing some characters, such as using <kbd>Option-3</kbd> to type `#` on the British English layout. For such a scenario, set the `ctrl_n_shortcuts` option to `true` in your config file to replace <kbd>Alt-0</kbd> to <kbd>Alt-9</kbd> shortcuts with <kbd>Ctrl-0</kbd> to <kbd>Ctrl-9</kbd> instead:
+
+```
+# Use Ctrl-0 .. Ctrl-9 instead of Alt-0 .. Alt-9 UI shortcuts
+ctrl_n_shortcuts = true
+```
+
 ## zsh
 
 If you'd like to customize your bindings further, it's possible to do so with custom shell config:

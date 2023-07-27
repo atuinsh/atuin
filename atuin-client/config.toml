@@ -68,6 +68,10 @@
 ## number of context lines to show when scrolling by pages
 # scroll_context_lines = 1
 
+## use ctrl instead of alt as the shortcut modifier key for numerical UI shortcuts
+## alt-0 .. alt-9
+# ctrl_n_shortcuts = false
+
 ## prevent commands matching any of these regexes from being written to history.
 ## Note that these regular expressions are unanchored, i.e. if they don't start
 ## with ^ or end with $, they'll match anywhere in the command.
