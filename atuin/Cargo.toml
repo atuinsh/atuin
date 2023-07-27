@@ -71,9 +71,14 @@ futures-util = "0.3"
 fuzzy-matcher = "0.3.7"
 colored = "2.0.4"
 ratatui = "0.21"
+tracing = "0.1"
+
 
 [dependencies.tracing-subscriber]
 version = "0.3"
 default-features = false
 features = ["ansi", "fmt", "registry", "env-filter"]
 optional = true
+
+[dev-dependencies]
+tracing-tree = "0.2"

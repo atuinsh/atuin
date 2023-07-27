@@ -44,6 +44,16 @@ jobs:
   test:
     runs-on: ubuntu-latest
 
+    services:
+      postgres:
+        image: postgres
+        env:
+          POSTGRES_USER: atuin
+          POSTGRES_PASSWORD: pass
+          POSTGRES_DB: atuin
+        ports:
+          - 5432:5432
+
     steps:
     - uses: actions/checkout@v3
 
@@ -62,6 +72,8 @@ jobs:
 
     - name: Run cargo test
       run: cargo test --all-features --workspace
+      env:
+        ATUIN_DB_URI: postgres://atuin:pass@localhost:5432/atuin
 
     - name: Run cargo check (all features)
       run: cargo check --all-features --workspace
