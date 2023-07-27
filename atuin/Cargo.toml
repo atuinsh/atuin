@@ -49,7 +49,7 @@ env_logger = "0.10.0"
 chrono = { version = "0.4", features = ["serde"] }
 eyre = { workspace = true }
 directories = { workspace = true }
-indicatif = "0.17.1"
+indicatif = "0.17.5"
 serde = { workspace = true }
 serde_json = { workspace = true }
 crossterm = { version = "0.26", features = ["use-dev-tty"] }
