@@ -1,6 +1,7 @@
 ---
 title: Getting Started
 id: index
+slug: /
 sidebar_position: 1
 ---
 

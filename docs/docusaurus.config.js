@@ -14,7 +14,7 @@ const config = {
   url: 'https://atuin.sh',
   // Set the /<baseUrl>/ pathname under which your site is served
   // For GitHub pages deployment, it is often '/<projectName>/'
-  baseUrl: '/',
+  baseUrl: '/docs/',
 
   // GitHub pages deployment config.
   // If you aren't using GitHub pages, you don't need these.
@@ -40,6 +40,7 @@ const config = {
       /** @type {import('@docusaurus/preset-classic').Options} */
       ({
         docs: {
+          routeBasePath: '/',
           sidebarPath: require.resolve('./sidebars.js'),
           // Please change this to your repo.
           // Remove this to remove the "edit this page" links.
@@ -65,31 +66,11 @@ const config = {
     ({
       // Replace with your project's social card
       navbar: {
-        title: '🐢 Atuin',
-        items: [
-          {
-            type: 'doc',
-            docId: 'guide/index',
-            position: 'left',
-            label: 'Docs',
-          },
-          { to: '/blog', label: 'Blog', position: 'left' },
-          {
-            href: 'https://github.com/ellie/atuin',
-            label: 'GitHub',
-            position: 'right',
-          },
-          {
-            href: 'https://hachyderm.io/@atuin',
-            label: 'Mastodon',
-            position: 'right',
-          },
-          {
-            href: 'https://twitter.com/atuinsh',
-            label: 'Twitter',
-            position: 'right',
-          }
-        ],
+        logo: {
+          href: "https://atuin.sh",
+          src: "/img/atuin.png"
+        }
+
       },
       footer: {
         style: 'dark',
