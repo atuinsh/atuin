@@ -114,7 +114,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "tracing-tree",
- "unicode-segmentation",
  "unicode-width",
  "whoami",
 ]

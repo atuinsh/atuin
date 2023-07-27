@@ -31,6 +31,7 @@ async fn start_server(path: &str) -> (String, oneshot::Sender<()>, JoinHandle<()
         path: path.to_owned(),
         open_registration: true,
         max_history_length: 8192,
+        max_record_size: 1024 * 1024 * 1024,
         page_size: 1100,
         register_webhook_url: None,
         register_webhook_username: String::new(),
