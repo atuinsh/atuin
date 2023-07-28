@@ -363,7 +363,7 @@ impl Settings {
             .set_default("auto_sync", true)?
             .set_default("update_check", true)?
             .set_default("sync_address", "https://api.atuin.sh")?
-            .set_default("sync_frequency", "1h")?
+            .set_default("sync_frequency", "10m")?
             .set_default("search_mode", "fuzzy")?
             .set_default("filter_mode", "global")?
             .set_default("style", "auto")?
