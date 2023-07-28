@@ -269,15 +269,22 @@ case "$SHELL" in
         BASH_PREEXEC_PATH="$HOME/.bash-preexec.sh"
 
         # Check if .bashrc exists and append the necessary lines
+          # shellcheck disable=SC2086,SC2016
         if [ -f "$BASHRC_PATH" ]; then
+          	# shellcheck disable=SC2086,SC2016
             if ! grep -q 'eval "$(atuin init zsh)"' "$BASHRC_PATH"; then
+          	# shellcheck disable=SC2086,SC2016
                 printf '\neval "$(atuin init zsh)"\n' >> "$BASHRC_PATH"
             fi
             curl https://raw.githubusercontent.com/rcaloras/bash-preexec/master/bash-preexec.sh -o "$BASH_PREEXEC_PATH"
+          # shellcheck disable=SC2086,SC2016
             if ! grep -q '\[\[ -f ~/.bash-preexec.sh \]\] && source ~/.bash-preexec.sh' "$BASHRC_PATH"; then
+         	 # shellcheck disable=SC2086,SC2016
                 printf '\n[[ -f ~/.bash-preexec.sh ]] && source ~/.bash-preexec.sh\n' >> "$BASHRC_PATH"
             fi
+          # shellcheck disable=SC2086,SC2016
             if ! grep -q 'eval "$(atuin init bash)"' "$BASHRC_PATH"; then
+          # shellcheck disable=SC2086,SC2016
                 echo 'eval "$(atuin init bash)"' >> "$BASHRC_PATH"
             fi
         else
@@ -287,10 +294,12 @@ case "$SHELL" in
     *zsh*)
         ZSHRC_PATH="${ZDOTDIR:-$HOME}/.zshrc"
         ZSHRC_XDG_PATH="$HOME/.config/zsh/.zshrc"
-      
+          # shellcheck disable=SC2086,SC2016
         if [ -f "$ZSHRC_PATH" ] && ! grep -q 'eval "$(atuin init zsh)"' "$ZSHRC_PATH"; then
+          # shellcheck disable=SC2086,SC2016
             printf '\neval "$(atuin init zsh)"\n' >> "$ZSHRC_PATH"
             echo "Running under zsh (traditional location)"
+          # shellcheck disable=SC2086,SC2016
         elif [ -f "$ZSHRC_XDG_PATH" ] && ! grep -q 'eval "$(atuin init zsh)"' "$ZSHRC_XDG_PATH"; then
             printf '\neval "$(atuin init zsh)"\n' >> "$ZSHRC_XDG_PATH"
             echo "Running under zsh (XDG location)"
@@ -307,10 +316,13 @@ case "$SHELL" in
         BASH_PREEXEC_PATH="$HOME/.bash-preexec.sh"
 
         # Append to .zshrc in traditional location
+          # shellcheck disable=SC2086,SC2016
         if [ -f "$ZSHRC_PATH" ] && ! grep -q 'eval "$(atuin init zsh)"' "$ZSHRC_PATH"; then
             printf '\neval "$(atuin init zsh)"\n' >> "$ZSHRC_PATH"
         # Append to .zshrc in XDG location
+          # shellcheck disable=SC2086,SC2016
         elif [ -f "$ZSHRC_XDG_PATH" ] && ! grep -q 'eval "$(atuin init zsh)"' "$ZSHRC_XDG_PATH"; then
+          # shellcheck disable=SC2086,SC2016
             printf '\neval "$(atuin init zsh)"\n' >> "$ZSHRC_XDG_PATH"
         else
             echo ".zshrc not found at $ZSHRC_PATH or $ZSHRC_XDG_PATH"
@@ -318,14 +330,20 @@ case "$SHELL" in
 
         # Append to .bashrc and download bash-preexec.sh
         if [ -f "$BASHRC_PATH" ]; then
+          # shellcheck disable=SC2086,SC2016
             if ! grep -q 'eval "$(atuin init zsh)"' "$BASHRC_PATH"; then
+          # shellcheck disable=SC2086,SC2016
                 printf '\neval "$(atuin init zsh)"\n' >> "$BASHRC_PATH"
             fi
             curl https://raw.githubusercontent.com/rcaloras/bash-preexec/master/bash-preexec.sh -o "$BASH_PREEXEC_PATH"
+          # shellcheck disable=SC2086,SC2016
             if ! grep -q '\[\[ -f ~/.bash-preexec.sh \]\] && source ~/.bash-preexec.sh' "$BASHRC_PATH"; then
+          # shellcheck disable=SC2086,SC2016
                 printf '\n[[ -f ~/.bash-preexec.sh ]] && source ~/.bash-preexec.sh\n' >> "$BASHRC_PATH"
             fi
+          # shellcheck disable=SC2086,SC2016
             if ! grep -q 'eval "$(atuin init bash)"' "$BASHRC_PATH"; then
+          # shellcheck disable=SC2086,SC2016
                 echo 'eval "$(atuin init bash)"' >> "$BASHRC_PATH"
             fi
         else
