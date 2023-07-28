@@ -294,13 +294,13 @@ case "$SHELL" in
     *zsh*)
         ZSHRC_PATH="${ZDOTDIR:-$HOME}/.zshrc"
         ZSHRC_XDG_PATH="$HOME/.config/zsh/.zshrc"
-          # shellcheck disable=SC2086,SC2016
+        # shellcheck disable=SC2086,SC2016
         if [ -f "$ZSHRC_PATH" ] && ! grep -q 'eval "$(atuin init zsh)"' "$ZSHRC_PATH"; then
-          # shellcheck disable=SC2086,SC2016
+            # shellcheck disable=SC2086,SC2016
             printf '\neval "$(atuin init zsh)"\n' >> "$ZSHRC_PATH"
             echo "Running under zsh (traditional location)"
-          # shellcheck disable=SC2086,SC2016
         elif [ -f "$ZSHRC_XDG_PATH" ] && ! grep -q 'eval "$(atuin init zsh)"' "$ZSHRC_XDG_PATH"; then
+            # shellcheck disable=SC2086,SC2016
             printf '\neval "$(atuin init zsh)"\n' >> "$ZSHRC_XDG_PATH"
             echo "Running under zsh (XDG location)"
         else
