@@ -64,18 +64,21 @@ __atuin_install_arch(){
 }
 
 __atuin_install_ubuntu(){
-	echo "Ubuntu detected"
-	# TODO: select correct AARCH too
-	ARTIFACT_URL="https://github.com/atuinsh/atuin/releases/download/$LATEST_VERSION/atuin_${LATEST_VERSION//v/}_amd64.deb"
-
-	TEMP_DEB="$(mktemp)".deb &&
-	curl -Lo "$TEMP_DEB" "$ARTIFACT_URL"
-	if command -v sudo &> /dev/null; then
-		sudo apt install "$TEMP_DEB"
+	if [ "$(dpkg --print-architecture)" = "amd64" ]; then
+		echo "Ubuntu detected"
+		ARTIFACT_URL="https://github.com/atuinsh/atuin/releases/download/$LATEST_VERSION/atuin_${LATEST_VERSION//v/}_amd64.deb"
+		TEMP_DEB="$(mktemp)".deb &&
+		curl -Lo "$TEMP_DEB" "$ARTIFACT_URL"
+		if command -v sudo &> /dev/null; then
+			sudo apt install "$TEMP_DEB"
+		else
+			su -l -c "apt install '$TEMP_DEB'"
+		fi
+		rm -f "$TEMP_DEB"
 	else
-		su -l -c "apt install '$TEMP_DEB'"
+		echo "Ubuntu detected, but not amd64"
+		__atuin_install_unsupported
 	fi
-	rm -f "$TEMP_DEB"
 }
 
 __atuin_install_linux(){
@@ -148,7 +151,7 @@ __atuin_install_cargo(){
 }
 
 __atuin_install_unsupported(){
-	echo "Unknown or unsupported OS"
+	echo "Unknown or unsupported OS or architecture"
 	echo "Please check the README at https://github.com/atuinsh/atuin for manual install instructions"
 	echo "If you have any problems, please open an issue!"
 
