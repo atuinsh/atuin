@@ -6,7 +6,7 @@ LATEST_RELEASE=$(curl -L -s -H 'Accept: application/json' https://github.com/ell
 # Allow sed; sometimes it's more readable than ${variable//search/replace}
 # shellcheck disable=SC2001
 LATEST_VERSION=$(echo "$LATEST_RELEASE" | sed -e 's/.*"tag_name":"\([^"]*\)".*/\1/')
-
+ARCH="unknown"
 
 #####################################################################
 ######################  HELPER FUNCTIONS  ###########################
@@ -48,10 +48,37 @@ __atuin_install_arch(){
 
 }
 
+get_architecture() {
+  local detected_arch
+  detected_arch=$(uname -m)
+  case "$detected_arch" in
+    x86_64)
+      echo "64-bit architecture detected."
+      ARCH="amd64"
+      ;;
+    i386|i486|i586|i686)
+      echo "32-bit architecture detected."
+      ARCH="i386"
+      ;;
+    armv7l)
+      echo "32-bit ARM architecture detected."
+      ARCH="armhf" 
+      ;;
+    aarch64|arm64)
+      echo "64-bit ARM architecture detected."
+      ARCH="arm64"
+      ;;
+    *)
+      echo "Unknown or unsupported architecture: $detected_arch"
+      exit 1
+      ;;
+  esac
+}
+
 __atuin_install_ubuntu(){
 	echo "Ubuntu detected"
-	# TODO: select correct AARCH too
-	ARTIFACT_URL="https://github.com/ellie/atuin/releases/download/$LATEST_VERSION/atuin_${LATEST_VERSION//v/}_amd64.deb"
+	 get_architecture
+  	ARTIFACT_URL="https://github.com/ellie/atuin/releases/download/$LATEST_VERSION/atuin_${LATEST_VERSION//v/}_${ARCH}.deb"
 	TEMP_DEB="$(mktemp)".deb &&
   curl -Lo "$TEMP_DEB" "$ARTIFACT_URL"
 	if command -v sudo &> /dev/null; then
@@ -206,6 +233,33 @@ __atuin_install() {
   esac
 }
 
+
+update_config_file() {
+    local file_path="$1"
+    local atuin_init_command="$2"
+    local shell_name="$3"
+
+    if [ ! -f "$file_path" ]; then
+        echo ".$shell_name not found at $file_path"
+        return
+    fi
+
+    if ! grep -q "eval \"$atuin_init_command\"" "$file_path"; then
+        printf "\neval \"$atuin_init_command\"\n" >> "$file_path"
+    fi
+
+    if [ "$shell_name" = "bash" ]; then
+        local bash_preexec_path="$HOME/.bash-preexec.sh"
+        curl https://raw.githubusercontent.com/rcaloras/bash-preexec/master/bash-preexec.sh -o "$bash_preexec_path"
+        if ! grep -q '\[\[ -f ~/.bash-preexec.sh \]\] && source ~/.bash-preexec.sh' "$file_path"; then
+            printf '\n[[ -f ~/.bash-preexec.sh ]] && source ~/.bash-preexec.sh\n' >> "$file_path"
+        fi
+        if ! grep -q 'eval "$(atuin init bash)"' "$file_path"; then
+            echo 'eval "$(atuin init bash)"' >> "$file_path"
+        fi
+    fi
+}
+
 __print_intro() {
 cat << EOF
  _______  _______  __   __  ___   __    _
@@ -248,7 +302,7 @@ EOF
 
 check_command curl
 check_command sed
-
+get_architecture
 __print_intro
 
 # TODO: would be great to support others!
@@ -265,90 +319,27 @@ esac
 
 case "$SHELL" in
     *bash*)
-        BASHRC_PATH="$HOME/.bashrc"
-        BASH_PREEXEC_PATH="$HOME/.bash-preexec.sh"
-
-        # Check if .bashrc exists and append the necessary lines
-          # shellcheck disable=SC2086,SC2016
-        if [ -f "$BASHRC_PATH" ]; then
-          	# shellcheck disable=SC2086,SC2016
-            if ! grep -q 'eval "$(atuin init zsh)"' "$BASHRC_PATH"; then
-          	# shellcheck disable=SC2086,SC2016
-                printf '\neval "$(atuin init zsh)"\n' >> "$BASHRC_PATH"
-            fi
-            curl https://raw.githubusercontent.com/rcaloras/bash-preexec/master/bash-preexec.sh -o "$BASH_PREEXEC_PATH"
-          # shellcheck disable=SC2086,SC2016
-            if ! grep -q '\[\[ -f ~/.bash-preexec.sh \]\] && source ~/.bash-preexec.sh' "$BASHRC_PATH"; then
-         	 # shellcheck disable=SC2086,SC2016
-                printf '\n[[ -f ~/.bash-preexec.sh ]] && source ~/.bash-preexec.sh\n' >> "$BASHRC_PATH"
-            fi
-          # shellcheck disable=SC2086,SC2016
-            if ! grep -q 'eval "$(atuin init bash)"' "$BASHRC_PATH"; then
-          # shellcheck disable=SC2086,SC2016
-                echo 'eval "$(atuin init bash)"' >> "$BASHRC_PATH"
-            fi
-        else
-            echo ".bashrc not found at $BASHRC_PATH"
-        fi
+        update_config_file "$HOME/.bashrc" 'atuin init zsh' 'bash'
         ;;
     *zsh*)
         ZSHRC_PATH="${ZDOTDIR:-$HOME}/.zshrc"
-        ZSHRC_XDG_PATH="$HOME/.config/zsh/.zshrc"
-        # shellcheck disable=SC2086,SC2016
-        if [ -f "$ZSHRC_PATH" ] && ! grep -q 'eval "$(atuin init zsh)"' "$ZSHRC_PATH"; then
-            # shellcheck disable=SC2086,SC2016
-            printf '\neval "$(atuin init zsh)"\n' >> "$ZSHRC_PATH"
+        if [ -f "$ZSHRC_PATH" ]; then
+            update_config_file "$ZSHRC_PATH" 'atuin init zsh' 'zsh'
             echo "Running under zsh (traditional location)"
-        elif [ -f "$ZSHRC_XDG_PATH" ] && ! grep -q 'eval "$(atuin init zsh)"' "$ZSHRC_XDG_PATH"; then
-            # shellcheck disable=SC2086,SC2016
-            printf '\neval "$(atuin init zsh)"\n' >> "$ZSHRC_XDG_PATH"
-            echo "Running under zsh (XDG location)"
         else
-            echo ".zshrc not found at $ZSHRC_PATH or $ZSHRC_XDG_PATH"
+            ZSHRC_XDG_PATH="$HOME/.config/zsh/.zshrc"
+            if [ -f "$ZSHRC_XDG_PATH" ]; then
+                update_config_file "$ZSHRC_XDG_PATH" 'atuin init zsh' 'zsh'
+                echo "Running under zsh (XDG location)"
+            else
+                echo ".zshrc not found at $ZSHRC_PATH or $ZSHRC_XDG_PATH"
+            fi
         fi
         ;;
     *)
         echo "Unknown shell"
-
-        BASHRC_PATH="$HOME/.bashrc"
-        ZSHRC_PATH="$HOME/.zshrc"
-        ZSHRC_XDG_PATH="$HOME/.config/zsh/.zshrc"
-        BASH_PREEXEC_PATH="$HOME/.bash-preexec.sh"
-
-        # Append to .zshrc in traditional location
-          # shellcheck disable=SC2086,SC2016
-        if [ -f "$ZSHRC_PATH" ] && ! grep -q 'eval "$(atuin init zsh)"' "$ZSHRC_PATH"; then
-          # shellcheck disable=SC2086,SC2016
-            printf '\neval "$(atuin init zsh)"\n' >> "$ZSHRC_PATH"
-        # Append to .zshrc in XDG location
-        elif [ -f "$ZSHRC_XDG_PATH" ] && ! grep -q 'eval "$(atuin init zsh)"' "$ZSHRC_XDG_PATH"; then
-          # shellcheck disable=SC2086,SC2016
-            printf '\neval "$(atuin init zsh)"\n' >> "$ZSHRC_XDG_PATH"
-        else
-            echo ".zshrc not found at $ZSHRC_PATH or $ZSHRC_XDG_PATH"
-        fi
-
-        # Append to .bashrc and download bash-preexec.sh
-        if [ -f "$BASHRC_PATH" ]; then
-          # shellcheck disable=SC2086,SC2016
-            if ! grep -q 'eval "$(atuin init zsh)"' "$BASHRC_PATH"; then
-          	# shellcheck disable=SC2086,SC2016
-                printf '\neval "$(atuin init zsh)"\n' >> "$BASHRC_PATH"
-            fi
-            curl https://raw.githubusercontent.com/rcaloras/bash-preexec/master/bash-preexec.sh -o "$BASH_PREEXEC_PATH"
-            # shellcheck disable=SC2086,SC2016
-            if ! grep -q '\[\[ -f ~/.bash-preexec.sh \]\] && source ~/.bash-preexec.sh' "$BASHRC_PATH"; then
-	        # shellcheck disable=SC2086,SC2016
-                printf '\n[[ -f ~/.bash-preexec.sh ]] && source ~/.bash-preexec.sh\n' >> "$BASHRC_PATH"
-            fi
-          # shellcheck disable=SC2086,SC2016
-            if ! grep -q 'eval "$(atuin init bash)"' "$BASHRC_PATH"; then
-	          # shellcheck disable=SC2086,SC2016
-                echo 'eval "$(atuin init bash)"' >> "$BASHRC_PATH"
-            fi
-        else
-            echo ".bashrc not found at $BASHRC_PATH"
-        fi
+        update_config_file "$HOME/.zshrc" 'atuin init zsh' 'zsh'
+        update_config_file "$HOME/.bashrc" 'atuin init zsh' 'bash'
         ;;
 esac
 
