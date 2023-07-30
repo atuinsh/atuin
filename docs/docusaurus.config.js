@@ -18,7 +18,7 @@ const config = {
 
   // GitHub pages deployment config.
   // If you aren't using GitHub pages, you don't need these.
-  organizationName: 'ellie', // Usually your GitHub org/user name.
+  organizationName: 'atuinsh', // Usually your GitHub org/user name.
   projectName: 'atuin', // Usually your repo name.
 
   onBrokenLinks: 'warn',
@@ -45,14 +45,14 @@ const config = {
           // Please change this to your repo.
           // Remove this to remove the "edit this page" links.
           editUrl:
-            'https://github.com/ellie/atuin/tree/main/docs/',
+            'https://github.com/atuinsh/atuin/tree/main/docs/',
         },
         blog: {
           showReadingTime: true,
           // Please change this to your repo.
           // Remove this to remove the "edit this page" links.
           editUrl:
-            'https://github.com/ellie/atuin/tree/main/docs/',
+            'https://github.com/atuinsh/atuin/tree/main/docs/',
         },
         theme: {
           customCss: require.resolve('./src/css/custom.css'),
@@ -102,7 +102,7 @@ const config = {
               },
               {
                 label: 'GitHub',
-                href: 'https://github.com/ellie/atuin',
+                href: 'https://github.com/atuinsh/atuin',
               },
               {
                 label: 'Twitter',
