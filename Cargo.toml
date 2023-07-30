@@ -15,7 +15,7 @@ authors = ["Ellie Huxtable <ellie@elliehuxtable.com>"]
 rust-version = "1.59"
 license = "MIT"
 homepage = "https://atuin.sh"
-repository = "https://github.com/ellie/atuin"
+repository = "https://github.com/atuinsh/atuin"
 readme = "README.md"
 
 [workspace.dependencies]
