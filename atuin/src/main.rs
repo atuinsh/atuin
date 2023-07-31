@@ -19,7 +19,7 @@ static HELP_TEMPLATE: &str = "\
 
 {all-args}{after-help}";
 
-/// Magical shell history
+/// Magical shell history 🪄
 #[derive(Parser)]
 #[command(
     author = "Ellie Huxtable <e@elm.sh>",
