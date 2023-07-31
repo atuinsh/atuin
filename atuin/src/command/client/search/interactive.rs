@@ -288,7 +288,10 @@ impl State {
                     settings.max_preview_height,
                     v.command
                         .split('\n')
-                        .map(|line| (line.len() as u16 + preview_width - 1 - border_size) / (preview_width - border_size))
+                        .map(|line| {
+                            (line.len() as u16 + preview_width - 1 - border_size)
+                                / (preview_width - border_size)
+                        })
                         .sum(),
                 )
             }) + border_size * 2
@@ -475,13 +478,15 @@ impl State {
         } else {
             use itertools::Itertools as _;
             let s = &results[selected].command;
-            s.split('\n').flat_map(|line|
-                line.char_indices()
-                    .step_by(preview_width.into())
-                    .map(|(i, _)| i)
-                    .chain(Some(line.len()))
-                    .tuple_windows()
-                    .map(|(a, b)| &line[a..b]))
+            s.split('\n')
+                .flat_map(|line| {
+                    line.char_indices()
+                        .step_by(preview_width.into())
+                        .map(|(i, _)| i)
+                        .chain(Some(line.len()))
+                        .tuple_windows()
+                        .map(|(a, b)| &line[a..b])
+                })
                 .join("\n")
         };
         let preview = if compact {
