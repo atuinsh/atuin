@@ -53,7 +53,7 @@ where
 }
 
 async fn teapot() -> impl IntoResponse {
-    (http::StatusCode::IM_A_TEAPOT, "☕")
+    (http::StatusCode::IM_A_TEAPOT, "🫖")
 }
 
 #[derive(Clone)]
