@@ -41,7 +41,41 @@ jobs:
     - name: Run cargo build main
       run: cargo build --all --locked --release && strip target/release/atuin
 
-  test:
+  unit-test:
+    runs-on: [self-hosted, ARM64, macOS]
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Install rust
+      uses: dtolnay/rust-toolchain@master
+      with:
+          toolchain: stable
+
+    - uses: actions/cache@v3
+      with:
+        path: |
+         ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${ runner.os }-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Run cargo test
+      run: cargo test --lib --bins
+
+    - name: Run cargo check (all features)
+      run: cargo check --all-features --workspace
+
+    - name: Run cargo check (no features)
+      run: cargo check --no-default-features --workspace
+
+    - name: Run cargo check (sync)
+      run: cargo check --no-default-features --features sync --workspace
+
+    - name: Run cargo check (server)
+      run: cargo check --no-default-features --features server --workspace
+
+  integration-test:
     runs-on: ubuntu-latest
 
     services:
@@ -71,21 +105,9 @@ jobs:
         key: ${ runner.os }-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
 
     - name: Run cargo test
-      run: cargo test --all-features --workspace
+      run: cargo test --test '*'
       env:
         ATUIN_DB_URI: postgres://atuin:pass@localhost:5432/atuin
-
-    - name: Run cargo check (all features)
-      run: cargo check --all-features --workspace
-
-    - name: Run cargo check (no features)
-      run: cargo check --no-default-features --workspace
-
-    - name: Run cargo check (sync)
-      run: cargo check --no-default-features --features sync --workspace
-
-    - name: Run cargo check (server)
-      run: cargo check --no-default-features --features server --workspace
 
   clippy:
     runs-on: ubuntu-latest
