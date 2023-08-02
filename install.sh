@@ -2,7 +2,35 @@
 
 set -euo pipefail
 
-LATEST_RELEASE=$(curl -L -s -H 'Accept: application/json' https://github.com/ellie/atuin/releases/latest)
+cat << EOF
+ _______  _______  __   __  ___   __    _
+|   _   ||       ||  | |  ||   | |  |  | |
+|  |_|  ||_     _||  | |  ||   | |   |_| |
+|       |  |   |  |  |_|  ||   | |       |
+|       |  |   |  |       ||   | |  _    |
+|   _   |  |   |  |       ||   | | | |   |
+|__| |__|  |___|  |_______||___| |_|  |__|
+
+Magical shell history
+
+Atuin setup
+https://github.com/atuinsh/atuin
+
+Please file an issue if you encounter any problems!
+
+===============================================================================
+
+EOF
+
+if ! command -v curl &> /dev/null; then
+    echo "curl not installed. Please install curl."
+    exit
+elif ! command -v sed &> /dev/null; then
+    echo "sed not installed. Please install sed."
+    exit
+fi
+
+LATEST_RELEASE=$(curl -L -s -H 'Accept: application/json' https://github.com/atuinsh/atuin/releases/latest)
 # Allow sed; sometimes it's more readable than ${variable//search/replace}
 # shellcheck disable=SC2001
 LATEST_VERSION=$(echo "$LATEST_RELEASE" | sed -e 's/.*"tag_name":"\([^"]*\)".*/\1/')
@@ -78,7 +106,7 @@ get_architecture() {
 __atuin_install_ubuntu(){
 	echo "Ubuntu detected"
 	 get_architecture
-  	ARTIFACT_URL="https://github.com/ellie/atuin/releases/download/$LATEST_VERSION/atuin_${LATEST_VERSION//v/}_${ARCH}.deb"
+  	ARTIFACT_URL="https://github.com/atuinsh/atuin/releases/download/$LATEST_VERSION/atuin_${LATEST_VERSION//v/}_${ARCH}.deb"
 	TEMP_DEB="$(mktemp)".deb &&
   curl -Lo "$TEMP_DEB" "$ARTIFACT_URL"
 	if command -v sudo &> /dev/null; then
@@ -135,7 +163,7 @@ __atuin_install_cargo(){
 __atuin_install_unsupported(){
 	echo "$OS"
 	echo "Unknown or unsupported OS"
-	echo "Please check the README at https://github.com/ellie/atuin for manual install instructions"
+	echo "Please check the README at https://github.com/atuinsh/atuin for manual install instructions"
 	echo "If you have any problems, please open an issue!"
 
 	while true; do
@@ -277,7 +305,7 @@ cat << EOF
 |__| |__|  |___|  |_______||___| |_|  |__|
 Magical shell history
 Atuin setup
-https://github.com/ellie/atuin 
+https://github.com/atuinsh/atuin 
 ☝️Please file an issue if you encounter any problems!
 ===============================================================================
 EOF
@@ -294,11 +322,11 @@ cat << EOF
   |___|  |__| |__||__| |__||_|  |__||___| |_|    |___|  |_______||_______|
 Thanks for installing Atuin! I really hope you like it.
 If you have any issues, please open an issue on GitHub or visit our Discord (https://discord.gg/dPhv2B3x)!
-Otherwise, Atuin is a hobby project - if you find it valuable, you can help us out!
-- ⭐️ Give us a star on GitHub (https://github.com/ellie/atuin)
-- 🚀 Contribute! We would love more regular contributors (https://github.com/ellie/atuin)
-- 🤑 Sponsor me! If you value the project + want to help keep the hosted sync server free (https://github.com/sponsors/ellie)
-~ Ellie 🐢💖
+
+If you love Atuin, please give us a star on GitHub! It really helps ⭐️ https://github.com/atuinsh/atuin
+
+Please run "atuin register" to get setup with sync, or "atuin login" if you already have an account
+
 EOF
 }
 

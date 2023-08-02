@@ -46,7 +46,7 @@ And then follow [the shell setup](#shell-plugin)
 This repository is a flake, and can be installed using `nix profile`:
 
 ```
-nix profile install "github:ellie/atuin"
+nix profile install "github:atuinsh/atuin"
 ```
 
 Atuin is also available in [nixpkgs](https://github.com/NixOS/nixpkgs):
@@ -82,7 +82,7 @@ Note: Atuin builds on the latest stable version of Rust, and we make no
 promises regarding older versions. We recommend using rustup.
 
 ```
-git clone https://github.com/ellie/atuin.git
+git clone https://github.com/atuinsh/atuin.git
 cd atuin/atuin
 cargo install --path .
 ```
@@ -101,13 +101,13 @@ echo 'eval "$(atuin init zsh)"' >> ~/.zshrc
 #### Zinit
 
 ```sh
-zinit load ellie/atuin
+zinit load atuinsh/atuin
 ```
 
 #### Antigen  
   
 ```sh  
-antigen bundle ellie/atuin@main
+antigen bundle atuinsh/atuin@main
 ```
 
 ### bash
