@@ -72,7 +72,10 @@ impl Encryption for PASETO_V4 {
         let assertions = Assertions::from(ad).encode();
 
         // build the payload and encrypt the token
-        let payload = general_purpose::URL_SAFE_NO_PAD.encode(data.0);
+        let payload = serde_json::to_string(&AtuinPayload {
+            data: general_purpose::URL_SAFE_NO_PAD.encode(data.0),
+        })
+        .expect("json encoding can't fail");
         let nonce = DataKey::<32>::try_new_random().expect("could not source from random");
         let nonce = PasetoNonce::<V4, LocalPurpose>::from(&nonce);
 
@@ -104,7 +107,8 @@ impl Encryption for PASETO_V4 {
         )
         .context("could not decrypt entry")?;
 
-        let data = general_purpose::URL_SAFE_NO_PAD.decode(payload)?;
+        let payload: AtuinPayload = serde_json::from_str(&payload)?;
+        let data = general_purpose::URL_SAFE_NO_PAD.decode(payload.data)?;
         Ok(DecryptedData(data))
     }
 }
@@ -144,6 +148,11 @@ impl PASETO_V4 {
         };
         serde_json::to_string(&wrapped_cek).expect("could not serialize wrapped cek")
     }
+}
+
+#[derive(Serialize, Deserialize)]
+struct AtuinPayload {
+    data: String,
 }
 
 #[derive(Serialize, Deserialize)]
