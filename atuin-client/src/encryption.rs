@@ -147,8 +147,7 @@ fn encode(h: &History) -> Result<Vec<u8>> {
     encode::write_str(&mut output, &h.id)?;
     encode::write_str(
         &mut output,
-        &dbg!(h
-            .timestamp
+        &(h.timestamp
             .to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)),
     )?;
     encode::write_sint(&mut output, h.duration)?;
