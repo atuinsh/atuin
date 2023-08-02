@@ -2,34 +2,6 @@
 
 set -euo pipefail
 
-cat << EOF
- _______  _______  __   __  ___   __    _
-|   _   ||       ||  | |  ||   | |  |  | |
-|  |_|  ||_     _||  | |  ||   | |   |_| |
-|       |  |   |  |  |_|  ||   | |       |
-|       |  |   |  |       ||   | |  _    |
-|   _   |  |   |  |       ||   | | | |   |
-|__| |__|  |___|  |_______||___| |_|  |__|
-
-Magical shell history
-
-Atuin setup
-https://github.com/atuinsh/atuin
-
-Please file an issue if you encounter any problems!
-
-===============================================================================
-
-EOF
-
-if ! command -v curl &> /dev/null; then
-    echo "curl not installed. Please install curl."
-    exit
-elif ! command -v sed &> /dev/null; then
-    echo "sed not installed. Please install sed."
-    exit
-fi
-
 LATEST_RELEASE=$(curl -L -s -H 'Accept: application/json' https://github.com/atuinsh/atuin/releases/latest)
 # Allow sed; sometimes it's more readable than ${variable//search/replace}
 # shellcheck disable=SC2001
@@ -107,8 +79,8 @@ __atuin_install_ubuntu(){
 	echo "Ubuntu detected"
 	 get_architecture
   	ARTIFACT_URL="https://github.com/atuinsh/atuin/releases/download/$LATEST_VERSION/atuin_${LATEST_VERSION//v/}_${ARCH}.deb"
-	TEMP_DEB="$(mktemp)".deb &&
-  curl -Lo "$TEMP_DEB" "$ARTIFACT_URL"
+	  TEMP_DEB="$(mktemp)".deb &&
+    curl -Lo "$TEMP_DEB" "$ARTIFACT_URL"
 	if command -v sudo &> /dev/null; then
 		sudo apt install "$TEMP_DEB"
 	else
@@ -261,41 +233,11 @@ __atuin_install() {
   esac
 }
 
-
-# update_config_file() {
-#     local file_path="$1"
-#     local atuin_init_command="$2"
-#     local shell_name="$3"
-
-#     if [ ! -f "$file_path" ]; then
-#         echo ".$shell_name not found at $file_path"
-#         return
-#     fi
-
-#     if ! grep -q "eval \"$atuin_init_command\"" "$file_path"; then
-#   	  # shellcheck disable=SC2086,SC2016
-#         printf "\neval \"$atuin_init_command\"\n" >> "$file_path"
-#     fi
-
-#     # shellcheck disable=SC2086,SC2016
-#     if [ "$shell_name" = "bash" ]; then
-#         local bash_preexec_path="$HOME/.bash-preexec.sh"
-       
-#    	 # shellcheck disable=SC2086,SC2016
-#         if ! grep -q '\[\[ -f ~/.bash-preexec.sh \]\] && source ~/.bash-preexec.sh' "$file_path"; then 
-# 	    curl https://raw.githubusercontent.com/rcaloras/bash-preexec/master/bash-preexec.sh -o "$bash_preexec_path"
-#             printf '\n[[ -f ~/.bash-preexec.sh ]] && source ~/.bash-preexec.sh\n' >> "$file_path"
-#         fi
-#     	# shellcheck disable=SC2086,SC2016
-#         if ! grep -q 'eval "$(atuin init bash)"' "$file_path"; then
-#   	    # shellcheck disable=SC2086,SC2016
-#             echo 'eval "$(atuin init bash)"' >> "$file_path"
-#         fi
-#     fi
-# }
-
 __print_intro() {
 cat << EOF
+
+🐢🐢🐢🐢🐢🐢🐢🐢🐢🐢🐢🐢🐢🐢🐢🐢🐢🐢🐢🐢🐢
+
  _______  _______  __   __  ___   __    _
 |   _   ||       ||  | |  ||   | |  |  | |
 |  |_|  ||_     _||  | |  ||   | |   |_| |
@@ -303,11 +245,15 @@ cat << EOF
 |       |  |   |  |       ||   | |  _    |
 |   _   |  |   |  |       ||   | | | |   |
 |__| |__|  |___|  |_______||___| |_|  |__|
+
 Magical shell history
+
 Atuin setup
-https://github.com/atuinsh/atuin 
-☝️Please file an issue if you encounter any problems!
-===============================================================================
+https://github.com/atuinsh/atuin
+
+Please file an issue if you encounter any problems!
+
+🐢🐢🐢🐢🐢🐢🐢🐢🐢🐢🐢🐢🐢🐢🐢🐢🐢🐢🐢🐢🐢
 EOF
 }
 
@@ -326,6 +272,7 @@ If you have any issues, please open an issue on GitHub or visit our Discord (htt
 If you love Atuin, please give us a star on GitHub! It really helps ⭐️ https://github.com/atuinsh/atuin
 
 Please run "atuin register" to get setup with sync, or "atuin login" if you already have an account
+
 
 EOF
 }
@@ -350,34 +297,5 @@ case "$OSTYPE" in
   bsd*)           __atuin_install_unsupported ;;
   *)              __atuin_install_unsupported ;;
 esac
-
-# Find config and add needed lines to init
-# case "$SHELL" in
-#     *bash*)
-#         update_config_file "$HOME/.bashrc" 'atuin init zsh' 'bash'
-#         ;;
-#     *zsh*)
-#         ZSHRC_PATH="${ZDOTDIR:-$HOME}/.zshrc"
-#         if [ -f "$ZSHRC_PATH" ]; then
-#             update_config_file "$ZSHRC_PATH" 'atuin init zsh' 'zsh'
-#             echo "Running under zsh (traditional location)"
-#         else
-#             ZSHRC_XDG_PATH="$HOME/.config/zsh/.zshrc"
-#             if [ -f "$ZSHRC_XDG_PATH" ]; then
-#                 update_config_file "$ZSHRC_XDG_PATH" 'atuin init zsh' 'zsh'
-#                 echo "Running under zsh (XDG location)"
-#             else
-#                 echo ".zshrc not found at $ZSHRC_PATH or $ZSHRC_XDG_PATH"
-#             fi
-#         fi
-#         ;;
-#     *)
-#         echo "Unknown shell"
-#         update_config_file "$HOME/.zshrc" 'atuin init zsh' 'zsh'
-#         update_config_file "$HOME/.bashrc" 'atuin init zsh' 'bash'
-#         ;;
-# esac
-
-
 
 __print_outro
