@@ -31,12 +31,12 @@ _atuin_search() {
     zle -I
 
     # Switch to cursor mode, then back to application
-    echoti rmkx
+    echoti smkx
     # swap stderr and stdout, so that the tui stuff works
     # TODO: not this
     # shellcheck disable=SC2048
     output=$(RUST_LOG=error atuin search $* -i -- $BUFFER 3>&1 1>&2 2>&3)
-    echoti smkx
+    echoti rmkx
 
     if [[ -n $output ]]; then
         RBUFFER=""
