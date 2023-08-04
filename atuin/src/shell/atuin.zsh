@@ -30,7 +30,7 @@ _atuin_search() {
     emulate -L zsh
     zle -I
 
-    # Switch to cursor mode, then back to application
+    # Switch to application mode, then back to cursor
     echoti smkx
     # swap stderr and stdout, so that the tui stuff works
     # TODO: not this
