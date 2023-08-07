@@ -152,7 +152,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_regex",
- "sha2 0.10.6",
+ "sha2 0.10.7",
  "shellexpand",
  "sql-builder",
  "sqlx",
@@ -818,7 +818,7 @@ dependencies = [
  "curve25519-dalek 4.0.0-rc.2",
  "ed25519 2.2.1",
  "serde",
- "sha2 0.10.6",
+ "sha2 0.10.7",
  "zeroize",
 ]
 
@@ -2214,7 +2214,7 @@ dependencies = [
  "rand 0.8.5",
  "rusty_paseto",
  "serde",
- "sha2 0.10.6",
+ "sha2 0.10.7",
  "subtle",
  "x25519-dalek",
 ]
@@ -2395,9 +2395,9 @@ dependencies = [
 
 [[package]]
 name = "sha2"
-version = "0.10.6"
+version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "82e6b795fe2e3b1e845bafcb27aa35405c4d47cdfc92af5fc8d3002f76cebdc0"
+checksum = "479fb9d862239e610720565ca91403019f2f00410f1864c5aa7479b950a76ed8"
 dependencies = [
  "cfg-if",
  "cpufeatures",
@@ -2590,7 +2590,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha1",
- "sha2 0.10.6",
+ "sha2 0.10.7",
  "smallvec",
  "sqlformat",
  "sqlx-rt",
@@ -2615,7 +2615,7 @@ dependencies = [
  "once_cell",
  "proc-macro2",
  "quote",
- "sha2 0.10.6",
+ "sha2 0.10.7",
  "sqlx-core",
  "sqlx-rt",
  "syn 1.0.99",
@@ -2772,7 +2772,7 @@ dependencies = [
  "pbkdf2",
  "rand 0.8.5",
  "rustc-hash",
- "sha2 0.10.6",
+ "sha2 0.10.7",
  "thiserror",
  "unicode-normalization",
  "wasm-bindgen",
