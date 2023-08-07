@@ -124,7 +124,12 @@ async fn sync_upload(
     // we need to iterate from the remote tail, and keep going until
     // remote tail = current local tail
 
-    let mut record = Some(store.get(start).await.unwrap());
+    let mut record = if current_tail.is_some() {
+        let r = store.get(start).await.unwrap();
+        store.next(&r).await?
+    } else {
+        Some(store.get(start).await.unwrap())
+    };
 
     let mut buf = Vec::with_capacity(upload_page_size);
 

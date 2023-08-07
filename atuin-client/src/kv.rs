@@ -7,6 +7,7 @@ use crate::settings::Settings;
 
 const KV_VERSION: &str = "v0";
 const KV_TAG: &str = "kv";
+const KV_VAL_MAX_LEN: usize = 100 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KvRecord {
@@ -91,6 +92,13 @@ impl KvStore {
         key: &str,
         value: &str,
     ) -> Result<()> {
+        if value.len() > KV_VAL_MAX_LEN {
+            return Err(eyre!(
+                "kv value too large: max len {} bytes",
+                KV_VAL_MAX_LEN
+            ));
+        }
+
         let host_id = Settings::host_id().expect("failed to get host_id");
 
         let record = KvRecord {
