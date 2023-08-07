@@ -1,4 +1,5 @@
 use std::time::Duration;
+use std::env;
 
 use atuin_client::history::History;
 use ratatui::{
@@ -69,6 +70,7 @@ impl<'a> StatefulWidget for HistoryList<'a> {
             s.index();
             s.duration(item);
             s.time(item);
+            s.hostname(item);
             s.command(item);
 
             // reset line
@@ -159,6 +161,35 @@ impl DrawState<'_> {
 
         self.draw(&time, style);
         self.draw(" ago", style);
+    }
+
+    fn hostname(&mut self, h: &History) {
+        let style = Style::default().fg(Color::DarkGray);
+
+        // Split host and user
+        let hostname : Vec<&str> = h.hostname.split(":").collect();
+        let host = hostname[0];
+        let user = hostname[1];
+
+        // Pad the hostname a little bit before we write
+        self.x += 1;
+
+        // Change style if the command isn't from the current client
+        let mut user_style = style.clone();
+        if env::var("ATUIN_HOST_USER").unwrap_or_else(|_| whoami::username()) != user {
+            user_style = user_style.add_modifier(Modifier::BOLD);
+        }
+        self.draw(hostname[1], user_style);
+
+
+        self.draw("@", style);
+
+        // Change style (again) if the command isn't from the current client
+        let mut host_style = style.clone();
+        if env::var("ATUIN_HOST_NAME").unwrap_or_else(|_| whoami::hostname()) != host {
+            host_style = host_style.add_modifier(Modifier::BOLD);
+        }
+        self.draw(hostname[0], host_style);
     }
 
     fn command(&mut self, h: &History) {
