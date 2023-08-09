@@ -166,6 +166,16 @@ filter_mode_shell_up_key_binding = "session"
 
 Defaults to the value specified for filter_mode.
 
+### `workspace`
+
+This flag enables a pseudo filter-mode named "workspace": the filter is automatically
+activated when you are in a git repository. Defaults to false.
+
+With workspace filtering enabled, Atuin will filter for commands executed in any directory
+within a git repository tree.
+
+Filter modes can still be toggled via ctrl-r.
+
 ### `style`
 
 Which style to use. Possible values: `auto`, `full` and `compact`.
