@@ -437,7 +437,7 @@ impl Database for Postgres {
     }
 
     async fn tail_records(&self, user: &User) -> DbResult<RecordIndex> {
-        const TAIL_RECORDS_SQL: &str = "select host, tag, client_id from records rp where (select count(1) from records where parent=rp.client_id and user_id = $1) = 0;";
+        const TAIL_RECORDS_SQL: &str = "select host, tag, client_id from records rp where (select count(1) from records where parent=rp.client_id and user_id = $1) = 0 and user_id = $1;";
 
         let res = sqlx::query_as(TAIL_RECORDS_SQL)
             .bind(user.id)
