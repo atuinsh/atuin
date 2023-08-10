@@ -4,6 +4,7 @@ members = [
   "atuin-client",
   "atuin-server",
   "atuin-server-postgres",
+  "atuin-server-sqlite",
   "atuin-server-database",
   "atuin-common",
 ]

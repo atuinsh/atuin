@@ -1,10 +1,13 @@
-use atuin_server_postgres::Postgres;
+#[cfg(feature = "atuin-server-postgres")]
+use atuin_server_postgres::{Postgres, PostgresSettings};
+#[cfg(feature = "atuin-server-sqlite")]
+use atuin_server_sqlite::{Sqlite, SqliteSettings};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 use clap::Parser;
 use eyre::{Context, Result};
 
-use atuin_server::{launch, Settings};
+use atuin_server::Settings;
 
 #[derive(Parser)]
 #[clap(infer_subcommands = true)]
@@ -38,8 +41,18 @@ impl Cmd {
                     .map_or(settings.host.clone(), std::string::ToString::to_string);
                 let port = port.map_or(settings.port, |p| p);
 
-                launch::<Postgres>(settings, host, port).await
+                launch(settings, host, port).await
             }
         }
     }
+}
+
+#[cfg(feature = "atuin-server-postgres")]
+async fn launch(settings: Settings<PostgresSettings>, host: String, port: u16) -> Result<()> {
+    atuin_server::launch::<Postgres>(settings, host, port).await
+}
+
+#[cfg(feature = "atuin-server-sqlite")]
+async fn launch(settings: Settings<SqliteSettings>, host: String, port: u16) -> Result<()> {
+    atuin_server::launch::<Sqlite>(settings, host, port).await
 }

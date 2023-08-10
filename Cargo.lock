@@ -87,6 +87,7 @@ dependencies = [
  "atuin-common",
  "atuin-server",
  "atuin-server-postgres",
+ "atuin-server-sqlite",
  "base64 0.21.0",
  "chrono",
  "clap",
@@ -222,6 +223,21 @@ dependencies = [
 
 [[package]]
 name = "atuin-server-postgres"
+version = "16.0.0"
+dependencies = [
+ "async-trait",
+ "atuin-common",
+ "atuin-server-database",
+ "chrono",
+ "futures-util",
+ "serde",
+ "sqlx",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "atuin-server-sqlite"
 version = "16.0.0"
 dependencies = [
  "async-trait",
