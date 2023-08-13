@@ -1,0 +1,34 @@
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+resources:
+  - service-monitor.yaml
+
+patches:
+  - patch: |
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: atuin
+      spec:
+        ports:
+          - port: 9001
+            name: metrics
+  - patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: atuin
+      spec:
+        template:
+          spec:
+            containers:
+              - name: atuin
+                ports:
+                  - containerPort: 9001
+                    name: metrics
+                env:
+                  - name: ATUIN_METRICS__ENABLE
+                    value: "true"
+                  - name: ATUIN_METRICS__HOST
+                    value: 0.0.0.0

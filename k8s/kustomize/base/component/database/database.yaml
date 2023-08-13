@@ -1,0 +1,97 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: database
+  labels:
+    app.kubernetes.io/name: database
+spec:
+  ports:
+    - name: pg-port
+      port: 5432
+      targetPort: 5432
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: database
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: database
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: database
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: database
+    spec:
+      terminationGracePeriodSeconds: 90
+      containers:
+        - image: postgres:15
+          imagePullPolicy: IfNotPresent
+          name: database
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: database
+                  key: username
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: database
+                  key: password
+            - name: POSTGRES_DB
+              valueFrom:
+                configMapKeyRef:
+                  name: database
+                  key: name
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - mountPath: /var/lib/postgresql/data/pgdata
+              name: pgdata
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - su - postgres -c "pg_ctl stop -m fast"
+          livenessProbe:
+            timeoutSeconds: 5
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - exec pg_isready -U $POSTGRES_USER -d $POSTGRES_DB -h 127.1 -p 5432
+          readinessProbe:
+            timeoutSeconds: 5
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - -e
+                - exec pg_isready -U $POSTGRES_USER -d $POSTGRES_DB -h 127.1 -p 5432
+          ports:
+            - name: pg-port
+              containerPort: 5432
+              protocol: TCP
+      volumes:
+        - name: pgdata
+          persistentVolumeClaim:
+            claimName: database
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  labels:
+    app.kubernetes.io/name: database
+  name: database
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 300Mi

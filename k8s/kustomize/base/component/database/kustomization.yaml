@@ -1,0 +1,19 @@
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+resources:
+  - database.yaml
+
+configMapGenerator:
+  - name: database
+    behavior: merge
+    literals:
+      - name=atuin
+      - uri="postgres://atuin:seriously-insecure@database/atuin"
+
+secretGenerator:
+  - name: database
+    behavior: merge
+    literals:
+      - username=atuin
+      - password=seriously-insecure

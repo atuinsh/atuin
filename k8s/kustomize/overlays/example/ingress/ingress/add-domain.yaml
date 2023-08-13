@@ -1,0 +1,3 @@
+- op: replace
+  path: /spec/rules/0/host
+  value: foo.127.0.0.1.nip.io

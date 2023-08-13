@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: atuin
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: atuin
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: atuin
+    spec:
+      enableServiceLinks: false
+      containers:
+        - image: atuin
+          name: atuin
+          args:
+            - server
+            - start
+          env:
+            - name: ATUIN_DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: database
+                  key: username
+            - name: ATUIN_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: database
+                  key: password
+            - name: ATUIN_DB_URI
+              valueFrom:
+                configMapKeyRef:
+                  name: database
+                  key: uri
+            - name: ATUIN_HOST
+              value: 0.0.0.0
+            - name: ATUIN_OPEN_REGISTRATION
+              valueFrom:
+                configMapKeyRef:
+                  name: atuin
+                  key: open_registration
+          ports:
+            - containerPort: 8888
+              name: http
+          resources:
+            limits:
+              cpu: 250m
+              memory: 1Gi
+            requests:
+              cpu: 250m
+              memory: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/name: atuin
+  name: atuin
+spec:
+  ports:
+    - name: http
+      port: 8888
+  selector:
+    app.kubernetes.io/name: atuin
