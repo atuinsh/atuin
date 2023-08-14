@@ -1,3 +1,4 @@
+use crate::{SHA, VERSION};
 use atuin_client::{api_client, database::Database, settings::Settings};
 use colored::Colorize;
 use eyre::Result;
@@ -8,6 +9,8 @@ pub async fn run(settings: &Settings, db: &impl Database) -> Result<()> {
     let status = client.status().await?;
     let last_sync = Settings::last_sync()?;
     let local_count = db.history_count().await?;
+
+    println!("Atuin v{VERSION} - Build rev {SHA}\n");
 
     println!("{}", "[Local]".green());
 
