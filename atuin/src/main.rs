@@ -8,6 +8,7 @@ use command::AtuinCmd;
 mod command;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+const SHA: &str = env!("GIT_HASH");
 
 static HELP_TEMPLATE: &str = "\
 {before-help}{name} {version}
