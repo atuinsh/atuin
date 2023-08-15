@@ -166,7 +166,7 @@ filter_mode_shell_up_key_binding = "session"
 
 Defaults to the value specified for filter_mode.
 
-### `workspace`
+### `workspaces`
 
 This flag enables a pseudo filter-mode named "workspace": the filter is automatically
 activated when you are in a git repository. Defaults to false.
