@@ -176,13 +176,18 @@ esac
 # TODO: Check which shell is in use
 # Use of single quotes around $() is intentional here
 # shellcheck disable=SC2016
-printf '\neval "$(atuin init zsh)"\n' >> ~/.zshrc
+if ! grep -q "atuin init zsh" ~/.zshrc; then
+  printf '\neval "$(atuin init zsh)"\n' >> ~/.zshrc
+fi
 
-curl https://raw.githubusercontent.com/rcaloras/bash-preexec/master/bash-preexec.sh -o ~/.bash-preexec.sh
-printf '\n[[ -f ~/.bash-preexec.sh ]] && source ~/.bash-preexec.sh\n' >> ~/.bashrc
 # Use of single quotes around $() is intentional here
 # shellcheck disable=SC2016
-echo 'eval "$(atuin init bash)"' >> ~/.bashrc
+
+if ! grep -q "atuin init bash" ~/.bashrc; then
+  curl https://raw.githubusercontent.com/rcaloras/bash-preexec/master/bash-preexec.sh -o ~/.bash-preexec.sh
+  printf '\n[[ -f ~/.bash-preexec.sh ]] && source ~/.bash-preexec.sh\n' >> ~/.bashrc
+  echo 'eval "$(atuin init bash)"' >> ~/.bashrc
+fi
 
 cat << EOF
 
