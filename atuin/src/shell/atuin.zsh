@@ -33,7 +33,19 @@ _atuin_search() {
     # swap stderr and stdout, so that the tui stuff works
     # TODO: not this
     # shellcheck disable=SC2048
-    output=$(RUST_LOG=error atuin search $* -i -- $BUFFER 3>&1 1>&2 2>&3)
+    if [ -z "${TMUX}" ]; then
+        output=$(RUST_LOG=error atuin search $* -i -- $BUFFER 3>&1 1>&2 2>&3)
+    else
+        tmpdir=$(mktemp -d)
+        mkfifo "$tmpdir/pipe"
+        trap "rm -rf '$tmpdir'" EXIT HUP INT TERM
+        output=$(
+            cat "$tmpdir/pipe" &;
+            tmux display-popup -d $(pwd) -B -E -E -h 80% -w 80% -- \
+                "$(printf "%q " RUST_LOG=error atuin search $* -i -- $BUFFER) 1>&2 2>$tmpdir/pipe"
+        )
+        rm -rf "$tmpdir"
+    fi
 
     if [[ -n $output ]]; then
         RBUFFER=""
