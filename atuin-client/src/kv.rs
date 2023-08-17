@@ -1,12 +1,11 @@
 use std::collections::BTreeMap;
 
-use atuin_common::record::DecryptedData;
+use atuin_common::record::{DecryptedData, HostId};
 use eyre::{bail, ensure, eyre, Result};
 use serde::Deserialize;
 
 use crate::record::encryption::PASETO_V4;
 use crate::record::store::Store;
-use crate::settings::Settings;
 
 const KV_VERSION: &str = "v0";
 const KV_TAG: &str = "kv";
@@ -92,6 +91,7 @@ impl KvStore {
         &self,
         store: &mut (impl Store + Send + Sync),
         encryption_key: &[u8; 32],
+        host_id: HostId,
         namespace: &str,
         key: &str,
         value: &str,
@@ -102,8 +102,6 @@ impl KvStore {
                 KV_VAL_MAX_LEN
             ));
         }
-
-        let host_id = Settings::host_id().expect("failed to get host_id");
 
         let record = KvRecord {
             namespace: namespace.to_string(),
@@ -250,12 +248,15 @@ mod tests {
         let mut store = SqliteStore::new(":memory:").await.unwrap();
         let kv = KvStore::new();
         let key: [u8; 32] = XSalsa20Poly1305::generate_key(&mut OsRng).into();
+        let host_id = atuin_common::record::HostId(atuin_common::utils::uuid_v7());
 
-        kv.set(&mut store, &key, "test-kv", "foo", "bar")
+        kv.set(&mut store, &key, host_id, "test-kv", "foo", "bar")
             .await
             .unwrap();
 
-        kv.set(&mut store, &key, "test-kv", "1", "2").await.unwrap();
+        kv.set(&mut store, &key, host_id, "test-kv", "1", "2")
+            .await
+            .unwrap();
 
         let map = kv.build_kv(&store, &key).await.unwrap();
 

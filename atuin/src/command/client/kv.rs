@@ -46,6 +46,8 @@ impl Cmd {
             .context("could not load encryption key")?
             .into();
 
+        let host_id = Settings::host_id().expect("failed to get host_id");
+
         match self {
             Self::Set {
                 key,
@@ -53,7 +55,7 @@ impl Cmd {
                 namespace,
             } => {
                 kv_store
-                    .set(store, &encryption_key, namespace, key, value)
+                    .set(store, &encryption_key, host_id, namespace, key, value)
                     .await
             }
 
