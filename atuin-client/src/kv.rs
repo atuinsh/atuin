@@ -218,8 +218,8 @@ impl KvStore {
 
 #[cfg(test)]
 mod tests {
+    use crypto_secretbox::{KeyInit, XSalsa20Poly1305};
     use rand::rngs::OsRng;
-    use xsalsa20poly1305::{KeyInit, XSalsa20Poly1305};
 
     use crate::record::sqlite_store::SqliteStore;
 

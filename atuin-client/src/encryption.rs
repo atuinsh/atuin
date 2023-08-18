@@ -12,15 +12,15 @@ use std::{io::prelude::*, path::PathBuf};
 
 use base64::prelude::{Engine, BASE64_STANDARD};
 use chrono::{DateTime, Utc};
+pub use crypto_secretbox::Key;
+use crypto_secretbox::{
+    aead::{Nonce, OsRng},
+    AeadCore, AeadInPlace, KeyInit, XSalsa20Poly1305,
+};
 use eyre::{bail, ensure, eyre, Context, Result};
 use fs_err as fs;
 use rmp::{decode::Bytes, Marker};
 use serde::{Deserialize, Serialize};
-pub use xsalsa20poly1305::Key;
-use xsalsa20poly1305::{
-    aead::{Nonce, OsRng},
-    AeadInPlace, KeyInit, XSalsa20Poly1305,
-};
 
 use crate::{history::History, settings::Settings};
 
@@ -240,7 +240,7 @@ fn error_report<E: std::fmt::Debug>(err: E) -> eyre::Report {
 
 #[cfg(test)]
 mod test {
-    use xsalsa20poly1305::{aead::OsRng, KeyInit, XSalsa20Poly1305};
+    use crypto_secretbox::{aead::OsRng, KeyInit, XSalsa20Poly1305};
 
     use crate::history::History;
 

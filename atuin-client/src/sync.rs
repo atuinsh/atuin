@@ -6,7 +6,7 @@ use chrono::prelude::*;
 use eyre::Result;
 
 use atuin_common::api::AddHistoryRequest;
-use xsalsa20poly1305::Key;
+use crypto_secretbox::Key;
 
 use crate::{
     api_client,
