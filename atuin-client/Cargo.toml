@@ -44,11 +44,11 @@ sql-builder = "3"
 lazy_static = "1"
 memchr = "2.5"
 rmp = { version = "0.8.11" }
-typed-builder = "0.14.0"
+typed-builder = { workspace = true }
 tokio = { workspace = true }
 semver = { workspace = true }
 futures = "0.3"
-xsalsa20poly1305 = "0.9.0"
+crypto_secretbox = "0.1.1"
 generic-array = { version = "0.14", features = ["serde"] }
 
 # encryption
