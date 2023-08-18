@@ -29,7 +29,7 @@ http = "0.2"
 fs-err = { workspace = true }
 chronoutil = "0.2.3"
 tower = "0.4"
-tower-http = { version = "0.3", features = ["trace"] }
+tower-http = { version = "0.4", features = ["trace"] }
 reqwest = { workspace = true }
 argon2 = "0.5.0"
 semver = { workspace = true }
