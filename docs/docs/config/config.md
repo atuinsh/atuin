@@ -250,6 +250,20 @@ history_filter = [
 ]
 ```
 
+### secrets_filter
+
+```
+secrets_filter = true
+```
+
+Defaults to true. This matches history against a set of default regex, and will not save it if we get a match. Defaults include
+
+1. AWS key id
+2. Github pat (old and new)
+3. Slack oauth tokens (bot, user)
+4. Slack webhooks
+5. Stripe live/test keys
+
 ## macOS <kbd>Ctrl-n</kbd> key shortcuts
 
 macOS does not have an <kbd>Alt</kbd> key, although terminal emulators can often be configured to map the <kbd>Option</kbd> key to be used as <kbd>Alt</kbd>. *However*, remapping <kbd>Option</kbd> this way may prevent typing some characters, such as using <kbd>Option-3</kbd> to type `#` on the British English layout. For such a scenario, set the `ctrl_n_shortcuts` option to `true` in your config file to replace <kbd>Alt-0</kbd> to <kbd>Alt-9</kbd> shortcuts with <kbd>Ctrl-0</kbd> to <kbd>Ctrl-9</kbd> instead:

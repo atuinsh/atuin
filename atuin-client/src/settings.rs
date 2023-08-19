@@ -7,7 +7,9 @@ use std::{
 use atuin_common::record::HostId;
 use chrono::{prelude::*, Utc};
 use clap::ValueEnum;
-use config::{Config, Environment, File as ConfigFile, FileFormat};
+use config::{
+    builder::DefaultState, Config, ConfigBuilder, Environment, File as ConfigFile, FileFormat,
+};
 use eyre::{eyre, Context, Result};
 use fs_err::{create_dir_all, File};
 use parse_duration::parse;
@@ -168,6 +170,7 @@ pub struct Settings {
     pub history_filter: RegexSet,
     #[serde(with = "serde_regex", default = "RegexSet::empty")]
     pub cwd_filter: RegexSet,
+    pub secrets_filter: bool,
     pub workspaces: bool,
     pub ctrl_n_shortcuts: bool,
 
@@ -330,32 +333,15 @@ impl Settings {
         None
     }
 
-    pub fn new() -> Result<Self> {
-        let config_dir = atuin_common::utils::config_dir();
-
+    pub fn builder() -> Result<ConfigBuilder<DefaultState>> {
         let data_dir = atuin_common::utils::data_dir();
-
-        create_dir_all(&config_dir)
-            .wrap_err_with(|| format!("could not create dir {config_dir:?}"))?;
-        create_dir_all(&data_dir).wrap_err_with(|| format!("could not create dir {data_dir:?}"))?;
-
-        let mut config_file = if let Ok(p) = std::env::var("ATUIN_CONFIG_DIR") {
-            PathBuf::from(p)
-        } else {
-            let mut config_file = PathBuf::new();
-            config_file.push(config_dir);
-            config_file
-        };
-
-        config_file.push("config.toml");
-
         let db_path = data_dir.join("history.db");
         let record_store_path = data_dir.join("records.db");
 
         let key_path = data_dir.join("key");
         let session_path = data_dir.join("session");
 
-        let mut config_builder = Config::builder()
+        Ok(Config::builder()
             .set_default("db_path", db_path.to_str())?
             .set_default("record_store_path", record_store_path.to_str())?
             .set_default("key_path", key_path.to_str())?
@@ -384,11 +370,33 @@ impl Settings {
             .set_default("session_token", "")?
             .set_default("workspaces", false)?
             .set_default("ctrl_n_shortcuts", false)?
+            .set_default("secrets_filter", true)?
             .add_source(
                 Environment::with_prefix("atuin")
                     .prefix_separator("_")
                     .separator("__"),
-            );
+            ))
+    }
+
+    pub fn new() -> Result<Self> {
+        let config_dir = atuin_common::utils::config_dir();
+        let data_dir = atuin_common::utils::data_dir();
+
+        create_dir_all(&config_dir)
+            .wrap_err_with(|| format!("could not create dir {config_dir:?}"))?;
+        create_dir_all(&data_dir).wrap_err_with(|| format!("could not create dir {data_dir:?}"))?;
+
+        let mut config_file = if let Ok(p) = std::env::var("ATUIN_CONFIG_DIR") {
+            PathBuf::from(p)
+        } else {
+            let mut config_file = PathBuf::new();
+            config_file.push(config_dir);
+            config_file
+        };
+
+        config_file.push("config.toml");
+
+        let mut config_builder = Self::builder()?;
 
         config_builder = if config_file.exists() {
             config_builder.add_source(ConfigFile::new(
@@ -431,5 +439,18 @@ impl Settings {
         }
 
         Ok(settings)
+    }
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        // if this panics something is very wrong, as the default config
+        // does not build or deserialize into the settings struct
+        Self::builder()
+            .expect("Could not build default")
+            .build()
+            .expect("Could not build config")
+            .try_deserialize()
+            .expect("Could not deserialize config")
     }
 }
