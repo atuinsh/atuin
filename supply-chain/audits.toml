@@ -51,6 +51,16 @@ who = "Conrad Ludgate <conradludgate@gmail.com>"
 criteria = "safe-to-run"
 version = "0.1.13"
 
+[[audits.either]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "1.8.1 -> 1.9.0"
+
+[[audits.errno]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.3.1 -> 0.3.2"
+
 [[audits.errno-dragonfly]]
 who = "Conrad Ludgate <conradludgate@gmail.com>"
 criteria = "safe-to-deploy"
@@ -60,6 +70,11 @@ version = "0.1.2"
 who = "Conrad Ludgate <conradludgate@gmail.com>"
 criteria = "safe-to-deploy"
 version = "2.1.0"
+
+[[audits.form_urlencoded]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "1.1.0 -> 1.2.0"
 
 [[audits.futures-core]]
 who = "Conrad Ludgate <conradludgate@gmail.com>"
@@ -116,6 +131,11 @@ who = "Conrad Ludgate <conradludgate@gmail.com>"
 criteria = "safe-to-deploy"
 version = "0.4.5"
 
+[[audits.httpdate]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "1.0.2 -> 1.0.3"
+
 [[audits.iban_validate]]
 who = "Conrad Ludgate <conradludgate@gmail.com>"
 criteria = "safe-to-deploy"
@@ -130,6 +150,11 @@ version = "0.7.2"
 who = "Conrad Ludgate <conradludgate@gmail.com>"
 criteria = "safe-to-deploy"
 version = "0.7.2"
+
+[[audits.is-terminal]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.4.7 -> 0.4.9"
 
 [[audits.jurisdiction]]
 who = "Conrad Ludgate <conradludgate@gmail.com>"
@@ -166,10 +191,20 @@ who = "Conrad Ludgate <conradludgate@gmail.com>"
 criteria = "safe-to-deploy"
 delta = "2.1.0 -> 2.3.0"
 
+[[audits.pkg-config]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.3.26 -> 0.3.27"
+
 [[audits.pretty_assertions]]
 who = "Conrad Ludgate <conradludgate@gmail.com>"
 criteria = "safe-to-run"
 version = "1.4.0"
+
+[[audits.quote]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "1.0.31 -> 1.0.33"
 
 [[audits.reqwest-middleware]]
 who = "Conrad Ludgate <conradludgate@gmail.com>"
@@ -195,6 +230,16 @@ version = "0.1.1"
 who = "Conrad Ludgate <conradludgate@gmail.com>"
 criteria = "safe-to-deploy"
 version = "0.2.1"
+
+[[audits.rustversion]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "1.0.9 -> 1.0.14"
+
+[[audits.semver]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "1.0.17 -> 1.0.18"
 
 [[audits.serde_plain]]
 who = "Conrad Ludgate <conradludgate@gmail.com>"
@@ -230,6 +275,16 @@ version = "2.1.0"
 who = "Conrad Ludgate <conradludgate@gmail.com>"
 criteria = "safe-to-run"
 version = "2.1.0"
+
+[[audits.thiserror-impl]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "1.0.40 -> 1.0.47"
+
+[[audits.time-core]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.1.0 -> 0.1.1"
 
 [[audits.tokio-executor-trait]]
 who = "Conrad Ludgate <conradludgate@gmail.com>"
@@ -285,6 +340,21 @@ version = "0.1.11"
 who = "Conrad Ludgate <conradludgate@gmail.com>"
 criteria = "safe-to-run"
 version = "0.2.4"
+
+[[audits.unicode-ident]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "1.0.9 -> 1.0.11"
+
+[[audits.want]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.3.0 -> 0.3.1"
+
+[[audits.webpki-roots]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.23.0 -> 0.24.0"
 
 [[audits.wiremock]]
 who = "Conrad Ludgate <conradludgate@gmail.com>"
