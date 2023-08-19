@@ -1,0 +1,297 @@
+
+# cargo-vet audits file
+
+[[audits.anyhow]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+version = "1.0.57"
+
+[[audits.assert-json-diff]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-run"
+version = "2.0.1"
+
+[[audits.async-graphql-actix-web]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+version = "3.0.38"
+
+[[audits.async-stream]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.3.3"
+
+[[audits.async-stream-impl]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.3.3"
+
+[[audits.atty]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.2.14"
+
+[[audits.base64-serde]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.6.1"
+
+[[audits.cache_control]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.2.0"
+
+[[audits.cfg-if]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+version = "1.0.0"
+
+[[audits.diff]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-run"
+version = "0.1.13"
+
+[[audits.errno-dragonfly]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.1.2"
+
+[[audits.executor-trait]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+version = "2.1.0"
+
+[[audits.futures-core]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.3.21"
+
+[[audits.futures-core]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.3.21 -> 0.3.28"
+
+[[audits.futures-retry-policies]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.1.0"
+
+[[audits.futures-task]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.3.21"
+
+[[audits.futures-task]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.3.21 -> 0.3.28"
+
+[[audits.futures-timer]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-run"
+version = "3.0.2"
+
+[[audits.gethostname]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.2.3"
+
+[[audits.ginepro]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.4.0"
+
+[[audits.ginepro]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.4.0"
+
+[[audits.hermit-abi]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.1.19"
+
+[[audits.http-body]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.4.5"
+
+[[audits.iban_validate]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+version = "4.0.1"
+
+[[audits.include_dir]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.7.2"
+
+[[audits.include_dir_macros]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.7.2"
+
+[[audits.jurisdiction]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.1.1"
+
+[[audits.lazy_static]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+version = "1.4.0"
+
+[[audits.log-panics]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+version = "2.0.0"
+
+[[audits.macro_rules_attribute]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-run"
+version = "0.1.1"
+
+[[audits.macro_rules_attribute-proc_macro]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-run"
+version = "0.1.1"
+
+[[audits.percent-encoding]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+version = "2.1.0"
+
+[[audits.percent-encoding]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "2.1.0 -> 2.3.0"
+
+[[audits.pretty_assertions]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-run"
+version = "1.4.0"
+
+[[audits.reqwest-middleware]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.1.6"
+
+[[audits.reqwest-retry]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.1.5"
+
+[[audits.reqwest-tracing]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.2.2"
+
+[[audits.retry-policies]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.1.1"
+
+[[audits.rustls-pemfile]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.2.1"
+
+[[audits.serde_plain]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.3.0"
+
+[[audits.static_assertions]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+version = "1.1.0"
+
+[[audits.strum]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.19.5"
+
+[[audits.strum]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.23.0"
+
+[[audits.task-local-extensions]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.1.1"
+
+[[audits.test-case]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-run"
+version = "2.1.0"
+
+[[audits.test-case-macros]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-run"
+version = "2.1.0"
+
+[[audits.tokio-executor-trait]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+version = "2.1.0"
+
+[[audits.tonic-health]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.6.0"
+
+[[audits.tonic-types]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.5.0"
+
+[[audits.tower-layer]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.3.1"
+
+[[audits.tower-service]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.3.1"
+
+[[audits.tracing-core]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.1.27"
+
+[[audits.tracing-error]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.1.2"
+
+[[audits.tracing-futures]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.2.5"
+
+[[audits.tracing-log]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-run"
+version = "0.1.3"
+
+[[audits.tracing-tree]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-run"
+version = "0.1.11"
+
+[[audits.tracing-tree]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-run"
+version = "0.2.4"
+
+[[audits.wiremock]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-run"
+version = "0.5.13"
+
+[[audits.yansi]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-run"
+version = "0.5.1"
