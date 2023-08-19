@@ -306,10 +306,6 @@ criteria = "safe-to-deploy"
 version = "0.10.0"
 criteria = "safe-to-deploy"
 
-[[exemptions.equivalent]]
-version = "1.0.1"
-criteria = "safe-to-deploy"
-
 [[exemptions.etcetera]]
 version = "0.8.0"
 criteria = "safe-to-deploy"
@@ -490,10 +486,6 @@ criteria = "safe-to-deploy"
 version = "0.4.10"
 criteria = "safe-to-deploy"
 
-[[exemptions.log]]
-version = "0.4.20"
-criteria = "safe-to-deploy"
-
 [[exemptions.logos]]
 version = "0.12.1"
 criteria = "safe-to-deploy"
@@ -564,10 +556,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.once_cell]]
 version = "1.18.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.opaque-debug]]
-version = "0.3.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.overload]]
@@ -794,10 +782,6 @@ criteria = "safe-to-deploy"
 version = "1.0.105"
 criteria = "safe-to-deploy"
 
-[[exemptions.serde_path_to_error]]
-version = "0.1.14"
-criteria = "safe-to-deploy"
-
 [[exemptions.serde_regex]]
 version = "1.1.0"
 criteria = "safe-to-deploy"
@@ -882,10 +866,6 @@ criteria = "safe-to-deploy"
 version = "0.7.1"
 criteria = "safe-to-deploy"
 
-[[exemptions.sqlx-macros]]
-version = "0.7.1"
-criteria = "safe-to-deploy"
-
 [[exemptions.sqlx-macros-core]]
 version = "0.7.1"
 criteria = "safe-to-deploy"
@@ -942,10 +922,6 @@ criteria = "safe-to-deploy"
 version = "1.0.0"
 criteria = "safe-to-deploy"
 
-[[exemptions.tinyvec_macros]]
-version = "0.1.1"
-criteria = "safe-to-deploy"
-
 [[exemptions.tokio]]
 version = "1.32.0"
 criteria = "safe-to-deploy"
@@ -976,10 +952,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.tower-http]]
 version = "0.3.5"
-criteria = "safe-to-deploy"
-
-[[exemptions.tower-layer]]
-version = "0.3.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.tracing]]
@@ -1096,70 +1068,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.windows-sys]]
 version = "0.48.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.windows-targets]]
-version = "0.42.2"
-criteria = "safe-to-deploy"
-
-[[exemptions.windows-targets]]
-version = "0.48.5"
-criteria = "safe-to-deploy"
-
-[[exemptions.windows_aarch64_gnullvm]]
-version = "0.42.2"
-criteria = "safe-to-deploy"
-
-[[exemptions.windows_aarch64_gnullvm]]
-version = "0.48.5"
-criteria = "safe-to-deploy"
-
-[[exemptions.windows_aarch64_msvc]]
-version = "0.42.2"
-criteria = "safe-to-deploy"
-
-[[exemptions.windows_aarch64_msvc]]
-version = "0.48.5"
-criteria = "safe-to-deploy"
-
-[[exemptions.windows_i686_gnu]]
-version = "0.42.2"
-criteria = "safe-to-deploy"
-
-[[exemptions.windows_i686_gnu]]
-version = "0.48.5"
-criteria = "safe-to-deploy"
-
-[[exemptions.windows_i686_msvc]]
-version = "0.42.2"
-criteria = "safe-to-deploy"
-
-[[exemptions.windows_i686_msvc]]
-version = "0.48.5"
-criteria = "safe-to-deploy"
-
-[[exemptions.windows_x86_64_gnu]]
-version = "0.42.2"
-criteria = "safe-to-deploy"
-
-[[exemptions.windows_x86_64_gnu]]
-version = "0.48.5"
-criteria = "safe-to-deploy"
-
-[[exemptions.windows_x86_64_gnullvm]]
-version = "0.42.2"
-criteria = "safe-to-deploy"
-
-[[exemptions.windows_x86_64_gnullvm]]
-version = "0.48.5"
-criteria = "safe-to-deploy"
-
-[[exemptions.windows_x86_64_msvc]]
-version = "0.42.2"
-criteria = "safe-to-deploy"
-
-[[exemptions.windows_x86_64_msvc]]
-version = "0.48.5"
 criteria = "safe-to-deploy"
 
 [[exemptions.winreg]]

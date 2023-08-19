@@ -61,6 +61,11 @@ who = "Conrad Ludgate <conradludgate@gmail.com>"
 criteria = "safe-to-deploy"
 delta = "1.8.1 -> 1.9.0"
 
+[[audits.equivalent]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+version = "1.0.1"
+
 [[audits.errno]]
 who = "Conrad Ludgate <conradludgate@gmail.com>"
 criteria = "safe-to-deploy"
@@ -176,6 +181,11 @@ who = "Conrad Ludgate <conradludgate@gmail.com>"
 criteria = "safe-to-deploy"
 delta = "0.2.6 -> 0.2.4"
 
+[[audits.log]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.4.18 -> 0.4.20"
+
 [[audits.log-panics]]
 who = "Conrad Ludgate <conradludgate@gmail.com>"
 criteria = "safe-to-deploy"
@@ -200,6 +210,11 @@ version = "0.1.1"
 who = "Conrad Ludgate <conradludgate@gmail.com>"
 criteria = "safe-to-deploy"
 delta = "0.4.0 -> 0.2.1"
+
+[[audits.opaque-debug]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.3.0"
 
 [[audits.percent-encoding]]
 who = "Conrad Ludgate <conradludgate@gmail.com>"
@@ -266,10 +281,20 @@ who = "Conrad Ludgate <conradludgate@gmail.com>"
 criteria = "safe-to-deploy"
 delta = "1.0.17 -> 1.0.18"
 
+[[audits.serde_path_to_error]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.1.11 -> 0.1.14"
+
 [[audits.serde_plain]]
 who = "Conrad Ludgate <conradludgate@gmail.com>"
 criteria = "safe-to-deploy"
 version = "0.3.0"
+
+[[audits.sqlx-macros]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.7.1"
 
 [[audits.static_assertions]]
 who = "Conrad Ludgate <conradludgate@gmail.com>"
@@ -321,6 +346,11 @@ who = "Conrad Ludgate <conradludgate@gmail.com>"
 criteria = "safe-to-deploy"
 delta = "0.1.0 -> 0.1.1"
 
+[[audits.tinyvec_macros]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.1.0 -> 0.1.1"
+
 [[audits.tokio-executor-trait]]
 who = "Conrad Ludgate <conradludgate@gmail.com>"
 criteria = "safe-to-deploy"
@@ -340,6 +370,11 @@ version = "0.5.0"
 who = "Conrad Ludgate <conradludgate@gmail.com>"
 criteria = "safe-to-deploy"
 version = "0.3.1"
+
+[[audits.tower-layer]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.3.1 -> 0.3.2"
 
 [[audits.tower-service]]
 who = "Conrad Ludgate <conradludgate@gmail.com>"
@@ -395,6 +430,86 @@ delta = "0.3.0 -> 0.3.1"
 who = "Conrad Ludgate <conradludgate@gmail.com>"
 criteria = "safe-to-deploy"
 delta = "0.23.0 -> 0.24.0"
+
+[[audits.windows-targets]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.42.2"
+
+[[audits.windows-targets]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.42.2 -> 0.48.5"
+
+[[audits.windows_aarch64_gnullvm]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.42.2"
+
+[[audits.windows_aarch64_gnullvm]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.42.2 -> 0.48.5"
+
+[[audits.windows_aarch64_msvc]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.42.2"
+
+[[audits.windows_aarch64_msvc]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.42.2 -> 0.48.5"
+
+[[audits.windows_i686_gnu]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.42.2"
+
+[[audits.windows_i686_gnu]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.42.2 -> 0.48.5"
+
+[[audits.windows_i686_msvc]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.42.2"
+
+[[audits.windows_i686_msvc]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.42.2 -> 0.48.5"
+
+[[audits.windows_x86_64_gnu]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.42.2"
+
+[[audits.windows_x86_64_gnu]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.42.2 -> 0.48.5"
+
+[[audits.windows_x86_64_gnullvm]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.42.2"
+
+[[audits.windows_x86_64_gnullvm]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.42.2 -> 0.48.5"
+
+[[audits.windows_x86_64_msvc]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.42.2"
+
+[[audits.windows_x86_64_msvc]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.42.2 -> 0.48.5"
 
 [[audits.wiremock]]
 who = "Conrad Ludgate <conradludgate@gmail.com>"
