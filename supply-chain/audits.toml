@@ -295,3 +295,21 @@ version = "0.5.13"
 who = "Conrad Ludgate <conradludgate@gmail.com>"
 criteria = "safe-to-run"
 version = "0.5.1"
+
+[[trusted.interim]]
+criteria = "safe-to-deploy"
+user-id = 38395 # Conrad Ludgate (conradludgate)
+start = "2022-09-18"
+end = "2024-08-19"
+
+[[trusted.runtime-format]]
+criteria = "safe-to-deploy"
+user-id = 38395 # Conrad Ludgate (conradludgate)
+start = "2023-01-25"
+end = "2024-08-19"
+
+[[trusted.rusty_paserk]]
+criteria = "safe-to-deploy"
+user-id = 38395 # Conrad Ludgate (conradludgate)
+start = "2023-06-18"
+end = "2024-08-19"
