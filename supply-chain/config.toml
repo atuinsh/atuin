@@ -470,18 +470,6 @@ criteria = "safe-to-deploy"
 version = "0.3.64"
 criteria = "safe-to-deploy"
 
-[[exemptions.libc]]
-version = "0.2.147"
-criteria = "safe-to-deploy"
-
-[[exemptions.libsqlite3-sys]]
-version = "0.26.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.linux-raw-sys]]
-version = "0.4.5"
-criteria = "safe-to-deploy"
-
 [[exemptions.lock_api]]
 version = "0.4.10"
 criteria = "safe-to-deploy"
@@ -696,10 +684,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.reqwest]]
 version = "0.11.18"
-criteria = "safe-to-deploy"
-
-[[exemptions.ring]]
-version = "0.16.20"
 criteria = "safe-to-deploy"
 
 [[exemptions.rmp]]
@@ -1038,10 +1022,6 @@ criteria = "safe-to-deploy"
 version = "0.2.87"
 criteria = "safe-to-deploy"
 
-[[exemptions.web-sys]]
-version = "0.3.64"
-criteria = "safe-to-deploy"
-
 [[exemptions.whoami]]
 version = "1.4.1"
 criteria = "safe-to-deploy"
@@ -1060,14 +1040,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.winapi-x86_64-pc-windows-gnu]]
 version = "0.4.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.windows-sys]]
-version = "0.45.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.windows-sys]]
-version = "0.48.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.winreg]]

@@ -563,6 +563,30 @@ user-id = 38395 # Conrad Ludgate (conradludgate)
 start = "2022-09-18"
 end = "2024-08-19"
 
+[[trusted.libc]]
+criteria = "safe-to-deploy"
+user-id = 51017 # Yuki Okushi (JohnTitor)
+start = "2020-03-17"
+end = "2024-08-19"
+
+[[trusted.libsqlite3-sys]]
+criteria = "safe-to-deploy"
+user-id = 5062 # gwenn (gwenn)
+start = "2019-03-10"
+end = "2024-08-19"
+
+[[trusted.linux-raw-sys]]
+criteria = "safe-to-deploy"
+user-id = 6825 # Dan Gohman (sunfishcode)
+start = "2021-06-12"
+end = "2024-08-19"
+
+[[trusted.ring]]
+criteria = "safe-to-deploy"
+user-id = 2342 # Brian Smith (briansmith)
+start = "2019-07-03"
+end = "2024-08-19"
+
 [[trusted.runtime-format]]
 criteria = "safe-to-deploy"
 user-id = 38395 # Conrad Ludgate (conradludgate)
@@ -573,4 +597,16 @@ end = "2024-08-19"
 criteria = "safe-to-deploy"
 user-id = 38395 # Conrad Ludgate (conradludgate)
 start = "2023-06-18"
+end = "2024-08-19"
+
+[[trusted.web-sys]]
+criteria = "safe-to-deploy"
+user-id = 1 # Alex Crichton (alexcrichton)
+start = "2019-03-04"
+end = "2024-08-19"
+
+[[trusted.windows-sys]]
+criteria = "safe-to-deploy"
+user-id = 64539 # Kenny Kerr (kennykerr)
+start = "2021-11-15"
 end = "2024-08-19"
