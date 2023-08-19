@@ -191,16 +191,9 @@ impl Cmd {
     ) -> Result<()> {
         let command = command.join(" ");
 
-        if command.starts_with(' ') || settings.history_filter.is_match(&command) {
-            return Ok(());
-        }
-
         // It's better for atuin to silently fail here and attempt to
         // store whatever is ran, than to throw an error to the terminal
         let cwd = utils::get_current_dir();
-        if !cwd.is_empty() && settings.cwd_filter.is_match(&cwd) {
-            return Ok(());
-        }
 
         let h: History = History::capture()
             .timestamp(chrono::Utc::now())
@@ -208,6 +201,10 @@ impl Cmd {
             .cwd(cwd)
             .build()
             .into();
+
+        if !h.should_save(settings) {
+            return Ok(());
+        }
 
         // print the ID
         // we use this as the key for calling end
