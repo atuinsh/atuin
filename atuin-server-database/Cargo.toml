@@ -18,4 +18,4 @@ eyre = { workspace = true }
 uuid = { workspace = true }
 serde = { workspace = true }
 async-trait = { workspace = true }
-chronoutil = "0.2.3"
+chronoutil = "0.2.5"

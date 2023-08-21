@@ -27,7 +27,7 @@ async-trait = { workspace = true }
 axum = "0.6.4"
 http = "0.2"
 fs-err = { workspace = true }
-chronoutil = "0.2.3"
+chronoutil = "0.2.5"
 tower = "0.4"
 tower-http = { version = "0.3", features = ["trace"] }
 reqwest = { workspace = true }
