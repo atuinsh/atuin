@@ -37,7 +37,7 @@ atuin search --exit 0 --after "yesterday 3pm" make
 
 你可以使用我(ellie)托管的服务器，也可以使用你自己的服务器！或者干脆不使用 sync 功能。所有的历史记录同步都是加密，即使我想，也无法访问你的数据。且我**真的**不想。
 
-## 特点
+## 功能
 
 - 重新绑定 `up` 和 `ctrl-r` 的全屏历史记录搜索UI界面
 - 使用 sqlite 数据库存储 shell 历史记录
@@ -60,12 +60,12 @@ atuin search --exit 0 --after "yesterday 3pm" make
 - [历史记录统计](./stats.md)
 - [运行你自己的服务器](./server.md)
 - [键绑定](./key-binding.md)
-- [shell补全](./shell-completions.md)
+- [shell 补全](./shell-completions.md)
 
 ## 支持的 Shells
 
 - zsh
-- bas
+- bash
 - fish
  
 ## 社区
@@ -87,7 +87,23 @@ atuin register -u <USERNAME> -e <EMAIL> -p <PASSWORD>
 atuin import auto
 atuin sync
 ```
-  
+
+### 使用活跃图
+
+除了托管 Atuin 服务器外，还有一个服务可以用来生成你的 shell 历史记录使用活跃图！这个功能的灵感来自于 GitHub 的使用活跃图。
+
+例如，这是我的：
+
+![](https://api.atuin.sh/img/ellie.png?token=0722830c382b42777bdb652da5b71efb61d8d387)
+
+如果你也想要，请在登陆你的同步服务器后，执行
+
+```
+curl https://api.atuin.sh/enable -d $(cat ~/.local/share/atuin/session)
+```
+
+执行结果为你的活跃图 URL 地址。可以共享或嵌入这个 URL 地址，令牌（token）并<i>不是</i>加密的，只是用来防止被枚举攻击。
+
 ## 仅离线 (不同步)
   
 ```
@@ -107,7 +123,9 @@ atuin import auto
 bash <(curl https://raw.githubusercontent.com/ellie/atuin/main/install.sh)
 ```
 
-### 使用cargo
+然后可直接看 <a href="#shell-plugin">Shell 插件</a>
+
+### 通过 cargo
 
 最好使用 [rustup](https://rustup.rs/) 来设置 Rust 工具链，然后你就可以运行下面的命令:
 
@@ -115,11 +133,15 @@ bash <(curl https://raw.githubusercontent.com/ellie/atuin/main/install.sh)
 cargo install atuin
 ```
 
+然后可直接看 <a href="#shell-plugin">Shell 插件</a>
+
 ### Homebrew
 
 ```
 brew install atuin
 ```
+
+然后可直接看 <a href="#shell-plugin">Shell 插件</a>
   
 ### MacPorts
 
@@ -129,6 +151,8 @@ Atuin 也可以在 [MacPorts](https://ports.macports.org/port/atuin/) 中找到
 sudo port install atuin
 ```
 
+然后可直接看 <a href="#shell-plugin">Shell 插件</a>
+
 ### Pacman
 
 Atuin 在 Arch Linux 的 [社区存储库](https://archlinux.org/packages/community/x86_64/atuin/) 中可用。
@@ -137,18 +161,21 @@ Atuin 在 Arch Linux 的 [社区存储库](https://archlinux.org/packages/commun
 pacman -S atuin
 ```
 
+然后可直接看 <a href="#shell-plugin">Shell 插件</a>
+
 ### 从源码编译安装
 
 ```
 git clone https://github.com/ellie/atuin.git
-cd atuin
+cd atuin/atuin
 cargo install --path .
 ```
 
-## Shell 插件
+然后可直接看 <a href="#shell-plugin">Shell 插件</a>
 
-安装二进制文件后，需要安装 shell 插件。 
-如果你使用的是脚本安装，那么这一切应该都会帮您完成！
+## <a id="shell-plugin">Shell 插件</a>
+
+安装二进制文件后，需要安装 shell 插件。 如果你使用的是脚本安装，那么这一切应该都会帮您完成！
 
 ### zsh
 
@@ -164,14 +191,14 @@ zinit load ellie/atuin
 
 ### bash
 
-我们需要设置一些钩子(hooks), 所以首先需要安装 bash-preexec :
+我们需要设置一些钩子（hooks）, 所以首先需要安装 bash-preexec :
 
 ```
 curl https://raw.githubusercontent.com/rcaloras/bash-preexec/master/bash-preexec.sh -o ~/.bash-preexec.sh
 echo '[[ -f ~/.bash-preexec.sh ]] && source ~/.bash-preexec.sh' >> ~/.bashrc
 ```
 
-然后设置Atuin
+然后设置 Atuin
 
 ```
 echo 'eval "$(atuin init bash)"' >> ~/.bashrc
@@ -185,12 +212,17 @@ echo 'eval "$(atuin init bash)"' >> ~/.bashrc
 atuin init fish | source
 ```
 
-到 ~/.config/fish/config.fish 文件中的 is-interactive 块中
+到 `~/.config/fish/config.fish` 文件中的 `is-interactive` 块中
+
+### Fig
+
+通过 [Fig](https://fig.io) 可为 zsh， bash 或 fish 一键安装 `atuin` 脚本插件。
+
+<a href="https://fig.io/plugins/other/atuin" target="_blank"><img src="https://fig.io/badges/install-with-fig.svg" /></a>
 
 ## ...这个名字是什么意思?
 
 Atuin 以 "The Great A'Tuin" 命名, 这是一只来自 Terry Pratchett 的 Discworld 系列书籍的巨龟。
-
 
 [English]: ../../README.md
 [简体中文]: ./README.md

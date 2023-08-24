@@ -1,0 +1,140 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: atuin
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      io.kompose.service: atuin
+  template:
+    metadata:
+      labels:
+        io.kompose.service: atuin
+    spec:
+      containers:
+        - args:
+            - server
+            - start
+          env:
+            - name: ATUIN_DB_URI
+              valueFrom:
+                secretKeyRef:
+                  name: atuin-secrets
+                  key: ATUIN_DB_URI
+                  optional: false
+            - name: ATUIN_HOST
+              value: 0.0.0.0
+            - name: ATUIN_PORT
+              value: "8888"
+            - name: ATUIN_OPEN_REGISTRATION
+              value: "true"
+          image: ghcr.io/atuinsh/atuin:main
+          name: atuin
+          ports:
+            - containerPort: 8888
+          resources:
+            limits:
+              cpu: 250m
+              memory: 1Gi
+            requests:
+              cpu: 250m
+              memory: 1Gi
+          volumeMounts:
+            - mountPath: /config
+              name: atuin-claim0
+        - name: postgresql
+          image: postgres:14
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: atuin
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: atuin-secrets
+                  key: ATUIN_DB_PASSWORD
+                  optional: false
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: atuin-secrets
+                  key: ATUIN_DB_USERNAME
+                  optional: false
+          resources:
+            limits:
+              cpu: 250m
+              memory: 1Gi
+            requests:
+              cpu: 250m
+              memory: 1Gi
+          volumeMounts:
+            - mountPath: /var/lib/postgresql/data/
+              name: database
+      volumes:
+        - name: database
+          persistentVolumeClaim:
+            claimName: database
+        - name: atuin-claim0
+          persistentVolumeClaim:
+            claimName: atuin-claim0
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    io.kompose.service: atuin
+  name: atuin
+spec:
+  type: NodePort
+  ports:
+    - name: "8888"
+      port: 8888
+      nodePort: 31929
+  selector:
+    io.kompose.service: atuin
+---
+kind: PersistentVolume
+apiVersion: v1
+metadata:
+  name: database-pv
+  labels:
+    app: database
+    type: local
+spec:
+  storageClassName: manual
+  capacity:
+    storage: 300Mi
+  accessModes:
+    - ReadWriteOnce
+  hostPath:
+    path: "/Users/firstname.lastname/.kube/database"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  labels:
+    io.kompose.service: database
+  name: database
+spec:
+  storageClassName: manual
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 300Mi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  labels:
+    io.kompose.service: atuin-claim0
+  name: atuin-claim0
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Mi

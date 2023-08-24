@@ -89,9 +89,9 @@ key = "~/.atuin-session"
 
 ### `search_mode`
 
-使用哪种搜索模式。Atuin 支持 "prefix"（前缀）、"fulltext"（全文） 和 "fuzzy"（模糊）搜索模式。前缀(prefix)搜索语法为 "query\*"，全文(full text)搜索语法为 "\*query\*"，而模糊搜索适用的搜索语法 [如下所述](#fuzzy-search-syntax) 。
+使用哪种搜索模式。Atuin 支持 "prefix"（前缀）、"fulltext"（全文） 和 "fuzzy"（模糊）搜索模式。前缀(prefix)搜索语法为 "query\*"，全文(fulltext)搜索语法为 "\*query\*"，而模糊搜索适用的搜索语法 [如下所述](#fuzzy-search-syntax) 。
 
-默认配置为 "prefix"
+默认配置为 "fuzzy"
 
 ### `filter_mode`
 

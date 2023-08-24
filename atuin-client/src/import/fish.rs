@@ -8,7 +8,7 @@ use chrono::{prelude::*, Utc};
 use directories::BaseDirs;
 use eyre::{eyre, Result};
 
-use super::{get_histpath, unix_byte_lines, Importer, Loader};
+use super::{unix_byte_lines, Importer, Loader};
 use crate::history::History;
 
 #[derive(Debug)]
@@ -19,7 +19,10 @@ pub struct Fish {
 /// see https://fishshell.com/docs/current/interactive.html#searchable-command-history
 fn default_histpath() -> Result<PathBuf> {
     let base = BaseDirs::new().ok_or_else(|| eyre!("could not determine data directory"))?;
-    let data = base.data_local_dir();
+    let data = std::env::var("XDG_DATA_HOME").map_or_else(
+        |_| base.home_dir().join(".local").join("share"),
+        PathBuf::from,
+    );
 
     // fish supports multiple history sessions
     // If `fish_history` var is missing, or set to `default`, use `fish` as the session
@@ -31,12 +34,12 @@ fn default_histpath() -> Result<PathBuf> {
     };
 
     let mut histpath = data.join("fish");
-    histpath.push(format!("{}_history", session));
+    histpath.push(format!("{session}_history"));
 
     if histpath.exists() {
         Ok(histpath)
     } else {
-        Err(eyre!("Could not find history file. Try setting $HISTFILE"))
+        Err(eyre!("Could not find history file."))
     }
 }
 
@@ -46,8 +49,7 @@ impl Importer for Fish {
 
     async fn new() -> Result<Self> {
         let mut bytes = Vec::new();
-        let path = get_histpath(default_histpath)?;
-        let mut f = File::open(path)?;
+        let mut f = File::open(default_histpath()?)?;
         f.read_to_end(&mut bytes)?;
         Ok(Self { bytes })
     }
@@ -71,18 +73,9 @@ impl Importer for Fish {
                 // first, we must deal with the prev cmd
                 if let Some(cmd) = cmd.take() {
                     let time = time.unwrap_or(now);
+                    let entry = History::import().timestamp(time).command(cmd);
 
-                    loader
-                        .push(History::new(
-                            time,
-                            cmd,
-                            "unknown".into(),
-                            -1,
-                            -1,
-                            None,
-                            None,
-                        ))
-                        .await?;
+                    loader.push(entry.build().into()).await?;
                 }
 
                 // using raw strings to avoid needing escaping.
@@ -106,18 +99,9 @@ impl Importer for Fish {
         // we might have a trailing cmd
         if let Some(cmd) = cmd.take() {
             let time = time.unwrap_or(now);
+            let entry = History::import().timestamp(time).command(cmd);
 
-            loader
-                .push(History::new(
-                    time,
-                    cmd,
-                    "unknown".into(),
-                    -1,
-                    -1,
-                    None,
-                    None,
-                ))
-                .await?;
+            loader.push(entry.build().into()).await?;
         }
 
         Ok(())

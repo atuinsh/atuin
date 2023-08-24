@@ -1,36 +1,34 @@
 use async_trait::async_trait;
 use axum::{
-    extract::{FromRequest, RequestParts},
-    handler::Handler,
+    extract::FromRequestParts,
     response::IntoResponse,
-    routing::{get, post},
-    Extension, Router,
+    routing::{delete, get, post},
+    Router,
 };
 use eyre::Result;
+use http::request::Parts;
 use tower::ServiceBuilder;
 use tower_http::trace::TraceLayer;
 
-use super::{
-    database::{Database, Postgres},
-    handlers,
-};
-use crate::{models::User, settings::Settings};
+use super::handlers;
+use crate::settings::Settings;
+use atuin_server_database::{models::User, Database};
+
+pub struct UserAuth(pub User);
 
 #[async_trait]
-impl<B> FromRequest<B> for User
+impl<DB: Send + Sync> FromRequestParts<AppState<DB>> for UserAuth
 where
-    B: Send,
+    DB: Database,
 {
     type Rejection = http::StatusCode;
 
-    async fn from_request(req: &mut RequestParts<B>) -> Result<Self, Self::Rejection> {
-        let postgres = req
-            .extensions()
-            .get::<Postgres>()
-            .ok_or(http::StatusCode::INTERNAL_SERVER_ERROR)?;
-
+    async fn from_request_parts(
+        req: &mut Parts,
+        state: &AppState<DB>,
+    ) -> Result<Self, Self::Rejection> {
         let auth_header = req
-            .headers()
+            .headers
             .get(http::header::AUTHORIZATION)
             .ok_or(http::StatusCode::FORBIDDEN)?;
         let auth_header = auth_header
@@ -44,33 +42,50 @@ where
             return Err(http::StatusCode::FORBIDDEN);
         }
 
-        let user = postgres
+        let user = state
+            .database
             .get_session_user(token)
             .await
             .map_err(|_| http::StatusCode::FORBIDDEN)?;
 
-        Ok(user)
+        Ok(UserAuth(user))
     }
 }
 
 async fn teapot() -> impl IntoResponse {
-    (http::StatusCode::IM_A_TEAPOT, "☕")
+    (http::StatusCode::IM_A_TEAPOT, "🫖")
 }
-pub fn router(postgres: Postgres, settings: Settings) -> Router {
-    Router::new()
+
+#[derive(Clone)]
+pub struct AppState<DB: Database> {
+    pub database: DB,
+    pub settings: Settings<DB::Settings>,
+}
+
+pub fn router<DB: Database>(database: DB, settings: Settings<DB::Settings>) -> Router {
+    let routes = Router::new()
         .route("/", get(handlers::index))
         .route("/sync/count", get(handlers::history::count))
         .route("/sync/history", get(handlers::history::list))
         .route("/sync/calendar/:focus", get(handlers::history::calendar))
+        .route("/sync/status", get(handlers::status::status))
         .route("/history", post(handlers::history::add))
+        .route("/history", delete(handlers::history::delete))
+        .route("/record", post(handlers::record::post))
+        .route("/record", get(handlers::record::index))
+        .route("/record/next", get(handlers::record::next))
         .route("/user/:username", get(handlers::user::get))
+        .route("/account", delete(handlers::user::delete))
         .route("/register", post(handlers::user::register))
-        .route("/login", post(handlers::user::login))
-        .fallback(teapot.into_service())
-        .layer(
-            ServiceBuilder::new()
-                .layer(TraceLayer::new_for_http())
-                .layer(Extension(postgres))
-                .layer(Extension(settings)),
-        )
+        .route("/login", post(handlers::user::login));
+
+    let path = settings.path.as_str();
+    if path.is_empty() {
+        routes
+    } else {
+        Router::new().nest(path, routes)
+    }
+    .fallback(teapot)
+    .with_state(AppState { database, settings })
+    .layer(ServiceBuilder::new().layer(TraceLayer::new_for_http()))
 }

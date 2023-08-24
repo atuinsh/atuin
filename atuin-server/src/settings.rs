@@ -3,20 +3,25 @@ use std::{io::prelude::*, path::PathBuf};
 use config::{Config, Environment, File as ConfigFile, FileFormat};
 use eyre::{eyre, Result};
 use fs_err::{create_dir_all, File};
-use serde::{Deserialize, Serialize};
-
-pub const HISTORY_PAGE_SIZE: i64 = 100;
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct Settings {
+pub struct Settings<DbSettings> {
     pub host: String,
     pub port: u16,
-    pub db_uri: String,
+    pub path: String,
     pub open_registration: bool,
     pub max_history_length: usize,
+    pub max_record_size: usize,
+    pub page_size: i64,
+    pub register_webhook_url: Option<String>,
+    pub register_webhook_username: String,
+
+    #[serde(flatten)]
+    pub db_settings: DbSettings,
 }
 
-impl Settings {
+impl<DbSettings: DeserializeOwned> Settings<DbSettings> {
     pub fn new() -> Result<Self> {
         let mut config_file = if let Ok(p) = std::env::var("ATUIN_CONFIG_DIR") {
             PathBuf::from(p)
@@ -35,6 +40,10 @@ impl Settings {
             .set_default("port", 8888)?
             .set_default("open_registration", false)?
             .set_default("max_history_length", 8192)?
+            .set_default("max_record_size", 1024 * 1024 * 1024)? // pretty chonky
+            .set_default("path", "")?
+            .set_default("register_webhook_username", "")?
+            .set_default("page_size", 1100)?
             .add_source(
                 Environment::with_prefix("atuin")
                     .prefix_separator("_")

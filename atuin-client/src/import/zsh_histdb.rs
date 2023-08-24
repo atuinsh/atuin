@@ -61,26 +61,29 @@ pub struct HistDbEntry {
 
 impl From<HistDbEntry> for History {
     fn from(histdb_item: HistDbEntry) -> Self {
-        History::new(
-            DateTime::from_utc(histdb_item.start_time, Utc), // must assume UTC?
-            String::from_utf8(histdb_item.argv)
-                .unwrap_or_else(|_e| String::from(""))
-                .trim_end()
-                .to_string(),
-            String::from_utf8(histdb_item.dir)
-                .unwrap_or_else(|_e| String::from(""))
-                .trim_end()
-                .to_string(),
-            0, // assume 0, we have no way of knowing :(
-            histdb_item.duration,
-            None,
-            Some(
+        let imported = History::import()
+            .timestamp(DateTime::from_utc(histdb_item.start_time, Utc))
+            .command(
+                String::from_utf8(histdb_item.argv)
+                    .unwrap_or_else(|_e| String::from(""))
+                    .trim_end()
+                    .to_string(),
+            )
+            .cwd(
+                String::from_utf8(histdb_item.dir)
+                    .unwrap_or_else(|_e| String::from(""))
+                    .trim_end()
+                    .to_string(),
+            )
+            .duration(histdb_item.duration)
+            .hostname(
                 String::from_utf8(histdb_item.host)
                     .unwrap_or_else(|_e| String::from(""))
                     .trim_end()
                     .to_string(),
-            ),
-        )
+            );
+
+        imported.build().into()
     }
 }
 
@@ -221,7 +224,7 @@ mod test {
         println!("h: {:#?}", histdb.histdb);
         println!("counter: {:?}", histdb.histdb.len());
         for i in histdb.histdb {
-            println!("{:?}", i);
+            println!("{i:?}");
         }
     }
 }

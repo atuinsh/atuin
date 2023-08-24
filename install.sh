@@ -14,7 +14,7 @@ cat << EOF
 Magical shell history
 
 Atuin setup
-https://github.com/ellie/atuin
+https://github.com/atuinsh/atuin
 
 Please file an issue if you encounter any problems!
 
@@ -30,7 +30,7 @@ elif ! command -v sed &> /dev/null; then
     exit
 fi
 
-LATEST_RELEASE=$(curl -L -s -H 'Accept: application/json' https://github.com/ellie/atuin/releases/latest)
+LATEST_RELEASE=$(curl -L -s -H 'Accept: application/json' https://github.com/atuinsh/atuin/releases/latest)
 # Allow sed; sometimes it's more readable than ${variable//search/replace}
 # shellcheck disable=SC2001
 LATEST_VERSION=$(echo "$LATEST_RELEASE" | sed -e 's/.*"tag_name":"\([^"]*\)".*/\1/')
@@ -64,38 +64,37 @@ __atuin_install_arch(){
 }
 
 __atuin_install_ubuntu(){
-	echo "Ubuntu detected"
-	# TODO: select correct AARCH too
-	ARTIFACT_URL="https://github.com/ellie/atuin/releases/download/$LATEST_VERSION/atuin_${LATEST_VERSION//v/}_amd64.deb"
-
-	TEMP_DEB="$(mktemp)".deb &&
-	curl -Lo "$TEMP_DEB" "$ARTIFACT_URL"
-	if command -v sudo &> /dev/null; then
-		sudo apt install "$TEMP_DEB"
+	if [ "$(dpkg --print-architecture)" = "amd64" ]; then
+		echo "Ubuntu detected"
+		ARTIFACT_URL="https://github.com/atuinsh/atuin/releases/download/$LATEST_VERSION/atuin_${LATEST_VERSION//v/}_amd64.deb"
+		TEMP_DEB="$(mktemp)".deb &&
+		curl -Lo "$TEMP_DEB" "$ARTIFACT_URL"
+		if command -v sudo &> /dev/null; then
+			sudo apt install "$TEMP_DEB"
+		else
+			su -l -c "apt install '$TEMP_DEB'"
+		fi
+		rm -f "$TEMP_DEB"
 	else
-		su -l -c "apt install '$TEMP_DEB'"
+		echo "Ubuntu detected, but not amd64"
+		__atuin_install_unsupported
 	fi
-	rm -f "$TEMP_DEB"
 }
 
 __atuin_install_linux(){
 	echo "Detected Linux!"
 	echo "Checking distro..."
-
 	if (uname -a | grep -qi "Microsoft"); then
-        OS="UbuntuWSL"
-    else
-        if ! command -v lsb_release &> /dev/null; then
-            echo "lsb_release could not be found, unable to determine your distribution"
-            echo "If you are using Arch Linux, please get community/lsb-release"
-            exit 1
-        fi
-        OS=$(lsb_release -i | awk '{ print $3 }')
-    fi
-
-	if [ "$OS" == "Arch" ] || [ "$OS" == "ManjaroLinux" ]; then
+    OS="ubuntuwsl"
+  elif ! command -v lsb_release &> /dev/null; then
+    echo "lsb_release could not be found. Falling back to /etc/os-release"
+    OS="$(grep -Po '(?<=^ID=).*$' /etc/os-release | tr '[:upper:]' '[:lower:]')" 2>/dev/null
+  else
+    OS=$(lsb_release -i | awk '{ print $3 }' | tr '[:upper:]' '[:lower:]')
+  fi
+	if [ "$OS" == "arch" ] || [ "$OS" == "manjarolinux" ] || [ "$OS" == "endeavouros" ]; then
 		__atuin_install_arch
-    elif [ "$OS" == "Ubuntu" ] || [ "$OS" == "UbuntuWSL" ] || [ "$OS" == "Debian" ] || [ "$OS" == "Linuxmint" ] || [ "$OS" == "Parrot" ] || [ "$OS" == "Kali" ] || [ "$OS" == "Elementary" ] || [ "$OS" == "Pop" ]; then
+  elif [ "$OS" == "ubuntu" ] || [ "$OS" == "ubuntuwsl" ] || [ "$OS" == "debian" ] || [ "$OS" == "linuxmint" ] || [ "$OS" == "parrot" ] || [ "$OS" == "kali" ] || [ "$OS" == "elementary" ] || [ "$OS" == "pop" ]; then
 		__atuin_install_ubuntu
 	else
 		# TODO: download a binary or smth
@@ -109,13 +108,24 @@ __atuin_install_mac(){
 	if command -v brew &> /dev/null
 	then
 		echo "Installing with brew"
-		brew tap ellie/atuin
 		brew install atuin
 	else
 		echo "Could not find brew, installing with Cargo"
 		__atuin_install_unsupported
 	fi
 
+}
+
+__atuin_install_termux(){
+	echo "Termux detected!"
+
+	if command -v pkg &> /dev/null; then
+		echo "Installing with pkg"
+		pkg install atuin
+	else
+		echo "Could not find pkg"
+		__atuin_install_unsupported
+	fi
 }
 
 __atuin_install_cargo(){
@@ -141,12 +151,12 @@ __atuin_install_cargo(){
 }
 
 __atuin_install_unsupported(){
-	echo "Unknown or unsupported OS"
-	echo "Please check the README at https://github.com/ellie/atuin for manual install instructions"
+	echo "Unknown or unsupported OS or architecture"
+	echo "Please check the README at https://github.com/atuinsh/atuin for manual install instructions"
 	echo "If you have any problems, please open an issue!"
 
 	while true; do
-		read -r -p "Do you wish to attempt an install with 'cargo'?" yn
+		read -r -p "Do you wish to attempt an install with 'cargo'? [Y/N] " yn
 		case $yn in
 			[Yy]* ) __atuin_install_cargo; break;;
 			[Nn]* ) exit;;
@@ -157,21 +167,51 @@ __atuin_install_unsupported(){
 
 # TODO: would be great to support others!
 case "$OSTYPE" in
-  linux*)   __atuin_install_linux ;;
-  darwin*)  __atuin_install_mac ;;
-  msys*)    __atuin_install_unsupported ;;
-  solaris*) __atuin_install_unsupported ;;
-  bsd*)     __atuin_install_unsupported ;;
-  *)        __atuin_install_unsupported ;;
+  linux-android*) __atuin_install_termux ;;
+  linux*)         __atuin_install_linux ;;
+  darwin*)        __atuin_install_mac ;;
+  msys*)          __atuin_install_unsupported ;;
+  solaris*)       __atuin_install_unsupported ;;
+  bsd*)           __atuin_install_unsupported ;;
+  *)              __atuin_install_unsupported ;;
 esac
 
 # TODO: Check which shell is in use
 # Use of single quotes around $() is intentional here
 # shellcheck disable=SC2016
-printf '\neval "$(atuin init zsh)"\n' >> ~/.zshrc
+if ! grep -q "atuin init zsh" ~/.zshrc; then
+  printf '\neval "$(atuin init zsh)"\n' >> ~/.zshrc
+fi
 
-curl https://raw.githubusercontent.com/rcaloras/bash-preexec/master/bash-preexec.sh -o ~/.bash-preexec.sh
-printf '\n[[ -f ~/.bash-preexec.sh ]] && source ~/.bash-preexec.sh\n' >> ~/.bashrc
 # Use of single quotes around $() is intentional here
 # shellcheck disable=SC2016
-echo 'eval "$(atuin init bash)"' >> ~/.bashrc
+
+if ! grep -q "atuin init bash" ~/.bashrc; then
+  curl https://raw.githubusercontent.com/rcaloras/bash-preexec/master/bash-preexec.sh -o ~/.bash-preexec.sh
+  printf '\n[[ -f ~/.bash-preexec.sh ]] && source ~/.bash-preexec.sh\n' >> ~/.bashrc
+  echo 'eval "$(atuin init bash)"' >> ~/.bashrc
+fi
+
+cat << EOF
+
+
+
+ _______  __   __  _______  __    _  ___   _    __   __  _______  __   __ 
+|       ||  | |  ||   _   ||  |  | ||   | | |  |  | |  ||       ||  | |  |
+|_     _||  |_|  ||  |_|  ||   |_| ||   |_| |  |  |_|  ||   _   ||  | |  |
+  |   |  |       ||       ||       ||      _|  |       ||  | |  ||  |_|  |
+  |   |  |       ||       ||  _    ||     |_   |_     _||  |_|  ||       |
+  |   |  |   _   ||   _   || | |   ||    _  |    |   |  |       ||       |
+  |___|  |__| |__||__| |__||_|  |__||___| |_|    |___|  |_______||_______|
+
+
+
+Thanks for installing Atuin! I really hope you like it.
+
+If you have any issues, please open an issue on GitHub or visit our Discord (https://discord.gg/dPhv2B3x)!
+
+If you love Atuin, please give us a star on GitHub! It really helps ⭐️ https://github.com/atuinsh/atuin
+
+Please run "atuin register" to get setup with sync, or "atuin login" if you already have an account
+
+EOF

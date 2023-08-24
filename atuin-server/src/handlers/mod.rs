@@ -1,31 +1,28 @@
-use std::borrow::Cow;
+use atuin_common::api::{ErrorResponse, IndexResponse};
+use atuin_server_database::Database;
+use axum::{extract::State, response::IntoResponse, Json};
 
-use axum::{response::IntoResponse, Json};
-use serde::{Deserialize, Serialize};
+use crate::router::AppState;
 
 pub mod history;
+pub mod record;
+pub mod status;
 pub mod user;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct IndexResponse {
-    pub homage: String,
-    pub version: String,
-}
-
-pub async fn index() -> Json<IndexResponse> {
+pub async fn index<DB: Database>(state: State<AppState<DB>>) -> Json<IndexResponse> {
     let homage = r#""Through the fathomless deeps of space swims the star turtle Great A'Tuin, bearing on its back the four giant elephants who carry on their shoulders the mass of the Discworld." -- Sir Terry Pratchett"#;
+
+    // Error with a -1 response
+    // It's super unlikley this will happen
+    let count = state.database.total_history().await.unwrap_or(-1);
 
     Json(IndexResponse {
         homage: homage.to_string(),
         version: VERSION.to_string(),
+        total_history: count,
     })
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ErrorResponse<'a> {
-    pub reason: Cow<'a, str>,
 }
 
 impl<'a> IntoResponse for ErrorResponseStatus<'a> {
@@ -39,15 +36,20 @@ pub struct ErrorResponseStatus<'a> {
     pub status: http::StatusCode,
 }
 
-impl<'a> ErrorResponse<'a> {
-    pub fn with_status(self, status: http::StatusCode) -> ErrorResponseStatus<'a> {
+pub trait RespExt<'a> {
+    fn with_status(self, status: http::StatusCode) -> ErrorResponseStatus<'a>;
+    fn reply(reason: &'a str) -> Self;
+}
+
+impl<'a> RespExt<'a> for ErrorResponse<'a> {
+    fn with_status(self, status: http::StatusCode) -> ErrorResponseStatus<'a> {
         ErrorResponseStatus {
             error: self,
             status,
         }
     }
 
-    pub fn reply(reason: &'a str) -> ErrorResponse {
+    fn reply(reason: &'a str) -> ErrorResponse {
         Self {
             reason: reason.into(),
         }

@@ -9,11 +9,13 @@
 <hr/>
 
 <p align="center">
-  <a href="https://github.com/ellie/atuin/actions?query=workflow%3ARust"><img src="https://img.shields.io/github/workflow/status/ellie/atuin/Rust?style=flat-square" /></a>
+  <a href="https://github.com/atuinsh/atuin/actions?query=workflow%3ARust"><img src="https://img.shields.io/github/actions/workflow/status/atuinsh/atuin/rust.yml?style=flat-square" /></a>
   <a href="https://crates.io/crates/atuin"><img src="https://img.shields.io/crates/v/atuin.svg?style=flat-square" /></a>
   <a href="https://crates.io/crates/atuin"><img src="https://img.shields.io/crates/d/atuin.svg?style=flat-square" /></a>
-  <a href="https://github.com/ellie/atuin/blob/main/LICENSE"><img src="https://img.shields.io/crates/l/atuin.svg?style=flat-square" /></a>
+  <a href="https://github.com/atuinsh/atuin/blob/main/LICENSE"><img src="https://img.shields.io/crates/l/atuin.svg?style=flat-square" /></a>
   <a href="https://discord.gg/Fq8bJSKPHh"><img src="https://img.shields.io/discord/954121165239115808" /></a>
+  <a rel="me" href="https://hachyderm.io/@atuin"><img src="https://img.shields.io/mastodon/follow/109944632283122560?domain=https%3A%2F%2Fhachyderm.io&style=social"/></a>
+  <a href="https://twitter.com/atuinsh"><img src="https://img.shields.io/twitter/follow/atuinsh?style=social" /></a>
 </p>
 
 
@@ -53,7 +55,7 @@ I wanted to. And I **really** don't want to.
 
 ## Features
 
-- rebind `up` and `ctrl-r` with a full screen history search UI
+- rebind `ctrl-r` and `up` (configurable) to a full screen history search UI
 - store shell history in a sqlite database
 - backup and sync **encrypted** shell history
 - the same history across terminals, across sessions, and across machines
@@ -67,20 +69,21 @@ I wanted to. And I **really** don't want to.
 
 - [Quickstart](#quickstart)
 - [Install](#install)
-- [Import](docs/import.md)
-- [Configuration](docs/config.md)
-- [Searching history](docs/search.md)
-- [Cloud history sync](docs/sync.md)
-- [History stats](docs/stats.md)
-- [Running your own server](docs/server.md)
-- [Key binding](docs/key-binding.md)
-- [Shell completions](docs/shell-completions.md)
+- [Import](https://atuin.sh/docs/commands/import)
+- [Configuration](https://atuin.sh/docs/config)
+- [Searching history](https://atuin.sh/docs/commands/search)
+- [Cloud history sync](https://atuin.sh/docs/commands/sync)
+- [History stats](https://atuin.sh/docs/commands/stats)
+- [Self host Atuin server](https://atuin.sh/docs/self-hosting)
+- [Key binding](https://atuin.sh/docs/key-binding)
+- [Shell completions](https://atuin.sh/docs/commands/shell-completions)
 
 ## Supported Shells
 
 - zsh
 - bash
 - fish
+- nushell
  
 ## Community
 
@@ -95,20 +98,22 @@ This will sign you up for the default sync server, hosted by me. Everything is e
 Read more below for offline-only usage, or for hosting your own server.
 
 ```
-bash <(curl https://raw.githubusercontent.com/ellie/atuin/main/install.sh)
+bash <(curl https://raw.githubusercontent.com/atuinsh/atuin/main/install.sh)
 
-atuin register -u <USERNAME> -e <EMAIL> -p <PASSWORD>
+atuin register -u <USERNAME> -e <EMAIL>
 atuin import auto
 atuin sync
 ```
+
+Then restart your shell!
   
 ### Opt-in to activity graph
 Alongside the hosted Atuin server, there is also a service which generates activity graphs for your shell history! These are inspired by the GitHub graph.
   
 For example, here is mine:
   
-![](https://api.atuin.sh/img/ellie.png?token=0722830c382b42777bdb652da5b71efb61d8d387)
-  
+![Activity Graph Example](docs/static/img/activity-graph-example.png)
+
 If you wish to get your own, after signing up for the sync server, run this
   
 ```
@@ -120,10 +125,14 @@ The response includes the URL to your graph. Feel free to share and/or embed thi
 ## Offline only (no sync)
   
 ```
-bash <(curl https://raw.githubusercontent.com/ellie/atuin/main/install.sh)
+bash <(curl https://raw.githubusercontent.com/atuinsh/atuin/main/install.sh)
             
 atuin import auto
 ```
+
+By default, Atuin will check for updates. You can [disable update checks by modifying](https://atuin.sh/docs/config/#update_check) `config.toml`.
+
+Then restart your shell!
 
 ## Install
 
@@ -135,8 +144,10 @@ system package manager where possible (pacman, homebrew, etc etc).
 
 ```
 # do not run this as root, root will be asked for if required
-bash <(curl https://raw.githubusercontent.com/ellie/atuin/main/install.sh)
+bash <(curl https://raw.githubusercontent.com/atuinsh/atuin/main/install.sh)
 ```
+
+And then follow [the shell setup](#shell-plugin)
 
 ### With cargo
 
@@ -167,9 +178,24 @@ sudo port install atuin
   
 And then follow [the shell setup](#shell-plugin)
 
+### Nix
+
+This repository is a flake, and can be installed using `nix profile`:
+
+```
+nix profile install "github:atuinsh/atuin"
+```
+
+Atuin is also available in [nixpkgs](https://github.com/NixOS/nixpkgs):
+
+```
+nix-env -f '<nixpkgs>' -iA atuin
+```
+
+And then follow [the shell setup](#shell-plugin)
 ### Pacman
 
-Atuin is available in the Arch Linux [community repository](https://archlinux.org/packages/community/x86_64/atuin/):
+Atuin is available in the Arch Linux [[extra] repository](https://archlinux.org/packages/extra/x86_64/atuin/):
 
 ```
 pacman -S atuin
@@ -177,11 +203,21 @@ pacman -S atuin
   
 And then follow [the shell setup](#shell-plugin)
 
+### Termux
+
+Atuin is available in the Termux package repository:
+
+```
+pkg install atuin
+```
+  
+And then follow [the shell setup](#shell-plugin)
+
 ### From source
 
 ```
-git clone https://github.com/ellie/atuin.git
-cd atuin
+git clone https://github.com/atuinsh/atuin.git
+cd atuin/atuin
 cargo install --path .
 ```
   
@@ -190,7 +226,7 @@ And then follow [the shell setup](#shell-plugin)
 ## Shell plugin
 
 Once the binary is installed, the shell plugin requires installing. If you use
-the install script, this should all be done for you!
+the install script, this should all be done for you! After installing, remember to restart your shell.
 
 ### zsh
 
@@ -198,10 +234,16 @@ the install script, this should all be done for you!
 echo 'eval "$(atuin init zsh)"' >> ~/.zshrc
 ```
 
-Or using a plugin manager:
+#### Zinit
 
+```sh
+zinit load atuinsh/atuin
 ```
-zinit load ellie/atuin
+
+#### Antigen  
+  
+```sh  
+antigen bundle atuinsh/atuin@main
 ```
 
 ### bash
@@ -219,6 +261,10 @@ Then setup Atuin
 echo 'eval "$(atuin init bash)"' >> ~/.bashrc
 ```
 
+**PLEASE NOTE**
+
+bash-preexec currently has an issue where it will stop honoring `ignorespace`. While Atuin will ignore commands prefixed with whitespace, they may still end up in your bash history. Please check your configuration! All other shells do not have this issue.
+
 ### fish
 
 Add
@@ -233,12 +279,22 @@ to your `is-interactive` block in your `~/.config/fish/config.fish` file
 
 Install `atuin` shell plugin in zsh, bash, or fish with [Fig](https://fig.io) in one click. 
 
-<a href="https://fig.io/plugins/other/atuin" target="_blank"><img src="https://fig.io/badges/install-with-fig.svg" /></a>
+<a href="https://fig.io/plugins/shell/atuin" target="_blank"><img src="https://fig.io/badges/install-with-fig.svg" /></a>
 
-## ...what's with the name?
+### Nushell
 
-Atuin is named after "The Great A'Tuin", a giant turtle from Terry Pratchett's
-Discworld series of books.
+Run in *Nushell*:
+
+```
+mkdir ~/.local/share/atuin/
+atuin init nu | save ~/.local/share/atuin/init.nu
+```
+
+Add to `config.nu`:
+
+```
+source ~/.local/share/atuin/init.nu
+```
 
 [English]: ./README.md
 [简体中文]: ./docs/zh-CN/README.md

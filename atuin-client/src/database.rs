@@ -1,10 +1,16 @@
-use std::{env, path::Path, str::FromStr};
+use std::{
+    env,
+    path::{Path, PathBuf},
+    str::FromStr,
+};
 
 use async_trait::async_trait;
+use atuin_common::utils;
 use chrono::{prelude::*, Utc};
 use fs_err as fs;
 use itertools::Itertools;
 use lazy_static::lazy_static;
+use rand::{distributions::Alphanumeric, Rng};
 use regex::Regex;
 use sql_builder::{esc, quote, SqlBuilder, SqlName};
 use sqlx::{
@@ -15,33 +21,55 @@ use sqlx::{
 use super::{
     history::History,
     ordering,
-    settings::{FilterMode, SearchMode},
+    settings::{FilterMode, SearchMode, Settings},
 };
 
 pub struct Context {
-    session: String,
-    cwd: String,
-    hostname: String,
+    pub session: String,
+    pub cwd: String,
+    pub hostname: String,
+    pub host_id: String,
+    pub git_root: Option<PathBuf>,
+}
+
+#[derive(Default, Clone)]
+pub struct OptFilters {
+    pub exit: Option<i64>,
+    pub exclude_exit: Option<i64>,
+    pub cwd: Option<String>,
+    pub exclude_cwd: Option<String>,
+    pub before: Option<String>,
+    pub after: Option<String>,
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+    pub reverse: bool,
 }
 
 pub fn current_context() -> Context {
-    let session =
-        env::var("ATUIN_SESSION").expect("failed to find ATUIN_SESSION - check your shell setup");
-    let hostname = format!("{}:{}", whoami::hostname(), whoami::username());
-    let cwd = match env::current_dir() {
-        Ok(dir) => dir.display().to_string(),
-        Err(_) => String::from(""),
+    let Ok(session) = env::var("ATUIN_SESSION") else {
+        eprintln!("ERROR: Failed to find $ATUIN_SESSION in the environment. Check that you have correctly set up your shell.");
+        std::process::exit(1);
     };
+    let hostname = format!(
+        "{}:{}",
+        env::var("ATUIN_HOST_NAME").unwrap_or_else(|_| whoami::hostname()),
+        env::var("ATUIN_HOST_USER").unwrap_or_else(|_| whoami::username())
+    );
+    let cwd = utils::get_current_dir();
+    let host_id = Settings::host_id().expect("failed to load host ID");
+    let git_root = utils::in_git_repo(cwd.as_str());
 
     Context {
         session,
         hostname,
         cwd,
+        git_root,
+        host_id: host_id.0.as_simple().to_string(),
     }
 }
 
 #[async_trait]
-pub trait Database: Send + Sync {
+pub trait Database: Send + Sync + 'static {
     async fn save(&mut self, h: &History) -> Result<()>;
     async fn save_bulk(&mut self, h: &[History]) -> Result<()>;
 
@@ -66,16 +94,25 @@ pub trait Database: Send + Sync {
     async fn last(&self) -> Result<History>;
     async fn before(&self, timestamp: chrono::DateTime<Utc>, count: i64) -> Result<Vec<History>>;
 
+    async fn delete(&self, mut h: History) -> Result<()>;
+    async fn deleted(&self) -> Result<Vec<History>>;
+
+    // Yes I know, it's a lot.
+    // Could maybe break it down to a searchparams struct or smth but that feels a little... pointless.
+    // Been debating maybe a DSL for search? eg "before:time limit:1 the query"
+    #[allow(clippy::too_many_arguments)]
     async fn search(
         &self,
-        limit: Option<i64>,
         search_mode: SearchMode,
         filter: FilterMode,
         context: &Context,
         query: &str,
+        filter_options: OptFilters,
     ) -> Result<Vec<History>>;
 
     async fn query_history(&self, query: &str) -> Result<Vec<History>>;
+
+    async fn all_with_count(&self) -> Result<Vec<(History, i32)>>;
 }
 
 // Intended for use on a developer machine and not a sync server.
@@ -117,8 +154,8 @@ impl Sqlite {
 
     async fn save_raw(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, h: &History) -> Result<()> {
         sqlx::query(
-            "insert or ignore into history(id, timestamp, duration, exit, command, cwd, session, hostname)
-                values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "insert or ignore into history(id, timestamp, duration, exit, command, cwd, session, hostname, deleted_at)
+                values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         )
         .bind(h.id.as_str())
         .bind(h.timestamp.timestamp_nanos())
@@ -128,23 +165,28 @@ impl Sqlite {
         .bind(h.cwd.as_str())
         .bind(h.session.as_str())
         .bind(h.hostname.as_str())
-        .execute(tx)
+        .bind(h.deleted_at.map(|t|t.timestamp_nanos()))
+        .execute(&mut **tx)
         .await?;
 
         Ok(())
     }
 
     fn query_history(row: SqliteRow) -> History {
-        History {
-            id: row.get("id"),
-            timestamp: Utc.timestamp_nanos(row.get("timestamp")),
-            duration: row.get("duration"),
-            exit: row.get("exit"),
-            command: row.get("command"),
-            cwd: row.get("cwd"),
-            session: row.get("session"),
-            hostname: row.get("hostname"),
-        }
+        let deleted_at: Option<i64> = row.get("deleted_at");
+
+        History::from_db()
+            .id(row.get("id"))
+            .timestamp(Utc.timestamp_nanos(row.get("timestamp")))
+            .duration(row.get("duration"))
+            .exit(row.get("exit"))
+            .command(row.get("command"))
+            .cwd(row.get("cwd"))
+            .session(row.get("session"))
+            .hostname(row.get("hostname"))
+            .deleted_at(deleted_at.map(|t| Utc.timestamp_nanos(t)))
+            .build()
+            .into()
     }
 }
 
@@ -152,7 +194,6 @@ impl Sqlite {
 impl Database for Sqlite {
     async fn save(&mut self, h: &History) -> Result<()> {
         debug!("saving history to sqlite");
-
         let mut tx = self.pool.begin().await?;
         Self::save_raw(&mut tx, h).await?;
         tx.commit().await?;
@@ -166,7 +207,7 @@ impl Database for Sqlite {
         let mut tx = self.pool.begin().await?;
 
         for i in h {
-            Self::save_raw(&mut tx, i).await?
+            Self::save_raw(&mut tx, i).await?;
         }
 
         tx.commit().await?;
@@ -191,7 +232,7 @@ impl Database for Sqlite {
 
         sqlx::query(
             "update history
-                set timestamp = ?2, duration = ?3, exit = ?4, command = ?5, cwd = ?6, session = ?7, hostname = ?8
+                set timestamp = ?2, duration = ?3, exit = ?4, command = ?5, cwd = ?6, session = ?7, hostname = ?8, deleted_at = ?9
                 where id = ?1",
         )
         .bind(h.id.as_str())
@@ -202,6 +243,7 @@ impl Database for Sqlite {
         .bind(h.cwd.as_str())
         .bind(h.session.as_str())
         .bind(h.hostname.as_str())
+        .bind(h.deleted_at.map(|t|t.timestamp_nanos()))
         .execute(&self.pool)
         .await?;
 
@@ -226,6 +268,7 @@ impl Database for Sqlite {
             FilterMode::Host => query.and_where_eq("hostname", quote(&context.hostname)),
             FilterMode::Session => query.and_where_eq("session", quote(&context.session)),
             FilterMode::Directory => query.and_where_eq("cwd", quote(&context.cwd)),
+            FilterMode::Workspace => query.and_where_like_any("cwd", context.cwd.clone()),
         };
 
         if unique {
@@ -302,6 +345,15 @@ impl Database for Sqlite {
         Ok(res)
     }
 
+    async fn deleted(&self) -> Result<Vec<History>> {
+        let res = sqlx::query("select * from history where deleted_at is not null")
+            .map(Self::query_history)
+            .fetch_all(&self.pool)
+            .await?;
+
+        Ok(res)
+    }
+
     async fn history_count(&self) -> Result<i64> {
         let res: (i64,) = sqlx::query_as("select count(1) from history")
             .fetch_one(&self.pool)
@@ -312,27 +364,42 @@ impl Database for Sqlite {
 
     async fn search(
         &self,
-        limit: Option<i64>,
         search_mode: SearchMode,
         filter: FilterMode,
         context: &Context,
         query: &str,
+        filter_options: OptFilters,
     ) -> Result<Vec<History>> {
         let mut sql = SqlBuilder::select_from("history");
 
-        sql.group_by("command")
-            .having("max(timestamp)")
-            .order_desc("timestamp");
+        sql.group_by("command").having("max(timestamp)");
 
-        if let Some(limit) = limit {
+        if let Some(limit) = filter_options.limit {
             sql.limit(limit);
         }
+
+        if let Some(offset) = filter_options.offset {
+            sql.offset(offset);
+        }
+
+        if filter_options.reverse {
+            sql.order_asc("timestamp");
+        } else {
+            sql.order_desc("timestamp");
+        }
+
+        let git_root = if let Some(git_root) = context.git_root.clone() {
+            git_root.to_str().unwrap_or("/").to_string()
+        } else {
+            context.cwd.clone()
+        };
 
         match filter {
             FilterMode::Global => &mut sql,
             FilterMode::Host => sql.and_where_eq("hostname", quote(&context.hostname)),
             FilterMode::Session => sql.and_where_eq("session", quote(&context.session)),
             FilterMode::Directory => sql.and_where_eq("cwd", quote(&context.cwd)),
+            FilterMode::Workspace => sql.and_where_like_left("cwd", git_root),
         };
 
         let orig_query = query;
@@ -341,7 +408,7 @@ impl Database for Sqlite {
         match search_mode {
             SearchMode::Prefix => sql.and_where_like_left("command", query),
             SearchMode::FullText => sql.and_where_like_any("command", query),
-            SearchMode::Fuzzy => {
+            _ => {
                 // don't recompile the regex on successive calls!
                 lazy_static! {
                     static ref SPLIT_REGEX: Regex = Regex::new(r" +").unwrap();
@@ -375,7 +442,7 @@ impl Database for Sqlite {
                     } else if let Some(term) = query_part.strip_prefix('\'') {
                         format!("{glob}{term}{glob}")
                     } else if is_inverse {
-                        format!("{glob}{term}{glob}", term = query_part)
+                        format!("{glob}{query_part}{glob}")
                     } else {
                         query_part.split("").join(glob)
                     };
@@ -386,6 +453,34 @@ impl Database for Sqlite {
                 &mut sql
             }
         };
+
+        filter_options
+            .exit
+            .map(|exit| sql.and_where_eq("exit", exit));
+
+        filter_options
+            .exclude_exit
+            .map(|exclude_exit| sql.and_where_ne("exit", exclude_exit));
+
+        filter_options
+            .cwd
+            .map(|cwd| sql.and_where_eq("cwd", quote(cwd)));
+
+        filter_options
+            .exclude_cwd
+            .map(|exclude_cwd| sql.and_where_ne("cwd", quote(exclude_cwd)));
+
+        filter_options.before.map(|before| {
+            interim::parse_date_string(before.as_str(), Utc::now(), interim::Dialect::Uk)
+                .map(|before| sql.and_where_lt("timestamp", quote(before.timestamp_nanos())))
+        });
+
+        filter_options.after.map(|after| {
+            interim::parse_date_string(after.as_str(), Utc::now(), interim::Dialect::Uk)
+                .map(|after| sql.and_where_gt("timestamp", quote(after.timestamp_nanos())))
+        });
+
+        sql.and_where_is_null("deleted_at");
 
         let query = sql.sql().expect("bug in search query. please report");
 
@@ -405,6 +500,58 @@ impl Database for Sqlite {
 
         Ok(res)
     }
+
+    async fn all_with_count(&self) -> Result<Vec<(History, i32)>> {
+        debug!("listing history");
+
+        let mut query = SqlBuilder::select_from(SqlName::new("history").alias("h").baquoted());
+
+        query
+            .fields(&[
+                "id",
+                "max(timestamp) as timestamp",
+                "max(duration) as duration",
+                "exit",
+                "command",
+                "deleted_at",
+                "group_concat(cwd, ':') as cwd",
+                "group_concat(session) as session",
+                "group_concat(hostname, ',') as hostname",
+                "count(*) as count",
+            ])
+            .group_by("command")
+            .group_by("exit")
+            .and_where("deleted_at is null")
+            .order_desc("timestamp");
+
+        let query = query.sql().expect("bug in list query. please report");
+
+        let res = sqlx::query(&query)
+            .map(|row: SqliteRow| {
+                let count: i32 = row.get("count");
+                (Self::query_history(row), count)
+            })
+            .fetch_all(&self.pool)
+            .await?;
+
+        Ok(res)
+    }
+
+    // deleted_at doesn't mean the actual time that the user deleted it,
+    // but the time that the system marks it as deleted
+    async fn delete(&self, mut h: History) -> Result<()> {
+        let now = chrono::Utc::now();
+        h.command = rand::thread_rng()
+            .sample_iter(&Alphanumeric)
+            .take(32)
+            .map(char::from)
+            .collect(); // overwrite with random string
+        h.deleted_at = Some(now); // delete it
+
+        self.update(&h).await?; // save it
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -423,9 +570,21 @@ mod test {
             hostname: "test:host".to_string(),
             session: "beepboopiamasession".to_string(),
             cwd: "/home/ellie".to_string(),
+            host_id: "test-host".to_string(),
+            git_root: None,
         };
 
-        let results = db.search(None, mode, filter_mode, &context, query).await?;
+        let results = db
+            .search(
+                mode,
+                filter_mode,
+                &context,
+                query,
+                OptFilters {
+                    ..Default::default()
+                },
+            )
+            .await?;
 
         assert_eq!(
             results.len(),
@@ -452,16 +611,19 @@ mod test {
     }
 
     async fn new_history_item(db: &mut impl Database, cmd: &str) -> Result<()> {
-        let history = History::new(
-            chrono::Utc::now(),
-            cmd.to_string(),
-            "/home/ellie".to_string(),
-            0,
-            1,
-            Some("beep boop".to_string()),
-            Some("booop".to_string()),
-        );
-        return db.save(&history).await;
+        let mut captured: History = History::capture()
+            .timestamp(chrono::Utc::now())
+            .command(cmd)
+            .cwd("/home/ellie")
+            .build()
+            .into();
+
+        captured.exit = 0;
+        captured.duration = 1;
+        captured.session = "beep boop".to_string();
+        captured.hostname = "booop".to_string();
+
+        db.save(&captured).await
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -618,6 +780,8 @@ mod test {
             hostname: "test:host".to_string(),
             session: "beepboopiamasession".to_string(),
             cwd: "/home/ellie".to_string(),
+            host_id: "test-host".to_string(),
+            git_root: None,
         };
 
         let mut db = Sqlite::new("sqlite::memory:").await.unwrap();
@@ -628,7 +792,15 @@ mod test {
         }
         let start = Instant::now();
         let _results = db
-            .search(None, SearchMode::Fuzzy, FilterMode::Global, &context, "")
+            .search(
+                SearchMode::Fuzzy,
+                FilterMode::Global,
+                &context,
+                "",
+                OptFilters {
+                    ..Default::default()
+                },
+            )
             .await
             .unwrap();
         let duration = start.elapsed();
@@ -667,7 +839,7 @@ impl SqlBuilderExt for SqlBuilder {
         } else {
             cond.push_str(" LIKE '");
         }
-        cond.push_str(&esc(&mask.to_string()));
+        cond.push_str(&esc(mask.to_string()));
         cond.push('\'');
         if is_or {
             self.or_where(cond)

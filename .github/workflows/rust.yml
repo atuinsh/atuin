@@ -14,15 +14,14 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v3
 
     - name: Install rust
-      uses: actions-rs/toolchain@v1
+      uses: dtolnay/rust-toolchain@master
       with:
           toolchain: stable
-          override: true
 
-    - uses: actions/cache@v2
+    - uses: actions/cache@v3
       with:
         path: |
           ~/.cargo/registry
@@ -42,28 +41,27 @@ jobs:
     - name: Run cargo build main
       run: cargo build --all --locked --release && strip target/release/atuin
 
-  test:
-    runs-on: ubuntu-latest
+  unit-test:
+    runs-on: [self-hosted, ARM64, macOS]
 
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v3
 
     - name: Install rust
-      uses: actions-rs/toolchain@v1
+      uses: dtolnay/rust-toolchain@master
       with:
           toolchain: stable
-          override: true
 
-    - uses: actions/cache@v2
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ runner.os }}-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
+#     - uses: actions/cache@v3
+#       with:
+#         path: |
+#          ~/.cargo/registry
+#           ~/.cargo/git
+#           target
+#         key: ${ runner.os }-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
 
     - name: Run cargo test
-      run: cargo test --all-features --workspace
+      run: cargo test --lib --bins
 
     - name: Run cargo check (all features)
       run: cargo check --all-features --workspace
@@ -77,20 +75,56 @@ jobs:
     - name: Run cargo check (server)
       run: cargo check --no-default-features --features server --workspace
 
+    - name: Run cargo check (client only)
+      run: cargo check --no-default-features --features client --workspace
+
+  integration-test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres
+        env:
+          POSTGRES_USER: atuin
+          POSTGRES_PASSWORD: pass
+          POSTGRES_DB: atuin
+        ports:
+          - 5432:5432
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Install rust
+      uses: dtolnay/rust-toolchain@master
+      with:
+          toolchain: stable
+
+    - uses: actions/cache@v3
+      with:
+        path: |
+         ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${ runner.os }-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Run cargo test
+      run: cargo test --test '*'
+      env:
+        ATUIN_DB_URI: postgres://atuin:pass@localhost:5432/atuin
+
   clippy:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v3
 
     - name: Install latest rust
-      uses: actions-rs/toolchain@v1
+      uses: dtolnay/rust-toolchain@master
       with:
           toolchain: stable
-          override: true
           components: clippy
 
-    - uses: actions/cache@v2
+    - uses: actions/cache@v3
       with:
         path: |
           ~/.cargo/registry
@@ -105,13 +139,12 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v3
 
     - name: Install latest rust
-      uses: actions-rs/toolchain@v1
+      uses: dtolnay/rust-toolchain@master
       with:
           toolchain: stable
-          override: true
           components: rustfmt
 
     - name: Format
