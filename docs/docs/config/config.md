@@ -190,6 +190,10 @@ Which style to use. Possible values: `auto`, `full` and `compact`.
 
 Defaults to `auto`.
 
+### `invert`
+
+Invert the UI - put the search bar at the top
+
 ### `inline_height`
 
 Set the maximum number of lines Atuin's interface should take up.
