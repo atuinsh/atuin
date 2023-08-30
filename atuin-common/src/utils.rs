@@ -112,8 +112,12 @@ pub fn get_current_dir() -> String {
 }
 
 pub fn get_days_from_month(year: i32, month: u32) -> i64 {
-    let Some(start) = NaiveDate::from_ymd_opt(year, month, 1) else { return 30 };
-    let Some(end) = start.checked_add_months(Months::new(1)) else { return 30 };
+    let Some(start) = NaiveDate::from_ymd_opt(year, month, 1) else {
+        return 30;
+    };
+    let Some(end) = start.checked_add_months(Months::new(1)) else {
+        return 30;
+    };
     end.signed_duration_since(start).num_days()
 }
 
