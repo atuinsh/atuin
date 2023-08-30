@@ -1,6 +1,11 @@
 
 # cargo-vet audits file
 
+[[audits.aead]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.5.2"
+
 [[audits.anyhow]]
 who = "Conrad Ludgate <conradludgate@gmail.com>"
 criteria = "safe-to-deploy"
@@ -50,6 +55,11 @@ version = "0.2.0"
 who = "Conrad Ludgate <conradludgate@gmail.com>"
 criteria = "safe-to-deploy"
 version = "1.0.0"
+
+[[audits.cipher]]
+who = "Conrad Ludgate <conradludgate@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.4.4"
 
 [[audits.diff]]
 who = "Conrad Ludgate <conradludgate@gmail.com>"
@@ -591,6 +601,12 @@ end = "2024-08-19"
 criteria = "safe-to-deploy"
 user-id = 38395 # Conrad Ludgate (conradludgate)
 start = "2023-01-25"
+end = "2024-08-19"
+
+[[trusted.rustix]]
+criteria = "safe-to-deploy"
+user-id = 6825 # Dan Gohman (sunfishcode)
+start = "2021-10-29"
 end = "2024-08-19"
 
 [[trusted.rusty_paserk]]

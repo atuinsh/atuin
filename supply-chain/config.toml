@@ -38,10 +38,6 @@ audit-as-crates-io = true
 version = "0.20.0"
 criteria = "safe-to-deploy"
 
-[[exemptions.aead]]
-version = "0.5.2"
-criteria = "safe-to-deploy"
-
 [[exemptions.ahash]]
 version = "0.8.3"
 criteria = "safe-to-deploy"
@@ -164,10 +160,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.cipher]]
 version = "0.3.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.cipher]]
-version = "0.4.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.clap]]
@@ -704,10 +696,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.rustc_version]]
 version = "0.4.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.rustix]]
-version = "0.38.8"
 criteria = "safe-to-deploy"
 
 [[exemptions.rustls]]

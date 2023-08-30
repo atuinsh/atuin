@@ -106,6 +106,13 @@ user-id = 38395
 user-login = "conradludgate"
 user-name = "Conrad Ludgate"
 
+[[publisher.rustix]]
+version = "0.38.8"
+when = "2023-08-10"
+user-id = 6825
+user-login = "sunfishcode"
+user-name = "Dan Gohman"
+
 [[publisher.rusty_paserk]]
 version = "0.2.3"
 when = "2023-08-18"
