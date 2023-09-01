@@ -3,7 +3,7 @@
 There is a supplied docker image to make deploying a server as a container easier.
 
 ```sh
-docker run -d -v "$HOME/.config/atuin:/config" ghcr.io/ellie/atuin:latest server start
+docker run -d -v "$HOME/.config/atuin:/config" ghcr.io/atuinsh/atuin:latest server start
 ```
 
 # Docker Compose
@@ -25,7 +25,7 @@ version: '3.5'
 services:
   atuin:
     restart: always
-    image: ghcr.io/ellie/atuin:main
+    image: ghcr.io/atuinsh/atuin:main
     command: server start
     volumes:
       - "./config:/config"
