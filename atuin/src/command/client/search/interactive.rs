@@ -23,15 +23,15 @@ use super::{
     engines::{SearchEngine, SearchState},
     history_list::{HistoryList, ListState, PREFIX_LENGTH},
 };
-use crate::ratatui::{
+use crate::{command::client::search::engines, VERSION};
+use ratatui::{
     backend::{Backend, CrosstermBackend},
     layout::{Alignment, Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
-    text::{Span, Spans, Text},
+    text::{Line, Span, Text},
     widgets::{Block, BorderType, Borders, Paragraph},
     Frame, Terminal, TerminalOptions, Viewport,
 };
-use crate::{command::client::search::engines, VERSION};
 
 const RETURN_ORIGINAL: usize = usize::MAX;
 const RETURN_QUERY: usize = usize::MAX - 1;
@@ -102,6 +102,9 @@ impl State {
         let ctrl = input.modifiers.contains(KeyModifiers::CONTROL);
         let alt = input.modifiers.contains(KeyModifiers::ALT);
 
+        // Use Ctrl-n instead of Alt-n?
+        let modfr = if settings.ctrl_n_shortcuts { ctrl } else { alt };
+
         // reset the state, will be set to true later if user really did change it
         self.switched_search_mode = false;
         match input.code {
@@ -115,7 +118,7 @@ impl State {
             KeyCode::Enter => {
                 return Some(self.results_state.selected());
             }
-            KeyCode::Char(c @ '1'..='9') if alt => {
+            KeyCode::Char(c @ '1'..='9') if modfr => {
                 let c = c.to_digit(10)? as usize;
                 return Some(self.results_state.selected() + c);
             }
@@ -184,15 +187,27 @@ impl State {
             }
             KeyCode::Char('u') if ctrl => self.search.input.clear(),
             KeyCode::Char('r') if ctrl => {
-                pub static FILTER_MODES: [FilterMode; 4] = [
-                    FilterMode::Global,
-                    FilterMode::Host,
-                    FilterMode::Session,
-                    FilterMode::Directory,
-                ];
+                let filter_modes = if settings.workspaces && self.search.context.git_root.is_some()
+                {
+                    vec![
+                        FilterMode::Global,
+                        FilterMode::Host,
+                        FilterMode::Session,
+                        FilterMode::Directory,
+                        FilterMode::Workspace,
+                    ]
+                } else {
+                    vec![
+                        FilterMode::Global,
+                        FilterMode::Host,
+                        FilterMode::Session,
+                        FilterMode::Directory,
+                    ]
+                };
+
                 let i = self.search.filter_mode as usize;
-                let i = (i + 1) % FILTER_MODES.len();
-                self.search.filter_mode = FILTER_MODES[i];
+                let i = (i + 1) % filter_modes.len();
+                self.search.filter_mode = filter_modes[i];
             }
             KeyCode::Char('s') if ctrl => {
                 self.switched_search_mode = true;
@@ -285,9 +300,14 @@ impl State {
                 .max_by(|h1, h2| h1.command.len().cmp(&h2.command.len()));
             longest_command.map_or(0, |v| {
                 std::cmp::min(
-                    4,
-                    (v.command.len() as u16 + preview_width - 1 - border_size)
-                        / (preview_width - border_size),
+                    settings.max_preview_height,
+                    v.command
+                        .split('\n')
+                        .map(|line| {
+                            (line.len() as u16 + preview_width - 1 - border_size)
+                                / (preview_width - border_size)
+                        })
+                        .sum(),
                 )
             }) + border_size * 2
         } else if compact {
@@ -390,7 +410,7 @@ impl State {
 
     #[allow(clippy::unused_self)]
     fn build_help(&mut self) -> Paragraph {
-        let help = Paragraph::new(Text::from(Spans::from(vec![
+        let help = Paragraph::new(Text::from(Line::from(vec![
             Span::styled("Esc", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw(" to exit"),
         ])))
@@ -473,12 +493,15 @@ impl State {
         } else {
             use itertools::Itertools as _;
             let s = &results[selected].command;
-            s.char_indices()
-                .step_by(preview_width.into())
-                .map(|(i, _)| i)
-                .chain(Some(s.len()))
-                .tuple_windows()
-                .map(|(a, b)| &s[a..b])
+            s.split('\n')
+                .flat_map(|line| {
+                    line.char_indices()
+                        .step_by(preview_width.into())
+                        .map(|(i, _)| i)
+                        .chain(Some(line.len()))
+                        .tuple_windows()
+                        .map(|(a, b)| &line[a..b])
+                })
                 .join("\n")
         };
         let preview = if compact {
@@ -586,14 +609,16 @@ pub async fn history(
         search_mode: settings.search_mode,
         search: SearchState {
             input,
-            context,
-            filter_mode: if settings.shell_up_key_binding {
+            filter_mode: if settings.workspaces && context.git_root.is_some() {
+                FilterMode::Workspace
+            } else if settings.shell_up_key_binding {
                 settings
                     .filter_mode_shell_up_key_binding
                     .unwrap_or(settings.filter_mode)
             } else {
                 settings.filter_mode
             },
+            context,
         },
         engine: engines::engine(settings.search_mode),
         results_len: 0,

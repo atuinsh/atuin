@@ -7,7 +7,8 @@ create table if not exists records (
   timestamp integer not null,
   tag text not null,
   version text not null,
-  data blob not null
+  data blob not null,
+  cek blob not null
 );
 
 create index host_idx on records (host);

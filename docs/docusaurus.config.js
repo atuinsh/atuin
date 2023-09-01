@@ -14,11 +14,11 @@ const config = {
   url: 'https://atuin.sh',
   // Set the /<baseUrl>/ pathname under which your site is served
   // For GitHub pages deployment, it is often '/<projectName>/'
-  baseUrl: '/',
+  baseUrl: '/docs/',
 
   // GitHub pages deployment config.
   // If you aren't using GitHub pages, you don't need these.
-  organizationName: 'ellie', // Usually your GitHub org/user name.
+  organizationName: 'atuinsh', // Usually your GitHub org/user name.
   projectName: 'atuin', // Usually your repo name.
 
   onBrokenLinks: 'warn',
@@ -40,18 +40,19 @@ const config = {
       /** @type {import('@docusaurus/preset-classic').Options} */
       ({
         docs: {
+          routeBasePath: '/',
           sidebarPath: require.resolve('./sidebars.js'),
           // Please change this to your repo.
           // Remove this to remove the "edit this page" links.
           editUrl:
-            'https://github.com/ellie/atuin/tree/main/docs/',
+            'https://github.com/atuinsh/atuin/tree/main/docs/',
         },
         blog: {
           showReadingTime: true,
           // Please change this to your repo.
           // Remove this to remove the "edit this page" links.
           editUrl:
-            'https://github.com/ellie/atuin/tree/main/docs/',
+            'https://github.com/atuinsh/atuin/tree/main/docs/',
         },
         theme: {
           customCss: require.resolve('./src/css/custom.css'),
@@ -64,33 +65,12 @@ const config = {
     /** @type {import('@docusaurus/preset-classic').ThemeConfig} */
     ({
       // Replace with your project's social card
-      image: 'img/docusaurus-social-card.jpg',
       navbar: {
-        title: '🐢 Atuin',
-        items: [
-          {
-            type: 'doc',
-            docId: 'guide/index',
-            position: 'left',
-            label: 'Docs',
-          },
-          { to: '/blog', label: 'Blog', position: 'left' },
-          {
-            href: 'https://github.com/ellie/atuin',
-            label: 'GitHub',
-            position: 'right',
-          },
-          {
-            href: 'https://hachyderm.io/@atuin',
-            label: 'Mastodon',
-            position: 'right',
-          },
-          {
-            href: 'https://twitter.com/atuinsh',
-            label: 'Twitter',
-            position: 'right',
-          }
-        ],
+        logo: {
+          href: "https://atuin.sh",
+          src: "/img/atuin.png"
+        }
+
       },
       footer: {
         style: 'dark',
@@ -122,7 +102,7 @@ const config = {
               },
               {
                 label: 'GitHub',
-                href: 'https://github.com/ellie/atuin',
+                href: 'https://github.com/atuinsh/atuin',
               },
               {
                 label: 'Twitter',

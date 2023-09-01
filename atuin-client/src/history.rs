@@ -3,6 +3,9 @@ use std::env;
 use chrono::Utc;
 
 use atuin_common::utils::uuid_v7;
+use regex::RegexSet;
+
+use crate::{secrets::SECRET_PATTERNS, settings::Settings};
 
 mod builder;
 
@@ -184,5 +187,88 @@ impl History {
 
     pub fn success(&self) -> bool {
         self.exit == 0 || self.duration == -1
+    }
+
+    pub fn should_save(&self, settings: &Settings) -> bool {
+        let secret_regex = SECRET_PATTERNS.iter().map(|f| f.1);
+        let secret_regex = RegexSet::new(secret_regex).expect("Failed to build secrets regex");
+
+        !(self.command.starts_with(' ')
+            || settings.history_filter.is_match(&self.command)
+            || settings.cwd_filter.is_match(&self.cwd)
+            || (secret_regex.is_match(&self.command)) && settings.secrets_filter)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use regex::RegexSet;
+
+    use crate::settings::Settings;
+
+    use super::History;
+
+    // Test that we don't save history where necessary
+    #[test]
+    fn privacy_test() {
+        let mut settings = Settings::default();
+        settings.cwd_filter = RegexSet::new(["^/supasecret"]).unwrap();
+        settings.history_filter = RegexSet::new(["^psql"]).unwrap();
+
+        let normal_command: History = History::capture()
+            .timestamp(chrono::Utc::now())
+            .command("echo foo")
+            .cwd("/")
+            .build()
+            .into();
+
+        let with_space: History = History::capture()
+            .timestamp(chrono::Utc::now())
+            .command(" echo bar")
+            .cwd("/")
+            .build()
+            .into();
+
+        let stripe_key: History = History::capture()
+            .timestamp(chrono::Utc::now())
+            .command("curl foo.com/bar?key=sk_test_1234567890abcdefghijklmnop")
+            .cwd("/")
+            .build()
+            .into();
+
+        let secret_dir: History = History::capture()
+            .timestamp(chrono::Utc::now())
+            .command("echo ohno")
+            .cwd("/supasecret")
+            .build()
+            .into();
+
+        let with_psql: History = History::capture()
+            .timestamp(chrono::Utc::now())
+            .command("psql")
+            .cwd("/supasecret")
+            .build()
+            .into();
+
+        assert!(normal_command.should_save(&settings));
+        assert!(!with_space.should_save(&settings));
+        assert!(!stripe_key.should_save(&settings));
+        assert!(!secret_dir.should_save(&settings));
+        assert!(!with_psql.should_save(&settings));
+    }
+
+    #[test]
+    fn disable_secrets() {
+        let mut settings = Settings::default();
+        settings.secrets_filter = false;
+
+        let stripe_key: History = History::capture()
+            .timestamp(chrono::Utc::now())
+            .command("curl foo.com/bar?key=sk_test_1234567890abcdefghijklmnop")
+            .cwd("/")
+            .build()
+            .into();
+
+        assert!(stripe_key.should_save(&settings));
     }
 }

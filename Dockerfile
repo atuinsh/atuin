@@ -1,4 +1,4 @@
-FROM lukemathwalker/cargo-chef:latest-rust-1.70.0 AS chef
+FROM lukemathwalker/cargo-chef:latest-rust-1.72.0-buster AS chef
 WORKDIR app
 
 FROM chef AS planner
@@ -16,7 +16,7 @@ RUN cargo chef cook --release --recipe-path recipe.json
 COPY . .
 RUN cargo build --release --bin atuin
 
-FROM debian:bullseye-20230612-slim AS runtime
+FROM debian:bullseye-20230814-slim AS runtime
 
 RUN useradd -c 'atuin user' atuin && mkdir /config && chown atuin:atuin /config
 # Install ca-certificates for webhooks to work

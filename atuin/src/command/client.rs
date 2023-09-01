@@ -69,7 +69,7 @@ impl Cmd {
             Self::Search(search) => search.run(db, &mut settings).await,
 
             #[cfg(feature = "sync")]
-            Self::Sync(sync) => sync.run(settings, &mut db).await,
+            Self::Sync(sync) => sync.run(settings, &mut db, &mut store).await,
 
             #[cfg(feature = "sync")]
             Self::Account(account) => account.run(settings).await,

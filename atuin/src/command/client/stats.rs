@@ -80,6 +80,7 @@ impl Cmd {
         } else {
             self.period.join(" ")
         };
+
         let history = if words.as_str() == "all" {
             db.list(FilterMode::Global, &context, None, false).await?
         } else if words.trim() == "today" {

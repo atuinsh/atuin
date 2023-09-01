@@ -166,6 +166,16 @@ filter_mode_shell_up_key_binding = "session"
 
 Defaults to the value specified for filter_mode.
 
+### `workspaces`
+
+This flag enables a pseudo filter-mode named "workspace": the filter is automatically
+activated when you are in a git repository. Defaults to false.
+
+With workspace filtering enabled, Atuin will filter for commands executed in any directory
+within a git repository tree.
+
+Filter modes can still be toggled via ctrl-r.
+
 ### `style`
 
 Which style to use. Possible values: `auto`, `full` and `compact`.
@@ -179,6 +189,10 @@ Which style to use. Possible values: `auto`, `full` and `compact`.
 ![full](https://user-images.githubusercontent.com/1710904/161623547-42afbfa7-a3ef-4820-bacd-fcaf1e324969.png)
 
 Defaults to `auto`.
+
+### `invert`
+
+Invert the UI - put the search bar at the top
 
 ### `inline_height`
 
@@ -195,6 +209,14 @@ Configure whether or not to show a preview of the selected command.
 ![show_preview](../../blog/2023/04-01-release-v14/preview.png)
 
 Useful when the command is longer than the terminal width and is cut off.
+
+### `max_preview_height`
+
+Configure the maximum height of the preview to show.
+
+Useful when you have long scripts in your history that you want to distinguish by more than the first few lines.
+
+Defaults to `4`.
 
 ### `show_help`
 
@@ -230,4 +252,27 @@ history_filter = [
    "^secret-cmd",
    "^innocuous-cmd .*--secret=.+"
 ]
+```
+
+### secrets_filter
+
+```
+secrets_filter = true
+```
+
+Defaults to true. This matches history against a set of default regex, and will not save it if we get a match. Defaults include
+
+1. AWS key id
+2. Github pat (old and new)
+3. Slack oauth tokens (bot, user)
+4. Slack webhooks
+5. Stripe live/test keys
+
+## macOS <kbd>Ctrl-n</kbd> key shortcuts
+
+macOS does not have an <kbd>Alt</kbd> key, although terminal emulators can often be configured to map the <kbd>Option</kbd> key to be used as <kbd>Alt</kbd>. *However*, remapping <kbd>Option</kbd> this way may prevent typing some characters, such as using <kbd>Option-3</kbd> to type `#` on the British English layout. For such a scenario, set the `ctrl_n_shortcuts` option to `true` in your config file to replace <kbd>Alt-0</kbd> to <kbd>Alt-9</kbd> shortcuts with <kbd>Ctrl-0</kbd> to <kbd>Ctrl-9</kbd> instead:
+
+```
+# Use Ctrl-0 .. Ctrl-9 instead of Alt-0 .. Alt-9 UI shortcuts
+ctrl_n_shortcuts = true
 ```

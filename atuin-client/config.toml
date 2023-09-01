@@ -38,6 +38,10 @@
 ## possible values: global, host, session, directory
 # filter_mode = "global"
 
+## With workspace filtering enabled, Atuin will filter for commands executed
+## in any directory within a git repositiry tree (default: false)
+# workspaces = false
+
 ## which filter mode to use when atuin is invoked from a shell up-key binding
 ## the accepted values are identical to those of "filter_mode"
 ## leave unspecified to use same mode set in "filter_mode"
@@ -67,6 +71,10 @@
 
 ## number of context lines to show when scrolling by pages
 # scroll_context_lines = 1
+
+## use ctrl instead of alt as the shortcut modifier key for numerical UI shortcuts
+## alt-0 .. alt-9
+# ctrl_n_shortcuts = false
 
 ## prevent commands matching any of these regexes from being written to history.
 ## Note that these regular expressions are unanchored, i.e. if they don't start

@@ -16,10 +16,8 @@ _atuin_precmd() {
 }
 
 __atuin_history() {
-    tput rmkx
     # shellcheck disable=SC2048,SC2086
     HISTORY="$(RUST_LOG=error atuin search $* -i -- "${READLINE_LINE}" 3>&1 1>&2 2>&3)"
-    tput smkx
 
     READLINE_LINE=${HISTORY}
     READLINE_POINT=${#READLINE_LINE}

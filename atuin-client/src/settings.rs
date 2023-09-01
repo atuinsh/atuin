@@ -1,17 +1,22 @@
 use std::{
     io::prelude::*,
     path::{Path, PathBuf},
+    str::FromStr,
 };
 
+use atuin_common::record::HostId;
 use chrono::{prelude::*, Utc};
 use clap::ValueEnum;
-use config::{Config, Environment, File as ConfigFile, FileFormat};
+use config::{
+    builder::DefaultState, Config, ConfigBuilder, Environment, File as ConfigFile, FileFormat,
+};
 use eyre::{eyre, Context, Result};
 use fs_err::{create_dir_all, File};
 use parse_duration::parse;
 use regex::RegexSet;
 use semver::Version;
 use serde::Deserialize;
+use uuid::Uuid;
 
 pub const HISTORY_PAGE_SIZE: i64 = 100;
 pub const LAST_SYNC_FILENAME: &str = "last_sync_time";
@@ -69,6 +74,9 @@ pub enum FilterMode {
 
     #[serde(rename = "directory")]
     Directory = 3,
+
+    #[serde(rename = "workspace")]
+    Workspace = 4,
 }
 
 impl FilterMode {
@@ -78,6 +86,7 @@ impl FilterMode {
             FilterMode::Host => "HOST",
             FilterMode::Session => "SESSION",
             FilterMode::Directory => "DIRECTORY",
+            FilterMode::Workspace => "WORKSPACE",
         }
     }
 }
@@ -151,6 +160,7 @@ pub struct Settings {
     pub inline_height: u16,
     pub invert: bool,
     pub show_preview: bool,
+    pub max_preview_height: u16,
     pub show_help: bool,
     pub exit_mode: ExitMode,
     pub word_jump_mode: WordJumpMode,
@@ -160,6 +170,9 @@ pub struct Settings {
     pub history_filter: RegexSet,
     #[serde(with = "serde_regex", default = "RegexSet::empty")]
     pub cwd_filter: RegexSet,
+    pub secrets_filter: bool,
+    pub workspaces: bool,
+    pub ctrl_n_shortcuts: bool,
 
     // This is automatically loaded when settings is created. Do not set in
     // config! Keep secrets and settings apart.
@@ -228,11 +241,13 @@ impl Settings {
         Settings::load_time_from_file(LAST_VERSION_CHECK_FILENAME)
     }
 
-    pub fn host_id() -> Option<String> {
+    pub fn host_id() -> Option<HostId> {
         let id = Settings::read_from_data_dir(HOST_ID_FILENAME);
 
-        if id.is_some() {
-            return id;
+        if let Some(id) = id {
+            let parsed =
+                Uuid::from_str(id.as_str()).expect("failed to parse host ID from local directory");
+            return Some(HostId(parsed));
         }
 
         let uuid = atuin_common::utils::uuid_v7();
@@ -240,7 +255,7 @@ impl Settings {
         Settings::save_to_data_dir(HOST_ID_FILENAME, uuid.as_simple().to_string().as_ref())
             .expect("Could not write host ID to data dir");
 
-        Some(uuid.as_simple().to_string())
+        Some(HostId(uuid))
     }
 
     pub fn should_sync(&self) -> Result<bool> {
@@ -318,9 +333,53 @@ impl Settings {
         None
     }
 
+    pub fn builder() -> Result<ConfigBuilder<DefaultState>> {
+        let data_dir = atuin_common::utils::data_dir();
+        let db_path = data_dir.join("history.db");
+        let record_store_path = data_dir.join("records.db");
+
+        let key_path = data_dir.join("key");
+        let session_path = data_dir.join("session");
+
+        Ok(Config::builder()
+            .set_default("db_path", db_path.to_str())?
+            .set_default("record_store_path", record_store_path.to_str())?
+            .set_default("key_path", key_path.to_str())?
+            .set_default("session_path", session_path.to_str())?
+            .set_default("dialect", "us")?
+            .set_default("auto_sync", true)?
+            .set_default("update_check", true)?
+            .set_default("sync_address", "https://api.atuin.sh")?
+            .set_default("sync_frequency", "10m")?
+            .set_default("search_mode", "fuzzy")?
+            .set_default("filter_mode", "global")?
+            .set_default("style", "auto")?
+            .set_default("inline_height", 0)?
+            .set_default("show_preview", false)?
+            .set_default("max_preview_height", 4)?
+            .set_default("show_help", true)?
+            .set_default("invert", false)?
+            .set_default("exit_mode", "return-original")?
+            .set_default("word_jump_mode", "emacs")?
+            .set_default(
+                "word_chars",
+                "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+            )?
+            .set_default("scroll_context_lines", 1)?
+            .set_default("shell_up_key_binding", false)?
+            .set_default("session_token", "")?
+            .set_default("workspaces", false)?
+            .set_default("ctrl_n_shortcuts", false)?
+            .set_default("secrets_filter", true)?
+            .add_source(
+                Environment::with_prefix("atuin")
+                    .prefix_separator("_")
+                    .separator("__"),
+            ))
+    }
+
     pub fn new() -> Result<Self> {
         let config_dir = atuin_common::utils::config_dir();
-
         let data_dir = atuin_common::utils::data_dir();
 
         create_dir_all(&config_dir)
@@ -337,43 +396,7 @@ impl Settings {
 
         config_file.push("config.toml");
 
-        let db_path = data_dir.join("history.db");
-        let record_store_path = data_dir.join("records.db");
-
-        let key_path = data_dir.join("key");
-        let session_path = data_dir.join("session");
-
-        let mut config_builder = Config::builder()
-            .set_default("db_path", db_path.to_str())?
-            .set_default("record_store_path", record_store_path.to_str())?
-            .set_default("key_path", key_path.to_str())?
-            .set_default("session_path", session_path.to_str())?
-            .set_default("dialect", "us")?
-            .set_default("auto_sync", true)?
-            .set_default("update_check", true)?
-            .set_default("sync_address", "https://api.atuin.sh")?
-            .set_default("sync_frequency", "1h")?
-            .set_default("search_mode", "fuzzy")?
-            .set_default("filter_mode", "global")?
-            .set_default("style", "auto")?
-            .set_default("inline_height", 0)?
-            .set_default("show_preview", false)?
-            .set_default("show_help", true)?
-            .set_default("invert", false)?
-            .set_default("exit_mode", "return-original")?
-            .set_default("word_jump_mode", "emacs")?
-            .set_default(
-                "word_chars",
-                "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
-            )?
-            .set_default("scroll_context_lines", 1)?
-            .set_default("shell_up_key_binding", false)?
-            .set_default("session_token", "")?
-            .add_source(
-                Environment::with_prefix("atuin")
-                    .prefix_separator("_")
-                    .separator("__"),
-            );
+        let mut config_builder = Self::builder()?;
 
         config_builder = if config_file.exists() {
             config_builder.add_source(ConfigFile::new(
@@ -416,5 +439,18 @@ impl Settings {
         }
 
         Ok(settings)
+    }
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        // if this panics something is very wrong, as the default config
+        // does not build or deserialize into the settings struct
+        Self::builder()
+            .expect("Could not build default")
+            .build()
+            .expect("Could not build config")
+            .try_deserialize()
+            .expect("Could not deserialize config")
     }
 }

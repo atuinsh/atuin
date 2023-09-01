@@ -67,6 +67,7 @@ pub struct ErrorResponse<'a> {
 pub struct IndexResponse {
     pub homage: String,
     pub version: String,
+    pub total_history: i64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
