@@ -1,5 +1,5 @@
 use std::{
-    io::{self, stdout, Write},
+    io::{stdout, Write},
     time::Duration,
 };
 
@@ -73,7 +73,7 @@ impl State {
         w: &mut W,
     ) -> Result<Option<usize>>
     where
-        W: io::Write,
+        W: Write,
     {
         execute!(w, EnableMouseCapture)?;
         let r = match input {
@@ -653,7 +653,7 @@ pub async fn history(
             event_ready = event_ready => {
                 if event_ready?? {
                     loop {
-                        if let Some(i) = app.handle_input(settings, &event::read()?, &mut io::stdout())? {
+                        if let Some(i) = app.handle_input(settings, &event::read()?, &mut std::io::stdout())? {
                             break 'render i;
                         }
                         if !event::poll(Duration::ZERO)? {
