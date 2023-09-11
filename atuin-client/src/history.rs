@@ -215,35 +215,35 @@ mod tests {
         settings.history_filter = RegexSet::new(["^psql"]).unwrap();
 
         let normal_command: History = History::capture()
-            .timestamp(chrono::Utc::now())
+            .timestamp(time::OffsetDateTime::now_utc())
             .command("echo foo")
             .cwd("/")
             .build()
             .into();
 
         let with_space: History = History::capture()
-            .timestamp(chrono::Utc::now())
+            .timestamp(time::OffsetDateTime::now_utc())
             .command(" echo bar")
             .cwd("/")
             .build()
             .into();
 
         let stripe_key: History = History::capture()
-            .timestamp(chrono::Utc::now())
+            .timestamp(time::OffsetDateTime::now_utc())
             .command("curl foo.com/bar?key=sk_test_1234567890abcdefghijklmnop")
             .cwd("/")
             .build()
             .into();
 
         let secret_dir: History = History::capture()
-            .timestamp(chrono::Utc::now())
+            .timestamp(time::OffsetDateTime::now_utc())
             .command("echo ohno")
             .cwd("/supasecret")
             .build()
             .into();
 
         let with_psql: History = History::capture()
-            .timestamp(chrono::Utc::now())
+            .timestamp(time::OffsetDateTime::now_utc())
             .command("psql")
             .cwd("/supasecret")
             .build()
@@ -262,7 +262,7 @@ mod tests {
         settings.secrets_filter = false;
 
         let stripe_key: History = History::capture()
-            .timestamp(chrono::Utc::now())
+            .timestamp(time::OffsetDateTime::now_utc())
             .command("curl foo.com/bar?key=sk_test_1234567890abcdefghijklmnop")
             .cwd("/")
             .build()
