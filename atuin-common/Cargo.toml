@@ -1,8 +1,9 @@
 [package]
 name = "atuin-common"
-edition = "2018"
+edition = "2021"
 description = "common library for atuin"
 
+rust-version = { workspace = true }
 version = { workspace = true }
 authors = { workspace = true }
 license = { workspace = true }
@@ -12,7 +13,7 @@ repository = { workspace = true }
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-chrono = { workspace = true }
+time = { workspace = true }
 serde = { workspace = true }
 uuid = { workspace = true }
 rand = { workspace = true }

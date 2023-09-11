@@ -1,10 +1,10 @@
 [package]
 name = "atuin"
 edition = "2021"
-rust-version = "1.59"
 description = "atuin - magical shell history"
 readme = "./README.md"
 
+rust-version = { workspace = true }
 version = { workspace = true }
 authors = { workspace = true }
 license = { workspace = true }
@@ -46,7 +46,7 @@ atuin-common = { path = "../atuin-common", version = "16.0.0" }
 
 log = { workspace = true }
 env_logger = "0.10.0"
-chrono = { version = "0.4", features = ["serde"] }
+time = { workspace = true }
 eyre = { workspace = true }
 directories = { workspace = true }
 indicatif = "0.17.5"
