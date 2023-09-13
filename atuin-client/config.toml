@@ -47,6 +47,11 @@
 ## leave unspecified to use same mode set in "filter_mode"
 # filter_mode_shell_up_key_binding = "global"
 
+## which search mode to use when atuin is invoked from a shell up-key binding
+## the accepted values are identical to those of "search_mode"
+## leave unspecified to use same mode set in "search_mode"
+# search_mode_shell_up_key_binding = "fuzzy"
+
 ## which style to use
 ## possible values: auto, full, compact
 # style = "auto"
