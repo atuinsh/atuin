@@ -192,7 +192,11 @@ Defaults to `auto`.
 
 ### `invert`
 
-Invert the UI - put the search bar at the top
+Invert the UI - put the search bar at the top , Default to `false`
+
+```
+invert = true/false
+```
 
 ### `inline_height`
 
