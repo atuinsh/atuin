@@ -70,7 +70,7 @@ tiny-bip39 = "1"
 futures-util = "0.3"
 fuzzy-matcher = "0.3.7"
 colored = "2.0.4"
-ratatui = "0.22"
+ratatui = "0.23"
 tracing = "0.1"
 
 
