@@ -35,7 +35,7 @@ parse_duration = "2.1.1"
 async-trait = { workspace = true }
 itertools = { workspace = true }
 rand = { workspace = true }
-shellexpand = "2"
+shellexpand = "3"
 sqlx = { workspace = true, features = ["sqlite"] }
 minspan = "0.1.1"
 regex = "1.9.1"
