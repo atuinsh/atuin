@@ -29,7 +29,7 @@ axum = "0.6.4"
 http = "0.2"
 fs-err = { workspace = true }
 tower = "0.4"
-tower-http = { version = "0.3", features = ["trace"] }
+tower-http = { version = "0.4", features = ["trace"] }
 reqwest = { workspace = true }
 argon2 = "0.5.0"
 semver = { workspace = true }
