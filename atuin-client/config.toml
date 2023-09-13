@@ -55,6 +55,9 @@
 ## set it to 0 to always go full screen
 # inline_height = 0
 
+##Invert the UI - put the search bar at the top , Default to `false`
+# invert = false
+
 ## enable or disable showing a preview of the selected command
 ## useful when the command is longer than the terminal width and is cut off
 # show_preview = false
