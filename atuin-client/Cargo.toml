@@ -50,7 +50,7 @@ tokio = { workspace = true }
 semver = { workspace = true }
 futures = "0.3"
 crypto_secretbox = "0.1.1"
-generic-array = { version = "0.14", features = ["serde"] }
+generic-array = { version = "1.0", features = ["serde"] }
 
 # encryption
 rusty_paseto = { version = "0.5.0", default-features = false }
