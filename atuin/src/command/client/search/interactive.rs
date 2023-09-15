@@ -4,7 +4,10 @@ use std::{
 };
 
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers,
+        MouseEvent,
+    },
     execute, terminal,
 };
 use eyre::Result;
@@ -63,13 +66,24 @@ impl State {
         Ok(results)
     }
 
-    fn handle_input(&mut self, settings: &Settings, input: &Event) -> Option<usize> {
-        match input {
+    fn handle_input<W>(
+        &mut self,
+        settings: &Settings,
+        input: &Event,
+        w: &mut W,
+    ) -> Result<Option<usize>>
+    where
+        W: Write,
+    {
+        execute!(w, EnableMouseCapture)?;
+        let r = match input {
             Event::Key(k) => self.handle_key_input(settings, k),
             Event::Mouse(m) => self.handle_mouse_input(*m),
             Event::Paste(d) => self.handle_paste_input(d),
             _ => None,
-        }
+        };
+        execute!(w, DisableMouseCapture)?;
+        Ok(r)
     }
 
     fn handle_mouse_input(&mut self, input: MouseEvent) -> Option<usize> {
@@ -639,7 +653,7 @@ pub async fn history(
             event_ready = event_ready => {
                 if event_ready?? {
                     loop {
-                        if let Some(i) = app.handle_input(settings, &event::read()?) {
+                        if let Some(i) = app.handle_input(settings, &event::read()?, &mut std::io::stdout())? {
                             break 'render i;
                         }
                         if !event::poll(Duration::ZERO)? {

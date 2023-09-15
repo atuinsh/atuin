@@ -28,7 +28,9 @@ use atuin_common::api::*;
 
 pub fn verify_str(hash: &str, password: &str) -> bool {
     let arg2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, Params::default());
-    let Ok(hash) = PasswordHash::new(hash) else { return false };
+    let Ok(hash) = PasswordHash::new(hash) else {
+        return false;
+    };
     arg2.verify_password(password.as_bytes(), &hash).is_ok()
 }
 

@@ -1,10 +1,10 @@
 [package]
 name = "atuin"
 edition = "2021"
-rust-version = "1.59"
 description = "atuin - magical shell history"
 readme = "./README.md"
 
+rust-version = { workspace = true }
 version = { workspace = true }
 authors = { workspace = true }
 license = { workspace = true }
@@ -46,13 +46,13 @@ atuin-common = { path = "../atuin-common", version = "16.0.0" }
 
 log = { workspace = true }
 env_logger = "0.10.0"
-chrono = { version = "0.4", features = ["serde"] }
+time = { workspace = true }
 eyre = { workspace = true }
 directories = { workspace = true }
 indicatif = "0.17.5"
 serde = { workspace = true }
 serde_json = { workspace = true }
-crossterm = { version = "0.26", features = ["use-dev-tty"] }
+crossterm = { version = "0.27", features = ["use-dev-tty"] }
 unicode-width = "0.1"
 itertools = { workspace = true }
 tokio = { workspace = true }
@@ -70,7 +70,7 @@ tiny-bip39 = "1"
 futures-util = "0.3"
 fuzzy-matcher = "0.3.7"
 colored = "2.0.4"
-ratatui = "0.22"
+ratatui = "0.23"
 tracing = "0.1"
 
 

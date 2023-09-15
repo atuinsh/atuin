@@ -7,6 +7,7 @@ use ratatui::{
     style::{Color, Modifier, Style},
     widgets::{Block, StatefulWidget, Widget},
 };
+use time::OffsetDateTime;
 
 use super::format_duration;
 
@@ -151,8 +152,8 @@ impl DrawState<'_> {
         // would fail.
         // If the timestamp would otherwise be in the future, display
         // the time since as 0.
-        let since = chrono::Utc::now() - h.timestamp;
-        let time = format_duration(since.to_std().unwrap_or_default());
+        let since = OffsetDateTime::now_utc() - h.timestamp;
+        let time = format_duration(since.try_into().unwrap_or_default());
 
         // pad the time a little bit before we write. this aligns things nicely
         self.x = PREFIX_LENGTH - 4 - time.len() as u16;

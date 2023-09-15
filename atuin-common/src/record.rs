@@ -42,7 +42,7 @@ pub struct Record<Data> {
     pub parent: Option<RecordId>,
 
     /// The creation time in nanoseconds since unix epoch
-    #[builder(default = chrono::Utc::now().timestamp_nanos() as u64)]
+    #[builder(default = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as u64)]
     pub timestamp: u64,
 
     /// The version the data in the entry conforms to
