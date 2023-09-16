@@ -51,7 +51,7 @@ pub enum Cmd {
         #[arg(long)]
         cmd_only: bool,
 
-        /// Available variables: {command}, {directory}, {duration}, {user}, {host} and {time}.
+        /// Available variables: {command}, {directory}, {duration}, {user}, {host}, {exit} and {time}.
         /// Example: --format "{time} - [{duration}] - {directory}$\t{command}"
         #[arg(long, short)]
         format: Option<String>,
