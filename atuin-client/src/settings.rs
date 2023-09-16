@@ -155,6 +155,7 @@ pub struct Settings {
     pub key_path: String,
     pub session_path: String,
     pub search_mode: SearchMode,
+    pub search_mode_shell_up_key_binding: Option<SearchMode>,
     pub filter_mode: FilterMode,
     pub filter_mode_shell_up_key_binding: Option<FilterMode>,
     pub shell_up_key_binding: bool,

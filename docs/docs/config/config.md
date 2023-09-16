@@ -114,6 +114,18 @@ Prefix mode searches for "query\*"; fulltext mode searches for "\*query\*";
 
 Defaults to "fuzzy".
 
+### `search_mode_shell_up_key_binding`
+
+The default search mode to use when invoked from a shell up-key binding.
+
+Accepts exactly the same options as `search_mode` above
+
+```
+search_mode_shell_up_key_binding = "fuzzy"
+```
+
+Defaults to the value specified for search_mode.
+
 #### `fuzzy` search syntax
 
 The "fuzzy" search syntax is based on the
