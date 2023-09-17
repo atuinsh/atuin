@@ -614,13 +614,19 @@ pub async fn history(
     let context = current_context();
 
     let history_count = db.history_count().await?;
-
+    let search_mode = if settings.shell_up_key_binding {
+        settings
+            .search_mode_shell_up_key_binding
+            .unwrap_or(settings.search_mode)
+    } else {
+        settings.search_mode
+    };
     let mut app = State {
         history_count,
         results_state: ListState::default(),
         update_needed: None,
         switched_search_mode: false,
-        search_mode: settings.search_mode,
+        search_mode,
         search: SearchState {
             input,
             filter_mode: if settings.workspaces && context.git_root.is_some() {
@@ -634,7 +640,7 @@ pub async fn history(
             },
             context,
         },
-        engine: engines::engine(settings.search_mode),
+        engine: engines::engine(search_mode),
         results_len: 0,
     };
 

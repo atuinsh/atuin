@@ -157,6 +157,7 @@ pub struct Settings {
     pub search_mode: SearchMode,
     pub filter_mode: FilterMode,
     pub filter_mode_shell_up_key_binding: Option<FilterMode>,
+    pub search_mode_shell_up_key_binding: Option<SearchMode>,
     pub shell_up_key_binding: bool,
     pub inline_height: u16,
     pub invert: bool,
