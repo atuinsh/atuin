@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::env;
+use std::time::Duration;
 
 use eyre::{bail, Result};
 use reqwest::{
@@ -115,6 +116,8 @@ impl<'a> Client<'a> {
             client: reqwest::Client::builder()
                 .user_agent(APP_USER_AGENT)
                 .default_headers(headers)
+                .connect_timeout(Duration::new(5, 0))
+                .timeout(Duration::new(30, 0))
                 .build()?,
         })
     }
