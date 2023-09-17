@@ -8,7 +8,7 @@ Atuin does not yet have full key binding customization, though we do allow some 
 
 ## Custom up arrow filter mode
 
-It can be useful to use a different filter mode on the up arrow. For example, you could use ctrl-r for searching globally, but the up arrow for searching history from the current directory only.
+It can be useful to use a different filter or search mode on the up arrow. For example, you could use ctrl-r for searching globally, but the up arrow for searching history from the current directory only.
 
 Set your config like this:
 
