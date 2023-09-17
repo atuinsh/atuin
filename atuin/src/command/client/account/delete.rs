@@ -9,7 +9,12 @@ pub async fn run(settings: &Settings) -> Result<()> {
         bail!("You are not logged in");
     }
 
-    let client = api_client::Client::new(&settings.sync_address, &settings.session_token)?;
+    let client = api_client::Client::new(
+        &settings.sync_address,
+        &settings.session_token,
+        settings.network_connect_timeout,
+        settings.network_timeout,
+    )?;
 
     client.delete().await?;
 
