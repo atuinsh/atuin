@@ -626,7 +626,7 @@ pub async fn history(
         results_state: ListState::default(),
         update_needed: None,
         switched_search_mode: false,
-        search_mode: search_mode,
+        search_mode,
         search: SearchState {
             input,
             filter_mode: if settings.workspaces && context.git_root.is_some() {
