@@ -292,3 +292,16 @@ macOS does not have an <kbd>Alt</kbd> key, although terminal emulators can often
 # Use Ctrl-0 .. Ctrl-9 instead of Alt-0 .. Alt-9 UI shortcuts
 ctrl_n_shortcuts = true
 ```
+
+## network_timeout
+Default: 30
+
+The max amount of time (in seconds) to wait for a network request. If any
+operations with a sync server take longer than this, the code will fail -
+rather than wait indefinitely.
+
+## network_connect_timeout
+Default: 5
+
+The max time (in seconds) we wait for a connection to become established with a
+remote sync server. Any longer than this and the request will fail.

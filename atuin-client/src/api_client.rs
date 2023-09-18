@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::env;
+use std::time::Duration;
 
 use eyre::{bail, Result};
 use reqwest::{
@@ -106,7 +107,12 @@ pub async fn latest_version() -> Result<Version> {
 }
 
 impl<'a> Client<'a> {
-    pub fn new(sync_addr: &'a str, session_token: &'a str) -> Result<Self> {
+    pub fn new(
+        sync_addr: &'a str,
+        session_token: &'a str,
+        connect_timeout: u64,
+        timeout: u64,
+    ) -> Result<Self> {
         let mut headers = HeaderMap::new();
         headers.insert(AUTHORIZATION, format!("Token {session_token}").parse()?);
 
@@ -115,6 +121,8 @@ impl<'a> Client<'a> {
             client: reqwest::Client::builder()
                 .user_agent(APP_USER_AGENT)
                 .default_headers(headers)
+                .connect_timeout(Duration::new(connect_timeout, 0))
+                .timeout(Duration::new(timeout, 0))
                 .build()?,
         })
     }

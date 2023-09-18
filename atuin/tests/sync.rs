@@ -77,7 +77,7 @@ async fn registration() {
         .await
         .unwrap();
 
-    let client = api_client::Client::new(&address, &registration_response.session).unwrap();
+    let client = api_client::Client::new(&address, &registration_response.session, 5, 30).unwrap();
 
     // the session token works
     let status = client.status().await.unwrap();
