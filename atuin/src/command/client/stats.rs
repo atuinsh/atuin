@@ -419,4 +419,12 @@ mod tests {
             ["foo ", " bar baz \\| quux"]
         );
     }
+
+    #[test]
+    fn emoji() {
+        assert_eq!(
+            split_at_pipe("git commit -m \"🚀\""),
+            ["git commit -m \"🚀\""]
+        );
+    }
 }
