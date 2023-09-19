@@ -12,6 +12,7 @@ mod sync;
 #[cfg(feature = "sync")]
 mod account;
 
+mod config;
 mod history;
 mod import;
 mod kv;
@@ -44,6 +45,10 @@ pub enum Cmd {
 
     #[command(subcommand)]
     Kv(kv::Cmd),
+
+    /// Print example configuration
+    #[command()]
+    Config,
 }
 
 impl Cmd {
@@ -75,6 +80,11 @@ impl Cmd {
             Self::Account(account) => account.run(settings).await,
 
             Self::Kv(kv) => kv.run(&settings, &mut store).await,
+
+            Self::Config => {
+                config::run();
+                Ok(())
+            }
         }
     }
 }

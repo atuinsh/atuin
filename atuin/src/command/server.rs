@@ -4,7 +4,7 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 use clap::Parser;
 use eyre::{Context, Result};
 
-use atuin_server::{launch, Settings};
+use atuin_server::{example_config, launch, Settings};
 
 #[derive(Parser)]
 #[clap(infer_subcommands = true)]
@@ -19,6 +19,9 @@ pub enum Cmd {
         #[clap(long, short)]
         port: Option<u16>,
     },
+
+    /// Print server example configuration
+    Config,
 }
 
 impl Cmd {
@@ -29,16 +32,19 @@ impl Cmd {
             .with(EnvFilter::from_default_env())
             .init();
 
-        let settings = Settings::new().wrap_err("could not load server settings")?;
-
         match self {
             Self::Start { host, port } => {
+                let settings = Settings::new().wrap_err("could not load server settings")?;
                 let host = host
                     .as_ref()
                     .map_or(settings.host.clone(), std::string::ToString::to_string);
                 let port = port.map_or(settings.port, |p| p);
 
                 launch::<Postgres>(settings, host, port).await
+            }
+            Self::Config => {
+                println!("{}", example_config());
+                Ok(())
             }
         }
     }

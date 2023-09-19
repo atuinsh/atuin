@@ -5,6 +5,8 @@ use eyre::{eyre, Result};
 use fs_err::{create_dir_all, File};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
+static EXAMPLE_CONFIG: &str = include_str!("../server.toml");
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Settings<DbSettings> {
     pub host: String,
@@ -56,10 +58,9 @@ impl<DbSettings: DeserializeOwned> Settings<DbSettings> {
                 FileFormat::Toml,
             ))
         } else {
-            let example_config = include_bytes!("../server.toml");
             create_dir_all(config_file.parent().unwrap())?;
             let mut file = File::create(config_file)?;
-            file.write_all(example_config)?;
+            file.write_all(EXAMPLE_CONFIG.as_bytes())?;
 
             config_builder
         };
@@ -70,4 +71,8 @@ impl<DbSettings: DeserializeOwned> Settings<DbSettings> {
             .try_deserialize()
             .map_err(|e| eyre!("failed to deserialize: {}", e))
     }
+}
+
+pub fn example_config() -> &'static str {
+    EXAMPLE_CONFIG
 }

@@ -24,6 +24,7 @@ pub const LAST_SYNC_FILENAME: &str = "last_sync_time";
 pub const LAST_VERSION_CHECK_FILENAME: &str = "last_version_check_time";
 pub const LATEST_VERSION_FILENAME: &str = "latest_version";
 pub const HOST_ID_FILENAME: &str = "host_id";
+static EXAMPLE_CONFIG: &str = include_str!("../config.toml");
 
 #[derive(Clone, Debug, Deserialize, Copy, ValueEnum, PartialEq)]
 pub enum SearchMode {
@@ -410,9 +411,8 @@ impl Settings {
                 FileFormat::Toml,
             ))
         } else {
-            let example_config = include_bytes!("../config.toml");
             let mut file = File::create(config_file).wrap_err("could not create config file")?;
-            file.write_all(example_config)
+            file.write_all(EXAMPLE_CONFIG.as_bytes())
                 .wrap_err("could not write default config file")?;
 
             config_builder
@@ -445,6 +445,10 @@ impl Settings {
         }
 
         Ok(settings)
+    }
+
+    pub fn example_config() -> &'static str {
+        EXAMPLE_CONFIG
     }
 }
 
