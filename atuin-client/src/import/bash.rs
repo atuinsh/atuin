@@ -1,4 +1,4 @@
-use std::{fs::File, io::Read, path::PathBuf, str};
+use std::{path::PathBuf, str};
 
 use async_trait::async_trait;
 use directories::UserDirs;
@@ -8,6 +8,7 @@ use time::{Duration, OffsetDateTime};
 
 use super::{get_histpath, unix_byte_lines, Importer, Loader};
 use crate::history::History;
+use crate::import::read_to_end;
 
 #[derive(Debug)]
 pub struct Bash {
@@ -26,10 +27,7 @@ impl Importer for Bash {
     const NAME: &'static str = "bash";
 
     async fn new() -> Result<Self> {
-        let mut bytes = Vec::new();
-        let path = get_histpath(default_histpath)?;
-        let mut f = File::open(path)?;
-        f.read_to_end(&mut bytes)?;
+        let bytes = read_to_end(get_histpath(default_histpath)?)?;
         Ok(Self { bytes })
     }
 

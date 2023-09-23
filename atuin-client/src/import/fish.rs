@@ -1,7 +1,7 @@
 // import old shell history!
 // automatically hoover up all that we can find
 
-use std::{fs::File, io::Read, path::PathBuf};
+use std::path::PathBuf;
 
 use async_trait::async_trait;
 use directories::BaseDirs;
@@ -10,6 +10,7 @@ use time::OffsetDateTime;
 
 use super::{unix_byte_lines, Importer, Loader};
 use crate::history::History;
+use crate::import::read_to_end;
 
 #[derive(Debug)]
 pub struct Fish {
@@ -48,9 +49,7 @@ impl Importer for Fish {
     const NAME: &'static str = "fish";
 
     async fn new() -> Result<Self> {
-        let mut bytes = Vec::new();
-        let mut f = File::open(default_histpath()?)?;
-        f.read_to_end(&mut bytes)?;
+        let bytes = read_to_end(default_histpath()?)?;
         Ok(Self { bytes })
     }
 
