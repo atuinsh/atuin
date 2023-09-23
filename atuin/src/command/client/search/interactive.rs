@@ -35,6 +35,7 @@ use ratatui::{
 
 const RETURN_ORIGINAL: usize = usize::MAX;
 const RETURN_QUERY: usize = usize::MAX - 1;
+const COPY_QUERY: usize = usize::MAX - 2;
 
 struct State {
     history_count: i64,
@@ -117,6 +118,9 @@ impl State {
             }
             KeyCode::Enter => {
                 return Some(self.results_state.selected());
+            }
+            KeyCode::Char('y') if ctrl => {
+                return Some(COPY_QUERY);
             }
             KeyCode::Char(c @ '1'..='9') if modfr => {
                 let c = c.to_digit(10)? as usize;
@@ -669,6 +673,10 @@ pub async fn history(
         // index is in bounds so we return that entry
         Ok(results.swap_remove(index).command)
     } else if index == RETURN_ORIGINAL {
+        Ok(String::new())
+    } else if index == COPY_QUERY {
+        let cmd = results.swap_remove(app.results_state.selected()).command;
+        cli_clipboard::set_contents(cmd).unwrap();
         Ok(String::new())
     } else {
         // Either:
