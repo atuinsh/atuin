@@ -4,7 +4,12 @@ use colored::Colorize;
 use eyre::Result;
 
 pub async fn run(settings: &Settings, db: &impl Database) -> Result<()> {
-    let client = api_client::Client::new(&settings.sync_address, &settings.session_token)?;
+    let client = api_client::Client::new(
+        &settings.sync_address,
+        &settings.session_token,
+        settings.network_connect_timeout,
+        settings.network_timeout,
+    )?;
 
     let status = client.status().await?;
     let last_sync = Settings::last_sync()?;

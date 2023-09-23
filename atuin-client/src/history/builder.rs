@@ -1,4 +1,3 @@
-use chrono::Utc;
 use typed_builder::TypedBuilder;
 
 use super::History;
@@ -8,7 +7,7 @@ use super::History;
 /// The only two required fields are `timestamp` and `command`.
 #[derive(Debug, Clone, TypedBuilder)]
 pub struct HistoryImported {
-    timestamp: chrono::DateTime<Utc>,
+    timestamp: time::OffsetDateTime,
     #[builder(setter(into))]
     command: String,
     #[builder(default = "unknown".into(), setter(into))]
@@ -45,7 +44,7 @@ impl From<HistoryImported> for History {
 /// the command is finished, such as `exit` or `duration`.
 #[derive(Debug, Clone, TypedBuilder)]
 pub struct HistoryCaptured {
-    timestamp: chrono::DateTime<Utc>,
+    timestamp: time::OffsetDateTime,
     #[builder(setter(into))]
     command: String,
     #[builder(setter(into))]
@@ -73,14 +72,14 @@ impl From<HistoryCaptured> for History {
 #[derive(Debug, Clone, TypedBuilder)]
 pub struct HistoryFromDb {
     id: String,
-    timestamp: chrono::DateTime<Utc>,
+    timestamp: time::OffsetDateTime,
     command: String,
     cwd: String,
     exit: i64,
     duration: i64,
     session: String,
     hostname: String,
-    deleted_at: Option<chrono::DateTime<Utc>>,
+    deleted_at: Option<time::OffsetDateTime>,
 }
 
 impl From<HistoryFromDb> for History {

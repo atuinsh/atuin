@@ -1,11 +1,10 @@
 use std::env;
 
-use chrono::Utc;
-
 use atuin_common::utils::uuid_v7;
 use regex::RegexSet;
 
 use crate::{secrets::SECRET_PATTERNS, settings::Settings};
+use time::OffsetDateTime;
 
 mod builder;
 
@@ -29,7 +28,7 @@ pub struct History {
     /// Stored as `client_id` in the database.
     pub id: String,
     /// When the command was run.
-    pub timestamp: chrono::DateTime<Utc>,
+    pub timestamp: OffsetDateTime,
     /// How long the command took to run.
     pub duration: i64,
     /// The exit code of the command.
@@ -43,20 +42,20 @@ pub struct History {
     /// The hostname of the machine the command was run on.
     pub hostname: String,
     /// Timestamp, which is set when the entry is deleted, allowing a soft delete.
-    pub deleted_at: Option<chrono::DateTime<Utc>>,
+    pub deleted_at: Option<OffsetDateTime>,
 }
 
 impl History {
     #[allow(clippy::too_many_arguments)]
     fn new(
-        timestamp: chrono::DateTime<Utc>,
+        timestamp: OffsetDateTime,
         command: String,
         cwd: String,
         exit: i64,
         duration: i64,
         session: Option<String>,
         hostname: Option<String>,
-        deleted_at: Option<chrono::DateTime<Utc>>,
+        deleted_at: Option<OffsetDateTime>,
     ) -> Self {
         let session = session
             .or_else(|| env::var("ATUIN_SESSION").ok())
@@ -91,7 +90,7 @@ impl History {
     /// use atuin_client::history::History;
     ///
     /// let history: History = History::import()
-    ///     .timestamp(chrono::Utc::now())
+    ///     .timestamp(time::OffsetDateTime::now_utc())
     ///     .command("ls -la")
     ///     .build()
     ///     .into();
@@ -102,7 +101,7 @@ impl History {
     /// use atuin_client::history::History;
     ///
     /// let history: History = History::import()
-    ///     .timestamp(chrono::Utc::now())
+    ///     .timestamp(time::OffsetDateTime::now_utc())
     ///     .command("ls -la")
     ///     .cwd("/home/user")
     ///     .exit(0)
@@ -138,7 +137,7 @@ impl History {
     /// use atuin_client::history::History;
     ///
     /// let history: History = History::capture()
-    ///     .timestamp(chrono::Utc::now())
+    ///     .timestamp(time::OffsetDateTime::now_utc())
     ///     .command("ls -la")
     ///     .cwd("/home/user")
     ///     .build()
@@ -152,7 +151,7 @@ impl History {
     ///
     /// // this will not compile because `cwd` is missing
     /// let history: History = History::capture()
-    ///     .timestamp(chrono::Utc::now())
+    ///     .timestamp(time::OffsetDateTime::now_utc())
     ///     .command("ls -la")
     ///     .build()
     ///     .into();
@@ -170,7 +169,7 @@ impl History {
     ///
     /// // this will not compile because `id` field is missing
     /// let history: History = History::from_db()
-    ///     .timestamp(chrono::Utc::now())
+    ///     .timestamp(time::OffsetDateTime::now_utc())
     ///     .command("ls -la".to_string())
     ///     .cwd("/home/user".to_string())
     ///     .exit(0)
@@ -216,35 +215,35 @@ mod tests {
         settings.history_filter = RegexSet::new(["^psql"]).unwrap();
 
         let normal_command: History = History::capture()
-            .timestamp(chrono::Utc::now())
+            .timestamp(time::OffsetDateTime::now_utc())
             .command("echo foo")
             .cwd("/")
             .build()
             .into();
 
         let with_space: History = History::capture()
-            .timestamp(chrono::Utc::now())
+            .timestamp(time::OffsetDateTime::now_utc())
             .command(" echo bar")
             .cwd("/")
             .build()
             .into();
 
         let stripe_key: History = History::capture()
-            .timestamp(chrono::Utc::now())
+            .timestamp(time::OffsetDateTime::now_utc())
             .command("curl foo.com/bar?key=sk_test_1234567890abcdefghijklmnop")
             .cwd("/")
             .build()
             .into();
 
         let secret_dir: History = History::capture()
-            .timestamp(chrono::Utc::now())
+            .timestamp(time::OffsetDateTime::now_utc())
             .command("echo ohno")
             .cwd("/supasecret")
             .build()
             .into();
 
         let with_psql: History = History::capture()
-            .timestamp(chrono::Utc::now())
+            .timestamp(time::OffsetDateTime::now_utc())
             .command("psql")
             .cwd("/supasecret")
             .build()
@@ -263,7 +262,7 @@ mod tests {
         settings.secrets_filter = false;
 
         let stripe_key: History = History::capture()
-            .timestamp(chrono::Utc::now())
+            .timestamp(time::OffsetDateTime::now_utc())
             .command("curl foo.com/bar?key=sk_test_1234567890abcdefghijklmnop")
             .cwd("/")
             .build()

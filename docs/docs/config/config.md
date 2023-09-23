@@ -154,6 +154,18 @@ Filter modes can still be toggled via ctrl-r
 filter_mode = "host"
 ```
 
+### `search_mode_shell_up_key_binding`
+
+The default searchmode to use when searching and being invoked from a shell up-key binding.
+
+Accepts exactly the same options as `search_mode` above
+
+```
+search_mode_shell_up_key_binding = "fuzzy"
+```
+
+Defaults to the value specified for search_mode.
+
 ### `filter_mode_shell_up_key_binding`
 
 The default filter to use when searching and being invoked from a shell up-key binding.
@@ -192,7 +204,11 @@ Defaults to `auto`.
 
 ### `invert`
 
-Invert the UI - put the search bar at the top
+Invert the UI - put the search bar at the top , Default to `false`
+
+```
+invert = true/false
+```
 
 ### `inline_height`
 
@@ -276,3 +292,16 @@ macOS does not have an <kbd>Alt</kbd> key, although terminal emulators can often
 # Use Ctrl-0 .. Ctrl-9 instead of Alt-0 .. Alt-9 UI shortcuts
 ctrl_n_shortcuts = true
 ```
+
+## network_timeout
+Default: 30
+
+The max amount of time (in seconds) to wait for a network request. If any
+operations with a sync server take longer than this, the code will fail -
+rather than wait indefinitely.
+
+## network_connect_timeout
+Default: 5
+
+The max time (in seconds) we wait for a connection to become established with a
+remote sync server. Any longer than this and the request will fail.

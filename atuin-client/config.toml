@@ -47,6 +47,11 @@
 ## leave unspecified to use same mode set in "filter_mode"
 # filter_mode_shell_up_key_binding = "global"
 
+## which search mode to use when atuin is invoked from a shell up-key binding
+## the accepted values are identical to those of "search_mode"
+## leave unspecified to use same mode set in "search_mode"
+# search_mode_shell_up_key_binding = "fuzzy"
+
 ## which style to use
 ## possible values: auto, full, compact
 # style = "auto"
@@ -54,6 +59,9 @@
 ## the maximum number of lines the interface should take up
 ## set it to 0 to always go full screen
 # inline_height = 0
+
+##Invert the UI - put the search bar at the top , Default to `false`
+# invert = false
 
 ## enable or disable showing a preview of the selected command
 ## useful when the command is longer than the terminal width and is cut off

@@ -4,7 +4,10 @@ use std::{
 };
 
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers,
+        MouseEvent,
+    },
     execute, terminal,
 };
 use eyre::Result;
@@ -64,13 +67,24 @@ impl State {
         Ok(results)
     }
 
-    fn handle_input(&mut self, settings: &Settings, input: &Event) -> Option<usize> {
-        match input {
+    fn handle_input<W>(
+        &mut self,
+        settings: &Settings,
+        input: &Event,
+        w: &mut W,
+    ) -> Result<Option<usize>>
+    where
+        W: Write,
+    {
+        execute!(w, EnableMouseCapture)?;
+        let r = match input {
             Event::Key(k) => self.handle_key_input(settings, k),
             Event::Mouse(m) => self.handle_mouse_input(*m),
             Event::Paste(d) => self.handle_paste_input(d),
             _ => None,
-        }
+        };
+        execute!(w, DisableMouseCapture)?;
+        Ok(r)
     }
 
     fn handle_mouse_input(&mut self, input: MouseEvent) -> Option<usize> {
@@ -604,13 +618,19 @@ pub async fn history(
     let context = current_context();
 
     let history_count = db.history_count().await?;
-
+    let search_mode = if settings.shell_up_key_binding {
+        settings
+            .search_mode_shell_up_key_binding
+            .unwrap_or(settings.search_mode)
+    } else {
+        settings.search_mode
+    };
     let mut app = State {
         history_count,
         results_state: ListState::default(),
         update_needed: None,
         switched_search_mode: false,
-        search_mode: settings.search_mode,
+        search_mode,
         search: SearchState {
             input,
             filter_mode: if settings.workspaces && context.git_root.is_some() {
@@ -624,7 +644,7 @@ pub async fn history(
             },
             context,
         },
-        engine: engines::engine(settings.search_mode),
+        engine: engines::engine(search_mode),
         results_len: 0,
     };
 
@@ -643,7 +663,7 @@ pub async fn history(
             event_ready = event_ready => {
                 if event_ready?? {
                     loop {
-                        if let Some(i) = app.handle_input(settings, &event::read()?) {
+                        if let Some(i) = app.handle_input(settings, &event::read()?, &mut std::io::stdout())? {
                             break 'render i;
                         }
                         if !event::poll(Duration::ZERO)? {
