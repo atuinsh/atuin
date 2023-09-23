@@ -72,6 +72,7 @@ fuzzy-matcher = "0.3.7"
 colored = "2.0.4"
 ratatui = "0.22"
 tracing = "0.1"
+cli-clipboard = "0.4.0"
 
 
 [dependencies.tracing-subscriber]
