@@ -181,9 +181,19 @@ impl<'a> Client<'a> {
 
         let resp = self.client.get(url).send().await?;
 
-        let history = resp.json::<SyncHistoryResponse>().await?;
-
-        Ok(history)
+        let status = resp.status();
+        if status.is_success() {
+            let history = resp.json::<SyncHistoryResponse>().await?;
+            Ok(history)
+        } else if status.is_client_error() {
+            let error = resp.json::<ErrorResponse>().await?.reason;
+            bail!("Could not fetch history: {error}.")
+        } else if status.is_server_error() {
+            let error = resp.json::<ErrorResponse>().await?.reason;
+            bail!("There was an error with the atuin sync service: {error}.\nIf the problem persists, contact the host")
+        } else {
+            bail!("There was an error with the atuin sync service: Status {status:?}.\nIf the problem persists, contact the host")
+        }
     }
 
     pub async fn post_history(&self, history: &[AddHistoryRequest]) -> Result<()> {

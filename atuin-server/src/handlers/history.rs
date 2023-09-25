@@ -63,10 +63,6 @@ pub async fn list<DB: Database>(
         100
     };
 
-    let history = db
-        .list_history(&user, req.sync_ts, req.history_ts, &req.host, page_size)
-        .await;
-
     if req.sync_ts.unix_timestamp_nanos() < 0 || req.history_ts.unix_timestamp_nanos() < 0 {
         error!("client asked for history from < epoch 0");
         return Err(
@@ -74,6 +70,10 @@ pub async fn list<DB: Database>(
                 .with_status(StatusCode::BAD_REQUEST),
         );
     }
+
+    let history = db
+        .list_history(&user, req.sync_ts, req.history_ts, &req.host, page_size)
+        .await;
 
     if let Err(e) = history {
         error!("failed to load history: {}", e);
