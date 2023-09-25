@@ -31,7 +31,7 @@ fs-err = "2.9"
 interim = { version = "0.1.0", features = ["time"] }
 itertools = "0.11.0"
 rand = { version = "0.8.5", features = ["std"] }
-semver = "1.0.14"
+semver = "1.0.19"
 # https://github.com/serde-rs/serde/issues/2538
 # I don't trust dtolnay with our user's builds. especially as we
 # have things like encryption keys
