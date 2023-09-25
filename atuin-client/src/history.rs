@@ -210,9 +210,11 @@ mod tests {
     // Test that we don't save history where necessary
     #[test]
     fn privacy_test() {
-        let mut settings = Settings::default();
-        settings.cwd_filter = RegexSet::new(["^/supasecret"]).unwrap();
-        settings.history_filter = RegexSet::new(["^psql"]).unwrap();
+        let settings = Settings {
+            cwd_filter: RegexSet::new(["^/supasecret"]).unwrap(),
+            history_filter: RegexSet::new(["^psql"]).unwrap(),
+            ..Settings::default()
+        };
 
         let normal_command: History = History::capture()
             .timestamp(time::OffsetDateTime::now_utc())
@@ -258,8 +260,10 @@ mod tests {
 
     #[test]
     fn disable_secrets() {
-        let mut settings = Settings::default();
-        settings.secrets_filter = false;
+        let settings = Settings {
+            secrets_filter: false,
+            ..Settings::default()
+        };
 
         let stripe_key: History = History::capture()
             .timestamp(time::OffsetDateTime::now_utc())
