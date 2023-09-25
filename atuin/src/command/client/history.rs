@@ -287,7 +287,7 @@ impl Cmd {
             None
         };
 
-        let history = match (session, cwd) {
+        let mut history = match (session, cwd) {
             (None, None) => db.list(settings.filter_mode, &context, None, false).await?,
             (None, Some(cwd)) => {
                 let query = format!("select * from history where cwd = '{cwd}';");
@@ -305,13 +305,10 @@ impl Cmd {
             }
         };
 
-        print_list(&history, mode, format.as_deref());
-
         if reverse {
-            let mut history = history;
             history.reverse();
-            print_list(&history, mode, format.as_deref());
         }
+        print_list(&history, mode, format.as_deref());
 
         Ok(())
     }
