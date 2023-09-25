@@ -51,6 +51,9 @@ pub enum Cmd {
         #[arg(long)]
         cmd_only: bool,
 
+        #[arg(long, short, default_value = "false")]
+        reverse: bool,
+
         /// Available variables: {command}, {directory}, {duration}, {user}, {host}, {exit} and {time}.
         /// Example: --format "{time} - [{duration}] - {directory}$\t{command}"
         #[arg(long, short)]
@@ -271,6 +274,7 @@ impl Cmd {
         cwd: bool,
         mode: ListMode,
         format: Option<String>,
+        reverse: bool,
     ) -> Result<()> {
         let session = if session {
             Some(env::var("ATUIN_SESSION")?)
@@ -303,6 +307,12 @@ impl Cmd {
 
         print_list(&history, mode, format.as_deref());
 
+        if reverse {
+            let mut history = history;
+            history.reverse();
+            print_list(&history, mode, format.as_deref());
+        }
+
         Ok(())
     }
 
@@ -317,10 +327,12 @@ impl Cmd {
                 cwd,
                 human,
                 cmd_only,
+                reverse,
                 format,
             } => {
                 let mode = ListMode::from_flags(human, cmd_only);
-                Self::handle_list(db, settings, context, session, cwd, mode, format).await
+                let reverse = reverse;
+                Self::handle_list(db, settings, context, session, cwd, mode, format, reverse).await
             }
 
             Self::Last {
