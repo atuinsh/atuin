@@ -109,7 +109,7 @@ async fn sync_download(
     for i in remote_status.deleted {
         // we will update the stored history to have this data
         // pretty much everything can be nullified
-        if let Ok(h) = db.load(i.as_str()).await {
+        if let Some(h) = db.load(i.as_str()).await? {
             db.delete(h).await?;
         } else {
             info!(
