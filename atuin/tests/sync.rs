@@ -20,7 +20,7 @@ async fn start_server(path: &str) -> (String, oneshot::Sender<()>, JoinHandle<()
 
     let dispatch: Dispatch = tracing_subscriber::registry()
         .with(formatting_layer)
-        .with(EnvFilter::new("atuin_server=debug,info"))
+        .with(EnvFilter::new("atuin_server=debug,atuin_client=debug,info"))
         .into();
 
     let db_uri = env::var("ATUIN_DB_URI")
