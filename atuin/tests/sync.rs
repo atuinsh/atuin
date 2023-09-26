@@ -1,10 +1,11 @@
 use std::{env, net::TcpListener, time::Duration};
 
 use atuin_client::api_client;
-use atuin_common::utils::uuid_v7;
+use atuin_common::{api::AddHistoryRequest, utils::uuid_v7};
 use atuin_server::{launch_with_listener, Settings as ServerSettings};
 use atuin_server_postgres::{Postgres, PostgresSettings};
 use futures_util::TryFutureExt;
+use time::OffsetDateTime;
 use tokio::{sync::oneshot, task::JoinHandle};
 use tracing::{dispatcher, Dispatch};
 use tracing_subscriber::{layer::SubscriberExt, EnvFilter};
@@ -62,37 +63,103 @@ async fn start_server(path: &str) -> (String, oneshot::Sender<()>, JoinHandle<()
     (format!("http://{addr}{path}"), shutdown_tx, server)
 }
 
+async fn register_inner<'a>(
+    address: &'a str,
+    username: &str,
+    password: &str,
+) -> api_client::Client<'a> {
+    let email = format!("{}@example.com", uuid_v7().as_simple());
+
+    // registration works
+    let registration_response = api_client::register(address, username, &email, password)
+        .await
+        .unwrap();
+
+    api_client::Client::new(address, &registration_response.session, 5, 30).unwrap()
+}
+
+async fn login(address: &str, username: String, password: String) -> api_client::Client<'_> {
+    // registration works
+    let login_respose = api_client::login(
+        address,
+        atuin_common::api::LoginRequest { username, password },
+    )
+    .await
+    .unwrap();
+
+    api_client::Client::new(address, &login_respose.session, 5, 30).unwrap()
+}
+
+async fn register(address: &str) -> api_client::Client<'_> {
+    let username = uuid_v7().as_simple().to_string();
+    let password = uuid_v7().as_simple().to_string();
+    register_inner(address, &username, &password).await
+}
+
 #[tokio::test]
 async fn registration() {
     let path = format!("/{}", uuid_v7().as_simple());
     let (address, shutdown, server) = start_server(&path).await;
     dbg!(&address);
 
+    // -- REGISTRATION --
+
     let username = uuid_v7().as_simple().to_string();
-    let email = format!("{}@example.com", uuid_v7().as_simple());
     let password = uuid_v7().as_simple().to_string();
-
-    // registration works
-    let registration_response = api_client::register(&address, &username, &email, &password)
-        .await
-        .unwrap();
-
-    let client = api_client::Client::new(&address, &registration_response.session, 5, 30).unwrap();
+    let client = register_inner(&address, &username, &password).await;
 
     // the session token works
     let status = client.status().await.unwrap();
     assert_eq!(status.username, username);
 
-    // login works
-    let login_response = api_client::login(
-        &address,
-        atuin_common::api::LoginRequest { username, password },
-    )
-    .await
-    .unwrap();
+    // -- LOGIN --
 
-    // currently we return the same session token
-    assert_eq!(registration_response.session, login_response.session);
+    let client = login(&address, username.clone(), password).await;
+
+    // the session token works
+    let status = client.status().await.unwrap();
+    assert_eq!(status.username, username);
+
+    shutdown.send(()).unwrap();
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn sync() {
+    let path = format!("/{}", uuid_v7().as_simple());
+    let (address, shutdown, server) = start_server(&path).await;
+
+    let client = register(&address).await;
+    let hostname = uuid_v7().as_simple().to_string();
+    let now = OffsetDateTime::now_utc();
+
+    let data1 = uuid_v7().as_simple().to_string();
+    let data2 = uuid_v7().as_simple().to_string();
+
+    client
+        .post_history(&[
+            AddHistoryRequest {
+                id: uuid_v7().as_simple().to_string(),
+                timestamp: now,
+                data: data1.clone(),
+                hostname: hostname.clone(),
+            },
+            AddHistoryRequest {
+                id: uuid_v7().as_simple().to_string(),
+                timestamp: now,
+                data: data2.clone(),
+                hostname: hostname.clone(),
+            },
+        ])
+        .await
+        .unwrap();
+
+    let history = client
+        .get_history(OffsetDateTime::UNIX_EPOCH, OffsetDateTime::UNIX_EPOCH, None)
+        .await
+        .unwrap();
+
+    assert_eq!(history.history, vec![data1, data2]);
 
     shutdown.send(()).unwrap();
     server.await.unwrap();
