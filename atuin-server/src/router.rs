@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use atuin_common::api::ErrorResponse;
 use axum::{
     extract::FromRequestParts,
     response::IntoResponse,
@@ -11,8 +12,11 @@ use tower::ServiceBuilder;
 use tower_http::trace::TraceLayer;
 
 use super::handlers;
-use crate::settings::Settings;
-use atuin_server_database::{models::User, Database};
+use crate::{
+    handlers::{ErrorResponseStatus, RespExt},
+    settings::Settings,
+};
+use atuin_server_database::{models::User, Database, DbError};
 
 pub struct UserAuth(pub User);
 
@@ -21,7 +25,7 @@ impl<DB: Send + Sync> FromRequestParts<AppState<DB>> for UserAuth
 where
     DB: Database,
 {
-    type Rejection = http::StatusCode;
+    type Rejection = ErrorResponseStatus<'static>;
 
     async fn from_request_parts(
         req: &mut Parts,
@@ -30,23 +34,39 @@ where
         let auth_header = req
             .headers
             .get(http::header::AUTHORIZATION)
-            .ok_or(http::StatusCode::FORBIDDEN)?;
-        let auth_header = auth_header
-            .to_str()
-            .map_err(|_| http::StatusCode::FORBIDDEN)?;
-        let (typ, token) = auth_header
-            .split_once(' ')
-            .ok_or(http::StatusCode::FORBIDDEN)?;
+            .ok_or_else(|| {
+                ErrorResponse::reply("missing authorization header")
+                    .with_status(http::StatusCode::BAD_REQUEST)
+            })?;
+        let auth_header = auth_header.to_str().map_err(|_| {
+            ErrorResponse::reply("invalid authorization header encoding")
+                .with_status(http::StatusCode::BAD_REQUEST)
+        })?;
+        let (typ, token) = auth_header.split_once(' ').ok_or_else(|| {
+            ErrorResponse::reply("invalid authorization header encoding")
+                .with_status(http::StatusCode::BAD_REQUEST)
+        })?;
 
         if typ != "Token" {
-            return Err(http::StatusCode::FORBIDDEN);
+            return Err(
+                ErrorResponse::reply("invalid authorization header encoding")
+                    .with_status(http::StatusCode::BAD_REQUEST),
+            );
         }
 
         let user = state
             .database
             .get_session_user(token)
             .await
-            .map_err(|_| http::StatusCode::FORBIDDEN)?;
+            .map_err(|e| match e {
+                DbError::NotFound => ErrorResponse::reply("session not found")
+                    .with_status(http::StatusCode::FORBIDDEN),
+                DbError::Other(e) => {
+                    tracing::error!(error = ?e, "could not query user session");
+                    ErrorResponse::reply("could not query user session")
+                        .with_status(http::StatusCode::INTERNAL_SERVER_ERROR)
+                }
+            })?;
 
         Ok(UserAuth(user))
     }
