@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::Row;
 
-use time::{OffsetDateTime, PrimitiveDateTime};
+use time::{OffsetDateTime, PrimitiveDateTime, UtcOffset};
 use tracing::instrument;
 use wrappers::{DbHistory, DbRecord, DbSession, DbUser};
 
@@ -215,8 +215,8 @@ impl Database for Postgres {
         )
         .bind(user.id)
         .bind(host)
-        .bind(created_after)
-        .bind(since)
+        .bind(into_utc(created_after))
+        .bind(into_utc(since))
         .bind(page_size)
         .fetch(&self.pool)
         .map_ok(|DbHistory(h)| h)
@@ -449,4 +449,9 @@ impl Database for Postgres {
 
         Ok(res)
     }
+}
+
+fn into_utc(x: OffsetDateTime) -> PrimitiveDateTime {
+    let x = x.to_offset(UtcOffset::UTC);
+    PrimitiveDateTime::new(x.date(), x.time())
 }

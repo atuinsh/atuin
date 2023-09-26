@@ -2,6 +2,7 @@ use ::sqlx::{FromRow, Result};
 use atuin_common::record::{EncryptedData, Record};
 use atuin_server_database::models::{History, Session, User};
 use sqlx::{postgres::PgRow, Row};
+use time::PrimitiveDateTime;
 
 pub struct DbUser(pub User);
 pub struct DbSession(pub Session);
@@ -36,9 +37,13 @@ impl<'a> ::sqlx::FromRow<'a, PgRow> for DbHistory {
             client_id: row.try_get("client_id")?,
             user_id: row.try_get("user_id")?,
             hostname: row.try_get("hostname")?,
-            timestamp: row.try_get("timestamp")?,
+            timestamp: row
+                .try_get::<PrimitiveDateTime, _>("timestamp")?
+                .assume_utc(),
             data: row.try_get("data")?,
-            created_at: row.try_get("created_at")?,
+            created_at: row
+                .try_get::<PrimitiveDateTime, _>("created_at")?
+                .assume_utc(),
         }))
     }
 }
