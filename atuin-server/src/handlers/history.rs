@@ -6,7 +6,7 @@ use axum::{
     Json,
 };
 use http::StatusCode;
-use time::Month;
+use time::{Month, UtcOffset};
 use tracing::{debug, error, instrument};
 
 use super::{ErrorResponse, ErrorResponseStatus, RespExt};
@@ -166,53 +166,65 @@ pub async fn add<DB: Database>(
     Ok(())
 }
 
+#[derive(serde::Deserialize, Debug)]
+pub struct CalendarQuery {
+    #[serde(default = "serde_calendar::zero")]
+    year: i32,
+    #[serde(default = "serde_calendar::one")]
+    month: u8,
+
+    #[serde(default = "serde_calendar::utc")]
+    tz: UtcOffset,
+}
+
+mod serde_calendar {
+    use time::UtcOffset;
+
+    pub fn zero() -> i32 {
+        0
+    }
+
+    pub fn one() -> u8 {
+        1
+    }
+
+    pub fn utc() -> UtcOffset {
+        UtcOffset::UTC
+    }
+}
+
 #[instrument(skip_all, fields(user.id = user.id))]
 pub async fn calendar<DB: Database>(
     Path(focus): Path<String>,
-    Query(params): Query<HashMap<String, u64>>,
+    Query(params): Query<CalendarQuery>,
     UserAuth(user): UserAuth,
     state: State<AppState<DB>>,
 ) -> Result<Json<HashMap<u64, TimePeriodInfo>>, ErrorResponseStatus<'static>> {
     let focus = focus.as_str();
 
-    let year = params.get("year").unwrap_or(&0);
-    let month = params.get("month").unwrap_or(&1);
-    let month = Month::try_from(*month as u8).map_err(|e| ErrorResponseStatus {
+    let year = params.year;
+    let month = Month::try_from(params.month).map_err(|e| ErrorResponseStatus {
         error: ErrorResponse {
             reason: e.to_string().into(),
         },
         status: http::StatusCode::BAD_REQUEST,
     })?;
 
+    let period = match focus {
+        "year" => TimePeriod::Year,
+        "month" => TimePeriod::Month { year },
+        "day" => TimePeriod::Day { year, month },
+        _ => {
+            return Err(ErrorResponse::reply("invalid focus: use year/month/day")
+                .with_status(StatusCode::BAD_REQUEST))
+        }
+    };
+
     let db = &state.0.database;
-    let focus = match focus {
-        "year" => db
-            .calendar(&user, TimePeriod::YEAR, *year, month)
-            .await
-            .map_err(|_| {
-                ErrorResponse::reply("failed to query calendar")
-                    .with_status(StatusCode::INTERNAL_SERVER_ERROR)
-            }),
-
-        "month" => db
-            .calendar(&user, TimePeriod::MONTH, *year, month)
-            .await
-            .map_err(|_| {
-                ErrorResponse::reply("failed to query calendar")
-                    .with_status(StatusCode::INTERNAL_SERVER_ERROR)
-            }),
-
-        "day" => db
-            .calendar(&user, TimePeriod::DAY, *year, month)
-            .await
-            .map_err(|_| {
-                ErrorResponse::reply("failed to query calendar")
-                    .with_status(StatusCode::INTERNAL_SERVER_ERROR)
-            }),
-
-        _ => Err(ErrorResponse::reply("invalid focus: use year/month/day")
-            .with_status(StatusCode::BAD_REQUEST)),
-    }?;
+    let focus = db.calendar(&user, period, params.tz).await.map_err(|_| {
+        ErrorResponse::reply("failed to query calendar")
+            .with_status(StatusCode::INTERNAL_SERVER_ERROR)
+    })?;
 
     Ok(Json(focus))
 }
