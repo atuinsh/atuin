@@ -455,3 +455,25 @@ fn into_utc(x: OffsetDateTime) -> PrimitiveDateTime {
     let x = x.to_offset(UtcOffset::UTC);
     PrimitiveDateTime::new(x.date(), x.time())
 }
+
+#[cfg(test)]
+mod tests {
+    use time::macros::datetime;
+
+    use crate::into_utc;
+
+    #[test]
+    fn utc() {
+        let dt = datetime!(2023-09-26 15:11:02 +05:30);
+        assert_eq!(into_utc(dt), datetime!(2023-09-26 09:41:02));
+        assert_eq!(into_utc(dt).assume_utc(), dt);
+
+        let dt = datetime!(2023-09-26 15:11:02 -07:00);
+        assert_eq!(into_utc(dt), datetime!(2023-09-26 22:11:02));
+        assert_eq!(into_utc(dt).assume_utc(), dt);
+
+        let dt = datetime!(2023-09-26 15:11:02 +00:00);
+        assert_eq!(into_utc(dt), datetime!(2023-09-26 15:11:02));
+        assert_eq!(into_utc(dt).assume_utc(), dt);
+    }
+}
