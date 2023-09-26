@@ -18,7 +18,7 @@ use atuin_client::{
 
 #[cfg(feature = "sync")]
 use atuin_client::sync;
-use log::debug;
+use log::{debug, warn};
 use time::{macros::format_description, OffsetDateTime};
 
 use super::search::format_duration_into;
@@ -233,7 +233,10 @@ impl Cmd {
             return Ok(());
         }
 
-        let mut h = db.load(id).await?;
+        let Some(mut h) = db.load(id).await? else {
+            warn!("history entry is missing");
+            return Ok(());
+        };
 
         if h.duration > 0 {
             debug!("cannot end history - already has duration");
@@ -329,8 +332,9 @@ impl Cmd {
                 format,
             } => {
                 let last = db.last().await?;
+                let last = last.as_ref().map(std::slice::from_ref).unwrap_or_default();
                 print_list(
-                    &[last],
+                    last,
                     ListMode::from_flags(human, cmd_only),
                     format.as_deref(),
                 );

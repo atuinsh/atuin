@@ -73,7 +73,7 @@ pub trait Database: Send + Sync + 'static {
     async fn save(&mut self, h: &History) -> Result<()>;
     async fn save_bulk(&mut self, h: &[History]) -> Result<()>;
 
-    async fn load(&self, id: &str) -> Result<History>;
+    async fn load(&self, id: &str) -> Result<Option<History>>;
     async fn list(
         &self,
         filter: FilterMode,
@@ -86,8 +86,7 @@ pub trait Database: Send + Sync + 'static {
     async fn update(&self, h: &History) -> Result<()>;
     async fn history_count(&self) -> Result<i64>;
 
-    async fn first(&self) -> Result<History>;
-    async fn last(&self) -> Result<History>;
+    async fn last(&self) -> Result<Option<History>>;
     async fn before(&self, timestamp: OffsetDateTime, count: i64) -> Result<Vec<History>>;
 
     async fn delete(&self, mut h: History) -> Result<()>;
@@ -216,13 +215,13 @@ impl Database for Sqlite {
         Ok(())
     }
 
-    async fn load(&self, id: &str) -> Result<History> {
+    async fn load(&self, id: &str) -> Result<Option<History>> {
         debug!("loading history item {}", id);
 
         let res = sqlx::query("select * from history where id = ?1")
             .bind(id)
             .map(Self::query_history)
-            .fetch_one(&self.pool)
+            .fetch_optional(&self.pool)
             .await?;
 
         Ok(res)
@@ -308,22 +307,12 @@ impl Database for Sqlite {
         Ok(res)
     }
 
-    async fn first(&self) -> Result<History> {
-        let res =
-            sqlx::query("select * from history where duration >= 0 order by timestamp asc limit 1")
-                .map(Self::query_history)
-                .fetch_one(&self.pool)
-                .await?;
-
-        Ok(res)
-    }
-
-    async fn last(&self) -> Result<History> {
+    async fn last(&self) -> Result<Option<History>> {
         let res = sqlx::query(
             "select * from history where duration >= 0 order by timestamp desc limit 1",
         )
         .map(Self::query_history)
-        .fetch_one(&self.pool)
+        .fetch_optional(&self.pool)
         .await?;
 
         Ok(res)
