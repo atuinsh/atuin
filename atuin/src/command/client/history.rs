@@ -13,14 +13,13 @@ use runtime_format::{FormatKey, FormatKeyError, ParseSegment, ParsedFmt};
 use atuin_client::{
     database::{current_context, Database},
     history::History,
-    settings::Settings
+    settings::Settings,
 };
 
 #[cfg(feature = "sync")]
 use atuin_client::sync;
 use log::debug;
 use time::{macros::format_description, OffsetDateTime};
-
 
 use super::search::format_duration_into;
 
@@ -117,7 +116,7 @@ pub fn print_list(h: &[History], list_mode: ListMode, format: Option<&str>, reve
         ListMode::CmdOnly => std::iter::once(ParseSegment::Key("command")).collect(),
     };
 
-    let iterator= if reverse {
+    let iterator = if reverse {
         Box::new(h.iter().rev()) as Box<dyn Iterator<Item = &History>>
     } else {
         Box::new(h.iter()) as Box<dyn Iterator<Item = &History>>
@@ -347,7 +346,7 @@ impl Cmd {
                     &[last],
                     ListMode::from_flags(human, cmd_only),
                     format.as_deref(),
-                    true
+                    true,
                 );
 
                 Ok(())
