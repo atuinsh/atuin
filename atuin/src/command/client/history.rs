@@ -51,7 +51,7 @@ pub enum Cmd {
         #[arg(long)]
         cmd_only: bool,
 
-        #[arg(long, short, default_value = "false")]
+        #[arg(long, short, default_value = "true")]
         reverse: bool,
 
         /// Available variables: {command}, {directory}, {duration}, {user}, {host}, {exit} and {time}.
