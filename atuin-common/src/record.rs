@@ -182,21 +182,29 @@ impl RecordIndex {
 }
 
 pub trait Encryption {
+    type EncryptionKey;
+    type DecryptionKey;
+
     fn re_encrypt(
         data: EncryptedData,
         ad: AdditionalData,
-        old_key: &[u8; 32],
-        new_key: &[u8; 32],
+        old_key: &Self::DecryptionKey,
+        new_key: &Self::EncryptionKey,
     ) -> Result<EncryptedData> {
         let data = Self::decrypt(data, ad, old_key)?;
         Ok(Self::encrypt(data, ad, new_key))
     }
-    fn encrypt(data: DecryptedData, ad: AdditionalData, key: &[u8; 32]) -> EncryptedData;
-    fn decrypt(data: EncryptedData, ad: AdditionalData, key: &[u8; 32]) -> Result<DecryptedData>;
+    fn encrypt(data: DecryptedData, ad: AdditionalData, key: &Self::EncryptionKey)
+        -> EncryptedData;
+    fn decrypt(
+        data: EncryptedData,
+        ad: AdditionalData,
+        key: &Self::DecryptionKey,
+    ) -> Result<DecryptedData>;
 }
 
 impl Record<DecryptedData> {
-    pub fn encrypt<E: Encryption>(self, key: &[u8; 32]) -> Record<EncryptedData> {
+    pub fn encrypt<E: Encryption>(self, key: &E::EncryptionKey) -> Record<EncryptedData> {
         let ad = AdditionalData {
             id: &self.id,
             version: &self.version,
@@ -217,7 +225,7 @@ impl Record<DecryptedData> {
 }
 
 impl Record<EncryptedData> {
-    pub fn decrypt<E: Encryption>(self, key: &[u8; 32]) -> Result<Record<DecryptedData>> {
+    pub fn decrypt<E: Encryption>(self, key: &E::DecryptionKey) -> Result<Record<DecryptedData>> {
         let ad = AdditionalData {
             id: &self.id,
             version: &self.version,
@@ -238,8 +246,8 @@ impl Record<EncryptedData> {
 
     pub fn re_encrypt<E: Encryption>(
         self,
-        old_key: &[u8; 32],
-        new_key: &[u8; 32],
+        old_key: &E::DecryptionKey,
+        new_key: &E::EncryptionKey,
     ) -> Result<Record<EncryptedData>> {
         let ad = AdditionalData {
             id: &self.id,

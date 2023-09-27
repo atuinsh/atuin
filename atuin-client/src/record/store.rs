@@ -8,7 +8,7 @@ use atuin_common::record::{EncryptedData, HostId, Record, RecordId, RecordIndex}
 /// As is, the record store is intended as the source of truth for arbitratry data, which could
 /// be shell history, kvs, etc.
 #[async_trait]
-pub trait Store {
+pub trait Store: Send + Sync {
     // Push a record
     async fn push(&self, record: &Record<EncryptedData>) -> Result<()> {
         self.push_batch(std::iter::once(record)).await

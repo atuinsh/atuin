@@ -1,3 +1,5 @@
+use std::marker::PhantomData;
+
 use atuin_common::record::{
     AdditionalData, DecryptedData, EncryptedData, Encryption, HostId, RecordId,
 };
@@ -11,7 +13,11 @@ use serde::{Deserialize, Serialize};
 
 /// Use PASETO V4 Local encryption using the additional data as an implicit assertion.
 #[allow(non_camel_case_types)]
-pub struct PASETO_V4;
+pub struct PASETO_V4_ENVELOPE<KE>(PhantomData<KE>);
+
+/// Use PASETO V4 Local encryption using the additional data as an implicit assertion.
+#[allow(non_camel_case_types)]
+pub type PASETO_V4 = PASETO_V4_ENVELOPE<Wrap>;
 
 /*
 Why do we use a random content-encryption key?
@@ -51,19 +57,22 @@ will need the HSM. This allows the encryption path to still be extremely fast (n
 that happens in the background can make the network calls to the HSM
 */
 
-impl Encryption for PASETO_V4 {
+impl<KE: KeyEncapsulation> Encryption for PASETO_V4_ENVELOPE<KE> {
+    type DecryptionKey = KE::DecryptionKey;
+    type EncryptionKey = KE::EncryptionKey;
+
     fn re_encrypt(
         mut data: EncryptedData,
         _ad: AdditionalData,
-        old_key: &[u8; 32],
-        new_key: &[u8; 32],
+        old_key: &KE::DecryptionKey,
+        new_key: &KE::EncryptionKey,
     ) -> Result<EncryptedData> {
-        let cek = Self::decrypt_cek(data.content_encryption_key, old_key)?;
-        data.content_encryption_key = Self::encrypt_cek(cek, new_key);
+        let cek = KE::decrypt_cek(data.content_encryption_key, old_key)?;
+        data.content_encryption_key = KE::encrypt_cek(cek, new_key);
         Ok(data)
     }
 
-    fn encrypt(data: DecryptedData, ad: AdditionalData, key: &[u8; 32]) -> EncryptedData {
+    fn encrypt(data: DecryptedData, ad: AdditionalData, key: &KE::EncryptionKey) -> EncryptedData {
         // generate a random key for this entry
         // aka content-encryption-key (CEK)
         let random_key = Key::<V4, Local>::new_os_random();
@@ -87,13 +96,17 @@ impl Encryption for PASETO_V4 {
 
         EncryptedData {
             data: token,
-            content_encryption_key: Self::encrypt_cek(random_key, key),
+            content_encryption_key: KE::encrypt_cek(random_key, key),
         }
     }
 
-    fn decrypt(data: EncryptedData, ad: AdditionalData, key: &[u8; 32]) -> Result<DecryptedData> {
+    fn decrypt(
+        data: EncryptedData,
+        ad: AdditionalData,
+        key: &KE::DecryptionKey,
+    ) -> Result<DecryptedData> {
         let token = data.data;
-        let cek = Self::decrypt_cek(data.content_encryption_key, key)?;
+        let cek = KE::decrypt_cek(data.content_encryption_key, key)?;
 
         // encode the implicit assertions
         let assertions = Assertions::from(ad).encode();
@@ -113,7 +126,20 @@ impl Encryption for PASETO_V4 {
     }
 }
 
-impl PASETO_V4 {
+pub trait KeyEncapsulation {
+    type DecryptionKey;
+    type EncryptionKey;
+
+    fn decrypt_cek(wrapped_cek: String, key: &Self::DecryptionKey) -> Result<Key<V4, Local>>;
+    fn encrypt_cek(cek: Key<V4, Local>, key: &Self::EncryptionKey) -> String;
+}
+
+pub struct Wrap;
+
+impl KeyEncapsulation for Wrap {
+    type DecryptionKey = [u8; 32];
+    type EncryptionKey = [u8; 32];
+
     fn decrypt_cek(wrapped_cek: String, key: &[u8; 32]) -> Result<Key<V4, Local>> {
         let wrapping_key = Key::<V4, Local>::from_bytes(*key);
 

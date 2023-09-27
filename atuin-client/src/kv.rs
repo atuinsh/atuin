@@ -1,13 +1,17 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::{Mutex, OnceLock};
 
 use atuin_common::record::{DecryptedData, HostId};
-use eyre::{bail, ensure, eyre, Result};
-use serde::Deserialize;
+use eyre::{bail, ensure, eyre, ContextCompat, Result};
+use rusty_paserk::{Key, KeyId, Public, Secret, V4};
 
 use crate::record::encryption::PASETO_V4;
+use crate::record::key_mgmt;
+use crate::record::key_mgmt::key::KeyStore;
+use crate::record::key_mgmt::paseto_seal::PASETO_V4_SEAL;
 use crate::record::store::Store;
 
-const KV_VERSION: &str = "v0";
+const KV_VERSION: &str = "v1";
 const KV_TAG: &str = "kv";
 const KV_VAL_MAX_LEN: usize = 100 * 1024;
 
@@ -42,7 +46,7 @@ impl KvRecord {
         }
 
         match version {
-            KV_VERSION => {
+            "v0" | "v1" => {
                 let mut bytes = decode::Bytes::new(&data.0);
 
                 let nfields = decode::read_array_len(&mut bytes).map_err(error_report)?;
@@ -72,8 +76,11 @@ impl KvRecord {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct KvStore;
+pub struct KvStore {
+    key_store: KeyStore,
+    v1_public_key: OnceLock<Key<V4, Public>>,
+    v1_secret_keys: Mutex<HashMap<KeyId<V4, Public>, Key<V4, Secret>>>,
+}
 
 impl Default for KvStore {
     fn default() -> Self {
@@ -84,7 +91,12 @@ impl Default for KvStore {
 impl KvStore {
     // will want to init the actual kv store when that is done
     pub fn new() -> KvStore {
-        KvStore {}
+        let key_store = KeyStore::new("atuin-kv");
+        KvStore {
+            key_store,
+            v1_public_key: OnceLock::new(),
+            v1_secret_keys: Mutex::new(HashMap::new()),
+        }
     }
 
     pub async fn set(
@@ -121,11 +133,25 @@ impl KvStore {
             .data(bytes)
             .build();
 
-        store
-            .push(&record.encrypt::<PASETO_V4>(encryption_key))
-            .await?;
+        let key = self
+            .key_store
+            .get_encryption_key(store)
+            .await?
+            .context("no key")?;
+
+        store.push(&record.encrypt::<PASETO_V4_SEAL>(&key)).await?;
 
         Ok(())
+    }
+
+    fn get_v1_decryption_key(
+        &self,
+        store: &impl Store,
+        id: KeyId<V4, Public>,
+    ) -> Result<Option<Key<V4, Secret>>> {
+        // self.v1_secret_keys.lock().unwrap().get()
+
+        todo!()
     }
 
     // TODO: setup an actual kv store, rebuild func, and do not pass the main store in here as
@@ -156,7 +182,17 @@ impl KvStore {
 
         loop {
             let decrypted = match record.version.as_str() {
-                KV_VERSION => record.decrypt::<PASETO_V4>(encryption_key)?,
+                "v0" => record.decrypt::<PASETO_V4>(encryption_key)?,
+                "v1" => {
+                    let id = serde_json::from_str::<key_mgmt::paseto_seal::AtuinFooter>(
+                        &record.data.content_encryption_key,
+                    )?
+                    .kid;
+                    let key = self
+                        .get_v1_decryption_key(store, id)?
+                        .context("missing key")?;
+                    record.decrypt::<PASETO_V4_SEAL>(&key)?
+                }
                 version => bail!("unknown version {version:?}"),
             };
 
