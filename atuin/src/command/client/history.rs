@@ -13,13 +13,14 @@ use runtime_format::{FormatKey, FormatKeyError, ParseSegment, ParsedFmt};
 use atuin_client::{
     database::{current_context, Database},
     history::History,
-    settings::Settings,
+    settings::Settings
 };
 
 #[cfg(feature = "sync")]
 use atuin_client::sync;
 use log::debug;
 use time::{macros::format_description, OffsetDateTime};
+
 
 use super::search::format_duration_into;
 
@@ -96,7 +97,7 @@ impl ListMode {
 }
 
 #[allow(clippy::cast_sign_loss)]
-pub fn print_list(h: &[History], list_mode: ListMode, format: Option<&str>) {
+pub fn print_list(h: &[History], list_mode: ListMode, format: Option<&str>, reverse: bool) {
     let w = std::io::stdout();
     let mut w = w.lock();
 
@@ -116,7 +117,13 @@ pub fn print_list(h: &[History], list_mode: ListMode, format: Option<&str>) {
         ListMode::CmdOnly => std::iter::once(ParseSegment::Key("command")).collect(),
     };
 
-    for h in h.iter().rev() {
+    let iterator= if reverse {
+        Box::new(h.iter().rev()) as Box<dyn Iterator<Item = &History>>
+    } else {
+        Box::new(h.iter()) as Box<dyn Iterator<Item = &History>>
+    };
+
+    for h in iterator {
         match writeln!(w, "{}", parsed_fmt.with_args(&FmtHistory(h))) {
             Ok(()) => {}
             // ignore broken pipe (issue #626)
@@ -266,6 +273,7 @@ impl Cmd {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn handle_list(
         db: &mut impl Database,
         settings: &Settings,
@@ -287,7 +295,7 @@ impl Cmd {
             None
         };
 
-        let mut history = match (session, cwd) {
+        let history = match (session, cwd) {
             (None, None) => db.list(settings.filter_mode, &context, None, false).await?,
             (None, Some(cwd)) => {
                 let query = format!("select * from history where cwd = '{cwd}';");
@@ -305,10 +313,7 @@ impl Cmd {
             }
         };
 
-        if reverse {
-            history.reverse();
-        }
-        print_list(&history, mode, format.as_deref());
+        print_list(&history, mode, format.as_deref(), reverse);
 
         Ok(())
     }
@@ -342,6 +347,7 @@ impl Cmd {
                     &[last],
                     ListMode::from_flags(human, cmd_only),
                     format.as_deref(),
+                    true
                 );
 
                 Ok(())
