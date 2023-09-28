@@ -14,7 +14,7 @@ use atuin_client::{
     },
 };
 
-#[derive(Parser)]
+#[derive(Parser, Debug)]
 #[command(infer_subcommands = true)]
 pub enum Cmd {
     /// Import history for the current shell

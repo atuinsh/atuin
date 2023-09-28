@@ -12,7 +12,7 @@ use atuin_client::{
 use atuin_common::api::LoginRequest;
 use rpassword::prompt_password;
 
-#[derive(Parser)]
+#[derive(Parser, Debug)]
 pub struct Cmd {
     #[clap(long, short)]
     pub username: Option<String>,

@@ -23,7 +23,7 @@ use time::{macros::format_description, OffsetDateTime};
 
 use super::search::format_duration_into;
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Debug)]
 #[command(infer_subcommands = true)]
 pub enum Cmd {
     /// Begins a new command in the history

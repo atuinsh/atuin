@@ -18,7 +18,7 @@ mod kv;
 mod search;
 mod stats;
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Debug)]
 #[command(infer_subcommands = true)]
 pub enum Cmd {
     /// Manipulate shell history
@@ -53,6 +53,8 @@ impl Cmd {
             .filter_level(log::LevelFilter::Off)
             .parse_env("ATUIN_LOG")
             .init();
+
+        tracing::trace!(command = ?self, "client command");
 
         let mut settings = Settings::new().wrap_err("could not load client settings")?;
 

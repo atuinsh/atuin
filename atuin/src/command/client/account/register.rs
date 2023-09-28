@@ -4,7 +4,7 @@ use tokio::{fs::File, io::AsyncWriteExt};
 
 use atuin_client::{api_client, settings::Settings};
 
-#[derive(Parser)]
+#[derive(Parser, Debug)]
 pub struct Cmd {
     #[clap(long, short)]
     pub username: Option<String>,

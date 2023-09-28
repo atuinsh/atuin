@@ -19,16 +19,17 @@ let _atuin_pre_prompt = {||
     if 'ATUIN_HISTORY_ID' not-in $env {
         return
     }
-    with-env { RUST_LOG: error } {
+    with-env { ATUIN_LOG: error } {
         atuin history end $'--exit=($last_exit)' -- $env.ATUIN_HISTORY_ID | null
     }
+    $env.ATUIN_HISTORY_ID = ""
 }
 
 def _atuin_search_cmd [...flags: string] {
     [
         $ATUIN_KEYBINDING_TOKEN,
         ([
-            `commandline (RUST_LOG=error run-external --redirect-stderr atuin search`,
+            `commandline (ATUIN_LOG=error run-external --redirect-stderr atuin search`,
             ($flags | append [--interactive, --] | each {|e| $'"($e)"'}),
             `(commandline) | complete | $in.stderr | str substring ..-1)`,
         ] | flatten | str join ' '),

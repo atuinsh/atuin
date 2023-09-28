@@ -11,7 +11,7 @@ mod status;
 
 use crate::command::client::account;
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Debug)]
 #[command(infer_subcommands = true)]
 pub enum Cmd {
     /// Sync with the configured server

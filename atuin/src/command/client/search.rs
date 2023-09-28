@@ -19,7 +19,7 @@ mod interactive;
 pub use duration::{format_duration, format_duration_into};
 
 #[allow(clippy::struct_excessive_bools)]
-#[derive(Parser)]
+#[derive(Parser, Debug)]
 pub struct Cmd {
     /// Filter search result by directory
     #[arg(long, short)]

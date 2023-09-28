@@ -12,7 +12,7 @@ use atuin_client::{
 };
 use time::{Duration, OffsetDateTime, Time};
 
-#[derive(Parser)]
+#[derive(Parser, Debug)]
 #[command(infer_subcommands = true)]
 pub struct Cmd {
     /// compute statistics for the specified period, leave blank for statistics since the beginning
