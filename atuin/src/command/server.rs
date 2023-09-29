@@ -21,7 +21,7 @@ pub enum Cmd {
     },
 
     /// Print server example configuration
-    Config,
+    DefaultConfig,
 }
 
 impl Cmd {
@@ -42,7 +42,7 @@ impl Cmd {
 
                 launch::<Postgres>(settings, host, port).await
             }
-            Self::Config => {
+            Self::DefaultConfig => {
                 println!("{}", example_config());
                 Ok(())
             }

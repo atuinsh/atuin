@@ -48,7 +48,7 @@ pub enum Cmd {
 
     /// Print example configuration
     #[command()]
-    Config,
+    DefaultConfig,
 }
 
 impl Cmd {
@@ -81,7 +81,7 @@ impl Cmd {
 
             Self::Kv(kv) => kv.run(&settings, &mut store).await,
 
-            Self::Config => {
+            Self::DefaultConfig => {
                 config::run();
                 Ok(())
             }
