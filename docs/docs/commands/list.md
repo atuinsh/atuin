@@ -13,7 +13,6 @@ title: Listing History
 | `--cmd-only`        | Show only the text of the command (default: false)                            |
 | `--reverse`      | Reverse the order of the output (default: false)                              |
 | `--format`          | Specify the formatting of a command (see below)                               |
-| `--include-deleted` | Include deleted entries (default: false)                                      |
 
 ## Format
 

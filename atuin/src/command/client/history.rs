@@ -51,10 +51,6 @@ pub enum Cmd {
         #[arg(long)]
         cmd_only: bool,
 
-        /// explicitely include deleted
-        #[arg(long)]
-        include_deleted: bool,
-
         #[arg(long, short, default_value = "true")]
         // accept no value
         #[arg(num_args(0..=1), default_missing_value("true"))]
@@ -346,7 +342,6 @@ impl Cmd {
                 cmd_only,
                 reverse,
                 format,
-                include_deleted,
             } => {
                 let mode = ListMode::from_flags(human, cmd_only);
                 Self::handle_list(
@@ -357,7 +352,7 @@ impl Cmd {
                     cwd,
                     mode,
                     format,
-                    include_deleted,
+                    false,
                     reverse,
                 )
                 .await
