@@ -52,6 +52,10 @@ pub enum Cmd {
         cmd_only: bool,
 
         #[arg(long, short, default_value = "true")]
+        // accept no value
+        #[arg(num_args(0..=1), default_missing_value("true"))]
+        // accept a value
+        #[arg(action = clap::ArgAction::Set)]
         reverse: bool,
 
         /// Available variables: {command}, {directory}, {duration}, {user}, {host}, {exit} and {time}.
