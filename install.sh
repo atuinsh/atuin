@@ -44,7 +44,10 @@ __atuin_install_arch(){
 		sudo pacman -S atuin
 	else
 		echo "Attempting AUR install"
-		if command -v yaourt &> /dev/null; then
+		if command -v paru &> /dev/null; then
+			echo "Found paru"
+			paru -S atuin
+		elif command -v yaourt &> /dev/null; then
 			echo "Found yaourt"
 			yaourt -S atuin
 		elif command -v yay &> /dev/null; then

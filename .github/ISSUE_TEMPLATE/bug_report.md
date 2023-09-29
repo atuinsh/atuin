@@ -1,6 +1,6 @@
 ---
 name: Bug report
-about: Create a report to help us improve
+about: Unless you are absolutely certain this is a bug, please open a post on the support forum first.
 title: ''
 labels: bug
 assignees: ''

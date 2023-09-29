@@ -37,7 +37,8 @@ rustPlatform.buildRustPackage {
 
   # Additional flags passed to the cargo test binary, see `cargo test -- --help`
   checkFlags = [
-    # Registration tests require a postgres server
+    # Sync tests require a postgres server
+    "--skip=sync"
     "--skip=registration"
   ];
 
