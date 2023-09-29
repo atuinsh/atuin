@@ -51,6 +51,10 @@ pub enum Cmd {
         #[arg(long)]
         cmd_only: bool,
 
+        /// Terminate the output with a null, for better multiline support
+        #[arg(long)]
+        print0: bool,
+
         #[arg(long, short, default_value = "true")]
         // accept no value
         #[arg(num_args(0..=1), default_missing_value("true"))]
@@ -100,7 +104,13 @@ impl ListMode {
 }
 
 #[allow(clippy::cast_sign_loss)]
-pub fn print_list(h: &[History], list_mode: ListMode, format: Option<&str>, reverse: bool) {
+pub fn print_list(
+    h: &[History],
+    list_mode: ListMode,
+    format: Option<&str>,
+    print0: bool,
+    reverse: bool,
+) {
     let w = std::io::stdout();
     let mut w = w.lock();
 
@@ -126,8 +136,16 @@ pub fn print_list(h: &[History], list_mode: ListMode, format: Option<&str>, reve
         Box::new(h.iter()) as Box<dyn Iterator<Item = &History>>
     };
 
+    let entry_terminator = if print0 { "\0" } else { "\n" };
+    let flush_each_line = print0;
+
     for h in iterator {
-        match writeln!(w, "{}", parsed_fmt.with_args(&FmtHistory(h))) {
+        match write!(
+            w,
+            "{}{}",
+            parsed_fmt.with_args(&FmtHistory(h)),
+            entry_terminator
+        ) {
             Ok(()) => {}
             // ignore broken pipe (issue #626)
             Err(e) if e.kind() == io::ErrorKind::BrokenPipe => {
@@ -138,15 +156,28 @@ pub fn print_list(h: &[History], list_mode: ListMode, format: Option<&str>, reve
                 std::process::exit(1);
             }
         }
+        if flush_each_line {
+            match w.flush() {
+                Ok(()) => {}
+                // ignore broken pipe (issue #626)
+                Err(e) if e.kind() == io::ErrorKind::BrokenPipe => {}
+                Err(err) => {
+                    eprintln!("ERROR: History output failed with the following error: {err}");
+                    std::process::exit(1);
+                }
+            }
+        }
     }
 
-    match w.flush() {
-        Ok(()) => {}
-        // ignore broken pipe (issue #626)
-        Err(e) if e.kind() == io::ErrorKind::BrokenPipe => {}
-        Err(err) => {
-            eprintln!("ERROR: History output failed with the following error: {err}");
-            std::process::exit(1);
+    if !flush_each_line {
+        match w.flush() {
+            Ok(()) => {}
+            // ignore broken pipe (issue #626)
+            Err(e) if e.kind() == io::ErrorKind::BrokenPipe => {}
+            Err(err) => {
+                eprintln!("ERROR: History output failed with the following error: {err}");
+                std::process::exit(1);
+            }
         }
     }
 }
@@ -288,6 +319,7 @@ impl Cmd {
         cwd: bool,
         mode: ListMode,
         format: Option<String>,
+        print0: bool,
         reverse: bool,
     ) -> Result<()> {
         let session = if session {
@@ -319,7 +351,7 @@ impl Cmd {
             }
         };
 
-        print_list(&history, mode, format.as_deref(), reverse);
+        print_list(&history, mode, format.as_deref(), print0, reverse);
 
         Ok(())
     }
@@ -335,12 +367,16 @@ impl Cmd {
                 cwd,
                 human,
                 cmd_only,
+                print0,
                 reverse,
                 format,
             } => {
                 let mode = ListMode::from_flags(human, cmd_only);
                 let reverse = reverse;
-                Self::handle_list(db, settings, context, session, cwd, mode, format, reverse).await
+                Self::handle_list(
+                    db, settings, context, session, cwd, mode, format, print0, reverse,
+                )
+                .await
             }
 
             Self::Last {
@@ -354,6 +390,7 @@ impl Cmd {
                     last,
                     ListMode::from_flags(human, cmd_only),
                     format.as_deref(),
+                    false,
                     true,
                 );
 
