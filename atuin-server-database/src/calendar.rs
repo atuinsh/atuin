@@ -1,11 +1,12 @@
 // Calendar data
 
 use serde::{Deserialize, Serialize};
+use time::Month;
 
 pub enum TimePeriod {
-    YEAR,
-    MONTH,
-    DAY,
+    Year,
+    Month { year: i32 },
+    Day { year: i32, month: Month },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
