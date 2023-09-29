@@ -169,7 +169,7 @@ impl Cmd {
                             .await?;
                 }
             } else {
-                super::history::print_list(&entries, list_mode, self.format.as_deref());
+                super::history::print_list(&entries, list_mode, self.format.as_deref(), true);
             }
         };
         Ok(())

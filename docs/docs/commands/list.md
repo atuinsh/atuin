@@ -11,6 +11,7 @@ title: Listing History
 | `--session`/`-s` | Enable listing history for the current session only (default: false)          |
 | `--human`        | Use human-readable formatting for the timestamp and duration (default: false) |
 | `--cmd-only`     | Show only the text of the command (default: false)                            |
+| `--reverse`      | Reverse the order of the output (default: false)                              |
 | `--format`       | Specify the formatting of a command (see below)                               |
 
 ## Format
