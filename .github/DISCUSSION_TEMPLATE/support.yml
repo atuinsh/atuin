@@ -1,5 +1,5 @@
 body:
-  - type: textarea
+  - type: input
     attributes:
       label: Operating System
       description: What operating system are you using?
@@ -7,7 +7,7 @@ body:
     validations:
       required: true
 
-  - type: textarea
+  - type: input
     attributes:
       label: Shell
       description: What shell are you using?
