@@ -109,7 +109,7 @@ pub async fn latest_version() -> Result<Version> {
 impl<'a> Client<'a> {
     pub fn new(
         sync_addr: &'a str,
-        session_token: &'a str,
+        session_token: &str,
         connect_timeout: u64,
         timeout: u64,
     ) -> Result<Self> {
