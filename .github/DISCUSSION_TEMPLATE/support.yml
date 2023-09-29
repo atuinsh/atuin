@@ -49,7 +49,6 @@ body:
       description: Are you self hosting atuin server?
       options:
         - label: I am self hosting atuin server
-          required: true
 
   - type: checkboxes
     attributes:
