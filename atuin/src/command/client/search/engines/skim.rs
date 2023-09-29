@@ -54,6 +54,10 @@ async fn fuzzy_search(
             yield_now().await;
         }
         let context = &state.context;
+        let git_root = context.git_root.clone().map_or_else(
+            || context.cwd.clone(),
+            |git_root| git_root.to_str().unwrap_or("/").to_string(),
+        );
         match state.filter_mode {
             FilterMode::Global => {}
             // we aggregate host by ',' separating them
@@ -72,6 +76,7 @@ async fn fuzzy_search(
                     .contains(&context.session.as_bytes()) => {}
             // we aggregate directory by ':' separating them
             FilterMode::Directory if history.cwd.split(':').contains(&context.cwd.as_str()) => {}
+            FilterMode::Workspace if history.cwd.split(':').contains(&git_root.as_str()) => {}
             _ => continue,
         }
         #[allow(clippy::cast_lossless, clippy::cast_precision_loss)]
