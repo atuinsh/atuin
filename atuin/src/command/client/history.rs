@@ -51,6 +51,10 @@ pub enum Cmd {
         #[arg(long)]
         cmd_only: bool,
 
+        /// explicitely include deleted
+        #[arg(long)]
+        include_deleted: bool,
+
         /// Available variables: {command}, {directory}, {duration}, {user}, {host}, {exit} and {time}.
         /// Example: --format "{time} - [{duration}] - {directory}$\t{command}"
         #[arg(long, short)]
@@ -266,6 +270,7 @@ impl Cmd {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn handle_list(
         db: &mut impl Database,
         settings: &Settings,
@@ -274,6 +279,7 @@ impl Cmd {
         cwd: bool,
         mode: ListMode,
         format: Option<String>,
+        include_deleted: bool,
     ) -> Result<()> {
         let session = if session {
             Some(env::var("ATUIN_SESSION")?)
@@ -287,7 +293,10 @@ impl Cmd {
         };
 
         let history = match (session, cwd) {
-            (None, None) => db.list(settings.filter_mode, &context, None, false).await?,
+            (None, None) => {
+                db.list(settings.filter_mode, &context, None, false, include_deleted)
+                    .await?
+            }
             (None, Some(cwd)) => {
                 let query = format!("select * from history where cwd = '{cwd}';");
                 db.query_history(&query).await?
@@ -321,9 +330,20 @@ impl Cmd {
                 human,
                 cmd_only,
                 format,
+                include_deleted,
             } => {
                 let mode = ListMode::from_flags(human, cmd_only);
-                Self::handle_list(db, settings, context, session, cwd, mode, format).await
+                Self::handle_list(
+                    db,
+                    settings,
+                    context,
+                    session,
+                    cwd,
+                    mode,
+                    format,
+                    include_deleted,
+                )
+                .await
             }
 
             Self::Last {

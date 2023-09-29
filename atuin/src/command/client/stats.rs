@@ -82,7 +82,8 @@ impl Cmd {
         };
 
         let history = if words.as_str() == "all" {
-            db.list(FilterMode::Global, &context, None, false).await?
+            db.list(FilterMode::Global, &context, None, false, false)
+                .await?
         } else if words.trim() == "today" {
             let start = OffsetDateTime::now_local()?.replace_time(Time::MIDNIGHT);
             let end = start + Duration::days(1);
