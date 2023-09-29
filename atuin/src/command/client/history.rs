@@ -345,15 +345,7 @@ impl Cmd {
             } => {
                 let mode = ListMode::from_flags(human, cmd_only);
                 Self::handle_list(
-                    db,
-                    settings,
-                    context,
-                    session,
-                    cwd,
-                    mode,
-                    format,
-                    false,
-                    reverse,
+                    db, settings, context, session, cwd, mode, format, false, reverse,
                 )
                 .await
             }
