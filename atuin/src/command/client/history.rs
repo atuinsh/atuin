@@ -349,7 +349,18 @@ impl Cmd {
                 include_deleted,
             } => {
                 let mode = ListMode::from_flags(human, cmd_only);
-                Self::handle_list(db, settings, context, session, cwd, mode, format, include_deleted, reverse).await
+                Self::handle_list(
+                    db,
+                    settings,
+                    context,
+                    session,
+                    cwd,
+                    mode,
+                    format,
+                    include_deleted,
+                    reverse,
+                )
+                .await
             }
 
             Self::Last {
