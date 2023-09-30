@@ -311,6 +311,7 @@ impl Cmd {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::fn_params_excessive_bools)]
     async fn handle_list(
         db: &mut impl Database,
         settings: &Settings,
