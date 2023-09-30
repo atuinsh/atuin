@@ -23,7 +23,7 @@ async-trait = "0.1.58"
 base64 = "0.21"
 log = "0.4"
 time = { version = "0.3", features = ["serde-human-readable", "macros", "local-offset"] }
-clap = { version = "4.0.18", features = ["derive"] }
+clap = { version = "4.4.6", features = ["derive"] }
 config = { version = "0.13", default-features = false, features = ["toml"] }
 directories = "4"
 eyre = "0.6"
