@@ -42,7 +42,8 @@ jobs:
       run: cargo build --all --locked --release && strip target/release/atuin
 
   unit-test:
-    runs-on: [self-hosted, ARM64, macOS]
+    #runs-on: [self-hosted, ARM64, macOS]
+    runs-on: ubuntu-latest
 
     steps:
     - uses: actions/checkout@v3
