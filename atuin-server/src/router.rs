@@ -2,7 +2,9 @@ use async_trait::async_trait;
 use atuin_common::api::ErrorResponse;
 use axum::{
     extract::FromRequestParts,
-    response::IntoResponse,
+    http::Request,
+    middleware::Next,
+    response::{IntoResponse, Response},
     routing::{delete, get, post},
     Router,
 };
@@ -76,6 +78,16 @@ async fn teapot() -> impl IntoResponse {
     (http::StatusCode::IM_A_TEAPOT, "🫖")
 }
 
+async fn clacks_overhead<B>(request: Request<B>, next: Next<B>) -> Response {
+    let mut response = next.run(request).await;
+
+    let gnu_terry_value = "GNU Terry Pratchett";
+    let gnu_terry_header = "X-Clacks-Overhead";
+
+    response.headers_mut().insert(gnu_terry_header, gnu_terry_value.parse().unwrap());
+    response
+}
+
 #[derive(Clone)]
 pub struct AppState<DB: Database> {
     pub database: DB,
@@ -107,5 +119,7 @@ pub fn router<DB: Database>(database: DB, settings: Settings<DB::Settings>) -> R
     }
     .fallback(teapot)
     .with_state(AppState { database, settings })
-    .layer(ServiceBuilder::new().layer(TraceLayer::new_for_http()))
+    .layer(ServiceBuilder::new()
+           .layer(axum::middleware::from_fn(clacks_overhead))
+           .layer(TraceLayer::new_for_http()))
 }
