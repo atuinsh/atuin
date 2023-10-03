@@ -84,7 +84,9 @@ async fn clacks_overhead<B>(request: Request<B>, next: Next<B>) -> Response {
     let gnu_terry_value = "GNU Terry Pratchett";
     let gnu_terry_header = "X-Clacks-Overhead";
 
-    response.headers_mut().insert(gnu_terry_header, gnu_terry_value.parse().unwrap());
+    response
+        .headers_mut()
+        .insert(gnu_terry_header, gnu_terry_value.parse().unwrap());
     response
 }
 
@@ -119,7 +121,9 @@ pub fn router<DB: Database>(database: DB, settings: Settings<DB::Settings>) -> R
     }
     .fallback(teapot)
     .with_state(AppState { database, settings })
-    .layer(ServiceBuilder::new()
-           .layer(axum::middleware::from_fn(clacks_overhead))
-           .layer(TraceLayer::new_for_http()))
+    .layer(
+        ServiceBuilder::new()
+            .layer(axum::middleware::from_fn(clacks_overhead))
+            .layer(TraceLayer::new_for_http()),
+    )
 }
