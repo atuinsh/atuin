@@ -46,3 +46,5 @@ $env.config = (
             $env.config.hooks | get -i pre_prompt | default [] | append $_atuin_pre_prompt)
     )
 )
+
+$env.config = ($env.config | default [] keybindings)

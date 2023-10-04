@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use async_trait::async_trait;
 use atuin_common::record::{EncryptedData, HostId, Record, RecordId, RecordIndex};
 use atuin_server_database::models::{History, NewHistory, NewSession, NewUser, Session, User};
@@ -176,8 +178,7 @@ impl Database for Postgres {
     async fn count_history_range(
         &self,
         user: &User,
-        start: PrimitiveDateTime,
-        end: PrimitiveDateTime,
+        range: Range<OffsetDateTime>,
     ) -> DbResult<i64> {
         let res: (i64,) = sqlx::query_as(
             "select count(1) from history
@@ -186,8 +187,8 @@ impl Database for Postgres {
             and timestamp < $3::date",
         )
         .bind(user.id)
-        .bind(start)
-        .bind(end)
+        .bind(into_utc(range.start))
+        .bind(into_utc(range.end))
         .fetch_one(&self.pool)
         .await
         .map_err(fix_error)?;
