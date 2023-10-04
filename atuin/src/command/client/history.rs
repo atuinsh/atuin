@@ -336,7 +336,10 @@ impl Cmd {
         };
 
         let history = match (session, cwd) {
-            (None, None) => db.list(settings.filter_mode, &context, None, false, include_deleted).await?,
+            (None, None) => {
+                db.list(settings.filter_mode, &context, None, false, include_deleted)
+                    .await?
+            }
             (None, Some(cwd)) => {
                 let query = format!("select * from history where cwd = '{cwd}';");
                 db.query_history(&query).await?
@@ -375,7 +378,10 @@ impl Cmd {
             } => {
                 let mode = ListMode::from_flags(human, cmd_only);
                 let reverse = reverse;
-                Self::handle_list(db, settings, context, session, cwd, mode, format, false, print0, reverse).await
+                Self::handle_list(
+                    db, settings, context, session, cwd, mode, format, false, print0, reverse,
+                )
+                .await
             }
 
             Self::Last {
