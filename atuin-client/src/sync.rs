@@ -48,7 +48,7 @@ async fn sync_download(
     let remote_deleted =
         HashSet::<&str>::from_iter(remote_status.deleted.iter().map(String::as_str));
 
-    let initial_local = db.history_count().await?;
+    let initial_local = db.history_count(true).await?;
     let mut local_count = initial_local;
 
     let mut last_sync = if force {
@@ -84,7 +84,7 @@ async fn sync_download(
 
         db.save_bulk(&history).await?;
 
-        local_count = db.history_count().await?;
+        local_count = db.history_count(true).await?;
 
         if history.len() < remote_status.page_size.try_into().unwrap() {
             break;
@@ -137,7 +137,7 @@ async fn sync_upload(
     let initial_remote_count = client.count().await?;
     let mut remote_count = initial_remote_count;
 
-    let local_count = db.history_count().await?;
+    let local_count = db.history_count(true).await?;
 
     debug!("remote has {}, we have {}", remote_count, local_count);
 

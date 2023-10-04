@@ -617,7 +617,7 @@ pub async fn history(
 
     let context = current_context();
 
-    let history_count = db.history_count().await?;
+    let history_count = db.history_count(false).await?;
     let search_mode = if settings.shell_up_key_binding {
         settings
             .search_mode_shell_up_key_binding

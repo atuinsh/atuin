@@ -88,7 +88,7 @@ async fn run(
 
     println!(
         "Sync complete! {} items in history database, force: {}",
-        db.history_count().await?,
+        db.history_count(true).await?,
         force
     );
 

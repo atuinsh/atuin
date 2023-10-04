@@ -13,7 +13,7 @@ pub async fn run(settings: &Settings, db: &impl Database) -> Result<()> {
 
     let status = client.status().await?;
     let last_sync = Settings::last_sync()?;
-    let local_count = db.history_count().await?;
+    let local_count = db.history_count(false).await?;
 
     println!("Atuin v{VERSION} - Build rev {SHA}\n");
 

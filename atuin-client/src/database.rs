@@ -80,16 +80,17 @@ pub trait Database: Send + Sync + 'static {
         context: &Context,
         max: Option<usize>,
         unique: bool,
+        include_deleted: bool,
     ) -> Result<Vec<History>>;
     async fn range(&self, from: OffsetDateTime, to: OffsetDateTime) -> Result<Vec<History>>;
 
     async fn update(&self, h: &History) -> Result<()>;
-    async fn history_count(&self) -> Result<i64>;
+    async fn history_count(&self, include_deleted: bool) -> Result<i64>;
 
     async fn last(&self) -> Result<Option<History>>;
     async fn before(&self, timestamp: OffsetDateTime, count: i64) -> Result<Vec<History>>;
 
-    async fn delete(&self, mut h: History) -> Result<()>;
+    async fn delete(&self, h: History) -> Result<()>;
     async fn deleted(&self) -> Result<Vec<History>>;
 
     // Yes I know, it's a lot.
@@ -257,11 +258,15 @@ impl Database for Sqlite {
         context: &Context,
         max: Option<usize>,
         unique: bool,
+        include_deleted: bool,
     ) -> Result<Vec<History>> {
         debug!("listing history");
 
         let mut query = SqlBuilder::select_from(SqlName::new("history").alias("h").baquoted());
         query.field("*").order_desc("timestamp");
+        if !include_deleted {
+            query.and_where_is_null("deleted_at");
+        }
 
         match filter {
             FilterMode::Global => &mut query,
@@ -340,11 +345,13 @@ impl Database for Sqlite {
         Ok(res)
     }
 
-    async fn history_count(&self) -> Result<i64> {
-        let res: (i64,) = sqlx::query_as("select count(1) from history")
-            .fetch_one(&self.pool)
-            .await?;
-
+    async fn history_count(&self, include_deleted: bool) -> Result<i64> {
+        let exclude_deleted: &str = if include_deleted { "" } else { "not" };
+        let query = format!(
+            "select count(1) from history where deleted_at is {} null",
+            exclude_deleted
+        );
+        let res: (i64,) = sqlx::query_as(&query).fetch_one(&self.pool).await?;
         Ok(res.0)
     }
 
