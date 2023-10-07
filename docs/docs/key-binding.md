@@ -83,6 +83,7 @@ bind -x '"\C-r": __atuin_history'
 ```
 
 ## fish
+Edit key bindings in FISH shell by adding the following to ~/.config/fish/config.fish
 
 ```
 set -gx ATUIN_NOBIND "true"
@@ -92,6 +93,15 @@ atuin init fish | source
 bind \cr _atuin_search
 bind -M insert \cr _atuin_search
 ```
+
+Adding the useful alternative key binding of <kbd>CTRL-up</kbd> is tricky and determined by the terminals adherence to terminfo(5).
+
+Conveniently FISH uses a command to capture keystrokes and advises you of the exact command to add for your specific terminal.
+In your terminal, run `fish_key_reader` then punch the desired keystroke/s.
+
+For example, in Gnome Terminal the output to <kbd>CTRL-upkey</kbd> is `bind \e\[1\;5A 'do something'`
+
+So, adding this to the above sample, `bind \e\[1\;5A _atuin_search` will provide the additional search keybinding.
 
 ## nu
 
