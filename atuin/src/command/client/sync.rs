@@ -44,7 +44,7 @@ impl Cmd {
     pub async fn run(
         self,
         settings: Settings,
-        db: &mut impl Database,
+        db: &impl Database,
         store: &mut (impl Store + Send + Sync),
     ) -> Result<()> {
         match self {
@@ -74,7 +74,7 @@ impl Cmd {
 async fn run(
     settings: &Settings,
     force: bool,
-    db: &mut impl Database,
+    db: &impl Database,
     store: &mut (impl Store + Send + Sync),
 ) -> Result<()> {
     let (diff, remote_index) = sync::diff(settings, store).await?;

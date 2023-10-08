@@ -39,7 +39,7 @@ pub enum Cmd {
 const BATCH_SIZE: usize = 100;
 
 impl Cmd {
-    pub async fn run<DB: Database>(&self, db: &mut DB) -> Result<()> {
+    pub async fn run<DB: Database>(&self, db: &DB) -> Result<()> {
         println!("        Atuin         ");
         println!("======================");
         println!("          \u{1f30d}          ");
@@ -104,11 +104,11 @@ impl Cmd {
 pub struct HistoryImporter<'db, DB: Database> {
     pb: ProgressBar,
     buf: Vec<History>,
-    db: &'db mut DB,
+    db: &'db DB,
 }
 
 impl<'db, DB: Database> HistoryImporter<'db, DB> {
-    fn new(db: &'db mut DB, len: usize) -> Self {
+    fn new(db: &'db DB, len: usize) -> Self {
         Self {
             pb: ProgressBar::new(len as u64),
             buf: Vec::with_capacity(BATCH_SIZE),
@@ -138,7 +138,7 @@ impl<'db, DB: Database> Loader for HistoryImporter<'db, DB> {
     }
 }
 
-async fn import<I: Importer + Send, DB: Database>(db: &mut DB) -> Result<()> {
+async fn import<I: Importer + Send, DB: Database>(db: &DB) -> Result<()> {
     println!("Importing history from {}", I::NAME);
 
     let mut importer = I::new().await?;

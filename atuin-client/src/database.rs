@@ -70,8 +70,8 @@ pub fn current_context() -> Context {
 
 #[async_trait]
 pub trait Database: Send + Sync + 'static {
-    async fn save(&mut self, h: &History) -> Result<()>;
-    async fn save_bulk(&mut self, h: &[History]) -> Result<()>;
+    async fn save(&self, h: &History) -> Result<()>;
+    async fn save_bulk(&self, h: &[History]) -> Result<()>;
 
     async fn load(&self, id: &str) -> Result<Option<History>>;
     async fn list(
@@ -193,7 +193,7 @@ impl Sqlite {
 
 #[async_trait]
 impl Database for Sqlite {
-    async fn save(&mut self, h: &History) -> Result<()> {
+    async fn save(&self, h: &History) -> Result<()> {
         debug!("saving history to sqlite");
         let mut tx = self.pool.begin().await?;
         Self::save_raw(&mut tx, h).await?;
@@ -202,7 +202,7 @@ impl Database for Sqlite {
         Ok(())
     }
 
-    async fn save_bulk(&mut self, h: &[History]) -> Result<()> {
+    async fn save_bulk(&self, h: &[History]) -> Result<()> {
         debug!("saving history to sqlite");
 
         let mut tx = self.pool.begin().await?;

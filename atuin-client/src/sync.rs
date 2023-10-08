@@ -37,7 +37,7 @@ async fn sync_download(
     key: &Key,
     force: bool,
     client: &api_client::Client<'_>,
-    db: &mut (impl Database + Send),
+    db: &(impl Database + Send),
 ) -> Result<(i64, i64)> {
     debug!("starting sync download");
 
@@ -127,7 +127,7 @@ async fn sync_upload(
     key: &Key,
     _force: bool,
     client: &api_client::Client<'_>,
-    db: &mut (impl Database + Send),
+    db: &(impl Database + Send),
 ) -> Result<()> {
     debug!("starting sync upload");
 
@@ -188,7 +188,7 @@ async fn sync_upload(
     Ok(())
 }
 
-pub async fn sync(settings: &Settings, force: bool, db: &mut (impl Database + Send)) -> Result<()> {
+pub async fn sync(settings: &Settings, force: bool, db: &(impl Database + Send)) -> Result<()> {
     let client = api_client::Client::new(
         &settings.sync_address,
         &settings.session_token,

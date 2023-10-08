@@ -239,7 +239,7 @@ fn parse_fmt(format: &str) -> ParsedFmt {
 impl Cmd {
     #[allow(clippy::too_many_lines, clippy::cast_possible_truncation)]
     async fn handle_start(
-        db: &mut impl Database,
+        db: &impl Database,
         settings: &Settings,
         command: &[String],
     ) -> Result<()> {
@@ -268,7 +268,7 @@ impl Cmd {
     }
 
     async fn handle_end(
-        db: &mut impl Database,
+        db: &impl Database,
         settings: &Settings,
         id: &str,
         exit: i64,
@@ -313,7 +313,7 @@ impl Cmd {
     #[allow(clippy::too_many_arguments)]
     #[allow(clippy::fn_params_excessive_bools)]
     async fn handle_list(
-        db: &mut impl Database,
+        db: &impl Database,
         settings: &Settings,
         context: atuin_client::database::Context,
         session: bool,
@@ -361,7 +361,7 @@ impl Cmd {
         Ok(())
     }
 
-    pub async fn run(self, settings: &Settings, db: &mut impl Database) -> Result<()> {
+    pub async fn run(self, settings: &Settings, db: &impl Database) -> Result<()> {
         let context = current_context();
 
         match self {
@@ -377,7 +377,6 @@ impl Cmd {
                 format,
             } => {
                 let mode = ListMode::from_flags(human, cmd_only);
-                let reverse = reverse;
                 Self::handle_list(
                     db, settings, context, session, cwd, mode, format, false, print0, reverse,
                 )
