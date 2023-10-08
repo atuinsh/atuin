@@ -6,7 +6,7 @@ use atuin_client::{
 };
 use eyre::Result;
 
-use super::cursor::Cursor;
+use crate::interactive::cursor::Cursor;
 
 pub mod db;
 pub mod skim;
