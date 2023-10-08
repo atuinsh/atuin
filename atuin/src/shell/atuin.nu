@@ -22,7 +22,7 @@ let _atuin_pre_prompt = {||
     with-env { ATUIN_LOG: error } {
         atuin history end $'--exit=($last_exit)' -- $env.ATUIN_HISTORY_ID | null
     }
-    $env.ATUIN_HISTORY_ID = ""
+    hide-env ATUIN_HISTORY_ID
 }
 
 def _atuin_search_cmd [...flags: string] {
