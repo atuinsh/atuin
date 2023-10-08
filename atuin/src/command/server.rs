@@ -34,8 +34,6 @@ impl Cmd {
 
         tracing::trace!(command = ?self, "server command");
 
-        let settings = Settings::new().wrap_err("could not load server settings")?;
-
         match self {
             Self::Start { host, port } => {
                 let settings = Settings::new().wrap_err("could not load server settings")?;
