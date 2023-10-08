@@ -34,9 +34,10 @@ use crate::{
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Alignment, Constraint, Direction, Layout},
+    prelude::*,
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, BorderType, Borders, Paragraph},
+    widgets::{Block, BorderType, Borders, Paragraph, Tabs},
     Frame, Terminal, TerminalOptions, Viewport,
 };
 
@@ -49,8 +50,7 @@ enum InputAction {
     Redraw,
 }
 
-#[allow(clippy::struct_field_names)]
-struct State {
+pub struct State {
     history_count: i64,
     update_needed: Option<Version>,
     results_state: ListState,
@@ -58,6 +58,7 @@ struct State {
     search_mode: SearchMode,
     results_len: usize,
     accept: bool,
+    tab_index: usize,
 
     search: SearchState,
     engine: Box<dyn SearchEngine>,
@@ -133,8 +134,7 @@ impl State {
         // Use Ctrl-n instead of Alt-n?
         let modfr = if settings.ctrl_n_shortcuts { ctrl } else { alt };
 
-        // reset the state, will be set to true later if user really did change it
-        self.switched_search_mode = false;
+        // core input handling, common for all tabs
         match input.code {
             KeyCode::Char('c' | 'g') if ctrl => return InputAction::ReturnOriginal,
             KeyCode::Esc => {
@@ -146,12 +146,38 @@ impl State {
             KeyCode::Tab => {
                 return InputAction::Accept(self.results_state.selected());
             }
+
+            _ => {}
+        }
+
+        // handle tab-specific input
+        // todo: split out search
+        match self.tab_index {
+            0 => {}
+
+            1 => {
+                inspector_input(self, settings, input);
+
+                // this tab doesn't return search results, it just exits
+                return None;
+            }
+
+            _ => panic!("invalid tab index on input"),
+        }
+
+        // reset the state, will be set to true later if user really did change it
+        self.switched_search_mode = false;
+
+        match input.code {
             KeyCode::Enter => {
                 if settings.enter_accept {
                     self.accept = true;
                 }
 
                 return InputAction::Accept(self.results_state.selected());
+            }
+            KeyCode::Char('i') if ctrl => {
+                self.tab_index = (self.tab_index + 1) % TAB_TITLES.len();
             }
             KeyCode::Char('y') if ctrl => {
                 return InputAction::Copy(self.results_state.selected());
@@ -364,11 +390,13 @@ impl State {
                         Constraint::Length(1 + border_size),               // input
                         Constraint::Min(1),                                // results list
                         Constraint::Length(preview_height),                // preview
+                        Constraint::Length(1),                             // tabs
                         Constraint::Length(if show_help { 1 } else { 0 }), // header (sic)
                     ]
                 } else {
                     [
                         Constraint::Length(if show_help { 1 } else { 0 }), // header
+                        Constraint::Length(1),                             // tabs
                         Constraint::Min(1),                                // results list
                         Constraint::Length(1 + border_size),               // input
                         Constraint::Length(preview_height),                // preview
@@ -377,10 +405,25 @@ impl State {
                 .as_ref(),
             )
             .split(f.size());
-        let input_chunk = if invert { chunks[0] } else { chunks[2] };
-        let results_list_chunk = chunks[1];
-        let preview_chunk = if invert { chunks[2] } else { chunks[3] };
-        let header_chunk = if invert { chunks[3] } else { chunks[0] };
+
+        let input_chunk = if invert { chunks[0] } else { chunks[3] };
+        let results_list_chunk = if invert { chunks[1] } else { chunks[2] };
+        let preview_chunk = if invert { chunks[2] } else { chunks[4] };
+        let tabs_chunk = if invert { chunks[3] } else { chunks[1] };
+        let header_chunk = if invert { chunks[4] } else { chunks[0] };
+
+        // TODO: this should be split so that we have one interactive search container that is
+        // EITHER a search box or an inspector. But I'm not doing that now, way too much atm.
+        // also allocate less 🙈
+        let titles = TAB_TITLES.iter().cloned().map(Line::from).collect();
+
+        let tabs = Tabs::new(titles)
+            .block(Block::default().borders(Borders::NONE))
+            .select(self.tab_index)
+            .style(Style::default())
+            .highlight_style(Style::default().bold().on_black());
+
+        f.render_widget(tabs, tabs_chunk);
 
         let style = StyleState {
             compact,
@@ -409,8 +452,24 @@ impl State {
         let stats = self.build_stats();
         f.render_widget(stats, header_chunks[2]);
 
-        let results_list = Self::build_results_list(style, results);
-        f.render_stateful_widget(results_list, results_list_chunk, &mut self.results_state);
+        match self.tab_index {
+            0 => {
+                let results_list = Self::build_results_list(style, results);
+                f.render_stateful_widget(results_list, results_list_chunk, &mut self.results_state);
+            }
+
+            1 => {
+                inspector::draw_inspector(
+                    f,
+                    results_list_chunk,
+                    &results[self.results_state.selected()],
+                );
+            }
+
+            _ => {
+                panic!("invalid tab index");
+            }
+        }
 
         let input = self.build_input(style);
         f.render_widget(input, input_chunk);
@@ -477,6 +536,7 @@ impl State {
 
     fn build_results_list(style: StyleState, results: &[History]) -> HistoryList {
         let results_list = HistoryList::new(results, style.invert);
+
         if style.compact {
             results_list
         } else if style.invert {
@@ -667,6 +727,7 @@ pub async fn history(
         update_needed: None,
         switched_search_mode: false,
         search_mode,
+        tab_index: 0,
         search: SearchState {
             input,
             filter_mode: if settings.workspaces && context.git_root.is_some() {
