@@ -12,7 +12,7 @@ use atuin_client::{
 };
 use time::{Duration, OffsetDateTime, Time};
 
-#[derive(Parser)]
+#[derive(Parser, Debug)]
 #[command(infer_subcommands = true)]
 pub struct Cmd {
     /// compute statistics for the specified period, leave blank for statistics since the beginning
@@ -73,7 +73,7 @@ fn compute_stats(history: &[History], count: usize) -> Result<()> {
 }
 
 impl Cmd {
-    pub async fn run(&self, db: &mut impl Database, settings: &Settings) -> Result<()> {
+    pub async fn run(&self, db: &impl Database, settings: &Settings) -> Result<()> {
         let context = current_context();
         let words = if self.period.is_empty() {
             String::from("all")
@@ -82,7 +82,8 @@ impl Cmd {
         };
 
         let history = if words.as_str() == "all" {
-            db.list(FilterMode::Global, &context, None, false).await?
+            db.list(FilterMode::Global, &context, None, false, false)
+                .await?
         } else if words.trim() == "today" {
             let start = OffsetDateTime::now_local()?.replace_time(Time::MIDNIGHT);
             let end = start + Duration::days(1);

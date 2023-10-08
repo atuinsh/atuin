@@ -8,13 +8,13 @@ pub mod login;
 pub mod logout;
 pub mod register;
 
-#[derive(Args)]
+#[derive(Args, Debug)]
 pub struct Cmd {
     #[command(subcommand)]
     command: Commands,
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Debug)]
 pub enum Commands {
     /// Login to the configured server
     Login(login::Cmd),

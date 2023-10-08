@@ -23,7 +23,8 @@ _atuin_precmd() {
 
     [[ -z "${ATUIN_HISTORY_ID:-}" ]] && return
 
-    (RUST_LOG=error atuin history end --exit $EXIT -- $ATUIN_HISTORY_ID &) >/dev/null 2>&1
+    (ATUIN_LOG=error atuin history end --exit $EXIT -- $ATUIN_HISTORY_ID &) >/dev/null 2>&1
+    export ATUIN_HISTORY_ID=""
 }
 
 _atuin_search() {
@@ -33,7 +34,7 @@ _atuin_search() {
     # swap stderr and stdout, so that the tui stuff works
     # TODO: not this
     # shellcheck disable=SC2048
-    output=$(RUST_LOG=error atuin search $* -i -- $BUFFER 3>&1 1>&2 2>&3)
+    output=$(ATUIN_LOG=error atuin search $* -i -- $BUFFER 3>&1 1>&2 2>&3)
 
     if [[ -n $output ]]; then
         RBUFFER=""

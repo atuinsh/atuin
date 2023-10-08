@@ -18,12 +18,12 @@ use atuin_client::{
 
 #[cfg(feature = "sync")]
 use atuin_client::sync;
-use log::debug;
+use log::{debug, warn};
 use time::{macros::format_description, OffsetDateTime};
 
 use super::search::format_duration_into;
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Debug)]
 #[command(infer_subcommands = true)]
 pub enum Cmd {
     /// Begins a new command in the history
@@ -50,6 +50,17 @@ pub enum Cmd {
         /// Show only the text of the command
         #[arg(long)]
         cmd_only: bool,
+
+        /// Terminate the output with a null, for better multiline support
+        #[arg(long)]
+        print0: bool,
+
+        #[arg(long, short, default_value = "true")]
+        // accept no value
+        #[arg(num_args(0..=1), default_missing_value("true"))]
+        // accept a value
+        #[arg(action = clap::ArgAction::Set)]
+        reverse: bool,
 
         /// Available variables: {command}, {directory}, {duration}, {user}, {host}, {exit} and {time}.
         /// Example: --format "{time} - [{duration}] - {directory}$\t{command}"
@@ -93,7 +104,13 @@ impl ListMode {
 }
 
 #[allow(clippy::cast_sign_loss)]
-pub fn print_list(h: &[History], list_mode: ListMode, format: Option<&str>) {
+pub fn print_list(
+    h: &[History],
+    list_mode: ListMode,
+    format: Option<&str>,
+    print0: bool,
+    reverse: bool,
+) {
     let w = std::io::stdout();
     let mut w = w.lock();
 
@@ -113,8 +130,22 @@ pub fn print_list(h: &[History], list_mode: ListMode, format: Option<&str>) {
         ListMode::CmdOnly => std::iter::once(ParseSegment::Key("command")).collect(),
     };
 
-    for h in h.iter().rev() {
-        match writeln!(w, "{}", parsed_fmt.with_args(&FmtHistory(h))) {
+    let iterator = if reverse {
+        Box::new(h.iter().rev()) as Box<dyn Iterator<Item = &History>>
+    } else {
+        Box::new(h.iter()) as Box<dyn Iterator<Item = &History>>
+    };
+
+    let entry_terminator = if print0 { "\0" } else { "\n" };
+    let flush_each_line = print0;
+
+    for h in iterator {
+        match write!(
+            w,
+            "{}{}",
+            parsed_fmt.with_args(&FmtHistory(h)),
+            entry_terminator
+        ) {
             Ok(()) => {}
             // ignore broken pipe (issue #626)
             Err(e) if e.kind() == io::ErrorKind::BrokenPipe => {
@@ -125,15 +156,28 @@ pub fn print_list(h: &[History], list_mode: ListMode, format: Option<&str>) {
                 std::process::exit(1);
             }
         }
+        if flush_each_line {
+            match w.flush() {
+                Ok(()) => {}
+                // ignore broken pipe (issue #626)
+                Err(e) if e.kind() == io::ErrorKind::BrokenPipe => {}
+                Err(err) => {
+                    eprintln!("ERROR: History output failed with the following error: {err}");
+                    std::process::exit(1);
+                }
+            }
+        }
     }
 
-    match w.flush() {
-        Ok(()) => {}
-        // ignore broken pipe (issue #626)
-        Err(e) if e.kind() == io::ErrorKind::BrokenPipe => {}
-        Err(err) => {
-            eprintln!("ERROR: History output failed with the following error: {err}");
-            std::process::exit(1);
+    if !flush_each_line {
+        match w.flush() {
+            Ok(()) => {}
+            // ignore broken pipe (issue #626)
+            Err(e) if e.kind() == io::ErrorKind::BrokenPipe => {}
+            Err(err) => {
+                eprintln!("ERROR: History output failed with the following error: {err}");
+                std::process::exit(1);
+            }
         }
     }
 }
@@ -195,7 +239,7 @@ fn parse_fmt(format: &str) -> ParsedFmt {
 impl Cmd {
     #[allow(clippy::too_many_lines, clippy::cast_possible_truncation)]
     async fn handle_start(
-        db: &mut impl Database,
+        db: &impl Database,
         settings: &Settings,
         command: &[String],
     ) -> Result<()> {
@@ -224,7 +268,7 @@ impl Cmd {
     }
 
     async fn handle_end(
-        db: &mut impl Database,
+        db: &impl Database,
         settings: &Settings,
         id: &str,
         exit: i64,
@@ -233,7 +277,10 @@ impl Cmd {
             return Ok(());
         }
 
-        let mut h = db.load(id).await?;
+        let Some(mut h) = db.load(id).await? else {
+            warn!("history entry is missing");
+            return Ok(());
+        };
 
         if h.duration > 0 {
             debug!("cannot end history - already has duration");
@@ -263,14 +310,19 @@ impl Cmd {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::fn_params_excessive_bools)]
     async fn handle_list(
-        db: &mut impl Database,
+        db: &impl Database,
         settings: &Settings,
         context: atuin_client::database::Context,
         session: bool,
         cwd: bool,
         mode: ListMode,
         format: Option<String>,
+        include_deleted: bool,
+        print0: bool,
+        reverse: bool,
     ) -> Result<()> {
         let session = if session {
             Some(env::var("ATUIN_SESSION")?)
@@ -284,7 +336,10 @@ impl Cmd {
         };
 
         let history = match (session, cwd) {
-            (None, None) => db.list(settings.filter_mode, &context, None, false).await?,
+            (None, None) => {
+                db.list(settings.filter_mode, &context, None, false, include_deleted)
+                    .await?
+            }
             (None, Some(cwd)) => {
                 let query = format!("select * from history where cwd = '{cwd}';");
                 db.query_history(&query).await?
@@ -301,12 +356,12 @@ impl Cmd {
             }
         };
 
-        print_list(&history, mode, format.as_deref());
+        print_list(&history, mode, format.as_deref(), print0, reverse);
 
         Ok(())
     }
 
-    pub async fn run(self, settings: &Settings, db: &mut impl Database) -> Result<()> {
+    pub async fn run(self, settings: &Settings, db: &impl Database) -> Result<()> {
         let context = current_context();
 
         match self {
@@ -317,10 +372,15 @@ impl Cmd {
                 cwd,
                 human,
                 cmd_only,
+                print0,
+                reverse,
                 format,
             } => {
                 let mode = ListMode::from_flags(human, cmd_only);
-                Self::handle_list(db, settings, context, session, cwd, mode, format).await
+                Self::handle_list(
+                    db, settings, context, session, cwd, mode, format, false, print0, reverse,
+                )
+                .await
             }
 
             Self::Last {
@@ -329,10 +389,13 @@ impl Cmd {
                 format,
             } => {
                 let last = db.last().await?;
+                let last = last.as_ref().map(std::slice::from_ref).unwrap_or_default();
                 print_list(
-                    &[last],
+                    last,
                     ListMode::from_flags(human, cmd_only),
                     format.as_deref(),
+                    false,
+                    true,
                 );
 
                 Ok(())

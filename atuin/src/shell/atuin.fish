@@ -9,13 +9,14 @@ end
 function _atuin_postexec --on-event fish_postexec
     set s $status
     if test -n "$ATUIN_HISTORY_ID"
-        RUST_LOG=error atuin history end --exit $s -- $ATUIN_HISTORY_ID &>/dev/null &
+        ATUIN_LOG=error atuin history end --exit $s -- $ATUIN_HISTORY_ID &>/dev/null &
         disown
     end
+    set --erase ATUIN_HISTORY_ID
 end
 
 function _atuin_search
-    set h (RUST_LOG=error atuin search $argv -i -- (commandline -b) 3>&1 1>&2 2>&3)
+    set h (ATUIN_LOG=error atuin search $argv -i -- (commandline -b) 3>&1 1>&2 2>&3)
     commandline -f repaint
     if test -n "$h"
         commandline -r "$h"

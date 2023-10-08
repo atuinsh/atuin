@@ -70,27 +70,27 @@ pub fn current_context() -> Context {
 
 #[async_trait]
 pub trait Database: Send + Sync + 'static {
-    async fn save(&mut self, h: &History) -> Result<()>;
-    async fn save_bulk(&mut self, h: &[History]) -> Result<()>;
+    async fn save(&self, h: &History) -> Result<()>;
+    async fn save_bulk(&self, h: &[History]) -> Result<()>;
 
-    async fn load(&self, id: &str) -> Result<History>;
+    async fn load(&self, id: &str) -> Result<Option<History>>;
     async fn list(
         &self,
         filter: FilterMode,
         context: &Context,
         max: Option<usize>,
         unique: bool,
+        include_deleted: bool,
     ) -> Result<Vec<History>>;
     async fn range(&self, from: OffsetDateTime, to: OffsetDateTime) -> Result<Vec<History>>;
 
     async fn update(&self, h: &History) -> Result<()>;
-    async fn history_count(&self) -> Result<i64>;
+    async fn history_count(&self, include_deleted: bool) -> Result<i64>;
 
-    async fn first(&self) -> Result<History>;
-    async fn last(&self) -> Result<History>;
+    async fn last(&self) -> Result<Option<History>>;
     async fn before(&self, timestamp: OffsetDateTime, count: i64) -> Result<Vec<History>>;
 
-    async fn delete(&self, mut h: History) -> Result<()>;
+    async fn delete(&self, h: History) -> Result<()>;
     async fn deleted(&self) -> Result<Vec<History>>;
 
     // Yes I know, it's a lot.
@@ -193,7 +193,7 @@ impl Sqlite {
 
 #[async_trait]
 impl Database for Sqlite {
-    async fn save(&mut self, h: &History) -> Result<()> {
+    async fn save(&self, h: &History) -> Result<()> {
         debug!("saving history to sqlite");
         let mut tx = self.pool.begin().await?;
         Self::save_raw(&mut tx, h).await?;
@@ -202,7 +202,7 @@ impl Database for Sqlite {
         Ok(())
     }
 
-    async fn save_bulk(&mut self, h: &[History]) -> Result<()> {
+    async fn save_bulk(&self, h: &[History]) -> Result<()> {
         debug!("saving history to sqlite");
 
         let mut tx = self.pool.begin().await?;
@@ -216,13 +216,13 @@ impl Database for Sqlite {
         Ok(())
     }
 
-    async fn load(&self, id: &str) -> Result<History> {
+    async fn load(&self, id: &str) -> Result<Option<History>> {
         debug!("loading history item {}", id);
 
         let res = sqlx::query("select * from history where id = ?1")
             .bind(id)
             .map(Self::query_history)
-            .fetch_one(&self.pool)
+            .fetch_optional(&self.pool)
             .await?;
 
         Ok(res)
@@ -258,11 +258,15 @@ impl Database for Sqlite {
         context: &Context,
         max: Option<usize>,
         unique: bool,
+        include_deleted: bool,
     ) -> Result<Vec<History>> {
         debug!("listing history");
 
         let mut query = SqlBuilder::select_from(SqlName::new("history").alias("h").baquoted());
         query.field("*").order_desc("timestamp");
+        if !include_deleted {
+            query.and_where_is_null("deleted_at");
+        }
 
         match filter {
             FilterMode::Global => &mut query,
@@ -308,22 +312,12 @@ impl Database for Sqlite {
         Ok(res)
     }
 
-    async fn first(&self) -> Result<History> {
-        let res =
-            sqlx::query("select * from history where duration >= 0 order by timestamp asc limit 1")
-                .map(Self::query_history)
-                .fetch_one(&self.pool)
-                .await?;
-
-        Ok(res)
-    }
-
-    async fn last(&self) -> Result<History> {
+    async fn last(&self) -> Result<Option<History>> {
         let res = sqlx::query(
             "select * from history where duration >= 0 order by timestamp desc limit 1",
         )
         .map(Self::query_history)
-        .fetch_one(&self.pool)
+        .fetch_optional(&self.pool)
         .await?;
 
         Ok(res)
@@ -351,11 +345,13 @@ impl Database for Sqlite {
         Ok(res)
     }
 
-    async fn history_count(&self) -> Result<i64> {
-        let res: (i64,) = sqlx::query_as("select count(1) from history")
-            .fetch_one(&self.pool)
-            .await?;
-
+    async fn history_count(&self, include_deleted: bool) -> Result<i64> {
+        let exclude_deleted: &str = if include_deleted { "" } else { "not" };
+        let query = format!(
+            "select count(1) from history where deleted_at is {} null",
+            exclude_deleted
+        );
+        let res: (i64,) = sqlx::query_as(&query).fetch_one(&self.pool).await?;
         Ok(res.0)
     }
 

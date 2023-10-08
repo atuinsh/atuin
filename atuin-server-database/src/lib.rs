@@ -6,6 +6,7 @@ pub mod models;
 use std::{
     collections::HashMap,
     fmt::{Debug, Display},
+    ops::Range,
 };
 
 use self::{
@@ -15,7 +16,7 @@ use self::{
 use async_trait::async_trait;
 use atuin_common::record::{EncryptedData, HostId, Record, RecordId, RecordIndex};
 use serde::{de::DeserializeOwned, Serialize};
-use time::{Date, Duration, Month, OffsetDateTime, PrimitiveDateTime, Time};
+use time::{Date, Duration, Month, OffsetDateTime, Time, UtcOffset};
 use tracing::instrument;
 
 #[derive(Debug)]
@@ -74,12 +75,8 @@ pub trait Database: Sized + Clone + Send + Sync + 'static {
     // Return the tail record ID for each store, so (HostID, Tag, TailRecordID)
     async fn tail_records(&self, user: &User) -> DbResult<RecordIndex>;
 
-    async fn count_history_range(
-        &self,
-        user: &User,
-        start: PrimitiveDateTime,
-        end: PrimitiveDateTime,
-    ) -> DbResult<i64>;
+    async fn count_history_range(&self, user: &User, range: Range<OffsetDateTime>)
+        -> DbResult<i64>;
 
     async fn list_history(
         &self,
@@ -94,136 +91,81 @@ pub trait Database: Sized + Clone + Send + Sync + 'static {
 
     async fn oldest_history(&self, user: &User) -> DbResult<History>;
 
-    /// Count the history for a given year
-    #[instrument(skip_all)]
-    async fn count_history_year(&self, user: &User, year: i32) -> DbResult<i64> {
-        let start = Date::from_calendar_date(year, time::Month::January, 1)?;
-        let end = Date::from_calendar_date(year + 1, time::Month::January, 1)?;
-
-        let res = self
-            .count_history_range(
-                user,
-                start.with_time(Time::MIDNIGHT),
-                end.with_time(Time::MIDNIGHT),
-            )
-            .await?;
-        Ok(res)
-    }
-
-    /// Count the history for a given month
-    #[instrument(skip_all)]
-    async fn count_history_month(&self, user: &User, year: i32, month: Month) -> DbResult<i64> {
-        let start = Date::from_calendar_date(year, month, 1)?;
-        let days = time::util::days_in_year_month(year, month);
-        let end = start + Duration::days(days as i64);
-
-        tracing::debug!("start: {}, end: {}", start, end);
-
-        let res = self
-            .count_history_range(
-                user,
-                start.with_time(Time::MIDNIGHT),
-                end.with_time(Time::MIDNIGHT),
-            )
-            .await?;
-        Ok(res)
-    }
-
-    /// Count the history for a given day
-    #[instrument(skip_all)]
-    async fn count_history_day(&self, user: &User, day: Date) -> DbResult<i64> {
-        let end = day
-            .next_day()
-            .ok_or_else(|| DbError::Other(eyre::eyre!("no next day?")))?;
-
-        let res = self
-            .count_history_range(
-                user,
-                day.with_time(Time::MIDNIGHT),
-                end.with_time(Time::MIDNIGHT),
-            )
-            .await?;
-        Ok(res)
-    }
-
     #[instrument(skip_all)]
     async fn calendar(
         &self,
         user: &User,
         period: TimePeriod,
-        year: u64,
-        month: Month,
+        tz: UtcOffset,
     ) -> DbResult<HashMap<u64, TimePeriodInfo>> {
-        // TODO: Support different timezones. Right now we assume UTC and
-        // everything is stored as such. But it _should_ be possible to
-        // interpret the stored date with a different TZ
-
-        match period {
-            TimePeriod::YEAR => {
-                let mut ret = HashMap::new();
+        let mut ret = HashMap::new();
+        let iter: Box<dyn Iterator<Item = DbResult<(u64, Range<Date>)>> + Send> = match period {
+            TimePeriod::Year => {
                 // First we need to work out how far back to calculate. Get the
                 // oldest history item
-                let oldest = self.oldest_history(user).await?.timestamp.year();
-                let current_year = OffsetDateTime::now_utc().year();
+                let oldest = self
+                    .oldest_history(user)
+                    .await?
+                    .timestamp
+                    .to_offset(tz)
+                    .year();
+                let current_year = OffsetDateTime::now_utc().to_offset(tz).year();
 
                 // All the years we need to get data for
                 // The upper bound is exclusive, so include current +1
                 let years = oldest..current_year + 1;
 
-                for year in years {
-                    let count = self.count_history_year(user, year).await?;
+                Box::new(years.map(|year| {
+                    let start = Date::from_calendar_date(year, time::Month::January, 1)?;
+                    let end = Date::from_calendar_date(year + 1, time::Month::January, 1)?;
 
-                    ret.insert(
-                        year as u64,
-                        TimePeriodInfo {
-                            count: count as u64,
-                            hash: "".to_string(),
-                        },
-                    );
-                }
-
-                Ok(ret)
+                    Ok((year as u64, start..end))
+                }))
             }
 
-            TimePeriod::MONTH => {
-                let mut ret = HashMap::new();
-
+            TimePeriod::Month { year } => {
                 let months =
                     std::iter::successors(Some(Month::January), |m| Some(m.next())).take(12);
-                for month in months {
-                    let count = self.count_history_month(user, year as i32, month).await?;
 
-                    ret.insert(
-                        month as u64,
-                        TimePeriodInfo {
-                            count: count as u64,
-                            hash: "".to_string(),
-                        },
-                    );
-                }
+                Box::new(months.map(move |month| {
+                    let start = Date::from_calendar_date(year, month, 1)?;
+                    let days = time::util::days_in_year_month(year, month);
+                    let end = start + Duration::days(days as i64);
 
-                Ok(ret)
+                    Ok((month as u64, start..end))
+                }))
             }
 
-            TimePeriod::DAY => {
-                let mut ret = HashMap::new();
+            TimePeriod::Day { year, month } => {
+                let days = 1..time::util::days_in_year_month(year, month);
+                Box::new(days.map(move |day| {
+                    let start = Date::from_calendar_date(year, month, day)?;
+                    let end = start
+                        .next_day()
+                        .ok_or_else(|| DbError::Other(eyre::eyre!("no next day?")))?;
 
-                for day in 1..time::util::days_in_year_month(year as i32, month) {
-                    let count = self
-                        .count_history_day(user, Date::from_calendar_date(year as i32, month, day)?)
-                        .await?;
-
-                    ret.insert(
-                        day as u64,
-                        TimePeriodInfo {
-                            count: count as u64,
-                            hash: "".to_string(),
-                        },
-                    );
-                }
-
-                Ok(ret)
+                    Ok((day as u64, start..end))
+                }))
             }
+        };
+
+        for x in iter {
+            let (index, range) = x?;
+
+            let start = range.start.with_time(Time::MIDNIGHT).assume_offset(tz);
+            let end = range.end.with_time(Time::MIDNIGHT).assume_offset(tz);
+
+            let count = self.count_history_range(user, start..end).await?;
+
+            ret.insert(
+                index,
+                TimePeriodInfo {
+                    count: count as u64,
+                    hash: "".to_string(),
+                },
+            );
         }
+
+        Ok(ret)
     }
 }

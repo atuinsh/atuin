@@ -6,7 +6,7 @@ use eyre::{Context, Result};
 
 use atuin_server::{example_config, launch, Settings};
 
-#[derive(Parser)]
+#[derive(Parser, Debug)]
 #[clap(infer_subcommands = true)]
 pub enum Cmd {
     /// Start the server
@@ -31,6 +31,10 @@ impl Cmd {
             .with(fmt::layer())
             .with(EnvFilter::from_default_env())
             .init();
+
+        tracing::trace!(command = ?self, "server command");
+
+        let settings = Settings::new().wrap_err("could not load server settings")?;
 
         match self {
             Self::Start { host, port } => {

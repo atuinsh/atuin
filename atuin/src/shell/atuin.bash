@@ -12,12 +12,13 @@ _atuin_precmd() {
 
     [[ -z "${ATUIN_HISTORY_ID}" ]] && return
 
-    (RUST_LOG=error atuin history end --exit "${EXIT}" -- "${ATUIN_HISTORY_ID}" &) >/dev/null 2>&1
+    (ATUIN_LOG=error atuin history end --exit "${EXIT}" -- "${ATUIN_HISTORY_ID}" &) >/dev/null 2>&1
+    export ATUIN_HISTORY_ID=""
 }
 
 __atuin_history() {
     # shellcheck disable=SC2048,SC2086
-    HISTORY="$(RUST_LOG=error atuin search $* -i -- "${READLINE_LINE}" 3>&1 1>&2 2>&3)"
+    HISTORY="$(ATUIN_LOG=error atuin search $* -i -- "${READLINE_LINE}" 3>&1 1>&2 2>&3)"
 
     READLINE_LINE=${HISTORY}
     READLINE_POINT=${#READLINE_LINE}
