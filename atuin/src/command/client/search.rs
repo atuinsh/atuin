@@ -19,7 +19,7 @@ mod interactive;
 pub use duration::{format_duration, format_duration_into};
 
 #[allow(clippy::struct_excessive_bools)]
-#[derive(Parser)]
+#[derive(Parser, Debug)]
 pub struct Cmd {
     /// Filter search result by directory
     #[arg(long, short)]
@@ -103,7 +103,7 @@ pub struct Cmd {
 }
 
 impl Cmd {
-    pub async fn run(self, mut db: impl Database, settings: &mut Settings) -> Result<()> {
+    pub async fn run(self, db: impl Database, settings: &mut Settings) -> Result<()> {
         if self.delete && self.query.is_empty() {
             println!("Please specify a query to match the items you wish to delete. If you wish to delete all history, pass --delete-it-all");
             return Ok(());
@@ -147,7 +147,7 @@ impl Cmd {
             };
 
             let mut entries =
-                run_non_interactive(settings, opt_filter.clone(), &self.query, &mut db).await?;
+                run_non_interactive(settings, opt_filter.clone(), &self.query, &db).await?;
 
             if entries.is_empty() {
                 std::process::exit(1)
@@ -165,8 +165,7 @@ impl Cmd {
                     }
 
                     entries =
-                        run_non_interactive(settings, opt_filter.clone(), &self.query, &mut db)
-                            .await?;
+                        run_non_interactive(settings, opt_filter.clone(), &self.query, &db).await?;
                 }
             } else {
                 super::history::print_list(
@@ -189,7 +188,7 @@ async fn run_non_interactive(
     settings: &Settings,
     filter_options: OptFilters,
     query: &[String],
-    db: &mut impl Database,
+    db: &impl Database,
 ) -> Result<Vec<History>> {
     let dir = if filter_options.cwd.as_deref() == Some(".") {
         Some(utils::get_current_dir())
