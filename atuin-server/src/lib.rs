@@ -14,6 +14,7 @@ mod router;
 mod settings;
 mod utils;
 
+pub use settings::example_config;
 pub use settings::Settings;
 use tokio::signal;
 
