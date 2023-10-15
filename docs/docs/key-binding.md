@@ -18,7 +18,11 @@ filter_mode_shell_up_key_binding = "directory" # or global, host, directory, etc
 
 ## Disable up arrow
 
-Our default up-arrow binding can be a bit contentious. Some people love it, some people hate it. Many people who found it a bit jarring at first have since come to love it, so give it a try! Otherwise, if you don't like it, it's easy to disable.
+Our default up-arrow binding can be a bit contentious. Some people love it, some people hate it. Many people who found it a bit jarring at first have since come to love it, so give it a try! 
+
+It becomes much more powerful if you consider binding a different filter mode to the up arrow. For example, on "up" Atuin can default to searching all history for the current directory only, while ctrl-r searches history globally. See the [config](https://atuin.sh/docs/config/#filter_mode_shell_up_key_binding) for more.
+
+Otherwise, if you don't like it, it's easy to disable.
 
 You can also disable either the up-arrow or <kbd>Ctrl-r</kbd> bindings individually, by passing
 `--disable-up-arrow` or `--disable-ctrl-r` to the call to `atuin init`:
