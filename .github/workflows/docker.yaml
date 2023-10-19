@@ -1,63 +1,126 @@
-name: Build docker image
+name: build-docker
 
 on:
   push:
-    branches:
-      - 'main'
-    tags:
-      - 'v*'
-
-permissions:
-  packages: write
+    branches: [ master ]
 
 jobs:
-  build:
-    name: build and publish atuin image
-    runs-on: ubuntu-latest
+
+  publish_x86:
+    concurrency: 
+      group: ${{ github.ref }}-x86
+      cancel-in-progress: true
+    permissions:
+      packages: write
+
+    runs-on: actuated
     steps:
-
-      - name: Check Out Repo
-        uses: actions/checkout@v3
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v2
-
-      - name: Docker meta
-        id: meta
-        uses: docker/metadata-action@v4
+      - uses: actions/checkout@master
         with:
-          images: ghcr.io/${{ github.repository }}
-          tags: |
-            type=ref,event=pr
-            type=ref,event=branch
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+          repository: atuinsh/atuin
+          path: "./"
+
+      - name: Setup mirror
+        uses: self-actuated/hub-mirror@master
+
+      - name: Get Repo Owner
+        id: get_repo_owner
+        run: echo "REPO_OWNER=$(echo ${{ github.repository_owner }} | tr '[:upper:]' '[:lower:]')" > $GITHUB_ENV
 
       - name: Set up Docker Buildx
-        id: buildx
         uses: docker/setup-buildx-action@v2
-
-      - name: Login to Docker Hub
+      - name: Login to container Registry
         uses: docker/login-action@v2
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
+          username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
+          registry: ghcr.io
 
-      - name: Build and push
-        id: docker_build
+      - name: Release build
+        id: release_build
         uses: docker/build-push-action@v4
         with:
-          context: ./
+          outputs: "type=registry,push=true"
+          platforms: linux/amd64
           file: ./Dockerfile
-          builder: ${{ steps.buildx.outputs.name }}
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          platforms: linux/amd64 #,linux/arm64
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          build-args: RUST_BACKTRACE=1
+          context: .
+          provenance: false
+          build-args: |
+            Version=dev
+            GitCommit=${{ github.sha }}
+          tags: |
+            ghcr.io/${{ env.REPO_OWNER }}/atuin:${{ github.sha }}-amd64
 
-      - name: Image digest
-        run: echo ${{ steps.docker_build.outputs.digest }}
+
+  publish_aarch64:
+    concurrency: 
+      group: ${{ github.ref }}-aarch64
+      cancel-in-progress: true
+    permissions:
+      packages: write
+
+    runs-on: actuated-aarch64
+    steps:
+      - uses: actions/checkout@master
+        with:
+          repository: atuinsh/atuin
+          path: "./"
+
+      - name: Setup mirror
+        uses: self-actuated/hub-mirror@master
+
+      - name: Get Repo Owner
+        id: get_repo_owner
+        run: echo "REPO_OWNER=$(echo ${{ github.repository_owner }} | tr '[:upper:]' '[:lower:]')" > $GITHUB_ENV
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+      - name: Login to container Registry
+        uses: docker/login-action@v2
+        with:
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+          registry: ghcr.io
+
+      - name: Release build
+        id: release_build
+        uses: docker/build-push-action@v4
+        with:
+          outputs: "type=registry,push=true"
+          platforms: linux/arm64
+          file: ./Dockerfile
+          context: .
+          provenance: false
+          build-args: |
+            Version=dev
+            GitCommit=${{ github.sha }}
+          tags: |
+            ghcr.io/${{ env.REPO_OWNER }}/atuin:${{ github.sha }}-aarch64
+
+  publish_manifest:
+    runs-on: ubuntu-latest
+    needs: [publish_x86, publish_aarch64]
+    steps:
+
+    - name: Get Repo Owner
+      id: get_repo_owner
+      run: echo "REPO_OWNER=$(echo ${{ github.repository_owner }} | tr '[:upper:]' '[:lower:]')" > $GITHUB_ENV
+
+    - name: Login to container Registry
+      uses: docker/login-action@v2
+      with:
+        username: ${{ github.repository_owner }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+        registry: ghcr.io
+
+    - name: Create manifest
+      run: |
+        docker manifest create ghcr.io/${{ env.REPO_OWNER }}/atuin:${{ github.sha }} \
+          --amend ghcr.io/${{ env.REPO_OWNER }}/atuin:${{ github.sha }}-amd64 \
+          --amend ghcr.io/${{ env.REPO_OWNER }}/atuin:${{ github.sha }}-aarch64
+        docker manifest annotate --arch amd64 --os linux ghcr.io/${{ env.REPO_OWNER }}/atuin:${{ github.sha }} ghcr.io/${{ env.REPO_OWNER }}/atuin:${{ github.sha }}-amd64
+        docker manifest annotate --arch arm64 --os linux ghcr.io/${{ env.REPO_OWNER }}/atuin:${{ github.sha }} ghcr.io/${{ env.REPO_OWNER }}/atuin:${{ github.sha }}-aarch64
+        docker manifest inspect ghcr.io/${{ env.REPO_OWNER }}/atuin:${{ github.sha }}
+
+        docker manifest push ghcr.io/${{ env.REPO_OWNER }}/atuin:${{ github.sha }}
+
