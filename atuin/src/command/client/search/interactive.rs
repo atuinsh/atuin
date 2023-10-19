@@ -3,6 +3,7 @@ use std::{
     time::Duration,
 };
 
+use atuin_common::utils;
 use crossterm::{
     event::{
         self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers,
@@ -702,7 +703,7 @@ pub async fn history(
 
     if index < results.len() {
         let mut command = results.swap_remove(index).command;
-        if accept {
+        if accept && utils::is_zsh() {
             command = String::from("__atuin_accept__:") + &command;
         }
         // index is in bounds so we return that entry
