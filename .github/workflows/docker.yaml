@@ -15,7 +15,7 @@ jobs:
     permissions:
       packages: write
 
-    runs-on: actuated
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@master
         with:
