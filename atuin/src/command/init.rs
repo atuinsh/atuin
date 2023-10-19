@@ -9,6 +9,10 @@ pub struct Cmd {
     disable_ctrl_r: bool,
 
     /// Disable the binding of the Up Arrow key to atuin
+    /// Now the default, but left here to avoid breaking shells
+    ///
+    /// Originally we bound the up arrow by default, but due to pretty constant questions I'm
+    /// changing the default
     #[clap(long)]
     disable_up_arrow: bool,
 }

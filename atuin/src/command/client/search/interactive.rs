@@ -135,7 +135,10 @@ impl State {
                 return Some(self.results_state.selected());
             }
             KeyCode::Enter => {
-                self.accept = true;
+                if settings.enter_accept {
+                    self.accept = true;
+                }
+
                 return Some(self.results_state.selected());
             }
             KeyCode::Char('y') if ctrl => {
