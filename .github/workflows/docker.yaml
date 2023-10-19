@@ -109,6 +109,10 @@ jobs:
     runs-on: ubuntu-latest
     needs: [publish_x86, publish_aarch64]
     steps:
+    - uses: actions/checkout@master
+      with:
+        repository: atuinsh/atuin
+        path: "./"
 
     - name: Get Repo Owner
       id: get_repo_owner
