@@ -305,3 +305,16 @@ Default: 5
 
 The max time (in seconds) we wait for a connection to become established with a
 remote sync server. Any longer than this and the request will fail.
+
+## enter_accept
+Default: false
+
+Only supported on Bash.
+
+When set to true, Atuin will default to immediately executing a command rather
+than the user having to press enter twice. Pressing tab will return to the
+shell and give the user a chance to edit.
+
+This technically defaults to true for new users, but false for existing. We
+have set `enter_accept = true` in the default config file. This is likely to
+change to be the default for everyone in a later release.
