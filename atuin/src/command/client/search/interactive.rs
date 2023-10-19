@@ -47,6 +47,7 @@ struct State {
     switched_search_mode: bool,
     search_mode: SearchMode,
     results_len: usize,
+    accept: bool,
 
     search: SearchState,
     engine: Box<dyn SearchEngine>,
@@ -130,7 +131,11 @@ impl State {
                     ExitMode::ReturnQuery => RETURN_QUERY,
                 })
             }
+            KeyCode::Tab => {
+                return Some(self.results_state.selected());
+            }
             KeyCode::Enter => {
+                self.accept = true;
                 return Some(self.results_state.selected());
             }
             KeyCode::Char('y') if ctrl => {
@@ -646,10 +651,12 @@ pub async fn history(
         },
         engine: engines::engine(search_mode),
         results_len: 0,
+        accept: false,
     };
 
     let mut results = app.query_results(&mut db).await?;
 
+    let accept;
     let index = 'render: loop {
         terminal.draw(|f| app.draw(f, &results, settings))?;
 
@@ -664,6 +671,7 @@ pub async fn history(
                 if event_ready?? {
                     loop {
                         if let Some(i) = app.handle_input(settings, &event::read()?, &mut std::io::stdout())? {
+                            accept = app.accept;
                             break 'render i;
                         }
                         if !event::poll(Duration::ZERO)? {
@@ -690,8 +698,12 @@ pub async fn history(
     }
 
     if index < results.len() {
+        let mut command = results.swap_remove(index).command;
+        if accept {
+            command = String::from("__atuin_accept__:") + &command;
+        }
         // index is in bounds so we return that entry
-        Ok(results.swap_remove(index).command)
+        Ok(command)
     } else if index == RETURN_ORIGINAL {
         Ok(String::new())
     } else if index == COPY_QUERY {
