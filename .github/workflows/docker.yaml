@@ -2,7 +2,9 @@ name: build-docker
 
 on:
   push:
-    branches: [ master ]
+    branches: [ main ]
+    tags:
+      - 'v*'
 
 jobs:
 
