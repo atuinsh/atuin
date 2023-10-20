@@ -18,10 +18,18 @@ _atuin_precmd() {
 
 __atuin_history() {
     # shellcheck disable=SC2048,SC2086
-    HISTORY="$(ATUIN_LOG=error atuin search $* -i -- "${READLINE_LINE}" 3>&1 1>&2 2>&3)"
+    HISTORY="$(ATUIN_SHELL_BASH=t ATUIN_LOG=error atuin search $* -i -- "${READLINE_LINE}" 3>&1 1>&2 2>&3)"
 
-    READLINE_LINE=${HISTORY}
-    READLINE_POINT=${#READLINE_LINE}
+    if [[ $HISTORY == __atuin_accept__:* ]]
+    then
+      HISTORY=${HISTORY#__atuin_accept__:}
+
+      eval "$HISTORY"
+    else
+      READLINE_LINE=${HISTORY}
+      READLINE_POINT=${#READLINE_LINE}
+    fi
+
 }
 
 if [[ -n "${BLE_VERSION-}" ]]; then

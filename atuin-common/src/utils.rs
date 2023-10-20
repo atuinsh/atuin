@@ -119,8 +119,13 @@ pub fn is_zsh() -> bool {
 }
 
 pub fn is_fish() -> bool {
-    // only set on zsh
+    // only set on fish
     env::var("ATUIN_SHELL_FISH").is_ok()
+}
+
+pub fn is_bash() -> bool {
+    // only set on bash
+    env::var("ATUIN_SHELL_BASH").is_ok()
 }
 
 #[cfg(test)]
