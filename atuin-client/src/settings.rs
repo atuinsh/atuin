@@ -179,6 +179,7 @@ pub struct Settings {
 
     pub network_connect_timeout: u64,
     pub network_timeout: u64,
+    pub enter_accept: bool,
 
     // This is automatically loaded when settings is created. Do not set in
     // config! Keep secrets and settings apart.
@@ -378,6 +379,12 @@ impl Settings {
             .set_default("secrets_filter", true)?
             .set_default("network_connect_timeout", 5)?
             .set_default("network_timeout", 30)?
+            // enter_accept defaults to false here, but true in the default config file. The dissonance is
+            // intentional!
+            // Existing users will get the default "False", so we don't mess with any potential
+            // muscle memory.
+            // New users will get the new default, that is more similar to what they are used to.
+            .set_default("enter_accept", false)?
             .add_source(
                 Environment::with_prefix("atuin")
                     .prefix_separator("_")
@@ -391,6 +398,7 @@ impl Settings {
 
         create_dir_all(&config_dir)
             .wrap_err_with(|| format!("could not create dir {config_dir:?}"))?;
+
         create_dir_all(&data_dir).wrap_err_with(|| format!("could not create dir {data_dir:?}"))?;
 
         let mut config_file = if let Ok(p) = std::env::var("ATUIN_CONFIG_DIR") {

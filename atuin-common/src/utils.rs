@@ -113,6 +113,11 @@ pub fn get_current_dir() -> String {
     }
 }
 
+pub fn is_zsh() -> bool {
+    // only set on zsh
+    env::var("ZSH_VERSION").is_ok()
+}
+
 #[cfg(test)]
 mod tests {
     use time::Month;

@@ -36,12 +36,18 @@ _atuin_search() {
     # shellcheck disable=SC2048
     output=$(ATUIN_LOG=error atuin search $* -i -- $BUFFER 3>&1 1>&2 2>&3)
 
+    zle reset-prompt
+
     if [[ -n $output ]]; then
         RBUFFER=""
         LBUFFER=$output
     fi
 
-    zle reset-prompt
+    if [[ $LBUFFER == __atuin_accept__:* ]]
+    then
+        LBUFFER=${LBUFFER#__atuin_accept__:}
+        zle accept-line
+    fi
 }
 
 _atuin_up_search() {

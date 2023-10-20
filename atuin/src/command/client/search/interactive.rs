@@ -3,6 +3,7 @@ use std::{
     time::Duration,
 };
 
+use atuin_common::utils;
 use crossterm::{
     event::{
         self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers,
@@ -47,6 +48,7 @@ struct State {
     switched_search_mode: bool,
     search_mode: SearchMode,
     results_len: usize,
+    accept: bool,
 
     search: SearchState,
     engine: Box<dyn SearchEngine>,
@@ -130,7 +132,14 @@ impl State {
                     ExitMode::ReturnQuery => RETURN_QUERY,
                 })
             }
+            KeyCode::Tab => {
+                return Some(self.results_state.selected());
+            }
             KeyCode::Enter => {
+                if settings.enter_accept {
+                    self.accept = true;
+                }
+
                 return Some(self.results_state.selected());
             }
             KeyCode::Char('y') if ctrl => {
@@ -588,7 +597,7 @@ impl Write for Stdout {
 // this is a big blob of horrible! clean it up!
 // for now, it works. But it'd be great if it were more easily readable, and
 // modular. I'd like to add some more stats and stuff at some point
-#[allow(clippy::cast_possible_truncation)]
+#[allow(clippy::cast_possible_truncation, clippy::too_many_lines)]
 pub async fn history(
     query: &[String],
     settings: &Settings,
@@ -646,10 +655,12 @@ pub async fn history(
         },
         engine: engines::engine(search_mode),
         results_len: 0,
+        accept: false,
     };
 
     let mut results = app.query_results(&mut db).await?;
 
+    let accept;
     let index = 'render: loop {
         terminal.draw(|f| app.draw(f, &results, settings))?;
 
@@ -664,6 +675,7 @@ pub async fn history(
                 if event_ready?? {
                     loop {
                         if let Some(i) = app.handle_input(settings, &event::read()?, &mut std::io::stdout())? {
+                            accept = app.accept;
                             break 'render i;
                         }
                         if !event::poll(Duration::ZERO)? {
@@ -690,8 +702,12 @@ pub async fn history(
     }
 
     if index < results.len() {
+        let mut command = results.swap_remove(index).command;
+        if accept && utils::is_zsh() {
+            command = String::from("__atuin_accept__:") + &command;
+        }
         // index is in bounds so we return that entry
-        Ok(results.swap_remove(index).command)
+        Ok(command)
     } else if index == RETURN_ORIGINAL {
         Ok(String::new())
     } else if index == COPY_QUERY {
