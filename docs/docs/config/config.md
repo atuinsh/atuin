@@ -309,7 +309,7 @@ remote sync server. Any longer than this and the request will fail.
 ## enter_accept
 Default: false
 
-Only supported on Bash.
+Only supported on Zsh.
 
 When set to true, Atuin will default to immediately executing a command rather
 than the user having to press enter twice. Pressing tab will return to the
