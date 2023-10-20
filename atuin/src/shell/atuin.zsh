@@ -10,7 +10,6 @@
 autoload -U add-zsh-hook
 
 export ATUIN_SESSION=$(atuin uuid)
-export ATUIN_HISTORY="atuin history list"
 
 _atuin_preexec() {
     local id
@@ -34,7 +33,7 @@ _atuin_search() {
     # swap stderr and stdout, so that the tui stuff works
     # TODO: not this
     # shellcheck disable=SC2048
-    output=$(ATUIN_LOG=error atuin search $* -i -- $BUFFER 3>&1 1>&2 2>&3)
+    output=$(ATUIN_SHELL_ZSH=t ATUIN_LOG=error atuin search $* -i -- $BUFFER 3>&1 1>&2 2>&3)
 
     zle reset-prompt
 

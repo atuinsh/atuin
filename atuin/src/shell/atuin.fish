@@ -8,18 +8,25 @@ end
 
 function _atuin_postexec --on-event fish_postexec
     set s $status
+
     if test -n "$ATUIN_HISTORY_ID"
         ATUIN_LOG=error atuin history end --exit $s -- $ATUIN_HISTORY_ID &>/dev/null &
         disown
     end
+
     set --erase ATUIN_HISTORY_ID
 end
 
 function _atuin_search
-    set h (ATUIN_LOG=error atuin search $argv -i -- (commandline -b) 3>&1 1>&2 2>&3)
+    set h (ATUIN_SHELL_FISH=t ATUIN_LOG=error atuin search $argv -i -- (commandline -b) 3>&1 1>&2 2>&3)
     commandline -f repaint
+
     if test -n "$h"
-        commandline -r "$h"
+        if string match -g '__atuin_accept__:*' "$h"
+          eval (string match -r '__atuin_accept__:(.*|\s*)' "$h"  | awk 'NR == 2')
+        else
+          commandline -r "$h"
+        end
     end
 end
 
@@ -32,6 +39,7 @@ function _atuin_bind_up
 
     # Only invoke atuin if we're on the top line of the command
     set -l lineno (commandline --line)
+
     switch $lineno
         case 1
             _atuin_search --shell-up-key-binding

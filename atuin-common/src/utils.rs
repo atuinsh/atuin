@@ -115,7 +115,12 @@ pub fn get_current_dir() -> String {
 
 pub fn is_zsh() -> bool {
     // only set on zsh
-    env::var("ZSH_VERSION").is_ok()
+    env::var("ATUIN_SHELL_ZSH").is_ok()
+}
+
+pub fn is_fish() -> bool {
+    // only set on zsh
+    env::var("ATUIN_SHELL_FISH").is_ok()
 }
 
 #[cfg(test)]
