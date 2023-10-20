@@ -703,9 +703,10 @@ pub async fn history(
 
     if index < results.len() {
         let mut command = results.swap_remove(index).command;
-        if accept && utils::is_zsh() {
+        if accept && (utils::is_zsh() || utils::is_fish()) {
             command = String::from("__atuin_accept__:") + &command;
         }
+
         // index is in bounds so we return that entry
         Ok(command)
     } else if index == RETURN_ORIGINAL {
