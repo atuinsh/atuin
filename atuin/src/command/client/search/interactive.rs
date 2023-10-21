@@ -703,7 +703,7 @@ pub async fn history(
 
     if index < results.len() {
         let mut command = results.swap_remove(index).command;
-        if accept && (utils::is_zsh() || utils::is_fish()) {
+        if accept && (utils::is_zsh() || utils::is_fish() || utils::is_bash()) {
             command = String::from("__atuin_accept__:") + &command;
         }
 
