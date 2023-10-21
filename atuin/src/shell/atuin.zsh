@@ -93,7 +93,7 @@ _atuin_up_search_viins() {
     _atuin_up_search --keymap-mode=vim-insert
 }
 
-add-zsh-hook preexec _atuin_preexec
+add-zsh-hook zshaddhistory _atuin_preexec
 add-zsh-hook precmd _atuin_precmd
 
 zle -N atuin-search _atuin_search
