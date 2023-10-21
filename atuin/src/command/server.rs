@@ -37,12 +37,10 @@ impl Cmd {
         match self {
             Self::Start { host, port } => {
                 let settings = Settings::new().wrap_err("could not load server settings")?;
-                let host = host
-                    .as_ref()
-                    .map_or(settings.host.clone(), std::string::ToString::to_string);
-                let port = port.map_or(settings.port, |p| p);
+                let host = host.as_ref().unwrap_or(&settings.host).clone();
+                let port = port.unwrap_or(settings.port);
 
-                launch::<Postgres>(settings, host, port).await
+                launch::<Postgres>(settings, &host, port).await
             }
             Self::DefaultConfig => {
                 println!("{}", example_config());
