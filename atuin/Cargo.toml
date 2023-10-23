@@ -73,6 +73,7 @@ colored = "2.0.4"
 ratatui = "0.23"
 tracing = "0.1"
 cli-clipboard = "0.4.0"
+fork = "0.1.22"
 
 
 [dependencies.tracing-subscriber]

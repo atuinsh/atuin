@@ -159,6 +159,7 @@ dependencies = [
  "directories",
  "env_logger",
  "eyre",
+ "fork",
  "fs-err",
  "futures-util",
  "fuzzy-matcher",
@@ -1121,6 +1122,15 @@ name = "fnv"
 version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
+
+[[package]]
+name = "fork"
+version = "0.1.22"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bf2ca97a59201425e7ee4d197c9c4fea282fe87a97d666a580bda889b95b8e88"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "form_urlencoded"

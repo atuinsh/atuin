@@ -2,12 +2,14 @@ use std::{
     env,
     fmt::{self, Display},
     io::{self, Write},
+    thread::sleep,
     time::Duration,
 };
 
 use atuin_common::utils;
 use clap::Subcommand;
 use eyre::{Context, Result};
+use fork::{fork, Fork};
 use runtime_format::{FormatKey, FormatKeyError, ParseSegment, ParsedFmt};
 
 use atuin_client::{
@@ -263,7 +265,12 @@ impl Cmd {
         // print the ID
         // we use this as the key for calling end
         println!("{}", h.id);
-        db.save(&h).await?;
+
+        // Fork a thread so that we don't block the critical path on the DB write
+        if let Ok(Fork::Child) = fork() {
+            db.save(&h).await?;
+        }
+
         Ok(())
     }
 
@@ -277,7 +284,8 @@ impl Cmd {
             return Ok(());
         }
 
-        let Some(mut h) = db.load(id).await? else {
+        // It's possible that the write hasn't yet completed, so we'll retry several times
+        let Some(mut h) = load_data_with_retry(db, id, 5).await? else {
             warn!("history entry is missing");
             return Ok(());
         };
@@ -402,4 +410,15 @@ impl Cmd {
             }
         }
     }
+}
+
+async fn load_data_with_retry(db: &impl Database, id: &str, retries: u32) -> Result<Option<History>> {
+    for _ in 0..retries {
+        if let Some(h) = db.load(id).await? {
+            return Ok(Some(h));
+        } else {
+            sleep(Duration::from_secs(1));
+        }
+    }
+    Ok(None)
 }
