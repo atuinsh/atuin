@@ -346,12 +346,13 @@ impl Database for Sqlite {
     }
 
     async fn history_count(&self, include_deleted: bool) -> Result<i64> {
-        let exclude_deleted: &str = if include_deleted { "" } else { "not" };
-        let query = format!(
-            "select count(1) from history where deleted_at is {} null",
-            exclude_deleted
-        );
-        let res: (i64,) = sqlx::query_as(&query).fetch_one(&self.pool).await?;
+        let query = if include_deleted {
+            "select count(1) from history"
+        } else {
+            "select count(1) from history where deleted_at is null"
+        };
+
+        let res: (i64,) = sqlx::query_as(query).fetch_one(&self.pool).await?;
         Ok(res.0)
     }
 
