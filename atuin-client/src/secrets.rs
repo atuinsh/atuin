@@ -9,12 +9,12 @@ pub static SECRET_PATTERNS: &[(&str, &str, &str)] = &[
     ),
     (
         "GitHub PAT (old)",
-        "^ghp_[a-zA-Z0-9]{36}$",
+        "ghp_[a-zA-Z0-9]{36}",
         "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", // legit, I expired it
     ),
     (
         "GitHub PAT (new)",
-        "^github_pat_[a-zA-Z0-9]{22}_[a-zA-Z0-9]{59}$",
+        "github_pat_[a-zA-Z0-9]{22}_[a-zA-Z0-9]{59}",
         "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", // also legit, also expired
     ),
     (
