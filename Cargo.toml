@@ -10,7 +10,7 @@ members = [
 
 [workspace.package]
 name = "atuin"
-version = "17.0.0"
+version = "16.0.0"
 authors = ["Ellie Huxtable <ellie@elliehuxtable.com>"]
 rust-version = "1.67"
 license = "MIT"
@@ -22,11 +22,7 @@ readme = "README.md"
 async-trait = "0.1.58"
 base64 = "0.21"
 log = "0.4"
-time = { version = "0.3", features = [
-  "serde-human-readable",
-  "macros",
-  "local-offset",
-] }
+time = { version = "0.3", features = ["serde-human-readable", "macros", "local-offset"] }
 clap = { version = "4.0.18", features = ["derive"] }
 config = { version = "0.13", default-features = false, features = ["toml"] }
 directories = "4"
@@ -54,4 +50,9 @@ default-features = false
 
 [workspace.dependencies.sqlx]
 version = "0.7.1"
-features = ["runtime-tokio-rustls", "time", "postgres", "uuid"]
+features = [
+  "runtime-tokio-rustls",
+  "time",
+  "postgres",
+  "uuid",
+]
