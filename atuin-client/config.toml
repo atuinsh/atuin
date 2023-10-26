@@ -60,7 +60,7 @@
 ## set it to 0 to always go full screen
 # inline_height = 0
 
-##Invert the UI - put the search bar at the top , Default to `false`
+## Invert the UI - put the search bar at the top , Default to `false`
 # invert = false
 
 ## enable or disable showing a preview of the selected command
@@ -112,9 +112,6 @@
 ## version (and whether an update is available), a keymap hint, and the total
 ## amount of commands in your history.
 # show_help = true
-
-## Invert the UI - put the search bar at the top
-# invert = false
 
 ## Defaults to true. This matches history against a set of default regex, and will not save it if we get a match. Defaults include
 ## 1. AWS key id
