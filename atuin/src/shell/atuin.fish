@@ -19,15 +19,18 @@ end
 
 function _atuin_search
     set h (ATUIN_SHELL_FISH=t ATUIN_LOG=error atuin search $argv -i -- (commandline -b) 3>&1 1>&2 2>&3)
-    commandline -f repaint
 
     if test -n "$h"
-        if string match -g '__atuin_accept__:*' "$h"
-          eval (string match -r '__atuin_accept__:(.*|\s*)' "$h"  | awk 'NR == 2')
+        if string match -qg '__atuin_accept__:*' "$h"
+          set hist (string match -r '__atuin_accept__:(.*|\s*)' "$h"  | awk 'NR == 2')
+          echo $hist
+          eval $hist
         else
           commandline -r "$h"
         end
     end
+
+    commandline -f repaint
 end
 
 function _atuin_bind_up
