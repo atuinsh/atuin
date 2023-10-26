@@ -50,6 +50,8 @@ eval "$(atuin init zsh)"
 
 You can then choose to bind Atuin if needed, do this after the call to init.
 
+**Nushell Only**: The up-arrow keybinding is disabled by default for Nushell until [#1025](https://github.com/atuinsh/atuin/issues/1025) is resolved.
+
 ## <kbd>Ctrl-n</kbd> key shortcuts
 
 macOS does not have an <kbd>Alt</kbd> key, although terminal emulators can often be configured to map the <kbd>Option</kbd> key to be used as <kbd>Alt</kbd>. *However*, remapping <kbd>Option</kbd> this way may prevent typing some characters, such as using <kbd>Option-3</kbd> to type `#` on the British English layout. For such a scenario, set the `ctrl_n_shortcuts` option to `true` in your config file to replace <kbd>Alt-0</kbd> to <kbd>Alt-9</kbd> shortcuts with <kbd>Ctrl-0</kbd> to <kbd>Ctrl-9</kbd> instead:
