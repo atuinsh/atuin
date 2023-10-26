@@ -214,7 +214,7 @@ invert = true/false
 
 Set the maximum number of lines Atuin's interface should take up.
 
-![inline_height](../../blog/2023/04-01-release-v14/inline.png)
+![inline_height](/img/inline.png)
 
 If set to `0` (default), Atuin will always take up as many lines as available (full screen).
 
@@ -222,7 +222,7 @@ If set to `0` (default), Atuin will always take up as many lines as available (f
 
 Configure whether or not to show a preview of the selected command.
 
-![show_preview](../../blog/2023/04-01-release-v14/preview.png)
+![show_preview](/img/preview.png)
 
 Useful when the command is longer than the terminal width and is cut off.
 
