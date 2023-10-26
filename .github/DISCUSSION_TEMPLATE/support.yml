@@ -21,7 +21,8 @@ body:
       description: What version of atuin are you running?
       multiple: false
       options: # how often will I forget to update this? a lot.
-        - v16.0.0 (Default)
+        - v17.0.0 (Default)
+        - v16.0.0
         - v15.0.0
         - v14.0.1
         - v14.0.0
