@@ -40,7 +40,7 @@ atuin sync
 
 Now restart your shell! 
 
-Anytime you press ctrl-r or up, you will see the Atuin search UI. Enter your
+Anytime you press ctrl-r or up, you will see the Atuin search UI. Type your
 query, enter to execute. If you'd like to select a command without executing
 it, press tab.
 
