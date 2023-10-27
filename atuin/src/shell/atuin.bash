@@ -23,8 +23,12 @@ __atuin_history() {
     if [[ $HISTORY == __atuin_accept__:* ]]
     then
       HISTORY=${HISTORY#__atuin_accept__:}
-
+      echo "$HISTORY"
+      # Need to run the pre/post exec functions manually
+      _atuin_preexec "$HISTORY"
       eval "$HISTORY"
+      _atuin_precmd
+      echo
     else
       READLINE_LINE=${HISTORY}
       READLINE_POINT=${#READLINE_LINE}
