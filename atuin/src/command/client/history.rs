@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::{
     env,
     fmt::{self, Display},
@@ -13,7 +14,7 @@ use fork::{fork, Fork};
 use runtime_format::{FormatKey, FormatKeyError, ParseSegment, ParsedFmt};
 
 use atuin_client::{
-    database::{current_context, Database},
+    database::{current_context, Database, Sqlite},
     history::History,
     settings::Settings,
 };
@@ -241,7 +242,7 @@ fn parse_fmt(format: &str) -> ParsedFmt {
 impl Cmd {
     #[allow(clippy::too_many_lines, clippy::cast_possible_truncation)]
     async fn handle_start(
-        db: &impl Database,
+        _db: &impl Database,
         settings: &Settings,
         command: &[String],
     ) -> Result<()> {
@@ -267,7 +268,10 @@ impl Cmd {
         println!("{}", h.id);
 
         // Fork a thread so that we don't block the critical path on the DB write
-        if let Ok(Fork::Child) = fork() {
+        if matches!(fork(), Ok(Fork::Child)) {
+            // The writes fail if we pass the database to the child, so we'll just recreate it here
+            let db_path = PathBuf::from(settings.db_path.as_str());
+            let db = Sqlite::new(db_path).await?;
             db.save(&h).await?;
         }
 
@@ -275,7 +279,7 @@ impl Cmd {
     }
 
     async fn handle_end(
-        db: &impl Database,
+        _db: &impl Database,
         settings: &Settings,
         id: &str,
         exit: i64,
@@ -284,8 +288,18 @@ impl Cmd {
             return Ok(());
         }
 
+        if matches!(fork(), Ok(Fork::Parent(_))) {
+            // Return quickly and let the child handle background syncing
+            return Ok(());
+        }
+
+        // The writes fail if we pass the database to the child, so we'll just recreate it here
+        let db_path = PathBuf::from(settings.db_path.as_str());
+        let db = Sqlite::new(db_path).await?;
+
         // It's possible that the write hasn't yet completed, so we'll retry several times
-        let Some(mut h) = load_data_with_retry(db, id, 5).await? else {
+        // NOTE: This will need to not retry if fork isn't available
+        let Some(mut h) = load_data_with_retry(&db, id, 30).await? else {
             warn!("history entry is missing");
             return Ok(());
         };
@@ -307,7 +321,7 @@ impl Cmd {
             #[cfg(feature = "sync")]
             {
                 debug!("running periodic background sync");
-                sync::sync(settings, false, db).await?;
+                sync::sync(settings, false, &db).await?;
             }
             #[cfg(not(feature = "sync"))]
             debug!("not compiled with sync support");
@@ -412,13 +426,16 @@ impl Cmd {
     }
 }
 
-async fn load_data_with_retry(db: &impl Database, id: &str, retries: u32) -> Result<Option<History>> {
+async fn load_data_with_retry(
+    db: &impl Database,
+    id: &str,
+    retries: u32,
+) -> Result<Option<History>> {
     for _ in 0..retries {
         if let Some(h) = db.load(id).await? {
             return Ok(Some(h));
-        } else {
-            sleep(Duration::from_secs(1));
         }
+        sleep(Duration::from_secs(1));
     }
     Ok(None)
 }
