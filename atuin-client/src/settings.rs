@@ -1,11 +1,11 @@
 use std::{
+    convert::TryFrom,
     io::prelude::*,
     path::{Path, PathBuf},
     str::FromStr,
 };
 
 use atuin_common::record::HostId;
-use chrono::{prelude::*, Utc};
 use clap::ValueEnum;
 use config::{
     builder::DefaultState, Config, ConfigBuilder, Environment, File as ConfigFile, FileFormat,
@@ -16,6 +16,7 @@ use parse_duration::parse;
 use regex::RegexSet;
 use semver::Version;
 use serde::Deserialize;
+use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use uuid::Uuid;
 
 pub const HISTORY_PAGE_SIZE: i64 = 100;
@@ -23,6 +24,7 @@ pub const LAST_SYNC_FILENAME: &str = "last_sync_time";
 pub const LAST_VERSION_CHECK_FILENAME: &str = "last_version_check_time";
 pub const LATEST_VERSION_FILENAME: &str = "latest_version";
 pub const HOST_ID_FILENAME: &str = "host_id";
+static EXAMPLE_CONFIG: &str = include_str!("../config.toml");
 
 #[derive(Clone, Debug, Deserialize, Copy, ValueEnum, PartialEq)]
 pub enum SearchMode {
@@ -156,6 +158,7 @@ pub struct Settings {
     pub search_mode: SearchMode,
     pub filter_mode: FilterMode,
     pub filter_mode_shell_up_key_binding: Option<FilterMode>,
+    pub search_mode_shell_up_key_binding: Option<SearchMode>,
     pub shell_up_key_binding: bool,
     pub inline_height: u16,
     pub invert: bool,
@@ -173,6 +176,10 @@ pub struct Settings {
     pub secrets_filter: bool,
     pub workspaces: bool,
     pub ctrl_n_shortcuts: bool,
+
+    pub network_connect_timeout: u64,
+    pub network_timeout: u64,
+    pub enter_accept: bool,
 
     // This is automatically loaded when settings is created. Do not set in
     // config! Keep secrets and settings apart.
@@ -207,21 +214,20 @@ impl Settings {
     }
 
     fn save_current_time(filename: &str) -> Result<()> {
-        Settings::save_to_data_dir(filename, Utc::now().to_rfc3339().as_str())?;
+        Settings::save_to_data_dir(
+            filename,
+            OffsetDateTime::now_utc().format(&Rfc3339)?.as_str(),
+        )?;
 
         Ok(())
     }
 
-    fn load_time_from_file(filename: &str) -> Result<chrono::DateTime<Utc>> {
+    fn load_time_from_file(filename: &str) -> Result<OffsetDateTime> {
         let value = Settings::read_from_data_dir(filename);
 
         match value {
-            Some(v) => {
-                let time = chrono::DateTime::parse_from_rfc3339(v.as_str())?;
-
-                Ok(time.with_timezone(&Utc))
-            }
-            None => Ok(Utc.ymd(1970, 1, 1).and_hms(0, 0, 0)),
+            Some(v) => Ok(OffsetDateTime::parse(v.as_str(), &Rfc3339)?),
+            None => Ok(OffsetDateTime::UNIX_EPOCH),
         }
     }
 
@@ -233,11 +239,11 @@ impl Settings {
         Settings::save_current_time(LAST_VERSION_CHECK_FILENAME)
     }
 
-    pub fn last_sync() -> Result<chrono::DateTime<Utc>> {
+    pub fn last_sync() -> Result<OffsetDateTime> {
         Settings::load_time_from_file(LAST_SYNC_FILENAME)
     }
 
-    pub fn last_version_check() -> Result<chrono::DateTime<Utc>> {
+    pub fn last_version_check() -> Result<OffsetDateTime> {
         Settings::load_time_from_file(LAST_VERSION_CHECK_FILENAME)
     }
 
@@ -265,8 +271,8 @@ impl Settings {
 
         match parse(self.sync_frequency.as_str()) {
             Ok(d) => {
-                let d = chrono::Duration::from_std(d).unwrap();
-                Ok(Utc::now() - Settings::last_sync()? >= d)
+                let d = time::Duration::try_from(d).unwrap();
+                Ok(OffsetDateTime::now_utc() - Settings::last_sync()? >= d)
             }
             Err(e) => Err(eyre!("failed to check sync: {}", e)),
         }
@@ -274,10 +280,10 @@ impl Settings {
 
     fn needs_update_check(&self) -> Result<bool> {
         let last_check = Settings::last_version_check()?;
-        let diff = Utc::now() - last_check;
+        let diff = OffsetDateTime::now_utc() - last_check;
 
         // Check a max of once per hour
-        Ok(diff.num_hours() >= 1)
+        Ok(diff.whole_hours() >= 1)
     }
 
     async fn latest_version(&self) -> Result<Version> {
@@ -371,6 +377,14 @@ impl Settings {
             .set_default("workspaces", false)?
             .set_default("ctrl_n_shortcuts", false)?
             .set_default("secrets_filter", true)?
+            .set_default("network_connect_timeout", 5)?
+            .set_default("network_timeout", 30)?
+            // enter_accept defaults to false here, but true in the default config file. The dissonance is
+            // intentional!
+            // Existing users will get the default "False", so we don't mess with any potential
+            // muscle memory.
+            // New users will get the new default, that is more similar to what they are used to.
+            .set_default("enter_accept", false)?
             .add_source(
                 Environment::with_prefix("atuin")
                     .prefix_separator("_")
@@ -384,6 +398,7 @@ impl Settings {
 
         create_dir_all(&config_dir)
             .wrap_err_with(|| format!("could not create dir {config_dir:?}"))?;
+
         create_dir_all(&data_dir).wrap_err_with(|| format!("could not create dir {data_dir:?}"))?;
 
         let mut config_file = if let Ok(p) = std::env::var("ATUIN_CONFIG_DIR") {
@@ -404,9 +419,8 @@ impl Settings {
                 FileFormat::Toml,
             ))
         } else {
-            let example_config = include_bytes!("../config.toml");
             let mut file = File::create(config_file).wrap_err("could not create config file")?;
-            file.write_all(example_config)
+            file.write_all(EXAMPLE_CONFIG.as_bytes())
                 .wrap_err("could not write default config file")?;
 
             config_builder
@@ -439,6 +453,10 @@ impl Settings {
         }
 
         Ok(settings)
+    }
+
+    pub fn example_config() -> &'static str {
+        EXAMPLE_CONFIG
     }
 }
 

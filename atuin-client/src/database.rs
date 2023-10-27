@@ -6,7 +6,6 @@ use std::{
 
 use async_trait::async_trait;
 use atuin_common::utils;
-use chrono::{prelude::*, Utc};
 use fs_err as fs;
 use itertools::Itertools;
 use lazy_static::lazy_static;
@@ -17,6 +16,7 @@ use sqlx::{
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteRow},
     Result, Row,
 };
+use time::OffsetDateTime;
 
 use super::{
     history::History,
@@ -70,31 +70,27 @@ pub fn current_context() -> Context {
 
 #[async_trait]
 pub trait Database: Send + Sync + 'static {
-    async fn save(&mut self, h: &History) -> Result<()>;
-    async fn save_bulk(&mut self, h: &[History]) -> Result<()>;
+    async fn save(&self, h: &History) -> Result<()>;
+    async fn save_bulk(&self, h: &[History]) -> Result<()>;
 
-    async fn load(&self, id: &str) -> Result<History>;
+    async fn load(&self, id: &str) -> Result<Option<History>>;
     async fn list(
         &self,
         filter: FilterMode,
         context: &Context,
         max: Option<usize>,
         unique: bool,
+        include_deleted: bool,
     ) -> Result<Vec<History>>;
-    async fn range(
-        &self,
-        from: chrono::DateTime<Utc>,
-        to: chrono::DateTime<Utc>,
-    ) -> Result<Vec<History>>;
+    async fn range(&self, from: OffsetDateTime, to: OffsetDateTime) -> Result<Vec<History>>;
 
     async fn update(&self, h: &History) -> Result<()>;
-    async fn history_count(&self) -> Result<i64>;
+    async fn history_count(&self, include_deleted: bool) -> Result<i64>;
 
-    async fn first(&self) -> Result<History>;
-    async fn last(&self) -> Result<History>;
-    async fn before(&self, timestamp: chrono::DateTime<Utc>, count: i64) -> Result<Vec<History>>;
+    async fn last(&self) -> Result<Option<History>>;
+    async fn before(&self, timestamp: OffsetDateTime, count: i64) -> Result<Vec<History>>;
 
-    async fn delete(&self, mut h: History) -> Result<()>;
+    async fn delete(&self, h: History) -> Result<()>;
     async fn deleted(&self) -> Result<Vec<History>>;
 
     // Yes I know, it's a lot.
@@ -158,14 +154,14 @@ impl Sqlite {
                 values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         )
         .bind(h.id.as_str())
-        .bind(h.timestamp.timestamp_nanos())
+        .bind(h.timestamp.unix_timestamp_nanos() as i64)
         .bind(h.duration)
         .bind(h.exit)
         .bind(h.command.as_str())
         .bind(h.cwd.as_str())
         .bind(h.session.as_str())
         .bind(h.hostname.as_str())
-        .bind(h.deleted_at.map(|t|t.timestamp_nanos()))
+        .bind(h.deleted_at.map(|t|t.unix_timestamp_nanos() as i64))
         .execute(&mut **tx)
         .await?;
 
@@ -177,14 +173,19 @@ impl Sqlite {
 
         History::from_db()
             .id(row.get("id"))
-            .timestamp(Utc.timestamp_nanos(row.get("timestamp")))
+            .timestamp(
+                OffsetDateTime::from_unix_timestamp_nanos(row.get::<i64, _>("timestamp") as i128)
+                    .unwrap(),
+            )
             .duration(row.get("duration"))
             .exit(row.get("exit"))
             .command(row.get("command"))
             .cwd(row.get("cwd"))
             .session(row.get("session"))
             .hostname(row.get("hostname"))
-            .deleted_at(deleted_at.map(|t| Utc.timestamp_nanos(t)))
+            .deleted_at(
+                deleted_at.and_then(|t| OffsetDateTime::from_unix_timestamp_nanos(t as i128).ok()),
+            )
             .build()
             .into()
     }
@@ -192,7 +193,7 @@ impl Sqlite {
 
 #[async_trait]
 impl Database for Sqlite {
-    async fn save(&mut self, h: &History) -> Result<()> {
+    async fn save(&self, h: &History) -> Result<()> {
         debug!("saving history to sqlite");
         let mut tx = self.pool.begin().await?;
         Self::save_raw(&mut tx, h).await?;
@@ -201,7 +202,7 @@ impl Database for Sqlite {
         Ok(())
     }
 
-    async fn save_bulk(&mut self, h: &[History]) -> Result<()> {
+    async fn save_bulk(&self, h: &[History]) -> Result<()> {
         debug!("saving history to sqlite");
 
         let mut tx = self.pool.begin().await?;
@@ -215,13 +216,13 @@ impl Database for Sqlite {
         Ok(())
     }
 
-    async fn load(&self, id: &str) -> Result<History> {
+    async fn load(&self, id: &str) -> Result<Option<History>> {
         debug!("loading history item {}", id);
 
         let res = sqlx::query("select * from history where id = ?1")
             .bind(id)
             .map(Self::query_history)
-            .fetch_one(&self.pool)
+            .fetch_optional(&self.pool)
             .await?;
 
         Ok(res)
@@ -236,14 +237,14 @@ impl Database for Sqlite {
                 where id = ?1",
         )
         .bind(h.id.as_str())
-        .bind(h.timestamp.timestamp_nanos())
+        .bind(h.timestamp.unix_timestamp_nanos() as i64)
         .bind(h.duration)
         .bind(h.exit)
         .bind(h.command.as_str())
         .bind(h.cwd.as_str())
         .bind(h.session.as_str())
         .bind(h.hostname.as_str())
-        .bind(h.deleted_at.map(|t|t.timestamp_nanos()))
+        .bind(h.deleted_at.map(|t|t.unix_timestamp_nanos() as i64))
         .execute(&self.pool)
         .await?;
 
@@ -257,11 +258,15 @@ impl Database for Sqlite {
         context: &Context,
         max: Option<usize>,
         unique: bool,
+        include_deleted: bool,
     ) -> Result<Vec<History>> {
         debug!("listing history");
 
         let mut query = SqlBuilder::select_from(SqlName::new("history").alias("h").baquoted());
         query.field("*").order_desc("timestamp");
+        if !include_deleted {
+            query.and_where_is_null("deleted_at");
+        }
 
         match filter {
             FilterMode::Global => &mut query,
@@ -292,18 +297,14 @@ impl Database for Sqlite {
         Ok(res)
     }
 
-    async fn range(
-        &self,
-        from: chrono::DateTime<Utc>,
-        to: chrono::DateTime<Utc>,
-    ) -> Result<Vec<History>> {
+    async fn range(&self, from: OffsetDateTime, to: OffsetDateTime) -> Result<Vec<History>> {
         debug!("listing history from {:?} to {:?}", from, to);
 
         let res = sqlx::query(
             "select * from history where timestamp >= ?1 and timestamp <= ?2 order by timestamp asc",
         )
-        .bind(from.timestamp_nanos())
-        .bind(to.timestamp_nanos())
+        .bind(from.unix_timestamp_nanos() as i64)
+        .bind(to.unix_timestamp_nanos() as i64)
             .map(Self::query_history)
         .fetch_all(&self.pool)
         .await?;
@@ -311,32 +312,22 @@ impl Database for Sqlite {
         Ok(res)
     }
 
-    async fn first(&self) -> Result<History> {
-        let res =
-            sqlx::query("select * from history where duration >= 0 order by timestamp asc limit 1")
-                .map(Self::query_history)
-                .fetch_one(&self.pool)
-                .await?;
-
-        Ok(res)
-    }
-
-    async fn last(&self) -> Result<History> {
+    async fn last(&self) -> Result<Option<History>> {
         let res = sqlx::query(
             "select * from history where duration >= 0 order by timestamp desc limit 1",
         )
         .map(Self::query_history)
-        .fetch_one(&self.pool)
+        .fetch_optional(&self.pool)
         .await?;
 
         Ok(res)
     }
 
-    async fn before(&self, timestamp: chrono::DateTime<Utc>, count: i64) -> Result<Vec<History>> {
+    async fn before(&self, timestamp: OffsetDateTime, count: i64) -> Result<Vec<History>> {
         let res = sqlx::query(
             "select * from history where timestamp < ?1 order by timestamp desc limit ?2",
         )
-        .bind(timestamp.timestamp_nanos())
+        .bind(timestamp.unix_timestamp_nanos() as i64)
         .bind(count)
         .map(Self::query_history)
         .fetch_all(&self.pool)
@@ -354,11 +345,14 @@ impl Database for Sqlite {
         Ok(res)
     }
 
-    async fn history_count(&self) -> Result<i64> {
-        let res: (i64,) = sqlx::query_as("select count(1) from history")
-            .fetch_one(&self.pool)
-            .await?;
+    async fn history_count(&self, include_deleted: bool) -> Result<i64> {
+        let query = if include_deleted {
+            "select count(1) from history"
+        } else {
+            "select count(1) from history where deleted_at is null"
+        };
 
+        let res: (i64,) = sqlx::query_as(query).fetch_one(&self.pool).await?;
         Ok(res.0)
     }
 
@@ -471,13 +465,23 @@ impl Database for Sqlite {
             .map(|exclude_cwd| sql.and_where_ne("cwd", quote(exclude_cwd)));
 
         filter_options.before.map(|before| {
-            interim::parse_date_string(before.as_str(), Utc::now(), interim::Dialect::Uk)
-                .map(|before| sql.and_where_lt("timestamp", quote(before.timestamp_nanos())))
+            interim::parse_date_string(
+                before.as_str(),
+                OffsetDateTime::now_utc(),
+                interim::Dialect::Uk,
+            )
+            .map(|before| {
+                sql.and_where_lt("timestamp", quote(before.unix_timestamp_nanos() as i64))
+            })
         });
 
         filter_options.after.map(|after| {
-            interim::parse_date_string(after.as_str(), Utc::now(), interim::Dialect::Uk)
-                .map(|after| sql.and_where_gt("timestamp", quote(after.timestamp_nanos())))
+            interim::parse_date_string(
+                after.as_str(),
+                OffsetDateTime::now_utc(),
+                interim::Dialect::Uk,
+            )
+            .map(|after| sql.and_where_gt("timestamp", quote(after.unix_timestamp_nanos() as i64)))
         });
 
         sql.and_where_is_null("deleted_at");
@@ -540,7 +544,7 @@ impl Database for Sqlite {
     // deleted_at doesn't mean the actual time that the user deleted it,
     // but the time that the system marks it as deleted
     async fn delete(&self, mut h: History) -> Result<()> {
-        let now = chrono::Utc::now();
+        let now = OffsetDateTime::now_utc();
         h.command = rand::thread_rng()
             .sample_iter(&Alphanumeric)
             .take(32)
@@ -612,7 +616,7 @@ mod test {
 
     async fn new_history_item(db: &mut impl Database, cmd: &str) -> Result<()> {
         let mut captured: History = History::capture()
-            .timestamp(chrono::Utc::now())
+            .timestamp(OffsetDateTime::now_utc())
             .command(cmd)
             .cwd("/home/ellie")
             .build()

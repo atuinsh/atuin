@@ -154,6 +154,18 @@ Filter modes can still be toggled via ctrl-r
 filter_mode = "host"
 ```
 
+### `search_mode_shell_up_key_binding`
+
+The default searchmode to use when searching and being invoked from a shell up-key binding.
+
+Accepts exactly the same options as `search_mode` above
+
+```
+search_mode_shell_up_key_binding = "fuzzy"
+```
+
+Defaults to the value specified for search_mode.
+
 ### `filter_mode_shell_up_key_binding`
 
 The default filter to use when searching and being invoked from a shell up-key binding.
@@ -192,13 +204,17 @@ Defaults to `auto`.
 
 ### `invert`
 
-Invert the UI - put the search bar at the top
+Invert the UI - put the search bar at the top , Default to `false`
+
+```
+invert = true/false
+```
 
 ### `inline_height`
 
 Set the maximum number of lines Atuin's interface should take up.
 
-![inline_height](../../blog/2023/04-01-release-v14/inline.png)
+![inline_height](/img/inline.png)
 
 If set to `0` (default), Atuin will always take up as many lines as available (full screen).
 
@@ -206,7 +222,7 @@ If set to `0` (default), Atuin will always take up as many lines as available (f
 
 Configure whether or not to show a preview of the selected command.
 
-![show_preview](../../blog/2023/04-01-release-v14/preview.png)
+![show_preview](/img/preview.png)
 
 Useful when the command is longer than the terminal width and is cut off.
 
@@ -276,3 +292,29 @@ macOS does not have an <kbd>Alt</kbd> key, although terminal emulators can often
 # Use Ctrl-0 .. Ctrl-9 instead of Alt-0 .. Alt-9 UI shortcuts
 ctrl_n_shortcuts = true
 ```
+
+## network_timeout
+Default: 30
+
+The max amount of time (in seconds) to wait for a network request. If any
+operations with a sync server take longer than this, the code will fail -
+rather than wait indefinitely.
+
+## network_connect_timeout
+Default: 5
+
+The max time (in seconds) we wait for a connection to become established with a
+remote sync server. Any longer than this and the request will fail.
+
+## enter_accept
+Default: false
+
+Not supported by NuShell presently
+
+When set to true, Atuin will default to immediately executing a command rather
+than the user having to press enter twice. Pressing tab will return to the
+shell and give the user a chance to edit.
+
+This technically defaults to true for new users, but false for existing. We
+have set `enter_accept = true` in the default config file. This is likely to
+change to be the default for everyone in a later release.

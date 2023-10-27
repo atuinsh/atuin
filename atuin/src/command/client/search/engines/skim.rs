@@ -2,10 +2,10 @@ use std::path::Path;
 
 use async_trait::async_trait;
 use atuin_client::{database::Database, history::History, settings::FilterMode};
-use chrono::Utc;
 use eyre::Result;
 use fuzzy_matcher::{skim::SkimMatcherV2, FuzzyMatcher};
 use itertools::Itertools;
+use time::OffsetDateTime;
 use tokio::task::yield_now;
 
 use super::{SearchEngine, SearchState};
@@ -47,13 +47,18 @@ async fn fuzzy_search(
     let mut set = Vec::with_capacity(200);
     let mut ranks = Vec::with_capacity(200);
     let query = state.input.as_str();
-    let now = Utc::now();
+    let now = OffsetDateTime::now_utc();
 
     for (i, (history, count)) in all_history.iter().enumerate() {
         if i % 256 == 0 {
             yield_now().await;
         }
         let context = &state.context;
+        let git_root = context
+            .git_root
+            .as_ref()
+            .and_then(|git_root| git_root.to_str())
+            .unwrap_or(&context.cwd);
         match state.filter_mode {
             FilterMode::Global => {}
             // we aggregate host by ',' separating them
@@ -72,13 +77,14 @@ async fn fuzzy_search(
                     .contains(&context.session.as_bytes()) => {}
             // we aggregate directory by ':' separating them
             FilterMode::Directory if history.cwd.split(':').contains(&context.cwd.as_str()) => {}
+            FilterMode::Workspace if history.cwd.split(':').contains(&git_root) => {}
             _ => continue,
         }
         #[allow(clippy::cast_lossless, clippy::cast_precision_loss)]
         if let Some((score, indices)) = engine.fuzzy_indices(&history.command, query) {
             let begin = indices.first().copied().unwrap_or_default();
 
-            let mut duration = ((now - history.timestamp).num_seconds() as f64).log2();
+            let mut duration = (now - history.timestamp).as_seconds_f64().log2();
             if !duration.is_finite() || duration <= 1.0 {
                 duration = 1.0;
             }

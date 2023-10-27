@@ -1,0 +1,10 @@
+# I think this was a little aggressive, but maybe enable if
+# people ignore this.
+# blank_issues_enabled: false
+contact_links:
+  - name: Support
+    url: https://github.com/atuinsh/atuin/discussions/new?category=support
+    about: Get community help and support with Atuin here!
+  - name: Feature suggestion
+    url: https://github.com/atuinsh/atuin/discussions/new?category=ideas
+    about: Suggest an idea for Atuin

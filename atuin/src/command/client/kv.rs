@@ -3,7 +3,7 @@ use eyre::{Context, Result};
 
 use atuin_client::{encryption, kv::KvStore, record::store::Store, settings::Settings};
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Debug)]
 #[command(infer_subcommands = true)]
 pub enum Cmd {
     // atuin kv set foo bar bar

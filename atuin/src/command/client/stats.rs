@@ -1,6 +1,5 @@
 use std::collections::{HashMap, HashSet};
 
-use chrono::{prelude::*, Duration};
 use clap::Parser;
 use crossterm::style::{Color, ResetColor, SetAttribute, SetForegroundColor};
 use eyre::{bail, Result};
@@ -11,8 +10,9 @@ use atuin_client::{
     history::History,
     settings::{FilterMode, Settings},
 };
+use time::{Duration, OffsetDateTime, Time};
 
-#[derive(Parser)]
+#[derive(Parser, Debug)]
 #[command(infer_subcommands = true)]
 pub struct Cmd {
     /// compute statistics for the specified period, leave blank for statistics since the beginning
@@ -73,7 +73,7 @@ fn compute_stats(history: &[History], count: usize) -> Result<()> {
 }
 
 impl Cmd {
-    pub async fn run(&self, db: &mut impl Database, settings: &Settings) -> Result<()> {
+    pub async fn run(&self, db: &impl Database, settings: &Settings) -> Result<()> {
         let context = current_context();
         let words = if self.period.is_empty() {
             String::from("all")
@@ -82,27 +82,32 @@ impl Cmd {
         };
 
         let history = if words.as_str() == "all" {
-            db.list(FilterMode::Global, &context, None, false).await?
+            db.list(FilterMode::Global, &context, None, false, false)
+                .await?
         } else if words.trim() == "today" {
-            let start = Local::now().date().and_hms(0, 0, 0);
+            let start = OffsetDateTime::now_local()?.replace_time(Time::MIDNIGHT);
             let end = start + Duration::days(1);
-            db.range(start.into(), end.into()).await?
+            db.range(start, end).await?
         } else if words.trim() == "month" {
-            let end = Local::now().date().and_hms(0, 0, 0);
+            let end = OffsetDateTime::now_local()?.replace_time(Time::MIDNIGHT);
             let start = end - Duration::days(31);
-            db.range(start.into(), end.into()).await?
+            db.range(start, end).await?
         } else if words.trim() == "week" {
-            let end = Local::now().date().and_hms(0, 0, 0);
+            let end = OffsetDateTime::now_local()?.replace_time(Time::MIDNIGHT);
             let start = end - Duration::days(7);
-            db.range(start.into(), end.into()).await?
+            db.range(start, end).await?
         } else if words.trim() == "year" {
-            let end = Local::now().date().and_hms(0, 0, 0);
+            let end = OffsetDateTime::now_local()?.replace_time(Time::MIDNIGHT);
             let start = end - Duration::days(365);
-            db.range(start.into(), end.into()).await?
+            db.range(start, end).await?
         } else {
-            let start = parse_date_string(&words, Local::now(), settings.dialect.into())?;
+            let start = parse_date_string(
+                &words,
+                OffsetDateTime::now_local()?,
+                settings.dialect.into(),
+            )?;
             let end = start + Duration::days(1);
-            db.range(start.into(), end.into()).await?
+            db.range(start, end).await?
         };
         compute_stats(&history, self.count)?;
         Ok(())

@@ -12,15 +12,28 @@ _atuin_precmd() {
 
     [[ -z "${ATUIN_HISTORY_ID}" ]] && return
 
-    (RUST_LOG=error atuin history end --exit "${EXIT}" -- "${ATUIN_HISTORY_ID}" &) >/dev/null 2>&1
+    (ATUIN_LOG=error atuin history end --exit "${EXIT}" -- "${ATUIN_HISTORY_ID}" &) >/dev/null 2>&1
+    export ATUIN_HISTORY_ID=""
 }
 
 __atuin_history() {
     # shellcheck disable=SC2048,SC2086
-    HISTORY="$(RUST_LOG=error atuin search $* -i -- "${READLINE_LINE}" 3>&1 1>&2 2>&3)"
+    HISTORY="$(ATUIN_SHELL_BASH=t ATUIN_LOG=error atuin search $* -i -- "${READLINE_LINE}" 3>&1 1>&2 2>&3)"
 
-    READLINE_LINE=${HISTORY}
-    READLINE_POINT=${#READLINE_LINE}
+    if [[ $HISTORY == __atuin_accept__:* ]]
+    then
+      HISTORY=${HISTORY#__atuin_accept__:}
+      echo "$HISTORY"
+      # Need to run the pre/post exec functions manually
+      _atuin_preexec "$HISTORY"
+      eval "$HISTORY"
+      _atuin_precmd
+      echo
+    else
+      READLINE_LINE=${HISTORY}
+      READLINE_POINT=${#READLINE_LINE}
+    fi
+
 }
 
 if [[ -n "${BLE_VERSION-}" ]]; then

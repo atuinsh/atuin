@@ -11,7 +11,7 @@ mod status;
 
 use crate::command::client::account;
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Debug)]
 #[command(infer_subcommands = true)]
 pub enum Cmd {
     /// Sync with the configured server
@@ -44,7 +44,7 @@ impl Cmd {
     pub async fn run(
         self,
         settings: Settings,
-        db: &mut impl Database,
+        db: &impl Database,
         store: &mut (impl Store + Send + Sync),
     ) -> Result<()> {
         match self {
@@ -74,7 +74,7 @@ impl Cmd {
 async fn run(
     settings: &Settings,
     force: bool,
-    db: &mut impl Database,
+    db: &impl Database,
     store: &mut (impl Store + Send + Sync),
 ) -> Result<()> {
     let (diff, remote_index) = sync::diff(settings, store).await?;
@@ -88,7 +88,7 @@ async fn run(
 
     println!(
         "Sync complete! {} items in history database, force: {}",
-        db.history_count().await?,
+        db.history_count(true).await?,
         force
     );
 

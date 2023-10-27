@@ -3,8 +3,12 @@ use std::{
     time::Duration,
 };
 
+use atuin_common::utils;
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers,
+        MouseEvent,
+    },
     execute, terminal,
 };
 use eyre::Result;
@@ -35,6 +39,7 @@ use ratatui::{
 
 const RETURN_ORIGINAL: usize = usize::MAX;
 const RETURN_QUERY: usize = usize::MAX - 1;
+const COPY_QUERY: usize = usize::MAX - 2;
 
 struct State {
     history_count: i64,
@@ -43,6 +48,7 @@ struct State {
     switched_search_mode: bool,
     search_mode: SearchMode,
     results_len: usize,
+    accept: bool,
 
     search: SearchState,
     engine: Box<dyn SearchEngine>,
@@ -63,13 +69,24 @@ impl State {
         Ok(results)
     }
 
-    fn handle_input(&mut self, settings: &Settings, input: &Event) -> Option<usize> {
-        match input {
+    fn handle_input<W>(
+        &mut self,
+        settings: &Settings,
+        input: &Event,
+        w: &mut W,
+    ) -> Result<Option<usize>>
+    where
+        W: Write,
+    {
+        execute!(w, EnableMouseCapture)?;
+        let r = match input {
             Event::Key(k) => self.handle_key_input(settings, k),
             Event::Mouse(m) => self.handle_mouse_input(*m),
             Event::Paste(d) => self.handle_paste_input(d),
             _ => None,
-        }
+        };
+        execute!(w, DisableMouseCapture)?;
+        Ok(r)
     }
 
     fn handle_mouse_input(&mut self, input: MouseEvent) -> Option<usize> {
@@ -115,8 +132,18 @@ impl State {
                     ExitMode::ReturnQuery => RETURN_QUERY,
                 })
             }
-            KeyCode::Enter => {
+            KeyCode::Tab => {
                 return Some(self.results_state.selected());
+            }
+            KeyCode::Enter => {
+                if settings.enter_accept {
+                    self.accept = true;
+                }
+
+                return Some(self.results_state.selected());
+            }
+            KeyCode::Char('y') if ctrl => {
+                return Some(COPY_QUERY);
             }
             KeyCode::Char(c @ '1'..='9') if modfr => {
                 let c = c.to_digit(10)? as usize;
@@ -570,7 +597,7 @@ impl Write for Stdout {
 // this is a big blob of horrible! clean it up!
 // for now, it works. But it'd be great if it were more easily readable, and
 // modular. I'd like to add some more stats and stuff at some point
-#[allow(clippy::cast_possible_truncation)]
+#[allow(clippy::cast_possible_truncation, clippy::too_many_lines)]
 pub async fn history(
     query: &[String],
     settings: &Settings,
@@ -599,14 +626,20 @@ pub async fn history(
 
     let context = current_context();
 
-    let history_count = db.history_count().await?;
-
+    let history_count = db.history_count(false).await?;
+    let search_mode = if settings.shell_up_key_binding {
+        settings
+            .search_mode_shell_up_key_binding
+            .unwrap_or(settings.search_mode)
+    } else {
+        settings.search_mode
+    };
     let mut app = State {
         history_count,
         results_state: ListState::default(),
         update_needed: None,
         switched_search_mode: false,
-        search_mode: settings.search_mode,
+        search_mode,
         search: SearchState {
             input,
             filter_mode: if settings.workspaces && context.git_root.is_some() {
@@ -620,12 +653,14 @@ pub async fn history(
             },
             context,
         },
-        engine: engines::engine(settings.search_mode),
+        engine: engines::engine(search_mode),
         results_len: 0,
+        accept: false,
     };
 
     let mut results = app.query_results(&mut db).await?;
 
+    let accept;
     let index = 'render: loop {
         terminal.draw(|f| app.draw(f, &results, settings))?;
 
@@ -639,7 +674,8 @@ pub async fn history(
             event_ready = event_ready => {
                 if event_ready?? {
                     loop {
-                        if let Some(i) = app.handle_input(settings, &event::read()?) {
+                        if let Some(i) = app.handle_input(settings, &event::read()?, &mut std::io::stdout())? {
+                            accept = app.accept;
                             break 'render i;
                         }
                         if !event::poll(Duration::ZERO)? {
@@ -666,9 +702,18 @@ pub async fn history(
     }
 
     if index < results.len() {
+        let mut command = results.swap_remove(index).command;
+        if accept && (utils::is_zsh() || utils::is_fish() || utils::is_bash()) {
+            command = String::from("__atuin_accept__:") + &command;
+        }
+
         // index is in bounds so we return that entry
-        Ok(results.swap_remove(index).command)
+        Ok(command)
     } else if index == RETURN_ORIGINAL {
+        Ok(String::new())
+    } else if index == COPY_QUERY {
+        let cmd = results.swap_remove(app.results_state.selected()).command;
+        cli_clipboard::set_contents(cmd).unwrap();
         Ok(String::new())
     } else {
         // Either:

@@ -22,7 +22,12 @@ pub enum Operation {
 }
 
 pub async fn diff(settings: &Settings, store: &mut impl Store) -> Result<(Vec<Diff>, RecordIndex)> {
-    let client = Client::new(&settings.sync_address, &settings.session_token)?;
+    let client = Client::new(
+        &settings.sync_address,
+        &settings.session_token,
+        settings.network_connect_timeout,
+        settings.network_timeout,
+    )?;
 
     let local_index = store.tail_records().await?;
     let remote_index = client.record_index().await?;
@@ -218,7 +223,12 @@ pub async fn sync_remote(
     local_store: &mut impl Store,
     settings: &Settings,
 ) -> Result<(i64, i64)> {
-    let client = Client::new(&settings.sync_address, &settings.session_token)?;
+    let client = Client::new(
+        &settings.sync_address,
+        &settings.session_token,
+        settings.network_connect_timeout,
+        settings.network_timeout,
+    )?;
 
     let mut uploaded = 0;
     let mut downloaded = 0;

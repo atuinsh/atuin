@@ -44,7 +44,10 @@ __atuin_install_arch(){
 		sudo pacman -S atuin
 	else
 		echo "Attempting AUR install"
-		if command -v yaourt &> /dev/null; then
+		if command -v paru &> /dev/null; then
+			echo "Found paru"
+			paru -S atuin
+		elif command -v yaourt &> /dev/null; then
 			echo "Found yaourt"
 			yaourt -S atuin
 		elif command -v yay &> /dev/null; then
@@ -92,14 +95,15 @@ __atuin_install_linux(){
   else
     OS=$(lsb_release -i | awk '{ print $3 }' | tr '[:upper:]' '[:lower:]')
   fi
-	if [ "$OS" == "arch" ] || [ "$OS" == "manjarolinux" ] || [ "$OS" == "endeavouros" ]; then
-		__atuin_install_arch
-  elif [ "$OS" == "ubuntu" ] || [ "$OS" == "ubuntuwsl" ] || [ "$OS" == "debian" ] || [ "$OS" == "linuxmint" ] || [ "$OS" == "parrot" ] || [ "$OS" == "kali" ] || [ "$OS" == "elementary" ] || [ "$OS" == "pop" ]; then
-		__atuin_install_ubuntu
-	else
-		# TODO: download a binary or smth
-		__atuin_install_unsupported
-	fi
+	case "$OS" in
+		"arch" | "manjarolinux" | "endeavouros")
+			__atuin_install_arch;;
+		"ubuntu" | "ubuntuwsl" | "debian" | "linuxmint" | "parrot" | "kali" | "elementary" | "pop")
+			__atuin_install_ubuntu;;
+		*)
+			# TODO: download a binary or smth
+			__atuin_install_unsupported;;
+	esac
 }
 
 __atuin_install_mac(){

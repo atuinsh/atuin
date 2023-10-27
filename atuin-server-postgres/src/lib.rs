@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use async_trait::async_trait;
 use atuin_common::record::{EncryptedData, HostId, Record, RecordId, RecordIndex};
 use atuin_server_database::models::{History, NewHistory, NewSession, NewUser, Session, User};
@@ -7,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::Row;
 
+use time::{OffsetDateTime, PrimitiveDateTime, UtcOffset};
 use tracing::instrument;
 use wrappers::{DbHistory, DbRecord, DbSession, DbUser};
 
@@ -139,7 +142,7 @@ impl Database for Postgres {
         )
         .bind(user.id)
         .bind(id)
-        .bind(chrono::Utc::now().naive_utc())
+        .bind(OffsetDateTime::now_utc())
         .fetch_all(&self.pool)
         .await
         .map_err(fix_error)?;
@@ -175,8 +178,7 @@ impl Database for Postgres {
     async fn count_history_range(
         &self,
         user: &User,
-        start: chrono::NaiveDateTime,
-        end: chrono::NaiveDateTime,
+        range: Range<OffsetDateTime>,
     ) -> DbResult<i64> {
         let res: (i64,) = sqlx::query_as(
             "select count(1) from history
@@ -185,8 +187,8 @@ impl Database for Postgres {
             and timestamp < $3::date",
         )
         .bind(user.id)
-        .bind(start)
-        .bind(end)
+        .bind(into_utc(range.start))
+        .bind(into_utc(range.end))
         .fetch_one(&self.pool)
         .await
         .map_err(fix_error)?;
@@ -198,8 +200,8 @@ impl Database for Postgres {
     async fn list_history(
         &self,
         user: &User,
-        created_after: chrono::NaiveDateTime,
-        since: chrono::NaiveDateTime,
+        created_after: OffsetDateTime,
+        since: OffsetDateTime,
         host: &str,
         page_size: i64,
     ) -> DbResult<Vec<History>> {
@@ -214,8 +216,8 @@ impl Database for Postgres {
         )
         .bind(user.id)
         .bind(host)
-        .bind(created_after)
-        .bind(since)
+        .bind(into_utc(created_after))
+        .bind(into_utc(since))
         .bind(page_size)
         .fetch(&self.pool)
         .map_ok(|DbHistory(h)| h)
@@ -447,5 +449,32 @@ impl Database for Postgres {
             .map_err(fix_error)?;
 
         Ok(res)
+    }
+}
+
+fn into_utc(x: OffsetDateTime) -> PrimitiveDateTime {
+    let x = x.to_offset(UtcOffset::UTC);
+    PrimitiveDateTime::new(x.date(), x.time())
+}
+
+#[cfg(test)]
+mod tests {
+    use time::macros::datetime;
+
+    use crate::into_utc;
+
+    #[test]
+    fn utc() {
+        let dt = datetime!(2023-09-26 15:11:02 +05:30);
+        assert_eq!(into_utc(dt), datetime!(2023-09-26 09:41:02));
+        assert_eq!(into_utc(dt).assume_utc(), dt);
+
+        let dt = datetime!(2023-09-26 15:11:02 -07:00);
+        assert_eq!(into_utc(dt), datetime!(2023-09-26 22:11:02));
+        assert_eq!(into_utc(dt).assume_utc(), dt);
+
+        let dt = datetime!(2023-09-26 15:11:02 +00:00);
+        assert_eq!(into_utc(dt), datetime!(2023-09-26 15:11:02));
+        assert_eq!(into_utc(dt).assume_utc(), dt);
     }
 }

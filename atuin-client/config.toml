@@ -28,7 +28,7 @@
 ## how often to sync history. note that this is only triggered when a command
 ## is ran, so sync intervals may well be longer
 ## set it to 0 to sync after every command
-# sync_frequency = "1h"
+# sync_frequency = "10m"
 
 ## which search mode to use
 ## possible values: prefix, fulltext, fuzzy, skim
@@ -47,6 +47,11 @@
 ## leave unspecified to use same mode set in "filter_mode"
 # filter_mode_shell_up_key_binding = "global"
 
+## which search mode to use when atuin is invoked from a shell up-key binding
+## the accepted values are identical to those of "search_mode"
+## leave unspecified to use same mode set in "search_mode"
+# search_mode_shell_up_key_binding = "fuzzy"
+
 ## which style to use
 ## possible values: auto, full, compact
 # style = "auto"
@@ -54,6 +59,9 @@
 ## the maximum number of lines the interface should take up
 ## set it to 0 to always go full screen
 # inline_height = 0
+
+## Invert the UI - put the search bar at the top , Default to `false`
+# invert = false
 
 ## enable or disable showing a preview of the selected command
 ## useful when the command is longer than the terminal width and is cut off
@@ -94,3 +102,25 @@
 # cwd_filter = [
 #   "^/very/secret/area"
 # ]
+
+## Configure the maximum height of the preview to show.
+## Useful when you have long scripts in your history that you want to distinguish
+## by more than the first few lines.
+# max_preview_height = 4
+
+## Configure whether or not to show the help row, which includes the current Atuin
+## version (and whether an update is available), a keymap hint, and the total
+## amount of commands in your history.
+# show_help = true
+
+## Defaults to true. This matches history against a set of default regex, and will not save it if we get a match. Defaults include
+## 1. AWS key id
+## 2. Github pat (old and new)
+## 3. Slack oauth tokens (bot, user)
+## 4. Slack webhooks
+## 5. Stripe live/test keys
+# secrets_filter = true
+
+## Defaults to true. If enabled, upon hitting enter Atuin will immediately execute the command. Press tab to return to the shell and edit.
+# This applies for new installs. Old installs will keep the old behaviour unless configured otherwise.
+enter_accept = true

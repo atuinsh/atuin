@@ -1,9 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::{
-    future::Future,
-    net::{IpAddr, SocketAddr, TcpListener},
-};
+use std::{future::Future, net::TcpListener};
 
 use atuin_server_database::Database;
 use axum::Server;
@@ -14,6 +11,7 @@ mod router;
 mod settings;
 mod utils;
 
+pub use settings::example_config;
 pub use settings::Settings;
 use tokio::signal;
 
@@ -42,13 +40,12 @@ async fn shutdown_signal() {
 
 pub async fn launch<Db: Database>(
     settings: Settings<Db::Settings>,
-    host: String,
+    host: &str,
     port: u16,
 ) -> Result<()> {
-    let host = host.parse::<IpAddr>()?;
     launch_with_listener::<Db>(
         settings,
-        TcpListener::bind(SocketAddr::new(host, port)).context("could not connect to socket")?,
+        TcpListener::bind((host, port)).context("could not connect to socket")?,
         shutdown_signal(),
     )
     .await

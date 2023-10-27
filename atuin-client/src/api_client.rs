@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::env;
+use std::time::Duration;
 
-use chrono::Utc;
 use eyre::{bail, Result};
 use reqwest::{
     header::{HeaderMap, AUTHORIZATION, USER_AGENT},
@@ -17,6 +17,8 @@ use atuin_common::{
     record::RecordIndex,
 };
 use semver::Version;
+use time::format_description::well_known::Rfc3339;
+use time::OffsetDateTime;
 
 use crate::{history::History, sync::hash_str};
 
@@ -105,7 +107,12 @@ pub async fn latest_version() -> Result<Version> {
 }
 
 impl<'a> Client<'a> {
-    pub fn new(sync_addr: &'a str, session_token: &'a str) -> Result<Self> {
+    pub fn new(
+        sync_addr: &'a str,
+        session_token: &str,
+        connect_timeout: u64,
+        timeout: u64,
+    ) -> Result<Self> {
         let mut headers = HeaderMap::new();
         headers.insert(AUTHORIZATION, format!("Token {session_token}").parse()?);
 
@@ -114,6 +121,8 @@ impl<'a> Client<'a> {
             client: reqwest::Client::builder()
                 .user_agent(APP_USER_AGENT)
                 .default_headers(headers)
+                .connect_timeout(Duration::new(connect_timeout, 0))
+                .timeout(Duration::new(timeout, 0))
                 .build()?,
         })
     }
@@ -150,8 +159,8 @@ impl<'a> Client<'a> {
 
     pub async fn get_history(
         &self,
-        sync_ts: chrono::DateTime<Utc>,
-        history_ts: chrono::DateTime<Utc>,
+        sync_ts: OffsetDateTime,
+        history_ts: OffsetDateTime,
         host: Option<String>,
     ) -> Result<SyncHistoryResponse> {
         let host = host.unwrap_or_else(|| {
@@ -165,16 +174,26 @@ impl<'a> Client<'a> {
         let url = format!(
             "{}/sync/history?sync_ts={}&history_ts={}&host={}",
             self.sync_addr,
-            urlencoding::encode(sync_ts.to_rfc3339().as_str()),
-            urlencoding::encode(history_ts.to_rfc3339().as_str()),
+            urlencoding::encode(sync_ts.format(&Rfc3339)?.as_str()),
+            urlencoding::encode(history_ts.format(&Rfc3339)?.as_str()),
             host,
         );
 
         let resp = self.client.get(url).send().await?;
 
-        let history = resp.json::<SyncHistoryResponse>().await?;
-
-        Ok(history)
+        let status = resp.status();
+        if status.is_success() {
+            let history = resp.json::<SyncHistoryResponse>().await?;
+            Ok(history)
+        } else if status.is_client_error() {
+            let error = resp.json::<ErrorResponse>().await?.reason;
+            bail!("Could not fetch history: {error}.")
+        } else if status.is_server_error() {
+            let error = resp.json::<ErrorResponse>().await?.reason;
+            bail!("There was an error with the atuin sync service: {error}.\nIf the problem persists, contact the host")
+        } else {
+            bail!("There was an error with the atuin sync service: Status {status:?}.\nIf the problem persists, contact the host")
+        }
     }
 
     pub async fn post_history(&self, history: &[AddHistoryRequest]) -> Result<()> {
