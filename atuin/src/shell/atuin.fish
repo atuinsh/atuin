@@ -24,7 +24,13 @@ function _atuin_search
         if string match -qg '__atuin_accept__:*' "$h"
           set hist (string match -r '__atuin_accept__:(.*|\s*)' "$h"  | awk 'NR == 2')
           echo $hist
+          # Need to run the pre/post exec functions manually
+          _atuin_preexec $hist
           eval $hist
+          _atuin_postexec
+          # Allow space for repainting the prompt, this will work for prompts up to 2 lines
+          echo
+          echo
         else
           commandline -r "$h"
         end
