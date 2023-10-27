@@ -31,6 +31,7 @@ function _atuin_search
           # Allow space for repainting the prompt, this will work for prompts up to 2 lines
           echo
           echo
+          commandline -r ""
         else
           commandline -r "$h"
         end

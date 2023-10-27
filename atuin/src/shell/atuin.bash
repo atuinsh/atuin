@@ -29,6 +29,8 @@ __atuin_history() {
       eval "$HISTORY"
       _atuin_precmd
       echo
+      READLINE_LINE=""
+      READLINE_POINT=${#READLINE_LINE}
     else
       READLINE_LINE=${HISTORY}
       READLINE_POINT=${#READLINE_LINE}
