@@ -71,12 +71,24 @@ __atuin_install_ubuntu(){
 		echo "Ubuntu detected"
 		ARTIFACT_URL="https://github.com/atuinsh/atuin/releases/download/$LATEST_VERSION/atuin_${LATEST_VERSION//v/}_amd64.deb"
 		TEMP_DEB="$(mktemp)".deb &&
-		curl -Lo "$TEMP_DEB" "$ARTIFACT_URL"
-		if command -v sudo &> /dev/null; then
-			sudo apt install "$TEMP_DEB"
+		DOWNLOAD_RSP=$(curl -Lo "$TEMP_DEB" -w "%{http_code}" "$ARTIFACT_URL")
+
+		if [ "$DOWNLOAD_RSP" -eq 200 ]; then
+			if command -v sudo &> /dev/null; then
+				sudo apt install "$TEMP_DEB"
+			else
+				su -l -c "apt install '$TEMP_DEB'"
+			fi
+		elif [ "$DOWNLOAD_RSP" -eq 404 ]; then
+			echo "$LATEST_VERSION version deb package not ready now"
+			echo "Try to use cargo install"
+			__atuin_install_unsupported
 		else
-			su -l -c "apt install '$TEMP_DEB'"
+			echo "Download latest Ubuntu package failed"
+			echo "Try to use cargo install"
+			__atuin_install_unsupported
 		fi
+
 		rm -f "$TEMP_DEB"
 	else
 		echo "Ubuntu detected, but not amd64"
@@ -200,7 +212,7 @@ cat << EOF
 
 
 
- _______  __   __  _______  __    _  ___   _    __   __  _______  __   __ 
+ _______  __   __  _______  __    _  ___   _    __   __  _______  __   __
 |       ||  | |  ||   _   ||  |  | ||   | | |  |  | |  ||       ||  | |  |
 |_     _||  |_|  ||  |_|  ||   |_| ||   |_| |  |  |_|  ||   _   ||  | |  |
   |   |  |       ||       ||       ||      _|  |       ||  | |  ||  |_|  |
