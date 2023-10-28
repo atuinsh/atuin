@@ -29,7 +29,7 @@ use super::{
 };
 use crate::{command::client::search::engines, VERSION};
 use ratatui::{
-    backend::{Backend, CrosstermBackend},
+    backend::CrosstermBackend,
     layout::{Alignment, Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
@@ -312,7 +312,7 @@ impl State {
 
     #[allow(clippy::cast_possible_truncation)]
     #[allow(clippy::bool_to_int_with_if)]
-    fn draw<T: Backend>(&mut self, f: &mut Frame<'_, T>, results: &[History], settings: &Settings) {
+    fn draw(&mut self, f: &mut Frame, results: &[History], settings: &Settings) {
         let compact = match settings.style {
             atuin_client::settings::Style::Auto => f.size().height < 14,
             atuin_client::settings::Style::Compact => true,
