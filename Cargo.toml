@@ -10,7 +10,7 @@ members = [
 
 [workspace.package]
 name = "atuin"
-version = "17.0.0"
+version = "17.0.1"
 authors = ["Ellie Huxtable <ellie@elliehuxtable.com>"]
 rust-version = "1.67"
 license = "MIT"
