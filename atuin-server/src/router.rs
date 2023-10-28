@@ -81,7 +81,7 @@ async fn teapot() -> impl IntoResponse {
 async fn clacks_overhead<B>(request: Request<B>, next: Next<B>) -> Response {
     let mut response = next.run(request).await;
 
-    let gnu_terry_value = "GNU Terry Pratchett";
+    let gnu_terry_value = "GNU Terry Pratchett, Kris Nova";
     let gnu_terry_header = "X-Clacks-Overhead";
 
     response
