@@ -31,5 +31,10 @@
           ];
         RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";
       });
-    });
+    })
+    // {
+      overlays.default = final: prev: {
+        inherit (self.packages.${final.system}) atuin;
+      };
+    };
 }
