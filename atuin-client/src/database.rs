@@ -268,12 +268,18 @@ impl Database for Sqlite {
             query.and_where_is_null("deleted_at");
         }
 
+        let git_root = if let Some(git_root) = context.git_root.clone() {
+            git_root.to_str().unwrap_or("/").to_string()
+        } else {
+            context.cwd.clone()
+        };
+
         match filter {
             FilterMode::Global => &mut query,
             FilterMode::Host => query.and_where_eq("hostname", quote(&context.hostname)),
             FilterMode::Session => query.and_where_eq("session", quote(&context.session)),
             FilterMode::Directory => query.and_where_eq("cwd", quote(&context.cwd)),
-            FilterMode::Workspace => query.and_where_like_any("cwd", context.cwd.clone()),
+            FilterMode::Workspace => query.and_where_like_left("cwd", git_root),
         };
 
         if unique {
