@@ -50,8 +50,8 @@ _atuin_search() {
 }
 
 _atuin_up_search() {
-    # Only trigger on the first line of the buffer
-    if [[ ! $LBUFFER == *$'\n'* ]]; then
+    # Only trigger if the buffer is a single line
+    if [[ ! $BUFFER == *$'\n'* ]]; then
         _atuin_search --shell-up-key-binding
     else
         zle up-line
