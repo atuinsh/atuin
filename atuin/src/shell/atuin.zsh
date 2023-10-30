@@ -50,7 +50,12 @@ _atuin_search() {
 }
 
 _atuin_up_search() {
-    _atuin_search --shell-up-key-binding
+    # Only trigger on the first line of the buffer
+    if [[ ! $LBUFFER == *$'\n'* ]]; then
+        _atuin_search --shell-up-key-binding
+    else
+        zle up-line
+    fi
 }
 
 add-zsh-hook preexec _atuin_preexec
