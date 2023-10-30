@@ -12,6 +12,7 @@
   libiconv,
   Security,
   SystemConfiguration,
+  Appkit,
 }:
 rustPlatform.buildRustPackage {
   name = "atuin";
@@ -26,7 +27,7 @@ rustPlatform.buildRustPackage {
 
   nativeBuildInputs = [installShellFiles];
 
-  buildInputs = lib.optionals stdenv.isDarwin [libiconv Security SystemConfiguration];
+  buildInputs = lib.optionals stdenv.isDarwin [libiconv Security SystemConfiguration Appkit];
 
   postInstall = ''
     installShellCompletion --cmd atuin \

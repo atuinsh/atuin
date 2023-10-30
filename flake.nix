@@ -17,7 +17,7 @@
       pkgs = nixpkgs.outputs.legacyPackages.${system};
     in {
       packages.atuin = pkgs.callPackage ./atuin.nix {
-        inherit (pkgs.darwin.apple_sdk.frameworks) Security SystemConfiguration;
+        inherit (pkgs.darwin.apple_sdk.frameworks) Security SystemConfiguration Appkit;
       };
       packages.default = self.outputs.packages.${system}.atuin;
 
