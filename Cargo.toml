@@ -40,7 +40,7 @@ semver = "1.0.20"
 # I don't trust dtolnay with our user's builds. especially as we
 # have things like encryption keys
 serde = { version = "1.0.145, <=1.0.171", features = ["derive"] }
-serde_json = "1.0.99"
+serde_json = "1.0.108"
 tokio = { version = "1", features = ["full"] }
 uuid = { version = "1.3", features = ["v4", "serde"] }
 whoami = "1.1.2"
