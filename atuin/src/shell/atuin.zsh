@@ -50,7 +50,12 @@ _atuin_search() {
 }
 
 _atuin_up_search() {
-    _atuin_search --shell-up-key-binding
+    # Only trigger if the buffer is a single line
+    if [[ ! $BUFFER == *$'\n'* ]]; then
+        _atuin_search --shell-up-key-binding
+    else
+        zle up-line
+    fi
 }
 
 add-zsh-hook preexec _atuin_preexec
