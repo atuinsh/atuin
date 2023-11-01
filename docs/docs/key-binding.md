@@ -136,6 +136,8 @@ $env.config = (
 
 | Shortcut                                  | Action                                                                        |
 | ----------------------------------------- | ----------------------------------------------------------------------------- |
+| enter                                     | Execute selected item                                                        |
+| tab                                       | Select item and edit                                                          |
 | ctrl + r                                  | Cycle through filter modes                                                    |
 | ctrl + s                                  | Cycle through search modes                                                    |
 | alt + 1 to alt + 9                        | Select item by the number located near it                                     |
@@ -155,7 +157,6 @@ $env.config = (
 | ctrl + p / ctrl + k / ⬇                  | Select the previous item on the list                                          |
 | page down                                 | Scroll search results one page down                                           |
 | page up                                   | Scroll search results one page up                                             |
-| enter                                     | Select highlighted item                                                       |
 | ⬇ (with no entry selected)               | Return original or return query depending on settings                         |
 | ⬇                                        | Select the next item on the list                                              |
 
