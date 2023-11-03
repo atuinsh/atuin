@@ -28,6 +28,9 @@ export ATUIN_SESSION=$(atuin uuid)
 ATUIN_HISTORY_ID=""
 
 _atuin_preexec() {
+    # skip history for empty calls
+    # remove space, \t, \n, and literal '\'
+    [[ -n "${${1//[[:space:]]/}//\\/}" ]] || return
     local id
     id=$(atuin history start -- "$1")
     export ATUIN_HISTORY_ID="$id"
