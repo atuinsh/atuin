@@ -23,15 +23,10 @@ function _atuin_search
     if test -n "$ATUIN_H"
         if string match --quiet '__atuin_accept__:*' "$ATUIN_H"
           set -l ATUIN_HIST (string match --regex '__atuin_accept__:(.*|\s*)' "$ATUIN_H"  | awk 'NR == 2')
-          echo $ATUIN_HIST
-          # Need to run the pre/post exec functions manually
-          _atuin_preexec $ATUIN_HIST
-          eval $ATUIN_HIST
-          _atuin_postexec
-          # Allow space for repainting the prompt, this will work for prompts up to 2 lines
-          echo
-          echo
-          commandline -r ""
+          commandline -r "$ATUIN_HIST"
+          commandline -f repaint
+          commandline -f execute
+          return
         else
           commandline -r "$ATUIN_H"
         end
