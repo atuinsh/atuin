@@ -23,6 +23,8 @@ pub enum Shell {
     Fish,
     /// Nu setup
     Nu,
+    /// Xonsh setup
+    Xonsh,
 }
 
 impl Cmd {
@@ -140,12 +142,18 @@ bind -M insert \e\[A _atuin_bind_up";
         }
     }
 
+    fn init_xonsh(&self) {
+        let base = include_str!("../shell/atuin.xsh");
+        println!("{base}");
+    }
+
     pub fn run(self) {
         match self.shell {
             Shell::Zsh => self.init_zsh(),
             Shell::Bash => self.init_bash(),
             Shell::Fish => self.init_fish(),
             Shell::Nu => self.init_nu(),
+            Shell::Xonsh => self.init_xonsh(),
         }
     }
 }
