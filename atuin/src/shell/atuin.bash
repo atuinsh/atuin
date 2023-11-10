@@ -29,6 +29,8 @@ __atuin_history() {
       eval "$HISTORY"
       _atuin_precmd
       echo
+      # Add the command to the bash history
+      history -s "$HISTORY"
       READLINE_LINE=""
       READLINE_POINT=${#READLINE_LINE}
     else
