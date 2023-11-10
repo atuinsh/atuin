@@ -248,16 +248,30 @@ antigen bundle atuinsh/atuin@main
 
 ### bash
 
-We need to setup some hooks, so first install bash-preexec:
+#### [ble.sh](https://github.com/akinomyoga/ble.sh)
 
+Atuin works best in bash when using [ble.sh](https://github.com/akinomyoga/ble.sh).
+
+With ble.sh installed, just add atuin to your .bashrc
+
+```bash
+echo 'eval "$(atuin init bash)"' >> ~/.bashrc
 ```
+
+#### [bash-preexec](https://github.com/rcaloras/bash-preexec)
+
+[Bash-preexec](https://github.com/rcaloras/bash-preexec) can also be used, but you may experience some minor problems with the recorded duration and exit status of some commands.
+
+To use bash-preexec, download and initialize it
+
+```bash
 curl https://raw.githubusercontent.com/rcaloras/bash-preexec/master/bash-preexec.sh -o ~/.bash-preexec.sh
 echo '[[ -f ~/.bash-preexec.sh ]] && source ~/.bash-preexec.sh' >> ~/.bashrc
 ```
 
 Then setup Atuin
 
-```
+```bash
 echo 'eval "$(atuin init bash)"' >> ~/.bashrc
 ```
 
