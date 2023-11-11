@@ -28,6 +28,7 @@ __atuin_history() {
     then
       HISTORY=${HISTORY#__atuin_accept__:}
       # Reprint the prompt, accounting for multiple lines
+      # shellcheck disable=SC2046
       tput cuu $(echo -n "${PS1@P}" | tr -cd '\n' | wc -c)
       echo "${PS1@P}$HISTORY"
 
@@ -49,6 +50,7 @@ __atuin_history() {
             fi
           fi
         done
+        # shellcheck disable=SC2154
         __bp_set_ret_value "$preexec_ret_value" "$__bp_last_argument_prev_command" 
       fi
       eval "$HISTORY"

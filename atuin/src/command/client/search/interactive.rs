@@ -64,8 +64,10 @@ struct StyleState {
 impl State {
     async fn query_results(&mut self, db: &mut dyn Database) -> Result<Vec<History>> {
         let results = self.engine.query(&self.search, db).await?;
+
         self.results_state.select(0);
         self.results_len = results.len();
+
         Ok(results)
     }
 
@@ -703,7 +705,7 @@ pub async fn history(
 
     if index < results.len() {
         let mut command = results.swap_remove(index).command;
-        if accept && (utils::is_zsh() || utils::is_fish() || utils::is_bash()) {
+        if accept && (utils::is_zsh() || utils::is_fish()) {
             command = String::from("__atuin_accept__:") + &command;
         }
 
