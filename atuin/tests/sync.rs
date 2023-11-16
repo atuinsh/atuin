@@ -37,6 +37,7 @@ async fn start_server(path: &str) -> (String, oneshot::Sender<()>, JoinHandle<()
         register_webhook_url: None,
         register_webhook_username: String::new(),
         db_settings: PostgresSettings { db_uri },
+        metrics: atuin_server::settings::Metrics::default(),
     };
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();

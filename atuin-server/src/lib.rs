@@ -10,11 +10,13 @@ use eyre::{Context, Result};
 mod handlers;
 mod metrics;
 mod router;
-mod settings;
 mod utils;
 
 pub use settings::example_config;
 pub use settings::Settings;
+
+pub mod settings;
+
 use tokio::signal;
 
 #[cfg(target_family = "unix")]

@@ -14,6 +14,16 @@ pub struct Metrics {
     pub port: u16,
 }
 
+impl Default for Metrics {
+    fn default() -> Self {
+        Self {
+            enable: false,
+            host: String::from("127.0.0.1"),
+            port: 9001,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Settings<DbSettings> {
     pub host: String,
