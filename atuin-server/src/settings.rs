@@ -8,7 +8,7 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 static EXAMPLE_CONFIG: &str = include_str!("../server.toml");
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-struct Metrics {
+pub struct Metrics {
     pub enable: bool,
     pub host: String,
     pub port: u16,

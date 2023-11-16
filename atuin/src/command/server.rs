@@ -42,9 +42,9 @@ impl Cmd {
 
                 if settings.metrics.enable {
                     tokio::spawn(launch_metrics_server(
-                        settings.metrics.host.as_str(),
+                        settings.metrics.host.clone(),
                         settings.metrics.port,
-                    ))
+                    ));
                 }
 
                 launch::<Postgres>(settings, &host, port).await

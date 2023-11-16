@@ -16,6 +16,7 @@ use tower_http::trace::TraceLayer;
 use super::handlers;
 use crate::{
     handlers::{ErrorResponseStatus, RespExt},
+    metrics,
     settings::Settings,
 };
 use atuin_server_database::{models::User, Database, DbError};
@@ -124,6 +125,7 @@ pub fn router<DB: Database>(database: DB, settings: Settings<DB::Settings>) -> R
     .layer(
         ServiceBuilder::new()
             .layer(axum::middleware::from_fn(clacks_overhead))
-            .layer(TraceLayer::new_for_http()),
+            .layer(TraceLayer::new_for_http())
+            .layer(axum::middleware::from_fn(metrics::track_metrics)),
     )
 }
