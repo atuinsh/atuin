@@ -8,6 +8,23 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 static EXAMPLE_CONFIG: &str = include_str!("../server.toml");
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Metrics {
+    pub enable: bool,
+    pub host: String,
+    pub port: u16,
+}
+
+impl Default for Metrics {
+    fn default() -> Self {
+        Self {
+            enable: false,
+            host: String::from("127.0.0.1"),
+            port: 9001,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Settings<DbSettings> {
     pub host: String,
     pub port: u16,
@@ -18,6 +35,7 @@ pub struct Settings<DbSettings> {
     pub page_size: i64,
     pub register_webhook_url: Option<String>,
     pub register_webhook_username: String,
+    pub metrics: Metrics,
 
     #[serde(flatten)]
     pub db_settings: DbSettings,
@@ -46,6 +64,9 @@ impl<DbSettings: DeserializeOwned> Settings<DbSettings> {
             .set_default("path", "")?
             .set_default("register_webhook_username", "")?
             .set_default("page_size", 1100)?
+            .set_default("metrics.enable", false)?
+            .set_default("metrics.host", "127.0.0.1")?
+            .set_default("metrics.port", 9001)?
             .add_source(
                 Environment::with_prefix("atuin")
                     .prefix_separator("_")
