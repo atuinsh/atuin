@@ -22,3 +22,8 @@
 
 ## Default page size for requests
 # page_size = 1100
+
+# [metrics]
+# enable = false
+# host = 127.0.0.1
+# port = 9001
