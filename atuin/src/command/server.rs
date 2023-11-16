@@ -4,7 +4,7 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 use clap::Parser;
 use eyre::{Context, Result};
 
-use atuin_server::{example_config, launch, Settings};
+use atuin_server::{example_config, launch, launch_metrics_server, Settings};
 
 #[derive(Parser, Debug)]
 #[clap(infer_subcommands = true)]
@@ -39,6 +39,13 @@ impl Cmd {
                 let settings = Settings::new().wrap_err("could not load server settings")?;
                 let host = host.as_ref().unwrap_or(&settings.host).clone();
                 let port = port.unwrap_or(settings.port);
+
+                if settings.metrics.enable {
+                    tokio::spawn(launch_metrics_server(
+                        settings.metrics.host.as_str(),
+                        settings.metrics.port,
+                    ))
+                }
 
                 launch::<Postgres>(settings, &host, port).await
             }
