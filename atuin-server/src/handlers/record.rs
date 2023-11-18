@@ -1,5 +1,6 @@
 use axum::{extract::Query, extract::State, Json};
 use http::StatusCode;
+use metrics::counter;
 use serde::Deserialize;
 use tracing::{error, instrument};
 
@@ -23,11 +24,15 @@ pub async fn post<DB: Database>(
         "request to add records"
     );
 
+    counter!("atuin_record_uploaded", records.len() as u64);
+
     let too_big = records
         .iter()
         .any(|r| r.data.data.len() >= settings.max_record_size || settings.max_record_size == 0);
 
     if too_big {
+        counter!("atuin_record_too_large", 1);
+
         return Err(
             ErrorResponse::reply("could not add records; record too large")
                 .with_status(StatusCode::BAD_REQUEST),
