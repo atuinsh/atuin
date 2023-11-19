@@ -70,7 +70,7 @@ impl Cmd {
         let mut store = SqliteStore::new(record_store_path).await?;
 
         match self {
-            Self::History(history) => history.run(&settings, &db).await,
+            Self::History(history) => history.run(&settings, &db, store).await,
             Self::Import(import) => import.run(&db).await,
             Self::Stats(stats) => stats.run(&db, &settings).await,
             Self::Search(search) => search.run(db, &mut settings).await,
