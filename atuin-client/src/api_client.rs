@@ -13,11 +13,11 @@ use atuin_common::{
         AddHistoryRequest, CountResponse, DeleteHistoryRequest, ErrorResponse, IndexResponse,
         LoginRequest, LoginResponse, RegisterResponse, StatusResponse, SyncHistoryResponse,
     },
-    record::RecordIndex,
+    record::RecordStatus,
 };
 use atuin_common::{
     api::{ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ATUIN_VERSION},
-    record::{EncryptedData, HostId, Record, RecordId},
+    record::{EncryptedData, HostId, Record, RecordIdx},
 };
 use semver::Version;
 use time::format_description::well_known::Rfc3339;
@@ -279,24 +279,22 @@ impl<'a> Client<'a> {
         &self,
         host: HostId,
         tag: String,
-        start: Option<RecordId>,
+        start: RecordIdx,
         count: u64,
     ) -> Result<Vec<Record<EncryptedData>>> {
-        let url = format!(
-            "{}/record/next?host={}&tag={}&count={}",
-            self.sync_addr, host.0, tag, count
+        debug!(
+            "fetching record/s from host {}/{}/{}",
+            host.0.to_string(),
+            tag,
+            start
         );
-        let mut url = Url::parse(url.as_str())?;
 
-        if let Some(start) = start {
-            url.set_query(Some(
-                format!(
-                    "host={}&tag={}&count={}&start={}",
-                    host.0, tag, count, start.0
-                )
-                .as_str(),
-            ));
-        }
+        let url = format!(
+            "{}/record/next?host={}&tag={}&count={}&start={}",
+            self.sync_addr, host.0, tag, count, start
+        );
+
+        let url = Url::parse(url.as_str())?;
 
         let resp = self.client.get(url).send().await?;
 
@@ -305,7 +303,7 @@ impl<'a> Client<'a> {
         Ok(records)
     }
 
-    pub async fn record_index(&self) -> Result<RecordIndex> {
+    pub async fn record_status(&self) -> Result<RecordStatus> {
         let url = format!("{}/record", self.sync_addr);
         let url = Url::parse(url.as_str())?;
 
@@ -316,6 +314,8 @@ impl<'a> Client<'a> {
         }
 
         let index = resp.json().await?;
+
+        debug!("got remote index {:?}", index);
 
         Ok(index)
     }

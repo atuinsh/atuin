@@ -48,6 +48,7 @@ rmp = { version = "0.8.11" }
 typed-builder = { workspace = true }
 tokio = { workspace = true }
 semver = { workspace = true }
+thiserror = { workspace = true }
 futures = "0.3"
 crypto_secretbox = "0.1.1"
 generic-array = { version = "0.14", features = ["serde"] }

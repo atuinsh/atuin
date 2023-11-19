@@ -16,6 +16,7 @@ mod config;
 mod history;
 mod import;
 mod kv;
+mod record;
 mod search;
 mod stats;
 
@@ -45,6 +46,9 @@ pub enum Cmd {
 
     #[command(subcommand)]
     Kv(kv::Cmd),
+
+    #[command(subcommand)]
+    Record(record::Cmd),
 
     /// Print example configuration
     #[command()]
@@ -82,7 +86,7 @@ impl Cmd {
         let mut store = SqliteStore::new(record_store_path).await?;
 
         match self {
-            Self::History(history) => history.run(&settings, &db).await,
+            Self::History(history) => history.run(&settings, &db, store).await,
             Self::Import(import) => import.run(&db).await,
             Self::Stats(stats) => stats.run(&db, &settings).await,
             Self::Search(search) => search.run(db, &mut settings).await,
@@ -94,6 +98,8 @@ impl Cmd {
             Self::Account(account) => account.run(settings).await,
 
             Self::Kv(kv) => kv.run(&settings, &mut store).await,
+
+            Self::Record(record) => record.run(&settings, &store).await,
 
             Self::DefaultConfig => {
                 config::run();

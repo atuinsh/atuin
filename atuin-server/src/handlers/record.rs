@@ -1,109 +1,46 @@
-use axum::{extract::Query, extract::State, Json};
+use axum::{response::IntoResponse, Json};
 use http::StatusCode;
-use metrics::counter;
-use serde::Deserialize;
-use tracing::{error, instrument};
+use serde_json::json;
+use tracing::instrument;
 
 use super::{ErrorResponse, ErrorResponseStatus, RespExt};
-use crate::router::{AppState, UserAuth};
+use crate::router::UserAuth;
 use atuin_server_database::Database;
 
-use atuin_common::record::{EncryptedData, HostId, Record, RecordId, RecordIndex};
+use atuin_common::record::{EncryptedData, Record};
 
 #[instrument(skip_all, fields(user.id = user.id))]
 pub async fn post<DB: Database>(
     UserAuth(user): UserAuth,
-    state: State<AppState<DB>>,
-    Json(records): Json<Vec<Record<EncryptedData>>>,
 ) -> Result<(), ErrorResponseStatus<'static>> {
-    let State(AppState { database, settings }) = state;
+    // anyone who has actually used the old record store (a very small number) will see this error
+    // upon trying to sync.
+    // 1. The status endpoint will say that the server has nothing
+    // 2. The client will try to upload local records
+    // 3. Sync will fail with this error
 
-    tracing::debug!(
-        count = records.len(),
-        user = user.username,
-        "request to add records"
+    // If the client has no local records, they will see the empty index and do nothing. For the
+    // vast majority of users, this is the case.
+    return Err(
+        ErrorResponse::reply("record store deprecated; please upgrade")
+            .with_status(StatusCode::BAD_REQUEST),
     );
-
-    counter!("atuin_record_uploaded", records.len() as u64);
-
-    let too_big = records
-        .iter()
-        .any(|r| r.data.data.len() >= settings.max_record_size || settings.max_record_size == 0);
-
-    if too_big {
-        counter!("atuin_record_too_large", 1);
-
-        return Err(
-            ErrorResponse::reply("could not add records; record too large")
-                .with_status(StatusCode::BAD_REQUEST),
-        );
-    }
-
-    if let Err(e) = database.add_records(&user, &records).await {
-        error!("failed to add record: {}", e);
-
-        return Err(ErrorResponse::reply("failed to add record")
-            .with_status(StatusCode::INTERNAL_SERVER_ERROR));
-    };
-
-    Ok(())
 }
 
 #[instrument(skip_all, fields(user.id = user.id))]
-pub async fn index<DB: Database>(
-    UserAuth(user): UserAuth,
-    state: State<AppState<DB>>,
-) -> Result<Json<RecordIndex>, ErrorResponseStatus<'static>> {
-    let State(AppState {
-        database,
-        settings: _,
-    }) = state;
+pub async fn index<DB: Database>(UserAuth(user): UserAuth) -> axum::response::Response {
+    let ret = json!({
+        "hosts": {}
+    });
 
-    let record_index = match database.tail_records(&user).await {
-        Ok(index) => index,
-        Err(e) => {
-            error!("failed to get record index: {}", e);
-
-            return Err(ErrorResponse::reply("failed to calculate record index")
-                .with_status(StatusCode::INTERNAL_SERVER_ERROR));
-        }
-    };
-
-    Ok(Json(record_index))
-}
-
-#[derive(Deserialize)]
-pub struct NextParams {
-    host: HostId,
-    tag: String,
-    start: Option<RecordId>,
-    count: u64,
+    ret.to_string().into_response()
 }
 
 #[instrument(skip_all, fields(user.id = user.id))]
-pub async fn next<DB: Database>(
-    params: Query<NextParams>,
+pub async fn next(
     UserAuth(user): UserAuth,
-    state: State<AppState<DB>>,
 ) -> Result<Json<Vec<Record<EncryptedData>>>, ErrorResponseStatus<'static>> {
-    let State(AppState {
-        database,
-        settings: _,
-    }) = state;
-    let params = params.0;
-
-    let records = match database
-        .next_records(&user, params.host, params.tag, params.start, params.count)
-        .await
-    {
-        Ok(records) => records,
-        Err(e) => {
-            error!("failed to get record index: {}", e);
-
-            return Err(ErrorResponse::reply("failed to calculate record index")
-                .with_status(StatusCode::INTERNAL_SERVER_ERROR));
-        }
-    };
+    let records = Vec::new();
 
     Ok(Json(records))
 }

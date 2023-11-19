@@ -118,13 +118,16 @@ pub fn router<DB: Database>(database: DB, settings: Settings<DB::Settings>) -> R
         .route("/sync/status", get(handlers::status::status))
         .route("/history", post(handlers::history::add))
         .route("/history", delete(handlers::history::delete))
-        .route("/record", post(handlers::record::post))
-        .route("/record", get(handlers::record::index))
-        .route("/record/next", get(handlers::record::next))
         .route("/user/:username", get(handlers::user::get))
         .route("/account", delete(handlers::user::delete))
         .route("/register", post(handlers::user::register))
-        .route("/login", post(handlers::user::login));
+        .route("/login", post(handlers::user::login))
+        .route("/record", post(handlers::record::post::<DB>))
+        .route("/record", get(handlers::record::index::<DB>))
+        .route("/record/next", get(handlers::record::next))
+        .route("/api/v0/record", post(handlers::v0::record::post))
+        .route("/api/v0/record", get(handlers::v0::record::index))
+        .route("/api/v0/record/next", get(handlers::v0::record::next));
 
     let path = settings.path.as_str();
     if path.is_empty() {

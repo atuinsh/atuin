@@ -1,5 +1,5 @@
 use ::sqlx::{FromRow, Result};
-use atuin_common::record::{EncryptedData, Record};
+use atuin_common::record::{EncryptedData, Host, Record};
 use atuin_server_database::models::{History, Session, User};
 use sqlx::{postgres::PgRow, Row};
 use time::PrimitiveDateTime;
@@ -51,6 +51,7 @@ impl<'a> ::sqlx::FromRow<'a, PgRow> for DbHistory {
 impl<'a> ::sqlx::FromRow<'a, PgRow> for DbRecord {
     fn from_row(row: &'a PgRow) -> ::sqlx::Result<Self> {
         let timestamp: i64 = row.try_get("timestamp")?;
+        let idx: i64 = row.try_get("idx")?;
 
         let data = EncryptedData {
             data: row.try_get("data")?,
@@ -59,8 +60,8 @@ impl<'a> ::sqlx::FromRow<'a, PgRow> for DbRecord {
 
         Ok(Self(Record {
             id: row.try_get("client_id")?,
-            host: row.try_get("host")?,
-            parent: row.try_get("parent")?,
+            host: Host::new(row.try_get("host")?),
+            idx: idx as u64,
             timestamp: timestamp as u64,
             version: row.try_get("version")?,
             tag: row.try_get("tag")?,

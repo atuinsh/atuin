@@ -12,7 +12,9 @@ use runtime_format::{FormatKey, FormatKeyError, ParseSegment, ParsedFmt};
 
 use atuin_client::{
     database::{current_context, Database},
-    history::History,
+    encryption,
+    history::{store::HistoryStore, History},
+    record::sqlite_store::SqliteStore,
     settings::Settings,
 };
 
@@ -266,11 +268,13 @@ impl Cmd {
         // we use this as the key for calling end
         println!("{}", h.id);
         db.save(&h).await?;
+
         Ok(())
     }
 
     async fn handle_end(
         db: &impl Database,
+        store: HistoryStore,
         settings: &Settings,
         id: &str,
         exit: i64,
@@ -300,6 +304,7 @@ impl Cmd {
         };
 
         db.update(&h).await?;
+        store.push(&h).await?;
 
         if settings.should_sync()? {
             #[cfg(feature = "sync")]
@@ -367,13 +372,25 @@ impl Cmd {
         Ok(())
     }
 
-    pub async fn run(self, settings: &Settings, db: &impl Database) -> Result<()> {
+    pub async fn run(
+        self,
+        settings: &Settings,
+        db: &impl Database,
+        store: SqliteStore,
+    ) -> Result<()> {
         let context = current_context();
+
+        let encryption_key: [u8; 32] = encryption::load_key(settings)
+            .context("could not load encryption key")?
+            .into();
+
+        let host_id = Settings::host_id().expect("failed to get host_id");
+        let history_store = HistoryStore::new(store, host_id, encryption_key);
 
         match self {
             Self::Start { command } => Self::handle_start(db, settings, &command).await,
             Self::End { id, exit, duration } => {
-                Self::handle_end(db, settings, &id, exit, duration).await
+                Self::handle_end(db, history_store, settings, &id, exit, duration).await
             }
             Self::List {
                 session,
