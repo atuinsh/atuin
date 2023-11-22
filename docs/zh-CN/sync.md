@@ -26,7 +26,7 @@ atuin register -u <USERNAME> -e <EMAIL> -p <PASSWORD>
 
 ## 密钥
 
-由于你的数据是加密的， Atuin 将为你生成一个密钥。它被存储在 Atuin 的数据目录里（ Linus 上为 `~/.local/share/atuin`）
+由于你的数据是加密的， Atuin 将为你生成一个密钥。它被存储在 Atuin 的数据目录里（ Linux 上为 `~/.local/share/atuin`）
 
 你也可以通过以下方式获得它
 
