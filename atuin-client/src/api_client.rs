@@ -234,6 +234,13 @@ impl<'a> Client<'a> {
         start: Option<RecordId>,
         count: u64,
     ) -> Result<Vec<Record<EncryptedData>>> {
+        debug!(
+            "fetching record/s from host {}/{}/{}",
+            host.0.to_string(),
+            tag,
+            start.map_or(String::from("empty"), |f| f.0.to_string())
+        );
+
         let url = format!(
             "{}/record/next?host={}&tag={}&count={}",
             self.sync_addr, host.0, tag, count
@@ -263,6 +270,8 @@ impl<'a> Client<'a> {
 
         let resp = self.client.get(url).send().await?;
         let index = resp.json().await?;
+
+        debug!("got remote index {:?}", index);
 
         Ok(index)
     }

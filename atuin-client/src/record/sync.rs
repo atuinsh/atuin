@@ -166,7 +166,7 @@ async fn sync_download(
     op: (HostId, String, RecordId),
 ) -> Result<i64> {
     // TODO(ellie): implement variable page sizing like on history sync
-    let download_page_size = 1000;
+    let download_page_size = 1;
 
     let mut total = 0;
 
@@ -185,7 +185,7 @@ async fn sync_download(
     // In this case, that contains the remote tail.
     assert_eq!(remote_tail, op.2);
 
-    println!("Downloading {:?}/{}/{:?} to local", op.0, op.1, op.2);
+    debug!("Downloading {:?}/{}/{:?} to local", op.0, op.1, op.2);
 
     let mut records = client
         .next_records(
@@ -195,6 +195,8 @@ async fn sync_download(
             download_page_size,
         )
         .await?;
+
+    debug!("received {} records from remote", records.len());
 
     while !records.is_empty() {
         total += std::cmp::min(download_page_size, records.len() as u64);
