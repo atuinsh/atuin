@@ -318,3 +318,36 @@ shell and give the user a chance to edit.
 This technically defaults to true for new users, but false for existing. We
 have set `enter_accept = true` in the default config file. This is likely to
 change to be the default for everyone in a later release.
+
+## Stats
+This section of client config is specifically for configuring Atuin stats calculations
+
+### common_subcommands
+
+Default
+
+```
+common_subcommands = [
+  "cargo",
+  "go",
+  "git",
+  "npm",
+  "yarn",
+  "pnpm",
+  "kubectl",
+]
+```
+
+Configures commands where we should consider the subcommand as part of the statistics. For example, consider `kubectl get` rather than just `kubectl`.
+
+### common_prefix
+
+Default
+
+```
+common_prefix = [
+  "sudo",
+]
+```
+
+Configures commands that should be totally stripped from stats calculations. For example, 'sudo' should be ignored.
