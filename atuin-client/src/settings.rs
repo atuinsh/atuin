@@ -144,6 +144,24 @@ pub enum WordJumpMode {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+pub struct Stats {
+    pub common_prefix: Vec<String>, // sudo, etc. commands we want to strip off
+    pub common_subcommands: Vec<String>, // kubectl, commands we should consider subcommands for
+}
+
+impl Default for Stats {
+    fn default() -> Self {
+        Self {
+            common_prefix: vec!["sudo", "doas"].into_iter().map(String::from).collect(),
+            common_subcommands: vec!["cargo", "go", "git", "npm", "yarn", "pnpm", "kubectl"]
+                .into_iter()
+                .map(String::from)
+                .collect(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
 pub struct Settings {
     pub dialect: Dialect,
     pub style: Style,
@@ -169,10 +187,13 @@ pub struct Settings {
     pub word_jump_mode: WordJumpMode,
     pub word_chars: String,
     pub scroll_context_lines: usize,
+
     #[serde(with = "serde_regex", default = "RegexSet::empty")]
     pub history_filter: RegexSet,
+
     #[serde(with = "serde_regex", default = "RegexSet::empty")]
     pub cwd_filter: RegexSet,
+
     pub secrets_filter: bool,
     pub workspaces: bool,
     pub ctrl_n_shortcuts: bool,
@@ -180,6 +201,9 @@ pub struct Settings {
     pub network_connect_timeout: u64,
     pub network_timeout: u64,
     pub enter_accept: bool,
+
+    #[serde(default)]
+    pub stats: Stats,
 
     // This is automatically loaded when settings is created. Do not set in
     // config! Keep secrets and settings apart.

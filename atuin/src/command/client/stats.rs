@@ -23,14 +23,16 @@ pub struct Cmd {
     count: usize,
 }
 
-fn compute_stats(history: &[History], count: usize) -> Result<()> {
+fn compute_stats(settings: &Settings, history: &[History], count: usize) -> Result<()> {
     let mut commands = HashSet::<&str>::with_capacity(history.len());
     let mut prefixes = HashMap::<&str, usize>::with_capacity(history.len());
     for i in history {
         // just in case it somehow has a leading tab or space or something (legacy atuin didn't ignore space prefixes)
         let command = i.command.trim();
         commands.insert(command);
-        *prefixes.entry(interesting_command(command)).or_default() += 1;
+        *prefixes
+            .entry(interesting_command(settings, command))
+            .or_default() += 1;
     }
 
     let unique = commands.len();
@@ -109,14 +111,10 @@ impl Cmd {
             let end = start + Duration::days(1);
             db.range(start, end).await?
         };
-        compute_stats(&history, self.count)?;
+        compute_stats(settings, &history, self.count)?;
         Ok(())
     }
 }
-
-// TODO: make this configurable?
-static COMMON_COMMAND_PREFIX: &[&str] = &["sudo"];
-static COMMON_SUBCOMMAND_PREFIX: &[&str] = &["cargo", "go", "git", "npm", "yarn", "pnpm"];
 
 fn first_non_whitespace(s: &str) -> Option<usize> {
     s.char_indices()
@@ -134,7 +132,7 @@ fn first_whitespace(s: &str) -> usize {
         .map_or(s.len(), |(i, _)| i)
 }
 
-fn interesting_command(mut command: &str) -> &str {
+fn interesting_command<'a>(settings: &Settings, mut command: &'a str) -> &'a str {
     // compute command prefix
     // we loop here because we might be working with a common command prefix (eg sudo) that we want to trim off
     let (i, prefix) = loop {
@@ -142,7 +140,7 @@ fn interesting_command(mut command: &str) -> &str {
         let prefix = &command[..i];
 
         // is it a common prefix
-        if COMMON_COMMAND_PREFIX.contains(&prefix) {
+        if settings.stats.common_prefix.contains(&String::from(prefix)) {
             command = command[i..].trim_start();
             if command.is_empty() {
                 // no commands following, just use the prefix
@@ -164,7 +162,14 @@ fn interesting_command(mut command: &str) -> &str {
 
     match subcommand_indices {
         // if there is a subcommand and it's a common one, then count the full prefix + subcommand
-        Some(end) if COMMON_SUBCOMMAND_PREFIX.contains(&prefix) => &command[..end],
+        Some(end)
+            if settings
+                .stats
+                .common_subcommands
+                .contains(&String::from(prefix)) =>
+        {
+            &command[..end]
+        }
         // otherwise just count the main command
         _ => prefix,
     }
@@ -172,16 +177,23 @@ fn interesting_command(mut command: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
+    use atuin_client::settings::Settings;
+
     use super::interesting_command;
 
     #[test]
     fn interesting_commands() {
-        assert_eq!(interesting_command("cargo"), "cargo");
-        assert_eq!(interesting_command("cargo build foo bar"), "cargo build");
+        let settings = Settings::default();
+
+        assert_eq!(interesting_command(&settings, "cargo"), "cargo");
         assert_eq!(
-            interesting_command("sudo   cargo build foo bar"),
+            interesting_command(&settings, "cargo build foo bar"),
             "cargo build"
         );
-        assert_eq!(interesting_command("sudo"), "sudo");
+        assert_eq!(
+            interesting_command(&settings, "sudo   cargo build foo bar"),
+            "cargo build"
+        );
+        assert_eq!(interesting_command(&settings, "sudo"), "sudo");
     }
 }
