@@ -133,46 +133,44 @@ fn first_whitespace(s: &str) -> usize {
 }
 
 fn interesting_command<'a>(settings: &Settings, mut command: &'a str) -> &'a str {
-    // compute command prefix
-    // we loop here because we might be working with a common command prefix (eg sudo) that we want to trim off
-    let (i, prefix) = loop {
-        let i = first_whitespace(command);
-        let prefix = &command[..i];
+    // Sort by length so that we match the longest prefix first
+    let mut common_prefix = settings.stats.common_prefix.clone();
+    common_prefix.sort_by_key(|b| std::cmp::Reverse(b.len()));
 
-        // is it a common prefix
-        if settings.stats.common_prefix.contains(&String::from(prefix)) {
+    // Trim off the common prefix, if it exists
+    for p in &common_prefix {
+        if command.starts_with(p) {
+            let i = p.len();
+            let prefix = &command[..i];
             command = command[i..].trim_start();
             if command.is_empty() {
                 // no commands following, just use the prefix
                 return prefix;
             }
-        } else {
-            break (i, prefix);
+            break;
         }
-    };
-
-    // compute subcommand
-    let subcommand_indices = command
-        // after the end of the command prefix
-        .get(i..)
-        // find the first non whitespace character (start of subcommand)
-        .and_then(first_non_whitespace)
-        // then find the end of that subcommand
-        .map(|j| i + j + first_whitespace(&command[i + j..]));
-
-    match subcommand_indices {
-        // if there is a subcommand and it's a common one, then count the full prefix + subcommand
-        Some(end)
-            if settings
-                .stats
-                .common_subcommands
-                .contains(&String::from(prefix)) =>
-        {
-            &command[..end]
-        }
-        // otherwise just count the main command
-        _ => prefix,
     }
+
+    // Sort the common_subcommands by length so that we match the longest subcommand first
+    let mut common_subcommands = settings.stats.common_subcommands.clone();
+    common_subcommands.sort_by_key(|b| std::cmp::Reverse(b.len()));
+
+    // Check for a common subcommand
+    for p in &common_subcommands {
+        if command.starts_with(p) {
+            // if the subcommand is the same length as the command, then we just use the subcommand
+            if p.len() == command.len() {
+                return command;
+            }
+            // otherwise we need to use the subcommand + the next word
+            let non_whitespace = first_non_whitespace(&command[p.len()..]).unwrap_or(0);
+            let j =
+                p.len() + non_whitespace + first_whitespace(&command[p.len() + non_whitespace..]);
+            return &command[..j];
+        }
+    }
+    // Return the first word if there is no subcommand
+    &command[..first_whitespace(command)]
 }
 
 #[cfg(test)]
@@ -195,5 +193,88 @@ mod tests {
             "cargo build"
         );
         assert_eq!(interesting_command(&settings, "sudo"), "sudo");
+    }
+
+    // Test with spaces in the common_prefix
+    #[test]
+    fn interesting_commands_spaces() {
+        let mut settings = Settings::default();
+        settings.stats.common_prefix.push("sudo test".to_string());
+
+        assert_eq!(interesting_command(&settings, "sudo test"), "sudo test");
+        assert_eq!(interesting_command(&settings, "sudo test  "), "sudo test");
+        assert_eq!(interesting_command(&settings, "sudo test foo bar"), "foo");
+        assert_eq!(
+            interesting_command(&settings, "sudo test    foo bar"),
+            "foo"
+        );
+
+        // Works with a common_subcommand as well
+        assert_eq!(
+            interesting_command(&settings, "sudo test cargo build foo bar"),
+            "cargo build"
+        );
+
+        // We still match on just the sudo prefix
+        assert_eq!(interesting_command(&settings, "sudo"), "sudo");
+        assert_eq!(interesting_command(&settings, "sudo foo"), "foo");
+    }
+
+    // Test with spaces in the common_subcommand
+    #[test]
+    fn interesting_commands_spaces_subcommand() {
+        let mut settings = Settings::default();
+        settings
+            .stats
+            .common_subcommands
+            .push("cargo build".to_string());
+
+        assert_eq!(interesting_command(&settings, "cargo build"), "cargo build");
+        assert_eq!(
+            interesting_command(&settings, "cargo build   "),
+            "cargo build"
+        );
+        assert_eq!(
+            interesting_command(&settings, "cargo build foo bar"),
+            "cargo build foo"
+        );
+
+        // Works with a common_prefix as well
+        assert_eq!(
+            interesting_command(&settings, "sudo cargo build foo bar"),
+            "cargo build foo"
+        );
+
+        // We still match on just cargo as a subcommand
+        assert_eq!(interesting_command(&settings, "cargo"), "cargo");
+        assert_eq!(interesting_command(&settings, "cargo foo"), "cargo foo");
+    }
+
+    // Test with spaces in the common_prefix and common_subcommand
+    #[test]
+    fn interesting_commands_spaces_both() {
+        let mut settings = Settings::default();
+        settings.stats.common_prefix.push("sudo test".to_string());
+        settings
+            .stats
+            .common_subcommands
+            .push("cargo build".to_string());
+
+        assert_eq!(
+            interesting_command(&settings, "sudo test cargo build"),
+            "cargo build"
+        );
+        assert_eq!(
+            interesting_command(&settings, "sudo test   cargo build"),
+            "cargo build"
+        );
+        assert_eq!(
+            interesting_command(&settings, "sudo test cargo build   "),
+            "cargo build"
+        );
+        assert_eq!(
+            interesting_command(&settings, "sudo test cargo build foo bar"),
+            "cargo build foo"
+        );
     }
 }
