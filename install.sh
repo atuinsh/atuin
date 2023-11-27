@@ -80,7 +80,7 @@ __atuin_install_ubuntu(){
 		rm -f "$TEMP_DEB"
 	else
 		echo "Ubuntu detected, but not amd64"
-		__atuin_install_unsupported
+		__atuin_install_binary
 	fi
 }
 
@@ -101,8 +101,7 @@ __atuin_install_linux(){
 		"ubuntu" | "ubuntuwsl" | "debian" | "linuxmint" | "parrot" | "kali" | "elementary" | "pop")
 			__atuin_install_ubuntu;;
 		*)
-			# TODO: download a binary or smth
-			__atuin_install_unsupported;;
+			__atuin_install_binary;;
 	esac
 }
 
@@ -114,8 +113,8 @@ __atuin_install_mac(){
 		echo "Installing with brew"
 		brew install atuin
 	else
-		echo "Could not find brew, installing with Cargo"
-		__atuin_install_unsupported
+		echo "Could not find brew, installing binary"
+		__atuin_install_binary
 	fi
 
 }
@@ -128,7 +127,7 @@ __atuin_install_termux(){
 		pkg install atuin
 	else
 		echo "Could not find pkg"
-		__atuin_install_unsupported
+		__atuin_install_binary
 	fi
 }
 
@@ -152,6 +151,45 @@ __atuin_install_cargo(){
 	fi
 
 	cargo install atuin
+}
+
+__atuin_install_binary() {
+    local target
+    local arch=$(uname -sm)
+    local bin_dir=/usr/local/bin
+
+    # todo: Can make it an optional argument to install script as well,
+    # which could support:
+    # bash ~/.local/bin/ <(curl --proto '=https' --tlsv1.2 -sSf https://setup.atuin.sh)
+    # local bin_dir=${1:-/usr/local/bin}
+
+    case $arch in
+    "Linux x86_64")
+        target="x86_64-unknown-linux-musl"
+        ;;
+    "Linux aarch64")
+        target="aarch64-unknown-linux-gnu"
+        ;;
+    "Darwin x86_64")
+        target="x86_64-apple-darwin"
+        ;;
+    "Darwin arm64")
+        target="aarch64-apple-darwin"
+        ;;
+    *)
+        __atuin_install_unsupported
+        return
+        ;;
+    esac
+
+    local latest_version=$(curl -s https://api.github.com/repos/atuinsh/atuin/releases/latest | grep tag_name  | grep -Eo "v[0-9]+\.[0-9]+\.[0-9]+")
+    local archive_name=atuin-$latest_version-$target
+    local binary_url="https://github.com/atuinsh/atuin/releases/download/v17.0.1/$archive_name.tar.gz"
+    download_dir=$(mktemp -d)
+    curl -s -L $binary_url | tar -xz -C $download_dir -f -
+    sudo mkdir -p $bin_dir
+    sudo mv $download_dir/$archive_name/atuin $bin_dir/
+    rm -r $download_dir
 }
 
 __atuin_install_unsupported(){
