@@ -637,28 +637,6 @@ pub async fn history(
         settings.search_mode
     };
 
-    let could_use_workspaces = settings.workspaces && context.git_root.is_some();
-    let key_up_would_use_workspaces = could_use_workspaces
-        && settings
-            .filter_mode_shell_up_key_binding_prefer_workspaces
-            .unwrap_or(settings.filter_mode_prefer_workspaces);
-
-    let key_up_filter_mode = if key_up_would_use_workspaces {
-        FilterMode::Workspace
-    } else {
-        settings
-            .filter_mode_shell_up_key_binding
-            .unwrap_or(settings.filter_mode)
-    };
-
-    let filter_mode = if settings.shell_up_key_binding {
-        key_up_filter_mode
-    } else if could_use_workspaces && settings.filter_mode_prefer_workspaces {
-        FilterMode::Workspace
-    } else {
-        settings.filter_mode
-    };
-
     let mut app = State {
         history_count,
         results_state: ListState::default(),
@@ -667,7 +645,7 @@ pub async fn history(
         search_mode,
         search: SearchState {
             input,
-            filter_mode,
+            filter_mode: filter_mode(settings, &context),
             context,
         },
         engine: engines::engine(search_mode),
@@ -738,4 +716,28 @@ pub async fn history(
         // * out of bounds -> usually implies no selected entry so we return the input
         Ok(app.search.input.into_inner())
     }
+}
+
+fn filter_mode(settings: &Settings, context: &atuin_client::database::Context) -> FilterMode {
+    let could_use_workspaces = settings.workspaces && context.git_root.is_some();
+    let key_up_would_use_workspaces = could_use_workspaces
+        && settings
+            .filter_mode_shell_up_key_binding_prefer_workspaces
+            .unwrap_or(settings.filter_mode_prefer_workspaces);
+
+    let key_up_filter_mode = if key_up_would_use_workspaces {
+        FilterMode::Workspace
+    } else {
+        settings
+            .filter_mode_shell_up_key_binding
+            .unwrap_or(settings.filter_mode)
+    };
+
+    if settings.shell_up_key_binding {
+        return key_up_filter_mode;
+    } else if could_use_workspaces && settings.filter_mode_prefer_workspaces {
+        return FilterMode::Workspace;
+    } else {
+        return settings.filter_mode;
+    };
 }
