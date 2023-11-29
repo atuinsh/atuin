@@ -34,6 +34,8 @@ LATEST_RELEASE=$(curl -L -s -H 'Accept: application/json' https://github.com/atu
 # Allow sed; sometimes it's more readable than ${variable//search/replace}
 # shellcheck disable=SC2001
 LATEST_VERSION=$(echo "$LATEST_RELEASE" | sed -e 's/.*"tag_name":"\([^"]*\)".*/\1/')
+# For binary install, use the first argument as the installation directory.
+INSTALL_DIRECTORY=${1:-/usr/local/bin}
 
 __atuin_install_arch(){
 	echo "Arch Linux detected!"
@@ -156,12 +158,6 @@ __atuin_install_cargo(){
 __atuin_install_binary() {
     local target
     local arch=$(uname -sm)
-    local bin_dir=/usr/local/bin
-
-    # todo: Can make it an optional argument to install script as well,
-    # which could support:
-    # bash ~/.local/bin/ <(curl --proto '=https' --tlsv1.2 -sSf https://setup.atuin.sh)
-    # local bin_dir=${1:-/usr/local/bin}
 
     case $arch in
     "Linux x86_64")
@@ -186,9 +182,12 @@ __atuin_install_binary() {
     local archive_name=atuin-$latest_version-$target
     local binary_url="https://github.com/atuinsh/atuin/releases/download/v17.0.1/$archive_name.tar.gz"
     download_dir=$(mktemp -d)
+    echo "Downloading atuin $latest_version from the latest github release..."
     curl -s -L $binary_url | tar -xz -C $download_dir -f -
-    sudo mkdir -p $bin_dir
-    sudo mv $download_dir/$archive_name/atuin $bin_dir/
+    echo "Copying atuin binary to to $INSTALL_DIRECTORY ..."
+    local dir_usr=$(stat -c "%U" $INSTALL_DIRECTORY)
+    sudo -u $dir_usr mkdir -p $INSTALL_DIRECTORY
+    sudo -u $dir_usr mv $download_dir/$archive_name/atuin $INSTALL_DIRECTORY/
     rm -r $download_dir
 }
 
