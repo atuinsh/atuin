@@ -16,6 +16,7 @@ mod config;
 mod history;
 mod import;
 mod kv;
+mod record;
 mod search;
 mod stats;
 
@@ -45,6 +46,9 @@ pub enum Cmd {
 
     #[command(subcommand)]
     Kv(kv::Cmd),
+
+    #[command(subcommand)]
+    Record(record::Cmd),
 
     /// Print example configuration
     #[command()]
@@ -82,6 +86,8 @@ impl Cmd {
             Self::Account(account) => account.run(settings).await,
 
             Self::Kv(kv) => kv.run(&settings, &mut store).await,
+
+            Self::Record(record) => record.run(&settings, &mut store).await,
 
             Self::DefaultConfig => {
                 config::run();
