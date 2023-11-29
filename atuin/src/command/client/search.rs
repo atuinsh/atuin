@@ -204,7 +204,11 @@ async fn run_non_interactive(
     };
 
     let dir = dir.unwrap_or_else(|| "/".to_string());
-    let filter_mode = if settings.workspaces && utils::has_git_dir(dir.as_str()) {
+
+    let filter_mode = if settings.workspaces
+        && settings.filter_mode_prefer_workspaces
+        && utils::has_git_dir(dir.as_str())
+    {
         FilterMode::Workspace
     } else {
         settings.filter_mode

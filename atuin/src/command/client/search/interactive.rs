@@ -636,6 +636,29 @@ pub async fn history(
     } else {
         settings.search_mode
     };
+
+    let could_use_workspaces = settings.workspaces && context.git_root.is_some();
+    let key_up_would_use_workspaces = could_use_workspaces
+        && settings
+            .filter_mode_shell_up_key_binding_prefer_workspaces
+            .unwrap_or(settings.filter_mode_prefer_workspaces);
+
+    let key_up_filter_mode = if key_up_would_use_workspaces {
+        FilterMode::Workspace
+    } else {
+        settings
+            .filter_mode_shell_up_key_binding
+            .unwrap_or(settings.filter_mode)
+    };
+
+    let filter_mode = if settings.shell_up_key_binding {
+        key_up_filter_mode
+    } else if could_use_workspaces && settings.filter_mode_prefer_workspaces {
+        FilterMode::Workspace
+    } else {
+        settings.filter_mode
+    };
+
     let mut app = State {
         history_count,
         results_state: ListState::default(),
@@ -644,15 +667,7 @@ pub async fn history(
         search_mode,
         search: SearchState {
             input,
-            filter_mode: if settings.workspaces && context.git_root.is_some() {
-                FilterMode::Workspace
-            } else if settings.shell_up_key_binding {
-                settings
-                    .filter_mode_shell_up_key_binding
-                    .unwrap_or(settings.filter_mode)
-            } else {
-                settings.filter_mode
-            },
+            filter_mode,
             context,
         },
         engine: engines::engine(search_mode),

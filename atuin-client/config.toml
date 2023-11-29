@@ -42,10 +42,17 @@
 ## in any directory within a git repositiry tree (default: false)
 # workspaces = false
 
+## If a workspace was detected, Atuin will default to the workspace filter
+# filter_mode_prefer_workspaces = true
+
 ## which filter mode to use when atuin is invoked from a shell up-key binding
 ## the accepted values are identical to those of "filter_mode"
 ## leave unspecified to use same mode set in "filter_mode"
 # filter_mode_shell_up_key_binding = "global"
+
+## If a workspace was detected, Atuin will default to the workspace filter 
+## from the shell up-key binding
+# filter_mode_shell_up_key_binding_prefer_workspaces = true
 
 ## which search mode to use when atuin is invoked from a shell up-key binding
 ## the accepted values are identical to those of "search_mode"
