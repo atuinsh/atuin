@@ -8,10 +8,9 @@ create table if not exists host(
 -- this will become more useful when we allow for multiple recipients of 
 -- some data (same cek, multiple long term keys)
 -- This could be a key per host rather than one global key, or separate users.
-create table if not exists cek(
+create table if not exists cek (
   id integer primary key,    -- normalization rowid
-  wpk text not null,         -- the encryption key, wrapped with the main key
-  kid text not null,         -- the key id we used to wrap the wpk
+  cek text unique not null, 
 );
 
 create table if not exists store (

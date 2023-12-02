@@ -21,7 +21,7 @@ pub trait Store {
     ) -> Result<()>;
 
     async fn get(&self, id: RecordId) -> Result<Record<EncryptedData>>;
-    async fn len(&self, host: HostId, tag: &str) -> Result<u64>;
+    async fn last(&self, host: HostId, tag: &str) -> Result<Option<u64>>;
 
     /// Get the record that follows this record
     async fn next(&self, record: &Record<EncryptedData>) -> Result<Option<Record<EncryptedData>>>;

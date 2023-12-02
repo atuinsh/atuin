@@ -1,27 +1,49 @@
 // do a sync :O
 use eyre::Result;
+use thiserror::Error;
 
 use super::store::Store;
 use crate::{api_client::Client, settings::Settings};
 
-use atuin_common::record::{Diff, HostId, RecordId, RecordIndex};
+use atuin_common::record::{Diff, HostId, RecordId, RecordIdx, RecordStatus};
+
+#[derive(Error, Debug)]
+pub enum SyncError {
+    #[error("the local store is ahead of the remote, but for another host. has remote lost data?")]
+    LocalAheadOtherHost,
+
+    #[error("some issue with the local database occured")]
+    LocalStoreError,
+
+    #[error("something has gone wrong with the sync logic: {msg:?}")]
+    SyncLogicError { msg: String },
+}
 
 #[derive(Debug, Eq, PartialEq)]
 pub enum Operation {
-    // Either upload or download until the tail matches the below
+    // Either upload or download until the states matches the below
     Upload {
-        tail: RecordId,
+        local: RecordIdx,
+        remote: Option<RecordIdx>,
         host: HostId,
         tag: String,
     },
     Download {
-        tail: RecordId,
+        local: Option<RecordIdx>,
+        remote: RecordIdx,
+        host: HostId,
+        tag: String,
+    },
+    Noop {
         host: HostId,
         tag: String,
     },
 }
 
-pub async fn diff(settings: &Settings, store: &mut impl Store) -> Result<(Vec<Diff>, RecordIndex)> {
+pub async fn diff(
+    settings: &Settings,
+    store: &mut impl Store,
+) -> Result<(Vec<Diff>, RecordStatus)> {
     let client = Client::new(
         &settings.sync_address,
         &settings.session_token,
@@ -41,8 +63,9 @@ pub async fn diff(settings: &Settings, store: &mut impl Store) -> Result<(Vec<Di
 // With the store as context, we can determine if a tail exists locally or not and therefore if it needs uploading or download.
 // In theory this could be done as a part of the diffing stage, but it's easier to reason
 // about and test this way
-pub async fn operations(diffs: Vec<Diff>, store: &impl Store) -> Result<Vec<Operation>> {
+pub async fn operations(diffs: Vec<Diff>, store: &impl Store) -> Result<Vec<Operation>, SyncError> {
     let mut operations = Vec::with_capacity(diffs.len());
+    let host = Settings::host_id().expect("got to record sync without a host id; abort");
 
     for diff in diffs {
         // First, try to fetch the tail
@@ -50,30 +73,61 @@ pub async fn operations(diffs: Vec<Diff>, store: &impl Store) -> Result<Vec<Oper
         // host until it has the same tail. Ie, upload.
         // If it does not exist locally, that means remote is ahead of us.
         // Therefore, we need to download until our local tail matches
-        let record = store.get(diff.tail).await;
+        let last = store
+            .last(diff.host, diff.tag.as_str())
+            .await
+            .map_err(|_| SyncError::LocalStoreError)?;
 
-        let op = if record.is_ok() {
-            // if local has the ID, then we should find the actual tail of this
-            // store, so we know what we need to update the remote to.
-            let tail = store
-                .tail(diff.host, diff.tag.as_str())
-                .await?
-                .expect("failed to fetch last record, expected tag/host to exist");
-
-            // TODO(ellie) update the diffing so that it stores the context of the current tail
-            // that way, we can determine how much we need to upload.
-            // For now just keep uploading until tails match
-
-            Operation::Upload {
-                tail: tail.id,
-                host: diff.host,
-                tag: diff.tag,
+        let op = match (last, diff.remote) {
+            // We both have it! Could be either. Compare.
+            (Some(last), Some(remote)) => {
+                if last == remote {
+                    // between the diff and now, a sync has somehow occured.
+                    // regardless, no work is needed!
+                    Operation::Noop {
+                        host: diff.host,
+                        tag: diff.tag,
+                    }
+                } else if last > remote {
+                    Operation::Upload {
+                        local: last,
+                        remote: Some(remote),
+                        host: diff.host,
+                        tag: diff.tag,
+                    }
+                } else {
+                    Operation::Download {
+                        local: Some(last),
+                        remote,
+                        host: diff.host,
+                        tag: diff.tag,
+                    }
+                }
             }
-        } else {
-            Operation::Download {
-                tail: diff.tail,
+
+            // Remote has it, we don't. Gotta be download
+            (None, Some(remote)) => Operation::Download {
+                local: None,
+                remote,
                 host: diff.host,
                 tag: diff.tag,
+            },
+
+            // We have it, remote doesn't. Gotta be upload.
+            (Some(last), None) => Operation::Upload {
+                local: last,
+                remote: None,
+                host: diff.host,
+                tag: diff.tag,
+            },
+
+            // something is pretty fucked.
+            (None, None) => {
+                return Err(SyncError::SyncLogicError {
+                    msg: String::from(
+                        "diff has nothing for local or remote - (host, tag) does not exist",
+                    ),
+                })
             }
         };
 
@@ -86,8 +140,11 @@ pub async fn operations(diffs: Vec<Diff>, store: &impl Store) -> Result<Vec<Oper
     // with the same properties
 
     operations.sort_by_key(|op| match op {
-        Operation::Upload { tail, host, .. } => ("upload", *host, *tail),
-        Operation::Download { tail, host, .. } => ("download", *host, *tail),
+        Operation::Noop { host, tag } => (0, *host, tag.clone()),
+
+        Operation::Upload { host, tag, .. } => (1, *host, tag.clone()),
+
+        Operation::Download { host, tag, .. } => (2, *host, tag.clone()),
     });
 
     Ok(operations)
@@ -95,133 +152,66 @@ pub async fn operations(diffs: Vec<Diff>, store: &impl Store) -> Result<Vec<Oper
 
 async fn sync_upload(
     store: &mut impl Store,
-    remote_index: &RecordIndex,
     client: &Client<'_>,
-    op: (HostId, String, RecordId),
-) -> Result<i64> {
+    host: HostId,
+    tag: String,
+    local: RecordIdx,
+    remote: Option<RecordIdx>,
+) -> Result<i64, SyncError> {
+    let expected = local - remote.unwrap_or(0);
     let upload_page_size = 100;
     let mut total = 0;
 
-    // so. we have an upload operation, with the tail representing the state
-    // we want to get the remote to
-    let current_tail = remote_index.get(op.0, op.1.clone());
+    if expected < 0 {
+        return Err(SyncError::SyncLogicError {
+            msg: String::from("ran upload, but remote ahead of local"),
+        });
+    }
 
     println!(
-        "Syncing local {:?}/{}/{:?}, remote has {:?}",
-        op.0, op.1, op.2, current_tail
+        "Uploading {} records to {}/{}",
+        expected,
+        host.0.as_simple().to_string(),
+        tag
     );
 
-    let start = if let Some(current_tail) = current_tail {
-        current_tail
-    } else {
-        store
-            .head(op.0, op.1.as_str())
-            .await
-            .expect("failed to fetch host/tag head")
-            .expect("host/tag not in current index")
-            .id
-    };
+    // TODO: actually upload lmfao
 
-    debug!("starting push to remote from: {:?}", start);
-
-    // we have the start point for sync. it is either the head of the store if
-    // the remote has no data for it, or the tail that the remote has
-    // we need to iterate from the remote tail, and keep going until
-    // remote tail = current local tail
-
-    let mut record = if current_tail.is_some() {
-        let r = store.get(start).await.unwrap();
-        store.next(&r).await?
-    } else {
-        Some(store.get(start).await.unwrap())
-    };
-
-    let mut buf = Vec::with_capacity(upload_page_size);
-
-    while let Some(r) = record {
-        if buf.len() < upload_page_size {
-            buf.push(r.clone());
-        } else {
-            client.post_records(&buf).await?;
-
-            // can we reset what we have? len = 0 but keep capacity
-            buf = Vec::with_capacity(upload_page_size);
-        }
-        record = store.next(&r).await?;
-
-        total += 1;
-    }
-
-    if !buf.is_empty() {
-        client.post_records(&buf).await?;
-    }
-
-    Ok(total)
+    Ok(0)
 }
 
 async fn sync_download(
     store: &mut impl Store,
-    remote_index: &RecordIndex,
     client: &Client<'_>,
-    op: (HostId, String, RecordId),
-) -> Result<i64> {
-    // TODO(ellie): implement variable page sizing like on history sync
-    let download_page_size = 1;
-
+    host: HostId,
+    tag: String,
+    local: Option<RecordIdx>,
+    remote: RecordIdx,
+) -> Result<i64, SyncError> {
+    let expected = remote - local.unwrap_or(0);
+    let download_page_size = 100;
     let mut total = 0;
 
-    // We know that the remote is ahead of us, so let's keep downloading until both
-    // 1) The remote stops returning full pages
-    // 2) The tail equals what we expect
-    //
-    // If (1) occurs without (2), then something is wrong with our index calculation
-    // and we should bail.
-    let remote_tail = remote_index
-        .get(op.0, op.1.clone())
-        .expect("remote index does not contain expected tail during download");
-    let local_tail = store.tail(op.0, op.1.as_str()).await?;
-    //
-    // We expect that the operations diff will represent the desired state
-    // In this case, that contains the remote tail.
-    assert_eq!(remote_tail, op.2);
-
-    debug!("Downloading {:?}/{}/{:?} to local", op.0, op.1, op.2);
-
-    let mut records = client
-        .next_records(
-            op.0,
-            op.1.clone(),
-            local_tail.map(|r| r.id),
-            download_page_size,
-        )
-        .await?;
-
-    debug!("received {} records from remote", records.len());
-
-    while !records.is_empty() {
-        total += std::cmp::min(download_page_size, records.len() as u64);
-        store.push_batch(records.iter()).await?;
-
-        if records.last().unwrap().id == remote_tail {
-            break;
-        }
-
-        records = client
-            .next_records(
-                op.0,
-                op.1.clone(),
-                records.last().map(|r| r.id),
-                download_page_size,
-            )
-            .await?;
+    if expected < 0 {
+        return Err(SyncError::SyncLogicError {
+            msg: String::from("ran download, but local ahead of remote"),
+        });
     }
 
-    Ok(total as i64)
+    println!(
+        "Downloading {} records from {}/{}",
+        expected,
+        host.0.as_simple().to_string(),
+        tag
+    );
+
+    // TODO: actually upload lmfao
+
+    Ok(0)
 }
 
 pub async fn sync_remote(
     operations: Vec<Operation>,
-    remote_index: &RecordIndex,
     local_store: &mut impl Store,
     settings: &Settings,
 ) -> Result<(i64, i64)> {
@@ -238,14 +228,23 @@ pub async fn sync_remote(
     // this can totally run in parallel, but lets get it working first
     for i in operations {
         match i {
-            Operation::Upload { tail, host, tag } => {
-                uploaded +=
-                    sync_upload(local_store, remote_index, &client, (host, tag, tail)).await?
+            Operation::Upload {
+                host,
+                tag,
+                local,
+                remote,
+            } => uploaded += sync_upload(local_store, &client, host, tag, local, remote).await?,
+
+            Operation::Download {
+                host,
+                tag,
+                local,
+                remote,
+            } => {
+                downloaded += sync_download(local_store, &client, host, tag, local, remote).await?
             }
-            Operation::Download { tail, host, tag } => {
-                downloaded +=
-                    sync_download(local_store, remote_index, &client, (host, tag, tail)).await?
-            }
+
+            Operation::Noop { .. } => continue,
         }
     }
 
@@ -266,13 +265,16 @@ mod tests {
 
     fn test_record() -> Record<EncryptedData> {
         Record::builder()
-            .host(HostId(atuin_common::utils::uuid_v7()))
+            .host(atuin_common::record::Host::new(HostId(
+                atuin_common::utils::uuid_v7(),
+            )))
             .version("v1".into())
             .tag(atuin_common::utils::uuid_v7().simple().to_string())
             .data(EncryptedData {
                 data: String::new(),
                 content_encryption_key: String::new(),
             })
+            .idx(0)
             .build()
     }
 
@@ -322,9 +324,10 @@ mod tests {
         assert_eq!(
             operations[0],
             Operation::Upload {
-                host: record.host,
+                host: record.host.id,
                 tag: record.tag,
-                tail: record.id
+                local: record.idx,
+                remote: None,
             }
         );
     }
@@ -338,7 +341,7 @@ mod tests {
 
         let remote_ahead = test_record();
         let local_ahead = shared_record
-            .new_child(vec![1, 2, 3])
+            .append(vec![1, 2, 3])
             .encrypt::<PASETO_V4>(&[0; 32]);
 
         let local = vec![shared_record.clone(), local_ahead.clone()]; // local knows about the already synced, and something newer in the same store
@@ -353,14 +356,16 @@ mod tests {
             operations,
             vec![
                 Operation::Download {
-                    tail: remote_ahead.id,
-                    host: remote_ahead.host,
+                    host: remote_ahead.host.id,
                     tag: remote_ahead.tag,
+                    local: None,
+                    remote: 0,
                 },
                 Operation::Upload {
-                    tail: local_ahead.id,
-                    host: local_ahead.host,
+                    host: local_ahead.host.id,
                     tag: local_ahead.tag,
+                    local: 0,
+                    remote: None,
                 },
             ]
         );
@@ -379,11 +384,11 @@ mod tests {
 
         let second_shared = test_record();
         let second_shared_remote_ahead = second_shared
-            .new_child(vec![1, 2, 3])
+            .append(vec![1, 2, 3])
             .encrypt::<PASETO_V4>(&[0; 32]);
 
         let local_ahead = shared_record
-            .new_child(vec![1, 2, 3])
+            .append(vec![1, 2, 3])
             .encrypt::<PASETO_V4>(&[0; 32]);
 
         let local = vec![
@@ -407,30 +412,37 @@ mod tests {
 
         let mut result_ops = vec![
             Operation::Download {
-                tail: remote_known.id,
-                host: remote_known.host,
+                host: remote_known.host.id,
                 tag: remote_known.tag,
+                local: Some(second_shared.idx),
+                remote: second_shared_remote_ahead.idx,
             },
             Operation::Download {
-                tail: second_shared_remote_ahead.id,
-                host: second_shared.host,
+                host: second_shared.host.id,
                 tag: second_shared.tag,
+                local: None,
+                remote: remote_known.idx,
             },
             Operation::Upload {
-                tail: local_ahead.id,
-                host: local_ahead.host,
+                host: local_ahead.host.id,
                 tag: local_ahead.tag,
+                local: local_ahead.idx,
+                remote: Some(shared_record.idx),
             },
             Operation::Upload {
-                tail: local_known.id,
-                host: local_known.host,
+                host: local_known.host.id,
                 tag: local_known.tag,
+                local: local_known.idx,
+                remote: None,
             },
         ];
 
         result_ops.sort_by_key(|op| match op {
-            Operation::Upload { tail, host, .. } => ("upload", *host, *tail),
-            Operation::Download { tail, host, .. } => ("download", *host, *tail),
+            Operation::Noop { host, tag } => (0, *host, tag.clone()),
+
+            Operation::Upload { host, tag, .. } => (1, *host, tag.clone()),
+
+            Operation::Download { host, tag, .. } => (2, *host, tag.clone()),
         });
 
         assert_eq!(operations, result_ops);

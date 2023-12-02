@@ -14,7 +14,7 @@ use sqlx::{
     Row,
 };
 
-use atuin_common::record::{EncryptedData, HostId, Record, RecordId, RecordIndex};
+use atuin_common::record::{EncryptedData, Host, HostId, Record, RecordId, RecordIndex};
 use uuid::Uuid;
 
 use super::store::Store;
@@ -49,6 +49,49 @@ impl SqliteStore {
         Ok(Self { pool })
     }
 
+    async fn host(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, host: &Host) -> Result<u64> {
+        // try selecting the id from the host. return if exists, or insert new and return id
+
+        let res: Result<(i64,), sqlx::Error> =
+            sqlx::query_as("select id from host where host = ?1")
+                .bind(host.id.0.as_hyphenated().to_string())
+                .fetch_one(&mut **tx)
+                .await;
+
+        if let Ok(res) = res {
+            return Ok(res.0 as u64);
+        }
+
+        let res: (i64,) =
+            sqlx::query_as("insert into host(host, name) values (?1, ?2) returning id")
+                .bind(host.id.0.as_hyphenated().to_string())
+                .bind(host.name.as_str())
+                .fetch_one(&mut **tx)
+                .await?;
+
+        Ok(res.0 as u64)
+    }
+
+    async fn cek(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, cek: &str) -> Result<u64> {
+        // try selecting the id from the host. return if exists, or insert new and return id
+
+        let res: Result<(i64,), sqlx::Error> = sqlx::query_as("select id from cek where cek = ?1")
+            .bind(cek)
+            .fetch_one(&mut **tx)
+            .await;
+
+        if let Ok(res) = res {
+            return Ok(res.0 as u64);
+        }
+
+        let res: (i64,) = sqlx::query_as("insert into cek(cek) values (?1) returning id")
+            .bind(cek)
+            .fetch_one(&mut **tx)
+            .await?;
+
+        Ok(res.0 as u64)
+    }
+
     async fn setup_db(pool: &SqlitePool) -> Result<()> {
         debug!("running sqlite database setup");
 
@@ -61,19 +104,22 @@ impl SqliteStore {
         tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
         r: &Record<EncryptedData>,
     ) -> Result<()> {
+        let host = Self::host(tx, &r.host).await?;
+        let cek = Self::cek(tx, r.data.content_encryption_key.as_str()).await?;
+
         // In sqlite, we are "limited" to i64. But that is still fine, until 2262.
         sqlx::query(
-            "insert or ignore into records(id, host, tag, timestamp, parent, version, data, cek)
+            "insert or ignore into store(id, idx, host, cek, timestamp, tag, version, data)
                 values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         )
         .bind(r.id.0.as_simple().to_string())
-        .bind(r.host.0.as_simple().to_string())
-        .bind(r.tag.as_str())
+        .bind(r.idx as i64)
+        .bind(host as i64)
+        .bind(cek as i64)
         .bind(r.timestamp as i64)
-        .bind(r.parent.map(|p| p.0.as_simple().to_string()))
+        .bind(r.tag.as_str())
         .bind(r.version.as_str())
         .bind(r.data.data.as_str())
-        .bind(r.data.content_encryption_key.as_str())
         .execute(&mut **tx)
         .await?;
 
@@ -81,26 +127,24 @@ impl SqliteStore {
     }
 
     fn query_row(row: SqliteRow) -> Record<EncryptedData> {
+        let idx: i64 = row.get("idx");
         let timestamp: i64 = row.get("timestamp");
 
         // tbh at this point things are pretty fucked so just panic
         let id = Uuid::from_str(row.get("id")).expect("invalid id UUID format in sqlite DB");
-        let host = Uuid::from_str(row.get("host")).expect("invalid host UUID format in sqlite DB");
-        let parent: Option<&str> = row.get("parent");
-
-        let parent = parent
-            .map(|parent| Uuid::from_str(parent).expect("invalid parent UUID format in sqlite DB"));
+        let host =
+            Uuid::from_str(row.get("host.host")).expect("invalid host UUID format in sqlite DB");
 
         Record {
             id: RecordId(id),
-            host: HostId(host),
-            parent: parent.map(RecordId),
+            idx: idx as u64,
+            host: Host::new(HostId(host)),
             timestamp: timestamp as u64,
             tag: row.get("tag"),
             version: row.get("version"),
             data: EncryptedData {
                 data: row.get("data"),
-                content_encryption_key: row.get("cek"),
+                content_encryption_key: row.get("cek.cek"),
             },
         }
     }
@@ -124,7 +168,7 @@ impl Store for SqliteStore {
     }
 
     async fn get(&self, id: RecordId) -> Result<Record<EncryptedData>> {
-        let res = sqlx::query("select * from records where id = ?1")
+        let res = sqlx::query("select * from store inner join host on store.host=host.id inner join cek on store.cek=cek.id where store.id = ?1")
             .bind(id.0.as_simple().to_string())
             .map(Self::query_row)
             .fetch_one(&self.pool)
@@ -133,9 +177,9 @@ impl Store for SqliteStore {
         Ok(res)
     }
 
-    async fn len(&self, host: HostId, tag: &str) -> Result<u64> {
+    async fn last(&self, host: HostId, tag: &str) -> Result<u64> {
         let res: (i64,) =
-            sqlx::query_as("select count(1) from records where host = ?1 and tag = ?2")
+            sqlx::query_as("select max(idx) from records where host = ?1 and tag = ?2")
                 .bind(host.0.as_simple().to_string())
                 .bind(tag)
                 .fetch_one(&self.pool)
