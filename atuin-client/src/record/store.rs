@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use eyre::Result;
 
-use atuin_common::record::{EncryptedData, HostId, Record, RecordId, RecordIndex};
+use atuin_common::record::{EncryptedData, HostId, Record, RecordId, RecordIdx, RecordStatus};
 
 /// A record store stores records
 /// In more detail - we tend to need to process this into _another_ format to actually query it.
@@ -21,21 +21,32 @@ pub trait Store {
     ) -> Result<()>;
 
     async fn get(&self, id: RecordId) -> Result<Record<EncryptedData>>;
-    async fn last(&self, host: HostId, tag: &str) -> Result<Option<u64>>;
+    async fn len(&self, host: HostId, tag: &str) -> Result<Option<u64>>;
+
+    async fn last(&self, host: HostId, tag: &str) -> Result<Option<Record<EncryptedData>>>;
+    async fn first(&self, host: HostId, tag: &str) -> Result<Option<Record<EncryptedData>>>;
 
     /// Get the record that follows this record
-    async fn next(&self, record: &Record<EncryptedData>) -> Result<Option<Record<EncryptedData>>>;
+    async fn next(
+        &self,
+        host: HostId,
+        tag: &str,
+        idx: RecordIdx,
+        limit: u64,
+    ) -> Result<Vec<Record<EncryptedData>>>;
 
     /// Get the first record for a given host and tag
-    async fn head(&self, host: HostId, tag: &str) -> Result<Option<Record<EncryptedData>>>;
+    async fn idx(
+        &self,
+        host: HostId,
+        tag: &str,
+        idx: RecordIdx,
+    ) -> Result<Option<Record<EncryptedData>>>;
 
-    /// Get the last record for a given host and tag
-    async fn tail(&self, host: HostId, tag: &str) -> Result<Option<Record<EncryptedData>>>;
+    async fn status(&self) -> Result<RecordStatus>;
 
-    // Get the last record for all hosts for a given tag, useful for the read path of apps.
-    async fn tag_tails(&self, tag: &str) -> Result<Vec<Record<EncryptedData>>>;
-
-    // Get the latest host/tag/record tuple for every set in the store. useful for building an
-    // index
-    async fn tail_records(&self) -> Result<RecordIndex>;
+    /// Get every start record for a given tag, regardless of host.
+    /// Useful when actually operating on synchronized data, and will often have conflict
+    /// resolution applied.
+    async fn all_tagged(&self, tag: &str) -> Result<Vec<Record<EncryptedData>>>;
 }

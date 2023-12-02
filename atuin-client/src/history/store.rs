@@ -1,10 +1,10 @@
-use std::sync::Arc;
+
 
 use eyre::Result;
-use serde::{Deserialize, Serialize};
+use serde::{Serialize};
 
-use crate::record::{self, encryption::PASETO_V4, sqlite_store::SqliteStore, store::Store};
-use atuin_common::record::{HostId, Record};
+use crate::record::{encryption::PASETO_V4, sqlite_store::SqliteStore, store::Store};
+use atuin_common::record::{Host, HostId, Record};
 
 use super::{History, HISTORY_TAG, HISTORY_VERSION};
 
@@ -26,17 +26,17 @@ impl HistoryStore {
 
     pub async fn push(&self, history: &History) -> Result<()> {
         let bytes = history.serialize()?;
-        let parent = self
+        let id = self
             .store
-            .tail(self.host_id, HISTORY_TAG)
+            .last(self.host_id, HISTORY_TAG)
             .await?
-            .map(|p| p.id);
+            .map_or(0, |p| p.idx + 1);
 
         let record = Record::builder()
-            .host(self.host_id)
+            .host(Host::new(self.host_id))
             .version(HISTORY_VERSION.to_string())
             .tag(HISTORY_TAG.to_string())
-            .parent(parent)
+            .idx(id)
             .data(bytes)
             .build();
 

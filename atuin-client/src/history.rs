@@ -1,12 +1,12 @@
-use rmp::decode::bytes::BytesReadError;
-use rmp::decode::{read_u64, ValueReadError};
+
+use rmp::decode::{ValueReadError};
 use rmp::{decode::Bytes, Marker};
 use std::env;
 
-use atuin_common::record::{DecryptedData, HostId};
+use atuin_common::record::{DecryptedData};
 use atuin_common::utils::uuid_v7;
 
-use eyre::{bail, ensure, eyre, Result};
+use eyre::{bail, eyre, Result};
 use regex::RegexSet;
 
 use crate::{secrets::SECRET_PATTERNS, settings::Settings};
@@ -313,6 +313,7 @@ impl History {
 
 #[cfg(test)]
 mod tests {
+    use atuin_common::record::DecryptedData;
     use regex::RegexSet;
     use time::{macros::datetime, OffsetDateTime};
 
@@ -415,9 +416,9 @@ mod tests {
         };
 
         let serialized = history.serialize().expect("failed to serialize history");
-        assert_eq!(serialized, bytes);
+        assert_eq!(serialized.0, bytes);
 
-        let deserialized = History::deserialize(&serialized, HISTORY_VERSION)
+        let deserialized = History::deserialize(&serialized.0, HISTORY_VERSION)
             .expect("failed to deserialize history");
         assert_eq!(history, deserialized);
 
@@ -443,7 +444,7 @@ mod tests {
 
         let serialized = history.serialize().expect("failed to serialize history");
 
-        let deserialized = History::deserialize(&serialized, HISTORY_VERSION)
+        let deserialized = History::deserialize(&serialized.0, HISTORY_VERSION)
             .expect("failed to deserialize history");
 
         assert_eq!(history, deserialized);

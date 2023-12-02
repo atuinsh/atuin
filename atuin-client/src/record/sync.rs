@@ -5,7 +5,7 @@ use thiserror::Error;
 use super::store::Store;
 use crate::{api_client::Client, settings::Settings};
 
-use atuin_common::record::{Diff, HostId, RecordId, RecordIdx, RecordStatus};
+use atuin_common::record::{Diff, HostId, RecordIdx, RecordStatus};
 
 #[derive(Error, Debug)]
 pub enum SyncError {
@@ -51,8 +51,8 @@ pub async fn diff(
         settings.network_timeout,
     )?;
 
-    let local_index = store.tail_records().await?;
-    let remote_index = client.record_index().await?;
+    let local_index = store.status().await?;
+    let remote_index = client.record_status().await?;
 
     let diff = local_index.diff(&remote_index);
 
@@ -63,41 +63,31 @@ pub async fn diff(
 // With the store as context, we can determine if a tail exists locally or not and therefore if it needs uploading or download.
 // In theory this could be done as a part of the diffing stage, but it's easier to reason
 // about and test this way
-pub async fn operations(diffs: Vec<Diff>, store: &impl Store) -> Result<Vec<Operation>, SyncError> {
+pub async fn operations(diffs: Vec<Diff>, _store: &impl Store) -> Result<Vec<Operation>, SyncError> {
     let mut operations = Vec::with_capacity(diffs.len());
-    let host = Settings::host_id().expect("got to record sync without a host id; abort");
+    let _host = Settings::host_id().expect("got to record sync without a host id; abort");
 
     for diff in diffs {
-        // First, try to fetch the tail
-        // If it exists locally, then that means we need to update the remote
-        // host until it has the same tail. Ie, upload.
-        // If it does not exist locally, that means remote is ahead of us.
-        // Therefore, we need to download until our local tail matches
-        let last = store
-            .last(diff.host, diff.tag.as_str())
-            .await
-            .map_err(|_| SyncError::LocalStoreError)?;
-
-        let op = match (last, diff.remote) {
+        let op = match (diff.local, diff.remote) {
             // We both have it! Could be either. Compare.
-            (Some(last), Some(remote)) => {
-                if last == remote {
+            (Some(local), Some(remote)) => {
+                if local == remote {
                     // between the diff and now, a sync has somehow occured.
                     // regardless, no work is needed!
                     Operation::Noop {
                         host: diff.host,
                         tag: diff.tag,
                     }
-                } else if last > remote {
+                } else if local > remote {
                     Operation::Upload {
-                        local: last,
+                        local,
                         remote: Some(remote),
                         host: diff.host,
                         tag: diff.tag,
                     }
                 } else {
                     Operation::Download {
-                        local: Some(last),
+                        local: Some(local),
                         remote,
                         host: diff.host,
                         tag: diff.tag,
@@ -114,8 +104,8 @@ pub async fn operations(diffs: Vec<Diff>, store: &impl Store) -> Result<Vec<Oper
             },
 
             // We have it, remote doesn't. Gotta be upload.
-            (Some(last), None) => Operation::Upload {
-                local: last,
+            (Some(local), None) => Operation::Upload {
+                local,
                 remote: None,
                 host: diff.host,
                 tag: diff.tag,
@@ -151,16 +141,16 @@ pub async fn operations(diffs: Vec<Diff>, store: &impl Store) -> Result<Vec<Oper
 }
 
 async fn sync_upload(
-    store: &mut impl Store,
-    client: &Client<'_>,
+    _store: &mut impl Store,
+    _client: &Client<'_>,
     host: HostId,
     tag: String,
     local: RecordIdx,
     remote: Option<RecordIdx>,
 ) -> Result<i64, SyncError> {
     let expected = local - remote.unwrap_or(0);
-    let upload_page_size = 100;
-    let mut total = 0;
+    let _upload_page_size = 100;
+    let _total = 0;
 
     if expected < 0 {
         return Err(SyncError::SyncLogicError {
@@ -181,16 +171,16 @@ async fn sync_upload(
 }
 
 async fn sync_download(
-    store: &mut impl Store,
-    client: &Client<'_>,
+    _store: &mut impl Store,
+    _client: &Client<'_>,
     host: HostId,
     tag: String,
     local: Option<RecordIdx>,
     remote: RecordIdx,
 ) -> Result<i64, SyncError> {
     let expected = remote - local.unwrap_or(0);
-    let download_page_size = 100;
-    let mut total = 0;
+    let _download_page_size = 100;
+    let _total = 0;
 
     if expected < 0 {
         return Err(SyncError::SyncLogicError {
@@ -300,8 +290,8 @@ mod tests {
             remote_store.push(&i).await.unwrap();
         }
 
-        let local_index = local_store.tail_records().await.unwrap();
-        let remote_index = remote_store.tail_records().await.unwrap();
+        let local_index = local_store.status().await.unwrap();
+        let remote_index = remote_store.status().await.unwrap();
 
         let diff = local_index.diff(&remote_index);
 
@@ -338,11 +328,13 @@ mod tests {
         // another. One upload, one download
 
         let shared_record = test_record();
-
         let remote_ahead = test_record();
+
         let local_ahead = shared_record
             .append(vec![1, 2, 3])
             .encrypt::<PASETO_V4>(&[0; 32]);
+
+        assert_eq!(local_ahead.idx, 1);
 
         let local = vec![shared_record.clone(), local_ahead.clone()]; // local knows about the already synced, and something newer in the same store
         let remote = vec![shared_record.clone(), remote_ahead.clone()]; // remote knows about the already-synced, and one new record in a new store
@@ -355,17 +347,19 @@ mod tests {
         assert_eq!(
             operations,
             vec![
+                // Or in otherwords, local is ahead by one
+                Operation::Upload {
+                    host: local_ahead.host.id,
+                    tag: local_ahead.tag,
+                    local: 1,
+                    remote: Some(0),
+                },
+                // Or in other words, remote knows of a record in an entirely new store (tag)
                 Operation::Download {
                     host: remote_ahead.host.id,
                     tag: remote_ahead.tag,
                     local: None,
                     remote: 0,
-                },
-                Operation::Upload {
-                    host: local_ahead.host.id,
-                    tag: local_ahead.tag,
-                    local: 0,
-                    remote: None,
                 },
             ]
         );
@@ -378,62 +372,149 @@ mod tests {
         // One known only by remote
 
         let shared_record = test_record();
+        let local_only = test_record();
 
-        let remote_known = test_record();
-        let local_known = test_record();
+        let local_only_20 = test_record();
+        let local_only_21 = local_only_20
+            .append(vec![1, 2, 3])
+            .encrypt::<PASETO_V4>(&[0; 32]);
+        let local_only_22 = local_only_21
+            .append(vec![1, 2, 3])
+            .encrypt::<PASETO_V4>(&[0; 32]);
+        let local_only_23 = local_only_22
+            .append(vec![1, 2, 3])
+            .encrypt::<PASETO_V4>(&[0; 32]);
+
+        let remote_only = test_record();
+
+        let remote_only_20 = test_record();
+        let remote_only_21 = remote_only_20
+            .append(vec![2, 3, 2])
+            .encrypt::<PASETO_V4>(&[0; 32]);
+        let remote_only_22 = remote_only_21
+            .append(vec![2, 3, 2])
+            .encrypt::<PASETO_V4>(&[0; 32]);
+        let remote_only_23 = remote_only_22
+            .append(vec![2, 3, 2])
+            .encrypt::<PASETO_V4>(&[0; 32]);
+        let remote_only_24 = remote_only_23
+            .append(vec![2, 3, 2])
+            .encrypt::<PASETO_V4>(&[0; 32]);
 
         let second_shared = test_record();
         let second_shared_remote_ahead = second_shared
             .append(vec![1, 2, 3])
             .encrypt::<PASETO_V4>(&[0; 32]);
+        let second_shared_remote_ahead2 = second_shared_remote_ahead
+            .append(vec![1, 2, 3])
+            .encrypt::<PASETO_V4>(&[0; 32]);
 
-        let local_ahead = shared_record
+        let third_shared = test_record();
+        let third_shared_local_ahead = third_shared
+            .append(vec![1, 2, 3])
+            .encrypt::<PASETO_V4>(&[0; 32]);
+        let third_shared_local_ahead2 = third_shared_local_ahead
+            .append(vec![1, 2, 3])
+            .encrypt::<PASETO_V4>(&[0; 32]);
+
+        let fourth_shared = test_record();
+        let fourth_shared_remote_ahead = fourth_shared
+            .append(vec![1, 2, 3])
+            .encrypt::<PASETO_V4>(&[0; 32]);
+        let fourth_shared_remote_ahead2 = fourth_shared_remote_ahead
             .append(vec![1, 2, 3])
             .encrypt::<PASETO_V4>(&[0; 32]);
 
         let local = vec![
             shared_record.clone(),
             second_shared.clone(),
-            local_known.clone(),
-            local_ahead.clone(),
+            third_shared.clone(),
+            fourth_shared.clone(),
+            fourth_shared_remote_ahead.clone(),
+            // single store, only local has it
+            local_only.clone(),
+            // bigger store, also only known by local
+            local_only_20.clone(),
+            local_only_21.clone(),
+            local_only_22.clone(),
+            local_only_23.clone(),
+            // another shared store, but local is ahead on this one
+            third_shared_local_ahead.clone(),
+            third_shared_local_ahead2.clone(),
         ];
 
         let remote = vec![
+            remote_only.clone(),
+            remote_only_20.clone(),
+            remote_only_21.clone(),
+            remote_only_22.clone(),
+            remote_only_23.clone(),
+            remote_only_24.clone(),
             shared_record.clone(),
             second_shared.clone(),
+            third_shared.clone(),
             second_shared_remote_ahead.clone(),
-            remote_known.clone(),
+            second_shared_remote_ahead2.clone(),
+            fourth_shared.clone(),
+            fourth_shared_remote_ahead.clone(),
+            fourth_shared_remote_ahead2.clone(),
         ]; // remote knows about the already-synced, and one new record in a new store
 
         let (store, diff) = build_test_diff(local, remote).await;
         let operations = sync::operations(diff, &store).await.unwrap();
 
-        assert_eq!(operations.len(), 4);
+        assert_eq!(operations.len(), 7);
 
         let mut result_ops = vec![
+            // We started with a shared record, but the remote knows of two newer records in the
+            // same store
             Operation::Download {
-                host: remote_known.host.id,
-                tag: remote_known.tag,
-                local: Some(second_shared.idx),
-                remote: second_shared_remote_ahead.idx,
+                local: Some(0),
+                remote: 2,
+                host: second_shared_remote_ahead.host.id,
+                tag: second_shared_remote_ahead.tag,
             },
+            // We have a shared record, local knows of the first two but not the last
             Operation::Download {
-                host: second_shared.host.id,
-                tag: second_shared.tag,
+                local: Some(1),
+                remote: 2,
+                host: fourth_shared_remote_ahead2.host.id,
+                tag: fourth_shared_remote_ahead2.tag,
+            },
+            // Remote knows of a store with a single record that local does not have
+            Operation::Download {
                 local: None,
-                remote: remote_known.idx,
+                remote: 0,
+                host: remote_only.host.id,
+                tag: remote_only.tag,
             },
-            Operation::Upload {
-                host: local_ahead.host.id,
-                tag: local_ahead.tag,
-                local: local_ahead.idx,
-                remote: Some(shared_record.idx),
+            // Remote knows of a store with a bunch of records that local does not have
+            Operation::Download {
+                local: None,
+                remote: 4,
+                host: remote_only_20.host.id,
+                tag: remote_only_20.tag,
             },
+            // Local knows of a record in a store that remote does not have
             Operation::Upload {
-                host: local_known.host.id,
-                tag: local_known.tag,
-                local: local_known.idx,
+                local: 0,
                 remote: None,
+                host: local_only.host.id,
+                tag: local_only.tag,
+            },
+            // Local knows of 4 records in a store that remote does not have
+            Operation::Upload {
+                local: 3,
+                remote: None,
+                host: local_only_20.host.id,
+                tag: local_only_20.tag,
+            },
+            // Local knows of 2 more records in a shared store that remote only has one of
+            Operation::Upload {
+                local: 2,
+                remote: Some(0),
+                host: third_shared.host.id,
+                tag: third_shared.tag,
             },
         ];
 
@@ -445,6 +526,6 @@ mod tests {
             Operation::Download { host, tag, .. } => (2, *host, tag.clone()),
         });
 
-        assert_eq!(operations, result_ops);
+        assert_eq!(result_ops, operations);
     }
 }

@@ -14,7 +14,7 @@ use atuin_common::{
         AddHistoryRequest, CountResponse, DeleteHistoryRequest, ErrorResponse, IndexResponse,
         LoginRequest, LoginResponse, RegisterResponse, StatusResponse, SyncHistoryResponse,
     },
-    record::RecordIndex,
+    record::RecordStatus,
 };
 use semver::Version;
 use time::format_description::well_known::Rfc3339;
@@ -264,7 +264,7 @@ impl<'a> Client<'a> {
         Ok(records)
     }
 
-    pub async fn record_index(&self) -> Result<RecordIndex> {
+    pub async fn record_status(&self) -> Result<RecordStatus> {
         let url = format!("{}/record", self.sync_addr);
         let url = Url::parse(url.as_str())?;
 
