@@ -221,7 +221,7 @@ dependencies = [
  "reqwest",
  "rmp",
  "rusty_paserk",
- "rusty_paseto",
+ "rusty_paseto 0.6.0",
  "semver",
  "serde",
  "serde_json",
@@ -2766,7 +2766,7 @@ dependencies = [
  "ed25519-dalek 2.1.0",
  "generic-array",
  "rand 0.8.5",
- "rusty_paseto",
+ "rusty_paseto 0.5.0",
  "serde",
  "sha2 0.10.8",
  "subtle",
@@ -2782,6 +2782,21 @@ dependencies = [
  "blake2 0.9.2",
  "chacha20 0.8.2",
  "ed25519-dalek 1.0.1",
+ "hex",
+ "iso8601",
+ "ring 0.16.20",
+ "thiserror",
+ "time",
+ "zeroize",
+]
+
+[[package]]
+name = "rusty_paseto"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6cdf6eecf99ba1cc36c0629fc69772bbd7fbec0d6a84a29076c25dc0f587be16"
+dependencies = [
+ "base64 0.13.1",
  "hex",
  "iso8601",
  "ring 0.16.20",

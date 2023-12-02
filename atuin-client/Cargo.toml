@@ -53,7 +53,7 @@ crypto_secretbox = "0.1.1"
 generic-array = { version = "0.14", features = ["serde"] }
 
 # encryption
-rusty_paseto = { version = "0.5.0", default-features = false }
+rusty_paseto = { version = "0.6.0", default-features = false }
 rusty_paserk = { version = "0.2.0", default-features = false, features = [
   "v4",
   "serde",
