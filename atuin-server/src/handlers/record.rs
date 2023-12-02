@@ -8,7 +8,7 @@ use super::{ErrorResponse, ErrorResponseStatus, RespExt};
 use crate::router::{AppState, UserAuth};
 use atuin_server_database::Database;
 
-use atuin_common::record::{EncryptedData, HostId, Record, RecordId, RecordIndex};
+use atuin_common::record::{EncryptedData, HostId, Record, RecordId, RecordIdx, RecordStatus};
 
 #[instrument(skip_all, fields(user.id = user.id))]
 pub async fn post<DB: Database>(
@@ -53,13 +53,13 @@ pub async fn post<DB: Database>(
 pub async fn index<DB: Database>(
     UserAuth(user): UserAuth,
     state: State<AppState<DB>>,
-) -> Result<Json<RecordIndex>, ErrorResponseStatus<'static>> {
+) -> Result<Json<RecordStatus>, ErrorResponseStatus<'static>> {
     let State(AppState {
         database,
         settings: _,
     }) = state;
 
-    let record_index = match database.tail_records(&user).await {
+    let record_index = match database.status(&user).await {
         Ok(index) => index,
         Err(e) => {
             error!("failed to get record index: {}", e);
@@ -76,7 +76,7 @@ pub async fn index<DB: Database>(
 pub struct NextParams {
     host: HostId,
     tag: String,
-    start: Option<RecordId>,
+    start: Option<RecordIdx>,
     count: u64,
 }
 

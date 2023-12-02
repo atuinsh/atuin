@@ -79,8 +79,7 @@ async fn run(
 ) -> Result<()> {
     let (diff, remote_index) = sync::diff(settings, store).await?;
     let operations = sync::operations(diff, store).await?;
-    let (uploaded, downloaded) =
-        sync::sync_remote(operations, &remote_index, store, settings).await?;
+    let (uploaded, downloaded) = sync::sync_remote(operations, store, settings).await?;
 
     println!("{uploaded}/{downloaded} up/down to record store");
 

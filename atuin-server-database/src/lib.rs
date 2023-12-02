@@ -14,7 +14,7 @@ use self::{
     models::{History, NewHistory, NewSession, NewUser, Session, User},
 };
 use async_trait::async_trait;
-use atuin_common::record::{EncryptedData, HostId, Record, RecordId, RecordStatus};
+use atuin_common::record::{EncryptedData, HostId, Record, RecordId, RecordIdx, RecordStatus};
 use serde::{de::DeserializeOwned, Serialize};
 use time::{Date, Duration, Month, OffsetDateTime, Time, UtcOffset};
 use tracing::instrument;
@@ -68,12 +68,12 @@ pub trait Database: Sized + Clone + Send + Sync + 'static {
         user: &User,
         host: HostId,
         tag: String,
-        start: Option<RecordId>,
+        start: Option<RecordIdx>,
         count: u64,
     ) -> DbResult<Vec<Record<EncryptedData>>>;
 
     // Return the tail record ID for each store, so (HostID, Tag, TailRecordID)
-    async fn tail_records(&self, user: &User) -> DbResult<RecordStatus>;
+    async fn status(&self, user: &User) -> DbResult<RecordStatus>;
 
     async fn count_history_range(&self, user: &User, range: Range<OffsetDateTime>)
         -> DbResult<i64>;

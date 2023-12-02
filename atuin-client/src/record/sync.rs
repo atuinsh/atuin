@@ -12,11 +12,14 @@ pub enum SyncError {
     #[error("the local store is ahead of the remote, but for another host. has remote lost data?")]
     LocalAheadOtherHost,
 
-    #[error("some issue with the local database occured")]
+    #[error("an issue with the local database occured")]
     LocalStoreError,
 
     #[error("something has gone wrong with the sync logic: {msg:?}")]
     SyncLogicError { msg: String },
+
+    #[error("a request to the sync server failed")]
+    RemoteRequestError,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -63,7 +66,10 @@ pub async fn diff(
 // With the store as context, we can determine if a tail exists locally or not and therefore if it needs uploading or download.
 // In theory this could be done as a part of the diffing stage, but it's easier to reason
 // about and test this way
-pub async fn operations(diffs: Vec<Diff>, _store: &impl Store) -> Result<Vec<Operation>, SyncError> {
+pub async fn operations(
+    diffs: Vec<Diff>,
+    _store: &impl Store,
+) -> Result<Vec<Operation>, SyncError> {
     let mut operations = Vec::with_capacity(diffs.len());
     let _host = Settings::host_id().expect("got to record sync without a host id; abort");
 
@@ -141,22 +147,16 @@ pub async fn operations(diffs: Vec<Diff>, _store: &impl Store) -> Result<Vec<Ope
 }
 
 async fn sync_upload(
-    _store: &mut impl Store,
-    _client: &Client<'_>,
+    store: &mut impl Store,
+    client: &Client<'_>,
     host: HostId,
     tag: String,
     local: RecordIdx,
     remote: Option<RecordIdx>,
 ) -> Result<i64, SyncError> {
     let expected = local - remote.unwrap_or(0);
-    let _upload_page_size = 100;
-    let _total = 0;
-
-    if expected < 0 {
-        return Err(SyncError::SyncLogicError {
-            msg: String::from("ran upload, but remote ahead of local"),
-        });
-    }
+    let upload_page_size = 100;
+    let mut progress = 0;
 
     println!(
         "Uploading {} records to {}/{}",
@@ -165,28 +165,47 @@ async fn sync_upload(
         tag
     );
 
-    // TODO: actually upload lmfao
+    // preload with the first entry if remote does not know of this store
+    while progress < expected {
+        let page = store
+            .next(
+                host,
+                tag.as_str(),
+                remote.unwrap_or(0) + progress,
+                upload_page_size,
+            )
+            .await
+            .map_err(|_| SyncError::LocalStoreError)?;
 
-    Ok(0)
+        let _ = client
+            .post_records(&page)
+            .await
+            .map_err(|_| SyncError::RemoteRequestError)?;
+
+        println!(
+            "uploaded {} to remote, progress {}/{}",
+            page.len(),
+            progress,
+            expected
+        );
+        progress += page.len() as u64;
+    }
+
+    Ok(progress as i64)
 }
 
 async fn sync_download(
-    _store: &mut impl Store,
-    _client: &Client<'_>,
+    store: &mut impl Store,
+    client: &Client<'_>,
     host: HostId,
     tag: String,
     local: Option<RecordIdx>,
     remote: RecordIdx,
 ) -> Result<i64, SyncError> {
+    let local = local.unwrap_or(0);
     let expected = remote - local.unwrap_or(0);
-    let _download_page_size = 100;
-    let _total = 0;
-
-    if expected < 0 {
-        return Err(SyncError::SyncLogicError {
-            msg: String::from("ran download, but local ahead of remote"),
-        });
-    }
+    let download_page_size = 100;
+    let mut progress = 0;
 
     println!(
         "Downloading {} records from {}/{}",
@@ -195,7 +214,25 @@ async fn sync_download(
         tag
     );
 
-    // TODO: actually upload lmfao
+    // preload with the first entry if remote does not know of this store
+    while progress < expected {
+        let page = client.next_records(host, tag, Some(local + progress), download_page_size);
+
+        let _ = client
+            .post_records(&page)
+            .await
+            .map_err(|_| SyncError::RemoteRequestError)?;
+
+        println!(
+            "uploaded {} to remote, progress {}/{}",
+            page.len(),
+            progress,
+            expected
+        );
+        progress += page.len() as u64;
+    }
+
+    Ok(progress as i64)
 
     Ok(0)
 }
@@ -204,13 +241,14 @@ pub async fn sync_remote(
     operations: Vec<Operation>,
     local_store: &mut impl Store,
     settings: &Settings,
-) -> Result<(i64, i64)> {
+) -> Result<(i64, i64), SyncError> {
     let client = Client::new(
         &settings.sync_address,
         &settings.session_token,
         settings.network_connect_timeout,
         settings.network_timeout,
-    )?;
+    )
+    .expect("failed to create client");
 
     let mut uploaded = 0;
     let mut downloaded = 0;

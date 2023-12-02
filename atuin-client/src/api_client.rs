@@ -8,7 +8,7 @@ use reqwest::{
     StatusCode, Url,
 };
 
-use atuin_common::record::{EncryptedData, HostId, Record, RecordId};
+use atuin_common::record::{EncryptedData, HostId, Record, RecordId, RecordIdx};
 use atuin_common::{
     api::{
         AddHistoryRequest, CountResponse, DeleteHistoryRequest, ErrorResponse, IndexResponse,
@@ -231,14 +231,14 @@ impl<'a> Client<'a> {
         &self,
         host: HostId,
         tag: String,
-        start: Option<RecordId>,
+        start: RecordIdx,
         count: u64,
     ) -> Result<Vec<Record<EncryptedData>>> {
         debug!(
             "fetching record/s from host {}/{}/{}",
             host.0.to_string(),
             tag,
-            start.map_or(String::from("empty"), |f| f.0.to_string())
+            start
         );
 
         let url = format!(

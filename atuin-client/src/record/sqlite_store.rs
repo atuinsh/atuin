@@ -170,9 +170,9 @@ impl Store for SqliteStore {
         limit: u64,
     ) -> Result<Vec<Record<EncryptedData>>> {
         let res =
-            sqlx::query("select * from store where idx > ?1 and host = ?2 and tag = ?3 limit ?4")
+            sqlx::query("select * from store where idx >= ?1 and host = ?2 and tag = ?3 limit ?4")
                 .bind(idx as i64)
-                .bind(host)
+                .bind(host.0.as_hyphenated().to_string())
                 .bind(tag)
                 .bind(limit as i64)
                 .map(Self::query_row)
