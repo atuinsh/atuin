@@ -154,7 +154,8 @@ async fn sync_upload(
     local: RecordIdx,
     remote: Option<RecordIdx>,
 ) -> Result<i64, SyncError> {
-    let expected = local - remote.unwrap_or(0);
+    let remote = remote.unwrap_or(0);
+    let expected = local - remote;
     let upload_page_size = 100;
     let mut progress = 0;
 
@@ -168,12 +169,7 @@ async fn sync_upload(
     // preload with the first entry if remote does not know of this store
     while progress < expected {
         let page = store
-            .next(
-                host,
-                tag.as_str(),
-                remote.unwrap_or(0) + progress,
-                upload_page_size,
-            )
+            .next(host, tag.as_str(), remote + progress, upload_page_size)
             .await
             .map_err(|_| SyncError::LocalStoreError)?;
 
@@ -203,7 +199,7 @@ async fn sync_download(
     remote: RecordIdx,
 ) -> Result<i64, SyncError> {
     let local = local.unwrap_or(0);
-    let expected = remote - local.unwrap_or(0);
+    let expected = remote - local;
     let download_page_size = 100;
     let mut progress = 0;
 
@@ -216,25 +212,27 @@ async fn sync_download(
 
     // preload with the first entry if remote does not know of this store
     while progress < expected {
-        let page = client.next_records(host, tag, Some(local + progress), download_page_size);
-
-        let _ = client
-            .post_records(&page)
+        let page = client
+            .next_records(host, tag.clone(), local + progress, download_page_size)
             .await
             .map_err(|_| SyncError::RemoteRequestError)?;
 
+        store
+            .push_batch(page.iter())
+            .await
+            .map_err(|_| SyncError::LocalStoreError)?;
+
         println!(
-            "uploaded {} to remote, progress {}/{}",
+            "downloaded {} records from remote, progress {}/{}",
             page.len(),
             progress,
             expected
         );
+
         progress += page.len() as u64;
     }
 
     Ok(progress as i64)
-
-    Ok(0)
 }
 
 pub async fn sync_remote(

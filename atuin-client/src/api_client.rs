@@ -242,20 +242,11 @@ impl<'a> Client<'a> {
         );
 
         let url = format!(
-            "{}/record/next?host={}&tag={}&count={}",
-            self.sync_addr, host.0, tag, count
+            "{}/record/next?host={}&tag={}&count={}&start={}",
+            self.sync_addr, host.0, tag, count, start
         );
-        let mut url = Url::parse(url.as_str())?;
 
-        if let Some(start) = start {
-            url.set_query(Some(
-                format!(
-                    "host={}&tag={}&count={}&start={}",
-                    host.0, tag, count, start.0
-                )
-                .as_str(),
-            ));
-        }
+        let url = Url::parse(url.as_str())?;
 
         let resp = self.client.get(url).send().await?;
 
