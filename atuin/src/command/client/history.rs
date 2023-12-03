@@ -14,7 +14,7 @@ use atuin_client::{
     database::{current_context, Database},
     encryption,
     history::{store::HistoryStore, History},
-    record::{sqlite_store::SqliteStore, store::Store},
+    record::sqlite_store::SqliteStore,
     settings::Settings,
 };
 

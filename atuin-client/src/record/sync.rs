@@ -1,4 +1,6 @@
 // do a sync :O
+use std::cmp::Ordering;
+
 use eyre::Result;
 use thiserror::Error;
 
@@ -76,30 +78,24 @@ pub async fn operations(
     for diff in diffs {
         let op = match (diff.local, diff.remote) {
             // We both have it! Could be either. Compare.
-            (Some(local), Some(remote)) => {
-                if local == remote {
-                    // between the diff and now, a sync has somehow occured.
-                    // regardless, no work is needed!
-                    Operation::Noop {
-                        host: diff.host,
-                        tag: diff.tag,
-                    }
-                } else if local > remote {
-                    Operation::Upload {
-                        local,
-                        remote: Some(remote),
-                        host: diff.host,
-                        tag: diff.tag,
-                    }
-                } else {
-                    Operation::Download {
-                        local: Some(local),
-                        remote,
-                        host: diff.host,
-                        tag: diff.tag,
-                    }
-                }
-            }
+            (Some(local), Some(remote)) => match local.cmp(&remote) {
+                Ordering::Equal => Operation::Noop {
+                    host: diff.host,
+                    tag: diff.tag,
+                },
+                Ordering::Greater => Operation::Upload {
+                    local,
+                    remote: Some(remote),
+                    host: diff.host,
+                    tag: diff.tag,
+                },
+                Ordering::Less => Operation::Download {
+                    local: Some(local),
+                    remote,
+                    host: diff.host,
+                    tag: diff.tag,
+                },
+            },
 
             // Remote has it, we don't. Gotta be download
             (None, Some(remote)) => Operation::Download {
@@ -162,7 +158,7 @@ async fn sync_upload(
     println!(
         "Uploading {} records to {}/{}",
         expected,
-        host.0.as_simple().to_string(),
+        host.0.as_simple(),
         tag
     );
 
@@ -173,7 +169,7 @@ async fn sync_upload(
             .await
             .map_err(|_| SyncError::LocalStoreError)?;
 
-        let _ = client
+        client
             .post_records(&page)
             .await
             .map_err(|_| SyncError::RemoteRequestError)?;
@@ -206,7 +202,7 @@ async fn sync_download(
     println!(
         "Downloading {} records from {}/{}",
         expected,
-        host.0.as_simple().to_string(),
+        host.0.as_simple(),
         tag
     );
 

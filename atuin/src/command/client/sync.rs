@@ -77,7 +77,7 @@ async fn run(
     db: &impl Database,
     store: &mut (impl Store + Send + Sync),
 ) -> Result<()> {
-    let (diff, remote_index) = sync::diff(settings, store).await?;
+    let (diff, _) = sync::diff(settings, store).await?;
     let operations = sync::operations(diff, store).await?;
     let (uploaded, downloaded) = sync::sync_remote(operations, store, settings).await?;
 

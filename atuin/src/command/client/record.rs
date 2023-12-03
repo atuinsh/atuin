@@ -12,10 +12,29 @@ pub enum Cmd {
 impl Cmd {
     pub async fn run(
         &self,
-        settings: &Settings,
-        store: &mut (impl Store + Send + Sync),
+        _settings: &Settings,
+        store: &(impl Store + Send + Sync),
     ) -> Result<()> {
         let host_id = Settings::host_id().expect("failed to get host_id");
+
+        let status = store.status().await?;
+
+        for (host, store) in &status.hosts {
+            let host_string = if host == &host_id {
+                format!("host: {} <- CURRENT HOST", host.0.as_hyphenated())
+            } else {
+                format!("host: {}", host.0.as_hyphenated())
+            };
+
+            println!("{host_string}");
+
+            for (tag, idx) in store {
+                println!("\tstore: {tag} at {idx}");
+            }
+
+            println!();
+        }
+
         Ok(())
     }
 }

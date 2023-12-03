@@ -1,7 +1,4 @@
-
-
 use eyre::Result;
-use serde::{Serialize};
 
 use crate::record::{encryption::PASETO_V4, sqlite_store::SqliteStore, store::Store};
 use atuin_common::record::{Host, HostId, Record};

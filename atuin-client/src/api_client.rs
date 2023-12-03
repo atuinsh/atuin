@@ -8,7 +8,7 @@ use reqwest::{
     StatusCode, Url,
 };
 
-use atuin_common::record::{EncryptedData, HostId, Record, RecordId, RecordIdx};
+use atuin_common::record::{EncryptedData, HostId, Record, RecordIdx};
 use atuin_common::{
     api::{
         AddHistoryRequest, CountResponse, DeleteHistoryRequest, ErrorResponse, IndexResponse,

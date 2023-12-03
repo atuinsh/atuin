@@ -14,7 +14,7 @@ use self::{
     models::{History, NewHistory, NewSession, NewUser, Session, User},
 };
 use async_trait::async_trait;
-use atuin_common::record::{EncryptedData, HostId, Record, RecordId, RecordIdx, RecordStatus};
+use atuin_common::record::{EncryptedData, HostId, Record, RecordIdx, RecordStatus};
 use serde::{de::DeserializeOwned, Serialize};
 use time::{Date, Duration, Month, OffsetDateTime, Time, UtcOffset};
 use tracing::instrument;

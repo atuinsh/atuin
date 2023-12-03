@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use async_trait::async_trait;
-use atuin_common::record::{EncryptedData, HostId, Record, RecordId, RecordIdx, RecordStatus};
+use atuin_common::record::{EncryptedData, HostId, Record, RecordIdx, RecordStatus};
 use atuin_server_database::models::{History, NewHistory, NewSession, NewUser, Session, User};
 use atuin_server_database::{Database, DbError, DbResult};
 use futures_util::TryStreamExt;
@@ -398,8 +398,6 @@ impl Database for Postgres {
         count: u64,
     ) -> DbResult<Vec<Record<EncryptedData>>> {
         tracing::debug!("{:?} - {:?} - {:?}", host, tag, start);
-        let mut ret = Vec::with_capacity(count as usize);
-        let mut parent = start;
         let start = start.unwrap_or(0);
 
         let records: Result<Vec<DbRecord>, DbError> = sqlx::query_as(
@@ -433,8 +431,8 @@ impl Database for Postgres {
                 records
             }
             Err(DbError::NotFound) => {
-                tracing::debug!("hit end of store: {:?}/{}", host, tag);
-                return Ok(ret);
+                tracing::debug!("no records found in store: {:?}/{}", host, tag);
+                return Ok(vec![]);
             }
             Err(e) => return Err(e),
         };

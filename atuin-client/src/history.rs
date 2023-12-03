@@ -1,9 +1,8 @@
-
-use rmp::decode::{ValueReadError};
+use rmp::decode::ValueReadError;
 use rmp::{decode::Bytes, Marker};
 use std::env;
 
-use atuin_common::record::{DecryptedData};
+use atuin_common::record::DecryptedData;
 use atuin_common::utils::uuid_v7;
 
 use eyre::{bail, eyre, Result};

@@ -8,7 +8,7 @@ use super::{ErrorResponse, ErrorResponseStatus, RespExt};
 use crate::router::{AppState, UserAuth};
 use atuin_server_database::Database;
 
-use atuin_common::record::{EncryptedData, HostId, Record, RecordId, RecordIdx, RecordStatus};
+use atuin_common::record::{EncryptedData, HostId, Record, RecordIdx, RecordStatus};
 
 #[instrument(skip_all, fields(user.id = user.id))]
 pub async fn post<DB: Database>(

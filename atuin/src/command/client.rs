@@ -87,7 +87,7 @@ impl Cmd {
 
             Self::Kv(kv) => kv.run(&settings, &mut store).await,
 
-            Self::Record(record) => record.run(&settings, &mut store).await,
+            Self::Record(record) => record.run(&settings, &store).await,
 
             Self::DefaultConfig => {
                 config::run();
