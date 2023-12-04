@@ -54,12 +54,16 @@ __atuin_history() {
         # shellcheck disable=SC2154
         __bp_set_ret_value "$preexec_ret_value" "$__bp_last_argument_prev_command" 
       fi
-      # Juggle the stty so that the command can be executed
-      local stty_bkup=$(stty -g)
+      # Juggle the terminal settings so that the command can be interacted with
+      local stty_backup
+      stty_backup=$(stty -g)
       stty "$ATUIN_STTY"
+
       eval "$HISTORY"
       exit_status=$?
-      stty "$stty_bkup"
+
+      stty "$stty_backup"
+
       # Execute preprompt commands
       __atuin_set_ret_value "$exit_status" "$HISTORY"
       eval "$PROMPT_COMMAND"
