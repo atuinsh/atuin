@@ -1,4 +1,5 @@
 ATUIN_SESSION=$(atuin uuid)
+ATUIN_STTY=$(stty -g)
 export ATUIN_SESSION
 
 __atuin_preexec() {
@@ -53,8 +54,16 @@ __atuin_history() {
         # shellcheck disable=SC2154
         __bp_set_ret_value "$preexec_ret_value" "$__bp_last_argument_prev_command" 
       fi
+      # Juggle the terminal settings so that the command can be interacted with
+      local stty_backup
+      stty_backup=$(stty -g)
+      stty "$ATUIN_STTY"
+
       eval "$HISTORY"
       exit_status=$?
+
+      stty "$stty_backup"
+
       # Execute preprompt commands
       __atuin_set_ret_value "$exit_status" "$HISTORY"
       eval "$PROMPT_COMMAND"
