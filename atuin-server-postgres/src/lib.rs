@@ -1,14 +1,17 @@
+use std::ops::Range;
+
 use async_trait::async_trait;
+use atuin_common::record::{EncryptedData, HostId, Record, RecordId, RecordIndex};
 use atuin_server_database::models::{History, NewHistory, NewSession, NewUser, Session, User};
 use atuin_server_database::{Database, DbError, DbResult};
 use futures_util::TryStreamExt;
 use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgPoolOptions;
-
 use sqlx::Row;
 
+use time::{OffsetDateTime, PrimitiveDateTime, UtcOffset};
 use tracing::instrument;
-use wrappers::{DbHistory, DbSession, DbUser};
+use wrappers::{DbHistory, DbRecord, DbSession, DbUser};
 
 mod wrappers;
 
@@ -101,6 +104,21 @@ impl Database for Postgres {
     }
 
     #[instrument(skip_all)]
+    async fn total_history(&self) -> DbResult<i64> {
+        // The cache is new, and the user might not yet have a cache value.
+        // They will have one as soon as they post up some new history, but handle that
+        // edge case.
+
+        let res: (i64,) = sqlx::query_as("select sum(total) from total_history_count_user")
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(fix_error)?
+            .unwrap_or((0,));
+
+        Ok(res.0)
+    }
+
+    #[instrument(skip_all)]
     async fn count_history_cached(&self, user: &User) -> DbResult<i64> {
         let res: (i32,) = sqlx::query_as(
             "select total from total_history_count_user
@@ -124,7 +142,7 @@ impl Database for Postgres {
         )
         .bind(user.id)
         .bind(id)
-        .bind(chrono::Utc::now().naive_utc())
+        .bind(OffsetDateTime::now_utc())
         .fetch_all(&self.pool)
         .await
         .map_err(fix_error)?;
@@ -160,8 +178,7 @@ impl Database for Postgres {
     async fn count_history_range(
         &self,
         user: &User,
-        start: chrono::NaiveDateTime,
-        end: chrono::NaiveDateTime,
+        range: Range<OffsetDateTime>,
     ) -> DbResult<i64> {
         let res: (i64,) = sqlx::query_as(
             "select count(1) from history
@@ -170,8 +187,8 @@ impl Database for Postgres {
             and timestamp < $3::date",
         )
         .bind(user.id)
-        .bind(start)
-        .bind(end)
+        .bind(into_utc(range.start))
+        .bind(into_utc(range.end))
         .fetch_one(&self.pool)
         .await
         .map_err(fix_error)?;
@@ -183,8 +200,8 @@ impl Database for Postgres {
     async fn list_history(
         &self,
         user: &User,
-        created_after: chrono::NaiveDateTime,
-        since: chrono::NaiveDateTime,
+        created_after: OffsetDateTime,
+        since: OffsetDateTime,
         host: &str,
         page_size: i64,
     ) -> DbResult<Vec<History>> {
@@ -199,8 +216,8 @@ impl Database for Postgres {
         )
         .bind(user.id)
         .bind(host)
-        .bind(created_after)
-        .bind(since)
+        .bind(into_utc(created_after))
+        .bind(into_utc(since))
         .bind(page_size)
         .fetch(&self.pool)
         .map_ok(|DbHistory(h)| h)
@@ -232,7 +249,7 @@ impl Database for Postgres {
             .bind(hostname)
             .bind(i.timestamp)
             .bind(data)
-            .execute(&mut tx)
+            .execute(&mut *tx)
             .await
             .map_err(fix_error)?;
         }
@@ -257,6 +274,12 @@ impl Database for Postgres {
             .map_err(fix_error)?;
 
         sqlx::query("delete from history where user_id = $1")
+            .bind(u.id)
+            .execute(&self.pool)
+            .await
+            .map_err(fix_error)?;
+
+        sqlx::query("delete from total_history_count_user where user_id = $1")
             .bind(u.id)
             .execute(&self.pool)
             .await
@@ -328,5 +351,130 @@ impl Database for Postgres {
         .await
         .map_err(fix_error)
         .map(|DbHistory(h)| h)
+    }
+
+    #[instrument(skip_all)]
+    async fn add_records(&self, user: &User, records: &[Record<EncryptedData>]) -> DbResult<()> {
+        let mut tx = self.pool.begin().await.map_err(fix_error)?;
+
+        for i in records {
+            let id = atuin_common::utils::uuid_v7();
+
+            sqlx::query(
+                "insert into records
+                    (id, client_id, host, parent, timestamp, version, tag, data, cek, user_id) 
+                values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                on conflict do nothing
+                ",
+            )
+            .bind(id)
+            .bind(i.id)
+            .bind(i.host)
+            .bind(i.parent)
+            .bind(i.timestamp as i64) // throwing away some data, but i64 is still big in terms of time
+            .bind(&i.version)
+            .bind(&i.tag)
+            .bind(&i.data.data)
+            .bind(&i.data.content_encryption_key)
+            .bind(user.id)
+            .execute(&mut *tx)
+            .await
+            .map_err(fix_error)?;
+        }
+
+        tx.commit().await.map_err(fix_error)?;
+
+        Ok(())
+    }
+
+    #[instrument(skip_all)]
+    async fn next_records(
+        &self,
+        user: &User,
+        host: HostId,
+        tag: String,
+        start: Option<RecordId>,
+        count: u64,
+    ) -> DbResult<Vec<Record<EncryptedData>>> {
+        tracing::debug!("{:?} - {:?} - {:?}", host, tag, start);
+        let mut ret = Vec::with_capacity(count as usize);
+        let mut parent = start;
+
+        // yeah let's do something better
+        for _ in 0..count {
+            // a very much not ideal query. but it's simple at least?
+            // we are basically using postgres as a kv store here, so... maybe consider using an actual
+            // kv store?
+            let record: Result<DbRecord, DbError> = sqlx::query_as(
+                "select client_id, host, parent, timestamp, version, tag, data, cek from records 
+                    where user_id = $1
+                    and tag = $2
+                    and host = $3
+                    and parent is not distinct from $4",
+            )
+            .bind(user.id)
+            .bind(tag.clone())
+            .bind(host)
+            .bind(parent)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(fix_error);
+
+            match record {
+                Ok(record) => {
+                    let record: Record<EncryptedData> = record.into();
+                    ret.push(record.clone());
+
+                    parent = Some(record.id);
+                }
+                Err(DbError::NotFound) => {
+                    tracing::debug!("hit tail of store: {:?}/{}", host, tag);
+                    return Ok(ret);
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        Ok(ret)
+    }
+
+    async fn tail_records(&self, user: &User) -> DbResult<RecordIndex> {
+        const TAIL_RECORDS_SQL: &str = "select host, tag, client_id from records rp where (select count(1) from records where parent=rp.client_id and user_id = $1) = 0 and user_id = $1;";
+
+        let res = sqlx::query_as(TAIL_RECORDS_SQL)
+            .bind(user.id)
+            .fetch(&self.pool)
+            .try_collect()
+            .await
+            .map_err(fix_error)?;
+
+        Ok(res)
+    }
+}
+
+fn into_utc(x: OffsetDateTime) -> PrimitiveDateTime {
+    let x = x.to_offset(UtcOffset::UTC);
+    PrimitiveDateTime::new(x.date(), x.time())
+}
+
+#[cfg(test)]
+mod tests {
+    use time::macros::datetime;
+
+    use crate::into_utc;
+
+    #[test]
+    fn utc() {
+        let dt = datetime!(2023-09-26 15:11:02 +05:30);
+        assert_eq!(into_utc(dt), datetime!(2023-09-26 09:41:02));
+        assert_eq!(into_utc(dt).assume_utc(), dt);
+
+        let dt = datetime!(2023-09-26 15:11:02 -07:00);
+        assert_eq!(into_utc(dt), datetime!(2023-09-26 22:11:02));
+        assert_eq!(into_utc(dt).assume_utc(), dt);
+
+        let dt = datetime!(2023-09-26 15:11:02 +00:00);
+        assert_eq!(into_utc(dt), datetime!(2023-09-26 15:11:02));
+        assert_eq!(into_utc(dt).assume_utc(), dt);
     }
 }

@@ -1,15 +1,16 @@
 // import old shell history!
 // automatically hoover up all that we can find
 
-use std::{fs::File, io::Read, path::PathBuf};
+use std::path::PathBuf;
 
 use async_trait::async_trait;
-use chrono::{prelude::*, Utc};
 use directories::UserDirs;
 use eyre::{eyre, Result};
+use time::OffsetDateTime;
 
 use super::{get_histpath, unix_byte_lines, Importer, Loader};
 use crate::history::History;
+use crate::import::read_to_end;
 
 #[derive(Debug)]
 pub struct Zsh {
@@ -46,10 +47,7 @@ impl Importer for Zsh {
     const NAME: &'static str = "zsh";
 
     async fn new() -> Result<Self> {
-        let mut bytes = Vec::new();
-        let path = get_histpath(default_histpath)?;
-        let mut f = File::open(path)?;
-        f.read_to_end(&mut bytes)?;
+        let bytes = read_to_end(get_histpath(default_histpath)?)?;
         Ok(Self { bytes })
     }
 
@@ -58,7 +56,7 @@ impl Importer for Zsh {
     }
 
     async fn load(self, h: &mut impl Loader) -> Result<()> {
-        let now = chrono::Utc::now();
+        let now = OffsetDateTime::now_utc();
         let mut line = String::new();
 
         let mut counter = 0;
@@ -79,7 +77,7 @@ impl Importer for Zsh {
                     counter += 1;
                     h.push(parse_extended(command, counter)).await?;
                 } else {
-                    let offset = chrono::Duration::seconds(counter);
+                    let offset = time::Duration::seconds(counter);
                     counter += 1;
 
                     let imported = History::import()
@@ -102,11 +100,10 @@ fn parse_extended(line: &str, counter: i64) -> History {
 
     let time = time
         .parse::<i64>()
-        .unwrap_or_else(|_| chrono::Utc::now().timestamp());
-
-    let offset = chrono::Duration::milliseconds(counter);
-    let time = Utc.timestamp(time, 0);
-    let time = time + offset;
+        .ok()
+        .and_then(|t| OffsetDateTime::from_unix_timestamp(t).ok())
+        .unwrap_or_else(OffsetDateTime::now_utc)
+        + time::Duration::milliseconds(counter);
 
     // use nanos, because why the hell not? we won't display them.
     let duration = duration.parse::<i64>().map_or(-1, |t| t * 1_000_000_000);
@@ -121,8 +118,6 @@ fn parse_extended(line: &str, counter: i64) -> History {
 
 #[cfg(test)]
 mod test {
-    use chrono::prelude::*;
-    use chrono::Utc;
     use itertools::assert_equal;
 
     use crate::import::tests::TestLoader;
@@ -135,25 +130,37 @@ mod test {
 
         assert_eq!(parsed.command, "cargo install atuin");
         assert_eq!(parsed.duration, 0);
-        assert_eq!(parsed.timestamp, Utc.timestamp(1_613_322_469, 0));
+        assert_eq!(
+            parsed.timestamp,
+            OffsetDateTime::from_unix_timestamp(1_613_322_469).unwrap()
+        );
 
         let parsed = parse_extended("1613322469:10;cargo install atuin;cargo update", 0);
 
         assert_eq!(parsed.command, "cargo install atuin;cargo update");
         assert_eq!(parsed.duration, 10_000_000_000);
-        assert_eq!(parsed.timestamp, Utc.timestamp(1_613_322_469, 0));
+        assert_eq!(
+            parsed.timestamp,
+            OffsetDateTime::from_unix_timestamp(1_613_322_469).unwrap()
+        );
 
         let parsed = parse_extended("1613322469:10;cargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷", 0);
 
         assert_eq!(parsed.command, "cargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷");
         assert_eq!(parsed.duration, 10_000_000_000);
-        assert_eq!(parsed.timestamp, Utc.timestamp(1_613_322_469, 0));
+        assert_eq!(
+            parsed.timestamp,
+            OffsetDateTime::from_unix_timestamp(1_613_322_469).unwrap()
+        );
 
         let parsed = parse_extended("1613322469:10;cargo install \\n atuin\n", 0);
 
         assert_eq!(parsed.command, "cargo install \\n atuin");
         assert_eq!(parsed.duration, 10_000_000_000);
-        assert_eq!(parsed.timestamp, Utc.timestamp(1_613_322_469, 0));
+        assert_eq!(
+            parsed.timestamp,
+            OffsetDateTime::from_unix_timestamp(1_613_322_469).unwrap()
+        );
     }
 
     #[tokio::test]

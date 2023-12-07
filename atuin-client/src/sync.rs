@@ -2,11 +2,11 @@ use std::collections::HashSet;
 use std::convert::TryInto;
 use std::iter::FromIterator;
 
-use chrono::prelude::*;
 use eyre::Result;
 
 use atuin_common::api::AddHistoryRequest;
-use xsalsa20poly1305::Key;
+use crypto_secretbox::Key;
+use time::OffsetDateTime;
 
 use crate::{
     api_client,
@@ -37,7 +37,7 @@ async fn sync_download(
     key: &Key,
     force: bool,
     client: &api_client::Client<'_>,
-    db: &mut (impl Database + Send),
+    db: &(impl Database + Send),
 ) -> Result<(i64, i64)> {
     debug!("starting sync download");
 
@@ -48,16 +48,16 @@ async fn sync_download(
     let remote_deleted =
         HashSet::<&str>::from_iter(remote_status.deleted.iter().map(String::as_str));
 
-    let initial_local = db.history_count().await?;
+    let initial_local = db.history_count(true).await?;
     let mut local_count = initial_local;
 
     let mut last_sync = if force {
-        Utc.timestamp_millis(0)
+        OffsetDateTime::UNIX_EPOCH
     } else {
         Settings::last_sync()?
     };
 
-    let mut last_timestamp = Utc.timestamp_millis(0);
+    let mut last_timestamp = OffsetDateTime::UNIX_EPOCH;
 
     let host = if force { Some(String::from("")) } else { None };
 
@@ -74,7 +74,7 @@ async fn sync_download(
             .map(|h| decrypt(h, key).expect("failed to decrypt history! check your key"))
             .map(|mut h| {
                 if remote_deleted.contains(h.id.as_str()) {
-                    h.deleted_at = Some(chrono::Utc::now());
+                    h.deleted_at = Some(time::OffsetDateTime::now_utc());
                     h.command = String::from("");
                 }
 
@@ -84,7 +84,7 @@ async fn sync_download(
 
         db.save_bulk(&history).await?;
 
-        local_count = db.history_count().await?;
+        local_count = db.history_count(true).await?;
 
         if history.len() < remote_status.page_size.try_into().unwrap() {
             break;
@@ -99,8 +99,8 @@ async fn sync_download(
         // be "lost" between syncs. In this case we need to rewind the sync
         // timestamps
         if page_last == last_timestamp {
-            last_timestamp = Utc.timestamp_millis(0);
-            last_sync -= chrono::Duration::hours(1);
+            last_timestamp = OffsetDateTime::UNIX_EPOCH;
+            last_sync -= time::Duration::hours(1);
         } else {
             last_timestamp = page_last;
         }
@@ -109,7 +109,7 @@ async fn sync_download(
     for i in remote_status.deleted {
         // we will update the stored history to have this data
         // pretty much everything can be nullified
-        if let Ok(h) = db.load(i.as_str()).await {
+        if let Some(h) = db.load(i.as_str()).await? {
             db.delete(h).await?;
         } else {
             info!(
@@ -127,7 +127,7 @@ async fn sync_upload(
     key: &Key,
     _force: bool,
     client: &api_client::Client<'_>,
-    db: &mut (impl Database + Send),
+    db: &(impl Database + Send),
 ) -> Result<()> {
     debug!("starting sync upload");
 
@@ -137,12 +137,12 @@ async fn sync_upload(
     let initial_remote_count = client.count().await?;
     let mut remote_count = initial_remote_count;
 
-    let local_count = db.history_count().await?;
+    let local_count = db.history_count(true).await?;
 
     debug!("remote has {}, we have {}", remote_count, local_count);
 
     // first just try the most recent set
-    let mut cursor = Utc::now();
+    let mut cursor = OffsetDateTime::now_utc();
 
     while local_count > remote_count {
         let last = db.before(cursor, remote_status.page_size).await?;
@@ -188,8 +188,13 @@ async fn sync_upload(
     Ok(())
 }
 
-pub async fn sync(settings: &Settings, force: bool, db: &mut (impl Database + Send)) -> Result<()> {
-    let client = api_client::Client::new(&settings.sync_address, &settings.session_token)?;
+pub async fn sync(settings: &Settings, force: bool, db: &(impl Database + Send)) -> Result<()> {
+    let client = api_client::Client::new(
+        &settings.sync_address,
+        &settings.session_token,
+        settings.network_connect_timeout,
+        settings.network_timeout,
+    )?;
 
     let key = load_key(settings)?; // encryption key
 

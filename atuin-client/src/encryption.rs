@@ -11,16 +11,16 @@
 use std::{io::prelude::*, path::PathBuf};
 
 use base64::prelude::{Engine, BASE64_STANDARD};
-use chrono::{DateTime, Utc};
+pub use crypto_secretbox::Key;
+use crypto_secretbox::{
+    aead::{Nonce, OsRng},
+    AeadCore, AeadInPlace, KeyInit, XSalsa20Poly1305,
+};
 use eyre::{bail, ensure, eyre, Context, Result};
 use fs_err as fs;
 use rmp::{decode::Bytes, Marker};
 use serde::{Deserialize, Serialize};
-pub use xsalsa20poly1305::Key;
-use xsalsa20poly1305::{
-    aead::{Nonce, OsRng},
-    AeadInPlace, KeyInit, XSalsa20Poly1305,
-};
+use time::{format_description::well_known::Rfc3339, macros::format_description, OffsetDateTime};
 
 use crate::{history::History, settings::Settings};
 
@@ -70,6 +70,8 @@ pub fn encode_key(key: &Key) -> Result<String> {
 }
 
 pub fn decode_key(key: String) -> Result<Key> {
+    use rmp::decode;
+
     let buf = BASE64_STANDARD
         .decode(key.trim_end())
         .wrap_err("encryption key is not a valid base64 encoding")?;
@@ -80,14 +82,27 @@ pub fn decode_key(key: String) -> Result<Key> {
         Ok(key) => Ok(key.into()),
         Err(_) => {
             let mut bytes = rmp::decode::Bytes::new(&buf);
-            let key_len =
-                rmp::decode::read_array_len(&mut bytes).map_err(|err| eyre!("{err:?}"))?;
-            ensure!(key_len == 32, "encryption key is not the correct size");
-            let mut key = Key::default();
-            for i in &mut key {
-                *i = rmp::decode::read_int(&mut bytes).map_err(|err| eyre!("{err:?}"))?;
+
+            match Marker::from_u8(buf[0]) {
+                Marker::Bin8 => {
+                    let len = decode::read_bin_len(&mut bytes).map_err(|err| eyre!("{err:?}"))?;
+                    ensure!(len == 32, "encryption key is not the correct size");
+                    let key = <[u8; 32]>::try_from(bytes.remaining_slice())
+                        .context("could not decode encryption key")?;
+                    Ok(key.into())
+                }
+                Marker::Array16 => {
+                    let len = decode::read_array_len(&mut bytes).map_err(|err| eyre!("{err:?}"))?;
+                    ensure!(len == 32, "encryption key is not the correct size");
+
+                    let mut key = Key::default();
+                    for i in &mut key {
+                        *i = rmp::decode::read_int(&mut bytes).map_err(|err| eyre!("{err:?}"))?;
+                    }
+                    Ok(key)
+                }
+                _ => bail!("could not decode encryption key"),
             }
-            Ok(key)
         }
     }
 }
@@ -122,6 +137,28 @@ pub fn decrypt(mut encrypted_history: EncryptedHistory, key: &Key) -> Result<His
     Ok(history)
 }
 
+fn format_rfc3339(ts: OffsetDateTime) -> Result<String> {
+    // horrible hack. chrono AutoSI limits to 0, 3, 6, or 9 decimal places for nanoseconds.
+    // time does not have this functionality.
+    static PARTIAL_RFC3339_0: &[time::format_description::FormatItem<'static>] =
+        format_description!("[year]-[month]-[day]T[hour]:[minute]:[second]Z");
+    static PARTIAL_RFC3339_3: &[time::format_description::FormatItem<'static>] =
+        format_description!("[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z");
+    static PARTIAL_RFC3339_6: &[time::format_description::FormatItem<'static>] =
+        format_description!("[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:6]Z");
+    static PARTIAL_RFC3339_9: &[time::format_description::FormatItem<'static>] =
+        format_description!("[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:9]Z");
+
+    let fmt = match ts.nanosecond() {
+        0 => PARTIAL_RFC3339_0,
+        ns if ns % 1_000_000 == 0 => PARTIAL_RFC3339_3,
+        ns if ns % 1_000 == 0 => PARTIAL_RFC3339_6,
+        _ => PARTIAL_RFC3339_9,
+    };
+
+    Ok(ts.format(fmt)?)
+}
+
 fn encode(h: &History) -> Result<Vec<u8>> {
     use rmp::encode;
 
@@ -130,12 +167,7 @@ fn encode(h: &History) -> Result<Vec<u8>> {
     encode::write_array_len(&mut output, 9)?;
 
     encode::write_str(&mut output, &h.id)?;
-    encode::write_str(
-        &mut output,
-        &dbg!(h
-            .timestamp
-            .to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)),
-    )?;
+    encode::write_str(&mut output, &(format_rfc3339(h.timestamp)?))?;
     encode::write_sint(&mut output, h.duration)?;
     encode::write_sint(&mut output, h.exit)?;
     encode::write_str(&mut output, &h.command)?;
@@ -143,10 +175,7 @@ fn encode(h: &History) -> Result<Vec<u8>> {
     encode::write_str(&mut output, &h.session)?;
     encode::write_str(&mut output, &h.hostname)?;
     match h.deleted_at {
-        Some(d) => encode::write_str(
-            &mut output,
-            &d.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true),
-        )?,
+        Some(d) => encode::write_str(&mut output, &format_rfc3339(d)?)?,
         None => encode::write_nil(&mut output)?,
     }
 
@@ -206,7 +235,7 @@ fn decode(bytes: &[u8]) -> Result<History> {
 
     Ok(History {
         id: id.to_owned(),
-        timestamp: DateTime::parse_from_rfc3339(timestamp)?.with_timezone(&Utc),
+        timestamp: OffsetDateTime::parse(timestamp, &Rfc3339)?,
         duration,
         exit,
         command: command.to_owned(),
@@ -214,9 +243,8 @@ fn decode(bytes: &[u8]) -> Result<History> {
         session: session.to_owned(),
         hostname: hostname.to_owned(),
         deleted_at: deleted_at
-            .map(DateTime::parse_from_rfc3339)
-            .transpose()?
-            .map(|dt| dt.with_timezone(&Utc)),
+            .map(|t| OffsetDateTime::parse(t, &Rfc3339))
+            .transpose()?,
     })
 }
 
@@ -226,7 +254,9 @@ fn error_report<E: std::fmt::Debug>(err: E) -> eyre::Report {
 
 #[cfg(test)]
 mod test {
-    use xsalsa20poly1305::{aead::OsRng, KeyInit, XSalsa20Poly1305};
+    use crypto_secretbox::{aead::OsRng, KeyInit, XSalsa20Poly1305};
+    use pretty_assertions::assert_eq;
+    use time::{macros::datetime, OffsetDateTime};
 
     use crate::history::History;
 
@@ -239,7 +269,7 @@ mod test {
 
         let history = History::from_db()
             .id("1".into())
-            .timestamp(chrono::Utc::now())
+            .timestamp(OffsetDateTime::now_utc())
             .command("ls".into())
             .cwd("/home/ellie".into())
             .exit(0)
@@ -283,7 +313,7 @@ mod test {
         ];
         let history = History {
             id: "66d16cbee7cd47538e5c5b8b44e9006e".to_owned(),
-            timestamp: "2023-05-28T18:35:40.633872Z".parse().unwrap(),
+            timestamp: datetime!(2023-05-28 18:35:40.633872 +00:00),
             duration: 49206000,
             exit: 0,
             command: "git status".to_owned(),
@@ -304,14 +334,14 @@ mod test {
     fn test_decode_deleted() {
         let history = History {
             id: "66d16cbee7cd47538e5c5b8b44e9006e".to_owned(),
-            timestamp: "2023-05-28T18:35:40.633872Z".parse().unwrap(),
+            timestamp: datetime!(2023-05-28 18:35:40.633872 +00:00),
             duration: 49206000,
             exit: 0,
             command: "git status".to_owned(),
             cwd: "/Users/conrad.ludgate/Documents/code/atuin".to_owned(),
             session: "b97d9a306f274473a203d2eba41f9457".to_owned(),
             hostname: "fvfg936c0kpf:conrad.ludgate".to_owned(),
-            deleted_at: Some("2023-05-28T18:35:40.633872Z".parse().unwrap()),
+            deleted_at: Some(datetime!(2023-05-28 18:35:40.633872 +00:00)),
         };
 
         let b = encode(&history).unwrap();
@@ -335,7 +365,7 @@ mod test {
         ];
         let history = History {
             id: "66d16cbee7cd47538e5c5b8b44e9006e".to_owned(),
-            timestamp: "2023-05-28T18:35:40.633872Z".parse().unwrap(),
+            timestamp: datetime!(2023-05-28 18:35:40.633872 +00:00),
             duration: 49206000,
             exit: 0,
             command: "git status".to_owned(),
@@ -347,5 +377,43 @@ mod test {
 
         let h = decode(&bytes).unwrap();
         assert_eq!(history, h);
+    }
+
+    #[test]
+    fn key_encodings() {
+        use super::{decode_key, encode_key, Key};
+
+        // a history of our key encodings.
+        // v11.0.0 xCAbWypb0msJ2Kq+8j4GVEWUlDX7deKnrTRSIopuqXxc5Q==
+        // v12.0.0 xCAbWypb0msJ2Kq+8j4GVEWUlDX7deKnrTRSIopuqXxc5Q==
+        // v13.0.0 xCAbWypb0msJ2Kq+8j4GVEWUlDX7deKnrTRSIopuqXxc5Q==
+        // v13.0.1 xCAbWypb0msJ2Kq+8j4GVEWUlDX7deKnrTRSIopuqXxc5Q==
+        // v14.0.0 xCAbWypb0msJ2Kq+8j4GVEWUlDX7deKnrTRSIopuqXxc5Q==
+        // v14.0.1 xCAbWypb0msJ2Kq+8j4GVEWUlDX7deKnrTRSIopuqXxc5Q==
+        // c7d89c1 3AAgG1sqW8zSawnM2MyqzL7M8j4GVEXMlMyUNcz7dczizKfMrTRSIsyKbsypfFzM5Q== (https://github.com/ellie/atuin/pull/805)
+        // b53ca35 3AAgG1sqW8zSawnM2MyqzL7M8j4GVEXMlMyUNcz7dczizKfMrTRSIsyKbsypfFzM5Q== (https://github.com/ellie/atuin/pull/974)
+        // v15.0.0 3AAgG1sqW8zSawnM2MyqzL7M8j4GVEXMlMyUNcz7dczizKfMrTRSIsyKbsypfFzM5Q==
+        // b8b57c8 xCAbWypb0msJ2Kq+8j4GVEWUlDX7deKnrTRSIopuqXxc5Q==                     (https://github.com/ellie/atuin/pull/1057)
+        // 8c94d79 3AAgG1sqW8zSawnM2MyqzL7M8j4GVEXMlMyUNcz7dczizKfMrTRSIsyKbsypfFzM5Q== (https://github.com/ellie/atuin/pull/1089)
+
+        let key = Key::from([
+            27, 91, 42, 91, 210, 107, 9, 216, 170, 190, 242, 62, 6, 84, 69, 148, 148, 53, 251, 117,
+            226, 167, 173, 52, 82, 34, 138, 110, 169, 124, 92, 229,
+        ]);
+
+        assert_eq!(
+            encode_key(&key).unwrap(),
+            "3AAgG1sqW8zSawnM2MyqzL7M8j4GVEXMlMyUNcz7dczizKfMrTRSIsyKbsypfFzM5Q=="
+        );
+
+        // key encodings we have to support
+        let valid_encodings = [
+            "xCAbWypb0msJ2Kq+8j4GVEWUlDX7deKnrTRSIopuqXxc5Q==",
+            "3AAgG1sqW8zSawnM2MyqzL7M8j4GVEXMlMyUNcz7dczizKfMrTRSIsyKbsypfFzM5Q==",
+        ];
+
+        for k in valid_encodings {
+            assert_eq!(decode_key(k.to_owned()).expect(k), key);
+        }
     }
 }
