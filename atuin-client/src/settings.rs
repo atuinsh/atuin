@@ -143,15 +143,6 @@ pub enum WordJumpMode {
     Subl,
 }
 
-#[derive(Clone, Debug, Deserialize, Copy, PartialEq)]
-pub enum KeyModifier {
-    #[serde(rename = "ctrl")]
-    Ctrl,
-
-    #[serde(rename = "alt")]
-    Alt,
-}
-
 #[derive(Clone, Debug, Deserialize)]
 pub struct Settings {
     pub dialect: Dialect,
@@ -176,7 +167,6 @@ pub struct Settings {
     pub show_help: bool,
     pub exit_mode: ExitMode,
     pub word_jump_mode: WordJumpMode,
-    pub number_jump_modifier: KeyModifier,
     pub word_chars: String,
     pub scroll_context_lines: usize,
     #[serde(with = "serde_regex", default = "RegexSet::empty")]
