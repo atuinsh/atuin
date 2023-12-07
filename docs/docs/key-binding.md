@@ -8,7 +8,7 @@ Atuin does not yet have full key binding customization, though we do allow some 
 
 ## Custom up arrow filter mode
 
-It can be useful to use a different filter mode on the up arrow. For example, you could use ctrl-r for searching globally, but the up arrow for searching history from the current directory only.
+It can be useful to use a different filter or search mode on the up arrow. For example, you could use ctrl-r for searching globally, but the up arrow for searching history from the current directory only.
 
 Set your config like this:
 
@@ -18,7 +18,11 @@ filter_mode_shell_up_key_binding = "directory" # or global, host, directory, etc
 
 ## Disable up arrow
 
-Our default up-arrow binding can be a bit contentious. Some people love it, some people hate it. Many people who found it a bit jarring at first have since come to love it, so give it a try! Otherwise, if you don't like it, it's easy to disable.
+Our default up-arrow binding can be a bit contentious. Some people love it, some people hate it. Many people who found it a bit jarring at first have since come to love it, so give it a try! 
+
+It becomes much more powerful if you consider binding a different filter mode to the up arrow. For example, on "up" Atuin can default to searching all history for the current directory only, while ctrl-r searches history globally. See the [config](https://atuin.sh/docs/config/#filter_mode_shell_up_key_binding) for more.
+
+Otherwise, if you don't like it, it's easy to disable.
 
 You can also disable either the up-arrow or <kbd>Ctrl-r</kbd> bindings individually, by passing
 `--disable-up-arrow` or `--disable-ctrl-r` to the call to `atuin init`:
@@ -45,6 +49,17 @@ eval "$(atuin init zsh)"
 ```
 
 You can then choose to bind Atuin if needed, do this after the call to init.
+
+**Nushell Only**: The up-arrow keybinding is disabled by default for Nushell until [#1025](https://github.com/atuinsh/atuin/issues/1025) is resolved.
+
+## <kbd>Ctrl-n</kbd> key shortcuts
+
+macOS does not have an <kbd>Alt</kbd> key, although terminal emulators can often be configured to map the <kbd>Option</kbd> key to be used as <kbd>Alt</kbd>. *However*, remapping <kbd>Option</kbd> this way may prevent typing some characters, such as using <kbd>Option-3</kbd> to type `#` on the British English layout. For such a scenario, set the `ctrl_n_shortcuts` option to `true` in your config file to replace <kbd>Alt-0</kbd> to <kbd>Alt-9</kbd> shortcuts with <kbd>Ctrl-0</kbd> to <kbd>Ctrl-9</kbd> instead:
+
+```
+# Use Ctrl-0 .. Ctrl-9 instead of Alt-0 .. Alt-9 UI shortcuts
+ctrl_n_shortcuts = true
+```
 
 ## zsh
 
@@ -74,6 +89,7 @@ bind -x '"\C-r": __atuin_history'
 ```
 
 ## fish
+Edit key bindings in FISH shell by adding the following to ~/.config/fish/config.fish
 
 ```
 set -gx ATUIN_NOBIND "true"
@@ -83,6 +99,15 @@ atuin init fish | source
 bind \cr _atuin_search
 bind -M insert \cr _atuin_search
 ```
+
+Adding the useful alternative key binding of <kbd>CTRL-up</kbd> is tricky and determined by the terminals adherence to terminfo(5).
+
+Conveniently FISH uses a command to capture keystrokes and advises you of the exact command to add for your specific terminal.
+In your terminal, run `fish_key_reader` then punch the desired keystroke/s.
+
+For example, in Gnome Terminal the output to <kbd>CTRL-upkey</kbd> is `bind \e\[1\;5A 'do something'`
+
+So, adding this to the above sample, `bind \e\[1\;5A _atuin_search` will provide the additional search keybinding.
 
 ## nu
 
@@ -115,6 +140,7 @@ $env.config = (
 | ctrl + s                                  | Cycle through search modes                                                    |
 | alt + 1 to alt + 9                        | Select item by the number located near it                                     |
 | ctrl + c / ctrl + d / ctrl + g / esc      | Return original                                                               |
+| ctrl + y                                  | Copy selected item to clipboard                                               |
 | ctrl + ⬅︎ / alt + b                       | Move the cursor to the previous word                                          |
 | ctrl + ➡️ / alt + f                       | Move the cursor to the next word                                              |
 | ctrl + h / ctrl + b / ⬅︎                  | Move the cursor to the left                                                   |

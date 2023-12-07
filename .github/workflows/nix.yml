@@ -19,7 +19,7 @@ jobs:
       - name: Run nix flake check
         run: nix flake check --print-build-logs
 
-  build:
+  build-test:
     runs-on: ubuntu-latest
 
     steps:

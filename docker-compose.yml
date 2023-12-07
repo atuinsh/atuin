@@ -2,7 +2,7 @@ version: '3.5'
 services:
   atuin:
     restart: always
-    image: ghcr.io/ellie/atuin:main
+    image: ghcr.io/atuinsh/atuin:main
     command: server start
     volumes:
       - "./config:/config"

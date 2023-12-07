@@ -109,20 +109,22 @@ bind -M insert \e\[A _atuin_bind_up";
             event: { send: executehostcommand cmd: (_atuin_search_cmd) }
         }
     )
-)
-"#;
-            const BIND_UP_ARROW: &str = r#"$env.config = (
-    $env.config | upsert keybindings (
-        $env.config.keybindings
-        | append {
-            name: atuin
-            modifier: none
-            keycode: up
-            mode: [emacs, vi_normal, vi_insert]
-            event: { send: executehostcommand cmd: (_atuin_search_cmd '--shell-up-key-binding') }
-        }
-    )
-)
+)"#;
+            const BIND_UP_ARROW: &str = r#"
+# The up arrow keybinding has surprising behavior in Nu, and is disabled by default.
+# See https://github.com/atuinsh/atuin/issues/1025 for details
+# $env.config = (
+#     $env.config | upsert keybindings (
+#         $env.config.keybindings
+#         | append {
+#             name: atuin
+#             modifier: none
+#             keycode: up
+#             mode: [emacs, vi_normal, vi_insert]
+#             event: { send: executehostcommand cmd: (_atuin_search_cmd '--shell-up-key-binding') }
+#         }
+#     )
+# )
 "#;
             if !self.disable_ctrl_r {
                 println!("{BIND_CTRL_R}");

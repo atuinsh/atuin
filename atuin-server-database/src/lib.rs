@@ -6,6 +6,7 @@ pub mod models;
 use std::{
     collections::HashMap,
     fmt::{Debug, Display},
+    ops::Range,
 };
 
 use self::{
@@ -13,10 +14,9 @@ use self::{
     models::{History, NewHistory, NewSession, NewUser, Session, User},
 };
 use async_trait::async_trait;
-use atuin_common::utils::get_days_from_month;
-use chrono::{Datelike, TimeZone};
-use chronoutil::RelativeDuration;
+use atuin_common::record::{EncryptedData, HostId, Record, RecordId, RecordIndex};
 use serde::{de::DeserializeOwned, Serialize};
+use time::{Date, Duration, Month, OffsetDateTime, Time, UtcOffset};
 use tracing::instrument;
 
 #[derive(Debug)]
@@ -28,6 +28,12 @@ pub enum DbError {
 impl Display for DbError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{self:?}")
+    }
+}
+
+impl<T: std::error::Error + Into<time::error::Error>> From<T> for DbError {
+    fn from(value: T) -> Self {
+        DbError::Other(value.into().into())
     }
 }
 
@@ -49,24 +55,34 @@ pub trait Database: Sized + Clone + Send + Sync + 'static {
     async fn add_user(&self, user: &NewUser) -> DbResult<i64>;
     async fn delete_user(&self, u: &User) -> DbResult<()>;
 
+    async fn total_history(&self) -> DbResult<i64>;
     async fn count_history(&self, user: &User) -> DbResult<i64>;
     async fn count_history_cached(&self, user: &User) -> DbResult<i64>;
 
     async fn delete_history(&self, user: &User, id: String) -> DbResult<()>;
     async fn deleted_history(&self, user: &User) -> DbResult<Vec<String>>;
 
-    async fn count_history_range(
+    async fn add_records(&self, user: &User, record: &[Record<EncryptedData>]) -> DbResult<()>;
+    async fn next_records(
         &self,
         user: &User,
-        start: chrono::NaiveDateTime,
-        end: chrono::NaiveDateTime,
-    ) -> DbResult<i64>;
+        host: HostId,
+        tag: String,
+        start: Option<RecordId>,
+        count: u64,
+    ) -> DbResult<Vec<Record<EncryptedData>>>;
+
+    // Return the tail record ID for each store, so (HostID, Tag, TailRecordID)
+    async fn tail_records(&self, user: &User) -> DbResult<RecordIndex>;
+
+    async fn count_history_range(&self, user: &User, range: Range<OffsetDateTime>)
+        -> DbResult<i64>;
 
     async fn list_history(
         &self,
         user: &User,
-        created_after: chrono::NaiveDateTime,
-        since: chrono::NaiveDateTime,
+        created_after: OffsetDateTime,
+        since: OffsetDateTime,
         host: &str,
         page_size: i64,
     ) -> DbResult<Vec<History>>;
@@ -75,146 +91,81 @@ pub trait Database: Sized + Clone + Send + Sync + 'static {
 
     async fn oldest_history(&self, user: &User) -> DbResult<History>;
 
-    /// Count the history for a given year
-    #[instrument(skip_all)]
-    async fn count_history_year(&self, user: &User, year: i32) -> DbResult<i64> {
-        let start = chrono::Utc.ymd(year, 1, 1).and_hms_nano(0, 0, 0, 0);
-        let end = start + RelativeDuration::years(1);
-
-        let res = self
-            .count_history_range(user, start.naive_utc(), end.naive_utc())
-            .await?;
-        Ok(res)
-    }
-
-    /// Count the history for a given month
-    #[instrument(skip_all)]
-    async fn count_history_month(&self, user: &User, month: chrono::NaiveDate) -> DbResult<i64> {
-        let start = chrono::Utc
-            .ymd(month.year(), month.month(), 1)
-            .and_hms_nano(0, 0, 0, 0);
-
-        // ofc...
-        let end = if month.month() < 12 {
-            chrono::Utc
-                .ymd(month.year(), month.month() + 1, 1)
-                .and_hms_nano(0, 0, 0, 0)
-        } else {
-            chrono::Utc
-                .ymd(month.year() + 1, 1, 1)
-                .and_hms_nano(0, 0, 0, 0)
-        };
-
-        tracing::debug!("start: {}, end: {}", start, end);
-
-        let res = self
-            .count_history_range(user, start.naive_utc(), end.naive_utc())
-            .await?;
-        Ok(res)
-    }
-
-    /// Count the history for a given day
-    #[instrument(skip_all)]
-    async fn count_history_day(&self, user: &User, day: chrono::NaiveDate) -> DbResult<i64> {
-        let start = chrono::Utc
-            .ymd(day.year(), day.month(), day.day())
-            .and_hms_nano(0, 0, 0, 0);
-        let end = chrono::Utc
-            .ymd(day.year(), day.month(), day.day() + 1)
-            .and_hms_nano(0, 0, 0, 0);
-
-        let res = self
-            .count_history_range(user, start.naive_utc(), end.naive_utc())
-            .await?;
-        Ok(res)
-    }
-
     #[instrument(skip_all)]
     async fn calendar(
         &self,
         user: &User,
         period: TimePeriod,
-        year: u64,
-        month: u64,
+        tz: UtcOffset,
     ) -> DbResult<HashMap<u64, TimePeriodInfo>> {
-        // TODO: Support different timezones. Right now we assume UTC and
-        // everything is stored as such. But it _should_ be possible to
-        // interpret the stored date with a different TZ
-
-        match period {
-            TimePeriod::YEAR => {
-                let mut ret = HashMap::new();
+        let mut ret = HashMap::new();
+        let iter: Box<dyn Iterator<Item = DbResult<(u64, Range<Date>)>> + Send> = match period {
+            TimePeriod::Year => {
                 // First we need to work out how far back to calculate. Get the
                 // oldest history item
-                let oldest = self.oldest_history(user).await?.timestamp.year();
-                let current_year = chrono::Utc::now().year();
+                let oldest = self
+                    .oldest_history(user)
+                    .await?
+                    .timestamp
+                    .to_offset(tz)
+                    .year();
+                let current_year = OffsetDateTime::now_utc().to_offset(tz).year();
 
                 // All the years we need to get data for
                 // The upper bound is exclusive, so include current +1
                 let years = oldest..current_year + 1;
 
-                for year in years {
-                    let count = self.count_history_year(user, year).await?;
+                Box::new(years.map(|year| {
+                    let start = Date::from_calendar_date(year, time::Month::January, 1)?;
+                    let end = Date::from_calendar_date(year + 1, time::Month::January, 1)?;
 
-                    ret.insert(
-                        year as u64,
-                        TimePeriodInfo {
-                            count: count as u64,
-                            hash: "".to_string(),
-                        },
-                    );
-                }
-
-                Ok(ret)
+                    Ok((year as u64, start..end))
+                }))
             }
 
-            TimePeriod::MONTH => {
-                let mut ret = HashMap::new();
+            TimePeriod::Month { year } => {
+                let months =
+                    std::iter::successors(Some(Month::January), |m| Some(m.next())).take(12);
 
-                for month in 1..13 {
-                    let count = self
-                        .count_history_month(
-                            user,
-                            chrono::Utc.ymd(year as i32, month, 1).naive_utc(),
-                        )
-                        .await?;
+                Box::new(months.map(move |month| {
+                    let start = Date::from_calendar_date(year, month, 1)?;
+                    let days = time::util::days_in_year_month(year, month);
+                    let end = start + Duration::days(days as i64);
 
-                    ret.insert(
-                        month as u64,
-                        TimePeriodInfo {
-                            count: count as u64,
-                            hash: "".to_string(),
-                        },
-                    );
-                }
-
-                Ok(ret)
+                    Ok((month as u64, start..end))
+                }))
             }
 
-            TimePeriod::DAY => {
-                let mut ret = HashMap::new();
+            TimePeriod::Day { year, month } => {
+                let days = 1..time::util::days_in_year_month(year, month);
+                Box::new(days.map(move |day| {
+                    let start = Date::from_calendar_date(year, month, day)?;
+                    let end = start
+                        .next_day()
+                        .ok_or_else(|| DbError::Other(eyre::eyre!("no next day?")))?;
 
-                for day in 1..get_days_from_month(year as i32, month as u32) {
-                    let count = self
-                        .count_history_day(
-                            user,
-                            chrono::Utc
-                                .ymd(year as i32, month as u32, day as u32)
-                                .naive_utc(),
-                        )
-                        .await?;
-
-                    ret.insert(
-                        day as u64,
-                        TimePeriodInfo {
-                            count: count as u64,
-                            hash: "".to_string(),
-                        },
-                    );
-                }
-
-                Ok(ret)
+                    Ok((day as u64, start..end))
+                }))
             }
+        };
+
+        for x in iter {
+            let (index, range) = x?;
+
+            let start = range.start.with_time(Time::MIDNIGHT).assume_offset(tz);
+            let end = range.end.with_time(Time::MIDNIGHT).assume_offset(tz);
+
+            let count = self.count_history_range(user, start..end).await?;
+
+            ret.insert(
+                index,
+                TimePeriodInfo {
+                    count: count as u64,
+                    hash: "".to_string(),
+                },
+            );
         }
+
+        Ok(ret)
     }
 }

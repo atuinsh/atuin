@@ -1,25 +1,25 @@
-use chrono::prelude::*;
+use time::OffsetDateTime;
 
 pub struct History {
     pub id: i64,
     pub client_id: String, // a client generated ID
     pub user_id: i64,
     pub hostname: String,
-    pub timestamp: NaiveDateTime,
+    pub timestamp: OffsetDateTime,
 
     /// All the data we have about this command, encrypted.
     ///
     /// Currently this is an encrypted msgpack object, but this may change in the future.
     pub data: String,
 
-    pub created_at: NaiveDateTime,
+    pub created_at: OffsetDateTime,
 }
 
 pub struct NewHistory {
     pub client_id: String,
     pub user_id: i64,
     pub hostname: String,
-    pub timestamp: chrono::NaiveDateTime,
+    pub timestamp: OffsetDateTime,
 
     /// All the data we have about this command, encrypted.
     ///

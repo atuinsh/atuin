@@ -19,26 +19,34 @@ let _atuin_pre_prompt = {||
     if 'ATUIN_HISTORY_ID' not-in $env {
         return
     }
-    with-env { RUST_LOG: error } {
-        atuin history end $'--exit=($last_exit)' -- $env.ATUIN_HISTORY_ID | null
+    with-env { ATUIN_LOG: error } {
+        do { atuin history end $'--exit=($last_exit)' -- $env.ATUIN_HISTORY_ID | null } | null
+
     }
+    hide-env ATUIN_HISTORY_ID
 }
 
 def _atuin_search_cmd [...flags: string] {
     [
         $ATUIN_KEYBINDING_TOKEN,
         ([
-            `commandline (RUST_LOG=error run-external --redirect-stderr atuin search`,
+            `commandline (ATUIN_LOG=error run-external --redirect-stderr atuin search`,
             ($flags | append [--interactive, --] | each {|e| $'"($e)"'}),
             `(commandline) | complete | $in.stderr | str substring ..-1)`,
         ] | flatten | str join ' '),
     ] | str join "\n"
 }
 
+$env.config = ($env | default {} config).config
+$env.config = ($env.config | default {} hooks)
 $env.config = (
     $env.config | upsert hooks (
         $env.config.hooks
-        | upsert pre_execution ($env.config.hooks.pre_execution | append $_atuin_pre_execution)
-        | upsert pre_prompt ($env.config.hooks.pre_prompt | append $_atuin_pre_prompt)
+        | upsert pre_execution (
+            $env.config.hooks | get -i pre_execution | default [] | append $_atuin_pre_execution)
+        | upsert pre_prompt (
+            $env.config.hooks | get -i pre_prompt | default [] | append $_atuin_pre_prompt)
     )
 )
+
+$env.config = ($env.config | default [] keybindings)

@@ -1,23 +1,30 @@
 use std::{
+    convert::TryFrom,
     io::prelude::*,
     path::{Path, PathBuf},
+    str::FromStr,
 };
 
-use chrono::{prelude::*, Utc};
+use atuin_common::record::HostId;
 use clap::ValueEnum;
-use config::{Config, Environment, File as ConfigFile, FileFormat};
+use config::{
+    builder::DefaultState, Config, ConfigBuilder, Environment, File as ConfigFile, FileFormat,
+};
 use eyre::{eyre, Context, Result};
 use fs_err::{create_dir_all, File};
 use parse_duration::parse;
 use regex::RegexSet;
 use semver::Version;
 use serde::Deserialize;
+use time::{format_description::well_known::Rfc3339, OffsetDateTime};
+use uuid::Uuid;
 
 pub const HISTORY_PAGE_SIZE: i64 = 100;
 pub const LAST_SYNC_FILENAME: &str = "last_sync_time";
 pub const LAST_VERSION_CHECK_FILENAME: &str = "last_version_check_time";
 pub const LATEST_VERSION_FILENAME: &str = "latest_version";
 pub const HOST_ID_FILENAME: &str = "host_id";
+static EXAMPLE_CONFIG: &str = include_str!("../config.toml");
 
 #[derive(Clone, Debug, Deserialize, Copy, ValueEnum, PartialEq)]
 pub enum SearchMode {
@@ -69,6 +76,9 @@ pub enum FilterMode {
 
     #[serde(rename = "directory")]
     Directory = 3,
+
+    #[serde(rename = "workspace")]
+    Workspace = 4,
 }
 
 impl FilterMode {
@@ -78,6 +88,7 @@ impl FilterMode {
             FilterMode::Host => "HOST",
             FilterMode::Session => "SESSION",
             FilterMode::Directory => "DIRECTORY",
+            FilterMode::Workspace => "WORKSPACE",
         }
     }
 }
@@ -156,10 +167,12 @@ pub struct Settings {
     pub search_mode: SearchMode,
     pub filter_mode: FilterMode,
     pub filter_mode_shell_up_key_binding: Option<FilterMode>,
+    pub search_mode_shell_up_key_binding: Option<SearchMode>,
     pub shell_up_key_binding: bool,
     pub inline_height: u16,
     pub invert: bool,
     pub show_preview: bool,
+    pub max_preview_height: u16,
     pub show_help: bool,
     pub exit_mode: ExitMode,
     pub word_jump_mode: WordJumpMode,
@@ -170,6 +183,13 @@ pub struct Settings {
     pub history_filter: RegexSet,
     #[serde(with = "serde_regex", default = "RegexSet::empty")]
     pub cwd_filter: RegexSet,
+    pub secrets_filter: bool,
+    pub workspaces: bool,
+    pub ctrl_n_shortcuts: bool,
+
+    pub network_connect_timeout: u64,
+    pub network_timeout: u64,
+    pub enter_accept: bool,
 
     // This is automatically loaded when settings is created. Do not set in
     // config! Keep secrets and settings apart.
@@ -204,21 +224,20 @@ impl Settings {
     }
 
     fn save_current_time(filename: &str) -> Result<()> {
-        Settings::save_to_data_dir(filename, Utc::now().to_rfc3339().as_str())?;
+        Settings::save_to_data_dir(
+            filename,
+            OffsetDateTime::now_utc().format(&Rfc3339)?.as_str(),
+        )?;
 
         Ok(())
     }
 
-    fn load_time_from_file(filename: &str) -> Result<chrono::DateTime<Utc>> {
+    fn load_time_from_file(filename: &str) -> Result<OffsetDateTime> {
         let value = Settings::read_from_data_dir(filename);
 
         match value {
-            Some(v) => {
-                let time = chrono::DateTime::parse_from_rfc3339(v.as_str())?;
-
-                Ok(time.with_timezone(&Utc))
-            }
-            None => Ok(Utc.ymd(1970, 1, 1).and_hms(0, 0, 0)),
+            Some(v) => Ok(OffsetDateTime::parse(v.as_str(), &Rfc3339)?),
+            None => Ok(OffsetDateTime::UNIX_EPOCH),
         }
     }
 
@@ -230,19 +249,21 @@ impl Settings {
         Settings::save_current_time(LAST_VERSION_CHECK_FILENAME)
     }
 
-    pub fn last_sync() -> Result<chrono::DateTime<Utc>> {
+    pub fn last_sync() -> Result<OffsetDateTime> {
         Settings::load_time_from_file(LAST_SYNC_FILENAME)
     }
 
-    pub fn last_version_check() -> Result<chrono::DateTime<Utc>> {
+    pub fn last_version_check() -> Result<OffsetDateTime> {
         Settings::load_time_from_file(LAST_VERSION_CHECK_FILENAME)
     }
 
-    pub fn host_id() -> Option<String> {
+    pub fn host_id() -> Option<HostId> {
         let id = Settings::read_from_data_dir(HOST_ID_FILENAME);
 
-        if id.is_some() {
-            return id;
+        if let Some(id) = id {
+            let parsed =
+                Uuid::from_str(id.as_str()).expect("failed to parse host ID from local directory");
+            return Some(HostId(parsed));
         }
 
         let uuid = atuin_common::utils::uuid_v7();
@@ -250,7 +271,7 @@ impl Settings {
         Settings::save_to_data_dir(HOST_ID_FILENAME, uuid.as_simple().to_string().as_ref())
             .expect("Could not write host ID to data dir");
 
-        Some(uuid.as_simple().to_string())
+        Some(HostId(uuid))
     }
 
     pub fn should_sync(&self) -> Result<bool> {
@@ -260,8 +281,8 @@ impl Settings {
 
         match parse(self.sync_frequency.as_str()) {
             Ok(d) => {
-                let d = chrono::Duration::from_std(d).unwrap();
-                Ok(Utc::now() - Settings::last_sync()? >= d)
+                let d = time::Duration::try_from(d).unwrap();
+                Ok(OffsetDateTime::now_utc() - Settings::last_sync()? >= d)
             }
             Err(e) => Err(eyre!("failed to check sync: {}", e)),
         }
@@ -269,10 +290,10 @@ impl Settings {
 
     fn needs_update_check(&self) -> Result<bool> {
         let last_check = Settings::last_version_check()?;
-        let diff = Utc::now() - last_check;
+        let diff = OffsetDateTime::now_utc() - last_check;
 
         // Check a max of once per hour
-        Ok(diff.num_hours() >= 1)
+        Ok(diff.whole_hours() >= 1)
     }
 
     async fn latest_version(&self) -> Result<Version> {
@@ -328,13 +349,66 @@ impl Settings {
         None
     }
 
+    pub fn builder() -> Result<ConfigBuilder<DefaultState>> {
+        let data_dir = atuin_common::utils::data_dir();
+        let db_path = data_dir.join("history.db");
+        let record_store_path = data_dir.join("records.db");
+
+        let key_path = data_dir.join("key");
+        let session_path = data_dir.join("session");
+
+        Ok(Config::builder()
+            .set_default("db_path", db_path.to_str())?
+            .set_default("record_store_path", record_store_path.to_str())?
+            .set_default("key_path", key_path.to_str())?
+            .set_default("session_path", session_path.to_str())?
+            .set_default("dialect", "us")?
+            .set_default("auto_sync", true)?
+            .set_default("update_check", true)?
+            .set_default("sync_address", "https://api.atuin.sh")?
+            .set_default("sync_frequency", "10m")?
+            .set_default("search_mode", "fuzzy")?
+            .set_default("filter_mode", "global")?
+            .set_default("style", "auto")?
+            .set_default("inline_height", 0)?
+            .set_default("show_preview", false)?
+            .set_default("max_preview_height", 4)?
+            .set_default("show_help", true)?
+            .set_default("invert", false)?
+            .set_default("exit_mode", "return-original")?
+            .set_default("word_jump_mode", "emacs")?
+            .set_default(
+                "word_chars",
+                "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+            )?
+            .set_default("scroll_context_lines", 1)?
+            .set_default("shell_up_key_binding", false)?
+            .set_default("session_token", "")?
+            .set_default("workspaces", false)?
+            .set_default("ctrl_n_shortcuts", false)?
+            .set_default("secrets_filter", true)?
+            .set_default("network_connect_timeout", 5)?
+            .set_default("network_timeout", 30)?
+            // enter_accept defaults to false here, but true in the default config file. The dissonance is
+            // intentional!
+            // Existing users will get the default "False", so we don't mess with any potential
+            // muscle memory.
+            // New users will get the new default, that is more similar to what they are used to.
+            .set_default("enter_accept", false)?
+            .add_source(
+                Environment::with_prefix("atuin")
+                    .prefix_separator("_")
+                    .separator("__"),
+            ))
+    }
+
     pub fn new() -> Result<Self> {
         let config_dir = atuin_common::utils::config_dir();
-
         let data_dir = atuin_common::utils::data_dir();
 
         create_dir_all(&config_dir)
             .wrap_err_with(|| format!("could not create dir {config_dir:?}"))?;
+
         create_dir_all(&data_dir).wrap_err_with(|| format!("could not create dir {data_dir:?}"))?;
 
         let mut config_file = if let Ok(p) = std::env::var("ATUIN_CONFIG_DIR") {
@@ -347,44 +421,7 @@ impl Settings {
 
         config_file.push("config.toml");
 
-        let db_path = data_dir.join("history.db");
-        let record_store_path = data_dir.join("records.db");
-
-        let key_path = data_dir.join("key");
-        let session_path = data_dir.join("session");
-
-        let mut config_builder = Config::builder()
-            .set_default("db_path", db_path.to_str())?
-            .set_default("record_store_path", record_store_path.to_str())?
-            .set_default("key_path", key_path.to_str())?
-            .set_default("session_path", session_path.to_str())?
-            .set_default("dialect", "us")?
-            .set_default("auto_sync", true)?
-            .set_default("update_check", true)?
-            .set_default("sync_address", "https://api.atuin.sh")?
-            .set_default("sync_frequency", "1h")?
-            .set_default("search_mode", "fuzzy")?
-            .set_default("filter_mode", "global")?
-            .set_default("style", "auto")?
-            .set_default("inline_height", 0)?
-            .set_default("show_preview", false)?
-            .set_default("show_help", true)?
-            .set_default("invert", false)?
-            .set_default("exit_mode", "return-original")?
-            .set_default("word_jump_mode", "emacs")?
-            .set_default("number_jump_modifier", "alt")?
-            .set_default(
-                "word_chars",
-                "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
-            )?
-            .set_default("scroll_context_lines", 1)?
-            .set_default("shell_up_key_binding", false)?
-            .set_default("session_token", "")?
-            .add_source(
-                Environment::with_prefix("atuin")
-                    .prefix_separator("_")
-                    .separator("__"),
-            );
+        let mut config_builder = Self::builder()?;
 
         config_builder = if config_file.exists() {
             config_builder.add_source(ConfigFile::new(
@@ -392,9 +429,8 @@ impl Settings {
                 FileFormat::Toml,
             ))
         } else {
-            let example_config = include_bytes!("../config.toml");
             let mut file = File::create(config_file).wrap_err("could not create config file")?;
-            file.write_all(example_config)
+            file.write_all(EXAMPLE_CONFIG.as_bytes())
                 .wrap_err("could not write default config file")?;
 
             config_builder
@@ -427,5 +463,22 @@ impl Settings {
         }
 
         Ok(settings)
+    }
+
+    pub fn example_config() -> &'static str {
+        EXAMPLE_CONFIG
+    }
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        // if this panics something is very wrong, as the default config
+        // does not build or deserialize into the settings struct
+        Self::builder()
+            .expect("Could not build default")
+            .build()
+            .expect("Could not build config")
+            .try_deserialize()
+            .expect("Could not deserialize config")
     }
 }

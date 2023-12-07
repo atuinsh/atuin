@@ -5,6 +5,8 @@ use eyre::{eyre, Result};
 use fs_err::{create_dir_all, File};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
+static EXAMPLE_CONFIG: &str = include_str!("../server.toml");
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Settings<DbSettings> {
     pub host: String,
@@ -12,6 +14,7 @@ pub struct Settings<DbSettings> {
     pub path: String,
     pub open_registration: bool,
     pub max_history_length: usize,
+    pub max_record_size: usize,
     pub page_size: i64,
     pub register_webhook_url: Option<String>,
     pub register_webhook_username: String,
@@ -39,6 +42,7 @@ impl<DbSettings: DeserializeOwned> Settings<DbSettings> {
             .set_default("port", 8888)?
             .set_default("open_registration", false)?
             .set_default("max_history_length", 8192)?
+            .set_default("max_record_size", 1024 * 1024 * 1024)? // pretty chonky
             .set_default("path", "")?
             .set_default("register_webhook_username", "")?
             .set_default("page_size", 1100)?
@@ -54,10 +58,9 @@ impl<DbSettings: DeserializeOwned> Settings<DbSettings> {
                 FileFormat::Toml,
             ))
         } else {
-            let example_config = include_bytes!("../server.toml");
             create_dir_all(config_file.parent().unwrap())?;
             let mut file = File::create(config_file)?;
-            file.write_all(example_config)?;
+            file.write_all(EXAMPLE_CONFIG.as_bytes())?;
 
             config_builder
         };
@@ -68,4 +71,8 @@ impl<DbSettings: DeserializeOwned> Settings<DbSettings> {
             .try_deserialize()
             .map_err(|e| eyre!("failed to deserialize: {}", e))
     }
+}
+
+pub fn example_config() -> &'static str {
+    EXAMPLE_CONFIG
 }

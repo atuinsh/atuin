@@ -33,4 +33,8 @@
   --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.3);
 }
 
-
+.navbar__logo {
+  height: 50px;
+  position: absolute;
+  top: 4px;
+}

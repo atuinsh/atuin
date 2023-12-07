@@ -1,6 +1,0 @@
-target
-Cargo.lock
-*.log
-*.rs.rustfmt
-.gdb_history
-.idea/

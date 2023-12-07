@@ -154,6 +154,18 @@ Filter modes can still be toggled via ctrl-r
 filter_mode = "host"
 ```
 
+### `search_mode_shell_up_key_binding`
+
+The default searchmode to use when searching and being invoked from a shell up-key binding.
+
+Accepts exactly the same options as `search_mode` above
+
+```
+search_mode_shell_up_key_binding = "fuzzy"
+```
+
+Defaults to the value specified for search_mode.
+
 ### `filter_mode_shell_up_key_binding`
 
 The default filter to use when searching and being invoked from a shell up-key binding.
@@ -165,6 +177,16 @@ filter_mode_shell_up_key_binding = "session"
 ```
 
 Defaults to the value specified for filter_mode.
+
+### `workspaces`
+
+This flag enables a pseudo filter-mode named "workspace": the filter is automatically
+activated when you are in a git repository. Defaults to false.
+
+With workspace filtering enabled, Atuin will filter for commands executed in any directory
+within a git repository tree.
+
+Filter modes can still be toggled via ctrl-r.
 
 ### `style`
 
@@ -180,11 +202,19 @@ Which style to use. Possible values: `auto`, `full` and `compact`.
 
 Defaults to `auto`.
 
+### `invert`
+
+Invert the UI - put the search bar at the top , Default to `false`
+
+```
+invert = true/false
+```
+
 ### `inline_height`
 
 Set the maximum number of lines Atuin's interface should take up.
 
-![inline_height](../../blog/2023/04-01-release-v14/inline.png)
+![inline_height](/img/inline.png)
 
 If set to `0` (default), Atuin will always take up as many lines as available (full screen).
 
@@ -192,9 +222,17 @@ If set to `0` (default), Atuin will always take up as many lines as available (f
 
 Configure whether or not to show a preview of the selected command.
 
-![show_preview](../../blog/2023/04-01-release-v14/preview.png)
+![show_preview](/img/preview.png)
 
 Useful when the command is longer than the terminal width and is cut off.
+
+### `max_preview_height`
+
+Configure the maximum height of the preview to show.
+
+Useful when you have long scripts in your history that you want to distinguish by more than the first few lines.
+
+Defaults to `4`.
 
 ### `show_help`
 
@@ -231,3 +269,52 @@ history_filter = [
    "^innocuous-cmd .*--secret=.+"
 ]
 ```
+
+### secrets_filter
+
+```
+secrets_filter = true
+```
+
+Defaults to true. This matches history against a set of default regex, and will not save it if we get a match. Defaults include
+
+1. AWS key id
+2. Github pat (old and new)
+3. Slack oauth tokens (bot, user)
+4. Slack webhooks
+5. Stripe live/test keys
+
+## macOS <kbd>Ctrl-n</kbd> key shortcuts
+
+macOS does not have an <kbd>Alt</kbd> key, although terminal emulators can often be configured to map the <kbd>Option</kbd> key to be used as <kbd>Alt</kbd>. *However*, remapping <kbd>Option</kbd> this way may prevent typing some characters, such as using <kbd>Option-3</kbd> to type `#` on the British English layout. For such a scenario, set the `ctrl_n_shortcuts` option to `true` in your config file to replace <kbd>Alt-0</kbd> to <kbd>Alt-9</kbd> shortcuts with <kbd>Ctrl-0</kbd> to <kbd>Ctrl-9</kbd> instead:
+
+```
+# Use Ctrl-0 .. Ctrl-9 instead of Alt-0 .. Alt-9 UI shortcuts
+ctrl_n_shortcuts = true
+```
+
+## network_timeout
+Default: 30
+
+The max amount of time (in seconds) to wait for a network request. If any
+operations with a sync server take longer than this, the code will fail -
+rather than wait indefinitely.
+
+## network_connect_timeout
+Default: 5
+
+The max time (in seconds) we wait for a connection to become established with a
+remote sync server. Any longer than this and the request will fail.
+
+## enter_accept
+Default: false
+
+Not supported by NuShell presently
+
+When set to true, Atuin will default to immediately executing a command rather
+than the user having to press enter twice. Pressing tab will return to the
+shell and give the user a chance to edit.
+
+This technically defaults to true for new users, but false for existing. We
+have set `enter_accept = true` in the default config file. This is likely to
+change to be the default for everyone in a later release.

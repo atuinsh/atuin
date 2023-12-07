@@ -1,4 +1,6 @@
-use atuin_common::record::{AdditionalData, DecryptedData, EncryptedData, Encryption};
+use atuin_common::record::{
+    AdditionalData, DecryptedData, EncryptedData, Encryption, HostId, RecordId,
+};
 use base64::{engine::general_purpose, Engine};
 use eyre::{ensure, Context, Result};
 use rusty_paserk::{Key, KeyId, Local, PieWrappedKey};
@@ -70,7 +72,10 @@ impl Encryption for PASETO_V4 {
         let assertions = Assertions::from(ad).encode();
 
         // build the payload and encrypt the token
-        let payload = general_purpose::URL_SAFE_NO_PAD.encode(data.0);
+        let payload = serde_json::to_string(&AtuinPayload {
+            data: general_purpose::URL_SAFE_NO_PAD.encode(data.0),
+        })
+        .expect("json encoding can't fail");
         let nonce = DataKey::<32>::try_new_random().expect("could not source from random");
         let nonce = PasetoNonce::<V4, LocalPurpose>::from(&nonce);
 
@@ -102,7 +107,8 @@ impl Encryption for PASETO_V4 {
         )
         .context("could not decrypt entry")?;
 
-        let data = general_purpose::URL_SAFE_NO_PAD.decode(payload)?;
+        let payload: AtuinPayload = serde_json::from_str(&payload)?;
+        let data = general_purpose::URL_SAFE_NO_PAD.decode(payload.data)?;
         Ok(DecryptedData(data))
     }
 }
@@ -145,6 +151,11 @@ impl PASETO_V4 {
 }
 
 #[derive(Serialize, Deserialize)]
+struct AtuinPayload {
+    data: String,
+}
+
+#[derive(Serialize, Deserialize)]
 /// Well-known footer claims for decrypting. This is not encrypted but is stored in the record.
 /// <https://github.com/paseto-standard/paseto-spec/blob/master/docs/02-Implementation-Guide/04-Claims.md#optional-footer-claims>
 struct AtuinFooter {
@@ -158,10 +169,11 @@ struct AtuinFooter {
 // This cannot be changed, otherwise it breaks the authenticated encryption.
 #[derive(Debug, Copy, Clone, Serialize)]
 struct Assertions<'a> {
-    id: &'a str,
+    id: &'a RecordId,
     version: &'a str,
     tag: &'a str,
-    host: &'a str,
+    host: &'a HostId,
+    parent: Option<&'a RecordId>,
 }
 
 impl<'a> From<AdditionalData<'a>> for Assertions<'a> {
@@ -171,6 +183,7 @@ impl<'a> From<AdditionalData<'a>> for Assertions<'a> {
             version: ad.version,
             tag: ad.tag,
             host: ad.host,
+            parent: ad.parent,
         }
     }
 }
@@ -183,7 +196,7 @@ impl Assertions<'_> {
 
 #[cfg(test)]
 mod tests {
-    use atuin_common::record::Record;
+    use atuin_common::{record::Record, utils::uuid_v7};
 
     use super::*;
 
@@ -192,10 +205,11 @@ mod tests {
         let key = Key::<V4, Local>::new_os_random();
 
         let ad = AdditionalData {
-            id: "foo",
+            id: &RecordId(uuid_v7()),
             version: "v0",
             tag: "kv",
-            host: "1234",
+            host: &HostId(uuid_v7()),
+            parent: None,
         };
 
         let data = DecryptedData(vec![1, 2, 3, 4]);
@@ -210,10 +224,11 @@ mod tests {
         let key = Key::<V4, Local>::new_os_random();
 
         let ad = AdditionalData {
-            id: "foo",
+            id: &RecordId(uuid_v7()),
             version: "v0",
             tag: "kv",
-            host: "1234",
+            host: &HostId(uuid_v7()),
+            parent: None,
         };
 
         let data = DecryptedData(vec![1, 2, 3, 4]);
@@ -233,10 +248,11 @@ mod tests {
         let fake_key = Key::<V4, Local>::new_os_random();
 
         let ad = AdditionalData {
-            id: "foo",
+            id: &RecordId(uuid_v7()),
             version: "v0",
             tag: "kv",
-            host: "1234",
+            host: &HostId(uuid_v7()),
+            parent: None,
         };
 
         let data = DecryptedData(vec![1, 2, 3, 4]);
@@ -250,10 +266,11 @@ mod tests {
         let key = Key::<V4, Local>::new_os_random();
 
         let ad = AdditionalData {
-            id: "foo",
+            id: &RecordId(uuid_v7()),
             version: "v0",
             tag: "kv",
-            host: "1234",
+            host: &HostId(uuid_v7()),
+            parent: None,
         };
 
         let data = DecryptedData(vec![1, 2, 3, 4]);
@@ -261,10 +278,8 @@ mod tests {
         let encrypted = PASETO_V4::encrypt(data, ad, &key.to_bytes());
 
         let ad = AdditionalData {
-            id: "foo1",
-            version: "v0",
-            tag: "kv",
-            host: "1234",
+            id: &RecordId(uuid_v7()),
+            ..ad
         };
         let _ = PASETO_V4::decrypt(encrypted, ad, &key.to_bytes()).unwrap_err();
     }
@@ -275,10 +290,11 @@ mod tests {
         let key2 = Key::<V4, Local>::new_os_random();
 
         let ad = AdditionalData {
-            id: "foo",
+            id: &RecordId(uuid_v7()),
             version: "v0",
             tag: "kv",
-            host: "1234",
+            host: &HostId(uuid_v7()),
+            parent: None,
         };
 
         let data = DecryptedData(vec![1, 2, 3, 4]);
@@ -304,10 +320,10 @@ mod tests {
     fn full_record_round_trip() {
         let key = [0x55; 32];
         let record = Record::builder()
-            .id("1".to_owned())
+            .id(RecordId(uuid_v7()))
             .version("v0".to_owned())
             .tag("kv".to_owned())
-            .host("host1".to_owned())
+            .host(HostId(uuid_v7()))
             .timestamp(1687244806000000)
             .data(DecryptedData(vec![1, 2, 3, 4]))
             .build();
@@ -316,30 +332,20 @@ mod tests {
 
         assert!(!encrypted.data.data.is_empty());
         assert!(!encrypted.data.content_encryption_key.is_empty());
-        assert_eq!(encrypted.id, "1");
-        assert_eq!(encrypted.host, "host1");
-        assert_eq!(encrypted.version, "v0");
-        assert_eq!(encrypted.tag, "kv");
-        assert_eq!(encrypted.timestamp, 1687244806000000);
 
         let decrypted = encrypted.decrypt::<PASETO_V4>(&key).unwrap();
 
         assert_eq!(decrypted.data.0, [1, 2, 3, 4]);
-        assert_eq!(decrypted.id, "1");
-        assert_eq!(decrypted.host, "host1");
-        assert_eq!(decrypted.version, "v0");
-        assert_eq!(decrypted.tag, "kv");
-        assert_eq!(decrypted.timestamp, 1687244806000000);
     }
 
     #[test]
     fn full_record_round_trip_fail() {
         let key = [0x55; 32];
         let record = Record::builder()
-            .id("1".to_owned())
+            .id(RecordId(uuid_v7()))
             .version("v0".to_owned())
             .tag("kv".to_owned())
-            .host("host1".to_owned())
+            .host(HostId(uuid_v7()))
             .timestamp(1687244806000000)
             .data(DecryptedData(vec![1, 2, 3, 4]))
             .build();
@@ -347,13 +353,13 @@ mod tests {
         let encrypted = record.encrypt::<PASETO_V4>(&key);
 
         let mut enc1 = encrypted.clone();
-        enc1.host = "host2".to_owned();
+        enc1.host = HostId(uuid_v7());
         let _ = enc1
             .decrypt::<PASETO_V4>(&key)
             .expect_err("tampering with the host should result in auth failure");
 
         let mut enc2 = encrypted;
-        enc2.id = "2".to_owned();
+        enc2.id = RecordId(uuid_v7());
         let _ = enc2
             .decrypt::<PASETO_V4>(&key)
             .expect_err("tampering with the id should result in auth failure");

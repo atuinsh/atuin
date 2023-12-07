@@ -3,10 +3,12 @@ use std::{
     time::Duration,
 };
 
+use atuin_common::utils;
 use crossterm::{
     event::{
-        self, Event, KeyCode, KeyEvent, KeyModifiers, KeyboardEnhancementFlags, MouseEvent,
-        PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers,
+        KeyboardEnhancementFlags, MouseEvent, PopKeyboardEnhancementFlags,
+        PushKeyboardEnhancementFlags,
     },
     execute, queue, terminal,
 };
@@ -18,7 +20,7 @@ use unicode_width::UnicodeWidthStr;
 use atuin_client::{
     database::{current_context, Database},
     history::History,
-    settings::{ExitMode, FilterMode, KeyModifier, SearchMode, Settings},
+    settings::{ExitMode, FilterMode, SearchMode, Settings},
 };
 
 use super::{
@@ -26,18 +28,19 @@ use super::{
     engines::{SearchEngine, SearchState},
     history_list::{HistoryList, ListState, PREFIX_LENGTH},
 };
-use crate::ratatui::{
-    backend::{Backend, CrosstermBackend},
+use crate::{command::client::search::engines, VERSION};
+use ratatui::{
+    backend::CrosstermBackend,
     layout::{Alignment, Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
-    text::{Span, Spans, Text},
+    text::{Line, Span, Text},
     widgets::{Block, BorderType, Borders, Paragraph},
     Frame, Terminal, TerminalOptions, Viewport,
 };
-use crate::{command::client::search::engines, VERSION};
 
 const RETURN_ORIGINAL: usize = usize::MAX;
 const RETURN_QUERY: usize = usize::MAX - 1;
+const COPY_QUERY: usize = usize::MAX - 2;
 
 struct State {
     history_count: i64,
@@ -46,6 +49,7 @@ struct State {
     switched_search_mode: bool,
     search_mode: SearchMode,
     results_len: usize,
+    accept: bool,
 
     search: SearchState,
     engine: Box<dyn SearchEngine>,
@@ -66,13 +70,24 @@ impl State {
         Ok(results)
     }
 
-    fn handle_input(&mut self, settings: &Settings, input: &Event) -> Option<usize> {
-        match input {
+    fn handle_input<W>(
+        &mut self,
+        settings: &Settings,
+        input: &Event,
+        w: &mut W,
+    ) -> Result<Option<usize>>
+    where
+        W: Write,
+    {
+        execute!(w, EnableMouseCapture)?;
+        let r = match input {
             Event::Key(k) => self.handle_key_input(settings, k),
             Event::Mouse(m) => self.handle_mouse_input(*m),
             Event::Paste(d) => self.handle_paste_input(d),
             _ => None,
-        }
+        };
+        execute!(w, DisableMouseCapture)?;
+        Ok(r)
     }
 
     fn handle_mouse_input(&mut self, input: MouseEvent) -> Option<usize> {
@@ -104,8 +119,9 @@ impl State {
 
         let ctrl = input.modifiers.contains(KeyModifiers::CONTROL);
         let alt = input.modifiers.contains(KeyModifiers::ALT);
-        let number_modifer_pressed = (ctrl && settings.number_jump_modifier == KeyModifier::Ctrl)
-            || (alt && settings.number_jump_modifier == KeyModifier::Alt);
+
+        // Use Ctrl-n instead of Alt-n?
+        let modfr = if settings.ctrl_n_shortcuts { ctrl } else { alt };
 
         // reset the state, will be set to true later if user really did change it
         self.switched_search_mode = false;
@@ -117,10 +133,20 @@ impl State {
                     ExitMode::ReturnQuery => RETURN_QUERY,
                 })
             }
-            KeyCode::Enter => {
+            KeyCode::Tab => {
                 return Some(self.results_state.selected());
             }
-            KeyCode::Char(c @ '1'..='9') if number_modifer_pressed => {
+            KeyCode::Enter => {
+                if settings.enter_accept {
+                    self.accept = true;
+                }
+
+                return Some(self.results_state.selected());
+            }
+            KeyCode::Char('y') if ctrl => {
+                return Some(COPY_QUERY);
+            }
+            KeyCode::Char(c @ '1'..='9') if modfr => {
                 let c = c.to_digit(10)? as usize;
                 return Some(self.results_state.selected() + c);
             }
@@ -189,15 +215,27 @@ impl State {
             }
             KeyCode::Char('u') if ctrl => self.search.input.clear(),
             KeyCode::Char('r') if ctrl => {
-                pub static FILTER_MODES: [FilterMode; 4] = [
-                    FilterMode::Global,
-                    FilterMode::Host,
-                    FilterMode::Session,
-                    FilterMode::Directory,
-                ];
+                let filter_modes = if settings.workspaces && self.search.context.git_root.is_some()
+                {
+                    vec![
+                        FilterMode::Global,
+                        FilterMode::Host,
+                        FilterMode::Session,
+                        FilterMode::Directory,
+                        FilterMode::Workspace,
+                    ]
+                } else {
+                    vec![
+                        FilterMode::Global,
+                        FilterMode::Host,
+                        FilterMode::Session,
+                        FilterMode::Directory,
+                    ]
+                };
+
                 let i = self.search.filter_mode as usize;
-                let i = (i + 1) % FILTER_MODES.len();
-                self.search.filter_mode = FILTER_MODES[i];
+                let i = (i + 1) % filter_modes.len();
+                self.search.filter_mode = filter_modes[i];
             }
             KeyCode::Char('s') if ctrl => {
                 self.switched_search_mode = true;
@@ -275,7 +313,7 @@ impl State {
 
     #[allow(clippy::cast_possible_truncation)]
     #[allow(clippy::bool_to_int_with_if)]
-    fn draw<T: Backend>(&mut self, f: &mut Frame<'_, T>, results: &[History], settings: &Settings) {
+    fn draw(&mut self, f: &mut Frame, results: &[History], settings: &Settings) {
         let compact = match settings.style {
             atuin_client::settings::Style::Auto => f.size().height < 14,
             atuin_client::settings::Style::Compact => true,
@@ -290,9 +328,14 @@ impl State {
                 .max_by(|h1, h2| h1.command.len().cmp(&h2.command.len()));
             longest_command.map_or(0, |v| {
                 std::cmp::min(
-                    4,
-                    (v.command.len() as u16 + preview_width - 1 - border_size)
-                        / (preview_width - border_size),
+                    settings.max_preview_height,
+                    v.command
+                        .split('\n')
+                        .map(|line| {
+                            (line.len() as u16 + preview_width - 1 - border_size)
+                                / (preview_width - border_size)
+                        })
+                        .sum(),
                 )
             }) + border_size * 2
         } else if compact {
@@ -395,7 +438,7 @@ impl State {
 
     #[allow(clippy::unused_self)]
     fn build_help(&mut self) -> Paragraph {
-        let help = Paragraph::new(Text::from(Spans::from(vec![
+        let help = Paragraph::new(Text::from(Line::from(vec![
             Span::styled("Esc", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw(" to exit"),
         ])))
@@ -478,12 +521,15 @@ impl State {
         } else {
             use itertools::Itertools as _;
             let s = &results[selected].command;
-            s.char_indices()
-                .step_by(preview_width.into())
-                .map(|(i, _)| i)
-                .chain(Some(s.len()))
-                .tuple_windows()
-                .map(|(a, b)| &s[a..b])
+            s.split('\n')
+                .flat_map(|line| {
+                    line.char_indices()
+                        .step_by(preview_width.into())
+                        .map(|(i, _)| i)
+                        .chain(Some(line.len()))
+                        .tuple_windows()
+                        .map(|(a, b)| &line[a..b])
+                })
                 .join("\n")
         };
         let preview = if compact {
@@ -577,7 +623,7 @@ impl Write for Stdout {
 // this is a big blob of horrible! clean it up!
 // for now, it works. But it'd be great if it were more easily readable, and
 // modular. I'd like to add some more stats and stuff at some point
-#[allow(clippy::cast_possible_truncation)]
+#[allow(clippy::cast_possible_truncation, clippy::too_many_lines)]
 pub async fn history(
     query: &[String],
     settings: &Settings,
@@ -606,31 +652,41 @@ pub async fn history(
 
     let context = current_context();
 
-    let history_count = db.history_count().await?;
-
+    let history_count = db.history_count(false).await?;
+    let search_mode = if settings.shell_up_key_binding {
+        settings
+            .search_mode_shell_up_key_binding
+            .unwrap_or(settings.search_mode)
+    } else {
+        settings.search_mode
+    };
     let mut app = State {
         history_count,
         results_state: ListState::default(),
         update_needed: None,
         switched_search_mode: false,
-        search_mode: settings.search_mode,
+        search_mode,
         search: SearchState {
             input,
-            context,
-            filter_mode: if settings.shell_up_key_binding {
+            filter_mode: if settings.workspaces && context.git_root.is_some() {
+                FilterMode::Workspace
+            } else if settings.shell_up_key_binding {
                 settings
                     .filter_mode_shell_up_key_binding
                     .unwrap_or(settings.filter_mode)
             } else {
                 settings.filter_mode
             },
+            context,
         },
-        engine: engines::engine(settings.search_mode),
+        engine: engines::engine(search_mode),
         results_len: 0,
+        accept: false,
     };
 
     let mut results = app.query_results(&mut db).await?;
 
+    let accept;
     let index = 'render: loop {
         terminal.draw(|f| app.draw(f, &results, settings))?;
 
@@ -644,7 +700,8 @@ pub async fn history(
             event_ready = event_ready => {
                 if event_ready?? {
                     loop {
-                        if let Some(i) = app.handle_input(settings, &event::read()?) {
+                        if let Some(i) = app.handle_input(settings, &event::read()?, &mut std::io::stdout())? {
+                            accept = app.accept;
                             break 'render i;
                         }
                         if !event::poll(Duration::ZERO)? {
@@ -671,9 +728,18 @@ pub async fn history(
     }
 
     if index < results.len() {
+        let mut command = results.swap_remove(index).command;
+        if accept && (utils::is_zsh() || utils::is_fish() || utils::is_bash()) {
+            command = String::from("__atuin_accept__:") + &command;
+        }
+
         // index is in bounds so we return that entry
-        Ok(results.swap_remove(index).command)
+        Ok(command)
     } else if index == RETURN_ORIGINAL {
+        Ok(String::new())
+    } else if index == COPY_QUERY {
+        let cmd = results.swap_remove(app.results_state.selected()).command;
+        cli_clipboard::set_contents(cmd).unwrap();
         Ok(String::new())
     } else {
         // Either:
