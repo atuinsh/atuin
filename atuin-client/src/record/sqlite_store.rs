@@ -2,8 +2,8 @@
 // Multiple stores of multiple types are all stored in one chonky table (for now), and we just index
 // by tag/host
 
-use std::path::Path;
 use std::str::FromStr;
+use std::{collections::HashMap, path::Path};
 
 use async_trait::async_trait;
 use eyre::{eyre, Result};
@@ -190,7 +190,7 @@ impl Store for SqliteStore {
     ) -> Result<Option<Record<EncryptedData>>> {
         let res = sqlx::query("select * from store where idx = ?1 and host = ?2 and tag = ?3")
             .bind(idx as i64)
-            .bind(host)
+            .bind(host.0.as_hyphenated().to_string())
             .bind(tag)
             .map(Self::query_row)
             .fetch_one(&self.pool)
@@ -227,14 +227,22 @@ impl Store for SqliteStore {
         Ok(status)
     }
 
-    async fn all_tagged(&self, tag: &str) -> Result<Vec<Record<EncryptedData>>> {
+    async fn all_tagged(&self, tag: &str) -> Result<HashMap<HostId, Record<EncryptedData>>> {
         let res = sqlx::query("select * from store where idx = 0 and tag = ?1")
             .bind(tag)
             .map(Self::query_row)
             .fetch_all(&self.pool)
             .await?;
 
-        Ok(res)
+        let mut ret = HashMap::new();
+
+        for i in res {
+            assert!(ret.get(&i.host.id).is_none());
+
+            ret.insert(i.host.id, i);
+        }
+
+        Ok(ret)
     }
 }
 
@@ -302,6 +310,24 @@ mod tests {
 
         assert_eq!(
             last.unwrap().id,
+            record.id,
+            "expected to get back the same record that was inserted"
+        );
+    }
+
+    #[tokio::test]
+    async fn first() {
+        let db = SqliteStore::new(":memory:").await.unwrap();
+        let record = test_record();
+        db.push(&record).await.unwrap();
+
+        let first = db
+            .first(record.host.id, record.tag.as_str())
+            .await
+            .expect("failed to get store len");
+
+        assert_eq!(
+            first.unwrap().id,
             record.id,
             "expected to get back the same record that was inserted"
         );

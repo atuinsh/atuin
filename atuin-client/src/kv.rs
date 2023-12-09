@@ -151,11 +151,30 @@ impl KvStore {
     // use as a write-through cache to avoid constant rebuilds.
     pub async fn build_kv(
         &self,
-        _store: &impl Store,
-        _encryption_key: &[u8; 32],
+        store: &impl Store,
+        encryption_key: &[u8; 32],
     ) -> Result<BTreeMap<String, BTreeMap<String, String>>> {
         let map = BTreeMap::new();
-        // TODO: implement
+
+        // get the status of all stores
+        let mut tagged = store.all_tagged(KV_TAG).await?;
+
+        // iterate through all tags and play each KV record at a time
+        for (host, record) in tagged {
+            let decrypted = match record.version.as_str() {
+                KV_VERSION => record.decrypt::<PASETO_V4>(encryption_key)?,
+                version => bail!("unknown version {version:?}"),
+            };
+
+            let kv = KvRecord::deserialize(&decrypted.data, &decrypted.version)?;
+
+            let next = store.next(host, KV_TAG, decrypted.idx, 1).await?;
+
+            write a function that iterates the kv records in order and builds a map
+            maybe next_record(tag) that returns the next of that tag in time, ignoring host?
+            then write some tests for this new sync
+            also see what happens if we run the new server but try and sync with v17 client. I imagine `atuin sync` breaks, but auto sync is fine. maybe version the api now.
+        }
 
         Ok(map)
     }

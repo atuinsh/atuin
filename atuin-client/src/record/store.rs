@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use async_trait::async_trait;
 use eyre::Result;
 
@@ -48,5 +50,5 @@ pub trait Store {
     /// Get every start record for a given tag, regardless of host.
     /// Useful when actually operating on synchronized data, and will often have conflict
     /// resolution applied.
-    async fn all_tagged(&self, tag: &str) -> Result<Vec<Record<EncryptedData>>>;
+    async fn all_tagged(&self, tag: &str) -> Result<HashMap<HostId, Record<EncryptedData>>>;
 }

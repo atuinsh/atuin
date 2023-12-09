@@ -312,9 +312,8 @@ impl History {
 
 #[cfg(test)]
 mod tests {
-    use atuin_common::record::DecryptedData;
     use regex::RegexSet;
-    use time::{macros::datetime, OffsetDateTime};
+    use time::macros::datetime;
 
     use crate::{history::HISTORY_VERSION, settings::Settings};
 
