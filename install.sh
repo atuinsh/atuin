@@ -184,7 +184,7 @@ esac
 # Use of single quotes around $() is intentional here
 # shellcheck disable=SC2016
 if ! grep -q "atuin init zsh" ~/.zshrc; then
-  printf '\neval "$(atuin init zsh)"\n' >> ~/.zshrc
+  printf '\neval "$(atuin init zsh)"\n' >> "${ZDOTDIR:-$HOME}/.zshrc"
 fi
 
 # Use of single quotes around $() is intentional here
