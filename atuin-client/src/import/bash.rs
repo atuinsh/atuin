@@ -1,13 +1,14 @@
-use std::{fs::File, io::Read, path::PathBuf, str};
+use std::{path::PathBuf, str};
 
 use async_trait::async_trait;
-use chrono::{DateTime, Duration, NaiveDateTime, Utc};
 use directories::UserDirs;
 use eyre::{eyre, Result};
 use itertools::Itertools;
+use time::{Duration, OffsetDateTime};
 
 use super::{get_histpath, unix_byte_lines, Importer, Loader};
 use crate::history::History;
+use crate::import::read_to_end;
 
 #[derive(Debug)]
 pub struct Bash {
@@ -26,10 +27,7 @@ impl Importer for Bash {
     const NAME: &'static str = "bash";
 
     async fn new() -> Result<Self> {
-        let mut bytes = Vec::new();
-        let path = get_histpath(default_histpath)?;
-        let mut f = File::open(path)?;
-        f.read_to_end(&mut bytes)?;
+        let bytes = read_to_end(get_histpath(default_histpath)?)?;
         Ok(Self { bytes })
     }
 
@@ -55,14 +53,14 @@ impl Importer for Bash {
                 _ => None,
             })
             // if no known timestamps, use now as base
-            .unwrap_or((lines.len(), Utc::now()));
+            .unwrap_or((lines.len(), OffsetDateTime::now_utc()));
 
         // if no timestamp is recorded, then use this increment to set an arbitrary timestamp
         // to preserve ordering
         // this increment is deliberately very small to prevent particularly fast fingers
         // causing ordering issues; it also helps in handling the "here document" syntax,
         // where several lines are recorded in succession without individual timestamps
-        let timestamp_increment = Duration::nanoseconds(1);
+        let timestamp_increment = Duration::milliseconds(1);
 
         // make sure there is a minimum amount of time before the first known timestamp
         // to fit all commands, given the default increment
@@ -80,17 +78,9 @@ impl Importer for Bash {
                     next_timestamp = t;
                 }
                 LineType::Command(c) => {
-                    let entry = History::new(
-                        next_timestamp,
-                        c.into(),
-                        "unknown".into(),
-                        -1,
-                        -1,
-                        None,
-                        None,
-                        None,
-                    );
-                    h.push(entry).await?;
+                    let imported = History::import().timestamp(next_timestamp).command(c);
+
+                    h.push(imported.build().into()).await?;
                     next_timestamp += timestamp_increment;
                 }
             }
@@ -107,7 +97,7 @@ enum LineType<'a> {
     Empty,
     /// A timestamp line start with a '#', followed immediately by an integer
     /// that represents seconds since UNIX epoch.
-    Timestamp(DateTime<Utc>),
+    Timestamp(OffsetDateTime),
     /// Anything else.
     Command(&'a str),
 }
@@ -127,10 +117,9 @@ impl<'a> From<&'a [u8]> for LineType<'a> {
     }
 }
 
-fn try_parse_line_as_timestamp(line: &str) -> Option<DateTime<Utc>> {
+fn try_parse_line_as_timestamp(line: &str) -> Option<OffsetDateTime> {
     let seconds = line.strip_prefix('#')?.parse().ok()?;
-    let time = NaiveDateTime::from_timestamp(seconds, 0);
-    Some(DateTime::from_utc(time, Utc))
+    OffsetDateTime::from_unix_timestamp(seconds).ok()
 }
 
 #[cfg(test)]
@@ -191,7 +180,7 @@ cd ../
             ["git reset", "git clean -dxf", "cd ../"],
         );
         assert_equal(
-            loader.buf.iter().map(|h| h.timestamp.timestamp()),
+            loader.buf.iter().map(|h| h.timestamp.unix_timestamp()),
             [1672918999, 1672919006, 1672919020],
         )
     }

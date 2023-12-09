@@ -1,15 +1,16 @@
-use std::{fs::File, io::Read, path::PathBuf};
+use std::path::PathBuf;
 
 use async_trait::async_trait;
-use chrono::{TimeZone, Utc};
 use directories::UserDirs;
 use eyre::{eyre, Result};
 use serde::Deserialize;
 
 use atuin_common::utils::uuid_v7;
+use time::OffsetDateTime;
 
 use super::{get_histpath, unix_byte_lines, Importer, Loader};
 use crate::history::History;
+use crate::import::read_to_end;
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -84,10 +85,7 @@ impl Importer for Resh {
     const NAME: &'static str = "resh";
 
     async fn new() -> Result<Self> {
-        let mut bytes = Vec::new();
-        let path = get_histpath(default_histpath)?;
-        let mut f = File::open(path)?;
-        f.read_to_end(&mut bytes)?;
+        let bytes = read_to_end(get_histpath(default_histpath)?)?;
         Ok(Self { bytes })
     }
 
@@ -110,30 +108,31 @@ impl Importer for Resh {
             #[allow(clippy::cast_sign_loss)]
             let timestamp = {
                 let secs = entry.realtime_before.floor() as i64;
-                let nanosecs = (entry.realtime_before.fract() * 1_000_000_000_f64).round() as u32;
-                Utc.timestamp(secs, nanosecs)
+                let nanosecs = (entry.realtime_before.fract() * 1_000_000_000_f64).round() as i64;
+                OffsetDateTime::from_unix_timestamp(secs)? + time::Duration::nanoseconds(nanosecs)
             };
             #[allow(clippy::cast_possible_truncation)]
             #[allow(clippy::cast_sign_loss)]
             let duration = {
                 let secs = entry.realtime_after.floor() as i64;
-                let nanosecs = (entry.realtime_after.fract() * 1_000_000_000_f64).round() as u32;
-                let difference = Utc.timestamp(secs, nanosecs) - timestamp;
-                difference.num_nanoseconds().unwrap_or(0)
+                let nanosecs = (entry.realtime_after.fract() * 1_000_000_000_f64).round() as i64;
+                let base = OffsetDateTime::from_unix_timestamp(secs)?
+                    + time::Duration::nanoseconds(nanosecs);
+                let difference = base - timestamp;
+                difference.whole_nanoseconds() as i64
             };
 
-            h.push(History {
-                id: uuid_v7().as_simple().to_string(),
-                timestamp,
-                duration,
-                exit: entry.exit_code,
-                command: entry.cmd_line,
-                cwd: entry.pwd,
-                session: uuid_v7().as_simple().to_string(),
-                hostname: entry.host,
-                deleted_at: None,
-            })
-            .await?;
+            let imported = History::import()
+                .command(entry.cmd_line)
+                .timestamp(timestamp)
+                .duration(duration)
+                .exit(entry.exit_code)
+                .cwd(entry.pwd)
+                .hostname(entry.host)
+                // CHECK: should we add uuid here? It's not set in the other importers
+                .session(uuid_v7().as_simple().to_string());
+
+            h.push(imported.build().into()).await?;
         }
 
         Ok(())

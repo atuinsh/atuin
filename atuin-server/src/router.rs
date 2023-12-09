@@ -1,7 +1,10 @@
 use async_trait::async_trait;
+use atuin_common::api::ErrorResponse;
 use axum::{
     extract::FromRequestParts,
-    response::IntoResponse,
+    http::Request,
+    middleware::Next,
+    response::{IntoResponse, Response},
     routing::{delete, get, post},
     Router,
 };
@@ -10,15 +13,22 @@ use http::request::Parts;
 use tower::ServiceBuilder;
 use tower_http::trace::TraceLayer;
 
-use super::{database::Database, handlers};
-use crate::{models::User, settings::Settings};
+use super::handlers;
+use crate::{
+    handlers::{ErrorResponseStatus, RespExt},
+    metrics,
+    settings::Settings,
+};
+use atuin_server_database::{models::User, Database, DbError};
+
+pub struct UserAuth(pub User);
 
 #[async_trait]
-impl<DB: Send + Sync> FromRequestParts<AppState<DB>> for User
+impl<DB: Send + Sync> FromRequestParts<AppState<DB>> for UserAuth
 where
     DB: Database,
 {
-    type Rejection = http::StatusCode;
+    type Rejection = ErrorResponseStatus<'static>;
 
     async fn from_request_parts(
         req: &mut Parts,
@@ -27,42 +37,67 @@ where
         let auth_header = req
             .headers
             .get(http::header::AUTHORIZATION)
-            .ok_or(http::StatusCode::FORBIDDEN)?;
-        let auth_header = auth_header
-            .to_str()
-            .map_err(|_| http::StatusCode::FORBIDDEN)?;
-        let (typ, token) = auth_header
-            .split_once(' ')
-            .ok_or(http::StatusCode::FORBIDDEN)?;
+            .ok_or_else(|| {
+                ErrorResponse::reply("missing authorization header")
+                    .with_status(http::StatusCode::BAD_REQUEST)
+            })?;
+        let auth_header = auth_header.to_str().map_err(|_| {
+            ErrorResponse::reply("invalid authorization header encoding")
+                .with_status(http::StatusCode::BAD_REQUEST)
+        })?;
+        let (typ, token) = auth_header.split_once(' ').ok_or_else(|| {
+            ErrorResponse::reply("invalid authorization header encoding")
+                .with_status(http::StatusCode::BAD_REQUEST)
+        })?;
 
         if typ != "Token" {
-            return Err(http::StatusCode::FORBIDDEN);
+            return Err(
+                ErrorResponse::reply("invalid authorization header encoding")
+                    .with_status(http::StatusCode::BAD_REQUEST),
+            );
         }
 
         let user = state
             .database
             .get_session_user(token)
             .await
-            .map_err(|_| http::StatusCode::FORBIDDEN)?;
+            .map_err(|e| match e {
+                DbError::NotFound => ErrorResponse::reply("session not found")
+                    .with_status(http::StatusCode::FORBIDDEN),
+                DbError::Other(e) => {
+                    tracing::error!(error = ?e, "could not query user session");
+                    ErrorResponse::reply("could not query user session")
+                        .with_status(http::StatusCode::INTERNAL_SERVER_ERROR)
+                }
+            })?;
 
-        Ok(user)
+        Ok(UserAuth(user))
     }
 }
 
 async fn teapot() -> impl IntoResponse {
-    (http::StatusCode::IM_A_TEAPOT, "☕")
+    (http::StatusCode::IM_A_TEAPOT, "🫖")
+}
+
+async fn clacks_overhead<B>(request: Request<B>, next: Next<B>) -> Response {
+    let mut response = next.run(request).await;
+
+    let gnu_terry_value = "GNU Terry Pratchett, Kris Nova";
+    let gnu_terry_header = "X-Clacks-Overhead";
+
+    response
+        .headers_mut()
+        .insert(gnu_terry_header, gnu_terry_value.parse().unwrap());
+    response
 }
 
 #[derive(Clone)]
-pub struct AppState<DB> {
+pub struct AppState<DB: Database> {
     pub database: DB,
-    pub settings: Settings,
+    pub settings: Settings<DB::Settings>,
 }
 
-pub fn router<DB: Database + Clone + Send + Sync + 'static>(
-    database: DB,
-    settings: Settings,
-) -> Router {
+pub fn router<DB: Database>(database: DB, settings: Settings<DB::Settings>) -> Router {
     let routes = Router::new()
         .route("/", get(handlers::index))
         .route("/sync/count", get(handlers::history::count))
@@ -71,7 +106,11 @@ pub fn router<DB: Database + Clone + Send + Sync + 'static>(
         .route("/sync/status", get(handlers::status::status))
         .route("/history", post(handlers::history::add))
         .route("/history", delete(handlers::history::delete))
+        .route("/record", post(handlers::record::post))
+        .route("/record", get(handlers::record::index))
+        .route("/record/next", get(handlers::record::next))
         .route("/user/:username", get(handlers::user::get))
+        .route("/account", delete(handlers::user::delete))
         .route("/register", post(handlers::user::register))
         .route("/login", post(handlers::user::login));
 
@@ -83,5 +122,10 @@ pub fn router<DB: Database + Clone + Send + Sync + 'static>(
     }
     .fallback(teapot)
     .with_state(AppState { database, settings })
-    .layer(ServiceBuilder::new().layer(TraceLayer::new_for_http()))
+    .layer(
+        ServiceBuilder::new()
+            .layer(axum::middleware::from_fn(clacks_overhead))
+            .layer(TraceLayer::new_for_http())
+            .layer(axum::middleware::from_fn(metrics::track_metrics)),
+    )
 }

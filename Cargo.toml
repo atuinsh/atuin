@@ -1,36 +1,51 @@
 [workspace]
-members = ["atuin", "atuin-client", "atuin-server", "atuin-common"]
+members = [
+  "atuin",
+  "atuin-client",
+  "atuin-server",
+  "atuin-server-postgres",
+  "atuin-server-database",
+  "atuin-common",
+]
 
 [workspace.package]
 name = "atuin"
-version = "14.0.1"
+version = "17.0.1"
 authors = ["Ellie Huxtable <ellie@elliehuxtable.com>"]
-rust-version = "1.59"
+rust-version = "1.67"
 license = "MIT"
 homepage = "https://atuin.sh"
-repository = "https://github.com/ellie/atuin"
+repository = "https://github.com/atuinsh/atuin"
 readme = "README.md"
 
 [workspace.dependencies]
 async-trait = "0.1.58"
 base64 = "0.21"
 log = "0.4"
-chrono = { version = "0.4", features = ["serde"] }
+time = { version = "0.3", features = [
+  "serde-human-readable",
+  "macros",
+  "local-offset",
+] }
 clap = { version = "4.0.18", features = ["derive"] }
 config = { version = "0.13", default-features = false, features = ["toml"] }
 directories = "4"
 eyre = "0.6"
 fs-err = "2.9"
-interim = { version = "0.1.0", features = ["chrono"] }
-itertools = "0.10.5"
+interim = { version = "0.1.0", features = ["time"] }
+itertools = "0.11.0"
 rand = { version = "0.8.5", features = ["std"] }
-semver = "1.0.14"
-serde = { version = "1.0.145", features = ["derive"] }
-serde_json = "1.0.86"
-sodiumoxide = "0.2.6"
+semver = "1.0.20"
+# https://github.com/serde-rs/serde/issues/2538
+# I don't trust dtolnay with our user's builds. especially as we
+# have things like encryption keys
+serde = { version = "1.0.145, <=1.0.171", features = ["derive"] }
+serde_json = "1.0.108"
 tokio = { version = "1", features = ["full"] }
-uuid = { version = "1.2", features = ["v4"] }
+uuid = { version = "1.3", features = ["v4", "serde"] }
 whoami = "1.1.2"
+typed-builder = "0.15.0"
+pretty_assertions = "1.3.0"
 
 [workspace.dependencies.reqwest]
 version = "0.11"
@@ -38,5 +53,5 @@ features = ["json", "rustls-tls-native-roots"]
 default-features = false
 
 [workspace.dependencies.sqlx]
-version = "0.6"
-features = ["runtime-tokio-rustls", "chrono", "postgres"]
+version = "0.7.3"
+features = ["runtime-tokio-rustls", "time", "postgres", "uuid"]

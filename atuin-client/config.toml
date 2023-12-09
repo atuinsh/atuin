@@ -1,13 +1,17 @@
 ## where to store your database, default is your system data directory
-## mac: ~/Library/Application Support/com.elliehuxtable.atuin/history.db
-## linux: ~/.local/share/atuin/history.db
+## linux/mac: ~/.local/share/atuin/history.db
+## windows: %USERPROFILE%/.local/share/atuin/history.db
 # db_path = "~/.history.db"
 
 ## where to store your encryption key, default is your system data directory
+## linux/mac: ~/.local/share/atuin/key
+## windows: %USERPROFILE%/.local/share/atuin/key
 # key_path = "~/.key"
 
 ## where to store your auth session token, default is your system data directory
-# session_path = "~/.key"
+## linux/mac: ~/.local/share/atuin/session
+## windows: %USERPROFILE%/.local/share/atuin/session
+# session_path = "~/.session"
 
 ## date format used, either "us" or "uk"
 # dialect = "us"
@@ -24,7 +28,7 @@
 ## how often to sync history. note that this is only triggered when a command
 ## is ran, so sync intervals may well be longer
 ## set it to 0 to sync after every command
-# sync_frequency = "1h"
+# sync_frequency = "10m"
 
 ## which search mode to use
 ## possible values: prefix, fulltext, fuzzy, skim
@@ -34,10 +38,19 @@
 ## possible values: global, host, session, directory
 # filter_mode = "global"
 
+## With workspace filtering enabled, Atuin will filter for commands executed
+## in any directory within a git repositiry tree (default: false)
+# workspaces = false
+
 ## which filter mode to use when atuin is invoked from a shell up-key binding
 ## the accepted values are identical to those of "filter_mode"
 ## leave unspecified to use same mode set in "filter_mode"
-# filter_mode_shell_up_keybinding = "global"
+# filter_mode_shell_up_key_binding = "global"
+
+## which search mode to use when atuin is invoked from a shell up-key binding
+## the accepted values are identical to those of "search_mode"
+## leave unspecified to use same mode set in "search_mode"
+# search_mode_shell_up_key_binding = "fuzzy"
 
 ## which style to use
 ## possible values: auto, full, compact
@@ -46,6 +59,9 @@
 ## the maximum number of lines the interface should take up
 ## set it to 0 to always go full screen
 # inline_height = 0
+
+## Invert the UI - put the search bar at the top , Default to `false`
+# invert = false
 
 ## enable or disable showing a preview of the selected command
 ## useful when the command is longer than the terminal width and is cut off
@@ -64,6 +80,10 @@
 ## number of context lines to show when scrolling by pages
 # scroll_context_lines = 1
 
+## use ctrl instead of alt as the shortcut modifier key for numerical UI shortcuts
+## alt-0 .. alt-9
+# ctrl_n_shortcuts = false
+
 ## prevent commands matching any of these regexes from being written to history.
 ## Note that these regular expressions are unanchored, i.e. if they don't start
 ## with ^ or end with $, they'll match anywhere in the command.
@@ -76,9 +96,46 @@
 
 ## prevent commands run with cwd matching any of these regexes from being written
 ## to history. Note that these regular expressions are unanchored, i.e. if they don't
-## start with ^ or end with $, they'll match anyware in CWD.
+## start with ^ or end with $, they'll match anywhere in CWD.
 ## For details on the supported regular expression syntax, see
 ## https://docs.rs/regex/latest/regex/#syntax
 # cwd_filter = [
 #   "^/very/secret/area"
 # ]
+
+## Configure the maximum height of the preview to show.
+## Useful when you have long scripts in your history that you want to distinguish
+## by more than the first few lines.
+# max_preview_height = 4
+
+## Configure whether or not to show the help row, which includes the current Atuin
+## version (and whether an update is available), a keymap hint, and the total
+## amount of commands in your history.
+# show_help = true
+
+## Defaults to true. This matches history against a set of default regex, and will not save it if we get a match. Defaults include
+## 1. AWS key id
+## 2. Github pat (old and new)
+## 3. Slack oauth tokens (bot, user)
+## 4. Slack webhooks
+## 5. Stripe live/test keys
+# secrets_filter = true
+
+## Defaults to true. If enabled, upon hitting enter Atuin will immediately execute the command. Press tab to return to the shell and edit.
+# This applies for new installs. Old installs will keep the old behaviour unless configured otherwise.
+enter_accept = true
+
+#[stats]
+# Set commands where we should consider the subcommand for statistics. Eg, kubectl get vs just kubectl
+#common_subcommands = [
+#  "cargo",
+#  "go",
+#  "git",
+#  "npm",
+#  "yarn",
+#  "pnpm",
+#  "kubectl",
+#]
+# 
+# Set commands that should be totally stripped and ignored from stats
+#common_prefix = ["sudo"]

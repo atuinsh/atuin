@@ -1,18 +1,20 @@
 use std::time::Duration;
 
-use crate::ratatui::{
+use atuin_client::history::History;
+use ratatui::{
     buffer::Buffer,
     layout::Rect,
     style::{Color, Modifier, Style},
     widgets::{Block, StatefulWidget, Widget},
 };
-use atuin_client::history::History;
+use time::OffsetDateTime;
 
 use super::format_duration;
 
 pub struct HistoryList<'a> {
     history: &'a [History],
     block: Option<Block<'a>>,
+    inverted: bool,
 }
 
 #[derive(Default)]
@@ -61,6 +63,7 @@ impl<'a> StatefulWidget for HistoryList<'a> {
             x: 0,
             y: 0,
             state,
+            inverted: self.inverted,
         };
 
         for item in self.history.iter().skip(state.offset).take(end - start) {
@@ -77,10 +80,11 @@ impl<'a> StatefulWidget for HistoryList<'a> {
 }
 
 impl<'a> HistoryList<'a> {
-    pub fn new(history: &'a [History]) -> Self {
+    pub fn new(history: &'a [History], inverted: bool) -> Self {
         Self {
             history,
             block: None,
+            inverted,
         }
     }
 
@@ -110,6 +114,7 @@ struct DrawState<'a> {
     x: u16,
     y: u16,
     state: &'a ListState,
+    inverted: bool,
 }
 
 // longest line prefix I could come up with
@@ -147,8 +152,8 @@ impl DrawState<'_> {
         // would fail.
         // If the timestamp would otherwise be in the future, display
         // the time since as 0.
-        let since = chrono::Utc::now() - h.timestamp;
-        let time = format_duration(since.to_std().unwrap_or_default());
+        let since = OffsetDateTime::now_utc() - h.timestamp;
+        let time = format_duration(since.try_into().unwrap_or_default());
 
         // pad the time a little bit before we write. this aligns things nicely
         self.x = PREFIX_LENGTH - 4 - time.len() as u16;
@@ -176,7 +181,13 @@ impl DrawState<'_> {
 
     fn draw(&mut self, s: &str, style: Style) {
         let cx = self.list_area.left() + self.x;
-        let cy = self.list_area.bottom() - self.y - 1;
+
+        let cy = if self.inverted {
+            self.list_area.top() + self.y
+        } else {
+            self.list_area.bottom() - self.y - 1
+        };
+
         let w = (self.list_area.width - self.x) as usize;
         self.x += self.buf.set_stringn(cx, cy, s, w, style).0 - cx;
     }

@@ -1,15 +1,16 @@
 // import old shell history!
 // automatically hoover up all that we can find
 
-use std::{fs::File, io::Read, path::PathBuf};
+use std::path::PathBuf;
 
 use async_trait::async_trait;
-use chrono::{prelude::*, Utc};
 use directories::BaseDirs;
 use eyre::{eyre, Result};
+use time::OffsetDateTime;
 
 use super::{unix_byte_lines, Importer, Loader};
 use crate::history::History;
+use crate::import::read_to_end;
 
 #[derive(Debug)]
 pub struct Fish {
@@ -48,9 +49,7 @@ impl Importer for Fish {
     const NAME: &'static str = "fish";
 
     async fn new() -> Result<Self> {
-        let mut bytes = Vec::new();
-        let mut f = File::open(default_histpath()?)?;
-        f.read_to_end(&mut bytes)?;
+        let bytes = read_to_end(default_histpath()?)?;
         Ok(Self { bytes })
     }
 
@@ -59,8 +58,8 @@ impl Importer for Fish {
     }
 
     async fn load(self, loader: &mut impl Loader) -> Result<()> {
-        let now = Utc::now();
-        let mut time: Option<DateTime<Utc>> = None;
+        let now = OffsetDateTime::now_utc();
+        let mut time: Option<OffsetDateTime> = None;
         let mut cmd: Option<String> = None;
 
         for b in unix_byte_lines(&self.bytes) {
@@ -73,19 +72,9 @@ impl Importer for Fish {
                 // first, we must deal with the prev cmd
                 if let Some(cmd) = cmd.take() {
                     let time = time.unwrap_or(now);
+                    let entry = History::import().timestamp(time).command(cmd);
 
-                    loader
-                        .push(History::new(
-                            time,
-                            cmd,
-                            "unknown".into(),
-                            -1,
-                            -1,
-                            None,
-                            None,
-                            None,
-                        ))
-                        .await?;
+                    loader.push(entry.build().into()).await?;
                 }
 
                 // using raw strings to avoid needing escaping.
@@ -99,7 +88,7 @@ impl Importer for Fish {
             } else if let Some(t) = s.strip_prefix("  when: ") {
                 // if t is not an int, just ignore this line
                 if let Ok(t) = t.parse::<i64>() {
-                    time = Some(Utc.timestamp(t, 0));
+                    time = Some(OffsetDateTime::from_unix_timestamp(t)?);
                 }
             } else {
                 // ... ignore paths lines
@@ -109,19 +98,9 @@ impl Importer for Fish {
         // we might have a trailing cmd
         if let Some(cmd) = cmd.take() {
             let time = time.unwrap_or(now);
+            let entry = History::import().timestamp(time).command(cmd);
 
-            loader
-                .push(History::new(
-                    time,
-                    cmd,
-                    "unknown".into(),
-                    -1,
-                    -1,
-                    None,
-                    None,
-                    None,
-                ))
-                .await?;
+            loader.push(entry.build().into()).await?;
         }
 
         Ok(())
@@ -184,7 +163,7 @@ ERROR
             ($timestamp:expr, $command:expr) => {
                 let h = history.next().expect("missing entry in history");
                 assert_eq!(h.command.as_str(), $command);
-                assert_eq!(h.timestamp.timestamp(), $timestamp);
+                assert_eq!(h.timestamp.unix_timestamp(), $timestamp);
             };
         }
 

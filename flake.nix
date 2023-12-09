@@ -17,7 +17,7 @@
       pkgs = nixpkgs.outputs.legacyPackages.${system};
     in {
       packages.atuin = pkgs.callPackage ./atuin.nix {
-        inherit (pkgs.darwin.apple_sdk.frameworks) Security SystemConfiguration;
+        inherit (pkgs.darwin.apple_sdk.frameworks) Security SystemConfiguration AppKit;
       };
       packages.default = self.outputs.packages.${system}.atuin;
 
@@ -31,5 +31,10 @@
           ];
         RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";
       });
-    });
+    })
+    // {
+      overlays.default = final: prev: {
+        inherit (self.packages.${final.system}) atuin;
+      };
+    };
 }

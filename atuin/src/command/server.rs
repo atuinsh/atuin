@@ -1,11 +1,12 @@
+use atuin_server_postgres::Postgres;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 use clap::Parser;
 use eyre::{Context, Result};
 
-use atuin_server::{launch, settings::Settings};
+use atuin_server::{example_config, launch, launch_metrics_server, Settings};
 
-#[derive(Parser)]
+#[derive(Parser, Debug)]
 #[clap(infer_subcommands = true)]
 pub enum Cmd {
     /// Start the server
@@ -18,6 +19,9 @@ pub enum Cmd {
         #[clap(long, short)]
         port: Option<u16>,
     },
+
+    /// Print server example configuration
+    DefaultConfig,
 }
 
 impl Cmd {
@@ -28,16 +32,26 @@ impl Cmd {
             .with(EnvFilter::from_default_env())
             .init();
 
-        let settings = Settings::new().wrap_err("could not load server settings")?;
+        tracing::trace!(command = ?self, "server command");
 
         match self {
             Self::Start { host, port } => {
-                let host = host
-                    .as_ref()
-                    .map_or(settings.host.clone(), std::string::ToString::to_string);
-                let port = port.map_or(settings.port, |p| p);
+                let settings = Settings::new().wrap_err("could not load server settings")?;
+                let host = host.as_ref().unwrap_or(&settings.host).clone();
+                let port = port.unwrap_or(settings.port);
 
-                launch(settings, host, port).await
+                if settings.metrics.enable {
+                    tokio::spawn(launch_metrics_server(
+                        settings.metrics.host.clone(),
+                        settings.metrics.port,
+                    ));
+                }
+
+                launch::<Postgres>(settings, &host, port).await
+            }
+            Self::DefaultConfig => {
+                println!("{}", example_config());
+                Ok(())
             }
         }
     }

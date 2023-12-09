@@ -1,14 +1,17 @@
 use clap::Subcommand;
 use eyre::{Result, WrapErr};
 
-use atuin_client::{database::Database, settings::Settings};
+use atuin_client::{
+    database::Database,
+    record::{store::Store, sync},
+    settings::Settings,
+};
 
-mod login;
-mod logout;
-mod register;
 mod status;
 
-#[derive(Subcommand)]
+use crate::command::client::account;
+
+#[derive(Subcommand, Debug)]
 #[command(infer_subcommands = true)]
 pub enum Cmd {
     /// Sync with the configured server
@@ -19,13 +22,13 @@ pub enum Cmd {
     },
 
     /// Login to the configured server
-    Login(login::Cmd),
+    Login(account::login::Cmd),
 
     /// Log out
     Logout,
 
     /// Register with the configured server
-    Register(register::Cmd),
+    Register(account::register::Cmd),
 
     /// Print the encryption key for transfer to another machine
     Key {
@@ -38,11 +41,16 @@ pub enum Cmd {
 }
 
 impl Cmd {
-    pub async fn run(self, settings: Settings, db: &mut impl Database) -> Result<()> {
+    pub async fn run(
+        self,
+        settings: Settings,
+        db: &impl Database,
+        store: &mut (impl Store + Send + Sync),
+    ) -> Result<()> {
         match self {
-            Self::Sync { force } => run(&settings, force, db).await,
+            Self::Sync { force } => run(&settings, force, db, store).await,
             Self::Login(l) => l.run(&settings).await,
-            Self::Logout => logout::run(&settings),
+            Self::Logout => account::logout::run(&settings),
             Self::Register(r) => r.run(&settings).await,
             Self::Status => status::run(&settings, db).await,
             Self::Key { base64 } => {
@@ -63,12 +71,26 @@ impl Cmd {
     }
 }
 
-async fn run(settings: &Settings, force: bool, db: &mut impl Database) -> Result<()> {
+async fn run(
+    settings: &Settings,
+    force: bool,
+    db: &impl Database,
+    store: &mut (impl Store + Send + Sync),
+) -> Result<()> {
+    let (diff, remote_index) = sync::diff(settings, store).await?;
+    let operations = sync::operations(diff, store).await?;
+    let (uploaded, downloaded) =
+        sync::sync_remote(operations, &remote_index, store, settings).await?;
+
+    println!("{uploaded}/{downloaded} up/down to record store");
+
     atuin_client::sync::sync(settings, force, db).await?;
+
     println!(
-        "Sync complete! {} items in database, force: {}",
-        db.history_count().await?,
+        "Sync complete! {} items in history database, force: {}",
+        db.history_count(true).await?,
         force
     );
+
     Ok(())
 }

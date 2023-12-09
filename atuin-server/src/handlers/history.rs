@@ -1,25 +1,31 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, convert::TryFrom};
 
 use axum::{
     extract::{Path, Query, State},
+    http::HeaderMap,
     Json,
 };
 use http::StatusCode;
+use metrics::counter;
+use time::{Month, UtcOffset};
 use tracing::{debug, error, instrument};
 
 use super::{ErrorResponse, ErrorResponseStatus, RespExt};
 use crate::{
+    router::{AppState, UserAuth},
+    utils::client_version_min,
+};
+use atuin_server_database::{
     calendar::{TimePeriod, TimePeriodInfo},
-    database::Database,
-    models::{NewHistory, User},
-    router::AppState,
+    models::NewHistory,
+    Database,
 };
 
 use atuin_common::api::*;
 
 #[instrument(skip_all, fields(user.id = user.id))]
 pub async fn count<DB: Database>(
-    user: User,
+    UserAuth(user): UserAuth,
     state: State<AppState<DB>>,
 ) -> Result<Json<CountResponse>, ErrorResponseStatus<'static>> {
     let db = &state.0.database;
@@ -40,17 +46,36 @@ pub async fn count<DB: Database>(
 #[instrument(skip_all, fields(user.id = user.id))]
 pub async fn list<DB: Database>(
     req: Query<SyncHistoryRequest>,
-    user: User,
+    UserAuth(user): UserAuth,
+    headers: HeaderMap,
     state: State<AppState<DB>>,
 ) -> Result<Json<SyncHistoryResponse>, ErrorResponseStatus<'static>> {
     let db = &state.0.database;
+
+    let agent = headers
+        .get("user-agent")
+        .map_or("", |v| v.to_str().unwrap_or(""));
+
+    let variable_page_size = client_version_min(agent, ">=15.0.0").unwrap_or(false);
+
+    let page_size = if variable_page_size {
+        state.settings.page_size
+    } else {
+        100
+    };
+
+    if req.sync_ts.unix_timestamp_nanos() < 0 || req.history_ts.unix_timestamp_nanos() < 0 {
+        error!("client asked for history from < epoch 0");
+        counter!("atuin_history_epoch_before_zero", 1);
+
+        return Err(
+            ErrorResponse::reply("asked for history from before epoch 0")
+                .with_status(StatusCode::BAD_REQUEST),
+        );
+    }
+
     let history = db
-        .list_history(
-            &user,
-            req.sync_ts.naive_utc(),
-            req.history_ts.naive_utc(),
-            &req.host,
-        )
+        .list_history(&user, req.sync_ts, req.history_ts, &req.host, page_size)
         .await;
 
     if let Err(e) = history {
@@ -71,12 +96,14 @@ pub async fn list<DB: Database>(
         user.id
     );
 
+    counter!("atuin_history_returned", history.len() as u64);
+
     Ok(Json(SyncHistoryResponse { history }))
 }
 
 #[instrument(skip_all, fields(user.id = user.id))]
 pub async fn delete<DB: Database>(
-    user: User,
+    UserAuth(user): UserAuth,
     state: State<AppState<DB>>,
     Json(req): Json<DeleteHistoryRequest>,
 ) -> Result<Json<MessageResponse>, ErrorResponseStatus<'static>> {
@@ -98,25 +125,46 @@ pub async fn delete<DB: Database>(
 
 #[instrument(skip_all, fields(user.id = user.id))]
 pub async fn add<DB: Database>(
-    user: User,
+    UserAuth(user): UserAuth,
     state: State<AppState<DB>>,
     Json(req): Json<Vec<AddHistoryRequest>>,
 ) -> Result<(), ErrorResponseStatus<'static>> {
-    debug!("request to add {} history items", req.len());
+    let State(AppState { database, settings }) = state;
 
-    let history: Vec<NewHistory> = req
+    debug!("request to add {} history items", req.len());
+    counter!("atuin_history_uploaded", req.len() as u64);
+
+    let mut history: Vec<NewHistory> = req
         .into_iter()
         .map(|h| NewHistory {
             client_id: h.id,
             user_id: user.id,
             hostname: h.hostname,
-            timestamp: h.timestamp.naive_utc(),
+            timestamp: h.timestamp,
             data: h.data,
         })
         .collect();
 
-    let db = &state.0.database;
-    if let Err(e) = db.add_history(&history).await {
+    history.retain(|h| {
+        // keep if within limit, or limit is 0 (unlimited)
+        let keep = h.data.len() <= settings.max_history_length || settings.max_history_length == 0;
+
+        // Don't return an error here. We want to insert as much of the
+        // history list as we can, so log the error and continue going.
+        if !keep {
+            counter!("atuin_history_too_long", 1);
+
+            tracing::warn!(
+                "history too long, got length {}, max {}",
+                h.data.len(),
+                settings.max_history_length
+            );
+        }
+
+        keep
+    });
+
+    if let Err(e) = database.add_history(&history).await {
         error!("failed to add history: {}", e);
 
         return Err(ErrorResponse::reply("failed to add history")
@@ -126,47 +174,65 @@ pub async fn add<DB: Database>(
     Ok(())
 }
 
+#[derive(serde::Deserialize, Debug)]
+pub struct CalendarQuery {
+    #[serde(default = "serde_calendar::zero")]
+    year: i32,
+    #[serde(default = "serde_calendar::one")]
+    month: u8,
+
+    #[serde(default = "serde_calendar::utc")]
+    tz: UtcOffset,
+}
+
+mod serde_calendar {
+    use time::UtcOffset;
+
+    pub fn zero() -> i32 {
+        0
+    }
+
+    pub fn one() -> u8 {
+        1
+    }
+
+    pub fn utc() -> UtcOffset {
+        UtcOffset::UTC
+    }
+}
+
 #[instrument(skip_all, fields(user.id = user.id))]
 pub async fn calendar<DB: Database>(
     Path(focus): Path<String>,
-    Query(params): Query<HashMap<String, u64>>,
-    user: User,
+    Query(params): Query<CalendarQuery>,
+    UserAuth(user): UserAuth,
     state: State<AppState<DB>>,
 ) -> Result<Json<HashMap<u64, TimePeriodInfo>>, ErrorResponseStatus<'static>> {
     let focus = focus.as_str();
 
-    let year = params.get("year").unwrap_or(&0);
-    let month = params.get("month").unwrap_or(&1);
+    let year = params.year;
+    let month = Month::try_from(params.month).map_err(|e| ErrorResponseStatus {
+        error: ErrorResponse {
+            reason: e.to_string().into(),
+        },
+        status: http::StatusCode::BAD_REQUEST,
+    })?;
+
+    let period = match focus {
+        "year" => TimePeriod::Year,
+        "month" => TimePeriod::Month { year },
+        "day" => TimePeriod::Day { year, month },
+        _ => {
+            return Err(ErrorResponse::reply("invalid focus: use year/month/day")
+                .with_status(StatusCode::BAD_REQUEST))
+        }
+    };
 
     let db = &state.0.database;
-    let focus = match focus {
-        "year" => db
-            .calendar(&user, TimePeriod::YEAR, *year, *month)
-            .await
-            .map_err(|_| {
-                ErrorResponse::reply("failed to query calendar")
-                    .with_status(StatusCode::INTERNAL_SERVER_ERROR)
-            }),
-
-        "month" => db
-            .calendar(&user, TimePeriod::MONTH, *year, *month)
-            .await
-            .map_err(|_| {
-                ErrorResponse::reply("failed to query calendar")
-                    .with_status(StatusCode::INTERNAL_SERVER_ERROR)
-            }),
-
-        "day" => db
-            .calendar(&user, TimePeriod::DAY, *year, *month)
-            .await
-            .map_err(|_| {
-                ErrorResponse::reply("failed to query calendar")
-                    .with_status(StatusCode::INTERNAL_SERVER_ERROR)
-            }),
-
-        _ => Err(ErrorResponse::reply("invalid focus: use year/month/day")
-            .with_status(StatusCode::BAD_REQUEST)),
-    }?;
+    let focus = db.calendar(&user, period, params.tz).await.map_err(|_| {
+        ErrorResponse::reply("failed to query calendar")
+            .with_status(StatusCode::INTERNAL_SERVER_ERROR)
+    })?;
 
     Ok(Json(focus))
 }

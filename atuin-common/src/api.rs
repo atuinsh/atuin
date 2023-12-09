@@ -1,6 +1,6 @@
-use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
+use time::OffsetDateTime;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UserResponse {
@@ -20,6 +20,9 @@ pub struct RegisterResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct DeleteUserResponse {}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct LoginRequest {
     pub username: String,
     pub password: String,
@@ -33,7 +36,8 @@ pub struct LoginResponse {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AddHistoryRequest {
     pub id: String,
-    pub timestamp: chrono::DateTime<Utc>,
+    #[serde(with = "time::serde::rfc3339")]
+    pub timestamp: OffsetDateTime,
     pub data: String,
     pub hostname: String,
 }
@@ -45,8 +49,10 @@ pub struct CountResponse {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SyncHistoryRequest {
-    pub sync_ts: chrono::DateTime<chrono::FixedOffset>,
-    pub history_ts: chrono::DateTime<chrono::FixedOffset>,
+    #[serde(with = "time::serde::rfc3339")]
+    pub sync_ts: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339")]
+    pub history_ts: OffsetDateTime,
     pub host: String,
 }
 
@@ -64,6 +70,7 @@ pub struct ErrorResponse<'a> {
 pub struct IndexResponse {
     pub homage: String,
     pub version: String,
+    pub total_history: i64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -71,6 +78,12 @@ pub struct StatusResponse {
     pub count: i64,
     pub username: String,
     pub deleted: Vec<String>,
+
+    // These could/should also go on the index of the server
+    // However, we do not request the server index as a part of normal sync
+    // I'd rather slightly increase the size of this response, than add an extra HTTP request
+    pub page_size: i64, // max page size supported by the server
+    pub version: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

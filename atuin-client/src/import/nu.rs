@@ -1,14 +1,16 @@
 // import old shell history!
 // automatically hoover up all that we can find
 
-use std::{fs::File, io::Read, path::PathBuf};
+use std::path::PathBuf;
 
 use async_trait::async_trait;
 use directories::BaseDirs;
 use eyre::{eyre, Result};
+use time::OffsetDateTime;
 
 use super::{unix_byte_lines, Importer, Loader};
 use crate::history::History;
+use crate::import::read_to_end;
 
 #[derive(Debug)]
 pub struct Nu {
@@ -32,10 +34,7 @@ impl Importer for Nu {
     const NAME: &'static str = "nu";
 
     async fn new() -> Result<Self> {
-        let mut bytes = Vec::new();
-        let path = get_histpath()?;
-        let mut f = File::open(path)?;
-        f.read_to_end(&mut bytes)?;
+        let bytes = read_to_end(get_histpath()?)?;
         Ok(Self { bytes })
     }
 
@@ -44,7 +43,7 @@ impl Importer for Nu {
     }
 
     async fn load(self, h: &mut impl Loader) -> Result<()> {
-        let now = chrono::Utc::now();
+        let now = OffsetDateTime::now_utc();
 
         let mut counter = 0;
         for b in unix_byte_lines(&self.bytes) {
@@ -55,20 +54,12 @@ impl Importer for Nu {
 
             let cmd: String = s.replace("<\\n>", "\n");
 
-            let offset = chrono::Duration::nanoseconds(counter);
+            let offset = time::Duration::nanoseconds(counter);
             counter += 1;
 
-            h.push(History::new(
-                now - offset, // preserve ordering
-                cmd,
-                String::from("unknown"),
-                -1,
-                -1,
-                None,
-                None,
-                None,
-            ))
-            .await?;
+            let entry = History::import().timestamp(now - offset).command(cmd);
+
+            h.push(entry.build().into()).await?;
         }
 
         Ok(())

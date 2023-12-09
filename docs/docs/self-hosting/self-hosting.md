@@ -4,7 +4,7 @@ title: Self Hosting
 
 While we offer a public sync server, and cannot view your data (as it is encrypted), you may still wish to self host your own Atuin sync server.
 
-The requirements to do so are pretty minimal! You need to be able to run a binary or docker container, and have a PostgreSQL database setup.
+The requirements to do so are pretty minimal! You need to be able to run a binary or docker container, and have a PostgreSQL database setup. Atuin requires PostgreSQL 14 or above.
 
 ## Configuration
 
@@ -34,7 +34,7 @@ ATUIN_DB_URI="postgres://user:password@hostname/database"
 | Parameter           | Description                                                                   |
 | ------------------- | ----------------------------------------------------------------------------- |
 | `host`              | The host to listen on (default: 127.0.0.1)                                    |
-| `port`              | The port to listen on (default: 8888)                                         |
+| `port`              | The TCP port to listen on (default: 8888)                                         |
 | `open_registration` | If `true`, accept new user registrations (default: false)                     |
 | `db_uri`            | A valid PostgreSQL URI, for saving history (default: false)                   |
 | `path`              | A path to prepend to all routes of the server (default: false)                |

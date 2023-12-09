@@ -1,3 +1,5 @@
+use std::fs::File;
+use std::io::Read;
 use std::path::PathBuf;
 
 use async_trait::async_trait;
@@ -74,6 +76,12 @@ where
     }
 }
 
+fn read_to_end(path: PathBuf) -> Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    let mut f = File::open(path)?;
+    f.read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
 fn is_file(p: PathBuf) -> Result<PathBuf> {
     if p.is_file() {
         Ok(p)
