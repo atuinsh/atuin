@@ -27,7 +27,7 @@ time = { version = "0.3", features = [
   "macros",
   "local-offset",
 ] }
-clap = { version = "4.0.18", features = ["derive"] }
+clap = { version = "4.4.11", features = ["derive"] }
 config = { version = "0.13", default-features = false, features = ["toml"] }
 directories = "4"
 eyre = "0.6"
