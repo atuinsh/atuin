@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [unreleased]
+## [17.1.0] - 2023-12-10
 
 ### Bug Fixes
 
@@ -40,6 +40,7 @@ All notable changes to this project will be documented in this file.
 - Run dependabot weekly, not daily ([#1423](https://github.com/atuinsh/atuin/issues/1423))
 - Don't group deps ([#1424](https://github.com/atuinsh/atuin/issues/1424))
 - Add contributor image to README ([#1430](https://github.com/atuinsh/atuin/issues/1430))
+- Setup git cliff ([#1431](https://github.com/atuinsh/atuin/issues/1431))
 
 ## [17.0.1] - 2023-10-28
 
