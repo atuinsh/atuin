@@ -304,5 +304,13 @@ Add to `config.nu`:
 source ~/.local/share/atuin/init.nu
 ```
 
+# Contributors
+
+<a href="https://github.com/atuinsh/atuin/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=atuinsh/atuin&max=300" />
+</a>
+
+Made with [contrib.rocks](https://contrib.rocks).
+
 [English]: ./README.md
 [简体中文]: ./docs/zh-CN/README.md
