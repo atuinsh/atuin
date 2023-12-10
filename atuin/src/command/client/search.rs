@@ -104,6 +104,18 @@ pub struct Cmd {
 
 impl Cmd {
     pub async fn run(self, db: impl Database, settings: &mut Settings) -> Result<()> {
+        if (self.delete_it_all || self.delete) && self.limit.is_some() {
+            // Because of how deletion is implemented, it will always delete all matches
+            // and disregard the limit option. It is also not clear what deletion with a
+            // limit would even mean. Deleting the LIMIT most recent entries that match
+            // the search query would make sense, but that wouldn't match what's displayed
+            // when running the equivalent search, but deleting those entries that are
+            // displayed with the search would leave any duplicates of those lines which may
+            // or may not have been intended to be deleted.
+            println!("\"--limit\" is not compatible with deletion.");
+            return Ok(());
+        }
+
         if self.delete && self.query.is_empty() {
             println!("Please specify a query to match the items you wish to delete. If you wish to delete all history, pass --delete-it-all");
             return Ok(());
