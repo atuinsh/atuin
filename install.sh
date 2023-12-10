@@ -35,7 +35,7 @@ LATEST_RELEASE=$(curl -L -s -H 'Accept: application/json' https://github.com/atu
 # shellcheck disable=SC2001
 LATEST_VERSION=$(echo "$LATEST_RELEASE" | sed -e 's/.*"tag_name":"\([^"]*\)".*/\1/')
 # For binary install, use the first argument as the installation directory.
-INSTALL_DIRECTORY=${1:-/usr/local/bin}
+INSTALL_DIR=${INSTALL_DIR:-/usr/local/bin}
 
 __atuin_install_arch(){
 	echo "Arch Linux detected!"
@@ -157,7 +157,9 @@ __atuin_install_cargo(){
 
 __atuin_install_binary() {
     local target
-    local arch=$(uname -sm)
+    local arch
+
+    arch=$(uname -sm)
 
     case $arch in
     "Linux x86_64")
@@ -178,17 +180,27 @@ __atuin_install_binary() {
         ;;
     esac
 
-    local latest_version=$(curl -s https://api.github.com/repos/atuinsh/atuin/releases/latest | grep tag_name  | grep -Eo "v[0-9]+\.[0-9]+\.[0-9]+")
-    local archive_name=atuin-$latest_version-$target
-    local binary_url="https://github.com/atuinsh/atuin/releases/download/v17.0.1/$archive_name.tar.gz"
+    local latest_version
+    local archive_name
+    local binary_url
+    local download_dir
+    local dir_usr
+
+    latest_version=$(curl -s https://api.github.com/repos/atuinsh/atuin/releases/latest | grep tag_name  | grep -Eo "v[0-9]+\.[0-9]+\.[0-9]+")
+    archive_name=atuin-$latest_version-$target
+    binary_url="https://github.com/atuinsh/atuin/releases/download/$latest_version/$archive_name.tar.gz"
     download_dir=$(mktemp -d)
     echo "Downloading atuin $latest_version from the latest github release..."
-    curl -s -L $binary_url | tar -xz -C $download_dir -f -
-    echo "Copying atuin binary to to $INSTALL_DIRECTORY ..."
-    local dir_usr=$(stat -c "%U" $INSTALL_DIRECTORY)
-    sudo -u $dir_usr mkdir -p $INSTALL_DIRECTORY
-    sudo -u $dir_usr mv $download_dir/$archive_name/atuin $INSTALL_DIRECTORY/
-    rm -r $download_dir
+    curl -s -L "$binary_url" | tar -xz -C "$download_dir" -f -
+    echo "Copying atuin binary to to $INSTALL_DIR ..."
+    if [[ "$OSTYPE" == darwin* ]]; then
+        dir_usr=$(stat -f "%Su" "$INSTALL_DIR")
+    else
+        dir_usr=$(stat -c "%U" "$INSTALL_DIR")
+    fi
+    sudo -u "$dir_usr" mkdir -p "$INSTALL_DIR"
+    sudo -u "$dir_usr" mv "$download_dir/$archive_name/atuin" "$INSTALL_DIR/"
+    rm -r "$download_dir"
 }
 
 __atuin_install_unsupported(){
