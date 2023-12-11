@@ -145,18 +145,30 @@ pub enum WordJumpMode {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct Stats {
+    #[serde(default = "Stats::common_prefix_default")]
     pub common_prefix: Vec<String>, // sudo, etc. commands we want to strip off
+    #[serde(default = "Stats::common_subcommands_default")]
     pub common_subcommands: Vec<String>, // kubectl, commands we should consider subcommands for
+}
+
+impl Stats {
+    fn common_prefix_default() -> Vec<String> {
+        vec!["sudo", "doas"].into_iter().map(String::from).collect()
+    }
+
+    fn common_subcommands_default() -> Vec<String> {
+        vec!["cargo", "go", "git", "npm", "yarn", "pnpm", "kubectl"]
+            .into_iter()
+            .map(String::from)
+            .collect()
+    }
 }
 
 impl Default for Stats {
     fn default() -> Self {
         Self {
-            common_prefix: vec!["sudo", "doas"].into_iter().map(String::from).collect(),
-            common_subcommands: vec!["cargo", "go", "git", "npm", "yarn", "pnpm", "kubectl"]
-                .into_iter()
-                .map(String::from)
-                .collect(),
+            common_prefix: Self::common_prefix_default(),
+            common_subcommands: Self::common_subcommands_default(),
         }
     }
 }
