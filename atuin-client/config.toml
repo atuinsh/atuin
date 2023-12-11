@@ -39,7 +39,7 @@
 # filter_mode = "global"
 
 ## With workspace filtering enabled, Atuin will filter for commands executed
-## in any directory within a git repositiry tree (default: false)
+## in any directory within a git repository tree (default: false)
 # workspaces = false
 
 ## which filter mode to use when atuin is invoked from a shell up-key binding
