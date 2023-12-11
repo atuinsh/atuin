@@ -52,8 +52,20 @@ pub enum Cmd {
 }
 
 impl Cmd {
-    #[tokio::main(flavor = "current_thread")]
-    pub async fn run(self) -> Result<()> {
+    pub fn run(self) -> Result<()> {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        let res = runtime.block_on(self.run_inner());
+
+        runtime.shutdown_timeout(std::time::Duration::from_millis(50));
+
+        res
+    }
+
+    async fn run_inner(self) -> Result<()> {
         Builder::new()
             .filter_level(log::LevelFilter::Off)
             .parse_env("ATUIN_LOG")
