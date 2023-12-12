@@ -88,7 +88,13 @@ I wanted to. And I **really** don't want to.
  
 ## Community
 
-Atuin has a community Discord, available [here](https://discord.gg/Fq8bJSKPHh)
+### Forum
+
+Atuin has a community forum, please ask here for help and support: https://forum.atuin.sh/
+
+### Discord
+
+Atuin also has a community Discord, available [here](https://discord.gg/Fq8bJSKPHh)
 
 # Quickstart
   
