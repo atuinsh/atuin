@@ -2,8 +2,8 @@
 // Multiple stores of multiple types are all stored in one chonky table (for now), and we just index
 // by tag/host
 
+use std::path::Path;
 use std::str::FromStr;
-use std::{collections::HashMap, path::Path};
 
 use async_trait::async_trait;
 use eyre::{eyre, Result};
@@ -227,22 +227,14 @@ impl Store for SqliteStore {
         Ok(status)
     }
 
-    async fn all_tagged(&self, tag: &str) -> Result<HashMap<HostId, Record<EncryptedData>>> {
-        let res = sqlx::query("select * from store where idx = 0 and tag = ?1")
+    async fn all_tagged(&self, tag: &str) -> Result<Vec<Record<EncryptedData>>> {
+        let res = sqlx::query("select * from store where tag = ?1 order by timestamp asc")
             .bind(tag)
             .map(Self::query_row)
             .fetch_all(&self.pool)
             .await?;
 
-        let mut ret = HashMap::new();
-
-        for i in res {
-            assert!(ret.get(&i.host.id).is_none());
-
-            ret.insert(i.host.id, i);
-        }
-
-        Ok(ret)
+        Ok(res)
     }
 }
 

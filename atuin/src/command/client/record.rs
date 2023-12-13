@@ -39,17 +39,19 @@ impl Cmd {
                 println!("\t\tidx: {idx}");
 
                 if let Some(first) = first {
-                    println!("\t\tfirst: {}", first.id.0.as_hyphenated().to_string());
+                    println!("\t\tfirst: {}", first.id.0.as_hyphenated());
 
-                    let time = OffsetDateTime::from_unix_timestamp_nanos(first.timestamp as i128)?;
-                    println!("\t\t\tcreated: {}", time.to_string());
+                    let time =
+                        OffsetDateTime::from_unix_timestamp_nanos(i128::from(first.timestamp))?;
+                    println!("\t\t\tcreated: {time}");
                 }
 
                 if let Some(last) = last {
-                    println!("\t\tlast: {}", last.id.0.as_hyphenated().to_string());
+                    println!("\t\tlast: {}", last.id.0.as_hyphenated());
 
-                    let time = OffsetDateTime::from_unix_timestamp_nanos(last.timestamp as i128)?;
-                    println!("\t\t\tcreated: {:?}", time.to_string());
+                    let time =
+                        OffsetDateTime::from_unix_timestamp_nanos(i128::from(last.timestamp))?;
+                    println!("\t\t\tcreated: {time}");
                 }
             }
 

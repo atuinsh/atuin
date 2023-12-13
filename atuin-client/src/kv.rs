@@ -135,14 +135,23 @@ impl KvStore {
     // well.
     pub async fn get(
         &self,
-        _store: &impl Store,
-        _encryption_key: &[u8; 32],
-        _namespace: &str,
-        _key: &str,
+        store: &impl Store,
+        encryption_key: &[u8; 32],
+        namespace: &str,
+        key: &str,
     ) -> Result<Option<KvRecord>> {
-        // TODO: implement
+        // TODO: don't rebuild every time...
+        let map = self.build_kv(store, encryption_key).await?;
 
-        Ok(None)
+        let res = map.get(namespace);
+
+        if let Some(ns) = res {
+            let value = ns.get(key);
+
+            Ok(value.cloned())
+        } else {
+            Ok(None)
+        }
     }
 
     // Build a kv map out of the linked list kv store
@@ -153,27 +162,30 @@ impl KvStore {
         &self,
         store: &impl Store,
         encryption_key: &[u8; 32],
-    ) -> Result<BTreeMap<String, BTreeMap<String, String>>> {
-        let map = BTreeMap::new();
+    ) -> Result<BTreeMap<String, BTreeMap<String, KvRecord>>> {
+        let mut map = BTreeMap::new();
 
-        // get the status of all stores
-        let mut tagged = store.all_tagged(KV_TAG).await?;
+        // TODO: maybe don't load the entire tag into memory to build the kv
+        // we can be smart about it and only load values since the last build
+        // or, iterate/paginate
+        let tagged = store.all_tagged(KV_TAG).await?;
 
         // iterate through all tags and play each KV record at a time
-        for (host, record) in tagged {
+        // this is "last write wins"
+        // probably good enough for now, but revisit in future
+        for record in tagged {
             let decrypted = match record.version.as_str() {
                 KV_VERSION => record.decrypt::<PASETO_V4>(encryption_key)?,
                 version => bail!("unknown version {version:?}"),
             };
 
-            let kv = KvRecord::deserialize(&decrypted.data, &decrypted.version)?;
+            let kv = KvRecord::deserialize(&decrypted.data, KV_VERSION)?;
 
-            let next = store.next(host, KV_TAG, decrypted.idx, 1).await?;
+            let ns = map
+                .entry(kv.namespace.clone())
+                .or_insert_with(BTreeMap::new);
 
-            write a function that iterates the kv records in order and builds a map
-            maybe next_record(tag) that returns the next of that tag in time, ignoring host?
-            then write some tests for this new sync
-            also see what happens if we run the new server but try and sync with v17 client. I imagine `atuin sync` breaks, but auto sync is fine. maybe version the api now.
+            ns.entry(kv.key.clone()).or_insert_with(|| kv);
         }
 
         Ok(map)
@@ -225,19 +237,27 @@ mod tests {
         let map = kv.build_kv(&store, &key).await.unwrap();
 
         assert_eq!(
-            map.get("test-kv")
+            *map.get("test-kv")
                 .expect("map namespace not set")
                 .get("foo")
                 .expect("map key not set"),
-            "bar"
+            KvRecord {
+                namespace: String::from("test-kv"),
+                key: String::from("foo"),
+                value: String::from("bar")
+            }
         );
 
         assert_eq!(
-            map.get("test-kv")
+            *map.get("test-kv")
                 .expect("map namespace not set")
                 .get("1")
                 .expect("map key not set"),
-            "2"
+            KvRecord {
+                namespace: String::from("test-kv"),
+                key: String::from("1"),
+                value: String::from("2")
+            }
         );
     }
 }
