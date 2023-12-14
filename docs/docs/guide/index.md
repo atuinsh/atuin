@@ -56,7 +56,7 @@ script which handles most of the commonly used platforms and package managers:
 ## bash/zsh
 
 ```
-bash <(curl https://raw.githubusercontent.com/ellie/atuin/main/install.sh)
+bash <(curl --proto '=https' --tlsv1.2 -sSf https://setup.atuin.sh)
 ```
 
 ## fish
