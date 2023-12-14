@@ -105,7 +105,7 @@ This will sign you up for the default sync server, hosted by me. Everything is e
 Read more below for offline-only usage, or for hosting your own server.
 
 ```
-bash <(curl https://raw.githubusercontent.com/atuinsh/atuin/main/install.sh)
+bash <(curl --proto '=https' --tlsv1.2 -sSf https://setup.atuin.sh)
 
 atuin register -u <USERNAME> -e <EMAIL>
 atuin import auto
