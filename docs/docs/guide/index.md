@@ -53,9 +53,19 @@ bindings](https://atuin.sh/docs/key-binding#disable-up-arrow)
 Let's get started! First up, you will want to install Atuin. We have an install
 script which handles most of the commonly used platforms and package managers:
 
+## bash/zsh
+
 ```
 bash <(curl https://raw.githubusercontent.com/ellie/atuin/main/install.sh)
 ```
+
+## fish
+
+```
+bash (curl --proto '=https' --tlsv1.2 -sSf https://setup.atuin.sh | psub)
+```
+
+## Importing
 
 The script will install the binary and attempt to configure your shell. Atuin
 uses a shell plugin to ensure that we capture new shell history. But for older
