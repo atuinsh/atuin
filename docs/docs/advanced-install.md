@@ -66,6 +66,16 @@ pacman -S atuin
   
 And then follow [the shell setup](#shell-plugin)
 
+### Xbps
+
+Atuin is available in the Void Linux [repository](https://github.com/void-linux/void-packages/tree/master/srcpkgs/atuin):
+
+```
+sudo xbps-install atuin
+```
+
+And then follow [the shell setup](#shell-plugin)
+
 ### Termux
 
 Atuin is available in the Termux package repository:
