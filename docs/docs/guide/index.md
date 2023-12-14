@@ -31,7 +31,7 @@ Please do try and read this guide, but if you're in a hurry and want to get
 started quickly:
 
 ```
-bash <(curl https://raw.githubusercontent.com/ellie/atuin/main/install.sh)
+bash <(curl --proto '=https' --tlsv1.2 -sSf https://setup.atuin.sh)
 
 atuin register -u <USERNAME> -e <EMAIL>
 atuin import auto
