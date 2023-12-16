@@ -29,22 +29,19 @@ time = { version = "0.3", features = [
 ] }
 clap = { version = "4.0.18", features = ["derive"] }
 config = { version = "0.13", default-features = false, features = ["toml"] }
-directories = "4"
+directories = "5.0.1"
 eyre = "0.6"
 fs-err = "2.9"
 interim = { version = "0.1.0", features = ["time"] }
-itertools = "0.11.0"
+itertools = "0.12.0"
 rand = { version = "0.8.5", features = ["std"] }
 semver = "1.0.20"
-# https://github.com/serde-rs/serde/issues/2538
-# I don't trust dtolnay with our user's builds. especially as we
-# have things like encryption keys
-serde = { version = "1.0.145, <=1.0.171", features = ["derive"] }
+serde = { version = "1.0.193", features = ["derive"] }
 serde_json = "1.0.108"
 tokio = { version = "1", features = ["full"] }
 uuid = { version = "1.3", features = ["v4", "serde"] }
 whoami = "1.1.2"
-typed-builder = "0.15.0"
+typed-builder = "0.18.0"
 pretty_assertions = "1.3.0"
 
 [workspace.dependencies.reqwest]
