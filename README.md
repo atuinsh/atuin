@@ -1,6 +1,10 @@
 <p align="center">
-  <img src="https://github.com/atuinsh/atuin/assets/53315310/08bc86d4-a781-4aaa-8d7e-478ae6bcd129" />
+  <img src="https://github.com/atuinsh/atuin/assets/53315310/08bc86d4-a781-4aaa-8d7e-478ae6bcd129#gh-light-mode-only" />
+  <img src="https://github.com/atuinsh/atuin/assets/53315310/13216a1d-1ac0-4c99-b0eb-d88290fe0efd#gh-dark-mode-only" />
 </p>
+
+![Atuin_Logo_01_blue]()
+
 
 <p align="center">
 <em>magical shell history</em>
