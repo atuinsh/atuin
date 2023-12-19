@@ -130,8 +130,9 @@ pub fn ensure_version(response: &Response) -> Result<bool> {
         Version::parse("17.1.0")
     }?;
 
-    if version.major != ATUIN_VERSION.major {
-        println!("Atuin version mismatch! In order to successfully sync, the client and the server must run the same *major* version");
+    // If the client is newer than the server
+    if version.major < ATUIN_VERSION.major {
+        println!("Atuin version mismatch! In order to successfully sync, the server needs to run a newer version of Atuin");
         println!("Client: {}", ATUIN_CARGO_VERSION);
         println!("Server: {}", version);
 

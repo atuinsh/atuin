@@ -97,6 +97,7 @@ async fn semver<B>(request: Request<B>, next: Next<B>) -> Response {
     response
         .headers_mut()
         .insert(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION.parse().unwrap());
+
     response
 }
 
