@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::env;
 use std::time::Duration;
 
-use eyre::{bail, eyre, Result};
+use eyre::{bail, Result};
 use reqwest::{
     header::{HeaderMap, AUTHORIZATION, USER_AGENT},
     Response, StatusCode, Url,
@@ -133,7 +133,7 @@ pub fn ensure_version(response: &Response) -> Result<bool> {
     if version.major != ATUIN_VERSION.major {
         println!("Atuin version mismatch! In order to successfully sync, the client and the server must run the same *major* version");
         println!("Client: {}", ATUIN_CARGO_VERSION);
-        println!("Server: {}", version.to_string());
+        println!("Server: {}", version);
 
         return Ok(false);
     }

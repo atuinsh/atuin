@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use atuin_common::api::{ErrorResponse, ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ATUIN_VERSION};
+use atuin_common::api::{ErrorResponse, ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION};
 use axum::{
     extract::FromRequestParts,
     http::Request,
@@ -9,11 +9,9 @@ use axum::{
     Router,
 };
 use eyre::Result;
-use http::{header::USER_AGENT, request::Parts};
-use semver::Version;
+use http::request::Parts;
 use tower::ServiceBuilder;
 use tower_http::trace::TraceLayer;
-use tracing::error;
 
 use super::handlers;
 use crate::{

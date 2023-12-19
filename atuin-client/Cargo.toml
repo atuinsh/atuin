@@ -62,7 +62,6 @@ rusty_paserk = { version = "0.3.0", default-features = false, features = [
 # sync
 urlencoding = { version = "2.1.0", optional = true }
 reqwest = { workspace = true, optional = true }
-reqwest-middleware = "0.2.4"
 hex = { version = "0.4", optional = true }
 sha2 = { version = "0.10", optional = true }
 
