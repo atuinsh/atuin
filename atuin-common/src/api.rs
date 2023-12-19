@@ -1,6 +1,17 @@
+use lazy_static::lazy_static;
+use semver::Version;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use time::OffsetDateTime;
+
+// the usage of X- has been deprecated for quite along time, it turns out
+pub static ATUIN_HEADER_VERSION: &str = "Atuin-Version";
+pub static ATUIN_CARGO_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+lazy_static! {
+    pub static ref ATUIN_VERSION: Version =
+        Version::parse(ATUIN_CARGO_VERSION).expect("failed to parse self semver");
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UserResponse {

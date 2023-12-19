@@ -2,19 +2,22 @@ use std::collections::HashMap;
 use std::env;
 use std::time::Duration;
 
-use eyre::{bail, Result};
+use eyre::{bail, eyre, Result};
 use reqwest::{
     header::{HeaderMap, AUTHORIZATION, USER_AGENT},
-    StatusCode, Url,
+    Response, StatusCode, Url,
 };
 
-use atuin_common::record::{EncryptedData, HostId, Record, RecordId};
 use atuin_common::{
     api::{
         AddHistoryRequest, CountResponse, DeleteHistoryRequest, ErrorResponse, IndexResponse,
         LoginRequest, LoginResponse, RegisterResponse, StatusResponse, SyncHistoryResponse,
     },
     record::RecordIndex,
+};
+use atuin_common::{
+    api::{ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ATUIN_VERSION},
+    record::{EncryptedData, HostId, Record, RecordId},
 };
 use semver::Version;
 use time::format_description::well_known::Rfc3339;
@@ -56,6 +59,10 @@ pub async fn register(
         .send()
         .await?;
 
+    if !ensure_version(&resp)? {
+        bail!("could not register user due to version mismatch");
+    }
+
     if !resp.status().is_success() {
         let error = resp.json::<ErrorResponse>().await?;
         bail!("failed to register user: {}", error.reason);
@@ -75,6 +82,10 @@ pub async fn login(address: &str, req: LoginRequest) -> Result<LoginResponse> {
         .json(&req)
         .send()
         .await?;
+
+    if !ensure_version(&resp)? {
+        bail!("could not login due to version mismatch");
+    }
 
     if resp.status() != reqwest::StatusCode::OK {
         let error = resp.json::<ErrorResponse>().await?;
@@ -106,6 +117,30 @@ pub async fn latest_version() -> Result<Version> {
     Ok(version)
 }
 
+pub fn ensure_version(response: &Response) -> Result<bool> {
+    let version = response.headers().get(ATUIN_HEADER_VERSION);
+
+    let version = if let Some(version) = version {
+        match version.to_str() {
+            Ok(v) => Version::parse(v),
+            Err(e) => bail!("failed to parse server version: {:?}", e),
+        }
+    } else {
+        // if there is no version header, then the newest this server can possibly be is 17.1.0
+        Version::parse("17.1.0")
+    }?;
+
+    if version.major != ATUIN_VERSION.major {
+        println!("Atuin version mismatch! In order to successfully sync, the client and the server must run the same *major* version");
+        println!("Client: {}", ATUIN_CARGO_VERSION);
+        println!("Server: {}", version.to_string());
+
+        return Ok(false);
+    }
+
+    Ok(true)
+}
+
 impl<'a> Client<'a> {
     pub fn new(
         sync_addr: &'a str,
@@ -115,6 +150,9 @@ impl<'a> Client<'a> {
     ) -> Result<Self> {
         let mut headers = HeaderMap::new();
         headers.insert(AUTHORIZATION, format!("Token {session_token}").parse()?);
+
+        // used for semver server check
+        headers.insert(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION.parse()?);
 
         Ok(Client {
             sync_addr,
@@ -133,6 +171,10 @@ impl<'a> Client<'a> {
 
         let resp = self.client.get(url).send().await?;
 
+        if !ensure_version(&resp)? {
+            bail!("could not sync due to version mismatch");
+        }
+
         if resp.status() != StatusCode::OK {
             bail!("failed to get count (are you logged in?)");
         }
@@ -147,6 +189,10 @@ impl<'a> Client<'a> {
         let url = Url::parse(url.as_str())?;
 
         let resp = self.client.get(url).send().await?;
+
+        if !ensure_version(&resp)? {
+            bail!("could not sync due to version mismatch");
+        }
 
         if resp.status() != StatusCode::OK {
             bail!("failed to get status (are you logged in?)");
@@ -262,6 +308,11 @@ impl<'a> Client<'a> {
         let url = Url::parse(url.as_str())?;
 
         let resp = self.client.get(url).send().await?;
+
+        if !ensure_version(&resp)? {
+            bail!("could not sync records due to version mismatch");
+        }
+
         let index = resp.json().await?;
 
         Ok(index)
