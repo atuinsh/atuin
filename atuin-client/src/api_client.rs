@@ -55,6 +55,7 @@ pub async fn register(
     let resp = client
         .post(url)
         .header(USER_AGENT, APP_USER_AGENT)
+        .header(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION)
         .json(&map)
         .send()
         .await?;
