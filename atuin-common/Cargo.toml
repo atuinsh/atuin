@@ -20,6 +20,9 @@ rand = { workspace = true }
 typed-builder = { workspace = true }
 eyre = { workspace = true }
 sqlx = { workspace = true }
+semver = { workspace = true }
+
+lazy_static = "1.4.0"
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

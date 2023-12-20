@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use atuin_common::api::ErrorResponse;
+use atuin_common::api::{ErrorResponse, ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION};
 use axum::{
     extract::FromRequestParts,
     http::Request,
@@ -91,6 +91,16 @@ async fn clacks_overhead<B>(request: Request<B>, next: Next<B>) -> Response {
     response
 }
 
+/// Ensure that we only try and sync with clients on the same major version
+async fn semver<B>(request: Request<B>, next: Next<B>) -> Response {
+    let mut response = next.run(request).await;
+    response
+        .headers_mut()
+        .insert(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION.parse().unwrap());
+
+    response
+}
+
 #[derive(Clone)]
 pub struct AppState<DB: Database> {
     pub database: DB,
@@ -126,6 +136,7 @@ pub fn router<DB: Database>(database: DB, settings: Settings<DB::Settings>) -> R
         ServiceBuilder::new()
             .layer(axum::middleware::from_fn(clacks_overhead))
             .layer(TraceLayer::new_for_http())
-            .layer(axum::middleware::from_fn(metrics::track_metrics)),
+            .layer(axum::middleware::from_fn(metrics::track_metrics))
+            .layer(axum::middleware::from_fn(semver)),
     )
 }

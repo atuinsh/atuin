@@ -249,8 +249,10 @@ name = "atuin-common"
 version = "17.1.0"
 dependencies = [
  "eyre",
+ "lazy_static",
  "pretty_assertions",
  "rand",
+ "semver",
  "serde",
  "sqlx",
  "time",
