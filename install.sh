@@ -186,18 +186,31 @@ __atuin_install_binary() {
     local download_dir
     local dir_usr
 
+    echo "Will copy atuin binary to $INSTALL_DIR..."
+    if [[ ! -v ATUIN_NO_PROMPT ]]; then
+        read -p "Okay? [Y/n]: " -n 1 -r
+        echo
+
+        if [[ ! $REPLY =~ ^[Y]$ ]]
+        then
+            exit
+        fi
+    fi
+
     latest_version=$(curl -s https://api.github.com/repos/atuinsh/atuin/releases/latest | grep tag_name  | grep -Eo "v[0-9]+\.[0-9]+\.[0-9]+")
     archive_name=atuin-$latest_version-$target
     binary_url="https://github.com/atuinsh/atuin/releases/download/$latest_version/$archive_name.tar.gz"
     download_dir=$(mktemp -d)
     echo "Downloading atuin $latest_version from the latest github release..."
-    curl -s -L "$binary_url" | tar -xz -C "$download_dir" -f -
-    echo "Copying atuin binary to to $INSTALL_DIR ..."
+    curl -sL "$binary_url" | tar -xz -C "$download_dir" -f -
+
     if [[ "$OSTYPE" == darwin* ]]; then
         dir_usr=$(stat -f "%Su" "$INSTALL_DIR")
     else
         dir_usr=$(stat -c "%U" "$INSTALL_DIR")
     fi
+
+    echo "Copying atuin binary to $INSTALL_DIR ..."
     sudo -u "$dir_usr" mkdir -p "$INSTALL_DIR"
     sudo -u "$dir_usr" mv "$download_dir/$archive_name/atuin" "$INSTALL_DIR/"
     rm -r "$download_dir"
