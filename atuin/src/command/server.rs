@@ -1,3 +1,5 @@
+use std::net::SocketAddr;
+
 use atuin_server_postgres::Postgres;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
@@ -39,6 +41,7 @@ impl Cmd {
                 let settings = Settings::new().wrap_err("could not load server settings")?;
                 let host = host.as_ref().unwrap_or(&settings.host).clone();
                 let port = port.unwrap_or(settings.port);
+                let addr = SocketAddr::new(host.parse()?, port);
 
                 if settings.metrics.enable {
                     tokio::spawn(launch_metrics_server(
@@ -47,7 +50,7 @@ impl Cmd {
                     ));
                 }
 
-                launch::<Postgres>(settings, &host, port).await
+                launch::<Postgres>(settings, addr).await
             }
             Self::DefaultConfig => {
                 println!("{}", example_config());
