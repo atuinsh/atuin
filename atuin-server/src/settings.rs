@@ -102,21 +102,11 @@ pub fn example_config() -> &'static str {
     EXAMPLE_CONFIG
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct Tls {
     pub enable: bool,
     pub cert_path: PathBuf,
     pub pkey_path: PathBuf,
-}
-
-impl Default for Tls {
-    fn default() -> Self {
-        Self {
-            enable: false,
-            cert_path: PathBuf::default(),
-            pkey_path: PathBuf::default(),
-        }
-    }
 }
 
 impl Tls {
