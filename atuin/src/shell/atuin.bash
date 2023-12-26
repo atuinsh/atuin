@@ -67,21 +67,23 @@ __atuin_history() {
         stty_backup=$(stty -g)
         stty "$ATUIN_STTY"
 
-        eval -- "$HISTORY"
-        exit_status=$?
+        # Execute the command.  Note: We need to record $? and $_ after the
+        # user command within the same call of "eval" because $_ is otherwise
+        # overwritten by the last argument of "eval".
+        __atuin_set_ret_value "${__bp_last_ret_value-}" "${__bp_last_argument_prev_command-}"
+        eval -- "$HISTORY"$'\n__bp_last_ret_value=$? __bp_last_argument_prev_command=$_'
 
         stty "$stty_backup"
 
         # Execute preprompt commands
-        __atuin_set_ret_value "$exit_status" "$HISTORY"
+        __atuin_set_ret_value "${__bp_last_ret_value-}" "${__bp_last_argument_prev_command-}"
         eval -- "$PROMPT_COMMAND"
         # Bash will redraw only the line with the prompt after we finish,
         # so to work for a multiline prompt we need to print it ourselves,
         # then move up a line
-        __atuin_set_ret_value "$exit_status" "$HISTORY"
+        __atuin_set_ret_value "${__bp_last_ret_value-}" "${__bp_last_argument_prev_command-}"
         echo "${PS1@P}"
         tput cuu 1
-        __atuin_set_ret_value "$exit_status" "$HISTORY"
       fi
 
       READLINE_LINE=""
