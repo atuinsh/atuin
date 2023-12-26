@@ -37,26 +37,26 @@ __atuin_accept_line() {
 
     # Assuming bash-preexec
     # Invoke every function in the preexec array
-    local preexec_function
-    local preexec_function_ret_value
-    local preexec_ret_value=0
-    for preexec_function in "${preexec_functions[@]:-}"; do
-      if type -t "$preexec_function" 1>/dev/null; then
+    local __atuin_preexec_function
+    local __atuin_preexec_function_ret_value
+    local __atuin_preexec_ret_value=0
+    for __atuin_preexec_function in "${preexec_functions[@]:-}"; do
+      if type -t "$__atuin_preexec_function" 1>/dev/null; then
         __atuin_set_ret_value "${__bp_last_ret_value:-}"
-        "$preexec_function" "$HISTORY"
-        preexec_function_ret_value="$?"
-        if [[ "$preexec_function_ret_value" != 0 ]]; then
-          preexec_ret_value="$preexec_function_ret_value"
+        "$__atuin_preexec_function" "$HISTORY"
+        __atuin_preexec_function_ret_value="$?"
+        if [[ "$__atuin_preexec_function_ret_value" != 0 ]]; then
+          __atuin_preexec_ret_value="$__atuin_preexec_function_ret_value"
         fi
       fi
     done
 
     # If extdebug is turned on and any preexec function returns non-zero
     # exit status, we do not run the user command.
-    if ! { shopt -q extdebug && ((preexec_ret_value)); }; then
+    if ! { shopt -q extdebug && ((__atuin_preexec_ret_value)); }; then
       # Juggle the terminal settings so that the command can be interacted with
-      local stty_backup
-      stty_backup=$(stty -g)
+      local __atuin_stty_backup
+      __atuin_stty_backup=$(stty -g)
       stty "$ATUIN_STTY"
 
       # Execute the command.  Note: We need to record $? and $_ after the
@@ -65,7 +65,7 @@ __atuin_accept_line() {
       __atuin_set_ret_value "${__bp_last_ret_value-}" "${__bp_last_argument_prev_command-}"
       eval -- "$HISTORY"$'\n__bp_last_ret_value=$? __bp_last_argument_prev_command=$_'
 
-      stty "$stty_backup"
+      stty "$__atuin_stty_backup"
     fi
 
     # Execute preprompt commands
