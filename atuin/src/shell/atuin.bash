@@ -92,7 +92,8 @@ __atuin_history() {
     fi
 }
 
-if [[ -n "${BLE_VERSION-}" ]]; then
+# shellcheck disable=SC2154
+if [[ -n "${BLE_VERSION-}" ]] && ((_ble_version >= 400)); then
     blehook PRECMD-+=__atuin_precmd
     blehook PREEXEC-+=__atuin_preexec
 else

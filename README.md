@@ -274,13 +274,15 @@ antigen bundle atuinsh/atuin@main
 
 #### [ble.sh](https://github.com/akinomyoga/ble.sh)
 
-Atuin works best in bash when using [ble.sh](https://github.com/akinomyoga/ble.sh).
+Atuin works best in bash when using [ble.sh](https://github.com/akinomyoga/ble.sh) >= 0.4.
 
-With ble.sh installed, just add atuin to your .bashrc
+With ble.sh (>= 0.4) installed, just add atuin to your .bashrc
 
 ```bash
 echo 'eval "$(atuin init bash)"' >> ~/.bashrc
 ```
+
+Please make sure that the above line comes after sourcing ble.sh so atuin knows the presence of ble.sh.
 
 #### [bash-preexec](https://github.com/rcaloras/bash-preexec)
 
