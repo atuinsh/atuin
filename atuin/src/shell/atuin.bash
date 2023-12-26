@@ -78,8 +78,11 @@ __atuin_history() {
         fi
 
         # Execute preprompt commands
-        __atuin_set_ret_value "${__bp_last_ret_value-}" "${__bp_last_argument_prev_command-}"
-        eval -- "$PROMPT_COMMAND"
+        local __atuin_prompt_command
+        for __atuin_prompt_command in "${PROMPT_COMMAND[@]}"; do
+          __atuin_set_ret_value "${__bp_last_ret_value-}" "${__bp_last_argument_prev_command-}"
+          eval -- "$__atuin_prompt_command"
+        done
         # Bash will redraw only the line with the prompt after we finish,
         # so to work for a multiline prompt we need to print it ourselves,
         # then move up a line
