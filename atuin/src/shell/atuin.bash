@@ -76,10 +76,9 @@ __atuin_accept_line() {
     done
     # Bash will redraw only the line with the prompt after we finish,
     # so to work for a multiline prompt we need to print it ourselves,
-    # then move up a line
+    # then go to the beginning of the last line.
     __atuin_set_ret_value "${__bp_last_ret_value-}" "${__bp_last_argument_prev_command-}"
-    printf '%s\n' "${PS1@P}"
-    tput cuu 1
+    printf '%s\r' "${PS1@P}"
 }
 
 __atuin_history() {
