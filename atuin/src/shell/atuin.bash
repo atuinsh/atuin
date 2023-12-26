@@ -67,14 +67,14 @@ __atuin_history() {
         stty_backup=$(stty -g)
         stty "$ATUIN_STTY"
 
-        eval "$HISTORY"
+        eval -- "$HISTORY"
         exit_status=$?
 
         stty "$stty_backup"
 
         # Execute preprompt commands
         __atuin_set_ret_value "$exit_status" "$HISTORY"
-        eval "$PROMPT_COMMAND"
+        eval -- "$PROMPT_COMMAND"
         # Bash will redraw only the line with the prompt after we finish,
         # so to work for a multiline prompt we need to print it ourselves,
         # then move up a line
