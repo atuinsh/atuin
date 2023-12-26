@@ -26,11 +26,11 @@ __atuin_accept_line() {
 
     # Reprint the prompt, accounting for multiple lines
     local __atuin_prompt_offset
-    __atuin_prompt_offset=$(echo -n "${PS1@P}" | tr -cd '\n' | wc -c)
+    __atuin_prompt_offset=$(printf '%s' "${PS1@P}" | tr -cd '\n' | wc -c)
     if ((__atuin_prompt_offset > 0)); then
       tput cuu "$__atuin_prompt_offset"
     fi
-    echo "${PS1@P}$HISTORY"
+    printf '%s\n' "${PS1@P}$HISTORY"
 
     # Add it to the bash history
     history -s "$HISTORY"
@@ -78,7 +78,7 @@ __atuin_accept_line() {
     # so to work for a multiline prompt we need to print it ourselves,
     # then move up a line
     __atuin_set_ret_value "${__bp_last_ret_value-}" "${__bp_last_argument_prev_command-}"
-    echo "${PS1@P}"
+    printf '%s\n' "${PS1@P}"
     tput cuu 1
 }
 
