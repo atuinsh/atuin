@@ -41,6 +41,9 @@ __atuin_history() {
         fi
         echo "${PS1@P}$HISTORY"
 
+        # Add it to the bash history
+        history -s "$HISTORY"
+
         # Assuming bash-preexec
         # Invoke every function in the preexec array
         local preexec_function
@@ -72,8 +75,6 @@ __atuin_history() {
         # Execute preprompt commands
         __atuin_set_ret_value "$exit_status" "$HISTORY"
         eval "$PROMPT_COMMAND"
-        # Add it to the bash history
-        history -s "$HISTORY"
         # Bash will redraw only the line with the prompt after we finish,
         # so to work for a multiline prompt we need to print it ourselves,
         # then move up a line
