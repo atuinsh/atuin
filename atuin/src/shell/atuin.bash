@@ -27,7 +27,7 @@ __atuin_accept_line() {
     # Reprint the prompt, accounting for multiple lines
     local __atuin_prompt=${PS1@P}
     local __atuin_prompt_offset
-    __atuin_prompt_offset=$(printf '%s' "$__atuin_prompt" | tr -cd '\n' | wc -c)
+    __atuin_prompt_offset=$(printf '%s' "$__atuin_prompt" | wc -l)
     if ((__atuin_prompt_offset > 0)); then
       tput cuu "$__atuin_prompt_offset"
     fi
