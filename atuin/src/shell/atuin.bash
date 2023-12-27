@@ -25,12 +25,13 @@ __atuin_accept_line() {
     local HISTORY=$1
 
     # Reprint the prompt, accounting for multiple lines
+    local __atuin_prompt=${PS1@P}
     local __atuin_prompt_offset
-    __atuin_prompt_offset=$(printf '%s' "${PS1@P}" | tr -cd '\n' | wc -c)
+    __atuin_prompt_offset=$(printf '%s' "$__atuin_prompt" | tr -cd '\n' | wc -c)
     if ((__atuin_prompt_offset > 0)); then
       tput cuu "$__atuin_prompt_offset"
     fi
-    printf '%s\n' "${PS1@P}$HISTORY"
+    printf '%s\n' "$__atuin_prompt$HISTORY"
 
     # Add it to the bash history
     history -s "$HISTORY"
