@@ -1,10 +1,13 @@
 #![forbid(unsafe_code)]
 
+use std::net::SocketAddr;
+use std::sync::Arc;
 use std::{future::Future, net::TcpListener};
 
 use atuin_server_database::Database;
 use axum::Router;
 use axum::Server;
+use axum_server::Handle;
 use eyre::{Context, Result};
 
 mod handlers;
@@ -12,6 +15,7 @@ mod metrics;
 mod router;
 mod utils;
 
+use rustls::ServerConfig;
 pub use settings::example_config;
 pub use settings::Settings;
 
@@ -44,33 +48,66 @@ async fn shutdown_signal() {
 
 pub async fn launch<Db: Database>(
     settings: Settings<Db::Settings>,
-    host: &str,
-    port: u16,
+    addr: SocketAddr,
 ) -> Result<()> {
-    launch_with_listener::<Db>(
-        settings,
-        TcpListener::bind((host, port)).context("could not connect to socket")?,
-        shutdown_signal(),
-    )
-    .await
+    if settings.tls.enable {
+        launch_with_tls::<Db>(settings, addr, shutdown_signal()).await
+    } else {
+        launch_with_tcp_listener::<Db>(
+            settings,
+            TcpListener::bind(addr).context("could not connect to socket")?,
+            shutdown_signal(),
+        )
+        .await
+    }
 }
 
-pub async fn launch_with_listener<Db: Database>(
+pub async fn launch_with_tcp_listener<Db: Database>(
     settings: Settings<Db::Settings>,
     listener: TcpListener,
     shutdown: impl Future<Output = ()>,
 ) -> Result<()> {
-    let db = Db::new(&settings.db_settings)
-        .await
-        .wrap_err_with(|| format!("failed to connect to db: {:?}", settings.db_settings))?;
-
-    let r = router::router(db, settings);
+    let r = make_router::<Db>(settings).await?;
 
     Server::from_tcp(listener)
         .context("could not launch server")?
         .serve(r.into_make_service())
         .with_graceful_shutdown(shutdown)
         .await?;
+
+    Ok(())
+}
+
+async fn launch_with_tls<Db: Database>(
+    settings: Settings<Db::Settings>,
+    addr: SocketAddr,
+    shutdown: impl Future<Output = ()>,
+) -> Result<()> {
+    let certificates = settings.tls.certificates()?;
+    let pkey = settings.tls.private_key()?;
+
+    let server_config = ServerConfig::builder()
+        .with_safe_defaults()
+        .with_no_client_auth()
+        .with_single_cert(certificates, pkey)?;
+
+    let server_config = Arc::new(server_config);
+    let rustls_config = axum_server::tls_rustls::RustlsConfig::from_config(server_config);
+
+    let r = make_router::<Db>(settings).await?;
+
+    let handle = Handle::new();
+
+    let server = axum_server::bind_rustls(addr, rustls_config)
+        .handle(handle.clone())
+        .serve(r.into_make_service());
+
+    tokio::select! {
+        _ = server => {}
+        _ = shutdown => {
+            handle.graceful_shutdown(None);
+        }
+    }
 
     Ok(())
 }
@@ -94,4 +131,14 @@ pub async fn launch_metrics_server(host: String, port: u16) -> Result<()> {
         .await?;
 
     Ok(())
+}
+
+async fn make_router<Db: Database>(
+    settings: Settings<<Db as Database>::Settings>,
+) -> Result<Router, eyre::Error> {
+    let db = Db::new(&settings.db_settings)
+        .await
+        .wrap_err_with(|| format!("failed to connect to db: {:?}", settings.db_settings))?;
+    let r = router::router(db, settings);
+    Ok(r)
 }

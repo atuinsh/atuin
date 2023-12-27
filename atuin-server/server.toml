@@ -27,3 +27,8 @@
 # enable = false
 # host = 127.0.0.1
 # port = 9001
+
+# [tls]
+# enable = false
+# cert_path = ""
+# pkey_path = ""
