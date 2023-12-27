@@ -27,7 +27,7 @@ tokio = { workspace = true }
 async-trait = { workspace = true }
 axum = "0.6.4"
 axum-server = { version = "0.5.1", features = ["tls-rustls"] }
-http = "0.2"
+http = "1.0"
 hyper = "0.14"
 hyper-rustls = "0.24"
 fs-err = { workspace = true }
