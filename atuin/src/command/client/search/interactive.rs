@@ -41,6 +41,7 @@ const RETURN_ORIGINAL: usize = usize::MAX;
 const RETURN_QUERY: usize = usize::MAX - 1;
 const COPY_QUERY: usize = usize::MAX - 2;
 
+#[allow(clippy::struct_field_names)]
 struct State {
     history_count: i64,
     update_needed: Option<Version>,
