@@ -29,8 +29,11 @@ __atuin_history() {
     then
       HISTORY=${HISTORY#__atuin_accept__:}
       # Reprint the prompt, accounting for multiple lines
-      # shellcheck disable=SC2046
-      tput cuu $(echo -n "${PS1@P}" | tr -cd '\n' | wc -c)
+      local __atuin_prompt_offset
+      __atuin_prompt_offset=$(echo -n "${PS1@P}" | tr -cd '\n' | wc -c)
+      if ((__atuin_prompt_offset > 0)); then
+        tput cuu "$__atuin_prompt_offset"
+      fi
       echo "${PS1@P}$HISTORY"
 
       if [[ -n "${BLE_VERSION-}" ]]; then
