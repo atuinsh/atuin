@@ -432,7 +432,6 @@ impl Database for Sqlite {
 
         match search_mode {
             SearchMode::Prefix => sql.and_where_like_left("command", query),
-            SearchMode::FullText => sql.and_where_like_any("command", query),
             _ => {
                 // don't recompile the regex on successive calls!
                 lazy_static! {
@@ -453,6 +452,7 @@ impl Database for Sqlite {
                         None => (false, query_part),
                     };
 
+                    #[allow(clippy::if_same_then_else)]
                     let param = if query_part == "|" {
                         if !is_or {
                             is_or = true;
@@ -467,6 +467,8 @@ impl Database for Sqlite {
                     } else if let Some(term) = query_part.strip_prefix('\'') {
                         format!("{glob}{term}{glob}")
                     } else if is_inverse {
+                        format!("{glob}{query_part}{glob}")
+                    } else if search_mode == SearchMode::FullText {
                         format!("{glob}{query_part}{glob}")
                     } else {
                         query_part.split("").join(glob)
@@ -817,7 +819,10 @@ mod test {
         assert_search_eq(&db, SearchMode::FullText, FilterMode::Global, "/home", 1)
             .await
             .unwrap();
-        assert_search_eq(&db, SearchMode::FullText, FilterMode::Global, "ls  ", 0)
+        assert_search_eq(&db, SearchMode::FullText, FilterMode::Global, "ls ho", 1)
+            .await
+            .unwrap();
+        assert_search_eq(&db, SearchMode::FullText, FilterMode::Global, "hm", 0)
             .await
             .unwrap();
     }
