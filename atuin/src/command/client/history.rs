@@ -34,6 +34,8 @@ pub enum Cmd {
         id: String,
         #[arg(long, short)]
         exit: i64,
+        #[arg(long, short, default_value = "-1")]
+        duration: i64,
     },
 
     /// List all items in history
@@ -272,6 +274,7 @@ impl Cmd {
         settings: &Settings,
         id: &str,
         exit: i64,
+        duration: i64,
     ) -> Result<()> {
         if id.trim() == "" {
             return Ok(());
@@ -290,8 +293,12 @@ impl Cmd {
         }
 
         h.exit = exit;
-        h.duration = i64::try_from((OffsetDateTime::now_utc() - h.timestamp).whole_nanoseconds())
-            .context("command took over 292 years")?;
+        h.duration = if duration >= 0 {
+            duration
+        } else {
+            i64::try_from((OffsetDateTime::now_utc() - h.timestamp).whole_nanoseconds())
+                .context("command took over 292 years")?
+        };
 
         db.update(&h).await?;
 
@@ -366,7 +373,7 @@ impl Cmd {
 
         match self {
             Self::Start { command } => Self::handle_start(db, settings, &command).await,
-            Self::End { id, exit } => Self::handle_end(db, settings, &id, exit).await,
+            Self::End { id, exit, duration } => Self::handle_end(db, settings, &id, exit, duration).await,
             Self::List {
                 session,
                 cwd,
