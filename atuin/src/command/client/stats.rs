@@ -83,31 +83,31 @@ impl Cmd {
             self.period.join(" ")
         };
 
+        let now = OffsetDateTime::now_utc();
+        let now = settings.local_tz.map_or(now, |local| now.to_offset(local));
+        let last_night = now.replace_time(Time::MIDNIGHT);
+
         let history = if words.as_str() == "all" {
             db.list(FilterMode::Global, &context, None, false, false)
                 .await?
         } else if words.trim() == "today" {
-            let start = OffsetDateTime::now_local()?.replace_time(Time::MIDNIGHT);
+            let start = last_night;
             let end = start + Duration::days(1);
             db.range(start, end).await?
         } else if words.trim() == "month" {
-            let end = OffsetDateTime::now_local()?.replace_time(Time::MIDNIGHT);
+            let end = last_night;
             let start = end - Duration::days(31);
             db.range(start, end).await?
         } else if words.trim() == "week" {
-            let end = OffsetDateTime::now_local()?.replace_time(Time::MIDNIGHT);
+            let end = last_night;
             let start = end - Duration::days(7);
             db.range(start, end).await?
         } else if words.trim() == "year" {
-            let end = OffsetDateTime::now_local()?.replace_time(Time::MIDNIGHT);
+            let end = last_night;
             let start = end - Duration::days(365);
             db.range(start, end).await?
         } else {
-            let start = parse_date_string(
-                &words,
-                OffsetDateTime::now_local()?,
-                settings.dialect.into(),
-            )?;
+            let start = parse_date_string(&words, now, settings.dialect.into())?;
             let end = start + Duration::days(1);
             db.range(start, end).await?
         };
