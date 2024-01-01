@@ -90,6 +90,11 @@ __atuin_history() {
     then
       HISTORY=${HISTORY#__atuin_accept__:}
 
+      # Reprint the prompt, accounting for multiple lines
+      # shellcheck disable=SC2046
+      tput cuu $(echo -n "${PS1@P}" | tr -cd '\n' | wc -c)
+      echo "${PS1@P}$HISTORY"
+
       if [[ -n "${BLE_ATTACHED-}" ]]; then
         ble-edit/content/reset-and-check-dirty "$HISTORY"
         ble/widget/accept-line

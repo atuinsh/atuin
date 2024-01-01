@@ -1,7 +1,7 @@
-#<p align="center">
+<p align="center">
  <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://github.com/atuinsh/atuin/assets/53315310/13216a1d-1ac0-4c99-b0eb-d88290fe0efd">
-  <img alt="Text changing depending on mode. Light: 'So light!' Dark: 'So dark!'" src="https://github.com/atuinsh/atuin/assets/53315310/08bc86d4-a781-4aaa-8d7e-478ae6bcd129">
+  <img alt="Atuin logo" src="https://github.com/atuinsh/atuin/assets/53315310/08bc86d4-a781-4aaa-8d7e-478ae6bcd129">
 </picture>
 </p>
 
@@ -19,7 +19,6 @@
   <a href="https://discord.gg/Fq8bJSKPHh"><img src="https://img.shields.io/discord/954121165239115808" /></a>
   <a rel="me" href="https://hachyderm.io/@atuin"><img src="https://img.shields.io/mastodon/follow/109944632283122560?domain=https%3A%2F%2Fhachyderm.io&style=social"/></a>
   <a href="https://twitter.com/atuinsh"><img src="https://img.shields.io/twitter/follow/atuinsh?style=social" /></a>
-  <a href="https://actuated.dev/"><img alt="Arm CI sponsored by Actuated" src="https://docs.actuated.dev/images/actuated-badge.png" width="120px"></img></a>
 </p>
 
 
@@ -108,11 +107,7 @@ This will sign you up for the default sync server, hosted by me. Everything is e
 Read more below for offline-only usage, or for hosting your own server.
 
 ```
-# bash/zsh/etc
-bash <(curl --proto '=https' --tlsv1.2 -sSf https://setup.atuin.sh)
-
-# fish
-bash (curl --proto '=https' --tlsv1.2 -sSf https://setup.atuin.sh | psub)
+bash <(curl https://raw.githubusercontent.com/atuinsh/atuin/main/install.sh)
 
 atuin register -u <USERNAME> -e <EMAIL>
 atuin import auto
@@ -215,16 +210,6 @@ Atuin is available in the Arch Linux [[extra] repository](https://archlinux.org/
 pacman -S atuin
 ```
   
-And then follow [the shell setup](#shell-plugin)
-
-### Xbps
-
-Atuin is available in the Void Linux [repository](https://github.com/void-linux/void-packages/tree/master/srcpkgs/atuin):
-
-```
-sudo xbps-install atuin
-```
-
 And then follow [the shell setup](#shell-plugin)
 
 ### Termux

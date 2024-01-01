@@ -71,19 +71,35 @@ impl Cmd {
     }
 }
 
+async fn run_new_sync(
+    settings: &Settings,
+    store: &mut (impl Store + Send + Sync),
+) -> Result<(i64, i64)> {
+    let (diff, _) = sync::diff(settings, store).await?;
+    let operations = sync::operations(diff, store).await?;
+
+    let res = sync::sync_remote(operations, store, settings).await?;
+
+    Ok(res)
+}
+
 async fn run(
     settings: &Settings,
     force: bool,
     db: &impl Database,
     store: &mut (impl Store + Send + Sync),
 ) -> Result<()> {
-    let (diff, remote_index) = sync::diff(settings, store).await?;
-    let operations = sync::operations(diff, store).await?;
-    let (uploaded, downloaded) =
-        sync::sync_remote(operations, &remote_index, store, settings).await?;
+    println!("Running record store sync...");
+    let res = run_new_sync(settings, store).await;
 
-    println!("{uploaded}/{downloaded} up/down to record store");
+    if let Ok((uploaded, downloaded)) = res {
+        println!("{uploaded}/{downloaded} up/down to record store");
+    } else {
+        println!("Error while contacting record store: {res:?}\n");
+        println!("Please ensure client + server are both up to date\n");
+    }
 
+    println!("Running old history sync...");
     atuin_client::sync::sync(settings, force, db).await?;
 
     println!(

@@ -39,14 +39,3 @@ ATUIN_DB_URI="postgres://user:password@hostname/database"
 | `db_uri`            | A valid PostgreSQL URI, for saving history (default: false)                   |
 | `path`              | A path to prepend to all routes of the server (default: false)                |
 
-### TLS
-
-The server supports TLS through the `[tls]` section:
-
-```toml
-[tls]
-enabled = true
-cert_path = "/path/to/letsencrypt/live/fully.qualified.domain/fullchain.pem"
-pkey_path = "/path/to/letsencrypt/live/fully.qualified.domain/privkey.pem"
-```
-

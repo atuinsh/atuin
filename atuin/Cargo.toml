@@ -82,4 +82,4 @@ features = ["ansi", "fmt", "registry", "env-filter"]
 optional = true
 
 [dev-dependencies]
-tracing-tree = "0.3"
+tracing-tree = "0.2"

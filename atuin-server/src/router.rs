@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use atuin_common::api::{ErrorResponse, ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION};
+use atuin_common::api::ErrorResponse;
 use axum::{
     extract::FromRequestParts,
     http::Request,
@@ -91,16 +91,6 @@ async fn clacks_overhead<B>(request: Request<B>, next: Next<B>) -> Response {
     response
 }
 
-/// Ensure that we only try and sync with clients on the same major version
-async fn semver<B>(request: Request<B>, next: Next<B>) -> Response {
-    let mut response = next.run(request).await;
-    response
-        .headers_mut()
-        .insert(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION.parse().unwrap());
-
-    response
-}
-
 #[derive(Clone)]
 pub struct AppState<DB: Database> {
     pub database: DB,
@@ -110,19 +100,22 @@ pub struct AppState<DB: Database> {
 pub fn router<DB: Database>(database: DB, settings: Settings<DB::Settings>) -> Router {
     let routes = Router::new()
         .route("/", get(handlers::index))
+        .route("/account", delete(handlers::user::delete))
+        .route("/register", post(handlers::user::register))
+        .route("/login", post(handlers::user::login))
         .route("/sync/count", get(handlers::history::count))
         .route("/sync/history", get(handlers::history::list))
         .route("/sync/calendar/:focus", get(handlers::history::calendar))
         .route("/sync/status", get(handlers::status::status))
         .route("/history", post(handlers::history::add))
         .route("/history", delete(handlers::history::delete))
-        .route("/record", post(handlers::record::post))
-        .route("/record", get(handlers::record::index))
+        .route("/record", post(handlers::record::post::<DB>))
+        .route("/record", get(handlers::record::index::<DB>))
         .route("/record/next", get(handlers::record::next))
         .route("/user/:username", get(handlers::user::get))
-        .route("/account", delete(handlers::user::delete))
-        .route("/register", post(handlers::user::register))
-        .route("/login", post(handlers::user::login));
+        .route("/api/v0/record", post(handlers::v0::record::post))
+        .route("/api/v0/record", get(handlers::v0::record::index))
+        .route("/api/v0/record/next", get(handlers::v0::record::next));
 
     let path = settings.path.as_str();
     if path.is_empty() {
@@ -136,7 +129,6 @@ pub fn router<DB: Database>(database: DB, settings: Settings<DB::Settings>) -> R
         ServiceBuilder::new()
             .layer(axum::middleware::from_fn(clacks_overhead))
             .layer(TraceLayer::new_for_http())
-            .layer(axum::middleware::from_fn(metrics::track_metrics))
-            .layer(axum::middleware::from_fn(semver)),
+            .layer(axum::middleware::from_fn(metrics::track_metrics)),
     )
 }

@@ -2,7 +2,7 @@ use std::{env, net::TcpListener, time::Duration};
 
 use atuin_client::api_client;
 use atuin_common::{api::AddHistoryRequest, utils::uuid_v7};
-use atuin_server::{launch_with_tcp_listener, Settings as ServerSettings};
+use atuin_server::{launch_with_listener, Settings as ServerSettings};
 use atuin_server_postgres::{Postgres, PostgresSettings};
 use futures_util::TryFutureExt;
 use time::OffsetDateTime;
@@ -38,7 +38,6 @@ async fn start_server(path: &str) -> (String, oneshot::Sender<()>, JoinHandle<()
         register_webhook_username: String::new(),
         db_settings: PostgresSettings { db_uri },
         metrics: atuin_server::settings::Metrics::default(),
-        tls: atuin_server::settings::Tls::default(),
     };
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
@@ -47,7 +46,7 @@ async fn start_server(path: &str) -> (String, oneshot::Sender<()>, JoinHandle<()
     let server = tokio::spawn(async move {
         let _tracing_guard = dispatcher::set_default(&dispatch);
 
-        if let Err(e) = launch_with_tcp_listener::<Postgres>(
+        if let Err(e) = launch_with_listener::<Postgres>(
             server_settings,
             listener,
             shutdown_rx.unwrap_or_else(|_| ()),
