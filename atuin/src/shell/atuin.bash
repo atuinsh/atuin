@@ -41,6 +41,9 @@ __atuin_history() {
         fi
         echo "${PS1@P}$HISTORY"
 
+        # Add it to the bash history
+        history -s "$HISTORY"
+
         # Assuming bash-preexec
         # Invoke every function in the preexec array
         local preexec_function
@@ -56,31 +59,36 @@ __atuin_history() {
             fi
           fi
         done
-        # shellcheck disable=SC2154
-        __atuin_set_ret_value "$preexec_ret_value" "$__bp_last_argument_prev_command"
 
-        # Juggle the terminal settings so that the command can be interacted with
-        local stty_backup
-        stty_backup=$(stty -g)
-        stty "$ATUIN_STTY"
+        # If extdebug is turned on and any preexec function returns non-zero
+        # exit status, we do not run the user command.
+        if ! { shopt -q extdebug && ((preexec_ret_value)); }; then
+          # Juggle the terminal settings so that the command can be interacted with
+          local stty_backup
+          stty_backup=$(stty -g)
+          stty "$ATUIN_STTY"
 
-        eval "$HISTORY"
-        exit_status=$?
+          # Execute the command.  Note: We need to record $? and $_ after the
+          # user command within the same call of "eval" because $_ is otherwise
+          # overwritten by the last argument of "eval".
+          __atuin_set_ret_value "${__bp_last_ret_value-}" "${__bp_last_argument_prev_command-}"
+          eval -- "$HISTORY"$'\n__bp_last_ret_value=$? __bp_last_argument_prev_command=$_'
 
-        stty "$stty_backup"
+          stty "$stty_backup"
+        fi
 
         # Execute preprompt commands
-        __atuin_set_ret_value "$exit_status" "$HISTORY"
-        eval "$PROMPT_COMMAND"
-        # Add it to the bash history
-        history -s "$HISTORY"
+        local __atuin_prompt_command
+        for __atuin_prompt_command in "${PROMPT_COMMAND[@]}"; do
+          __atuin_set_ret_value "${__bp_last_ret_value-}" "${__bp_last_argument_prev_command-}"
+          eval -- "$__atuin_prompt_command"
+        done
         # Bash will redraw only the line with the prompt after we finish,
         # so to work for a multiline prompt we need to print it ourselves,
         # then move up a line
-        __atuin_set_ret_value "$exit_status" "$HISTORY"
+        __atuin_set_ret_value "${__bp_last_ret_value-}" "${__bp_last_argument_prev_command-}"
         echo "${PS1@P}"
         tput cuu 1
-        __atuin_set_ret_value "$exit_status" "$HISTORY"
       fi
 
       READLINE_LINE=""
