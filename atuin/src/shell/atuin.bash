@@ -22,7 +22,7 @@ __atuin_set_ret_value() {
 }
 
 __atuin_accept_line() {
-    local HISTORY=$1
+    local __atuin_command=$1
 
     # Reprint the prompt, accounting for multiple lines
     local __atuin_prompt=${PS1@P}
@@ -31,10 +31,10 @@ __atuin_accept_line() {
     if ((__atuin_prompt_offset > 0)); then
       tput cuu "$__atuin_prompt_offset"
     fi
-    printf '%s\n' "$__atuin_prompt$HISTORY"
+    printf '%s\n' "$__atuin_prompt$__atuin_command"
 
     # Add it to the bash history
-    history -s "$HISTORY"
+    history -s "$__atuin_command"
 
     # Assuming bash-preexec
     # Invoke every function in the preexec array
@@ -44,7 +44,7 @@ __atuin_accept_line() {
     for __atuin_preexec_function in "${preexec_functions[@]:-}"; do
       if type -t "$__atuin_preexec_function" 1>/dev/null; then
         __atuin_set_ret_value "${__bp_last_ret_value:-}"
-        "$__atuin_preexec_function" "$HISTORY"
+        "$__atuin_preexec_function" "$__atuin_command"
         __atuin_preexec_function_ret_value="$?"
         if [[ "$__atuin_preexec_function_ret_value" != 0 ]]; then
           __atuin_preexec_ret_value="$__atuin_preexec_function_ret_value"
@@ -64,7 +64,7 @@ __atuin_accept_line() {
       # user command within the same call of "eval" because $_ is otherwise
       # overwritten by the last argument of "eval".
       __atuin_set_ret_value "${__bp_last_ret_value-}" "${__bp_last_argument_prev_command-}"
-      eval -- "$HISTORY"$'\n__bp_last_ret_value=$? __bp_last_argument_prev_command=$_'
+      eval -- "$__atuin_command"$'\n__bp_last_ret_value=$? __bp_last_argument_prev_command=$_'
 
       stty "$__atuin_stty_backup"
     fi
