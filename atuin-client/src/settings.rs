@@ -219,7 +219,13 @@ pub struct Settings {
 
     // This is automatically loaded when settings is created. Do not set in
     // config! Keep secrets and settings apart.
+    #[serde(skip)]
     pub session_token: String,
+
+    // This is determined at startup and cached.
+    // This is due to non-threadsafe get-env limitations.
+    #[serde(skip)]
+    pub local_tz: Option<time::UtcOffset>,
 }
 
 impl Settings {
@@ -487,6 +493,8 @@ impl Settings {
         } else {
             settings.session_token = String::from("not logged in");
         }
+
+        settings.local_tz = time::UtcOffset::current_local_offset().ok();
 
         Ok(settings)
     }
