@@ -372,7 +372,9 @@ impl Cmd {
 
         match self {
             Self::Start { command } => Self::handle_start(db, settings, &command).await,
-            Self::End { id, exit, duration } => Self::handle_end(db, settings, &id, exit, duration).await,
+            Self::End { id, exit, duration } => {
+                Self::handle_end(db, settings, &id, exit, duration).await
+            }
             Self::List {
                 session,
                 cwd,
