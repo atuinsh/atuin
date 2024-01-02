@@ -35,7 +35,7 @@ pub enum Cmd {
         #[arg(long, short)]
         exit: i64,
         #[arg(long, short)]
-        duration: Option<i64>,
+        duration: Option<u64>,
     },
 
     /// List all items in history
@@ -274,7 +274,7 @@ impl Cmd {
         settings: &Settings,
         id: &str,
         exit: i64,
-        duration: Option<i64>,
+        duration: Option<u64>,
     ) -> Result<()> {
         if id.trim() == "" {
             return Ok(());
@@ -294,7 +294,7 @@ impl Cmd {
 
         h.exit = exit;
         h.duration = match duration {
-            Some(value) => value,
+            Some(value) => i64::try_from(value).context("command took over 292 years")?,
             None => i64::try_from((OffsetDateTime::now_utc() - h.timestamp).whole_nanoseconds())
                 .context("command took over 292 years")?,
         };
