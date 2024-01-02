@@ -17,7 +17,12 @@ zmodload zsh/datetime 2>/dev/null
 _zsh_autosuggest_strategy_atuin() {
     suggestion=$(atuin search --cmd-only --limit 1 --search-mode prefix "$1")
 }
-ZSH_AUTOSUGGEST_STRATEGY=("atuin" "${ZSH_AUTOSUGGEST_STRATEGY[@]}")
+
+if [ -n "${ZSH_AUTOSUGGEST_STRATEGY:-}" ]; then
+    ZSH_AUTOSUGGEST_STRATEGY=("atuin" "${ZSH_AUTOSUGGEST_STRATEGY[@]}")
+else
+    ZSH_AUTOSUGGEST_STRATEGY=("atuin")
+fi
 
 export ATUIN_SESSION=$(atuin uuid)
 
