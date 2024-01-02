@@ -13,7 +13,16 @@ __atuin_precmd() {
 
     [[ -z "${ATUIN_HISTORY_ID}" ]] && return
 
-    (ATUIN_LOG=error atuin history end --exit "${EXIT}" -- "${ATUIN_HISTORY_ID}" &) >/dev/null 2>&1
+    local duration=""
+    # shellcheck disable=SC2154,SC2309
+    if [[ -n "${BLE_ATTACHED-}" && _ble_bash -ge 50000 && -n "${_ble_exec_time_ata-}" ]]; then
+      # We use the high-resolution duration based on EPOCHREALTIME (bash >=
+      # 5.0) that is recorded by ble.sh. The shell variable
+      # `_ble_exec_time_ata` contains the execution time in microseconds.
+      duration=${_ble_exec_time_ata}000
+    fi
+
+    (ATUIN_LOG=error atuin history end --exit "${EXIT}" ${duration:+--duration "$duration"} -- "${ATUIN_HISTORY_ID}" &) >/dev/null 2>&1
     export ATUIN_HISTORY_ID=""
 }
 
