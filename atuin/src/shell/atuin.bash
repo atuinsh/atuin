@@ -22,50 +22,51 @@ __atuin_set_ret_value() {
 }
 
 __atuin_accept_line() {
-    local HISTORY=$1
+    local __atuin_command=$1
 
     # Reprint the prompt, accounting for multiple lines
+    local __atuin_prompt=${PS1@P}
     local __atuin_prompt_offset
-    __atuin_prompt_offset=$(echo -n "${PS1@P}" | tr -cd '\n' | wc -c)
+    __atuin_prompt_offset=$(printf '%s' "$__atuin_prompt" | wc -l)
     if ((__atuin_prompt_offset > 0)); then
       tput cuu "$__atuin_prompt_offset"
     fi
-    echo "${PS1@P}$HISTORY"
+    printf '%s\n' "$__atuin_prompt$__atuin_command"
 
     # Add it to the bash history
-    history -s "$HISTORY"
+    history -s "$__atuin_command"
 
     # Assuming bash-preexec
     # Invoke every function in the preexec array
-    local preexec_function
-    local preexec_function_ret_value
-    local preexec_ret_value=0
-    for preexec_function in "${preexec_functions[@]:-}"; do
-      if type -t "$preexec_function" 1>/dev/null; then
+    local __atuin_preexec_function
+    local __atuin_preexec_function_ret_value
+    local __atuin_preexec_ret_value=0
+    for __atuin_preexec_function in "${preexec_functions[@]:-}"; do
+      if type -t "$__atuin_preexec_function" 1>/dev/null; then
         __atuin_set_ret_value "${__bp_last_ret_value:-}"
-        "$preexec_function" "$HISTORY"
-        preexec_function_ret_value="$?"
-        if [[ "$preexec_function_ret_value" != 0 ]]; then
-          preexec_ret_value="$preexec_function_ret_value"
+        "$__atuin_preexec_function" "$__atuin_command"
+        __atuin_preexec_function_ret_value="$?"
+        if [[ "$__atuin_preexec_function_ret_value" != 0 ]]; then
+          __atuin_preexec_ret_value="$__atuin_preexec_function_ret_value"
         fi
       fi
     done
 
     # If extdebug is turned on and any preexec function returns non-zero
     # exit status, we do not run the user command.
-    if ! { shopt -q extdebug && ((preexec_ret_value)); }; then
+    if ! { shopt -q extdebug && ((__atuin_preexec_ret_value)); }; then
       # Juggle the terminal settings so that the command can be interacted with
-      local stty_backup
-      stty_backup=$(stty -g)
+      local __atuin_stty_backup
+      __atuin_stty_backup=$(stty -g)
       stty "$ATUIN_STTY"
 
       # Execute the command.  Note: We need to record $? and $_ after the
       # user command within the same call of "eval" because $_ is otherwise
       # overwritten by the last argument of "eval".
       __atuin_set_ret_value "${__bp_last_ret_value-}" "${__bp_last_argument_prev_command-}"
-      eval -- "$HISTORY"$'\n__bp_last_ret_value=$? __bp_last_argument_prev_command=$_'
+      eval -- "$__atuin_command"$'\n__bp_last_ret_value=$? __bp_last_argument_prev_command=$_'
 
-      stty "$stty_backup"
+      stty "$__atuin_stty_backup"
     fi
 
     # Execute preprompt commands
@@ -76,10 +77,9 @@ __atuin_accept_line() {
     done
     # Bash will redraw only the line with the prompt after we finish,
     # so to work for a multiline prompt we need to print it ourselves,
-    # then move up a line
+    # then go to the beginning of the last line.
     __atuin_set_ret_value "${__bp_last_ret_value-}" "${__bp_last_argument_prev_command-}"
-    echo "${PS1@P}"
-    tput cuu 1
+    printf '%s\r' "${PS1@P}"
 }
 
 __atuin_history() {
