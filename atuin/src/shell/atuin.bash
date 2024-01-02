@@ -111,6 +111,24 @@ __atuin_history() {
 # shellcheck disable=SC2154
 if [[ -n "${BLE_VERSION-}" ]] && ((_ble_version >= 400)); then
     ble-import contrib/integration/bash-preexec
+
+    # Define and register an autosuggestion source for ble.sh's auto-complete.
+    # If you'd like to overwrite this, define the same name of shell function
+    # after the $(atuin init bash) line in your .bashrc.  If you do not need
+    # the auto-complete source by atuin, please add the following code to
+    # remove the entry after the $(atuin init bash) line in your .bashrc:
+    #
+    #   ble/util/import/eval-after-load core-complete '
+    #     ble/array#remove _ble_complete_auto_source atuin-history'
+    #
+    function ble/complete/auto-complete/source:atuin-history {
+        local suggestion
+        suggestion=$(atuin search --cmd-only --limit 1 --search-mode prefix "$_ble_edit_str")
+        [[ $suggestion == "$_ble_edit_str"?* ]] || return 1
+        ble/complete/auto-complete/enter h 0 "${suggestion:${#_ble_edit_str}}" '' "$suggestion"
+    }
+    ble/util/import/eval-after-load core-complete '
+        ble/array#unshift _ble_complete_auto_source atuin-history'
 fi
 precmd_functions+=(__atuin_precmd)
 preexec_functions+=(__atuin_preexec)
