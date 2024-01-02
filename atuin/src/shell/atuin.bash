@@ -86,6 +86,9 @@ __atuin_history() {
     # shellcheck disable=SC2048,SC2086
     HISTORY="$(ATUIN_SHELL_BASH=t ATUIN_LOG=error atuin search $* -i -- "${READLINE_LINE}" 3>&1 1>&2 2>&3)"
 
+    # We do nothing when the search is canceled.
+    [[ $HISTORY ]] || return 0
+
     if [[ $HISTORY == __atuin_accept__:* ]]
     then
       HISTORY=${HISTORY#__atuin_accept__:}
