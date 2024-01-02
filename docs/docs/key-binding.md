@@ -143,6 +143,7 @@ $env.config = (
 | alt + 1 to alt + 9                        | Select item by the number located near it                                     |
 | ctrl + c / ctrl + d / ctrl + g / esc      | Return original                                                               |
 | ctrl + y                                  | Copy selected item to clipboard                                               |
+| shift + delete                            | Delete selected item from history                                             |
 | ctrl + ⬅︎ / alt + b                       | Move the cursor to the previous word                                          |
 | ctrl + ➡️ / alt + f                       | Move the cursor to the next word                                              |
 | ctrl + h / ctrl + b / ⬅︎                  | Move the cursor to the left                                                   |

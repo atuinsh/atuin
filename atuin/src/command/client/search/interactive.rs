@@ -39,6 +39,7 @@ use ratatui::{
 
 enum InputAction {
     Accept(usize),
+    Delete(usize),
     Copy(usize),
     ReturnOriginal,
     ReturnQuery,
@@ -125,6 +126,7 @@ impl State {
 
         let ctrl = input.modifiers.contains(KeyModifiers::CONTROL);
         let alt = input.modifiers.contains(KeyModifiers::ALT);
+        let shift = input.modifiers.contains(KeyModifiers::SHIFT);
 
         // Use Ctrl-n instead of Alt-n?
         let modfr = if settings.ctrl_n_shortcuts { ctrl } else { alt };
@@ -195,6 +197,17 @@ impl State {
                 .remove_prev_word(&settings.word_chars, settings.word_jump_mode),
             KeyCode::Backspace => {
                 self.search.input.back();
+            }
+            KeyCode::Delete if shift => {
+                if self.results_len == 0 {
+                    return InputAction::Continue;
+                }
+                self.results_len -= 1;
+                let selected = self.results_state.selected();
+                if selected == self.results_len {
+                    self.results_state.select(selected - 1);
+                }
+                return InputAction::Delete(selected);
             }
             KeyCode::Delete if ctrl => self
                 .search
@@ -684,6 +697,10 @@ pub async fn history(
                     loop {
                         match app.handle_input(settings, &event::read()?, &mut std::io::stdout())? {
                             InputAction::Continue => {},
+                            InputAction::Delete(index) => {
+                                let entry = results.remove(index);
+                                db.delete(entry).await?;
+                            },
                             r => {
                                 accept = app.accept;
                                 break 'render r;
@@ -734,7 +751,7 @@ pub async fn history(
             // * out of bounds -> usually implies no selected entry so we return the input
             Ok(app.search.input.into_inner())
         }
-        InputAction::Continue => {
+        InputAction::Delete(_) | InputAction::Continue => {
             unreachable!("should have been handled!")
         }
     }
