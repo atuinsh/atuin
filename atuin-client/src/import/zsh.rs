@@ -2,6 +2,7 @@
 // automatically hoover up all that we can find
 
 use std::path::PathBuf;
+use std::borrow::Cow;
 
 use async_trait::async_trait;
 use directories::UserDirs;
@@ -61,16 +62,16 @@ impl Importer for Zsh {
 
         let mut counter = 0;
         for b in unix_byte_lines(&self.bytes) {
-            let s = match std::str::from_utf8(b) {
-                Ok(s) => s,
-                Err(_) => continue, // we can skip past things like invalid utf8
+            let s = match unmetafy(b) {
+                Some(s) => s,
+                _ => continue, // we can skip past things like invalid utf8
             };
 
             if let Some(s) = s.strip_suffix('\\') {
                 line.push_str(s);
                 line.push_str("\\\n");
             } else {
-                line.push_str(s);
+                line.push_str(&s);
                 let command = std::mem::take(&mut line);
 
                 if let Some(command) = command.strip_prefix(": ") {
@@ -114,6 +115,26 @@ fn parse_extended(line: &str, counter: i64) -> History {
         .duration(duration);
 
     imported.build().into()
+}
+
+fn unmetafy(line: &[u8]) -> Option<Cow<str>> {
+    if line.contains(&0x83) {
+        let mut s = Vec::with_capacity(line.len());
+        let mut is_meta = false;
+        for ch in line {
+            if *ch == 0x83 {
+                is_meta = true;
+            } else if is_meta {
+                is_meta = false;
+                s.push(*ch ^ 32);
+            } else {
+                s.push(*ch)
+            }
+        }
+        String::from_utf8(s).ok().map(Cow::Owned)
+    } else {
+        std::str::from_utf8(line).ok().map(Cow::Borrowed)
+    }
 }
 
 #[cfg(test)]
@@ -185,6 +206,26 @@ cargo update
                 "cargo install atuin",
                 "cargo install atuin; \\\ncargo update",
                 "cargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷",
+            ],
+        );
+    }
+
+    #[tokio::test]
+    async fn test_parse_metafied() {
+        let bytes = b"echo \xe4\xbd\x83\x80\xe5\xa5\xbd\nls ~/\xe9\x83\xbf\xb3\xe4\xb9\x83\xb0\n"
+        .to_vec();
+
+        let mut zsh = Zsh { bytes };
+        assert_eq!(zsh.entries().await.unwrap(), 2);
+
+        let mut loader = TestLoader::default();
+        zsh.load(&mut loader).await.unwrap();
+
+        assert_equal(
+            loader.buf.iter().map(|h| h.command.as_str()),
+            [
+                "echo 你好",
+                "ls ~/音乐",
             ],
         );
     }
