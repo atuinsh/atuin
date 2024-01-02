@@ -183,8 +183,8 @@ esac
 # TODO: Check which shell is in use
 # Use of single quotes around $() is intentional here
 # shellcheck disable=SC2016
-if ! grep -q "atuin init zsh" ~/.zshrc; then
-  printf '\neval "$(atuin init zsh)"\n' >> ~/.zshrc
+if ! grep -q "atuin init zsh" "${ZDOTDIR:-$HOME}/.zshrc"; then
+  printf '\neval "$(atuin init zsh)"\n' >> "${ZDOTDIR:-$HOME}/.zshrc"
 fi
 
 # Use of single quotes around $() is intentional here
@@ -212,7 +212,7 @@ cat << EOF
 
 Thanks for installing Atuin! I really hope you like it.
 
-If you have any issues, please open an issue on GitHub or visit our Discord (https://discord.gg/dPhv2B3x)!
+If you have any issues, please open an issue on GitHub or visit our Discord (https://discord.gg/jR3tfchVvW)!
 
 If you love Atuin, please give us a star on GitHub! It really helps ⭐️ https://github.com/atuinsh/atuin
 

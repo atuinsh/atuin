@@ -144,6 +144,36 @@ pub enum WordJumpMode {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+pub struct Stats {
+    #[serde(default = "Stats::common_prefix_default")]
+    pub common_prefix: Vec<String>, // sudo, etc. commands we want to strip off
+    #[serde(default = "Stats::common_subcommands_default")]
+    pub common_subcommands: Vec<String>, // kubectl, commands we should consider subcommands for
+}
+
+impl Stats {
+    fn common_prefix_default() -> Vec<String> {
+        vec!["sudo", "doas"].into_iter().map(String::from).collect()
+    }
+
+    fn common_subcommands_default() -> Vec<String> {
+        vec!["cargo", "go", "git", "npm", "yarn", "pnpm", "kubectl"]
+            .into_iter()
+            .map(String::from)
+            .collect()
+    }
+}
+
+impl Default for Stats {
+    fn default() -> Self {
+        Self {
+            common_prefix: Self::common_prefix_default(),
+            common_subcommands: Self::common_subcommands_default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
 pub struct Settings {
     pub dialect: Dialect,
     pub style: Style,
@@ -169,10 +199,13 @@ pub struct Settings {
     pub word_jump_mode: WordJumpMode,
     pub word_chars: String,
     pub scroll_context_lines: usize,
+
     #[serde(with = "serde_regex", default = "RegexSet::empty")]
     pub history_filter: RegexSet,
+
     #[serde(with = "serde_regex", default = "RegexSet::empty")]
     pub cwd_filter: RegexSet,
+
     pub secrets_filter: bool,
     pub workspaces: bool,
     pub ctrl_n_shortcuts: bool,
@@ -181,9 +214,18 @@ pub struct Settings {
     pub network_timeout: u64,
     pub enter_accept: bool,
 
+    #[serde(default)]
+    pub stats: Stats,
+
     // This is automatically loaded when settings is created. Do not set in
     // config! Keep secrets and settings apart.
+    #[serde(skip)]
     pub session_token: String,
+
+    // This is determined at startup and cached.
+    // This is due to non-threadsafe get-env limitations.
+    #[serde(skip)]
+    pub local_tz: Option<time::UtcOffset>,
 }
 
 impl Settings {
@@ -451,6 +493,8 @@ impl Settings {
         } else {
             settings.session_token = String::from("not logged in");
         }
+
+        settings.local_tz = time::UtcOffset::current_local_offset().ok();
 
         Ok(settings)
     }

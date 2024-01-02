@@ -29,7 +29,7 @@ use super::{
 };
 use crate::{command::client::search::engines, VERSION};
 use ratatui::{
-    backend::{Backend, CrosstermBackend},
+    backend::CrosstermBackend,
     layout::{Alignment, Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
@@ -41,6 +41,7 @@ const RETURN_ORIGINAL: usize = usize::MAX;
 const RETURN_QUERY: usize = usize::MAX - 1;
 const COPY_QUERY: usize = usize::MAX - 2;
 
+#[allow(clippy::struct_field_names)]
 struct State {
     history_count: i64,
     update_needed: Option<Version>,
@@ -64,8 +65,10 @@ struct StyleState {
 impl State {
     async fn query_results(&mut self, db: &mut dyn Database) -> Result<Vec<History>> {
         let results = self.engine.query(&self.search, db).await?;
+
         self.results_state.select(0);
         self.results_len = results.len();
+
         Ok(results)
     }
 
@@ -312,7 +315,7 @@ impl State {
 
     #[allow(clippy::cast_possible_truncation)]
     #[allow(clippy::bool_to_int_with_if)]
-    fn draw<T: Backend>(&mut self, f: &mut Frame<'_, T>, results: &[History], settings: &Settings) {
+    fn draw(&mut self, f: &mut Frame, results: &[History], settings: &Settings) {
         let compact = match settings.style {
             atuin_client::settings::Style::Auto => f.size().height < 14,
             atuin_client::settings::Style::Compact => true,

@@ -31,7 +31,7 @@ Please do try and read this guide, but if you're in a hurry and want to get
 started quickly:
 
 ```
-bash <(curl https://raw.githubusercontent.com/ellie/atuin/main/install.sh)
+bash <(curl --proto '=https' --tlsv1.2 -sSf https://setup.atuin.sh)
 
 atuin register -u <USERNAME> -e <EMAIL>
 atuin import auto
@@ -53,9 +53,19 @@ bindings](https://atuin.sh/docs/key-binding#disable-up-arrow)
 Let's get started! First up, you will want to install Atuin. We have an install
 script which handles most of the commonly used platforms and package managers:
 
+## bash/zsh
+
 ```
-bash <(curl https://raw.githubusercontent.com/ellie/atuin/main/install.sh)
+bash <(curl --proto '=https' --tlsv1.2 -sSf https://setup.atuin.sh)
 ```
+
+## fish
+
+```
+bash (curl --proto '=https' --tlsv1.2 -sSf https://setup.atuin.sh | psub)
+```
+
+## Importing
 
 The script will install the binary and attempt to configure your shell. Atuin
 uses a shell plugin to ensure that we capture new shell history. But for older
@@ -164,5 +174,7 @@ curl https://api.atuin.sh/enable -d $(cat ~/.local/share/atuin/session)
   
 The response includes the URL to your graph. Feel free to share and/or embed
 this URL, the token is _not_ a secret, and simply prevents user enumeration. 
-  
-  
+
+## Known issues
+- SQLite has some issues with ZFS in certain configurations. As Atuin uses SQLite, this may cause your shell to become slow! We have an [issue](https://github.com/atuinsh/atuin/issues/952) to track, with some workarounds
+- SQLite also does not tend to like network filesystems (eg, NFS)

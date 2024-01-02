@@ -6,6 +6,7 @@ use axum::{
     Json,
 };
 use http::StatusCode;
+use metrics::counter;
 use time::{Month, UtcOffset};
 use tracing::{debug, error, instrument};
 
@@ -65,6 +66,8 @@ pub async fn list<DB: Database>(
 
     if req.sync_ts.unix_timestamp_nanos() < 0 || req.history_ts.unix_timestamp_nanos() < 0 {
         error!("client asked for history from < epoch 0");
+        counter!("atuin_history_epoch_before_zero", 1);
+
         return Err(
             ErrorResponse::reply("asked for history from before epoch 0")
                 .with_status(StatusCode::BAD_REQUEST),
@@ -92,6 +95,8 @@ pub async fn list<DB: Database>(
         history.len(),
         user.id
     );
+
+    counter!("atuin_history_returned", history.len() as u64);
 
     Ok(Json(SyncHistoryResponse { history }))
 }
@@ -127,6 +132,7 @@ pub async fn add<DB: Database>(
     let State(AppState { database, settings }) = state;
 
     debug!("request to add {} history items", req.len());
+    counter!("atuin_history_uploaded", req.len() as u64);
 
     let mut history: Vec<NewHistory> = req
         .into_iter()
@@ -146,6 +152,8 @@ pub async fn add<DB: Database>(
         // Don't return an error here. We want to insert as much of the
         // history list as we can, so log the error and continue going.
         if !keep {
+            counter!("atuin_history_too_long", 1);
+
             tracing::warn!(
                 "history too long, got length {}, max {}",
                 h.data.len(),

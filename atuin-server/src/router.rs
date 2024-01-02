@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use atuin_common::api::ErrorResponse;
+use atuin_common::api::{ErrorResponse, ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION};
 use axum::{
     extract::FromRequestParts,
     http::Request,
@@ -16,6 +16,7 @@ use tower_http::trace::TraceLayer;
 use super::handlers;
 use crate::{
     handlers::{ErrorResponseStatus, RespExt},
+    metrics,
     settings::Settings,
 };
 use atuin_server_database::{models::User, Database, DbError};
@@ -81,12 +82,22 @@ async fn teapot() -> impl IntoResponse {
 async fn clacks_overhead<B>(request: Request<B>, next: Next<B>) -> Response {
     let mut response = next.run(request).await;
 
-    let gnu_terry_value = "GNU Terry Pratchett";
+    let gnu_terry_value = "GNU Terry Pratchett, Kris Nova";
     let gnu_terry_header = "X-Clacks-Overhead";
 
     response
         .headers_mut()
         .insert(gnu_terry_header, gnu_terry_value.parse().unwrap());
+    response
+}
+
+/// Ensure that we only try and sync with clients on the same major version
+async fn semver<B>(request: Request<B>, next: Next<B>) -> Response {
+    let mut response = next.run(request).await;
+    response
+        .headers_mut()
+        .insert(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION.parse().unwrap());
+
     response
 }
 
@@ -124,6 +135,8 @@ pub fn router<DB: Database>(database: DB, settings: Settings<DB::Settings>) -> R
     .layer(
         ServiceBuilder::new()
             .layer(axum::middleware::from_fn(clacks_overhead))
-            .layer(TraceLayer::new_for_http()),
+            .layer(TraceLayer::new_for_http())
+            .layer(axum::middleware::from_fn(metrics::track_metrics))
+            .layer(axum::middleware::from_fn(semver)),
     )
 }

@@ -6,6 +6,12 @@ Atuin doesn't require anything super special to develop - standard Rust tooling 
 
 Before working on anything, we suggest taking a copy of your Atuin data directory (`~/.local/share/atuin` on most \*nix platforms). If anything goes wrong, you can always restore it!
 
+## What to work on?
+
+Any issues labeled "bug" or "help wanted" would be fantastic, just drop a comment and feel free to ask for help!
+
+If there's anything you want to work on that isn't already an issue, either open a feature request or get in touch on Discord. 
+
 ## Setup
 
 ```

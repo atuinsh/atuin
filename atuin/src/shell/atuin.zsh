@@ -9,6 +9,15 @@
 # Source this in your ~/.zshrc
 autoload -U add-zsh-hook
 
+
+# If zsh-autosuggestions is installed, configure it to use Atuin's search. If
+# you'd like to override this, then add your config after the $(atuin init zsh)
+# in your .zshrc
+_zsh_autosuggest_strategy_atuin() {
+    suggestion=$(atuin search --cmd-only --limit 1 --search-mode prefix "$1")
+}
+ZSH_AUTOSUGGEST_STRATEGY=("atuin" "${ZSH_AUTOSUGGEST_STRATEGY[@]}")
+
 export ATUIN_SESSION=$(atuin uuid)
 
 _atuin_preexec() {
@@ -40,17 +49,22 @@ _atuin_search() {
     if [[ -n $output ]]; then
         RBUFFER=""
         LBUFFER=$output
-    fi
 
-    if [[ $LBUFFER == __atuin_accept__:* ]]
-    then
-        LBUFFER=${LBUFFER#__atuin_accept__:}
-        zle accept-line
+        if [[ $LBUFFER == __atuin_accept__:* ]]
+        then
+            LBUFFER=${LBUFFER#__atuin_accept__:}
+            zle accept-line
+        fi
     fi
 }
 
 _atuin_up_search() {
-    _atuin_search --shell-up-key-binding
+    # Only trigger if the buffer is a single line
+    if [[ ! $BUFFER == *$'\n'* ]]; then
+        _atuin_search --shell-up-key-binding
+    else
+        zle up-line
+    fi
 }
 
 add-zsh-hook preexec _atuin_preexec

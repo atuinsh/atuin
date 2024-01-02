@@ -11,8 +11,8 @@ homepage = { workspace = true }
 repository = { workspace = true }
 
 [dependencies]
-atuin-common = { path = "../atuin-common", version = "17.0.0" }
-atuin-server-database = { path = "../atuin-server-database", version = "17.0.0" }
+atuin-common = { path = "../atuin-common", version = "17.1.0" }
+atuin-server-database = { path = "../atuin-server-database", version = "17.1.0" }
 
 tracing = "0.1"
 time = { workspace = true }
@@ -26,10 +26,17 @@ rand = { workspace = true }
 tokio = { workspace = true }
 async-trait = { workspace = true }
 axum = "0.6.4"
+axum-server = { version = "0.5.1", features = ["tls-rustls"] }
 http = "0.2"
+hyper = "0.14"
+hyper-rustls = "0.24"
 fs-err = { workspace = true }
 tower = "0.4"
 tower-http = { version = "0.4", features = ["trace"] }
 reqwest = { workspace = true }
+rustls = "0.21"
+rustls-pemfile = "1.0"
 argon2 = "0.5.0"
 semver = { workspace = true }
+metrics-exporter-prometheus = "0.12.1"
+metrics = "0.21.1"
