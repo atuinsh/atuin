@@ -30,17 +30,28 @@ __atuin_set_ret_value() {
     return ${1:+"$1"}
 }
 
+# The expansion ${PS1@P} is available in bash >= 4.4.
+if ((BASH_VERSINFO[0] >= 5 || BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4)); then
+    __atuin_use_prompt_expansion=true
+else
+    __atuin_use_prompt_expansion=false
+fi
+
 __atuin_accept_line() {
     local __atuin_command=$1
 
     # Reprint the prompt, accounting for multiple lines
-    local __atuin_prompt=${PS1@P}
-    local __atuin_prompt_offset
-    __atuin_prompt_offset=$(printf '%s' "$__atuin_prompt" | wc -l)
-    if ((__atuin_prompt_offset > 0)); then
-      tput cuu "$__atuin_prompt_offset"
+    if [[ $__atuin_use_prompt_expansion == true ]]; then
+        local __atuin_prompt=${PS1@P}
+        local __atuin_prompt_offset
+        __atuin_prompt_offset=$(printf '%s' "$__atuin_prompt" | wc -l)
+        if ((__atuin_prompt_offset > 0)); then
+            tput cuu "$__atuin_prompt_offset"
+        fi
+        printf '%s\n' "$__atuin_prompt$__atuin_command"
+    else
+        printf '%s\n' "\$ $__atuin_command"
     fi
-    printf '%s\n' "$__atuin_prompt$__atuin_command"
 
     # Add it to the bash history
     history -s "$__atuin_command"
@@ -87,8 +98,10 @@ __atuin_accept_line() {
     # Bash will redraw only the line with the prompt after we finish,
     # so to work for a multiline prompt we need to print it ourselves,
     # then go to the beginning of the last line.
-    __atuin_set_ret_value "${__bp_last_ret_value-}" "${__bp_last_argument_prev_command-}"
-    printf '%s\r' "${PS1@P}"
+    if [[ $__atuin_use_prompt_expansion == true ]]; then
+        __atuin_set_ret_value "${__bp_last_ret_value-}" "${__bp_last_argument_prev_command-}"
+        printf '%s\r' "${PS1@P}"
+    fi
 }
 
 __atuin_history() {
