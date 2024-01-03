@@ -150,6 +150,13 @@ Then restart your shell!
 
 ## Install
 
+<details>
+<summary>Packaging status</summary>
+<a href="https://repology.org/project/atuin/versions">
+    <img src="https://repology.org/badge/vertical-allrepos/atuin.svg?columns=3" alt="Packaging status">
+</a>
+</details>
+
 ### Script (recommended)
 
 The install script will help you through the setup, ensuring your shell is
