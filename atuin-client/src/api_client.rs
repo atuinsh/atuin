@@ -267,10 +267,18 @@ impl<'a> Client<'a> {
     }
 
     pub async fn post_records(&self, records: &[Record<EncryptedData>]) -> Result<()> {
-        let url = format!("{}/record", self.sync_addr);
+        let url = format!("{}/api/v0/record", self.sync_addr);
         let url = Url::parse(url.as_str())?;
 
-        self.client.post(url).json(records).send().await?;
+        let resp = self.client.post(url).json(records).send().await?;
+        info!("posted records, got {}", resp.status());
+
+        if !resp.status().is_success() {
+            error!(
+                "failed to post records to server; got: {:?}",
+                resp.text().await
+            );
+        }
 
         Ok(())
     }
@@ -290,7 +298,7 @@ impl<'a> Client<'a> {
         );
 
         let url = format!(
-            "{}/record/next?host={}&tag={}&count={}&start={}",
+            "{}/api/v0/record/next?host={}&tag={}&count={}&start={}",
             self.sync_addr, host.0, tag, count, start
         );
 
@@ -304,7 +312,7 @@ impl<'a> Client<'a> {
     }
 
     pub async fn record_status(&self) -> Result<RecordStatus> {
-        let url = format!("{}/record", self.sync_addr);
+        let url = format!("{}/api/v0/record", self.sync_addr);
         let url = Url::parse(url.as_str())?;
 
         let resp = self.client.get(url).send().await?;

@@ -167,12 +167,17 @@ async fn sync_upload(
         let page = store
             .next(host, tag.as_str(), remote + progress, upload_page_size)
             .await
-            .map_err(|_| SyncError::LocalStoreError)?;
+            .map_err(|e| {
+                error!("failed to read upload page: {e:?}");
 
-        client
-            .post_records(&page)
-            .await
-            .map_err(|_| SyncError::RemoteRequestError)?;
+                SyncError::LocalStoreError
+            })?;
+
+        client.post_records(&page).await.map_err(|e| {
+            error!("failed to post records: {e:?}");
+
+            SyncError::RemoteRequestError
+        })?;
 
         println!(
             "uploaded {} to remote, progress {}/{}",
