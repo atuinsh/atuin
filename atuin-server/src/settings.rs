@@ -70,7 +70,7 @@ impl<DbSettings: DeserializeOwned> Settings<DbSettings> {
             .set_default("metrics.port", 9001)?
             .set_default("tls.enable", false)?
             .set_default("tls.cert_path", "")?
-            .set_default("tls.key_path", "")?
+            .set_default("tls.pkey_path", "")?
             .add_source(
                 Environment::with_prefix("atuin")
                     .prefix_separator("_")
@@ -105,6 +105,7 @@ pub fn example_config() -> &'static str {
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct Tls {
     pub enable: bool,
+
     pub cert_path: PathBuf,
     pub pkey_path: PathBuf,
 }
