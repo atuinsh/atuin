@@ -2,6 +2,58 @@
 
 All notable changes to this project will be documented in this file.
 
+## [17.2.0] - 2024-01-03
+
+### Bug Fixes
+
+- Fix typo ([#1439](https://github.com/atuinsh/atuin/issues/1439))
+- Don't require all fields under [stats] ([#1437](https://github.com/atuinsh/atuin/issues/1437))
+- Disallow deletion if the '--limit' flag is present ([#1436](https://github.com/atuinsh/atuin/issues/1436))
+- Respect ZSH's $ZDOTDIR environment variable ([#1441](https://github.com/atuinsh/atuin/issues/1441))
+- Fix loss of the last output line with enter_accept ([#1463](https://github.com/atuinsh/atuin/issues/1463))
+- Ignore struct_field_names ([#1466](https://github.com/atuinsh/atuin/issues/1466))
+- Improve the support for `enter_accept` with `ble.sh` ([#1465](https://github.com/atuinsh/atuin/issues/1465))
+- Discord link expired
+- Discord broken link
+- Fix small issues of `enter_accept` for the plain Bash ([#1467](https://github.com/atuinsh/atuin/issues/1467))
+- Time now_local not working 
+- Fix quirks on search cancel ([#1483](https://github.com/atuinsh/atuin/issues/1483))
+- Zsh_autosuggest_strategy for no-unset environment ([#1486](https://github.com/atuinsh/atuin/issues/1486))
+- Fix error by the use of ${PS1@P} in bash < 4.4 ([#1488](https://github.com/atuinsh/atuin/issues/1488))
+- Zsh use a special format to escape some characters ([#1490](https://github.com/atuinsh/atuin/issues/1490))
+
+### Documentation
+
+- Add actuated linkback
+- Add link to forum
+- Align setup links in docs and readme ([#1446](https://github.com/atuinsh/atuin/issues/1446))
+- Add Void Linux install instruction ([#1445](https://github.com/atuinsh/atuin/issues/1445))
+- Add fish install script ([#1447](https://github.com/atuinsh/atuin/issues/1447))
+- Correct link
+- Fix light/dark mode logo
+- Use picture element for logo
+- Add docs for zsh-autosuggestion integration ([#1480](https://github.com/atuinsh/atuin/issues/1480))
+- Remove stray character from README
+- Update logo ([#1481](https://github.com/atuinsh/atuin/issues/1481))
+
+### Features
+
+- Add semver checking to client requests ([#1456](https://github.com/atuinsh/atuin/issues/1456))
+- Add TLS to atuin-server ([#1457](https://github.com/atuinsh/atuin/issues/1457))
+- Integrate with zsh-autosuggestions ([#1479](https://github.com/atuinsh/atuin/issues/1479))
+- Support high-resolution duration if available ([#1484](https://github.com/atuinsh/atuin/issues/1484))
+- Provide auto-complete source for ble.sh ([#1487](https://github.com/atuinsh/atuin/issues/1487))
+
+### Miscellaneous Tasks
+
+- Remove issue config ([#1433](https://github.com/atuinsh/atuin/issues/1433))
+- Remove issue template ([#1444](https://github.com/atuinsh/atuin/issues/1444))
+
+### Refactor
+
+- Factorize `__atuin_accept_line` ([#1476](https://github.com/atuinsh/atuin/issues/1476))
+- Refactor and optimize `__atuin_accept_line` ([#1482](https://github.com/atuinsh/atuin/issues/1482))
+
 ## [17.1.0] - 2023-12-10
 
 ### Bug Fixes
