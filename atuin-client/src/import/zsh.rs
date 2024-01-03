@@ -1,8 +1,8 @@
 // import old shell history!
 // automatically hoover up all that we can find
 
-use std::path::PathBuf;
 use std::borrow::Cow;
+use std::path::PathBuf;
 
 use async_trait::async_trait;
 use directories::UserDirs;
@@ -212,8 +212,8 @@ cargo update
 
     #[tokio::test]
     async fn test_parse_metafied() {
-        let bytes = b"echo \xe4\xbd\x83\x80\xe5\xa5\xbd\nls ~/\xe9\x83\xbf\xb3\xe4\xb9\x83\xb0\n"
-        .to_vec();
+        let bytes =
+            b"echo \xe4\xbd\x83\x80\xe5\xa5\xbd\nls ~/\xe9\x83\xbf\xb3\xe4\xb9\x83\xb0\n".to_vec();
 
         let mut zsh = Zsh { bytes };
         assert_eq!(zsh.entries().await.unwrap(), 2);
@@ -223,10 +223,7 @@ cargo update
 
         assert_equal(
             loader.buf.iter().map(|h| h.command.as_str()),
-            [
-                "echo 你好",
-                "ls ~/音乐",
-            ],
+            ["echo 你好", "ls ~/音乐"],
         );
     }
 }
