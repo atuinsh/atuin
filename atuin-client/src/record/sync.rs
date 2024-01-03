@@ -163,7 +163,7 @@ async fn sync_upload(
     );
 
     // preload with the first entry if remote does not know of this store
-    while progress < expected {
+    loop {
         let page = store
             .next(host, tag.as_str(), remote + progress, upload_page_size)
             .await
@@ -186,6 +186,10 @@ async fn sync_upload(
             expected
         );
         progress += page.len() as u64;
+
+        if progress >= expected {
+            break;
+        }
     }
 
     Ok(progress as i64)
@@ -212,7 +216,7 @@ async fn sync_download(
     );
 
     // preload with the first entry if remote does not know of this store
-    while progress < expected {
+    loop {
         let page = client
             .next_records(host, tag.clone(), local + progress, download_page_size)
             .await
@@ -231,6 +235,10 @@ async fn sync_download(
         );
 
         progress += page.len() as u64;
+
+        if progress >= expected {
+            break;
+        }
     }
 
     Ok(progress as i64)

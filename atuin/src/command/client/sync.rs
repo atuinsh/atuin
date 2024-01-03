@@ -83,7 +83,7 @@ async fn run(
 
     println!("{uploaded}/{downloaded} up/down to record store");
 
-    //atuin_client::sync::sync(settings, force, db).await?;
+    atuin_client::sync::sync(settings, force, db).await?;
 
     println!(
         "Sync complete! {} items in history database, force: {}",
