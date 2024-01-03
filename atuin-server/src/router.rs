@@ -76,7 +76,9 @@ where
 }
 
 async fn teapot() -> impl IntoResponse {
-    (http::StatusCode::IM_A_TEAPOT, "🫖")
+    // This used to return 418: 🫖
+    // Much as it was fun, it wasn't as useful or informative as it should be
+    (http::StatusCode::NOT_FOUND, "404 not found")
 }
 
 async fn clacks_overhead<B>(request: Request<B>, next: Next<B>) -> Response {
