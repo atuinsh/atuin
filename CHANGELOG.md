@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [17.2.1] - 2024-01-03
+
+### Bug Fixes
+
+- Typo with default config ([#1493](https://github.com/atuinsh/atuin/issues/1493))
+
 ## [17.2.0] - 2024-01-03
 
 ### Bug Fixes

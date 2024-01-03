@@ -165,7 +165,7 @@ dependencies = [
 
 [[package]]
 name = "atuin"
-version = "17.2.0"
+version = "17.2.1"
 dependencies = [
  "async-trait",
  "atuin-client",
@@ -206,7 +206,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-client"
-version = "17.2.0"
+version = "17.2.1"
 dependencies = [
  "async-trait",
  "atuin-common",
@@ -252,7 +252,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-common"
-version = "17.2.0"
+version = "17.2.1"
 dependencies = [
  "eyre",
  "lazy_static",
@@ -268,7 +268,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-server"
-version = "17.2.0"
+version = "17.2.1"
 dependencies = [
  "argon2",
  "async-trait",
@@ -302,7 +302,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-server-database"
-version = "17.2.0"
+version = "17.2.1"
 dependencies = [
  "async-trait",
  "atuin-common",
@@ -315,7 +315,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-server-postgres"
-version = "17.2.0"
+version = "17.2.1"
 dependencies = [
  "async-trait",
  "atuin-common",
