@@ -304,7 +304,7 @@ impl Cmd {
         };
 
         db.update(&h).await?;
-        store.push(&h).await?;
+        store.push(h).await?;
 
         if settings.should_sync()? {
             #[cfg(feature = "sync")]
