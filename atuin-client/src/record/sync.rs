@@ -178,6 +178,12 @@ async fn sync_upload(
             SyncError::RemoteRequestError
         })?;
 
+        println!(
+            "uploaded {} to remote, progress {}/{}",
+            page.len(),
+            progress,
+            expected
+        );
         progress += page.len() as u64;
 
         if progress >= expected {
@@ -219,6 +225,13 @@ async fn sync_download(
             .push_batch(page.iter())
             .await
             .map_err(|_| SyncError::LocalStoreError)?;
+
+        println!(
+            "downloaded {} records from remote, progress {}/{}",
+            page.len(),
+            progress,
+            expected
+        );
 
         progress += page.len() as u64;
 

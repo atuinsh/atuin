@@ -86,6 +86,10 @@ pub enum Cmd {
         #[arg(long, short)]
         format: Option<String>,
     },
+
+    /// Import all old history.db data into the record store. Do not run more than once, and do not
+    /// run unless you know what you're doing (or the docs ask you to)
+    InitStore,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -372,6 +376,37 @@ impl Cmd {
         Ok(())
     }
 
+    async fn init_store(
+        context: atuin_client::database::Context,
+        db: &impl Database,
+        store: HistoryStore,
+    ) -> Result<()> {
+        println!("Importing all history.db data into records.db");
+
+        let history = db
+            .list(
+                atuin_client::settings::FilterMode::Global,
+                &context,
+                None,
+                false,
+                true,
+            )
+            .await?;
+
+        for i in history {
+            println!("loaded {}", i.id);
+
+            if i.deleted_at.is_some() {
+                store.push(i.clone()).await?;
+                store.delete(i.id).await?;
+            } else {
+                store.push(i).await?;
+            }
+        }
+
+        Ok(())
+    }
+
     pub async fn run(
         self,
         settings: &Settings,
@@ -425,6 +460,8 @@ impl Cmd {
 
                 Ok(())
             }
+
+            Self::InitStore => Self::init_store(context, db, history_store).await,
         }
     }
 }
