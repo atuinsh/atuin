@@ -21,7 +21,7 @@ use uuid::Uuid;
 
 use super::store::Store;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SqliteStore {
     pool: SqlitePool,
 }

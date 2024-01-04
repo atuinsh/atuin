@@ -14,7 +14,7 @@ use atuin_client::{
     database::{current_context, Database},
     encryption,
     history::{store::HistoryStore, History},
-    record::sqlite_store::SqliteStore,
+    record::{self, sqlite_store::SqliteStore},
     settings::Settings,
 };
 
@@ -278,7 +278,8 @@ impl Cmd {
 
     async fn handle_end(
         db: &impl Database,
-        store: HistoryStore,
+        store: SqliteStore,
+        history_store: HistoryStore,
         settings: &Settings,
         id: &str,
         exit: i64,
@@ -308,11 +309,20 @@ impl Cmd {
         };
 
         db.update(&h).await?;
-        store.push(h).await?;
+        history_store.push(h).await?;
 
         if settings.should_sync()? {
             #[cfg(feature = "sync")]
             {
+                if settings.sync.records {
+                    let (diff, _) = record::sync::diff(settings, &store).await?;
+                    let operations = record::sync::operations(diff, &store).await?;
+                    let (uploaded, downloaded) =
+                        record::sync::sync_remote(operations, &store, settings).await?;
+
+                    println!("{uploaded}/{downloaded} up/down to record store");
+                }
+
                 debug!("running periodic background sync");
                 sync::sync(settings, false, db).await?;
             }
@@ -420,12 +430,12 @@ impl Cmd {
             .into();
 
         let host_id = Settings::host_id().expect("failed to get host_id");
-        let history_store = HistoryStore::new(store, host_id, encryption_key);
+        let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
         match self {
             Self::Start { command } => Self::handle_start(db, settings, &command).await,
             Self::End { id, exit, duration } => {
-                Self::handle_end(db, history_store, settings, &id, exit, duration).await
+                Self::handle_end(db, store, history_store, settings, &id, exit, duration).await
             }
             Self::List {
                 session,

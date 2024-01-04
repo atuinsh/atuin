@@ -45,10 +45,7 @@ pub enum Operation {
     },
 }
 
-pub async fn diff(
-    settings: &Settings,
-    store: &mut impl Store,
-) -> Result<(Vec<Diff>, RecordStatus)> {
+pub async fn diff(settings: &Settings, store: &impl Store) -> Result<(Vec<Diff>, RecordStatus)> {
     let client = Client::new(
         &settings.sync_address,
         &settings.session_token,
@@ -142,7 +139,7 @@ pub async fn operations(
 }
 
 async fn sync_upload(
-    store: &mut impl Store,
+    store: &impl Store,
     client: &Client<'_>,
     host: HostId,
     tag: String,
@@ -195,7 +192,7 @@ async fn sync_upload(
 }
 
 async fn sync_download(
-    store: &mut impl Store,
+    store: &impl Store,
     client: &Client<'_>,
     host: HostId,
     tag: String,
@@ -245,7 +242,7 @@ async fn sync_download(
 
 pub async fn sync_remote(
     operations: Vec<Operation>,
-    local_store: &mut impl Store,
+    local_store: &impl Store,
     settings: &Settings,
 ) -> Result<(i64, i64), SyncError> {
     let client = Client::new(
