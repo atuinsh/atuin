@@ -37,9 +37,13 @@ use ratatui::{
     Frame, Terminal, TerminalOptions, Viewport,
 };
 
-const RETURN_ORIGINAL: usize = usize::MAX;
-const RETURN_QUERY: usize = usize::MAX - 1;
-const COPY_QUERY: usize = usize::MAX - 2;
+enum InputAction {
+    Accept(usize),
+    Copy(usize),
+    ReturnOriginal,
+    ReturnQuery,
+    Continue,
+}
 
 #[allow(clippy::struct_field_names)]
 struct State {
@@ -77,7 +81,7 @@ impl State {
         settings: &Settings,
         input: &Event,
         w: &mut W,
-    ) -> Result<Option<usize>>
+    ) -> Result<InputAction>
     where
         W: Write,
     {
@@ -86,13 +90,13 @@ impl State {
             Event::Key(k) => self.handle_key_input(settings, k),
             Event::Mouse(m) => self.handle_mouse_input(*m),
             Event::Paste(d) => self.handle_paste_input(d),
-            _ => None,
+            _ => InputAction::Continue,
         };
         execute!(w, DisableMouseCapture)?;
         Ok(r)
     }
 
-    fn handle_mouse_input(&mut self, input: MouseEvent) -> Option<usize> {
+    fn handle_mouse_input(&mut self, input: MouseEvent) -> InputAction {
         match input.kind {
             event::MouseEventKind::ScrollDown => {
                 self.scroll_down(1);
@@ -102,21 +106,21 @@ impl State {
             }
             _ => {}
         }
-        None
+        InputAction::Continue
     }
 
-    fn handle_paste_input(&mut self, input: &str) -> Option<usize> {
+    fn handle_paste_input(&mut self, input: &str) -> InputAction {
         for i in input.chars() {
             self.search.input.insert(i);
         }
-        None
+        InputAction::Continue
     }
 
     #[allow(clippy::too_many_lines)]
     #[allow(clippy::cognitive_complexity)]
-    fn handle_key_input(&mut self, settings: &Settings, input: &KeyEvent) -> Option<usize> {
+    fn handle_key_input(&mut self, settings: &Settings, input: &KeyEvent) -> InputAction {
         if input.kind == event::KeyEventKind::Release {
-            return None;
+            return InputAction::Continue;
         }
 
         let ctrl = input.modifiers.contains(KeyModifiers::CONTROL);
@@ -128,29 +132,30 @@ impl State {
         // reset the state, will be set to true later if user really did change it
         self.switched_search_mode = false;
         match input.code {
-            KeyCode::Char('c' | 'g') if ctrl => return Some(RETURN_ORIGINAL),
+            KeyCode::Char('c' | 'g') if ctrl => return InputAction::ReturnOriginal,
             KeyCode::Esc => {
-                return Some(match settings.exit_mode {
-                    ExitMode::ReturnOriginal => RETURN_ORIGINAL,
-                    ExitMode::ReturnQuery => RETURN_QUERY,
-                })
+                return match settings.exit_mode {
+                    ExitMode::ReturnOriginal => InputAction::ReturnOriginal,
+                    ExitMode::ReturnQuery => InputAction::ReturnQuery,
+                }
             }
             KeyCode::Tab => {
-                return Some(self.results_state.selected());
+                return InputAction::Accept(self.results_state.selected());
             }
             KeyCode::Enter => {
                 if settings.enter_accept {
                     self.accept = true;
                 }
 
-                return Some(self.results_state.selected());
+                return InputAction::Accept(self.results_state.selected());
             }
             KeyCode::Char('y') if ctrl => {
-                return Some(COPY_QUERY);
+                return InputAction::Copy(self.results_state.selected());
             }
             KeyCode::Char(c @ '1'..='9') if modfr => {
-                let c = c.to_digit(10)? as usize;
-                return Some(self.results_state.selected() + c);
+                return c.to_digit(10).map_or(InputAction::Continue, |c| {
+                    InputAction::Accept(self.results_state.selected() + c as usize)
+                })
             }
             KeyCode::Left if ctrl => self
                 .search
@@ -200,7 +205,7 @@ impl State {
             }
             KeyCode::Char('d') if ctrl => {
                 if self.search.input.as_str().is_empty() {
-                    return Some(RETURN_ORIGINAL);
+                    return InputAction::ReturnOriginal;
                 }
                 self.search.input.remove();
             }
@@ -245,16 +250,16 @@ impl State {
                 self.engine = engines::engine(self.search_mode);
             }
             KeyCode::Down if !settings.invert && self.results_state.selected() == 0 => {
-                return Some(match settings.exit_mode {
-                    ExitMode::ReturnOriginal => RETURN_ORIGINAL,
-                    ExitMode::ReturnQuery => RETURN_QUERY,
-                })
+                return match settings.exit_mode {
+                    ExitMode::ReturnOriginal => InputAction::ReturnOriginal,
+                    ExitMode::ReturnQuery => InputAction::ReturnQuery,
+                }
             }
             KeyCode::Up if settings.invert && self.results_state.selected() == 0 => {
-                return Some(match settings.exit_mode {
-                    ExitMode::ReturnOriginal => RETURN_ORIGINAL,
-                    ExitMode::ReturnQuery => RETURN_QUERY,
-                })
+                return match settings.exit_mode {
+                    ExitMode::ReturnOriginal => InputAction::ReturnOriginal,
+                    ExitMode::ReturnQuery => InputAction::ReturnQuery,
+                }
             }
             KeyCode::Down if !settings.invert => {
                 self.scroll_down(1);
@@ -300,7 +305,7 @@ impl State {
             _ => {}
         };
 
-        None
+        InputAction::Continue
     }
 
     fn scroll_down(&mut self, scroll_len: usize) {
@@ -664,7 +669,7 @@ pub async fn history(
     let mut results = app.query_results(&mut db).await?;
 
     let accept;
-    let index = 'render: loop {
+    let result = 'render: loop {
         terminal.draw(|f| app.draw(f, &results, settings))?;
 
         let initial_input = app.search.input.as_str().to_owned();
@@ -677,9 +682,12 @@ pub async fn history(
             event_ready = event_ready => {
                 if event_ready?? {
                     loop {
-                        if let Some(i) = app.handle_input(settings, &event::read()?, &mut std::io::stdout())? {
-                            accept = app.accept;
-                            break 'render i;
+                        match app.handle_input(settings, &event::read()?, &mut std::io::stdout())? {
+                            InputAction::Continue => {},
+                            r => {
+                                accept = app.accept;
+                                break 'render r;
+                            },
                         }
                         if !event::poll(Duration::ZERO)? {
                             break;
@@ -704,24 +712,30 @@ pub async fn history(
         terminal.clear()?;
     }
 
-    if index < results.len() {
-        let mut command = results.swap_remove(index).command;
-        if accept && (utils::is_zsh() || utils::is_fish() || utils::is_bash()) {
-            command = String::from("__atuin_accept__:") + &command;
-        }
+    match result {
+        InputAction::Accept(index) if index < results.len() => {
+            let mut command = results.swap_remove(index).command;
+            if accept && (utils::is_zsh() || utils::is_fish() || utils::is_bash()) {
+                command = String::from("__atuin_accept__:") + &command;
+            }
 
-        // index is in bounds so we return that entry
-        Ok(command)
-    } else if index == RETURN_ORIGINAL {
-        Ok(String::new())
-    } else if index == COPY_QUERY {
-        let cmd = results.swap_remove(app.results_state.selected()).command;
-        cli_clipboard::set_contents(cmd).unwrap();
-        Ok(String::new())
-    } else {
-        // Either:
-        // * index == RETURN_QUERY, in which case we should return the input
-        // * out of bounds -> usually implies no selected entry so we return the input
-        Ok(app.search.input.into_inner())
+            // index is in bounds so we return that entry
+            Ok(command)
+        }
+        InputAction::ReturnOriginal => Ok(String::new()),
+        InputAction::Copy(index) => {
+            let cmd = results.swap_remove(index).command;
+            cli_clipboard::set_contents(cmd).unwrap();
+            Ok(String::new())
+        }
+        InputAction::ReturnQuery | InputAction::Accept(_) => {
+            // Either:
+            // * index == RETURN_QUERY, in which case we should return the input
+            // * out of bounds -> usually implies no selected entry so we return the input
+            Ok(app.search.input.into_inner())
+        }
+        InputAction::Continue => {
+            unreachable!("should have been handled!")
+        }
     }
 }
