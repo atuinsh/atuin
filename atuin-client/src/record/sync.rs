@@ -73,7 +73,6 @@ pub async fn operations(
     _store: &impl Store,
 ) -> Result<Vec<Operation>, SyncError> {
     let mut operations = Vec::with_capacity(diffs.len());
-    let _host = Settings::host_id().expect("got to record sync without a host id; abort");
 
     for diff in diffs {
         let op = match (diff.local, diff.remote) {

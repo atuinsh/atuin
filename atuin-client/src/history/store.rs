@@ -51,7 +51,7 @@ impl HistoryRecord {
             HistoryRecord::Delete(id) => {
                 // 1 -> a history delete
                 encode::write_u8(&mut output, 1)?;
-                encode::write_str(&mut output, &id)?;
+                encode::write_str(&mut output, id)?;
             }
         };
 
