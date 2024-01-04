@@ -89,7 +89,7 @@ impl KvStore {
 
     pub async fn set(
         &self,
-        store: &mut (impl Store + Send + Sync),
+        store: &(impl Store + Send + Sync),
         encryption_key: &[u8; 32],
         host_id: HostId,
         namespace: &str,

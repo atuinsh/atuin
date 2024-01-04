@@ -35,11 +35,7 @@ pub enum Cmd {
 }
 
 impl Cmd {
-    pub async fn run(
-        &self,
-        settings: &Settings,
-        store: &mut (impl Store + Send + Sync),
-    ) -> Result<()> {
+    pub async fn run(&self, settings: &Settings, store: &(impl Store + Send + Sync)) -> Result<()> {
         let kv_store = KvStore::new();
 
         let encryption_key: [u8; 32] = encryption::load_key(settings)

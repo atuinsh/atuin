@@ -45,7 +45,7 @@ impl Cmd {
         self,
         settings: Settings,
         db: &impl Database,
-        store: &mut (impl Store + Send + Sync),
+        store: &(impl Store + Send + Sync),
     ) -> Result<()> {
         match self {
             Self::Sync { force } => run(&settings, force, db, store).await,
@@ -75,7 +75,7 @@ async fn run(
     settings: &Settings,
     force: bool,
     db: &impl Database,
-    store: &mut (impl Store + Send + Sync),
+    store: &(impl Store + Send + Sync),
 ) -> Result<()> {
     if settings.sync.records {
         let (diff, _) = sync::diff(settings, store).await?;

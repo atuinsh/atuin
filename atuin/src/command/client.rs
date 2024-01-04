@@ -83,7 +83,7 @@ impl Cmd {
         let record_store_path = PathBuf::from(settings.record_store_path.as_str());
 
         let db = Sqlite::new(db_path).await?;
-        let mut store = SqliteStore::new(record_store_path).await?;
+        let store = SqliteStore::new(record_store_path).await?;
 
         match self {
             Self::History(history) => history.run(&settings, &db, store).await,
@@ -92,12 +92,12 @@ impl Cmd {
             Self::Search(search) => search.run(db, &mut settings).await,
 
             #[cfg(feature = "sync")]
-            Self::Sync(sync) => sync.run(settings, &db, &mut store).await,
+            Self::Sync(sync) => sync.run(settings, &db, &store).await,
 
             #[cfg(feature = "sync")]
             Self::Account(account) => account.run(settings).await,
 
-            Self::Kv(kv) => kv.run(&settings, &mut store).await,
+            Self::Kv(kv) => kv.run(&settings, &store).await,
 
             Self::Record(record) => record.run(&settings, &store).await,
 
