@@ -152,14 +152,14 @@ impl Store for SqliteStore {
         self.idx(host, tag, 0).await
     }
 
-    async fn len(&self, host: HostId, tag: &str) -> Result<Option<u64>> {
+    async fn len(&self, host: HostId, tag: &str) -> Result<u64> {
         let last = self.last(host, tag).await?;
 
         if let Some(last) = last {
-            return Ok(Some(last.idx + 1));
+            return Ok(last.idx + 1);
         }
 
-        return Ok(None);
+        return Ok(0);
     }
 
     async fn next(
@@ -336,7 +336,7 @@ mod tests {
             .await
             .expect("failed to get store len");
 
-        assert_eq!(len, Some(1), "expected length of 1 after insert");
+        assert_eq!(len, 1, "expected length of 1 after insert");
     }
 
     #[tokio::test]
@@ -355,8 +355,8 @@ mod tests {
         let first_len = db.len(first.host.id, first.tag.as_str()).await.unwrap();
         let second_len = db.len(second.host.id, second.tag.as_str()).await.unwrap();
 
-        assert_eq!(first_len, Some(1), "expected length of 1 after insert");
-        assert_eq!(second_len, Some(1), "expected length of 1 after insert");
+        assert_eq!(first_len, 1, "expected length of 1 after insert");
+        assert_eq!(second_len, 1, "expected length of 1 after insert");
     }
 
     #[tokio::test]
@@ -373,7 +373,7 @@ mod tests {
 
         assert_eq!(
             db.len(tail.host.id, tail.tag.as_str()).await.unwrap(),
-            Some(100),
+            100,
             "failed to insert 100 records"
         );
     }
@@ -396,7 +396,7 @@ mod tests {
 
         assert_eq!(
             db.len(tail.host.id, tail.tag.as_str()).await.unwrap(),
-            Some(10000),
+            10000,
             "failed to insert 10k records"
         );
     }

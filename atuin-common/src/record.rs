@@ -14,7 +14,7 @@ pub struct EncryptedData {
     pub content_encryption_key: String,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, PartialOrd, Ord, Eq)]
 pub struct Diff {
     pub host: HostId,
     pub tag: String,
@@ -194,14 +194,7 @@ impl RecordStatus {
         }
 
         // Stability is a nice property to have
-        ret.sort_by(|a, b| {
-            (a.host, a.tag.clone(), a.local, a.remote).cmp(&(
-                b.host,
-                b.tag.clone(),
-                b.local,
-                b.remote,
-            ))
-        });
+        ret.sort();
         ret
     }
 }

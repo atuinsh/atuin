@@ -58,7 +58,7 @@ impl HistoryRecord {
         Ok(DecryptedData(output))
     }
 
-    pub fn deserialize(bytes: &[u8]) -> Result<Self> {
+    pub fn deserialize(bytes: &[u8], version: &str) -> Result<Self> {
         use rmp::decode;
 
         fn error_report<E: std::fmt::Debug>(err: E) -> eyre::Report {
@@ -76,7 +76,7 @@ impl HistoryRecord {
                 // written by write_bin above
                 let _ = decode::read_bin_len(&mut bytes).map_err(error_report)?;
 
-                let record = History::deserialize(bytes.remaining_slice(), HISTORY_VERSION)?;
+                let record = History::deserialize(bytes.remaining_slice(), version)?;
 
                 Ok(HistoryRecord::Create(record))
             }
@@ -153,7 +153,7 @@ impl HistoryStore {
 mod tests {
     use time::macros::datetime;
 
-    use crate::history::store::HistoryRecord;
+    use crate::history::{store::HistoryRecord, HISTORY_VERSION};
 
     use super::History;
 
@@ -187,13 +187,13 @@ mod tests {
         let serialized = record.serialize().expect("failed to serialize history");
         assert_eq!(serialized.0, bytes);
 
-        let deserialized =
-            HistoryRecord::deserialize(&serialized.0).expect("failed to deserialize HistoryRecord");
+        let deserialized = HistoryRecord::deserialize(&serialized.0, HISTORY_VERSION)
+            .expect("failed to deserialize HistoryRecord");
         assert_eq!(deserialized, record);
 
         // check the snapshot too
-        let deserialized =
-            HistoryRecord::deserialize(&bytes).expect("failed to deserialize HistoryRecord");
+        let deserialized = HistoryRecord::deserialize(&bytes, HISTORY_VERSION)
+            .expect("failed to deserialize HistoryRecord");
         assert_eq!(deserialized, record);
     }
 
@@ -208,12 +208,12 @@ mod tests {
         let serialized = record.serialize().expect("failed to serialize history");
         assert_eq!(serialized.0, bytes);
 
-        let deserialized =
-            HistoryRecord::deserialize(&serialized.0).expect("failed to deserialize HistoryRecord");
+        let deserialized = HistoryRecord::deserialize(&serialized.0, HISTORY_VERSION)
+            .expect("failed to deserialize HistoryRecord");
         assert_eq!(deserialized, record);
 
-        let deserialized =
-            HistoryRecord::deserialize(&bytes).expect("failed to deserialize HistoryRecord");
+        let deserialized = HistoryRecord::deserialize(&bytes, HISTORY_VERSION)
+            .expect("failed to deserialize HistoryRecord");
         assert_eq!(deserialized, record);
     }
 }
