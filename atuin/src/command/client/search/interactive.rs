@@ -7,7 +7,8 @@ use atuin_common::utils;
 use crossterm::{
     event::{
         self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers,
-        MouseEvent,
+        KeyboardEnhancementFlags, MouseEvent, PopKeyboardEnhancementFlags,
+        PushKeyboardEnhancementFlags,
     },
     execute, terminal,
 };
@@ -562,14 +563,21 @@ impl Stdout {
     pub fn new(inline_mode: bool) -> std::io::Result<Self> {
         terminal::enable_raw_mode()?;
         let mut stdout = stdout();
+
         if !inline_mode {
             execute!(stdout, terminal::EnterAlternateScreen)?;
         }
+
         execute!(
             stdout,
             event::EnableMouseCapture,
             event::EnableBracketedPaste,
+            PushKeyboardEnhancementFlags(
+                KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                    | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
+            ),
         )?;
+
         Ok(Self {
             stdout,
             inline_mode,
@@ -586,6 +594,7 @@ impl Drop for Stdout {
             self.stdout,
             event::DisableMouseCapture,
             event::DisableBracketedPaste,
+            PopKeyboardEnhancementFlags
         )
         .unwrap();
         terminal::disable_raw_mode().unwrap();
