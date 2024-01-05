@@ -15,7 +15,7 @@ zmodload zsh/datetime 2>/dev/null
 # you'd like to override this, then add your config after the $(atuin init zsh)
 # in your .zshrc
 _zsh_autosuggest_strategy_atuin() {
-    suggestion=$(atuin search --cmd-only --limit 1 --search-mode prefix "$1")
+    suggestion=$(atuin search --cmd-only --limit 1 --search-mode prefix -- "$1")
 }
 
 if [ -n "${ZSH_AUTOSUGGEST_STRATEGY:-}" ]; then
