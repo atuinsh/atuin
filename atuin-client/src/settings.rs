@@ -173,6 +173,11 @@ impl Default for Stats {
     }
 }
 
+#[derive(Clone, Debug, Deserialize, Default)]
+pub struct Sync {
+    pub records: bool,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct Settings {
     pub dialect: Dialect,
@@ -216,6 +221,9 @@ pub struct Settings {
 
     #[serde(default)]
     pub stats: Stats,
+
+    #[serde(default)]
+    pub sync: Sync,
 
     // This is automatically loaded when settings is created. Do not set in
     // config! Keep secrets and settings apart.
@@ -427,6 +435,7 @@ impl Settings {
             // muscle memory.
             // New users will get the new default, that is more similar to what they are used to.
             .set_default("enter_accept", false)?
+            .set_default("sync.records", false)?
             .add_source(
                 Environment::with_prefix("atuin")
                     .prefix_separator("_")

@@ -1,5 +1,5 @@
 use atuin_common::record::{
-    AdditionalData, DecryptedData, EncryptedData, Encryption, HostId, RecordId,
+    AdditionalData, DecryptedData, EncryptedData, Encryption, HostId, RecordId, RecordIdx,
 };
 use base64::{engine::general_purpose, Engine};
 use eyre::{ensure, Context, Result};
@@ -170,10 +170,10 @@ struct AtuinFooter {
 #[derive(Debug, Copy, Clone, Serialize)]
 struct Assertions<'a> {
     id: &'a RecordId,
+    idx: &'a RecordIdx,
     version: &'a str,
     tag: &'a str,
     host: &'a HostId,
-    parent: Option<&'a RecordId>,
 }
 
 impl<'a> From<AdditionalData<'a>> for Assertions<'a> {
@@ -183,7 +183,7 @@ impl<'a> From<AdditionalData<'a>> for Assertions<'a> {
             version: ad.version,
             tag: ad.tag,
             host: ad.host,
-            parent: ad.parent,
+            idx: ad.idx,
         }
     }
 }
@@ -196,7 +196,10 @@ impl Assertions<'_> {
 
 #[cfg(test)]
 mod tests {
-    use atuin_common::{record::Record, utils::uuid_v7};
+    use atuin_common::{
+        record::{Host, Record},
+        utils::uuid_v7,
+    };
 
     use super::*;
 
@@ -209,7 +212,7 @@ mod tests {
             version: "v0",
             tag: "kv",
             host: &HostId(uuid_v7()),
-            parent: None,
+            idx: &0,
         };
 
         let data = DecryptedData(vec![1, 2, 3, 4]);
@@ -228,7 +231,7 @@ mod tests {
             version: "v0",
             tag: "kv",
             host: &HostId(uuid_v7()),
-            parent: None,
+            idx: &0,
         };
 
         let data = DecryptedData(vec![1, 2, 3, 4]);
@@ -252,7 +255,7 @@ mod tests {
             version: "v0",
             tag: "kv",
             host: &HostId(uuid_v7()),
-            parent: None,
+            idx: &0,
         };
 
         let data = DecryptedData(vec![1, 2, 3, 4]);
@@ -270,7 +273,7 @@ mod tests {
             version: "v0",
             tag: "kv",
             host: &HostId(uuid_v7()),
-            parent: None,
+            idx: &0,
         };
 
         let data = DecryptedData(vec![1, 2, 3, 4]);
@@ -294,7 +297,7 @@ mod tests {
             version: "v0",
             tag: "kv",
             host: &HostId(uuid_v7()),
-            parent: None,
+            idx: &0,
         };
 
         let data = DecryptedData(vec![1, 2, 3, 4]);
@@ -323,9 +326,10 @@ mod tests {
             .id(RecordId(uuid_v7()))
             .version("v0".to_owned())
             .tag("kv".to_owned())
-            .host(HostId(uuid_v7()))
+            .host(Host::new(HostId(uuid_v7())))
             .timestamp(1687244806000000)
             .data(DecryptedData(vec![1, 2, 3, 4]))
+            .idx(0)
             .build();
 
         let encrypted = record.encrypt::<PASETO_V4>(&key);
@@ -345,15 +349,16 @@ mod tests {
             .id(RecordId(uuid_v7()))
             .version("v0".to_owned())
             .tag("kv".to_owned())
-            .host(HostId(uuid_v7()))
+            .host(Host::new(HostId(uuid_v7())))
             .timestamp(1687244806000000)
             .data(DecryptedData(vec![1, 2, 3, 4]))
+            .idx(0)
             .build();
 
         let encrypted = record.encrypt::<PASETO_V4>(&key);
 
         let mut enc1 = encrypted.clone();
-        enc1.host = HostId(uuid_v7());
+        enc1.host = Host::new(HostId(uuid_v7()));
         let _ = enc1
             .decrypt::<PASETO_V4>(&key)
             .expect_err("tampering with the host should result in auth failure");

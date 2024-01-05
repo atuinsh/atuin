@@ -242,6 +242,7 @@ dependencies = [
  "shellexpand",
  "sql-builder",
  "sqlx",
+ "thiserror",
  "time",
  "tokio",
  "typed-builder",

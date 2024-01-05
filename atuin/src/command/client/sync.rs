@@ -45,7 +45,7 @@ impl Cmd {
         self,
         settings: Settings,
         db: &impl Database,
-        store: &mut (impl Store + Send + Sync),
+        store: &(impl Store + Send + Sync),
     ) -> Result<()> {
         match self {
             Self::Sync { force } => run(&settings, force, db, store).await,
@@ -75,14 +75,15 @@ async fn run(
     settings: &Settings,
     force: bool,
     db: &impl Database,
-    store: &mut (impl Store + Send + Sync),
+    store: &(impl Store + Send + Sync),
 ) -> Result<()> {
-    let (diff, remote_index) = sync::diff(settings, store).await?;
-    let operations = sync::operations(diff, store).await?;
-    let (uploaded, downloaded) =
-        sync::sync_remote(operations, &remote_index, store, settings).await?;
+    if settings.sync.records {
+        let (diff, _) = sync::diff(settings, store).await?;
+        let operations = sync::operations(diff, store).await?;
+        let (uploaded, downloaded) = sync::sync_remote(operations, store, settings).await?;
 
-    println!("{uploaded}/{downloaded} up/down to record store");
+        println!("{uploaded}/{downloaded} up/down to record store");
+    }
 
     atuin_client::sync::sync(settings, force, db).await?;
 

@@ -8,6 +8,7 @@ pub mod history;
 pub mod record;
 pub mod status;
 pub mod user;
+pub mod v0;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 

@@ -12,7 +12,9 @@ use runtime_format::{FormatKey, FormatKeyError, ParseSegment, ParsedFmt};
 
 use atuin_client::{
     database::{current_context, Database},
-    history::History,
+    encryption,
+    history::{store::HistoryStore, History},
+    record::{self, sqlite_store::SqliteStore},
     settings::Settings,
 };
 
@@ -84,6 +86,10 @@ pub enum Cmd {
         #[arg(long, short)]
         format: Option<String>,
     },
+
+    /// Import all old history.db data into the record store. Do not run more than once, and do not
+    /// run unless you know what you're doing (or the docs ask you to)
+    InitStore,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -266,11 +272,14 @@ impl Cmd {
         // we use this as the key for calling end
         println!("{}", h.id);
         db.save(&h).await?;
+
         Ok(())
     }
 
     async fn handle_end(
         db: &impl Database,
+        store: SqliteStore,
+        history_store: HistoryStore,
         settings: &Settings,
         id: &str,
         exit: i64,
@@ -300,10 +309,20 @@ impl Cmd {
         };
 
         db.update(&h).await?;
+        history_store.push(h).await?;
 
         if settings.should_sync()? {
             #[cfg(feature = "sync")]
             {
+                if settings.sync.records {
+                    let (diff, _) = record::sync::diff(settings, &store).await?;
+                    let operations = record::sync::operations(diff, &store).await?;
+                    let (uploaded, downloaded) =
+                        record::sync::sync_remote(operations, &store, settings).await?;
+
+                    println!("{uploaded}/{downloaded} up/down to record store");
+                }
+
                 debug!("running periodic background sync");
                 sync::sync(settings, false, db).await?;
             }
@@ -367,13 +386,56 @@ impl Cmd {
         Ok(())
     }
 
-    pub async fn run(self, settings: &Settings, db: &impl Database) -> Result<()> {
+    async fn init_store(
+        context: atuin_client::database::Context,
+        db: &impl Database,
+        store: HistoryStore,
+    ) -> Result<()> {
+        println!("Importing all history.db data into records.db");
+
+        let history = db
+            .list(
+                atuin_client::settings::FilterMode::Global,
+                &context,
+                None,
+                false,
+                true,
+            )
+            .await?;
+
+        for i in history {
+            println!("loaded {}", i.id);
+
+            if i.deleted_at.is_some() {
+                store.push(i.clone()).await?;
+                store.delete(i.id).await?;
+            } else {
+                store.push(i).await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    pub async fn run(
+        self,
+        settings: &Settings,
+        db: &impl Database,
+        store: SqliteStore,
+    ) -> Result<()> {
         let context = current_context();
+
+        let encryption_key: [u8; 32] = encryption::load_key(settings)
+            .context("could not load encryption key")?
+            .into();
+
+        let host_id = Settings::host_id().expect("failed to get host_id");
+        let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
         match self {
             Self::Start { command } => Self::handle_start(db, settings, &command).await,
             Self::End { id, exit, duration } => {
-                Self::handle_end(db, settings, &id, exit, duration).await
+                Self::handle_end(db, store, history_store, settings, &id, exit, duration).await
             }
             Self::List {
                 session,
@@ -408,6 +470,8 @@ impl Cmd {
 
                 Ok(())
             }
+
+            Self::InitStore => Self::init_store(context, db, history_store).await,
         }
     }
 }
