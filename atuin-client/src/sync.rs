@@ -73,7 +73,7 @@ async fn sync_download(
             .map(|h| serde_json::from_str(h).expect("invalid base64"))
             .map(|h| decrypt(h, key).expect("failed to decrypt history! check your key"))
             .map(|mut h| {
-                if remote_deleted.contains(h.id.as_str()) {
+                if remote_deleted.contains(h.id.0.as_str()) {
                     h.deleted_at = Some(time::OffsetDateTime::now_utc());
                     h.command = String::from("");
                 }
@@ -157,7 +157,7 @@ async fn sync_upload(
             let data = serde_json::to_string(&data)?;
 
             let add_hist = AddHistoryRequest {
-                id: i.id,
+                id: i.id.to_string(),
                 timestamp: i.timestamp,
                 data,
                 hostname: hash_str(&i.hostname),
@@ -177,7 +177,7 @@ async fn sync_upload(
     let deleted = db.deleted().await?;
 
     for i in deleted {
-        if remote_deleted.contains(&i.id) {
+        if remote_deleted.contains(&i.id.to_string()) {
             continue;
         }
 
