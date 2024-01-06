@@ -25,6 +25,7 @@ else
 fi
 
 export ATUIN_SESSION=$(atuin uuid)
+ATUIN_HISTORY_ID=""
 
 _atuin_preexec() {
     local id

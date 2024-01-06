@@ -1,5 +1,6 @@
 # Source this in your ~/.config/nushell/config.nu
 $env.ATUIN_SESSION = (atuin uuid)
+hide-env -i ATUIN_HISTORY_ID
 
 # Magic token to make sure we don't record commands run by keybindings
 let ATUIN_KEYBINDING_TOKEN = $"# (random uuid)"
