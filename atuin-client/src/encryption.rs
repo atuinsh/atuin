@@ -166,7 +166,7 @@ fn encode(h: &History) -> Result<Vec<u8>> {
     // INFO: ensure this is updated when adding new fields
     encode::write_array_len(&mut output, 9)?;
 
-    encode::write_str(&mut output, &h.id)?;
+    encode::write_str(&mut output, &h.id.0)?;
     encode::write_str(&mut output, &(format_rfc3339(h.timestamp)?))?;
     encode::write_sint(&mut output, h.duration)?;
     encode::write_sint(&mut output, h.exit)?;
@@ -234,7 +234,7 @@ fn decode(bytes: &[u8]) -> Result<History> {
     }
 
     Ok(History {
-        id: id.to_owned(),
+        id: id.to_owned().into(),
         timestamp: OffsetDateTime::parse(timestamp, &Rfc3339)?,
         duration,
         exit,
@@ -312,7 +312,7 @@ mod test {
             108, 117, 100, 103, 97, 116, 101, 192,
         ];
         let history = History {
-            id: "66d16cbee7cd47538e5c5b8b44e9006e".to_owned(),
+            id: "66d16cbee7cd47538e5c5b8b44e9006e".to_owned().into(),
             timestamp: datetime!(2023-05-28 18:35:40.633872 +00:00),
             duration: 49206000,
             exit: 0,
@@ -333,7 +333,7 @@ mod test {
     #[test]
     fn test_decode_deleted() {
         let history = History {
-            id: "66d16cbee7cd47538e5c5b8b44e9006e".to_owned(),
+            id: "66d16cbee7cd47538e5c5b8b44e9006e".to_owned().into(),
             timestamp: datetime!(2023-05-28 18:35:40.633872 +00:00),
             duration: 49206000,
             exit: 0,
@@ -364,7 +364,7 @@ mod test {
             108, 117, 100, 103, 97, 116, 101,
         ];
         let history = History {
-            id: "66d16cbee7cd47538e5c5b8b44e9006e".to_owned(),
+            id: "66d16cbee7cd47538e5c5b8b44e9006e".to_owned().into(),
             timestamp: datetime!(2023-05-28 18:35:40.633872 +00:00),
             duration: 49206000,
             exit: 0,

@@ -1,6 +1,8 @@
+use core::fmt::Formatter;
 use rmp::decode::ValueReadError;
 use rmp::{decode::Bytes, Marker};
 use std::env;
+use std::fmt::Display;
 
 use atuin_common::record::DecryptedData;
 use atuin_common::utils::uuid_v7;
@@ -16,6 +18,21 @@ pub mod store;
 
 const HISTORY_VERSION: &str = "v0";
 const HISTORY_TAG: &str = "history";
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct HistoryId(pub String);
+
+impl Display for HistoryId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl From<String> for HistoryId {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
 
 /// Client-side history entry.
 ///
@@ -35,7 +52,7 @@ pub struct History {
     /// A client-generated ID, used to identify the entry when syncing.
     ///
     /// Stored as `client_id` in the database.
-    pub id: String,
+    pub id: HistoryId,
     /// When the command was run.
     pub timestamp: OffsetDateTime,
     /// How long the command took to run.
@@ -78,7 +95,7 @@ impl History {
         });
 
         Self {
-            id: uuid_v7().as_simple().to_string(),
+            id: uuid_v7().as_simple().to_string().into(),
             timestamp,
             command,
             cwd,
@@ -103,7 +120,7 @@ impl History {
         // INFO: ensure this is updated when adding new fields
         encode::write_array_len(&mut output, 9)?;
 
-        encode::write_str(&mut output, &self.id)?;
+        encode::write_str(&mut output, &self.id.0)?;
         encode::write_u64(&mut output, self.timestamp.unix_timestamp_nanos() as u64)?;
         encode::write_sint(&mut output, self.duration)?;
         encode::write_sint(&mut output, self.exit)?;
@@ -170,7 +187,7 @@ impl History {
         }
 
         Ok(History {
-            id: id.to_owned(),
+            id: id.to_owned().into(),
             timestamp: OffsetDateTime::from_unix_timestamp_nanos(timestamp as i128)?,
             duration,
             exit,
@@ -402,7 +419,7 @@ mod tests {
         ];
 
         let history = History {
-            id: "66d16cbee7cd47538e5c5b8b44e9006e".to_owned(),
+            id: "66d16cbee7cd47538e5c5b8b44e9006e".to_owned().into(),
             timestamp: datetime!(2023-05-28 18:35:40.633872 +00:00),
             duration: 49206000,
             exit: 0,
@@ -429,7 +446,7 @@ mod tests {
     #[test]
     fn test_serialize_deserialize_deleted() {
         let history = History {
-            id: "66d16cbee7cd47538e5c5b8b44e9006e".to_owned(),
+            id: "66d16cbee7cd47538e5c5b8b44e9006e".to_owned().into(),
             timestamp: datetime!(2023-05-28 18:35:40.633872 +00:00),
             duration: 49206000,
             exit: 0,

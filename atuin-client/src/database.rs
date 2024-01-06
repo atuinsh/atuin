@@ -153,7 +153,7 @@ impl Sqlite {
             "insert or ignore into history(id, timestamp, duration, exit, command, cwd, session, hostname, deleted_at)
                 values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         )
-        .bind(h.id.as_str())
+        .bind(h.id.0.as_str())
         .bind(h.timestamp.unix_timestamp_nanos() as i64)
         .bind(h.duration)
         .bind(h.exit)
@@ -236,7 +236,7 @@ impl Database for Sqlite {
                 set timestamp = ?2, duration = ?3, exit = ?4, command = ?5, cwd = ?6, session = ?7, hostname = ?8, deleted_at = ?9
                 where id = ?1",
         )
-        .bind(h.id.as_str())
+        .bind(h.id.0.as_str())
         .bind(h.timestamp.unix_timestamp_nanos() as i64)
         .bind(h.duration)
         .bind(h.exit)

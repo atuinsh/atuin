@@ -85,7 +85,7 @@ pub struct HistoryFromDb {
 impl From<HistoryFromDb> for History {
     fn from(from_db: HistoryFromDb) -> Self {
         History {
-            id: from_db.id,
+            id: from_db.id.into(),
             timestamp: from_db.timestamp,
             exit: from_db.exit,
             command: from_db.command,

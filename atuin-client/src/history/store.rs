@@ -4,7 +4,7 @@ use rmp::decode::Bytes;
 use crate::record::{encryption::PASETO_V4, sqlite_store::SqliteStore, store::Store};
 use atuin_common::record::{DecryptedData, Host, HostId, Record, RecordIdx};
 
-use super::{History, HISTORY_TAG, HISTORY_VERSION};
+use super::{History, HistoryId, HISTORY_TAG, HISTORY_VERSION};
 
 #[derive(Debug)]
 pub struct HistoryStore {
@@ -15,8 +15,8 @@ pub struct HistoryStore {
 
 #[derive(Debug, Eq, PartialEq, Clone)]
 pub enum HistoryRecord {
-    Create(History), // Create a history record
-    Delete(String),  // Delete a history record, identified by ID
+    Create(History),   // Create a history record
+    Delete(HistoryId), // Delete a history record, identified by ID
 }
 
 impl HistoryRecord {
@@ -51,7 +51,7 @@ impl HistoryRecord {
             HistoryRecord::Delete(id) => {
                 // 1 -> a history delete
                 encode::write_u8(&mut output, 1)?;
-                encode::write_str(&mut output, id)?;
+                encode::write_str(&mut output, id.0.as_str())?;
             }
         };
 
@@ -92,7 +92,7 @@ impl HistoryRecord {
                     );
                 }
 
-                Ok(HistoryRecord::Delete(id.to_string()))
+                Ok(HistoryRecord::Delete(id.to_string().into()))
             }
 
             n => {
@@ -134,7 +134,7 @@ impl HistoryStore {
         Ok(idx)
     }
 
-    pub async fn delete(&self, id: String) -> Result<RecordIdx> {
+    pub async fn delete(&self, id: HistoryId) -> Result<RecordIdx> {
         let record = HistoryRecord::Delete(id);
 
         self.push_record(record).await
@@ -171,7 +171,7 @@ mod tests {
         ];
 
         let history = History {
-            id: "018cd4fe81757cd2aee65cd7861f9c81".to_owned(),
+            id: "018cd4fe81757cd2aee65cd7861f9c81".to_owned().into(),
             timestamp: datetime!(2024-01-04 00:00:00.000000 +00:00),
             duration: 100,
             exit: 0,
@@ -203,7 +203,7 @@ mod tests {
             204, 1, 217, 32, 48, 49, 56, 99, 100, 52, 102, 101, 56, 49, 55, 53, 55, 99, 100, 50,
             97, 101, 101, 54, 53, 99, 100, 55, 56, 54, 49, 102, 57, 99, 56, 49,
         ];
-        let record = HistoryRecord::Delete("018cd4fe81757cd2aee65cd7861f9c81".to_string());
+        let record = HistoryRecord::Delete("018cd4fe81757cd2aee65cd7861f9c81".to_string().into());
 
         let serialized = record.serialize().expect("failed to serialize history");
         assert_eq!(serialized.0, bytes);

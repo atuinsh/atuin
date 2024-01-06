@@ -259,7 +259,9 @@ impl<'a> Client<'a> {
 
         self.client
             .delete(url)
-            .json(&DeleteHistoryRequest { client_id: h.id })
+            .json(&DeleteHistoryRequest {
+                client_id: h.id.to_string(),
+            })
             .send()
             .await?;
 
