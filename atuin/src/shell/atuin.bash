@@ -145,7 +145,7 @@ if [[ -n "${BLE_VERSION-}" ]] && ((_ble_version >= 400)); then
     #
     function ble/complete/auto-complete/source:atuin-history {
         local suggestion
-        suggestion=$(atuin search --cmd-only --limit 1 --search-mode prefix "$_ble_edit_str")
+        suggestion=$(atuin search --cmd-only --limit 1 --search-mode prefix -- "$_ble_edit_str")
         [[ $suggestion == "$_ble_edit_str"?* ]] || return 1
         ble/complete/auto-complete/enter h 0 "${suggestion:${#_ble_edit_str}}" '' "$suggestion"
     }
