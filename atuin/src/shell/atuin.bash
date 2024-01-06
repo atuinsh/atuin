@@ -113,6 +113,26 @@ __atuin_accept_line() {
 }
 
 __atuin_history() {
+    # Default action of the up key: When this function is called with the first
+    # argument `--shell-up-key-binding`, we perform Atuin's history search only
+    # when the up key is supposed to cause the history movement in the original
+    # binding.  We do this only for ble.sh because the up key always invokes
+    # the history movement in the plain Bash.
+    if [[ ${BLE_ATTACHED-} && ${1-} == --shell-up-key-binding ]]; then
+        # When the current cursor position is not in the first line, the up key
+        # should move the cursor to the previous line.  While the selection is
+        # performed, the up key should not start the history search.
+        # shellcheck disable=SC2154 # Note: these variables are set by ble.sh
+        if [[ ${_ble_edit_str::_ble_edit_ind} == *$'\n'* || $_ble_edit_mark_active ]]; then
+            ble/widget/@nomarked backward-line
+            local status=$?
+            READLINE_LINE=$_ble_edit_str
+            READLINE_POINT=$_ble_edit_ind
+            READLINE_MARK=$_ble_edit_mark
+            return "$status"
+        fi
+    fi
+
     HISTORY="$(ATUIN_SHELL_BASH=t ATUIN_LOG=error atuin search "$@" -i -- "${READLINE_LINE}" 3>&1 1>&2 2>&3)"
 
     # We do nothing when the search is canceled.
