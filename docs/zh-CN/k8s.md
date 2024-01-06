@@ -56,7 +56,7 @@ spec:
               value: "8888"
             - name: ATUIN_OPEN_REGISTRATION
               value: "true"
-          image: ghcr.io/atuinsh/atuin:main
+          image: ghcr.io/atuinsh/atuin:latest
           name: atuin
           ports:
             - containerPort: 8888
