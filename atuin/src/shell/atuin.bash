@@ -3,6 +3,14 @@ ATUIN_STTY=$(stty -g)
 export ATUIN_SESSION
 
 __atuin_preexec() {
+    if [[ ! ${BLE_ATTACHED-} ]]; then
+        # With bash-preexec, preexec may be called even for the command run by
+        # keybindings.  There is no general and robust way to detect the
+        # command for keybindings, but at least we want to exclude Atuin's
+        # keybindings.
+        [[ $BASH_COMMAND == '__atuin_history'* && $BASH_COMMAND != "$1" ]] && return 0
+    fi
+
     local id
     id=$(atuin history start -- "$1")
     export ATUIN_HISTORY_ID="${id}"
