@@ -44,6 +44,7 @@ enum InputAction {
     ReturnOriginal,
     ReturnQuery,
     Continue,
+    Redraw,
 }
 
 #[allow(clippy::struct_field_names)]
@@ -169,9 +170,6 @@ impl State {
             KeyCode::Left => {
                 self.search.input.left();
             }
-            KeyCode::Char('h') if ctrl => {
-                self.search.input.left();
-            }
             KeyCode::Char('b') if ctrl => {
                 self.search.input.left();
             }
@@ -184,7 +182,6 @@ impl State {
                 .input
                 .next_word(&settings.word_chars, settings.word_jump_mode),
             KeyCode::Right => self.search.input.right(),
-            KeyCode::Char('l') if ctrl => self.search.input.right(),
             KeyCode::Char('f') if ctrl => self.search.input.right(),
             KeyCode::Char('a') if ctrl => self.search.input.start(),
             KeyCode::Home => self.search.input.start(),
@@ -285,6 +282,9 @@ impl State {
             }
             KeyCode::Char('p' | 'k') if ctrl && settings.invert => {
                 self.scroll_down(1);
+            }
+            KeyCode::Char('l') if ctrl => {
+                return InputAction::Redraw;
             }
             KeyCode::Char(c) => self.search.input.insert(c),
             KeyCode::PageDown if !settings.invert => {
@@ -693,6 +693,10 @@ pub async fn history(
                     loop {
                         match app.handle_input(settings, &event::read()?, &mut std::io::stdout())? {
                             InputAction::Continue => {},
+                            InputAction::Redraw => {
+                                terminal.clear()?;
+                                terminal.draw(|f| app.draw(f, &results, settings))?;
+                            },
                             r => {
                                 accept = app.accept;
                                 break 'render r;
@@ -743,7 +747,7 @@ pub async fn history(
             // * out of bounds -> usually implies no selected entry so we return the input
             Ok(app.search.input.into_inner())
         }
-        InputAction::Continue => {
+        InputAction::Continue | InputAction::Redraw => {
             unreachable!("should have been handled!")
         }
     }
