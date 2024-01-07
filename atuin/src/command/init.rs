@@ -58,9 +58,18 @@ bindkey -M vicmd 'k' _atuin_up_search_widget";
         println!("{base}");
 
         if std::env::var("ATUIN_NOBIND").is_err() {
-            const BIND_CTRL_R: &str = r#"bind -x '"\C-r": __atuin_history'"#;
-            const BIND_UP_ARROW: &str = r#"bind -x '"\e[A": __atuin_history --shell-up-key-binding'
-bind -x '"\eOA": __atuin_history --shell-up-key-binding'"#;
+            // Note: We do not overwrite [C-r] in the vi-command keymap for
+            // Bash because we do not want to overwrite "redo", which is
+            // already bound to [C-r] in the vi_nmap keymap in ble.sh.
+            const BIND_CTRL_R: &str = r#"bind -m emacs -x '"\C-r": __atuin_history'
+bind -m vi-insert -x '"\C-r": __atuin_history'"#;
+            const BIND_UP_ARROW: &str = r#"bind -m emacs -x '"\e[A": __atuin_history --shell-up-key-binding'
+bind -m emacs -x '"\eOA": __atuin_history --shell-up-key-binding'
+bind -m vi-insert -x '"\e[A": __atuin_history --shell-up-key-binding'
+bind -m vi-insert -x '"\eOA": __atuin_history --shell-up-key-binding'
+bind -m vi-command -x '"\e[A": __atuin_history --shell-up-key-binding'
+bind -m vi-command -x '"\eOA": __atuin_history --shell-up-key-binding'
+bind -m vi-command -x '"k": __atuin_history --shell-up-key-binding'"#;
             if !self.disable_ctrl_r {
                 println!("{BIND_CTRL_R}");
             }
