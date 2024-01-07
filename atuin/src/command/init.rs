@@ -55,7 +55,7 @@ bindkey -M vicmd 'k' _atuin_up_search_widget";
 
     fn init_bash(&self) {
         let base = include_str!("../shell/atuin.bash");
-        let (bind_ctrl_r, bind_up_arrow) = if !std::env::var("ATUIN_NOBIND").is_err() {
+        let (bind_ctrl_r, bind_up_arrow) = if std::env::var("ATUIN_NOBIND").is_ok() {
             (false, false)
         } else {
             (!self.disable_ctrl_r, !self.disable_up_arrow)
