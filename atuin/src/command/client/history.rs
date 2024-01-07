@@ -1,12 +1,13 @@
 use std::{
     fmt::{self, Display},
     io::{self, IsTerminal, Write},
+    str::FromStr,
     time::Duration,
 };
 
 use atuin_common::utils::{self, Escapable as _};
 use clap::Subcommand;
-use eyre::{Context, Result};
+use eyre::{bail, Context, Error, Result};
 use runtime_format::{FormatKey, FormatKeyError, ParseSegment, ParsedFmt};
 
 use atuin_client::{
@@ -24,7 +25,7 @@ use atuin_client::{
 use atuin_client::{record, sync};
 
 use log::{debug, warn};
-use time::{macros::format_description, OffsetDateTime};
+use time::{format_description::FormatItem, macros::format_description, OffsetDateTime, UtcOffset};
 
 use super::search::format_duration_into;
 
@@ -69,6 +70,14 @@ pub enum Cmd {
         #[arg(action = clap::ArgAction::Set)]
         reverse: bool,
 
+        /// Display the command time in another timezone other than UTC.
+        ///
+        /// This option takes one of the following kinds of values:
+        /// - the special value "local" (or "l") which refers to the system time zone
+        /// - an offset from UTC (e.g. "+9", "-2:30")
+        #[arg(long, default_value_t)]
+        tz: Timezone,
+
         /// Available variables: {command}, {directory}, {duration}, {user}, {host}, {exit} and {time}.
         /// Example: --format "{time} - [{duration}] - {directory}$\t{command}"
         #[arg(long, short)]
@@ -83,6 +92,14 @@ pub enum Cmd {
         /// Show only the text of the command
         #[arg(long)]
         cmd_only: bool,
+
+        /// Display the command time in another timezone other than UTC.
+        ///
+        /// This option takes one of the following kinds of values:
+        /// - the special value "local" (or "l") which refers to the system time zone
+        /// - an offset from UTC (e.g. "+9", "-2:30")
+        #[arg(long, default_value_t)]
+        tz: Timezone,
 
         /// Available variables: {command}, {directory}, {duration}, {user}, {host} and {time}.
         /// Example: --format "{time} - [{duration}] - {directory}$\t{command}"
@@ -110,6 +127,44 @@ impl ListMode {
     }
 }
 
+/// Type wrapper around time::UtcOffset to support a wider variety of timezone formats.
+#[derive(Clone, Copy, Debug)]
+pub struct Timezone(UtcOffset);
+
+impl Default for Timezone {
+    fn default() -> Self {
+        Self(UtcOffset::UTC)
+    }
+}
+impl fmt::Display for Timezone {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+impl FromStr for Timezone {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self> {
+        // local timezone
+        if matches!(s.to_lowercase().as_str(), "l" | "local") {
+            let offset = UtcOffset::current_local_offset()?;
+            return Ok(Self(offset));
+        }
+
+        // offset from UTC
+        // format: <+|-><hour>[:<minute>[:<second>]]
+        static FMT: &[FormatItem<'_>] =
+            format_description!("[offset_hour sign:mandatory padding:none][optional [:[offset_minute padding:none][optional [:[offset_second padding:none]]]]]");
+        if let Ok(offset) = UtcOffset::parse(s, FMT) {
+            return Ok(Self(offset));
+        }
+
+        // IDEA: support named timezones; maybe use chrono_tz?
+
+        bail!(r#""{}" is not a valid timezone spec"#, s)
+    }
+}
+
 #[allow(clippy::cast_sign_loss)]
 pub fn print_list(
     h: &[History],
@@ -117,6 +172,7 @@ pub fn print_list(
     format: Option<&str>,
     print0: bool,
     reverse: bool,
+    tz: Timezone,
 ) {
     let w = std::io::stdout();
     let mut w = w.lock();
@@ -146,8 +202,12 @@ pub fn print_list(
     let entry_terminator = if print0 { "\0" } else { "\n" };
     let flush_each_line = print0;
 
-    for h in iterator {
-        let fh = FmtHistory(h, CmdFormat::for_output(&w));
+    for history in iterator {
+        let fh = FmtHistory {
+            history,
+            cmd_format: CmdFormat::for_output(&w),
+            tz: &tz,
+        };
         let args = parsed_fmt.with_args(&fh);
         let write = write!(w, "{args}{entry_terminator}");
         if let Err(err) = args.status() {
@@ -175,14 +235,19 @@ fn check_for_write_errors(write: Result<(), io::Error>) {
     }
 }
 
-/// Wrapper around `History` so we can format output dynamically at runtime
-struct FmtHistory<'a>(&'a History, CmdFormat);
+/// Type wrapper around `History` with formatting settings.
+#[derive(Clone, Copy, Debug)]
+struct FmtHistory<'a> {
+    history: &'a History,
+    cmd_format: CmdFormat,
+    tz: &'a Timezone,
+}
 
+#[derive(Clone, Copy, Debug)]
 enum CmdFormat {
     Literal,
     Escaped,
 }
-
 impl CmdFormat {
     fn for_output<O: IsTerminal>(out: &O) -> Self {
         if out.is_terminal() {
@@ -201,35 +266,41 @@ impl FormatKey for FmtHistory<'_> {
     #[allow(clippy::cast_sign_loss)]
     fn fmt(&self, key: &str, f: &mut fmt::Formatter<'_>) -> Result<(), FormatKeyError> {
         match key {
-            "command" => match self.1 {
-                CmdFormat::Literal => f.write_str(self.0.command.trim()),
-                CmdFormat::Escaped => f.write_str(&self.0.command.trim().escape_control()),
+            "command" => match self.cmd_format {
+                CmdFormat::Literal => f.write_str(self.history.command.trim()),
+                CmdFormat::Escaped => f.write_str(&self.history.command.trim().escape_control()),
             }?,
-            "directory" => f.write_str(self.0.cwd.trim())?,
-            "exit" => f.write_str(&self.0.exit.to_string())?,
+            "directory" => f.write_str(self.history.cwd.trim())?,
+            "exit" => f.write_str(&self.history.exit.to_string())?,
             "duration" => {
-                let dur = Duration::from_nanos(std::cmp::max(self.0.duration, 0) as u64);
+                let dur = Duration::from_nanos(std::cmp::max(self.history.duration, 0) as u64);
                 format_duration_into(dur, f)?;
             }
             "time" => {
-                self.0
+                self.history
                     .timestamp
+                    .to_offset(self.tz.0)
                     .format(TIME_FMT)
                     .map_err(|_| fmt::Error)?
                     .fmt(f)?;
             }
             "relativetime" => {
-                let since = OffsetDateTime::now_utc() - self.0.timestamp;
+                let since = OffsetDateTime::now_utc() - self.history.timestamp;
                 let d = Duration::try_from(since).unwrap_or_default();
                 format_duration_into(d, f)?;
             }
             "host" => f.write_str(
-                self.0
+                self.history
                     .hostname
                     .split_once(':')
-                    .map_or(&self.0.hostname, |(host, _)| host),
+                    .map_or(&self.history.hostname, |(host, _)| host),
             )?,
-            "user" => f.write_str(self.0.hostname.split_once(':').map_or("", |(_, user)| user))?,
+            "user" => f.write_str(
+                self.history
+                    .hostname
+                    .split_once(':')
+                    .map_or("", |(_, user)| user),
+            )?,
             _ => return Err(FormatKeyError::UnknownKey),
         }
         Ok(())
@@ -349,6 +420,7 @@ impl Cmd {
         include_deleted: bool,
         print0: bool,
         reverse: bool,
+        tz: Timezone,
     ) -> Result<()> {
         let filters = match (session, cwd) {
             (true, true) => [Session, Directory],
@@ -370,6 +442,7 @@ impl Cmd {
             },
             print0,
             reverse,
+            tz,
         );
 
         Ok(())
@@ -402,11 +475,12 @@ impl Cmd {
                 cmd_only,
                 print0,
                 reverse,
+                tz,
                 format,
             } => {
                 let mode = ListMode::from_flags(human, cmd_only);
                 Self::handle_list(
-                    db, settings, context, session, cwd, mode, format, false, print0, reverse,
+                    db, settings, context, session, cwd, mode, format, false, print0, reverse, tz,
                 )
                 .await
             }
@@ -414,6 +488,7 @@ impl Cmd {
             Self::Last {
                 human,
                 cmd_only,
+                tz,
                 format,
             } => {
                 let last = db.last().await?;
@@ -427,6 +502,7 @@ impl Cmd {
                     },
                     false,
                     true,
+                    tz,
                 );
 
                 Ok(())

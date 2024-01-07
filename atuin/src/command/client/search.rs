@@ -13,7 +13,7 @@ use atuin_client::{
     settings::{FilterMode, KeymapMode, SearchMode, Settings},
 };
 
-use super::history::ListMode;
+use super::history::{ListMode, Timezone};
 
 mod cursor;
 mod duration;
@@ -100,6 +100,14 @@ pub struct Cmd {
     /// Reverse the order of results, oldest first
     #[arg(long, short)]
     reverse: bool,
+
+    /// Display the command time in another timezone other than UTC.
+    ///
+    /// This option takes one of the following kinds of values:
+    /// - the special value "local" (or "l") which refers to the system time zone
+    /// - an offset from UTC (e.g. "+9", "-2:30")
+    #[arg(long, default_value_t)]
+    tz: Timezone,
 
     /// Available variables: {command}, {directory}, {duration}, {user}, {host}, {time}, {exit} and
     /// {relativetime}.
@@ -226,6 +234,7 @@ impl Cmd {
                     format,
                     false,
                     true,
+                    self.tz,
                 );
             }
         };
