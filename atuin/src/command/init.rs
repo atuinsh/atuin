@@ -55,19 +55,15 @@ bindkey -M vicmd 'k' _atuin_up_search_widget";
 
     fn init_bash(&self) {
         let base = include_str!("../shell/atuin.bash");
-        println!("{base}");
+        let (bind_ctrl_r, bind_up_arrow) = if std::env::var("ATUIN_NOBIND").is_ok() {
+            (false, false)
+        } else {
+            (!self.disable_ctrl_r, !self.disable_up_arrow)
+        };
 
-        if std::env::var("ATUIN_NOBIND").is_err() {
-            const BIND_CTRL_R: &str = r#"bind -x '"\C-r": __atuin_history'"#;
-            const BIND_UP_ARROW: &str = r#"bind -x '"\e[A": __atuin_history --shell-up-key-binding'
-bind -x '"\eOA": __atuin_history --shell-up-key-binding'"#;
-            if !self.disable_ctrl_r {
-                println!("{BIND_CTRL_R}");
-            }
-            if !self.disable_up_arrow {
-                println!("{BIND_UP_ARROW}");
-            }
-        }
+        println!("__atuin_bind_ctrl_r={bind_ctrl_r}");
+        println!("__atuin_bind_up_arrow={bind_up_arrow}");
+        println!("{base}");
     }
 
     fn init_fish(&self) {

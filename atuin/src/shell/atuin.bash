@@ -113,6 +113,26 @@ __atuin_accept_line() {
 }
 
 __atuin_history() {
+    # Default action of the up key: When this function is called with the first
+    # argument `--shell-up-key-binding`, we perform Atuin's history search only
+    # when the up key is supposed to cause the history movement in the original
+    # binding.  We do this only for ble.sh because the up key always invokes
+    # the history movement in the plain Bash.
+    if [[ ${BLE_ATTACHED-} && ${1-} == --shell-up-key-binding ]]; then
+        # When the current cursor position is not in the first line, the up key
+        # should move the cursor to the previous line.  While the selection is
+        # performed, the up key should not start the history search.
+        # shellcheck disable=SC2154 # Note: these variables are set by ble.sh
+        if [[ ${_ble_edit_str::_ble_edit_ind} == *$'\n'* || $_ble_edit_mark_active ]]; then
+            ble/widget/@nomarked backward-line
+            local status=$?
+            READLINE_LINE=$_ble_edit_str
+            READLINE_POINT=$_ble_edit_ind
+            READLINE_MARK=$_ble_edit_mark
+            return "$status"
+        fi
+    fi
+
     HISTORY="$(ATUIN_SHELL_BASH=t ATUIN_LOG=error atuin search "$@" -i -- "${READLINE_LINE}" 3>&1 1>&2 2>&3)"
 
     # We do nothing when the search is canceled.
@@ -161,3 +181,41 @@ if [[ -n "${BLE_VERSION-}" ]] && ((_ble_version >= 400)); then
 fi
 precmd_functions+=(__atuin_precmd)
 preexec_functions+=(__atuin_preexec)
+
+# shellcheck disable=SC2154
+if [[ $__atuin_bind_ctrl_r == true ]]; then
+    # Note: We do not overwrite [C-r] in the vi-command keymap for Bash because
+    # we do not want to overwrite "redo", which is already bound to [C-r] in
+    # the vi_nmap keymap in ble.sh.
+    bind -m emacs -x '"\C-r": __atuin_history'
+    bind -m vi-insert -x '"\C-r": __atuin_history'
+fi
+
+# shellcheck disable=SC2154
+if [[ $__atuin_bind_up_arrow == true ]]; then
+    if ((BASH_VERSINFO[0] > 4 || BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 3)); then
+        bind -m emacs -x '"\e[A": __atuin_history --shell-up-key-binding'
+        bind -m emacs -x '"\eOA": __atuin_history --shell-up-key-binding'
+        bind -m vi-insert -x '"\e[A": __atuin_history --shell-up-key-binding'
+        bind -m vi-insert -x '"\eOA": __atuin_history --shell-up-key-binding'
+        bind -m vi-command -x '"\e[A": __atuin_history --shell-up-key-binding'
+        bind -m vi-command -x '"\eOA": __atuin_history --shell-up-key-binding'
+        bind -m vi-command -x '"k": __atuin_history --shell-up-key-binding'
+    else
+        # In bash < 4.3, "bind -x" cannot bind a shell command to a keyseq
+        # having more than two bytes.  To work around this, we first translate
+        # the keyseqs to the two-byte sequence \C-x\C-p (which is not used by
+        # default) using string macros and run the shell command through the
+        # keybinding to \C-x\C-p.
+        bind -m emacs -x '"\C-x\C-p": __atuin_history --shell-up-key-binding'
+        bind -m emacs '"\e[A": "\C-x\C-p"'
+        bind -m emacs '"\eOA": "\C-x\C-p"'
+        bind -m vi-insert -x '"\C-x\C-p": __atuin_history --shell-up-key-binding'
+        bind -m vi-insert -x '"\e[A": "\C-x\C-p"'
+        bind -m vi-insert -x '"\eOA": "\C-x\C-p"'
+        bind -m vi-command -x '"\C-x\C-p": __atuin_history --shell-up-key-binding'
+        bind -m vi-command -x '"\e[A": "\C-x\C-p"'
+        bind -m vi-command -x '"\eOA": "\C-x\C-p"'
+        bind -m vi-command -x '"k": "\C-x\C-p"'
+    fi
+fi
