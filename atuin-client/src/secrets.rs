@@ -8,6 +8,11 @@ pub static SECRET_PATTERNS: &[(&str, &str, &str)] = &[
         "AKIAIOSFODNN7EXAMPLE",
     ),
     (
+        "Atuin login",
+        r"atuin\s+login",
+        "atuin login -u mycoolusername -p mycoolpassword -k \"lots of random words\"",
+    ),
+    (
         "GitHub PAT (old)",
         "ghp_[a-zA-Z0-9]{36}",
         "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", // legit, I expired it
