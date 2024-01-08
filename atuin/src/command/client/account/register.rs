@@ -29,8 +29,11 @@ pub async fn run(
     password: &Option<String>,
 ) -> Result<()> {
     use super::login::or_user_input;
+    println!("Registering for an Atuin Sync account");
+
     let username = or_user_input(username, "username");
     let email = or_user_input(email, "email");
+
     let password = password
         .clone()
         .unwrap_or_else(super::login::read_user_password);
