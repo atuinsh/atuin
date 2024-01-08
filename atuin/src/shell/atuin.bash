@@ -1,6 +1,12 @@
 # Enable only in interactive shells
 [[ $- == *i* ]] || return 0
 
+# Require bash >= 3.1
+if ((BASH_VERSINFO[0] < 3 || BASH_VERSINFO[0] == 3 && BASH_VERSINFO[1] < 1)); then
+    [[ -t 2 ]] && printf 'atuin: requires bash >= 3.1 for the integration.\n' >&2
+    return 0
+fi
+
 ATUIN_SESSION=$(atuin uuid)
 ATUIN_STTY=$(stty -g)
 export ATUIN_SESSION
