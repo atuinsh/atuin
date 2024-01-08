@@ -50,7 +50,7 @@ __atuin_precmd() {
         fi
     fi
 
-    (ATUIN_LOG=error atuin history end --exit "$EXIT" ${duration:+--duration "$duration"} -- "$ATUIN_HISTORY_ID" &) >/dev/null 2>&1
+    (ATUIN_LOG=error atuin history end --exit "$EXIT" ${duration:+"--duration=$duration"} -- "$ATUIN_HISTORY_ID" &) >/dev/null 2>&1
     export ATUIN_HISTORY_ID=""
 }
 
