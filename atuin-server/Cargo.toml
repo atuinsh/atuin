@@ -25,7 +25,7 @@ base64 = { workspace = true }
 rand = { workspace = true }
 tokio = { workspace = true }
 async-trait = { workspace = true }
-axum = "0.6.4"
+axum = "0.7.3"
 axum-server = { version = "0.5.1", features = ["tls-rustls"] }
 http = "0.2"
 hyper = "1.1"
