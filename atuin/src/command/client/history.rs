@@ -127,7 +127,7 @@ impl ListMode {
     }
 }
 
-/// Type wrapper around time::UtcOffset to support a wider variety of timezone formats.
+/// Type wrapper around `time::UtcOffset` to support a wider variety of timezone formats.
 #[derive(Clone, Copy, Debug)]
 pub struct Timezone(UtcOffset);
 
@@ -141,6 +141,11 @@ impl fmt::Display for Timezone {
         self.0.fmt(f)
     }
 }
+
+/// format: <+|-><hour>[:<minute>[:<second>]]
+static OFFSET_FMT: &[FormatItem<'_>] =
+    format_description!("[offset_hour sign:mandatory padding:none][optional [:[offset_minute padding:none][optional [:[offset_second padding:none]]]]]");
+
 impl FromStr for Timezone {
     type Err = Error;
 
@@ -152,10 +157,7 @@ impl FromStr for Timezone {
         }
 
         // offset from UTC
-        // format: <+|-><hour>[:<minute>[:<second>]]
-        static FMT: &[FormatItem<'_>] =
-            format_description!("[offset_hour sign:mandatory padding:none][optional [:[offset_minute padding:none][optional [:[offset_second padding:none]]]]]");
-        if let Ok(offset) = UtcOffset::parse(s, FMT) {
+        if let Ok(offset) = UtcOffset::parse(s, OFFSET_FMT) {
             return Ok(Self(offset));
         }
 
