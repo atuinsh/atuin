@@ -281,8 +281,8 @@ dependencies = [
  "config",
  "eyre",
  "fs-err",
- "http",
- "hyper",
+ "http 0.2.11",
+ "hyper 1.1.0",
  "hyper-rustls",
  "metrics",
  "metrics-exporter-prometheus",
@@ -346,9 +346,9 @@ dependencies = [
  "bitflags 1.3.2",
  "bytes",
  "futures-util",
- "http",
- "http-body",
- "hyper",
+ "http 0.2.11",
+ "http-body 0.4.6",
+ "hyper 0.14.28",
  "itoa",
  "matchit",
  "memchr",
@@ -376,8 +376,8 @@ dependencies = [
  "async-trait",
  "bytes",
  "futures-util",
- "http",
- "http-body",
+ "http 0.2.11",
+ "http-body 0.4.6",
  "mime",
  "rustversion",
  "tower-layer",
@@ -393,9 +393,9 @@ dependencies = [
  "arc-swap",
  "bytes",
  "futures-util",
- "http",
- "http-body",
- "hyper",
+ "http 0.2.11",
+ "http-body 0.4.6",
+ "hyper 0.14.28",
  "pin-project-lite",
  "rustls",
  "rustls-pemfile",
@@ -1307,7 +1307,7 @@ dependencies = [
  "futures-core",
  "futures-sink",
  "futures-util",
- "http",
+ "http 0.2.11",
  "indexmap 2.1.0",
  "slab",
  "tokio",
@@ -1409,14 +1409,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "http"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b32afd38673a8016f7c9ae69e5af41a58f81b1d31689040f2f1959594ce194ea"
+dependencies = [
+ "bytes",
+ "fnv",
+ "itoa",
+]
+
+[[package]]
 name = "http-body"
 version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7ceab25649e9960c0311ea418d17bee82c0dcec1bd053b5f9a66e265a693bed2"
 dependencies = [
  "bytes",
- "http",
+ "http 0.2.11",
  "pin-project-lite",
+]
+
+[[package]]
+name = "http-body"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1cac85db508abc24a2e48553ba12a996e87244a0395ce011e62b37158745d643"
+dependencies = [
+ "bytes",
+ "http 1.0.0",
 ]
 
 [[package]]
@@ -1454,8 +1475,8 @@ dependencies = [
  "futures-core",
  "futures-util",
  "h2",
- "http",
- "http-body",
+ "http 0.2.11",
+ "http-body 0.4.6",
  "httparse",
  "httpdate",
  "itoa",
@@ -1468,14 +1489,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "hyper"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fb5aa53871fc917b1a9ed87b683a5d86db645e23acb32c2e0785a353e522fb75"
+dependencies = [
+ "bytes",
+ "http 1.0.0",
+ "http-body 1.0.0",
+ "pin-project-lite",
+ "tokio",
+]
+
+[[package]]
 name = "hyper-rustls"
 version = "0.24.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec3efd23720e2049821a693cbc7e65ea87c72f1c58ff2f9522ff332b1491e590"
 dependencies = [
  "futures-util",
- "http",
- "hyper",
+ "http 0.2.11",
+ "hyper 0.14.28",
  "log",
  "rustls",
  "rustls-native-certs",
@@ -1807,7 +1841,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d4fa7ce7c4862db464a37b0b31d89bca874562f034bd7993895572783d02950"
 dependencies = [
  "base64 0.21.5",
- "hyper",
+ "hyper 0.14.28",
  "indexmap 1.9.3",
  "ipnet",
  "metrics",
@@ -2495,9 +2529,9 @@ dependencies = [
  "futures-core",
  "futures-util",
  "h2",
- "http",
- "http-body",
- "hyper",
+ "http 0.2.11",
+ "http-body 0.4.6",
+ "hyper 0.14.28",
  "hyper-rustls",
  "ipnet",
  "js-sys",
@@ -3551,8 +3585,8 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-util",
- "http",
- "http-body",
+ "http 0.2.11",
+ "http-body 0.4.6",
  "http-range-header",
  "pin-project-lite",
  "tower-layer",
