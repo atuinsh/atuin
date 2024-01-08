@@ -1,6 +1,7 @@
 ATUIN_SESSION=$(atuin uuid)
 ATUIN_STTY=$(stty -g)
 export ATUIN_SESSION
+ATUIN_HISTORY_ID=""
 
 __atuin_preexec() {
     if [[ ! ${BLE_ATTACHED-} ]]; then

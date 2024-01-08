@@ -1,4 +1,5 @@
 set -gx ATUIN_SESSION (atuin uuid)
+set --erase ATUIN_HISTORY_ID
 
 function _atuin_preexec --on-event fish_preexec
     if not test -n "$fish_private_mode"
