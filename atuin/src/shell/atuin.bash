@@ -1,3 +1,6 @@
+# Enable only in interactive shells
+[[ $- == *i* ]] || return 0
+
 ATUIN_SESSION=$(atuin uuid)
 ATUIN_STTY=$(stty -g)
 export ATUIN_SESSION
