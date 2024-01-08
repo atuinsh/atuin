@@ -283,6 +283,7 @@ Defaults to true. This matches history against a set of default regex, and will 
 3. Slack oauth tokens (bot, user)
 4. Slack webhooks
 5. Stripe live/test keys
+6. Atuin login command
 
 ## macOS <kbd>Ctrl-n</kbd> key shortcuts
 
