@@ -32,7 +32,7 @@ hyper = "1.1"
 hyper-rustls = "0.24"
 fs-err = { workspace = true }
 tower = "0.4"
-tower-http = { version = "0.4", features = ["trace"] }
+tower-http = { version = "0.5", features = ["trace"] }
 reqwest = { workspace = true }
 rustls = "0.21"
 rustls-pemfile = "1.0"
