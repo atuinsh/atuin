@@ -140,8 +140,7 @@ __atuin_history() {
     # We do nothing when the search is canceled.
     [[ $HISTORY ]] || return 0
 
-    if [[ $HISTORY == __atuin_accept__:* ]]
-    then
+    if [[ $HISTORY == __atuin_accept__:* ]]; then
         HISTORY=${HISTORY#__atuin_accept__:}
 
         if [[ ${BLE_ATTACHED-} ]]; then
