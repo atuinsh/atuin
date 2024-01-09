@@ -313,7 +313,7 @@ Run in *Nushell*:
 
 ```
 mkdir ~/.local/share/atuin/
-atuin init nu | save ~/.local/share/atuin/init.nu
+atuin init nu | save -f ~/.local/share/atuin/init.nu
 ```
 
 Add to `config.nu`:
