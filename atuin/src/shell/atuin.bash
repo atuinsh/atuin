@@ -135,25 +135,26 @@ __atuin_history() {
         fi
     fi
 
-    HISTORY=$(ATUIN_SHELL_BASH=t ATUIN_LOG=error atuin search "$@" -i -- "$READLINE_LINE" 3>&1 1>&2 2>&3)
+    local __atuin_output
+    __atuin_output=$(ATUIN_SHELL_BASH=t ATUIN_LOG=error atuin search "$@" -i -- "$READLINE_LINE" 3>&1 1>&2 2>&3)
 
     # We do nothing when the search is canceled.
-    [[ $HISTORY ]] || return 0
+    [[ $__atuin_output ]] || return 0
 
-    if [[ $HISTORY == __atuin_accept__:* ]]; then
-        HISTORY=${HISTORY#__atuin_accept__:}
+    if [[ $__atuin_output == __atuin_accept__:* ]]; then
+        __atuin_output=${__atuin_output#__atuin_accept__:}
 
         if [[ ${BLE_ATTACHED-} ]]; then
-            ble-edit/content/reset-and-check-dirty "$HISTORY"
+            ble-edit/content/reset-and-check-dirty "$__atuin_output"
             ble/widget/accept-line
         else
-            __atuin_accept_line "$HISTORY"
+            __atuin_accept_line "$__atuin_output"
         fi
 
         READLINE_LINE=""
         READLINE_POINT=${#READLINE_LINE}
     else
-        READLINE_LINE=$HISTORY
+        READLINE_LINE=$__atuin_output
         READLINE_POINT=${#READLINE_LINE}
     fi
 }
