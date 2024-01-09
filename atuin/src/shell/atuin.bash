@@ -1,3 +1,7 @@
+# Include guard
+[[ ${__atuin_initialized-} == true ]] && return 0
+__atuin_initialized=true
+
 # Enable only in interactive shells
 [[ $- == *i* ]] || return 0
 
