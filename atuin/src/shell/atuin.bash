@@ -163,6 +163,12 @@ __atuin_history() {
         fi
     fi
 
+    # READLINE_LINE and READLINE_POINT are only supported by bash >= 4.0 or
+    # ble.sh.  When it is not supported, we localize them to suppress strange
+    # behaviors.
+    [[ ${BLE_ATTACHED-} ]] || ((BASH_VERSINFO[0] >= 4)) ||
+        local READLINE_LINE="" READLINE_POINT=0
+
     local __atuin_output
     __atuin_output=$(ATUIN_SHELL_BASH=t ATUIN_LOG=error atuin search "$@" -i -- "$READLINE_LINE" 3>&1 1>&2 2>&3)
 
