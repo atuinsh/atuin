@@ -24,7 +24,7 @@ If you have any problems, please open an [issue](https://github.com/ellie/atuin/
 - bash
 - fish
 - nushell
- 
+
 # Quickstart
 
 Please do try and read this guide, but if you're in a hurry and want to get
@@ -38,7 +38,7 @@ atuin import auto
 atuin sync
 ```
 
-Now restart your shell! 
+Now restart your shell!
 
 Anytime you press ctrl-r or up, you will see the Atuin search UI. Type your
 query, enter to execute. If you'd like to select a command without executing
@@ -152,28 +152,28 @@ Syncing will happen automatically in the background, but you may wish to run it 
 atuin sync
 ```
 
-Or, if you see missing data, force a full sync with: 
+Or, if you see missing data, force a full sync with:
 
 ```
 atuin sync -f
 ```
-  
+
 ## Opt-in to activity graph
 Alongside the hosted Atuin server, there is also a service which generates
 activity graphs for your shell history! These are inspired by the GitHub graph.
-  
+
 For example, here is mine:
-  
+
 ![Activity Graph Example](https://api.atuin.sh/img/ellie.png?token=0722830c382b42777bdb652da5b71efb61d8d387)
 
 If you wish to get your own, after signing up for the sync server, run this
-  
+
 ```
 curl https://api.atuin.sh/enable -d $(cat ~/.local/share/atuin/session)
 ```
-  
+
 The response includes the URL to your graph. Feel free to share and/or embed
-this URL, the token is _not_ a secret, and simply prevents user enumeration. 
+this URL, the token is _not_ a secret, and simply prevents user enumeration.
 
 ## Known issues
 - SQLite has some issues with ZFS in certain configurations. As Atuin uses SQLite, this may cause your shell to become slow! We have an [issue](https://github.com/atuinsh/atuin/issues/952) to track, with some workarounds

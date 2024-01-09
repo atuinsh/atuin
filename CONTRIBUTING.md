@@ -10,7 +10,7 @@ Before working on anything, we suggest taking a copy of your Atuin data director
 
 Any issues labeled "bug" or "help wanted" would be fantastic, just drop a comment and feel free to ask for help!
 
-If there's anything you want to work on that isn't already an issue, either open a feature request or get in touch on the [forum](https://forum.atuin.sh)/Discord. 
+If there's anything you want to work on that isn't already an issue, either open a feature request or get in touch on the [forum](https://forum.atuin.sh)/Discord.
 
 ## Setup
 

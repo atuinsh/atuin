@@ -1,5 +1,5 @@
 create type event_type as enum ('create', 'delete');
- 
+
 create table events (
 	id bigserial primary key,
 	client_id text not null unique, -- the client-generated ID

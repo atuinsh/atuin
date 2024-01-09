@@ -67,17 +67,17 @@ atuin search --exit 0 --after "yesterday 3pm" make
 - zsh
 - bash
 - fish
- 
+
 ## 社区
 
 Atuin 有一个 Discord 社区, 可以在 [这里](https://discord.gg/Fq8bJSKPHh) 获得
 
 # 快速开始
-  
+
 ## 使用默认的同步服务器
-  
+
 这将为您注册由我托管的默认同步服务器。 一切都是端到端加密的，所以你的秘密是安全的！
-  
+
 阅读下面的更多信息，了解仅供离线使用或托管您自己的服务器。
 
 ```
@@ -105,10 +105,10 @@ curl https://api.atuin.sh/enable -d $(cat ~/.local/share/atuin/session)
 执行结果为你的活跃图 URL 地址。可以共享或嵌入这个 URL 地址，令牌（token）并<i>不是</i>加密的，只是用来防止被枚举攻击。
 
 ## 仅离线 (不同步)
-  
+
 ```
 bash <(curl https://raw.githubusercontent.com/ellie/atuin/main/install.sh)
-            
+
 atuin import auto
 ```
 
@@ -142,11 +142,11 @@ brew install atuin
 ```
 
 然后可直接看 <a href="#shell-plugin">Shell 插件</a>
-  
+
 ### MacPorts
 
 Atuin 也可以在 [MacPorts](https://ports.macports.org/port/atuin/) 中找到
-  
+
 ```
 sudo port install atuin
 ```

@@ -74,9 +74,9 @@ impl Database for Postgres {
     #[instrument(skip_all)]
     async fn get_session_user(&self, token: &str) -> DbResult<User> {
         sqlx::query_as(
-            "select users.id, users.username, users.email, users.password from users 
-            inner join sessions 
-            on users.id = sessions.user_id 
+            "select users.id, users.username, users.email, users.password from users
+            inner join sessions
+            on users.id = sessions.user_id
             and sessions.token = $1",
         )
         .bind(token)
@@ -158,7 +158,7 @@ impl Database for Postgres {
         // edge case.
 
         let res = sqlx::query(
-            "select client_id from history 
+            "select client_id from history
             where user_id = $1
             and deleted_at is not null",
         )
@@ -207,7 +207,7 @@ impl Database for Postgres {
         page_size: i64,
     ) -> DbResult<Vec<History>> {
         let res = sqlx::query_as(
-            "select id, client_id, user_id, hostname, timestamp, data, created_at from history 
+            "select id, client_id, user_id, hostname, timestamp, data, created_at from history
             where user_id = $1
             and hostname != $2
             and created_at >= $3
@@ -240,7 +240,7 @@ impl Database for Postgres {
 
             sqlx::query(
                 "insert into history
-                    (client_id, user_id, hostname, timestamp, data) 
+                    (client_id, user_id, hostname, timestamp, data)
                 values ($1, $2, $3, $4, $5)
                 on conflict do nothing
                 ",
@@ -342,7 +342,7 @@ impl Database for Postgres {
     #[instrument(skip_all)]
     async fn oldest_history(&self, user: &User) -> DbResult<History> {
         sqlx::query_as(
-            "select id, client_id, user_id, hostname, timestamp, data, created_at from history 
+            "select id, client_id, user_id, hostname, timestamp, data, created_at from history
             where user_id = $1
             order by timestamp asc
             limit 1",
@@ -363,7 +363,7 @@ impl Database for Postgres {
 
             sqlx::query(
                 "insert into store
-                    (id, client_id, host, idx, timestamp, version, tag, data, cek, user_id) 
+                    (id, client_id, host, idx, timestamp, version, tag, data, cek, user_id)
                 values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                 on conflict do nothing
                 ",

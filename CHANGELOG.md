@@ -22,7 +22,7 @@ All notable changes to this project will be documented in this file.
 - Discord link expired
 - Discord broken link
 - Fix small issues of `enter_accept` for the plain Bash ([#1467](https://github.com/atuinsh/atuin/issues/1467))
-- Time now_local not working 
+- Time now_local not working
 - Fix quirks on search cancel ([#1483](https://github.com/atuinsh/atuin/issues/1483))
 - Zsh_autosuggest_strategy for no-unset environment ([#1486](https://github.com/atuinsh/atuin/issues/1486))
 - Fix error by the use of ${PS1@P} in bash < 4.4 ([#1488](https://github.com/atuinsh/atuin/issues/1488))

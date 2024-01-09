@@ -29,7 +29,7 @@
 Atuin replaces your existing shell history with a SQLite database, and records
 additional context for your commands. Additionally, it provides optional and
 _fully encrypted_ synchronisation of your history between machines, via an Atuin
-server.  
+server.
 
 
 
@@ -88,7 +88,7 @@ I wanted to. And I **really** don't want to.
 - bash
 - fish
 - nushell
- 
+
 ## Community
 
 ### Forum
@@ -100,11 +100,11 @@ Atuin has a community forum, please ask here for help and support: https://forum
 Atuin also has a community Discord, available [here](https://discord.gg/jR3tfchVvW)
 
 # Quickstart
-  
+
 ## With the default sync server
-  
+
 This will sign you up for the default sync server, hosted by me. Everything is end-to-end encrypted, so your secrets are safe!
-  
+
 Read more below for offline-only usage, or for hosting your own server.
 
 ```
@@ -120,12 +120,12 @@ atuin sync
 ```
 
 Then restart your shell!
-  
+
 ## Offline only (no sync)
-  
+
 ```
 bash <(curl https://raw.githubusercontent.com/atuinsh/atuin/main/install.sh)
-            
+
 atuin import auto
 ```
 
@@ -163,7 +163,7 @@ toolchain, then you can run:
 ```
 cargo install atuin
 ```
-  
+
 And then follow [the shell setup](#shell-plugin)
 
 ### Homebrew
@@ -171,17 +171,17 @@ And then follow [the shell setup](#shell-plugin)
 ```
 brew install atuin
 ```
-  
+
 And then follow [the shell setup](#shell-plugin)
-  
+
 ### MacPorts
 
-Atuin is also available in [MacPorts](https://ports.macports.org/port/atuin/)  
-  
+Atuin is also available in [MacPorts](https://ports.macports.org/port/atuin/)
+
 ```
 sudo port install atuin
 ```
-  
+
 And then follow [the shell setup](#shell-plugin)
 
 ### Nix
@@ -206,7 +206,7 @@ Atuin is available in the Arch Linux [[extra] repository](https://archlinux.org/
 ```
 pacman -S atuin
 ```
-  
+
 And then follow [the shell setup](#shell-plugin)
 
 ### Xbps
@@ -226,7 +226,7 @@ Atuin is available in the Termux package repository:
 ```
 pkg install atuin
 ```
-  
+
 And then follow [the shell setup](#shell-plugin)
 
 ### From source
@@ -236,7 +236,7 @@ git clone https://github.com/atuinsh/atuin.git
 cd atuin/atuin
 cargo install --path .
 ```
-  
+
 And then follow [the shell setup](#shell-plugin)
 
 ## Shell plugin
@@ -256,9 +256,9 @@ echo 'eval "$(atuin init zsh)"' >> ~/.zshrc
 zinit load atuinsh/atuin
 ```
 
-#### Antigen  
-  
-```sh  
+#### Antigen
+
+```sh
 antigen bundle atuinsh/atuin@main
 ```
 
@@ -306,7 +306,7 @@ atuin init fish | source
 ```
 
 to your `is-interactive` block in your `~/.config/fish/config.fish` file
-  
+
 ### Nushell
 
 Run in *Nushell*:

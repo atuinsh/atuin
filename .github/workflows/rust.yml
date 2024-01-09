@@ -134,7 +134,7 @@ jobs:
 
     - name: Run clippy
       run: cargo clippy -- -D warnings
-        
+
   format:
     runs-on: ubuntu-latest
 

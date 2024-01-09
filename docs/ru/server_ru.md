@@ -1,9 +1,9 @@
 # `atuin server`
 
-Autin позволяет запустить свой собственный сервер синхронизации, если вы 
+Autin позволяет запустить свой собственный сервер синхронизации, если вы
 не хотите использовать мой :)
 
-Здесь есть только одна субкоманда, `atuin server start`, которая запустит 
+Здесь есть только одна субкоманда, `atuin server start`, которая запустит
 Autin http-сервер синхронизации
 
 ```
@@ -44,7 +44,7 @@ ATUIN_DB_URI="postgres://user:password@hostname/database"
 
 ### host
 
-Адрес хоста, который будет прослушиваться сервером Autin 
+Адрес хоста, который будет прослушиваться сервером Autin
 
 По умолчанию это `127.0.0.1`.
 
@@ -57,7 +57,7 @@ POST, который будет прослушиваться сервером Au
 ### open_registration
 
 Если `true`, autin будет разрешать регистрацию новых пользователей.
-Установите флаг `false`, если после создания вашего аккаута вы не хотите, чтобы другие 
+Установите флаг `false`, если после создания вашего аккаута вы не хотите, чтобы другие
 могли пользоваться вашим сервером.
 
 По умолчанию `false`.
@@ -76,8 +76,8 @@ docker run -d -v "$USER/.config/atuin:/config" ghcr.io/ellie/atuin:latest server
 
 ## Docker Compose
 
-Использование вашего собственного docker-образа с хостингом вашего собственного Autin может быть реализовано через 
-файл docker-compose. 
+Использование вашего собственного docker-образа с хостингом вашего собственного Autin может быть реализовано через
+файл docker-compose.
 
 Создайте файл `.env` рядом с `docker-compode.yml` с содержанием наподобие этому:
 
@@ -135,7 +135,7 @@ After=docker.service
 
 [Service]
 # Where the docker-compose file is located
-WorkingDirectory=/srv/atuin-server 
+WorkingDirectory=/srv/atuin-server
 ExecStart=/usr/bin/docker-compose up
 ExecStop=/usr/bin/docker-compose down
 TimeoutStartSec=0

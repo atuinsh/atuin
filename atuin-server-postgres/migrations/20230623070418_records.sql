@@ -8,7 +8,7 @@ create table records (
 	version text not null,
 	tag text not null,              -- what is this? history, kv, whatever. Remember clients get a log per tag per host
 	data text not null,            -- store the actual history data, encrypted. I don't wanna know!
-	cek text not null,            
+	cek text not null,
 
 	user_id bigint not null,        -- allow multiple users
 	created_at timestamp not null default current_timestamp

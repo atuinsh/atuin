@@ -7,7 +7,7 @@ on:
 jobs:
 
   publish_x86:
-    concurrency: 
+    concurrency:
       group: ${{ github.ref }}-x86
       cancel-in-progress: true
     permissions:
@@ -57,7 +57,7 @@ jobs:
 
 
   publish_aarch64:
-    concurrency: 
+    concurrency:
       group: ${{ github.ref }}-aarch64
       cancel-in-progress: true
     permissions:

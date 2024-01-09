@@ -62,7 +62,7 @@ sync_frequency = "1h"
 
 ### `db_path`
 
-Atuin SQlite数据库的路径。默认为 
+Atuin SQlite数据库的路径。默认为
 `~/.local/share/atuin/history.db`
 
 ```
@@ -71,7 +71,7 @@ db_path = "~/.history.db"
 
 ### `key_path`
 
-Atuin加密密钥的路径。默认为 
+Atuin加密密钥的路径。默认为
 `~/.local/share/atuin/key`
 
 ```
@@ -80,7 +80,7 @@ key = "~/.atuin-key"
 
 ### `session_path`
 
-Atuin服务器会话文件的路径。默认为 
+Atuin服务器会话文件的路径。默认为
 `~/.local/share/atuin/session` 。 这本质上只是一个API令牌
 
 ```

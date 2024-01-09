@@ -63,7 +63,7 @@ body:
     attributes:
       label: Behaviour
       description: "Please describe the issue - what you expected to happen, what actually happened"
-      
+
   - type: textarea
     attributes:
       label: Logs
