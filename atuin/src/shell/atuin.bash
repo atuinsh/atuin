@@ -14,11 +14,11 @@ __atuin_preexec() {
 
     local id
     id=$(atuin history start -- "$1")
-    export ATUIN_HISTORY_ID="${id}"
+    export ATUIN_HISTORY_ID=${id}
 }
 
 __atuin_precmd() {
-    local EXIT="$?"
+    local EXIT=$?
 
     [[ -z "${ATUIN_HISTORY_ID}" ]] && return
 
@@ -74,9 +74,9 @@ __atuin_accept_line() {
         if type -t "$__atuin_preexec_function" 1>/dev/null; then
             __atuin_set_ret_value "${__bp_last_ret_value:-}"
             "$__atuin_preexec_function" "$__atuin_command"
-            __atuin_preexec_function_ret_value="$?"
+            __atuin_preexec_function_ret_value=$?
             if [[ "$__atuin_preexec_function_ret_value" != 0 ]]; then
-                __atuin_preexec_ret_value="$__atuin_preexec_function_ret_value"
+                __atuin_preexec_ret_value=$__atuin_preexec_function_ret_value
             fi
         fi
     done
@@ -135,7 +135,7 @@ __atuin_history() {
         fi
     fi
 
-    HISTORY="$(ATUIN_SHELL_BASH=t ATUIN_LOG=error atuin search "$@" -i -- "${READLINE_LINE}" 3>&1 1>&2 2>&3)"
+    HISTORY=$(ATUIN_SHELL_BASH=t ATUIN_LOG=error atuin search "$@" -i -- "${READLINE_LINE}" 3>&1 1>&2 2>&3)
 
     # We do nothing when the search is canceled.
     [[ $HISTORY ]] || return 0
