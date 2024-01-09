@@ -20,11 +20,11 @@ __atuin_preexec() {
 __atuin_precmd() {
     local EXIT=$?
 
-    [[ -z $ATUIN_HISTORY_ID ]] && return
+    [[ ! $ATUIN_HISTORY_ID ]] && return
 
     local duration=""
     # shellcheck disable=SC2154,SC2309
-    if [[ -n ${BLE_ATTACHED-} && _ble_bash -ge 50000 && -n ${_ble_exec_time_ata-} ]]; then
+    if [[ ${BLE_ATTACHED-} && _ble_bash -ge 50000 && ${_ble_exec_time_ata-} ]]; then
         # We use the high-resolution duration based on EPOCHREALTIME (bash >=
         # 5.0) that is recorded by ble.sh. The shell variable
         # `_ble_exec_time_ata` contains the execution time in microseconds.
@@ -144,7 +144,7 @@ __atuin_history() {
     then
         HISTORY=${HISTORY#__atuin_accept__:}
 
-        if [[ -n ${BLE_ATTACHED-} ]]; then
+        if [[ ${BLE_ATTACHED-} ]]; then
             ble-edit/content/reset-and-check-dirty "$HISTORY"
             ble/widget/accept-line
         else
@@ -160,7 +160,7 @@ __atuin_history() {
 }
 
 # shellcheck disable=SC2154
-if [[ -n ${BLE_VERSION-} ]] && ((_ble_version >= 400)); then
+if [[ ${BLE_VERSION-} ]] && ((_ble_version >= 400)); then
     ble-import contrib/integration/bash-preexec
 
     # Define and register an autosuggestion source for ble.sh's auto-complete.
