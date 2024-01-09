@@ -14,13 +14,13 @@ __atuin_preexec() {
 
     local id
     id=$(atuin history start -- "$1")
-    export ATUIN_HISTORY_ID=${id}
+    export ATUIN_HISTORY_ID=$id
 }
 
 __atuin_precmd() {
     local EXIT=$?
 
-    [[ -z "${ATUIN_HISTORY_ID}" ]] && return
+    [[ -z "$ATUIN_HISTORY_ID" ]] && return
 
     local duration=""
     # shellcheck disable=SC2154,SC2309
@@ -31,7 +31,7 @@ __atuin_precmd() {
         duration=${_ble_exec_time_ata}000
     fi
 
-    (ATUIN_LOG=error atuin history end --exit "${EXIT}" ${duration:+--duration "$duration"} -- "${ATUIN_HISTORY_ID}" &) >/dev/null 2>&1
+    (ATUIN_LOG=error atuin history end --exit "$EXIT" ${duration:+--duration "$duration"} -- "$ATUIN_HISTORY_ID" &) >/dev/null 2>&1
     export ATUIN_HISTORY_ID=""
 }
 
@@ -135,7 +135,7 @@ __atuin_history() {
         fi
     fi
 
-    HISTORY=$(ATUIN_SHELL_BASH=t ATUIN_LOG=error atuin search "$@" -i -- "${READLINE_LINE}" 3>&1 1>&2 2>&3)
+    HISTORY=$(ATUIN_SHELL_BASH=t ATUIN_LOG=error atuin search "$@" -i -- "$READLINE_LINE" 3>&1 1>&2 2>&3)
 
     # We do nothing when the search is canceled.
     [[ $HISTORY ]] || return 0
@@ -154,7 +154,7 @@ __atuin_history() {
         READLINE_LINE=""
         READLINE_POINT=${#READLINE_LINE}
     else
-        READLINE_LINE=${HISTORY}
+        READLINE_LINE=$HISTORY
         READLINE_POINT=${#READLINE_LINE}
     fi
 }
