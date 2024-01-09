@@ -178,7 +178,7 @@ jobs:
     - name: Create Debian package
       id: debian-package
       shell: bash
-      if: startsWith(matrix.job.os, 'ubuntu')
+      if: startsWith(matrix.job.os, 'ubuntu') && endsWith(matrix.job.target, 'gnu')
       run: |
         cargo install cargo-deb
         cargo deb --deb-revision="" -p atuin
