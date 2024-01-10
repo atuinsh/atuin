@@ -48,10 +48,10 @@ services:
       POSTGRES_DB: atuin
 ```
 
-Start the services using `docker-compose`:
+Start the services using `docker compose`:
 
 ```sh
-docker-compose up -d
+docker compose up -d
 ```
 
 ## Using systemd to manage your atuin server
@@ -67,8 +67,8 @@ After=docker.service
 [Service]
 # Where the docker-compose file is located
 WorkingDirectory=/srv/atuin-server
-ExecStart=/usr/bin/docker-compose up
-ExecStop=/usr/bin/docker-compose down
+ExecStart=/usr/bin/docker compose up
+ExecStop=/usr/bin/docker compose down
 TimeoutStartSec=0
 Restart=on-failure
 StartLimitBurst=3
