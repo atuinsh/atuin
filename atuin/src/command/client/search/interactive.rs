@@ -390,9 +390,9 @@ impl State {
             .direction(Direction::Horizontal)
             .constraints(
                 [
-                    Constraint::Ratio(1, 3),
-                    Constraint::Ratio(1, 3),
-                    Constraint::Ratio(1, 3),
+                    Constraint::Ratio(1, 5),
+                    Constraint::Ratio(3, 5),
+                    Constraint::Ratio(1, 5),
                 ]
                 .as_ref(),
             )
@@ -429,29 +429,37 @@ impl State {
 
     fn build_title(&mut self) -> Paragraph {
         let title = if self.update_needed.is_some() {
-            let version = self.update_needed.clone().unwrap();
-
             Paragraph::new(Text::from(Span::styled(
-                format!(" Atuin v{VERSION} - UPDATE AVAILABLE {version}"),
+                format!("Atuin v{VERSION} - UPGRADE"),
                 Style::default().add_modifier(Modifier::BOLD).fg(Color::Red),
             )))
         } else {
             Paragraph::new(Text::from(Span::styled(
-                format!(" Atuin v{VERSION}"),
+                format!("Atuin v{VERSION}"),
                 Style::default().add_modifier(Modifier::BOLD),
             )))
         };
-        title
+        title.alignment(Alignment::Left)
     }
 
     #[allow(clippy::unused_self)]
     fn build_help(&mut self) -> Paragraph {
         let help = Paragraph::new(Text::from(Line::from(vec![
-            Span::styled("Esc", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw(" to exit"),
+            Span::styled("<esc>", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(": exit"),
+            Span::raw(", "),
+            Span::styled("<tab>", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(": edit"),
+            Span::raw(", "),
+            Span::styled("<enter>", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(": execute"),
+            Span::raw(", "),
+            Span::styled("<ctrl-r>", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(": filter toggle"),
         ])))
         .style(Style::default().fg(Color::DarkGray))
         .alignment(Alignment::Center);
+
         help
     }
 
