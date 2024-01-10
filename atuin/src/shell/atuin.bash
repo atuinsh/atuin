@@ -15,23 +15,42 @@ __atuin_preexec() {
     local id
     id=$(atuin history start -- "$1")
     export ATUIN_HISTORY_ID=$id
+    __atuin_preexec_time=${EPOCHREALTIME-}
 }
 
 __atuin_precmd() {
-    local EXIT=$?
+    local EXIT=$? __atuin_precmd_time=${EPOCHREALTIME-}
 
     [[ ! $ATUIN_HISTORY_ID ]] && return
 
     local duration=""
-    # shellcheck disable=SC2154,SC2309
-    if [[ ${BLE_ATTACHED-} && _ble_bash -ge 50000 && ${_ble_exec_time_ata-} ]]; then
+    if ((BASH_VERSINFO[0] >= 5)); then
         # We use the high-resolution duration based on EPOCHREALTIME (bash >=
-        # 5.0) that is recorded by ble.sh. The shell variable
-        # `_ble_exec_time_ata` contains the execution time in microseconds.
-        duration=${_ble_exec_time_ata}000
+        # 5.0) if available.
+        # shellcheck disable=SC2154,SC2309
+        if [[ ${BLE_ATTACHED-} && ${_ble_exec_time_ata-} ]]; then
+            # With ble.sh, we utilize the shell variable `_ble_exec_time_ata`
+            # recorded by ble.sh.
+            duration=${_ble_exec_time_ata}000
+        else
+            # With bash-preexec, we calculate the time duration here, though it
+            # might not be as accurate as `_ble_exec_time_ata` because it also
+            # includes the time for precmd/preexec handling.  Bash does not
+            # allow floating-point arithmetic, so we remove the non-digit
+            # characters and perform the integral arithmetic.  The fraction
+            # part of EPOCHREALTIME is fixed to have 6 digits in Bash.  We
+            # remove all the non-digit characters because the decimal point is
+            # not necessarily a period depending on the locale.
+            duration=$((${__atuin_precmd_time//[!0-9]} - ${__atuin_preexec_time//[!0-9]}))
+            if ((duration >= 0)); then
+                duration=${duration}000
+            else
+                duration="" # clear the result on overflow
+            fi
+        fi
     fi
 
-    (ATUIN_LOG=error atuin history end --exit "$EXIT" ${duration:+--duration "$duration"} -- "$ATUIN_HISTORY_ID" &) >/dev/null 2>&1
+    (ATUIN_LOG=error atuin history end --exit "$EXIT" ${duration:+"--duration=$duration"} -- "$ATUIN_HISTORY_ID" &) >/dev/null 2>&1
     export ATUIN_HISTORY_ID=""
 }
 

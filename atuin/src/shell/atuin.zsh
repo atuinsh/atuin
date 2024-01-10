@@ -44,7 +44,7 @@ _atuin_precmd() {
         printf -v duration %.0f $(((__atuin_precmd_time - __atuin_preexec_time) * 1000000000))
     fi
 
-    (ATUIN_LOG=error atuin history end --exit $EXIT ${=duration:+--duration $duration} -- $ATUIN_HISTORY_ID &) >/dev/null 2>&1
+    (ATUIN_LOG=error atuin history end --exit $EXIT ${duration:+--duration=$duration} -- $ATUIN_HISTORY_ID &) >/dev/null 2>&1
     export ATUIN_HISTORY_ID=""
 }
 
