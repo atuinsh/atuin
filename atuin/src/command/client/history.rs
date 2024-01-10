@@ -161,7 +161,10 @@ impl FromStr for Timezone {
             return Ok(Self(offset));
         }
 
-        // IDEA: support named timezones; maybe use chrono_tz?
+        // IDEA: Currently named timezones are not supported, because the well-known crate
+        // for this is `chrono_tz`, which is not really interoperable with the datetime crate
+        // that we currently use - `time`. If ever we migrate to using `chrono`, this would
+        // be a good feature to add.
 
         bail!(r#""{}" is not a valid timezone spec"#, s)
     }
