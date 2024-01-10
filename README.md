@@ -61,7 +61,7 @@ I wanted to. And I **really** don't want to.
 
 - rebind `ctrl-r` and `up` (configurable) to a full screen history search UI
 - store shell history in a sqlite database
-- backup and sync **encrypted** shell history
+- back up and sync **encrypted** shell history
 - the same history across terminals, across sessions, and across machines
 - log exit code, cwd, hostname, session, command duration, etc
 - calculate statistics such as "most used command"
