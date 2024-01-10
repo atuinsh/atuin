@@ -128,7 +128,7 @@ impl ListMode {
 }
 
 /// Type wrapper around `time::UtcOffset` to support a wider variety of timezone formats.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Timezone(UtcOffset);
 
 impl Default for Timezone {
@@ -513,5 +513,54 @@ impl Cmd {
                 Ok(())
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use eyre::Result;
+    use time::UtcOffset;
+
+    use super::Timezone;
+
+    #[test]
+    fn can_parse_local_timezone_spec() -> Result<()> {
+        let local_tz = Timezone(UtcOffset::current_local_offset()?);
+
+        assert_eq!(Timezone::from_str("l")?, local_tz);
+        assert_eq!(Timezone::from_str("local")?, local_tz);
+        Ok(())
+    }
+
+    #[test]
+    fn can_parse_offset_timezone_spec() -> Result<()> {
+        assert_eq!(Timezone::from_str("+02")?.0.as_hms(), (2, 0, 0));
+        assert_eq!(Timezone::from_str("-04")?.0.as_hms(), (-4, 0, 0));
+        assert_eq!(Timezone::from_str("+05:30")?.0.as_hms(), (5, 30, 0));
+        assert_eq!(Timezone::from_str("-09:30")?.0.as_hms(), (-9, -30, 0));
+
+        // single digit hours are allowed
+        assert_eq!(Timezone::from_str("+2")?.0.as_hms(), (2, 0, 0));
+        assert_eq!(Timezone::from_str("-4")?.0.as_hms(), (-4, 0, 0));
+        assert_eq!(Timezone::from_str("+5:30")?.0.as_hms(), (5, 30, 0));
+        assert_eq!(Timezone::from_str("-9:30")?.0.as_hms(), (-9, -30, 0));
+
+        // fully qualified form
+        assert_eq!(Timezone::from_str("+09:30:00")?.0.as_hms(), (9, 30, 0));
+        assert_eq!(Timezone::from_str("-09:30:00")?.0.as_hms(), (-9, -30, 0));
+
+        // these offsets don't really exist but are supported anyway
+        assert_eq!(Timezone::from_str("+0:5")?.0.as_hms(), (0, 5, 0));
+        assert_eq!(Timezone::from_str("-0:5")?.0.as_hms(), (0, -5, 0));
+        assert_eq!(Timezone::from_str("+01:23:45")?.0.as_hms(), (1, 23, 45));
+        assert_eq!(Timezone::from_str("-01:23:45")?.0.as_hms(), (-1, -23, -45));
+
+        // require a leading sign for clarity
+        assert!(Timezone::from_str("5").is_err());
+        assert!(Timezone::from_str("10:30").is_err());
+
+        Ok(())
     }
 }
