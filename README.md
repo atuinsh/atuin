@@ -265,6 +265,8 @@ antigen bundle atuinsh/atuin@main
 
 ### bash
 
+Atuin works in `bash >= 3.1`, but we recommend to use Atuin with the recent versions of `bash >= 5`.
+
 #### [ble.sh](https://github.com/akinomyoga/ble.sh)
 
 Atuin works best in bash when using [ble.sh](https://github.com/akinomyoga/ble.sh) >= 0.4.
@@ -297,6 +299,8 @@ echo 'eval "$(atuin init bash)"' >> ~/.bashrc
 **PLEASE NOTE**
 
 bash-preexec currently has an issue where it will stop honoring `ignorespace`. While Atuin will ignore commands prefixed with whitespace, they may still end up in your bash history. Please check your configuration! All other shells do not have this issue.
+
+To use Atuin in `bash < 4` with bash-preexec, the option `enter_accept` needs to be turned on (which is so by default).
 
 ### fish
 

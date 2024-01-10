@@ -1,3 +1,16 @@
+# Include guard
+[[ ${__atuin_initialized-} == true ]] && return 0
+__atuin_initialized=true
+
+# Enable only in interactive shells
+[[ $- == *i* ]] || return 0
+
+# Require bash >= 3.1
+if ((BASH_VERSINFO[0] < 3 || BASH_VERSINFO[0] == 3 && BASH_VERSINFO[1] < 1)); then
+    [[ -t 2 ]] && printf 'atuin: requires bash >= 3.1 for the integration.\n' >&2
+    return 0
+fi
+
 ATUIN_SESSION=$(atuin uuid)
 ATUIN_STTY=$(stty -g)
 export ATUIN_SESSION
@@ -153,6 +166,12 @@ __atuin_history() {
             return "$status"
         fi
     fi
+
+    # READLINE_LINE and READLINE_POINT are only supported by bash >= 4.0 or
+    # ble.sh.  When it is not supported, we localize them to suppress strange
+    # behaviors.
+    [[ ${BLE_ATTACHED-} ]] || ((BASH_VERSINFO[0] >= 4)) ||
+        local READLINE_LINE="" READLINE_POINT=0
 
     local __atuin_output
     __atuin_output=$(ATUIN_SHELL_BASH=t ATUIN_LOG=error atuin search "$@" -i -- "$READLINE_LINE" 3>&1 1>&2 2>&3)
