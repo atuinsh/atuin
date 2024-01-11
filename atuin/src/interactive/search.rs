@@ -370,7 +370,7 @@ impl State {
         let invert = settings.invert;
         let border_size = if compact { 0 } else { 1 };
         let preview_width = f.size().width - 2;
-        let preview_height = if settings.show_preview {
+        let preview_height = if settings.show_preview && self.tab_index == 0 {
             let longest_command = results
                 .iter()
                 .max_by(|h1, h2| h1.command.len().cmp(&h2.command.len()));
@@ -386,7 +386,7 @@ impl State {
                         .sum(),
                 )
             }) + border_size * 2
-        } else if compact {
+        } else if compact || self.tab_index == 1 {
             0
         } else {
             1
@@ -477,6 +477,12 @@ impl State {
                     &results[self.results_state.selected()],
                     stats.expect("Drawing inspector, but no stats").clone(),
                 );
+
+                // HACK: I'm following up with abstracting this into the UI container, with a
+                // sub-widget for search + for inspector
+                let feedback = Paragraph::new("The inspector is new - please give feedback (good, or bad) at https://forum.atuin.sh");
+                f.render_widget(feedback, input_chunk);
+
                 return;
             }
 
@@ -544,6 +550,9 @@ impl State {
                 Span::raw(", "),
                 Span::styled("<ctrl-i>", Style::default().add_modifier(Modifier::BOLD)),
                 Span::raw(": search"),
+                Span::raw(", "),
+                Span::styled("<ctrl-d>", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(": delete"),
             ]))),
 
             _ => unreachable!("invalid tab index"),

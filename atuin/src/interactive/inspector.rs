@@ -2,24 +2,18 @@ use std::time::Duration;
 use time::macros::format_description;
 
 use atuin_client::{
-    database::Database,
     history::{History, HistoryStats},
     settings::Settings,
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
-    buffer::Buffer,
     layout::Rect,
-    prelude::{Alignment, Backend, Constraint, Direction, Layout},
-    style::{Color, Modifier, Style, Styled, Stylize},
-    text::{Span, Text},
-    widgets::{
-        Bar, BarChart, BarGroup, Block, Borders, Cell, Padding, Paragraph, Row, StatefulWidget,
-        Table, Widget,
-    },
+    prelude::{Constraint, Direction, Layout},
+    style::Style,
+    symbols,
+    widgets::{Bar, BarChart, BarGroup, Block, Borders, Padding, Paragraph, Row, Table},
     Frame,
 };
-use time::OffsetDateTime;
 
 use crate::utils::duration::format_duration;
 
@@ -75,16 +69,14 @@ pub fn draw_commands(f: &mut Frame<'_>, parent: Rect, history: &History, stats: 
 
 pub fn draw_stats_table(f: &mut Frame<'_>, parent: Rect, history: &History, stats: &HistoryStats) {
     let duration = Duration::from_nanos(history.duration as u64);
+    let avg_duration = Duration::from_nanos(stats.average_duration);
 
     let rows = [
         Row::new(vec!["Time".to_string(), history.timestamp.to_string()]),
+        Row::new(vec!["Duration".to_string(), format_duration(duration)]),
         Row::new(vec![
-            "Duration".to_string(),
-            format!(
-                "{}.{}s",
-                duration.as_secs().to_string(),
-                duration.subsec_nanos()
-            ),
+            "Avg duration".to_string(),
+            format_duration(avg_duration),
         ]),
         Row::new(vec!["Exit".to_string(), history.exit.to_string()]),
         Row::new(vec!["Directory".to_string(), history.cwd.to_string()]),
@@ -97,6 +89,7 @@ pub fn draw_stats_table(f: &mut Frame<'_>, parent: Rect, history: &History, stat
     let table = Table::new(rows, widths).column_spacing(1).block(
         Block::default()
             .title("Command stats")
+            .borders(Borders::ALL)
             .padding(Padding::vertical(1)),
     );
 
@@ -143,7 +136,7 @@ fn sort_duration_over_time(durations: &[(String, i64)]) -> Vec<(String, i64)> {
         .collect()
 }
 
-fn draw_stats_charts(f: &mut Frame<'_>, parent: Rect, history: &History, stats: &HistoryStats) {
+fn draw_stats_charts(f: &mut Frame<'_>, parent: Rect, stats: &HistoryStats) {
     let exits: Vec<Bar> = stats
         .exits
         .iter()
@@ -157,8 +150,8 @@ fn draw_stats_charts(f: &mut Frame<'_>, parent: Rect, history: &History, stats: 
     let exits = BarChart::default()
         .block(
             Block::default()
-                .title("Exit distribution")
-                .borders(Borders::ALL),
+                .title("Exit code distribution")
+                .borders(Borders::TOP | Borders::RIGHT | Borders::LEFT),
         )
         .bar_width(3)
         .bar_gap(1)
@@ -190,17 +183,19 @@ fn draw_stats_charts(f: &mut Frame<'_>, parent: Rect, history: &History, stats: 
     let duration_over_time: Vec<Bar> = duration_over_time
         .iter()
         .map(|(date, duration)| {
+            let d = Duration::from_nanos(*duration as u64);
             Bar::default()
                 .label(date.clone().into())
-                .value((*duration / 1000000000) as u64)
+                .value((*duration) as u64)
+                .text_value(format_duration(d))
         })
         .collect();
 
     let duration_over_time = BarChart::default()
         .block(
             Block::default()
-                .title("Duration over time (s)")
-                .borders(Borders::ALL),
+                .title("Duration over time")
+                .borders(Borders::BOTTOM | Borders::RIGHT | Borders::LEFT),
         )
         .bar_width(5)
         .bar_gap(1)
@@ -236,14 +231,14 @@ pub fn draw_inspector(f: &mut Frame<'_>, chunk: Rect, history: &History, stats: 
 
     draw_commands(f, vert_layout[0], history, &stats);
     draw_stats_table(f, stats_layout[0], history, &stats);
-    draw_stats_charts(f, stats_layout[1], history, &stats);
+    draw_stats_charts(f, stats_layout[1], &stats);
 }
 
 // I'm going to break this out more, but just starting to move things around before changing
 // structure and making it nicer.
 pub fn inspector_input(
-    state: &mut State,
-    settings: &Settings,
+    _state: &mut State,
+    _settings: &Settings,
     selected: usize,
     input: &KeyEvent,
 ) -> InputAction {

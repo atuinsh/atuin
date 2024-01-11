@@ -11,7 +11,7 @@ use atuin_client::{
 
 use super::history::ListMode;
 
-pub use crate::utils::duration::{format_duration, format_duration_into};
+pub use crate::utils::duration::format_duration_into;
 
 #[allow(clippy::struct_excessive_bools, clippy::struct_field_names)]
 #[derive(Parser, Debug)]

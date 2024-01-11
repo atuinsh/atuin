@@ -586,6 +586,9 @@ impl Database for Sqlite {
         let mut total = SqlBuilder::select_from("history");
         total.field("count(1)").and_where("command = ?1");
 
+        let mut average = SqlBuilder::select_from("history");
+        average.field("avg(duration)").and_where("command = ?1");
+
         let mut exits = SqlBuilder::select_from("history");
         exits
             .fields(&["exit", "count(1) as count"])
@@ -617,8 +620,9 @@ impl Database for Sqlite {
             .having("duration > 0");
 
         let prev = prev.sql().expect("issue in stats previous query");
-        let next = next.sql().expect("issue in stats previous query");
-        let total = total.sql().expect("issue in stats previous query");
+        let next = next.sql().expect("issue in stats next query");
+        let total = total.sql().expect("issue in stats average query");
+        let average = average.sql().expect("issue in stats previous query");
         let exits = exits.sql().expect("issue in stats exits query");
         let day_of_week = day_of_week.sql().expect("issue in stats day of week query");
         let duration_over_time = duration_over_time
@@ -640,6 +644,11 @@ impl Database for Sqlite {
             .await?;
 
         let total: (i64,) = sqlx::query_as(&total)
+            .bind(&h.command)
+            .fetch_one(&self.pool)
+            .await?;
+
+        let average: (f64,) = sqlx::query_as(&average)
             .bind(&h.command)
             .fetch_one(&self.pool)
             .await?;
@@ -668,6 +677,7 @@ impl Database for Sqlite {
             next,
             previous: prev,
             total: total.0 as u64,
+            average_duration: average.0 as u64,
             exits,
             day_of_week,
             duration_over_time,
