@@ -159,7 +159,7 @@ fn draw_stats_charts(f: &mut Frame<'_>, parent: Rect, stats: &HistoryStats) {
         .block(
             Block::default()
                 .title("Exit code distribution")
-                .borders(Borders::TOP | Borders::RIGHT | Borders::LEFT),
+                .borders(Borders::ALL),
         )
         .bar_width(3)
         .bar_gap(1)
@@ -203,7 +203,7 @@ fn draw_stats_charts(f: &mut Frame<'_>, parent: Rect, stats: &HistoryStats) {
         .block(
             Block::default()
                 .title("Duration over time")
-                .borders(Borders::BOTTOM | Borders::RIGHT | Borders::LEFT),
+                .borders(Borders::ALL),
         )
         .bar_width(5)
         .bar_gap(1)
