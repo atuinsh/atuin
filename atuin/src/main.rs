@@ -5,10 +5,8 @@ use clap::Parser;
 use eyre::Result;
 
 use command::AtuinCmd;
+
 mod command;
-mod engines;
-mod interactive;
-mod utils;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const SHA: &str = env!("GIT_HASH");

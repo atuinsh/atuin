@@ -9,7 +9,7 @@ use ratatui::{
 };
 use time::OffsetDateTime;
 
-use crate::utils::duration::format_duration;
+use super::duration::format_duration;
 
 pub struct HistoryList<'a> {
     history: &'a [History],
