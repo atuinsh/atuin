@@ -586,9 +586,44 @@ impl Database for Sqlite {
         let mut total = SqlBuilder::select_from("history");
         total.field("count(1)").and_where("command = ?1");
 
+        let mut exits = SqlBuilder::select_from("history");
+        exits
+            .fields(&["exit", "count(1) as count"])
+            .and_where("command = ?1")
+            .group_by("exit");
+
+        // rewrite the following with sqlbuilder
+        let mut day_of_week = SqlBuilder::select_from("history");
+        day_of_week
+            .fields(&[
+                "strftime('%w', ROUND(timestamp / 1000000000), 'unixepoch') AS day_of_week",
+                "count(1) as count",
+            ])
+            .and_where("command = ?1")
+            .group_by("day_of_week");
+
+        // Intentionally format the string with 01 hardcoded. We want the average runtime for the
+        // _entire month_, but will later parse it as a datetime for sorting
+        // Sqlite has no datetime so we cannot do it there, and otherwise sorting will just be a
+        // string sort, which won't be correct.
+        let mut duration_over_time = SqlBuilder::select_from("history");
+        duration_over_time
+            .fields(&[
+                "strftime('01-%m-%Y', ROUND(timestamp / 1000000000), 'unixepoch') AS month_year",
+                "avg(duration) as duration",
+            ])
+            .and_where("command = ?1")
+            .group_by("month_year")
+            .having("duration > 0");
+
         let prev = prev.sql().expect("issue in stats previous query");
         let next = next.sql().expect("issue in stats previous query");
         let total = total.sql().expect("issue in stats previous query");
+        let exits = exits.sql().expect("issue in stats exits query");
+        let day_of_week = day_of_week.sql().expect("issue in stats day of week query");
+        let duration_over_time = duration_over_time
+            .sql()
+            .expect("issue in stats duration over time query");
 
         let prev = sqlx::query(&prev)
             .bind(h.timestamp.unix_timestamp_nanos() as i64)
@@ -609,10 +644,33 @@ impl Database for Sqlite {
             .fetch_one(&self.pool)
             .await?;
 
+        let exits: Vec<(i64, i64)> = sqlx::query_as(&exits)
+            .bind(&h.command)
+            .fetch_all(&self.pool)
+            .await?;
+
+        let day_of_week: Vec<(String, i64)> = sqlx::query_as(&day_of_week)
+            .bind(&h.command)
+            .fetch_all(&self.pool)
+            .await?;
+
+        let duration_over_time: Vec<(String, f64)> = sqlx::query_as(&duration_over_time)
+            .bind(&h.command)
+            .fetch_all(&self.pool)
+            .await?;
+
+        let duration_over_time = duration_over_time
+            .iter()
+            .map(|f| (f.0.clone(), f.1.round() as i64))
+            .collect();
+
         Ok(HistoryStats {
             next,
             previous: prev,
             total: total.0 as u64,
+            exits,
+            day_of_week,
+            duration_over_time,
         })
     }
 }

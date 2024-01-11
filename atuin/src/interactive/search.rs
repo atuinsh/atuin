@@ -43,9 +43,10 @@ use ratatui::{
 
 const TAB_TITLES: [&str; 2] = ["Search", "Inspect"];
 
-enum InputAction {
+pub(crate) enum InputAction {
     Accept(usize),
     Copy(usize),
+    Delete(usize),
     ReturnOriginal,
     ReturnQuery,
     Continue,
@@ -163,10 +164,12 @@ impl State {
             0 => {}
 
             1 => {
-                super::inspector::inspector_input(self, settings, input);
-
-                // this tab doesn't return search results, it just exits
-                return InputAction::Continue;
+                return super::inspector::inspector_input(
+                    self,
+                    settings,
+                    self.results_state.selected(),
+                    input,
+                );
             }
 
             _ => panic!("invalid tab index on input"),
@@ -515,24 +518,38 @@ impl State {
     }
 
     #[allow(clippy::unused_self)]
-    fn build_help(&mut self) -> Paragraph {
-        let help = Paragraph::new(Text::from(Line::from(vec![
-            Span::styled("<esc>", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw(": exit"),
-            Span::raw(", "),
-            Span::styled("<tab>", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw(": edit"),
-            Span::raw(", "),
-            Span::styled("<enter>", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw(": execute"),
-            Span::raw(", "),
-            Span::styled("<ctrl-r>", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw(": filter toggle"),
-        ])))
-        .style(Style::default().fg(Color::DarkGray))
-        .alignment(Alignment::Center);
+    fn build_help(&self) -> Paragraph {
+        match self.tab_index {
+            // search
+            0 => Paragraph::new(Text::from(Line::from(vec![
+                Span::styled("<esc>", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(": exit"),
+                Span::raw(", "),
+                Span::styled("<tab>", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(": edit"),
+                Span::raw(", "),
+                Span::styled("<enter>", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(": execute"),
+                Span::raw(", "),
+                Span::styled("<ctrl-r>", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(": filter toggle"),
+                Span::raw(", "),
+                Span::styled("<ctrl-i>", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(": open inspector"),
+            ]))),
 
-        help
+            1 => Paragraph::new(Text::from(Line::from(vec![
+                Span::styled("<esc>", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(": exit"),
+                Span::raw(", "),
+                Span::styled("<ctrl-i>", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(": search"),
+            ]))),
+
+            _ => unreachable!("invalid tab index"),
+        }
+        .style(Style::default().fg(Color::DarkGray))
+        .alignment(Alignment::Center)
     }
 
     fn build_stats(&mut self) -> Paragraph {
@@ -776,6 +793,18 @@ pub async fn history(
                     loop {
                         match app.handle_input(settings, &event::read()?, &mut std::io::stdout())? {
                             InputAction::Continue => {},
+                            InputAction::Delete(index) => {
+                                app.results_len -= 1;
+                                let selected = app.results_state.selected();
+                                if selected == app.results_len {
+                                    app.results_state.select(selected - 1);
+                                }
+
+                                let entry = results.remove(index);
+                                db.delete(entry).await?;
+
+                                app.tab_index  = 0;
+                            },
                             InputAction::Redraw => {
                                 terminal.clear()?;
                                 terminal.draw(|f| app.draw(f, &results, stats.clone(), settings))?;
@@ -837,7 +866,7 @@ pub async fn history(
             // * out of bounds -> usually implies no selected entry so we return the input
             Ok(app.search.input.into_inner())
         }
-        InputAction::Continue | InputAction::Redraw => {
+        InputAction::Continue | InputAction::Redraw | InputAction::Delete(_) => {
             unreachable!("should have been handled!")
         }
     }

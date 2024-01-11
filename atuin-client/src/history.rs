@@ -81,6 +81,12 @@ pub struct HistoryStats {
 
     /// How many times has this command been ran?
     pub total: u64,
+
+    pub exits: Vec<(i64, i64)>,
+
+    pub day_of_week: Vec<(String, i64)>,
+
+    pub duration_over_time: Vec<(String, i64)>,
 }
 
 impl History {
