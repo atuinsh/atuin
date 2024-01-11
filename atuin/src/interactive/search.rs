@@ -43,7 +43,7 @@ use ratatui::{
 
 const TAB_TITLES: [&str; 2] = ["Search", "Inspect"];
 
-pub(crate) enum InputAction {
+pub enum InputAction {
     Accept(usize),
     Copy(usize),
     Delete(usize),
@@ -53,6 +53,7 @@ pub(crate) enum InputAction {
     Redraw,
 }
 
+#[allow(clippy::struct_field_names)]
 pub struct State {
     history_count: i64,
     update_needed: Option<Version>,
@@ -164,7 +165,7 @@ impl State {
             0 => {}
 
             1 => {
-                return super::inspector::inspector_input(
+                return super::inspector::input(
                     self,
                     settings,
                     self.results_state.selected(),
@@ -355,6 +356,7 @@ impl State {
 
     #[allow(clippy::cast_possible_truncation)]
     #[allow(clippy::bool_to_int_with_if)]
+    #[allow(clippy::too_many_lines)]
     fn draw(
         &mut self,
         f: &mut Frame,
@@ -427,7 +429,7 @@ impl State {
         // TODO: this should be split so that we have one interactive search container that is
         // EITHER a search box or an inspector. But I'm not doing that now, way too much atm.
         // also allocate less 🙈
-        let titles = TAB_TITLES.iter().cloned().map(Line::from).collect();
+        let titles = TAB_TITLES.iter().copied().map(Line::from).collect();
 
         let tabs = Tabs::new(titles)
             .block(Block::default().borders(Borders::NONE))
@@ -471,11 +473,11 @@ impl State {
             }
 
             1 => {
-                super::inspector::draw_inspector(
+                super::inspector::draw(
                     f,
                     results_list_chunk,
                     &results[self.results_state.selected()],
-                    stats.expect("Drawing inspector, but no stats").clone(),
+                    &stats.expect("Drawing inspector, but no stats"),
                 );
 
                 // HACK: I'm following up with abstracting this into the UI container, with a

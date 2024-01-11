@@ -10,7 +10,6 @@ use ratatui::{
     layout::Rect,
     prelude::{Constraint, Direction, Layout},
     style::Style,
-    symbols,
     widgets::{Bar, BarChart, BarGroup, Block, Borders, Padding, Paragraph, Row, Table},
     Frame,
 };
@@ -18,6 +17,15 @@ use ratatui::{
 use crate::utils::duration::format_duration;
 
 use super::search::{InputAction, State};
+
+#[allow(clippy::cast_sign_loss)]
+fn u64_or_zero(num: i64) -> u64 {
+    if num < 0 {
+        0
+    } else {
+        num as u64
+    }
+}
 
 pub fn draw_commands(f: &mut Frame<'_>, parent: Rect, history: &History, stats: &HistoryStats) {
     let commands = Layout::default()
@@ -68,7 +76,7 @@ pub fn draw_commands(f: &mut Frame<'_>, parent: Rect, history: &History, stats: 
 }
 
 pub fn draw_stats_table(f: &mut Frame<'_>, parent: Rect, history: &History, stats: &HistoryStats) {
-    let duration = Duration::from_nanos(history.duration as u64);
+    let duration = Duration::from_nanos(u64_or_zero(history.duration));
     let avg_duration = Duration::from_nanos(stats.average_duration);
 
     let rows = [
@@ -129,7 +137,7 @@ fn sort_duration_over_time(durations: &[(String, i64)]) -> Vec<(String, i64)> {
         .iter()
         .map(|(date, duration)| {
             (
-                String::from(date.format(output).expect("failed to format sqlite date")),
+                date.format(output).expect("failed to format sqlite date"),
                 *duration,
             )
         })
@@ -143,7 +151,7 @@ fn draw_stats_charts(f: &mut Frame<'_>, parent: Rect, stats: &HistoryStats) {
         .map(|(exit, count)| {
             Bar::default()
                 .label(exit.to_string().into())
-                .value(*count as u64)
+                .value(u64_or_zero(*count))
         })
         .collect();
 
@@ -166,7 +174,7 @@ fn draw_stats_charts(f: &mut Frame<'_>, parent: Rect, stats: &HistoryStats) {
         .map(|(day, count)| {
             Bar::default()
                 .label(num_to_day(day.as_str()).into())
-                .value(*count as u64)
+                .value(u64_or_zero(*count))
         })
         .collect();
 
@@ -183,10 +191,10 @@ fn draw_stats_charts(f: &mut Frame<'_>, parent: Rect, stats: &HistoryStats) {
     let duration_over_time: Vec<Bar> = duration_over_time
         .iter()
         .map(|(date, duration)| {
-            let d = Duration::from_nanos(*duration as u64);
+            let d = Duration::from_nanos(u64_or_zero(*duration));
             Bar::default()
                 .label(date.clone().into())
-                .value((*duration) as u64)
+                .value(u64_or_zero(*duration))
                 .text_value(format_duration(d))
         })
         .collect();
@@ -218,7 +226,7 @@ fn draw_stats_charts(f: &mut Frame<'_>, parent: Rect, stats: &HistoryStats) {
     f.render_widget(duration_over_time, layout[2]);
 }
 
-pub fn draw_inspector(f: &mut Frame<'_>, chunk: Rect, history: &History, stats: HistoryStats) {
+pub fn draw(f: &mut Frame<'_>, chunk: Rect, history: &History, stats: &HistoryStats) {
     let vert_layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Ratio(1, 5), Constraint::Ratio(4, 5)])
@@ -229,14 +237,14 @@ pub fn draw_inspector(f: &mut Frame<'_>, chunk: Rect, history: &History, stats: 
         .constraints([Constraint::Ratio(1, 3), Constraint::Ratio(2, 3)])
         .split(vert_layout[1]);
 
-    draw_commands(f, vert_layout[0], history, &stats);
-    draw_stats_table(f, stats_layout[0], history, &stats);
-    draw_stats_charts(f, stats_layout[1], &stats);
+    draw_commands(f, vert_layout[0], history, stats);
+    draw_stats_table(f, stats_layout[0], history, stats);
+    draw_stats_charts(f, stats_layout[1], stats);
 }
 
 // I'm going to break this out more, but just starting to move things around before changing
 // structure and making it nicer.
-pub fn inspector_input(
+pub fn input(
     _state: &mut State,
     _settings: &Settings,
     selected: usize,
@@ -245,7 +253,7 @@ pub fn inspector_input(
     let ctrl = input.modifiers.contains(KeyModifiers::CONTROL);
 
     match input.code {
-        KeyCode::Char('d') if ctrl => return InputAction::Delete(selected),
+        KeyCode::Char('d') if ctrl => InputAction::Delete(selected),
         _ => InputAction::Continue,
     }
 }
