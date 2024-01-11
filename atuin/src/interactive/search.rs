@@ -19,7 +19,7 @@ use unicode_width::UnicodeWidthStr;
 
 use atuin_client::{
     database::{current_context, Database},
-    history::History,
+    history::{History, HistoryStats},
     settings::{ExitMode, FilterMode, SearchMode, Settings},
 };
 
@@ -40,6 +40,8 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Paragraph, Tabs},
     Frame, Terminal, TerminalOptions, Viewport,
 };
+
+const TAB_TITLES: [&str; 2] = ["Search", "Inspect"];
 
 enum InputAction {
     Accept(usize),
@@ -146,6 +148,11 @@ impl State {
             KeyCode::Tab => {
                 return InputAction::Accept(self.results_state.selected());
             }
+            KeyCode::Char('i') if ctrl => {
+                self.tab_index = (self.tab_index + 1) % TAB_TITLES.len();
+
+                return InputAction::Continue;
+            }
 
             _ => {}
         }
@@ -156,15 +163,14 @@ impl State {
             0 => {}
 
             1 => {
-                inspector_input(self, settings, input);
+                super::inspector::inspector_input(self, settings, input);
 
                 // this tab doesn't return search results, it just exits
-                return None;
+                return InputAction::Continue;
             }
 
             _ => panic!("invalid tab index on input"),
         }
-
         // reset the state, will be set to true later if user really did change it
         self.switched_search_mode = false;
 
@@ -175,9 +181,6 @@ impl State {
                 }
 
                 return InputAction::Accept(self.results_state.selected());
-            }
-            KeyCode::Char('i') if ctrl => {
-                self.tab_index = (self.tab_index + 1) % TAB_TITLES.len();
             }
             KeyCode::Char('y') if ctrl => {
                 return InputAction::Copy(self.results_state.selected());
@@ -349,7 +352,13 @@ impl State {
 
     #[allow(clippy::cast_possible_truncation)]
     #[allow(clippy::bool_to_int_with_if)]
-    fn draw(&mut self, f: &mut Frame, results: &[History], settings: &Settings) {
+    fn draw(
+        &mut self,
+        f: &mut Frame,
+        results: &[History],
+        stats: Option<HistoryStats>,
+        settings: &Settings,
+    ) {
         let compact = match settings.style {
             atuin_client::settings::Style::Auto => f.size().height < 14,
             atuin_client::settings::Style::Compact => true,
@@ -449,8 +458,8 @@ impl State {
         let help = self.build_help();
         f.render_widget(help, header_chunks[1]);
 
-        let stats = self.build_stats();
-        f.render_widget(stats, header_chunks[2]);
+        let stats_tab = self.build_stats();
+        f.render_widget(stats_tab, header_chunks[2]);
 
         match self.tab_index {
             0 => {
@@ -459,11 +468,13 @@ impl State {
             }
 
             1 => {
-                inspector::draw_inspector(
+                super::inspector::draw_inspector(
                     f,
                     results_list_chunk,
                     &results[self.results_state.selected()],
+                    stats.expect("Drawing inspector, but no stats").clone(),
                 );
+                return;
             }
 
             _ => {
@@ -748,9 +759,10 @@ pub async fn history(
 
     let mut results = app.query_results(&mut db).await?;
 
+    let mut stats: Option<HistoryStats> = None;
     let accept;
     let result = 'render: loop {
-        terminal.draw(|f| app.draw(f, &results, settings))?;
+        terminal.draw(|f| app.draw(f, &results, stats.clone(), settings))?;
 
         let initial_input = app.search.input.as_str().to_owned();
         let initial_filter_mode = app.search.filter_mode;
@@ -766,7 +778,7 @@ pub async fn history(
                             InputAction::Continue => {},
                             InputAction::Redraw => {
                                 terminal.clear()?;
-                                terminal.draw(|f| app.draw(f, &results, settings))?;
+                                terminal.draw(|f| app.draw(f, &results, stats.clone(), settings))?;
                             },
                             r => {
                                 accept = app.accept;
@@ -790,6 +802,13 @@ pub async fn history(
         {
             results = app.query_results(&mut db).await?;
         }
+
+        stats = if app.tab_index == 0 {
+            None
+        } else {
+            let selected = results[app.results_state.selected()].clone();
+            Some(db.stats(&selected).await?)
+        };
     };
 
     if settings.inline_height > 0 {

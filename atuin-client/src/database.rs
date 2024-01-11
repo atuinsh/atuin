@@ -18,6 +18,8 @@ use sqlx::{
 };
 use time::OffsetDateTime;
 
+use crate::history::HistoryStats;
+
 use super::{
     history::History,
     ordering,
@@ -109,6 +111,8 @@ pub trait Database: Send + Sync + 'static {
     async fn query_history(&self, query: &str) -> Result<Vec<History>>;
 
     async fn all_with_count(&self) -> Result<Vec<(History, i32)>>;
+
+    async fn stats(&self, h: &History) -> Result<HistoryStats>;
 }
 
 // Intended for use on a developer machine and not a sync server.
@@ -561,6 +565,55 @@ impl Database for Sqlite {
         self.update(&h).await?; // save it
 
         Ok(())
+    }
+
+    async fn stats(&self, h: &History) -> Result<HistoryStats> {
+        // We select the previous in the session by time
+        let mut prev = SqlBuilder::select_from("history");
+        prev.field("*")
+            .and_where("timestamp < ?1")
+            .and_where("session = ?2")
+            .order_by("timestamp", true)
+            .limit(1);
+
+        let mut next = SqlBuilder::select_from("history");
+        next.field("*")
+            .and_where("timestamp > ?1")
+            .and_where("session = ?2")
+            .order_by("timestamp", false)
+            .limit(1);
+
+        let mut total = SqlBuilder::select_from("history");
+        total.field("count(1)").and_where("command = ?1");
+
+        let prev = prev.sql().expect("issue in stats previous query");
+        let next = next.sql().expect("issue in stats previous query");
+        let total = total.sql().expect("issue in stats previous query");
+
+        let prev = sqlx::query(&prev)
+            .bind(h.timestamp.unix_timestamp_nanos() as i64)
+            .bind(&h.session)
+            .map(Self::query_history)
+            .fetch_optional(&self.pool)
+            .await?;
+
+        let next = sqlx::query(&next)
+            .bind(h.timestamp.unix_timestamp_nanos() as i64)
+            .bind(&h.session)
+            .map(Self::query_history)
+            .fetch_optional(&self.pool)
+            .await?;
+
+        let total: (i64,) = sqlx::query_as(&total)
+            .bind(&h.command)
+            .fetch_one(&self.pool)
+            .await?;
+
+        Ok(HistoryStats {
+            next,
+            previous: prev,
+            total: total.0 as u64,
+        })
     }
 }
 
