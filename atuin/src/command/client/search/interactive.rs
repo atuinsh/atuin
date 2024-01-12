@@ -19,7 +19,7 @@ use unicode_width::UnicodeWidthStr;
 
 use atuin_client::{
     database::{current_context, Database},
-    history::History,
+    history::{History, HistoryStats},
     settings::{ExitMode, FilterMode, SearchMode, Settings},
 };
 
@@ -28,19 +28,25 @@ use super::{
     engines::{SearchEngine, SearchState},
     history_list::{HistoryList, ListState, PREFIX_LENGTH},
 };
+
 use crate::{command::client::search::engines, VERSION};
+
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Alignment, Constraint, Direction, Layout},
+    prelude::*,
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, BorderType, Borders, Paragraph},
+    widgets::{Block, BorderType, Borders, Paragraph, Tabs},
     Frame, Terminal, TerminalOptions, Viewport,
 };
 
-enum InputAction {
+const TAB_TITLES: [&str; 2] = ["Search", "Inspect"];
+
+pub enum InputAction {
     Accept(usize),
     Copy(usize),
+    Delete(usize),
     ReturnOriginal,
     ReturnQuery,
     Continue,
@@ -48,7 +54,7 @@ enum InputAction {
 }
 
 #[allow(clippy::struct_field_names)]
-struct State {
+pub struct State {
     history_count: i64,
     update_needed: Option<Version>,
     results_state: ListState,
@@ -56,6 +62,7 @@ struct State {
     search_mode: SearchMode,
     results_len: usize,
     accept: bool,
+    tab_index: usize,
 
     search: SearchState,
     engine: Box<dyn SearchEngine>,
@@ -131,8 +138,7 @@ impl State {
         // Use Ctrl-n instead of Alt-n?
         let modfr = if settings.ctrl_n_shortcuts { ctrl } else { alt };
 
-        // reset the state, will be set to true later if user really did change it
-        self.switched_search_mode = false;
+        // core input handling, common for all tabs
         match input.code {
             KeyCode::Char('c' | 'g') if ctrl => return InputAction::ReturnOriginal,
             KeyCode::Esc => {
@@ -144,6 +150,35 @@ impl State {
             KeyCode::Tab => {
                 return InputAction::Accept(self.results_state.selected());
             }
+            KeyCode::Char('i') if ctrl => {
+                self.tab_index = (self.tab_index + 1) % TAB_TITLES.len();
+
+                return InputAction::Continue;
+            }
+
+            _ => {}
+        }
+
+        // handle tab-specific input
+        // todo: split out search
+        match self.tab_index {
+            0 => {}
+
+            1 => {
+                return super::inspector::input(
+                    self,
+                    settings,
+                    self.results_state.selected(),
+                    input,
+                );
+            }
+
+            _ => panic!("invalid tab index on input"),
+        }
+        // reset the state, will be set to true later if user really did change it
+        self.switched_search_mode = false;
+
+        match input.code {
             KeyCode::Enter => {
                 if settings.enter_accept {
                     self.accept = true;
@@ -321,7 +356,14 @@ impl State {
 
     #[allow(clippy::cast_possible_truncation)]
     #[allow(clippy::bool_to_int_with_if)]
-    fn draw(&mut self, f: &mut Frame, results: &[History], settings: &Settings) {
+    #[allow(clippy::too_many_lines)]
+    fn draw(
+        &mut self,
+        f: &mut Frame,
+        results: &[History],
+        stats: Option<HistoryStats>,
+        settings: &Settings,
+    ) {
         let compact = match settings.style {
             atuin_client::settings::Style::Auto => f.size().height < 14,
             atuin_client::settings::Style::Compact => true,
@@ -330,7 +372,7 @@ impl State {
         let invert = settings.invert;
         let border_size = if compact { 0 } else { 1 };
         let preview_width = f.size().width - 2;
-        let preview_height = if settings.show_preview {
+        let preview_height = if settings.show_preview && self.tab_index == 0 {
             let longest_command = results
                 .iter()
                 .max_by(|h1, h2| h1.command.len().cmp(&h2.command.len()));
@@ -346,7 +388,7 @@ impl State {
                         .sum(),
                 )
             }) + border_size * 2
-        } else if compact {
+        } else if compact || self.tab_index == 1 {
             0
         } else {
             1
@@ -362,11 +404,13 @@ impl State {
                         Constraint::Length(1 + border_size),               // input
                         Constraint::Min(1),                                // results list
                         Constraint::Length(preview_height),                // preview
+                        Constraint::Length(1),                             // tabs
                         Constraint::Length(if show_help { 1 } else { 0 }), // header (sic)
                     ]
                 } else {
                     [
                         Constraint::Length(if show_help { 1 } else { 0 }), // header
+                        Constraint::Length(1),                             // tabs
                         Constraint::Min(1),                                // results list
                         Constraint::Length(1 + border_size),               // input
                         Constraint::Length(preview_height),                // preview
@@ -375,10 +419,25 @@ impl State {
                 .as_ref(),
             )
             .split(f.size());
-        let input_chunk = if invert { chunks[0] } else { chunks[2] };
-        let results_list_chunk = chunks[1];
-        let preview_chunk = if invert { chunks[2] } else { chunks[3] };
-        let header_chunk = if invert { chunks[3] } else { chunks[0] };
+
+        let input_chunk = if invert { chunks[0] } else { chunks[3] };
+        let results_list_chunk = if invert { chunks[1] } else { chunks[2] };
+        let preview_chunk = if invert { chunks[2] } else { chunks[4] };
+        let tabs_chunk = if invert { chunks[3] } else { chunks[1] };
+        let header_chunk = if invert { chunks[4] } else { chunks[0] };
+
+        // TODO: this should be split so that we have one interactive search container that is
+        // EITHER a search box or an inspector. But I'm not doing that now, way too much atm.
+        // also allocate less 🙈
+        let titles = TAB_TITLES.iter().copied().map(Line::from).collect();
+
+        let tabs = Tabs::new(titles)
+            .block(Block::default().borders(Borders::NONE))
+            .select(self.tab_index)
+            .style(Style::default())
+            .highlight_style(Style::default().bold().on_black());
+
+        f.render_widget(tabs, tabs_chunk);
 
         let style = StyleState {
             compact,
@@ -404,11 +463,35 @@ impl State {
         let help = self.build_help();
         f.render_widget(help, header_chunks[1]);
 
-        let stats = self.build_stats();
-        f.render_widget(stats, header_chunks[2]);
+        let stats_tab = self.build_stats();
+        f.render_widget(stats_tab, header_chunks[2]);
 
-        let results_list = Self::build_results_list(style, results);
-        f.render_stateful_widget(results_list, results_list_chunk, &mut self.results_state);
+        match self.tab_index {
+            0 => {
+                let results_list = Self::build_results_list(style, results);
+                f.render_stateful_widget(results_list, results_list_chunk, &mut self.results_state);
+            }
+
+            1 => {
+                super::inspector::draw(
+                    f,
+                    results_list_chunk,
+                    &results[self.results_state.selected()],
+                    &stats.expect("Drawing inspector, but no stats"),
+                );
+
+                // HACK: I'm following up with abstracting this into the UI container, with a
+                // sub-widget for search + for inspector
+                let feedback = Paragraph::new("The inspector is new - please give feedback (good, or bad) at https://forum.atuin.sh");
+                f.render_widget(feedback, input_chunk);
+
+                return;
+            }
+
+            _ => {
+                panic!("invalid tab index");
+            }
+        }
 
         let input = self.build_input(style);
         f.render_widget(input, input_chunk);
@@ -443,24 +526,41 @@ impl State {
     }
 
     #[allow(clippy::unused_self)]
-    fn build_help(&mut self) -> Paragraph {
-        let help = Paragraph::new(Text::from(Line::from(vec![
-            Span::styled("<esc>", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw(": exit"),
-            Span::raw(", "),
-            Span::styled("<tab>", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw(": edit"),
-            Span::raw(", "),
-            Span::styled("<enter>", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw(": execute"),
-            Span::raw(", "),
-            Span::styled("<ctrl-r>", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw(": filter toggle"),
-        ])))
-        .style(Style::default().fg(Color::DarkGray))
-        .alignment(Alignment::Center);
+    fn build_help(&self) -> Paragraph {
+        match self.tab_index {
+            // search
+            0 => Paragraph::new(Text::from(Line::from(vec![
+                Span::styled("<esc>", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(": exit"),
+                Span::raw(", "),
+                Span::styled("<tab>", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(": edit"),
+                Span::raw(", "),
+                Span::styled("<enter>", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(": execute"),
+                Span::raw(", "),
+                Span::styled("<ctrl-r>", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(": filter toggle"),
+                Span::raw(", "),
+                Span::styled("<ctrl-i>", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(": open inspector"),
+            ]))),
 
-        help
+            1 => Paragraph::new(Text::from(Line::from(vec![
+                Span::styled("<esc>", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(": exit"),
+                Span::raw(", "),
+                Span::styled("<ctrl-i>", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(": search"),
+                Span::raw(", "),
+                Span::styled("<ctrl-d>", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(": delete"),
+            ]))),
+
+            _ => unreachable!("invalid tab index"),
+        }
+        .style(Style::default().fg(Color::DarkGray))
+        .alignment(Alignment::Center)
     }
 
     fn build_stats(&mut self) -> Paragraph {
@@ -475,6 +575,7 @@ impl State {
 
     fn build_results_list(style: StyleState, results: &[History]) -> HistoryList {
         let results_list = HistoryList::new(results, style.invert);
+
         if style.compact {
             results_list
         } else if style.invert {
@@ -665,6 +766,7 @@ pub async fn history(
         update_needed: None,
         switched_search_mode: false,
         search_mode,
+        tab_index: 0,
         search: SearchState {
             input,
             filter_mode: if settings.workspaces && context.git_root.is_some() {
@@ -685,9 +787,10 @@ pub async fn history(
 
     let mut results = app.query_results(&mut db).await?;
 
+    let mut stats: Option<HistoryStats> = None;
     let accept;
     let result = 'render: loop {
-        terminal.draw(|f| app.draw(f, &results, settings))?;
+        terminal.draw(|f| app.draw(f, &results, stats.clone(), settings))?;
 
         let initial_input = app.search.input.as_str().to_owned();
         let initial_filter_mode = app.search.filter_mode;
@@ -701,9 +804,21 @@ pub async fn history(
                     loop {
                         match app.handle_input(settings, &event::read()?, &mut std::io::stdout())? {
                             InputAction::Continue => {},
+                            InputAction::Delete(index) => {
+                                app.results_len -= 1;
+                                let selected = app.results_state.selected();
+                                if selected == app.results_len {
+                                    app.results_state.select(selected - 1);
+                                }
+
+                                let entry = results.remove(index);
+                                db.delete(entry).await?;
+
+                                app.tab_index  = 0;
+                            },
                             InputAction::Redraw => {
                                 terminal.clear()?;
-                                terminal.draw(|f| app.draw(f, &results, settings))?;
+                                terminal.draw(|f| app.draw(f, &results, stats.clone(), settings))?;
                             },
                             r => {
                                 accept = app.accept;
@@ -727,6 +842,13 @@ pub async fn history(
         {
             results = app.query_results(&mut db).await?;
         }
+
+        stats = if app.tab_index == 0 {
+            None
+        } else {
+            let selected = results[app.results_state.selected()].clone();
+            Some(db.stats(&selected).await?)
+        };
     };
 
     if settings.inline_height > 0 {
@@ -755,7 +877,7 @@ pub async fn history(
             // * out of bounds -> usually implies no selected entry so we return the input
             Ok(app.search.input.into_inner())
         }
-        InputAction::Continue | InputAction::Redraw => {
+        InputAction::Continue | InputAction::Redraw | InputAction::Delete(_) => {
             unreachable!("should have been handled!")
         }
     }

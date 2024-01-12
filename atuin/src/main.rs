@@ -5,6 +5,7 @@ use clap::Parser;
 use eyre::Result;
 
 use command::AtuinCmd;
+
 mod command;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");

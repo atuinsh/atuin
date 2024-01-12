@@ -71,6 +71,26 @@ pub struct History {
     pub deleted_at: Option<OffsetDateTime>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
+pub struct HistoryStats {
+    /// The command that was ran after this one in the session
+    pub next: Option<History>,
+    ///
+    /// The command that was ran before this one in the session
+    pub previous: Option<History>,
+
+    /// How many times has this command been ran?
+    pub total: u64,
+
+    pub average_duration: u64,
+
+    pub exits: Vec<(i64, i64)>,
+
+    pub day_of_week: Vec<(String, i64)>,
+
+    pub duration_over_time: Vec<(String, i64)>,
+}
+
 impl History {
     #[allow(clippy::too_many_arguments)]
     fn new(

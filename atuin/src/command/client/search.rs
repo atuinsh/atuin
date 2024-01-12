@@ -15,8 +15,10 @@ mod cursor;
 mod duration;
 mod engines;
 mod history_list;
+mod inspector;
 mod interactive;
-pub use duration::{format_duration, format_duration_into};
+
+pub use duration::format_duration_into;
 
 #[allow(clippy::struct_excessive_bools, clippy::struct_field_names)]
 #[derive(Parser, Debug)]
