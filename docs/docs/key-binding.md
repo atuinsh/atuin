@@ -18,7 +18,7 @@ filter_mode_shell_up_key_binding = "directory" # or global, host, directory, etc
 
 ## Disable up arrow
 
-Our default up-arrow binding can be a bit contentious. Some people love it, some people hate it. Many people who found it a bit jarring at first have since come to love it, so give it a try! 
+Our default up-arrow binding can be a bit contentious. Some people love it, some people hate it. Many people who found it a bit jarring at first have since come to love it, so give it a try!
 
 It becomes much more powerful if you consider binding a different filter mode to the up arrow. For example, on "up" Atuin can default to searching all history for the current directory only, while ctrl-r searches history globally. See the [config](https://atuin.sh/docs/config/#filter_mode_shell_up_key_binding) for more.
 
@@ -160,3 +160,13 @@ $env.config = (
 | ⬇ (with no entry selected)               | Return original or return query depending on settings                         |
 | ⬇                                        | Select the next item on the list                                              |
 
+
+### Vim mode
+If vim is enabled in the config, the following keybindings are enabled:
+
+| Shortcut | Mode   | Action                                |
+| -------- | ------ | ------------------------------------- |
+| k        | Normal | Selects the next item on the list     |
+| j        | Normal | Selects the previous item on the list |
+| i        | Normal | Enters insert mode                    |
+| Esc      | Insert | Enters normal mode                    |
