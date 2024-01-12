@@ -162,15 +162,8 @@ source ~/.local/share/atuin/init.nu
 
 ### Xonsh
 
-Run:
-
-```
-mkdir ~/.local/share/atuin/
-atuin init xonsh > ~/.local/share/atuin/init.xsh
-```
-
 Add to `.xonshrc`:
 
 ```
-source ~/.local/share/atuin/init.xsh
+execx($(atuin init xonsh))
 ```
