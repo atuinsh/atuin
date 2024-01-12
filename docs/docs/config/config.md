@@ -320,6 +320,14 @@ This technically defaults to true for new users, but false for existing. We
 have set `enter_accept = true` in the default config file. This is likely to
 change to be the default for everyone in a later release.
 
+## vim
+Default: true
+
+When set to true, there will be two "modes:" Normal and Insert. In normal,
+you may use 'k' and 'j' to navigate the list like in vim. Pressing 'i' whilst
+in Normal mode will change it to Insert mode, allowing you to search. Pressing
+Esc will exit Insert mode. Add `vim = true` to your config to enable this feature.
+
 ## Stats
 This section of client config is specifically for configuring Atuin stats calculations
 

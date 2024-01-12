@@ -125,6 +125,10 @@
 # This applies for new installs. Old installs will keep the old behaviour unless configured otherwise.
 enter_accept = true
 
+
+## Defaults to false. If enabled you may use 'j' and 'k' to navigate the history list and 'i' to enter Insert mode.
+# vim = false
+
 #[stats]
 # Set commands where we should consider the subcommand for statistics. Eg, kubectl get vs just kubectl
 #common_subcommands = [
@@ -136,6 +140,6 @@ enter_accept = true
 #  "pnpm",
 #  "kubectl",
 #]
-# 
+#
 # Set commands that should be totally stripped and ignored from stats
 #common_prefix = ["sudo"]
