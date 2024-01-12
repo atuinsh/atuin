@@ -47,6 +47,12 @@ enum InputAction {
     Redraw,
 }
 
+#[derive(PartialEq)]
+enum VimMode {
+    Normal,
+    Insert,
+}
+
 #[allow(clippy::struct_field_names)]
 struct State {
     history_count: i64,
@@ -56,6 +62,7 @@ struct State {
     search_mode: SearchMode,
     results_len: usize,
     accept: bool,
+    vim_mode: VimMode,
 
     search: SearchState,
     engine: Box<dyn SearchEngine>,
@@ -135,6 +142,9 @@ impl State {
         self.switched_search_mode = false;
         match input.code {
             KeyCode::Char('c' | 'g') if ctrl => return InputAction::ReturnOriginal,
+            KeyCode::Esc if settings.vim && self.vim_mode == VimMode::Insert => {
+                self.vim_mode = VimMode::Normal;
+            }
             KeyCode::Esc => {
                 return match settings.exit_mode {
                     ExitMode::ReturnOriginal => InputAction::ReturnOriginal,
@@ -247,6 +257,7 @@ impl State {
                 self.search_mode = self.search_mode.next(settings);
                 self.engine = engines::engine(self.search_mode);
             }
+            // todo: impl the vim mode of these
             KeyCode::Down if !settings.invert && self.results_state.selected() == 0 => {
                 return match settings.exit_mode {
                     ExitMode::ReturnOriginal => InputAction::ReturnOriginal,
@@ -258,6 +269,12 @@ impl State {
                     ExitMode::ReturnOriginal => InputAction::ReturnOriginal,
                     ExitMode::ReturnQuery => InputAction::ReturnQuery,
                 }
+            }
+            KeyCode::Char('k') if settings.vim && self.vim_mode == VimMode::Normal => {
+                self.scroll_up(1);
+            }
+            KeyCode::Char('j') if settings.vim && self.vim_mode == VimMode::Normal => {
+                self.scroll_down(1);
             }
             KeyCode::Down if !settings.invert => {
                 self.scroll_down(1);
@@ -286,7 +303,10 @@ impl State {
             KeyCode::Char('l') if ctrl => {
                 return InputAction::Redraw;
             }
-            KeyCode::Char(c) => self.search.input.insert(c),
+            KeyCode::Char('i') if settings.vim && self.vim_mode == VimMode::Normal => {
+                self.vim_mode = VimMode::Insert;
+            }
+            KeyCode::Char(c) if !settings.vim || self.vim_mode == VimMode::Insert => self.search.input.insert(c),
             KeyCode::PageDown if !settings.invert => {
                 let scroll_len = self.results_state.max_entries() - settings.scroll_context_lines;
                 self.scroll_down(scroll_len);
@@ -639,7 +659,7 @@ pub async fn history(
                 Viewport::Fullscreen
             },
         },
-    )?;
+    ).unwrap();
 
     let mut input = Cursor::from(query.join(" "));
     // Put the cursor at the end of the query by default
@@ -681,6 +701,7 @@ pub async fn history(
         engine: engines::engine(search_mode),
         results_len: 0,
         accept: false,
+        vim_mode: VimMode::Normal,
     };
 
     let mut results = app.query_results(&mut db).await?;
