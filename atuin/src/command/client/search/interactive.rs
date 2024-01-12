@@ -790,7 +790,7 @@ pub async fn history(
     settings: &Settings,
     mut db: impl Database,
 ) -> Result<String> {
-    let stdout = Stdout::new(settings.inline_height > 0).unwrap();
+    let stdout = Stdout::new(settings.inline_height > 0)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::with_options(
         backend,
@@ -801,8 +801,7 @@ pub async fn history(
                 Viewport::Fullscreen
             },
         },
-    )
-    .unwrap();
+    )?;
 
     let mut input = Cursor::from(query.join(" "));
     // Put the cursor at the end of the query by default
@@ -863,9 +862,9 @@ pub async fn history(
 
         tokio::select! {
             event_ready = event_ready => {
-                if event_ready.unwrap().unwrap() {
+                if event_ready?? {
                     loop {
-                        match app.handle_input(settings, &event::read().unwrap(), &mut std::io::stdout())? {
+                        match app.handle_input(settings, &event::read()?, &mut std::io::stdout())? {
                             InputAction::Continue => {},
                             InputAction::Delete(index) => {
                                 app.results_len -= 1;
