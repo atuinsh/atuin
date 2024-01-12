@@ -191,6 +191,7 @@ dependencies = [
  "ratatui",
  "rpassword",
  "runtime-format",
+ "rustix",
  "semver",
  "serde",
  "serde_json",
