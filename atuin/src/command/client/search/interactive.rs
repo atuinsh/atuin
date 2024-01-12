@@ -844,7 +844,7 @@ pub async fn history(
         engine: engines::engine(search_mode),
         results_len: 0,
         accept: false,
-        vim_mode: VimMode::Normal,
+        vim_mode: VimMode::Insert,
     };
 
     let mut results = app.query_results(&mut db).await?;
