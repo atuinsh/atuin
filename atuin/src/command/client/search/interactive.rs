@@ -306,7 +306,9 @@ impl State {
             KeyCode::Char('i') if settings.vim && self.vim_mode == VimMode::Normal => {
                 self.vim_mode = VimMode::Insert;
             }
-            KeyCode::Char(c) if !settings.vim || self.vim_mode == VimMode::Insert => self.search.input.insert(c),
+            KeyCode::Char(c) if !settings.vim || self.vim_mode == VimMode::Insert => {
+                self.search.input.insert(c)
+            }
             KeyCode::PageDown if !settings.invert => {
                 let scroll_len = self.results_state.max_entries() - settings.scroll_context_lines;
                 self.scroll_down(scroll_len);
@@ -588,6 +590,28 @@ struct Stdout {
 }
 
 impl Stdout {
+    #[cfg(target_os = "windows")]
+    pub fn new(inline_mode: bool) -> std::io::Result<Self> {
+        terminal::enable_raw_mode()?;
+        let mut stdout = stdout();
+
+        if !inline_mode {
+            execute!(stdout, terminal::EnterAlternateScreen)?;
+        }
+
+        execute!(
+            stdout,
+            event::EnableMouseCapture,
+            event::EnableBracketedPaste,
+        )?;
+
+        Ok(Self {
+            stdout,
+            inline_mode,
+        })
+    }
+
+    #[cfg(not(target_os = "windows"))]
     pub fn new(inline_mode: bool) -> std::io::Result<Self> {
         terminal::enable_raw_mode()?;
         let mut stdout = stdout();
@@ -614,6 +638,21 @@ impl Stdout {
 }
 
 impl Drop for Stdout {
+    #[cfg(target_os = "windows")]
+    fn drop(&mut self) {
+        if !self.inline_mode {
+            execute!(self.stdout, terminal::LeaveAlternateScreen).unwrap();
+        }
+        execute!(
+            self.stdout,
+            event::DisableMouseCapture,
+            event::DisableBracketedPaste,
+        )
+        .unwrap();
+        terminal::disable_raw_mode().unwrap();
+    }
+
+    #[cfg(not(target_os = "windows"))]
     fn drop(&mut self) {
         if !self.inline_mode {
             execute!(self.stdout, terminal::LeaveAlternateScreen).unwrap();
@@ -648,7 +687,7 @@ pub async fn history(
     settings: &Settings,
     mut db: impl Database,
 ) -> Result<String> {
-    let stdout = Stdout::new(settings.inline_height > 0)?;
+    let stdout = Stdout::new(settings.inline_height > 0).unwrap();
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::with_options(
         backend,
@@ -659,7 +698,8 @@ pub async fn history(
                 Viewport::Fullscreen
             },
         },
-    ).unwrap();
+    )
+    .unwrap();
 
     let mut input = Cursor::from(query.join(" "));
     // Put the cursor at the end of the query by default
@@ -718,9 +758,9 @@ pub async fn history(
 
         tokio::select! {
             event_ready = event_ready => {
-                if event_ready?? {
+                if event_ready.unwrap().unwrap() {
                     loop {
-                        match app.handle_input(settings, &event::read()?, &mut std::io::stdout())? {
+                        match app.handle_input(settings, &event::read().unwrap(), &mut std::io::stdout())? {
                             InputAction::Continue => {},
                             InputAction::Redraw => {
                                 terminal.clear()?;
