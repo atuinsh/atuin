@@ -293,7 +293,6 @@ impl State {
                 self.search_mode = self.search_mode.next(settings);
                 self.engine = engines::engine(self.search_mode);
             }
-            // todo: impl the vim mode of these
             KeyCode::Down if !settings.invert && self.results_state.selected() == 0 => {
                 return match settings.exit_mode {
                     ExitMode::ReturnOriginal => InputAction::ReturnOriginal,
@@ -301,6 +300,12 @@ impl State {
                 }
             }
             KeyCode::Up if settings.invert && self.results_state.selected() == 0 => {
+                return match settings.exit_mode {
+                    ExitMode::ReturnOriginal => InputAction::ReturnOriginal,
+                    ExitMode::ReturnQuery => InputAction::ReturnQuery,
+                }
+            }
+            KeyCode::Char('j') if settings.vim && self.vim_mode == VimMode::Normal && self.results_state.selected() == 0 => {
                 return match settings.exit_mode {
                     ExitMode::ReturnOriginal => InputAction::ReturnOriginal,
                     ExitMode::ReturnQuery => InputAction::ReturnQuery,
@@ -844,7 +849,7 @@ pub async fn history(
         engine: engines::engine(search_mode),
         results_len: 0,
         accept: false,
-        vim_mode: VimMode::Insert,
+        vim_mode: VimMode::Normal,
     };
 
     let mut results = app.query_results(&mut db).await?;
