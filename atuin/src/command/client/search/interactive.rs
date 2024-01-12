@@ -1,5 +1,5 @@
 use std::{
-    io::{stdout, Write},
+    io::{stdout, Write, self},
     time::Duration,
 };
 
@@ -10,7 +10,7 @@ use crossterm::{
         KeyboardEnhancementFlags, MouseEvent, PopKeyboardEnhancementFlags,
         PushKeyboardEnhancementFlags,
     },
-    execute, terminal,
+    execute, terminal, cursor::{EnableBlinking, DisableBlinking, SetCursorStyle}, ExecutableCommand,
 };
 use eyre::Result;
 use futures_util::FutureExt;
@@ -143,6 +143,7 @@ impl State {
         match input.code {
             KeyCode::Char('c' | 'g') if ctrl => return InputAction::ReturnOriginal,
             KeyCode::Esc if settings.vim && self.vim_mode == VimMode::Insert => {
+                let _ = io::stdout().execute(SetCursorStyle::SteadyBlock);
                 self.vim_mode = VimMode::Normal;
             }
             KeyCode::Esc => {
@@ -304,10 +305,11 @@ impl State {
                 return InputAction::Redraw;
             }
             KeyCode::Char('i') if settings.vim && self.vim_mode == VimMode::Normal => {
+                let _ = io::stdout().execute(SetCursorStyle::BlinkingBlock);
                 self.vim_mode = VimMode::Insert;
             }
             KeyCode::Char(c) if !settings.vim || self.vim_mode == VimMode::Insert => {
-                self.search.input.insert(c)
+                self.search.input.insert(c);
             }
             KeyCode::PageDown if !settings.invert => {
                 let scroll_len = self.results_state.max_entries() - settings.scroll_context_lines;
