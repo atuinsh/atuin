@@ -201,6 +201,7 @@ pub struct Settings {
     pub max_preview_height: u16,
     pub show_help: bool,
     pub exit_mode: ExitMode,
+    pub vim: bool,
     pub word_jump_mode: WordJumpMode,
     pub word_chars: String,
     pub scroll_context_lines: usize,
@@ -436,6 +437,7 @@ impl Settings {
             // New users will get the new default, that is more similar to what they are used to.
             .set_default("enter_accept", false)?
             .set_default("sync.records", false)?
+            .set_default("vim", false)?
             .add_source(
                 Environment::with_prefix("atuin")
                     .prefix_separator("_")

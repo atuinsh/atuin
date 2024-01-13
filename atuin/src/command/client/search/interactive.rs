@@ -5,6 +5,7 @@ use std::{
 
 use atuin_common::utils;
 use crossterm::{
+    cursor::SetCursorStyle,
     event::{
         self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers,
         KeyboardEnhancementFlags, MouseEvent, PopKeyboardEnhancementFlags,
@@ -53,6 +54,12 @@ pub enum InputAction {
     Redraw,
 }
 
+#[derive(PartialEq)]
+enum VimMode {
+    Normal,
+    Insert,
+}
+
 #[allow(clippy::struct_field_names)]
 pub struct State {
     history_count: i64,
@@ -62,6 +69,7 @@ pub struct State {
     search_mode: SearchMode,
     results_len: usize,
     accept: bool,
+    vim_mode: VimMode,
     tab_index: usize,
 
     search: SearchState,
@@ -141,6 +149,10 @@ impl State {
         // core input handling, common for all tabs
         match input.code {
             KeyCode::Char('c' | 'g') if ctrl => return InputAction::ReturnOriginal,
+            KeyCode::Esc if settings.vim && self.vim_mode == VimMode::Insert => {
+                let _ = execute!(stdout(), SetCursorStyle::SteadyBlock);
+                self.vim_mode = VimMode::Normal;
+            }
             KeyCode::Esc => {
                 return match settings.exit_mode {
                     ExitMode::ReturnOriginal => InputAction::ReturnOriginal,
@@ -294,6 +306,22 @@ impl State {
                     ExitMode::ReturnQuery => InputAction::ReturnQuery,
                 }
             }
+            KeyCode::Char('j')
+                if settings.vim
+                    && self.vim_mode == VimMode::Normal
+                    && self.results_state.selected() == 0 =>
+            {
+                return match settings.exit_mode {
+                    ExitMode::ReturnOriginal => InputAction::ReturnOriginal,
+                    ExitMode::ReturnQuery => InputAction::ReturnQuery,
+                }
+            }
+            KeyCode::Char('k') if settings.vim && self.vim_mode == VimMode::Normal => {
+                self.scroll_up(1);
+            }
+            KeyCode::Char('j') if settings.vim && self.vim_mode == VimMode::Normal => {
+                self.scroll_down(1);
+            }
             KeyCode::Down if !settings.invert => {
                 self.scroll_down(1);
             }
@@ -321,7 +349,13 @@ impl State {
             KeyCode::Char('l') if ctrl => {
                 return InputAction::Redraw;
             }
-            KeyCode::Char(c) => self.search.input.insert(c),
+            KeyCode::Char('i') if settings.vim && self.vim_mode == VimMode::Normal => {
+                let _ = execute!(stdout(), SetCursorStyle::BlinkingBlock);
+                self.vim_mode = VimMode::Insert;
+            }
+            KeyCode::Char(c) if !settings.vim || self.vim_mode == VimMode::Insert => {
+                self.search.input.insert(c);
+            }
             KeyCode::PageDown if !settings.invert => {
                 let scroll_len = self.results_state.max_entries() - settings.scroll_context_lines;
                 self.scroll_down(scroll_len);
@@ -669,6 +703,28 @@ struct Stdout {
 }
 
 impl Stdout {
+    #[cfg(target_os = "windows")]
+    pub fn new(inline_mode: bool) -> std::io::Result<Self> {
+        terminal::enable_raw_mode()?;
+        let mut stdout = stdout();
+
+        if !inline_mode {
+            execute!(stdout, terminal::EnterAlternateScreen)?;
+        }
+
+        execute!(
+            stdout,
+            event::EnableMouseCapture,
+            event::EnableBracketedPaste,
+        )?;
+
+        Ok(Self {
+            stdout,
+            inline_mode,
+        })
+    }
+
+    #[cfg(not(target_os = "windows"))]
     pub fn new(inline_mode: bool) -> std::io::Result<Self> {
         terminal::enable_raw_mode()?;
         let mut stdout = stdout();
@@ -695,6 +751,21 @@ impl Stdout {
 }
 
 impl Drop for Stdout {
+    #[cfg(target_os = "windows")]
+    fn drop(&mut self) {
+        if !self.inline_mode {
+            execute!(self.stdout, terminal::LeaveAlternateScreen).unwrap();
+        }
+        execute!(
+            self.stdout,
+            event::DisableMouseCapture,
+            event::DisableBracketedPaste,
+        )
+        .unwrap();
+        terminal::disable_raw_mode().unwrap();
+    }
+
+    #[cfg(not(target_os = "windows"))]
     fn drop(&mut self) {
         if !self.inline_mode {
             execute!(self.stdout, terminal::LeaveAlternateScreen).unwrap();
@@ -783,6 +854,7 @@ pub async fn history(
         engine: engines::engine(search_mode),
         results_len: 0,
         accept: false,
+        vim_mode: VimMode::Normal,
     };
 
     let mut results = app.query_results(&mut db).await?;
