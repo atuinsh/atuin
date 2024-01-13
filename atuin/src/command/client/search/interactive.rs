@@ -703,7 +703,6 @@ struct Stdout {
 }
 
 impl Stdout {
-    #[cfg(target_os = "windows")]
     pub fn new(inline_mode: bool) -> std::io::Result<Self> {
         terminal::enable_raw_mode()?;
         let mut stdout = stdout();
@@ -718,25 +717,9 @@ impl Stdout {
             event::EnableBracketedPaste,
         )?;
 
-        Ok(Self {
-            stdout,
-            inline_mode,
-        })
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    pub fn new(inline_mode: bool) -> std::io::Result<Self> {
-        terminal::enable_raw_mode()?;
-        let mut stdout = stdout();
-
-        if !inline_mode {
-            execute!(stdout, terminal::EnterAlternateScreen)?;
-        }
-
+        #[cfg(not(target_os = "windows"))]
         execute!(
             stdout,
-            event::EnableMouseCapture,
-            event::EnableBracketedPaste,
             PushKeyboardEnhancementFlags(
                 KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
                     | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
@@ -751,7 +734,6 @@ impl Stdout {
 }
 
 impl Drop for Stdout {
-    #[cfg(target_os = "windows")]
     fn drop(&mut self) {
         if !self.inline_mode {
             execute!(self.stdout, terminal::LeaveAlternateScreen).unwrap();
@@ -762,21 +744,10 @@ impl Drop for Stdout {
             event::DisableBracketedPaste,
         )
         .unwrap();
-        terminal::disable_raw_mode().unwrap();
-    }
 
-    #[cfg(not(target_os = "windows"))]
-    fn drop(&mut self) {
-        if !self.inline_mode {
-            execute!(self.stdout, terminal::LeaveAlternateScreen).unwrap();
-        }
-        execute!(
-            self.stdout,
-            event::DisableMouseCapture,
-            event::DisableBracketedPaste,
-            PopKeyboardEnhancementFlags
-        )
-        .unwrap();
+        #[cfg(not(target_os = "windows"))]
+        execute!(self.stdout, PopKeyboardEnhancementFlags).unwrap();
+
         terminal::disable_raw_mode().unwrap();
     }
 }
