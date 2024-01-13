@@ -1,5 +1,5 @@
 use std::{
-    io::{self, stdout, Write},
+    io::{stdout, Write},
     time::Duration,
 };
 
@@ -150,7 +150,7 @@ impl State {
         match input.code {
             KeyCode::Char('c' | 'g') if ctrl => return InputAction::ReturnOriginal,
             KeyCode::Esc if settings.vim && self.vim_mode == VimMode::Insert => {
-                let _ = io::stdout().execute(SetCursorStyle::SteadyBlock);
+                let _ = execute!(stdout(), SetCursorStyle::SteadyBlock);
                 self.vim_mode = VimMode::Normal;
             }
             KeyCode::Esc => {
@@ -350,7 +350,7 @@ impl State {
                 return InputAction::Redraw;
             }
             KeyCode::Char('i') if settings.vim && self.vim_mode == VimMode::Normal => {
-                let _ = io::stdout().execute(SetCursorStyle::BlinkingBlock);
+                let _ = execute!(stdout(), SetCursorStyle::BlinkingBlock);
                 self.vim_mode = VimMode::Insert;
             }
             KeyCode::Char(c) if !settings.vim || self.vim_mode == VimMode::Insert => {
