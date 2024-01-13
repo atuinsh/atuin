@@ -159,14 +159,3 @@ $env.config = (
 | page up                                   | Scroll search results one page up                                             |
 | ⬇ (with no entry selected)               | Return original or return query depending on settings                         |
 | ⬇                                        | Select the next item on the list                                              |
-
-
-### Vim mode
-If vim is enabled in the config, the following keybindings are enabled:
-
-| Shortcut | Mode   | Action                                |
-| -------- | ------ | ------------------------------------- |
-| k        | Normal | Selects the next item on the list     |
-| j        | Normal | Selects the previous item on the list |
-| i        | Normal | Enters insert mode                    |
-| Esc      | Insert | Enters normal mode                    |

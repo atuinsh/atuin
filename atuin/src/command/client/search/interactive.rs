@@ -1,16 +1,17 @@
 use std::{
-    io::{stdout, Write, self},
+    io::{self, stdout, Write},
     time::Duration,
 };
 
 use atuin_common::utils;
 use crossterm::{
+    cursor::SetCursorStyle,
     event::{
         self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers,
         KeyboardEnhancementFlags, MouseEvent, PopKeyboardEnhancementFlags,
         PushKeyboardEnhancementFlags,
     },
-    execute, terminal, cursor::SetCursorStyle, ExecutableCommand,
+    execute, terminal, ExecutableCommand,
 };
 use eyre::Result;
 use futures_util::FutureExt;
@@ -305,7 +306,11 @@ impl State {
                     ExitMode::ReturnQuery => InputAction::ReturnQuery,
                 }
             }
-            KeyCode::Char('j') if settings.vim && self.vim_mode == VimMode::Normal && self.results_state.selected() == 0 => {
+            KeyCode::Char('j')
+                if settings.vim
+                    && self.vim_mode == VimMode::Normal
+                    && self.results_state.selected() == 0 =>
+            {
                 return match settings.exit_mode {
                     ExitMode::ReturnOriginal => InputAction::ReturnOriginal,
                     ExitMode::ReturnQuery => InputAction::ReturnQuery,
