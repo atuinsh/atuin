@@ -146,6 +146,16 @@ impl State {
         // Use Ctrl-n instead of Alt-n?
         let modfr = if settings.ctrl_n_shortcuts { ctrl } else { alt };
 
+        // Common actions
+        macro_rules! do_exit {
+            () => {
+                return match settings.exit_mode {
+                    ExitMode::ReturnOriginal => InputAction::ReturnOriginal,
+                    ExitMode::ReturnQuery => InputAction::ReturnQuery,
+                }
+            };
+        }
+
         // core input handling, common for all tabs
         match input.code {
             KeyCode::Char('c' | 'g') if ctrl => return InputAction::ReturnOriginal,
@@ -154,10 +164,7 @@ impl State {
                 self.vim_mode = VimMode::Normal;
             }
             KeyCode::Esc => {
-                return match settings.exit_mode {
-                    ExitMode::ReturnOriginal => InputAction::ReturnOriginal,
-                    ExitMode::ReturnQuery => InputAction::ReturnQuery,
-                }
+                do_exit!();
             }
             KeyCode::Tab => {
                 return InputAction::Accept(self.results_state.selected());
@@ -295,26 +302,26 @@ impl State {
                 self.engine = engines::engine(self.search_mode);
             }
             KeyCode::Down if !settings.invert && self.results_state.selected() == 0 => {
-                return match settings.exit_mode {
-                    ExitMode::ReturnOriginal => InputAction::ReturnOriginal,
-                    ExitMode::ReturnQuery => InputAction::ReturnQuery,
-                }
+                do_exit!();
             }
             KeyCode::Up if settings.invert && self.results_state.selected() == 0 => {
-                return match settings.exit_mode {
-                    ExitMode::ReturnOriginal => InputAction::ReturnOriginal,
-                    ExitMode::ReturnQuery => InputAction::ReturnQuery,
-                }
+                do_exit!();
             }
             KeyCode::Char('j')
-                if settings.vim
+                if !settings.invert
+                    && settings.vim
                     && self.vim_mode == VimMode::Normal
                     && self.results_state.selected() == 0 =>
             {
-                return match settings.exit_mode {
-                    ExitMode::ReturnOriginal => InputAction::ReturnOriginal,
-                    ExitMode::ReturnQuery => InputAction::ReturnQuery,
-                }
+                do_exit!();
+            }
+            KeyCode::Char('k')
+                if settings.invert
+                    && settings.vim
+                    && self.vim_mode == VimMode::Normal
+                    && self.results_state.selected() == 0 =>
+            {
+                do_exit!();
             }
             KeyCode::Char('k') if settings.vim && self.vim_mode == VimMode::Normal => {
                 self.scroll_up(1);
