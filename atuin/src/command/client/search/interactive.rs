@@ -11,7 +11,7 @@ use crossterm::{
         KeyboardEnhancementFlags, MouseEvent, PopKeyboardEnhancementFlags,
         PushKeyboardEnhancementFlags,
     },
-    execute, terminal, ExecutableCommand,
+    execute, terminal,
 };
 use eyre::Result;
 use futures_util::FutureExt;
