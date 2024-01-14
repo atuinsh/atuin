@@ -143,6 +143,28 @@ pub enum WordJumpMode {
     Subl,
 }
 
+#[derive(Clone, Debug, Deserialize, Copy, PartialEq, Eq, ValueEnum)]
+pub enum KeymapMode {
+    #[serde(rename = "emacs")]
+    Emacs,
+
+    #[serde(rename = "vim-normal")]
+    VimNormal,
+
+    #[serde(rename = "vim-insert")]
+    VimInsert,
+}
+
+impl KeymapMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            KeymapMode::Emacs => "EMACS",
+            KeymapMode::VimNormal => "VIMNORMAL",
+            KeymapMode::VimInsert => "VIMINSERT",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct Stats {
     #[serde(default = "Stats::common_prefix_default")]
@@ -202,6 +224,7 @@ pub struct Settings {
     pub show_help: bool,
     pub exit_mode: ExitMode,
     pub vim: bool,
+    pub keymap_mode: Option<KeymapMode>,
     pub word_jump_mode: WordJumpMode,
     pub word_chars: String,
     pub scroll_context_lines: usize,

@@ -52,11 +52,18 @@ _atuin_search() {
     emulate -L zsh
     zle -I
 
+    local keymap_mode
+    case ${KEYMAP/#%main/$(bindkey -lL main | cut -d ' ' -f 3)} in
+    vicmd) keymap_mode=vim-normal ;;
+    viins) keymap_mode=vim-insert ;;
+    *) keymap_mode=emacs ;;
+    esac
+
     # swap stderr and stdout, so that the tui stuff works
     # TODO: not this
     local output
     # shellcheck disable=SC2048
-    output=$(ATUIN_SHELL_ZSH=t ATUIN_LOG=error atuin search $* -i -- $BUFFER 3>&1 1>&2 2>&3)
+    output=$(ATUIN_SHELL_ZSH=t ATUIN_LOG=error atuin search $* --keymap-mode=$keymap_mode -i -- $BUFFER 3>&1 1>&2 2>&3)
 
     zle reset-prompt
 

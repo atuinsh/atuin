@@ -126,8 +126,15 @@
 enter_accept = true
 
 
-## Defaults to false. If enabled you may use 'j' and 'k' to navigate the history list and 'i' to enter Insert mode.
+## Defaults to false. If enabled, in the vim-normal keymap, you may use 'j' and
+## 'k' to navigate the history list and 'i' to enter Insert mode.
 # vim = false
+
+## The keymap on the startup of `atuin search`.  If this is not set, the keymap
+## on the startup is automatically selected based on the shell's keymap where
+## the keybinding is defined.  Note: To enable the special behavior of the vim
+## keymaps, the setting `vim` needs to be set to `true`.
+# keymap_mode = "vim-normal"
 
 #[stats]
 # Set commands where we should consider the subcommand for statistics. Eg, kubectl get vs just kubectl

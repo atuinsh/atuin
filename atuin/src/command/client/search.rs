@@ -6,7 +6,7 @@ use atuin_client::{
     database::Database,
     database::{current_context, OptFilters},
     history::History,
-    settings::{FilterMode, SearchMode, Settings},
+    settings::{FilterMode, KeymapMode, SearchMode, Settings},
 };
 
 use super::history::ListMode;
@@ -70,6 +70,10 @@ pub struct Cmd {
     /// Marker argument used to inform atuin that it was invoked from a shell up-key binding (hidden from help to avoid confusion)
     #[arg(long = "shell-up-key-binding", hide = true)]
     shell_up_key_binding: bool,
+
+    /// Notify the keymap at the shell's side
+    #[arg(long = "keymap-mode")]
+    keymap_mode: Option<KeymapMode>,
 
     /// Use human-readable formatting for time
     #[arg(long)]
@@ -141,6 +145,7 @@ impl Cmd {
         }
 
         settings.shell_up_key_binding = self.shell_up_key_binding;
+        settings.keymap_mode = settings.keymap_mode.or(self.keymap_mode);
 
         if self.interactive {
             let item = interactive::history(&self.query, settings, db).await?;

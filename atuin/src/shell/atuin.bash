@@ -227,33 +227,33 @@ if [[ $__atuin_bind_ctrl_r == true ]]; then
     # Note: We do not overwrite [C-r] in the vi-command keymap for Bash because
     # we do not want to overwrite "redo", which is already bound to [C-r] in
     # the vi_nmap keymap in ble.sh.
-    bind -m emacs -x '"\C-r": __atuin_history'
-    bind -m vi-insert -x '"\C-r": __atuin_history'
+    bind -m emacs -x '"\C-r": __atuin_history --keymap-mode=emacs'
+    bind -m vi-insert -x '"\C-r": __atuin_history --keymap-mode=vim-insert'
 fi
 
 # shellcheck disable=SC2154
 if [[ $__atuin_bind_up_arrow == true ]]; then
     if ((BASH_VERSINFO[0] > 4 || BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 3)); then
-        bind -m emacs -x '"\e[A": __atuin_history --shell-up-key-binding'
-        bind -m emacs -x '"\eOA": __atuin_history --shell-up-key-binding'
-        bind -m vi-insert -x '"\e[A": __atuin_history --shell-up-key-binding'
-        bind -m vi-insert -x '"\eOA": __atuin_history --shell-up-key-binding'
-        bind -m vi-command -x '"\e[A": __atuin_history --shell-up-key-binding'
-        bind -m vi-command -x '"\eOA": __atuin_history --shell-up-key-binding'
-        bind -m vi-command -x '"k": __atuin_history --shell-up-key-binding'
+        bind -m emacs -x '"\e[A": __atuin_history --shell-up-key-binding --keymap-mode=emacs'
+        bind -m emacs -x '"\eOA": __atuin_history --shell-up-key-binding --keymap-mode=emacs'
+        bind -m vi-insert -x '"\e[A": __atuin_history --shell-up-key-binding --keymap-mode=vim-insert'
+        bind -m vi-insert -x '"\eOA": __atuin_history --shell-up-key-binding --keymap-mode=vim-insert'
+        bind -m vi-command -x '"\e[A": __atuin_history --shell-up-key-binding --keymap-mode=vim-normal'
+        bind -m vi-command -x '"\eOA": __atuin_history --shell-up-key-binding --keymap-mode=vim-normal'
+        bind -m vi-command -x '"k": __atuin_history --shell-up-key-binding --keymap-mode=vim-normal'
     else
         # In bash < 4.3, "bind -x" cannot bind a shell command to a keyseq
         # having more than two bytes.  To work around this, we first translate
         # the keyseqs to the two-byte sequence \C-x\C-p (which is not used by
         # default) using string macros and run the shell command through the
         # keybinding to \C-x\C-p.
-        bind -m emacs -x '"\C-x\C-p": __atuin_history --shell-up-key-binding'
+        bind -m emacs -x '"\C-x\C-p": __atuin_history --shell-up-key-binding --keymap-mode=emacs'
         bind -m emacs '"\e[A": "\C-x\C-p"'
         bind -m emacs '"\eOA": "\C-x\C-p"'
-        bind -m vi-insert -x '"\C-x\C-p": __atuin_history --shell-up-key-binding'
+        bind -m vi-insert -x '"\C-x\C-p": __atuin_history --shell-up-key-binding --keymap-mode=vim-insert'
         bind -m vi-insert -x '"\e[A": "\C-x\C-p"'
         bind -m vi-insert -x '"\eOA": "\C-x\C-p"'
-        bind -m vi-command -x '"\C-x\C-p": __atuin_history --shell-up-key-binding'
+        bind -m vi-command -x '"\C-x\C-p": __atuin_history --shell-up-key-binding --keymap-mode=vim-normal'
         bind -m vi-command -x '"\e[A": "\C-x\C-p"'
         bind -m vi-command -x '"\eOA": "\C-x\C-p"'
         bind -m vi-command -x '"k": "\C-x\C-p"'

@@ -19,10 +19,23 @@ function _atuin_postexec --on-event fish_postexec
 end
 
 function _atuin_search
+    set -l keymap_mode
+    switch $fish_key_bindings
+        case fish_vi_key_bindings
+            switch $fish_bind_mode
+                case default
+                    set keymap_mode vim-normal
+                case insert
+                    set keymap_mode vim-insert
+            end
+        case '*'
+            set keymap_mode emacs
+    end
+
     # In fish 3.4 and above we can use `"$(some command)"` to keep multiple lines separate;
     # but to support fish 3.3 we need to use `(some command | string collect)`.
     # https://fishshell.com/docs/current/relnotes.html#id24 (fish 3.4 "Notable improvements and fixes")
-    set -l ATUIN_H (ATUIN_SHELL_FISH=t ATUIN_LOG=error atuin search $argv -i -- (commandline -b) 3>&1 1>&2 2>&3 | string collect)
+    set -l ATUIN_H (ATUIN_SHELL_FISH=t ATUIN_LOG=error atuin search $argv --keymap-mode=$keymap_mode -i -- (commandline -b) 3>&1 1>&2 2>&3 | string collect)
 
     if test -n "$ATUIN_H"
         if string match --quiet '__atuin_accept__:*' "$ATUIN_H"
