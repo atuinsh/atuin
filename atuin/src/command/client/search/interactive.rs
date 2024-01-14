@@ -940,7 +940,7 @@ pub async fn history(
         InputAction::ReturnOriginal => Ok(String::new()),
         InputAction::Copy(index) => {
             let cmd = results.swap_remove(index).command;
-            cli_clipboard::set_contents(cmd).unwrap();
+            set_clipboard(cmd);
             Ok(String::new())
         }
         InputAction::ReturnQuery | InputAction::Accept(_) => {
@@ -954,3 +954,11 @@ pub async fn history(
         }
     }
 }
+
+#[cfg(feature = "clipboard")]
+fn set_clipboard(s: String) {
+    cli_clipboard::set_contents(s).unwrap();
+}
+
+#[cfg(not(feature = "clipboard"))]
+fn set_clipboard(_s: String) {}
