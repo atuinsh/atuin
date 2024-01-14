@@ -469,7 +469,7 @@ impl State {
             .block(Block::default().borders(Borders::NONE))
             .select(self.tab_index)
             .style(Style::default())
-            .highlight_style(Style::default().bold().on_black());
+            .highlight_style(Style::default().bold().white().on_black());
 
         f.render_widget(tabs, tabs_chunk);
 
