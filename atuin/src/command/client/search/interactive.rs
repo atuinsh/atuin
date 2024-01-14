@@ -162,7 +162,7 @@ impl State {
             KeyCode::Tab => {
                 return InputAction::Accept(self.results_state.selected());
             }
-            KeyCode::Char('i') if ctrl => {
+            KeyCode::Char('o') if ctrl => {
                 self.tab_index = (self.tab_index + 1) % TAB_TITLES.len();
 
                 return InputAction::Continue;
@@ -571,20 +571,17 @@ impl State {
                 Span::raw(": edit"),
                 Span::raw(", "),
                 Span::styled("<enter>", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(": execute"),
+                Span::raw(": run"),
                 Span::raw(", "),
-                Span::styled("<ctrl-r>", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(": filter toggle"),
-                Span::raw(", "),
-                Span::styled("<ctrl-i>", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(": open inspector"),
+                Span::styled("<ctrl-o>", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(": inspect"),
             ]))),
 
             1 => Paragraph::new(Text::from(Line::from(vec![
                 Span::styled("<esc>", Style::default().add_modifier(Modifier::BOLD)),
                 Span::raw(": exit"),
                 Span::raw(", "),
-                Span::styled("<ctrl-i>", Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled("<ctrl-o>", Style::default().add_modifier(Modifier::BOLD)),
                 Span::raw(": search"),
                 Span::raw(", "),
                 Span::styled("<ctrl-d>", Style::default().add_modifier(Modifier::BOLD)),
