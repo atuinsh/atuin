@@ -19,11 +19,14 @@ function _atuin_postexec --on-event fish_postexec
 end
 
 function _atuin_search
-    set -l ATUIN_H (ATUIN_SHELL_FISH=t ATUIN_LOG=error atuin search $argv -i -- (commandline -b) 3>&1 1>&2 2>&3)
+    # In fish 3.4 and above we can use `"$(some command)"` to keep multiple lines separate;
+    # but to support fish 3.3 we need to use `(some command | string collect)`.
+    # https://fishshell.com/docs/current/relnotes.html#id24 (fish 3.4 "Notable improvements and fixes")
+    set -l ATUIN_H (ATUIN_SHELL_FISH=t ATUIN_LOG=error atuin search $argv -i -- (commandline -b) 3>&1 1>&2 2>&3 | string collect)
 
     if test -n "$ATUIN_H"
         if string match --quiet '__atuin_accept__:*' "$ATUIN_H"
-          set -l ATUIN_HIST (string replace "__atuin_accept__:" "" -- "$ATUIN_H")
+          set -l ATUIN_HIST (string replace "__atuin_accept__:" "" -- "$ATUIN_H" | string collect)
           commandline -r "$ATUIN_HIST"
           commandline -f repaint
           commandline -f execute
