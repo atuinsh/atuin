@@ -309,7 +309,8 @@ impl State {
                 do_exit!();
             }
             KeyCode::Char('j')
-                if !settings.invert
+                if !ctrl
+                    && !settings.invert
                     && settings.vim
                     && self.vim_mode == VimMode::Normal
                     && self.results_state.selected() == 0 =>
@@ -317,17 +318,18 @@ impl State {
                 do_exit!();
             }
             KeyCode::Char('k')
-                if settings.invert
+                if !ctrl
+                    && settings.invert
                     && settings.vim
                     && self.vim_mode == VimMode::Normal
                     && self.results_state.selected() == 0 =>
             {
                 do_exit!();
             }
-            KeyCode::Char('k') if settings.vim && self.vim_mode == VimMode::Normal => {
+            KeyCode::Char('k') if !ctrl && settings.vim && self.vim_mode == VimMode::Normal => {
                 self.scroll_up(1);
             }
-            KeyCode::Char('j') if settings.vim && self.vim_mode == VimMode::Normal => {
+            KeyCode::Char('j') if !ctrl && settings.vim && self.vim_mode == VimMode::Normal => {
                 self.scroll_down(1);
             }
             KeyCode::Down if !settings.invert => {
