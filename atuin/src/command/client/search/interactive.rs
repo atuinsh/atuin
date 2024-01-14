@@ -162,6 +162,7 @@ impl State {
             KeyCode::Esc if settings.vim && self.vim_mode == VimMode::Insert => {
                 let _ = execute!(stdout(), SetCursorStyle::SteadyBlock);
                 self.vim_mode = VimMode::Normal;
+                return InputAction::Continue;
             }
             KeyCode::Esc => {
                 do_exit!();
