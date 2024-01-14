@@ -146,18 +146,26 @@ impl State {
         // Use Ctrl-n instead of Alt-n?
         let modfr = if settings.ctrl_n_shortcuts { ctrl } else { alt };
 
+        // Common actions
+        macro_rules! do_exit {
+            () => {
+                return match settings.exit_mode {
+                    ExitMode::ReturnOriginal => InputAction::ReturnOriginal,
+                    ExitMode::ReturnQuery => InputAction::ReturnQuery,
+                }
+            };
+        }
+
         // core input handling, common for all tabs
         match input.code {
             KeyCode::Char('c' | 'g') if ctrl => return InputAction::ReturnOriginal,
             KeyCode::Esc if settings.vim && self.vim_mode == VimMode::Insert => {
                 let _ = execute!(stdout(), SetCursorStyle::SteadyBlock);
                 self.vim_mode = VimMode::Normal;
+                return InputAction::Continue;
             }
             KeyCode::Esc => {
-                return match settings.exit_mode {
-                    ExitMode::ReturnOriginal => InputAction::ReturnOriginal,
-                    ExitMode::ReturnQuery => InputAction::ReturnQuery,
-                }
+                do_exit!();
             }
             KeyCode::Tab => {
                 return InputAction::Accept(self.results_state.selected());
@@ -295,31 +303,33 @@ impl State {
                 self.engine = engines::engine(self.search_mode);
             }
             KeyCode::Down if !settings.invert && self.results_state.selected() == 0 => {
-                return match settings.exit_mode {
-                    ExitMode::ReturnOriginal => InputAction::ReturnOriginal,
-                    ExitMode::ReturnQuery => InputAction::ReturnQuery,
-                }
+                do_exit!();
             }
             KeyCode::Up if settings.invert && self.results_state.selected() == 0 => {
-                return match settings.exit_mode {
-                    ExitMode::ReturnOriginal => InputAction::ReturnOriginal,
-                    ExitMode::ReturnQuery => InputAction::ReturnQuery,
-                }
+                do_exit!();
             }
             KeyCode::Char('j')
-                if settings.vim
+                if !ctrl
+                    && !settings.invert
+                    && settings.vim
                     && self.vim_mode == VimMode::Normal
                     && self.results_state.selected() == 0 =>
             {
-                return match settings.exit_mode {
-                    ExitMode::ReturnOriginal => InputAction::ReturnOriginal,
-                    ExitMode::ReturnQuery => InputAction::ReturnQuery,
-                }
+                do_exit!();
             }
-            KeyCode::Char('k') if settings.vim && self.vim_mode == VimMode::Normal => {
+            KeyCode::Char('k')
+                if !ctrl
+                    && settings.invert
+                    && settings.vim
+                    && self.vim_mode == VimMode::Normal
+                    && self.results_state.selected() == 0 =>
+            {
+                do_exit!();
+            }
+            KeyCode::Char('k') if !ctrl && settings.vim && self.vim_mode == VimMode::Normal => {
                 self.scroll_up(1);
             }
-            KeyCode::Char('j') if settings.vim && self.vim_mode == VimMode::Normal => {
+            KeyCode::Char('j') if !ctrl && settings.vim && self.vim_mode == VimMode::Normal => {
                 self.scroll_down(1);
             }
             KeyCode::Down if !settings.invert => {
@@ -700,7 +710,6 @@ struct Stdout {
 }
 
 impl Stdout {
-    #[cfg(target_os = "windows")]
     pub fn new(inline_mode: bool) -> std::io::Result<Self> {
         terminal::enable_raw_mode()?;
         let mut stdout = stdout();
@@ -715,25 +724,9 @@ impl Stdout {
             event::EnableBracketedPaste,
         )?;
 
-        Ok(Self {
-            stdout,
-            inline_mode,
-        })
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    pub fn new(inline_mode: bool) -> std::io::Result<Self> {
-        terminal::enable_raw_mode()?;
-        let mut stdout = stdout();
-
-        if !inline_mode {
-            execute!(stdout, terminal::EnterAlternateScreen)?;
-        }
-
+        #[cfg(not(target_os = "windows"))]
         execute!(
             stdout,
-            event::EnableMouseCapture,
-            event::EnableBracketedPaste,
             PushKeyboardEnhancementFlags(
                 KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
                     | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
@@ -748,7 +741,6 @@ impl Stdout {
 }
 
 impl Drop for Stdout {
-    #[cfg(target_os = "windows")]
     fn drop(&mut self) {
         if !self.inline_mode {
             execute!(self.stdout, terminal::LeaveAlternateScreen).unwrap();
@@ -759,21 +751,10 @@ impl Drop for Stdout {
             event::DisableBracketedPaste,
         )
         .unwrap();
-        terminal::disable_raw_mode().unwrap();
-    }
 
-    #[cfg(not(target_os = "windows"))]
-    fn drop(&mut self) {
-        if !self.inline_mode {
-            execute!(self.stdout, terminal::LeaveAlternateScreen).unwrap();
-        }
-        execute!(
-            self.stdout,
-            event::DisableMouseCapture,
-            event::DisableBracketedPaste,
-            PopKeyboardEnhancementFlags
-        )
-        .unwrap();
+        #[cfg(not(target_os = "windows"))]
+        execute!(self.stdout, PopKeyboardEnhancementFlags).unwrap();
+
         terminal::disable_raw_mode().unwrap();
     }
 }
