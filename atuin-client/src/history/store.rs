@@ -207,6 +207,7 @@ impl HistoryStore {
 
 #[cfg(test)]
 mod tests {
+    use atuin_common::record::DecryptedData;
     use time::macros::datetime;
 
     use crate::history::{store::HistoryRecord, HISTORY_VERSION};
@@ -243,13 +244,14 @@ mod tests {
         let serialized = record.serialize().expect("failed to serialize history");
         assert_eq!(serialized.0, bytes);
 
-        let deserialized = HistoryRecord::deserialize(&serialized.0, HISTORY_VERSION)
+        let deserialized = HistoryRecord::deserialize(&serialized, HISTORY_VERSION)
             .expect("failed to deserialize HistoryRecord");
         assert_eq!(deserialized, record);
 
         // check the snapshot too
-        let deserialized = HistoryRecord::deserialize(&bytes, HISTORY_VERSION)
-            .expect("failed to deserialize HistoryRecord");
+        let deserialized =
+            HistoryRecord::deserialize(&DecryptedData(Vec::from(bytes)), HISTORY_VERSION)
+                .expect("failed to deserialize HistoryRecord");
         assert_eq!(deserialized, record);
     }
 
@@ -264,12 +266,13 @@ mod tests {
         let serialized = record.serialize().expect("failed to serialize history");
         assert_eq!(serialized.0, bytes);
 
-        let deserialized = HistoryRecord::deserialize(&serialized.0, HISTORY_VERSION)
+        let deserialized = HistoryRecord::deserialize(&serialized, HISTORY_VERSION)
             .expect("failed to deserialize HistoryRecord");
         assert_eq!(deserialized, record);
 
-        let deserialized = HistoryRecord::deserialize(&bytes, HISTORY_VERSION)
-            .expect("failed to deserialize HistoryRecord");
+        let deserialized =
+            HistoryRecord::deserialize(&DecryptedData(Vec::from(bytes)), HISTORY_VERSION)
+                .expect("failed to deserialize HistoryRecord");
         assert_eq!(deserialized, record);
     }
 }
