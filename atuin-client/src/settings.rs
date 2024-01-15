@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     convert::TryFrom,
     io::prelude::*,
     path::{Path, PathBuf},
@@ -10,6 +11,7 @@ use clap::ValueEnum;
 use config::{
     builder::DefaultState, Config, ConfigBuilder, Environment, File as ConfigFile, FileFormat,
 };
+use crossterm::cursor::SetCursorStyle;
 use eyre::{eyre, Context, Result};
 use fs_err::{create_dir_all, File};
 use parse_duration::parse;
@@ -169,6 +171,63 @@ impl KeymapMode {
     }
 }
 
+// We want to translate the config to crossterm::cursor::SetCursorStyle, but
+// the original type does not implement trait serde::Deserialize unfortunately.
+// It seems impossible to implement Deserialize for external types when it is
+// used in HashMap (https://stackoverflow.com/questions/67142663).  We instead
+// define an adapter type.
+#[derive(Clone, Debug, Deserialize, Copy, PartialEq, Eq, ValueEnum)]
+pub enum CursorStyle {
+    #[serde(rename = "default")]
+    DefaultUserShape,
+
+    #[serde(rename = "blink-block")]
+    BlinkingBlock,
+
+    #[serde(rename = "steady-block")]
+    SteadyBlock,
+
+    #[serde(rename = "blink-underline")]
+    BlinkingUnderScore,
+
+    #[serde(rename = "steady-underline")]
+    SteadyUnderScore,
+
+    #[serde(rename = "blink-bar")]
+    BlinkingBar,
+
+    #[serde(rename = "steady-bar")]
+    SteadyBar,
+}
+
+impl CursorStyle {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            CursorStyle::DefaultUserShape => "DEFAULT",
+            CursorStyle::BlinkingBlock => "BLINKBLOCK",
+            CursorStyle::SteadyBlock => "STEADYBLOCK",
+            CursorStyle::BlinkingUnderScore => "BLINKUNDERLINE",
+            CursorStyle::SteadyUnderScore => "STEADYUNDERLINE",
+            CursorStyle::BlinkingBar => "BLINKBAR",
+            CursorStyle::SteadyBar => "STEADYBAR",
+        }
+    }
+}
+
+impl From<CursorStyle> for SetCursorStyle {
+    fn from(style: CursorStyle) -> SetCursorStyle {
+        match style {
+            CursorStyle::DefaultUserShape => SetCursorStyle::DefaultUserShape,
+            CursorStyle::BlinkingBlock => SetCursorStyle::BlinkingBlock,
+            CursorStyle::SteadyBlock => SetCursorStyle::SteadyBlock,
+            CursorStyle::BlinkingUnderScore => SetCursorStyle::BlinkingUnderScore,
+            CursorStyle::SteadyUnderScore => SetCursorStyle::SteadyUnderScore,
+            CursorStyle::BlinkingBar => SetCursorStyle::BlinkingBar,
+            CursorStyle::SteadyBar => SetCursorStyle::SteadyBar,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct Stats {
     #[serde(default = "Stats::common_prefix_default")]
@@ -228,6 +287,8 @@ pub struct Settings {
     pub show_help: bool,
     pub exit_mode: ExitMode,
     pub keymap_mode: KeymapMode,
+    pub keymap_mode_shell: KeymapMode,
+    pub keymap_cursor: HashMap<String, CursorStyle>,
     pub word_jump_mode: WordJumpMode,
     pub word_chars: String,
     pub scroll_context_lines: usize,
@@ -466,6 +527,8 @@ impl Settings {
             .set_default("enter_accept", false)?
             .set_default("sync.records", false)?
             .set_default("keymap_mode", "emacs")?
+            .set_default("keymap_mode_shell", "auto")?
+            .set_default("keymap_cursor", HashMap::<String, String>::new())?
             .add_source(
                 Environment::with_prefix("atuin")
                     .prefix_separator("_")

@@ -21,7 +21,7 @@ use unicode_width::UnicodeWidthStr;
 use atuin_client::{
     database::{current_context, Database},
     history::{store::HistoryStore, History, HistoryStats},
-    settings::{ExitMode, FilterMode, KeymapMode, SearchMode, Settings},
+    settings::{CursorStyle, ExitMode, FilterMode, KeymapMode, SearchMode, Settings},
 };
 
 use super::{
@@ -64,6 +64,7 @@ pub struct State {
     results_len: usize,
     accept: bool,
     keymap_mode: KeymapMode,
+    current_cursor: Option<CursorStyle>,
     tab_index: usize,
 
     search: SearchState,
@@ -127,6 +128,40 @@ impl State {
         InputAction::Continue
     }
 
+    fn set_keymap_cursor(&mut self, settings: &Settings, keymap_name: &str) {
+        let cursor_style = if keymap_name == "__clear__" {
+            None
+        } else {
+            settings.keymap_cursor.get(keymap_name).copied()
+        }
+        .or_else(|| self.current_cursor.map(|_| CursorStyle::DefaultUserShape));
+
+        if cursor_style != self.current_cursor {
+            if let Some(style) = cursor_style {
+                self.current_cursor = cursor_style;
+                let _ = execute!(stdout(), SetCursorStyle::from(style));
+            }
+        }
+    }
+
+    pub fn initialize_keymap_cursor(&mut self, settings: &Settings) {
+        match self.keymap_mode {
+            KeymapMode::Emacs => self.set_keymap_cursor(settings, "emacs"),
+            KeymapMode::VimNormal => self.set_keymap_cursor(settings, "vim_normal"),
+            KeymapMode::VimInsert => self.set_keymap_cursor(settings, "vim_insert"),
+            KeymapMode::Auto => {}
+        }
+    }
+
+    pub fn finalize_keymap_cursor(&mut self, settings: &Settings) {
+        match settings.keymap_mode_shell {
+            KeymapMode::Emacs => self.set_keymap_cursor(settings, "emacs"),
+            KeymapMode::VimNormal => self.set_keymap_cursor(settings, "vim_normal"),
+            KeymapMode::VimInsert => self.set_keymap_cursor(settings, "vim_insert"),
+            KeymapMode::Auto => self.set_keymap_cursor(settings, "__clear__"),
+        }
+    }
+
     #[allow(clippy::too_many_lines)]
     #[allow(clippy::cognitive_complexity)]
     fn handle_key_input(&mut self, settings: &Settings, input: &KeyEvent) -> InputAction {
@@ -154,7 +189,7 @@ impl State {
         match input.code {
             KeyCode::Char('c' | 'g') if ctrl => return InputAction::ReturnOriginal,
             KeyCode::Esc if self.keymap_mode == KeymapMode::VimInsert => {
-                let _ = execute!(stdout(), SetCursorStyle::SteadyBlock);
+                self.set_keymap_cursor(settings, "vim_normal");
                 self.keymap_mode = KeymapMode::VimNormal;
                 return InputAction::Continue;
             }
@@ -352,7 +387,7 @@ impl State {
                 return InputAction::Redraw;
             }
             KeyCode::Char('i') if self.keymap_mode == KeymapMode::VimNormal => {
-                let _ = execute!(stdout(), SetCursorStyle::BlinkingBlock);
+                self.set_keymap_cursor(settings, "vim_insert");
                 self.keymap_mode = KeymapMode::VimInsert;
             }
             KeyCode::Char(c) if self.keymap_mode != KeymapMode::VimNormal => {
@@ -830,7 +865,10 @@ pub async fn history(
             KeymapMode::Auto => KeymapMode::Emacs,
             value => value,
         },
+        current_cursor: None,
     };
+
+    app.initialize_keymap_cursor(settings);
 
     let mut results = app.query_results(&mut db).await?;
 
@@ -903,6 +941,8 @@ pub async fn history(
             Some(db.stats(&selected).await?)
         };
     };
+
+    app.finalize_keymap_cursor(settings);
 
     if settings.inline_height > 0 {
         terminal.clear()?;

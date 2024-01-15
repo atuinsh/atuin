@@ -214,6 +214,7 @@ dependencies = [
  "base64 0.21.5",
  "clap",
  "config",
+ "crossterm",
  "crypto_secretbox",
  "directories",
  "eyre",
