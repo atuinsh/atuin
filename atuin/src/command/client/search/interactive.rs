@@ -153,7 +153,7 @@ impl State {
         // core input handling, common for all tabs
         match input.code {
             KeyCode::Char('c' | 'g') if ctrl => return InputAction::ReturnOriginal,
-            KeyCode::Esc if settings.vim && self.keymap_mode == KeymapMode::VimInsert => {
+            KeyCode::Esc if self.keymap_mode == KeymapMode::VimInsert => {
                 let _ = execute!(stdout(), SetCursorStyle::SteadyBlock);
                 self.keymap_mode = KeymapMode::VimNormal;
                 return InputAction::Continue;
@@ -305,7 +305,6 @@ impl State {
             KeyCode::Char('j')
                 if !ctrl
                     && !settings.invert
-                    && settings.vim
                     && self.keymap_mode == KeymapMode::VimNormal
                     && self.results_state.selected() == 0 =>
             {
@@ -314,20 +313,15 @@ impl State {
             KeyCode::Char('k')
                 if !ctrl
                     && settings.invert
-                    && settings.vim
                     && self.keymap_mode == KeymapMode::VimNormal
                     && self.results_state.selected() == 0 =>
             {
                 do_exit!();
             }
-            KeyCode::Char('k')
-                if !ctrl && settings.vim && self.keymap_mode == KeymapMode::VimNormal =>
-            {
+            KeyCode::Char('k') if !ctrl && self.keymap_mode == KeymapMode::VimNormal => {
                 self.scroll_up(1);
             }
-            KeyCode::Char('j')
-                if !ctrl && settings.vim && self.keymap_mode == KeymapMode::VimNormal =>
-            {
+            KeyCode::Char('j') if !ctrl && self.keymap_mode == KeymapMode::VimNormal => {
                 self.scroll_down(1);
             }
             KeyCode::Down if !settings.invert => {
@@ -357,11 +351,11 @@ impl State {
             KeyCode::Char('l') if ctrl => {
                 return InputAction::Redraw;
             }
-            KeyCode::Char('i') if settings.vim && self.keymap_mode == KeymapMode::VimNormal => {
+            KeyCode::Char('i') if self.keymap_mode == KeymapMode::VimNormal => {
                 let _ = execute!(stdout(), SetCursorStyle::BlinkingBlock);
                 self.keymap_mode = KeymapMode::VimInsert;
             }
-            KeyCode::Char(c) if !settings.vim || self.keymap_mode != KeymapMode::VimNormal => {
+            KeyCode::Char(c) if self.keymap_mode != KeymapMode::VimNormal => {
                 self.search.input.insert(c);
             }
             KeyCode::PageDown if !settings.invert => {
@@ -830,7 +824,10 @@ pub async fn history(
         engine: engines::engine(search_mode),
         results_len: 0,
         accept: false,
-        keymap_mode: settings.keymap_mode.unwrap_or(KeymapMode::VimNormal),
+        keymap_mode: match settings.keymap_mode {
+            KeymapMode::Auto => KeymapMode::Emacs,
+            value => value,
+        },
     };
 
     let mut results = app.query_results(&mut db).await?;

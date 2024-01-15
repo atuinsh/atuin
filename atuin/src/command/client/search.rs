@@ -72,8 +72,8 @@ pub struct Cmd {
     shell_up_key_binding: bool,
 
     /// Notify the keymap at the shell's side
-    #[arg(long = "keymap-mode")]
-    keymap_mode: Option<KeymapMode>,
+    #[arg(long = "keymap-mode", default_value = "auto")]
+    keymap_mode: KeymapMode,
 
     /// Use human-readable formatting for time
     #[arg(long)]
@@ -145,7 +145,13 @@ impl Cmd {
         }
 
         settings.shell_up_key_binding = self.shell_up_key_binding;
-        settings.keymap_mode = settings.keymap_mode.or(self.keymap_mode);
+
+        // `keymap_mode` specified in config.toml overrides the `--keymap-mode`
+        // option specified in the keybindings.
+        settings.keymap_mode = match settings.keymap_mode {
+            KeymapMode::Auto => self.keymap_mode,
+            value => value,
+        };
 
         if self.interactive {
             let item = interactive::history(&self.query, settings, db).await?;

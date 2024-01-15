@@ -126,15 +126,13 @@
 enter_accept = true
 
 
-## Defaults to false. If enabled, in the vim-normal keymap, you may use 'j' and
-## 'k' to navigate the history list and 'i' to enter Insert mode.
-# vim = false
-
-## The keymap on the startup of `atuin search`.  If this is not set, the keymap
-## on the startup is automatically selected based on the shell's keymap where
-## the keybinding is defined.  Note: To enable the special behavior of the vim
-## keymaps, the setting `vim` needs to be set to `true`.
-# keymap_mode = "vim-normal"
+## Defaults to "emacs".  This specifies the keymap on the startup of `atuin
+## search`.  If this is set to "auto", the startup keymap mode in the Atuin
+## search is automatically selected based on the shell's keymap where the
+## keybinding is defined.  If this is set to "emacs", "vim-insert", or
+## "vim-normal", the startup keymap mode in the Atuin search is forced to be
+## the specified one.
+# keymap_mode = "auto"
 
 #[stats]
 # Set commands where we should consider the subcommand for statistics. Eg, kubectl get vs just kubectl
