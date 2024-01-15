@@ -1,7 +1,10 @@
 use eyre::{bail, eyre, Result};
 use rmp::decode::Bytes;
 
-use crate::record::{encryption::PASETO_V4, sqlite_store::SqliteStore, store::Store};
+use crate::{
+    database::Database,
+    record::{encryption::PASETO_V4, sqlite_store::SqliteStore, store::Store},
+};
 use atuin_common::record::{DecryptedData, Host, HostId, Record, RecordIdx};
 
 use super::{History, HistoryId, HISTORY_TAG, HISTORY_VERSION};
@@ -58,14 +61,14 @@ impl HistoryRecord {
         Ok(DecryptedData(output))
     }
 
-    pub fn deserialize(bytes: &[u8], version: &str) -> Result<Self> {
+    pub fn deserialize(bytes: &DecryptedData, version: &str) -> Result<Self> {
         use rmp::decode;
 
         fn error_report<E: std::fmt::Debug>(err: E) -> eyre::Report {
             eyre!("{err:?}")
         }
 
-        let mut bytes = Bytes::new(bytes);
+        let mut bytes = Bytes::new(&bytes.0);
 
         let record_type = decode::read_u8(&mut bytes).map_err(error_report)?;
 
@@ -146,6 +149,59 @@ impl HistoryStore {
         let record = HistoryRecord::Create(history);
 
         self.push_record(record).await
+    }
+
+    pub async fn history(&self) -> Result<Vec<HistoryRecord>> {
+        // Atm this loads all history into memory
+        // Not ideal as that is potentially quite a lot, although history will be small.
+        let records = self.store.all_tagged(HISTORY_TAG).await?;
+        let mut ret = Vec::with_capacity(records.len());
+
+        for record in records.into_iter() {
+            let hist = match record.version.as_str() {
+                HISTORY_VERSION => {
+                    let decrypted = record.decrypt::<PASETO_V4>(&self.encryption_key)?;
+                    HistoryRecord::deserialize(&decrypted.data, HISTORY_VERSION)
+                }
+                version => bail!("unknown history version {version:?}"),
+            }?;
+
+            ret.push(hist);
+        }
+
+        Ok(ret)
+    }
+
+    pub async fn build(&self, database: &dyn Database) -> Result<()> {
+        // I'd like to change how we rebuild and not couple this with the database, but need to
+        // consider the structure more deeply. This will be easy to change.
+
+        // TODO(ellie): page or iterate this
+        let history = self.history().await?;
+
+        // In theory we could flatten this here
+        // The current issue is that the database may have history in it already, from the old sync
+        // This didn't actually delete old history
+        // If we're sure we have a DB only maintained by the new store, we can flatten
+        // create/delete before we even get to sqlite
+        let mut creates = Vec::new();
+        let mut deletes = Vec::new();
+
+        for i in history {
+            match i {
+                HistoryRecord::Create(h) => {
+                    creates.push(h);
+                }
+                HistoryRecord::Delete(id) => {
+                    deletes.push(id);
+                }
+            }
+        }
+
+        database.save_bulk(&creates).await?;
+        database.delete_rows(&deletes).await?;
+
+        Ok(())
     }
 }
 

@@ -3,7 +3,7 @@ use eyre::{Result, WrapErr};
 
 use atuin_client::{
     database::Database,
-    record::{store::Store, sync},
+    record::{sqlite_store::SqliteStore, sync},
     settings::Settings,
 };
 
@@ -45,7 +45,7 @@ impl Cmd {
         self,
         settings: Settings,
         db: &impl Database,
-        store: &(impl Store + Send + Sync),
+        store: SqliteStore,
     ) -> Result<()> {
         match self {
             Self::Sync { force } => run(&settings, force, db, store).await,
@@ -75,12 +75,12 @@ async fn run(
     settings: &Settings,
     force: bool,
     db: &impl Database,
-    store: &(impl Store + Send + Sync),
+    store: SqliteStore,
 ) -> Result<()> {
     if settings.sync.records {
-        let (diff, _) = sync::diff(settings, store).await?;
-        let operations = sync::operations(diff, store).await?;
-        let (uploaded, downloaded) = sync::sync_remote(operations, store, settings).await?;
+        let (diff, _) = sync::diff(settings, &store).await?;
+        let operations = sync::operations(diff, &store).await?;
+        let (uploaded, downloaded) = sync::sync_remote(operations, &store, settings).await?;
 
         println!("{uploaded}/{downloaded} up/down to record store");
     }

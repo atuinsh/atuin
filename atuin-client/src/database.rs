@@ -18,7 +18,7 @@ use sqlx::{
 };
 use time::OffsetDateTime;
 
-use crate::history::HistoryStats;
+use crate::history::{HistoryId, HistoryStats};
 
 use super::{
     history::History,
@@ -93,6 +93,7 @@ pub trait Database: Send + Sync + 'static {
     async fn before(&self, timestamp: OffsetDateTime, count: i64) -> Result<Vec<History>>;
 
     async fn delete(&self, h: History) -> Result<()>;
+    async fn delete_rows(&self, ids: &[HistoryId]) -> Result<()>;
     async fn deleted(&self) -> Result<Vec<History>>;
 
     // Yes I know, it's a lot.
@@ -168,6 +169,18 @@ impl Sqlite {
         .bind(h.deleted_at.map(|t|t.unix_timestamp_nanos() as i64))
         .execute(&mut **tx)
         .await?;
+
+        Ok(())
+    }
+
+    async fn delete_row_raw(
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        id: HistoryId,
+    ) -> Result<()> {
+        sqlx::query("delete from history where id = ?1")
+            .bind(id.0.as_str())
+            .execute(&mut **tx)
+            .await?;
 
         Ok(())
     }
@@ -563,6 +576,18 @@ impl Database for Sqlite {
         h.deleted_at = Some(now); // delete it
 
         self.update(&h).await?; // save it
+
+        Ok(())
+    }
+
+    async fn delete_rows(&self, ids: &[HistoryId]) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+
+        for id in ids {
+            Self::delete_row_raw(&mut tx, id.clone()).await?;
+        }
+
+        tx.commit().await?;
 
         Ok(())
     }
