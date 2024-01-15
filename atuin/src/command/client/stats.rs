@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
+use atuin_common::utils::Escapable as _;
 use clap::Parser;
 use crossterm::style::{Color, ResetColor, SetAttribute, SetForegroundColor};
 use eyre::{bail, Result};
@@ -66,7 +67,10 @@ fn compute_stats(settings: &Settings, history: &[History], count: usize) -> Resu
             print!(" ");
         }
 
-        println!("{ResetColor}] {gray}{count:num_pad$}{ResetColor} {bold}{command}{ResetColor}");
+        println!(
+            "{ResetColor}] {gray}{count:num_pad$}{ResetColor} {bold}{}{ResetColor}",
+            command.escape_control()
+        );
     }
     println!("Total commands:   {}", history.len());
     println!("Unique commands:  {unique}");

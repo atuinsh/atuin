@@ -1,4 +1,6 @@
+use std::borrow::Cow;
 use std::env;
+use std::fmt::Write;
 use std::path::PathBuf;
 
 use rand::RngCore;
@@ -100,6 +102,34 @@ pub fn is_bash() -> bool {
     env::var("ATUIN_SHELL_BASH").is_ok()
 }
 
+/// Extension trait for anything that can behave like a string to make it easy to escape control
+/// characters.
+///
+/// Intended to help prevent control characters being printed and interpreted by the terminal when
+/// printing history as well as to ensure the commands that appear in the interactive search
+/// reflect the actual command run rather than just the printable characters.
+pub trait Escapable: AsRef<str> {
+    fn escape_control(&self) -> Cow<str> {
+        if !self.as_ref().contains(|c: char| c.is_ascii_control()) {
+            self.as_ref().into()
+        } else {
+            let mut remaining = self.as_ref();
+            // Not a perfect way to reserve space but should reduce the allocations
+            let mut buf = String::with_capacity(remaining.as_bytes().len());
+            while let Some(i) = remaining.find(|c: char| c.is_ascii_control()) {
+                // safe to index with `..i`, `i` and `i+1..` as part[i] is a single byte ascii char
+                buf.push_str(&remaining[..i]);
+                let _ = write!(&mut buf, "\\x{:02x}", remaining.as_bytes()[i]);
+                remaining = &remaining[i + 1..];
+            }
+            buf.push_str(remaining);
+            buf.into()
+        }
+    }
+}
+
+impl<T: AsRef<str>> Escapable for T {}
+
 #[cfg(test)]
 mod tests {
     use time::Month;
@@ -182,5 +212,35 @@ mod tests {
         }
 
         assert_eq!(uuids.len(), how_many);
+    }
+
+    #[test]
+    fn escape_control_characters() {
+        use super::Escapable;
+        // CSI colour sequence
+        assert_eq!("\x1b[31mfoo".escape_control(), "\\x1b[31mfoo");
+
+        // Tabs count as control chars
+        assert_eq!("foo\tbar".escape_control(), "foo\\x09bar");
+
+        // space is in control char range but should be excluded
+        assert_eq!("two words".escape_control(), "two words");
+
+        // unicode multi-byte characters
+        let s = "🐢\x1b[32m🦀";
+        assert_eq!(s.escape_control(), s.replace("\x1b", "\\x1b"));
+    }
+
+    #[test]
+    fn escape_no_control_characters() {
+        use super::Escapable as _;
+        assert!(matches!(
+            "no control characters".escape_control(),
+            Cow::Borrowed(_)
+        ));
+        assert!(matches!(
+            "with \x1b[31mcontrol\x1b[0m characters".escape_control(),
+            Cow::Owned(_)
+        ));
     }
 }
