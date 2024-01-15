@@ -196,6 +196,8 @@ pub async fn sync(settings: &Settings, force: bool, db: &(impl Database + Send))
         settings.network_timeout,
     )?;
 
+    Settings::save_sync_time()?;
+
     let key = load_key(settings)?; // encryption key
 
     sync_upload(&key, force, &client, db).await?;
@@ -203,8 +205,6 @@ pub async fn sync(settings: &Settings, force: bool, db: &(impl Database + Send))
     let download = sync_download(&key, force, &client, db).await?;
 
     debug!("sync downloaded {}", download.0);
-
-    Settings::save_sync_time()?;
 
     Ok(())
 }
