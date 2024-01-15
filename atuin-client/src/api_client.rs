@@ -143,6 +143,28 @@ pub fn ensure_version(response: &Response) -> Result<bool> {
     Ok(true)
 }
 
+async fn handle_resp_error(resp: Response) -> Result<Response> {
+    let status = resp.status();
+
+    if status == StatusCode::SERVICE_UNAVAILABLE {
+        bail!(
+            "Service unavailable: check https://status.atuin.sh (or get in touch with your host)"
+        );
+    }
+
+    if status.is_client_error() {
+        let error = resp.json::<ErrorResponse>().await?.reason;
+        bail!("Could not fetch history, client error: {error}.")
+    } else if status.is_server_error() {
+        let error = resp.json::<ErrorResponse>().await?.reason;
+        bail!("There was an error with the atuin sync service: {error}.\nIf the problem persists, contact the host")
+    } else if !status.is_success() {
+        bail!("There was an error with the atuin sync service: Status {status:?}.\nIf the problem persists, contact the host")
+    }
+
+    Ok(resp)
+}
+
 impl<'a> Client<'a> {
     pub fn new(
         sync_addr: &'a str,
@@ -172,6 +194,7 @@ impl<'a> Client<'a> {
         let url = Url::parse(url.as_str())?;
 
         let resp = self.client.get(url).send().await?;
+        let resp = handle_resp_error(resp).await?;
 
         if !ensure_version(&resp)? {
             bail!("could not sync due to version mismatch");
@@ -191,13 +214,10 @@ impl<'a> Client<'a> {
         let url = Url::parse(url.as_str())?;
 
         let resp = self.client.get(url).send().await?;
+        let resp = handle_resp_error(resp).await?;
 
         if !ensure_version(&resp)? {
             bail!("could not sync due to version mismatch");
-        }
-
-        if resp.status() != StatusCode::OK {
-            bail!("failed to get status (are you logged in?)");
         }
 
         let status = resp.json::<StatusResponse>().await?;
@@ -228,27 +248,18 @@ impl<'a> Client<'a> {
         );
 
         let resp = self.client.get(url).send().await?;
+        let resp = handle_resp_error(resp).await?;
 
-        let status = resp.status();
-        if status.is_success() {
-            let history = resp.json::<SyncHistoryResponse>().await?;
-            Ok(history)
-        } else if status.is_client_error() {
-            let error = resp.json::<ErrorResponse>().await?.reason;
-            bail!("Could not fetch history: {error}.")
-        } else if status.is_server_error() {
-            let error = resp.json::<ErrorResponse>().await?.reason;
-            bail!("There was an error with the atuin sync service: {error}.\nIf the problem persists, contact the host")
-        } else {
-            bail!("There was an error with the atuin sync service: Status {status:?}.\nIf the problem persists, contact the host")
-        }
+        let history = resp.json::<SyncHistoryResponse>().await?;
+        Ok(history)
     }
 
     pub async fn post_history(&self, history: &[AddHistoryRequest]) -> Result<()> {
         let url = format!("{}/history", self.sync_addr);
         let url = Url::parse(url.as_str())?;
 
-        self.client.post(url).json(history).send().await?;
+        let resp = self.client.post(url).json(history).send().await?;
+        handle_resp_error(resp).await?;
 
         Ok(())
     }
@@ -257,13 +268,16 @@ impl<'a> Client<'a> {
         let url = format!("{}/history", self.sync_addr);
         let url = Url::parse(url.as_str())?;
 
-        self.client
+        let resp = self
+            .client
             .delete(url)
             .json(&DeleteHistoryRequest {
                 client_id: h.id.to_string(),
             })
             .send()
             .await?;
+
+        handle_resp_error(resp).await?;
 
         Ok(())
     }
@@ -273,14 +287,7 @@ impl<'a> Client<'a> {
         let url = Url::parse(url.as_str())?;
 
         let resp = self.client.post(url).json(records).send().await?;
-        info!("posted records, got {}", resp.status());
-
-        if !resp.status().is_success() {
-            error!(
-                "failed to post records to server; got: {:?}",
-                resp.text().await
-            );
-        }
+        handle_resp_error(resp).await?;
 
         Ok(())
     }
@@ -307,6 +314,7 @@ impl<'a> Client<'a> {
         let url = Url::parse(url.as_str())?;
 
         let resp = self.client.get(url).send().await?;
+        let resp = handle_resp_error(resp).await?;
 
         let records = resp.json::<Vec<Record<EncryptedData>>>().await?;
 
@@ -318,6 +326,7 @@ impl<'a> Client<'a> {
         let url = Url::parse(url.as_str())?;
 
         let resp = self.client.get(url).send().await?;
+        let resp = handle_resp_error(resp).await?;
 
         if !ensure_version(&resp)? {
             bail!("could not sync records due to version mismatch");
