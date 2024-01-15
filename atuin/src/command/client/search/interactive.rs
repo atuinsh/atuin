@@ -551,7 +551,7 @@ impl State {
 
         match self.tab_index {
             0 => {
-                let results_list = Self::build_results_list(style, results);
+                let results_list = Self::build_results_list(style, results, self.keymap_mode);
                 f.render_stateful_widget(results_list, results_list_chunk, &mut self.results_state);
             }
 
@@ -653,8 +653,13 @@ impl State {
         stats
     }
 
-    fn build_results_list(style: StyleState, results: &[History]) -> HistoryList {
-        let results_list = HistoryList::new(results, style.invert);
+    fn build_results_list(
+        style: StyleState,
+        results: &[History],
+        keymap_mode: KeymapMode,
+    ) -> HistoryList<'_> {
+        let results_list =
+            HistoryList::new(results, style.invert, keymap_mode == KeymapMode::VimNormal);
 
         if style.compact {
             results_list
