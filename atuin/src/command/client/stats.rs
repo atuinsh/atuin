@@ -9,7 +9,7 @@ use interim::parse_date_string;
 use atuin_client::{
     database::{current_context, Database},
     history::History,
-    settings::{FilterMode, Settings},
+    settings::Settings,
 };
 use time::{Duration, OffsetDateTime, Time};
 
@@ -92,8 +92,7 @@ impl Cmd {
         let last_night = now.replace_time(Time::MIDNIGHT);
 
         let history = if words.as_str() == "all" {
-            db.list(FilterMode::Global, &context, None, false, false)
-                .await?
+            db.list(&[], &context, None, false, false).await?
         } else if words.trim() == "today" {
             let start = last_night;
             let end = start + Duration::days(1);

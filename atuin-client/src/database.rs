@@ -78,7 +78,7 @@ pub trait Database: Send + Sync + 'static {
     async fn load(&self, id: &str) -> Result<Option<History>>;
     async fn list(
         &self,
-        filter: FilterMode,
+        filters: &[FilterMode],
         context: &Context,
         max: Option<usize>,
         unique: bool,
@@ -271,7 +271,7 @@ impl Database for Sqlite {
     // make a unique list, that only shows the *newest* version of things
     async fn list(
         &self,
-        filter: FilterMode,
+        filters: &[FilterMode],
         context: &Context,
         max: Option<usize>,
         unique: bool,
@@ -291,13 +291,15 @@ impl Database for Sqlite {
             context.cwd.clone()
         };
 
-        match filter {
-            FilterMode::Global => &mut query,
-            FilterMode::Host => query.and_where_eq("hostname", quote(&context.hostname)),
-            FilterMode::Session => query.and_where_eq("session", quote(&context.session)),
-            FilterMode::Directory => query.and_where_eq("cwd", quote(&context.cwd)),
-            FilterMode::Workspace => query.and_where_like_left("cwd", git_root),
-        };
+        for filter in filters {
+            match filter {
+                FilterMode::Global => &mut query,
+                FilterMode::Host => query.and_where_eq("hostname", quote(&context.hostname)),
+                FilterMode::Session => query.and_where_eq("session", quote(&context.session)),
+                FilterMode::Directory => query.and_where_eq("cwd", quote(&context.cwd)),
+                FilterMode::Workspace => query.and_where_like_left("cwd", &git_root),
+            };
+        }
 
         if unique {
             query.and_where_eq(
