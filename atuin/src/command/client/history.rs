@@ -317,10 +317,7 @@ impl Cmd {
                 if settings.sync.records {
                     let (diff, _) = record::sync::diff(settings, &store).await?;
                     let operations = record::sync::operations(diff, &store).await?;
-                    let (uploaded, downloaded) =
-                        record::sync::sync_remote(operations, &store, settings).await?;
-
-                    println!("{uploaded}/{downloaded} up/down to record store");
+                    record::sync::sync_remote(operations, &store, settings).await?;
                 }
 
                 debug!("running periodic background sync");

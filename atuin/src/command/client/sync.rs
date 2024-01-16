@@ -3,6 +3,8 @@ use eyre::{Result, WrapErr};
 
 use atuin_client::{
     database::Database,
+    encryption,
+    history::store::HistoryStore,
     record::{sqlite_store::SqliteStore, sync},
     settings::Settings,
 };
@@ -82,10 +84,19 @@ async fn run(
         let operations = sync::operations(diff, &store).await?;
         let (uploaded, downloaded) = sync::sync_remote(operations, &store, settings).await?;
 
-        println!("{uploaded}/{downloaded} up/down to record store");
-    }
+        let encryption_key: [u8; 32] = encryption::load_key(settings)
+            .context("could not load encryption key")?
+            .into();
 
-    atuin_client::sync::sync(settings, force, db).await?;
+        let host_id = Settings::host_id().expect("failed to get host_id");
+        let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
+
+        history_store.incremental_build(db, &downloaded).await?;
+
+        println!("{uploaded}/{} up/down to record store", downloaded.len());
+    } else {
+        atuin_client::sync::sync(settings, force, db).await?;
+    }
 
     println!(
         "Sync complete! {} items in history database, force: {}",

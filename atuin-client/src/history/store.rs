@@ -5,7 +5,7 @@ use crate::{
     database::Database,
     record::{encryption::PASETO_V4, sqlite_store::SqliteStore, store::Store},
 };
-use atuin_common::record::{DecryptedData, Host, HostId, Record, RecordIdx};
+use atuin_common::record::{DecryptedData, Host, HostId, Record, RecordId, RecordIdx};
 
 use super::{History, HistoryId, HISTORY_TAG, HISTORY_VERSION};
 
@@ -200,6 +200,31 @@ impl HistoryStore {
 
         database.save_bulk(&creates).await?;
         database.delete_rows(&deletes).await?;
+
+        Ok(())
+    }
+
+    pub async fn incremental_build(&self, database: &dyn Database, ids: &[RecordId]) -> Result<()> {
+        for id in ids {
+            let record = self.store.get(*id).await?;
+
+            if record.tag != HISTORY_TAG {
+                continue;
+            }
+
+            let decrypted = record.decrypt::<PASETO_V4>(&self.encryption_key)?;
+            let record = HistoryRecord::deserialize(&decrypted.data, HISTORY_VERSION)?;
+
+            match record {
+                HistoryRecord::Create(h) => {
+                    // TODO: benchmark CPU time/memory tradeoff of batch commit vs one at a time
+                    database.save(&h).await?;
+                }
+                HistoryRecord::Delete(id) => {
+                    database.delete_rows(&[id]).await?;
+                }
+            }
+        }
 
         Ok(())
     }
