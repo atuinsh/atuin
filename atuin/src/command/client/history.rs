@@ -317,11 +317,14 @@ impl Cmd {
                 if settings.sync.records {
                     let (diff, _) = record::sync::diff(settings, &store).await?;
                     let operations = record::sync::operations(diff, &store).await?;
-                    record::sync::sync_remote(operations, &store, settings).await?;
-                }
+                    let (_, downloaded) =
+                        record::sync::sync_remote(operations, &store, settings).await?;
 
-                debug!("running periodic background sync");
-                sync::sync(settings, false, db).await?;
+                    history_store.incremental_build(db, &downloaded).await?;
+                } else {
+                    debug!("running periodic background sync");
+                    sync::sync(settings, false, db).await?;
+                }
             }
             #[cfg(not(feature = "sync"))]
             debug!("not compiled with sync support");
