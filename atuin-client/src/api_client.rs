@@ -286,6 +286,8 @@ impl<'a> Client<'a> {
         let url = format!("{}/api/v0/record", self.sync_addr);
         let url = Url::parse(url.as_str())?;
 
+        debug!("uploading {} records to {url}", records.len());
+
         let resp = self.client.post(url).json(records).send().await?;
         handle_resp_error(resp).await?;
 
