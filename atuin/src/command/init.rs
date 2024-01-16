@@ -33,16 +33,16 @@ impl Cmd {
 
         if std::env::var("ATUIN_NOBIND").is_err() {
             const BIND_CTRL_R: &str = r"bindkey -M emacs '^r' _atuin_search_widget
-bindkey -M vicmd '^r' _atuin_search_widget
-bindkey -M viins '^r' _atuin_search_widget";
+bindkey -M vicmd '^r' _atuin_search_vicmd_widget
+bindkey -M viins '^r' _atuin_search_viins_widget";
 
             const BIND_UP_ARROW: &str = r"bindkey -M emacs '^[[A' _atuin_up_search_widget
-bindkey -M vicmd '^[[A' _atuin_up_search_widget
-bindkey -M viins '^[[A' _atuin_up_search_widget
+bindkey -M vicmd '^[[A' _atuin_up_search_vicmd_widget
+bindkey -M viins '^[[A' _atuin_up_search_viins_widget
 bindkey -M emacs '^[OA' _atuin_up_search_widget
-bindkey -M vicmd '^[OA' _atuin_up_search_widget
-bindkey -M viins '^[OA' _atuin_up_search_widget
-bindkey -M vicmd 'k' _atuin_up_search_widget";
+bindkey -M vicmd '^[OA' _atuin_up_search_vicmd_widget
+bindkey -M viins '^[OA' _atuin_up_search_viins_widget
+bindkey -M vicmd 'k' _atuin_up_search_vicmd_widget";
 
             if !self.disable_ctrl_r {
                 println!("{BIND_CTRL_R}");

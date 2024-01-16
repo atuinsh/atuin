@@ -143,6 +143,32 @@ pub enum WordJumpMode {
     Subl,
 }
 
+#[derive(Clone, Debug, Deserialize, Copy, PartialEq, Eq, ValueEnum)]
+pub enum KeymapMode {
+    #[serde(rename = "emacs")]
+    Emacs,
+
+    #[serde(rename = "vim-normal")]
+    VimNormal,
+
+    #[serde(rename = "vim-insert")]
+    VimInsert,
+
+    #[serde(rename = "auto")]
+    Auto,
+}
+
+impl KeymapMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            KeymapMode::Emacs => "EMACS",
+            KeymapMode::VimNormal => "VIMNORMAL",
+            KeymapMode::VimInsert => "VIMINSERT",
+            KeymapMode::Auto => "AUTO",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct Stats {
     #[serde(default = "Stats::common_prefix_default")]
@@ -201,7 +227,7 @@ pub struct Settings {
     pub max_preview_height: u16,
     pub show_help: bool,
     pub exit_mode: ExitMode,
-    pub vim: bool,
+    pub keymap_mode: KeymapMode,
     pub word_jump_mode: WordJumpMode,
     pub word_chars: String,
     pub scroll_context_lines: usize,
@@ -437,7 +463,7 @@ impl Settings {
             // New users will get the new default, that is more similar to what they are used to.
             .set_default("enter_accept", false)?
             .set_default("sync.records", false)?
-            .set_default("vim", false)?
+            .set_default("keymap_mode", "emacs")?
             .add_source(
                 Environment::with_prefix("atuin")
                     .prefix_separator("_")

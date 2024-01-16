@@ -71,18 +71,34 @@ _atuin_search() {
         fi
     fi
 }
+_atuin_search_vicmd() {
+    _atuin_search --keymap-mode=vim-normal
+}
+_atuin_search_viins() {
+    _atuin_search --keymap-mode=vim-insert
+}
 
 _atuin_up_search() {
     # Only trigger if the buffer is a single line
     if [[ ! $BUFFER == *$'\n'* ]]; then
-        _atuin_search --shell-up-key-binding
+        _atuin_search --shell-up-key-binding "$@"
     else
         zle up-line
     fi
+}
+_atuin_up_search_vicmd() {
+    _atuin_up_search --keymap-mode=vim-normal
+}
+_atuin_up_search_viins() {
+    _atuin_up_search --keymap-mode=vim-insert
 }
 
 add-zsh-hook preexec _atuin_preexec
 add-zsh-hook precmd _atuin_precmd
 
 zle -N _atuin_search_widget _atuin_search
+zle -N _atuin_search_vicmd_widget _atuin_search_vicmd
+zle -N _atuin_search_viins_widget _atuin_search_viins
 zle -N _atuin_up_search_widget _atuin_up_search
+zle -N _atuin_up_search_vicmd_widget _atuin_up_search_vicmd
+zle -N _atuin_up_search_viins_widget _atuin_up_search_viins
