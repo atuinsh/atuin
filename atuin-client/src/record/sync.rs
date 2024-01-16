@@ -7,7 +7,7 @@ use thiserror::Error;
 use super::store::Store;
 use crate::{api_client::Client, settings::Settings};
 
-use atuin_common::record::{Diff, HostId, RecordIdx, RecordStatus};
+use atuin_common::record::{Diff, HostId, RecordId, RecordIdx, RecordStatus};
 
 #[derive(Error, Debug)]
 pub enum SyncError {
@@ -198,11 +198,12 @@ async fn sync_download(
     tag: String,
     local: Option<RecordIdx>,
     remote: RecordIdx,
-) -> Result<i64, SyncError> {
+) -> Result<Vec<RecordId>, SyncError> {
     let local = local.unwrap_or(0);
     let expected = remote - local;
     let download_page_size = 100;
     let mut progress = 0;
+    let mut ret = Vec::new();
 
     println!(
         "Downloading {} records from {}/{}",
@@ -230,6 +231,8 @@ async fn sync_download(
             expected
         );
 
+        ret.extend(page.iter().map(|f| f.id));
+
         progress += page.len() as u64;
 
         if progress >= expected {
@@ -237,14 +240,14 @@ async fn sync_download(
         }
     }
 
-    Ok(progress as i64)
+    Ok(ret)
 }
 
 pub async fn sync_remote(
     operations: Vec<Operation>,
     local_store: &impl Store,
     settings: &Settings,
-) -> Result<(i64, i64), SyncError> {
+) -> Result<(i64, Vec<RecordId>), SyncError> {
     let client = Client::new(
         &settings.sync_address,
         &settings.session_token,
@@ -254,7 +257,7 @@ pub async fn sync_remote(
     .expect("failed to create client");
 
     let mut uploaded = 0;
-    let mut downloaded = 0;
+    let mut downloaded = Vec::new();
 
     // this can totally run in parallel, but lets get it working first
     for i in operations {
@@ -271,9 +274,7 @@ pub async fn sync_remote(
                 tag,
                 local,
                 remote,
-            } => {
-                downloaded += sync_download(local_store, &client, host, tag, local, remote).await?
-            }
+            } => downloaded = sync_download(local_store, &client, host, tag, local, remote).await?,
 
             Operation::Noop { .. } => continue,
         }

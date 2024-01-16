@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use eyre::Result;
 
 use atuin_common::record::{EncryptedData, HostId, Record, RecordId, RecordIdx, RecordStatus};
+
 /// A record store stores records
 /// In more detail - we tend to need to process this into _another_ format to actually query it.
 /// As is, the record store is intended as the source of truth for arbitratry data, which could
@@ -44,8 +45,6 @@ pub trait Store {
 
     async fn status(&self) -> Result<RecordStatus>;
 
-    /// Get every start record for a given tag, regardless of host.
-    /// Useful when actually operating on synchronized data, and will often have conflict
-    /// resolution applied.
+    /// Get all records for a given tag
     async fn all_tagged(&self, tag: &str) -> Result<Vec<Record<EncryptedData>>>;
 }

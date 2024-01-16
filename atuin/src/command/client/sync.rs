@@ -3,7 +3,9 @@ use eyre::{Result, WrapErr};
 
 use atuin_client::{
     database::Database,
-    record::{store::Store, sync},
+    encryption,
+    history::store::HistoryStore,
+    record::{sqlite_store::SqliteStore, sync},
     settings::Settings,
 };
 
@@ -45,7 +47,7 @@ impl Cmd {
         self,
         settings: Settings,
         db: &impl Database,
-        store: &(impl Store + Send + Sync),
+        store: SqliteStore,
     ) -> Result<()> {
         match self {
             Self::Sync { force } => run(&settings, force, db, store).await,
@@ -75,17 +77,26 @@ async fn run(
     settings: &Settings,
     force: bool,
     db: &impl Database,
-    store: &(impl Store + Send + Sync),
+    store: SqliteStore,
 ) -> Result<()> {
     if settings.sync.records {
-        let (diff, _) = sync::diff(settings, store).await?;
-        let operations = sync::operations(diff, store).await?;
-        let (uploaded, downloaded) = sync::sync_remote(operations, store, settings).await?;
+        let (diff, _) = sync::diff(settings, &store).await?;
+        let operations = sync::operations(diff, &store).await?;
+        let (uploaded, downloaded) = sync::sync_remote(operations, &store, settings).await?;
 
-        println!("{uploaded}/{downloaded} up/down to record store");
+        let encryption_key: [u8; 32] = encryption::load_key(settings)
+            .context("could not load encryption key")?
+            .into();
+
+        let host_id = Settings::host_id().expect("failed to get host_id");
+        let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
+
+        history_store.incremental_build(db, &downloaded).await?;
+
+        println!("{uploaded}/{} up/down to record store", downloaded.len());
+    } else {
+        atuin_client::sync::sync(settings, force, db).await?;
     }
-
-    atuin_client::sync::sync(settings, force, db).await?;
 
     println!(
         "Sync complete! {} items in history database, force: {}",
