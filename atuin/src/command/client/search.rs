@@ -5,7 +5,9 @@ use eyre::Result;
 use atuin_client::{
     database::Database,
     database::{current_context, OptFilters},
-    history::History,
+    encryption,
+    history::{store::HistoryStore, History},
+    record::sqlite_store::SqliteStore,
     settings::{FilterMode, KeymapMode, SearchMode, Settings},
 };
 
@@ -109,7 +111,12 @@ pub struct Cmd {
 }
 
 impl Cmd {
-    pub async fn run(self, db: impl Database, settings: &mut Settings) -> Result<()> {
+    pub async fn run(
+        self,
+        db: impl Database,
+        settings: &mut Settings,
+        store: SqliteStore,
+    ) -> Result<()> {
         if (self.delete_it_all || self.delete) && self.limit.is_some() {
             // Because of how deletion is implemented, it will always delete all matches
             // and disregard the limit option. It is also not clear what deletion with a
@@ -153,8 +160,13 @@ impl Cmd {
             value => value,
         };
 
+        let encryption_key: [u8; 32] = encryption::load_key(settings)?.into();
+
+        let host_id = Settings::host_id().expect("failed to get host_id");
+        let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
+
         if self.interactive {
-            let item = interactive::history(&self.query, settings, db).await?;
+            let item = interactive::history(&self.query, settings, db, &history_store).await?;
             eprintln!("{item}");
         } else {
             let list_mode = ListMode::from_flags(self.human, self.cmd_only);
