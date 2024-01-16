@@ -130,7 +130,7 @@ impl HistoryStore {
             .data(bytes)
             .build();
 
-        let id = record.id.clone();
+        let id = record.id;
 
         self.store
             .push(&record.encrypt::<PASETO_V4>(&self.encryption_key))
