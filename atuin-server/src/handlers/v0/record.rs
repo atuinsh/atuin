@@ -107,5 +107,7 @@ pub async fn next<DB: Database>(
         }
     };
 
+    counter!("atuin_record_downloaded", records.len() as u64);
+
     Ok(Json(records))
 }
