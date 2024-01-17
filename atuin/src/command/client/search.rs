@@ -1,3 +1,5 @@
+use std::io::{stderr, IsTerminal as _};
+
 use atuin_common::utils::{self, Escapable as _};
 use clap::Parser;
 use eyre::Result;
@@ -167,7 +169,11 @@ impl Cmd {
 
         if self.interactive {
             let item = interactive::history(&self.query, settings, db, &history_store).await?;
-            eprintln!("{}", item.escape_control());
+            if stderr().is_terminal() {
+                eprintln!("{}", item.escape_control());
+            } else {
+                eprintln!("{}", item);
+            }
         } else {
             let list_mode = ListMode::from_flags(self.human, self.cmd_only);
 
