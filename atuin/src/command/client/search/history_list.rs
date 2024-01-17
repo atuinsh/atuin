@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use atuin_client::history::History;
+use atuin_common::utils::Escapable as _;
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -168,7 +169,7 @@ impl DrawState<'_> {
             style = style.fg(Color::Red).add_modifier(Modifier::BOLD);
         }
 
-        for section in h.command.split_ascii_whitespace() {
+        for section in h.command.escape_control().split_ascii_whitespace() {
             self.x += 1;
             if self.x > self.list_area.width {
                 // Avoid attempting to draw a command section beyond the width

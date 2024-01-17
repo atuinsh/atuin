@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use atuin_common::utils;
+use atuin_common::utils::{self, Escapable as _};
 use clap::Subcommand;
 use eyre::{Context, Result};
 use runtime_format::{FormatKey, FormatKeyError, ParseSegment, ParsedFmt};
@@ -201,7 +201,7 @@ impl FormatKey for FmtHistory<'_> {
     #[allow(clippy::cast_sign_loss)]
     fn fmt(&self, key: &str, f: &mut fmt::Formatter<'_>) -> Result<(), FormatKeyError> {
         match key {
-            "command" => f.write_str(self.0.command.trim())?,
+            "command" => f.write_str(&self.0.command.trim().escape_control())?,
             "directory" => f.write_str(self.0.cwd.trim())?,
             "exit" => f.write_str(&self.0.exit.to_string())?,
             "duration" => {
