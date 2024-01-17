@@ -114,7 +114,7 @@ impl HistoryStore {
         }
     }
 
-    async fn push_record(&self, record: HistoryRecord) -> Result<RecordIdx> {
+    async fn push_record(&self, record: HistoryRecord) -> Result<(RecordId, RecordIdx)> {
         let bytes = record.serialize()?;
         let idx = self
             .store
@@ -130,20 +130,22 @@ impl HistoryStore {
             .data(bytes)
             .build();
 
+        let id = record.id;
+
         self.store
             .push(&record.encrypt::<PASETO_V4>(&self.encryption_key))
             .await?;
 
-        Ok(idx)
+        Ok((id, idx))
     }
 
-    pub async fn delete(&self, id: HistoryId) -> Result<RecordIdx> {
+    pub async fn delete(&self, id: HistoryId) -> Result<(RecordId, RecordIdx)> {
         let record = HistoryRecord::Delete(id);
 
         self.push_record(record).await
     }
 
-    pub async fn push(&self, history: History) -> Result<RecordIdx> {
+    pub async fn push(&self, history: History) -> Result<(RecordId, RecordIdx)> {
         // TODO(ellie): move the history store to its own file
         // it's tiny rn so fine as is
         let record = HistoryRecord::Create(history);

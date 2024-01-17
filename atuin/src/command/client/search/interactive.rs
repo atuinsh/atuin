@@ -20,7 +20,7 @@ use unicode_width::UnicodeWidthStr;
 
 use atuin_client::{
     database::{current_context, Database},
-    history::{History, HistoryStats},
+    history::{store::HistoryStore, History, HistoryStats},
     settings::{ExitMode, FilterMode, KeymapMode, SearchMode, Settings},
 };
 
@@ -769,6 +769,7 @@ pub async fn history(
     query: &[String],
     settings: &Settings,
     mut db: impl Database,
+    history_store: &HistoryStore,
 ) -> Result<String> {
     let stdout = Stdout::new(settings.inline_height > 0)?;
     let backend = CrosstermBackend::new(stdout);
@@ -857,7 +858,13 @@ pub async fn history(
                                 }
 
                                 let entry = results.remove(index);
-                                db.delete(entry).await?;
+
+                                if settings.sync.records {
+                                    let (id, _) = history_store.delete(entry.id).await?;
+                                    history_store.incremental_build(&db, &[id]).await?;
+                                } else {
+                                    db.delete(entry.clone()).await?;
+                                }
 
                                 app.tab_index  = 0;
                             },
