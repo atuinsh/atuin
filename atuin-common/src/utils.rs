@@ -1,6 +1,5 @@
 use std::borrow::Cow;
 use std::env;
-use std::fmt::Write;
 use std::path::PathBuf;
 
 use rand::RngCore;
@@ -119,7 +118,11 @@ pub trait Escapable: AsRef<str> {
             while let Some(i) = remaining.find(|c: char| c.is_ascii_control()) {
                 // safe to index with `..i`, `i` and `i+1..` as part[i] is a single byte ascii char
                 buf.push_str(&remaining[..i]);
-                let _ = write!(&mut buf, "\\x{:02x}", remaining.as_bytes()[i]);
+                buf.push('^');
+                buf.push(match remaining.as_bytes()[i] {
+                    0x7F => '?',
+                    code => char::from_u32(u32::from(code) + 64).unwrap(),
+                });
                 remaining = &remaining[i + 1..];
             }
             buf.push_str(remaining);
@@ -218,17 +221,17 @@ mod tests {
     fn escape_control_characters() {
         use super::Escapable;
         // CSI colour sequence
-        assert_eq!("\x1b[31mfoo".escape_control(), "\\x1b[31mfoo");
+        assert_eq!("\x1b[31mfoo".escape_control(), "^[[31mfoo");
 
         // Tabs count as control chars
-        assert_eq!("foo\tbar".escape_control(), "foo\\x09bar");
+        assert_eq!("foo\tbar".escape_control(), "foo^Ibar");
 
         // space is in control char range but should be excluded
         assert_eq!("two words".escape_control(), "two words");
 
         // unicode multi-byte characters
         let s = "🐢\x1b[32m🦀";
-        assert_eq!(s.escape_control(), s.replace("\x1b", "\\x1b"));
+        assert_eq!(s.escape_control(), s.replace("\x1b", "^["));
     }
 
     #[test]
