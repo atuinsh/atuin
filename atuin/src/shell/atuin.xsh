@@ -2,7 +2,8 @@ $ATUIN_SESSION=$(atuin uuid).rstrip('\n')
 
 @events.on_precommand
 def _atuin_precommand(cmd: str):
-    $ATUIN_HISTORY_ID=$(atuin history start -- @(cmd)).rstrip('\n')
+    cmd = cmd.rstrip('\n')
+    $ATUIN_HISTORY_ID = $(atuin history start -- @(cmd)).rstrip('\n')
 
 @events.on_postcommand
 def _atuin_postcommand(cmd: str, rtn: int, out, ts):
