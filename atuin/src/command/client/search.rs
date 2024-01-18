@@ -172,7 +172,7 @@ impl Cmd {
             if stderr().is_terminal() {
                 eprintln!("{}", item.escape_control());
             } else {
-                eprintln!("{}", item);
+                eprintln!("{item}");
             }
         } else {
             let list_mode = ListMode::from_flags(self.human, self.cmd_only);
