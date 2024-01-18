@@ -50,6 +50,9 @@ pub enum Cmd {
     #[command(subcommand)]
     Store(store::Cmd),
 
+    #[command(subcommand)]
+    Config(config::Cmd),
+
     /// Print example configuration
     #[command()]
     DefaultConfig,
@@ -100,9 +103,10 @@ impl Cmd {
             Self::Kv(kv) => kv.run(&settings, &sqlite_store).await,
 
             Self::Store(store) => store.run(&settings, &db, sqlite_store).await,
+            Self::Config(config) => config.run(&settings).await,
 
             Self::DefaultConfig => {
-                config::run();
+                println!("{}", Settings::example_config());
                 Ok(())
             }
         }

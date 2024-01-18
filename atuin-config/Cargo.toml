@@ -1,0 +1,22 @@
+[package]
+name = "atuin-config"
+edition = "2021"
+version = "0.0.1"
+authors = {workspace = true}
+
+rust-version = { workspace = true }
+license = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+readme.workspace = true
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+atuin-common = { path = "../atuin-common", version = "17.2.1" }
+atuin-client = { path = "../atuin-client", version = "17.2.1" }
+
+uuid = { workspace = true }
+serde = { workspace = true }
+rmp = { workspace= true }
+eyre = {workspace = true}

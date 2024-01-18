@@ -269,6 +269,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "atuin-config"
+version = "0.0.1"
+dependencies = [
+ "atuin-client",
+ "atuin-common",
+ "eyre",
+ "rmp",
+ "serde",
+ "uuid",
+]
+
+[[package]]
 name = "atuin-server"
 version = "17.2.1"
 dependencies = [
