@@ -82,8 +82,8 @@ impl Cmd {
         let db_path = PathBuf::from(settings.db_path.as_str());
         let record_store_path = PathBuf::from(settings.record_store_path.as_str());
 
-        let db = Sqlite::new(db_path).await?;
-        let sqlite_store = SqliteStore::new(record_store_path).await?;
+        let db = Sqlite::new(db_path, settings.local_timeout).await?;
+        let sqlite_store = SqliteStore::new(record_store_path, settings.local_timeout).await?;
 
         match self {
             Self::History(history) => history.run(&settings, &db, sqlite_store).await,

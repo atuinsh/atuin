@@ -2,6 +2,7 @@ use std::{
     env,
     path::{Path, PathBuf},
     str::FromStr,
+    time::Duration,
 };
 
 use async_trait::async_trait;
@@ -123,7 +124,7 @@ pub struct Sqlite {
 }
 
 impl Sqlite {
-    pub async fn new(path: impl AsRef<Path>) -> Result<Self> {
+    pub async fn new(path: impl AsRef<Path>, timeout: f64) -> Result<Self> {
         let path = path.as_ref();
         debug!("opening sqlite database at {:?}", path);
 
@@ -138,7 +139,10 @@ impl Sqlite {
             .journal_mode(SqliteJournalMode::Wal)
             .create_if_missing(true);
 
-        let pool = SqlitePoolOptions::new().connect_with(opts).await?;
+        let pool = SqlitePoolOptions::new()
+            .acquire_timeout(Duration::from_secs_f64(timeout))
+            .connect_with(opts)
+            .await?;
 
         Self::setup_db(&pool).await?;
 

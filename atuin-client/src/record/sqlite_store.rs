@@ -2,8 +2,8 @@
 // Multiple stores of multiple types are all stored in one chonky table (for now), and we just index
 // by tag/host
 
-use std::path::Path;
 use std::str::FromStr;
+use std::{path::Path, time::Duration};
 
 use async_trait::async_trait;
 use eyre::{eyre, Result};
@@ -27,7 +27,7 @@ pub struct SqliteStore {
 }
 
 impl SqliteStore {
-    pub async fn new(path: impl AsRef<Path>) -> Result<Self> {
+    pub async fn new(path: impl AsRef<Path>, timeout: f64) -> Result<Self> {
         let path = path.as_ref();
 
         debug!("opening sqlite database at {:?}", path);
@@ -44,7 +44,10 @@ impl SqliteStore {
             .foreign_keys(true)
             .create_if_missing(true);
 
-        let pool = SqlitePoolOptions::new().connect_with(opts).await?;
+        let pool = SqlitePoolOptions::new()
+            .acquire_timeout(Duration::from_secs_f64(timeout))
+            .connect_with(opts)
+            .await?;
 
         Self::setup_db(&pool).await?;
 

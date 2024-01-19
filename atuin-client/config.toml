@@ -134,6 +134,12 @@ enter_accept = true
 ## the specified one.
 # keymap_mode = "auto"
 
+# network_connect_timeout = 5
+# network_timeout = 5
+
+## Timeout (in seconds) for acquiring a local database connection (sqlite)
+# local_timeout = 5
+
 #[stats]
 # Set commands where we should consider the subcommand for statistics. Eg, kubectl get vs just kubectl
 #common_subcommands = [
