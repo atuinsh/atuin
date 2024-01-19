@@ -244,6 +244,7 @@ pub struct Settings {
 
     pub network_connect_timeout: u64,
     pub network_timeout: u64,
+    pub local_timeout: f64,
     pub enter_accept: bool,
 
     #[serde(default)]
@@ -456,6 +457,7 @@ impl Settings {
             .set_default("secrets_filter", true)?
             .set_default("network_connect_timeout", 5)?
             .set_default("network_timeout", 30)?
+            .set_default("local_timeout", 2.0)?
             // enter_accept defaults to false here, but true in the default config file. The dissonance is
             // intentional!
             // Existing users will get the default "False", so we don't mess with any potential

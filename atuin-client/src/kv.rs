@@ -221,7 +221,7 @@ mod tests {
 
     #[tokio::test]
     async fn build_kv() {
-        let mut store = SqliteStore::new(":memory:").await.unwrap();
+        let mut store = SqliteStore::new(":memory:", 0.1).await.unwrap();
         let kv = KvStore::new();
         let key: [u8; 32] = XSalsa20Poly1305::generate_key(&mut OsRng).into();
         let host_id = atuin_common::record::HostId(atuin_common::utils::uuid_v7());

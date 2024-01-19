@@ -2,8 +2,8 @@
 // Multiple stores of multiple types are all stored in one chonky table (for now), and we just index
 // by tag/host
 
-use std::path::Path;
 use std::str::FromStr;
+use std::{path::Path, time::Duration};
 
 use async_trait::async_trait;
 use eyre::{eyre, Result};
@@ -27,7 +27,7 @@ pub struct SqliteStore {
 }
 
 impl SqliteStore {
-    pub async fn new(path: impl AsRef<Path>) -> Result<Self> {
+    pub async fn new(path: impl AsRef<Path>, timeout: f64) -> Result<Self> {
         let path = path.as_ref();
 
         debug!("opening sqlite database at {:?}", path);
@@ -44,7 +44,10 @@ impl SqliteStore {
             .foreign_keys(true)
             .create_if_missing(true);
 
-        let pool = SqlitePoolOptions::new().connect_with(opts).await?;
+        let pool = SqlitePoolOptions::new()
+            .acquire_timeout(Duration::from_secs_f64(timeout))
+            .connect_with(opts)
+            .await?;
 
         Self::setup_db(&pool).await?;
 
@@ -261,7 +264,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_db() {
-        let db = SqliteStore::new(":memory:").await;
+        let db = SqliteStore::new(":memory:", 0.1).await;
 
         assert!(
             db.is_ok(),
@@ -272,7 +275,7 @@ mod tests {
 
     #[tokio::test]
     async fn push_record() {
-        let db = SqliteStore::new(":memory:").await.unwrap();
+        let db = SqliteStore::new(":memory:", 0.1).await.unwrap();
         let record = test_record();
 
         db.push(&record).await.expect("failed to insert record");
@@ -280,7 +283,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_record() {
-        let db = SqliteStore::new(":memory:").await.unwrap();
+        let db = SqliteStore::new(":memory:", 0.1).await.unwrap();
         let record = test_record();
         db.push(&record).await.unwrap();
 
@@ -291,7 +294,7 @@ mod tests {
 
     #[tokio::test]
     async fn last() {
-        let db = SqliteStore::new(":memory:").await.unwrap();
+        let db = SqliteStore::new(":memory:", 0.1).await.unwrap();
         let record = test_record();
         db.push(&record).await.unwrap();
 
@@ -309,7 +312,7 @@ mod tests {
 
     #[tokio::test]
     async fn first() {
-        let db = SqliteStore::new(":memory:").await.unwrap();
+        let db = SqliteStore::new(":memory:", 0.1).await.unwrap();
         let record = test_record();
         db.push(&record).await.unwrap();
 
@@ -327,7 +330,7 @@ mod tests {
 
     #[tokio::test]
     async fn len() {
-        let db = SqliteStore::new(":memory:").await.unwrap();
+        let db = SqliteStore::new(":memory:", 0.1).await.unwrap();
         let record = test_record();
         db.push(&record).await.unwrap();
 
@@ -341,7 +344,7 @@ mod tests {
 
     #[tokio::test]
     async fn len_different_tags() {
-        let db = SqliteStore::new(":memory:").await.unwrap();
+        let db = SqliteStore::new(":memory:", 0.1).await.unwrap();
 
         // these have different tags, so the len should be the same
         // we model multiple stores within one database
@@ -361,7 +364,7 @@ mod tests {
 
     #[tokio::test]
     async fn append_a_bunch() {
-        let db = SqliteStore::new(":memory:").await.unwrap();
+        let db = SqliteStore::new(":memory:", 0.1).await.unwrap();
 
         let mut tail = test_record();
         db.push(&tail).await.expect("failed to push record");
@@ -380,7 +383,7 @@ mod tests {
 
     #[tokio::test]
     async fn append_a_big_bunch() {
-        let db = SqliteStore::new(":memory:").await.unwrap();
+        let db = SqliteStore::new(":memory:", 0.1).await.unwrap();
 
         let mut records: Vec<Record<EncryptedData>> = Vec::with_capacity(10000);
 

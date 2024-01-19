@@ -2,6 +2,7 @@ use std::{
     env,
     path::{Path, PathBuf},
     str::FromStr,
+    time::Duration,
 };
 
 use async_trait::async_trait;
@@ -123,7 +124,7 @@ pub struct Sqlite {
 }
 
 impl Sqlite {
-    pub async fn new(path: impl AsRef<Path>) -> Result<Self> {
+    pub async fn new(path: impl AsRef<Path>, timeout: f64) -> Result<Self> {
         let path = path.as_ref();
         debug!("opening sqlite database at {:?}", path);
 
@@ -138,7 +139,10 @@ impl Sqlite {
             .journal_mode(SqliteJournalMode::Wal)
             .create_if_missing(true);
 
-        let pool = SqlitePoolOptions::new().connect_with(opts).await?;
+        let pool = SqlitePoolOptions::new()
+            .acquire_timeout(Duration::from_secs_f64(timeout))
+            .connect_with(opts)
+            .await?;
 
         Self::setup_db(&pool).await?;
 
@@ -786,7 +790,7 @@ mod test {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_search_prefix() {
-        let mut db = Sqlite::new("sqlite::memory:").await.unwrap();
+        let mut db = Sqlite::new("sqlite::memory:", 0.1).await.unwrap();
         new_history_item(&mut db, "ls /home/ellie").await.unwrap();
 
         assert_search_eq(&db, SearchMode::Prefix, FilterMode::Global, "ls", 1)
@@ -802,7 +806,7 @@ mod test {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_search_fulltext() {
-        let mut db = Sqlite::new("sqlite::memory:").await.unwrap();
+        let mut db = Sqlite::new("sqlite::memory:", 0.1).await.unwrap();
         new_history_item(&mut db, "ls /home/ellie").await.unwrap();
 
         assert_search_eq(&db, SearchMode::FullText, FilterMode::Global, "ls", 1)
@@ -818,7 +822,7 @@ mod test {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_search_fuzzy() {
-        let mut db = Sqlite::new("sqlite::memory:").await.unwrap();
+        let mut db = Sqlite::new("sqlite::memory:", 0.1).await.unwrap();
         new_history_item(&mut db, "ls /home/ellie").await.unwrap();
         new_history_item(&mut db, "ls /home/frank").await.unwrap();
         new_history_item(&mut db, "cd /home/Ellie").await.unwrap();
@@ -908,7 +912,7 @@ mod test {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_search_reordered_fuzzy() {
-        let mut db = Sqlite::new("sqlite::memory:").await.unwrap();
+        let mut db = Sqlite::new("sqlite::memory:", 0.1).await.unwrap();
         // test ordering of results: we should choose the first, even though it happened longer ago.
 
         new_history_item(&mut db, "curl").await.unwrap();
@@ -942,7 +946,7 @@ mod test {
             git_root: None,
         };
 
-        let mut db = Sqlite::new("sqlite::memory:").await.unwrap();
+        let mut db = Sqlite::new("sqlite::memory:", 0.1).await.unwrap();
         for _i in 1..10000 {
             new_history_item(&mut db, "i am a duplicated command")
                 .await
