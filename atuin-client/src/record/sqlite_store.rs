@@ -264,7 +264,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_db() {
-        let db = SqliteStore::new(":memory:").await;
+        let db = SqliteStore::new(":memory:", 0.1).await;
 
         assert!(
             db.is_ok(),
@@ -275,7 +275,7 @@ mod tests {
 
     #[tokio::test]
     async fn push_record() {
-        let db = SqliteStore::new(":memory:").await.unwrap();
+        let db = SqliteStore::new(":memory:", 0.1).await.unwrap();
         let record = test_record();
 
         db.push(&record).await.expect("failed to insert record");
@@ -283,7 +283,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_record() {
-        let db = SqliteStore::new(":memory:").await.unwrap();
+        let db = SqliteStore::new(":memory:", 0.1).await.unwrap();
         let record = test_record();
         db.push(&record).await.unwrap();
 
@@ -294,7 +294,7 @@ mod tests {
 
     #[tokio::test]
     async fn last() {
-        let db = SqliteStore::new(":memory:").await.unwrap();
+        let db = SqliteStore::new(":memory:", 0.1).await.unwrap();
         let record = test_record();
         db.push(&record).await.unwrap();
 
@@ -312,7 +312,7 @@ mod tests {
 
     #[tokio::test]
     async fn first() {
-        let db = SqliteStore::new(":memory:").await.unwrap();
+        let db = SqliteStore::new(":memory:", 0.1).await.unwrap();
         let record = test_record();
         db.push(&record).await.unwrap();
 
@@ -330,7 +330,7 @@ mod tests {
 
     #[tokio::test]
     async fn len() {
-        let db = SqliteStore::new(":memory:").await.unwrap();
+        let db = SqliteStore::new(":memory:", 0.1).await.unwrap();
         let record = test_record();
         db.push(&record).await.unwrap();
 
@@ -344,7 +344,7 @@ mod tests {
 
     #[tokio::test]
     async fn len_different_tags() {
-        let db = SqliteStore::new(":memory:").await.unwrap();
+        let db = SqliteStore::new(":memory:", 0.1).await.unwrap();
 
         // these have different tags, so the len should be the same
         // we model multiple stores within one database
@@ -364,7 +364,7 @@ mod tests {
 
     #[tokio::test]
     async fn append_a_bunch() {
-        let db = SqliteStore::new(":memory:").await.unwrap();
+        let db = SqliteStore::new(":memory:", 0.1).await.unwrap();
 
         let mut tail = test_record();
         db.push(&tail).await.expect("failed to push record");
@@ -383,7 +383,7 @@ mod tests {
 
     #[tokio::test]
     async fn append_a_big_bunch() {
-        let db = SqliteStore::new(":memory:").await.unwrap();
+        let db = SqliteStore::new(":memory:", 0.1).await.unwrap();
 
         let mut records: Vec<Record<EncryptedData>> = Vec::with_capacity(10000);
 

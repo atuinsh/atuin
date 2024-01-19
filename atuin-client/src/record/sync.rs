@@ -317,10 +317,10 @@ mod tests {
         local_records: Vec<Record<EncryptedData>>,
         remote_records: Vec<Record<EncryptedData>>,
     ) -> (SqliteStore, Vec<Diff>) {
-        let local_store = SqliteStore::new(":memory:")
+        let local_store = SqliteStore::new(":memory:", 0.1)
             .await
             .expect("failed to open in memory sqlite");
-        let remote_store = SqliteStore::new(":memory:")
+        let remote_store = SqliteStore::new(":memory:", 0.1)
             .await
             .expect("failed to open in memory sqlite"); // "remote"
 
