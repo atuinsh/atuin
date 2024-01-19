@@ -3,7 +3,7 @@ use std::{
     time::Duration,
 };
 
-use atuin_common::utils;
+use atuin_common::utils::{self, Escapable as _};
 use crossterm::{
     cursor::SetCursorStyle,
     event::{
@@ -678,7 +678,7 @@ impl State {
                         .map(|(i, _)| i)
                         .chain(Some(line.len()))
                         .tuple_windows()
-                        .map(|(a, b)| &line[a..b])
+                        .map(|(a, b)| (&line[a..b]).escape_control().to_string())
                 })
                 .join("\n")
         };
