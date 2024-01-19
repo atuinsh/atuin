@@ -1,5 +1,4 @@
 use std::{
-    env,
     fmt::{self, Display},
     io::{self, Write},
     time::Duration,
@@ -15,7 +14,10 @@ use atuin_client::{
     encryption,
     history::{store::HistoryStore, History},
     record::{self, sqlite_store::SqliteStore},
-    settings::Settings,
+    settings::{
+        FilterMode::{Directory, Global, Session},
+        Settings,
+    },
 };
 
 #[cfg(feature = "sync")]
@@ -349,37 +351,16 @@ impl Cmd {
         print0: bool,
         reverse: bool,
     ) -> Result<()> {
-        let session = if session {
-            Some(env::var("ATUIN_SESSION")?)
-        } else {
-            None
-        };
-        let cwd = if cwd {
-            Some(utils::get_current_dir())
-        } else {
-            None
+        let filters = match (session, cwd) {
+            (true, true) => [Session, Directory],
+            (true, false) => [Session, Global],
+            (false, true) => [Global, Directory],
+            (false, false) => [settings.filter_mode, Global],
         };
 
-        let history = match (session, cwd) {
-            (None, None) => {
-                db.list(settings.filter_mode, &context, None, false, include_deleted)
-                    .await?
-            }
-            (None, Some(cwd)) => {
-                let query = format!("select * from history where cwd = '{cwd}';");
-                db.query_history(&query).await?
-            }
-            (Some(session), None) => {
-                let query = format!("select * from history where session = '{session}';");
-                db.query_history(&query).await?
-            }
-            (Some(session), Some(cwd)) => {
-                let query = format!(
-                    "select * from history where cwd = '{cwd}' and session = '{session}';",
-                );
-                db.query_history(&query).await?
-            }
-        };
+        let history = db
+            .list(&filters, &context, None, false, include_deleted)
+            .await?;
 
         print_list(&history, mode, format.as_deref(), print0, reverse);
 
@@ -393,15 +374,7 @@ impl Cmd {
     ) -> Result<()> {
         println!("Importing all history.db data into records.db");
 
-        let history = db
-            .list(
-                atuin_client::settings::FilterMode::Global,
-                &context,
-                None,
-                false,
-                true,
-            )
-            .await?;
+        let history = db.list(&[], &context, None, false, true).await?;
 
         for i in history {
             println!("loaded {}", i.id);
