@@ -15,7 +15,7 @@ If there's anything you want to work on that isn't already an issue, either open
 ## Setup
 
 ```
-git clone https://github.com/ellie/atuin
+git clone https://github.com/atuinsh/atuin
 cd atuin
 cargo build
 ```
