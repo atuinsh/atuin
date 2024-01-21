@@ -68,7 +68,7 @@ pub enum Cmd {
         #[arg(action = clap::ArgAction::Set)]
         reverse: bool,
 
-        /// Available variables: {command}, {directory}, {duration}, {user}, {host}, {exit} and {time}.
+        /// Available variables: {command}, {directory}, {duration}, {user}, {host}, {exit}, {count_id} and {time}.
         /// Example: --format "{time} - [{duration}] - {directory}$\t{command}"
         #[arg(long, short)]
         format: Option<String>,
@@ -149,11 +149,13 @@ pub fn print_list(
     let entry_terminator = if print0 { "\0" } else { "\n" };
     let flush_each_line = print0;
 
+    let mut count_id = 1;
+
     for h in iterator {
         match write!(
             w,
             "{}{}",
-            parsed_fmt.with_args(&FmtHistory(h)),
+            parsed_fmt.with_args(&FmtHistory(h, FmtHistoryState::new(count_id))),
             entry_terminator
         ) {
             Ok(()) => {}
@@ -166,6 +168,9 @@ pub fn print_list(
                 std::process::exit(1);
             }
         }
+
+        count_id += 1;
+
         if flush_each_line {
             match w.flush() {
                 Ok(()) => {}
@@ -192,8 +197,18 @@ pub fn print_list(
     }
 }
 
+struct FmtHistoryState {
+    count_id: usize,
+}
+
+impl FmtHistoryState {
+    fn new(count_id: usize) -> Self {
+        Self { count_id }
+    }
+}
+
 /// type wrapper around `History` so we can implement traits
-struct FmtHistory<'a>(&'a History);
+struct FmtHistory<'a>(&'a History, FmtHistoryState);
 
 static TIME_FMT: &[time::format_description::FormatItem<'static>] =
     format_description!("[year]-[month]-[day] [hour repr:24]:[minute]:[second]");
@@ -229,6 +244,10 @@ impl FormatKey for FmtHistory<'_> {
                     .map_or(&self.0.hostname, |(host, _)| host),
             )?,
             "user" => f.write_str(self.0.hostname.split_once(':').map_or("", |(_, user)| user))?,
+            "count_id" => {
+                let count_id = self.1.count_id;
+                f.write_str(&count_id.to_string())?
+            }
             _ => return Err(FormatKeyError::UnknownKey),
         }
         Ok(())
