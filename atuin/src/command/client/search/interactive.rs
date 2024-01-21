@@ -174,39 +174,25 @@ impl State {
         }
     }
 
-    #[allow(clippy::too_many_lines)]
-    #[allow(clippy::cognitive_complexity)]
+    fn handle_key_exit(settings: &Settings) -> InputAction {
+        match settings.exit_mode {
+            ExitMode::ReturnOriginal => InputAction::ReturnOriginal,
+            ExitMode::ReturnQuery => InputAction::ReturnQuery,
+        }
+    }
+
     fn handle_key_input(&mut self, settings: &Settings, input: &KeyEvent) -> InputAction {
         if input.kind == event::KeyEventKind::Release {
             return InputAction::Continue;
         }
 
         let ctrl = input.modifiers.contains(KeyModifiers::CONTROL);
-        let alt = input.modifiers.contains(KeyModifiers::ALT);
-
-        // Use Ctrl-n instead of Alt-n?
-        let modfr = if settings.ctrl_n_shortcuts { ctrl } else { alt };
-
-        // Common actions
-        macro_rules! do_exit {
-            () => {
-                return match settings.exit_mode {
-                    ExitMode::ReturnOriginal => InputAction::ReturnOriginal,
-                    ExitMode::ReturnQuery => InputAction::ReturnQuery,
-                }
-            };
-        }
 
         // core input handling, common for all tabs
         match input.code {
             KeyCode::Char('c' | 'g') if ctrl => return InputAction::ReturnOriginal,
-            KeyCode::Esc if self.keymap_mode == KeymapMode::VimInsert => {
-                self.set_keymap_cursor(settings, "vim_normal");
-                self.keymap_mode = KeymapMode::VimNormal;
-                return InputAction::Continue;
-            }
-            KeyCode::Esc => {
-                do_exit!();
+            KeyCode::Esc if !(self.tab_index == 0 && self.keymap_mode == KeymapMode::VimInsert) => {
+                return Self::handle_key_exit(settings);
             }
             KeyCode::Tab => {
                 return InputAction::Accept(self.results_state.selected());
@@ -221,23 +207,80 @@ impl State {
         }
 
         // handle tab-specific input
-        // todo: split out search
         match self.tab_index {
-            0 => {}
+            0 => self.handle_search_input(settings, input),
 
-            1 => {
-                return super::inspector::input(
-                    self,
-                    settings,
-                    self.results_state.selected(),
-                    input,
-                );
-            }
+            1 => super::inspector::input(self, settings, self.results_state.selected(), input),
 
             _ => panic!("invalid tab index on input"),
         }
+    }
+
+    fn handle_search_scroll_one_line(
+        &mut self,
+        settings: &Settings,
+        enable_exit: bool,
+        is_down: bool,
+    ) -> InputAction {
+        if is_down {
+            if enable_exit && self.results_state.selected() == 0 {
+                return Self::handle_key_exit(settings);
+            }
+            self.scroll_down(1);
+        } else {
+            self.scroll_up(1);
+        }
+        InputAction::Continue
+    }
+
+    fn handle_search_up(&mut self, settings: &Settings, enable_exit: bool) -> InputAction {
+        self.handle_search_scroll_one_line(settings, enable_exit, settings.invert)
+    }
+
+    fn handle_search_down(&mut self, settings: &Settings, enable_exit: bool) -> InputAction {
+        self.handle_search_scroll_one_line(settings, enable_exit, !settings.invert)
+    }
+
+    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::cognitive_complexity)]
+    fn handle_search_input(&mut self, settings: &Settings, input: &KeyEvent) -> InputAction {
+        let ctrl = input.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = input.modifiers.contains(KeyModifiers::ALT);
+
+        // Use Ctrl-n instead of Alt-n?
+        let modfr = if settings.ctrl_n_shortcuts { ctrl } else { alt };
+
         // reset the state, will be set to true later if user really did change it
         self.switched_search_mode = false;
+
+        // First handle keymap specific keybindings.
+        match self.keymap_mode {
+            KeymapMode::VimNormal => match input.code {
+                KeyCode::Char('j') if !ctrl => {
+                    return self.handle_search_down(settings, true);
+                }
+                KeyCode::Char('k') if !ctrl => {
+                    return self.handle_search_up(settings, true);
+                }
+                KeyCode::Char('i') if !ctrl => {
+                    self.set_keymap_cursor(settings, "vim_insert");
+                    self.keymap_mode = KeymapMode::VimInsert;
+                    return InputAction::Continue;
+                }
+                KeyCode::Char(_) if !ctrl => {
+                    return InputAction::Continue;
+                }
+                _ => {}
+            },
+            KeymapMode::VimInsert => {
+                if input.code == KeyCode::Esc {
+                    self.set_keymap_cursor(settings, "vim_normal");
+                    self.keymap_mode = KeymapMode::VimNormal;
+                    return InputAction::Continue;
+                }
+            }
+            _ => {}
+        }
 
         match input.code {
             KeyCode::Enter => {
@@ -343,66 +386,22 @@ impl State {
                 self.search_mode = self.search_mode.next(settings);
                 self.engine = engines::engine(self.search_mode);
             }
-            KeyCode::Down if !settings.invert && self.results_state.selected() == 0 => {
-                do_exit!();
+            KeyCode::Down => {
+                return self.handle_search_down(settings, true);
             }
-            KeyCode::Up if settings.invert && self.results_state.selected() == 0 => {
-                do_exit!();
+            KeyCode::Up => {
+                return self.handle_search_up(settings, true);
             }
-            KeyCode::Char('j')
-                if !ctrl
-                    && !settings.invert
-                    && self.keymap_mode == KeymapMode::VimNormal
-                    && self.results_state.selected() == 0 =>
-            {
-                do_exit!();
+            KeyCode::Char('n' | 'j') if ctrl => {
+                return self.handle_search_down(settings, false);
             }
-            KeyCode::Char('k')
-                if !ctrl
-                    && settings.invert
-                    && self.keymap_mode == KeymapMode::VimNormal
-                    && self.results_state.selected() == 0 =>
-            {
-                do_exit!();
-            }
-            KeyCode::Char('k') if !ctrl && self.keymap_mode == KeymapMode::VimNormal => {
-                self.scroll_up(1);
-            }
-            KeyCode::Char('j') if !ctrl && self.keymap_mode == KeymapMode::VimNormal => {
-                self.scroll_down(1);
-            }
-            KeyCode::Down if !settings.invert => {
-                self.scroll_down(1);
-            }
-            KeyCode::Up if settings.invert => {
-                self.scroll_down(1);
-            }
-            KeyCode::Char('n' | 'j') if ctrl && !settings.invert => {
-                self.scroll_down(1);
-            }
-            KeyCode::Char('n' | 'j') if ctrl && settings.invert => {
-                self.scroll_up(1);
-            }
-            KeyCode::Up if !settings.invert => {
-                self.scroll_up(1);
-            }
-            KeyCode::Down if settings.invert => {
-                self.scroll_up(1);
-            }
-            KeyCode::Char('p' | 'k') if ctrl && !settings.invert => {
-                self.scroll_up(1);
-            }
-            KeyCode::Char('p' | 'k') if ctrl && settings.invert => {
-                self.scroll_down(1);
+            KeyCode::Char('p' | 'k') if ctrl => {
+                return self.handle_search_up(settings, false);
             }
             KeyCode::Char('l') if ctrl => {
                 return InputAction::Redraw;
             }
-            KeyCode::Char('i') if self.keymap_mode == KeymapMode::VimNormal => {
-                self.set_keymap_cursor(settings, "vim_insert");
-                self.keymap_mode = KeymapMode::VimInsert;
-            }
-            KeyCode::Char(c) if self.keymap_mode != KeymapMode::VimNormal => {
+            KeyCode::Char(c) => {
                 self.search.input.insert(c);
             }
             KeyCode::PageDown if !settings.invert => {
