@@ -35,7 +35,7 @@ tower = "0.4"
 tower-http = { version = "0.4", features = ["trace"] }
 reqwest = { workspace = true }
 rustls = "0.21"
-rustls-pemfile = "1.0"
+rustls-pemfile = "2.0"
 argon2 = "0.5.3"
 semver = { workspace = true }
 metrics-exporter-prometheus = "0.12.1"
