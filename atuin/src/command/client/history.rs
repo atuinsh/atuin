@@ -379,6 +379,11 @@ impl Cmd {
         for i in history {
             println!("loaded {}", i.id);
 
+            if db.load(i.id.0.as_str()).await?.is_some() {
+                println!("skipping {} - already exists", i.id);
+                continue;
+            }
+
             if i.deleted_at.is_some() {
                 store.push(i.clone()).await?;
                 store.delete(i.id).await?;
