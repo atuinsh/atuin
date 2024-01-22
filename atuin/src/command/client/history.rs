@@ -374,10 +374,19 @@ impl Cmd {
     ) -> Result<()> {
         println!("Importing all history.db data into records.db");
 
+        println!("Fetching history from old database");
         let history = db.list(&[], &context, None, false, true).await?;
+
+        println!("Fetching history already in store");
+        let store_ids = store.history_ids().await?;
 
         for i in history {
             println!("loaded {}", i.id);
+
+            if store_ids.contains(&i.id) {
+                println!("skipping {} - already exists", i.id);
+                continue;
+            }
 
             if i.deleted_at.is_some() {
                 store.push(i.clone()).await?;
