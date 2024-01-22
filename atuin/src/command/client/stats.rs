@@ -16,7 +16,7 @@ use time::{Duration, OffsetDateTime, Time};
 #[derive(Parser, Debug)]
 #[command(infer_subcommands = true)]
 pub struct Cmd {
-    /// compute statistics for the specified period, leave blank for statistics since the beginning
+    /// Compute statistics for the specified period, leave blank for statistics since the beginning. See https://docs.atuin.sh/reference/stats/ for more details.
     period: Vec<String>,
 
     /// How many top commands to list
