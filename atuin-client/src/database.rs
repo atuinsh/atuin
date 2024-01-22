@@ -306,10 +306,7 @@ impl Database for Sqlite {
         }
 
         if unique {
-            query.and_where_eq(
-                "timestamp",
-                "(select max(timestamp) from history where h.command = history.command)",
-            );
+            query.group_by("command").having("max(timestamp)");
         }
 
         if let Some(max) = max {
