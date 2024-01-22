@@ -161,6 +161,7 @@ impl Cmd {
             KeymapMode::Auto => self.keymap_mode,
             value => value,
         };
+        settings.keymap_mode_shell = self.keymap_mode;
 
         let encryption_key: [u8; 32] = encryption::load_key(settings)?.into();
 
