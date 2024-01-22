@@ -128,6 +128,18 @@ impl State {
         InputAction::Continue
     }
 
+    fn cast_cursor_style(style: CursorStyle) -> SetCursorStyle {
+        match style {
+            CursorStyle::DefaultUserShape => SetCursorStyle::DefaultUserShape,
+            CursorStyle::BlinkingBlock => SetCursorStyle::BlinkingBlock,
+            CursorStyle::SteadyBlock => SetCursorStyle::SteadyBlock,
+            CursorStyle::BlinkingUnderScore => SetCursorStyle::BlinkingUnderScore,
+            CursorStyle::SteadyUnderScore => SetCursorStyle::SteadyUnderScore,
+            CursorStyle::BlinkingBar => SetCursorStyle::BlinkingBar,
+            CursorStyle::SteadyBar => SetCursorStyle::SteadyBar,
+        }
+    }
+
     fn set_keymap_cursor(&mut self, settings: &Settings, keymap_name: &str) {
         let cursor_style = if keymap_name == "__clear__" {
             None
@@ -139,7 +151,7 @@ impl State {
         if cursor_style != self.current_cursor {
             if let Some(style) = cursor_style {
                 self.current_cursor = cursor_style;
-                let _ = execute!(stdout(), SetCursorStyle::from(style));
+                let _ = execute!(stdout(), Self::cast_cursor_style(style));
             }
         }
     }

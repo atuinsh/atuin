@@ -11,7 +11,6 @@ use clap::ValueEnum;
 use config::{
     builder::DefaultState, Config, ConfigBuilder, Environment, File as ConfigFile, FileFormat,
 };
-use crossterm::cursor::SetCursorStyle;
 use eyre::{eyre, Context, Result};
 use fs_err::{create_dir_all, File};
 use parse_duration::parse;
@@ -210,20 +209,6 @@ impl CursorStyle {
             CursorStyle::SteadyUnderScore => "STEADYUNDERLINE",
             CursorStyle::BlinkingBar => "BLINKBAR",
             CursorStyle::SteadyBar => "STEADYBAR",
-        }
-    }
-}
-
-impl From<CursorStyle> for SetCursorStyle {
-    fn from(style: CursorStyle) -> SetCursorStyle {
-        match style {
-            CursorStyle::DefaultUserShape => SetCursorStyle::DefaultUserShape,
-            CursorStyle::BlinkingBlock => SetCursorStyle::BlinkingBlock,
-            CursorStyle::SteadyBlock => SetCursorStyle::SteadyBlock,
-            CursorStyle::BlinkingUnderScore => SetCursorStyle::BlinkingUnderScore,
-            CursorStyle::SteadyUnderScore => SetCursorStyle::SteadyUnderScore,
-            CursorStyle::BlinkingBar => SetCursorStyle::BlinkingBar,
-            CursorStyle::SteadyBar => SetCursorStyle::SteadyBar,
         }
     }
 }
