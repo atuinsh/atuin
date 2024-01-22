@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use eyre::{bail, eyre, Result};
 use rmp::decode::Bytes;
 
@@ -229,6 +231,20 @@ impl HistoryStore {
         }
 
         Ok(())
+    }
+
+    /// Get a list of history IDs that exist in the store
+    /// Note: This currently involves loading all history into memory. This is not going to be a
+    /// large amount in absolute terms, but do not all it in a hot loop.
+    pub async fn history_ids(&self) -> Result<HashSet<HistoryId>> {
+        let history = self.history().await?;
+
+        let ret = HashSet::from_iter(history.iter().map(|h| match h {
+            HistoryRecord::Create(h) => h.id.clone(),
+            HistoryRecord::Delete(id) => id.clone(),
+        }));
+
+        Ok(ret)
     }
 }
 
