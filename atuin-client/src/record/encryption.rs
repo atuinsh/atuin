@@ -128,6 +128,7 @@ impl PASETO_V4 {
         // For now though we will only support the one key and key rotation will
         // have to be a hard reset
         let current_kid = wrapping_key.to_id();
+
         ensure!(
             current_kid == kid,
             "attempting to decrypt with incorrect key. currently using {current_kid}, expecting {kid}"
