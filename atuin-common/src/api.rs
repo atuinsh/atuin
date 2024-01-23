@@ -34,6 +34,15 @@ pub struct RegisterResponse {
 pub struct DeleteUserResponse {}
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct ChangePasswordRequest {
+    pub current_password: String,
+    pub new_password: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ChangePasswordResponse {}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct LoginRequest {
     pub username: String,
     pub password: String,

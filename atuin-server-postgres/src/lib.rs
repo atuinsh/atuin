@@ -290,6 +290,22 @@ impl Database for Postgres {
     }
 
     #[instrument(skip_all)]
+    async fn update_user_password(&self, user: &User) -> DbResult<()> {
+        sqlx::query(
+            "update users
+            set password = $1
+            where id = $2",
+        )
+        .bind(&user.password)
+        .bind(user.id)
+        .execute(&self.pool)
+        .await
+        .map_err(fix_error)?;
+
+        Ok(())
+    }
+
+    #[instrument(skip_all)]
     async fn add_user(&self, user: &NewUser) -> DbResult<i64> {
         let email: &str = &user.email;
         let username: &str = &user.username;
