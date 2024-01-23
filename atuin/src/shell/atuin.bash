@@ -88,10 +88,15 @@ if ((BASH_VERSINFO[0] >= 5 || BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4)); 
         # characters before outputting it to the terminal.  We here strip these
         # characters following Bash's behavior.
         __atuin_prompt=${__atuin_prompt//[$'\001\002']}
+
+        # Count the number of newlines contained in $__atuin_prompt
+        __atuin_prompt_offset=${__atuin_prompt//[!$'\n']}
+        __atuin_prompt_offset=${#__atuin_prompt_offset}
     }
 else
     __atuin_evaluate_prompt() {
         __atuin_prompt='$ '
+        __atuin_prompt_offset=0
     }
 fi
 
@@ -99,10 +104,8 @@ __atuin_accept_line() {
     local __atuin_command=$1
 
     # Reprint the prompt, accounting for multiple lines
-    local __atuin_prompt
+    local __atuin_prompt __atuin_prompt_offset
     __atuin_evaluate_prompt
-    local __atuin_prompt_offset
-    __atuin_prompt_offset=$(printf '%s' "$__atuin_prompt" | wc -l)
     if ((__atuin_prompt_offset > 0)); then
         tput cuu "$__atuin_prompt_offset"
     fi
