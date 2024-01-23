@@ -71,28 +71,42 @@ __atuin_set_ret_value() {
     return ${1:+"$1"}
 }
 
-# The expansion ${PS1@P} is available in bash >= 4.4.
+# The shell function `__atuin_evaluate_prompt` evaluates prompt sequences in
+# $PS1.  We switch the implementation of the shell function
+# `__atuin_evaluate_prompt` based on the Bash version because the expansion
+# ${PS1@P} is only available in bash >= 4.4.
 if ((BASH_VERSINFO[0] >= 5 || BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4)); then
-    __atuin_use_prompt_expansion=true
+    __atuin_evaluate_prompt() {
+        __atuin_set_ret_value "${__bp_last_ret_value-}" "${__bp_last_argument_prev_command-}"
+        __atuin_prompt=${PS1@P}
+    
+        # Note: Strip the control characters ^A (\001) and ^B (\002), which
+        # Bash internally uses to enclose the escape sequences.  They are
+        # produced by '\[' and '\]', respectively, in $PS1 and used to tell
+        # Bash that the strings inbetween do not contribute to the prompt
+        # width.  After the prompt width calculation, Bash strips those control
+        # characters before outputting it to the terminal.  We here strip these
+        # characters following Bash's behavior.
+        __atuin_prompt=${__atuin_prompt//[$'\001\002']}
+    }
 else
-    __atuin_use_prompt_expansion=false
+    __atuin_evaluate_prompt() {
+        __atuin_prompt='$ '
+    }
 fi
 
 __atuin_accept_line() {
     local __atuin_command=$1
 
     # Reprint the prompt, accounting for multiple lines
-    if [[ $__atuin_use_prompt_expansion == true ]]; then
-        local __atuin_prompt=${PS1@P}
-        local __atuin_prompt_offset
-        __atuin_prompt_offset=$(printf '%s' "$__atuin_prompt" | wc -l)
-        if ((__atuin_prompt_offset > 0)); then
-            tput cuu "$__atuin_prompt_offset"
-        fi
-        printf '%s\n' "$__atuin_prompt$__atuin_command"
-    else
-        printf '%s\n' "\$ $__atuin_command"
+    local __atuin_prompt
+    __atuin_evaluate_prompt
+    local __atuin_prompt_offset
+    __atuin_prompt_offset=$(printf '%s' "$__atuin_prompt" | wc -l)
+    if ((__atuin_prompt_offset > 0)); then
+        tput cuu "$__atuin_prompt_offset"
     fi
+    printf '%s\n' "$__atuin_prompt$__atuin_command"
 
     # Add it to the bash history
     history -s "$__atuin_command"
@@ -140,10 +154,8 @@ __atuin_accept_line() {
     # Bash will redraw only the line with the prompt after we finish,
     # so to work for a multiline prompt we need to print it ourselves,
     # then go to the beginning of the last line.
-    if [[ $__atuin_use_prompt_expansion == true ]]; then
-        __atuin_set_ret_value "${__bp_last_ret_value-}" "${__bp_last_argument_prev_command-}"
-        printf '%s\r' "${PS1@P}"
-    fi
+    __atuin_evaluate_prompt
+    printf '%s\r' "$__atuin_prompt"
 }
 
 __atuin_history() {
