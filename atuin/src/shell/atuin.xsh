@@ -27,8 +27,8 @@ def _atuin_postcommand(cmd: str, rtn: int, out, ts):
 @events.on_ptk_create
 def _custom_keybindings(bindings, **kw):
 
-    @bindings.add(Keys.ControlR)
-    def search(event):
+    @bindings.add(Keys.ControlR, filter=_ATUIN_BIND_CTRL_R)
+    def r_search(event):
         buffer = event.current_buffer
         cmd = ['atuin', 'search', '--interactive', '--', buffer.text]
         # We need to explicitly pass in xonsh env, in case user has set XDG_HOME or something else that matters
