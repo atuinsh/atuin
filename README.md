@@ -89,6 +89,7 @@ I wanted to. And I **really** don't want to.
 - bash
 - fish
 - nushell
+- xonsh
  
 ## Community
 
@@ -326,6 +327,14 @@ Add to `config.nu`:
 ```
 source ~/.local/share/atuin/init.nu
 ```
+
+### Xonsh
+
+Add
+```
+execx($(atuin init xonsh))
+```
+to the end of your `~/.xonshrc`
 
 # Contributors
 
