@@ -152,7 +152,12 @@ pub fn print_list(
     for h in iterator {
         let fh = FmtHistory(h, CmdFormat::for_output(&w));
         let args = parsed_fmt.with_args(&fh);
-        check_for_write_errors(write!(w, "{args}{entry_terminator}"));
+        let write = write!(w, "{args}{entry_terminator}");
+        if let Err(err) = args.status() {
+            eprintln!("ERROR: history output failed with: {err}");
+            std::process::exit(1);
+        }
+        check_for_write_errors(write);
         if flush_each_line {
             check_for_write_errors(w.flush());
         }
