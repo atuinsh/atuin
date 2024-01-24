@@ -1,3 +1,6 @@
+import subprocess
+from prompt_toolkit.keys import Keys
+
 $ATUIN_SESSION=$(atuin uuid).rstrip('\n')
 
 @events.on_precommand
@@ -21,8 +24,6 @@ def _atuin_postcommand(cmd: str, rtn: int, out, ts):
         atuin history end --exit @(rtn) --duration @(nanos) -- $ATUIN_HISTORY_ID > /dev/null 2>&1
     del $ATUIN_HISTORY_ID
 
-import subprocess
-from prompt_toolkit.keys import Keys
 @events.on_ptk_create
 def _custom_keybindings(bindings, **kw):
 
@@ -48,5 +49,3 @@ def _custom_keybindings(bindings, **kw):
             buffer.validate_and_handle()
         else:
             buffer.insert_text(result)
-
-del _custom_keybindings
