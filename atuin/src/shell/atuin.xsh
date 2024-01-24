@@ -3,10 +3,12 @@ from prompt_toolkit.keys import Keys
 
 $ATUIN_SESSION=$(atuin uuid).rstrip('\n')
 
+
 @events.on_precommand
 def _atuin_precommand(cmd: str):
-    cmd = cmd.rstrip('\n')
-    $ATUIN_HISTORY_ID = $(atuin history start -- @(cmd)).rstrip('\n')
+    cmd = cmd.rstrip("\n")
+    $ATUIN_HISTORY_ID = $(atuin history start -- @(cmd)).rstrip("\n")
+
 
 @events.on_postcommand
 def _atuin_postcommand(cmd: str, rtn: int, out, ts):
@@ -24,27 +26,27 @@ def _atuin_postcommand(cmd: str, rtn: int, out, ts):
         atuin history end --exit @(rtn) --duration @(nanos) -- $ATUIN_HISTORY_ID > /dev/null 2>&1
     del $ATUIN_HISTORY_ID
 
+
 @events.on_ptk_create
 def _custom_keybindings(bindings, **kw):
-
     @bindings.add(Keys.ControlR, filter=_ATUIN_BIND_CTRL_R)
     def r_search(event):
         buffer = event.current_buffer
-        cmd = ['atuin', 'search', '--interactive', '--', buffer.text]
+        cmd = ["atuin", "search", "--interactive", "--", buffer.text]
         # We need to explicitly pass in xonsh env, in case user has set XDG_HOME or something else that matters
         env = ${...}.detype()
-        env['ATUIN_SHELL_XONSH'] = 't'
+        env["ATUIN_SHELL_XONSH"] = "t"
 
-        p = subprocess.run(cmd, stderr=subprocess.PIPE, encoding='utf-8', env=env)
-        result = p.stderr.rstrip('\n')
+        p = subprocess.run(cmd, stderr=subprocess.PIPE, encoding="utf-8", env=env)
+        result = p.stderr.rstrip("\n")
         # redraw prompt - necessary if atuin is configured to run inline, rather than fullscreen
         event.cli.renderer.erase()
 
-        if result == '':
+        if not result:
             return
 
         buffer.reset()
-        if result[:17] == '__atuin_accept__:':
+        if result.startswith("__atuin_accept__:"):
             buffer.insert_text(result[17:])
             buffer.validate_and_handle()
         else:
