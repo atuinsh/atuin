@@ -1,0 +1,257 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "Atuin Configuration",
+    "description": "Atuin Configuration",
+    "type": "object",
+    "properties": {
+        "db_path": {
+            "type": "string",
+            "description": "where to store your database, default is your system data directory"
+        },
+        "key_path": {
+            "type": "string",
+            "description": "where to store your encryption key, default is your system data directory"
+        },
+        "session_path": {
+            "type": "string",
+            "description": "where to store your auth session token, default is your system data directory"
+        },
+        "dialect": {
+            "type": "string",
+            "enum": [
+                "us",
+                "uk"
+            ],
+            "description": "date format used, either 'us' or 'uk'"
+        },
+        "auto_sync": {
+            "type": "boolean",
+            "description": "enable or disable automatic sync"
+        },
+        "update_check": {
+            "type": "boolean",
+            "description": "enable or disable automatic update checks"
+        },
+        "sync_address": {
+            "type": "string",
+            "description": "address of the sync server"
+        },
+        "sync_frequency": {
+            "type": "string",
+            "description": "how often to sync history. note that this is only triggered when a command is ran, so sync intervals may well be longer (set it to 0 to sync after every command)"
+        },
+        "search_mode": {
+            "type": "string",
+            "enum": [
+                "prefix",
+                "fulltext",
+                "fuzzy",
+                "skim"
+            ],
+            "description": "which search mode to use"
+        },
+        "filter_mode": {
+            "type": "string",
+            "enum": [
+                "global",
+                "host",
+                "session",
+                "directory"
+            ],
+            "description": "which filter mode to use"
+        },
+        "workspaces": {
+            "type": "boolean",
+            "default": false,
+            "description": "With workspace filtering enabled, Atuin will filter for commands executed in any directory within a git repository tree"
+        },
+        "filter_mode_shell_up_key_binding": {
+            "type": "string",
+            "enum": [
+                "global",
+                "host",
+                "session",
+                "directory"
+            ],
+            "description": "which filter mode to use when atuin is invoked from a shell up-key binding the accepted values are identical to those of `filter_mode` leave unspecified to use same mode set in `filter_mode`"
+        },
+        "search_mode_shell_up_key_binding": {
+            "type": "string",
+            "enum": [
+                "prefix",
+                "fulltext",
+                "fuzzy",
+                "skim"
+            ],
+            "description": "which search mode to use when atuin is invoked from a shell up-key binding the accepted values are identical to those of `search_mode` leave unspecified to use same mode set in `search_mode`"
+        },
+        "style": {
+            "type": "string",
+            "enum": [
+                "auto",
+                "full",
+                "compact"
+            ],
+            "description": "which style to use"
+        },
+        "inline_height": {
+            "type": "integer",
+            "description": "the maximum number of lines the interface should take up set it to 0 to always go full screen"
+        },
+        "invert": {
+            "type": "boolean",
+            "default": false,
+            "description": "Invert the UI - put the search bar at the top , Default to `false`"
+        },
+        "show_preview": {
+            "type": "boolean",
+            "description": "enable or disable showing a preview of the selected command useful when the command is longer than the terminal width and is cut off"
+        },
+        "exit_mode": {
+            "type": "string",
+            "enum": [
+                "return-original",
+                "return-query"
+            ],
+            "description": "what to do when the escape key is pressed when searching"
+        },
+        "word_jump_mode": {
+            "type": "string",
+            "enum": [
+                "emacs",
+                "subl"
+            ]
+        },
+        "word_chars": {
+            "type": "string",
+            "description": "characters that count as a part of a word"
+        },
+        "scroll_context_lines": {
+            "type": "integer",
+            "description": "number of context lines to show when scrolling by pages"
+        },
+        "ctrl_n_shortcuts": {
+            "type": "boolean",
+            "description": "use ctrl instead of alt as the shortcut modifier key for numerical UI shortcuts"
+        },
+        "history_filter": {
+            "type": "array",
+            "items": [
+                {
+                    "type": "string"
+                }
+            ],
+            "description": "prevent commands matching any of these regexes from being written to history. Note that these regular expressions are unanchored, i.e. if they don't start with ^ or end with $, they'll match anywhere in the command. For details on the supported regular expression syntax, see https://docs.rs/regex/latest/regex/#syntax"
+        },
+        "cwd_filter": {
+            "type": "array",
+            "items": [
+                {
+                    "type": "string"
+                }
+            ],
+            "description": "prevent commands run with cwd matching any of these regexes from being written to history. Note that these regular expressions are unanchored, i.e. if they don't start with ^ or end with $, they'll match anywhere in CWD. For details on the supported regular expression syntax, see https://docs.rs/regex/latest/regex/#syntax"
+        },
+        "max_preview_height": {
+            "type": "integer",
+            "description": "Configure the maximum height of the preview to show. Useful when you have long scripts in your history that you want to distinguish by more than the first few lines."
+        },
+        "show_help": {
+            "type": "boolean",
+            "description": "Configure whether or not to show the help row, which includes the current Atuin version (and whether an update is available), a keymap hint, and the total amount of commands in your history."
+        },
+        "secrets_filter": {
+            "type": "boolean",
+            "default": true,
+            "description": "Defaults to true. This matches history against a set of default regex, and will not save it if we get a match. Defaults include 1. AWS key id 2. Github pat (old and new) 3. Slack oauth tokens (bot, user) 4. Slack webhooks 5. Stripe live/test keys"
+        },
+        "enter_accept": {
+            "type": "boolean",
+            "default": true,
+            "description": "Defaults to true. If enabled, upon hitting enter Atuin will immediately execute the command. Press tab to return to the shell and edit. This applies for new installs. Old installs will keep the old behaviour unless configured otherwise."
+        },
+        "keymap_mode": {
+            "type": "string",
+            "enum": [
+                "auto",
+                "emacs",
+                "vim-insert",
+                "vim-normal"
+            ],
+            "default": "auto",
+            "description": "Defaults to `emacs`. This specifies the keymap on the startup of `atuin search`. If this is set to `auto`, the startup keymap mode in the Atuin search is automatically selected based on the shell's keymap where the keybinding is defined. If this is set to `emacs`, `vim-insert`, or `vim-normal`, the startup keymap mode in the Atuin search is forced to be the specified one."
+        },
+        "keymap_cursor": {
+            "type": "object",
+            "properties": {
+                "emacs": {
+                    "type": "string",
+                    "enum": [
+                        "default",
+                        "blink-block",
+                        "blink-underline",
+                        "blink-bar",
+                        "steady-block",
+                        "steady-underline",
+                        "steady-bar"
+                    ],
+                    "default": "default"
+                },
+                "vim_insert": {
+                    "type": "string",
+                    "enum": [
+                        "default",
+                        "blink-block",
+                        "blink-underline",
+                        "blink-bar",
+                        "steady-block",
+                        "steady-underline",
+                        "steady-bar"
+                    ],
+                    "default": "default"
+                },
+                "vim_normal": {
+                    "type": "string",
+                    "enum": [
+                        "default",
+                        "blink-block",
+                        "blink-underline",
+                        "blink-bar",
+                        "steady-block",
+                        "steady-underline",
+                        "steady-bar"
+                    ],
+                    "default": "default"
+                }
+            },
+            "description": "Cursor style in each keymap mode. If specified, the cursor style is changed in entering the cursor shape. Available values are `default` and `{blink,steady}-{block,underilne,bar}`."
+        },
+        "network_connect_timeout": {
+            "type": "integer"
+        },
+        "network_timeout": {
+            "type": "integer"
+        },
+        "local_timeout": {
+            "type": "integer",
+            "description": "Timeout (in seconds) for acquiring a local database connection (sqlite)"
+        },
+        "common_subcommands": {
+            "type": "array",
+            "items": [
+                {
+                    "type": "string"
+                }
+            ],
+            "description": "Set commands where we should consider the subcommand for statistics. Eg, kubectl get vs just kubectl"
+        },
+        "common_prefix": {
+            "type": "array",
+            "items": [
+                {
+                    "type": "string"
+                }
+            ]
+        }
+    }
+}

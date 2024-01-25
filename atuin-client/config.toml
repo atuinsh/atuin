@@ -1,3 +1,6 @@
+# get editor completions based on the config schema
+"$schema" = "https://atuin.sh/config-schema.json"
+
 ## where to store your database, default is your system data directory
 ## linux/mac: ~/.local/share/atuin/history.db
 ## windows: %USERPROFILE%/.local/share/atuin/history.db
