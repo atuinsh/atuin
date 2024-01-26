@@ -4,7 +4,7 @@ use eyre::{bail, eyre, Result};
 use rmp::decode::Bytes;
 
 use crate::{
-    database::Database,
+    database::{self, Database},
     record::{encryption::PASETO_V4, sqlite_store::SqliteStore, store::Store},
 };
 use atuin_common::record::{DecryptedData, Host, HostId, Record, RecordId, RecordIdx};
@@ -254,6 +254,34 @@ impl HistoryStore {
         }));
 
         Ok(ret)
+    }
+
+    pub async fn init_store(&self, context: database::Context, db: &impl Database) -> Result<()> {
+        println!("Importing all history.db data into records.db");
+
+        println!("Fetching history from old database");
+        let history = db.list(&[], &context, None, false, true).await?;
+
+        println!("Fetching history already in store");
+        let store_ids = self.history_ids().await?;
+
+        for i in history {
+            println!("loaded {}", i.id);
+
+            if store_ids.contains(&i.id) {
+                println!("skipping {} - already exists", i.id);
+                continue;
+            }
+
+            if i.deleted_at.is_some() {
+                self.push(i.clone()).await?;
+                self.delete(i.id).await?;
+            } else {
+                self.push(i).await?;
+            }
+        }
+
+        Ok(())
     }
 }
 
