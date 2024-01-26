@@ -49,12 +49,7 @@ pub async fn run(
     let mut file = File::create(path).await?;
     file.write_all(session.session.as_bytes()).await?;
 
-    // Create a new key, and save it to disk
-    // If using the record store, the user will already have a key.
-    // Records are stored encrypted on disk
-    if !settings.sync.records {
-        let _key = atuin_client::encryption::new_key(settings)?;
-    }
+    let _key = atuin_client::encryption::load_key(settings)?;
 
     Ok(())
 }
