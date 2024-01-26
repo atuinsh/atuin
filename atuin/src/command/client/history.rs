@@ -88,10 +88,6 @@ pub enum Cmd {
         #[arg(long, short)]
         format: Option<String>,
     },
-
-    /// Import all old history.db data into the record store. Do not run more than once, and do not
-    /// run unless you know what you're doing (or the docs ask you to)
-    InitStore,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -368,14 +364,6 @@ impl Cmd {
         Ok(())
     }
 
-    async fn init_store(
-        context: atuin_client::database::Context,
-        db: &impl Database,
-        store: HistoryStore,
-    ) -> Result<()> {
-        store.init_store(context, db).await
-    }
-
     pub async fn run(
         self,
         settings: &Settings,
@@ -429,8 +417,6 @@ impl Cmd {
 
                 Ok(())
             }
-
-            Self::InitStore => Self::init_store(context, db, history_store).await,
         }
     }
 }
