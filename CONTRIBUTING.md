@@ -21,6 +21,10 @@ export PATH="./target/release:$PATH"
 
 These 3 variables can be added in a local `.envrc` file, read by [direnv](https://direnv.net/).
 
+## PRs 
+
+It can speed up the review cycle if you consent to maintainers pushing to your branch. This will only be in the case of small fixes or adjustments, and not anything large. If you feel OK with this, please check the box on the template!
+
 ## What to work on?
 
 Any issues labeled "bug" or "help wanted" would be fantastic, just drop a comment and feel free to ask for help!
