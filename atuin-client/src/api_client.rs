@@ -10,8 +10,8 @@ use reqwest::{
 
 use atuin_common::{
     api::{
-        AddHistoryRequest, CountResponse, DeleteHistoryRequest, ErrorResponse,
-        LoginRequest, LoginResponse, RegisterResponse, StatusResponse, SyncHistoryResponse,
+        AddHistoryRequest, CountResponse, DeleteHistoryRequest, ErrorResponse, LoginRequest,
+        LoginResponse, RegisterResponse, StatusResponse, SyncHistoryResponse,
     },
     record::RecordStatus,
 };
