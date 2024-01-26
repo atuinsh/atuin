@@ -244,6 +244,7 @@ if [[ $__atuin_bind_ctrl_r == true ]]; then
     # the vi_nmap keymap in ble.sh.
     bind -m emacs -x '"\C-r": __atuin_history --keymap-mode=emacs'
     bind -m vi-insert -x '"\C-r": __atuin_history --keymap-mode=vim-insert'
+    bind -m vi-command -x '"/": __atuin_history --keymap-mode=emacs'
 fi
 
 # shellcheck disable=SC2154
