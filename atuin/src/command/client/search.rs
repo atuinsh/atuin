@@ -10,10 +10,10 @@ use atuin_client::{
     encryption,
     history::{store::HistoryStore, History},
     record::sqlite_store::SqliteStore,
-    settings::{FilterMode, KeymapMode, SearchMode, Settings},
+    settings::{FilterMode, KeymapMode, SearchMode, Settings, Timezone},
 };
 
-use super::history::{ListMode, Timezone};
+use super::history::ListMode;
 
 mod cursor;
 mod duration;
@@ -101,13 +101,13 @@ pub struct Cmd {
     #[arg(long, short)]
     reverse: bool,
 
-    /// Display the command time in another timezone other than UTC.
+    /// Display the command time in another timezone other than the configured default.
     ///
     /// This option takes one of the following kinds of values:
     /// - the special value "local" (or "l") which refers to the system time zone
     /// - an offset from UTC (e.g. "+9", "-2:30")
-    #[arg(long, default_value_t)]
-    tz: Timezone,
+    #[arg(long)]
+    tz: Option<Timezone>,
 
     /// Available variables: {command}, {directory}, {duration}, {user}, {host}, {time}, {exit} and
     /// {relativetime}.
@@ -228,13 +228,15 @@ impl Cmd {
                     None => Some(settings.history_format.as_str()),
                     _ => self.format.as_deref(),
                 };
+                let tz = self.tz.unwrap_or(settings.timezone);
+
                 super::history::print_list(
                     &entries,
                     ListMode::from_flags(self.human, self.cmd_only),
                     format,
                     false,
                     true,
-                    self.tz,
+                    tz,
                 );
             }
         };

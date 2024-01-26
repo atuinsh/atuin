@@ -1,13 +1,12 @@
 use std::{
     fmt::{self, Display},
     io::{self, IsTerminal, Write},
-    str::FromStr,
     time::Duration,
 };
 
 use atuin_common::utils::{self, Escapable as _};
 use clap::Subcommand;
-use eyre::{bail, Context, Error, Result};
+use eyre::{Context, Result};
 use runtime_format::{FormatKey, FormatKeyError, ParseSegment, ParsedFmt};
 
 use atuin_client::{
@@ -17,7 +16,7 @@ use atuin_client::{
     record::sqlite_store::SqliteStore,
     settings::{
         FilterMode::{Directory, Global, Session},
-        Settings,
+        Settings, Timezone,
     },
 };
 
@@ -25,7 +24,7 @@ use atuin_client::{
 use atuin_client::{record, sync};
 
 use log::{debug, warn};
-use time::{format_description::FormatItem, macros::format_description, OffsetDateTime, UtcOffset};
+use time::{macros::format_description, OffsetDateTime};
 
 use super::search::format_duration_into;
 
@@ -70,13 +69,13 @@ pub enum Cmd {
         #[arg(action = clap::ArgAction::Set)]
         reverse: bool,
 
-        /// Display the command time in another timezone other than UTC.
+        /// Display the command time in another timezone other than the configured default.
         ///
         /// This option takes one of the following kinds of values:
         /// - the special value "local" (or "l") which refers to the system time zone
         /// - an offset from UTC (e.g. "+9", "-2:30")
-        #[arg(long, default_value_t)]
-        tz: Timezone,
+        #[arg(long)]
+        tz: Option<Timezone>,
 
         /// Available variables: {command}, {directory}, {duration}, {user}, {host}, {exit} and {time}.
         /// Example: --format "{time} - [{duration}] - {directory}$\t{command}"
@@ -93,13 +92,13 @@ pub enum Cmd {
         #[arg(long)]
         cmd_only: bool,
 
-        /// Display the command time in another timezone other than UTC.
+        /// Display the command time in another timezone other than the configured default.
         ///
         /// This option takes one of the following kinds of values:
         /// - the special value "local" (or "l") which refers to the system time zone
         /// - an offset from UTC (e.g. "+9", "-2:30")
-        #[arg(long, default_value_t)]
-        tz: Timezone,
+        #[arg(long)]
+        tz: Option<Timezone>,
 
         /// Available variables: {command}, {directory}, {duration}, {user}, {host} and {time}.
         /// Example: --format "{time} - [{duration}] - {directory}$\t{command}"
@@ -124,49 +123,6 @@ impl ListMode {
         } else {
             ListMode::Regular
         }
-    }
-}
-
-/// Type wrapper around `time::UtcOffset` to support a wider variety of timezone formats.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Timezone(UtcOffset);
-
-impl Default for Timezone {
-    fn default() -> Self {
-        Self(UtcOffset::UTC)
-    }
-}
-impl fmt::Display for Timezone {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-/// format: <+|-><hour>[:<minute>[:<second>]]
-static OFFSET_FMT: &[FormatItem<'_>] =
-    format_description!("[offset_hour sign:mandatory padding:none][optional [:[offset_minute padding:none][optional [:[offset_second padding:none]]]]]");
-
-impl FromStr for Timezone {
-    type Err = Error;
-
-    fn from_str(s: &str) -> Result<Self> {
-        // local timezone
-        if matches!(s.to_lowercase().as_str(), "l" | "local") {
-            let offset = UtcOffset::current_local_offset()?;
-            return Ok(Self(offset));
-        }
-
-        // offset from UTC
-        if let Ok(offset) = UtcOffset::parse(s, OFFSET_FMT) {
-            return Ok(Self(offset));
-        }
-
-        // IDEA: Currently named timezones are not supported, because the well-known crate
-        // for this is `chrono_tz`, which is not really interoperable with the datetime crate
-        // that we currently use - `time`. If ever we migrate to using `chrono`, this would
-        // be a good feature to add.
-
-        bail!(r#""{}" is not a valid timezone spec"#, s)
     }
 }
 
@@ -484,6 +440,7 @@ impl Cmd {
                 format,
             } => {
                 let mode = ListMode::from_flags(human, cmd_only);
+                let tz = tz.unwrap_or(settings.timezone);
                 Self::handle_list(
                     db, settings, context, session, cwd, mode, format, false, print0, reverse, tz,
                 )
@@ -498,6 +455,7 @@ impl Cmd {
             } => {
                 let last = db.last().await?;
                 let last = last.as_ref().map(std::slice::from_ref).unwrap_or_default();
+                let tz = tz.unwrap_or(settings.timezone);
                 print_list(
                     last,
                     ListMode::from_flags(human, cmd_only),
@@ -513,44 +471,5 @@ impl Cmd {
                 Ok(())
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::str::FromStr;
-
-    use eyre::Result;
-
-    use super::Timezone;
-
-    #[test]
-    fn can_parse_offset_timezone_spec() -> Result<()> {
-        assert_eq!(Timezone::from_str("+02")?.0.as_hms(), (2, 0, 0));
-        assert_eq!(Timezone::from_str("-04")?.0.as_hms(), (-4, 0, 0));
-        assert_eq!(Timezone::from_str("+05:30")?.0.as_hms(), (5, 30, 0));
-        assert_eq!(Timezone::from_str("-09:30")?.0.as_hms(), (-9, -30, 0));
-
-        // single digit hours are allowed
-        assert_eq!(Timezone::from_str("+2")?.0.as_hms(), (2, 0, 0));
-        assert_eq!(Timezone::from_str("-4")?.0.as_hms(), (-4, 0, 0));
-        assert_eq!(Timezone::from_str("+5:30")?.0.as_hms(), (5, 30, 0));
-        assert_eq!(Timezone::from_str("-9:30")?.0.as_hms(), (-9, -30, 0));
-
-        // fully qualified form
-        assert_eq!(Timezone::from_str("+09:30:00")?.0.as_hms(), (9, 30, 0));
-        assert_eq!(Timezone::from_str("-09:30:00")?.0.as_hms(), (-9, -30, 0));
-
-        // these offsets don't really exist but are supported anyway
-        assert_eq!(Timezone::from_str("+0:5")?.0.as_hms(), (0, 5, 0));
-        assert_eq!(Timezone::from_str("-0:5")?.0.as_hms(), (0, -5, 0));
-        assert_eq!(Timezone::from_str("+01:23:45")?.0.as_hms(), (1, 23, 45));
-        assert_eq!(Timezone::from_str("-01:23:45")?.0.as_hms(), (-1, -23, -45));
-
-        // require a leading sign for clarity
-        assert!(Timezone::from_str("5").is_err());
-        assert!(Timezone::from_str("10:30").is_err());
-
-        Ok(())
     }
 }

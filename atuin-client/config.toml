@@ -16,6 +16,12 @@
 ## date format used, either "us" or "uk"
 # dialect = "us"
 
+## default timezone to use when displaying time
+## either "l", "local" to use the system's current local timezone, or an offset
+## from UTC in the format of "<+|->H[H][:M[M][:S[S]]]"
+## for example: "+9", "-05", "+03:30", "-01:23:45", etc.
+# timezone = "+0"
+
 ## enable or disable automatic sync
 # auto_sync = true
 
