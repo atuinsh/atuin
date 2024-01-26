@@ -90,6 +90,7 @@ async fn run(
         let history_length = db.history_count(true).await?;
         let store_history_length = store.len_tag("history").await?;
 
+        #[allow(clippy::cast_sign_loss)]
         if history_length as u64 > store_history_length {
             println!("History DB is longer than history record store");
             println!("This happens when you used Atuin pre-record-store");
