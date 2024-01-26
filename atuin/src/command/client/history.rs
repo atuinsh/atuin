@@ -321,10 +321,7 @@ impl Cmd {
             #[cfg(feature = "sync")]
             {
                 if settings.sync.records {
-                    let (diff, _) = record::sync::diff(settings, &store).await?;
-                    let operations = record::sync::operations(diff, &store).await?;
-                    let (_, downloaded) =
-                        record::sync::sync_remote(operations, &store, settings).await?;
+                    let (_, downloaded) = record::sync::sync(settings, &store).await?;
 
                     history_store.incremental_build(db, &downloaded).await?;
                 } else {

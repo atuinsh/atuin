@@ -80,9 +80,7 @@ async fn run(
     store: SqliteStore,
 ) -> Result<()> {
     if settings.sync.records {
-        let (diff, _) = sync::diff(settings, &store).await?;
-        let operations = sync::operations(diff, &store).await?;
-        let (uploaded, downloaded) = sync::sync_remote(operations, &store, settings).await?;
+        let (uploaded, downloaded) = sync::sync(settings, &store).await?;
 
         let encryption_key: [u8; 32] = encryption::load_key(settings)
             .context("could not load encryption key")?
