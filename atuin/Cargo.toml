@@ -33,11 +33,12 @@ buildflags = ["--release"]
 atuin = { path = "/usr/bin/atuin" }
 
 [features]
-default = ["client", "sync", "server", "clipboard"]
+default = ["client", "sync", "server", "clipboard", "check-update"]
 client = ["atuin-client"]
 sync = ["atuin-client/sync"]
 server = ["atuin-server", "atuin-server-postgres", "tracing-subscriber"]
 clipboard = ["cli-clipboard"]
+check-update = ["atuin-client/check-update"]
 
 [dependencies]
 atuin-server-postgres = { path = "../atuin-server-postgres", version = "17.2.1", optional = true }

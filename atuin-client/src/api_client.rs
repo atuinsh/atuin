@@ -10,7 +10,7 @@ use reqwest::{
 
 use atuin_common::{
     api::{
-        AddHistoryRequest, CountResponse, DeleteHistoryRequest, ErrorResponse, IndexResponse,
+        AddHistoryRequest, CountResponse, DeleteHistoryRequest, ErrorResponse,
         LoginRequest, LoginResponse, RegisterResponse, StatusResponse, SyncHistoryResponse,
     },
     record::RecordStatus,
@@ -19,6 +19,7 @@ use atuin_common::{
     api::{ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ATUIN_VERSION},
     record::{EncryptedData, HostId, Record, RecordIdx},
 };
+
 use semver::Version;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
@@ -97,7 +98,10 @@ pub async fn login(address: &str, req: LoginRequest) -> Result<LoginResponse> {
     Ok(session)
 }
 
+#[cfg(feature = "check-update")]
 pub async fn latest_version() -> Result<Version> {
+    use atuin_common::api::IndexResponse;
+
     let url = "https://api.atuin.sh";
     let client = reqwest::Client::new();
 
