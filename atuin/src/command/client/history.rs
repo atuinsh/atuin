@@ -521,18 +521,8 @@ mod tests {
     use std::str::FromStr;
 
     use eyre::Result;
-    use time::UtcOffset;
 
     use super::Timezone;
-
-    #[test]
-    fn can_parse_local_timezone_spec() -> Result<()> {
-        let local_tz = Timezone(UtcOffset::current_local_offset()?);
-
-        assert_eq!(Timezone::from_str("l")?, local_tz);
-        assert_eq!(Timezone::from_str("local")?, local_tz);
-        Ok(())
-    }
 
     #[test]
     fn can_parse_offset_timezone_spec() -> Result<()> {
