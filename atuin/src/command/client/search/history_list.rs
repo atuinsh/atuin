@@ -164,10 +164,10 @@ impl DrawState<'_> {
         let time = format_duration(since.try_into().unwrap_or_default());
 
         // pad the time a little bit before we write. this aligns things nicely
-        self.draw(
-            &SPACES[..((PREFIX_LENGTH - self.x) as usize - 4 - time.len())],
-            Style::default(),
-        );
+        // skip padding if for some reason it is already too long to align nicely
+        let padding =
+            usize::from(PREFIX_LENGTH).saturating_sub(usize::from(self.x) + 4 + time.len());
+        self.draw(&SPACES[..padding], Style::default());
 
         self.draw(&time, style);
         self.draw(" ago", style);
