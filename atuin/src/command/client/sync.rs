@@ -97,7 +97,7 @@ async fn run(
             let context = current_context();
             history_store.init_store(context, db).await?;
 
-            println!("");
+            println!("\n");
         }
 
         let (uploaded, downloaded) = sync::sync(settings, &store).await?;
