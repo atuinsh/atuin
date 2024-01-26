@@ -80,8 +80,6 @@ async fn run(
     store: SqliteStore,
 ) -> Result<()> {
     if settings.sync.records {
-        let (uploaded, downloaded) = sync::sync(settings, &store).await?;
-
         let encryption_key: [u8; 32] = encryption::load_key(settings)
             .context("could not load encryption key")?
             .into();
@@ -98,7 +96,11 @@ async fn run(
 
             let context = current_context();
             history_store.init_store(context, db).await?;
+
+            println!("");
         }
+
+        let (uploaded, downloaded) = sync::sync(settings, &store).await?;
 
         history_store.incremental_build(db, &downloaded).await?;
 
