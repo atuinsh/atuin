@@ -15,6 +15,7 @@ repository = { workspace = true }
 [features]
 default = ["sync"]
 sync = ["urlencoding", "reqwest", "sha2", "hex"]
+check-update = []
 
 [dependencies]
 atuin-common = { path = "../atuin-common", version = "17.2.1" }

@@ -402,6 +402,7 @@ impl Settings {
         }
     }
 
+    #[cfg(feature = "check-update")]
     fn needs_update_check(&self) -> Result<bool> {
         let last_check = Settings::last_version_check()?;
         let diff = OffsetDateTime::now_utc() - last_check;
@@ -410,6 +411,7 @@ impl Settings {
         Ok(diff.whole_hours() >= 1)
     }
 
+    #[cfg(feature = "check-update")]
     async fn latest_version(&self) -> Result<Version> {
         // Default to the current version, and if that doesn't parse, a version so high it's unlikely to ever
         // suggest upgrading.
@@ -440,6 +442,7 @@ impl Settings {
     }
 
     // Return Some(latest version) if an update is needed. Otherwise, none.
+    #[cfg(feature = "check-update")]
     pub async fn needs_update(&self) -> Option<Version> {
         if !self.update_check {
             return None;
@@ -463,6 +466,11 @@ impl Settings {
         None
     }
 
+    #[cfg(not(feature = "check-update"))]
+    pub async fn needs_update(&self) -> Option<Version> {
+        None
+    }
+
     pub fn builder() -> Result<ConfigBuilder<DefaultState>> {
         let data_dir = atuin_common::utils::data_dir();
         let db_path = data_dir.join("history.db");
@@ -478,7 +486,7 @@ impl Settings {
             .set_default("session_path", session_path.to_str())?
             .set_default("dialect", "us")?
             .set_default("auto_sync", true)?
-            .set_default("update_check", true)?
+            .set_default("update_check", cfg!(feature = "check-update"))?
             .set_default("sync_address", "https://api.atuin.sh")?
             .set_default("sync_frequency", "10m")?
             .set_default("search_mode", "fuzzy")?
