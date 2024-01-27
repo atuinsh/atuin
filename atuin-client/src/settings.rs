@@ -529,7 +529,7 @@ impl Settings {
             .set_default("key_path", key_path.to_str())?
             .set_default("session_path", session_path.to_str())?
             .set_default("dialect", "us")?
-            .set_default("timezone", "+0")?
+            .set_default("timezone", "local")?
             .set_default("auto_sync", true)?
             .set_default("update_check", cfg!(feature = "check-update"))?
             .set_default("sync_address", "https://api.atuin.sh")?
