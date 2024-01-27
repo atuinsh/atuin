@@ -277,6 +277,7 @@ pub struct Settings {
     pub word_jump_mode: WordJumpMode,
     pub word_chars: String,
     pub scroll_context_lines: usize,
+    pub history_format: String,
 
     #[serde(with = "serde_regex", default = "RegexSet::empty")]
     pub history_filter: RegexSet,
@@ -480,6 +481,7 @@ impl Settings {
         let session_path = data_dir.join("session");
 
         Ok(Config::builder()
+            .set_default("history_format", "{time}\t{command}\t{duration}")?
             .set_default("db_path", db_path.to_str())?
             .set_default("record_store_path", record_store_path.to_str())?
             .set_default("key_path", key_path.to_str())?

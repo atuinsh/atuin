@@ -84,6 +84,9 @@
 ## alt-0 .. alt-9
 # ctrl_n_shortcuts = false
 
+## default history list item format fallback when not appending in cmd
+# history_format = "{time}\t{command}\t{duration}"
+
 ## prevent commands matching any of these regexes from being written to history.
 ## Note that these regular expressions are unanchored, i.e. if they don't start
 ## with ^ or end with $, they'll match anywhere in the command.
