@@ -1,6 +1,10 @@
 use std::time::Instant;
 
-use axum::{extract::MatchedPath, http::Request, middleware::Next, response::IntoResponse};
+use axum::{
+    extract::{MatchedPath, Request},
+    middleware::Next,
+    response::IntoResponse,
+};
 use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
 
 pub fn setup_metrics_recorder() -> PrometheusHandle {
@@ -21,7 +25,7 @@ pub fn setup_metrics_recorder() -> PrometheusHandle {
 /// Middleware to record some common HTTP metrics
 /// Generic over B to allow for arbitrary body types (eg Vec<u8>, Streams, a deserialized thing, etc)
 /// Someday tower-http might provide a metrics middleware: https://github.com/tower-rs/tower-http/issues/57
-pub async fn track_metrics<B>(req: Request<B>, next: Next<B>) -> impl IntoResponse {
+pub async fn track_metrics(req: Request, next: Next) -> impl IntoResponse {
     let start = Instant::now();
 
     let path = if let Some(matched_path) = req.extensions().get::<MatchedPath>() {

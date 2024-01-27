@@ -116,10 +116,9 @@ impl Tls {
             .with_context(|| format!("tls.cert_path {:?} is missing", self.cert_path))?;
         let mut reader = std::io::BufReader::new(cert_file);
         let certs: Vec<_> = rustls_pemfile::certs(&mut reader)
-            .with_context(|| format!("tls.cert_path {:?} is invalid", self.cert_path))?
-            .into_iter()
-            .map(rustls::Certificate)
-            .collect();
+            .map(|c| c.map(|c| rustls::Certificate(c.to_vec())))
+            .collect::<Result<Vec<_>, _>>()
+            .with_context(|| format!("tls.cert_path {:?} is invalid", self.cert_path))?;
 
         if certs.is_empty() {
             bail!(
@@ -136,6 +135,8 @@ impl Tls {
             .with_context(|| format!("tls.pkey_path {:?} is missing", self.pkey_path))?;
         let mut reader = std::io::BufReader::new(pkey_file);
         let keys = rustls_pemfile::pkcs8_private_keys(&mut reader)
+            .map(|c| c.map(|c| rustls::PrivateKey(c.secret_pkcs8_der().to_vec())))
+            .collect::<Result<Vec<_>, _>>()
             .with_context(|| format!("tls.pkey_path {:?} is not PKCS8-encoded", self.pkey_path))?;
 
         if keys.is_empty() {
@@ -145,8 +146,6 @@ impl Tls {
             );
         }
 
-        let key = rustls::PrivateKey(keys[0].clone());
-
-        Ok(key)
+        Ok(keys[0].clone())
     }
 }

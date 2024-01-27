@@ -1,5 +1,4 @@
-use axum::{response::IntoResponse, Json};
-use http::StatusCode;
+use axum::{http::StatusCode, response::IntoResponse, Json};
 use serde_json::json;
 use tracing::instrument;
 

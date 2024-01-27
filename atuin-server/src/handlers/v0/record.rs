@@ -1,5 +1,4 @@
-use axum::{extract::Query, extract::State, Json};
-use http::StatusCode;
+use axum::{extract::Query, extract::State, http::StatusCode, Json};
 use metrics::counter;
 use serde::Deserialize;
 use tracing::{error, instrument};

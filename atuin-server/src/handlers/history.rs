@@ -2,10 +2,9 @@ use std::{collections::HashMap, convert::TryFrom};
 
 use axum::{
     extract::{Path, Query, State},
-    http::HeaderMap,
+    http::{HeaderMap, StatusCode},
     Json,
 };
-use http::StatusCode;
 use metrics::counter;
 use time::{Month, UtcOffset};
 use tracing::{debug, error, instrument};
@@ -215,7 +214,7 @@ pub async fn calendar<DB: Database>(
         error: ErrorResponse {
             reason: e.to_string().into(),
         },
-        status: http::StatusCode::BAD_REQUEST,
+        status: StatusCode::BAD_REQUEST,
     })?;
 
     let period = match focus {

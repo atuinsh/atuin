@@ -8,9 +8,9 @@ use argon2::{
 };
 use axum::{
     extract::{Path, State},
+    http::StatusCode,
     Json,
 };
-use http::StatusCode;
 use metrics::counter;
 use rand::rngs::OsRng;
 use tracing::{debug, error, info, instrument};
