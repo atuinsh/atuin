@@ -106,8 +106,8 @@ pub struct Cmd {
     /// This option takes one of the following kinds of values:
     /// - the special value "local" (or "l") which refers to the system time zone
     /// - an offset from UTC (e.g. "+9", "-2:30")
-    #[arg(long)]
-    tz: Option<Timezone>,
+    #[arg(long, visible_alias = "tz")]
+    timezone: Option<Timezone>,
 
     /// Available variables: {command}, {directory}, {duration}, {user}, {host}, {time}, {exit} and
     /// {relativetime}.
@@ -228,7 +228,7 @@ impl Cmd {
                     None => Some(settings.history_format.as_str()),
                     _ => self.format.as_deref(),
                 };
-                let tz = self.tz.unwrap_or(settings.timezone);
+                let tz = self.timezone.unwrap_or(settings.timezone);
 
                 super::history::print_list(
                     &entries,

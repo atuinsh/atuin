@@ -74,8 +74,8 @@ pub enum Cmd {
         /// This option takes one of the following kinds of values:
         /// - the special value "local" (or "l") which refers to the system time zone
         /// - an offset from UTC (e.g. "+9", "-2:30")
-        #[arg(long)]
-        tz: Option<Timezone>,
+        #[arg(long, visible_alias = "tz")]
+        timezone: Option<Timezone>,
 
         /// Available variables: {command}, {directory}, {duration}, {user}, {host}, {exit} and {time}.
         /// Example: --format "{time} - [{duration}] - {directory}$\t{command}"
@@ -97,8 +97,8 @@ pub enum Cmd {
         /// This option takes one of the following kinds of values:
         /// - the special value "local" (or "l") which refers to the system time zone
         /// - an offset from UTC (e.g. "+9", "-2:30")
-        #[arg(long)]
-        tz: Option<Timezone>,
+        #[arg(long, visible_alias = "tz")]
+        timezone: Option<Timezone>,
 
         /// Available variables: {command}, {directory}, {duration}, {user}, {host} and {time}.
         /// Example: --format "{time} - [{duration}] - {directory}$\t{command}"
@@ -436,11 +436,11 @@ impl Cmd {
                 cmd_only,
                 print0,
                 reverse,
-                tz,
+                timezone,
                 format,
             } => {
                 let mode = ListMode::from_flags(human, cmd_only);
-                let tz = tz.unwrap_or(settings.timezone);
+                let tz = timezone.unwrap_or(settings.timezone);
                 Self::handle_list(
                     db, settings, context, session, cwd, mode, format, false, print0, reverse, tz,
                 )
@@ -450,12 +450,12 @@ impl Cmd {
             Self::Last {
                 human,
                 cmd_only,
-                tz,
+                timezone,
                 format,
             } => {
                 let last = db.last().await?;
                 let last = last.as_ref().map(std::slice::from_ref).unwrap_or_default();
-                let tz = tz.unwrap_or(settings.timezone);
+                let tz = timezone.unwrap_or(settings.timezone);
                 print_list(
                     last,
                     ListMode::from_flags(human, cmd_only),
