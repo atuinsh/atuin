@@ -1,6 +1,6 @@
 [package]
 name = "atuin-server"
-edition = "2018"
+edition = "2021"
 description = "server library for atuin"
 
 rust-version = { workspace = true }

@@ -16,6 +16,8 @@ pub struct HistoryList<'a> {
     history: &'a [History],
     block: Option<Block<'a>>,
     inverted: bool,
+    /// Apply an alternative highlighting to the selected row
+    alternate_highlight: bool,
 }
 
 #[derive(Default)]
@@ -65,6 +67,7 @@ impl<'a> StatefulWidget for HistoryList<'a> {
             y: 0,
             state,
             inverted: self.inverted,
+            alternate_highlight: self.alternate_highlight,
         };
 
         for item in self.history.iter().skip(state.offset).take(end - start) {
@@ -81,11 +84,12 @@ impl<'a> StatefulWidget for HistoryList<'a> {
 }
 
 impl<'a> HistoryList<'a> {
-    pub fn new(history: &'a [History], inverted: bool) -> Self {
+    pub fn new(history: &'a [History], inverted: bool, alternate_highlight: bool) -> Self {
         Self {
             history,
             block: None,
             inverted,
+            alternate_highlight,
         }
     }
 
@@ -116,11 +120,14 @@ struct DrawState<'a> {
     y: u16,
     state: &'a ListState,
     inverted: bool,
+    alternate_highlight: bool,
 }
 
 // longest line prefix I could come up with
 #[allow(clippy::cast_possible_truncation)] // we know that this is <65536 length
 pub const PREFIX_LENGTH: u16 = " > 123ms 59s ago".len() as u16;
+static SPACES: &str = "                ";
+static _ASSERT: () = assert!(SPACES.len() == PREFIX_LENGTH as usize);
 
 impl DrawState<'_> {
     fn index(&mut self) {
@@ -157,7 +164,10 @@ impl DrawState<'_> {
         let time = format_duration(since.try_into().unwrap_or_default());
 
         // pad the time a little bit before we write. this aligns things nicely
-        self.x = PREFIX_LENGTH - 4 - time.len() as u16;
+        // skip padding if for some reason it is already too long to align nicely
+        let padding =
+            usize::from(PREFIX_LENGTH).saturating_sub(usize::from(self.x) + 4 + time.len());
+        self.draw(&SPACES[..padding], Style::default());
 
         self.draw(&time, style);
         self.draw(" ago", style);
@@ -165,12 +175,14 @@ impl DrawState<'_> {
 
     fn command(&mut self, h: &History) {
         let mut style = Style::default();
-        if self.y as usize + self.state.offset == self.state.selected {
+        if !self.alternate_highlight && (self.y as usize + self.state.offset == self.state.selected)
+        {
+            // if not applying alternative highlighting to the whole row, color the command
             style = style.fg(Color::Red).add_modifier(Modifier::BOLD);
         }
 
         for section in h.command.escape_control().split_ascii_whitespace() {
-            self.x += 1;
+            self.draw(" ", style);
             if self.x > self.list_area.width {
                 // Avoid attempting to draw a command section beyond the width
                 // of the list
@@ -180,7 +192,7 @@ impl DrawState<'_> {
         }
     }
 
-    fn draw(&mut self, s: &str, style: Style) {
+    fn draw(&mut self, s: &str, mut style: Style) {
         let cx = self.list_area.left() + self.x;
 
         let cy = if self.inverted {
@@ -188,6 +200,11 @@ impl DrawState<'_> {
         } else {
             self.list_area.bottom() - self.y - 1
         };
+
+        if self.alternate_highlight && (self.y as usize + self.state.offset == self.state.selected)
+        {
+            style = style.add_modifier(Modifier::REVERSED);
+        }
 
         let w = (self.list_area.width - self.x) as usize;
         self.x += self.buf.set_stringn(cx, cy, s, w, style).0 - cx;

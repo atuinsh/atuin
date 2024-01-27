@@ -11,6 +11,7 @@ use axum::{
     Json,
 };
 use http::StatusCode;
+use metrics::counter;
 use rand::rngs::OsRng;
 use tracing::{debug, error, info, instrument};
 use uuid::Uuid;
@@ -142,6 +143,8 @@ pub async fn register<DB: Database>(
         .await;
     }
 
+    counter!("atuin_users_registered", 1);
+
     match db.add_session(&new_session).await {
         Ok(_) => Ok(Json(RegisterResponse { session: token })),
         Err(e) => {
@@ -166,6 +169,9 @@ pub async fn delete<DB: Database>(
         return Err(ErrorResponse::reply("failed to delete user")
             .with_status(StatusCode::INTERNAL_SERVER_ERROR));
     };
+
+    counter!("atuin_users_deleted", 1);
+
     Ok(Json(DeleteUserResponse {}))
 }
 

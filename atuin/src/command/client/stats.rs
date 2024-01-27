@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use atuin_common::utils::Escapable as _;
 use clap::Parser;
 use crossterm::style::{Color, ResetColor, SetAttribute, SetForegroundColor};
-use eyre::{bail, Result};
+use eyre::Result;
 use interim::parse_date_string;
 
 use atuin_client::{
@@ -16,7 +16,7 @@ use time::{Duration, OffsetDateTime, Time};
 #[derive(Parser, Debug)]
 #[command(infer_subcommands = true)]
 pub struct Cmd {
-    /// compute statistics for the specified period, leave blank for statistics since the beginning
+    /// Compute statistics for the specified period, leave blank for statistics since the beginning. See https://docs.atuin.sh/reference/stats/ for more details.
     period: Vec<String>,
 
     /// How many top commands to list
@@ -24,7 +24,7 @@ pub struct Cmd {
     count: usize,
 }
 
-fn compute_stats(settings: &Settings, history: &[History], count: usize) -> Result<()> {
+fn compute_stats(settings: &Settings, history: &[History], count: usize) {
     let mut commands = HashSet::<&str>::with_capacity(history.len());
     let mut prefixes = HashMap::<&str, usize>::with_capacity(history.len());
     for i in history {
@@ -41,7 +41,8 @@ fn compute_stats(settings: &Settings, history: &[History], count: usize) -> Resu
     top.sort_unstable_by_key(|x| std::cmp::Reverse(x.1));
     top.truncate(count);
     if top.is_empty() {
-        bail!("No commands found");
+        println!("No commands found");
+        return;
     }
 
     let max = top.iter().map(|x| x.1).max().unwrap();
@@ -74,8 +75,6 @@ fn compute_stats(settings: &Settings, history: &[History], count: usize) -> Resu
     }
     println!("Total commands:   {}", history.len());
     println!("Unique commands:  {unique}");
-
-    Ok(())
 }
 
 impl Cmd {
@@ -114,7 +113,7 @@ impl Cmd {
             let end = start + Duration::days(1);
             db.range(start, end).await?
         };
-        compute_stats(settings, &history, self.count)?;
+        compute_stats(settings, &history, self.count);
         Ok(())
     }
 }

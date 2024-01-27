@@ -1,6 +1,6 @@
 use std::{
     fmt::{self, Display},
-    io::{self, Write},
+    io::{self, IsTerminal, Write},
     time::Duration,
 };
 
@@ -150,50 +150,51 @@ pub fn print_list(
     let flush_each_line = print0;
 
     for h in iterator {
-        match write!(
-            w,
-            "{}{}",
-            parsed_fmt.with_args(&FmtHistory(h)),
-            entry_terminator
-        ) {
-            Ok(()) => {}
-            // ignore broken pipe (issue #626)
-            Err(e) if e.kind() == io::ErrorKind::BrokenPipe => {
-                return;
-            }
-            Err(err) => {
-                eprintln!("ERROR: History output failed with the following error: {err}");
-                std::process::exit(1);
-            }
+        let fh = FmtHistory(h, CmdFormat::for_output(&w));
+        let args = parsed_fmt.with_args(&fh);
+        let write = write!(w, "{args}{entry_terminator}");
+        if let Err(err) = args.status() {
+            eprintln!("ERROR: history output failed with: {err}");
+            std::process::exit(1);
         }
+        check_for_write_errors(write);
         if flush_each_line {
-            match w.flush() {
-                Ok(()) => {}
-                // ignore broken pipe (issue #626)
-                Err(e) if e.kind() == io::ErrorKind::BrokenPipe => {}
-                Err(err) => {
-                    eprintln!("ERROR: History output failed with the following error: {err}");
-                    std::process::exit(1);
-                }
-            }
+            check_for_write_errors(w.flush());
         }
     }
 
     if !flush_each_line {
-        match w.flush() {
-            Ok(()) => {}
-            // ignore broken pipe (issue #626)
-            Err(e) if e.kind() == io::ErrorKind::BrokenPipe => {}
-            Err(err) => {
-                eprintln!("ERROR: History output failed with the following error: {err}");
-                std::process::exit(1);
-            }
+        check_for_write_errors(w.flush());
+    }
+}
+
+fn check_for_write_errors(write: Result<(), io::Error>) {
+    if let Err(err) = write {
+        // Ignore broken pipe (issue #626)
+        if err.kind() != io::ErrorKind::BrokenPipe {
+            eprintln!("ERROR: History output failed with the following error: {err}");
+            std::process::exit(1);
         }
     }
 }
 
-/// type wrapper around `History` so we can implement traits
-struct FmtHistory<'a>(&'a History);
+/// Wrapper around `History` so we can format output dynamically at runtime
+struct FmtHistory<'a>(&'a History, CmdFormat);
+
+enum CmdFormat {
+    Literal,
+    Escaped,
+}
+
+impl CmdFormat {
+    fn for_output<O: IsTerminal>(out: &O) -> Self {
+        if out.is_terminal() {
+            Self::Escaped
+        } else {
+            Self::Literal
+        }
+    }
+}
 
 static TIME_FMT: &[time::format_description::FormatItem<'static>] =
     format_description!("[year]-[month]-[day] [hour repr:24]:[minute]:[second]");
@@ -203,7 +204,10 @@ impl FormatKey for FmtHistory<'_> {
     #[allow(clippy::cast_sign_loss)]
     fn fmt(&self, key: &str, f: &mut fmt::Formatter<'_>) -> Result<(), FormatKeyError> {
         match key {
-            "command" => f.write_str(&self.0.command.trim().escape_control())?,
+            "command" => match self.1 {
+                CmdFormat::Literal => f.write_str(self.0.command.trim()),
+                CmdFormat::Escaped => f.write_str(&self.0.command.trim().escape_control()),
+            }?,
             "directory" => f.write_str(self.0.cwd.trim())?,
             "exit" => f.write_str(&self.0.exit.to_string())?,
             "duration" => {

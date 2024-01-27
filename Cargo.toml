@@ -8,6 +8,8 @@ members = [
   "atuin-common",
 ]
 
+resolver = "2"
+
 [workspace.package]
 name = "atuin"
 version = "17.2.1"

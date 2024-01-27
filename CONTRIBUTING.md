@@ -6,6 +6,25 @@ Atuin doesn't require anything super special to develop - standard Rust tooling 
 
 Before working on anything, we suggest taking a copy of your Atuin data directory (`~/.local/share/atuin` on most \*nix platforms). If anything goes wrong, you can always restore it!
 
+While data directory backups are always a good idea, you can instruct Atuin to use custom path using the following environment variables:
+
+```shell
+export ATUIN_DB_PATH=/tmp/atuin_dev.db
+export ATUIN_RECORD_STORE_PATH=/tmp/atuin_records.db
+```
+
+It is also recommended to update your `$PATH` so that the pre-exec scripts would use the locally built version:
+
+```shell
+export PATH="./target/release:$PATH"
+```
+
+These 3 variables can be added in a local `.envrc` file, read by [direnv](https://direnv.net/).
+
+## PRs 
+
+It can speed up the review cycle if you consent to maintainers pushing to your branch. This will only be in the case of small fixes or adjustments, and not anything large. If you feel OK with this, please check the box on the template!
+
 ## What to work on?
 
 Any issues labeled "bug" or "help wanted" would be fantastic, just drop a comment and feel free to ask for help!
