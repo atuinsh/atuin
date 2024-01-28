@@ -1,4 +1,4 @@
-use std::{env, net::TcpListener, time::Duration};
+use std::{env, time::Duration};
 
 use atuin_client::api_client;
 use atuin_common::{api::AddHistoryRequest, utils::uuid_v7};
@@ -6,7 +6,7 @@ use atuin_server::{launch_with_tcp_listener, Settings as ServerSettings};
 use atuin_server_postgres::{Postgres, PostgresSettings};
 use futures_util::TryFutureExt;
 use time::OffsetDateTime;
-use tokio::{sync::oneshot, task::JoinHandle};
+use tokio::{net::TcpListener, sync::oneshot, task::JoinHandle};
 use tracing::{dispatcher, Dispatch};
 use tracing_subscriber::{layer::SubscriberExt, EnvFilter};
 
@@ -42,7 +42,7 @@ async fn start_server(path: &str) -> (String, oneshot::Sender<()>, JoinHandle<()
     };
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
         let _tracing_guard = dispatcher::set_default(&dispatch);

@@ -1,6 +1,6 @@
 use atuin_common::api::{ErrorResponse, IndexResponse};
 use atuin_server_database::Database;
-use axum::{extract::State, response::IntoResponse, Json};
+use axum::{extract::State, http, response::IntoResponse, Json};
 
 use crate::router::AppState;
 

@@ -1,15 +1,14 @@
 use async_trait::async_trait;
 use atuin_common::api::{ErrorResponse, ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION};
 use axum::{
-    extract::FromRequestParts,
-    http::Request,
+    extract::{FromRequestParts, Request},
+    http::{self, request::Parts},
     middleware::Next,
     response::{IntoResponse, Response},
     routing::{delete, get, post},
     Router,
 };
 use eyre::Result;
-use http::request::Parts;
 use tower::ServiceBuilder;
 use tower_http::trace::TraceLayer;
 
@@ -81,7 +80,7 @@ async fn teapot() -> impl IntoResponse {
     (http::StatusCode::NOT_FOUND, "404 not found")
 }
 
-async fn clacks_overhead<B>(request: Request<B>, next: Next<B>) -> Response {
+async fn clacks_overhead(request: Request, next: Next) -> Response {
     let mut response = next.run(request).await;
 
     let gnu_terry_value = "GNU Terry Pratchett, Kris Nova";
@@ -94,7 +93,7 @@ async fn clacks_overhead<B>(request: Request<B>, next: Next<B>) -> Response {
 }
 
 /// Ensure that we only try and sync with clients on the same major version
-async fn semver<B>(request: Request<B>, next: Next<B>) -> Response {
+async fn semver(request: Request, next: Next) -> Response {
     let mut response = next.run(request).await;
     response
         .headers_mut()
