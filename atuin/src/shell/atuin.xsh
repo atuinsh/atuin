@@ -27,27 +27,41 @@ def _atuin_postcommand(cmd: str, rtn: int, out, ts):
     del $ATUIN_HISTORY_ID
 
 
+def _search(event, extra_args: list[str]):
+    buffer = event.current_buffer
+    cmd = ["atuin", "search", "--interactive", *extra_args, "--", buffer.text]
+    # We need to explicitly pass in xonsh env, in case user has set XDG_HOME or something else that matters
+    env = ${...}.detype()
+    env["ATUIN_SHELL_XONSH"] = "t"
+
+    p = subprocess.run(cmd, stderr=subprocess.PIPE, encoding="utf-8", env=env)
+    result = p.stderr.rstrip("\n")
+    # redraw prompt - necessary if atuin is configured to run inline, rather than fullscreen
+    event.cli.renderer.erase()
+
+    if not result:
+        return
+
+    buffer.reset()
+    if result.startswith("__atuin_accept__:"):
+        buffer.insert_text(result[17:])
+        buffer.validate_and_handle()
+    else:
+        buffer.insert_text(result)
+
+
 @events.on_ptk_create
 def _custom_keybindings(bindings, **kw):
     @bindings.add(Keys.ControlR, filter=_ATUIN_BIND_CTRL_R)
     def r_search(event):
-        buffer = event.current_buffer
-        cmd = ["atuin", "search", "--interactive", "--", buffer.text]
-        # We need to explicitly pass in xonsh env, in case user has set XDG_HOME or something else that matters
-        env = ${...}.detype()
-        env["ATUIN_SHELL_XONSH"] = "t"
+        _search(event, extra_args=[])
 
-        p = subprocess.run(cmd, stderr=subprocess.PIPE, encoding="utf-8", env=env)
-        result = p.stderr.rstrip("\n")
-        # redraw prompt - necessary if atuin is configured to run inline, rather than fullscreen
-        event.cli.renderer.erase()
-
-        if not result:
+    @bindings.add(Keys.Up, filter=_ATUIN_BIND_UP_ARROW)
+    def up_search(event):
+        # Only trigger if the buffer is a single line
+        if not '\n' in buffer.text:
+            _search(event, extra_args=["--shell-up-key-binding"])
             return
-
-        buffer.reset()
-        if result.startswith("__atuin_accept__:"):
-            buffer.insert_text(result[17:])
-            buffer.validate_and_handle()
-        else:
-            buffer.insert_text(result)
+        
+        # Run the default behavior for up arrow
+        event.current_buffer.auto_up(count=event.arg)
