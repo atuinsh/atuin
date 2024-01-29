@@ -14,15 +14,18 @@ use atuin_client::{
 
 #[derive(Args, Debug)]
 pub struct Push {
+    /// The tag to push (eg, 'history'). Defaults to all tags
     #[arg(long, short)]
     pub tag: Option<String>,
 
+    /// The host to push, in the form of a UUID host ID. Defaults to the current host.
     #[arg(long)]
     pub host: Option<Uuid>,
 }
 
 impl Push {
     pub async fn run(&self, settings: &Settings, store: SqliteStore) -> Result<()> {
+        let host_id = Settings::host_id().expect("failed to get host_id");
         // We can actually just use the existing diff/etc to push
         // 1. Diff
         // 2. Get operations
@@ -45,6 +48,10 @@ impl Push {
                 Operation::Upload { host, tag, .. } => {
                     if let Some(h) = self.host {
                         if HostId(h) != *host {
+                            return false;
+                        }
+                    } else {
+                        if *host != host_id {
                             return false;
                         }
                     }
