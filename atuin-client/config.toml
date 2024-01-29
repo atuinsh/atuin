@@ -84,7 +84,7 @@
 ## alt-0 .. alt-9
 # ctrl_n_shortcuts = false
 
-## default history list item format fallback when not appending in cmd
+## default history list format - can also be specified with the --format arg
 # history_format = "{time}\t{command}\t{duration}"
 
 ## prevent commands matching any of these regexes from being written to history.
