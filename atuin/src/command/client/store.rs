@@ -1,10 +1,8 @@
-use clap::{Args, Subcommand};
-use eyre::{bail, Result};
+use clap::Subcommand;
+use eyre::Result;
 
 use atuin_client::{
     database::Database,
-    encryption,
-    history::store::HistoryStore,
     record::{sqlite_store::SqliteStore, store::Store},
     settings::Settings,
 };

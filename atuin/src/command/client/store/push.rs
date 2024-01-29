@@ -1,14 +1,11 @@
 use atuin_common::record::HostId;
 use clap::Args;
-use eyre::{bail, Context, Result};
+use eyre::Result;
 use uuid::Uuid;
 
 use atuin_client::{
-    database::Database,
-    encryption,
-    history::store::HistoryStore,
+    record::sync::Operation,
     record::{sqlite_store::SqliteStore, sync},
-    record::{store::Store, sync::Operation},
     settings::Settings,
 };
 
@@ -38,11 +35,8 @@ impl Push {
         let operations = operations
             .into_iter()
             .filter(|op| match op {
-                // No noops thx
-                Operation::Noop { .. } => false,
-
-                // this is a push, so no downloads either
-                Operation::Download { .. } => false,
+                // No noops or downloads thx
+                Operation::Noop { .. } | Operation::Download { .. } => false,
 
                 // push, so yes plz to uploads!
                 Operation::Upload { host, tag, .. } => {
@@ -50,10 +44,8 @@ impl Push {
                         if HostId(h) != *host {
                             return false;
                         }
-                    } else {
-                        if *host != host_id {
-                            return false;
-                        }
+                    } else if *host != host_id {
+                        return false;
                     }
 
                     if let Some(t) = self.tag.clone() {
@@ -69,7 +61,7 @@ impl Push {
 
         let (uploaded, _) = sync::sync_remote(operations, &store, settings).await?;
 
-        println!("Uploaded {} records", uploaded);
+        println!("Uploaded {uploaded} records");
 
         Ok(())
     }
