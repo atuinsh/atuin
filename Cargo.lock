@@ -202,6 +202,7 @@ dependencies = [
  "tracing-subscriber",
  "tracing-tree",
  "unicode-width",
+ "uuid",
  "whoami",
 ]
 

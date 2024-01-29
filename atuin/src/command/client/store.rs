@@ -10,56 +10,15 @@ use atuin_client::{
 };
 use time::OffsetDateTime;
 
-#[derive(Args, Debug)]
-pub struct Rebuild {
-    pub tag: String,
-}
-
-impl Rebuild {
-    pub async fn run(
-        &self,
-        settings: &Settings,
-        store: SqliteStore,
-        database: &dyn Database,
-    ) -> Result<()> {
-        // keep it as a string and not an enum atm
-        // would be super cool to build this dynamically in the future
-        // eg register handles for rebuilding various tags without having to make this part of the
-        // binary big
-        match self.tag.as_str() {
-            "history" => {
-                self.rebuild_history(settings, store.clone(), database)
-                    .await?;
-            }
-
-            tag => bail!("unknown tag: {tag}"),
-        }
-
-        Ok(())
-    }
-
-    async fn rebuild_history(
-        &self,
-        settings: &Settings,
-        store: SqliteStore,
-        database: &dyn Database,
-    ) -> Result<()> {
-        let encryption_key: [u8; 32] = encryption::load_key(settings)?.into();
-
-        let host_id = Settings::host_id().expect("failed to get host_id");
-        let history_store = HistoryStore::new(store, host_id, encryption_key);
-
-        history_store.build(database).await?;
-
-        Ok(())
-    }
-}
+mod push;
+mod rebuild;
 
 #[derive(Subcommand, Debug)]
 #[command(infer_subcommands = true)]
 pub enum Cmd {
     Status,
-    Rebuild(Rebuild),
+    Rebuild(rebuild::Rebuild),
+    Push(push::Push),
 }
 
 impl Cmd {
@@ -72,6 +31,7 @@ impl Cmd {
         match self {
             Self::Status => self.status(store).await,
             Self::Rebuild(rebuild) => rebuild.run(settings, store, database).await,
+            Self::Push(push) => push.run(settings, store).await,
         }
     }
 
