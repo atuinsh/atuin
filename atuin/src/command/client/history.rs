@@ -88,10 +88,6 @@ pub enum Cmd {
         #[arg(long, short)]
         format: Option<String>,
     },
-
-    /// Import all old history.db data into the record store. Do not run more than once, and do not
-    /// run unless you know what you're doing (or the docs ask you to)
-    InitStore,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -321,10 +317,7 @@ impl Cmd {
             #[cfg(feature = "sync")]
             {
                 if settings.sync.records {
-                    let (diff, _) = record::sync::diff(settings, &store).await?;
-                    let operations = record::sync::operations(diff, &store).await?;
-                    let (_, downloaded) =
-                        record::sync::sync_remote(operations, &store, settings).await?;
+                    let (_, downloaded) = record::sync::sync(settings, &store).await?;
 
                     history_store.incremental_build(db, &downloaded).await?;
                 } else {
@@ -376,38 +369,6 @@ impl Cmd {
             print0,
             reverse,
         );
-
-        Ok(())
-    }
-
-    async fn init_store(
-        context: atuin_client::database::Context,
-        db: &impl Database,
-        store: HistoryStore,
-    ) -> Result<()> {
-        println!("Importing all history.db data into records.db");
-
-        println!("Fetching history from old database");
-        let history = db.list(&[], &context, None, false, true).await?;
-
-        println!("Fetching history already in store");
-        let store_ids = store.history_ids().await?;
-
-        for i in history {
-            println!("loaded {}", i.id);
-
-            if store_ids.contains(&i.id) {
-                println!("skipping {} - already exists", i.id);
-                continue;
-            }
-
-            if i.deleted_at.is_some() {
-                store.push(i.clone()).await?;
-                store.delete(i.id).await?;
-            } else {
-                store.push(i).await?;
-            }
-        }
 
         Ok(())
     }
@@ -468,8 +429,6 @@ impl Cmd {
 
                 Ok(())
             }
-
-            Self::InitStore => Self::init_store(context, db, history_store).await,
         }
     }
 }

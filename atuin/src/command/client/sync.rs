@@ -2,10 +2,10 @@ use clap::Subcommand;
 use eyre::{Result, WrapErr};
 
 use atuin_client::{
-    database::Database,
+    database::{current_context, Database},
     encryption,
     history::store::HistoryStore,
-    record::{sqlite_store::SqliteStore, sync},
+    record::{sqlite_store::SqliteStore, store::Store, sync},
     settings::Settings,
 };
 
@@ -80,16 +80,28 @@ async fn run(
     store: SqliteStore,
 ) -> Result<()> {
     if settings.sync.records {
-        let (diff, _) = sync::diff(settings, &store).await?;
-        let operations = sync::operations(diff, &store).await?;
-        let (uploaded, downloaded) = sync::sync_remote(operations, &store, settings).await?;
-
         let encryption_key: [u8; 32] = encryption::load_key(settings)
             .context("could not load encryption key")?
             .into();
 
         let host_id = Settings::host_id().expect("failed to get host_id");
         let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
+
+        let history_length = db.history_count(true).await?;
+        let store_history_length = store.len_tag("history").await?;
+
+        #[allow(clippy::cast_sign_loss)]
+        if history_length as u64 > store_history_length {
+            println!("History DB is longer than history record store");
+            println!("This happens when you used Atuin pre-record-store");
+
+            let context = current_context();
+            history_store.init_store(context, db).await?;
+
+            println!("\n");
+        }
+
+        let (uploaded, downloaded) = sync::sync(settings, &store).await?;
 
         history_store.incremental_build(db, &downloaded).await?;
 

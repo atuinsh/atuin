@@ -155,6 +155,18 @@ impl Store for SqliteStore {
         self.idx(host, tag, 0).await
     }
 
+    async fn len_tag(&self, tag: &str) -> Result<u64> {
+        let res: Result<(i64,), sqlx::Error> =
+            sqlx::query_as("select count(*) from store where tag=?1")
+                .bind(tag)
+                .fetch_one(&self.pool)
+                .await;
+        match res {
+            Err(e) => Err(eyre!("failed to fetch local store len: {}", e)),
+            Ok(v) => Ok(v.0 as u64),
+        }
+    }
+
     async fn len(&self, host: HostId, tag: &str) -> Result<u64> {
         let last = self.last(host, tag).await?;
 
@@ -343,6 +355,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn len_tag() {
+        let db = SqliteStore::new(":memory:", 0.1).await.unwrap();
+        let record = test_record();
+        db.push(&record).await.unwrap();
+
+        let len = db
+            .len_tag(record.tag.as_str())
+            .await
+            .expect("failed to get store len");
+
+        assert_eq!(len, 1, "expected length of 1 after insert");
+    }
+
+    #[tokio::test]
     async fn len_different_tags() {
         let db = SqliteStore::new(":memory:", 0.1).await.unwrap();
 
@@ -376,6 +402,12 @@ mod tests {
 
         assert_eq!(
             db.len(tail.host.id, tail.tag.as_str()).await.unwrap(),
+            100,
+            "failed to insert 100 records"
+        );
+
+        assert_eq!(
+            db.len_tag(tail.tag.as_str()).await.unwrap(),
             100,
             "failed to insert 100 records"
         );

@@ -21,7 +21,9 @@ pub trait Store {
     ) -> Result<()>;
 
     async fn get(&self, id: RecordId) -> Result<Record<EncryptedData>>;
+
     async fn len(&self, host: HostId, tag: &str) -> Result<u64>;
+    async fn len_tag(&self, tag: &str) -> Result<u64>;
 
     async fn last(&self, host: HostId, tag: &str) -> Result<Option<Record<EncryptedData>>>;
     async fn first(&self, host: HostId, tag: &str) -> Result<Option<Record<EncryptedData>>>;

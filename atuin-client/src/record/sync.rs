@@ -14,14 +14,17 @@ pub enum SyncError {
     #[error("the local store is ahead of the remote, but for another host. has remote lost data?")]
     LocalAheadOtherHost,
 
-    #[error("an issue with the local database occured")]
-    LocalStoreError,
+    #[error("an issue with the local database occured: {msg:?}")]
+    LocalStoreError { msg: String },
 
     #[error("something has gone wrong with the sync logic: {msg:?}")]
     SyncLogicError { msg: String },
 
-    #[error("a request to the sync server failed")]
-    RemoteRequestError,
+    #[error("operational error: {msg:?}")]
+    OperationalError { msg: String },
+
+    #[error("a request to the sync server failed: {msg:?}")]
+    RemoteRequestError { msg: String },
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -45,16 +48,27 @@ pub enum Operation {
     },
 }
 
-pub async fn diff(settings: &Settings, store: &impl Store) -> Result<(Vec<Diff>, RecordStatus)> {
+pub async fn diff(
+    settings: &Settings,
+    store: &impl Store,
+) -> Result<(Vec<Diff>, RecordStatus), SyncError> {
     let client = Client::new(
         &settings.sync_address,
         &settings.session_token,
         settings.network_connect_timeout,
         settings.network_timeout,
-    )?;
+    )
+    .map_err(|e| SyncError::OperationalError { msg: e.to_string() })?;
 
-    let local_index = store.status().await?;
-    let remote_index = client.record_status().await?;
+    let local_index = store
+        .status()
+        .await
+        .map_err(|e| SyncError::LocalStoreError { msg: e.to_string() })?;
+
+    let remote_index = client
+        .record_status()
+        .await
+        .map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?;
 
     let diff = local_index.diff(&remote_index);
 
@@ -166,13 +180,13 @@ async fn sync_upload(
             .map_err(|e| {
                 error!("failed to read upload page: {e:?}");
 
-                SyncError::LocalStoreError
+                SyncError::LocalStoreError { msg: e.to_string() }
             })?;
 
         client.post_records(&page).await.map_err(|e| {
             error!("failed to post records: {e:?}");
 
-            SyncError::RemoteRequestError
+            SyncError::RemoteRequestError { msg: e.to_string() }
         })?;
 
         println!(
@@ -217,12 +231,12 @@ async fn sync_download(
         let page = client
             .next_records(host, tag.clone(), local + progress, download_page_size)
             .await
-            .map_err(|_| SyncError::RemoteRequestError)?;
+            .map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?;
 
         store
             .push_batch(page.iter())
             .await
-            .map_err(|_| SyncError::LocalStoreError)?;
+            .map_err(|e| SyncError::LocalStoreError { msg: e.to_string() })?;
 
         println!(
             "downloaded {} records from remote, progress {}/{}",
@@ -279,6 +293,17 @@ pub async fn sync_remote(
             Operation::Noop { .. } => continue,
         }
     }
+
+    Ok((uploaded, downloaded))
+}
+
+pub async fn sync(
+    settings: &Settings,
+    store: &impl Store,
+) -> Result<(i64, Vec<RecordId>), SyncError> {
+    let (diff, _) = diff(settings, store).await?;
+    let operations = operations(diff, store).await?;
+    let (uploaded, downloaded) = sync_remote(operations, store, settings).await?;
 
     Ok((uploaded, downloaded))
 }
