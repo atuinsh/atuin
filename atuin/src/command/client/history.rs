@@ -366,7 +366,16 @@ impl Cmd {
             .list(&filters, &context, None, false, include_deleted)
             .await?;
 
-        print_list(&history, mode, format.as_deref(), print0, reverse);
+        print_list(
+            &history,
+            mode,
+            match format {
+                None => Some(settings.history_format.as_str()),
+                _ => format.as_deref(),
+            },
+            print0,
+            reverse,
+        );
 
         Ok(())
     }
@@ -449,7 +458,10 @@ impl Cmd {
                 print_list(
                     last,
                     ListMode::from_flags(human, cmd_only),
-                    format.as_deref(),
+                    match format {
+                        None => Some(settings.history_format.as_str()),
+                        _ => format.as_deref(),
+                    },
                     false,
                     true,
                 );

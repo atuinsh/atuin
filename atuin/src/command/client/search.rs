@@ -176,8 +176,6 @@ impl Cmd {
                 eprintln!("{item}");
             }
         } else {
-            let list_mode = ListMode::from_flags(self.human, self.cmd_only);
-
             let opt_filter = OptFilters {
                 exit: self.exit,
                 exclude_exit: self.exclude_exit,
@@ -218,10 +216,14 @@ impl Cmd {
                         run_non_interactive(settings, opt_filter.clone(), &self.query, &db).await?;
                 }
             } else {
+                let format = match self.format {
+                    None => Some(settings.history_format.as_str()),
+                    _ => self.format.as_deref(),
+                };
                 super::history::print_list(
                     &entries,
-                    list_mode,
-                    self.format.as_deref(),
+                    ListMode::from_flags(self.human, self.cmd_only),
+                    format,
                     false,
                     true,
                 );
