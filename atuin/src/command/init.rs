@@ -32,17 +32,17 @@ impl Cmd {
         println!("{base}");
 
         if std::env::var("ATUIN_NOBIND").is_err() {
-            const BIND_CTRL_R: &str = r"bindkey -M emacs '^r' _atuin_search_widget
-bindkey -M viins '^r' _atuin_search_viins_widget
-bindkey -M vicmd '/' _atuin_search_widget";
+            const BIND_CTRL_R: &str = r"bindkey -M emacs '^r' atuin-search
+bindkey -M viins '^r' atuin-search-viins
+bindkey -M vicmd '/' atuin-search";
 
-            const BIND_UP_ARROW: &str = r"bindkey -M emacs '^[[A' _atuin_up_search_widget
-bindkey -M vicmd '^[[A' _atuin_up_search_vicmd_widget
-bindkey -M viins '^[[A' _atuin_up_search_viins_widget
-bindkey -M emacs '^[OA' _atuin_up_search_widget
-bindkey -M vicmd '^[OA' _atuin_up_search_vicmd_widget
-bindkey -M viins '^[OA' _atuin_up_search_viins_widget
-bindkey -M vicmd 'k' _atuin_up_search_vicmd_widget";
+            const BIND_UP_ARROW: &str = r"bindkey -M emacs '^[[A' atuin-up-search
+bindkey -M vicmd '^[[A' atuin-up-search-vicmd
+bindkey -M viins '^[[A' atuin-up-search-viins
+bindkey -M emacs '^[OA' atuin-up-search
+bindkey -M vicmd '^[OA' atuin-up-search-vicmd
+bindkey -M viins '^[OA' atuin-up-search-viins
+bindkey -M vicmd 'k' atuin-up-search-vicmd";
 
             if !self.disable_ctrl_r {
                 println!("{BIND_CTRL_R}");

@@ -13,17 +13,17 @@ eval "$(atuin init zsh)"
 
 # zsh
 
-Atuin 定义了 ZLE 部件 "\_atuin_search_widget"
+Atuin 定义了 ZLE 部件 "atuin-search"
 
 ```
 export ATUIN_NOBIND="true"
 eval "$(atuin init zsh)"
 
-bindkey '^r' _atuin_search_widget
+bindkey '^r' atuin-search
 
 # 取决于终端模式
-bindkey '^[[A' _atuin_search_widget
-bindkey '^[OA' _atuin_search_widget
+bindkey '^[[A' atuin-search
+bindkey '^[OA' atuin-search
 ```
 
 # bash
