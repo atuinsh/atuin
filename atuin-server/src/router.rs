@@ -5,7 +5,7 @@ use axum::{
     http::{self, request::Parts},
     middleware::Next,
     response::{IntoResponse, Response},
-    routing::{delete, get, post},
+    routing::{delete, get, patch, post},
     Router,
 };
 use eyre::Result;
@@ -119,6 +119,7 @@ pub fn router<DB: Database>(database: DB, settings: Settings<DB::Settings>) -> R
         .route("/history", delete(handlers::history::delete))
         .route("/user/:username", get(handlers::user::get))
         .route("/account", delete(handlers::user::delete))
+        .route("/account/password", patch(handlers::user::change_password))
         .route("/register", post(handlers::user::register))
         .route("/login", post(handlers::user::login))
         .route("/record", post(handlers::record::post::<DB>))

@@ -3,6 +3,7 @@ use eyre::Result;
 
 use atuin_client::settings::Settings;
 
+pub mod change_password;
 pub mod delete;
 pub mod login;
 pub mod logout;
@@ -27,6 +28,8 @@ pub enum Commands {
 
     // Delete your account, and all synced data
     Delete,
+
+    ChangePassword(change_password::Cmd),
 }
 
 impl Cmd {
@@ -36,6 +39,7 @@ impl Cmd {
             Commands::Register(r) => r.run(&settings).await,
             Commands::Logout => logout::run(&settings),
             Commands::Delete => delete::run(&settings).await,
+            Commands::ChangePassword(c) => c.run(&settings).await,
         }
     }
 }

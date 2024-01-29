@@ -10,8 +10,9 @@ use reqwest::{
 
 use atuin_common::{
     api::{
-        AddHistoryRequest, CountResponse, DeleteHistoryRequest, ErrorResponse, LoginRequest,
-        LoginResponse, RegisterResponse, StatusResponse, SyncHistoryResponse,
+        AddHistoryRequest, ChangePasswordRequest, CountResponse, DeleteHistoryRequest,
+        ErrorResponse, LoginRequest, LoginResponse, RegisterResponse, StatusResponse,
+        SyncHistoryResponse,
     },
     record::RecordStatus,
 };
@@ -352,6 +353,37 @@ impl<'a> Client<'a> {
         let resp = self.client.delete(url).send().await?;
 
         if resp.status() == 403 {
+            bail!("invalid login details");
+        } else if resp.status() == 200 {
+            Ok(())
+        } else {
+            bail!("Unknown error");
+        }
+    }
+
+    pub async fn change_password(
+        &self,
+        current_password: String,
+        new_password: String,
+    ) -> Result<()> {
+        let url = format!("{}/account/password", self.sync_addr);
+        let url = Url::parse(url.as_str())?;
+
+        let resp = self
+            .client
+            .patch(url)
+            .json(&ChangePasswordRequest {
+                current_password,
+                new_password,
+            })
+            .send()
+            .await?;
+
+        dbg!(&resp);
+
+        if resp.status() == 401 {
+            bail!("current password is incorrect")
+        } else if resp.status() == 403 {
             bail!("invalid login details");
         } else if resp.status() == 200 {
             Ok(())

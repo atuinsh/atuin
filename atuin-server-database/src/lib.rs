@@ -54,6 +54,7 @@ pub trait Database: Sized + Clone + Send + Sync + 'static {
     async fn get_user_session(&self, u: &User) -> DbResult<Session>;
     async fn add_user(&self, user: &NewUser) -> DbResult<i64>;
     async fn delete_user(&self, u: &User) -> DbResult<()>;
+    async fn update_user_password(&self, u: &User) -> DbResult<()>;
 
     async fn total_history(&self) -> DbResult<i64>;
     async fn count_history(&self, user: &User) -> DbResult<i64>;

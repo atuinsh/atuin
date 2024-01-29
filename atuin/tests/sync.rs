@@ -127,6 +127,44 @@ async fn registration() {
 }
 
 #[tokio::test]
+async fn change_password() {
+    let path = format!("/{}", uuid_v7().as_simple());
+    let (address, shutdown, server) = start_server(&path).await;
+
+    // -- REGISTRATION --
+
+    let username = uuid_v7().as_simple().to_string();
+    let password = uuid_v7().as_simple().to_string();
+    let client = register_inner(&address, &username, &password).await;
+
+    // the session token works
+    let status = client.status().await.unwrap();
+    assert_eq!(status.username, username);
+
+    // -- PASSWORD CHANGE --
+
+    let current_password = password;
+    let new_password = uuid_v7().as_simple().to_string();
+    let result = client
+        .change_password(current_password, new_password.clone())
+        .await;
+
+    // the password change request succeeded
+    assert!(result.is_ok());
+
+    // -- LOGIN --
+
+    let client = login(&address, username.clone(), new_password).await;
+
+    // login with new password yields a working token
+    let status = client.status().await.unwrap();
+    assert_eq!(status.username, username);
+
+    shutdown.send(()).unwrap();
+    server.await.unwrap();
+}
+
+#[tokio::test]
 async fn sync() {
     let path = format!("/{}", uuid_v7().as_simple());
     let (address, shutdown, server) = start_server(&path).await;

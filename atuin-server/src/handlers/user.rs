@@ -175,6 +175,36 @@ pub async fn delete<DB: Database>(
     Ok(Json(DeleteUserResponse {}))
 }
 
+#[instrument(skip_all, fields(user.id = user.id, change_password))]
+pub async fn change_password<DB: Database>(
+    UserAuth(mut user): UserAuth,
+    state: State<AppState<DB>>,
+    Json(change_password): Json<ChangePasswordRequest>,
+) -> Result<Json<ChangePasswordResponse>, ErrorResponseStatus<'static>> {
+    let db = &state.0.database;
+
+    let verified = verify_str(
+        user.password.as_str(),
+        change_password.current_password.borrow(),
+    );
+    if !verified {
+        return Err(
+            ErrorResponse::reply("password is not correct").with_status(StatusCode::UNAUTHORIZED)
+        );
+    }
+
+    let hashed = hash_secret(&change_password.new_password);
+    user.password = hashed;
+
+    if let Err(e) = db.update_user_password(&user).await {
+        error!("failed to change user password: {}", e);
+
+        return Err(ErrorResponse::reply("failed to change user password")
+            .with_status(StatusCode::INTERNAL_SERVER_ERROR));
+    };
+    Ok(Json(ChangePasswordResponse {}))
+}
+
 #[instrument(skip_all, fields(user.username = login.username.as_str()))]
 pub async fn login<DB: Database>(
     state: State<AppState<DB>>,
