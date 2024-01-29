@@ -31,24 +31,26 @@ pub async fn run(
         settings.network_timeout,
     )?;
 
-    let current_password = current_password
-        .clone()
-        .unwrap_or_else(|| prompt_password("Please enter the current password: ").expect("Failed to read from input"));
+    let current_password = current_password.clone().unwrap_or_else(|| {
+        prompt_password("Please enter the current password: ").expect("Failed to read from input")
+    });
 
     if current_password.is_empty() {
         bail!("please provide the current password");
     }
 
-    let new_password = new_password
-        .clone()
-        .unwrap_or_else(|| prompt_password("Please enter the new password: ").expect("Failed to read from input"));
+    let new_password = new_password.clone().unwrap_or_else(|| {
+        prompt_password("Please enter the new password: ").expect("Failed to read from input")
+    });
 
     if new_password.is_empty() {
         bail!("please provide a new password");
     }
 
-    client.change_password(current_password, new_password).await?;
-    
+    client
+        .change_password(current_password, new_password)
+        .await?;
+
     println!("Account password successfully changed!");
 
     Ok(())

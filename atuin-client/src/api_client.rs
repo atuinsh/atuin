@@ -10,8 +10,9 @@ use reqwest::{
 
 use atuin_common::{
     api::{
-        AddHistoryRequest, CountResponse, DeleteHistoryRequest, ErrorResponse, LoginRequest,
-        LoginResponse, RegisterResponse, StatusResponse, SyncHistoryResponse, ChangePasswordRequest
+        AddHistoryRequest, ChangePasswordRequest, CountResponse, DeleteHistoryRequest,
+        ErrorResponse, LoginRequest, LoginResponse, RegisterResponse, StatusResponse,
+        SyncHistoryResponse,
     },
     record::RecordStatus,
 };
@@ -360,17 +361,26 @@ impl<'a> Client<'a> {
         }
     }
 
-    pub async fn change_password(&self, current_password: String, new_password: String) -> Result<()> {
+    pub async fn change_password(
+        &self,
+        current_password: String,
+        new_password: String,
+    ) -> Result<()> {
         let url = format!("{}/account/password", self.sync_addr);
         let url = Url::parse(url.as_str())?;
 
-        let resp = self.client.patch(url).json(&ChangePasswordRequest {
-            current_password,
-            new_password
-        }).send().await?;
+        let resp = self
+            .client
+            .patch(url)
+            .json(&ChangePasswordRequest {
+                current_password,
+                new_password,
+            })
+            .send()
+            .await?;
 
         dbg!(&resp);
-        
+
         if resp.status() == 401 {
             bail!("current password is incorrect")
         } else if resp.status() == 403 {

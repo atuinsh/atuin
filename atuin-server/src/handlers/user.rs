@@ -183,7 +183,10 @@ pub async fn change_password<DB: Database>(
 ) -> Result<Json<ChangePasswordResponse>, ErrorResponseStatus<'static>> {
     let db = &state.0.database;
 
-    let verified = verify_str(user.password.as_str(), change_password.current_password.borrow());
+    let verified = verify_str(
+        user.password.as_str(),
+        change_password.current_password.borrow(),
+    );
     if !verified {
         return Err(
             ErrorResponse::reply("password is not correct").with_status(StatusCode::UNAUTHORIZED)

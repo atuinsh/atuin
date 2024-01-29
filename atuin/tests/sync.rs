@@ -145,7 +145,9 @@ async fn change_password() {
 
     let current_password = password;
     let new_password = uuid_v7().as_simple().to_string();
-    let result = client.change_password(current_password, new_password.clone()).await;
+    let result = client
+        .change_password(current_password, new_password.clone())
+        .await;
 
     // the password change request succeeded
     assert!(result.is_ok());

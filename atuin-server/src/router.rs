@@ -5,7 +5,7 @@ use axum::{
     http::Request,
     middleware::Next,
     response::{IntoResponse, Response},
-    routing::{delete, get, post, patch},
+    routing::{delete, get, patch, post},
     Router,
 };
 use eyre::Result;
