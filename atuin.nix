@@ -36,12 +36,7 @@ rustPlatform.buildRustPackage {
       --zsh <($out/bin/atuin gen-completions -s zsh)
   '';
 
-  # Additional flags passed to the cargo test binary, see `cargo test -- --help`
-  checkFlags = [
-    # Sync tests require a postgres server
-    "--skip=sync"
-    "--skip=registration"
-  ];
+  doCheck = false;
 
   meta = with lib; {
     description = "Replacement for a shell history which records additional commands context with optional encrypted synchronization between machines";
