@@ -23,6 +23,8 @@ pub enum Shell {
     Fish,
     /// Nu setup
     Nu,
+    /// Xonsh setup
+    Xonsh,
 }
 
 impl Cmd {
@@ -140,12 +142,31 @@ bind -M insert \e\[A _atuin_bind_up";
         }
     }
 
+    fn init_xonsh(&self) {
+        let base = include_str!("../shell/atuin.xsh");
+        let (bind_ctrl_r, bind_up_arrow) = if std::env::var("ATUIN_NOBIND").is_ok() {
+            (false, false)
+        } else {
+            (!self.disable_ctrl_r, !self.disable_up_arrow)
+        };
+        println!(
+            "_ATUIN_BIND_CTRL_R={}",
+            if bind_ctrl_r { "True" } else { "False" }
+        );
+        println!(
+            "_ATUIN_BIND_UP_ARROW={}",
+            if bind_up_arrow { "True" } else { "False" }
+        );
+        println!("{base}");
+    }
+
     pub fn run(self) {
         match self.shell {
             Shell::Zsh => self.init_zsh(),
             Shell::Bash => self.init_bash(),
             Shell::Fish => self.init_fish(),
             Shell::Nu => self.init_nu(),
+            Shell::Xonsh => self.init_xonsh(),
         }
     }
 }

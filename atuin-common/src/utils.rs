@@ -101,6 +101,11 @@ pub fn is_bash() -> bool {
     env::var("ATUIN_SHELL_BASH").is_ok()
 }
 
+pub fn is_xonsh() -> bool {
+    // only set on xonsh
+    env::var("ATUIN_SHELL_XONSH").is_ok()
+}
+
 /// Extension trait for anything that can behave like a string to make it easy to escape control
 /// characters.
 ///
