@@ -13,7 +13,7 @@ use atuin_client::{
     database::{current_context, Database},
     encryption,
     history::{store::HistoryStore, History},
-    record::{self, sqlite_store::SqliteStore},
+    record::sqlite_store::SqliteStore,
     settings::{
         FilterMode::{Directory, Global, Session},
         Settings,
@@ -21,7 +21,8 @@ use atuin_client::{
 };
 
 #[cfg(feature = "sync")]
-use atuin_client::sync;
+use atuin_client::{record, sync};
+
 use log::{debug, warn};
 use time::{macros::format_description, OffsetDateTime};
 
@@ -282,6 +283,7 @@ impl Cmd {
         Ok(())
     }
 
+    #[allow(unused_variables)]
     async fn handle_end(
         db: &impl Database,
         store: SqliteStore,

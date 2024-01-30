@@ -8,7 +8,9 @@ use atuin_client::{
 };
 use time::OffsetDateTime;
 
+#[cfg(feature = "sync")]
 mod push;
+
 mod rebuild;
 
 #[derive(Subcommand, Debug)]
@@ -16,6 +18,8 @@ mod rebuild;
 pub enum Cmd {
     Status,
     Rebuild(rebuild::Rebuild),
+
+    #[cfg(feature = "sync")]
     Push(push::Push),
 }
 
@@ -29,6 +33,8 @@ impl Cmd {
         match self {
             Self::Status => self.status(store).await,
             Self::Rebuild(rebuild) => rebuild.run(settings, store, database).await,
+
+            #[cfg(feature = "sync")]
             Self::Push(push) => push.run(settings, store).await,
         }
     }
