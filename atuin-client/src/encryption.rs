@@ -32,6 +32,11 @@ pub struct EncryptedHistory {
 
 pub fn new_key(settings: &Settings) -> Result<Key> {
     let path = settings.key_path.as_str();
+    let path = PathBuf::from(path);
+
+    if path.exists() {
+        bail!("key already exists! cannot overwrite");
+    }
 
     let key = XSalsa20Poly1305::generate_key(&mut OsRng);
     let encoded = encode_key(&key)?;
