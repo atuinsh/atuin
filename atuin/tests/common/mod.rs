@@ -1,11 +1,10 @@
 use std::{env, time::Duration};
 
 use atuin_client::api_client;
-use atuin_common::{api::AddHistoryRequest, utils::uuid_v7};
+use atuin_common::utils::uuid_v7;
 use atuin_server::{launch_with_tcp_listener, Settings as ServerSettings};
 use atuin_server_postgres::{Postgres, PostgresSettings};
 use futures_util::TryFutureExt;
-use time::OffsetDateTime;
 use tokio::{net::TcpListener, sync::oneshot, task::JoinHandle};
 use tracing::{dispatcher, Dispatch};
 use tracing_subscriber::{layer::SubscriberExt, EnvFilter};
@@ -80,6 +79,7 @@ pub async fn register_inner<'a>(
     api_client::Client::new(address, &registration_response.session, 5, 30).unwrap()
 }
 
+#[allow(dead_code)]
 pub async fn login(address: &str, username: String, password: String) -> api_client::Client<'_> {
     // registration works
     let login_respose = api_client::login(
@@ -92,6 +92,7 @@ pub async fn login(address: &str, username: String, password: String) -> api_cli
     api_client::Client::new(address, &login_respose.session, 5, 30).unwrap()
 }
 
+#[allow(dead_code)]
 pub async fn register(address: &str) -> api_client::Client<'_> {
     let username = uuid_v7().as_simple().to_string();
     let password = uuid_v7().as_simple().to_string();

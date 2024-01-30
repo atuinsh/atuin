@@ -1,14 +1,4 @@
-use std::{env, time::Duration};
-
-use atuin_client::api_client;
-use atuin_common::{api::AddHistoryRequest, utils::uuid_v7};
-use atuin_server::{launch_with_tcp_listener, Settings as ServerSettings};
-use atuin_server_postgres::{Postgres, PostgresSettings};
-use futures_util::TryFutureExt;
-use time::OffsetDateTime;
-use tokio::{net::TcpListener, sync::oneshot, task::JoinHandle};
-use tracing::{dispatcher, Dispatch};
-use tracing_subscriber::{layer::SubscriberExt, EnvFilter};
+use atuin_common::utils::uuid_v7;
 
 mod common;
 
