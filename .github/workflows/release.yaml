@@ -30,7 +30,7 @@ jobs:
           - { os: ubuntu-20.04 , target: x86_64-unknown-linux-gnu    }
           - { os: ubuntu-20.04 , target: aarch64-unknown-linux-gnu    }
           - { os: macos-12     , target: x86_64-apple-darwin         }
-          - { os: self-hosted     , target: aarch64-apple-darwin         }
+          - { os: macos-14     , target: aarch64-apple-darwin         }
     steps:
     - name: Check for release
       id: is-release
