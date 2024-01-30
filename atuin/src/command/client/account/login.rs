@@ -48,8 +48,10 @@ impl Cmd {
         let password = self.password.clone().unwrap_or_else(read_user_password);
 
         let key_path = settings.key_path.as_str();
+        let key_path = PathBuf::from(key_path);
+
         if key.is_empty() {
-            if PathBuf::from(key_path).exists() {
+            if PathBuf::from(key_path.clone()).exists() {
                 let bytes = fs_err::read_to_string(key_path)
                     .context("existing key file couldn't be read")?;
                 if decode_key(bytes).is_err() {
@@ -59,7 +61,7 @@ impl Cmd {
                 println!("No key file exists, creating a new");
                 let _key = new_key(settings)?;
             }
-        } else {
+        } else if !key_path.exists() {
             // try parse the key as a mnemonic...
             let key = match bip39::Mnemonic::from_phrase(&key, bip39::Language::English) {
                 Ok(mnemonic) => encode_key(Key::from_slice(mnemonic.entropy()))?,
@@ -90,6 +92,8 @@ impl Cmd {
 
             let mut file = File::create(key_path).await?;
             file.write_all(key.as_bytes()).await?;
+        } else {
+            println!("Handle");
         }
 
         let session = api_client::login(

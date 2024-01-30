@@ -19,6 +19,7 @@ use atuin_common::record::{
 };
 use uuid::Uuid;
 
+use super::encryption::PASETO_V4;
 use super::store::Store;
 
 #[derive(Debug, Clone)]
@@ -105,6 +106,15 @@ impl SqliteStore {
                 content_encryption_key: row.get("cek"),
             },
         }
+    }
+
+    async fn load_all(&self) -> Result<Vec<Record<EncryptedData>>> {
+        let res = sqlx::query("select * from store ")
+            .map(Self::query_row)
+            .fetch_all(&self.pool)
+            .await?;
+
+        Ok(res)
     }
 }
 
@@ -250,6 +260,45 @@ impl Store for SqliteStore {
             .await?;
 
         Ok(res)
+    }
+
+    /// Reencrypt every single item in this store with a new key
+    /// Be careful - this may mess with sync.
+    async fn re_encrypt(&self, old_key: &[u8; 32], new_key: &[u8; 32]) -> Result<()> {
+        // Load all the records
+        // In memory like some of the other code here
+        // This will never be called in a hot loop, and only under the following circumstances
+        // 1. The user has logged into a new account, with a new key. They are unlikely to have a
+        //    lot of data
+        // 2. The user has encountered some sort of issue, and runs a maintenance command that
+        //    invokes this
+        let all = self.load_all().await?;
+
+        let re_encrypted = all
+            .into_iter()
+            .map(|record| record.re_encrypt::<PASETO_V4>(old_key, new_key))
+            .collect::<Result<Vec<_>>>()?;
+
+        // next up, we delete all the old data and reinsert the new stuff
+        // do it in one transaction, so if anything fails we rollback OK
+
+        let mut tx = self.pool.begin().await?;
+
+        let res = sqlx::query("delete from store").execute(&mut *tx).await?;
+
+        let rows = res.rows_affected();
+        debug!("deleted {rows} rows");
+
+        // don't call push_batch, as it will start its own transaction
+        // call the underlying save_raw
+
+        for record in re_encrypted {
+            Self::save_raw(&mut tx, &record).await?;
+        }
+
+        tx.commit().await?;
+
+        Ok(())
     }
 }
 
