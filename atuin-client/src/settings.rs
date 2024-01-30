@@ -262,6 +262,7 @@ pub struct Settings {
     pub session_path: String,
     pub search_mode: SearchMode,
     pub filter_mode: FilterMode,
+    pub filter_mode_list: Vec<FilterMode>,
     pub filter_mode_shell_up_key_binding: Option<FilterMode>,
     pub search_mode_shell_up_key_binding: Option<SearchMode>,
     pub shell_up_key_binding: bool,
@@ -493,6 +494,7 @@ impl Settings {
             .set_default("sync_frequency", "10m")?
             .set_default("search_mode", "fuzzy")?
             .set_default("filter_mode", "global")?
+            .set_default("filter_mode_list", vec!["global", "host", "session", "directory", "workspace"])?
             .set_default("style", "auto")?
             .set_default("inline_height", 0)?
             .set_default("show_preview", false)?

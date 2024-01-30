@@ -359,23 +359,10 @@ impl State {
             }
             KeyCode::Char('u') if ctrl => self.search.input.clear(),
             KeyCode::Char('r') if ctrl => {
-                let filter_modes = if settings.workspaces && self.search.context.git_root.is_some()
-                {
-                    vec![
-                        FilterMode::Global,
-                        FilterMode::Host,
-                        FilterMode::Session,
-                        FilterMode::Directory,
-                        FilterMode::Workspace,
-                    ]
-                } else {
-                    vec![
-                        FilterMode::Global,
-                        FilterMode::Host,
-                        FilterMode::Session,
-                        FilterMode::Directory,
-                    ]
-                };
+                let mut filter_modes = settings.filter_mode_list.clone();
+                if settings.workspaces && self.search.context.git_root.is_some() {
+                    filter_modes.retain(|fm| *fm != FilterMode::Workspace);
+                }
 
                 let i = self.search.filter_mode as usize;
                 let i = (i + 1) % filter_modes.len();
