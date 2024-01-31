@@ -111,13 +111,19 @@ impl Cmd {
             // 2. if not, re-encrypt the local history and overwrite the key
             let current_key: [u8; 32] = load_key(settings)?.into();
 
+            let encoded = key.clone(); // gonna want to save it in a bit
             let new_key: [u8; 32] = decode_key(key)
                 .context("could not decode provided key - is not valid base64")?
                 .into();
 
             if new_key != current_key {
-                println!("Re-encrypting local store with new key");
+                println!("\nRe-encrypting local store with new key");
+
                 store.re_encrypt(&current_key, &new_key).await?;
+
+                println!("Writing new key");
+                let mut file = File::create(key_path).await?;
+                file.write_all(encoded.as_bytes()).await?;
             }
         }
 
