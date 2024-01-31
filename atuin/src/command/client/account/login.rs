@@ -6,7 +6,9 @@ use tokio::{fs::File, io::AsyncWriteExt};
 
 use atuin_client::{
     api_client,
-    encryption::{decode_key, encode_key, new_key, Key},
+    encryption::{decode_key, encode_key, load_key, new_key, Key},
+    record::sqlite_store::SqliteStore,
+    record::store::Store,
     settings::Settings,
 };
 use atuin_common::api::LoginRequest;
@@ -32,7 +34,7 @@ fn get_input() -> Result<String> {
 }
 
 impl Cmd {
-    pub async fn run(&self, settings: &Settings) -> Result<()> {
+    pub async fn run(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
         let session_path = settings.session_path.as_str();
 
         if PathBuf::from(session_path).exists() {
@@ -44,26 +46,18 @@ impl Cmd {
         }
 
         let username = or_user_input(&self.username, "username");
-        let key = or_user_input(&self.key, "encryption key [blank to use existing key file]");
         let password = self.password.clone().unwrap_or_else(read_user_password);
 
         let key_path = settings.key_path.as_str();
         let key_path = PathBuf::from(key_path);
 
-        if key.is_empty() {
-            if PathBuf::from(key_path.clone()).exists() {
-                let bytes = fs_err::read_to_string(key_path)
-                    .context("existing key file couldn't be read")?;
-                if decode_key(bytes).is_err() {
-                    bail!("the key in existing key file was invalid");
-                }
-            } else {
-                println!("No key file exists, creating a new");
-                let _key = new_key(settings)?;
-            }
-        } else if !key_path.exists() {
+        let key = or_user_input(&self.key, "encryption key [blank to use existing key file]");
+
+        // if provided, the key may be EITHER base64, or a bip mnemonic
+        // try to normalize on base64
+        let key = if !key.is_empty() {
             // try parse the key as a mnemonic...
-            let key = match bip39::Mnemonic::from_phrase(&key, bip39::Language::English) {
+            match bip39::Mnemonic::from_phrase(&key, bip39::Language::English) {
                 Ok(mnemonic) => encode_key(Key::from_slice(mnemonic.entropy()))?,
                 Err(err) => {
                     if let Some(err) = err.downcast_ref::<bip39::ErrorKind>() {
@@ -84,8 +78,25 @@ impl Cmd {
                         key
                     }
                 }
-            };
+            }
+        } else {
+            key
+        };
 
+        // I've simplified this a little, but it could really do with a refactor
+        // Annoyingly, it's also very important to get it correct
+        if key.is_empty() {
+            if PathBuf::from(key_path.clone()).exists() {
+                let bytes = fs_err::read_to_string(key_path)
+                    .context("existing key file couldn't be read")?;
+                if decode_key(bytes).is_err() {
+                    bail!("the key in existing key file was invalid");
+                }
+            } else {
+                println!("No key file exists, creating a new");
+                let _key = new_key(settings)?;
+            }
+        } else if !key_path.exists() {
             if decode_key(key.clone()).is_err() {
                 bail!("the specified key was invalid");
             }
@@ -93,7 +104,21 @@ impl Cmd {
             let mut file = File::create(key_path).await?;
             file.write_all(key.as_bytes()).await?;
         } else {
-            println!("Handle");
+            // we now know that the user has logged in specifying a key, AND that the key path
+            // exists
+
+            // 1. check if the saved key and the provided key match. if so, nothing to do.
+            // 2. if not, re-encrypt the local history and overwrite the key
+            let current_key: [u8; 32] = load_key(settings)?.into();
+
+            let new_key: [u8; 32] = decode_key(key)
+                .context("could not decode provided key - is not valid base64")?
+                .into();
+
+            if new_key != current_key {
+                println!("Re-encrypting local store with new key");
+                store.re_encrypt(&current_key, &new_key).await?;
+            }
         }
 
         let session = api_client::login(
