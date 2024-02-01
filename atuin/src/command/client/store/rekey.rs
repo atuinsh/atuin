@@ -1,5 +1,6 @@
 use clap::Args;
 use eyre::Result;
+use tokio::{fs::File, io::AsyncWriteExt};
 
 use atuin_client::{
     encryption::{decode_key, generate_encoded_key, load_key},
@@ -16,7 +17,7 @@ pub struct Rekey {
 
 impl Rekey {
     pub async fn run(&self, settings: &Settings, store: SqliteStore) -> Result<()> {
-        let new_key = if let Some(key) = self.key.clone() {
+        let key = if let Some(key) = self.key.clone() {
             println!("Re-encrypting store with specified key");
             key
         } else {
@@ -26,9 +27,13 @@ impl Rekey {
         };
 
         let current_key: [u8; 32] = load_key(settings)?.into();
-        let new_key: [u8; 32] = decode_key(new_key)?.into();
+        let new_key: [u8; 32] = decode_key(key.clone())?.into();
 
         store.re_encrypt(&current_key, &new_key).await?;
+
+        println!("Store rewritten. Saving new key");
+        let mut file = File::create(settings.key_path.clone()).await?;
+        file.write_all(key.as_bytes()).await?;
 
         Ok(())
     }
