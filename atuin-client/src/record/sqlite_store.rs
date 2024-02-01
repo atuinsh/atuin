@@ -304,9 +304,15 @@ impl Store for SqliteStore {
 
 #[cfg(test)]
 mod tests {
-    use atuin_common::record::{EncryptedData, Host, HostId, Record};
+    use atuin_common::{
+        record::{DecryptedData, EncryptedData, Host, HostId, Record},
+        utils::uuid_v7,
+    };
 
-    use crate::record::{encryption::PASETO_V4, store::Store};
+    use crate::{
+        encryption::generate_encoded_key,
+        record::{encryption::PASETO_V4, store::Store},
+    };
 
     use super::SqliteStore;
 
@@ -483,5 +489,66 @@ mod tests {
             10000,
             "failed to insert 10k records"
         );
+    }
+
+    #[tokio::test]
+    async fn re_encrypt() {
+        let store = SqliteStore::new(":memory:", 0.1).await.unwrap();
+        let (key, _) = generate_encoded_key().unwrap();
+        let data = vec![0u8, 1u8, 2u8, 3u8];
+        let host_id = HostId(uuid_v7());
+
+        for i in 0..10 {
+            let record = Record::builder()
+                .host(Host::new(host_id))
+                .version(String::from("test"))
+                .tag(String::from("test"))
+                .idx(i)
+                .data(DecryptedData(data.clone()))
+                .build();
+
+            let record = record.encrypt::<PASETO_V4>(&key.into());
+            store
+                .push(&record)
+                .await
+                .expect("failed to push encrypted record");
+        }
+
+        // first, check that we can decrypt the data with the current key
+        let all = store.all_tagged("test").await.unwrap();
+
+        assert_eq!(all.len(), 10, "failed to fetch all records");
+
+        for record in all {
+            let decrypted = record.decrypt::<PASETO_V4>(&key.into()).unwrap();
+            assert_eq!(decrypted.data.0, data);
+        }
+
+        // reencrypt the store, then check if
+        // 1) it cannot be decrypted with the old key
+        // 2) it can be decrypted wiht the new key
+
+        let (new_key, _) = generate_encoded_key().unwrap();
+        store
+            .re_encrypt(&key.into(), &new_key.into())
+            .await
+            .expect("failed to re-encrypt store");
+
+        let all = store.all_tagged("test").await.unwrap();
+
+        for record in all.iter() {
+            let decrypted = record.clone().decrypt::<PASETO_V4>(&key.into());
+            assert!(
+                decrypted.is_err(),
+                "did not get error decrypting with old key after re-encrypt"
+            )
+        }
+
+        for record in all {
+            let decrypted = record.decrypt::<PASETO_V4>(&new_key.into()).unwrap();
+            assert_eq!(decrypted.data.0, data);
+        }
+
+        assert_eq!(store.len(host_id, "test").await.unwrap(), 10);
     }
 }

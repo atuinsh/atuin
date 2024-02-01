@@ -55,7 +55,9 @@ impl Cmd {
 
         // if provided, the key may be EITHER base64, or a bip mnemonic
         // try to normalize on base64
-        let key = if !key.is_empty() {
+        let key = if key.is_empty() {
+            key
+        } else {
             // try parse the key as a mnemonic...
             match bip39::Mnemonic::from_phrase(&key, bip39::Language::English) {
                 Ok(mnemonic) => encode_key(Key::from_slice(mnemonic.entropy()))?,
@@ -79,14 +81,12 @@ impl Cmd {
                     }
                 }
             }
-        } else {
-            key
         };
 
         // I've simplified this a little, but it could really do with a refactor
         // Annoyingly, it's also very important to get it correct
         if key.is_empty() {
-            if PathBuf::from(key_path.clone()).exists() {
+            if key_path.exists() {
                 let bytes = fs_err::read_to_string(key_path)
                     .context("existing key file couldn't be read")?;
                 if decode_key(bytes).is_err() {
