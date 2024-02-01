@@ -28,6 +28,8 @@ pub trait Store {
     async fn last(&self, host: HostId, tag: &str) -> Result<Option<Record<EncryptedData>>>;
     async fn first(&self, host: HostId, tag: &str) -> Result<Option<Record<EncryptedData>>>;
 
+    async fn re_encrypt(&self, old_key: &[u8; 32], new_key: &[u8; 32]) -> Result<()>;
+
     /// Get the next `limit` records, after and including the given index
     async fn next(
         &self,

@@ -30,6 +30,13 @@ pub struct EncryptedHistory {
     pub nonce: Nonce<XSalsa20Poly1305>,
 }
 
+pub fn generate_encoded_key() -> Result<(Key, String)> {
+    let key = XSalsa20Poly1305::generate_key(&mut OsRng);
+    let encoded = encode_key(&key)?;
+
+    Ok((key, encoded))
+}
+
 pub fn new_key(settings: &Settings) -> Result<Key> {
     let path = settings.key_path.as_str();
     let path = PathBuf::from(path);
@@ -38,8 +45,7 @@ pub fn new_key(settings: &Settings) -> Result<Key> {
         bail!("key already exists! cannot overwrite");
     }
 
-    let key = XSalsa20Poly1305::generate_key(&mut OsRng);
-    let encoded = encode_key(&key)?;
+    let (key, encoded) = generate_encoded_key()?;
 
     let mut file = fs::File::create(path)?;
     file.write_all(encoded.as_bytes())?;

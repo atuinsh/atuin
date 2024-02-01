@@ -95,7 +95,7 @@ impl Cmd {
             Self::Sync(sync) => sync.run(settings, &db, sqlite_store).await,
 
             #[cfg(feature = "sync")]
-            Self::Account(account) => account.run(settings).await,
+            Self::Account(account) => account.run(settings, sqlite_store).await,
 
             Self::Kv(kv) => kv.run(&settings, &sqlite_store).await,
 

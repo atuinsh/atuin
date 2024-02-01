@@ -51,7 +51,7 @@ impl Cmd {
     ) -> Result<()> {
         match self {
             Self::Sync { force } => run(&settings, force, db, store).await,
-            Self::Login(l) => l.run(&settings).await,
+            Self::Login(l) => l.run(&settings, &store).await,
             Self::Logout => account::logout::run(&settings),
             Self::Register(r) => r.run(&settings).await,
             Self::Status => status::run(&settings, db).await,
