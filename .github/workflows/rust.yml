@@ -52,16 +52,35 @@ jobs:
       with:
           toolchain: stable
 
-#     - uses: actions/cache@v3
-#       with:
-#         path: |
-#          ~/.cargo/registry
-#           ~/.cargo/git
-#           target
-#         key: ${ runner.os }-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
+    - uses: actions/cache@v3
+      with:
+        path: |
+         ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${ runner.os }-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
 
     - name: Run cargo test
       run: cargo test --lib --bins
+
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Install rust
+      uses: dtolnay/rust-toolchain@master
+      with:
+          toolchain: stable
+
+    - uses: actions/cache@v3
+      with:
+        path: |
+         ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${ runner.os }-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
 
     - name: Run cargo check (all features)
       run: cargo check --all-features --workspace
