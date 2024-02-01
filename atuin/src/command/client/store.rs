@@ -12,12 +12,14 @@ use time::OffsetDateTime;
 mod push;
 
 mod rebuild;
+mod rekey;
 
 #[derive(Subcommand, Debug)]
 #[command(infer_subcommands = true)]
 pub enum Cmd {
     Status,
     Rebuild(rebuild::Rebuild),
+    Rekey(rekey::Rekey),
 
     #[cfg(feature = "sync")]
     Push(push::Push),
@@ -33,6 +35,7 @@ impl Cmd {
         match self {
             Self::Status => self.status(store).await,
             Self::Rebuild(rebuild) => rebuild.run(settings, store, database).await,
+            Self::Rekey(rekey) => rekey.run(settings, store).await,
 
             #[cfg(feature = "sync")]
             Self::Push(push) => push.run(settings, store).await,
