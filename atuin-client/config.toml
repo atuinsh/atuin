@@ -148,6 +148,10 @@ enter_accept = true
 ## Timeout (in seconds) for acquiring a local database connection (sqlite)
 # local_timeout = 5
 
+## Set this to true and Atuin will minimize motion in the UI - timers will not update live, etc. 
+## Alternatively, set env NO_MOTION=true
+# prefers_reduced_motion = false
+
 #[stats]
 # Set commands where we should consider the subcommand for statistics. Eg, kubectl get vs just kubectl
 #common_subcommands = [

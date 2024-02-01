@@ -18,6 +18,7 @@ pub struct HistoryList<'a> {
     inverted: bool,
     /// Apply an alternative highlighting to the selected row
     alternate_highlight: bool,
+    now: &'a dyn Fn() -> OffsetDateTime,
 }
 
 #[derive(Default)]
@@ -68,6 +69,7 @@ impl<'a> StatefulWidget for HistoryList<'a> {
             state,
             inverted: self.inverted,
             alternate_highlight: self.alternate_highlight,
+            now: &self.now,
         };
 
         for item in self.history.iter().skip(state.offset).take(end - start) {
@@ -84,12 +86,18 @@ impl<'a> StatefulWidget for HistoryList<'a> {
 }
 
 impl<'a> HistoryList<'a> {
-    pub fn new(history: &'a [History], inverted: bool, alternate_highlight: bool) -> Self {
+    pub fn new(
+        history: &'a [History],
+        inverted: bool,
+        alternate_highlight: bool,
+        now: &'a dyn Fn() -> OffsetDateTime,
+    ) -> Self {
         Self {
             history,
             block: None,
             inverted,
             alternate_highlight,
+            now,
         }
     }
 
@@ -121,6 +129,7 @@ struct DrawState<'a> {
     state: &'a ListState,
     inverted: bool,
     alternate_highlight: bool,
+    now: &'a dyn Fn() -> OffsetDateTime,
 }
 
 // longest line prefix I could come up with
@@ -160,7 +169,7 @@ impl DrawState<'_> {
         // would fail.
         // If the timestamp would otherwise be in the future, display
         // the time since as 0.
-        let since = OffsetDateTime::now_utc() - h.timestamp;
+        let since = (self.now)() - h.timestamp;
         let time = format_duration(since.try_into().unwrap_or_default());
 
         // pad the time a little bit before we write. this aligns things nicely

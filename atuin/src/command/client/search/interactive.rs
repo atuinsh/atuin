@@ -16,6 +16,7 @@ use crossterm::{
 use eyre::Result;
 use futures_util::FutureExt;
 use semver::Version;
+use time::OffsetDateTime;
 use unicode_width::UnicodeWidthStr;
 
 use atuin_client::{
@@ -69,6 +70,7 @@ pub struct State {
 
     search: SearchState,
     engine: Box<dyn SearchEngine>,
+    now: Box<dyn Fn() -> OffsetDateTime + Send>,
 }
 
 #[derive(Clone, Copy)]
@@ -550,7 +552,8 @@ impl State {
 
         match self.tab_index {
             0 => {
-                let results_list = Self::build_results_list(style, results, self.keymap_mode);
+                let results_list =
+                    Self::build_results_list(style, results, self.keymap_mode, &self.now);
                 f.render_stateful_widget(results_list, results_list_chunk, &mut self.results_state);
             }
 
@@ -652,13 +655,18 @@ impl State {
         stats
     }
 
-    fn build_results_list(
+    fn build_results_list<'a>(
         style: StyleState,
-        results: &[History],
+        results: &'a [History],
         keymap_mode: KeymapMode,
-    ) -> HistoryList<'_> {
-        let results_list =
-            HistoryList::new(results, style.invert, keymap_mode == KeymapMode::VimNormal);
+        now: &'a dyn Fn() -> OffsetDateTime,
+    ) -> HistoryList<'a> {
+        let results_list = HistoryList::new(
+            results,
+            style.invert,
+            keymap_mode == KeymapMode::VimNormal,
+            now,
+        );
 
         if style.compact {
             results_list
@@ -882,6 +890,12 @@ pub async fn history(
             value => value,
         },
         current_cursor: None,
+        now: if settings.prefers_reduced_motion {
+            let now = OffsetDateTime::now_utc();
+            Box::new(move || now)
+        } else {
+            Box::new(OffsetDateTime::now_utc)
+        },
     };
 
     app.initialize_keymap_cursor(settings);

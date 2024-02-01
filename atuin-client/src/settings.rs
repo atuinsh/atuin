@@ -278,6 +278,7 @@ pub struct Settings {
     pub word_chars: String,
     pub scroll_context_lines: usize,
     pub history_format: String,
+    pub prefers_reduced_motion: bool,
 
     #[serde(with = "serde_regex", default = "RegexSet::empty")]
     pub history_filter: RegexSet,
@@ -524,6 +525,13 @@ impl Settings {
             .set_default("keymap_mode", "emacs")?
             .set_default("keymap_mode_shell", "auto")?
             .set_default("keymap_cursor", HashMap::<String, String>::new())?
+            .set_default(
+                "prefers_reduced_motion",
+                std::env::var("NO_MOTION")
+                    .ok()
+                    .map(|_| config::Value::new(None, config::ValueKind::Boolean(true)))
+                    .unwrap_or_else(|| config::Value::new(None, config::ValueKind::Boolean(false))),
+            )?
             .add_source(
                 Environment::with_prefix("atuin")
                     .prefix_separator("_")
