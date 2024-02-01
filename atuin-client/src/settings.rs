@@ -527,9 +527,9 @@ impl Settings {
             .set_default("keymap_cursor", HashMap::<String, String>::new())?
             .set_default(
                 "prefers_reduced_motion",
-                std::env::var("PREFERS_REDUCED_MOTION")
+                std::env::var("NO_MOTION")
                     .ok()
-                    .map(|s| config::Value::new(None, config::ValueKind::String(s)))
+                    .map(|_| config::Value::new(None, config::ValueKind::Boolean(true)))
                     .unwrap_or_else(|| config::Value::new(None, config::ValueKind::Boolean(false))),
             )?
             .add_source(
