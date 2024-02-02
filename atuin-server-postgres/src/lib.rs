@@ -133,6 +133,19 @@ impl Database for Postgres {
         Ok(res.0 as i64)
     }
 
+    async fn delete_store(&self, user: &User) -> DbResult<()> {
+        sqlx::query(
+            "delete from store
+            where user_id = $1",
+        )
+        .bind(user.id)
+        .execute(&self.pool)
+        .await
+        .map_err(fix_error)?;
+
+        Ok(())
+    }
+
     async fn delete_history(&self, user: &User, id: String) -> DbResult<()> {
         sqlx::query(
             "update history

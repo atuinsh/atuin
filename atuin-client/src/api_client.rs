@@ -287,6 +287,17 @@ impl<'a> Client<'a> {
         Ok(())
     }
 
+    pub async fn delete_store(&self) -> Result<()> {
+        let url = format!("{}/api/v0/store", self.sync_addr);
+        let url = Url::parse(url.as_str())?;
+
+        let resp = self.client.delete(url).send().await?;
+
+        handle_resp_error(resp).await?;
+
+        Ok(())
+    }
+
     pub async fn post_records(&self, records: &[Record<EncryptedData>]) -> Result<()> {
         let url = format!("{}/api/v0/record", self.sync_addr);
         let url = Url::parse(url.as_str())?;
