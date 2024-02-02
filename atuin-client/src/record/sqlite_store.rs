@@ -154,6 +154,12 @@ impl Store for SqliteStore {
         Ok(())
     }
 
+    async fn delete_all(&self) -> Result<()> {
+        sqlx::query("delete from store").execute(&self.pool).await?;
+
+        Ok(())
+    }
+
     async fn last(&self, host: HostId, tag: &str) -> Result<Option<Record<EncryptedData>>> {
         let res =
             sqlx::query("select * from store where host=?1 and tag=?2 order by idx desc limit 1")
