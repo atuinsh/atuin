@@ -300,6 +300,18 @@ impl Store for SqliteStore {
 
         Ok(())
     }
+
+    /// Verify that every record in this store can be decrypted with the current key
+    /// Someday maybe also check each tag/record can be deserialized, but not for now.
+    async fn verify(&self, key: &[u8; 32]) -> Result<()> {
+        let all = self.load_all().await?;
+
+        all.into_iter()
+            .map(|record| record.decrypt::<PASETO_V4>(key))
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
