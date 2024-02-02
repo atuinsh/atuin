@@ -11,6 +11,9 @@ use time::OffsetDateTime;
 #[cfg(feature = "sync")]
 mod push;
 
+#[cfg(feature = "sync")]
+mod pull;
+
 mod purge;
 mod rebuild;
 mod rekey;
@@ -27,6 +30,9 @@ pub enum Cmd {
 
     #[cfg(feature = "sync")]
     Push(push::Push),
+
+    #[cfg(feature = "sync")]
+    Pull(pull::Pull),
 }
 
 impl Cmd {
@@ -45,6 +51,9 @@ impl Cmd {
 
             #[cfg(feature = "sync")]
             Self::Push(push) => push.run(settings, store).await,
+
+            #[cfg(feature = "sync")]
+            Self::Pull(pull) => pull.run(settings, store, database).await,
         }
     }
 
