@@ -164,15 +164,7 @@ impl HistoryStore {
         for record in records.into_iter() {
             let hist = match record.version.as_str() {
                 HISTORY_VERSION => {
-                    let decrypted = record.decrypt::<PASETO_V4>(&self.encryption_key);
-
-                    let decrypted = match decrypted {
-                        Ok(d) => d,
-                        Err(e) => {
-                            println!("failed to decrypt history: {e}");
-                            continue;
-                        }
-                    };
+                    let decrypted = record.decrypt::<PASETO_V4>(&self.encryption_key)?;
 
                     HistoryRecord::deserialize(&decrypted.data, HISTORY_VERSION)
                 }
