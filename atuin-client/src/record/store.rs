@@ -21,6 +21,7 @@ pub trait Store {
     ) -> Result<()>;
 
     async fn get(&self, id: RecordId) -> Result<Record<EncryptedData>>;
+    async fn delete(&self, id: RecordId) -> Result<()>;
 
     async fn len(&self, host: HostId, tag: &str) -> Result<u64>;
     async fn len_tag(&self, tag: &str) -> Result<u64>;
@@ -30,6 +31,7 @@ pub trait Store {
 
     async fn re_encrypt(&self, old_key: &[u8; 32], new_key: &[u8; 32]) -> Result<()>;
     async fn verify(&self, key: &[u8; 32]) -> Result<()>;
+    async fn purge(&self, key: &[u8; 32]) -> Result<()>;
 
     /// Get the next `limit` records, after and including the given index
     async fn next(

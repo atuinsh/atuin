@@ -145,6 +145,15 @@ impl Store for SqliteStore {
         Ok(res)
     }
 
+    async fn delete(&self, id: RecordId) -> Result<()> {
+        sqlx::query("delete from store where id = ?1")
+            .bind(id.0.as_hyphenated().to_string())
+            .execute(&self.pool)
+            .await?;
+
+        Ok(())
+    }
+
     async fn last(&self, host: HostId, tag: &str) -> Result<Option<Record<EncryptedData>>> {
         let res =
             sqlx::query("select * from store where host=?1 and tag=?2 order by idx desc limit 1")
@@ -309,6 +318,28 @@ impl Store for SqliteStore {
         all.into_iter()
             .map(|record| record.decrypt::<PASETO_V4>(key))
             .collect::<Result<Vec<_>>>()?;
+
+        Ok(())
+    }
+
+    /// Verify that every record in this store can be decrypted with the current key
+    /// Someday maybe also check each tag/record can be deserialized, but not for now.
+    async fn purge(&self, key: &[u8; 32]) -> Result<()> {
+        let all = self.load_all().await?;
+
+        for record in all.iter() {
+            match record.clone().decrypt::<PASETO_V4>(key) {
+                Ok(_) => continue,
+                Err(_) => {
+                    println!(
+                        "Failed to decrypt {}, deleting",
+                        record.id.0.as_hyphenated()
+                    );
+
+                    self.delete(record.id).await?;
+                }
+            }
+        }
 
         Ok(())
     }

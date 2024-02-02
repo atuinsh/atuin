@@ -11,6 +11,7 @@ use time::OffsetDateTime;
 #[cfg(feature = "sync")]
 mod push;
 
+mod purge;
 mod rebuild;
 mod rekey;
 mod verify;
@@ -21,6 +22,7 @@ pub enum Cmd {
     Status,
     Rebuild(rebuild::Rebuild),
     Rekey(rekey::Rekey),
+    Purge(purge::Purge),
     Verify(verify::Verify),
 
     #[cfg(feature = "sync")]
@@ -39,6 +41,7 @@ impl Cmd {
             Self::Rebuild(rebuild) => rebuild.run(settings, store, database).await,
             Self::Rekey(rekey) => rekey.run(settings, store).await,
             Self::Verify(verify) => verify.run(settings, store).await,
+            Self::Purge(purge) => purge.run(settings, store).await,
 
             #[cfg(feature = "sync")]
             Self::Push(push) => push.run(settings, store).await,
