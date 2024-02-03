@@ -158,7 +158,7 @@ __atuin_accept_line() {
     # so to work for a multiline prompt we need to print it ourselves,
     # then go to the beginning of the last line.
     __atuin_evaluate_prompt
-    printf '%s\r' "$__atuin_prompt"
+    printf '%s\r%s' "$__atuin_prompt" "$(tput el)"
 }
 
 __atuin_history() {
