@@ -106,10 +106,16 @@ __atuin_accept_line() {
     # Reprint the prompt, accounting for multiple lines
     local __atuin_prompt __atuin_prompt_offset
     __atuin_evaluate_prompt
+    local __atuin_clear_prompt
+    __atuin_clear_prompt=$'\r'$(tput el)
     if ((__atuin_prompt_offset > 0)); then
-        tput cuu "$__atuin_prompt_offset"
+        __atuin_clear_prompt+=$(
+            tput cuu "$__atuin_prompt_offset"
+            tput dl "$__atuin_prompt_offset"
+            tput il "$__atuin_prompt_offset"
+        )
     fi
-    printf '%s\n' "$__atuin_prompt$__atuin_command"
+    printf '%s\n' "$__atuin_clear_prompt$__atuin_prompt$__atuin_command"
 
     # Add it to the bash history
     history -s "$__atuin_command"
