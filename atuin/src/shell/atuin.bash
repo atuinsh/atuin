@@ -107,12 +107,12 @@ __atuin_accept_line() {
     local __atuin_prompt __atuin_prompt_offset
     __atuin_evaluate_prompt
     local __atuin_clear_prompt
-    __atuin_clear_prompt=$'\r'$(tput el)
+    __atuin_clear_prompt=$'\r'$(tput el 2>/dev/null || tput ce 2>/dev/null)
     if ((__atuin_prompt_offset > 0)); then
         __atuin_clear_prompt+=$(
-            tput cuu "$__atuin_prompt_offset"
-            tput dl "$__atuin_prompt_offset"
-            tput il "$__atuin_prompt_offset"
+            tput cuu "$__atuin_prompt_offset" 2>/dev/null || tput UP "$__atuin_prompt_offset" 2>/dev/null
+            tput dl "$__atuin_prompt_offset"  2>/dev/null || tput DL "$__atuin_prompt_offset" 2>/dev/null
+            tput il "$__atuin_prompt_offset"  2>/dev/null || tput AL "$__atuin_prompt_offset" 2>/dev/null
         )
     fi
     printf '%s\n' "$__atuin_clear_prompt$__atuin_prompt$__atuin_command"
@@ -164,7 +164,7 @@ __atuin_accept_line() {
     # so to work for a multiline prompt we need to print it ourselves,
     # then go to the beginning of the last line.
     __atuin_evaluate_prompt
-    printf '%s\r%s' "$__atuin_prompt" "$(tput el)"
+    printf '%s\r%s' "$__atuin_prompt" "$(tput el 2>/dev/null || tput ce 2>/dev/null)"
 }
 
 __atuin_history() {
