@@ -288,7 +288,10 @@ pub async fn sync_remote(
                 tag,
                 local,
                 remote,
-            } => downloaded = sync_download(local_store, &client, host, tag, local, remote).await?,
+            } => {
+                let mut d = sync_download(local_store, &client, host, tag, local, remote).await?;
+                downloaded.append(&mut d)
+            }
 
             Operation::Noop { .. } => continue,
         }
