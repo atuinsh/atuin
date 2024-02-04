@@ -14,7 +14,10 @@ use rand::{distributions::Alphanumeric, Rng};
 use regex::Regex;
 use sql_builder::{esc, quote, SqlBuilder, SqlName};
 use sqlx::{
-    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteRow},
+    sqlite::{
+        SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteRow,
+        SqliteSynchronous,
+    },
     Result, Row,
 };
 use time::OffsetDateTime;
@@ -137,6 +140,8 @@ impl Sqlite {
 
         let opts = SqliteConnectOptions::from_str(path.as_os_str().to_str().unwrap())?
             .journal_mode(SqliteJournalMode::Wal)
+            .optimize_on_close(true, None)
+            .synchronous(SqliteSynchronous::Normal)
             .create_if_missing(true);
 
         let pool = SqlitePoolOptions::new()
