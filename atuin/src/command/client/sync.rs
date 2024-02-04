@@ -2,7 +2,7 @@ use clap::Subcommand;
 use eyre::{Result, WrapErr};
 
 use atuin_client::{
-    database::{current_context, Database},
+    database::Database,
     encryption,
     history::store::HistoryStore,
     record::{sqlite_store::SqliteStore, store::Store, sync},
@@ -94,9 +94,7 @@ async fn run(
         if history_length as u64 > store_history_length {
             println!("History DB is longer than history record store");
             println!("This happens when you used Atuin pre-record-store");
-
-            let context = current_context();
-            history_store.init_store(context, db).await?;
+            println!("Run atuin history init-store to correct this");
 
             println!("\n");
         }

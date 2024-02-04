@@ -32,7 +32,9 @@ use super::search::format_duration_into;
 #[command(infer_subcommands = true)]
 pub enum Cmd {
     /// Begins a new command in the history
-    Start { command: Vec<String> },
+    Start {
+        command: Vec<String>,
+    },
 
     /// Finishes a new command in the history (adds time, exit code)
     End {
@@ -89,6 +91,8 @@ pub enum Cmd {
         #[arg(long, short)]
         format: Option<String>,
     },
+
+    InitStore,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -375,6 +379,11 @@ impl Cmd {
         Ok(())
     }
 
+    async fn init_store(&self, db: &impl Database, history_store: HistoryStore) -> Result<()> {
+        let context = current_context();
+        history_store.init_store(context, db).await
+    }
+
     pub async fn run(
         self,
         settings: &Settings,
@@ -431,6 +440,8 @@ impl Cmd {
 
                 Ok(())
             }
+
+            Self::InitStore => self.init_store(db, history_store).await,
         }
     }
 }
