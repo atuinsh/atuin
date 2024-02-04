@@ -100,22 +100,35 @@ else
     }
 fi
 
+# The shell function `__atuin_clear_prompt N` outputs terminal control
+# sequences to clear the contents of the current and N previous lines.  After
+# clearing, the cursor is placed at the beginning of the N-th previous line.
+__atuin_clear_prompt_cache=()
+__atuin_clear_prompt() {
+    local offset=$1
+    if [[ ! ${__atuin_clear_prompt_cache[offset]+set} ]]; then
+        if [[ ! ${__atuin_clear_prompt_cache[0]+set} ]]; then
+            __atuin_clear_prompt_cache[0]=$'\r'$(tput el 2>/dev/null || tput ce 2>/dev/null)
+        fi
+        if ((offset > 0)); then
+            __atuin_clear_prompt_cache[offset]=${__atuin_clear_prompt_cache[0]}$(
+                tput cuu "$offset" 2>/dev/null || tput UP "$offset" 2>/dev/null
+                tput dl "$offset"  2>/dev/null || tput DL "$offset" 2>/dev/null
+                tput il "$offset"  2>/dev/null || tput AL "$offset" 2>/dev/null
+            )
+        fi
+    fi
+    printf '%s' "${__atuin_clear_prompt_cache[offset]}"
+}
+
 __atuin_accept_line() {
     local __atuin_command=$1
 
     # Reprint the prompt, accounting for multiple lines
     local __atuin_prompt __atuin_prompt_offset
     __atuin_evaluate_prompt
-    local __atuin_clear_prompt
-    __atuin_clear_prompt=$'\r'$(tput el)
-    if ((__atuin_prompt_offset > 0)); then
-        __atuin_clear_prompt+=$(
-            tput cuu "$__atuin_prompt_offset"
-            tput dl "$__atuin_prompt_offset"
-            tput il "$__atuin_prompt_offset"
-        )
-    fi
-    printf '%s\n' "$__atuin_clear_prompt$__atuin_prompt$__atuin_command"
+    __atuin_clear_prompt "$__atuin_prompt_offset"
+    printf '%s\n' "$__atuin_prompt$__atuin_command"
 
     # Add it to the bash history
     history -s "$__atuin_command"
@@ -164,7 +177,8 @@ __atuin_accept_line() {
     # so to work for a multiline prompt we need to print it ourselves,
     # then go to the beginning of the last line.
     __atuin_evaluate_prompt
-    printf '%s\r%s' "$__atuin_prompt" "$(tput el)"
+    printf '%s' "$__atuin_prompt"
+    __atuin_clear_prompt 0
 }
 
 __atuin_history() {
