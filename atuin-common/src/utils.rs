@@ -166,10 +166,13 @@ mod tests {
         env::remove_var("XDG_CONFIG_HOME");
     }
 
+    #[cfg(not(windows))]
     fn test_config_dir() {
         env::set_var("HOME", "/home/user");
         env::remove_var("XDG_CONFIG_HOME");
+
         assert_eq!(config_dir(), PathBuf::from("/home/user/.config/atuin"));
+
         env::remove_var("HOME");
     }
 
