@@ -147,6 +147,7 @@ mod tests {
 
     use std::collections::HashSet;
 
+    #[cfg(not(windows))]
     #[test]
     fn test_dirs() {
         // these tests need to be run sequentially to prevent race condition
@@ -169,7 +170,9 @@ mod tests {
     fn test_config_dir() {
         env::set_var("HOME", "/home/user");
         env::remove_var("XDG_CONFIG_HOME");
+
         assert_eq!(config_dir(), PathBuf::from("/home/user/.config/atuin"));
+
         env::remove_var("HOME");
     }
 

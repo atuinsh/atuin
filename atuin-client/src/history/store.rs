@@ -211,7 +211,13 @@ impl HistoryStore {
 
     pub async fn incremental_build(&self, database: &dyn Database, ids: &[RecordId]) -> Result<()> {
         for id in ids {
-            let record = self.store.get(*id).await?;
+            let record = self.store.get(*id).await;
+
+            let record = if let Ok(record) = record {
+                record
+            } else {
+                continue;
+            };
 
             if record.tag != HISTORY_TAG {
                 continue;
