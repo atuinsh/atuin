@@ -147,6 +147,7 @@ mod tests {
 
     use std::collections::HashSet;
 
+    #[cfg(not(windows))]
     #[test]
     fn test_dirs() {
         // these tests need to be run sequentially to prevent race condition
@@ -166,7 +167,6 @@ mod tests {
         env::remove_var("XDG_CONFIG_HOME");
     }
 
-    #[cfg(not(windows))]
     fn test_config_dir() {
         env::set_var("HOME", "/home/user");
         env::remove_var("XDG_CONFIG_HOME");

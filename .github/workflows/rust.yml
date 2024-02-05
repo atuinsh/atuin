@@ -42,7 +42,7 @@ jobs:
       run: cargo build -p atuin-server --locked --release
 
     - name: Run cargo build main
-      run: cargo build --all --locked --release && strip target/release/atuin
+      run: cargo build --all --locked --release 
 
   unit-test:
     strategy:
