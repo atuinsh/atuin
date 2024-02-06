@@ -5,14 +5,13 @@ use std::path::{Path, PathBuf};
 use async_trait::async_trait;
 use directories::BaseDirs;
 use eyre::{eyre, Result};
-use serde::{Deserialize};
+use serde::Deserialize;
 use time::OffsetDateTime;
+use uuid::timestamp::{context::NoContext, Timestamp};
 use uuid::Uuid;
-use uuid::timestamp::{Timestamp, context::NoContext};
 
 use super::{Importer, Loader};
 use crate::history::History;
-
 
 // Note: both HistoryFile and HistoryData have other keys present in the JSON, we don't
 // care about them so we leave them unspecified so as to avoid deserializing unnecessarily.
@@ -38,39 +37,35 @@ struct HistoryCmd {
 #[derive(Debug)]
 pub struct Xonsh {
     // history is stored as a bunch of json files, one per session
-    sessions: Vec<HistoryData>
+    sessions: Vec<HistoryData>,
 }
 
 #[cfg(test)]
 impl Xonsh {
     pub fn from_dir(dir: &Path) -> Result<Self> {
         let sessions = load_sessions(dir)?;
-        Ok(Xonsh{ sessions })
+        Ok(Xonsh { sessions })
     }
 }
-
 
 fn get_hist_dir() -> Result<PathBuf> {
     // if running within xonsh, this will be available
     if let Ok(d) = env::var("XONSH_DATA_DIR") {
         let mut path = PathBuf::from(d);
         path.push("history_json");
-        return Ok(path)
+        return Ok(path);
     }
 
     // otherwise, fall back to default
-    let base = BaseDirs::new()
-        .ok_or_else(|| eyre!("Could not determine home directory"))?;
+    let base = BaseDirs::new().ok_or_else(|| eyre!("Could not determine home directory"))?;
 
     let hist_dir = base.data_dir().join("xonsh/history_json");
     if hist_dir.exists() || cfg!(test) {
         Ok(hist_dir)
-    }
-    else {
+    } else {
         Err(eyre!("Could not find xonsh history files"))
     }
 }
-
 
 fn get_hostname() -> String {
     format!(
@@ -79,7 +74,6 @@ fn get_hostname() -> String {
         env::var("ATUIN_HOST_USER").unwrap_or_else(|_| whoami::username()),
     )
 }
-
 
 fn load_sessions(hist_dir: &Path) -> Result<Vec<HistoryData>> {
     let mut sessions = vec![];
@@ -115,7 +109,6 @@ fn load_session(path: &Path) -> Result<Option<HistoryData>> {
     Ok(Some(hist_file.data))
 }
 
-
 #[async_trait]
 impl Importer for Xonsh {
     const NAME: &'static str = "xonsh";
@@ -123,13 +116,11 @@ impl Importer for Xonsh {
     async fn new() -> Result<Self> {
         let hist_dir = get_hist_dir()?;
         let sessions = load_sessions(&hist_dir)?;
-        Ok(Xonsh{ sessions })
+        Ok(Xonsh { sessions })
     }
 
     async fn entries(&mut self) -> Result<usize> {
-        let total = self.sessions.iter()
-            .map(|s| s.cmds.len())
-            .sum();
+        let total = self.sessions.iter().map(|s| s.cmds.len()).sum();
         Ok(total)
     }
 
@@ -155,7 +146,7 @@ impl Importer for Xonsh {
                             .session(session.sessionid.clone())
                             .hostname(hostname);
                         loader.push(entry.build().into()).await?;
-                    },
+                    }
                     None => {
                         let entry = History::import()
                             .timestamp(timestamp)
@@ -165,7 +156,7 @@ impl Importer for Xonsh {
                             .session(session.sessionid.clone())
                             .hostname(hostname);
                         loader.push(entry.build().into()).await?;
-                    },
+                    }
                 }
             }
         }
@@ -173,16 +164,14 @@ impl Importer for Xonsh {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use time::macros::datetime;
 
     use super::*;
 
-    use crate::import::tests::TestLoader;
     use crate::history::History;
-
+    use crate::import::tests::TestLoader;
 
     #[test]
     fn test_dirs() {
@@ -222,8 +211,7 @@ mod tests {
 
         if let Ok(v) = orig_home {
             env::set_var("HOME", v);
-        }
-        else {
+        } else {
             env::remove_var("HOME");
         }
     }

@@ -5,14 +5,13 @@ use async_trait::async_trait;
 use directories::BaseDirs;
 use eyre::{eyre, Result};
 use futures::TryStreamExt;
-use sqlx::{sqlite::SqlitePool, Row, FromRow};
+use sqlx::{sqlite::SqlitePool, FromRow, Row};
 use time::OffsetDateTime;
+use uuid::timestamp::{context::NoContext, Timestamp};
 use uuid::Uuid;
-use uuid::timestamp::{Timestamp, context::NoContext};
 
-use crate::history::History;
 use super::{Importer, Loader};
-
+use crate::history::History;
 
 #[derive(Debug, FromRow)]
 struct HistDbEntry {
@@ -31,11 +30,7 @@ impl From<HistDbEntry> for History {
 
         let session_ts_seconds = entry.session_start.trunc() as u64;
         let session_ts_nanos = (entry.session_start.fract() * 1_000_000_000_f64) as u32;
-        let session_ts = Timestamp::from_unix(
-            NoContext,
-            session_ts_seconds,
-            session_ts_nanos,
-        );
+        let session_ts = Timestamp::from_unix(NoContext, session_ts_seconds, session_ts_nanos);
         let session_id = Uuid::new_v7(session_ts).to_string();
         let duration = (entry.tse - entry.tsb) * 1_000_000_000_f64;
         let hostname = get_hostname();
@@ -50,8 +45,7 @@ impl From<HistDbEntry> for History {
                 .session(session_id)
                 .hostname(hostname);
             imported.build().into()
-        }
-        else {
+        } else {
             let imported = History::import()
                 .timestamp(timestamp)
                 .duration(duration.trunc() as i64)
@@ -64,28 +58,27 @@ impl From<HistDbEntry> for History {
     }
 }
 
-
 fn get_db_path() -> Result<PathBuf> {
     // if running within xonsh, this will be available
     if let Ok(d) = env::var("XONSH_DATA_DIR") {
         let mut path = PathBuf::from(d);
         path.push("xonsh-history.sqlite");
-        return Ok(path)
+        return Ok(path);
     }
 
     // otherwise, fall back to default
-    let base = BaseDirs::new()
-        .ok_or_else(|| eyre!("Could not determine home directory"))?;
+    let base = BaseDirs::new().ok_or_else(|| eyre!("Could not determine home directory"))?;
 
     let hist_file = base.data_dir().join("xonsh/xonsh-history.sqlite");
     if hist_file.exists() || cfg!(test) {
         Ok(hist_file)
-    }
-    else {
-        Err(eyre!("Could not find xonsh history db at: {}", hist_file.to_string_lossy()))
+    } else {
+        Err(eyre!(
+            "Could not find xonsh history db at: {}",
+            hist_file.to_string_lossy()
+        ))
     }
 }
-
 
 fn get_hostname() -> String {
     format!(
@@ -94,7 +87,6 @@ fn get_hostname() -> String {
         env::var("ATUIN_HOST_USER").unwrap_or_else(|_| whoami::username()),
     )
 }
-
 
 #[derive(Debug)]
 pub struct XonshSqlite {
@@ -107,21 +99,20 @@ impl Importer for XonshSqlite {
 
     async fn new() -> Result<Self> {
         let db_path = get_db_path()?;
-        let connection_str = db_path.to_str()
-            .ok_or_else(|| eyre!(
-                    "Invalid path for SQLite database: {}",
-                    db_path.to_string_lossy())
-            )?;
+        let connection_str = db_path.to_str().ok_or_else(|| {
+            eyre!(
+                "Invalid path for SQLite database: {}",
+                db_path.to_string_lossy()
+            )
+        })?;
 
         let pool = SqlitePool::connect(connection_str).await?;
-        Ok(XonshSqlite{ pool })
+        Ok(XonshSqlite { pool })
     }
 
     async fn entries(&mut self) -> Result<usize> {
         let query = "SELECT COUNT(*) FROM xonsh_history";
-        let row = sqlx::query(query)
-            .fetch_one(&self.pool)
-            .await?;
+        let row = sqlx::query(query).fetch_one(&self.pool).await?;
         let count: u32 = row.get(0);
         Ok(count as usize)
     }
@@ -134,9 +125,8 @@ impl Importer for XonshSqlite {
             ORDER BY rowid
         "#;
 
-        let mut entries = sqlx::query_as::<_, HistDbEntry>(query)
-            .fetch(&self.pool);
-        
+        let mut entries = sqlx::query_as::<_, HistDbEntry>(query).fetch(&self.pool);
+
         let mut count = 0;
         while let Some(entry) = entries.try_next().await? {
             loader.push(entry.into()).await?;
@@ -148,16 +138,14 @@ impl Importer for XonshSqlite {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use time::macros::datetime;
 
     use super::*;
 
-    use crate::import::tests::TestLoader;
     use crate::history::History;
-
+    use crate::import::tests::TestLoader;
 
     #[test]
     fn test_db_path() {
@@ -197,8 +185,7 @@ mod tests {
 
         if let Ok(v) = orig_home {
             env::set_var("HOME", v);
-        }
-        else {
+        } else {
             env::remove_var("HOME");
         }
     }
