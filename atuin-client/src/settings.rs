@@ -155,6 +155,11 @@ impl FromStr for Timezone {
             return Ok(Self(offset));
         }
 
+        if matches!(s.to_lowercase().as_str(), "0" | "utc") {
+            let offset = UtcOffset::UTC;
+            return Ok(Self(offset));
+        }
+
         // offset from UTC
         if let Ok(offset) = UtcOffset::parse(s, OFFSET_FMT) {
             return Ok(Self(offset));
@@ -355,6 +360,17 @@ pub struct Settings {
 }
 
 impl Settings {
+    pub fn utc() -> Self {
+        Self::builder()
+            .expect("Could not build default")
+            .set_override("timezone", "0")
+            .expect("failed to override timezone with UTC")
+            .build()
+            .expect("Could not build config")
+            .try_deserialize()
+            .expect("Could not deserialize config")
+    }
+
     fn save_to_data_dir(filename: &str, value: &str) -> Result<()> {
         let data_dir = atuin_common::utils::data_dir();
         let data_dir = data_dir.as_path();
