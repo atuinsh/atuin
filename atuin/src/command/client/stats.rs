@@ -182,7 +182,7 @@ mod tests {
 
     #[test]
     fn interesting_commands() {
-        let settings = Settings::default();
+        let settings = Settings::utc();
 
         assert_eq!(interesting_command(&settings, "cargo"), "cargo");
         assert_eq!(
@@ -199,7 +199,7 @@ mod tests {
     // Test with spaces in the common_prefix
     #[test]
     fn interesting_commands_spaces() {
-        let mut settings = Settings::default();
+        let mut settings = Settings::utc();
         settings.stats.common_prefix.push("sudo test".to_string());
 
         assert_eq!(interesting_command(&settings, "sudo test"), "sudo test");
@@ -224,7 +224,7 @@ mod tests {
     // Test with spaces in the common_subcommand
     #[test]
     fn interesting_commands_spaces_subcommand() {
-        let mut settings = Settings::default();
+        let mut settings = Settings::utc();
         settings
             .stats
             .common_subcommands
@@ -254,7 +254,7 @@ mod tests {
     // Test with spaces in the common_prefix and common_subcommand
     #[test]
     fn interesting_commands_spaces_both() {
-        let mut settings = Settings::default();
+        let mut settings = Settings::utc();
         settings.stats.common_prefix.push("sudo test".to_string());
         settings
             .stats

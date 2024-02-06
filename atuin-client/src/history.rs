@@ -362,7 +362,7 @@ mod tests {
         let settings = Settings {
             cwd_filter: RegexSet::new(["^/supasecret"]).unwrap(),
             history_filter: RegexSet::new(["^psql"]).unwrap(),
-            ..Settings::default()
+            ..Settings::utc()
         };
 
         let normal_command: History = History::capture()
@@ -411,7 +411,7 @@ mod tests {
     fn disable_secrets() {
         let settings = Settings {
             secrets_filter: false,
-            ..Settings::default()
+            ..Settings::utc()
         };
 
         let stripe_key: History = History::capture()
