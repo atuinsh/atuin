@@ -86,8 +86,7 @@ impl Cmd {
             self.period.join(" ")
         };
 
-        let now = OffsetDateTime::now_utc();
-        let now = settings.local_tz.map_or(now, |local| now.to_offset(local));
+        let now = OffsetDateTime::now_utc().to_offset(settings.timezone.0);
         let last_night = now.replace_time(Time::MIDNIGHT);
 
         let history = if words.as_str() == "all" {
