@@ -1,8 +1,11 @@
 import subprocess
+
+from prompt_toolkit.application.current import get_app
+from prompt_toolkit.filters import Condition
 from prompt_toolkit.keys import Keys
 
-$ATUIN_SESSION=$(atuin uuid).rstrip('\n')
 
+$ATUIN_SESSION=$(atuin uuid).rstrip('\n')
 
 @events.on_precommand
 def _atuin_precommand(cmd: str):
@@ -52,16 +55,25 @@ def _search(event, extra_args: list[str]):
 
 @events.on_ptk_create
 def _custom_keybindings(bindings, **kw):
-    @bindings.add(Keys.ControlR, filter=_ATUIN_BIND_CTRL_R)
-    def r_search(event):
-        _search(event, extra_args=[])
+    if _ATUIN_BIND_CTRL_R:
+        @bindings.add(Keys.ControlR)
+        def r_search(event):
+            _search(event, extra_args=[])
 
-    @bindings.add(Keys.Up, filter=_ATUIN_BIND_UP_ARROW)
-    def up_search(event):
-        # Only trigger if the buffer is a single line
-        if not '\n' in buffer.text:
+    if _ATUIN_BIND_UP_ARROW:
+        @Condition
+        def should_search():
+            buffer = get_app().current_buffer
+            # disable keybind when there is an active completion, so
+            # that up arrow can be used to navigate completion menu
+            if buffer.complete_state is not None:
+                return False
+            # similarly, disable when buffer text contains multiple lines
+            if '\n' in buffer.text:
+                return False
+
+            return True
+
+        @bindings.add(Keys.Up, filter=should_search)
+        def up_search(event):
             _search(event, extra_args=["--shell-up-key-binding"])
-            return
-        
-        # Run the default behavior for up arrow
-        event.current_buffer.auto_up(count=event.arg)
