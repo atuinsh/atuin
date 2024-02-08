@@ -291,7 +291,7 @@ curl https://raw.githubusercontent.com/rcaloras/bash-preexec/master/bash-preexec
 echo '[[ -f ~/.bash-preexec.sh ]] && source ~/.bash-preexec.sh' >> ~/.bashrc
 ```
 
-Then setup Atuin
+Then set up Atuin
 
 ```bash
 echo 'eval "$(atuin init bash)"' >> ~/.bashrc
