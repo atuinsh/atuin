@@ -266,7 +266,7 @@ antigen bundle atuinsh/atuin@main
 
 ### bash
 
-Atuin works in `bash >= 3.1`, but we recommend to use Atuin with the recent versions of `bash >= 5`.
+Atuin works in `bash >= 3.1` when combined with either ble.sh or bash-preexec.  We recommend to use Atuin with the recent versions of `bash >= 5`.
 
 #### [ble.sh](https://github.com/akinomyoga/ble.sh)
 
