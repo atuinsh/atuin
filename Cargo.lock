@@ -237,6 +237,7 @@ dependencies = [
  "futures",
  "generic-array",
  "hex",
+ "indicatif",
  "interim",
  "itertools",
  "lazy_static",

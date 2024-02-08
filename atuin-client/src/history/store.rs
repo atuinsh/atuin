@@ -1,6 +1,7 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, fmt::Write};
 
 use eyre::{bail, eyre, Result};
+use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 use rmp::decode::Bytes;
 
 use crate::{
@@ -263,11 +264,17 @@ impl HistoryStore {
         println!("Fetching history already in store");
         let store_ids = self.history_ids().await?;
 
+        let pb = ProgressBar::new(history.len() as u64);
+        pb.set_style(ProgressStyle::with_template("{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {human_pos}/{human_len} ({eta})")
+        .unwrap()
+        .with_key("eta", |state: &ProgressState, w: &mut dyn Write| write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap())
+        .progress_chars("#>-"));
+
         for i in history {
-            println!("loaded {}", i.id);
+            debug!("loaded {}", i.id);
 
             if store_ids.contains(&i.id) {
-                println!("skipping {} - already exists", i.id);
+                debug!("skipping {} - already exists", i.id);
                 continue;
             }
 
@@ -277,7 +284,11 @@ impl HistoryStore {
             } else {
                 self.push(i).await?;
             }
+
+            pb.inc(1);
         }
+
+        pb.finish_with_message("Import complete");
 
         Ok(())
     }
