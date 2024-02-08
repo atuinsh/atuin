@@ -1,5 +1,5 @@
 // do a sync :O
-use std::cmp::Ordering;
+use std::{cmp::Ordering, fmt::Write};
 
 use eyre::Result;
 use thiserror::Error;
@@ -8,6 +8,7 @@ use super::store::Store;
 use crate::{api_client::Client, settings::Settings};
 
 use atuin_common::record::{Diff, HostId, RecordId, RecordIdx, RecordStatus};
+use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 
 #[derive(Error, Debug)]
 pub enum SyncError {
@@ -165,6 +166,12 @@ async fn sync_upload(
     let upload_page_size = 100;
     let mut progress = 0;
 
+    let pb = ProgressBar::new(expected);
+    pb.set_style(ProgressStyle::with_template("{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {human_pos}/{human_len} ({eta})")
+        .unwrap()
+        .with_key("eta", |state: &ProgressState, w: &mut dyn Write| write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap())
+        .progress_chars("#>-"));
+
     println!(
         "Uploading {} records to {}/{}",
         expected,
@@ -189,18 +196,15 @@ async fn sync_upload(
             SyncError::RemoteRequestError { msg: e.to_string() }
         })?;
 
-        println!(
-            "uploaded {} to remote, progress {}/{}",
-            page.len(),
-            progress,
-            expected
-        );
+        pb.set_position(progress);
         progress += page.len() as u64;
 
         if progress >= expected {
             break;
         }
     }
+
+    pb.finish_with_message("Uploaded records");
 
     Ok(progress as i64)
 }
@@ -226,6 +230,12 @@ async fn sync_download(
         tag
     );
 
+    let pb = ProgressBar::new(expected);
+    pb.set_style(ProgressStyle::with_template("{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {human_pos}/{human_len} ({eta})")
+        .unwrap()
+        .with_key("eta", |state: &ProgressState, w: &mut dyn Write| write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap())
+        .progress_chars("#>-"));
+
     // preload with the first entry if remote does not know of this store
     loop {
         let page = client
@@ -238,21 +248,17 @@ async fn sync_download(
             .await
             .map_err(|e| SyncError::LocalStoreError { msg: e.to_string() })?;
 
-        println!(
-            "downloaded {} records from remote, progress {}/{}",
-            page.len(),
-            progress,
-            expected
-        );
-
         ret.extend(page.iter().map(|f| f.id));
 
+        pb.set_position(progress);
         progress += page.len() as u64;
 
         if progress >= expected {
             break;
         }
     }
+
+    pb.finish_with_message("Downloaded records");
 
     Ok(ret)
 }
