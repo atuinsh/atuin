@@ -41,9 +41,9 @@ pub struct Xonsh {
     hostname: String,
 }
 
-fn get_hist_dir() -> Result<PathBuf> {
+fn get_hist_dir(xonsh_data_dir: Option<String>) -> Result<PathBuf> {
     // if running within xonsh, this will be available
-    if let Ok(d) = env::var("XONSH_DATA_DIR") {
+    if let Some(d) = xonsh_data_dir {
         let mut path = PathBuf::from(d);
         path.push("history_json");
         return Ok(path);
@@ -107,7 +107,7 @@ impl Importer for Xonsh {
     const NAME: &'static str = "xonsh";
 
     async fn new() -> Result<Self> {
-        let hist_dir = get_hist_dir()?;
+        let hist_dir = get_hist_dir(env::var("XONSH_DATA_DIR").ok())?;
         let sessions = load_sessions(&hist_dir)?;
         let hostname = get_hostname();
         Ok(Xonsh { sessions, hostname })
@@ -164,6 +164,15 @@ mod tests {
 
     use crate::history::History;
     use crate::import::tests::TestLoader;
+
+    #[test]
+    fn test_hist_dir_xonsh() {
+        let hist_dir = get_hist_dir(Some("/home/user/xonsh_data".to_string())).unwrap();
+        assert_eq!(
+            hist_dir,
+            PathBuf::from("/home/user/xonsh_data/history_json")
+        );
+    }
 
     #[tokio::test]
     async fn test_import() {
