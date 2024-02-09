@@ -264,6 +264,26 @@ impl State {
                 KeyCode::Char('k') if !ctrl => {
                     return self.handle_search_up(settings, true);
                 }
+                KeyCode::Char('h') if !ctrl => {
+                    self.search.input.left();
+                    return InputAction::Continue;
+                }
+                KeyCode::Char('l') if !ctrl => {
+                    self.search.input.right();
+                    return InputAction::Continue;
+                }
+                KeyCode::Char('a') if !ctrl => {
+                    self.search.input.right();
+                    self.set_keymap_cursor(settings, "vim_insert");
+                    self.keymap_mode = KeymapMode::VimInsert;
+                    return InputAction::Continue;
+                }
+                KeyCode::Char('A') if !ctrl => {
+                    self.search.input.end();
+                    self.set_keymap_cursor(settings, "vim_insert");
+                    self.keymap_mode = KeymapMode::VimInsert;
+                    return InputAction::Continue;
+                }
                 KeyCode::Char('i') if !ctrl => {
                     self.set_keymap_cursor(settings, "vim_insert");
                     self.keymap_mode = KeymapMode::VimInsert;
