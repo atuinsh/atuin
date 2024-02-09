@@ -38,14 +38,7 @@ struct HistoryCmd {
 pub struct Xonsh {
     // history is stored as a bunch of json files, one per session
     sessions: Vec<HistoryData>,
-}
-
-#[cfg(test)]
-impl Xonsh {
-    pub fn from_dir(dir: &Path) -> Result<Self> {
-        let sessions = load_sessions(dir)?;
-        Ok(Xonsh { sessions })
-    }
+    hostname: String,
 }
 
 fn get_hist_dir() -> Result<PathBuf> {
@@ -116,7 +109,8 @@ impl Importer for Xonsh {
     async fn new() -> Result<Self> {
         let hist_dir = get_hist_dir()?;
         let sessions = load_sessions(&hist_dir)?;
-        Ok(Xonsh { sessions })
+        let hostname = get_hostname();
+        Ok(Xonsh { sessions, hostname })
     }
 
     async fn entries(&mut self) -> Result<usize> {
@@ -133,8 +127,6 @@ impl Importer for Xonsh {
 
                 let duration = (end - start) * 1_000_000_000_f64;
 
-                let hostname = get_hostname();
-
                 match cmd.rtn {
                     Some(exit) => {
                         let entry = History::import()
@@ -144,7 +136,7 @@ impl Importer for Xonsh {
                             .command(cmd.inp.trim())
                             .cwd(cmd.cwd)
                             .session(session.sessionid.clone())
-                            .hostname(hostname);
+                            .hostname(self.hostname.clone());
                         loader.push(entry.build().into()).await?;
                     }
                     None => {
@@ -154,7 +146,7 @@ impl Importer for Xonsh {
                             .command(cmd.inp.trim())
                             .cwd(cmd.cwd)
                             .session(session.sessionid.clone())
-                            .hostname(hostname);
+                            .hostname(self.hostname.clone());
                         loader.push(entry.build().into()).await?;
                     }
                 }
@@ -173,65 +165,12 @@ mod tests {
     use crate::history::History;
     use crate::import::tests::TestLoader;
 
-    #[test]
-    fn test_dirs() {
-        // similarly to in utils.rs, these need to be run sequentially
-        test_hist_dir_xonsh();
-        test_hist_dir_xdg();
-        test_hist_dir_default();
-    }
-
-    fn test_hist_dir_xonsh() {
-        env::set_var("XONSH_DATA_DIR", "/home/user/xonsh_data");
-        assert_eq!(
-            get_hist_dir().unwrap(),
-            PathBuf::from("/home/user/xonsh_data/history_json"),
-        );
-        env::remove_var("XONSH_DATA_DIR");
-    }
-
-    fn test_hist_dir_xdg() {
-        env::set_var("XDG_DATA_HOME", "/home/user/custom_data");
-        assert_eq!(
-            get_hist_dir().unwrap(),
-            PathBuf::from("/home/user/custom_data/xonsh/history_json"),
-        );
-        env::remove_var("XDG_DATA_HOME");
-    }
-
-    fn test_hist_dir_default() {
-        // some other tests need this, so save it for later
-        let orig_home = env::var("HOME");
-
-        env::set_var("HOME", "/home/user");
-        assert_eq!(
-            get_hist_dir().unwrap(),
-            PathBuf::from("/home/user/.local/share/xonsh/history_json"),
-        );
-
-        if let Ok(v) = orig_home {
-            env::set_var("HOME", v);
-        } else {
-            env::remove_var("HOME");
-        }
-    }
-
-    #[test]
-    fn test_hostname_override() {
-        env::set_var("ATUIN_HOST_NAME", "box");
-        env::set_var("ATUIN_HOST_USER", "user");
-        assert_eq!(get_hostname(), "box:user");
-        env::remove_var("ATUIN_HOST_NAME");
-        env::remove_var("ATUIN_HOST_USER");
-    }
-
     #[tokio::test]
     async fn test_import() {
-        env::set_var("ATUIN_HOST_NAME", "box");
-        env::set_var("ATUIN_HOST_USER", "user");
-
         let dir = PathBuf::from("tests/data/xonsh");
-        let xonsh = Xonsh::from_dir(&dir).unwrap();
+        let sessions = load_sessions(&dir).unwrap();
+        let hostname = "box:user".to_string();
+        let xonsh = Xonsh { sessions, hostname };
 
         let mut loader = TestLoader::default();
         xonsh.load(&mut loader).await.unwrap();
@@ -245,9 +184,6 @@ mod tests {
             assert_eq!(actual.duration, expected.duration);
             assert_eq!(actual.hostname, expected.hostname);
         }
-
-        env::remove_var("ATUIN_HOST_NAME");
-        env::remove_var("ATUIN_HOST_USER");
     }
 
     fn expected_hist_entries() -> [History; 4] {

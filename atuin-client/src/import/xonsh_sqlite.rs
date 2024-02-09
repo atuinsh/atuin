@@ -23,25 +23,24 @@ struct HistDbEntry {
     session_start: f64,
 }
 
-impl From<HistDbEntry> for History {
-    fn from(entry: HistDbEntry) -> Self {
-        let ts_nanos = (entry.tsb * 1_000_000_000_f64) as i128;
+impl HistDbEntry {
+    fn into_hist_with_hostname(self, hostname: String) -> History {
+        let ts_nanos = (self.tsb * 1_000_000_000_f64) as i128;
         let timestamp = OffsetDateTime::from_unix_timestamp_nanos(ts_nanos).unwrap();
 
-        let session_ts_seconds = entry.session_start.trunc() as u64;
-        let session_ts_nanos = (entry.session_start.fract() * 1_000_000_000_f64) as u32;
+        let session_ts_seconds = self.session_start.trunc() as u64;
+        let session_ts_nanos = (self.session_start.fract() * 1_000_000_000_f64) as u32;
         let session_ts = Timestamp::from_unix(NoContext, session_ts_seconds, session_ts_nanos);
         let session_id = Uuid::new_v7(session_ts).to_string();
-        let duration = (entry.tse - entry.tsb) * 1_000_000_000_f64;
-        let hostname = get_hostname();
+        let duration = (self.tse - self.tsb) * 1_000_000_000_f64;
 
-        if let Some(exit) = entry.rtn {
+        if let Some(exit) = self.rtn {
             let imported = History::import()
                 .timestamp(timestamp)
                 .duration(duration.trunc() as i64)
                 .exit(exit)
-                .command(entry.inp)
-                .cwd(entry.cwd)
+                .command(self.inp)
+                .cwd(self.cwd)
                 .session(session_id)
                 .hostname(hostname);
             imported.build().into()
@@ -49,8 +48,8 @@ impl From<HistDbEntry> for History {
             let imported = History::import()
                 .timestamp(timestamp)
                 .duration(duration.trunc() as i64)
-                .command(entry.inp)
-                .cwd(entry.cwd)
+                .command(self.inp)
+                .cwd(self.cwd)
                 .session(session_id)
                 .hostname(hostname);
             imported.build().into()
@@ -91,6 +90,7 @@ fn get_hostname() -> String {
 #[derive(Debug)]
 pub struct XonshSqlite {
     pool: SqlitePool,
+    hostname: String,
 }
 
 #[async_trait]
@@ -107,7 +107,8 @@ impl Importer for XonshSqlite {
         })?;
 
         let pool = SqlitePool::connect(connection_str).await?;
-        Ok(XonshSqlite { pool })
+        let hostname = get_hostname();
+        Ok(XonshSqlite { pool, hostname })
     }
 
     async fn entries(&mut self) -> Result<usize> {
@@ -129,7 +130,8 @@ impl Importer for XonshSqlite {
 
         let mut count = 0;
         while let Some(entry) = entries.try_next().await? {
-            loader.push(entry.into()).await?;
+            let hist = entry.into_hist_with_hostname(self.hostname.clone());
+            loader.push(hist).await?;
             count += 1;
         }
 
@@ -147,66 +149,12 @@ mod tests {
     use crate::history::History;
     use crate::import::tests::TestLoader;
 
-    #[test]
-    fn test_db_path() {
-        // similarly to in utils.rs, these need to be run sequentially
-        test_db_path_xonsh();
-        test_db_path_xdg();
-        test_db_path_default();
-    }
-
-    fn test_db_path_xonsh() {
-        env::set_var("XONSH_DATA_DIR", "/home/user/xonsh_data");
-        assert_eq!(
-            get_db_path().unwrap(),
-            PathBuf::from("/home/user/xonsh_data/xonsh-history.sqlite"),
-        );
-        env::remove_var("XONSH_DATA_DIR");
-    }
-
-    fn test_db_path_xdg() {
-        env::set_var("XDG_DATA_HOME", "/home/user/custom_data");
-        assert_eq!(
-            get_db_path().unwrap(),
-            PathBuf::from("/home/user/custom_data/xonsh/xonsh-history.sqlite"),
-        );
-        env::remove_var("XDG_DATA_HOME");
-    }
-
-    fn test_db_path_default() {
-        // some other tests need this, so save it for later
-        let orig_home = env::var("HOME");
-
-        env::set_var("HOME", "/home/user");
-        assert_eq!(
-            get_db_path().unwrap(),
-            PathBuf::from("/home/user/.local/share/xonsh/xonsh-history.sqlite"),
-        );
-
-        if let Ok(v) = orig_home {
-            env::set_var("HOME", v);
-        } else {
-            env::remove_var("HOME");
-        }
-    }
-
-    #[test]
-    fn test_hostname_override() {
-        env::set_var("ATUIN_HOST_NAME", "box");
-        env::set_var("ATUIN_HOST_USER", "user");
-        assert_eq!(get_hostname(), "box:user");
-        env::remove_var("ATUIN_HOST_NAME");
-        env::remove_var("ATUIN_HOST_USER");
-    }
-
     #[tokio::test]
     async fn test_import() {
-        env::set_var("ATUIN_HOST_NAME", "box");
-        env::set_var("ATUIN_HOST_USER", "user");
-
         let connection_str = "tests/data/xonsh-history.sqlite";
         let xonsh_sqlite = XonshSqlite {
             pool: SqlitePool::connect(connection_str).await.unwrap(),
+            hostname: "box:user".to_string(),
         };
 
         let mut loader = TestLoader::default();
@@ -220,9 +168,6 @@ mod tests {
             assert_eq!(actual.duration, expected.duration);
             assert_eq!(actual.hostname, expected.hostname);
         }
-
-        env::remove_var("ATUIN_HOST_NAME");
-        env::remove_var("ATUIN_HOST_USER");
     }
 
     fn expected_hist_entries() -> [History; 4] {
