@@ -794,6 +794,9 @@ impl Stdout {
 
 impl Drop for Stdout {
     fn drop(&mut self) {
+        #[cfg(not(target_os = "windows"))]
+        execute!(self.stdout, PopKeyboardEnhancementFlags).unwrap();
+
         if !self.inline_mode {
             execute!(self.stdout, terminal::LeaveAlternateScreen).unwrap();
         }
@@ -803,9 +806,6 @@ impl Drop for Stdout {
             event::DisableBracketedPaste,
         )
         .unwrap();
-
-        #[cfg(not(target_os = "windows"))]
-        execute!(self.stdout, PopKeyboardEnhancementFlags).unwrap();
 
         terminal::disable_raw_mode().unwrap();
     }
