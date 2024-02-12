@@ -1,4 +1,4 @@
-use std::{collections::HashSet, fmt::Write};
+use std::{collections::HashSet, fmt::Write, time::Duration};
 
 use eyre::{bail, eyre, Result};
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
@@ -142,6 +142,38 @@ impl HistoryStore {
         Ok((id, idx))
     }
 
+    async fn push_batch(&self, records: impl Iterator<Item = HistoryRecord>) -> Result<()> {
+        let mut ret = Vec::new();
+
+        let idx = self
+            .store
+            .last(self.host_id, HISTORY_TAG)
+            .await?
+            .map_or(0, |p| p.idx + 1);
+
+        // Could probably _also_ do this as an iterator, but let's see how this is for now.
+        // optimizing for minimal sqlite transactions, this code can be optimised later
+        for (n, record) in records.enumerate() {
+            let bytes = record.serialize()?;
+
+            let record = Record::builder()
+                .host(Host::new(self.host_id))
+                .version(HISTORY_VERSION.to_string())
+                .tag(HISTORY_TAG.to_string())
+                .idx(idx + n as u64)
+                .data(bytes)
+                .build();
+
+            let record = record.encrypt::<PASETO_V4>(&self.encryption_key);
+
+            ret.push(record);
+        }
+
+        self.store.push_batch(ret.iter()).await?;
+
+        Ok(())
+    }
+
     pub async fn delete(&self, id: HistoryId) -> Result<(RecordId, RecordIdx)> {
         let record = HistoryRecord::Delete(id);
 
@@ -256,19 +288,25 @@ impl HistoryStore {
     }
 
     pub async fn init_store(&self, context: database::Context, db: &impl Database) -> Result<()> {
-        println!("Importing all history.db data into records.db");
+        let pb = ProgressBar::new_spinner();
+        pb.set_style(
+            ProgressStyle::with_template("{spinner:.blue} {msg}")
+                .unwrap()
+                .with_key("eta", |state: &ProgressState, w: &mut dyn Write| {
+                    write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap()
+                })
+                .progress_chars("#>-"),
+        );
+        pb.enable_steady_tick(Duration::from_millis(500));
 
-        println!("Fetching history from old database");
+        pb.set_message("Fetching history from old database");
         let history = db.list(&[], &context, None, false, true).await?;
 
-        println!("Fetching history already in store");
+        pb.set_message("Fetching history already in store");
         let store_ids = self.history_ids().await?;
 
-        let pb = ProgressBar::new(history.len() as u64);
-        pb.set_style(ProgressStyle::with_template("{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {human_pos}/{human_len} ({eta})")
-        .unwrap()
-        .with_key("eta", |state: &ProgressState, w: &mut dyn Write| write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap())
-        .progress_chars("#>-"));
+        pb.set_message("Converting old history to new store");
+        let mut records = Vec::new();
 
         for i in history {
             debug!("loaded {}", i.id);
@@ -279,13 +317,16 @@ impl HistoryStore {
             }
 
             if i.deleted_at.is_some() {
-                self.push(i.clone()).await?;
-                self.delete(i.id).await?;
+                records.push(HistoryRecord::Delete(i.id));
             } else {
-                self.push(i).await?;
+                records.push(HistoryRecord::Create(i));
             }
+        }
 
-            pb.inc(1);
+        pb.set_message("Writing to db");
+
+        if !records.is_empty() {
+            self.push_batch(records.into_iter()).await?;
         }
 
         pb.finish_with_message("Import complete");
