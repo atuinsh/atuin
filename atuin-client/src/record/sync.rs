@@ -324,7 +324,7 @@ mod tests {
 
     use crate::record::{
         encryption::PASETO_V4,
-        sqlite_store::SqliteStore,
+        sqlite_store::{test_sqlite_store_timeout, SqliteStore},
         store::Store,
         sync::{self, Operation},
     };
@@ -351,10 +351,10 @@ mod tests {
         local_records: Vec<Record<EncryptedData>>,
         remote_records: Vec<Record<EncryptedData>>,
     ) -> (SqliteStore, Vec<Diff>) {
-        let local_store = SqliteStore::new(":memory:", 0.1)
+        let local_store = SqliteStore::new(":memory:", test_sqlite_store_timeout())
             .await
             .expect("failed to open in memory sqlite");
-        let remote_store = SqliteStore::new(":memory:", 0.1)
+        let remote_store = SqliteStore::new(":memory:", test_sqlite_store_timeout())
             .await
             .expect("failed to open in memory sqlite"); // "remote"
 
