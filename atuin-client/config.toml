@@ -134,7 +134,6 @@
 # This applies for new installs. Old installs will keep the old behaviour unless configured otherwise.
 enter_accept = true
 
-
 ## Defaults to "emacs".  This specifies the keymap on the startup of `atuin
 ## search`.  If this is set to "auto", the startup keymap mode in the Atuin
 ## search is automatically selected based on the shell's keymap where the
@@ -154,12 +153,12 @@ enter_accept = true
 ## Timeout (in seconds) for acquiring a local database connection (sqlite)
 # local_timeout = 5
 
-## Set this to true and Atuin will minimize motion in the UI - timers will not update live, etc. 
+## Set this to true and Atuin will minimize motion in the UI - timers will not update live, etc.
 ## Alternatively, set env NO_MOTION=true
 # prefers_reduced_motion = false
 
-#[stats]
-# Set commands where we should consider the subcommand for statistics. Eg, kubectl get vs just kubectl
+[stats]
+## Set commands where we should consider the subcommand for statistics. Eg, kubectl get vs just kubectl
 #common_subcommands = [
 #  "cargo",
 #  "go",
@@ -169,6 +168,6 @@ enter_accept = true
 #  "pnpm",
 #  "kubectl",
 #]
-#
-# Set commands that should be totally stripped and ignored from stats
+
+## Set commands that should be totally stripped and ignored from stats
 #common_prefix = ["sudo"]
