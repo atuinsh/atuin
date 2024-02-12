@@ -72,7 +72,7 @@ fn load_sessions(hist_dir: &Path) -> Result<Vec<HistoryData>> {
     let mut sessions = vec![];
     for entry in fs::read_dir(hist_dir)? {
         let p = entry?.path();
-        let ext = p.extension().map(|e| e.to_str()).flatten();
+        let ext = p.extension().and_then(|e| e.to_str());
         if p.is_file() && ext == Some("json") {
             if let Some(data) = load_session(&p)? {
                 sessions.push(data);
@@ -93,7 +93,7 @@ fn load_session(path: &Path) -> Result<Option<HistoryData>> {
 
     // if there are commands in this session, replace the existing UUIDv4
     // with a UUIDv7 generated from the timestamp of the first command
-    if let Some(cmd) = hist_file.data.cmds.iter().next() {
+    if let Some(cmd) = hist_file.data.cmds.first() {
         let seconds = cmd.ts.0.trunc() as u64;
         let nanos = (cmd.ts.0.fract() * 1_000_000_000_f64) as u32;
         let ts = Timestamp::from_unix(NoContext, seconds, nanos);
