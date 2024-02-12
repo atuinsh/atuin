@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [18.0.1] - 2024-02-12
+
+### Bug Fixes
+
+- Reorder the exit of enhanced keyboard mode ([#1694](https://github.com/atuinsh/atuin/issues/1694))
+
 ## [18.0.0] - 2024-02-09
 
 ### Bug Fixes
@@ -51,6 +57,7 @@ All notable changes to this project will be documented in this file.
 - Mention environment variables for custom paths ([#1614](https://github.com/atuinsh/atuin/issues/1614))
 - Create pull_request_template.md ([#1632](https://github.com/atuinsh/atuin/issues/1632))
 - Update CONTRIBUTING.md ([#1633](https://github.com/atuinsh/atuin/issues/1633))
+- Clarify prerequisites for Bash ([#1686](https://github.com/atuinsh/atuin/issues/1686))
 
 ### Features
 
