@@ -452,27 +452,8 @@ impl State {
             }
             KeyCode::Char('u') if ctrl => self.search.input.clear(),
             KeyCode::Char('r') if ctrl => {
-                let filter_modes = if settings.workspaces && self.search.context.git_root.is_some()
-                {
-                    vec![
-                        FilterMode::Global,
-                        FilterMode::Host,
-                        FilterMode::Session,
-                        FilterMode::Directory,
-                        FilterMode::Workspace,
-                    ]
-                } else {
-                    vec![
-                        FilterMode::Global,
-                        FilterMode::Host,
-                        FilterMode::Session,
-                        FilterMode::Directory,
-                    ]
-                };
-
-                let i = self.search.filter_mode as usize;
-                let i = (i + 1) % filter_modes.len();
-                self.search.filter_mode = filter_modes[i];
+                self.search.filter_mode_index =
+                    (self.search.filter_mode_index + 1) % self.search.available_filter_modes.len();
             }
             KeyCode::Char('s') if ctrl => {
                 self.switched_search_mode = true;
@@ -848,7 +829,10 @@ impl State {
         let (pref, mode) = if self.switched_search_mode {
             (" SRCH:", self.search_mode.as_str())
         } else {
-            ("", self.search.filter_mode.as_str())
+            (
+                "",
+                self.search.available_filter_modes[self.search.filter_mode_index].as_str(),
+            )
         };
         let mode_width = MAX_WIDTH - pref.len();
         // sanity check to ensure we don't exceed the layout limits
@@ -1018,6 +1002,28 @@ pub async fn history(
     } else {
         settings.search_mode
     };
+    let mut available_filter_modes = settings
+        .filter_modes
+        .clone()
+        .into_iter()
+        .filter(|item| {
+            *item != FilterMode::Workspace || !settings.workspaces || context.git_root.is_some()
+        })
+        .collect::<Vec<_>>();
+    if available_filter_modes.is_empty() {
+        available_filter_modes = vec![
+            FilterMode::Workspace,
+            FilterMode::Global,
+            FilterMode::Host,
+            FilterMode::Session,
+        ]
+        .into_iter()
+        .filter(|item| {
+            *item != FilterMode::Workspace || !settings.workspaces || context.git_root.is_some()
+        })
+        .collect::<Vec<_>>();
+    }
+
     let mut app = State {
         history_count,
         results_state: ListState::default(),
@@ -1027,15 +1033,24 @@ pub async fn history(
         tab_index: 0,
         search: SearchState {
             input,
-            filter_mode: if settings.workspaces && context.git_root.is_some() {
-                FilterMode::Workspace
-            } else if settings.shell_up_key_binding {
-                settings
-                    .filter_mode_shell_up_key_binding
-                    .unwrap_or(settings.filter_mode)
+            filter_mode_index: if settings.shell_up_key_binding {
+                available_filter_modes
+                    .iter()
+                    .position(|&item| {
+                        item == settings
+                            .filter_mode_shell_up_key_binding
+                            .unwrap_or(FilterMode::Global)
+                    })
+                    .unwrap_or_default()
+            } else if let Some(filter_mode) = settings.filter_mode {
+                available_filter_modes
+                    .iter()
+                    .position(|&item| item == filter_mode)
+                    .unwrap_or_default()
             } else {
-                settings.filter_mode
+                0
             },
+            available_filter_modes,
             context,
         },
         engine: engines::engine(search_mode),
@@ -1065,7 +1080,7 @@ pub async fn history(
         terminal.draw(|f| app.draw(f, &results, stats.clone(), settings))?;
 
         let initial_input = app.search.input.as_str().to_owned();
-        let initial_filter_mode = app.search.filter_mode;
+        let initial_filter_mode = app.search.available_filter_modes[app.search.filter_mode_index];
         let initial_search_mode = app.search_mode;
 
         let event_ready = tokio::task::spawn_blocking(|| event::poll(Duration::from_millis(250)));
@@ -1115,7 +1130,8 @@ pub async fn history(
         }
 
         if initial_input != app.search.input.as_str()
-            || initial_filter_mode != app.search.filter_mode
+            || initial_filter_mode
+                != app.search.available_filter_modes[app.search.filter_mode_index]
             || initial_search_mode != app.search_mode
         {
             results = app.query_results(&mut db, settings.smart_sort).await?;
