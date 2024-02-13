@@ -59,6 +59,19 @@ impl Cmd {
                     return Ok(());
                 }
 
+                // $XONSH_HISTORY_BACKEND isn't always set, but $XONSH_HISTORY_FILE is
+                match env::var("XONSH_HISTORY_FILE").as_deref() {
+                    Ok(p) if p.ends_with(".json") => {
+                        println!("Detected Xonsh",);
+                        return import::<Xonsh, DB>(db).await;
+                    }
+                    Ok(p) if p.ends_with(".sqlite") => {
+                        println!("Detected Xonsh (SQLite backend)");
+                        return import::<XonshSqlite, DB>(db).await;
+                    }
+                    _ => (),
+                }
+
                 let shell = env::var("SHELL").unwrap_or_else(|_| String::from("NO_SHELL"));
                 if shell.ends_with("/zsh") {
                     if ZshHistDb::histpath().is_ok() {
