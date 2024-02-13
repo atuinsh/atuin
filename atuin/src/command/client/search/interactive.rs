@@ -380,6 +380,7 @@ impl State {
                 }
             }
             KeyCode::Char('u') if ctrl => self.search.input.clear(),
+            KeyCode::Char('k') if ctrl => self.search.input.truncate(),
             KeyCode::Char('r') if ctrl => {
                 let filter_modes = if settings.workspaces && self.search.context.git_root.is_some()
                 {
