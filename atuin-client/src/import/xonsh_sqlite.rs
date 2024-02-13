@@ -10,7 +10,7 @@ use time::OffsetDateTime;
 use uuid::timestamp::{context::NoContext, Timestamp};
 use uuid::Uuid;
 
-use super::{Importer, Loader};
+use super::{get_histpath, Importer, Loader};
 use crate::history::History;
 
 #[derive(Debug, FromRow)]
@@ -57,7 +57,7 @@ impl HistDbEntry {
     }
 }
 
-fn get_db_path(xonsh_data_dir: Option<String>) -> Result<PathBuf> {
+fn xonsh_db_path(xonsh_data_dir: Option<String>) -> Result<PathBuf> {
     // if running within xonsh, this will be available
     if let Some(d) = xonsh_data_dir {
         let mut path = PathBuf::from(d);
@@ -98,7 +98,9 @@ impl Importer for XonshSqlite {
     const NAME: &'static str = "xonsh_sqlite";
 
     async fn new() -> Result<Self> {
-        let db_path = get_db_path(env::var("XONSH_DATA_DIR").ok())?;
+        // wrap xonsh-specific path resolver in general one so that it respects $HISTPATH
+        let xonsh_data_dir = env::var("XONSH_DATA_DIR").ok();
+        let db_path = get_histpath(|| xonsh_db_path(xonsh_data_dir))?;
         let connection_str = db_path.to_str().ok_or_else(|| {
             eyre!(
                 "Invalid path for SQLite database: {}",
@@ -151,7 +153,7 @@ mod tests {
 
     #[test]
     fn test_db_path_xonsh() {
-        let db_path = get_db_path(Some("/home/user/xonsh_data".to_string())).unwrap();
+        let db_path = xonsh_db_path(Some("/home/user/xonsh_data".to_string())).unwrap();
         assert_eq!(
             db_path,
             PathBuf::from("/home/user/xonsh_data/xonsh-history.sqlite")
