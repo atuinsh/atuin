@@ -28,11 +28,13 @@ export ATUIN_SESSION=$(atuin uuid)
 ATUIN_HISTORY_ID=""
 
 _atuin_preexec() {
+    # remove ^J from end of $1 as it's passed by zshaddhistory
+    local cmd="${1[0, -2]}"
     # skip history for empty calls
     # remove space, \t, \n, and literal '\'
     [[ -n "${${1//[[:space:]]/}//\\/}" ]] || return
     local id
-    id=$(atuin history start -- "$1")
+    id=$(atuin history start -- "$cmd")
     export ATUIN_HISTORY_ID="$id"
     __atuin_preexec_time=${EPOCHREALTIME-}
 }
