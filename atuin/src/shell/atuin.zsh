@@ -1,3 +1,4 @@
+# shellcheck shell=bash # doesn't know about zsh
 # shellcheck disable=SC2034,SC2153,SC2086,SC2155
 
 # Above line is because shellcheck doesn't support zsh, per
@@ -32,6 +33,7 @@ _atuin_preexec() {
     local cmd="${1[0, -2]}"
     # skip history for empty calls
     # remove space, \t, \n, and literal '\'
+    # shellcheck disable=SC2299 # shellcheck doesn't know about zsh
     [[ -n "${${1//[[:space:]]/}//\\/}" ]] || return
     local id
     id=$(atuin history start -- "$cmd")
