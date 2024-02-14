@@ -24,16 +24,22 @@ pub struct Cmd {
     count: usize,
 }
 
-fn compute_stats(settings: &Settings, history: &[History], count: usize) {
+fn compute_stats(settings: &Settings, history: &[History], count: usize) -> (usize, usize) {
     let mut commands = HashSet::<&str>::with_capacity(history.len());
     let mut prefixes = HashMap::<&str, usize>::with_capacity(history.len());
+    let mut total_unignored = 0;
     for i in history {
         // just in case it somehow has a leading tab or space or something (legacy atuin didn't ignore space prefixes)
         let command = i.command.trim();
+        let prefix = interesting_command(settings, command);
+
+        if settings.stats.ignored_commands.iter().any(|c| c == prefix) {
+            continue;
+        }
+
+        total_unignored += 1;
         commands.insert(command);
-        *prefixes
-            .entry(interesting_command(settings, command))
-            .or_default() += 1;
+        *prefixes.entry(prefix).or_default() += 1;
     }
 
     let unique = commands.len();
@@ -42,7 +48,7 @@ fn compute_stats(settings: &Settings, history: &[History], count: usize) {
     top.truncate(count);
     if top.is_empty() {
         println!("No commands found");
-        return;
+        return (0, 0);
     }
 
     let max = top.iter().map(|x| x.1).max().unwrap();
@@ -73,8 +79,10 @@ fn compute_stats(settings: &Settings, history: &[History], count: usize) {
             command.escape_control()
         );
     }
-    println!("Total commands:   {}", history.len());
+    println!("Total commands:   {total_unignored}");
     println!("Unique commands:  {unique}");
+
+    (total_unignored, unique)
 }
 
 impl Cmd {
@@ -176,9 +184,35 @@ fn interesting_command<'a>(settings: &Settings, mut command: &'a str) -> &'a str
 
 #[cfg(test)]
 mod tests {
+    use atuin_client::history::History;
     use atuin_client::settings::Settings;
+    use time::OffsetDateTime;
 
+    use super::compute_stats;
     use super::interesting_command;
+
+    #[test]
+    fn ignored_commands() {
+        let mut settings = Settings::utc();
+        settings.stats.ignored_commands.push("cd".to_string());
+
+        let history = [
+            History::import()
+                .timestamp(OffsetDateTime::now_utc())
+                .command("cd foo")
+                .build()
+                .into(),
+            History::import()
+                .timestamp(OffsetDateTime::now_utc())
+                .command("cargo build stuff")
+                .build()
+                .into(),
+        ];
+
+        let (total, unique) = compute_stats(&settings, &history, 10);
+        assert_eq!(total, 1);
+        assert_eq!(unique, 1);
+    }
 
     #[test]
     fn interesting_commands() {
