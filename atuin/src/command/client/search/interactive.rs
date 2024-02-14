@@ -243,6 +243,13 @@ impl State {
         self.handle_search_scroll_one_line(settings, enable_exit, !settings.invert)
     }
 
+    fn handle_search_accept(&mut self, settings: &Settings) -> InputAction {
+        if settings.enter_accept {
+            self.accept = true;
+        }
+        InputAction::Accept(self.results_state.selected())
+    }
+
     #[allow(clippy::too_many_lines)]
     #[allow(clippy::cognitive_complexity)]
     fn handle_search_input(&mut self, settings: &Settings, input: &KeyEvent) -> InputAction {
@@ -305,13 +312,8 @@ impl State {
         }
 
         match input.code {
-            KeyCode::Enter => {
-                if settings.enter_accept {
-                    self.accept = true;
-                }
-
-                return InputAction::Accept(self.results_state.selected());
-            }
+            KeyCode::Enter => return self.handle_search_accept(settings),
+            KeyCode::Char('m') if ctrl => return self.handle_search_accept(settings),
             KeyCode::Char('y') if ctrl => {
                 return InputAction::Copy(self.results_state.selected());
             }
