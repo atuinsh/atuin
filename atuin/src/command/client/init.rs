@@ -1,6 +1,13 @@
-use clap::{Parser, ValueEnum};
+use std::path::PathBuf;
 
-#[derive(Parser)]
+use atuin_client::{encryption, record::sqlite_store::SqliteStore, settings::Settings};
+use atuin_config::store::AliasStore;
+use clap::{Parser, ValueEnum};
+use eyre::{Result, WrapErr};
+
+mod zsh;
+
+#[derive(Parser, Debug)]
 pub struct Cmd {
     shell: Shell,
 
@@ -13,7 +20,7 @@ pub struct Cmd {
     disable_up_arrow: bool,
 }
 
-#[derive(Clone, Copy, ValueEnum)]
+#[derive(Clone, Copy, ValueEnum, Debug)]
 pub enum Shell {
     /// Zsh setup
     Zsh,
@@ -28,35 +35,8 @@ pub enum Shell {
 }
 
 impl Cmd {
-    fn init_zsh(&self) {
-        let base = include_str!("../shell/atuin.zsh");
-
-        println!("{base}");
-
-        if std::env::var("ATUIN_NOBIND").is_err() {
-            const BIND_CTRL_R: &str = r"bindkey -M emacs '^r' atuin-search
-bindkey -M viins '^r' atuin-search-viins
-bindkey -M vicmd '/' atuin-search";
-
-            const BIND_UP_ARROW: &str = r"bindkey -M emacs '^[[A' atuin-up-search
-bindkey -M vicmd '^[[A' atuin-up-search-vicmd
-bindkey -M viins '^[[A' atuin-up-search-viins
-bindkey -M emacs '^[OA' atuin-up-search
-bindkey -M vicmd '^[OA' atuin-up-search-vicmd
-bindkey -M viins '^[OA' atuin-up-search-viins
-bindkey -M vicmd 'k' atuin-up-search-vicmd";
-
-            if !self.disable_ctrl_r {
-                println!("{BIND_CTRL_R}");
-            }
-            if !self.disable_up_arrow {
-                println!("{BIND_UP_ARROW}");
-            }
-        }
-    }
-
     fn init_bash(&self) {
-        let base = include_str!("../shell/atuin.bash");
+        let base = include_str!("../../shell/atuin.bash");
         let (bind_ctrl_r, bind_up_arrow) = if std::env::var("ATUIN_NOBIND").is_ok() {
             (false, false)
         } else {
@@ -69,7 +49,7 @@ bindkey -M vicmd 'k' atuin-up-search-vicmd";
     }
 
     fn init_fish(&self) {
-        let full = include_str!("../shell/atuin.fish");
+        let full = include_str!("../../shell/atuin.fish");
         println!("{full}");
 
         if std::env::var("ATUIN_NOBIND").is_err() {
@@ -101,7 +81,7 @@ bind -M insert \e\[A _atuin_bind_up";
     }
 
     fn init_nu(&self) {
-        let full = include_str!("../shell/atuin.nu");
+        let full = include_str!("../../shell/atuin.nu");
         println!("{full}");
 
         if std::env::var("ATUIN_NOBIND").is_err() {
@@ -143,7 +123,7 @@ bind -M insert \e\[A _atuin_bind_up";
     }
 
     fn init_xonsh(&self) {
-        let base = include_str!("../shell/atuin.xsh");
+        let base = include_str!("../../shell/atuin.xsh");
         let (bind_ctrl_r, bind_up_arrow) = if std::env::var("ATUIN_NOBIND").is_ok() {
             (false, false)
         } else {
@@ -160,13 +140,27 @@ bind -M insert \e\[A _atuin_bind_up";
         println!("{base}");
     }
 
-    pub fn run(self) {
+    pub async fn run(self, settings: &Settings) -> Result<()> {
+        let record_store_path = PathBuf::from(settings.record_store_path.as_str());
+        let sqlite_store = SqliteStore::new(record_store_path, settings.local_timeout).await?;
+
+        let encryption_key: [u8; 32] = encryption::load_key(&settings)
+            .context("could not load encryption key")?
+            .into();
+        let host_id = Settings::host_id().expect("failed to get host_id");
+
+        let alias_store = AliasStore::new(sqlite_store, host_id, encryption_key);
+
         match self.shell {
-            Shell::Zsh => self.init_zsh(),
+            Shell::Zsh => {
+                zsh::init(alias_store, self.disable_up_arrow, self.disable_ctrl_r).await?
+            }
             Shell::Bash => self.init_bash(),
             Shell::Fish => self.init_fish(),
             Shell::Nu => self.init_nu(),
             Shell::Xonsh => self.init_xonsh(),
         }
+
+        Ok(())
     }
 }
