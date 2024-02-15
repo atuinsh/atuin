@@ -13,8 +13,10 @@ mod sync;
 mod account;
 
 mod config;
+mod default_config;
 mod history;
 mod import;
+mod init;
 mod kv;
 mod search;
 mod stats;
@@ -49,6 +51,12 @@ pub enum Cmd {
 
     #[command(subcommand)]
     Store(store::Cmd),
+
+    #[command(subcommand)]
+    Config(config::Cmd),
+
+    #[command()]
+    Init(init::Cmd),
 
     /// Print example configuration
     #[command()]
@@ -101,8 +109,12 @@ impl Cmd {
 
             Self::Store(store) => store.run(&settings, &db, sqlite_store).await,
 
+            Self::Config(config) => config.run(&settings, sqlite_store).await,
+
+            Self::Init(init) => init.run(&settings).await,
+
             Self::DefaultConfig => {
-                config::run();
+                default_config::run();
                 Ok(())
             }
         }

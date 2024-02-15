@@ -11,8 +11,6 @@ mod client;
 #[cfg(feature = "server")]
 mod server;
 
-mod init;
-
 mod contributors;
 
 #[derive(Subcommand)]
@@ -26,9 +24,6 @@ pub enum AtuinCmd {
     #[cfg(feature = "server")]
     #[command(subcommand)]
     Server(server::Cmd),
-
-    /// Output shell setup
-    Init(init::Cmd),
 
     /// Generate a UUID
     Uuid,
@@ -65,10 +60,6 @@ impl AtuinCmd {
             Self::Server(server) => server.run(),
             Self::Contributors => {
                 contributors::run();
-                Ok(())
-            }
-            Self::Init(init) => {
-                init.run();
                 Ok(())
             }
             Self::Uuid => {
