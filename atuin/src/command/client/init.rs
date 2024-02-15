@@ -99,11 +99,11 @@ impl Cmd {
                 bash::init(alias_store, self.disable_up_arrow, self.disable_ctrl_r).await?;
             }
             Shell::Fish => {
-                fish::init(alias_store, self.disable_up_arrow, self.disable_ctrl_r).await?
+                fish::init(alias_store, self.disable_up_arrow, self.disable_ctrl_r).await?;
             }
             Shell::Nu => self.init_nu(),
             Shell::Xonsh => {
-                xonsh::init(alias_store, self.disable_up_arrow, self.disable_ctrl_r).await?
+                xonsh::init(alias_store, self.disable_up_arrow, self.disable_ctrl_r).await?;
             }
         }
 

@@ -172,6 +172,39 @@ impl AliasStore {
         Ok(())
     }
 
+    pub async fn delete(&self, name: &str) -> Result<()> {
+        if name.len() > CONFIG_SHELL_ALIAS_FIELD_MAX_LEN {
+            return Err(eyre!(
+                "alias record too large: max len {} bytes",
+                CONFIG_SHELL_ALIAS_FIELD_MAX_LEN
+            ));
+        }
+
+        let record = AliasRecord::Delete(name.to_string());
+
+        let bytes = record.serialize()?;
+
+        let idx = self
+            .store
+            .last(self.host_id, CONFIG_SHELL_ALIAS_TAG)
+            .await?
+            .map_or(0, |entry| entry.idx + 1);
+
+        let record = atuin_common::record::Record::builder()
+            .host(Host::new(self.host_id))
+            .version(CONFIG_SHELL_ALIAS_VERSION.to_string())
+            .tag(CONFIG_SHELL_ALIAS_TAG.to_string())
+            .idx(idx)
+            .data(bytes)
+            .build();
+
+        self.store
+            .push(&record.encrypt::<PASETO_V4>(&self.encryption_key))
+            .await?;
+
+        Ok(())
+    }
+
     pub async fn aliases(&self) -> Result<Vec<Alias>> {
         let mut build = BTreeMap::new();
 

@@ -9,6 +9,7 @@ use atuin_config::store::AliasStore;
 #[command(infer_subcommands = true)]
 pub enum Cmd {
     Set { name: String, value: String },
+    Delete { name: String },
 }
 
 impl Cmd {
@@ -20,6 +21,12 @@ impl Cmd {
         value: String,
     ) -> Result<()> {
         store.set(&name, &value).await?;
+
+        Ok(())
+    }
+
+    async fn delete(&self, _settings: &Settings, store: AliasStore, name: String) -> Result<()> {
+        store.delete(&name).await?;
 
         Ok(())
     }
@@ -37,6 +44,8 @@ impl Cmd {
                 self.set(settings, alias_store, name.clone(), value.clone())
                     .await
             }
+
+            Self::Delete { name } => self.delete(settings, alias_store, name.clone()).await,
         }
     }
 }
