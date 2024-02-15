@@ -270,6 +270,8 @@ pub struct Stats {
     pub common_prefix: Vec<String>, // sudo, etc. commands we want to strip off
     #[serde(default = "Stats::common_subcommands_default")]
     pub common_subcommands: Vec<String>, // kubectl, commands we should consider subcommands for
+    #[serde(default = "Stats::ignored_commands_default")]
+    pub ignored_commands: Vec<String>, // cd, ls, etc. commands we want to completely hide from stats
 }
 
 impl Stats {
@@ -283,6 +285,10 @@ impl Stats {
             .map(String::from)
             .collect()
     }
+
+    fn ignored_commands_default() -> Vec<String> {
+        vec![]
+    }
 }
 
 impl Default for Stats {
@@ -290,6 +296,7 @@ impl Default for Stats {
         Self {
             common_prefix: Self::common_prefix_default(),
             common_subcommands: Self::common_subcommands_default(),
+            ignored_commands: Self::ignored_commands_default(),
         }
     }
 }
