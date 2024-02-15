@@ -15,7 +15,6 @@ pub enum Cmd {
 impl Cmd {
     async fn set(
         &self,
-        _settings: &Settings,
         store: AliasStore,
         name: String,
         value: String,
@@ -25,7 +24,11 @@ impl Cmd {
         Ok(())
     }
 
-    async fn delete(&self, _settings: &Settings, store: AliasStore, name: String) -> Result<()> {
+    async fn delete(
+        &self,
+        store: AliasStore,
+        name: String,
+    ) -> Result<()> {
         store.delete(&name).await?;
 
         Ok(())
@@ -41,11 +44,14 @@ impl Cmd {
 
         match self {
             Self::Set { name, value } => {
-                self.set(settings, alias_store, name.clone(), value.clone())
+                self.set(alias_store, name.clone(), value.clone())
                     .await
             }
 
-            Self::Delete { name } => self.delete(settings, alias_store, name.clone()).await,
+            Self::Delete{ name } => {
+                self.delete(alias_store, name.clone())
+                    .await
+            }
         }
     }
 }
