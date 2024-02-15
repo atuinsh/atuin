@@ -144,7 +144,7 @@ bind -M insert \e\[A _atuin_bind_up";
         let record_store_path = PathBuf::from(settings.record_store_path.as_str());
         let sqlite_store = SqliteStore::new(record_store_path, settings.local_timeout).await?;
 
-        let encryption_key: [u8; 32] = encryption::load_key(&settings)
+        let encryption_key: [u8; 32] = encryption::load_key(settings)
             .context("could not load encryption key")?
             .into();
         let host_id = Settings::host_id().expect("failed to get host_id");
@@ -153,7 +153,7 @@ bind -M insert \e\[A _atuin_bind_up";
 
         match self.shell {
             Shell::Zsh => {
-                zsh::init(alias_store, self.disable_up_arrow, self.disable_ctrl_r).await?
+                zsh::init(alias_store, self.disable_up_arrow, self.disable_ctrl_r).await?;
             }
             Shell::Bash => self.init_bash(),
             Shell::Fish => self.init_fish(),
