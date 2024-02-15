@@ -2,7 +2,7 @@ use atuin_config::store::AliasStore;
 use eyre::Result;
 
 pub async fn init(store: AliasStore, disable_up_arrow: bool, disable_ctrl_r: bool) -> Result<()> {
-    let base = include_str!("../../../shell/atuin.zsh");
+    let base = include_str!("../../../shell/atuin.fish");
 
     println!("{base}");
 
