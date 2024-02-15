@@ -10,7 +10,7 @@ use time::OffsetDateTime;
 use uuid::timestamp::{context::NoContext, Timestamp};
 use uuid::Uuid;
 
-use super::{Importer, Loader};
+use super::{get_histpath, Importer, Loader};
 use crate::history::History;
 
 // Note: both HistoryFile and HistoryData have other keys present in the JSON, we don't
@@ -41,7 +41,7 @@ pub struct Xonsh {
     hostname: String,
 }
 
-fn get_hist_dir(xonsh_data_dir: Option<String>) -> Result<PathBuf> {
+fn xonsh_hist_dir(xonsh_data_dir: Option<String>) -> Result<PathBuf> {
     // if running within xonsh, this will be available
     if let Some(d) = xonsh_data_dir {
         let mut path = PathBuf::from(d);
@@ -107,7 +107,9 @@ impl Importer for Xonsh {
     const NAME: &'static str = "xonsh";
 
     async fn new() -> Result<Self> {
-        let hist_dir = get_hist_dir(env::var("XONSH_DATA_DIR").ok())?;
+        // wrap xonsh-specific path resolver in general one so that it respects $HISTPATH
+        let xonsh_data_dir = env::var("XONSH_DATA_DIR").ok();
+        let hist_dir = get_histpath(|| xonsh_hist_dir(xonsh_data_dir))?;
         let sessions = load_sessions(&hist_dir)?;
         let hostname = get_hostname();
         Ok(Xonsh { sessions, hostname })
@@ -167,7 +169,7 @@ mod tests {
 
     #[test]
     fn test_hist_dir_xonsh() {
-        let hist_dir = get_hist_dir(Some("/home/user/xonsh_data".to_string())).unwrap();
+        let hist_dir = xonsh_hist_dir(Some("/home/user/xonsh_data".to_string())).unwrap();
         assert_eq!(
             hist_dir,
             PathBuf::from("/home/user/xonsh_data/history_json")
