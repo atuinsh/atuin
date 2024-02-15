@@ -240,7 +240,7 @@ mod tests {
 
     #[tokio::test]
     async fn build_aliases() {
-        let mut store = SqliteStore::new(":memory:", test_sqlite_store_timeout())
+        let store = SqliteStore::new(":memory:", test_sqlite_store_timeout())
             .await
             .unwrap();
         let key: [u8; 32] = XSalsa20Poly1305::generate_key(&mut OsRng).into();
@@ -254,27 +254,24 @@ mod tests {
 
         let mut aliases = alias.aliases().await.unwrap();
 
-        aliases.sort_by_key(|a| match a.clone() {
-            AliasRecord::Create(a) => a.name,
-            AliasRecord::Delete(n) => n,
-        });
+        aliases.sort_by_key(|a| a.name.clone());
 
         assert_eq!(aliases.len(), 2);
 
         assert_eq!(
             aliases[0],
-            AliasRecord::Create(Alias {
+            Alias {
                 name: String::from("gp"),
                 value: String::from("git push")
-            })
+            }
         );
 
         assert_eq!(
             aliases[1],
-            AliasRecord::Create(Alias {
+            Alias {
                 name: String::from("k"),
                 value: String::from("kubectl")
-            })
+            }
         );
     }
 }
