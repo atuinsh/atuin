@@ -1,27 +1,7 @@
-use std::{
-    fmt::{self, Display},
-    io::{self, IsTerminal, Write},
-    time::Duration,
-};
-
-use atuin_common::utils::{self, Escapable as _};
 use clap::Subcommand;
 use eyre::{Context, Result};
-use runtime_format::{FormatKey, FormatKeyError, ParseSegment, ParsedFmt};
 
-use atuin_client::{
-    database::{current_context, Database},
-    encryption,
-    history::{store::HistoryStore, History},
-    record::sqlite_store::SqliteStore,
-    settings::{
-        FilterMode::{Directory, Global, Session},
-        Settings, Timezone,
-    },
-};
-
-use log::{debug, warn};
-use time::{macros::format_description, OffsetDateTime};
+use atuin_client::{encryption, record::sqlite_store::SqliteStore, settings::Settings};
 
 use atuin_config::store::AliasStore;
 
