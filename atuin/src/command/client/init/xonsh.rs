@@ -20,7 +20,7 @@ pub async fn init(store: AliasStore, disable_up_arrow: bool, disable_ctrl_r: boo
     println!("{base}");
 
     let aliases = store.aliases().await?;
-    let aliases = atuin_config::shell::fish::build(&aliases[..]);
+    let aliases = atuin_config::shell::xonsh::build(&aliases[..]);
 
     println!("{aliases}");
 
