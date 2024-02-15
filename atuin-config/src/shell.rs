@@ -1,3 +1,6 @@
+pub mod bash;
+pub mod fish;
+pub mod xonsh;
 pub mod zsh;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
