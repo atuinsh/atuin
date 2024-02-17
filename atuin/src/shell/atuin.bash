@@ -17,12 +17,19 @@ export ATUIN_SESSION
 ATUIN_HISTORY_ID=""
 
 __atuin_preexec() {
+    # Workaround for old versions of bash-preexec
     if [[ ! ${BLE_ATTACHED-} ]]; then
-        # With bash-preexec, preexec may be called even for the command run by
-        # keybindings.  There is no general and robust way to detect the
-        # command for keybindings, but at least we want to exclude Atuin's
-        # keybindings.
-        [[ $BASH_COMMAND == '__atuin_history'* && $BASH_COMMAND != "$1" ]] && return 0
+        # In older versions of bash-preexec, the preexec hook may be called
+        # even for the commands run by keybindings.  There is no general and
+        # robust way to detect the command for keybindings, but at least we
+        # want to exclude Atuin's keybindings.  When the preexec hook is called
+        # for a keybinding, the preexec hook for the user command will not
+        # fire, so we instead set a fake ATUIN_HISTORY_ID here to notify
+        # __atuin_precmd of this failure.
+        if [[ $BASH_COMMAND == '__atuin_history'* && $BASH_COMMAND != "$1" ]]; then
+            ATUIN_HISTORY_ID=__bash_preexec_failure__
+            return 0
+        fi
     fi
 
     local id
@@ -35,6 +42,17 @@ __atuin_precmd() {
     local EXIT=$? __atuin_precmd_time=${EPOCHREALTIME-}
 
     [[ ! $ATUIN_HISTORY_ID ]] && return
+
+    # If the previous preexec hook failed, we manually call __atuin_preexec
+    if [[ $ATUIN_HISTORY_ID == __bash_preexec_failure__ ]]; then
+        # This is the command extraction code taken from bash-preexec
+        local previous_command
+        previous_command=$(
+            export LC_ALL=C HISTTIMEFORMAT=''
+            builtin history 1 | sed '1 s/^ *[0-9][0-9]*[* ] //'
+        )
+        __atuin_preexec "$previous_command"
+    fi
 
     local duration=""
     if ((BASH_VERSINFO[0] >= 5)); then
