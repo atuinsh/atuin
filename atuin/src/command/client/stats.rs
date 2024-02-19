@@ -9,7 +9,7 @@ use interim::parse_date_string;
 use atuin_client::{
     database::{current_context, Database},
     history::History,
-    settings::Settings,
+    settings::{Settings, FilterMode},
 };
 use time::{Duration, OffsetDateTime, Time};
 
@@ -22,6 +22,10 @@ pub struct Cmd {
     /// How many top commands to list
     #[arg(long, short, default_value = "10")]
     count: usize,
+
+    /// Filter commands stats [global, host, session, directory, workspace]
+    #[arg(long = "filter-mode")]
+    filter_mode: Option<FilterMode>,
 }
 
 fn compute_stats(settings: &Settings, history: &[History], count: usize) -> (usize, usize) {
@@ -94,11 +98,13 @@ impl Cmd {
             self.period.join(" ")
         };
 
+        let filter = self.filter_mode.map(|f| vec![f]).unwrap_or(vec![]);
+
         let now = OffsetDateTime::now_utc().to_offset(settings.timezone.0);
         let last_night = now.replace_time(Time::MIDNIGHT);
 
         let history = if words.as_str() == "all" {
-            db.list(&[], &context, None, false, false).await?
+            db.list(filter.as_slice(), &context, None, false, false).await?
         } else if words.trim() == "today" {
             let start = last_night;
             let end = start + Duration::days(1);
