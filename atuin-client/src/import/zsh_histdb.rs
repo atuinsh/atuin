@@ -63,6 +63,10 @@ pub struct HistDbEntry {
 
 impl From<HistDbEntry> for History {
     fn from(histdb_item: HistDbEntry) -> Self {
+        let hostname = String::from_utf8(histdb_item.host)
+            .unwrap_or_else(|_e| String::from(""))
+            .trim_end()
+            .to_string();
         let imported = History::import()
             .timestamp(histdb_item.start_time.assume_utc())
             .command(
@@ -79,13 +83,8 @@ impl From<HistDbEntry> for History {
             )
             .duration(histdb_item.duration)
             .exit(histdb_item.exit_status)
-            .session(histdb_item.session.to_string())
-            .hostname(
-                String::from_utf8(histdb_item.host)
-                    .unwrap_or_else(|_e| String::from(""))
-                    .trim_end()
-                    .to_string(),
-            );
+            .session(format!("{}:{}", hostname, histdb_item.session))
+            .hostname(hostname);
 
         imported.build().into()
     }
