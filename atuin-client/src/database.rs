@@ -821,6 +821,19 @@ mod test {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn test_range() {
+        let mut db = Sqlite::new("sqlite::memory:", 0.1).await.unwrap();
+
+        let timestamp = OffsetDateTime::from_unix_timestamp(1708330400).unwrap();
+
+        new_history_item(&mut db, "ls /home/ellie", Some(timestamp)).await.unwrap();
+        new_history_item(&mut db, "ls /home/frank", None).await.unwrap();
+
+        let range = db.range(timestamp, timestamp).await.unwrap();
+        assert_eq!(range.len(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_search_prefix() {
         let mut db = Sqlite::new("sqlite::memory:", 0.1).await.unwrap();
         new_history_item(&mut db, "ls /home/ellie", None).await.unwrap();
