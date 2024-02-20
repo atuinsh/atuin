@@ -9,7 +9,7 @@ use interim::parse_date_string;
 use atuin_client::{
     database::{current_context, Database},
     history::History,
-    settings::{Settings, FilterMode},
+    settings::{FilterMode, Settings},
 };
 use time::{Duration, OffsetDateTime, Time};
 
@@ -98,7 +98,7 @@ impl Cmd {
             self.period.join(" ")
         };
 
-        let filter = self.filter_mode.map(|f| vec![f]).unwrap_or(vec![]);
+        let filter = self.filter_mode.map(|f| vec![f]).unwrap_or_default();
 
         let now = OffsetDateTime::now_utc().to_offset(settings.timezone.0);
         let last_night = now.replace_time(Time::MIDNIGHT);
@@ -127,7 +127,9 @@ impl Cmd {
             Some((start, end))
         };
 
-        let history = db.list(filter.as_slice(), &context, None, false, false, range).await?;
+        let history = db
+            .list(filter.as_slice(), &context, None, false, false, range)
+            .await?;
 
         compute_stats(settings, &history, self.count);
         Ok(())

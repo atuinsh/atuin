@@ -785,9 +785,13 @@ mod test {
         }
     }
 
-    async fn new_history_item(db: &mut impl Database, cmd: &str, timestamp: Option<OffsetDateTime>) -> Result<()> {
+    async fn new_history_item(
+        db: &mut impl Database,
+        cmd: &str,
+        timestamp: Option<OffsetDateTime>,
+    ) -> Result<()> {
         let mut captured: History = History::capture()
-            .timestamp(timestamp.unwrap_or_else(||OffsetDateTime::now_utc()))
+            .timestamp(timestamp.unwrap_or_else(|| OffsetDateTime::now_utc()))
             .command(cmd)
             .cwd("/home/ellie")
             .build()
@@ -807,17 +811,30 @@ mod test {
 
         let timestamp = OffsetDateTime::from_unix_timestamp(1708330400).unwrap();
 
-        new_history_item(&mut db, "ls /home/ellie", Some(timestamp)).await.unwrap();
-        new_history_item(&mut db, "ls /home/frank", None).await.unwrap();
+        new_history_item(&mut db, "ls /home/ellie", Some(timestamp))
+            .await
+            .unwrap();
+        new_history_item(&mut db, "ls /home/frank", None)
+            .await
+            .unwrap();
 
         let context = new_context();
 
-        let all = db.list(&[], &context, None, true, true, None).await.unwrap();
+        let all = db
+            .list(&[], &context, None, true, true, None)
+            .await
+            .unwrap();
         assert_eq!(all.len(), 2);
 
         let range = Some((timestamp, timestamp));
 
-        assert_eq!(db.list(&[], &context, None, false, true, range).await.unwrap().len(), 1);
+        assert_eq!(
+            db.list(&[], &context, None, false, true, range)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -826,8 +843,12 @@ mod test {
 
         let timestamp = OffsetDateTime::from_unix_timestamp(1708330400).unwrap();
 
-        new_history_item(&mut db, "ls /home/ellie", Some(timestamp)).await.unwrap();
-        new_history_item(&mut db, "ls /home/frank", None).await.unwrap();
+        new_history_item(&mut db, "ls /home/ellie", Some(timestamp))
+            .await
+            .unwrap();
+        new_history_item(&mut db, "ls /home/frank", None)
+            .await
+            .unwrap();
 
         let range = db.range(timestamp, timestamp).await.unwrap();
         assert_eq!(range.len(), 1);
@@ -836,7 +857,9 @@ mod test {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_search_prefix() {
         let mut db = Sqlite::new("sqlite::memory:", 0.1).await.unwrap();
-        new_history_item(&mut db, "ls /home/ellie", None).await.unwrap();
+        new_history_item(&mut db, "ls /home/ellie", None)
+            .await
+            .unwrap();
 
         assert_search_eq(&db, SearchMode::Prefix, FilterMode::Global, "ls", 1)
             .await
@@ -852,7 +875,9 @@ mod test {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_search_fulltext() {
         let mut db = Sqlite::new("sqlite::memory:", 0.1).await.unwrap();
-        new_history_item(&mut db, "ls /home/ellie", None).await.unwrap();
+        new_history_item(&mut db, "ls /home/ellie", None)
+            .await
+            .unwrap();
 
         assert_search_eq(&db, SearchMode::FullText, FilterMode::Global, "ls", 1)
             .await
@@ -868,9 +893,15 @@ mod test {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_search_fuzzy() {
         let mut db = Sqlite::new("sqlite::memory:", 0.1).await.unwrap();
-        new_history_item(&mut db, "ls /home/ellie", None).await.unwrap();
-        new_history_item(&mut db, "ls /home/frank", None).await.unwrap();
-        new_history_item(&mut db, "cd /home/Ellie", None).await.unwrap();
+        new_history_item(&mut db, "ls /home/ellie", None)
+            .await
+            .unwrap();
+        new_history_item(&mut db, "ls /home/frank", None)
+            .await
+            .unwrap();
+        new_history_item(&mut db, "cd /home/Ellie", None)
+            .await
+            .unwrap();
         new_history_item(&mut db, "/home/ellie/.bin/rustup", None)
             .await
             .unwrap();
