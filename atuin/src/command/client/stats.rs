@@ -32,22 +32,22 @@ fn split_at_pipe(command: &str) -> Vec<&str> {
     let mut result = vec![];
     let mut quoted = false;
     let mut start = 0;
-    let mut graphemes = UnicodeSegmentation::grapheme_indices(command, true).peekable();
+    let mut graphemes = UnicodeSegmentation::grapheme_indices(command, true);
 
     while let Some((i, c)) = graphemes.next() {
         let current = i;
         match c {
             "\"" => {
                 if command[start..current] != *"\"" {
-                    quoted = !quoted
+                    quoted = !quoted;
                 }
             }
             "'" => {
                 if command[start..current] != *"'" {
-                    quoted = !quoted
+                    quoted = !quoted;
                 }
             }
-            "\\" => if let Some(_) = graphemes.next() {},
+            "\\" => if graphemes.next().is_some() {},
             "|" => {
                 if !quoted {
                     if command[start..].starts_with('|') {
@@ -67,7 +67,12 @@ fn split_at_pipe(command: &str) -> Vec<&str> {
     result
 }
 
-fn compute_stats(settings: &Settings, history: &[History], count: usize, ngram_size: usize) -> (usize, usize) {
+fn compute_stats(
+    settings: &Settings,
+    history: &[History],
+    count: usize,
+    ngram_size: usize,
+) -> (usize, usize) {
     let mut commands = HashSet::<&str>::with_capacity(history.len());
     let mut total_unignored = 0;
     let mut prefixes = HashMap::<Vec<&str>, usize>::with_capacity(history.len());
@@ -145,7 +150,7 @@ fn compute_stats(settings: &Settings, history: &[History], count: usize, ngram_s
         let formatted_command = command
             .iter()
             .zip(column_widths.iter())
-            .map(|(cmd, width)| format!("{:width$}", cmd))
+            .map(|(cmd, width)| format!("{cmd:width$}"))
             .collect::<Vec<_>>()
             .join(" | ");
 
