@@ -109,6 +109,13 @@ pub enum Cmd {
     },
 
     InitStore,
+
+    /// Delete history entries matching the configured exclusion filters
+    Prune {
+        /// List matching history lines without performing the actual deletion.
+        #[arg(short = 'n', long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -413,6 +420,60 @@ impl Cmd {
         Ok(())
     }
 
+    async fn handle_prune(
+        db: &impl Database,
+        settings: &Settings,
+        store: SqliteStore,
+        context: atuin_client::database::Context,
+        dry_run: bool,
+    ) -> Result<()> {
+        // Grab all executed commands and filter them using History::should_save.
+        // We could iterate or paginate here if memory usage becomes an issue.
+        let matches: Vec<History> = db
+            .list(&[Global], &context, None, false, false)
+            .await?
+            .into_iter()
+            .filter(|h| !h.should_save(settings))
+            .collect();
+
+        match matches.len() {
+            0 => {
+                println!("No entries to prune.");
+                return Ok(());
+            }
+            1 => println!("Found 1 entry to prune."),
+            n => println!("Found {n} entries to prune."),
+        }
+
+        if dry_run {
+            print_list(
+                &matches,
+                ListMode::Human,
+                Some(settings.history_format.as_str()),
+                false,
+                false,
+                settings.timezone,
+            );
+        } else {
+            let encryption_key: [u8; 32] = encryption::load_key(settings)
+                .context("could not load encryption key")?
+                .into();
+            let host_id = Settings::host_id().expect("failed to get host_id");
+            let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
+
+            for entry in matches {
+                eprintln!("deleting {}", entry.id);
+                if settings.sync.records {
+                    let (id, _) = history_store.delete(entry.id.clone()).await?;
+                    history_store.incremental_build(db, &[id]).await?;
+                } else {
+                    db.delete(entry.clone()).await?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     async fn init_store(&self, db: &impl Database, history_store: HistoryStore) -> Result<()> {
         let context = current_context();
         history_store.init_store(context, db).await
@@ -481,6 +542,10 @@ impl Cmd {
             }
 
             Self::InitStore => self.init_store(db, history_store).await,
+
+            Self::Prune { dry_run } => {
+                Self::handle_prune(db, settings, store, context, dry_run).await
+            }
         }
     }
 }
