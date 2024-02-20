@@ -11,6 +11,7 @@ use atuin_client::{
     settings::Settings,
 };
 use time::{Duration, OffsetDateTime, Time};
+use unicode_segmentation::UnicodeSegmentation;
 
 #[derive(Parser, Debug)]
 #[command(infer_subcommands = true)]
@@ -31,22 +32,23 @@ fn split_at_pipe(command: &str) -> Vec<&str> {
     let mut result = vec![];
     let mut quoted = false;
     let mut start = 0;
-    let mut chars = command.chars().enumerate().peekable();
-    while let Some((i, c)) = chars.next() {
+    let mut graphemes = UnicodeSegmentation::grapheme_indices(command, true).peekable();
+
+    while let Some((i, c)) = graphemes.next() {
         let current = i;
         match c {
-            '"' => {
+            "\"" => {
                 if command[start..current] != *"\"" {
                     quoted = !quoted
                 }
             }
-            '\'' => {
+            "'" => {
                 if command[start..current] != *"'" {
                     quoted = !quoted
                 }
             }
-            '\\' => if let Some(_) = chars.next() {},
-            '|' => {
+            "\\" => if let Some(_) = graphemes.next() {},
+            "|" => {
                 if !quoted {
                     if command[start..].starts_with('|') {
                         start += 1;
