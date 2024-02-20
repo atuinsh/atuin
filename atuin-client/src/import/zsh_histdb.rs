@@ -20,8 +20,8 @@
 //    places.dir,
 //    commands.argv
 //  from history
-//    left join commands on history.command_id = commands.rowid
-//    left join places on history.place_id = places.rowid ;
+//    left join commands on history.command_id = commands.id
+//    left join places on history.place_id = places.id ;
 //
 // CREATE TABLE history  (id integer primary key autoincrement,
 //                       session int,
@@ -57,6 +57,8 @@ pub struct HistDbEntry {
     pub dir: Vec<u8>,
     pub argv: Vec<u8>,
     pub duration: i64,
+    pub exit_status: i64,
+    pub session: i64,
 }
 
 impl From<HistDbEntry> for History {
@@ -76,6 +78,8 @@ impl From<HistDbEntry> for History {
                     .to_string(),
             )
             .duration(histdb_item.duration)
+            .exit(histdb_item.exit_status)
+            .session(histdb_item.session.to_string())
             .hostname(
                 String::from_utf8(histdb_item.host)
                     .unwrap_or_else(|_e| String::from(""))
@@ -99,7 +103,15 @@ async fn hist_from_db(dbpath: PathBuf) -> Result<Vec<HistDbEntry>> {
 }
 
 async fn hist_from_db_conn(pool: Pool<sqlx::Sqlite>) -> Result<Vec<HistDbEntry>> {
-    let query = "select history.id,history.start_time,history.duration,places.host,places.dir,commands.argv from history left join commands on history.command_id = commands.rowid left join places on history.place_id = places.rowid order by history.start_time";
+    let query = r#"
+        SELECT
+            history.id, history.start_time, history.duration, places.host, places.dir,
+            commands.argv, history.exit_status, history.session
+        FROM history
+        LEFT JOIN commands ON history.command_id = commands.id
+        LEFT JOIN places ON history.place_id = places.id
+        ORDER BY history.start_time
+    "#;
     let histdb_vec: Vec<HistDbEntry> = sqlx::query_as::<_, HistDbEntry>(query)
         .fetch_all(&pool)
         .await?;
