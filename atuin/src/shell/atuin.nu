@@ -28,10 +28,12 @@ let _atuin_pre_prompt = {||
 }
 
 def _atuin_search_cmd [...flags: string] {
+    let nu_version = ($env.NU_VERSION | split row '.' | each { || into int })
     [
         $ATUIN_KEYBINDING_TOKEN,
         ([
-            `commandline (ATUIN_LOG=error run-external --redirect-stderr atuin search`,
+            (if $nu_version.0 <= 0 and $nu_version.1 <= 90 { 'commandline' } else { 'commandline edit' }),
+            `(ATUIN_LOG=error run-external --redirect-stderr atuin search`,
             ($flags | append [--interactive, --] | each {|e| $'"($e)"'}),
             `(commandline) | complete | $in.stderr | str substring ..-1)`,
         ] | flatten | str join ' '),
