@@ -395,7 +395,7 @@ impl Cmd {
         };
 
         let history = db
-            .list(&filters, &context, None, false, include_deleted)
+            .list(&filters, &context, None, false, include_deleted, None)
             .await?;
 
         print_list(

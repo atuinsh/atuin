@@ -103,29 +103,32 @@ impl Cmd {
         let now = OffsetDateTime::now_utc().to_offset(settings.timezone.0);
         let last_night = now.replace_time(Time::MIDNIGHT);
 
-        let history = if words.as_str() == "all" {
-            db.list(filter.as_slice(), &context, None, false, false).await?
+        let range = if words.as_str() == "all" {
+            None
         } else if words.trim() == "today" {
             let start = last_night;
             let end = start + Duration::days(1);
-            db.range(start, end).await?
+            Some((start, end))
         } else if words.trim() == "month" {
             let end = last_night;
             let start = end - Duration::days(31);
-            db.range(start, end).await?
+            Some((start, end))
         } else if words.trim() == "week" {
             let end = last_night;
             let start = end - Duration::days(7);
-            db.range(start, end).await?
+            Some((start, end))
         } else if words.trim() == "year" {
             let end = last_night;
             let start = end - Duration::days(365);
-            db.range(start, end).await?
+            Some((start, end))
         } else {
             let start = parse_date_string(&words, now, settings.dialect.into())?;
             let end = start + Duration::days(1);
-            db.range(start, end).await?
+            Some((start, end))
         };
+
+        let history = db.list(filter.as_slice(), &context, None, false, false, range).await?;
+
         compute_stats(settings, &history, self.count);
         Ok(())
     }
