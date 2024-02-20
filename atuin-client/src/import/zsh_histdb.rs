@@ -168,7 +168,7 @@ impl Importer for ZshHistDb {
                 .timestamp(entry.start_time.assume_utc())
                 .command(command)
                 .cwd(cwd)
-                .duration(entry.duration)
+                .duration(entry.duration * 1_000_000_000)
                 .exit(entry.exit_status)
                 .session(session.as_simple().to_string())
                 .hostname(hostname)
