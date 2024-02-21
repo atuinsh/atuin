@@ -26,5 +26,5 @@ async-trait = {workspace = true}
 # DO NOT REMOVE!!
 custom-protocol = ["tauri/custom-protocol"]
 
-[lib]
-crate-type = ["staticlib", "cdylib", "rlib"]
+#[lib]
+#crate-type = ["staticlib", "cdylib", "rlib"]

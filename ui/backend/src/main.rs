@@ -8,8 +8,8 @@ use std::path::PathBuf;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use tauri::SystemTray;
-use tauri::{CustomMenuItem, SystemTrayMenu, SystemTrayMenuItem};
+use tauri::menu::{MenuBuilder, MenuItemBuilder};
+use tauri::tray::{ClickType, TrayIconBuilder};
 
 use atuin_client::history::HistoryId;
 
@@ -60,12 +60,12 @@ async fn global_stats() -> Result<GlobalStats, String> {
 
 fn main() {
     // here `"quit".to_string()` defines the menu item id, and the second parameter is the menu item label.
-    let quit = CustomMenuItem::new("quit".to_string(), "Quit");
-    let tray_menu = SystemTrayMenu::new().add_item(quit);
-    let tray = SystemTray::new().with_menu(tray_menu);
-
     tauri::Builder::default()
-        .system_tray(tray)
+        .setup(|app| -> Result<(), Box<dyn std::error::Error>> {
+            let tray = TrayIconBuilder::new().build(app)?;
+
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![list, search, global_stats])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

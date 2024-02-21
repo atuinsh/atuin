@@ -13,7 +13,8 @@
     "@headlessui/react": "^1.7.18",
     "@heroicons/react": "^2.1.1",
     "@tailwindcss/forms": "^0.5.7",
-    "@tauri-apps/api": "^1.5.2",
+    "@tauri-apps/api": "^2.0.0-beta.1",
+    "core": "link:@tauri-apps/api/core",
     "highlight.js": "^11.9.0",
     "luxon": "^3.4.4",
     "react": "^18.2.0",
@@ -21,7 +22,7 @@
     "recharts": "^2.12.0"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^1.5.8",
+    "@tauri-apps/cli": "2.0.0-beta.2",
     "@types/react": "^18.2.15",
     "@types/react-dom": "^18.2.7",
     "@vitejs/plugin-react": "^4.2.1",
