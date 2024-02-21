@@ -19,10 +19,10 @@ impl Cmd {
         let found: Vec<Alias> = aliases.into_iter().filter(|a| a.name == name).collect();
 
         if found.is_empty() {
-            println!("Aliasing {name}={value}");
+            println!("Aliasing '{name}={value}'.");
         } else {
             println!(
-                "Overwriting alias {name}={} with {name}={value}",
+                "Overwriting alias '{name}={}' with '{name}={value}'.",
                 found[0].value
             );
         }
@@ -43,16 +43,13 @@ impl Cmd {
     }
 
     async fn delete(&self, store: AliasStore, name: String) -> Result<()> {
-        let aliases = store.aliases().await?;
-        let found = aliases.into_iter().any(|a| a.name == name);
-
-        if !found {
-            eprintln!("Alias not found - \"{name}\" - could not delete");
-            return Ok(());
-        }
-
-        store.delete(&name).await?;
-
+        let mut aliases = store.aliases().await?.into_iter();
+        if let Some(alias) = aliases.find(|alias| alias.name == name) {
+            println!("Deleting '{name}={}'.", alias.value);
+            store.delete(&name).await?;
+        } else {
+            eprintln!("Cannot delete '{name}': Alias not set.");
+        };
         Ok(())
     }
 
