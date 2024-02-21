@@ -225,7 +225,7 @@ impl State {
         is_down: bool,
     ) -> InputAction {
         if is_down {
-            if enable_exit && self.results_state.selected() == 0 && settings.keys.scroll_exits {
+            if settings.keys.scroll_exits && enable_exit && self.results_state.selected() == 0 {
                 return Self::handle_key_exit(settings);
             }
             self.scroll_down(1);
