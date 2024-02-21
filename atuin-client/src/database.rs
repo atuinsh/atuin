@@ -1,9 +1,9 @@
 use std::{
+    borrow::Cow,
     env,
     path::{Path, PathBuf},
     str::FromStr,
     time::Duration,
-    borrow::Cow,
 };
 
 use async_trait::async_trait;
@@ -11,7 +11,7 @@ use atuin_common::utils;
 use fs_err as fs;
 use itertools::Itertools;
 use rand::{distributions::Alphanumeric, Rng};
-use sql_builder::{esc, quote, SqlBuilder, SqlName, bind::Bind};
+use sql_builder::{bind::Bind, esc, quote, SqlBuilder, SqlName};
 use sqlx::{
     sqlite::{
         SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteRow,
@@ -442,7 +442,7 @@ impl Database for Sqlite {
                                 continue;
                             }
                             Cow::Owned(part.trim_end().replace('*', "%")) // allow wildcard char
-                        },
+                        }
                         (None, true) => {
                             if part[2..].trim_end().ends_with('/') {
                                 let end_pos = part.trim_end().len() - 1;
@@ -451,7 +451,7 @@ impl Database for Sqlite {
                                 regex = Some(String::from(&part[2..]));
                             }
                             continue;
-                        },
+                        }
                         (Some(r), _) => {
                             if part.trim_end().ends_with('/') {
                                 let end_pos = part.trim_end().len() - 1;
@@ -461,7 +461,7 @@ impl Database for Sqlite {
                                 r.push_str(part);
                             }
                             continue;
-                        },
+                        }
                     };
 
                     // TODO smart case mode could be made configurable like in fzf
