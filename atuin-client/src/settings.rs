@@ -306,6 +306,11 @@ pub struct Sync {
     pub records: bool,
 }
 
+#[derive(Clone, Debug, Deserialize, Default)]
+pub struct Keys {
+    pub scroll_exits: bool,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct Settings {
     pub dialect: Dialect,
@@ -359,6 +364,9 @@ pub struct Settings {
 
     #[serde(default)]
     pub sync: Sync,
+
+    #[serde(default)]
+    pub keys: Keys,
 
     // This is automatically loaded when settings is created. Do not set in
     // config! Keep secrets and settings apart.
@@ -588,6 +596,7 @@ impl Settings {
             // New users will get the new default, that is more similar to what they are used to.
             .set_default("enter_accept", false)?
             .set_default("sync.records", false)?
+            .set_default("keys.scroll_exits", true)?
             .set_default("keymap_mode", "emacs")?
             .set_default("keymap_mode_shell", "auto")?
             .set_default("keymap_cursor", HashMap::<String, String>::new())?
