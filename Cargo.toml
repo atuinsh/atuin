@@ -7,6 +7,9 @@ members = [
   "atuin-server-database",
   "atuin-common", 
   "atuin-dotfiles",
+
+  # The Tauri backend crate. Not published.
+  "ui/backend"
 ]
 
 resolver = "2"
