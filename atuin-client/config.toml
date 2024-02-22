@@ -1,3 +1,5 @@
+version = 2
+
 ## where to store your database, default is your system data directory
 ## linux/mac: ~/.local/share/atuin/history.db
 ## windows: %USERPROFILE%/.local/share/atuin/history.db
@@ -22,20 +24,16 @@
 ## for example: "+9", "-05", "+03:30", "-01:23:45", etc.
 # timezone = "local"
 
-## enable or disable automatic sync
-# auto_sync = true
-
 ## enable or disable automatic update checks
 # update_check = true
 
-## address of the sync server
-# sync_address = "https://api.atuin.sh"
+## Timeout (in seconds) for acquiring a local database connection (sqlite)
+# local_timeout = 5
 
-## how often to sync history. note that this is only triggered when a command
-## is ran, so sync intervals may well be longer
-## set it to 0 to sync after every command
-# sync_frequency = "10m"
+## default history list format - can also be specified with the --format arg
+# history_format = "{time}\t{command}\t{duration}"
 
+# FIXME: These 3 options are a group, and might be worth adding to their own table??
 ## which search mode to use
 ## possible values: prefix, fulltext, fuzzy, skim
 # search_mode = "fuzzy"
@@ -48,57 +46,68 @@
 ## in any directory within a git repository tree (default: false)
 # workspaces = false
 
-## which filter mode to use when atuin is invoked from a shell up-key binding
-## the accepted values are identical to those of "filter_mode"
-## leave unspecified to use same mode set in "filter_mode"
-# filter_mode_shell_up_key_binding = "global"
+[sync]
 
-## which search mode to use when atuin is invoked from a shell up-key binding
-## the accepted values are identical to those of "search_mode"
-## leave unspecified to use same mode set in "search_mode"
-# search_mode_shell_up_key_binding = "fuzzy"
+## enable or disable automatic sync
+# auto_sync = true
 
-## which style to use
-## possible values: auto, full, compact
-# style = "auto"
+## address of the sync server
+# sync_address = "https://api.atuin.sh"
 
-## the maximum number of lines the interface should take up
-## set it to 0 to always go full screen
-# inline_height = 0
+## how often to sync history. note that this is only triggered when a command
+## is ran, so sync intervals may well be longer
+## set it to 0 to sync after every command
+# sync_frequency = "10m"
 
-## Invert the UI - put the search bar at the top , Default to `false`
-# invert = false
+# network_connect_timeout = 5
+# network_timeout = 5
 
-## enable or disable showing a preview of the selected command
-## useful when the command is longer than the terminal width and is cut off
-# show_preview = false
+[keybindings.up]
+# enable = true
 
-## what to do when the escape key is pressed when searching
-## possible values: return-original, return-query
-# exit_mode = "return-original"
+# Defaults to the values in the main table
+# search_mode = "fuzzy"
+# filter_mode = "global"
+# workspaces = false
 
-## possible values: emacs, subl
-# word_jump_mode = "emacs"
+# FIXME: naming, and implementation
+# For switching between interactive search and cyling as in #798
+# behavior = "interactive" # or "cycle"
 
-## characters that count as a part of a word
-# word_chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+# FIXME: Customize the keybinding used for the entrypoint from the shell
+# UNIMPLEMENTED, reserved for future use of custom shell keybindings
+# key = "up" 
 
-## number of context lines to show when scrolling by pages
-# scroll_context_lines = 1
+# Customize any option in the ui table here
+# [keybindings.ctrl_r.ui]
 
-## use ctrl instead of alt as the shortcut modifier key for numerical UI shortcuts
-## alt-0 .. alt-9
-# ctrl_n_shortcuts = false
+[keybindings.ctrl_r]
+# enable = true
 
-## default history list format - can also be specified with the --format arg
-# history_format = "{time}\t{command}\t{duration}"
+# Defaults to the values in the main table
+# search_mode = "fuzzy"
+# filter_mode = "global"
+# workspaces = false
+
+# FIXME: naming, and implementation
+# For switching between interactive search and cyling as in #798
+# behavior = "interactive" # or "cycle"
+
+# FIXME: Customize the keybinding used for the entrypoint from the shell
+# UNIMPLEMENTED, reserved for future use of custom shell keybindings
+# key = "ctrl+r"
+
+# Customize any option in the ui table here
+# [keybindings.ctrl_r.ui]
+
+[filter]
 
 ## prevent commands matching any of these regexes from being written to history.
 ## Note that these regular expressions are unanchored, i.e. if they don't start
 ## with ^ or end with $, they'll match anywhere in the command.
 ## For details on the supported regular expression syntax, see
 ## https://docs.rs/regex/latest/regex/#syntax
-# history_filter = [
+# cmd = [
 #   "^secret-cmd",
 #   "^innocuous-cmd .*--secret=.+"
 # ]
@@ -108,9 +117,24 @@
 ## start with ^ or end with $, they'll match anywhere in CWD.
 ## For details on the supported regular expression syntax, see
 ## https://docs.rs/regex/latest/regex/#syntax
-# cwd_filter = [
+# cwd = [
 #   "^/very/secret/area"
 # ]
+
+## Defaults to true. This matches history against a set of default regex, and will not save it if we get a match. Defaults include
+## 1. AWS key id
+## 2. Github pat (old and new)
+## 3. Slack oauth tokens (bot, user)
+## 4. Slack webhooks
+## 5. Stripe live/test keys
+# secrets = true
+
+# Customizing the interactive UI
+[ui]
+
+## which style to use
+## possible values: auto, full, compact
+# style = "auto"
 
 ## Configure the maximum height of the preview to show.
 ## Useful when you have long scripts in your history that you want to distinguish
@@ -122,13 +146,20 @@
 ## amount of commands in your history.
 # show_help = true
 
-## Defaults to true. This matches history against a set of default regex, and will not save it if we get a match. Defaults include
-## 1. AWS key id
-## 2. Github pat (old and new)
-## 3. Slack oauth tokens (bot, user)
-## 4. Slack webhooks
-## 5. Stripe live/test keys
-# secrets_filter = true
+## Set this to true and Atuin will minimize motion in the UI - timers will not update live, etc.
+## Alternatively, set env NO_MOTION=true
+# prefers_reduced_motion = false
+
+## the maximum number of lines the interface should take up
+## set it to 0 to always go full screen
+# inline_height = 0
+
+## Invert the UI - put the search bar at the top , Default to `false`
+# invert = false
+
+## enable or disable showing a preview of the selected command
+## useful when the command is longer than the terminal width and is cut off
+# show_preview = false
 
 ## Defaults to true. If enabled, upon hitting enter Atuin will immediately execute the command. Press tab to return to the shell and edit.
 # This applies for new installs. Old installs will keep the old behaviour unless configured otherwise.
@@ -147,15 +178,28 @@ enter_accept = true
 ## "{blink,steady}-{block,underline,bar}".
 # keymap_cursor = { emacs = "blink-block", vim_insert = "blink-block", vim_normal = "steady-block" }
 
-# network_connect_timeout = 5
-# network_timeout = 5
+## what to do when the escape key is pressed when searching
+## possible values: return-original, return-query
+# exit_mode = "return-original"
 
-## Timeout (in seconds) for acquiring a local database connection (sqlite)
-# local_timeout = 5
+## possible values: emacs, subl
+# word_jump_mode = "emacs"
 
-## Set this to true and Atuin will minimize motion in the UI - timers will not update live, etc.
-## Alternatively, set env NO_MOTION=true
-# prefers_reduced_motion = false
+## characters that count as a part of a word
+# word_chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+
+## number of context lines to show when scrolling by pages
+# scroll_context_lines = 1
+
+# Keybindings while the interactive UI is open
+# FIXME: I'm not sure if this subtable is necessary
+[ui.keys]
+# Defaults to true. If disabled, using the up/down key won't exit the TUI when scrolled past the first/last entry.
+# scroll_exits = false
+
+## use ctrl instead of alt as the shortcut modifier key for numerical UI shortcuts
+## alt-0 .. alt-9
+# ctrl_n_shortcuts = false
 
 [stats]
 ## Set commands where we should consider the subcommand for statistics. Eg, kubectl get vs just kubectl
@@ -174,7 +218,3 @@ enter_accept = true
 
 ## Set commands that will be completely ignored from stats
 #ignored_commands = ["cd", "ls", "vi"]
-
-[keys]
-# Defaults to true. If disabled, using the up/down key won't exit the TUI when scrolled past the first/last entry.
-# scroll_exits = false
