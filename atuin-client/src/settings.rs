@@ -280,7 +280,7 @@ impl Stats {
     }
 
     fn common_subcommands_default() -> Vec<String> {
-        vec!["cargo", "go", "git", "npm", "yarn", "pnpm", "kubectl"]
+        vec!["cargo", "go", "git", "npm", "yarn", "pnpm", "kubectl", "composer"]
             .into_iter()
             .map(String::from)
             .collect()
