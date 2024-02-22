@@ -244,6 +244,9 @@ __atuin_history() {
 
         READLINE_LINE=""
         READLINE_POINT=${#READLINE_LINE}
+    elif [[ $__atuin_output = __atuin_home__:* ]]; then
+        READLINE_LINE=${__atuin_output#__atuin_home__:}
+        READLINE_POINT=0
     else
         READLINE_LINE=$__atuin_output
         READLINE_POINT=${#READLINE_LINE}

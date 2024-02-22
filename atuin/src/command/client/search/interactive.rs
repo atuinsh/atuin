@@ -64,6 +64,7 @@ pub struct State {
     search_mode: SearchMode,
     results_len: usize,
     accept: bool,
+    home: bool,
     keymap_mode: KeymapMode,
     current_cursor: Option<CursorStyle>,
     tab_index: usize,
@@ -249,6 +250,10 @@ impl State {
         }
         InputAction::Accept(self.results_state.selected())
     }
+    fn handle_search_home(&mut self) -> InputAction {
+        self.home = true;
+        InputAction::Accept(self.results_state.selected())
+    }
 
     #[allow(clippy::too_many_lines)]
     #[allow(clippy::cognitive_complexity)]
@@ -330,9 +335,8 @@ impl State {
                 .search
                 .input
                 .prev_word(&settings.word_chars, settings.word_jump_mode),
-            KeyCode::Left => {
-                self.search.input.left();
-            }
+
+            KeyCode::Left => return InputAction::Accept(self.results_state.selected()),
             KeyCode::Char('b') if ctrl => {
                 self.search.input.left();
             }
@@ -344,19 +348,17 @@ impl State {
                 .search
                 .input
                 .next_word(&settings.word_chars, settings.word_jump_mode),
-            KeyCode::Right => self.search.input.right(),
+            KeyCode::Right => return self.handle_search_home(),
             KeyCode::Char('f') if ctrl => self.search.input.right(),
             KeyCode::Char('a') if ctrl => self.search.input.start(),
-            KeyCode::Home => self.search.input.start(),
+            KeyCode::Home => return self.handle_search_home(),
             KeyCode::Char('e') if ctrl => self.search.input.end(),
-            KeyCode::End => self.search.input.end(),
+            KeyCode::End => return InputAction::Accept(self.results_state.selected()),
             KeyCode::Backspace if ctrl => self
                 .search
                 .input
                 .remove_prev_word(&settings.word_chars, settings.word_jump_mode),
-            KeyCode::Backspace => {
-                self.search.input.back();
-            }
+            KeyCode::Backspace => return InputAction::Accept(self.results_state.selected()),
             KeyCode::Delete if ctrl => self
                 .search
                 .input
@@ -907,6 +909,7 @@ pub async fn history(
         engine: engines::engine(search_mode),
         results_len: 0,
         accept: false,
+        home: false,
         keymap_mode: match settings.keymap_mode {
             KeymapMode::Auto => KeymapMode::Emacs,
             value => value,
@@ -926,6 +929,7 @@ pub async fn history(
 
     let mut stats: Option<HistoryStats> = None;
     let accept;
+    let home;
     let result = 'render: loop {
         terminal.draw(|f| app.draw(f, &results, stats.clone(), settings))?;
 
@@ -965,6 +969,7 @@ pub async fn history(
                             },
                             r => {
                                 accept = app.accept;
+                                home = app.home;
                                 break 'render r;
                             },
                         }
@@ -1003,10 +1008,13 @@ pub async fn history(
     match result {
         InputAction::Accept(index) if index < results.len() => {
             let mut command = results.swap_remove(index).command;
-            if accept
-                && (utils::is_zsh() || utils::is_fish() || utils::is_bash() || utils::is_xonsh())
+            if utils::is_zsh() || utils::is_fish() || utils::is_bash() || utils::is_xonsh()
             {
-                command = String::from("__atuin_accept__:") + &command;
+                if accept {
+                    command = String::from("__atuin_accept__:") + &command;
+                } else if home {
+                    command = String::from("__atuin_home__:") + &command;
+                }
             }
 
             // index is in bounds so we return that entry
