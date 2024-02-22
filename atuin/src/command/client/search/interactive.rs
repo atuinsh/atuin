@@ -265,6 +265,18 @@ impl State {
         // First handle keymap specific keybindings.
         match self.keymap_mode {
             KeymapMode::VimNormal => match input.code {
+                KeyCode::Char('/') if !ctrl => {
+                    self.search.input.clear();
+                    self.set_keymap_cursor(settings, "vim_insert");
+                    self.keymap_mode = KeymapMode::VimInsert;
+                    return InputAction::Continue;
+                }
+                KeyCode::Char('?') if !ctrl => {
+                    self.search.input.clear();
+                    self.set_keymap_cursor(settings, "vim_insert");
+                    self.keymap_mode = KeymapMode::VimInsert;
+                    return InputAction::Continue;
+                }
                 KeyCode::Char('j') if !ctrl => {
                     return self.handle_search_down(settings, true);
                 }
@@ -292,6 +304,12 @@ impl State {
                     return InputAction::Continue;
                 }
                 KeyCode::Char('i') if !ctrl => {
+                    self.set_keymap_cursor(settings, "vim_insert");
+                    self.keymap_mode = KeymapMode::VimInsert;
+                    return InputAction::Continue;
+                }
+                KeyCode::Char('I') if !ctrl => {
+                    self.search.input.start();
                     self.set_keymap_cursor(settings, "vim_insert");
                     self.keymap_mode = KeymapMode::VimInsert;
                     return InputAction::Continue;
