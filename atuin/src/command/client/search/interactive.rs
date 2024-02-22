@@ -500,6 +500,7 @@ impl State {
             1
         };
         let show_help = settings.show_help && (!compact || f.size().height > 1);
+        let show_tabs = settings.show_tabs
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .margin(0)
@@ -510,13 +511,13 @@ impl State {
                         Constraint::Length(1 + border_size),               // input
                         Constraint::Min(1),                                // results list
                         Constraint::Length(preview_height),                // preview
-                        Constraint::Length(1),                             // tabs
+                        Constraint::Length(if show_tabs { 1 } else { 0 }), // tabs
                         Constraint::Length(if show_help { 1 } else { 0 }), // header (sic)
                     ]
                 } else {
                     [
                         Constraint::Length(if show_help { 1 } else { 0 }), // header
-                        Constraint::Length(1),                             // tabs
+                        Constraint::Length(if show_tabs { 1 } else { 0 }), // tabs
                         Constraint::Min(1),                                // results list
                         Constraint::Length(1 + border_size),               // input
                         Constraint::Length(preview_height),                // preview
