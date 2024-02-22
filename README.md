@@ -53,10 +53,6 @@ As well as the search UI, it can do things like this:
 atuin search --exit 0 --after "yesterday 3pm" make
 ```
 
-You may use either the server I host, or host your own! Or just don't use sync
-at all. As all history sync is encrypted, I couldn't access your data even if
-I wanted to. And I **really** don't want to.
-
 ## Features
 
 - rebind `ctrl-r` and `up` (configurable) to a full screen history search UI
