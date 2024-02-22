@@ -363,6 +363,7 @@ impl Cmd {
             {
                 if settings.sync.records {
                     let (_, downloaded) = record::sync::sync(settings, &store).await?;
+                    Settings::save_sync_time()?;
 
                     history_store.incremental_build(db, &downloaded).await?;
                 } else {
