@@ -500,7 +500,7 @@ impl State {
             1
         };
         let show_help = settings.show_help && (!compact || f.size().height > 1);
-        let show_tabs = settings.show_tabs
+        let show_tabs = settings.show_tabs;
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .margin(0)
