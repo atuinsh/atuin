@@ -39,6 +39,7 @@ pub enum Cmd {
         base64: bool,
     },
 
+    /// Display the sync status
     Status,
 }
 
