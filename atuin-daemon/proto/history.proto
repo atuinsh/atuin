@@ -1,0 +1,14 @@
+syntax = "proto3";
+package history;
+
+message AddHistoryRequest {
+  string command = 1;
+}
+
+message AddHistoryReply {
+  string id = 1;
+}
+
+service History {
+  rpc AddHistory(AddHistoryRequest) returns (AddHistoryReply);
+}

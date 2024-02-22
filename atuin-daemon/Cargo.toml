@@ -1,7 +1,7 @@
 [package]
 name = "atuin-daemon"
 edition = "2021"
-version.workspace = true
+version = "0.1.0"
 authors.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -12,3 +12,14 @@ readme.workspace = true
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+atuin-client = { path = "../atuin-client", version = "18.0.1" }
+
+tonic = "0.11"
+prost = "0.12"
+tokio = { workspace = true }
+tokio-stream = {version="0.1.14", features=["net"]}
+tower = { workspace = true }
+eyre = { workspace = true }
+
+[build-dependencies]
+tonic-build = "0.11"
