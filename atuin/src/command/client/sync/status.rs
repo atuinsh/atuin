@@ -1,9 +1,19 @@
+use std::path::PathBuf;
+
 use crate::{SHA, VERSION};
 use atuin_client::{api_client, database::Database, settings::Settings};
 use colored::Colorize;
 use eyre::Result;
 
 pub async fn run(settings: &Settings, db: &impl Database) -> Result<()> {
+    let session_path = settings.session_path.as_str();
+
+    if !PathBuf::from(session_path).exists() {
+        println!("You are not logged in to a sync server - cannot show sync status");
+
+        return Ok(());
+    }
+
     let client = api_client::Client::new(
         &settings.sync_address,
         &settings.session_token,
