@@ -281,7 +281,7 @@ impl Stats {
 
     fn common_subcommands_default() -> Vec<String> {
         vec![
-            "cargo", "composer", "git", "go", "kubectl", "npm", "pnpm", "yarn",
+            "cargo", "composer", "go", "git", "kubectl", "nix", "npm", "pnpm", "yarn",
         ]
         .into_iter()
         .map(String::from)

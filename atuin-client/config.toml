@@ -165,6 +165,7 @@ enter_accept = true
 #   "go",
 #   "kubectl",
 #   "npm",
+#   "nix",
 #   "pnpm",
 #   "yarn",
 # ]
