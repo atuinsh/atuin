@@ -580,14 +580,7 @@ impl State {
             }
 
             1 => {
-                if !results.is_empty() {
-                    super::inspector::draw(
-                        f,
-                        results_list_chunk,
-                        &results[self.results_state.selected()],
-                        &stats.expect("Drawing inspector, but no stats"),
-                    );
-                } else {
+                if results.is_empty() {
                     let message = Paragraph::new("Nothing to inspect. :-(")
                         .block(
                             Block::new()
@@ -599,6 +592,13 @@ impl State {
                         )
                         .alignment(Alignment::Center);
                     f.render_widget(message, results_list_chunk);
+                } else {
+                    super::inspector::draw(
+                        f,
+                        results_list_chunk,
+                        &results[self.results_state.selected()],
+                        &stats.expect("Drawing inspector, but no stats"),
+                    );
                 }
 
                 // HACK: I'm following up with abstracting this into the UI container, with a
