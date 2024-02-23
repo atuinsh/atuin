@@ -39,7 +39,7 @@ use ratatui::{
     prelude::*,
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, BorderType, Borders, Paragraph, Tabs},
+    widgets::{block::Title, Block, BorderType, Borders, Padding, Paragraph, Tabs},
     Frame, Terminal, TerminalOptions, Viewport,
 };
 
@@ -580,12 +580,26 @@ impl State {
             }
 
             1 => {
-                super::inspector::draw(
-                    f,
-                    results_list_chunk,
-                    &results[self.results_state.selected()],
-                    &stats.expect("Drawing inspector, but no stats"),
-                );
+                if !results.is_empty() {
+                    super::inspector::draw(
+                        f,
+                        results_list_chunk,
+                        &results[self.results_state.selected()],
+                        &stats.expect("Drawing inspector, but no stats"),
+                    );
+                } else {
+                    let message = Paragraph::new("Nothing to inspect. :-(")
+                        .block(
+                            Block::new()
+                                .title(
+                                    Title::from(" Info ".to_string()).alignment(Alignment::Center),
+                                )
+                                .borders(Borders::ALL)
+                                .padding(Padding::vertical(2)),
+                        )
+                        .alignment(Alignment::Center);
+                    f.render_widget(message, results_list_chunk);
+                }
 
                 // HACK: I'm following up with abstracting this into the UI container, with a
                 // sub-widget for search + for inspector
@@ -988,9 +1002,11 @@ pub async fn history(
 
         stats = if app.tab_index == 0 {
             None
-        } else {
+        } else if !results.is_empty() {
             let selected = results[app.results_state.selected()].clone();
             Some(db.stats(&selected).await?)
+        } else {
+            None
         };
     };
 
