@@ -1,5 +1,4 @@
-use clap::{CommandFactory, Subcommand};
-use clap_complete::{generate, generate_to, Shell};
+use clap::Subcommand;
 use eyre::Result;
 
 #[cfg(not(windows))]
@@ -12,6 +11,8 @@ mod client;
 mod server;
 
 mod contributors;
+
+mod gen_completions;
 
 #[derive(Subcommand)]
 #[command(infer_subcommands = true)]
@@ -31,15 +32,7 @@ pub enum AtuinCmd {
     Contributors,
 
     /// Generate shell completions
-    GenCompletions {
-        /// Set the shell for generating completions
-        #[arg(long, short)]
-        shell: Shell,
-
-        /// Set the output directory
-        #[arg(long, short)]
-        out_dir: Option<String>,
-    },
+    GenCompletions(gen_completions::Cmd),
 }
 
 impl AtuinCmd {
@@ -66,25 +59,7 @@ impl AtuinCmd {
                 println!("{}", atuin_common::utils::uuid_v7().as_simple());
                 Ok(())
             }
-            Self::GenCompletions { shell, out_dir } => {
-                let mut cli = crate::Atuin::command();
-
-                match out_dir {
-                    Some(out_dir) => {
-                        generate_to(shell, &mut cli, env!("CARGO_PKG_NAME"), &out_dir)?;
-                    }
-                    None => {
-                        generate(
-                            shell,
-                            &mut cli,
-                            env!("CARGO_PKG_NAME"),
-                            &mut std::io::stdout(),
-                        );
-                    }
-                }
-
-                Ok(())
-            }
+            Self::GenCompletions(gen_completions) => gen_completions.run(),
         }
     }
 }

@@ -154,7 +154,7 @@ jobs:
         esac;
 
         # Shell completions
-        for sh in 'bash' 'fish' 'zsh'; do
+        for sh in 'bash' 'fish' 'zsh' 'nushell'; do
           $QEMU_PREFIX "${{ steps.strip.outputs.BIN_PATH }}" gen-completions -s $sh -o "${ARCHIVE_DIR}/completions"
         done
 
