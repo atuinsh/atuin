@@ -280,10 +280,12 @@ impl Stats {
     }
 
     fn common_subcommands_default() -> Vec<String> {
-        vec!["cargo", "go", "git", "npm", "yarn", "pnpm", "kubectl"]
-            .into_iter()
-            .map(String::from)
-            .collect()
+        vec![
+            "cargo", "composer", "git", "go", "kubectl", "npm", "pnpm", "yarn",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect()
     }
 
     fn ignored_commands_default() -> Vec<String> {
