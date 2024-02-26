@@ -71,7 +71,7 @@ impl<'a> StatefulWidget for HistoryList<'a> {
             inverted: self.inverted,
             alternate_highlight: self.alternate_highlight,
             now: &self.now,
-            styles: &self.styles,
+            styles: self.styles,
         };
 
         for item in self.history.iter().skip(state.offset).take(end - start) {
