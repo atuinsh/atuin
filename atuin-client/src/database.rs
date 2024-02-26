@@ -857,6 +857,71 @@ mod test {
         assert_search_eq(&db, SearchMode::FullText, FilterMode::Global, "hm", 0)
             .await
             .unwrap();
+
+        // regex
+        assert_search_eq(&db, SearchMode::FullText, FilterMode::Global, "r/^ls ", 1)
+            .await
+            .unwrap();
+        assert_search_eq(
+            &db,
+            SearchMode::FullText,
+            FilterMode::Global,
+            "r/ls / ie$",
+            1,
+        )
+        .await
+        .unwrap();
+        assert_search_eq(
+            &db,
+            SearchMode::FullText,
+            FilterMode::Global,
+            "r/ls / !ie",
+            0,
+        )
+        .await
+        .unwrap();
+        assert_search_eq(
+            &db,
+            SearchMode::FullText,
+            FilterMode::Global,
+            "meow r/ls/",
+            0,
+        )
+        .await
+        .unwrap();
+        assert_search_eq(&db, SearchMode::FullText, FilterMode::Global, "r//hom/", 1)
+            .await
+            .unwrap();
+        assert_search_eq(
+            &db,
+            SearchMode::FullText,
+            FilterMode::Global,
+            "r//home//",
+            1,
+        )
+        .await
+        .unwrap();
+        assert_search_eq(
+            &db,
+            SearchMode::FullText,
+            FilterMode::Global,
+            "r//home///",
+            0,
+        )
+        .await
+        .unwrap();
+        assert_search_eq(&db, SearchMode::FullText, FilterMode::Global, "/home.*e", 0)
+            .await
+            .unwrap();
+        assert_search_eq(
+            &db,
+            SearchMode::FullText,
+            FilterMode::Global,
+            "r/home.*e",
+            1,
+        )
+        .await
+        .unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -945,6 +1010,17 @@ mod test {
 
         // case matching
         assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "Ellie", 1)
+            .await
+            .unwrap();
+
+        // regex
+        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "r/^ls ", 2)
+            .await
+            .unwrap();
+        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "r/[Ee]llie", 3)
+            .await
+            .unwrap();
+        assert_search_eq(&db, SearchMode::Fuzzy, FilterMode::Global, "/h/e r/^ls ", 1)
             .await
             .unwrap();
     }
