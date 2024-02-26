@@ -281,6 +281,7 @@ impl Stats {
 
     fn common_subcommands_default() -> Vec<String> {
         vec![
+            "apt",
             "cargo",
             "composer",
             "dnf",
