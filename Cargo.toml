@@ -11,7 +11,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "18.0.1"
+version = "18.0.2"
 authors = ["Ellie Huxtable <ellie@elliehuxtable.com>"]
 rust-version = "1.67"
 license = "MIT"
