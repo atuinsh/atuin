@@ -328,11 +328,11 @@ impl Variants {
     }
 }
 
-impl Into<ratatui::style::Style> for Variants {
-    fn into(self) -> ratatui::style::Style {
-        match self {
-            Self::Components(complex_style) => complex_style.into(),
-            Self::Color(color) => color.into(),
+impl From<Variants> for ratatui::style::Style {
+    fn from(value: Variants) -> ratatui::style::Style {
+        match value {
+            Variants::Components(complex_style) => complex_style.into(),
+            Variants::Color(color) => color.into(),
         }
     }
 }
@@ -358,41 +358,41 @@ pub struct Components {
     pub underlined: Option<bool>,
 }
 
-impl Into<ratatui::style::Style> for Components {
-    fn into(self) -> ratatui::style::Style {
+impl From<Components> for ratatui::style::Style {
+    fn from(value: Components) -> ratatui::style::Style {
         let mut style = ratatui::style::Style::default();
 
-        if let Some(color) = self.foreground {
+        if let Some(color) = value.foreground {
             style = style.fg(color);
         };
 
-        if let Some(color) = self.background {
+        if let Some(color) = value.background {
             style = style.bg(color);
         }
 
-        if let Some(color) = self.underline {
+        if let Some(color) = value.underline {
             style = style.underline_color(color);
         }
 
-        style = match self.bold {
+        style = match value.bold {
             Some(true) => style.bold(),
             Some(_) => style.not_bold(),
             _ => style,
         };
 
-        style = match self.crossed_out {
+        style = match value.crossed_out {
             Some(true) => style.crossed_out(),
             Some(_) => style.not_crossed_out(),
             _ => style,
         };
 
-        style = match self.italic {
+        style = match value.italic {
             Some(true) => style.italic(),
             Some(_) => style.not_italic(),
             _ => style,
         };
 
-        style = match self.underlined {
+        style = match value.underlined {
             Some(true) => style.underlined(),
             Some(_) => style.not_underlined(),
             _ => style,
