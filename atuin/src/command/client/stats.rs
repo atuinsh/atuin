@@ -9,7 +9,7 @@ use interim::parse_date_string;
 use atuin_client::{
     database::{current_context, Database},
     history::History,
-    settings::Settings,
+    settings::{FilterMode, Settings},
 };
 use time::{Duration, OffsetDateTime, Time};
 
@@ -22,6 +22,10 @@ pub struct Cmd {
     /// How many top commands to list
     #[arg(long, short, default_value = "10")]
     count: usize,
+
+    /// Filter commands stats [global, host, session, directory, workspace]
+    #[arg(long = "filter-mode")]
+    filter_mode: Option<FilterMode>,
 }
 
 fn compute_stats(settings: &Settings, history: &[History], count: usize) -> (usize, usize) {
@@ -94,32 +98,39 @@ impl Cmd {
             self.period.join(" ")
         };
 
+        let filter = self.filter_mode.map(|f| vec![f]).unwrap_or_default();
+
         let now = OffsetDateTime::now_utc().to_offset(settings.timezone.0);
         let last_night = now.replace_time(Time::MIDNIGHT);
 
-        let history = if words.as_str() == "all" {
-            db.list(&[], &context, None, false, false).await?
+        let range = if words.as_str() == "all" {
+            None
         } else if words.trim() == "today" {
             let start = last_night;
             let end = start + Duration::days(1);
-            db.range(start, end).await?
+            Some((start, end))
         } else if words.trim() == "month" {
             let end = last_night;
             let start = end - Duration::days(31);
-            db.range(start, end).await?
+            Some((start, end))
         } else if words.trim() == "week" {
             let end = last_night;
             let start = end - Duration::days(7);
-            db.range(start, end).await?
+            Some((start, end))
         } else if words.trim() == "year" {
             let end = last_night;
             let start = end - Duration::days(365);
-            db.range(start, end).await?
+            Some((start, end))
         } else {
             let start = parse_date_string(&words, now, settings.dialect.into())?;
             let end = start + Duration::days(1);
-            db.range(start, end).await?
+            Some((start, end))
         };
+
+        let history = db
+            .list(filter.as_slice(), &context, None, false, false, range)
+            .await?;
+
         compute_stats(settings, &history, self.count);
         Ok(())
     }

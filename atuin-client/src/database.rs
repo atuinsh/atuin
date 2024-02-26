@@ -87,6 +87,7 @@ pub trait Database: Send + Sync + 'static {
         max: Option<usize>,
         unique: bool,
         include_deleted: bool,
+        range: Option<(OffsetDateTime, OffsetDateTime)>,
     ) -> Result<Vec<History>>;
     async fn range(&self, from: OffsetDateTime, to: OffsetDateTime) -> Result<Vec<History>>;
 
@@ -285,6 +286,7 @@ impl Database for Sqlite {
         max: Option<usize>,
         unique: bool,
         include_deleted: bool,
+        range: Option<(OffsetDateTime, OffsetDateTime)>,
     ) -> Result<Vec<History>> {
         debug!("listing history");
 
@@ -316,6 +318,11 @@ impl Database for Sqlite {
 
         if let Some(max) = max {
             query.limit(max);
+        }
+
+        if let Some((from, to)) = range {
+            query.and_where_ge("timestamp", from.unix_timestamp_nanos() as i64);
+            query.and_where_le("timestamp", to.unix_timestamp_nanos() as i64);
         }
 
         let query = query.sql().expect("bug in list query. please report");
@@ -732,13 +739,7 @@ mod test {
         query: &str,
         expected: usize,
     ) -> Result<Vec<History>> {
-        let context = Context {
-            hostname: "test:host".to_string(),
-            session: "beepboopiamasession".to_string(),
-            cwd: "/home/ellie".to_string(),
-            host_id: "test-host".to_string(),
-            git_root: None,
-        };
+        let context = new_context();
 
         let results = db
             .search(
@@ -776,9 +777,23 @@ mod test {
         assert_eq!(commands, expected_commands);
     }
 
-    async fn new_history_item(db: &mut impl Database, cmd: &str) -> Result<()> {
+    fn new_context() -> Context {
+        Context {
+            hostname: "test:host".to_string(),
+            session: "beepboopiamasession".to_string(),
+            cwd: "/home/ellie".to_string(),
+            host_id: "test-host".to_string(),
+            git_root: None,
+        }
+    }
+
+    async fn new_history_item(
+        db: &mut impl Database,
+        cmd: &str,
+        timestamp: Option<OffsetDateTime>,
+    ) -> Result<()> {
         let mut captured: History = History::capture()
-            .timestamp(OffsetDateTime::now_utc())
+            .timestamp(timestamp.unwrap_or_else(|| OffsetDateTime::now_utc()))
             .command(cmd)
             .cwd("/home/ellie")
             .build()
@@ -793,9 +808,60 @@ mod test {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn test_list_range() {
+        let mut db = Sqlite::new("sqlite::memory:", 0.1).await.unwrap();
+
+        let timestamp = OffsetDateTime::from_unix_timestamp(1708330400).unwrap();
+
+        new_history_item(&mut db, "ls /home/ellie", Some(timestamp))
+            .await
+            .unwrap();
+        new_history_item(&mut db, "ls /home/frank", None)
+            .await
+            .unwrap();
+
+        let context = new_context();
+
+        let all = db
+            .list(&[], &context, None, true, true, None)
+            .await
+            .unwrap();
+        assert_eq!(all.len(), 2);
+
+        let range = Some((timestamp, timestamp));
+
+        assert_eq!(
+            db.list(&[], &context, None, false, true, range)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_range() {
+        let mut db = Sqlite::new("sqlite::memory:", 0.1).await.unwrap();
+
+        let timestamp = OffsetDateTime::from_unix_timestamp(1708330400).unwrap();
+
+        new_history_item(&mut db, "ls /home/ellie", Some(timestamp))
+            .await
+            .unwrap();
+        new_history_item(&mut db, "ls /home/frank", None)
+            .await
+            .unwrap();
+
+        let range = db.range(timestamp, timestamp).await.unwrap();
+        assert_eq!(range.len(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_search_prefix() {
         let mut db = Sqlite::new("sqlite::memory:", 0.1).await.unwrap();
-        new_history_item(&mut db, "ls /home/ellie").await.unwrap();
+        new_history_item(&mut db, "ls /home/ellie", None)
+            .await
+            .unwrap();
 
         assert_search_eq(&db, SearchMode::Prefix, FilterMode::Global, "ls", 1)
             .await
@@ -811,7 +877,9 @@ mod test {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_search_fulltext() {
         let mut db = Sqlite::new("sqlite::memory:", 0.1).await.unwrap();
-        new_history_item(&mut db, "ls /home/ellie").await.unwrap();
+        new_history_item(&mut db, "ls /home/ellie", None)
+            .await
+            .unwrap();
 
         assert_search_eq(&db, SearchMode::FullText, FilterMode::Global, "ls", 1)
             .await
@@ -830,10 +898,16 @@ mod test {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_search_fuzzy() {
         let mut db = Sqlite::new("sqlite::memory:", 0.1).await.unwrap();
-        new_history_item(&mut db, "ls /home/ellie").await.unwrap();
-        new_history_item(&mut db, "ls /home/frank").await.unwrap();
-        new_history_item(&mut db, "cd /home/Ellie").await.unwrap();
-        new_history_item(&mut db, "/home/ellie/.bin/rustup")
+        new_history_item(&mut db, "ls /home/ellie", None)
+            .await
+            .unwrap();
+        new_history_item(&mut db, "ls /home/frank", None)
+            .await
+            .unwrap();
+        new_history_item(&mut db, "cd /home/Ellie", None)
+            .await
+            .unwrap();
+        new_history_item(&mut db, "/home/ellie/.bin/rustup", None)
             .await
             .unwrap();
 
@@ -922,8 +996,8 @@ mod test {
         let mut db = Sqlite::new("sqlite::memory:", 0.1).await.unwrap();
         // test ordering of results: we should choose the first, even though it happened longer ago.
 
-        new_history_item(&mut db, "curl").await.unwrap();
-        new_history_item(&mut db, "corburl").await.unwrap();
+        new_history_item(&mut db, "curl", None).await.unwrap();
+        new_history_item(&mut db, "corburl", None).await.unwrap();
 
         // if fuzzy reordering is on, it should come back in a more sensible order
         assert_search_commands(
@@ -955,7 +1029,7 @@ mod test {
 
         let mut db = Sqlite::new("sqlite::memory:", 0.1).await.unwrap();
         for _i in 1..10000 {
-            new_history_item(&mut db, "i am a duplicated command")
+            new_history_item(&mut db, "i am a duplicated command", None)
                 .await
                 .unwrap();
         }

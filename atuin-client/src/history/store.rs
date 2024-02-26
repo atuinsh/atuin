@@ -300,7 +300,7 @@ impl HistoryStore {
         pb.enable_steady_tick(Duration::from_millis(500));
 
         pb.set_message("Fetching history from old database");
-        let history = db.list(&[], &context, None, false, true).await?;
+        let history = db.list(&[], &context, None, false, true, None).await?;
 
         pb.set_message("Fetching history already in store");
         let store_ids = self.history_ids().await?;
