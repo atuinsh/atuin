@@ -36,8 +36,7 @@ use crate::{command::client::search::engines, VERSION};
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Alignment, Constraint, Direction, Layout},
-    prelude::*,
-    style::{Color, Modifier, Style},
+    style::{Color, Modifier, Style, Stylize},
     text::{Line, Span, Text},
     widgets::{Block, BorderType, Borders, Paragraph, Tabs},
     Frame, Terminal, TerminalOptions, Viewport,
@@ -535,7 +534,7 @@ impl State {
         // TODO: this should be split so that we have one interactive search container that is
         // EITHER a search box or an inspector. But I'm not doing that now, way too much atm.
         // also allocate less 🙈
-        let titles = TAB_TITLES.iter().copied().map(Line::from).collect();
+        let titles: Vec<_> = TAB_TITLES.iter().copied().map(Line::from).collect();
 
         let tabs = Tabs::new(titles)
             .block(Block::default().borders(Borders::NONE))

@@ -47,6 +47,7 @@ typed-builder = "0.18.0"
 pretty_assertions = "1.3.0"
 thiserror = "1.0"
 rustix = {version = "0.38.30", features=["process", "fs"]}
+ratatui = { version = "0.26", features = ["serde"] }
 
 [workspace.dependencies.reqwest]
 version = "0.11"

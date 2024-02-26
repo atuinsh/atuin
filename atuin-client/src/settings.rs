@@ -1,6 +1,5 @@
 use std::{
     collections::HashMap,
-    convert::TryFrom,
     fmt,
     io::prelude::*,
     path::{Path, PathBuf},
