@@ -1,6 +1,5 @@
 use std::collections::{HashMap, HashSet};
 
-use atuin_common::utils::Escapable as _;
 use clap::Parser;
 use crossterm::style::{Color, ResetColor, SetAttribute, SetForegroundColor};
 use eyre::Result;
@@ -12,6 +11,7 @@ use atuin_client::{
     settings::Settings,
 };
 use time::{Duration, OffsetDateTime, Time};
+use unicode_segmentation::UnicodeSegmentation;
 
 #[derive(Parser, Debug)]
 #[command(infer_subcommands = true)]
@@ -22,12 +22,60 @@ pub struct Cmd {
     /// How many top commands to list
     #[arg(long, short, default_value = "10")]
     count: usize,
+
+    /// The number of consecutive commands to consider
+    #[arg(long, short, default_value = "1")]
+    ngram_size: usize,
 }
 
-fn compute_stats(settings: &Settings, history: &[History], count: usize) -> (usize, usize) {
+fn split_at_pipe(command: &str) -> Vec<&str> {
+    let mut result = vec![];
+    let mut quoted = false;
+    let mut start = 0;
+    let mut graphemes = UnicodeSegmentation::grapheme_indices(command, true);
+
+    while let Some((i, c)) = graphemes.next() {
+        let current = i;
+        match c {
+            "\"" => {
+                if command[start..current] != *"\"" {
+                    quoted = !quoted;
+                }
+            }
+            "'" => {
+                if command[start..current] != *"'" {
+                    quoted = !quoted;
+                }
+            }
+            "\\" => if graphemes.next().is_some() {},
+            "|" => {
+                if !quoted {
+                    if command[start..].starts_with('|') {
+                        start += 1;
+                    }
+                    result.push(&command[start..current]);
+                    start = current;
+                }
+            }
+            _ => {}
+        }
+    }
+    if command[start..].starts_with('|') {
+        start += 1;
+    }
+    result.push(&command[start..]);
+    result
+}
+
+fn compute_stats(
+    settings: &Settings,
+    history: &[History],
+    count: usize,
+    ngram_size: usize,
+) -> (usize, usize) {
     let mut commands = HashSet::<&str>::with_capacity(history.len());
-    let mut prefixes = HashMap::<&str, usize>::with_capacity(history.len());
     let mut total_unignored = 0;
+    let mut prefixes = HashMap::<Vec<&str>, usize>::with_capacity(history.len());
     for i in history {
         // just in case it somehow has a leading tab or space or something (legacy atuin didn't ignore space prefixes)
         let command = i.command.trim();
@@ -39,7 +87,21 @@ fn compute_stats(settings: &Settings, history: &[History], count: usize) -> (usi
 
         total_unignored += 1;
         commands.insert(command);
-        *prefixes.entry(prefix).or_default() += 1;
+
+        split_at_pipe(i.command.trim())
+            .iter()
+            .map(|l| {
+                let command = l.trim();
+                commands.insert(command);
+                command
+            })
+            .collect::<Vec<_>>()
+            .windows(ngram_size)
+            .for_each(|w| {
+                *prefixes
+                    .entry(w.iter().map(|c| interesting_command(settings, c)).collect())
+                    .or_default() += 1;
+            });
     }
 
     let unique = commands.len();
@@ -53,6 +115,17 @@ fn compute_stats(settings: &Settings, history: &[History], count: usize) -> (usi
 
     let max = top.iter().map(|x| x.1).max().unwrap();
     let num_pad = max.ilog10() as usize + 1;
+
+    // Find the length of the longest command name for each column
+    let column_widths = top
+        .iter()
+        .map(|(commands, _)| commands.iter().map(|c| c.len()).collect::<Vec<usize>>())
+        .fold(vec![0; ngram_size], |acc, item| {
+            acc.iter()
+                .zip(item.iter())
+                .map(|(a, i)| *std::cmp::max(a, i))
+                .collect()
+        });
 
     for (command, count) in top {
         let gray = SetForegroundColor(Color::Grey);
@@ -74,10 +147,14 @@ fn compute_stats(settings: &Settings, history: &[History], count: usize) -> (usi
             print!(" ");
         }
 
-        println!(
-            "{ResetColor}] {gray}{count:num_pad$}{ResetColor} {bold}{}{ResetColor}",
-            command.escape_control()
-        );
+        let formatted_command = command
+            .iter()
+            .zip(column_widths.iter())
+            .map(|(cmd, width)| format!("{cmd:width$}"))
+            .collect::<Vec<_>>()
+            .join(" | ");
+
+        println!("{ResetColor}] {gray}{count:num_pad$}{ResetColor} {bold}{formatted_command}{ResetColor}");
     }
     println!("Total commands:   {total_unignored}");
     println!("Unique commands:  {unique}");
@@ -120,7 +197,7 @@ impl Cmd {
             let end = start + Duration::days(1);
             db.range(start, end).await?
         };
-        compute_stats(settings, &history, self.count);
+        compute_stats(settings, &history, self.count, self.ngram_size);
         Ok(())
     }
 }
@@ -189,7 +266,7 @@ mod tests {
     use time::OffsetDateTime;
 
     use super::compute_stats;
-    use super::interesting_command;
+    use super::{interesting_command, split_at_pipe};
 
     #[test]
     fn ignored_commands() {
@@ -209,7 +286,7 @@ mod tests {
                 .into(),
         ];
 
-        let (total, unique) = compute_stats(&settings, &history, 10);
+        let (total, unique) = compute_stats(&settings, &history, 10, 1);
         assert_eq!(total, 1);
         assert_eq!(unique, 1);
     }
@@ -310,6 +387,51 @@ mod tests {
         assert_eq!(
             interesting_command(&settings, "sudo test cargo build foo bar"),
             "cargo build foo"
+        );
+    }
+
+    #[test]
+    fn split_simple() {
+        assert_eq!(split_at_pipe("fd | rg"), ["fd ", " rg"]);
+    }
+
+    #[test]
+    fn split_multi() {
+        assert_eq!(
+            split_at_pipe("kubectl | jq | rg"),
+            ["kubectl ", " jq ", " rg"]
+        );
+    }
+
+    #[test]
+    fn split_simple_quoted() {
+        assert_eq!(
+            split_at_pipe("foo | bar 'baz {} | quux' | xyzzy"),
+            ["foo ", " bar 'baz {} | quux' ", " xyzzy"]
+        );
+    }
+
+    #[test]
+    fn split_multi_quoted() {
+        assert_eq!(
+            split_at_pipe("foo | bar 'baz \"{}\" | quux' | xyzzy"),
+            ["foo ", " bar 'baz \"{}\" | quux' ", " xyzzy"]
+        );
+    }
+
+    #[test]
+    fn escaped_pipes() {
+        assert_eq!(
+            split_at_pipe("foo | bar baz \\| quux"),
+            ["foo ", " bar baz \\| quux"]
+        );
+    }
+
+    #[test]
+    fn emoji() {
+        assert_eq!(
+            split_at_pipe("git commit -m \"🚀\""),
+            ["git commit -m \"🚀\""]
         );
     }
 }
