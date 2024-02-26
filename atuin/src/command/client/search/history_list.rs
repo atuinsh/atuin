@@ -196,7 +196,7 @@ impl DrawState<'_> {
                 .command_selected
                 .unwrap_or_else(|| Style::default().fg(Color::Red).bold())
         } else {
-            self.styles.command.unwrap_or_else(Style::default)
+            self.styles.command.unwrap_or_default()
         };
 
         for section in h.command.escape_control().split_ascii_whitespace() {
