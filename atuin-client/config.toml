@@ -100,7 +100,7 @@
 ## https://docs.rs/regex/latest/regex/#syntax
 # history_filter = [
 #   "^secret-cmd",
-#   "^innocuous-cmd .*--secret=.+"
+#   "^innocuous-cmd .*--secret=.+",
 # ]
 
 ## prevent commands run with cwd matching any of these regexes from being written
@@ -109,7 +109,7 @@
 ## For details on the supported regular expression syntax, see
 ## https://docs.rs/regex/latest/regex/#syntax
 # cwd_filter = [
-#   "^/very/secret/area"
+#   "^/very/secret/area",
 # ]
 
 ## Configure the maximum height of the preview to show.
@@ -159,21 +159,26 @@ enter_accept = true
 
 [stats]
 ## Set commands where we should consider the subcommand for statistics. Eg, kubectl get vs just kubectl
-#common_subcommands = [
-#  "cargo",
-#  "go",
-#  "git",
-#  "npm",
-#  "yarn",
-#  "pnpm",
-#  "kubectl",
-#]
+# common_subcommands = [
+#   "cargo",
+#   "git",
+#   "go",
+#   "kubectl",
+#   "npm",
+#   "nix",
+#   "pnpm",
+#   "yarn",
+# ]
 
 ## Set commands that should be totally stripped and ignored from stats
-#common_prefix = ["sudo"]
+# common_prefix = ["sudo"]
 
 ## Set commands that will be completely ignored from stats
-#ignored_commands = ["cd", "ls", "vi"]
+# ignored_commands = [
+#   "cd",
+#   "ls",
+#   "vi"
+# ]
 
 [keys]
 # Defaults to true. If disabled, using the up/down key won't exit the TUI when scrolled past the first/last entry.

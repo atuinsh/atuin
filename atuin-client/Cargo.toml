@@ -18,7 +18,7 @@ sync = ["urlencoding", "reqwest", "sha2", "hex"]
 check-update = []
 
 [dependencies]
-atuin-common = { path = "../atuin-common", version = "18.0.1" }
+atuin-common = { path = "../atuin-common", version = "18.0.2" }
 
 log = { workspace = true }
 base64 = { workspace = true }
