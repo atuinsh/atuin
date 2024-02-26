@@ -14,9 +14,10 @@ use config::{
 use eyre::{bail, eyre, Context, Error, Result};
 use fs_err::{create_dir_all, File};
 use parse_duration::parse;
+use ratatui::style::{Color, Stylize};
 use regex::RegexSet;
 use semver::Version;
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use serde_with::DeserializeFromStr;
 use time::{
     format_description::{well_known::Rfc3339, FormatItem},
@@ -279,12 +280,10 @@ impl Stats {
     }
 
     fn common_subcommands_default() -> Vec<String> {
-        vec![
-            "cargo", "composer", "go", "git", "kubectl", "nix", "npm", "pnpm", "yarn",
-        ]
-        .into_iter()
-        .map(String::from)
-        .collect()
+        vec!["cargo", "go", "git", "npm", "yarn", "pnpm", "kubectl"]
+            .into_iter()
+            .map(String::from)
+            .collect()
     }
 
     fn ignored_commands_default() -> Vec<String> {
@@ -299,6 +298,107 @@ impl Default for Stats {
             common_subcommands: Self::common_subcommands_default(),
             ignored_commands: Self::ignored_commands_default(),
         }
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct Styles {
+    #[serde(default, deserialize_with = "Variants::deserialize_style")]
+    pub command: Option<ratatui::style::Style>,
+    #[serde(default, deserialize_with = "Variants::deserialize_style")]
+    pub command_selected: Option<ratatui::style::Style>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum Variants {
+    Color(Color),
+    Components(Components),
+}
+
+impl Variants {
+    fn deserialize_style<'de, D>(deserializer: D) -> Result<Option<ratatui::style::Style>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let variants: Option<Variants> = Deserialize::deserialize(deserializer)?;
+        let style: Option<ratatui::style::Style> = variants.map(|variants| variants.into());
+
+        Ok(style)
+    }
+}
+
+impl Into<ratatui::style::Style> for Variants {
+    fn into(self) -> ratatui::style::Style {
+        match self {
+            Self::Components(complex_style) => complex_style.into(),
+            Self::Color(color) => color.into(),
+        }
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct Components {
+    // Colors
+    #[serde(default)]
+    pub foreground: Option<Color>,
+    #[serde(default)]
+    pub background: Option<Color>,
+    #[serde(default)]
+    pub underline: Option<Color>,
+
+    // Modifiers
+    #[serde(default)]
+    pub bold: Option<bool>,
+    #[serde(default)]
+    pub crossed_out: Option<bool>,
+    #[serde(default)]
+    pub italic: Option<bool>,
+    #[serde(default)]
+    pub underlined: Option<bool>,
+}
+
+impl Into<ratatui::style::Style> for Components {
+    fn into(self) -> ratatui::style::Style {
+        let mut style = ratatui::style::Style::default();
+
+        if let Some(color) = self.foreground {
+            style = style.fg(color);
+        };
+
+        if let Some(color) = self.background {
+            style = style.bg(color);
+        }
+
+        if let Some(color) = self.underline {
+            style = style.underline_color(color);
+        }
+
+        style = match self.bold {
+            Some(true) => style.bold(),
+            Some(_) => style.not_bold(),
+            _ => style,
+        };
+
+        style = match self.crossed_out {
+            Some(true) => style.crossed_out(),
+            Some(_) => style.not_crossed_out(),
+            _ => style,
+        };
+
+        style = match self.italic {
+            Some(true) => style.italic(),
+            Some(_) => style.not_italic(),
+            _ => style,
+        };
+
+        style = match self.underlined {
+            Some(true) => style.underlined(),
+            Some(_) => style.not_underlined(),
+            _ => style,
+        };
+
+        style
     }
 }
 
@@ -362,6 +462,9 @@ pub struct Settings {
 
     #[serde(default)]
     pub stats: Stats,
+
+    #[serde(default)]
+    pub styles: Styles,
 
     #[serde(default)]
     pub sync: Sync,
