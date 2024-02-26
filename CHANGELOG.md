@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [18.0.2] - 2024-02-26
+
+### Bug Fixes
+
+- Rework #1509 to recover from the preexec failure ([#1729](https://github.com/atuinsh/atuin/issues/1729))
+
 ## [18.0.1] - 2024-02-12
 
 ### Bug Fixes
