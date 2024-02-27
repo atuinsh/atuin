@@ -1,11 +1,11 @@
 use std::time::Duration;
 
-use atuin_client::history::History;
+use atuin_client::{history::History, settings::Styles};
 use atuin_common::utils::Escapable as _;
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Color, Modifier, Style, Stylize},
     widgets::{Block, StatefulWidget, Widget},
 };
 use time::OffsetDateTime;
@@ -19,6 +19,7 @@ pub struct HistoryList<'a> {
     /// Apply an alternative highlighting to the selected row
     alternate_highlight: bool,
     now: &'a dyn Fn() -> OffsetDateTime,
+    styles: &'a Styles,
 }
 
 #[derive(Default)]
@@ -70,6 +71,7 @@ impl<'a> StatefulWidget for HistoryList<'a> {
             inverted: self.inverted,
             alternate_highlight: self.alternate_highlight,
             now: &self.now,
+            styles: self.styles,
         };
 
         for item in self.history.iter().skip(state.offset).take(end - start) {
@@ -91,6 +93,7 @@ impl<'a> HistoryList<'a> {
         inverted: bool,
         alternate_highlight: bool,
         now: &'a dyn Fn() -> OffsetDateTime,
+        styles: &'a Styles,
     ) -> Self {
         Self {
             history,
@@ -98,6 +101,7 @@ impl<'a> HistoryList<'a> {
             inverted,
             alternate_highlight,
             now,
+            styles,
         }
     }
 
@@ -130,6 +134,7 @@ struct DrawState<'a> {
     inverted: bool,
     alternate_highlight: bool,
     now: &'a dyn Fn() -> OffsetDateTime,
+    styles: &'a Styles,
 }
 
 // longest line prefix I could come up with
@@ -183,12 +188,16 @@ impl DrawState<'_> {
     }
 
     fn command(&mut self, h: &History) {
-        let mut style = Style::default();
-        if !self.alternate_highlight && (self.y as usize + self.state.offset == self.state.selected)
-        {
-            // if not applying alternative highlighting to the whole row, color the command
-            style = style.fg(Color::Red).add_modifier(Modifier::BOLD);
-        }
+        let alternate_highlight = self.alternate_highlight;
+        let selected = self.y as usize + self.state.offset == self.state.selected;
+
+        let style = if !alternate_highlight && selected {
+            self.styles
+                .command_selected
+                .unwrap_or_else(|| Style::default().fg(Color::Red).bold())
+        } else {
+            self.styles.command.unwrap_or_default()
+        };
 
         for section in h.command.escape_control().split_ascii_whitespace() {
             self.draw(" ", style);

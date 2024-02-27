@@ -22,7 +22,7 @@ use unicode_width::UnicodeWidthStr;
 use atuin_client::{
     database::{current_context, Database},
     history::{store::HistoryStore, History, HistoryStats},
-    settings::{CursorStyle, ExitMode, FilterMode, KeymapMode, SearchMode, Settings},
+    settings::{CursorStyle, ExitMode, FilterMode, KeymapMode, SearchMode, Settings, Styles},
 };
 
 use super::{
@@ -557,7 +557,7 @@ impl State {
         // TODO: this should be split so that we have one interactive search container that is
         // EITHER a search box or an inspector. But I'm not doing that now, way too much atm.
         // also allocate less 🙈
-        let titles = TAB_TITLES.iter().copied().map(Line::from).collect();
+        let titles: Vec<_> = TAB_TITLES.iter().copied().map(Line::from).collect();
 
         let tabs = Tabs::new(titles)
             .block(Block::default().borders(Borders::NONE))
@@ -596,8 +596,13 @@ impl State {
 
         match self.tab_index {
             0 => {
-                let results_list =
-                    Self::build_results_list(style, results, self.keymap_mode, &self.now);
+                let results_list = Self::build_results_list(
+                    style,
+                    results,
+                    self.keymap_mode,
+                    &self.now,
+                    &settings.styles,
+                );
                 f.render_stateful_widget(results_list, results_list_chunk, &mut self.results_state);
             }
 
@@ -718,12 +723,14 @@ impl State {
         results: &'a [History],
         keymap_mode: KeymapMode,
         now: &'a dyn Fn() -> OffsetDateTime,
+        styles: &'a Styles,
     ) -> HistoryList<'a> {
         let results_list = HistoryList::new(
             results,
             style.invert,
             keymap_mode == KeymapMode::VimNormal,
             now,
+            styles,
         );
 
         if style.compact {
