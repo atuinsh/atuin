@@ -160,13 +160,24 @@ enter_accept = true
 [stats]
 ## Set commands where we should consider the subcommand for statistics. Eg, kubectl get vs just kubectl
 # common_subcommands = [
+#   "apt",
 #   "cargo",
+#   "composer",
+#   "dnf",
+#   "docker",
 #   "git",
 #   "go",
+#   "ip",
 #   "kubectl",
-#   "npm",
 #   "nix",
+#   "nmcli",
+#   "npm",
+#   "pecl",
 #   "pnpm",
+#   "podman",
+#   "port",
+#   "systemctl",
+#   "tmux",
 #   "yarn",
 # ]
 
