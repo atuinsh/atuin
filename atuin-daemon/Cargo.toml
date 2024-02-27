@@ -14,12 +14,17 @@ readme.workspace = true
 [dependencies]
 atuin-client = { path = "../atuin-client", version = "18.0.1" }
 
+time = { workspace = true }
+uuid = { workspace = true }
 tonic = "0.11"
 prost = "0.12"
+prost-types = "0.12"
 tokio = { workspace = true }
 tokio-stream = {version="0.1.14", features=["net"]}
 tower = { workspace = true }
 eyre = { workspace = true }
+dashmap = "5.5.3"
+tonic-types = "0.11.0"
 
 [build-dependencies]
 tonic-build = "0.11"

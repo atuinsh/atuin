@@ -24,6 +24,7 @@ use atuin_client::{
 use atuin_client::{record, sync};
 
 use log::{debug, warn};
+use rustix::path::Arg;
 use time::{macros::format_description, OffsetDateTime};
 
 use super::search::format_duration_into;
@@ -314,6 +315,20 @@ impl Cmd {
             return Ok(());
         }
 
+        if settings.daemon.enabled {
+            let mut client =
+                atuin_daemon::client::HistoryClient::new(settings.daemon.socket_path.clone())
+                    .await?;
+
+            let resp = client.start_history(h).await?;
+
+            // print the ID
+            // we use this as the key for calling end
+            println!("{}", resp);
+
+            return Ok(());
+        }
+
         // print the ID
         // we use this as the key for calling end
         println!("{}", h.id);
@@ -332,6 +347,19 @@ impl Cmd {
         exit: i64,
         duration: Option<u64>,
     ) -> Result<()> {
+        // If the daemon is enabled, use it. Ignore the rest.
+        // We will need to keep the old code around for a while.
+        // At the very least, while this is opt-in
+        if settings.daemon.enabled {
+            let mut client =
+                atuin_daemon::client::HistoryClient::new(settings.daemon.socket_path.clone())
+                    .await?;
+
+            client.end_history(id.to_string(), duration, exit).await?;
+
+            return Ok(());
+        }
+
         if id.trim() == "" {
             return Ok(());
         }

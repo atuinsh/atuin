@@ -337,34 +337,36 @@ pub struct Keys {
     pub scroll_exits: bool,
 }
 
-<<<<<<< HEAD:crates/atuin-client/src/settings.rs
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Preview {
     pub strategy: PreviewStrategy,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+pub struct Daemon {
+    pub enabled: bool,
+    pub socket_path: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 impl Default for Preview {
     fn default() -> Self {
         Self {
             strategy: PreviewStrategy::Auto,
-=======
-#[derive(Clone, Debug, Deserialize)]
-pub struct Daemon {
-    pub enabled: bool,
-    pub socked_path: String,
-}
-
-impl Default for Daemon {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            socked_path: "".to_string(),
->>>>>>> 5b18c896 (wip):atuin-client/src/settings.rs
         }
     }
 }
 
-<<<<<<< HEAD:crates/atuin-client/src/settings.rs
+#[derive(Clone, Debug, Deserialize, Serialize)]
+impl Default for Daemon {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            socket_path: "".to_string(),
+        }
+    }
+}
+
 // The preview height strategy also takes max_preview_height into account.
 #[derive(Clone, Debug, Deserialize, Copy, PartialEq, Eq, ValueEnum, Serialize)]
 pub enum PreviewStrategy {
@@ -378,9 +380,6 @@ pub enum PreviewStrategy {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-=======
-#[derive(Clone, Debug, Deserialize)]
->>>>>>> 5b18c896 (wip):atuin-client/src/settings.rs
 pub struct Settings {
     pub dialect: Dialect,
     pub timezone: Timezone,

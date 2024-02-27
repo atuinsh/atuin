@@ -97,3 +97,36 @@ impl From<HistoryFromDb> for History {
         }
     }
 }
+
+/// Builder for a history entry that is captured via hook and sent to the daemon
+///
+/// This builder is similar to Capture, but we just require more information up front.
+/// For the old setup, we could just rely on History::new to read some of the missing
+/// data. This is no longer the case.
+#[derive(Debug, Clone, TypedBuilder)]
+pub struct HistoryDaemonCapture {
+    timestamp: time::OffsetDateTime,
+    #[builder(setter(into))]
+    command: String,
+    #[builder(setter(into))]
+    cwd: String,
+    #[builder(setter(into))]
+    session: String,
+    #[builder(setter(into))]
+    hostname: String,
+}
+
+impl From<HistoryDaemonCapture> for History {
+    fn from(captured: HistoryDaemonCapture) -> Self {
+        History::new(
+            captured.timestamp,
+            captured.command,
+            captured.cwd,
+            -1,
+            -1,
+            Some(captured.session),
+            Some(captured.hostname),
+            None,
+        )
+    }
+}

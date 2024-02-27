@@ -1,14 +1,33 @@
 syntax = "proto3";
 package history;
 
-message AddHistoryRequest {
-  string command = 1;
+import "google/protobuf/timestamp.proto";
+
+message StartHistoryRequest {
+  // If people are still using my software in ~530 years, they can figure out a u128 migration
+  uint64 timestamp = 1; // nanosecond unix epoch
+  string command = 2;
+  string cwd = 3;
+  string session = 4;
+  string hostname = 5;
 }
 
-message AddHistoryReply {
+message EndHistoryRequest {
+  string id = 1;
+  int64 exit = 2;
+  optional uint64 duration = 3;
+}
+
+message StartHistoryReply {
   string id = 1;
 }
 
+message EndHistoryReply {
+  string id = 1;
+  uint64 idx = 2;
+}
+
 service History {
-  rpc AddHistory(AddHistoryRequest) returns (AddHistoryReply);
+  rpc StartHistory(StartHistoryRequest) returns (StartHistoryReply);
+  rpc EndHistory(EndHistoryRequest) returns (EndHistoryReply);
 }

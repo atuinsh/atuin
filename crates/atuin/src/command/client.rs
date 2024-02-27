@@ -144,7 +144,7 @@ impl Cmd {
                 Ok(())
             }
 
-            Self::Daemon => daemon::run(&settings).await,
+            Self::Daemon => daemon::run(settings, sqlite_store, db).await,
         }
     }
 }
