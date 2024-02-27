@@ -189,11 +189,15 @@ impl State {
         }
 
         let ctrl = input.modifiers.contains(KeyModifiers::CONTROL);
+        let esc_allow_exit = !(self.tab_index == 0 && self.keymap_mode == KeymapMode::VimInsert);
 
         // core input handling, common for all tabs
         match input.code {
             KeyCode::Char('c' | 'g') if ctrl => return InputAction::ReturnOriginal,
-            KeyCode::Esc if !(self.tab_index == 0 && self.keymap_mode == KeymapMode::VimInsert) => {
+            KeyCode::Esc if esc_allow_exit => {
+                return Self::handle_key_exit(settings);
+            }
+            KeyCode::Char('[') if ctrl && esc_allow_exit => {
                 return Self::handle_key_exit(settings);
             }
             KeyCode::Tab => {
@@ -320,7 +324,7 @@ impl State {
                 _ => {}
             },
             KeymapMode::VimInsert => {
-                if input.code == KeyCode::Esc {
+                if input.code == KeyCode::Esc || (ctrl && input.code == KeyCode::Char('[')) {
                     self.set_keymap_cursor(settings, "vim_normal");
                     self.keymap_mode = KeymapMode::VimNormal;
                     return InputAction::Continue;
