@@ -1,31 +1,40 @@
+mod behaviour;
+pub mod display;
+mod input;
+mod stats;
+mod sync;
+mod time;
+
+use ::time as time_lib;
+
 use std::{
     collections::HashMap,
-    convert::TryFrom,
-    fmt,
     io::prelude::*,
     path::{Path, PathBuf},
     str::FromStr,
 };
 
 use atuin_common::record::HostId;
-use clap::ValueEnum;
 use config::{
     builder::DefaultState, Config, ConfigBuilder, Environment, File as ConfigFile, FileFormat,
 };
-use eyre::{bail, eyre, Context, Error, Result};
+use eyre::{eyre, Context, Result};
 use fs_err::{create_dir_all, File};
 use parse_duration::parse;
-use ratatui::style::{Color, Stylize};
 use regex::RegexSet;
 use semver::Version;
-use serde::{Deserialize, Deserializer};
-use serde_with::DeserializeFromStr;
-use time::{
-    format_description::{well_known::Rfc3339, FormatItem},
-    macros::format_description,
-    OffsetDateTime, UtcOffset,
-};
+use serde::Deserialize;
+use time_lib::{format_description::well_known::Rfc3339, Duration, OffsetDateTime};
 use uuid::Uuid;
+
+pub use self::{
+    behaviour::{ExitMode, FilterMode, SearchMode},
+    display::{Display, Styles},
+    input::{CursorStyle, KeymapMode, Keys, WordJumpMode},
+    stats::{Dialect, Stats},
+    sync::Sync,
+    time::Timezone,
+};
 
 pub const HISTORY_PAGE_SIZE: i64 = 100;
 pub const LAST_SYNC_FILENAME: &str = "last_sync_time";
@@ -34,464 +43,68 @@ pub const LATEST_VERSION_FILENAME: &str = "latest_version";
 pub const HOST_ID_FILENAME: &str = "host_id";
 static EXAMPLE_CONFIG: &str = include_str!("../config.toml");
 
-#[derive(Clone, Debug, Deserialize, Copy, ValueEnum, PartialEq)]
-pub enum SearchMode {
-    #[serde(rename = "prefix")]
-    Prefix,
-
-    #[serde(rename = "fulltext")]
-    #[clap(aliases = &["fulltext"])]
-    FullText,
-
-    #[serde(rename = "fuzzy")]
-    Fuzzy,
-
-    #[serde(rename = "skim")]
-    Skim,
-}
-
-impl SearchMode {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            SearchMode::Prefix => "PREFIX",
-            SearchMode::FullText => "FULLTXT",
-            SearchMode::Fuzzy => "FUZZY",
-            SearchMode::Skim => "SKIM",
-        }
-    }
-    pub fn next(&self, settings: &Settings) -> Self {
-        match self {
-            SearchMode::Prefix => SearchMode::FullText,
-            // if the user is using skim, we go to skim
-            SearchMode::FullText if settings.search_mode == SearchMode::Skim => SearchMode::Skim,
-            // otherwise fuzzy.
-            SearchMode::FullText => SearchMode::Fuzzy,
-            SearchMode::Fuzzy | SearchMode::Skim => SearchMode::Prefix,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Copy, PartialEq, Eq, ValueEnum)]
-pub enum FilterMode {
-    #[serde(rename = "global")]
-    Global = 0,
-
-    #[serde(rename = "host")]
-    Host = 1,
-
-    #[serde(rename = "session")]
-    Session = 2,
-
-    #[serde(rename = "directory")]
-    Directory = 3,
-
-    #[serde(rename = "workspace")]
-    Workspace = 4,
-}
-
-impl FilterMode {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            FilterMode::Global => "GLOBAL",
-            FilterMode::Host => "HOST",
-            FilterMode::Session => "SESSION",
-            FilterMode::Directory => "DIRECTORY",
-            FilterMode::Workspace => "WORKSPACE",
-        }
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Copy)]
-pub enum ExitMode {
-    #[serde(rename = "return-original")]
-    ReturnOriginal,
-
-    #[serde(rename = "return-query")]
-    ReturnQuery,
-}
-
-// FIXME: Can use upstream Dialect enum if https://github.com/stevedonovan/chrono-english/pull/16 is merged
-// FIXME: Above PR was merged, but dependency was changed to interim (fork of chrono-english) in the ... interim
-#[derive(Clone, Debug, Deserialize, Copy)]
-pub enum Dialect {
-    #[serde(rename = "us")]
-    Us,
-
-    #[serde(rename = "uk")]
-    Uk,
-}
-
-impl From<Dialect> for interim::Dialect {
-    fn from(d: Dialect) -> interim::Dialect {
-        match d {
-            Dialect::Uk => interim::Dialect::Uk,
-            Dialect::Us => interim::Dialect::Us,
-        }
-    }
-}
-
-/// Type wrapper around `time::UtcOffset` to support a wider variety of timezone formats.
-///
-/// Note that the parsing of this struct needs to be done before starting any
-/// multithreaded runtime, otherwise it will fail on most Unix systems.
-///
-/// See: https://github.com/atuinsh/atuin/pull/1517#discussion_r1447516426
-#[derive(Clone, Copy, Debug, Eq, PartialEq, DeserializeFromStr)]
-pub struct Timezone(pub UtcOffset);
-impl fmt::Display for Timezone {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
-    }
-}
-/// format: <+|-><hour>[:<minute>[:<second>]]
-static OFFSET_FMT: &[FormatItem<'_>] =
-    format_description!("[offset_hour sign:mandatory padding:none][optional [:[offset_minute padding:none][optional [:[offset_second padding:none]]]]]");
-impl FromStr for Timezone {
-    type Err = Error;
-
-    fn from_str(s: &str) -> Result<Self> {
-        // local timezone
-        if matches!(s.to_lowercase().as_str(), "l" | "local") {
-            let offset = UtcOffset::current_local_offset()?;
-            return Ok(Self(offset));
-        }
-
-        if matches!(s.to_lowercase().as_str(), "0" | "utc") {
-            let offset = UtcOffset::UTC;
-            return Ok(Self(offset));
-        }
-
-        // offset from UTC
-        if let Ok(offset) = UtcOffset::parse(s, OFFSET_FMT) {
-            return Ok(Self(offset));
-        }
-
-        // IDEA: Currently named timezones are not supported, because the well-known crate
-        // for this is `chrono_tz`, which is not really interoperable with the datetime crate
-        // that we currently use - `time`. If ever we migrate to using `chrono`, this would
-        // be a good feature to add.
-
-        bail!(r#""{s}" is not a valid timezone spec"#)
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Copy)]
-pub enum Style {
-    #[serde(rename = "auto")]
-    Auto,
-
-    #[serde(rename = "full")]
-    Full,
-
-    #[serde(rename = "compact")]
-    Compact,
-}
-
-#[derive(Clone, Debug, Deserialize, Copy)]
-pub enum WordJumpMode {
-    #[serde(rename = "emacs")]
-    Emacs,
-
-    #[serde(rename = "subl")]
-    Subl,
-}
-
-#[derive(Clone, Debug, Deserialize, Copy, PartialEq, Eq, ValueEnum)]
-pub enum KeymapMode {
-    #[serde(rename = "emacs")]
-    Emacs,
-
-    #[serde(rename = "vim-normal")]
-    VimNormal,
-
-    #[serde(rename = "vim-insert")]
-    VimInsert,
-
-    #[serde(rename = "auto")]
-    Auto,
-}
-
-impl KeymapMode {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            KeymapMode::Emacs => "EMACS",
-            KeymapMode::VimNormal => "VIMNORMAL",
-            KeymapMode::VimInsert => "VIMINSERT",
-            KeymapMode::Auto => "AUTO",
-        }
-    }
-}
-
-// We want to translate the config to crossterm::cursor::SetCursorStyle, but
-// the original type does not implement trait serde::Deserialize unfortunately.
-// It seems impossible to implement Deserialize for external types when it is
-// used in HashMap (https://stackoverflow.com/questions/67142663).  We instead
-// define an adapter type.
-#[derive(Clone, Debug, Deserialize, Copy, PartialEq, Eq, ValueEnum)]
-pub enum CursorStyle {
-    #[serde(rename = "default")]
-    DefaultUserShape,
-
-    #[serde(rename = "blink-block")]
-    BlinkingBlock,
-
-    #[serde(rename = "steady-block")]
-    SteadyBlock,
-
-    #[serde(rename = "blink-underline")]
-    BlinkingUnderScore,
-
-    #[serde(rename = "steady-underline")]
-    SteadyUnderScore,
-
-    #[serde(rename = "blink-bar")]
-    BlinkingBar,
-
-    #[serde(rename = "steady-bar")]
-    SteadyBar,
-}
-
-impl CursorStyle {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            CursorStyle::DefaultUserShape => "DEFAULT",
-            CursorStyle::BlinkingBlock => "BLINKBLOCK",
-            CursorStyle::SteadyBlock => "STEADYBLOCK",
-            CursorStyle::BlinkingUnderScore => "BLINKUNDERLINE",
-            CursorStyle::SteadyUnderScore => "STEADYUNDERLINE",
-            CursorStyle::BlinkingBar => "BLINKBAR",
-            CursorStyle::SteadyBar => "STEADYBAR",
-        }
-    }
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct Stats {
-    #[serde(default = "Stats::common_prefix_default")]
-    pub common_prefix: Vec<String>, // sudo, etc. commands we want to strip off
-    #[serde(default = "Stats::common_subcommands_default")]
-    pub common_subcommands: Vec<String>, // kubectl, commands we should consider subcommands for
-    #[serde(default = "Stats::ignored_commands_default")]
-    pub ignored_commands: Vec<String>, // cd, ls, etc. commands we want to completely hide from stats
-}
-
-impl Stats {
-    fn common_prefix_default() -> Vec<String> {
-        vec!["sudo", "doas"].into_iter().map(String::from).collect()
-    }
-
-    fn common_subcommands_default() -> Vec<String> {
-        vec![
-            "apt",
-            "cargo",
-            "composer",
-            "dnf",
-            "docker",
-            "git",
-            "go",
-            "ip",
-            "kubectl",
-            "nix",
-            "nmcli",
-            "npm",
-            "pecl",
-            "pnpm",
-            "podman",
-            "port",
-            "systemctl",
-            "tmux",
-            "yarn",
-        ]
-        .into_iter()
-        .map(String::from)
-        .collect()
-    }
-
-    fn ignored_commands_default() -> Vec<String> {
-        vec![]
-    }
-}
-
-impl Default for Stats {
-    fn default() -> Self {
-        Self {
-            common_prefix: Self::common_prefix_default(),
-            common_subcommands: Self::common_subcommands_default(),
-            ignored_commands: Self::ignored_commands_default(),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Default, Deserialize)]
-pub struct Styles {
-    #[serde(default, deserialize_with = "Variants::deserialize_style")]
-    pub command: Option<ratatui::style::Style>,
-    #[serde(default, deserialize_with = "Variants::deserialize_style")]
-    pub command_selected: Option<ratatui::style::Style>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-pub enum Variants {
-    Color(Color),
-    Components(Components),
-}
-
-impl Variants {
-    fn deserialize_style<'de, D>(deserializer: D) -> Result<Option<ratatui::style::Style>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let variants: Option<Variants> = Deserialize::deserialize(deserializer)?;
-        let style: Option<ratatui::style::Style> = variants.map(|variants| variants.into());
-
-        Ok(style)
-    }
-}
-
-impl From<Variants> for ratatui::style::Style {
-    fn from(value: Variants) -> ratatui::style::Style {
-        match value {
-            Variants::Components(complex_style) => complex_style.into(),
-            Variants::Color(color) => color.into(),
-        }
-    }
-}
-
-#[derive(Debug, Default, Deserialize)]
-pub struct Components {
-    // Colors
-    #[serde(default)]
-    pub foreground: Option<Color>,
-    #[serde(default)]
-    pub background: Option<Color>,
-    #[serde(default)]
-    pub underline: Option<Color>,
-
-    // Modifiers
-    #[serde(default)]
-    pub bold: Option<bool>,
-    #[serde(default)]
-    pub crossed_out: Option<bool>,
-    #[serde(default)]
-    pub italic: Option<bool>,
-    #[serde(default)]
-    pub underlined: Option<bool>,
-}
-
-impl From<Components> for ratatui::style::Style {
-    fn from(value: Components) -> ratatui::style::Style {
-        let mut style = ratatui::style::Style::default();
-
-        if let Some(color) = value.foreground {
-            style = style.fg(color);
-        };
-
-        if let Some(color) = value.background {
-            style = style.bg(color);
-        }
-
-        if let Some(color) = value.underline {
-            style = style.underline_color(color);
-        }
-
-        style = match value.bold {
-            Some(true) => style.bold(),
-            Some(_) => style.not_bold(),
-            _ => style,
-        };
-
-        style = match value.crossed_out {
-            Some(true) => style.crossed_out(),
-            Some(_) => style.not_crossed_out(),
-            _ => style,
-        };
-
-        style = match value.italic {
-            Some(true) => style.italic(),
-            Some(_) => style.not_italic(),
-            _ => style,
-        };
-
-        style = match value.underlined {
-            Some(true) => style.underlined(),
-            Some(_) => style.not_underlined(),
-            _ => style,
-        };
-
-        style
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Default)]
-pub struct Sync {
-    pub records: bool,
-}
-
-#[derive(Clone, Debug, Deserialize, Default)]
-pub struct Keys {
-    pub scroll_exits: bool,
-}
-
 #[derive(Clone, Debug, Deserialize)]
 pub struct Settings {
-    pub dialect: Dialect,
-    pub timezone: Timezone,
-    pub style: Style,
-    pub auto_sync: bool,
-    pub update_check: bool,
-    pub sync_address: String,
-    pub sync_frequency: String,
-    pub db_path: String,
-    pub record_store_path: String,
-    pub key_path: String,
-    pub session_path: String,
-    pub search_mode: SearchMode,
+    // Behaviour
+    pub exit_mode: ExitMode,
     pub filter_mode: FilterMode,
     pub filter_mode_shell_up_key_binding: Option<FilterMode>,
+    pub search_mode: SearchMode,
     pub search_mode_shell_up_key_binding: Option<SearchMode>,
-    pub shell_up_key_binding: bool,
-    pub inline_height: u16,
-    pub invert: bool,
-    pub show_preview: bool,
-    pub max_preview_height: u16,
-    pub show_help: bool,
-    pub exit_mode: ExitMode,
-    pub keymap_mode: KeymapMode,
-    pub keymap_mode_shell: KeymapMode,
-    pub keymap_cursor: HashMap<String, CursorStyle>,
-    pub word_jump_mode: WordJumpMode,
-    pub word_chars: String,
-    pub scroll_context_lines: usize,
-    pub history_format: String,
-    pub prefers_reduced_motion: bool,
 
-    #[serde(with = "serde_regex", default = "RegexSet::empty")]
-    pub history_filter: RegexSet,
+    // Display
+    #[serde(default, flatten)]
+    pub display: display::Settings,
 
+    // Filters
     #[serde(with = "serde_regex", default = "RegexSet::empty")]
     pub cwd_filter: RegexSet,
-
+    #[serde(with = "serde_regex", default = "RegexSet::empty")]
+    pub history_filter: RegexSet,
     pub secrets_filter: bool,
     pub workspaces: bool,
-    pub ctrl_n_shortcuts: bool,
 
-    pub network_connect_timeout: u64,
-    pub network_timeout: u64,
-    pub local_timeout: f64,
+    // Input
     pub enter_accept: bool,
+    pub keymap_cursor: HashMap<String, CursorStyle>,
+    pub keymap_mode: KeymapMode,
+    pub keymap_mode_shell: KeymapMode,
+    #[serde(default)]
+    pub keys: Keys,
+    pub shell_up_key_binding: bool,
+    pub word_jump_mode: WordJumpMode,
 
+    // Paths
+    pub db_path: String,
+    pub key_path: String,
+    pub record_store_path: String,
+    pub session_path: String,
+
+    // Stats
+    pub dialect: Dialect,
     #[serde(default)]
     pub stats: Stats,
 
-    #[serde(default)]
-    pub styles: Styles,
-
+    // Sync
+    pub auto_sync: bool,
+    pub sync_address: String,
+    pub sync_frequency: String,
     #[serde(default)]
     pub sync: Sync,
 
-    #[serde(default)]
-    pub keys: Keys,
+    // Time
+    pub timezone: Timezone,
+
+    // Timeout
+    pub local_timeout: f64,
+    pub network_connect_timeout: u64,
+    pub network_timeout: u64,
+
+    pub update_check: bool,
+    pub word_chars: String,
+    pub scroll_context_lines: usize,
+    pub history_format: String,
+    pub ctrl_n_shortcuts: bool,
 
     // This is automatically loaded when settings is created. Do not set in
     // config! Keep secrets and settings apart.
@@ -595,7 +208,7 @@ impl Settings {
 
         match parse(self.sync_frequency.as_str()) {
             Ok(d) => {
-                let d = time::Duration::try_from(d).unwrap();
+                let d = Duration::try_from(d).unwrap();
                 Ok(OffsetDateTime::now_utc() - Settings::last_sync()? >= d)
             }
             Err(e) => Err(eyre!("failed to check sync: {}", e)),
@@ -679,7 +292,10 @@ impl Settings {
         let key_path = data_dir.join("key");
         let session_path = data_dir.join("session");
 
-        Ok(Config::builder()
+        let builder = Config::builder();
+        let builder = display::defaults(builder)?;
+
+        Ok(builder
             .set_default("history_format", "{time}\t{command}\t{duration}")?
             .set_default("db_path", db_path.to_str())?
             .set_default("record_store_path", record_store_path.to_str())?
@@ -693,12 +309,6 @@ impl Settings {
             .set_default("sync_frequency", "10m")?
             .set_default("search_mode", "fuzzy")?
             .set_default("filter_mode", "global")?
-            .set_default("style", "auto")?
-            .set_default("inline_height", 0)?
-            .set_default("show_preview", false)?
-            .set_default("max_preview_height", 4)?
-            .set_default("show_help", true)?
-            .set_default("invert", false)?
             .set_default("exit_mode", "return-original")?
             .set_default("word_jump_mode", "emacs")?
             .set_default(
@@ -725,13 +335,6 @@ impl Settings {
             .set_default("keymap_mode", "emacs")?
             .set_default("keymap_mode_shell", "auto")?
             .set_default("keymap_cursor", HashMap::<String, String>::new())?
-            .set_default(
-                "prefers_reduced_motion",
-                std::env::var("NO_MOTION")
-                    .ok()
-                    .map(|_| config::Value::new(None, config::ValueKind::Boolean(true)))
-                    .unwrap_or_else(|| config::Value::new(None, config::ValueKind::Boolean(false))),
-            )?
             .add_source(
                 Environment::with_prefix("atuin")
                     .prefix_separator("_")
@@ -817,44 +420,5 @@ impl Default for Settings {
             .expect("Could not build config")
             .try_deserialize()
             .expect("Could not deserialize config")
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::str::FromStr;
-
-    use eyre::Result;
-
-    use super::Timezone;
-
-    #[test]
-    fn can_parse_offset_timezone_spec() -> Result<()> {
-        assert_eq!(Timezone::from_str("+02")?.0.as_hms(), (2, 0, 0));
-        assert_eq!(Timezone::from_str("-04")?.0.as_hms(), (-4, 0, 0));
-        assert_eq!(Timezone::from_str("+05:30")?.0.as_hms(), (5, 30, 0));
-        assert_eq!(Timezone::from_str("-09:30")?.0.as_hms(), (-9, -30, 0));
-
-        // single digit hours are allowed
-        assert_eq!(Timezone::from_str("+2")?.0.as_hms(), (2, 0, 0));
-        assert_eq!(Timezone::from_str("-4")?.0.as_hms(), (-4, 0, 0));
-        assert_eq!(Timezone::from_str("+5:30")?.0.as_hms(), (5, 30, 0));
-        assert_eq!(Timezone::from_str("-9:30")?.0.as_hms(), (-9, -30, 0));
-
-        // fully qualified form
-        assert_eq!(Timezone::from_str("+09:30:00")?.0.as_hms(), (9, 30, 0));
-        assert_eq!(Timezone::from_str("-09:30:00")?.0.as_hms(), (-9, -30, 0));
-
-        // these offsets don't really exist but are supported anyway
-        assert_eq!(Timezone::from_str("+0:5")?.0.as_hms(), (0, 5, 0));
-        assert_eq!(Timezone::from_str("-0:5")?.0.as_hms(), (0, -5, 0));
-        assert_eq!(Timezone::from_str("+01:23:45")?.0.as_hms(), (1, 23, 45));
-        assert_eq!(Timezone::from_str("-01:23:45")?.0.as_hms(), (-1, -23, -45));
-
-        // require a leading sign for clarity
-        assert!(Timezone::from_str("5").is_err());
-        assert!(Timezone::from_str("10:30").is_err());
-
-        Ok(())
     }
 }

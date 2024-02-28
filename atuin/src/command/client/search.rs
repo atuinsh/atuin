@@ -158,7 +158,7 @@ impl Cmd {
             settings.filter_mode = self.filter_mode.unwrap();
         }
         if self.inline_height.is_some() {
-            settings.inline_height = self.inline_height.unwrap();
+            settings.display.inline_height = self.inline_height.unwrap();
         }
 
         settings.shell_up_key_binding = self.shell_up_key_binding;
