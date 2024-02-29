@@ -1,9 +1,11 @@
+use std::process::Command;
 use std::{collections::HashMap, env, path::PathBuf};
 
 use atuin_client::{encryption, record::sqlite_store::SqliteStore, settings::Settings};
 use atuin_config::store::AliasStore;
 use clap::{Parser, ValueEnum};
 use eyre::{Result, WrapErr};
+use rustix::path::Arg;
 use serde::{Deserialize, Serialize};
 
 use sysinfo::{get_current_pid, System};
@@ -18,9 +20,24 @@ struct ShellInfo {
 }
 
 impl ShellInfo {
-    pub fn plugins() -> Vec<String> {
-        // TODO: consider a different detection approach if there are plugins
+    pub fn plugins(shell: &str) -> Vec<String> {
+        // consider a different detection approach if there are plugins
         // that don't set env vars
+
+        // HACK ALERT!
+        // Many of the env vars we need to detect are not exported :(
+        // So, we're going to run `env` in a subshell and parse the output
+        // There's a chance this won't work, so it should not be fatal.
+        //
+        // Every shell we support handles `shell -c 'command'`
+        let cmd = Command::new(shell)
+            .args(["-c", "env"])
+            .output()
+            .map_or("".to_string(), |v| {
+                let out = v.stdout;
+
+                String::from(out.as_str().unwrap_or(""))
+            });
 
         let map = HashMap::from([
             ("BLE_ATTACHED", "blesh"),
@@ -30,7 +47,7 @@ impl ShellInfo {
         let plugins = map
             .into_iter()
             .filter_map(|(env, plugin)| {
-                if env::var(env).is_ok() {
+                if cmd.contains(env) {
                     return Some(plugin.to_string());
                 }
 
@@ -56,7 +73,7 @@ impl ShellInfo {
         let shell = shell.strip_prefix("-").unwrap_or(&shell);
         let name = shell.to_string();
 
-        let plugins = ShellInfo::plugins();
+        let plugins = ShellInfo::plugins(name.as_str());
 
         Self { name, plugins }
     }
