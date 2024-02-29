@@ -14,6 +14,7 @@ mod account;
 
 mod config;
 mod default_config;
+mod doctor;
 mod history;
 mod import;
 mod init;
@@ -57,6 +58,9 @@ pub enum Cmd {
 
     #[command()]
     Init(init::Cmd),
+
+    #[command()]
+    Doctor,
 
     /// Print example configuration
     #[command()]
@@ -112,6 +116,8 @@ impl Cmd {
             Self::Config(config) => config.run(&settings, sqlite_store).await,
 
             Self::Init(init) => init.run(&settings).await,
+
+            Self::Doctor => doctor::run(&settings),
 
             Self::DefaultConfig => {
                 default_config::run();
