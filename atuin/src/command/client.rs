@@ -60,7 +60,7 @@ pub enum Cmd {
     Init(init::Cmd),
 
     #[command()]
-    Doctor(doctor::Cmd),
+    Doctor,
 
     /// Print example configuration
     #[command()]
@@ -117,7 +117,7 @@ impl Cmd {
 
             Self::Init(init) => init.run(&settings).await,
 
-            Self::Doctor(doctor) => doctor.run(&settings),
+            Self::Doctor => doctor::run(&settings),
 
             Self::DefaultConfig => {
                 default_config::run();

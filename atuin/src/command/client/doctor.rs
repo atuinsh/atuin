@@ -1,10 +1,8 @@
 use std::process::Command;
-use std::{collections::HashMap, env, path::PathBuf};
+use std::{collections::HashMap, path::PathBuf};
 
-use atuin_client::{encryption, record::sqlite_store::SqliteStore, settings::Settings};
-use atuin_config::store::AliasStore;
-use clap::{Parser, ValueEnum};
-use eyre::{Result, WrapErr};
+use atuin_client::settings::Settings;
+use eyre::Result;
 use rustix::path::Arg;
 use serde::{Deserialize, Serialize};
 
@@ -33,7 +31,7 @@ impl ShellInfo {
         let cmd = Command::new(shell)
             .args(["-c", "env"])
             .output()
-            .map_or("".to_string(), |v| {
+            .map_or(String::new(), |v| {
                 let out = v.stdout;
 
                 String::from(out.as_str().unwrap_or(""))
@@ -44,8 +42,7 @@ impl ShellInfo {
             ("bash_preexec_imported", "bash-preexec"),
         ]);
 
-        let plugins = map
-            .into_iter()
+        map.into_iter()
             .filter_map(|(env, plugin)| {
                 if cmd.contains(env) {
                     return Some(plugin.to_string());
@@ -53,9 +50,7 @@ impl ShellInfo {
 
                 None
             })
-            .collect();
-
-        plugins
+            .collect()
     }
 
     pub fn new() -> Self {
@@ -70,7 +65,7 @@ impl ShellInfo {
             .expect("Process with parent pid does not exist");
 
         let shell = parent.name().trim().to_lowercase();
-        let shell = shell.strip_prefix("-").unwrap_or(&shell);
+        let shell = shell.strip_prefix('-').unwrap_or(&shell);
         let name = shell.to_string();
 
         let plugins = ShellInfo::plugins(name.as_str());
@@ -91,9 +86,9 @@ struct OsInfo {
 impl OsInfo {
     pub fn new() -> Self {
         Self {
-            name: System::name().unwrap_or("unknown".to_string()),
-            arch: System::cpu_arch().unwrap_or("unknown".to_string()),
-            version: System::os_version().unwrap_or("unknown".to_string()),
+            name: System::name().unwrap_or_else(|| "unknown".to_string()),
+            arch: System::cpu_arch().unwrap_or_else(|| "unknown".to_string()),
+            version: System::os_version().unwrap_or_else(|| "unknown".to_string()),
         }
     }
 }
@@ -164,16 +159,11 @@ impl DoctorDump {
     }
 }
 
-#[derive(Parser, Debug)]
-pub struct Cmd {}
+pub fn run(settings: &Settings) -> Result<()> {
+    let dump = DoctorDump::new(settings);
 
-impl Cmd {
-    pub fn run(&self, settings: &Settings) -> Result<()> {
-        let dump = DoctorDump::new(settings);
+    let dump = serde_yaml::to_string(&dump)?;
+    println!("{dump}");
 
-        let dump = serde_yaml::to_string(&dump)?;
-        println!("{}", dump);
-
-        Ok(())
-    }
+    Ok(())
 }
