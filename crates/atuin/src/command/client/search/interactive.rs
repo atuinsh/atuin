@@ -17,7 +17,7 @@ use super::{
 };
 use atuin_client::{
     database::{Database, current_context},
-    history::{History, HistoryStats, store::HistoryStore},
+    history::{History, HistoryId, HistoryStats, store::HistoryStore},
     settings::{
         CursorStyle, ExitMode, FilterMode, KeymapMode, PreviewStrategy, SearchMode, Settings,
     },
@@ -54,12 +54,40 @@ const TAB_TITLES: [&str; 2] = ["Search", "Inspect"];
 
 pub enum InputAction {
     Accept(usize),
+    AcceptInspecting,
     Copy(usize),
     Delete(usize),
     ReturnOriginal,
     ReturnQuery,
     Continue,
     Redraw,
+}
+
+#[derive(Clone)]
+pub struct InspectingState {
+    current_id: Option<HistoryId>,
+    next_id: Option<HistoryId>,
+    previous_id: Option<HistoryId>,
+}
+
+impl InspectingState {
+    pub fn to_previous(&mut self) {
+        let previous = self.previous_id.clone();
+        self.reset();
+        self.current_id = previous;
+    }
+
+    pub fn to_next(&mut self) {
+        let next = self.next_id.clone();
+        self.reset();
+        self.current_id = next;
+    }
+
+    pub fn reset(&mut self) {
+        self.current_id = None;
+        self.next_id = None;
+        self.previous_id = None;
+    }
 }
 
 #[allow(clippy::struct_field_names)]
@@ -75,6 +103,8 @@ pub struct State {
     prefix: bool,
     current_cursor: Option<CursorStyle>,
     tab_index: usize,
+
+    pub inspecting_state: InspectingState,
 
     search: SearchState,
     engine: Box<dyn SearchEngine>,
@@ -96,6 +126,7 @@ impl State {
     ) -> Result<Vec<History>> {
         let results = self.engine.query(&self.search, db).await?;
 
+        self.inspecting_state = InspectingState { current_id: None, next_id: None, previous_id: None };
         self.results_state.select(0);
         self.results_len = results.len();
 
@@ -227,7 +258,15 @@ impl State {
             KeyCode::Char('c' | 'g') if ctrl => Some(InputAction::ReturnOriginal),
             KeyCode::Esc if esc_allow_exit => Some(Self::handle_key_exit(settings)),
             KeyCode::Char('[') if ctrl && esc_allow_exit => Some(Self::handle_key_exit(settings)),
-            KeyCode::Tab => Some(InputAction::Accept(self.results_state.selected())),
+            KeyCode::Tab => {
+                match self.tab_index {
+                    0 => Some(InputAction::Accept(self.results_state.selected())),
+
+                    1 => Some(return InputAction::AcceptInspecting),
+
+                    _ => panic!("invalid tab index on input"),
+                }
+            }
             KeyCode::Right if cursor_at_end_of_line && settings.keys.accept_past_line_end => {
                 Some(InputAction::Accept(self.results_state.selected()))
             }
@@ -532,6 +571,7 @@ impl State {
 
     fn scroll_down(&mut self, scroll_len: usize) {
         let i = self.results_state.selected().saturating_sub(scroll_len);
+        self.inspecting_state.reset();
         self.results_state.select(i);
     }
 
@@ -539,6 +579,7 @@ impl State {
         let i = self.results_state.selected() + scroll_len;
         self.results_state
             .select(i.min(self.results_len.saturating_sub(1)));
+        self.inspecting_state.reset();
     }
 
     #[allow(clippy::cast_possible_truncation)]
@@ -623,6 +664,7 @@ impl State {
         f: &mut Frame,
         results: &[History],
         stats: Option<HistoryStats>,
+        inspecting: Option<&History>,
         settings: &Settings,
         theme: &Theme,
     ) {
@@ -775,11 +817,17 @@ impl State {
                         .alignment(Alignment::Center);
                     f.render_widget(message, results_list_chunk);
                 } else {
+                    let inspecting = match inspecting {
+                        Some(inspecting) => inspecting,
+                        None => &results[self.results_state.selected()]
+                    };
                     super::inspector::draw(
                         f,
                         results_list_chunk,
+                        inspecting,
                         &results[self.results_state.selected()],
                         &stats.expect("Drawing inspector, but no stats"),
+                        &settings,
                         theme,
                         settings.timezone,
                     );
@@ -1158,6 +1206,7 @@ pub async fn history(
         switched_search_mode: false,
         search_mode,
         tab_index: 0,
+        inspecting_state: InspectingState { current_id: None, next_id: None, previous_id: None },
         search: SearchState {
             input,
             filter_mode: settings
@@ -1194,9 +1243,10 @@ pub async fn history(
     }
 
     let mut stats: Option<HistoryStats> = None;
+    let mut inspecting: Option<History> = None;
     let accept;
     let result = 'render: loop {
-        terminal.draw(|f| app.draw(f, &results, stats.clone(), settings, theme))?;
+        terminal.draw(|f| app.draw(f, &results, stats.clone(), inspecting.as_ref(), settings, theme))?;
 
         let initial_input = app.search.input.as_str().to_owned();
         let initial_filter_mode = app.search.filter_mode;
@@ -1217,6 +1267,7 @@ pub async fn history(
                                 app.results_len -= 1;
                                 let selected = app.results_state.selected();
                                 if selected == app.results_len {
+                                    app.inspecting_state.reset();
                                     app.results_state.select(selected - 1);
                                 }
 
@@ -1233,7 +1284,7 @@ pub async fn history(
                             },
                             InputAction::Redraw => {
                                 terminal.clear()?;
-                                terminal.draw(|f| app.draw(f, &results, stats.clone(), settings, theme))?;
+                                terminal.draw(|f| app.draw(f, &results, stats.clone(), inspecting.as_ref(), settings, theme))?;
                             },
                             r => {
                                 accept = app.accept;
@@ -1258,11 +1309,33 @@ pub async fn history(
             results = app.query_results(&mut db, settings.smart_sort).await?;
         }
 
+        let inspecting_id = app.inspecting_state.clone().current_id;
+        // If inspecting ID is not the current inspecting History, update it.
+        match inspecting_id {
+            Some(inspecting_id) => {
+                if inspecting.is_none() || inspecting_id != inspecting.clone().unwrap().id {
+                    inspecting = db.load(inspecting_id.0.as_str()).await?
+                }
+            },
+            _ => {
+                inspecting = None
+            }
+        };
+
         stats = if app.tab_index == 0 {
             None
         } else if !results.is_empty() {
-            let selected = results[app.results_state.selected()].clone();
-            Some(db.stats(&selected).await?)
+            // If we have stats, then we can indicate next available IDs. This avoids passing
+            // around a database object, or a full stats object.
+            let selected = match inspecting.clone() {
+                Some(insp) => insp,
+                None => results[app.results_state.selected()].clone()
+            };
+            let stats = db.stats(&selected).await?;
+            app.inspecting_state.current_id = Some(selected.id);
+            app.inspecting_state.previous_id = match stats.previous.clone() { Some(p) => { Some(p.id) }, _ => None };
+            app.inspecting_state.next_id = match stats.next.clone() { Some(p) => { Some(p.id) }, _ => None };
+            Some(stats)
         } else {
             None
         };
@@ -1275,6 +1348,22 @@ pub async fn history(
     }
 
     match result {
+        InputAction::AcceptInspecting => {
+            match inspecting {
+                Some(result) => {
+                    let mut command = result.command;
+                    if accept
+                        && (utils::is_zsh() || utils::is_fish() || utils::is_bash() || utils::is_xonsh())
+                    {
+                        command = String::from("__atuin_accept__:") + &command;
+                    }
+
+                    // index is in bounds so we return that entry
+                    Ok(command)
+                },
+                None => Ok(String::new())
+            }
+        }
         InputAction::Accept(index) if index < results.len() => {
             let mut command = results.swap_remove(index).command;
 
