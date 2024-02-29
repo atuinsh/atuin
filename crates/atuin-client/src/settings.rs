@@ -440,6 +440,7 @@ pub struct Settings {
     pub max_preview_height: u16,
     pub show_help: bool,
     pub show_tabs: bool,
+    pub always_show_tabs: bool,
     pub exit_mode: ExitMode,
     pub keymap_mode: KeymapMode,
     pub keymap_mode_shell: KeymapMode,
@@ -722,6 +723,7 @@ impl Settings {
             .set_default("max_preview_height", 4)?
             .set_default("show_help", true)?
             .set_default("show_tabs", true)?
+            .set_default("always_show_tabs", false)?
             .set_default("invert", false)?
             .set_default("exit_mode", "return-original")?
             .set_default("word_jump_mode", "emacs")?
