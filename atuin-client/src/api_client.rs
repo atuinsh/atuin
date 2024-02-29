@@ -25,7 +25,7 @@ use semver::Version;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
-use crate::{history::History, sync::hash_str};
+use crate::{history::History, sync::hash_str, utils::get_host_user};
 
 static APP_USER_AGENT: &str = concat!("atuin/", env!("CARGO_PKG_VERSION"),);
 
@@ -236,13 +236,7 @@ impl<'a> Client<'a> {
         history_ts: OffsetDateTime,
         host: Option<String>,
     ) -> Result<SyncHistoryResponse> {
-        let host = host.unwrap_or_else(|| {
-            hash_str(&format!(
-                "{}:{}",
-                env::var("ATUIN_HOST_NAME").unwrap_or_else(|_| whoami::hostname()),
-                env::var("ATUIN_HOST_USER").unwrap_or_else(|_| whoami::username())
-            ))
-        });
+        let host = host.unwrap_or_else(|| hash_str(&get_host_user()));
 
         let url = format!(
             "{}/sync/history?sync_ts={}&history_ts={}&host={}",

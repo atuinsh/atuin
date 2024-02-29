@@ -10,6 +10,7 @@ use atuin_common::utils::uuid_v7;
 use eyre::{bail, eyre, Result};
 use regex::RegexSet;
 
+use crate::utils::get_host_user;
 use crate::{secrets::SECRET_PATTERNS, settings::Settings};
 use time::OffsetDateTime;
 
@@ -106,13 +107,7 @@ impl History {
         let session = session
             .or_else(|| env::var("ATUIN_SESSION").ok())
             .unwrap_or_else(|| uuid_v7().as_simple().to_string());
-        let hostname = hostname.unwrap_or_else(|| {
-            format!(
-                "{}:{}",
-                env::var("ATUIN_HOST_NAME").unwrap_or_else(|_| whoami::hostname()),
-                env::var("ATUIN_HOST_USER").unwrap_or_else(|_| whoami::username())
-            )
-        });
+        let hostname = hostname.unwrap_or_else(get_host_user);
 
         Self {
             id: uuid_v7().as_simple().to_string().into(),

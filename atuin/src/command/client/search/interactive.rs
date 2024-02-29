@@ -1074,10 +1074,18 @@ pub async fn history(
     }
 }
 
-#[cfg(feature = "clipboard")]
+// cli-clipboard only works on Windows, Mac, and Linux.
+
+#[cfg(all(
+    feature = "clipboard",
+    any(target_os = "windows", target_os = "macos", target_os = "linux")
+))]
 fn set_clipboard(s: String) {
     cli_clipboard::set_contents(s).unwrap();
 }
 
-#[cfg(not(feature = "clipboard"))]
+#[cfg(not(all(
+    feature = "clipboard",
+    any(target_os = "windows", target_os = "macos", target_os = "linux")
+)))]
 fn set_clipboard(_s: String) {}

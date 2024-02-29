@@ -12,6 +12,7 @@ use uuid::Uuid;
 
 use super::{get_histpath, Importer, Loader};
 use crate::history::History;
+use crate::utils::get_host_user;
 
 #[derive(Debug, FromRow)]
 struct HistDbEntry {
@@ -79,14 +80,6 @@ fn xonsh_db_path(xonsh_data_dir: Option<String>) -> Result<PathBuf> {
     }
 }
 
-fn get_hostname() -> String {
-    format!(
-        "{}:{}",
-        env::var("ATUIN_HOST_NAME").unwrap_or_else(|_| whoami::hostname()),
-        env::var("ATUIN_HOST_USER").unwrap_or_else(|_| whoami::username()),
-    )
-}
-
 #[derive(Debug)]
 pub struct XonshSqlite {
     pool: SqlitePool,
@@ -109,7 +102,7 @@ impl Importer for XonshSqlite {
         })?;
 
         let pool = SqlitePool::connect(connection_str).await?;
-        let hostname = get_hostname();
+        let hostname = get_host_user();
         Ok(XonshSqlite { pool, hostname })
     }
 

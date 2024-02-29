@@ -33,7 +33,6 @@
 //
 
 use std::collections::HashMap;
-use std::env;
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
@@ -46,6 +45,7 @@ use time::PrimitiveDateTime;
 use super::Importer;
 use crate::history::History;
 use crate::import::Loader;
+use crate::utils::{get_hostname, get_username};
 
 #[derive(sqlx::FromRow, Debug)]
 pub struct HistDbEntryCount {
@@ -62,14 +62,6 @@ pub struct HistDbEntry {
     pub duration: i64,
     pub exit_status: i64,
     pub session: i64,
-}
-
-fn get_hostname() -> String {
-    env::var("ATUIN_HOST_NAME").unwrap_or_else(|_| whoami::hostname())
-}
-
-fn get_username() -> String {
-    env::var("ATUIN_HOST_USER").unwrap_or_else(|_| whoami::username())
 }
 
 #[derive(Debug)]
