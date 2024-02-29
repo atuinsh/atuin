@@ -57,7 +57,6 @@ struct SyncInfo {
     /// Whether the main Atuin sync server is in use
     /// I'm just calling it Atuin Cloud for lack of a better name atm
     pub cloud: bool,
-    pub logged_in: bool,
     pub records: bool,
     pub auto_sync: bool,
 
@@ -66,15 +65,11 @@ struct SyncInfo {
 
 impl SyncInfo {
     pub fn new(settings: &Settings) -> Self {
-        let session_path = settings.session_path.as_str();
-        let logged_in = PathBuf::from(session_path).exists();
-
         Self {
             cloud: settings.sync_address == "https://api.atuin.sh",
             auto_sync: settings.auto_sync,
             records: settings.sync.records,
             last_sync: Settings::last_sync().map_or("no last sync".to_string(), |v| v.to_string()),
-            logged_in,
         }
     }
 }
@@ -85,14 +80,23 @@ struct AtuinInfo {
 
     /// Whether the main Atuin sync server is in use
     /// I'm just calling it Atuin Cloud for lack of a better name atm
-    pub sync: SyncInfo,
+    pub sync: Option<SyncInfo>,
 }
 
 impl AtuinInfo {
     pub fn new(settings: &Settings) -> Self {
+        let session_path = settings.session_path.as_str();
+        let logged_in = PathBuf::from(session_path).exists();
+
+        let sync = if logged_in {
+            Some(SyncInfo::new(settings))
+        } else {
+            None
+        };
+
         Self {
             version: crate::VERSION.to_string(),
-            sync: SyncInfo::new(settings),
+            sync,
         }
     }
 }
