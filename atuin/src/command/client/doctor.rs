@@ -184,9 +184,14 @@ impl DoctorDump {
 }
 
 fn checks(info: &DoctorDump) {
+    println!(); // spacing
+                //
+    let zfs_error = "[Filesystem] ZFS is known to have some issues with SQLite. Atuin uses SQLite heavily. If you are having poor performance, there are some workarounds here: https://github.com/atuinsh/atuin/issues/952".bold().red();
+    let bash_plugin_error = "[Shell] If you are using Bash, Atuin requires that either bash-preexec or ble.sh be installed. Read more here: https://docs.atuin.sh/guide/installation/#bash".bold().red();
+
     // ZFS: https://github.com/atuinsh/atuin/issues/952
     if info.system.disks.iter().any(|d| d.filesystem == "zfs") {
-        println!("[Filesystem] ZFS is known to have some issues with SQLite. Atuin uses SQLite heavily. If you are having poor performance, there are some workarounds here: https://github.com/atuinsh/atuin/issues/952")
+        println!("{}", zfs_error);
     }
 
     // Shell
@@ -197,7 +202,7 @@ fn checks(info: &DoctorDump) {
             .iter()
             .any(|p| p == "blesh" || p == "bash-preexec")
     {
-        println!("[Shell] If you are using Bash, Atuin requires that either bash-preexec or ble.sh be installed. Read more here: https://docs.atuin.sh/guide/installation/#bash")
+        println!("{}", bash_plugin_error);
     }
 }
 
