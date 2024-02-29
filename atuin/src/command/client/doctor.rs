@@ -183,14 +183,34 @@ impl DoctorDump {
     }
 }
 
+fn checks(info: &DoctorDump) {
+    // ZFS: https://github.com/atuinsh/atuin/issues/952
+    if info.system.disks.iter().any(|d| d.filesystem == "zfs") {
+        println!("[Filesystem] ZFS is known to have some issues with SQLite. Atuin uses SQLite heavily. If you are having poor performance, there are some workarounds here: https://github.com/atuinsh/atuin/issues/952")
+    }
+
+    // Shell
+    if info.shell.name == "bash"
+        && !info
+            .shell
+            .plugins
+            .iter()
+            .any(|p| p == "blesh" || p == "bash-preexec")
+    {
+        println!("[Shell] If you are using Bash, Atuin requires that either bash-preexec or ble.sh be installed. Read more here: https://docs.atuin.sh/guide/installation/#bash")
+    }
+}
+
 pub fn run(settings: &Settings) -> Result<()> {
     println!("{}", "Atuin Doctor".bold());
     println!("Checking for diagnostics");
-    println!("Please include the output below with any bug reports or issues\n");
-
     let dump = DoctorDump::new(settings);
 
+    checks(&dump);
+
     let dump = serde_yaml::to_string(&dump)?;
+
+    println!("Please include the output below with any bug reports or issues\n");
     println!("{dump}");
 
     Ok(())
