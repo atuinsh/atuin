@@ -4,7 +4,6 @@ use std::{collections::HashMap, path::PathBuf};
 use atuin_client::settings::Settings;
 use colored::Colorize;
 use eyre::Result;
-use rustix::path::Arg;
 use serde::{Deserialize, Serialize};
 
 use sysinfo::{get_current_pid, Disks, System};
@@ -31,8 +30,7 @@ impl ShellInfo {
             .output()
             .map_or(String::new(), |v| {
                 let out = v.stdout;
-
-                String::from(out.as_str().unwrap_or(""))
+                String::from_utf8(out).unwrap_or_default()
             });
 
         cmd.retain(|c| !c.is_whitespace());
