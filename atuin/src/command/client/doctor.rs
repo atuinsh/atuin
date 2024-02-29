@@ -26,7 +26,7 @@ impl ShellInfo {
     // Every shell we support handles `shell -c 'command'`
     fn env_exists(shell: &str, var: &str) -> bool {
         let mut cmd = Command::new(shell)
-            .args(["-c", format!("echo ${var}").as_str()])
+            .args(["-ic", format!("echo ${var}").as_str()])
             .output()
             .map_or(String::new(), |v| {
                 let out = v.stdout;
