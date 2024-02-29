@@ -191,6 +191,7 @@ dependencies = [
  "base64 0.21.7",
  "clap",
  "clap_complete",
+ "clap_complete_nushell",
  "cli-clipboard",
  "colored",
  "crossterm",
@@ -659,6 +660,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "885e4d7d5af40bfb99ae6f9433e292feac98d452dcb3ec3d25dfe7552b77da8c"
 dependencies = [
  "clap",
+]
+
+[[package]]
+name = "clap_complete_nushell"
+version = "4.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "80d0e48e026ce7df2040239117d25e4e79714907420c70294a5ce4b6bbe6a7b6"
+dependencies = [
+ "clap",
+ "clap_complete",
 ]
 
 [[package]]
