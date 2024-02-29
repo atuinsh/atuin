@@ -9,7 +9,8 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     layout::Rect,
     prelude::{Constraint, Direction, Layout},
-    style::Style,
+    style::{Color, Modifier, Style},
+    text::{Span, Text},
     widgets::{Bar, BarChart, BarGroup, Block, Borders, Padding, Paragraph, Row, Table},
     Frame,
 };
@@ -33,51 +34,85 @@ pub fn draw_commands(
     parent: Rect,
     history: &History,
     stats: &HistoryStats,
+    compact: bool,
     theme: &Theme,
 ) {
     let commands = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Ratio(1, 4),
-            Constraint::Ratio(1, 2),
-            Constraint::Ratio(1, 4),
-        ])
+        .direction(if compact { Direction::Vertical } else { Direction::Horizontal })
+        .constraints(
+            if compact {
+                [
+                    Constraint::Length(1),
+                    Constraint::Length(1),
+                    Constraint::Min(0),
+                ]
+            } else {
+                [
+                    Constraint::Ratio(1, 4),
+                    Constraint::Ratio(1, 2),
+                    Constraint::Ratio(1, 4),
+                ]
+            }
+        )
         .split(parent);
 
-    let command = Paragraph::new(history.command.clone()).block(
-        Block::new()
-            .borders(Borders::ALL)
-            .title("Command")
-            .style(theme.as_style(Meaning::Base))
-            .padding(Padding::horizontal(1)),
+    let command = Paragraph::new(
+        Text::from(Span::styled(
+            history.command.clone(),
+            Style::default().add_modifier(Modifier::BOLD).fg(Color::White),
+        ))
+    ).block(
+        if compact {
+            Block::new()
+                .borders(Borders::NONE)
+                .style(theme.as_style(Meaning::Base))
+        } else {
+            Block::new()
+                .borders(Borders::ALL)
+                .style(theme.as_style(Meaning::Base))
+                .title("Command")
+                .padding(Padding::horizontal(1))
+        }
     );
 
     let previous = Paragraph::new(
         stats
             .previous
             .clone()
-            .map_or("No previous command".to_string(), |prev| prev.command),
+            .map_or("[No previous command]".to_string(), |prev| prev.command),
     )
     .block(
-        Block::new()
-            .borders(Borders::ALL)
-            .title("Previous command")
-            .style(theme.as_style(Meaning::Annotation))
-            .padding(Padding::horizontal(1)),
+        if compact {
+            Block::new()
+                .borders(Borders::NONE)
+                .style(theme.as_style(Meaning::Annotation))
+        } else {
+            Block::new()
+                .borders(Borders::ALL)
+                .style(theme.as_style(Meaning::Annotation))
+                .title("Previous command")
+                .padding(Padding::horizontal(1))
+        }
     );
 
     let next = Paragraph::new(
         stats
             .next
             .clone()
-            .map_or("No next command".to_string(), |next| next.command),
+            .map_or("[No next command]".to_string(), |next| next.command),
     )
     .block(
-        Block::new()
-            .borders(Borders::ALL)
-            .title("Next command")
-            .style(theme.as_style(Meaning::Annotation))
-            .padding(Padding::horizontal(1)),
+        if compact {
+            Block::new()
+                .borders(Borders::NONE)
+                .style(theme.as_style(Meaning::Annotation))
+        } else {
+            Block::new()
+                .borders(Borders::ALL)
+                .title("Next command")
+                .padding(Padding::horizontal(1))
+                .style(theme.as_style(Meaning::Annotation))
+        }
     );
 
     f.render_widget(previous, commands[0]);
@@ -255,8 +290,27 @@ pub fn draw(
     chunk: Rect,
     history: &History,
     stats: &HistoryStats,
+    settings: &Settings,
     theme: &Theme,
 ) {
+    let compact = match settings.style {
+        atuin_client::settings::Style::Auto => f.size().height < 14,
+        atuin_client::settings::Style::Compact => true,
+        atuin_client::settings::Style::Full => false,
+    };
+
+    if compact {
+        draw_compact(f, chunk, history, stats)
+    } else {
+        draw_full(f, chunk, history, stats)
+    }
+}
+
+pub fn draw_compact(f: &mut Frame<'_>, chunk: Rect, history: &History, stats: &HistoryStats) {
+    draw_commands(f, chunk, history, stats, true);
+}
+
+pub fn draw_full(f: &mut Frame<'_>, chunk: Rect, history: &History, stats: &HistoryStats) {
     let vert_layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Ratio(1, 5), Constraint::Ratio(4, 5)])
@@ -267,7 +321,7 @@ pub fn draw(
         .constraints([Constraint::Ratio(1, 3), Constraint::Ratio(2, 3)])
         .split(vert_layout[1]);
 
-    draw_commands(f, vert_layout[0], history, stats, theme);
+    draw_commands(f, vert_layout[0], history, stats, false, theme);
     draw_stats_table(f, stats_layout[0], history, stats, theme);
     draw_stats_charts(f, stats_layout[1], stats, theme);
 }
@@ -275,7 +329,7 @@ pub fn draw(
 // I'm going to break this out more, but just starting to move things around before changing
 // structure and making it nicer.
 pub fn input(
-    _state: &mut State,
+    state: &mut State,
     _settings: &Settings,
     selected: usize,
     input: &KeyEvent,
@@ -284,6 +338,14 @@ pub fn input(
 
     match input.code {
         KeyCode::Char('d') if ctrl => InputAction::Delete(selected),
+        KeyCode::Up => {
+            state.inspecting_state.to_previous();
+            InputAction::Redraw
+        },
+        KeyCode::Down => {
+            state.inspecting_state.to_next();
+            InputAction::Redraw
+        },
         _ => InputAction::Continue,
     }
 }
