@@ -215,7 +215,7 @@ pub fn run(settings: &Settings) -> Result<()> {
 
     let dump = serde_yaml::to_string(&dump)?;
 
-    println!("Please include the output below with any bug reports or issues\n");
+    println!("\nPlease include the output below with any bug reports or issues\n");
     println!("{dump}");
 
     Ok(())
