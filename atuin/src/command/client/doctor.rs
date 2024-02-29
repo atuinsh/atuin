@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{collections::HashMap, env, path::PathBuf};
 
 use atuin_client::{encryption, record::sqlite_store::SqliteStore, settings::Settings};
 use atuin_config::store::AliasStore;
@@ -11,9 +11,36 @@ use sysinfo::{get_current_pid, System};
 #[derive(Debug, Serialize, Deserialize)]
 struct ShellInfo {
     pub name: String,
+
+    // Detect some shell plugins that the user has installed.
+    // I'm just going to start with preexec/blesh
+    pub plugins: Vec<String>,
 }
 
 impl ShellInfo {
+    pub fn plugins() -> Vec<String> {
+        // TODO: consider a different detection approach if there are plugins
+        // that don't set env vars
+
+        let map = HashMap::from([
+            ("BLE_ATTACHED", "blesh"),
+            ("bash_preexec_imported", "bash-preexec"),
+        ]);
+
+        let plugins = map
+            .into_iter()
+            .filter_map(|(env, plugin)| {
+                if env::var(env).is_ok() {
+                    return Some(plugin.to_string());
+                }
+
+                None
+            })
+            .collect();
+
+        plugins
+    }
+
     pub fn new() -> Self {
         let sys = System::new_all();
 
@@ -29,7 +56,9 @@ impl ShellInfo {
         let shell = shell.strip_prefix("-").unwrap_or(&shell);
         let name = shell.to_string();
 
-        Self { name }
+        let plugins = ShellInfo::plugins();
+
+        Self { name, plugins }
     }
 }
 
