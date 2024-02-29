@@ -88,6 +88,12 @@ async fn run(
         let host_id = Settings::host_id().expect("failed to get host_id");
         let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
+        let (uploaded, downloaded) = sync::sync(settings, &store).await?;
+
+        history_store.incremental_build(db, &downloaded).await?;
+
+        println!("{uploaded}/{} up/down to record store", downloaded.len());
+
         let history_length = db.history_count(true).await?;
         let store_history_length = store.len_tag("history").await?;
 
@@ -99,12 +105,6 @@ async fn run(
 
             println!("\n");
         }
-
-        let (uploaded, downloaded) = sync::sync(settings, &store).await?;
-
-        history_store.incremental_build(db, &downloaded).await?;
-
-        println!("{uploaded}/{} up/down to record store", downloaded.len());
     } else {
         atuin_client::sync::sync(settings, force, db).await?;
     }
