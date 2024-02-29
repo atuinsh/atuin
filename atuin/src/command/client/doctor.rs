@@ -191,7 +191,7 @@ fn checks(info: &DoctorDump) {
 
     // ZFS: https://github.com/atuinsh/atuin/issues/952
     if info.system.disks.iter().any(|d| d.filesystem == "zfs") {
-        println!("{}", zfs_error);
+        println!("{zfs_error}");
     }
 
     // Shell
@@ -202,7 +202,7 @@ fn checks(info: &DoctorDump) {
             .iter()
             .any(|p| p == "blesh" || p == "bash-preexec")
     {
-        println!("{}", bash_plugin_error);
+        println!("{bash_plugin_error}");
     }
 }
 
