@@ -2,6 +2,7 @@ use std::process::Command;
 use std::{collections::HashMap, path::PathBuf};
 
 use atuin_client::settings::Settings;
+use colored::Colorize;
 use eyre::Result;
 use rustix::path::Arg;
 use serde::{Deserialize, Serialize};
@@ -18,18 +19,15 @@ struct ShellInfo {
 }
 
 impl ShellInfo {
-    pub fn plugins(shell: &str) -> Vec<String> {
-        // consider a different detection approach if there are plugins
-        // that don't set env vars
-
-        // HACK ALERT!
-        // Many of the env vars we need to detect are not exported :(
-        // So, we're going to run `env` in a subshell and parse the output
-        // There's a chance this won't work, so it should not be fatal.
-        //
-        // Every shell we support handles `shell -c 'command'`
-        let cmd = Command::new(shell)
-            .args(["-c", "env"])
+    // HACK ALERT!
+    // Many of the env vars we need to detect are not exported :(
+    // So, we're going to run `env` in a subshell and parse the output
+    // There's a chance this won't work, so it should not be fatal.
+    //
+    // Every shell we support handles `shell -c 'command'`
+    fn env_exists(shell: &str, var: &str) -> bool {
+        let mut cmd = Command::new(shell)
+            .args(["-c", format!("echo ${var}").as_str()])
             .output()
             .map_or(String::new(), |v| {
                 let out = v.stdout;
@@ -37,14 +35,24 @@ impl ShellInfo {
                 String::from(out.as_str().unwrap_or(""))
             });
 
+        cmd.retain(|c| !c.is_whitespace());
+
+        !cmd.is_empty()
+    }
+
+    pub fn plugins(shell: &str) -> Vec<String> {
+        // consider a different detection approach if there are plugins
+        // that don't set env vars
+
         let map = HashMap::from([
+            ("ATUIN_SESSION", "atuin"),
             ("BLE_ATTACHED", "blesh"),
             ("bash_preexec_imported", "bash-preexec"),
         ]);
 
         map.into_iter()
             .filter_map(|(env, plugin)| {
-                if cmd.contains(env) {
+                if ShellInfo::env_exists(shell, env) {
                     return Some(plugin.to_string());
                 }
 
@@ -178,6 +186,10 @@ impl DoctorDump {
 }
 
 pub fn run(settings: &Settings) -> Result<()> {
+    println!("{}", "Atuin Doctor".bold());
+    println!("Checking for diagnostics");
+    println!("Please include the output below with any bug reports or issues\n");
+
     let dump = DoctorDump::new(settings);
 
     let dump = serde_yaml::to_string(&dump)?;
