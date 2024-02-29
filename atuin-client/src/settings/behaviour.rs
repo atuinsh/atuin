@@ -1,7 +1,29 @@
 use clap::ValueEnum;
+use config::{builder::DefaultState, ConfigBuilder};
+use eyre::Result;
 use serde::Deserialize;
 
-use super::Settings;
+// Settings
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct Settings {
+    pub exit_mode: ExitMode,
+    pub filter_mode: FilterMode,
+    pub filter_mode_shell_up_key_binding: Option<FilterMode>,
+    pub search_mode: SearchMode,
+    pub search_mode_shell_up_key_binding: Option<SearchMode>,
+}
+
+// Defaults
+
+pub(crate) fn defaults(
+    builder: ConfigBuilder<DefaultState>,
+) -> Result<ConfigBuilder<DefaultState>> {
+    Ok(builder
+        .set_default("search_mode", "fuzzy")?
+        .set_default("filter_mode", "global")?
+        .set_default("exit_mode", "return-original")?)
+}
 
 // Exit
 
@@ -73,11 +95,11 @@ impl SearchMode {
             SearchMode::Skim => "SKIM",
         }
     }
-    pub fn next(&self, settings: &Settings) -> Self {
+    pub fn next(&self, super::Settings { behaviour, .. }: &super::Settings) -> Self {
         match self {
             SearchMode::Prefix => SearchMode::FullText,
             // if the user is using skim, we go to skim
-            SearchMode::FullText if settings.search_mode == SearchMode::Skim => SearchMode::Skim,
+            SearchMode::FullText if behaviour.search_mode == SearchMode::Skim => SearchMode::Skim,
             // otherwise fuzzy.
             SearchMode::FullText => SearchMode::Fuzzy,
             SearchMode::Fuzzy | SearchMode::Skim => SearchMode::Prefix,

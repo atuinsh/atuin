@@ -1,14 +1,13 @@
-mod behaviour;
+pub mod behaviour;
 pub mod display;
-mod input;
-mod stats;
-mod sync;
-mod time;
+pub mod input;
+pub mod stats;
+pub mod sync;
+pub mod time;
 
 use ::time as time_lib;
 
 use std::{
-    collections::HashMap,
     io::prelude::*,
     path::{Path, PathBuf},
     str::FromStr,
@@ -27,15 +26,6 @@ use serde::Deserialize;
 use time_lib::{format_description::well_known::Rfc3339, Duration, OffsetDateTime};
 use uuid::Uuid;
 
-pub use self::{
-    behaviour::{ExitMode, FilterMode, SearchMode},
-    display::{Display, Styles},
-    input::{CursorStyle, KeymapMode, Keys, WordJumpMode},
-    stats::{Dialect, Stats},
-    sync::Sync,
-    time::Timezone,
-};
-
 pub const HISTORY_PAGE_SIZE: i64 = 100;
 pub const LAST_SYNC_FILENAME: &str = "last_sync_time";
 pub const LAST_VERSION_CHECK_FILENAME: &str = "last_version_check_time";
@@ -46,11 +36,8 @@ static EXAMPLE_CONFIG: &str = include_str!("../config.toml");
 #[derive(Clone, Debug, Deserialize)]
 pub struct Settings {
     // Behaviour
-    pub exit_mode: ExitMode,
-    pub filter_mode: FilterMode,
-    pub filter_mode_shell_up_key_binding: Option<FilterMode>,
-    pub search_mode: SearchMode,
-    pub search_mode_shell_up_key_binding: Option<SearchMode>,
+    #[serde(default, flatten)]
+    pub behaviour: behaviour::Settings,
 
     // Display
     #[serde(default, flatten)]
@@ -65,14 +52,8 @@ pub struct Settings {
     pub workspaces: bool,
 
     // Input
-    pub enter_accept: bool,
-    pub keymap_cursor: HashMap<String, CursorStyle>,
-    pub keymap_mode: KeymapMode,
-    pub keymap_mode_shell: KeymapMode,
-    #[serde(default)]
-    pub keys: Keys,
-    pub shell_up_key_binding: bool,
-    pub word_jump_mode: WordJumpMode,
+    #[serde(default, flatten)]
+    pub input: input::Settings,
 
     // Paths
     pub db_path: String,
@@ -81,19 +62,16 @@ pub struct Settings {
     pub session_path: String,
 
     // Stats
-    pub dialect: Dialect,
-    #[serde(default)]
-    pub stats: Stats,
+    #[serde(default, flatten)]
+    pub stats: stats::Settings,
 
     // Sync
-    pub auto_sync: bool,
-    pub sync_address: String,
-    pub sync_frequency: String,
-    #[serde(default)]
-    pub sync: Sync,
+    #[serde(default, flatten)]
+    pub sync: sync::Settings,
 
     // Time
-    pub timezone: Timezone,
+    #[serde(default, flatten)]
+    pub time: time::Settings,
 
     // Timeout
     pub local_timeout: f64,
@@ -202,11 +180,11 @@ impl Settings {
     }
 
     pub fn should_sync(&self) -> Result<bool> {
-        if !self.auto_sync || !PathBuf::from(self.session_path.as_str()).exists() {
+        if !self.sync.auto_sync || !PathBuf::from(self.session_path.as_str()).exists() {
             return Ok(false);
         }
 
-        match parse(self.sync_frequency.as_str()) {
+        match parse(self.sync.sync_frequency.as_str()) {
             Ok(d) => {
                 let d = Duration::try_from(d).unwrap();
                 Ok(OffsetDateTime::now_utc() - Settings::last_sync()? >= d)
@@ -293,48 +271,36 @@ impl Settings {
         let session_path = data_dir.join("session");
 
         let builder = Config::builder();
+        let builder = behaviour::defaults(builder)?;
         let builder = display::defaults(builder)?;
+        let builder = input::defaults(builder)?;
+        let builder = stats::defaults(builder)?;
+        let builder = sync::defaults(builder)?;
+        let builder = time::defaults(builder)?;
 
         Ok(builder
-            .set_default("history_format", "{time}\t{command}\t{duration}")?
+            // Filters
+            .set_default("secrets_filter", true)?
+            .set_default("workspaces", false)?
+            // Paths
             .set_default("db_path", db_path.to_str())?
-            .set_default("record_store_path", record_store_path.to_str())?
             .set_default("key_path", key_path.to_str())?
+            .set_default("record_store_path", record_store_path.to_str())?
             .set_default("session_path", session_path.to_str())?
-            .set_default("dialect", "us")?
-            .set_default("timezone", "local")?
-            .set_default("auto_sync", true)?
+            //
+            .set_default("history_format", "{time}\t{command}\t{duration}")?
             .set_default("update_check", cfg!(feature = "check-update"))?
-            .set_default("sync_address", "https://api.atuin.sh")?
-            .set_default("sync_frequency", "10m")?
-            .set_default("search_mode", "fuzzy")?
-            .set_default("filter_mode", "global")?
-            .set_default("exit_mode", "return-original")?
-            .set_default("word_jump_mode", "emacs")?
             .set_default(
                 "word_chars",
                 "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
             )?
             .set_default("scroll_context_lines", 1)?
-            .set_default("shell_up_key_binding", false)?
             .set_default("session_token", "")?
-            .set_default("workspaces", false)?
             .set_default("ctrl_n_shortcuts", false)?
-            .set_default("secrets_filter", true)?
             .set_default("network_connect_timeout", 5)?
             .set_default("network_timeout", 30)?
             .set_default("local_timeout", 2.0)?
-            // enter_accept defaults to false here, but true in the default config file. The dissonance is
-            // intentional!
-            // Existing users will get the default "False", so we don't mess with any potential
-            // muscle memory.
-            // New users will get the new default, that is more similar to what they are used to.
-            .set_default("enter_accept", false)?
-            .set_default("sync.records", false)?
             .set_default("keys.scroll_exits", true)?
-            .set_default("keymap_mode", "emacs")?
-            .set_default("keymap_mode_shell", "auto")?
-            .set_default("keymap_cursor", HashMap::<String, String>::new())?
             .add_source(
                 Environment::with_prefix("atuin")
                     .prefix_separator("_")

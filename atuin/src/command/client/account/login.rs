@@ -128,7 +128,7 @@ impl Cmd {
         }
 
         let session = api_client::login(
-            settings.sync_address.as_str(),
+            settings.sync.sync_address.as_str(),
             LoginRequest { username, password },
         )
         .await?;

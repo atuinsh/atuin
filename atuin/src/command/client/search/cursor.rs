@@ -1,4 +1,4 @@
-use atuin_client::settings::WordJumpMode;
+use atuin_client::settings::input::WordJumpMode;
 
 pub struct Cursor {
     source: String,

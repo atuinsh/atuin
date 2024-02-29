@@ -1,5 +1,43 @@
+use std::collections::HashMap;
+
 use clap::ValueEnum;
+use config::{builder::DefaultState, ConfigBuilder};
+use eyre::Result;
 use serde::Deserialize;
+
+// Settings
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct Settings {
+    pub enter_accept: bool,
+    pub keymap_cursor: HashMap<String, CursorStyle>,
+    pub keymap_mode: KeymapMode,
+    pub keymap_mode_shell: KeymapMode,
+    #[serde(default)]
+    pub keys: Keys,
+    pub shell_up_key_binding: bool,
+    pub word_jump_mode: WordJumpMode,
+}
+
+// Defaults
+
+pub(crate) fn defaults(
+    builder: ConfigBuilder<DefaultState>,
+) -> Result<ConfigBuilder<DefaultState>> {
+    Ok(builder
+        // enter_accept defaults to false here, but true in the default config file. The dissonance is
+        // intentional!
+        // Existing users will get the default "False", so we don't mess with any potential
+        // muscle memory.
+        // New users will get the new default, that is more similar to what they are used to.
+        .set_default("enter_accept", false)?
+        .set_default("keymap_mode", "emacs")?
+        .set_default("keymap_mode_shell", "auto")?
+        .set_default("keymap_cursor", HashMap::<String, String>::new())?
+        .set_default("keys.scroll_exits", true)?
+        .set_default("shell_up_key_binding", false)?
+        .set_default("word_jump_mode", "emacs")?)
+}
 
 #[derive(Clone, Debug, Deserialize, Copy, PartialEq, Eq, ValueEnum)]
 pub enum KeymapMode {

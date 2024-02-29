@@ -189,12 +189,7 @@ async fn sync_upload(
 }
 
 pub async fn sync(settings: &Settings, force: bool, db: &(impl Database + Send)) -> Result<()> {
-    let client = api_client::Client::new(
-        &settings.sync_address,
-        &settings.session_token,
-        settings.network_connect_timeout,
-        settings.network_timeout,
-    )?;
+    let client = api_client::Client::from_settings(&settings)?;
 
     Settings::save_sync_time()?;
 

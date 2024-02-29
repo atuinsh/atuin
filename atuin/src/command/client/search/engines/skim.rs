@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use async_trait::async_trait;
-use atuin_client::{database::Database, history::History, settings::FilterMode};
+use atuin_client::{database::Database, history::History, settings::behaviour::FilterMode};
 use eyre::Result;
 use fuzzy_matcher::{skim::SkimMatcherV2, FuzzyMatcher};
 use itertools::Itertools;

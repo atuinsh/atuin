@@ -14,12 +14,7 @@ pub async fn run(settings: &Settings, db: &impl Database) -> Result<()> {
         return Ok(());
     }
 
-    let client = api_client::Client::new(
-        &settings.sync_address,
-        &settings.session_token,
-        settings.network_connect_timeout,
-        settings.network_timeout,
-    )?;
+    let client = api_client::Client::from_settings(&settings)?;
 
     let status = client.status().await?;
     let last_sync = Settings::last_sync()?;
@@ -30,17 +25,17 @@ pub async fn run(settings: &Settings, db: &impl Database) -> Result<()> {
 
     println!("{}", "[Local]".green());
 
-    if settings.auto_sync {
-        println!("Sync frequency: {}", settings.sync_frequency);
+    if settings.sync.auto_sync {
+        println!("Sync frequency: {}", settings.sync.sync_frequency);
         println!("Last sync: {last_sync}");
     }
 
     println!("History count: {local_count}");
     println!("Deleted history count: {deleted_count}\n");
 
-    if settings.auto_sync {
+    if settings.sync.auto_sync {
         println!("{}", "[Remote]".green());
-        println!("Address: {}", settings.sync_address);
+        println!("Address: {}", settings.sync.sync_address);
         println!("Username: {}", status.username);
         println!("History count: {}", status.count);
     }

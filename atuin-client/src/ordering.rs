@@ -1,6 +1,6 @@
 use minspan::minspan;
 
-use super::{history::History, settings::SearchMode};
+use super::{history::History, settings::behaviour::SearchMode};
 
 pub fn reorder_fuzzy(mode: SearchMode, query: &str, res: Vec<History>) -> Vec<History> {
     match mode {

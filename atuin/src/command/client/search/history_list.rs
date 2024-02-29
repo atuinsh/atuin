@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use atuin_client::{history::History, settings::Styles};
+use atuin_client::{history::History, settings::display::Styles};
 use atuin_common::utils::Escapable as _;
 use ratatui::{
     buffer::Buffer,

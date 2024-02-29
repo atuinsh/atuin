@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use atuin_client::{
     database::{Context, Database},
     history::History,
-    settings::{FilterMode, SearchMode},
+    settings::behaviour::{FilterMode, SearchMode},
 };
 use eyre::Result;
 
