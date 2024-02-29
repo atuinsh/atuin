@@ -6,7 +6,7 @@ use eyre::Result;
 use rustix::path::Arg;
 use serde::{Deserialize, Serialize};
 
-use sysinfo::{get_current_pid, System};
+use sysinfo::{get_current_pid, Disks, System};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct ShellInfo {
@@ -75,20 +75,38 @@ impl ShellInfo {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct OsInfo {
+struct DiskInfo {
     pub name: String,
+    pub filesystem: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct SystemInfo {
+    pub os: String,
 
     pub arch: String,
 
     pub version: String,
+    pub disks: Vec<DiskInfo>,
 }
 
-impl OsInfo {
+impl SystemInfo {
     pub fn new() -> Self {
+        let disks = Disks::new_with_refreshed_list();
+        let disks = disks
+            .list()
+            .iter()
+            .map(|d| DiskInfo {
+                name: d.name().to_os_string().into_string().unwrap(),
+                filesystem: d.file_system().to_os_string().into_string().unwrap(),
+            })
+            .collect();
+
         Self {
-            name: System::name().unwrap_or_else(|| "unknown".to_string()),
+            os: System::name().unwrap_or_else(|| "unknown".to_string()),
             arch: System::cpu_arch().unwrap_or_else(|| "unknown".to_string()),
             version: System::os_version().unwrap_or_else(|| "unknown".to_string()),
+            disks,
         }
     }
 }
@@ -146,7 +164,7 @@ impl AtuinInfo {
 struct DoctorDump {
     pub atuin: AtuinInfo,
     pub shell: ShellInfo,
-    pub os: OsInfo,
+    pub system: SystemInfo,
 }
 
 impl DoctorDump {
@@ -154,7 +172,7 @@ impl DoctorDump {
         Self {
             atuin: AtuinInfo::new(settings),
             shell: ShellInfo::new(),
-            os: OsInfo::new(),
+            system: SystemInfo::new(),
         }
     }
 }
