@@ -10,7 +10,12 @@ use atuin_client::{
     encryption,
     history::{store::HistoryStore, History},
     record::sqlite_store::SqliteStore,
-    settings::{FilterMode, KeymapMode, SearchMode, Settings, Timezone},
+    settings::{
+        behaviour::{FilterMode, SearchMode},
+        input::KeymapMode,
+        time::Timezone,
+        Settings,
+    },
 };
 
 use super::history::ListMode;
@@ -152,24 +157,24 @@ impl Cmd {
         }
 
         if self.search_mode.is_some() {
-            settings.search_mode = self.search_mode.unwrap();
+            settings.behaviour.search_mode = self.search_mode.unwrap();
         }
         if self.filter_mode.is_some() {
-            settings.filter_mode = self.filter_mode.unwrap();
+            settings.behaviour.filter_mode = self.filter_mode.unwrap();
         }
         if self.inline_height.is_some() {
             settings.display.inline_height = self.inline_height.unwrap();
         }
 
-        settings.shell_up_key_binding = self.shell_up_key_binding;
+        settings.input.shell_up_key_binding = self.shell_up_key_binding;
 
         // `keymap_mode` specified in config.toml overrides the `--keymap-mode`
         // option specified in the keybindings.
-        settings.keymap_mode = match settings.keymap_mode {
+        settings.input.keymap_mode = match settings.input.keymap_mode {
             KeymapMode::Auto => self.keymap_mode,
             value => value,
         };
-        settings.keymap_mode_shell = self.keymap_mode;
+        settings.input.keymap_mode_shell = self.keymap_mode;
 
         let encryption_key: [u8; 32] = encryption::load_key(settings)?.into();
 
@@ -212,7 +217,7 @@ impl Cmd {
                     for entry in &entries {
                         eprintln!("deleting {}", entry.id);
 
-                        if settings.sync.records {
+                        if settings.sync.sync.records {
                             let (id, _) = history_store.delete(entry.id.clone()).await?;
                             history_store.incremental_build(&db, &[id]).await?;
                         } else {
@@ -228,7 +233,7 @@ impl Cmd {
                     None => Some(settings.history_format.as_str()),
                     _ => self.format.as_deref(),
                 };
-                let tz = self.timezone.unwrap_or(settings.timezone);
+                let tz = self.timezone.unwrap_or(settings.time.timezone);
 
                 super::history::print_list(
                     &entries,
@@ -270,12 +275,12 @@ async fn run_non_interactive(
     let filter_mode = if settings.workspaces && utils::has_git_dir(dir.as_str()) {
         FilterMode::Workspace
     } else {
-        settings.filter_mode
+        settings.behaviour.filter_mode
     };
 
     let results = db
         .search(
-            settings.search_mode,
+            settings.behaviour.search_mode,
             filter_mode,
             &context,
             query.join(" ").as_str(),

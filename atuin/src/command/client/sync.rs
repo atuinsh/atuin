@@ -80,7 +80,7 @@ async fn run(
     db: &impl Database,
     store: SqliteStore,
 ) -> Result<()> {
-    if settings.sync.records {
+    if settings.sync.sync.records {
         let encryption_key: [u8; 32] = encryption::load_key(settings)
             .context("could not load encryption key")?
             .into();

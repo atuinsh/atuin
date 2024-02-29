@@ -36,7 +36,7 @@ impl Push {
             println!("Clearing remote store");
 
             let client = Client::new(
-                &settings.sync_address,
+                &settings.sync.sync_address,
                 &settings.session_token,
                 settings.network_connect_timeout,
                 settings.network_timeout * 10, // we may be deleting a lot of data... so up the

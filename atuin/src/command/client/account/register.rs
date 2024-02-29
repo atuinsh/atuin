@@ -42,8 +42,13 @@ pub async fn run(
         bail!("please provide a password");
     }
 
-    let session =
-        api_client::register(settings.sync_address.as_str(), &username, &email, &password).await?;
+    let session = api_client::register(
+        settings.sync.sync_address.as_str(),
+        &username,
+        &email,
+        &password,
+    )
+    .await?;
 
     let path = settings.session_path.as_str();
     let mut file = File::create(path).await?;

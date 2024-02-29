@@ -53,13 +53,8 @@ pub async fn diff(
     settings: &Settings,
     store: &impl Store,
 ) -> Result<(Vec<Diff>, RecordStatus), SyncError> {
-    let client = Client::new(
-        &settings.sync_address,
-        &settings.session_token,
-        settings.network_connect_timeout,
-        settings.network_timeout,
-    )
-    .map_err(|e| SyncError::OperationalError { msg: e.to_string() })?;
+    let client = Client::from_settings(&settings)
+        .map_err(|e| SyncError::OperationalError { msg: e.to_string() })?;
 
     let local_index = store
         .status()
@@ -268,13 +263,7 @@ pub async fn sync_remote(
     local_store: &impl Store,
     settings: &Settings,
 ) -> Result<(i64, Vec<RecordId>), SyncError> {
-    let client = Client::new(
-        &settings.sync_address,
-        &settings.session_token,
-        settings.network_connect_timeout,
-        settings.network_timeout,
-    )
-    .expect("failed to create client");
+    let client = Client::from_settings(&settings).expect("failed to create client");
 
     let mut uploaded = 0;
     let mut downloaded = Vec::new();

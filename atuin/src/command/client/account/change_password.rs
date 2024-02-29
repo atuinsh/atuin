@@ -24,12 +24,7 @@ pub async fn run(
     current_password: &Option<String>,
     new_password: &Option<String>,
 ) -> Result<()> {
-    let client = api_client::Client::new(
-        &settings.sync_address,
-        &settings.session_token,
-        settings.network_connect_timeout,
-        settings.network_timeout,
-    )?;
+    let client = api_client::Client::from_settings(&settings)?;
 
     let current_password = current_password.clone().unwrap_or_else(|| {
         prompt_password("Please enter the current password: ").expect("Failed to read from input")

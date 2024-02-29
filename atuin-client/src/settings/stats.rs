@@ -1,4 +1,23 @@
+use config::{builder::DefaultState, ConfigBuilder};
+use eyre::Result;
 use serde::Deserialize;
+
+// Settings
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct Settings {
+    pub dialect: Dialect,
+    #[serde(default)]
+    pub stats: Stats,
+}
+
+// Defaults
+
+pub(crate) fn defaults(
+    builder: ConfigBuilder<DefaultState>,
+) -> Result<ConfigBuilder<DefaultState>> {
+    Ok(builder.set_default("dialect", "us")?)
+}
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct Stats {

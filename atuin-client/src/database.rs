@@ -27,7 +27,10 @@ use crate::history::{HistoryId, HistoryStats};
 use super::{
     history::History,
     ordering,
-    settings::{FilterMode, SearchMode, Settings},
+    settings::{
+        behaviour::{FilterMode, SearchMode},
+        Settings,
+    },
 };
 
 pub struct Context {

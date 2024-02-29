@@ -14,10 +14,7 @@ use atuin_client::{
     encryption,
     history::{store::HistoryStore, History},
     record::sqlite_store::SqliteStore,
-    settings::{
-        FilterMode::{Directory, Global, Session},
-        Settings, Timezone,
-    },
+    settings::{behaviour::FilterMode, time::Timezone, Settings},
 };
 
 #[cfg(feature = "sync")]
@@ -361,7 +358,7 @@ impl Cmd {
         if settings.should_sync()? {
             #[cfg(feature = "sync")]
             {
-                if settings.sync.records {
+                if settings.sync.sync.records {
                     let (_, downloaded) = record::sync::sync(settings, &store).await?;
                     Settings::save_sync_time()?;
 
@@ -396,10 +393,10 @@ impl Cmd {
         tz: Timezone,
     ) -> Result<()> {
         let filters = match (session, cwd) {
-            (true, true) => [Session, Directory],
-            (true, false) => [Session, Global],
-            (false, true) => [Global, Directory],
-            (false, false) => [settings.filter_mode, Global],
+            (true, true) => [FilterMode::Session, FilterMode::Directory],
+            (true, false) => [FilterMode::Session, FilterMode::Global],
+            (false, true) => [FilterMode::Global, FilterMode::Directory],
+            (false, false) => [settings.behaviour.filter_mode, FilterMode::Global],
         };
 
         let history = db
@@ -431,7 +428,7 @@ impl Cmd {
         // Grab all executed commands and filter them using History::should_save.
         // We could iterate or paginate here if memory usage becomes an issue.
         let matches: Vec<History> = db
-            .list(&[Global], &context, None, false, false)
+            .list(&[FilterMode::Global], &context, None, false, false)
             .await?
             .into_iter()
             .filter(|h| !h.should_save(settings))
@@ -453,7 +450,7 @@ impl Cmd {
                 Some(settings.history_format.as_str()),
                 false,
                 false,
-                settings.timezone,
+                settings.time.timezone,
             );
         } else {
             let encryption_key: [u8; 32] = encryption::load_key(settings)
@@ -464,7 +461,7 @@ impl Cmd {
 
             for entry in matches {
                 eprintln!("deleting {}", entry.id);
-                if settings.sync.records {
+                if settings.sync.sync.records {
                     let (id, _) = history_store.delete(entry.id.clone()).await?;
                     history_store.incremental_build(db, &[id]).await?;
                 } else {
@@ -511,7 +508,7 @@ impl Cmd {
                 format,
             } => {
                 let mode = ListMode::from_flags(human, cmd_only);
-                let tz = timezone.unwrap_or(settings.timezone);
+                let tz = timezone.unwrap_or(settings.time.timezone);
                 Self::handle_list(
                     db, settings, context, session, cwd, mode, format, false, print0, reverse, tz,
                 )
@@ -526,7 +523,7 @@ impl Cmd {
             } => {
                 let last = db.last().await?;
                 let last = last.as_ref().map(std::slice::from_ref).unwrap_or_default();
-                let tz = timezone.unwrap_or(settings.timezone);
+                let tz = timezone.unwrap_or(settings.time.timezone);
                 print_list(
                     last,
                     ListMode::from_flags(human, cmd_only),

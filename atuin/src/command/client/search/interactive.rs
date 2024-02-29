@@ -23,7 +23,10 @@ use atuin_client::{
     database::{current_context, Database},
     history::{store::HistoryStore, History, HistoryStats},
     settings::{
-        CursorStyle, Display, ExitMode, FilterMode, KeymapMode, SearchMode, Settings, Styles,
+        behaviour::{ExitMode, FilterMode, SearchMode},
+        display::{Display, Styles},
+        input::{CursorStyle, KeymapMode},
+        Settings,
     },
 };
 
@@ -148,7 +151,7 @@ impl State {
         let cursor_style = if keymap_name == "__clear__" {
             None
         } else {
-            settings.keymap_cursor.get(keymap_name).copied()
+            settings.input.keymap_cursor.get(keymap_name).copied()
         }
         .or_else(|| self.current_cursor.map(|_| CursorStyle::DefaultUserShape));
 
@@ -170,7 +173,7 @@ impl State {
     }
 
     pub fn finalize_keymap_cursor(&mut self, settings: &Settings) {
-        match settings.keymap_mode_shell {
+        match settings.input.keymap_mode_shell {
             KeymapMode::Emacs => self.set_keymap_cursor(settings, "emacs"),
             KeymapMode::VimNormal => self.set_keymap_cursor(settings, "vim_normal"),
             KeymapMode::VimInsert => self.set_keymap_cursor(settings, "vim_insert"),
@@ -179,7 +182,7 @@ impl State {
     }
 
     fn handle_key_exit(settings: &Settings) -> InputAction {
-        match settings.exit_mode {
+        match settings.behaviour.exit_mode {
             ExitMode::ReturnOriginal => InputAction::ReturnOriginal,
             ExitMode::ReturnQuery => InputAction::ReturnQuery,
         }
@@ -231,7 +234,8 @@ impl State {
         is_down: bool,
     ) -> InputAction {
         if is_down {
-            if settings.keys.scroll_exits && enable_exit && self.results_state.selected() == 0 {
+            if settings.input.keys.scroll_exits && enable_exit && self.results_state.selected() == 0
+            {
                 return Self::handle_key_exit(settings);
             }
             self.scroll_down(1);
@@ -250,7 +254,7 @@ impl State {
     }
 
     fn handle_search_accept(&mut self, settings: &Settings) -> InputAction {
-        if settings.enter_accept {
+        if settings.input.enter_accept {
             self.accept = true;
         }
         InputAction::Accept(self.results_state.selected())
@@ -349,11 +353,11 @@ impl State {
             KeyCode::Left if ctrl => self
                 .search
                 .input
-                .prev_word(&settings.word_chars, settings.word_jump_mode),
+                .prev_word(&settings.word_chars, settings.input.word_jump_mode),
             KeyCode::Char('b') if alt => self
                 .search
                 .input
-                .prev_word(&settings.word_chars, settings.word_jump_mode),
+                .prev_word(&settings.word_chars, settings.input.word_jump_mode),
             KeyCode::Left => {
                 self.search.input.left();
             }
@@ -363,11 +367,11 @@ impl State {
             KeyCode::Right if ctrl => self
                 .search
                 .input
-                .next_word(&settings.word_chars, settings.word_jump_mode),
+                .next_word(&settings.word_chars, settings.input.word_jump_mode),
             KeyCode::Char('f') if alt => self
                 .search
                 .input
-                .next_word(&settings.word_chars, settings.word_jump_mode),
+                .next_word(&settings.word_chars, settings.input.word_jump_mode),
             KeyCode::Right => self.search.input.right(),
             KeyCode::Char('f') if ctrl => self.search.input.right(),
             KeyCode::Char('a') if ctrl => self.search.input.start(),
@@ -377,14 +381,14 @@ impl State {
             KeyCode::Backspace if ctrl => self
                 .search
                 .input
-                .remove_prev_word(&settings.word_chars, settings.word_jump_mode),
+                .remove_prev_word(&settings.word_chars, settings.input.word_jump_mode),
             KeyCode::Backspace => {
                 self.search.input.back();
             }
             KeyCode::Delete if ctrl => self
                 .search
                 .input
-                .remove_next_word(&settings.word_chars, settings.word_jump_mode),
+                .remove_next_word(&settings.word_chars, settings.input.word_jump_mode),
             KeyCode::Delete => {
                 self.search.input.remove();
             }
@@ -922,12 +926,13 @@ pub async fn history(
     let context = current_context();
 
     let history_count = db.history_count(false).await?;
-    let search_mode = if settings.shell_up_key_binding {
+    let search_mode = if settings.input.shell_up_key_binding {
         settings
+            .behaviour
             .search_mode_shell_up_key_binding
-            .unwrap_or(settings.search_mode)
+            .unwrap_or(settings.behaviour.search_mode)
     } else {
-        settings.search_mode
+        settings.behaviour.search_mode
     };
     let mut app = State {
         history_count,
@@ -940,19 +945,20 @@ pub async fn history(
             input,
             filter_mode: if settings.workspaces && context.git_root.is_some() {
                 FilterMode::Workspace
-            } else if settings.shell_up_key_binding {
+            } else if settings.input.shell_up_key_binding {
                 settings
+                    .behaviour
                     .filter_mode_shell_up_key_binding
-                    .unwrap_or(settings.filter_mode)
+                    .unwrap_or(settings.behaviour.filter_mode)
             } else {
-                settings.filter_mode
+                settings.behaviour.filter_mode
             },
             context,
         },
         engine: engines::engine(search_mode),
         results_len: 0,
         accept: false,
-        keymap_mode: match settings.keymap_mode {
+        keymap_mode: match settings.input.keymap_mode {
             KeymapMode::Auto => KeymapMode::Emacs,
             value => value,
         },
@@ -995,7 +1001,7 @@ pub async fn history(
 
                                 let entry = results.remove(index);
 
-                                if settings.sync.records {
+                                if settings.sync.sync.records {
                                     let (id, _) = history_store.delete(entry.id).await?;
                                     history_store.incremental_build(&db, &[id]).await?;
                                 } else {

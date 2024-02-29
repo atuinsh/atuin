@@ -25,7 +25,7 @@ use semver::Version;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
-use crate::{history::History, sync::hash_str};
+use crate::{history::History, settings::Settings, sync::hash_str};
 
 static APP_USER_AGENT: &str = concat!("atuin/", env!("CARGO_PKG_VERSION"),);
 
@@ -192,6 +192,15 @@ impl<'a> Client<'a> {
                 .timeout(Duration::new(timeout, 0))
                 .build()?,
         })
+    }
+
+    pub fn from_settings(settings: &'a Settings) -> Result<Self> {
+        Self::new(
+            &settings.sync.sync_address,
+            &settings.session_token,
+            settings.network_connect_timeout,
+            settings.network_timeout,
+        )
     }
 
     pub async fn count(&self) -> Result<i64> {

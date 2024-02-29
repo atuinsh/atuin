@@ -81,7 +81,13 @@ fn compute_stats(
         let command = i.command.trim();
         let prefix = interesting_command(settings, command);
 
-        if settings.stats.ignored_commands.iter().any(|c| c == prefix) {
+        if settings
+            .stats
+            .stats
+            .ignored_commands
+            .iter()
+            .any(|c| c == prefix)
+        {
             continue;
         }
 
@@ -171,7 +177,7 @@ impl Cmd {
             self.period.join(" ")
         };
 
-        let now = OffsetDateTime::now_utc().to_offset(settings.timezone.0);
+        let now = OffsetDateTime::now_utc().to_offset(settings.time.timezone.0);
         let last_night = now.replace_time(Time::MIDNIGHT);
 
         let history = if words.as_str() == "all" {
@@ -193,7 +199,7 @@ impl Cmd {
             let start = end - Duration::days(365);
             db.range(start, end).await?
         } else {
-            let start = parse_date_string(&words, now, settings.dialect.into())?;
+            let start = parse_date_string(&words, now, settings.stats.dialect.into())?;
             let end = start + Duration::days(1);
             db.range(start, end).await?
         };
@@ -220,7 +226,7 @@ fn first_whitespace(s: &str) -> usize {
 
 fn interesting_command<'a>(settings: &Settings, mut command: &'a str) -> &'a str {
     // Sort by length so that we match the longest prefix first
-    let mut common_prefix = settings.stats.common_prefix.clone();
+    let mut common_prefix = settings.stats.stats.common_prefix.clone();
     common_prefix.sort_by_key(|b| std::cmp::Reverse(b.len()));
 
     // Trim off the common prefix, if it exists
@@ -238,7 +244,7 @@ fn interesting_command<'a>(settings: &Settings, mut command: &'a str) -> &'a str
     }
 
     // Sort the common_subcommands by length so that we match the longest subcommand first
-    let mut common_subcommands = settings.stats.common_subcommands.clone();
+    let mut common_subcommands = settings.stats.stats.common_subcommands.clone();
     common_subcommands.sort_by_key(|b| std::cmp::Reverse(b.len()));
 
     // Check for a common subcommand
@@ -271,7 +277,7 @@ mod tests {
     #[test]
     fn ignored_commands() {
         let mut settings = Settings::utc();
-        settings.stats.ignored_commands.push("cd".to_string());
+        settings.stats.stats.ignored_commands.push("cd".to_string());
 
         let history = [
             History::import()
@@ -311,7 +317,11 @@ mod tests {
     #[test]
     fn interesting_commands_spaces() {
         let mut settings = Settings::utc();
-        settings.stats.common_prefix.push("sudo test".to_string());
+        settings
+            .stats
+            .stats
+            .common_prefix
+            .push("sudo test".to_string());
 
         assert_eq!(interesting_command(&settings, "sudo test"), "sudo test");
         assert_eq!(interesting_command(&settings, "sudo test  "), "sudo test");
@@ -337,6 +347,7 @@ mod tests {
     fn interesting_commands_spaces_subcommand() {
         let mut settings = Settings::utc();
         settings
+            .stats
             .stats
             .common_subcommands
             .push("cargo build".to_string());
@@ -366,8 +377,13 @@ mod tests {
     #[test]
     fn interesting_commands_spaces_both() {
         let mut settings = Settings::utc();
-        settings.stats.common_prefix.push("sudo test".to_string());
         settings
+            .stats
+            .stats
+            .common_prefix
+            .push("sudo test".to_string());
+        settings
+            .stats
             .stats
             .common_subcommands
             .push("cargo build".to_string());

@@ -1,8 +1,25 @@
 use std::{fmt, str::FromStr};
 
+use config::{builder::DefaultState, ConfigBuilder};
 use eyre::{bail, Error, Result};
+use serde::Deserialize;
 use serde_with::DeserializeFromStr;
 use time::{format_description::FormatItem, macros::format_description, UtcOffset};
+
+// Settings
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct Settings {
+    pub timezone: Timezone,
+}
+
+// Defaults
+
+pub(crate) fn defaults(
+    builder: ConfigBuilder<DefaultState>,
+) -> Result<ConfigBuilder<DefaultState>> {
+    Ok(builder.set_default("timezone", "local")?)
+}
 
 /// format: <+|-><hour>[:<minute>[:<second>]]
 static OFFSET_FMT: &[FormatItem<'_>] =
