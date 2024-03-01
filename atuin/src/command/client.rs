@@ -84,6 +84,7 @@ impl Cmd {
     async fn run_inner(self) -> Result<()> {
         Builder::new()
             .filter_level(log::LevelFilter::Off)
+            .filter_module("sqlx_sqlite::regexp", log::LevelFilter::Off)
             .parse_env("ATUIN_LOG")
             .init();
 
