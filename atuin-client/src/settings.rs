@@ -358,6 +358,7 @@ pub struct Settings {
     pub inline_height: u16,
     pub invert: bool,
     pub show_preview: bool,
+    pub show_preview_auto: bool,
     pub max_preview_height: u16,
     pub show_help: bool,
     pub show_tabs: bool,
@@ -602,6 +603,7 @@ impl Settings {
             .set_default("style", "auto")?
             .set_default("inline_height", 0)?
             .set_default("show_preview", false)?
+            .set_default("show_preview_auto", true)?
             .set_default("max_preview_height", 4)?
             .set_default("show_help", true)?
             .set_default("show_tabs", true)?

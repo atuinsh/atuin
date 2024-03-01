@@ -547,27 +547,41 @@ impl State {
         let invert = settings.invert;
         let border_size = if compact { 0 } else { 1 };
         let preview_width = f.size().width - 2;
-        let preview_height = if settings.show_preview && self.tab_index == 0 {
-            let longest_command = results
-                .iter()
-                .max_by(|h1, h2| h1.command.len().cmp(&h2.command.len()));
-            longest_command.map_or(0, |v| {
-                std::cmp::min(
-                    settings.max_preview_height,
-                    v.command
-                        .split('\n')
-                        .map(|line| {
-                            (line.len() as u16 + preview_width - 1 - border_size)
-                                / (preview_width - border_size)
-                        })
-                        .sum(),
-                )
-            }) + border_size * 2
-        } else if compact || self.tab_index == 1 {
-            0
-        } else {
-            1
-        };
+        let preview_height =
+            if settings.show_preview_auto && self.tab_index == 0 && !results.is_empty() {
+                let length_current_cmd =
+                    results[self.results_state.selected()].command.len() as u16;
+                // The '- 19' takes the characters before the command (duration and time) into account
+                if length_current_cmd > preview_width - 19 {
+                    std::cmp::min(
+                        settings.max_preview_height,
+                        (length_current_cmd + preview_width - 1 - border_size)
+                            / (preview_width - border_size),
+                    ) + border_size * 2
+                } else {
+                    1
+                }
+            } else if settings.show_preview && self.tab_index == 0 {
+                let longest_command = results
+                    .iter()
+                    .max_by(|h1, h2| h1.command.len().cmp(&h2.command.len()));
+                longest_command.map_or(0, |v| {
+                    std::cmp::min(
+                        settings.max_preview_height,
+                        v.command
+                            .split('\n')
+                            .map(|line| {
+                                (line.len() as u16 + preview_width - 1 - border_size)
+                                    / (preview_width - border_size)
+                            })
+                            .sum(),
+                    )
+                }) + border_size * 2
+            } else if compact || self.tab_index == 1 {
+                0
+            } else {
+                1
+            };
         let show_help = settings.show_help && (!compact || f.size().height > 1);
         let show_tabs = settings.show_tabs;
         let chunks = Layout::default()
