@@ -122,6 +122,9 @@
 ## amount of commands in your history.
 # show_help = true
 
+## Configure whether or not to show tabs for search and inspect
+# show_tabs = true
+
 ## Defaults to true. This matches history against a set of default regex, and will not save it if we get a match. Defaults include
 ## 1. AWS key id
 ## 2. Github pat (old and new)
