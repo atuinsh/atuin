@@ -639,6 +639,11 @@ impl State {
         let input = self.build_input(style);
         f.render_widget(input, input_chunk);
 
+        let preview_width = if compact {
+            preview_width
+        } else {
+            preview_width - 2
+        };
         let preview =
             self.build_preview(results, compact, preview_width, preview_chunk.width.into());
         f.render_widget(preview, preview_chunk);
