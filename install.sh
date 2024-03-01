@@ -1,5 +1,10 @@
 #! /usr/bin/env bash
 
+if [[ "${BASH_VERSION%%.*}" -eq 3 ]]; then
+    echo "Atuin has limited support for Bash 3.2. The Atuin config enter_accept cannot be turned off." >&2
+    echo "To turn off enter_accept, please upgrade your version of bash (possibly via homebrew or ports)" >&2
+fi
+
 set -euo pipefail
 
 cat << EOF
