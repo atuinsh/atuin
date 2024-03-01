@@ -1,0 +1,11 @@
+name: Update CONTRIBUTORS
+on:
+  schedule:
+    - cron: "0 0 1 * *"
+  workflow_dispatch:
+jobs:
+  update_contributors:
+    runs-on: ubuntu-latest
+    steps:
+      - name: update
+        uses: tessus/update-contributors-list@v1
