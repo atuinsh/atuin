@@ -151,7 +151,11 @@ impl FromStr for Timezone {
     fn from_str(s: &str) -> Result<Self> {
         // local timezone
         if matches!(s.to_lowercase().as_str(), "l" | "local") {
-            let offset = UtcOffset::current_local_offset()?;
+            // There have been some timezone issues, related to errors fetching it on some
+            // platforms
+            // Rather than fail to start, fallback to UTC. The user should still be able to specify
+            // their timezone manually in the config file.
+            let offset = UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC);
             return Ok(Self(offset));
         }
 

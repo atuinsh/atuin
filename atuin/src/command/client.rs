@@ -74,14 +74,15 @@ impl Cmd {
             .build()
             .unwrap();
 
-        let res = runtime.block_on(self.run_inner());
+        let settings = Settings::new().wrap_err("could not load client settings")?;
+        let res = runtime.block_on(self.run_inner(settings));
 
         runtime.shutdown_timeout(std::time::Duration::from_millis(50));
 
         res
     }
 
-    async fn run_inner(self) -> Result<()> {
+    async fn run_inner(self, mut settings: Settings) -> Result<()> {
         Builder::new()
             .filter_level(log::LevelFilter::Off)
             .filter_module("sqlx_sqlite::regexp", log::LevelFilter::Off)
@@ -89,8 +90,6 @@ impl Cmd {
             .init();
 
         tracing::trace!(command = ?self, "client command");
-
-        let mut settings = Settings::new().wrap_err("could not load client settings")?;
 
         let db_path = PathBuf::from(settings.db_path.as_str());
         let record_store_path = PathBuf::from(settings.record_store_path.as_str());
