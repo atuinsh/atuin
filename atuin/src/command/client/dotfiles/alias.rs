@@ -3,7 +3,7 @@ use eyre::{Context, Result};
 
 use atuin_client::{encryption, record::sqlite_store::SqliteStore, settings::Settings};
 
-use atuin_config::{shell::Alias, store::AliasStore};
+use atuin_dotfiles::{shell::Alias, store::AliasStore};
 
 #[derive(Subcommand, Debug)]
 #[command(infer_subcommands = true)]

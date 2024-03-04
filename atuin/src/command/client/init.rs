@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use atuin_client::{encryption, record::sqlite_store::SqliteStore, settings::Settings};
-use atuin_config::store::AliasStore;
+use atuin_dotfiles::store::AliasStore;
 use clap::{Parser, ValueEnum};
 use eyre::{Result, WrapErr};
 

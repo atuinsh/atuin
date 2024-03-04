@@ -6,7 +6,7 @@ members = [
   "atuin-server-postgres",
   "atuin-server-database",
   "atuin-common", 
-  "atuin-config",
+  "atuin-dotfiles",
 ]
 
 resolver = "2"

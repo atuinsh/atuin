@@ -1,5 +1,5 @@
 [package]
-name = "atuin-config"
+name = "atuin-dotfiles"
 edition = "2021"
 version = "0.1.0" # intentionally not the same as the rest
 
