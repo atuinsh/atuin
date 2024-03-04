@@ -6,6 +6,9 @@ hide-env -i ATUIN_HISTORY_ID
 let ATUIN_KEYBINDING_TOKEN = $"# (random uuid)"
 
 let _atuin_pre_execution = {||
+    if ($nu | get -i history-enabled) == false {
+        return
+    }
     let cmd = (commandline)
     if ($cmd | is-empty) {
         return
