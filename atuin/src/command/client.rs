@@ -12,9 +12,9 @@ mod sync;
 #[cfg(feature = "sync")]
 mod account;
 
-mod config;
 mod default_config;
 mod doctor;
+mod dotfiles;
 mod history;
 mod import;
 mod init;
@@ -54,7 +54,7 @@ pub enum Cmd {
     Store(store::Cmd),
 
     #[command(subcommand)]
-    Config(config::Cmd),
+    Dotfiles(dotfiles::Cmd),
 
     #[command()]
     Init(init::Cmd),
@@ -113,7 +113,7 @@ impl Cmd {
 
             Self::Store(store) => store.run(&settings, &db, sqlite_store).await,
 
-            Self::Config(config) => config.run(&settings, sqlite_store).await,
+            Self::Dotfiles(dotfiles) => dotfiles.run(&settings, sqlite_store).await,
 
             Self::Init(init) => init.run(&settings).await,
 

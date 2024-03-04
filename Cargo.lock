@@ -185,7 +185,7 @@ dependencies = [
  "async-trait",
  "atuin-client",
  "atuin-common",
- "atuin-config",
+ "atuin-dotfiles",
  "atuin-server",
  "atuin-server-postgres",
  "base64 0.21.7",
@@ -291,7 +291,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "atuin-config"
+name = "atuin-dotfiles"
 version = "0.1.0"
 dependencies = [
  "atuin-client",

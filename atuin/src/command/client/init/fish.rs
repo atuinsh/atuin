@@ -1,4 +1,4 @@
-use atuin_config::store::AliasStore;
+use atuin_dotfiles::store::AliasStore;
 use eyre::Result;
 
 pub async fn init(store: AliasStore, disable_up_arrow: bool, disable_ctrl_r: bool) -> Result<()> {
@@ -34,7 +34,7 @@ bind -M insert \e\[A _atuin_bind_up";
     }
 
     let aliases = store.aliases().await?;
-    let aliases = atuin_config::shell::fish::build(&aliases[..]);
+    let aliases = atuin_dotfiles::shell::fish::build(&aliases[..]);
 
     println!("{aliases}");
 

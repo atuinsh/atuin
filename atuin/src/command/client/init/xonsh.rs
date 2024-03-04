@@ -1,4 +1,4 @@
-use atuin_config::store::AliasStore;
+use atuin_dotfiles::store::AliasStore;
 use eyre::Result;
 
 pub async fn init(store: AliasStore, disable_up_arrow: bool, disable_ctrl_r: bool) -> Result<()> {
@@ -20,7 +20,7 @@ pub async fn init(store: AliasStore, disable_up_arrow: bool, disable_ctrl_r: boo
     println!("{base}");
 
     let aliases = store.aliases().await?;
-    let aliases = atuin_config::shell::xonsh::build(&aliases[..]);
+    let aliases = atuin_dotfiles::shell::xonsh::build(&aliases[..]);
 
     println!("{aliases}");
 

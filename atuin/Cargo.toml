@@ -45,7 +45,7 @@ atuin-server-postgres = { path = "../atuin-server-postgres", version = "18.0.2",
 atuin-server = { path = "../atuin-server", version = "18.0.2", optional = true }
 atuin-client = { path = "../atuin-client", version = "18.0.2", optional = true, default-features = false }
 atuin-common = { path = "../atuin-common", version = "18.0.2" }
-atuin-config = { path = "../atuin-config", version = "0.1.0" }
+atuin-dotfiles = { path = "../atuin-dotfiles", version = "0.1.0" }
 
 log = { workspace = true }
 env_logger = "0.11.2"

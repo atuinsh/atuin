@@ -1,4 +1,4 @@
-use atuin_config::store::AliasStore;
+use atuin_dotfiles::store::AliasStore;
 use eyre::Result;
 
 pub async fn init(store: AliasStore, disable_up_arrow: bool, disable_ctrl_r: bool) -> Result<()> {
@@ -6,7 +6,7 @@ pub async fn init(store: AliasStore, disable_up_arrow: bool, disable_ctrl_r: boo
 
     let aliases = store.aliases().await?;
 
-    let aliases = atuin_config::shell::bash::build(&aliases[..]);
+    let aliases = atuin_dotfiles::shell::bash::build(&aliases[..]);
 
     let (bind_ctrl_r, bind_up_arrow) = if std::env::var("ATUIN_NOBIND").is_ok() {
         (false, false)
