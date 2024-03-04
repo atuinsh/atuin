@@ -25,17 +25,18 @@ impl ShellInfo {
     //
     // Every shell we support handles `shell -c 'command'`
     fn env_exists(shell: &str, var: &str) -> bool {
-        let mut cmd = Command::new(shell)
-            .args(["-ic", format!("echo ${var}").as_str()])
+        let cmd = Command::new(shell)
+            .args([
+                "-ic",
+                format!("[ -z ${var} ] || echo ATUIN_DOCTOR_ENV_FOUND").as_str(),
+            ])
             .output()
             .map_or(String::new(), |v| {
                 let out = v.stdout;
                 String::from_utf8(out).unwrap_or_default()
             });
 
-        cmd.retain(|c| !c.is_whitespace());
-
-        !cmd.is_empty()
+        cmd.contains("ATUIN_DOCTOR_ENV_FOUND")
     }
 
     pub fn plugins(shell: &str) -> Vec<String> {
