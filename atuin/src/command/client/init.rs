@@ -83,7 +83,27 @@ $env.config = (
         }
     }
 
-    pub async fn run(self, settings: &Settings) -> Result<()> {
+    fn static_init(&self) {
+        match self.shell {
+            Shell::Zsh => {
+                zsh::init_static(self.disable_up_arrow, self.disable_ctrl_r);
+            }
+            Shell::Bash => {
+                bash::init_static(self.disable_up_arrow, self.disable_ctrl_r);
+            }
+            Shell::Fish => {
+                fish::init_static(self.disable_up_arrow, self.disable_ctrl_r);
+            }
+            Shell::Nu => {
+                self.init_nu();
+            }
+            Shell::Xonsh => {
+                xonsh::init_static(self.disable_up_arrow, self.disable_ctrl_r);
+            }
+        };
+    }
+
+    async fn dotfiles_init(&self, settings: &Settings) -> Result<()> {
         let record_store_path = PathBuf::from(settings.record_store_path.as_str());
         let sqlite_store = SqliteStore::new(record_store_path, settings.local_timeout).await?;
 
@@ -108,6 +128,16 @@ $env.config = (
             Shell::Xonsh => {
                 xonsh::init(alias_store, self.disable_up_arrow, self.disable_ctrl_r).await?;
             }
+        }
+
+        Ok(())
+    }
+
+    pub async fn run(self, settings: &Settings) -> Result<()> {
+        if settings.dotfiles.enabled {
+            self.dotfiles_init(settings).await?;
+        } else {
+            self.static_init();
         }
 
         Ok(())
