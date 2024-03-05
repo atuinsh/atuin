@@ -1,7 +1,7 @@
 use atuin_dotfiles::store::AliasStore;
 use eyre::Result;
 
-pub async fn init(store: AliasStore, disable_up_arrow: bool, disable_ctrl_r: bool) -> Result<()> {
+pub fn init_static(disable_up_arrow: bool, disable_ctrl_r: bool) {
     let base = include_str!("../../../shell/atuin.zsh");
 
     println!("{base}");
@@ -26,6 +26,10 @@ bindkey -M vicmd 'k' atuin-up-search-vicmd";
             println!("{BIND_UP_ARROW}");
         }
     }
+}
+
+pub async fn init(store: AliasStore, disable_up_arrow: bool, disable_ctrl_r: bool) -> Result<()> {
+    init_static(disable_up_arrow, disable_ctrl_r);
 
     let aliases = store.aliases().await?;
     let aliases = atuin_dotfiles::shell::zsh::build(&aliases[..]);

@@ -33,6 +33,8 @@ pub const LATEST_VERSION_FILENAME: &str = "latest_version";
 pub const HOST_ID_FILENAME: &str = "host_id";
 static EXAMPLE_CONFIG: &str = include_str!("../config.toml");
 
+mod dotfiles;
+
 #[derive(Clone, Debug, Deserialize, Copy, ValueEnum, PartialEq)]
 pub enum SearchMode {
     #[serde(rename = "prefix")]
@@ -392,6 +394,9 @@ pub struct Settings {
 
     #[serde(default)]
     pub keys: Keys,
+
+    #[serde(default)]
+    pub dotfiles: dotfiles::Settings,
 
     // This is automatically loaded when settings is created. Do not set in
     // config! Keep secrets and settings apart.
