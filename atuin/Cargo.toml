@@ -77,12 +77,13 @@ fuzzy-matcher = "0.3.7"
 colored = "2.0.4"
 ratatui = "0.25"
 tracing = "0.1"
-cli-clipboard = { version = "0.4.0", optional = true }
 uuid = { workspace = true }
 unicode-segmentation = "1.11.0"
 serde_yaml = "0.9.32"
 sysinfo = "0.30.5"
 
+[target.'cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))'.dependencies]
+cli-clipboard = { version = "0.4.0", optional = true }
 
 [dependencies.tracing-subscriber]
 version = "0.3"

@@ -12,6 +12,7 @@ use uuid::Uuid;
 
 use super::{get_histpath, Importer, Loader};
 use crate::history::History;
+use crate::utils::get_host_user;
 
 // Note: both HistoryFile and HistoryData have other keys present in the JSON, we don't
 // care about them so we leave them unspecified so as to avoid deserializing unnecessarily.
@@ -60,14 +61,6 @@ fn xonsh_hist_dir(xonsh_data_dir: Option<String>) -> Result<PathBuf> {
     }
 }
 
-fn get_hostname() -> String {
-    format!(
-        "{}:{}",
-        env::var("ATUIN_HOST_NAME").unwrap_or_else(|_| whoami::hostname()),
-        env::var("ATUIN_HOST_USER").unwrap_or_else(|_| whoami::username()),
-    )
-}
-
 fn load_sessions(hist_dir: &Path) -> Result<Vec<HistoryData>> {
     let mut sessions = vec![];
     for entry in fs::read_dir(hist_dir)? {
@@ -111,7 +104,7 @@ impl Importer for Xonsh {
         let xonsh_data_dir = env::var("XONSH_DATA_DIR").ok();
         let hist_dir = get_histpath(|| xonsh_hist_dir(xonsh_data_dir))?;
         let sessions = load_sessions(&hist_dir)?;
-        let hostname = get_hostname();
+        let hostname = get_host_user();
         Ok(Xonsh { sessions, hostname })
     }
 

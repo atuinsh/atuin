@@ -21,7 +21,10 @@ use sqlx::{
 };
 use time::OffsetDateTime;
 
-use crate::history::{HistoryId, HistoryStats};
+use crate::{
+    history::{HistoryId, HistoryStats},
+    utils::get_host_user,
+};
 
 use super::{
     history::History,
@@ -55,11 +58,7 @@ pub fn current_context() -> Context {
         eprintln!("ERROR: Failed to find $ATUIN_SESSION in the environment. Check that you have correctly set up your shell.");
         std::process::exit(1);
     };
-    let hostname = format!(
-        "{}:{}",
-        env::var("ATUIN_HOST_NAME").unwrap_or_else(|_| whoami::hostname()),
-        env::var("ATUIN_HOST_USER").unwrap_or_else(|_| whoami::username())
-    );
+    let hostname = get_host_user();
     let cwd = utils::get_current_dir();
     let host_id = Settings::host_id().expect("failed to load host ID");
     let git_root = utils::in_git_repo(cwd.as_str());
