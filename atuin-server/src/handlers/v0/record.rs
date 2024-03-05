@@ -27,11 +27,11 @@ pub async fn post<DB: Database>(
 
     counter!("atuin_record_uploaded", records.len() as u64);
 
-    let too_big = records
+    let keep = records
         .iter()
-        .any(|r| r.data.data.len() >= settings.max_record_size || settings.max_record_size == 0);
+        .all(|r| r.data.data.len() <= settings.max_record_size || settings.max_record_size == 0);
 
-    if too_big {
+    if !keep {
         counter!("atuin_record_too_large", 1);
 
         return Err(
