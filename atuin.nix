@@ -1,7 +1,7 @@
 # Atuin package definition
 #
 # This file will be similar to the package definition in nixpkgs:
-#     https://github.com/NixOS/nixpkgs/blob/master/pkgs/tools/misc/atuin/default.nix
+#     https://github.com/NixOS/nixpkgs/blob/master/pkgs/by-name/at/atuin/package.nix
 #
 # Helpful documentation: https://github.com/NixOS/nixpkgs/blob/master/doc/languages-frameworks/rust.section.md
 {
@@ -42,5 +42,6 @@ rustPlatform.buildRustPackage {
     description = "Replacement for a shell history which records additional commands context with optional encrypted synchronization between machines";
     homepage = "https://github.com/atuinsh/atuin";
     license = licenses.mit;
+    mainProgram = "atuin";
   };
 }
