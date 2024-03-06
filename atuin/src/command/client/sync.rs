@@ -99,11 +99,13 @@ async fn run(
 
         #[allow(clippy::cast_sign_loss)]
         if history_length as u64 > store_history_length {
-            println!("History DB is longer than history record store");
-            println!("This happens when you used Atuin pre-record-store");
-            println!("Run atuin history init-store to correct this");
+            println!(
+                "{history_length} in history index, but {store_history_length} in history store"
+            );
+            println!("Running automatic history store init...");
 
-            println!("\n");
+            // Internally we use the global filter mode, so this context is ignored.
+            history_store.init_store(db).await?;
         }
     } else {
         atuin_client::sync::sync(settings, force, db).await?;

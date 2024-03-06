@@ -5,7 +5,7 @@ use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 use rmp::decode::Bytes;
 
 use crate::{
-    database::{self, Database},
+    database::{current_context, Database},
     record::{encryption::PASETO_V4, sqlite_store::SqliteStore, store::Store},
 };
 use atuin_common::record::{DecryptedData, Host, HostId, Record, RecordId, RecordIdx};
@@ -287,7 +287,7 @@ impl HistoryStore {
         Ok(ret)
     }
 
-    pub async fn init_store(&self, context: database::Context, db: &impl Database) -> Result<()> {
+    pub async fn init_store(&self, db: &impl Database) -> Result<()> {
         let pb = ProgressBar::new_spinner();
         pb.set_style(
             ProgressStyle::with_template("{spinner:.blue} {msg}")
@@ -300,6 +300,8 @@ impl HistoryStore {
         pb.enable_steady_tick(Duration::from_millis(500));
 
         pb.set_message("Fetching history from old database");
+
+        let context = current_context();
         let history = db.list(&[], &context, None, false, true).await?;
 
         pb.set_message("Fetching history already in store");
