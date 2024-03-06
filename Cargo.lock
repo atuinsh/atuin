@@ -29,9 +29,9 @@ dependencies = [
 
 [[package]]
 name = "ahash"
-version = "0.8.11"
+version = "0.8.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e89da841a80418a9b391ebaea17f5c112ffaaa96f621d2c285b5174da76b9011"
+checksum = "77c3a9648d43b9cd48db467b3f87fdd6e146bcc88ab0180006cef2179fe11d01"
 dependencies = [
  "cfg-if",
  "getrandom",
@@ -317,7 +317,7 @@ dependencies = [
  "config",
  "eyre",
  "fs-err",
- "metrics",
+ "metrics 0.22.1",
  "metrics-exporter-prometheus",
  "rand",
  "reqwest",
@@ -2010,6 +2010,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "metrics"
+version = "0.22.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cd71d9db2e4287c3407fa04378b8c2ee570aebe0854431562cdd89ca091854f4"
+dependencies = [
+ "ahash",
+ "portable-atomic",
+]
+
+[[package]]
 name = "metrics-exporter-prometheus"
 version = "0.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2019,7 +2029,7 @@ dependencies = [
  "hyper 0.14.28",
  "indexmap 1.9.3",
  "ipnet",
- "metrics",
+ "metrics 0.21.1",
  "metrics-util",
  "quanta",
  "thiserror",
@@ -2047,7 +2057,7 @@ dependencies = [
  "crossbeam-epoch",
  "crossbeam-utils",
  "hashbrown 0.13.1",
- "metrics",
+ "metrics 0.21.1",
  "num_cpus",
  "quanta",
  "sketches-ddsketch",
