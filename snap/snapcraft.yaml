@@ -1,0 +1,106 @@
+name: atuin
+adopt-info: atuin
+summary: Magical shell history
+description: |
+  Atuin replaces your existing shell history with a SQLite database,
+  and records additional context for your commands.
+  Additionally, it provides optional and fully encrypted synchronisation of your history between machines,
+  via an Atuin server.
+
+  To import existing history,
+  make sure to connect the appropriate interface such as:
+
+  `sudo snap connect atuin:dot-bash-history`
+
+  To see which interfaces are available and whether they are connected:
+
+  `snap connections atuin`
+
+  Furthermore, when using `atuin import auto`,
+  you must export your current shell such as,
+
+  `SHELL=${SHELL} atuin import auto`
+
+  When using this snap, atuin's configuration and data file live respectively at
+  - $HOME/snap/atuin/.config/atuin
+  - $HOME/snap/atuin/local/share/atuin
+
+issues: https://github.com/atuinsh/atuin/issues
+contact: https://github.com/atuinsh/atuin/issues
+source-code: https://github.com/atuinsh/atuin
+donation: https://github.com/sponsors/atuinsh
+website: https://atuin.sh/
+license: MIT
+
+confinement: strict
+base: core24
+
+apps:
+  atuin:
+    command: atuin
+    command-chain: [usr/local/atuin/launcher]
+    completer: usr/share/bash-completion/completions/atuin-completion.bash
+    plugs:
+      - dot-bash-history
+      - dot-fish-history
+      - dot-resh-history
+      - dot-zsh-history
+      - network
+      - network-bind
+
+plugs:
+  dot-bash-history:
+    interface: personal-files
+    read: [$HOME/.bash_history]
+  dot-fish-history:
+    interface: personal-files
+    read: [$HOME/.local/share/fish/fish_history]
+  dot-resh-history:
+    interface: personal-files
+    read: [$HOME/.local/share/resh/history.reshjson]
+  dot-zsh-history:
+    interface: personal-files
+    read: [$HOME/.zsh_history]
+
+parts:
+  atuin:
+    plugin: rust
+    source: .
+    override-pull: |
+      craftctl default
+
+      git config --global --add safe.directory '*'
+      version="$(git describe --always --tags --exclude='weekly' | sed -e 's/^v//;s/-/+git/;y/-/./')"
+      [ -n "$(echo $version | grep "+git")" ] && grade=devel || grade=stable
+      craftctl set version="$version"
+      craftctl set grade="$grade"
+
+  atuin-launcher:
+    after: [atuin]
+    plugin: dump
+    source: snap/local/
+    organize:
+      'launcher': usr/local/atuin/
+
+  atuin-completer:
+    after: [atuin]
+    plugin: nil
+    organize:
+      'atuin-completion.bash': usr/share/bash-completion/completions/
+    override-build: |
+      $CRAFT_STAGE/atuin gen-completions --shell bash > $CRAFT_PART_INSTALL/atuin-completion.bash
+
+  ble:
+    plugin: make
+    build-packages: [gawk]
+    source: https://github.com/akinomyoga/ble.sh.git
+    make-parameters:
+      - PREFIX=/usr
+
+  bash-preexec:
+    plugin: nil
+    build-packages: [curl]
+    organize:
+      'bash-preexec.sh': usr/share/
+    override-build: |
+      curl https://raw.githubusercontent.com/rcaloras/bash-preexec/master/bash-preexec.sh -o $CRAFT_PART_INSTALL/bash-preexec.sh

@@ -1,0 +1,34 @@
+#!/bin/bash
+
+if [ "$#" -eq 3 ] && [ "$2" == "import" ]; then
+  if ! snapctl is-connected dot-bash-history && \
+     ! snapctl is-connected dot-fish-history && \
+     ! snapctl is-connected dot-resh-history && \
+     ! snapctl is-connected dot-zsh-history; then
+    echo "Error: Requested to import existing history but no interface connected which would allow this."
+    echo "Please connect the appropriate interface such as: "
+    echo ""
+    echo "sudo snap connect $SNAP_NAME:dot-bash-history"
+    echo ""
+    echo "and try again."
+    echo "To see which interfaces are available and whether they are connected:"
+    echo ""
+    echo "snap connections $SNAP_NAME"
+    exit 1
+  fi
+
+  # Atuin looks for the bash history using directories::UserDirs::UserDir
+  # which relies on $HOME. This env var is remapped in Snaps.
+  # We thus workaround that by setting HISTFILE which takes precedence
+  # in atuin loading logic.
+  if snapctl is-connected dot-bash-history && [[ -z "${HISTFILE}" ]]; then
+    export HISTFILE="${SNAP_REAL_HOME}/.bash_history"
+  fi
+fi
+
+if snapctl is-connected atuin-existing-config-and-data; then
+  export XDG_CONFIG_HOME="${SNAP_REAL_HOME}/.config"
+  export XDG_DATA_HOME="${SNAP_REAL_HOME}/.local/share"
+fi
+
+exec "$@"

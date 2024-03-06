@@ -1,0 +1,28 @@
+#!/bin/sh -e
+
+# Print to the journal
+# sudo journalctl -r -t ${SNAP_NAME}
+
+logger -t ${SNAP_NAME} << EOF
+
+
+
+ _______  __   __  _______  __    _  ___   _    __   __  _______  __   __
+|       ||  | |  ||   _   ||  |  | ||   | | |  |  | |  ||       ||  | |  |
+|_     _||  |_|  ||  |_|  ||   |_| ||   |_| |  |  |_|  ||   _   ||  | |  |
+  |   |  |       ||       ||       ||      _|  |       ||  | |  ||  |_|  |
+  |   |  |       ||       ||  _    ||     |_   |_     _||  |_|  ||       |
+  |   |  |   _   ||   _   || | |   ||    _  |    |   |  |       ||       |
+  |___|  |__| |__||__| |__||_|  |__||___| |_|    |___|  |_______||_______|
+
+
+
+Thanks for installing Atuin! I really hope you like it.
+
+If you have any issues, please open an issue on GitHub or visit our Discord (https://discord.gg/jR3tfchVvW)!
+
+If you love Atuin, please give us a star on GitHub! It really helps ⭐️ https://github.com/atuinsh/atuin
+
+Please run "atuin register" to get setup with sync, or "atuin login" if you already have an account
+
+EOF

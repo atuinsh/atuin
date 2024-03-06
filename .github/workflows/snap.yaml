@@ -1,0 +1,70 @@
+name: snap
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      snap-file: ${{ steps.build-snap.outputs.snap }}
+    steps:
+    - name: Checkout snapcraft.yaml branch
+      uses: actions/checkout@v4
+
+    - name: Build snap
+      uses: snapcore/action-build@v1
+      id: build-snap
+
+    - name: Upload snap artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: atuin-snap
+        path: ${{ steps.build-snap.outputs.snap }}
+        retention-days: 7
+
+  test:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Download snap artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: atuin-snap
+
+      - name: Install snap
+        run: |
+          sudo snap install ${{needs.build.outputs.snap-file}} --dangerous
+
+      - name: Snap info
+        run: |
+          snap info atuin
+
+      - name: Run custom test script
+        shell: bash
+        run: |
+          atuin --help
+
+  publish:
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    needs: [build, test]
+    steps:
+    - name: Download snap artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: atuin-snap
+
+    - name: Publish snap
+      uses: snapcore/action-publish@v1
+      env:
+        SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.store-login }}
+      if: env.SNAPCRAFT_STORE_CREDENTIALS
+      with:
+        snap: ${{ needs.build.outputs.snap-file }}
+        release: ${{ startsWith(github.ref, 'refs/tags/') && 'candidate' || 'edge'}}
