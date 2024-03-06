@@ -35,14 +35,15 @@ pub async fn run(settings: &Settings, db: &impl Database) -> Result<()> {
         println!("Last sync: {last_sync}");
     }
 
-    println!("History count: {local_count}");
-    println!("Deleted history count: {deleted_count}\n");
+    if !settings.sync.records {
+        println!("History count: {local_count}");
+        println!("Deleted history count: {deleted_count}\n");
+    }
 
     if settings.auto_sync {
         println!("{}", "[Remote]".green());
         println!("Address: {}", settings.sync_address);
         println!("Username: {}", status.username);
-        println!("History count: {}", status.count);
     }
 
     Ok(())
