@@ -44,6 +44,43 @@ jobs:
     - name: Run cargo build main
       run: cargo build --all --locked --release 
 
+  cross-compile:
+    strategy:
+      matrix:
+        # There was an attempt to make cross-compiles also work on FreeBSD, but that failed with:
+        #
+        # warning: libelf.so.2, needed by <...>/libkvm.so, not found (try using -rpath or -rpath-link)
+        target: [x86_64-unknown-illumos]
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Install cross
+      uses: taiki-e/install-action@v1
+      with:
+        tool: cross
+
+    - uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ matrix.target }}-cross-compile-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Run cross build common
+      run: cross build -p atuin-common --locked --target ${{ matrix.target }}
+
+    - name: Run cross build client
+      run: cross build -p atuin-client --locked --target ${{ matrix.target }}
+
+    - name: Run cross build server
+      run: cross build -p atuin-server --locked --target ${{ matrix.target }}
+
+    - name: Run cross build main
+      run: cross build --all --locked --target ${{ matrix.target }}
+
   unit-test:
     strategy:
       matrix:
