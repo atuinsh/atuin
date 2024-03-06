@@ -105,7 +105,17 @@ async fn run(
             println!("Running automatic history store init...");
 
             // Internally we use the global filter mode, so this context is ignored.
+            // don't recurse or loop here.
             history_store.init_store(db).await?;
+
+            println!("Re-running sync due to new records locally");
+
+            // we'll want to run sync once more, as there will now be stuff to upload
+            let (uploaded, downloaded) = sync::sync(settings, &store).await?;
+
+            history_store.incremental_build(db, &downloaded).await?;
+
+            println!("{uploaded}/{} up/down to record store", downloaded.len());
         }
     } else {
         atuin_client::sync::sync(settings, force, db).await?;
