@@ -3,6 +3,7 @@ use atuin_client::record::sqlite_store::SqliteStore;
 use std::path::PathBuf;
 use std::sync::Arc;
 use time::OffsetDateTime;
+use tracing::{instrument, Level};
 
 use atuin_client::database::{Database, Sqlite as HistoryDatabase};
 use atuin_client::history::{History, HistoryId};
@@ -16,6 +17,7 @@ use crate::history::history_server::{History as HistorySvc, HistoryServer};
 
 use crate::history::{EndHistoryReply, EndHistoryRequest, StartHistoryReply, StartHistoryRequest};
 
+#[derive(Debug)]
 pub struct HistoryService {
     // A store for WIP history
     // This is history that has not yet been completed, aka a command that's current running.
@@ -36,6 +38,7 @@ impl HistoryService {
 
 #[tonic::async_trait()]
 impl HistorySvc for HistoryService {
+    #[instrument(skip_all, level = Level::INFO)]
     async fn start_history(
         &self,
         request: Request<StartHistoryRequest>,
@@ -59,8 +62,6 @@ impl HistorySvc for HistoryService {
             .build()
             .into();
 
-        println!("request to start {} {}", h.id, h.command);
-
         // The old behaviour had us inserting half-finished history records into the database
         // The new behaviour no longer allows that.
         // History that's running is stored in-memory by the daemon, and only committed when
@@ -68,6 +69,7 @@ impl HistorySvc for HistoryService {
         // If anyone relied on the old behaviour, we could perhaps insert to the history db here
         // too. I'd rather keep it pure, unless that ends up being the case.
         let id = h.id.clone();
+        tracing::info!(id = id.to_string(), "start history");
         running.insert(id.clone(), h);
 
         let reply = StartHistoryReply { id: id.to_string() };
@@ -75,19 +77,17 @@ impl HistorySvc for HistoryService {
         Ok(Response::new(reply))
     }
 
+    #[instrument(skip_all, level = Level::INFO)]
     async fn end_history(
         &self,
         request: Request<EndHistoryRequest>,
     ) -> Result<Response<EndHistoryReply>, Status> {
         let running = self.running.clone();
         let req = request.into_inner();
-        println!("Got end history request {}", req.id);
 
         let id = HistoryId(req.id);
 
         if let Some((_, mut history)) = running.remove(&id) {
-            println!("request to end {}", history.command);
-
             history.exit = req.exit;
             history.duration = match req.duration {
                 Some(value) => i64::try_from(value).expect("failed to get i64 duration"),
@@ -103,6 +103,12 @@ impl HistorySvc for HistoryService {
                 .await
                 .map_err(|e| Status::internal(format!("failed to write to db: {e:?}")))?;
 
+            tracing::info!(
+                id = id.0.to_string(),
+                duration = history.duration,
+                "end history"
+            );
+
             let (id, idx) =
                 self.store.push(history).await.map_err(|e| {
                     Status::internal(format!("failed to push record to store: {e:?}"))
@@ -115,8 +121,6 @@ impl HistorySvc for HistoryService {
 
             return Ok(Response::new(reply));
         }
-
-        println!("Failed to find history with id: {id:?}, running: {running:?}");
 
         Err(Status::not_found(format!(
             "could not find history with id: {id}"

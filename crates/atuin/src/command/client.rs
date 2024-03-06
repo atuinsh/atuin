@@ -4,7 +4,11 @@ use clap::Subcommand;
 use eyre::{Result, WrapErr};
 
 use atuin_client::{database::Sqlite, record::sqlite_store::SqliteStore, settings::Settings};
-use env_logger::Builder;
+use tracing_subscriber::{
+    filter::{EnvFilter, LevelFilter},
+    fmt,
+    prelude::*,
+};
 
 #[cfg(feature = "sync")]
 mod sync;
@@ -98,10 +102,12 @@ impl Cmd {
     }
 
     async fn run_inner(self, mut settings: Settings) -> Result<()> {
-        Builder::new()
-            .filter_level(log::LevelFilter::Off)
-            .filter_module("sqlx_sqlite::regexp", log::LevelFilter::Off)
-            .parse_env("ATUIN_LOG")
+        let filter =
+            EnvFilter::from_env("ATUIN_LOG").add_directive("sqlx_sqlite::regexp=off".parse()?);
+
+        tracing_subscriber::registry()
+            .with(fmt::layer())
+            .with(filter)
             .init();
 
         tracing::trace!(command = ?self, "client command");
