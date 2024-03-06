@@ -124,6 +124,22 @@ impl HistorySvc for HistoryService {
     }
 }
 
+async fn shutdown_signal(socket: PathBuf) {
+    let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .expect("failed to register sigterm handler");
+    let mut int = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+        .expect("failed to register sigint handler");
+
+    tokio::select! {
+        _  = term.recv() => {},
+        _  = int.recv() => {},
+    }
+
+    eprintln!("Removing socket...");
+    std::fs::remove_file(socket).expect("failed to remove socket");
+    eprintln!("Shutting down...");
+}
+
 // break the above down when we end up with multiple services
 
 /// Listen on a unix socket
@@ -140,10 +156,8 @@ pub async fn listen(
 
     Server::builder()
         .add_service(HistoryServer::new(history))
-        .serve_with_incoming(uds_stream)
+        .serve_with_incoming_shutdown(uds_stream, shutdown_signal(socket))
         .await?;
-
-    std::fs::remove_file(socket)?;
 
     Ok(())
 }
