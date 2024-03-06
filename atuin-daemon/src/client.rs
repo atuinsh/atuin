@@ -1,6 +1,4 @@
-use std::path::PathBuf;
-
-use eyre::Result;
+use eyre::{eyre, Result};
 use tokio::net::UnixStream;
 use tonic::transport::{Channel, Endpoint, Uri};
 use tower::service_fn;
@@ -8,8 +6,7 @@ use tower::service_fn;
 use atuin_client::history::History;
 
 use crate::history::{
-    history_client::HistoryClient as HistoryServiceClient, EndHistoryRequest, StartHistoryReply,
-    StartHistoryRequest,
+    history_client::HistoryClient as HistoryServiceClient, EndHistoryRequest, StartHistoryRequest,
 };
 
 pub struct HistoryClient {
@@ -25,7 +22,8 @@ impl HistoryClient {
 
                 UnixStream::connect(path)
             }))
-            .await?;
+            .await
+            .map_err(|_| eyre!("failed to connect to local atuin daemon. Is it running?"))?;
 
         let client = HistoryServiceClient::new(channel);
 

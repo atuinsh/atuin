@@ -135,13 +135,15 @@ pub async fn listen(
 ) -> Result<()> {
     let history = HistoryService::new(store, history_db);
 
-    let uds = UnixListener::bind(socket)?;
+    let uds = UnixListener::bind(socket.clone())?;
     let uds_stream = UnixListenerStream::new(uds);
 
     Server::builder()
         .add_service(HistoryServer::new(history))
         .serve_with_incoming(uds_stream)
         .await?;
+
+    std::fs::remove_file(socket)?;
 
     Ok(())
 }
