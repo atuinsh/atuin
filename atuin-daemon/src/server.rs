@@ -1,5 +1,9 @@
+use eyre::WrapErr;
+
+use atuin_client::encryption;
 use atuin_client::history::store::HistoryStore;
 use atuin_client::record::sqlite_store::SqliteStore;
+use atuin_client::settings::Settings;
 use std::path::PathBuf;
 use std::sync::Arc;
 use time::OffsetDateTime;
@@ -16,6 +20,8 @@ use tonic::{transport::Server, Request, Response, Status};
 use crate::history::history_server::{History as HistorySvc, HistoryServer};
 
 use crate::history::{EndHistoryReply, EndHistoryRequest, StartHistoryReply, StartHistoryRequest};
+
+mod sync;
 
 #[derive(Debug)]
 pub struct HistoryService {
@@ -149,18 +155,31 @@ async fn shutdown_signal(socket: PathBuf) {
 /// Listen on a unix socket
 /// Pass the path to the socket
 pub async fn listen(
-    store: HistoryStore,
+    settings: Settings,
+    store: SqliteStore,
     history_db: HistoryDatabase,
-    socket: PathBuf,
 ) -> Result<()> {
-    let history = HistoryService::new(store, history_db);
+    let encryption_key: [u8; 32] = encryption::load_key(&settings)
+        .context("could not load encryption key")?
+        .into();
 
+    let host_id = Settings::host_id().expect("failed to get host_id");
+    let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
+
+    let history = HistoryService::new(history_store, history_db);
+
+    let socket = settings.daemon.socket_path.clone();
     let uds = UnixListener::bind(socket.clone())?;
     let uds_stream = UnixListenerStream::new(uds);
 
+    tracing::info!("listening on unix socket {:?}", socket);
+
+    // start services
+    tokio::spawn(sync::worker(settings.clone(), store));
+
     Server::builder()
         .add_service(HistoryServer::new(history))
-        .serve_with_incoming_shutdown(uds_stream, shutdown_signal(socket))
+        .serve_with_incoming_shutdown(uds_stream, shutdown_signal(socket.into()))
         .await?;
 
     Ok(())
