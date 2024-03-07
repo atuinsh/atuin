@@ -379,6 +379,21 @@ impl State {
             KeyCode::Backspace => {
                 self.search.input.back();
             }
+            KeyCode::Char('h' | '?') if ctrl => {
+                // Depending on the terminal, [Backspace] can be transmitted as
+                // \x08 or \x7F.  Also, [Ctrl+Backspace] can be transmitted as
+                // \x08 or \x7F or \x1F.  On the other hand, [Ctrl+h] and
+                // [Ctrl+?] are also transmitted as \x08 or \x7F by the
+                // terminals.
+                //
+                // The crossterm library translates \x08 and \x7F to C-h and
+                // Backspace, respectively.  With the extended keyboard
+                // protocol enabled, crossterm can faithfully translate
+                // [Ctrl+h] and [Ctrl+?] to C-h and C-?.  There is no perfect
+                // solution, but we treat C-h and C-? the same as backspace to
+                // suppress quirks as much as possible.
+                self.search.input.back();
+            }
             KeyCode::Delete if ctrl => self
                 .search
                 .input
