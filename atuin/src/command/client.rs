@@ -17,12 +17,12 @@ mod doctor;
 mod dotfiles;
 mod history;
 mod import;
+mod info;
 mod init;
 mod kv;
 mod search;
 mod stats;
 mod store;
-mod info;
 
 #[derive(Subcommand, Debug)]
 #[command(infer_subcommands = true)]
@@ -122,7 +122,10 @@ impl Cmd {
 
             Self::Init(init) => init.run(&settings).await,
 
-            Self::Info => info::run(&settings),
+            Self::Info => {
+                info::run(&settings);
+                Ok(())
+            }
 
             Self::Doctor => doctor::run(&settings),
 

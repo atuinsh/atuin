@@ -3,7 +3,7 @@ use eyre::Result;
 
 use crate::VERSION;
 
-pub fn run(settings: &Settings) -> Result<()> {
+pub fn run(settings: &Settings) {
     let config = atuin_common::utils::config_dir();
     let mut config_file = config.clone();
     config_file.push("config.toml");
@@ -32,6 +32,4 @@ pub fn run(settings: &Settings) -> Result<()> {
     let print_out = format!("{config_paths}\n\n{env_vars}\n\n{general_info}");
 
     println!("{print_out}");
-
-    Ok(())
 }
