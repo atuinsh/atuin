@@ -95,6 +95,12 @@ jobs:
       with:
           toolchain: stable
 
+    - uses: taiki-e/install-action@v2
+      name: Install nextest
+      with:
+        tool: cargo-nextest
+
+
     - uses: actions/cache@v3
       with:
         path: |
@@ -104,7 +110,7 @@ jobs:
         key: ${ runner.os }-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
 
     - name: Run cargo test
-      run: cargo test --lib --bins
+      run: cargo nextest run --lib --bins
 
   check:
     strategy:
@@ -164,6 +170,12 @@ jobs:
       with:
           toolchain: stable
 
+    - uses: taiki-e/install-action@v2
+      name: Install nextest
+      with:
+        tool: cargo-nextest
+
+
     - uses: actions/cache@v3
       with:
         path: |
@@ -173,7 +185,7 @@ jobs:
         key: ${ runner.os }-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
 
     - name: Run cargo test
-      run: cargo test --test '*'
+      run: cargo nextest run --test '*'
       env:
         ATUIN_DB_URI: postgres://atuin:pass@localhost:5432/atuin
 
