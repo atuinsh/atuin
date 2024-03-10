@@ -17,6 +17,7 @@ mod doctor;
 mod dotfiles;
 mod history;
 mod import;
+mod info;
 mod init;
 mod kv;
 mod search;
@@ -58,6 +59,10 @@ pub enum Cmd {
 
     #[command()]
     Init(init::Cmd),
+
+    /// Information about dotfiles locations and ENV vars
+    #[command()]
+    Info,
 
     #[command()]
     Doctor,
@@ -116,6 +121,11 @@ impl Cmd {
             Self::Dotfiles(dotfiles) => dotfiles.run(&settings, sqlite_store).await,
 
             Self::Init(init) => init.run(&settings).await,
+
+            Self::Info => {
+                info::run(&settings);
+                Ok(())
+            }
 
             Self::Doctor => doctor::run(&settings),
 
