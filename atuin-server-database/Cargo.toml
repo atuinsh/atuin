@@ -10,7 +10,7 @@ homepage = { workspace = true }
 repository = { workspace = true }
 
 [dependencies]
-atuin-common = { path = "../atuin-common", version = "18.0.2" }
+atuin-common = { path = "../atuin-common", version = "18.1.0" }
 
 tracing = "0.1"
 time = { workspace = true }

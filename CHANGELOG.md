@@ -2,11 +2,81 @@
 
 All notable changes to this project will be documented in this file.
 
-## [18.0.2] - 2024-02-26
+## [18.1.0] - 2024-03-11
 
 ### Bug Fixes
 
+- Don't preserve for empty space ([#1712](https://github.com/atuinsh/atuin/issues/1712))
+- Fish init ([#1725](https://github.com/atuinsh/atuin/issues/1725))
+- Add xonsh to auto import, respect $HISTFILE in xonsh import, and fix issue with up-arrow keybinding in xonsh ([#1711](https://github.com/atuinsh/atuin/issues/1711))
 - Rework #1509 to recover from the preexec failure ([#1729](https://github.com/atuinsh/atuin/issues/1729))
+- Typo ([#1741](https://github.com/atuinsh/atuin/issues/1741))
+- Missing or wrong fields ([#1740](https://github.com/atuinsh/atuin/issues/1740))
+- Check session file exists for status command ([#1756](https://github.com/atuinsh/atuin/issues/1756))
+- Ensure sync time is saved for sync v2 ([#1758](https://github.com/atuinsh/atuin/issues/1758))
+- No panic on empty inspector ([#1768](https://github.com/atuinsh/atuin/issues/1768))
+- Enable multiple command stats to be shown using unicode_segmentation ([#1739](https://github.com/atuinsh/atuin/issues/1739))
+- Readd up-arrow keybinding, now with menu handling ([#1770](https://github.com/atuinsh/atuin/issues/1770))
+- Missing characters in preview ([#1803](https://github.com/atuinsh/atuin/issues/1803))
+- Check store length after sync, not before ([#1805](https://github.com/atuinsh/atuin/issues/1805))
+- Disable regex error logs ([#1806](https://github.com/atuinsh/atuin/issues/1806))
+- Attempt to fix timezone reading ([#1810](https://github.com/atuinsh/atuin/issues/1810))
+- Use a different method to detect env vars ([#1819](https://github.com/atuinsh/atuin/issues/1819))
+- Record size limiter ([#1827](https://github.com/atuinsh/atuin/issues/1827))
+- Make atuin compile on non-win/mac/linux platforms ([#1825](https://github.com/atuinsh/atuin/issues/1825))
+- Set meta.mainProgram in the package ([#1823](https://github.com/atuinsh/atuin/issues/1823))
+- Re-sync after running auto store init ([#1834](https://github.com/atuinsh/atuin/issues/1834))
+
+### Documentation
+
+- Minor formatting updates to the default config.toml ([#1689](https://github.com/atuinsh/atuin/issues/1689))
+- Update docker compose ([#1818](https://github.com/atuinsh/atuin/issues/1818))
+- Use db name env variable also in uri ([#1840](https://github.com/atuinsh/atuin/issues/1840))
+
+### Features
+
+- Use ATUIN_TEST_SQLITE_STORE_TIMEOUT to specify test timeout of SQLite store ([#1703](https://github.com/atuinsh/atuin/issues/1703))
+- Add 'a', 'A', 'h', and 'l' bindings to vim-normal mode ([#1697](https://github.com/atuinsh/atuin/issues/1697))
+- Add xonsh history import ([#1678](https://github.com/atuinsh/atuin/issues/1678))
+- Process Ctrl+m for kitty keyboard protocol ([#1720](https://github.com/atuinsh/atuin/issues/1720))
+- Add 'ignored_commands' option to stats ([#1722](https://github.com/atuinsh/atuin/issues/1722))
+- Support syncing aliases ([#1721](https://github.com/atuinsh/atuin/issues/1721))
+- Change fulltext to do multi substring match ([#1660](https://github.com/atuinsh/atuin/issues/1660))
+- Add config option keys.scroll_exits ([#1744](https://github.com/atuinsh/atuin/issues/1744))
+- Add history prune subcommand ([#1743](https://github.com/atuinsh/atuin/issues/1743))
+- Add alias feedback and list command ([#1747](https://github.com/atuinsh/atuin/issues/1747))
+- Add PHP package manager "composer" to list of default common subcommands ([#1757](https://github.com/atuinsh/atuin/issues/1757))
+- Add '/', '?', and 'I' bindings to vim-normal mode ([#1760](https://github.com/atuinsh/atuin/issues/1760))
+- Add update action ([#1779](https://github.com/atuinsh/atuin/issues/1779))
+- Normalize formatting of default config, suggest nix ([#1764](https://github.com/atuinsh/atuin/issues/1764))
+- Add linux sysadmin commands to common_subcommands ([#1784](https://github.com/atuinsh/atuin/issues/1784))
+- Add `CTRL+[` binding as `<Esc>` alias ([#1787](https://github.com/atuinsh/atuin/issues/1787))
+- Add nushell completion generation ([#1791](https://github.com/atuinsh/atuin/issues/1791))
+- Add atuin doctor ([#1796](https://github.com/atuinsh/atuin/issues/1796))
+- Add checks for common setup issues ([#1799](https://github.com/atuinsh/atuin/issues/1799))
+- Support regex with r/.../ syntax ([#1745](https://github.com/atuinsh/atuin/issues/1745))
+- Guard against ancient versions of bash where this does not work. ([#1794](https://github.com/atuinsh/atuin/issues/1794))
+- Add config setting for showing tabs ([#1755](https://github.com/atuinsh/atuin/issues/1755))
+- Return early if history is disabled ([#1807](https://github.com/atuinsh/atuin/issues/1807))
+- Add enable setting to dotfiles, disable by default ([#1829](https://github.com/atuinsh/atuin/issues/1829))
+- Add automatic history store init ([#1831](https://github.com/atuinsh/atuin/issues/1831))
+- Adds info command to show env vars and config files ([#1841](https://github.com/atuinsh/atuin/issues/1841))
+
+### Miscellaneous Tasks
+
+- Add cross-compile job for illumos ([#1830](https://github.com/atuinsh/atuin/issues/1830))
+- Do not show history table stats when using records ([#1835](https://github.com/atuinsh/atuin/issues/1835))
+- Setup nextest ([#1848](https://github.com/atuinsh/atuin/issues/1848))
+
+### Performance
+
+- Optimize history init-store ([#1691](https://github.com/atuinsh/atuin/issues/1691))
+
+### Refactor
+
+- Update `commandline` syntax, closes #1733 ([#1735](https://github.com/atuinsh/atuin/issues/1735))
+- Clarify operation result for working with aliases ([#1748](https://github.com/atuinsh/atuin/issues/1748))
+- Rename atuin-config to atuin-dotfiles ([#1817](https://github.com/atuinsh/atuin/issues/1817))
 
 ## [18.0.1] - 2024-02-12
 
