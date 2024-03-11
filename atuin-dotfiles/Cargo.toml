@@ -1,5 +1,6 @@
 [package]
 name = "atuin-dotfiles"
+description = "The dotfiles crate for Atuin"
 edition = "2021"
 version = "0.1.0" # intentionally not the same as the rest
 
