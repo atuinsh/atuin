@@ -188,7 +188,7 @@ fn checks(info: &DoctorDump) {
     println!(); // spacing
                 //
     let zfs_error = "[Filesystem] ZFS is known to have some issues with SQLite. Atuin uses SQLite heavily. If you are having poor performance, there are some workarounds here: https://github.com/atuinsh/atuin/issues/952".bold().red();
-    let bash_plugin_error = "[Shell] If you are using Bash, Atuin requires that either bash-preexec or ble.sh be installed. Read more here: https://docs.atuin.sh/guide/installation/#bash".bold().red();
+    let bash_plugin_error = "[Shell] If you are using Bash, Atuin requires that either bash-preexec or ble.sh be installed. We cannot currently detect ble, so if you have it setup then ignore this! Read more here: https://docs.atuin.sh/guide/installation/#bash".bold().red();
 
     // ZFS: https://github.com/atuinsh/atuin/issues/952
     if info.system.disks.iter().any(|d| d.filesystem == "zfs") {
