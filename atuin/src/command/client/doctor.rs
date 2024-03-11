@@ -19,12 +19,12 @@ struct ShellInfo {
 
 impl ShellInfo {
     // HACK ALERT!
-    // Many of the env vars we need to detect are not exported :(
-    // So, we're going to run `env` in a subshell and parse the output
-    // There's a chance this won't work, so it should not be fatal.
+    // Many of the shell vars we need to detect are not exported :(
+    // So, we're going to run a interactive session and directly check the
+    // variable.  There's a chance this won't work, so it should not be fatal.
     //
-    // Every shell we support handles `shell -c 'command'`
-    fn env_exists(shell: &str, var: &str) -> bool {
+    // Every shell we support handles `shell -ic 'command'`
+    fn shellvar_exists(shell: &str, var: &str) -> bool {
         let cmd = Command::new(shell)
             .args([
                 "-ic",
@@ -41,7 +41,7 @@ impl ShellInfo {
 
     pub fn plugins(shell: &str) -> Vec<String> {
         // consider a different detection approach if there are plugins
-        // that don't set env vars
+        // that don't set shell vars
 
         let map = HashMap::from([
             ("ATUIN_SESSION", "atuin"),
@@ -50,8 +50,8 @@ impl ShellInfo {
         ]);
 
         map.into_iter()
-            .filter_map(|(env, plugin)| {
-                if ShellInfo::env_exists(shell, env) {
+            .filter_map(|(shellvar, plugin)| {
+                if ShellInfo::shellvar_exists(shell, shellvar) {
                     return Some(plugin.to_string());
                 }
 
