@@ -1,5 +1,5 @@
 use std::process::Command;
-use std::{collections::HashMap, path::PathBuf};
+use std::{env, path::PathBuf, str::FromStr};
 
 use atuin_client::settings::Settings;
 use colored::Colorize;
@@ -39,23 +39,96 @@ impl ShellInfo {
         cmd.contains("ATUIN_DOCTOR_ENV_FOUND")
     }
 
-    pub fn plugins(shell: &str) -> Vec<String> {
+    fn validate_plugin_blesh(
+        _shell: &str,
+        shell_process: &sysinfo::Process,
+        ble_session_id: &str,
+    ) -> Option<String> {
+        ble_session_id
+            .split('/')
+            .nth(1)
+            .and_then(|field| u32::from_str(field).ok())
+            .filter(|&blesh_pid| blesh_pid == shell_process.pid().as_u32())
+            .map(|_| "blesh".to_string())
+    }
+
+    pub fn plugins(shell: &str, shell_process: &sysinfo::Process) -> Vec<String> {
         // consider a different detection approach if there are plugins
         // that don't set shell vars
 
-        let map = HashMap::from([
-            ("ATUIN_SESSION", "atuin"),
-            ("BLE_ATTACHED", "blesh"),
-            ("bash_preexec_imported", "bash-preexec"),
-        ]);
+        enum PluginShellType {
+            Any,
+            Bash,
 
-        map.into_iter()
-            .filter_map(|(shellvar, plugin)| {
-                if ShellInfo::shellvar_exists(shell, shellvar) {
-                    return Some(plugin.to_string());
+            // Note: these are currently unused
+            #[allow(dead_code)]
+            Zsh,
+            #[allow(dead_code)]
+            Fish,
+            #[allow(dead_code)]
+            Nushell,
+            #[allow(dead_code)]
+            Xonsh,
+        }
+
+        enum PluginProbeType {
+            EnvironmentVariable(&'static str),
+            InteractiveShellVariable(&'static str),
+        }
+
+        type PluginValidator = fn(&str, &sysinfo::Process, &str) -> Option<String>;
+
+        let plugin_list: [(
+            &str,
+            PluginShellType,
+            PluginProbeType,
+            Option<PluginValidator>,
+        ); 3] = [
+            (
+                "atuin",
+                PluginShellType::Any,
+                PluginProbeType::EnvironmentVariable("ATUIN_SESSION"),
+                None,
+            ),
+            (
+                "blesh",
+                PluginShellType::Bash,
+                PluginProbeType::EnvironmentVariable("BLE_SESSION_ID"),
+                Some(Self::validate_plugin_blesh),
+            ),
+            (
+                "bash-preexec",
+                PluginShellType::Bash,
+                PluginProbeType::InteractiveShellVariable("bash_preexec_imported"),
+                None,
+            ),
+        ];
+
+        plugin_list
+            .into_iter()
+            .filter(|(_, shell_type, _, _)| match shell_type {
+                PluginShellType::Any => true,
+                PluginShellType::Bash => shell.starts_with("bash") || shell == "sh",
+                PluginShellType::Zsh => shell.starts_with("zsh"),
+                PluginShellType::Fish => shell.starts_with("fish"),
+                PluginShellType::Nushell => shell.starts_with("nu"),
+                PluginShellType::Xonsh => shell.starts_with("xonsh"),
+            })
+            .filter_map(|(plugin, _, probe_type, validator)| -> Option<String> {
+                match probe_type {
+                    PluginProbeType::EnvironmentVariable(env) => {
+                        env::var(env).ok().filter(|value| !value.is_empty())
+                    }
+                    PluginProbeType::InteractiveShellVariable(shellvar) => {
+                        ShellInfo::shellvar_exists(shell, shellvar).then_some(String::default())
+                    }
                 }
-
-                None
+                .and_then(|value| {
+                    validator.map_or_else(
+                        || Some(plugin.to_string()),
+                        |validator| validator(shell, shell_process, &value),
+                    )
+                })
             })
             .collect()
     }
@@ -75,7 +148,7 @@ impl ShellInfo {
         let shell = shell.strip_prefix('-').unwrap_or(&shell);
         let name = shell.to_string();
 
-        let plugins = ShellInfo::plugins(name.as_str());
+        let plugins = ShellInfo::plugins(name.as_str(), parent);
 
         Self { name, plugins }
     }
@@ -188,7 +261,7 @@ fn checks(info: &DoctorDump) {
     println!(); // spacing
                 //
     let zfs_error = "[Filesystem] ZFS is known to have some issues with SQLite. Atuin uses SQLite heavily. If you are having poor performance, there are some workarounds here: https://github.com/atuinsh/atuin/issues/952".bold().red();
-    let bash_plugin_error = "[Shell] If you are using Bash, Atuin requires that either bash-preexec or ble.sh be installed. We cannot currently detect ble, so if you have it setup then ignore this! Read more here: https://docs.atuin.sh/guide/installation/#bash".bold().red();
+    let bash_plugin_error = "[Shell] If you are using Bash, Atuin requires that either bash-preexec or ble.sh be installed. An older ble.sh may not be detected. so ignore this if you have it set up! Read more here: https://docs.atuin.sh/guide/installation/#bash".bold().red();
 
     // ZFS: https://github.com/atuinsh/atuin/issues/952
     if info.system.disks.iter().any(|d| d.filesystem == "zfs") {
