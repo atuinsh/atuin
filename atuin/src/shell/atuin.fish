@@ -35,7 +35,7 @@ function _atuin_search
     # In fish 3.4 and above we can use `"$(some command)"` to keep multiple lines separate;
     # but to support fish 3.3 we need to use `(some command | string collect)`.
     # https://fishshell.com/docs/current/relnotes.html#id24 (fish 3.4 "Notable improvements and fixes")
-    set -l ATUIN_H (ATUIN_SHELL_FISH=t ATUIN_LOG=error atuin search --keymap-mode=$keymap_mode $argv -i -- (commandline -b) 3>&1 1>&2 2>&3 | string collect)
+    set -l ATUIN_H (ATUIN_SHELL_FISH=t ATUIN_LOG=error ATUIN_QUERY=(commandline -b) atuin search --keymap-mode=$keymap_mode $argv -i 3>&1 1>&2 2>&3 | string collect)
 
     if test -n "$ATUIN_H"
         if string match --quiet '__atuin_accept__:*' "$ATUIN_H"

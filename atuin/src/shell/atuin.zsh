@@ -15,7 +15,7 @@ zmodload zsh/datetime 2>/dev/null
 # you'd like to override this, then add your config after the $(atuin init zsh)
 # in your .zshrc
 _zsh_autosuggest_strategy_atuin() {
-    suggestion=$(atuin search --cmd-only --limit 1 --search-mode prefix -- "$1")
+    suggestion=$(ATUIN_QUERY="$1" atuin search --cmd-only --limit 1 --search-mode prefix)
 }
 
 if [ -n "${ZSH_AUTOSUGGEST_STRATEGY:-}" ]; then
@@ -56,7 +56,7 @@ _atuin_search() {
     # TODO: not this
     local output
     # shellcheck disable=SC2048
-    output=$(ATUIN_SHELL_ZSH=t ATUIN_LOG=error atuin search $* -i -- $BUFFER 3>&1 1>&2 2>&3)
+    output=$(ATUIN_SHELL_ZSH=t ATUIN_LOG=error ATUIN_QUERY=$BUFFER atuin search $* -i 3>&1 1>&2 2>&3)
 
     zle reset-prompt
 
