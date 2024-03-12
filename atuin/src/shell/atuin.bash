@@ -227,7 +227,7 @@ __atuin_history() {
         local READLINE_LINE="" READLINE_POINT=0
 
     local __atuin_output
-    __atuin_output=$(ATUIN_SHELL_BASH=t ATUIN_LOG=error atuin search "$@" -i -- "$READLINE_LINE" 3>&1 1>&2 2>&3)
+    __atuin_output=$(ATUIN_SHELL_BASH=t ATUIN_LOG=error ATUIN_QUERY="$READLINE_LINE" atuin search "$@" -i 3>&1 1>&2 2>&3)
 
     # We do nothing when the search is canceled.
     [[ $__atuin_output ]] || return 0
@@ -265,7 +265,7 @@ if [[ ${BLE_VERSION-} ]] && ((_ble_version >= 400)); then
     #
     function ble/complete/auto-complete/source:atuin-history {
         local suggestion
-        suggestion=$(atuin search --cmd-only --limit 1 --search-mode prefix -- "$_ble_edit_str")
+        suggestion=$(ATUIN_QUERY="$_ble_edit_str" atuin search --cmd-only --limit 1 --search-mode prefix)
         [[ $suggestion == "$_ble_edit_str"?* ]] || return 1
         ble/complete/auto-complete/enter h 0 "${suggestion:${#_ble_edit_str}}" '' "$suggestion"
     }

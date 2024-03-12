@@ -32,10 +32,11 @@ def _atuin_postcommand(cmd: str, rtn: int, out, ts):
 
 def _search(event, extra_args: list[str]):
     buffer = event.current_buffer
-    cmd = ["atuin", "search", "--interactive", *extra_args, "--", buffer.text]
+    cmd = ["atuin", "search", "--interactive", *extra_args]
     # We need to explicitly pass in xonsh env, in case user has set XDG_HOME or something else that matters
     env = ${...}.detype()
     env["ATUIN_SHELL_XONSH"] = "t"
+    env["ATUIN_QUERY"] = buffer.text
 
     p = subprocess.run(cmd, stderr=subprocess.PIPE, encoding="utf-8", env=env)
     result = p.stderr.rstrip("\n")

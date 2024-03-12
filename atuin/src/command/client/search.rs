@@ -2,7 +2,7 @@ use std::io::{stderr, IsTerminal as _};
 
 use atuin_common::utils::{self, Escapable as _};
 use clap::Parser;
-use eyre::{eyre, Result};
+use eyre::Result;
 
 use atuin_client::{
     database::Database,
@@ -121,22 +121,30 @@ pub struct Cmd {
 }
 
 impl Cmd {
+    // clippy: please write this instead
+    // clippy: now it has too many lines
+    // me: I'll do it later OKAY
+    #[allow(clippy::too_many_lines)]
     pub async fn run(
         self,
         db: impl Database,
         settings: &mut Settings,
         store: SqliteStore,
     ) -> Result<()> {
-        let query: Vec<String> = if let Some(query) = self.query {
-            query
-        } else if let Ok(query) = std::env::var("ATUIN_QUERY") {
-            query
-                .split(' ')
-                .map(std::string::ToString::to_string)
-                .collect()
-        } else {
-            vec![]
-        };
+        let query = self.query.map_or_else(
+            || {
+                std::env::var("ATUIN_QUERY").map_or_else(
+                    |_| vec![],
+                    |query| {
+                        query
+                            .split(' ')
+                            .map(std::string::ToString::to_string)
+                            .collect()
+                    },
+                )
+            },
+            |query| query,
+        );
 
         if (self.delete_it_all || self.delete) && self.limit.is_some() {
             // Because of how deletion is implemented, it will always delete all matches
