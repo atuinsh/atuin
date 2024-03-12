@@ -135,7 +135,7 @@ impl Cmd {
                 .map(std::string::ToString::to_string)
                 .collect()
         } else {
-            return Err(eyre!("please specify search query via args or ATUIN_QUERY"));
+            vec![]
         };
 
         if (self.delete_it_all || self.delete) && self.limit.is_some() {
