@@ -336,6 +336,10 @@ execx($(atuin init xonsh))
 ```
 to the end of your `~/.xonshrc`
 
+# Security
+
+If you find any security issues, we'd appreciate it if you could alert ellie@atuin.sh 
+
 # Contributors
 
 <a href="https://github.com/atuinsh/atuin/graphs/contributors">
