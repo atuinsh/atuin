@@ -2,7 +2,7 @@ use std::io::{stderr, IsTerminal as _};
 
 use atuin_common::utils::{self, Escapable as _};
 use clap::Parser;
-use eyre::Result;
+use eyre::{eyre, Result};
 
 use atuin_client::{
     database::Database,
@@ -83,7 +83,7 @@ pub struct Cmd {
     #[arg(long)]
     human: bool,
 
-    query: Vec<String>,
+    query: Option<Vec<String>>,
 
     /// Show only the text of the command
     #[arg(long)]
@@ -127,6 +127,17 @@ impl Cmd {
         settings: &mut Settings,
         store: SqliteStore,
     ) -> Result<()> {
+        let query: Vec<String> = if let Some(query) = self.query {
+            query
+        } else if let Ok(query) = std::env::var("ATUIN_QUERY") {
+            query
+                .split(' ')
+                .map(std::string::ToString::to_string)
+                .collect()
+        } else {
+            return Err(eyre!("please specify search query via args or ATUIN_QUERY"));
+        };
+
         if (self.delete_it_all || self.delete) && self.limit.is_some() {
             // Because of how deletion is implemented, it will always delete all matches
             // and disregard the limit option. It is also not clear what deletion with a
@@ -139,12 +150,12 @@ impl Cmd {
             return Ok(());
         }
 
-        if self.delete && self.query.is_empty() {
+        if self.delete && query.is_empty() {
             println!("Please specify a query to match the items you wish to delete. If you wish to delete all history, pass --delete-it-all");
             return Ok(());
         }
 
-        if self.delete_it_all && !self.query.is_empty() {
+        if self.delete_it_all && !query.is_empty() {
             println!(
                 "--delete-it-all will delete ALL of your history! It does not require a query."
             );
@@ -177,7 +188,7 @@ impl Cmd {
         let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
         if self.interactive {
-            let item = interactive::history(&self.query, settings, db, &history_store).await?;
+            let item = interactive::history(&query, settings, db, &history_store).await?;
             if stderr().is_terminal() {
                 eprintln!("{}", item.escape_control());
             } else {
@@ -197,7 +208,7 @@ impl Cmd {
             };
 
             let mut entries =
-                run_non_interactive(settings, opt_filter.clone(), &self.query, &db).await?;
+                run_non_interactive(settings, opt_filter.clone(), &query, &db).await?;
 
             if entries.is_empty() {
                 std::process::exit(1)
@@ -221,7 +232,7 @@ impl Cmd {
                     }
 
                     entries =
-                        run_non_interactive(settings, opt_filter.clone(), &self.query, &db).await?;
+                        run_non_interactive(settings, opt_filter.clone(), &query, &db).await?;
                 }
             } else {
                 let format = match self.format {
