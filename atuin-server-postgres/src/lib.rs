@@ -16,6 +16,8 @@ use wrappers::{DbHistory, DbRecord, DbSession, DbUser};
 
 mod wrappers;
 
+const MIN_PG_VERSION: u32 = 14;
+
 #[derive(Clone)]
 pub struct Postgres {
     pool: sqlx::Pool<sqlx::postgres::Postgres>,
@@ -42,6 +44,25 @@ impl Database for Postgres {
             .connect(settings.db_uri.as_str())
             .await
             .map_err(fix_error)?;
+
+        // Call server_version_num to get the DB server's major version number
+        // The call returns None for servers older than 8.x.
+        let pg_major_version: u32 = pool
+            .acquire()
+            .await
+            .map_err(fix_error)?
+            .server_version_num()
+            .ok_or(DbError::Other(eyre::Report::msg(
+                "could not get PostgreSQL version",
+            )))?
+            / 10000;
+
+        if pg_major_version < MIN_PG_VERSION {
+            return Err(DbError::Other(eyre::Report::msg(format!(
+                "unsupported PostgreSQL version {}, minimum required is {}",
+                pg_major_version, MIN_PG_VERSION
+            ))));
+        }
 
         sqlx::migrate!("./migrations")
             .run(&pool)

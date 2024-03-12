@@ -351,6 +351,7 @@ dependencies = [
  "async-trait",
  "atuin-common",
  "atuin-server-database",
+ "eyre",
  "futures-util",
  "serde",
  "sqlx",
