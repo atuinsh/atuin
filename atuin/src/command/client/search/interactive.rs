@@ -65,6 +65,7 @@ pub struct State {
     results_len: usize,
     accept: bool,
     keymap_mode: KeymapMode,
+    prefix: bool,
     current_cursor: Option<CursorStyle>,
     tab_index: usize,
 
@@ -191,35 +192,45 @@ impl State {
         let ctrl = input.modifiers.contains(KeyModifiers::CONTROL);
         let esc_allow_exit = !(self.tab_index == 0 && self.keymap_mode == KeymapMode::VimInsert);
 
+        // support ctrl-a prefix, like screen or tmux
+        if ctrl && input.code == KeyCode::Char('a') {
+            self.prefix = true;
+            return InputAction::Continue;
+        }
+
         // core input handling, common for all tabs
-        match input.code {
-            KeyCode::Char('c' | 'g') if ctrl => return InputAction::ReturnOriginal,
-            KeyCode::Esc if esc_allow_exit => {
-                return Self::handle_key_exit(settings);
-            }
-            KeyCode::Char('[') if ctrl && esc_allow_exit => {
-                return Self::handle_key_exit(settings);
-            }
-            KeyCode::Tab => {
-                return InputAction::Accept(self.results_state.selected());
-            }
+        let common: Option<InputAction> = match input.code {
+            KeyCode::Char('c' | 'g') if ctrl => Some(InputAction::ReturnOriginal),
+            KeyCode::Esc if esc_allow_exit => Some(Self::handle_key_exit(settings)),
+            KeyCode::Char('[') if ctrl && esc_allow_exit => Some(Self::handle_key_exit(settings)),
+            KeyCode::Tab => Some(InputAction::Accept(self.results_state.selected())),
             KeyCode::Char('o') if ctrl => {
                 self.tab_index = (self.tab_index + 1) % TAB_TITLES.len();
 
-                return InputAction::Continue;
+                Some(InputAction::Continue)
             }
 
-            _ => {}
+            _ => None,
+        };
+
+        if let Some(ret) = common {
+            self.prefix = false;
+
+            return ret;
         }
 
         // handle tab-specific input
-        match self.tab_index {
+        let action = match self.tab_index {
             0 => self.handle_search_input(settings, input),
 
             1 => super::inspector::input(self, settings, self.results_state.selected(), input),
 
             _ => panic!("invalid tab index on input"),
-        }
+        };
+
+        self.prefix = false;
+
+        action
     }
 
     fn handle_search_scroll_one_line(
@@ -266,7 +277,20 @@ impl State {
         // reset the state, will be set to true later if user really did change it
         self.switched_search_mode = false;
 
-        // First handle keymap specific keybindings.
+        // first up handle prefix mappings. these take precedence over all others
+        // eg, if a user types ctrl-a d, delete the history
+        if self.prefix {
+            // It'll be expanded.
+            #[allow(clippy::single_match)]
+            match input.code {
+                KeyCode::Char('d') => {
+                    return InputAction::Delete(self.results_state.selected());
+                }
+                _ => {}
+            }
+        }
+
+        // handle keymap specific keybindings.
         match self.keymap_mode {
             KeymapMode::VimNormal => match input.code {
                 KeyCode::Char('/') if !ctrl => {
@@ -368,7 +392,6 @@ impl State {
                 .next_word(&settings.word_chars, settings.word_jump_mode),
             KeyCode::Right => self.search.input.right(),
             KeyCode::Char('f') if ctrl => self.search.input.right(),
-            KeyCode::Char('a') if ctrl => self.search.input.start(),
             KeyCode::Home => self.search.input.start(),
             KeyCode::Char('e') if ctrl => self.search.input.end(),
             KeyCode::End => self.search.input.end(),
@@ -975,6 +998,7 @@ pub async fn history(
         } else {
             Box::new(OffsetDateTime::now_utc)
         },
+        prefix: false,
     };
 
     app.initialize_keymap_cursor(settings);
