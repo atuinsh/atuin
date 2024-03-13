@@ -35,10 +35,12 @@ def _atuin_search_cmd [...flags: string] {
     [
         $ATUIN_KEYBINDING_TOKEN,
         ([
-            (if $nu_version.0 <= 0 and $nu_version.1 <= 90 { 'commandline' } else { 'commandline edit' }),
-            `(ATUIN_LOG=error run-external --redirect-stderr atuin search`,
-            ($flags | append [--interactive, --] | each {|e| $'"($e)"'}),
-            `(commandline) | complete | $in.stderr | str substring ..-1)`,
+            `with-env { ATUIN_LOG: error, ATUIN_QUERY: (commandline) } {`,
+                (if $nu_version.0 <= 0 and $nu_version.1 <= 90 { 'commandline' } else { 'commandline edit' }),
+                `(run-external --redirect-stderr atuin search`,
+                    ($flags | append [--interactive] | each {|e| $'"($e)"'}),
+                ` | complete | $in.stderr | str substring ..-1)`,
+            `}`,
         ] | flatten | str join ' '),
     ] | str join "\n"
 }
