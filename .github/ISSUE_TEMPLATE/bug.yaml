@@ -13,14 +13,15 @@ body:
       label: What happened?
       description: Also tell us, what did you expect to happen?
       placeholder: Tell us what you see!
-      value: "A bug happened!"
     validations:
       required: true
   - type: textarea
     id: doctor
+    validations:
+      required: true
     attributes:
       label: Atuin doctor output
-      description: Please run 'atuin doctor' and share the output. If it fails to run, share any errors.
+      description: Please run 'atuin doctor' and share the output. If it fails to run, share any errors. This requires Atuin >=v18.1.0
       render: yaml
   - type: checkboxes
     id: terms
