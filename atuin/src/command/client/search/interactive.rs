@@ -280,6 +280,8 @@ impl State {
         // first up handle prefix mappings. these take precedence over all others
         // eg, if a user types ctrl-a d, delete the history
         if self.prefix {
+            // It'll be expanded.
+            #[allow(clippy::single_match)]
             match input.code {
                 KeyCode::Char('d') => {
                     return InputAction::Delete(self.results_state.selected());
