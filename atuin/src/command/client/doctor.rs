@@ -19,6 +19,9 @@ struct ShellInfo {
     // Detect some shell plugins that the user has installed.
     // I'm just going to start with preexec/blesh
     pub plugins: Vec<String>,
+
+    // The preexec framework used in the current session, if Atuin is loaded.
+    pub preexec: Option<String>,
 }
 
 impl ShellInfo {
@@ -41,6 +44,31 @@ impl ShellInfo {
             });
 
         cmd.contains("ATUIN_DOCTOR_ENV_FOUND")
+    }
+
+    fn detect_preexec_framework(shell: &str) -> Option<String> {
+        if env::var("ATUIN_SESSION").ok().is_none() {
+            None
+        } else if shell.starts_with("bash") || shell == "sh" {
+            env::var("ATUIN_PREEXEC_BACKEND")
+                .ok()
+                .filter(|value| !value.is_empty())
+                .and_then(|atuin_preexec_backend| {
+                    atuin_preexec_backend.rfind(':').and_then(|pos_colon| {
+                        u32::from_str(&atuin_preexec_backend[..pos_colon])
+                            .ok()
+                            .is_some_and(|preexec_shlvl| {
+                                env::var("SHLVL")
+                                    .ok()
+                                    .and_then(|shlvl| u32::from_str(&shlvl).ok())
+                                    .is_some_and(|shlvl| shlvl == preexec_shlvl)
+                            })
+                            .then(|| atuin_preexec_backend[pos_colon + 1..].to_string())
+                    })
+                })
+        } else {
+            Some("built-in".to_string())
+        }
     }
 
     fn validate_plugin_blesh(
@@ -156,10 +184,13 @@ impl ShellInfo {
 
         let default = Shell::default_shell().unwrap_or(Shell::Unknown).to_string();
 
+        let preexec = Self::detect_preexec_framework(name.as_str());
+
         Self {
             name,
             default,
             plugins,
+            preexec,
         }
     }
 }
