@@ -420,7 +420,9 @@ impl Database for Sqlite {
 
         match filter {
             FilterMode::Global => &mut sql,
-            FilterMode::Host => sql.and_where_eq("hostname", quote(&context.hostname)),
+            FilterMode::Host => {
+                sql.and_where_eq("lower(hostname)", quote(context.hostname.to_lowercase()))
+            }
             FilterMode::Session => sql.and_where_eq("session", quote(&context.session)),
             FilterMode::Directory => sql.and_where_eq("cwd", quote(&context.cwd)),
             FilterMode::Workspace => sql.and_where_like_left("cwd", git_root),
