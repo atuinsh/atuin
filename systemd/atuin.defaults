@@ -1,0 +1,4 @@
+ATUIN_HOST="0.0.0.0"
+ATUIN_PORT=8888
+ATUIN_OPEN_REGISTRATION=true
+ATUIN_DB_URI="postgres://user:password@hostname/database"

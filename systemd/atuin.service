@@ -1,0 +1,23 @@
+[Unit]
+Description=Start the Atuin syncing service
+
+[Service]
+ExecStart=atuin server start
+Restart=on-failure
+User=atuin
+EnvironmentFile=/etc/default/atuin
+PrivateTmp=yes
+PrivateUsers=yes
+PrivateDevices=yes
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectProc=invisible
+
+[Install]
+WantedBy=multi-user.target
