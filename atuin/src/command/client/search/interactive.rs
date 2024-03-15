@@ -29,6 +29,7 @@ use super::{
     cursor::Cursor,
     engines::{SearchEngine, SearchState},
     history_list::{HistoryList, ListState, PREFIX_LENGTH},
+    sort,
 };
 
 use crate::{command::client::search::engines, VERSION};
@@ -87,6 +88,8 @@ impl State {
 
         self.results_state.select(0);
         self.results_len = results.len();
+
+        let results = sort::sort(self.search.input.as_str(), results);
 
         Ok(results)
     }
