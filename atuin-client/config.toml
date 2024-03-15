@@ -73,6 +73,11 @@
 ## useful when the command is longer than the terminal width and is cut off
 # show_preview = false
 
+## enable or disable automatic preview. It shows a preview, if the command is
+## longer than the width of the terminal. It respects max_preview_height.
+## (default: true)
+# show_preview_auto = true
+
 ## what to do when the escape key is pressed when searching
 ## possible values: return-original, return-query
 # exit_mode = "return-original"
