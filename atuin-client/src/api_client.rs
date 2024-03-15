@@ -45,14 +45,15 @@ pub async fn register(
     map.insert("email", email);
     map.insert("password", password);
 
-    let url = format!("{address}/user/{username}");
+    let base = Url::parse(address)?;
+    let url = base.join(format!("/user/{username}").as_str())?;
     let resp = reqwest::get(url).await?;
 
     if resp.status().is_success() {
         bail!("username already in use");
     }
 
-    let url = format!("{address}/register");
+    let url = base.join("/register")?;
     let client = reqwest::Client::new();
     let resp = client
         .post(url)
@@ -76,7 +77,8 @@ pub async fn register(
 }
 
 pub async fn login(address: &str, req: LoginRequest) -> Result<LoginResponse> {
-    let url = format!("{address}/login");
+    let base = Url::parse(address)?;
+    let url = base.join("/login")?;
     let client = reqwest::Client::new();
 
     let resp = client
