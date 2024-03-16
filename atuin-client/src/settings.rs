@@ -614,7 +614,7 @@ impl Settings {
             .set_default("scroll_context_lines", 1)?
             .set_default("shell_up_key_binding", false)?
             .set_default("session_token", "")?
-            .set_default("workspaces", false)?
+            .set_default("workspaces", true)?
             .set_default("ctrl_n_shortcuts", false)?
             .set_default("secrets_filter", true)?
             .set_default("network_connect_timeout", 5)?
