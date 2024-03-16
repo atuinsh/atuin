@@ -40,9 +40,14 @@
 ## possible values: prefix, fulltext, fuzzy, skim
 # search_mode = "fuzzy"
 
-## which filter mode to use
+## which filter mode to use by default
 ## possible values: global, host, session, directory
+## defaults to the first element of 'filter_modes'
 # filter_mode = "global"
+
+## which filter modes are available in which order.
+## 'workspace' is skipped when not in a workspace or disabled
+# filter_modes = [ "workspace", "global", "host", "session", "directory" ]
 
 ## With workspace filtering enabled, Atuin will filter for commands executed
 ## in any directory within a git repository tree (default: false)
