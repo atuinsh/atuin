@@ -35,5 +35,5 @@ rustls = "0.21"
 rustls-pemfile = "2.1"
 argon2 = "0.5.3"
 semver = { workspace = true }
-metrics-exporter-prometheus = "0.12.1"
+metrics-exporter-prometheus = "0.14.0"
 metrics = "0.21.1"
