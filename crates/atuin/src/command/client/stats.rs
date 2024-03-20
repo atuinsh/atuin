@@ -6,6 +6,7 @@ use time::{Duration, OffsetDateTime, Time};
 use atuin_client::{
     database::{current_context, Database},
     settings::Settings,
+    theme::Theme,
 };
 
 use atuin_history::stats::{compute, pretty_print};
@@ -26,7 +27,7 @@ pub struct Cmd {
 }
 
 impl Cmd {
-    pub async fn run(&self, db: &impl Database, settings: &Settings) -> Result<()> {
+    pub async fn run(&self, db: &impl Database, settings: &Settings, theme: &Theme) -> Result<()> {
         let context = current_context();
         let words = if self.period.is_empty() {
             String::from("all")
@@ -64,7 +65,7 @@ impl Cmd {
         let stats = compute(settings, &history, self.count, self.ngram_size);
 
         if let Some(stats) = stats {
-            pretty_print(stats, self.ngram_size);
+            pretty_print(stats, self.ngram_size, theme);
         }
 
         Ok(())

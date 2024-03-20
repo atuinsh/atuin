@@ -17,6 +17,7 @@ use ratatui::{
 use super::duration::format_duration;
 
 use super::interactive::{InputAction, State};
+use super::super::theme::{Theme, Meaning};
 
 #[allow(clippy::cast_sign_loss)]
 fn u64_or_zero(num: i64) -> u64 {
@@ -27,7 +28,7 @@ fn u64_or_zero(num: i64) -> u64 {
     }
 }
 
-pub fn draw_commands(f: &mut Frame<'_>, parent: Rect, history: &History, stats: &HistoryStats) {
+pub fn draw_commands(f: &mut Frame<'_>, parent: Rect, history: &History, stats: &HistoryStats, theme: &Theme) {
     let commands = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -41,6 +42,7 @@ pub fn draw_commands(f: &mut Frame<'_>, parent: Rect, history: &History, stats: 
         Block::new()
             .borders(Borders::ALL)
             .title("Command")
+            .style(theme.as_style(Meaning::Base))
             .padding(Padding::horizontal(1)),
     );
 
@@ -54,6 +56,7 @@ pub fn draw_commands(f: &mut Frame<'_>, parent: Rect, history: &History, stats: 
         Block::new()
             .borders(Borders::ALL)
             .title("Previous command")
+            .style(theme.as_style(Meaning::Annotation))
             .padding(Padding::horizontal(1)),
     );
 
@@ -67,6 +70,7 @@ pub fn draw_commands(f: &mut Frame<'_>, parent: Rect, history: &History, stats: 
         Block::new()
             .borders(Borders::ALL)
             .title("Next command")
+            .style(theme.as_style(Meaning::Annotation))
             .padding(Padding::horizontal(1)),
     );
 
@@ -226,7 +230,7 @@ fn draw_stats_charts(f: &mut Frame<'_>, parent: Rect, stats: &HistoryStats) {
     f.render_widget(duration_over_time, layout[2]);
 }
 
-pub fn draw(f: &mut Frame<'_>, chunk: Rect, history: &History, stats: &HistoryStats) {
+pub fn draw(f: &mut Frame<'_>, chunk: Rect, history: &History, stats: &HistoryStats, theme: &Theme) {
     let vert_layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Ratio(1, 5), Constraint::Ratio(4, 5)])
@@ -237,7 +241,7 @@ pub fn draw(f: &mut Frame<'_>, chunk: Rect, history: &History, stats: &HistorySt
         .constraints([Constraint::Ratio(1, 3), Constraint::Ratio(2, 3)])
         .split(vert_layout[1]);
 
-    draw_commands(f, vert_layout[0], history, stats);
+    draw_commands(f, vert_layout[0], history, stats, theme);
     draw_stats_table(f, stats_layout[0], history, stats);
     draw_stats_charts(f, stats_layout[1], stats);
 }

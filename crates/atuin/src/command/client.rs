@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::Subcommand;
 use eyre::{Result, WrapErr};
 
-use atuin_client::{database::Sqlite, record::sqlite_store::SqliteStore, settings::Settings};
+use atuin_client::{database::Sqlite, record::sqlite_store::SqliteStore, settings::Settings, theme};
 use tracing_subscriber::{filter::EnvFilter, fmt, prelude::*};
 
 #[cfg(feature = "sync")]
@@ -26,7 +26,6 @@ mod kv;
 mod search;
 mod stats;
 mod store;
-mod theme;
 
 #[derive(Subcommand, Debug)]
 #[command(infer_subcommands = true)]
@@ -128,12 +127,12 @@ impl Cmd {
         let db = Sqlite::new(db_path, settings.local_timeout).await?;
         let sqlite_store = SqliteStore::new(record_store_path, settings.local_timeout).await?;
 
-        let theme = theme::load_theme(settings.theme);
+        let theme = theme::load_theme(settings.theme.as_str());
 
         match self {
             Self::Import(import) => import.run(&db).await,
-            Self::Stats(stats) => stats.run(&db, &settings).await,
-            Self::Search(search) => search.run(db, &mut settings, sqlite_store).await,
+            Self::Stats(stats) => stats.run(&db, &settings, &theme).await,
+            Self::Search(search) => search.run(db, &mut settings, sqlite_store, &theme).await,
 
             #[cfg(feature = "sync")]
             Self::Sync(sync) => sync.run(settings, &db, sqlite_store).await,

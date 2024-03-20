@@ -11,6 +11,7 @@ use atuin_client::{
     history::{store::HistoryStore, History},
     record::sqlite_store::SqliteStore,
     settings::{FilterMode, KeymapMode, SearchMode, Settings, Timezone},
+    theme::Theme,
 };
 
 use super::history::ListMode;
@@ -130,6 +131,7 @@ impl Cmd {
         db: impl Database,
         settings: &mut Settings,
         store: SqliteStore,
+        theme: &Theme,
     ) -> Result<()> {
         let query = self.query.map_or_else(
             || {
@@ -196,7 +198,7 @@ impl Cmd {
         let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
         if self.interactive {
-            let item = interactive::history(&query, settings, db, &history_store).await?;
+            let item = interactive::history(&query, settings, db, &history_store, theme).await?;
             if stderr().is_terminal() {
                 eprintln!("{}", item.escape_control());
             } else {

@@ -85,8 +85,6 @@ uuid = { workspace = true }
 unicode-segmentation = "1.11.0"
 sysinfo = "0.30.7"
 regex="1.10.5"
-strum_macros = "0.26.3"
-strum = { version = "0.26.2", features = ["strum_macros"] }
 
 [target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
 arboard = { version = "3.4", optional = true }
