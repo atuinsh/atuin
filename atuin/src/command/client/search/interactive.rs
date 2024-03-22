@@ -728,6 +728,9 @@ impl State {
                 Span::raw(", "),
                 Span::styled("<ctrl-o>", Style::default().add_modifier(Modifier::BOLD)),
                 Span::raw(": inspect"),
+                Span::raw(", "),
+                Span::styled("<ctrl-r>", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(": filter mode"),
             ]))),
 
             1 => Paragraph::new(Text::from(Line::from(vec![
