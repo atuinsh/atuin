@@ -71,9 +71,9 @@ __atuin_install_arch(){
 
 }
 
-__atuin_install_ubuntu(){
+__atuin_install_deb_based(){
 	if [ "$(dpkg --print-architecture)" = "amd64" ]; then
-		echo "Ubuntu detected"
+		echo "Detected distro: $OS"
 		ARTIFACT_URL="https://github.com/atuinsh/atuin/releases/download/$LATEST_VERSION/atuin_${LATEST_VERSION//v/}_amd64.deb"
 		TEMP_DEB="$(mktemp)".deb &&
 		curl -Lo "$TEMP_DEB" "$ARTIFACT_URL"
@@ -84,7 +84,7 @@ __atuin_install_ubuntu(){
 		fi
 		rm -f "$TEMP_DEB"
 	else
-		echo "Ubuntu detected, but not amd64"
+		echo "$OS detected, but not amd64"
 		__atuin_install_unsupported
 	fi
 }
@@ -104,7 +104,7 @@ __atuin_install_linux(){
 		"arch" | "manjarolinux" | "endeavouros")
 			__atuin_install_arch;;
 		"ubuntu" | "ubuntuwsl" | "debian" | "linuxmint" | "parrot" | "kali" | "elementary" | "pop")
-			__atuin_install_ubuntu;;
+			__atuin_install_deb_based;;
 		*)
 			# TODO: download a binary or smth
 			__atuin_install_unsupported;;
