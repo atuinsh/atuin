@@ -271,6 +271,11 @@ if [[ ${BLE_VERSION-} ]] && ((_ble_version >= 400)); then
     }
     ble/util/import/eval-after-load core-complete '
         ble/array#unshift _ble_complete_auto_source atuin-history'
+
+    # @env BLE_SESSION_ID: `atuin doctor` references the environment variable
+    # BLE_SESSION_ID.  We explicitly export the variable because it was not
+    # exported in older versions of ble.sh.
+    [[ ${BLE_SESSION_ID-} ]] && export BLE_SESSION_ID
 fi
 precmd_functions+=(__atuin_precmd)
 preexec_functions+=(__atuin_preexec)
