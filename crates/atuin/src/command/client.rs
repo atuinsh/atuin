@@ -94,14 +94,15 @@ impl Cmd {
             .unwrap();
 
         let settings = Settings::new().wrap_err("could not load client settings")?;
-        let res = runtime.block_on(self.run_inner(settings));
+        let theme_manager = theme::ThemeManager::new();
+        let res = runtime.block_on(self.run_inner(settings, theme_manager));
 
         runtime.shutdown_timeout(std::time::Duration::from_millis(50));
 
         res
     }
 
-    async fn run_inner(self, mut settings: Settings) -> Result<()> {
+    async fn run_inner(self, mut settings: Settings, mut theme_manager: theme::ThemeManager) -> Result<()> {
         let filter =
             EnvFilter::from_env("ATUIN_LOG").add_directive("sqlx_sqlite::regexp=off".parse()?);
 
@@ -127,7 +128,8 @@ impl Cmd {
         let db = Sqlite::new(db_path, settings.local_timeout).await?;
         let sqlite_store = SqliteStore::new(record_store_path, settings.local_timeout).await?;
 
-        let theme = theme::load_theme(settings.theme.as_str());
+        let theme_name = settings.theme.clone();
+        let theme = theme_manager.load_theme(theme_name.as_str());
 
         match self {
             Self::Import(import) => import.run(&db).await,

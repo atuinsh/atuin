@@ -1,22 +1,27 @@
 use strum_macros;
+use std::path::PathBuf;
+use std::io::BufReader;
+use std::fs::File;
+use eyre::Result;
 use std::collections::HashMap;
 use palette::named;
+use serde::{Serialize, Deserialize};
 use lazy_static::lazy_static;
 
-#[derive(Copy, Clone, Hash, Debug, Eq, PartialEq, strum_macros::Display)]
-#[strum(serialize_all = "snake_case")]
+#[derive(Serialize, Deserialize, Copy, Clone, Hash, Debug, Eq, PartialEq, strum_macros::Display)]
+#[strum(serialize_all = "camel_case")]
 pub enum Level {
     Info,
     Warning,
     Error,
 }
 
-#[derive(Copy, Clone, Hash, Debug, Eq, PartialEq, strum_macros::Display)]
-#[strum(serialize_all = "snake_case")]
+#[derive(Serialize, Deserialize, Copy, Clone, Hash, Debug, Eq, PartialEq, strum_macros::Display)]
+#[strum(serialize_all = "camel_case")]
 pub enum Meaning {
-    Alert {
-        severity: Level,
-    },
+    AlertInfo,
+    AlertWarning,
+    AlertError,
     Annotation,
     Base,
     Guidance,
@@ -49,7 +54,7 @@ impl Theme {
     }
 
     pub fn get_alert(&self, severity: Level) -> Color {
-        self.colors[&Meaning::Alert { severity: severity }]
+        self.colors[ALERT_TYPES.get(&severity).unwrap()]
     }
 
     pub fn new(colors: HashMap::<Meaning, Color>) -> Theme {
@@ -60,6 +65,12 @@ impl Theme {
         let mut style = ContentStyle::default();
         style.foreground_color = Some(self.colors[&meaning]);
         style
+    }
+
+    pub fn from_named(colors: HashMap::<Meaning, String>) -> Theme {
+        let colors: HashMap::<Meaning, Color> =
+            colors.iter().map(|(name, color)| { (*name, from_named(color)) }).collect();
+        make_theme(&colors)
     }
 }
 
@@ -72,39 +83,101 @@ fn from_named(name: &str) -> Color {
     }
 }
 
-lazy_static! {
-    static ref BUILTIN_THEMES: HashMap<&'static str, HashMap<Meaning, Color>> = {
-        HashMap::from([
-            ("autumn", HashMap::from([
-                (Meaning::Alert { severity: Level::Error }, from_named("saddlebrown")),
-                (Meaning::Alert { severity: Level::Warning }, from_named("darkorange")),
-                (Meaning::Alert { severity: Level::Info }, from_named("gold")),
-                (Meaning::Annotation, Color::DarkGrey),
-                (Meaning::Guidance, from_named("khaki")),
-            ]))
-        ])
-    };
-}
-
-pub fn load_theme(name: &str) -> Theme {
-    let mut default_theme = HashMap::from([
-        (Meaning::Alert { severity: Level::Error }, Color::Red),
-        (Meaning::Alert { severity: Level::Warning }, Color::Yellow),
-        (Meaning::Alert { severity: Level::Info }, Color::Green),
+fn make_theme(overrides: &HashMap<Meaning, Color>) -> Theme {
+    let colors = HashMap::from([
+        (Meaning::AlertError, Color::Red),
+        (Meaning::AlertWarning, Color::Yellow),
+        (Meaning::AlertInfo, Color::Green),
         (Meaning::Annotation, Color::DarkGrey),
         (Meaning::Guidance, Color::Blue),
         (Meaning::Important, Color::White),
         (Meaning::Base, Color::Grey),
-    ]);
-    let built_ins = &BUILTIN_THEMES;
-    let theme = match built_ins.get(name) {
-        Some(theme) => {
-            theme.iter().for_each(|(k, v)| {
-                default_theme.insert(*k, *v);
-            });
-            default_theme
-        },
-        None => default_theme
+    ]).iter().map(|(name, color)| {
+        match overrides.get(name) {
+            Some(value) => (*name, *value),
+            None => (*name, *color)
+        }
+    }).collect();
+    Theme::new(colors)
+}
+
+lazy_static! {
+    static ref ALERT_TYPES: HashMap<Level, Meaning> = {
+        HashMap::from([
+            (Level::Info, Meaning::AlertInfo),
+            (Level::Warning, Meaning::AlertWarning),
+            (Level::Error, Meaning::AlertError),
+        ])
     };
-    Theme::new(theme)
+
+    static ref BUILTIN_THEMES: HashMap<&'static str, Theme> = {
+        HashMap::from([
+            ("", HashMap::new()),
+            ("autumn", HashMap::from([
+                (Meaning::AlertError, from_named("saddlebrown")),
+                (Meaning::AlertWarning, from_named("darkorange")),
+                (Meaning::AlertInfo, from_named("gold")),
+                (Meaning::Annotation, Color::DarkGrey),
+                (Meaning::Guidance, from_named("brown")),
+            ])),
+            ("marine", HashMap::from([
+                (Meaning::AlertError, from_named("seagreen")),
+                (Meaning::AlertWarning, from_named("turquoise")),
+                (Meaning::AlertInfo, from_named("cyan")),
+                (Meaning::Annotation, from_named("midnightblue")),
+                (Meaning::Guidance, from_named("teal")),
+            ]))
+        ]).iter().map(|(name, theme)| (*name, make_theme(theme))).collect()
+    };
+}
+
+pub struct ThemeManager {
+    loaded_themes: HashMap::<String, Theme>
+}
+
+impl ThemeManager {
+    pub fn new() -> Self {
+        Self { loaded_themes: HashMap::new() }
+    }
+
+    pub fn load_theme_from_file(&mut self, name: &str) -> Result<&Theme> {
+        let mut theme_file = if let Ok(p) = std::env::var("ATUIN_THEME_DIR") {
+            PathBuf::from(p)
+        } else {
+            let config_dir = atuin_common::utils::config_dir();
+            let mut theme_file = PathBuf::new();
+            theme_file.push(config_dir);
+            theme_file.push("themes");
+            theme_file
+        };
+
+        let theme_yaml = format!["{}.yaml", name];
+        theme_file.push(theme_yaml);
+
+        let file = File::open(theme_file.as_path())?;
+        let reader: BufReader<File> = BufReader::new(file);
+        let colors: HashMap<Meaning, String> = serde_json::from_reader(reader)?;
+        let theme = Theme::from_named(colors);
+        let name = name.to_string();
+        self.loaded_themes.insert(name.clone(), theme);
+        let theme = self.loaded_themes.get(&name).unwrap();
+        Ok(theme)
+    }
+
+    pub fn load_theme(&mut self, name: &str) -> &Theme {
+        if self.loaded_themes.contains_key(name) {
+            return self.loaded_themes.get(name).unwrap();
+        }
+        let built_ins = &BUILTIN_THEMES;
+        match built_ins.get(name) {
+            Some(theme) => theme,
+            None => match self.load_theme_from_file(name) {
+                Ok(theme) => theme,
+                Err(err) => {
+                    print!["Could not load theme {}: {}", name, err];
+                    built_ins.get("").unwrap()
+                }
+            }
+        }
+    }
 }

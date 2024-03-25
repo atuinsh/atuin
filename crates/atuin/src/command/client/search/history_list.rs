@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use atuin_client::{
     history::History,
-    theme::{Theme, Meaning, Level},
+    theme::{Theme, Meaning},
 };
 use atuin_common::utils::Escapable as _;
 use ratatui::{
@@ -160,9 +160,9 @@ impl DrawState<'_> {
 
     fn duration(&mut self, h: &History) {
         let status = self.theme.as_style(if h.success() {
-            Meaning::Alert { severity: Level::Info }
+            Meaning::AlertInfo
         } else {
-            Meaning::Alert { severity: Level::Error }
+            Meaning::AlertError
         });
         let duration = Duration::from_nanos(u64::try_from(h.duration).unwrap_or(0));
         self.draw(&format_duration(duration), status.into());
@@ -195,7 +195,7 @@ impl DrawState<'_> {
         if !self.alternate_highlight && (self.y as usize + self.state.offset == self.state.selected)
         {
             // if not applying alternative highlighting to the whole row, color the command
-            style = self.theme.as_style(Meaning::Alert { severity: Level::Error });
+            style = self.theme.as_style(Meaning::AlertError);
             style.attributes.set(crossterm::style::Attribute::Bold)
         }
 
