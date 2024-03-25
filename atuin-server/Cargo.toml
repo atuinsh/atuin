@@ -31,7 +31,7 @@ fs-err = { workspace = true }
 tower = "0.4"
 tower-http = { version = "0.5.1", features = ["trace"] }
 reqwest = { workspace = true }
-rustls = "0.21"
+rustls = "0.23"
 rustls-pemfile = "2.1"
 argon2 = "0.5.3"
 semver = { workspace = true }
