@@ -385,6 +385,7 @@ pub struct Settings {
     pub network_timeout: u64,
     pub local_timeout: f64,
     pub enter_accept: bool,
+    pub smart_sort: bool,
 
     #[serde(default)]
     pub stats: Stats,
@@ -631,6 +632,7 @@ impl Settings {
             .set_default("keymap_mode", "emacs")?
             .set_default("keymap_mode_shell", "auto")?
             .set_default("keymap_cursor", HashMap::<String, String>::new())?
+            .set_default("smart_sort", false)?
             .set_default(
                 "prefers_reduced_motion",
                 std::env::var("NO_MOTION")

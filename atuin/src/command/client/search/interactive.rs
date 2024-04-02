@@ -29,6 +29,7 @@ use super::{
     cursor::Cursor,
     engines::{SearchEngine, SearchState},
     history_list::{HistoryList, ListState, PREFIX_LENGTH},
+    sort,
 };
 
 use crate::{command::client::search::engines, VERSION};
@@ -82,13 +83,21 @@ struct StyleState {
 }
 
 impl State {
-    async fn query_results(&mut self, db: &mut dyn Database) -> Result<Vec<History>> {
+    async fn query_results(
+        &mut self,
+        db: &mut dyn Database,
+        smart_sort: bool,
+    ) -> Result<Vec<History>> {
         let results = self.engine.query(&self.search, db).await?;
 
         self.results_state.select(0);
         self.results_len = results.len();
 
-        Ok(results)
+        if smart_sort {
+            Ok(sort::sort(self.search.input.as_str(), results))
+        } else {
+            Ok(results)
+        }
     }
 
     fn handle_input<W>(
@@ -1003,7 +1012,7 @@ pub async fn history(
 
     app.initialize_keymap_cursor(settings);
 
-    let mut results = app.query_results(&mut db).await?;
+    let mut results = app.query_results(&mut db, settings.smart_sort).await?;
 
     let mut stats: Option<HistoryStats> = None;
     let accept;
@@ -1064,7 +1073,7 @@ pub async fn history(
             || initial_filter_mode != app.search.filter_mode
             || initial_search_mode != app.search_mode
         {
-            results = app.query_results(&mut db).await?;
+            results = app.query_results(&mut db, settings.smart_sort).await?;
         }
 
         stats = if app.tab_index == 0 {
