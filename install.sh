@@ -103,7 +103,7 @@ __atuin_install_linux(){
 	case "$OS" in
 		"arch" | "manjarolinux" | "endeavouros")
 			__atuin_install_arch;;
-		"ubuntu" | "ubuntuwsl" | "debian" | "linuxmint" | "parrot" | "kali" | "elementary" | "pop")
+		"ubuntu" | "ubuntuwsl" | "debian" | "linuxmint" | "parrot" | "kali" | "elementary" | "pop" | "neon")
 			__atuin_install_deb_based;;
 		*)
 			# TODO: download a binary or smth
