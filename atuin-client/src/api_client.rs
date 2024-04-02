@@ -157,13 +157,17 @@ async fn handle_resp_error(resp: Response) -> Result<Response> {
         );
     }
 
-    if status.is_client_error() {
-        let error = resp.json::<ErrorResponse>().await?.reason;
-        bail!("Could not fetch history, client error: {error}.")
-    } else if status.is_server_error() {
-        let error = resp.json::<ErrorResponse>().await?.reason;
-        bail!("There was an error with the atuin sync service: {error}.\nIf the problem persists, contact the host")
-    } else if !status.is_success() {
+    if !status.is_success() {
+        if let Ok(error) = resp.json::<ErrorResponse>().await {
+            let reason = error.reason;
+
+            if status.is_client_error() {
+                bail!("Could not fetch history, client error {status}: {reason}.")
+            }
+
+            bail!("There was an error with the atuin sync service, server error {status}: {reason}.\nIf the problem persists, contact the host")
+        }
+
         bail!("There was an error with the atuin sync service: Status {status:?}.\nIf the problem persists, contact the host")
     }
 
