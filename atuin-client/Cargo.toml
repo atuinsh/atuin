@@ -15,13 +15,14 @@ repository = { workspace = true }
 [features]
 default = ["sync"]
 sync = ["urlencoding", "reqwest", "sha2", "hex"]
+check-update = []
 
 [dependencies]
-atuin-common = { path = "../atuin-common", version = "17.0.1" }
+atuin-common = { path = "../atuin-common", version = "18.1.0" }
 
 log = { workspace = true }
 base64 = { workspace = true }
-time = { workspace = true }
+time = { workspace = true, features = ["macros", "formatting"] }
 clap = { workspace = true }
 eyre = { workspace = true }
 directories = { workspace = true }
@@ -36,25 +37,26 @@ async-trait = { workspace = true }
 itertools = { workspace = true }
 rand = { workspace = true }
 shellexpand = "3"
-sqlx = { workspace = true, features = ["sqlite"] }
+sqlx = { workspace = true, features = ["sqlite", "regexp"] }
 minspan = "0.1.1"
 regex = "1.9.1"
 serde_regex = "1.1.0"
 fs-err = { workspace = true }
 sql-builder = "3"
-lazy_static = "1"
 memchr = "2.5"
 rmp = { version = "0.8.11" }
 typed-builder = { workspace = true }
 tokio = { workspace = true }
 semver = { workspace = true }
+thiserror = { workspace = true }
 futures = "0.3"
 crypto_secretbox = "0.1.1"
 generic-array = { version = "0.14", features = ["serde"] }
+serde_with = "3.5.1"
 
 # encryption
-rusty_paseto = { version = "0.5.0", default-features = false }
-rusty_paserk = { version = "0.2.0", default-features = false, features = [
+rusty_paseto = { version = "0.6.0", default-features = false }
+rusty_paserk = { version = "0.3.0", default-features = false, features = [
   "v4",
   "serde",
 ] }
@@ -64,6 +66,7 @@ urlencoding = { version = "2.1.0", optional = true }
 reqwest = { workspace = true, optional = true }
 hex = { version = "0.4", optional = true }
 sha2 = { version = "0.10", optional = true }
+indicatif = "0.17.7"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }

@@ -8,9 +8,10 @@ use argon2::{
 };
 use axum::{
     extract::{Path, State},
+    http::StatusCode,
     Json,
 };
-use http::StatusCode;
+use metrics::counter;
 use rand::rngs::OsRng;
 use tracing::{debug, error, info, instrument};
 use uuid::Uuid;
@@ -142,6 +143,8 @@ pub async fn register<DB: Database>(
         .await;
     }
 
+    counter!("atuin_users_registered", 1);
+
     match db.add_session(&new_session).await {
         Ok(_) => Ok(Json(RegisterResponse { session: token })),
         Err(e) => {
@@ -166,7 +169,40 @@ pub async fn delete<DB: Database>(
         return Err(ErrorResponse::reply("failed to delete user")
             .with_status(StatusCode::INTERNAL_SERVER_ERROR));
     };
+
+    counter!("atuin_users_deleted", 1);
+
     Ok(Json(DeleteUserResponse {}))
+}
+
+#[instrument(skip_all, fields(user.id = user.id, change_password))]
+pub async fn change_password<DB: Database>(
+    UserAuth(mut user): UserAuth,
+    state: State<AppState<DB>>,
+    Json(change_password): Json<ChangePasswordRequest>,
+) -> Result<Json<ChangePasswordResponse>, ErrorResponseStatus<'static>> {
+    let db = &state.0.database;
+
+    let verified = verify_str(
+        user.password.as_str(),
+        change_password.current_password.borrow(),
+    );
+    if !verified {
+        return Err(
+            ErrorResponse::reply("password is not correct").with_status(StatusCode::UNAUTHORIZED)
+        );
+    }
+
+    let hashed = hash_secret(&change_password.new_password);
+    user.password = hashed;
+
+    if let Err(e) = db.update_user_password(&user).await {
+        error!("failed to change user password: {}", e);
+
+        return Err(ErrorResponse::reply("failed to change user password")
+            .with_status(StatusCode::INTERNAL_SERVER_ERROR));
+    };
+    Ok(Json(ChangePasswordResponse {}))
 }
 
 #[instrument(skip_all, fields(user.username = login.username.as_str()))]

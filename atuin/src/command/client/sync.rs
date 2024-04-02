@@ -3,7 +3,9 @@ use eyre::{Result, WrapErr};
 
 use atuin_client::{
     database::Database,
-    record::{store::Store, sync},
+    encryption,
+    history::store::HistoryStore,
+    record::{sqlite_store::SqliteStore, store::Store, sync},
     settings::Settings,
 };
 
@@ -37,6 +39,7 @@ pub enum Cmd {
         base64: bool,
     },
 
+    /// Display the sync status
     Status,
 }
 
@@ -45,11 +48,11 @@ impl Cmd {
         self,
         settings: Settings,
         db: &impl Database,
-        store: &mut (impl Store + Send + Sync),
+        store: SqliteStore,
     ) -> Result<()> {
         match self {
             Self::Sync { force } => run(&settings, force, db, store).await,
-            Self::Login(l) => l.run(&settings).await,
+            Self::Login(l) => l.run(&settings, &store).await,
             Self::Logout => account::logout::run(&settings),
             Self::Register(r) => r.run(&settings).await,
             Self::Status => status::run(&settings, db).await,
@@ -75,16 +78,48 @@ async fn run(
     settings: &Settings,
     force: bool,
     db: &impl Database,
-    store: &mut (impl Store + Send + Sync),
+    store: SqliteStore,
 ) -> Result<()> {
-    let (diff, remote_index) = sync::diff(settings, store).await?;
-    let operations = sync::operations(diff, store).await?;
-    let (uploaded, downloaded) =
-        sync::sync_remote(operations, &remote_index, store, settings).await?;
+    if settings.sync.records {
+        let encryption_key: [u8; 32] = encryption::load_key(settings)
+            .context("could not load encryption key")?
+            .into();
 
-    println!("{uploaded}/{downloaded} up/down to record store");
+        let host_id = Settings::host_id().expect("failed to get host_id");
+        let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
-    atuin_client::sync::sync(settings, force, db).await?;
+        let (uploaded, downloaded) = sync::sync(settings, &store).await?;
+
+        history_store.incremental_build(db, &downloaded).await?;
+
+        println!("{uploaded}/{} up/down to record store", downloaded.len());
+
+        let history_length = db.history_count(true).await?;
+        let store_history_length = store.len_tag("history").await?;
+
+        #[allow(clippy::cast_sign_loss)]
+        if history_length as u64 > store_history_length {
+            println!(
+                "{history_length} in history index, but {store_history_length} in history store"
+            );
+            println!("Running automatic history store init...");
+
+            // Internally we use the global filter mode, so this context is ignored.
+            // don't recurse or loop here.
+            history_store.init_store(db).await?;
+
+            println!("Re-running sync due to new records locally");
+
+            // we'll want to run sync once more, as there will now be stuff to upload
+            let (uploaded, downloaded) = sync::sync(settings, &store).await?;
+
+            history_store.incremental_build(db, &downloaded).await?;
+
+            println!("{uploaded}/{} up/down to record store", downloaded.len());
+        }
+    } else {
+        atuin_client::sync::sync(settings, force, db).await?;
+    }
 
     println!(
         "Sync complete! {} items in history database, force: {}",

@@ -13,6 +13,8 @@ pub mod fish;
 pub mod nu;
 pub mod nu_histdb;
 pub mod resh;
+pub mod xonsh;
+pub mod xonsh_sqlite;
 pub mod zsh;
 pub mod zsh_histdb;
 

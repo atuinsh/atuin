@@ -29,6 +29,7 @@ pub fn format_duration_into(dur: Duration, f: &mut fmt::Formatter<'_>) -> fmt::R
         let seconds = day_secs % 60;
 
         let millis = nanos / 1_000_000;
+        let micros = nanos / 1_000;
 
         // a difference from our impl than the original is that
         // we only care about the most-significant segment of the duration.
@@ -41,6 +42,8 @@ pub fn format_duration_into(dur: Duration, f: &mut fmt::Formatter<'_>) -> fmt::R
         item("m", minutes)?;
         item("s", seconds)?;
         item("ms", u64::from(millis))?;
+        item("us", u64::from(micros))?;
+        item("ns", u64::from(nanos))?;
         ControlFlow::Continue(())
     }
 

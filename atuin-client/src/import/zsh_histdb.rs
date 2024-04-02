@@ -20,8 +20,8 @@
 //    places.dir,
 //    commands.argv
 //  from history
-//    left join commands on history.command_id = commands.rowid
-//    left join places on history.place_id = places.rowid ;
+//    left join commands on history.command_id = commands.id
+//    left join places on history.place_id = places.id ;
 //
 // CREATE TABLE history  (id integer primary key autoincrement,
 //                       session int,
@@ -32,9 +32,11 @@
 //                       duration int);
 //
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
+use atuin_common::utils::uuid_v7;
 use directories::UserDirs;
 use eyre::{eyre, Result};
 use sqlx::{sqlite::SqlitePool, Pool};
@@ -43,6 +45,7 @@ use time::PrimitiveDateTime;
 use super::Importer;
 use crate::history::History;
 use crate::import::Loader;
+use crate::utils::{get_hostname, get_username};
 
 #[derive(sqlx::FromRow, Debug)]
 pub struct HistDbEntryCount {
@@ -57,39 +60,14 @@ pub struct HistDbEntry {
     pub dir: Vec<u8>,
     pub argv: Vec<u8>,
     pub duration: i64,
-}
-
-impl From<HistDbEntry> for History {
-    fn from(histdb_item: HistDbEntry) -> Self {
-        let imported = History::import()
-            .timestamp(histdb_item.start_time.assume_utc())
-            .command(
-                String::from_utf8(histdb_item.argv)
-                    .unwrap_or_else(|_e| String::from(""))
-                    .trim_end()
-                    .to_string(),
-            )
-            .cwd(
-                String::from_utf8(histdb_item.dir)
-                    .unwrap_or_else(|_e| String::from(""))
-                    .trim_end()
-                    .to_string(),
-            )
-            .duration(histdb_item.duration)
-            .hostname(
-                String::from_utf8(histdb_item.host)
-                    .unwrap_or_else(|_e| String::from(""))
-                    .trim_end()
-                    .to_string(),
-            );
-
-        imported.build().into()
-    }
+    pub exit_status: i64,
+    pub session: i64,
 }
 
 #[derive(Debug)]
 pub struct ZshHistDb {
     histdb: Vec<HistDbEntry>,
+    username: String,
 }
 
 /// Read db at given file, return vector of entries.
@@ -99,7 +77,15 @@ async fn hist_from_db(dbpath: PathBuf) -> Result<Vec<HistDbEntry>> {
 }
 
 async fn hist_from_db_conn(pool: Pool<sqlx::Sqlite>) -> Result<Vec<HistDbEntry>> {
-    let query = "select history.id,history.start_time,history.duration,places.host,places.dir,commands.argv from history left join commands on history.command_id = commands.rowid left join places on history.place_id = places.rowid order by history.start_time";
+    let query = r#"
+        SELECT
+            history.id, history.start_time, history.duration, places.host, places.dir,
+            commands.argv, history.exit_status, history.session
+        FROM history
+        LEFT JOIN commands ON history.command_id = commands.id
+        LEFT JOIN places ON history.place_id = places.id
+        ORDER BY history.start_time
+    "#;
     let histdb_vec: Vec<HistDbEntry> = sqlx::query_as::<_, HistDbEntry>(query)
         .fetch_all(&pool)
         .await?;
@@ -144,14 +130,42 @@ impl Importer for ZshHistDb {
         let histdb_entry_vec = hist_from_db(dbpath).await?;
         Ok(Self {
             histdb: histdb_entry_vec,
+            username: get_username(),
         })
     }
+
     async fn entries(&mut self) -> Result<usize> {
         Ok(self.histdb.len())
     }
+
     async fn load(self, h: &mut impl Loader) -> Result<()> {
-        for i in self.histdb {
-            h.push(i.into()).await?;
+        let mut session_map = HashMap::new();
+        for entry in self.histdb {
+            let command = match std::str::from_utf8(&entry.argv) {
+                Ok(s) => s.trim_end(),
+                Err(_) => continue, // we can skip past things like invalid utf8
+            };
+            let cwd = match std::str::from_utf8(&entry.dir) {
+                Ok(s) => s.trim_end(),
+                Err(_) => continue, // we can skip past things like invalid utf8
+            };
+            let hostname = format!(
+                "{}:{}",
+                String::from_utf8(entry.host).unwrap_or_else(|_e| get_hostname()),
+                self.username
+            );
+            let session = session_map.entry(entry.session).or_insert_with(uuid_v7);
+
+            let imported = History::import()
+                .timestamp(entry.start_time.assume_utc())
+                .command(command)
+                .cwd(cwd)
+                .duration(entry.duration * 1_000_000_000)
+                .exit(entry.exit_status)
+                .session(session.as_simple().to_string())
+                .hostname(hostname)
+                .build();
+            h.push(imported.into()).await?;
         }
         Ok(())
     }
@@ -219,7 +233,10 @@ mod test {
 
         // test histdb iterator
         let histdb_vec = hist_from_db_conn(pool).await.unwrap();
-        let histdb = ZshHistDb { histdb: histdb_vec };
+        let histdb = ZshHistDb {
+            histdb: histdb_vec,
+            username: get_username(),
+        };
 
         println!("h: {:#?}", histdb.histdb);
         println!("counter: {:?}", histdb.histdb.len());

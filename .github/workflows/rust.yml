@@ -11,7 +11,10 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-14, windows-latest]
+    runs-on: ${{ matrix.os }}
 
     steps:
     - uses: actions/checkout@v3
@@ -39,10 +42,50 @@ jobs:
       run: cargo build -p atuin-server --locked --release
 
     - name: Run cargo build main
-      run: cargo build --all --locked --release && strip target/release/atuin
+      run: cargo build --all --locked --release 
+
+  cross-compile:
+    strategy:
+      matrix:
+        # There was an attempt to make cross-compiles also work on FreeBSD, but that failed with:
+        #
+        # warning: libelf.so.2, needed by <...>/libkvm.so, not found (try using -rpath or -rpath-link)
+        target: [x86_64-unknown-illumos]
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Install cross
+      uses: taiki-e/install-action@v1
+      with:
+        tool: cross
+
+    - uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ matrix.target }}-cross-compile-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Run cross build common
+      run: cross build -p atuin-common --locked --target ${{ matrix.target }}
+
+    - name: Run cross build client
+      run: cross build -p atuin-client --locked --target ${{ matrix.target }}
+
+    - name: Run cross build server
+      run: cross build -p atuin-server --locked --target ${{ matrix.target }}
+
+    - name: Run cross build main
+      run: cross build --all --locked --target ${{ matrix.target }}
 
   unit-test:
-    runs-on: [self-hosted, ARM64, macOS]
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-14, windows-latest]
+    runs-on: ${{ matrix.os }}
 
     steps:
     - uses: actions/checkout@v3
@@ -52,16 +95,44 @@ jobs:
       with:
           toolchain: stable
 
-#     - uses: actions/cache@v3
-#       with:
-#         path: |
-#          ~/.cargo/registry
-#           ~/.cargo/git
-#           target
-#         key: ${ runner.os }-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
+    - uses: taiki-e/install-action@v2
+      name: Install nextest
+      with:
+        tool: cargo-nextest
+
+
+    - uses: actions/cache@v3
+      with:
+        path: |
+         ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${ runner.os }-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
 
     - name: Run cargo test
-      run: cargo test --lib --bins
+      run: cargo nextest run --lib --bins
+
+  check:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-14, windows-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Install rust
+      uses: dtolnay/rust-toolchain@master
+      with:
+          toolchain: stable
+
+    - uses: actions/cache@v3
+      with:
+        path: |
+         ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${ runner.os }-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
 
     - name: Run cargo check (all features)
       run: cargo check --all-features --workspace
@@ -99,6 +170,12 @@ jobs:
       with:
           toolchain: stable
 
+    - uses: taiki-e/install-action@v2
+      name: Install nextest
+      with:
+        tool: cargo-nextest
+
+
     - uses: actions/cache@v3
       with:
         path: |
@@ -108,7 +185,7 @@ jobs:
         key: ${ runner.os }-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
 
     - name: Run cargo test
-      run: cargo test --test '*'
+      run: cargo nextest run --test '*'
       env:
         ATUIN_DB_URI: postgres://atuin:pass@localhost:5432/atuin
 

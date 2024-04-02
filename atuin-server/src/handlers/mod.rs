@@ -1,6 +1,6 @@
 use atuin_common::api::{ErrorResponse, IndexResponse};
 use atuin_server_database::Database;
-use axum::{extract::State, response::IntoResponse, Json};
+use axum::{extract::State, http, response::IntoResponse, Json};
 
 use crate::router::AppState;
 
@@ -8,6 +8,7 @@ pub mod history;
 pub mod record;
 pub mod status;
 pub mod user;
+pub mod v0;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 

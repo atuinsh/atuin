@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::env;
 use std::path::PathBuf;
 
@@ -12,36 +13,8 @@ pub fn random_bytes<const N: usize>() -> [u8; N] {
     ret
 }
 
-// basically just ripped from the uuid crate. they have it as unstable, but we can use it fine.
-const fn encode_unix_timestamp_millis(millis: u64, random_bytes: &[u8; 10]) -> Uuid {
-    let millis_high = ((millis >> 16) & 0xFFFF_FFFF) as u32;
-    let millis_low = (millis & 0xFFFF) as u16;
-
-    let random_and_version =
-        (random_bytes[0] as u16 | ((random_bytes[1] as u16) << 8) & 0x0FFF) | (0x7 << 12);
-
-    let mut d4 = [0; 8];
-
-    d4[0] = (random_bytes[2] & 0x3F) | 0x80;
-    d4[1] = random_bytes[3];
-    d4[2] = random_bytes[4];
-    d4[3] = random_bytes[5];
-    d4[4] = random_bytes[6];
-    d4[5] = random_bytes[7];
-    d4[6] = random_bytes[8];
-    d4[7] = random_bytes[9];
-
-    Uuid::from_fields(millis_high, millis_low, random_and_version, &d4)
-}
-
 pub fn uuid_v7() -> Uuid {
-    let bytes = random_bytes();
-    let now: u64 = u64::try_from(
-        time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000,
-    )
-    .expect("Either you're in the past (1970) - or your in the far future (2554). Good for you");
-
-    encode_unix_timestamp_millis(now, &bytes)
+    Uuid::now_v7()
 }
 
 pub fn uuid_v4() -> String {
@@ -128,6 +101,43 @@ pub fn is_bash() -> bool {
     env::var("ATUIN_SHELL_BASH").is_ok()
 }
 
+pub fn is_xonsh() -> bool {
+    // only set on xonsh
+    env::var("ATUIN_SHELL_XONSH").is_ok()
+}
+
+/// Extension trait for anything that can behave like a string to make it easy to escape control
+/// characters.
+///
+/// Intended to help prevent control characters being printed and interpreted by the terminal when
+/// printing history as well as to ensure the commands that appear in the interactive search
+/// reflect the actual command run rather than just the printable characters.
+pub trait Escapable: AsRef<str> {
+    fn escape_control(&self) -> Cow<str> {
+        if !self.as_ref().contains(|c: char| c.is_ascii_control()) {
+            self.as_ref().into()
+        } else {
+            let mut remaining = self.as_ref();
+            // Not a perfect way to reserve space but should reduce the allocations
+            let mut buf = String::with_capacity(remaining.as_bytes().len());
+            while let Some(i) = remaining.find(|c: char| c.is_ascii_control()) {
+                // safe to index with `..i`, `i` and `i+1..` as part[i] is a single byte ascii char
+                buf.push_str(&remaining[..i]);
+                buf.push('^');
+                buf.push(match remaining.as_bytes()[i] {
+                    0x7F => '?',
+                    code => char::from_u32(u32::from(code) + 64).unwrap(),
+                });
+                remaining = &remaining[i + 1..];
+            }
+            buf.push_str(remaining);
+            buf.into()
+        }
+    }
+}
+
+impl<T: AsRef<str>> Escapable for T {}
+
 #[cfg(test)]
 mod tests {
     use time::Month;
@@ -137,6 +147,7 @@ mod tests {
 
     use std::collections::HashSet;
 
+    #[cfg(not(windows))]
     #[test]
     fn test_dirs() {
         // these tests need to be run sequentially to prevent race condition
@@ -159,7 +170,9 @@ mod tests {
     fn test_config_dir() {
         env::set_var("HOME", "/home/user");
         env::remove_var("XDG_CONFIG_HOME");
+
         assert_eq!(config_dir(), PathBuf::from("/home/user/.config/atuin"));
+
         env::remove_var("HOME");
     }
 
@@ -210,5 +223,35 @@ mod tests {
         }
 
         assert_eq!(uuids.len(), how_many);
+    }
+
+    #[test]
+    fn escape_control_characters() {
+        use super::Escapable;
+        // CSI colour sequence
+        assert_eq!("\x1b[31mfoo".escape_control(), "^[[31mfoo");
+
+        // Tabs count as control chars
+        assert_eq!("foo\tbar".escape_control(), "foo^Ibar");
+
+        // space is in control char range but should be excluded
+        assert_eq!("two words".escape_control(), "two words");
+
+        // unicode multi-byte characters
+        let s = "🐢\x1b[32m🦀";
+        assert_eq!(s.escape_control(), s.replace("\x1b", "^["));
+    }
+
+    #[test]
+    fn escape_no_control_characters() {
+        use super::Escapable as _;
+        assert!(matches!(
+            "no control characters".escape_control(),
+            Cow::Borrowed(_)
+        ));
+        assert!(matches!(
+            "with \x1b[31mcontrol\x1b[0m characters".escape_control(),
+            Cow::Owned(_)
+        ));
     }
 }

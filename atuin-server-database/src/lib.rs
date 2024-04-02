@@ -14,7 +14,7 @@ use self::{
     models::{History, NewHistory, NewSession, NewUser, Session, User},
 };
 use async_trait::async_trait;
-use atuin_common::record::{EncryptedData, HostId, Record, RecordId, RecordIndex};
+use atuin_common::record::{EncryptedData, HostId, Record, RecordIdx, RecordStatus};
 use serde::{de::DeserializeOwned, Serialize};
 use time::{Date, Duration, Month, OffsetDateTime, Time, UtcOffset};
 use tracing::instrument;
@@ -53,14 +53,16 @@ pub trait Database: Sized + Clone + Send + Sync + 'static {
     async fn get_user(&self, username: &str) -> DbResult<User>;
     async fn get_user_session(&self, u: &User) -> DbResult<Session>;
     async fn add_user(&self, user: &NewUser) -> DbResult<i64>;
-    async fn delete_user(&self, u: &User) -> DbResult<()>;
+    async fn update_user_password(&self, u: &User) -> DbResult<()>;
 
     async fn total_history(&self) -> DbResult<i64>;
     async fn count_history(&self, user: &User) -> DbResult<i64>;
     async fn count_history_cached(&self, user: &User) -> DbResult<i64>;
 
+    async fn delete_user(&self, u: &User) -> DbResult<()>;
     async fn delete_history(&self, user: &User, id: String) -> DbResult<()>;
     async fn deleted_history(&self, user: &User) -> DbResult<Vec<String>>;
+    async fn delete_store(&self, user: &User) -> DbResult<()>;
 
     async fn add_records(&self, user: &User, record: &[Record<EncryptedData>]) -> DbResult<()>;
     async fn next_records(
@@ -68,12 +70,12 @@ pub trait Database: Sized + Clone + Send + Sync + 'static {
         user: &User,
         host: HostId,
         tag: String,
-        start: Option<RecordId>,
+        start: Option<RecordIdx>,
         count: u64,
     ) -> DbResult<Vec<Record<EncryptedData>>>;
 
     // Return the tail record ID for each store, so (HostID, Tag, TailRecordID)
-    async fn tail_records(&self, user: &User) -> DbResult<RecordIndex>;
+    async fn status(&self, user: &User) -> DbResult<RecordStatus>;
 
     async fn count_history_range(&self, user: &User, range: Range<OffsetDateTime>)
         -> DbResult<i64>;

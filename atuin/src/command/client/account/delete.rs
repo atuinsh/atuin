@@ -1,5 +1,6 @@
 use atuin_client::{api_client, settings::Settings};
 use eyre::{bail, Result};
+use std::fs::remove_file;
 use std::path::PathBuf;
 
 pub async fn run(settings: &Settings) -> Result<()> {
@@ -17,6 +18,11 @@ pub async fn run(settings: &Settings) -> Result<()> {
     )?;
 
     client.delete().await?;
+
+    // Fixes stale session+key when account is deleted via CLI.
+    if PathBuf::from(session_path).exists() {
+        remove_file(PathBuf::from(session_path))?;
+    }
 
     println!("Your account is deleted");
 

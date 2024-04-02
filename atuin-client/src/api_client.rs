@@ -5,22 +5,27 @@ use std::time::Duration;
 use eyre::{bail, Result};
 use reqwest::{
     header::{HeaderMap, AUTHORIZATION, USER_AGENT},
-    StatusCode, Url,
+    Response, StatusCode, Url,
 };
 
-use atuin_common::record::{EncryptedData, HostId, Record, RecordId};
 use atuin_common::{
     api::{
-        AddHistoryRequest, CountResponse, DeleteHistoryRequest, ErrorResponse, IndexResponse,
-        LoginRequest, LoginResponse, RegisterResponse, StatusResponse, SyncHistoryResponse,
+        AddHistoryRequest, ChangePasswordRequest, CountResponse, DeleteHistoryRequest,
+        ErrorResponse, LoginRequest, LoginResponse, RegisterResponse, StatusResponse,
+        SyncHistoryResponse,
     },
-    record::RecordIndex,
+    record::RecordStatus,
 };
+use atuin_common::{
+    api::{ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ATUIN_VERSION},
+    record::{EncryptedData, HostId, Record, RecordIdx},
+};
+
 use semver::Version;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
-use crate::{history::History, sync::hash_str};
+use crate::{history::History, sync::hash_str, utils::get_host_user};
 
 static APP_USER_AGENT: &str = concat!("atuin/", env!("CARGO_PKG_VERSION"),);
 
@@ -52,9 +57,14 @@ pub async fn register(
     let resp = client
         .post(url)
         .header(USER_AGENT, APP_USER_AGENT)
+        .header(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION)
         .json(&map)
         .send()
         .await?;
+
+    if !ensure_version(&resp)? {
+        bail!("could not register user due to version mismatch");
+    }
 
     if !resp.status().is_success() {
         let error = resp.json::<ErrorResponse>().await?;
@@ -76,6 +86,10 @@ pub async fn login(address: &str, req: LoginRequest) -> Result<LoginResponse> {
         .send()
         .await?;
 
+    if !ensure_version(&resp)? {
+        bail!("could not login due to version mismatch");
+    }
+
     if resp.status() != reqwest::StatusCode::OK {
         let error = resp.json::<ErrorResponse>().await?;
         bail!("invalid login details: {}", error.reason);
@@ -85,7 +99,10 @@ pub async fn login(address: &str, req: LoginRequest) -> Result<LoginResponse> {
     Ok(session)
 }
 
+#[cfg(feature = "check-update")]
 pub async fn latest_version() -> Result<Version> {
+    use atuin_common::api::IndexResponse;
+
     let url = "https://api.atuin.sh";
     let client = reqwest::Client::new();
 
@@ -106,6 +123,53 @@ pub async fn latest_version() -> Result<Version> {
     Ok(version)
 }
 
+pub fn ensure_version(response: &Response) -> Result<bool> {
+    let version = response.headers().get(ATUIN_HEADER_VERSION);
+
+    let version = if let Some(version) = version {
+        match version.to_str() {
+            Ok(v) => Version::parse(v),
+            Err(e) => bail!("failed to parse server version: {:?}", e),
+        }
+    } else {
+        // if there is no version header, then the newest this server can possibly be is 17.1.0
+        Version::parse("17.1.0")
+    }?;
+
+    // If the client is newer than the server
+    if version.major < ATUIN_VERSION.major {
+        println!("Atuin version mismatch! In order to successfully sync, the server needs to run a newer version of Atuin");
+        println!("Client: {}", ATUIN_CARGO_VERSION);
+        println!("Server: {}", version);
+
+        return Ok(false);
+    }
+
+    Ok(true)
+}
+
+async fn handle_resp_error(resp: Response) -> Result<Response> {
+    let status = resp.status();
+
+    if status == StatusCode::SERVICE_UNAVAILABLE {
+        bail!(
+            "Service unavailable: check https://status.atuin.sh (or get in touch with your host)"
+        );
+    }
+
+    if status.is_client_error() {
+        let error = resp.json::<ErrorResponse>().await?.reason;
+        bail!("Could not fetch history, client error: {error}.")
+    } else if status.is_server_error() {
+        let error = resp.json::<ErrorResponse>().await?.reason;
+        bail!("There was an error with the atuin sync service: {error}.\nIf the problem persists, contact the host")
+    } else if !status.is_success() {
+        bail!("There was an error with the atuin sync service: Status {status:?}.\nIf the problem persists, contact the host")
+    }
+
+    Ok(resp)
+}
+
 impl<'a> Client<'a> {
     pub fn new(
         sync_addr: &'a str,
@@ -115,6 +179,9 @@ impl<'a> Client<'a> {
     ) -> Result<Self> {
         let mut headers = HeaderMap::new();
         headers.insert(AUTHORIZATION, format!("Token {session_token}").parse()?);
+
+        // used for semver server check
+        headers.insert(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION.parse()?);
 
         Ok(Client {
             sync_addr,
@@ -132,6 +199,11 @@ impl<'a> Client<'a> {
         let url = Url::parse(url.as_str())?;
 
         let resp = self.client.get(url).send().await?;
+        let resp = handle_resp_error(resp).await?;
+
+        if !ensure_version(&resp)? {
+            bail!("could not sync due to version mismatch");
+        }
 
         if resp.status() != StatusCode::OK {
             bail!("failed to get count (are you logged in?)");
@@ -147,9 +219,10 @@ impl<'a> Client<'a> {
         let url = Url::parse(url.as_str())?;
 
         let resp = self.client.get(url).send().await?;
+        let resp = handle_resp_error(resp).await?;
 
-        if resp.status() != StatusCode::OK {
-            bail!("failed to get status (are you logged in?)");
+        if !ensure_version(&resp)? {
+            bail!("could not sync due to version mismatch");
         }
 
         let status = resp.json::<StatusResponse>().await?;
@@ -163,13 +236,7 @@ impl<'a> Client<'a> {
         history_ts: OffsetDateTime,
         host: Option<String>,
     ) -> Result<SyncHistoryResponse> {
-        let host = host.unwrap_or_else(|| {
-            hash_str(&format!(
-                "{}:{}",
-                env::var("ATUIN_HOST_NAME").unwrap_or_else(|_| whoami::hostname()),
-                env::var("ATUIN_HOST_USER").unwrap_or_else(|_| whoami::username())
-            ))
-        });
+        let host = host.unwrap_or_else(|| hash_str(&get_host_user()));
 
         let url = format!(
             "{}/sync/history?sync_ts={}&history_ts={}&host={}",
@@ -180,27 +247,18 @@ impl<'a> Client<'a> {
         );
 
         let resp = self.client.get(url).send().await?;
+        let resp = handle_resp_error(resp).await?;
 
-        let status = resp.status();
-        if status.is_success() {
-            let history = resp.json::<SyncHistoryResponse>().await?;
-            Ok(history)
-        } else if status.is_client_error() {
-            let error = resp.json::<ErrorResponse>().await?.reason;
-            bail!("Could not fetch history: {error}.")
-        } else if status.is_server_error() {
-            let error = resp.json::<ErrorResponse>().await?.reason;
-            bail!("There was an error with the atuin sync service: {error}.\nIf the problem persists, contact the host")
-        } else {
-            bail!("There was an error with the atuin sync service: Status {status:?}.\nIf the problem persists, contact the host")
-        }
+        let history = resp.json::<SyncHistoryResponse>().await?;
+        Ok(history)
     }
 
     pub async fn post_history(&self, history: &[AddHistoryRequest]) -> Result<()> {
         let url = format!("{}/history", self.sync_addr);
         let url = Url::parse(url.as_str())?;
 
-        self.client.post(url).json(history).send().await?;
+        let resp = self.client.post(url).json(history).send().await?;
+        handle_resp_error(resp).await?;
 
         Ok(())
     }
@@ -209,20 +267,39 @@ impl<'a> Client<'a> {
         let url = format!("{}/history", self.sync_addr);
         let url = Url::parse(url.as_str())?;
 
-        self.client
+        let resp = self
+            .client
             .delete(url)
-            .json(&DeleteHistoryRequest { client_id: h.id })
+            .json(&DeleteHistoryRequest {
+                client_id: h.id.to_string(),
+            })
             .send()
             .await?;
+
+        handle_resp_error(resp).await?;
+
+        Ok(())
+    }
+
+    pub async fn delete_store(&self) -> Result<()> {
+        let url = format!("{}/api/v0/store", self.sync_addr);
+        let url = Url::parse(url.as_str())?;
+
+        let resp = self.client.delete(url).send().await?;
+
+        handle_resp_error(resp).await?;
 
         Ok(())
     }
 
     pub async fn post_records(&self, records: &[Record<EncryptedData>]) -> Result<()> {
-        let url = format!("{}/record", self.sync_addr);
+        let url = format!("{}/api/v0/record", self.sync_addr);
         let url = Url::parse(url.as_str())?;
 
-        self.client.post(url).json(records).send().await?;
+        debug!("uploading {} records to {url}", records.len());
+
+        let resp = self.client.post(url).json(records).send().await?;
+        handle_resp_error(resp).await?;
 
         Ok(())
     }
@@ -231,38 +308,45 @@ impl<'a> Client<'a> {
         &self,
         host: HostId,
         tag: String,
-        start: Option<RecordId>,
+        start: RecordIdx,
         count: u64,
     ) -> Result<Vec<Record<EncryptedData>>> {
-        let url = format!(
-            "{}/record/next?host={}&tag={}&count={}",
-            self.sync_addr, host.0, tag, count
+        debug!(
+            "fetching record/s from host {}/{}/{}",
+            host.0.to_string(),
+            tag,
+            start
         );
-        let mut url = Url::parse(url.as_str())?;
 
-        if let Some(start) = start {
-            url.set_query(Some(
-                format!(
-                    "host={}&tag={}&count={}&start={}",
-                    host.0, tag, count, start.0
-                )
-                .as_str(),
-            ));
-        }
+        let url = format!(
+            "{}/api/v0/record/next?host={}&tag={}&count={}&start={}",
+            self.sync_addr, host.0, tag, count, start
+        );
+
+        let url = Url::parse(url.as_str())?;
 
         let resp = self.client.get(url).send().await?;
+        let resp = handle_resp_error(resp).await?;
 
         let records = resp.json::<Vec<Record<EncryptedData>>>().await?;
 
         Ok(records)
     }
 
-    pub async fn record_index(&self) -> Result<RecordIndex> {
-        let url = format!("{}/record", self.sync_addr);
+    pub async fn record_status(&self) -> Result<RecordStatus> {
+        let url = format!("{}/api/v0/record", self.sync_addr);
         let url = Url::parse(url.as_str())?;
 
         let resp = self.client.get(url).send().await?;
+        let resp = handle_resp_error(resp).await?;
+
+        if !ensure_version(&resp)? {
+            bail!("could not sync records due to version mismatch");
+        }
+
         let index = resp.json().await?;
+
+        debug!("got remote index {:?}", index);
 
         Ok(index)
     }
@@ -274,6 +358,37 @@ impl<'a> Client<'a> {
         let resp = self.client.delete(url).send().await?;
 
         if resp.status() == 403 {
+            bail!("invalid login details");
+        } else if resp.status() == 200 {
+            Ok(())
+        } else {
+            bail!("Unknown error");
+        }
+    }
+
+    pub async fn change_password(
+        &self,
+        current_password: String,
+        new_password: String,
+    ) -> Result<()> {
+        let url = format!("{}/account/password", self.sync_addr);
+        let url = Url::parse(url.as_str())?;
+
+        let resp = self
+            .client
+            .patch(url)
+            .json(&ChangePasswordRequest {
+                current_password,
+                new_password,
+            })
+            .send()
+            .await?;
+
+        dbg!(&resp);
+
+        if resp.status() == 401 {
+            bail!("current password is incorrect")
+        } else if resp.status() == 403 {
             bail!("invalid login details");
         } else if resp.status() == 200 {
             Ok(())

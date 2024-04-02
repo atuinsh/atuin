@@ -1,12 +1,16 @@
-use atuin_common::utils;
+use std::io::{stderr, IsTerminal as _};
+
+use atuin_common::utils::{self, Escapable as _};
 use clap::Parser;
 use eyre::Result;
 
 use atuin_client::{
     database::Database,
     database::{current_context, OptFilters},
-    history::History,
-    settings::{FilterMode, SearchMode, Settings},
+    encryption,
+    history::{store::HistoryStore, History},
+    record::sqlite_store::SqliteStore,
+    settings::{FilterMode, KeymapMode, SearchMode, Settings, Timezone},
 };
 
 use super::history::ListMode;
@@ -15,10 +19,13 @@ mod cursor;
 mod duration;
 mod engines;
 mod history_list;
+mod inspector;
 mod interactive;
-pub use duration::{format_duration, format_duration_into};
+mod sort;
 
-#[allow(clippy::struct_excessive_bools)]
+pub use duration::format_duration_into;
+
+#[allow(clippy::struct_excessive_bools, clippy::struct_field_names)]
 #[derive(Parser, Debug)]
 pub struct Cmd {
     /// Filter search result by directory
@@ -69,11 +76,15 @@ pub struct Cmd {
     #[arg(long = "shell-up-key-binding", hide = true)]
     shell_up_key_binding: bool,
 
+    /// Notify the keymap at the shell's side
+    #[arg(long = "keymap-mode", default_value = "auto")]
+    keymap_mode: KeymapMode,
+
     /// Use human-readable formatting for time
     #[arg(long)]
     human: bool,
 
-    query: Vec<String>,
+    query: Option<Vec<String>>,
 
     /// Show only the text of the command
     #[arg(long)]
@@ -91,6 +102,14 @@ pub struct Cmd {
     #[arg(long, short)]
     reverse: bool,
 
+    /// Display the command time in another timezone other than the configured default.
+    ///
+    /// This option takes one of the following kinds of values:
+    /// - the special value "local" (or "l") which refers to the system time zone
+    /// - an offset from UTC (e.g. "+9", "-2:30")
+    #[arg(long, visible_alias = "tz")]
+    timezone: Option<Timezone>,
+
     /// Available variables: {command}, {directory}, {duration}, {user}, {host}, {time}, {exit} and
     /// {relativetime}.
     /// Example: --format "{time} - [{duration}] - {directory}$\t{command}"
@@ -103,13 +122,49 @@ pub struct Cmd {
 }
 
 impl Cmd {
-    pub async fn run(self, db: impl Database, settings: &mut Settings) -> Result<()> {
-        if self.delete && self.query.is_empty() {
+    // clippy: please write this instead
+    // clippy: now it has too many lines
+    // me: I'll do it later OKAY
+    #[allow(clippy::too_many_lines)]
+    pub async fn run(
+        self,
+        db: impl Database,
+        settings: &mut Settings,
+        store: SqliteStore,
+    ) -> Result<()> {
+        let query = self.query.map_or_else(
+            || {
+                std::env::var("ATUIN_QUERY").map_or_else(
+                    |_| vec![],
+                    |query| {
+                        query
+                            .split(' ')
+                            .map(std::string::ToString::to_string)
+                            .collect()
+                    },
+                )
+            },
+            |query| query,
+        );
+
+        if (self.delete_it_all || self.delete) && self.limit.is_some() {
+            // Because of how deletion is implemented, it will always delete all matches
+            // and disregard the limit option. It is also not clear what deletion with a
+            // limit would even mean. Deleting the LIMIT most recent entries that match
+            // the search query would make sense, but that wouldn't match what's displayed
+            // when running the equivalent search, but deleting those entries that are
+            // displayed with the search would leave any duplicates of those lines which may
+            // or may not have been intended to be deleted.
+            println!("\"--limit\" is not compatible with deletion.");
+            return Ok(());
+        }
+
+        if self.delete && query.is_empty() {
             println!("Please specify a query to match the items you wish to delete. If you wish to delete all history, pass --delete-it-all");
             return Ok(());
         }
 
-        if self.delete_it_all && !self.query.is_empty() {
+        if self.delete_it_all && !query.is_empty() {
             println!(
                 "--delete-it-all will delete ALL of your history! It does not require a query."
             );
@@ -128,12 +183,27 @@ impl Cmd {
 
         settings.shell_up_key_binding = self.shell_up_key_binding;
 
-        if self.interactive {
-            let item = interactive::history(&self.query, settings, db).await?;
-            eprintln!("{item}");
-        } else {
-            let list_mode = ListMode::from_flags(self.human, self.cmd_only);
+        // `keymap_mode` specified in config.toml overrides the `--keymap-mode`
+        // option specified in the keybindings.
+        settings.keymap_mode = match settings.keymap_mode {
+            KeymapMode::Auto => self.keymap_mode,
+            value => value,
+        };
+        settings.keymap_mode_shell = self.keymap_mode;
 
+        let encryption_key: [u8; 32] = encryption::load_key(settings)?.into();
+
+        let host_id = Settings::host_id().expect("failed to get host_id");
+        let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
+
+        if self.interactive {
+            let item = interactive::history(&query, settings, db, &history_store).await?;
+            if stderr().is_terminal() {
+                eprintln!("{}", item.escape_control());
+            } else {
+                eprintln!("{item}");
+            }
+        } else {
             let opt_filter = OptFilters {
                 exit: self.exit,
                 exclude_exit: self.exclude_exit,
@@ -147,7 +217,7 @@ impl Cmd {
             };
 
             let mut entries =
-                run_non_interactive(settings, opt_filter.clone(), &self.query, &db).await?;
+                run_non_interactive(settings, opt_filter.clone(), &query, &db).await?;
 
             if entries.is_empty() {
                 std::process::exit(1)
@@ -161,19 +231,32 @@ impl Cmd {
                 while !entries.is_empty() {
                     for entry in &entries {
                         eprintln!("deleting {}", entry.id);
-                        db.delete(entry.clone()).await?;
+
+                        if settings.sync.records {
+                            let (id, _) = history_store.delete(entry.id.clone()).await?;
+                            history_store.incremental_build(&db, &[id]).await?;
+                        } else {
+                            db.delete(entry.clone()).await?;
+                        }
                     }
 
                     entries =
-                        run_non_interactive(settings, opt_filter.clone(), &self.query, &db).await?;
+                        run_non_interactive(settings, opt_filter.clone(), &query, &db).await?;
                 }
             } else {
+                let format = match self.format {
+                    None => Some(settings.history_format.as_str()),
+                    _ => self.format.as_deref(),
+                };
+                let tz = self.timezone.unwrap_or(settings.timezone);
+
                 super::history::print_list(
                     &entries,
-                    list_mode,
-                    self.format.as_deref(),
+                    ListMode::from_flags(self.human, self.cmd_only),
+                    format,
                     false,
                     true,
+                    tz,
                 );
             }
         };

@@ -1,5 +1,7 @@
 use std::{
+    collections::HashMap,
     convert::TryFrom,
+    fmt,
     io::prelude::*,
     path::{Path, PathBuf},
     str::FromStr,
@@ -10,13 +12,18 @@ use clap::ValueEnum;
 use config::{
     builder::DefaultState, Config, ConfigBuilder, Environment, File as ConfigFile, FileFormat,
 };
-use eyre::{eyre, Context, Result};
+use eyre::{bail, eyre, Context, Error, Result};
 use fs_err::{create_dir_all, File};
 use parse_duration::parse;
 use regex::RegexSet;
 use semver::Version;
 use serde::Deserialize;
-use time::{format_description::well_known::Rfc3339, OffsetDateTime};
+use serde_with::DeserializeFromStr;
+use time::{
+    format_description::{well_known::Rfc3339, FormatItem},
+    macros::format_description,
+    OffsetDateTime, UtcOffset,
+};
 use uuid::Uuid;
 
 pub const HISTORY_PAGE_SIZE: i64 = 100;
@@ -25,6 +32,8 @@ pub const LAST_VERSION_CHECK_FILENAME: &str = "last_version_check_time";
 pub const LATEST_VERSION_FILENAME: &str = "latest_version";
 pub const HOST_ID_FILENAME: &str = "host_id";
 static EXAMPLE_CONFIG: &str = include_str!("../config.toml");
+
+mod dotfiles;
 
 #[derive(Clone, Debug, Deserialize, Copy, ValueEnum, PartialEq)]
 pub enum SearchMode {
@@ -122,6 +131,55 @@ impl From<Dialect> for interim::Dialect {
     }
 }
 
+/// Type wrapper around `time::UtcOffset` to support a wider variety of timezone formats.
+///
+/// Note that the parsing of this struct needs to be done before starting any
+/// multithreaded runtime, otherwise it will fail on most Unix systems.
+///
+/// See: https://github.com/atuinsh/atuin/pull/1517#discussion_r1447516426
+#[derive(Clone, Copy, Debug, Eq, PartialEq, DeserializeFromStr)]
+pub struct Timezone(pub UtcOffset);
+impl fmt::Display for Timezone {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+/// format: <+|-><hour>[:<minute>[:<second>]]
+static OFFSET_FMT: &[FormatItem<'_>] =
+    format_description!("[offset_hour sign:mandatory padding:none][optional [:[offset_minute padding:none][optional [:[offset_second padding:none]]]]]");
+impl FromStr for Timezone {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self> {
+        // local timezone
+        if matches!(s.to_lowercase().as_str(), "l" | "local") {
+            // There have been some timezone issues, related to errors fetching it on some
+            // platforms
+            // Rather than fail to start, fallback to UTC. The user should still be able to specify
+            // their timezone manually in the config file.
+            let offset = UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC);
+            return Ok(Self(offset));
+        }
+
+        if matches!(s.to_lowercase().as_str(), "0" | "utc") {
+            let offset = UtcOffset::UTC;
+            return Ok(Self(offset));
+        }
+
+        // offset from UTC
+        if let Ok(offset) = UtcOffset::parse(s, OFFSET_FMT) {
+            return Ok(Self(offset));
+        }
+
+        // IDEA: Currently named timezones are not supported, because the well-known crate
+        // for this is `chrono_tz`, which is not really interoperable with the datetime crate
+        // that we currently use - `time`. If ever we migrate to using `chrono`, this would
+        // be a good feature to add.
+
+        bail!(r#""{s}" is not a valid timezone spec"#)
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Copy)]
 pub enum Style {
     #[serde(rename = "auto")]
@@ -143,9 +201,146 @@ pub enum WordJumpMode {
     Subl,
 }
 
+#[derive(Clone, Debug, Deserialize, Copy, PartialEq, Eq, ValueEnum)]
+pub enum KeymapMode {
+    #[serde(rename = "emacs")]
+    Emacs,
+
+    #[serde(rename = "vim-normal")]
+    VimNormal,
+
+    #[serde(rename = "vim-insert")]
+    VimInsert,
+
+    #[serde(rename = "auto")]
+    Auto,
+}
+
+impl KeymapMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            KeymapMode::Emacs => "EMACS",
+            KeymapMode::VimNormal => "VIMNORMAL",
+            KeymapMode::VimInsert => "VIMINSERT",
+            KeymapMode::Auto => "AUTO",
+        }
+    }
+}
+
+// We want to translate the config to crossterm::cursor::SetCursorStyle, but
+// the original type does not implement trait serde::Deserialize unfortunately.
+// It seems impossible to implement Deserialize for external types when it is
+// used in HashMap (https://stackoverflow.com/questions/67142663).  We instead
+// define an adapter type.
+#[derive(Clone, Debug, Deserialize, Copy, PartialEq, Eq, ValueEnum)]
+pub enum CursorStyle {
+    #[serde(rename = "default")]
+    DefaultUserShape,
+
+    #[serde(rename = "blink-block")]
+    BlinkingBlock,
+
+    #[serde(rename = "steady-block")]
+    SteadyBlock,
+
+    #[serde(rename = "blink-underline")]
+    BlinkingUnderScore,
+
+    #[serde(rename = "steady-underline")]
+    SteadyUnderScore,
+
+    #[serde(rename = "blink-bar")]
+    BlinkingBar,
+
+    #[serde(rename = "steady-bar")]
+    SteadyBar,
+}
+
+impl CursorStyle {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            CursorStyle::DefaultUserShape => "DEFAULT",
+            CursorStyle::BlinkingBlock => "BLINKBLOCK",
+            CursorStyle::SteadyBlock => "STEADYBLOCK",
+            CursorStyle::BlinkingUnderScore => "BLINKUNDERLINE",
+            CursorStyle::SteadyUnderScore => "STEADYUNDERLINE",
+            CursorStyle::BlinkingBar => "BLINKBAR",
+            CursorStyle::SteadyBar => "STEADYBAR",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct Stats {
+    #[serde(default = "Stats::common_prefix_default")]
+    pub common_prefix: Vec<String>, // sudo, etc. commands we want to strip off
+    #[serde(default = "Stats::common_subcommands_default")]
+    pub common_subcommands: Vec<String>, // kubectl, commands we should consider subcommands for
+    #[serde(default = "Stats::ignored_commands_default")]
+    pub ignored_commands: Vec<String>, // cd, ls, etc. commands we want to completely hide from stats
+}
+
+impl Stats {
+    fn common_prefix_default() -> Vec<String> {
+        vec!["sudo", "doas"].into_iter().map(String::from).collect()
+    }
+
+    fn common_subcommands_default() -> Vec<String> {
+        vec![
+            "apt",
+            "cargo",
+            "composer",
+            "dnf",
+            "docker",
+            "git",
+            "go",
+            "ip",
+            "kubectl",
+            "nix",
+            "nmcli",
+            "npm",
+            "pecl",
+            "pnpm",
+            "podman",
+            "port",
+            "systemctl",
+            "tmux",
+            "yarn",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect()
+    }
+
+    fn ignored_commands_default() -> Vec<String> {
+        vec![]
+    }
+}
+
+impl Default for Stats {
+    fn default() -> Self {
+        Self {
+            common_prefix: Self::common_prefix_default(),
+            common_subcommands: Self::common_subcommands_default(),
+            ignored_commands: Self::ignored_commands_default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Default)]
+pub struct Sync {
+    pub records: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Default)]
+pub struct Keys {
+    pub scroll_exits: bool,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct Settings {
     pub dialect: Dialect,
+    pub timezone: Timezone,
     pub style: Style,
     pub auto_sync: bool,
     pub update_check: bool,
@@ -165,28 +360,63 @@ pub struct Settings {
     pub show_preview: bool,
     pub max_preview_height: u16,
     pub show_help: bool,
+    pub show_tabs: bool,
     pub exit_mode: ExitMode,
+    pub keymap_mode: KeymapMode,
+    pub keymap_mode_shell: KeymapMode,
+    pub keymap_cursor: HashMap<String, CursorStyle>,
     pub word_jump_mode: WordJumpMode,
     pub word_chars: String,
     pub scroll_context_lines: usize,
+    pub history_format: String,
+    pub prefers_reduced_motion: bool,
+
     #[serde(with = "serde_regex", default = "RegexSet::empty")]
     pub history_filter: RegexSet,
+
     #[serde(with = "serde_regex", default = "RegexSet::empty")]
     pub cwd_filter: RegexSet,
+
     pub secrets_filter: bool,
     pub workspaces: bool,
     pub ctrl_n_shortcuts: bool,
 
     pub network_connect_timeout: u64,
     pub network_timeout: u64,
+    pub local_timeout: f64,
     pub enter_accept: bool,
+    pub smart_sort: bool,
+
+    #[serde(default)]
+    pub stats: Stats,
+
+    #[serde(default)]
+    pub sync: Sync,
+
+    #[serde(default)]
+    pub keys: Keys,
+
+    #[serde(default)]
+    pub dotfiles: dotfiles::Settings,
 
     // This is automatically loaded when settings is created. Do not set in
     // config! Keep secrets and settings apart.
+    #[serde(skip)]
     pub session_token: String,
 }
 
 impl Settings {
+    pub fn utc() -> Self {
+        Self::builder()
+            .expect("Could not build default")
+            .set_override("timezone", "0")
+            .expect("failed to override timezone with UTC")
+            .build()
+            .expect("Could not build config")
+            .try_deserialize()
+            .expect("Could not deserialize config")
+    }
+
     fn save_to_data_dir(filename: &str, value: &str) -> Result<()> {
         let data_dir = atuin_common::utils::data_dir();
         let data_dir = data_dir.as_path();
@@ -278,6 +508,7 @@ impl Settings {
         }
     }
 
+    #[cfg(feature = "check-update")]
     fn needs_update_check(&self) -> Result<bool> {
         let last_check = Settings::last_version_check()?;
         let diff = OffsetDateTime::now_utc() - last_check;
@@ -286,6 +517,7 @@ impl Settings {
         Ok(diff.whole_hours() >= 1)
     }
 
+    #[cfg(feature = "check-update")]
     async fn latest_version(&self) -> Result<Version> {
         // Default to the current version, and if that doesn't parse, a version so high it's unlikely to ever
         // suggest upgrading.
@@ -316,6 +548,7 @@ impl Settings {
     }
 
     // Return Some(latest version) if an update is needed. Otherwise, none.
+    #[cfg(feature = "check-update")]
     pub async fn needs_update(&self) -> Option<Version> {
         if !self.update_check {
             return None;
@@ -339,6 +572,11 @@ impl Settings {
         None
     }
 
+    #[cfg(not(feature = "check-update"))]
+    pub async fn needs_update(&self) -> Option<Version> {
+        None
+    }
+
     pub fn builder() -> Result<ConfigBuilder<DefaultState>> {
         let data_dir = atuin_common::utils::data_dir();
         let db_path = data_dir.join("history.db");
@@ -348,13 +586,15 @@ impl Settings {
         let session_path = data_dir.join("session");
 
         Ok(Config::builder()
+            .set_default("history_format", "{time}\t{command}\t{duration}")?
             .set_default("db_path", db_path.to_str())?
             .set_default("record_store_path", record_store_path.to_str())?
             .set_default("key_path", key_path.to_str())?
             .set_default("session_path", session_path.to_str())?
             .set_default("dialect", "us")?
+            .set_default("timezone", "local")?
             .set_default("auto_sync", true)?
-            .set_default("update_check", true)?
+            .set_default("update_check", cfg!(feature = "check-update"))?
             .set_default("sync_address", "https://api.atuin.sh")?
             .set_default("sync_frequency", "10m")?
             .set_default("search_mode", "fuzzy")?
@@ -364,6 +604,7 @@ impl Settings {
             .set_default("show_preview", false)?
             .set_default("max_preview_height", 4)?
             .set_default("show_help", true)?
+            .set_default("show_tabs", true)?
             .set_default("invert", false)?
             .set_default("exit_mode", "return-original")?
             .set_default("word_jump_mode", "emacs")?
@@ -379,12 +620,26 @@ impl Settings {
             .set_default("secrets_filter", true)?
             .set_default("network_connect_timeout", 5)?
             .set_default("network_timeout", 30)?
+            .set_default("local_timeout", 2.0)?
             // enter_accept defaults to false here, but true in the default config file. The dissonance is
             // intentional!
             // Existing users will get the default "False", so we don't mess with any potential
             // muscle memory.
             // New users will get the new default, that is more similar to what they are used to.
             .set_default("enter_accept", false)?
+            .set_default("sync.records", false)?
+            .set_default("keys.scroll_exits", true)?
+            .set_default("keymap_mode", "emacs")?
+            .set_default("keymap_mode_shell", "auto")?
+            .set_default("keymap_cursor", HashMap::<String, String>::new())?
+            .set_default("smart_sort", false)?
+            .set_default(
+                "prefers_reduced_motion",
+                std::env::var("NO_MOTION")
+                    .ok()
+                    .map(|_| config::Value::new(None, config::ValueKind::Boolean(true)))
+                    .unwrap_or_else(|| config::Value::new(None, config::ValueKind::Boolean(false))),
+            )?
             .add_source(
                 Environment::with_prefix("atuin")
                     .prefix_separator("_")
@@ -470,5 +725,44 @@ impl Default for Settings {
             .expect("Could not build config")
             .try_deserialize()
             .expect("Could not deserialize config")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use eyre::Result;
+
+    use super::Timezone;
+
+    #[test]
+    fn can_parse_offset_timezone_spec() -> Result<()> {
+        assert_eq!(Timezone::from_str("+02")?.0.as_hms(), (2, 0, 0));
+        assert_eq!(Timezone::from_str("-04")?.0.as_hms(), (-4, 0, 0));
+        assert_eq!(Timezone::from_str("+05:30")?.0.as_hms(), (5, 30, 0));
+        assert_eq!(Timezone::from_str("-09:30")?.0.as_hms(), (-9, -30, 0));
+
+        // single digit hours are allowed
+        assert_eq!(Timezone::from_str("+2")?.0.as_hms(), (2, 0, 0));
+        assert_eq!(Timezone::from_str("-4")?.0.as_hms(), (-4, 0, 0));
+        assert_eq!(Timezone::from_str("+5:30")?.0.as_hms(), (5, 30, 0));
+        assert_eq!(Timezone::from_str("-9:30")?.0.as_hms(), (-9, -30, 0));
+
+        // fully qualified form
+        assert_eq!(Timezone::from_str("+09:30:00")?.0.as_hms(), (9, 30, 0));
+        assert_eq!(Timezone::from_str("-09:30:00")?.0.as_hms(), (-9, -30, 0));
+
+        // these offsets don't really exist but are supported anyway
+        assert_eq!(Timezone::from_str("+0:5")?.0.as_hms(), (0, 5, 0));
+        assert_eq!(Timezone::from_str("-0:5")?.0.as_hms(), (0, -5, 0));
+        assert_eq!(Timezone::from_str("+01:23:45")?.0.as_hms(), (1, 23, 45));
+        assert_eq!(Timezone::from_str("-01:23:45")?.0.as_hms(), (-1, -23, -45));
+
+        // require a leading sign for clarity
+        assert!(Timezone::from_str("5").is_err());
+        assert!(Timezone::from_str("10:30").is_err());
+
+        Ok(())
     }
 }

@@ -1,6 +1,8 @@
-use clap::{CommandFactory, Subcommand};
-use clap_complete::{generate, generate_to, Shell};
+use clap::Subcommand;
 use eyre::Result;
+
+#[cfg(not(windows))]
+use rustix::{fs::Mode, process::umask};
 
 #[cfg(feature = "client")]
 mod client;
@@ -8,9 +10,9 @@ mod client;
 #[cfg(feature = "server")]
 mod server;
 
-mod init;
-
 mod contributors;
+
+mod gen_completions;
 
 #[derive(Subcommand)]
 #[command(infer_subcommands = true)]
@@ -24,28 +26,25 @@ pub enum AtuinCmd {
     #[command(subcommand)]
     Server(server::Cmd),
 
-    /// Output shell setup
-    Init(init::Cmd),
-
     /// Generate a UUID
     Uuid,
 
     Contributors,
 
     /// Generate shell completions
-    GenCompletions {
-        /// Set the shell for generating completions
-        #[arg(long, short)]
-        shell: Shell,
-
-        /// Set the output directory
-        #[arg(long, short)]
-        out_dir: Option<String>,
-    },
+    GenCompletions(gen_completions::Cmd),
 }
 
 impl AtuinCmd {
     pub fn run(self) -> Result<()> {
+        #[cfg(not(windows))]
+        {
+            // set umask before we potentially open/create files
+            // or in other words, 077. Do not allow any access to any other user
+            let mode = Mode::RWXG | Mode::RWXO;
+            umask(mode);
+        }
+
         match self {
             #[cfg(feature = "client")]
             Self::Client(client) => client.run(),
@@ -56,33 +55,11 @@ impl AtuinCmd {
                 contributors::run();
                 Ok(())
             }
-            Self::Init(init) => {
-                init.run();
-                Ok(())
-            }
             Self::Uuid => {
                 println!("{}", atuin_common::utils::uuid_v7().as_simple());
                 Ok(())
             }
-            Self::GenCompletions { shell, out_dir } => {
-                let mut cli = crate::Atuin::command();
-
-                match out_dir {
-                    Some(out_dir) => {
-                        generate_to(shell, &mut cli, env!("CARGO_PKG_NAME"), &out_dir)?;
-                    }
-                    None => {
-                        generate(
-                            shell,
-                            &mut cli,
-                            env!("CARGO_PKG_NAME"),
-                            &mut std::io::stdout(),
-                        );
-                    }
-                }
-
-                Ok(())
-            }
+            Self::GenCompletions(gen_completions) => gen_completions.run(),
         }
     }
 }

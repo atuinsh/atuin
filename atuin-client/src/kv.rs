@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use atuin_common::record::{DecryptedData, HostId};
+use atuin_common::record::{DecryptedData, Host, HostId};
 use eyre::{bail, ensure, eyre, Result};
 use serde::Deserialize;
 
@@ -89,7 +89,7 @@ impl KvStore {
 
     pub async fn set(
         &self,
-        store: &mut (impl Store + Send + Sync),
+        store: &(impl Store + Send + Sync),
         encryption_key: &[u8; 32],
         host_id: HostId,
         namespace: &str,
@@ -111,13 +111,16 @@ impl KvStore {
 
         let bytes = record.serialize()?;
 
-        let parent = store.tail(host_id, KV_TAG).await?.map(|entry| entry.id);
+        let idx = store
+            .last(host_id, KV_TAG)
+            .await?
+            .map_or(0, |entry| entry.idx + 1);
 
         let record = atuin_common::record::Record::builder()
-            .host(host_id)
+            .host(Host::new(host_id))
             .version(KV_VERSION.to_string())
             .tag(KV_TAG.to_string())
-            .parent(parent)
+            .idx(idx)
             .data(bytes)
             .build();
 
@@ -137,43 +140,18 @@ impl KvStore {
         namespace: &str,
         key: &str,
     ) -> Result<Option<KvRecord>> {
-        // Currently, this is O(n). When we have an actual KV store, it can be better
-        // Just a poc for now!
+        // TODO: don't rebuild every time...
+        let map = self.build_kv(store, encryption_key).await?;
 
-        // iterate records to find the value we want
-        // start at the end, so we get the most recent version
-        let tails = store.tag_tails(KV_TAG).await?;
+        let res = map.get(namespace);
 
-        if tails.is_empty() {
-            return Ok(None);
+        if let Some(ns) = res {
+            let value = ns.get(key);
+
+            Ok(value.cloned())
+        } else {
+            Ok(None)
         }
-
-        // first, decide on a record.
-        // try getting the newest first
-        // we always need a way of deciding the "winner" of a write
-        // TODO(ellie): something better than last-write-wins, what if two write at the same time?
-        let mut record = tails.iter().max_by_key(|r| r.timestamp).unwrap().clone();
-
-        loop {
-            let decrypted = match record.version.as_str() {
-                KV_VERSION => record.decrypt::<PASETO_V4>(encryption_key)?,
-                version => bail!("unknown version {version:?}"),
-            };
-
-            let kv = KvRecord::deserialize(&decrypted.data, &decrypted.version)?;
-            if kv.key == key && kv.namespace == namespace {
-                return Ok(Some(kv));
-            }
-
-            if let Some(parent) = decrypted.parent {
-                record = store.get(parent).await?;
-            } else {
-                break;
-            }
-        }
-
-        // if we get here, then... we didn't find the record with that key :(
-        Ok(None)
     }
 
     // Build a kv map out of the linked list kv store
@@ -184,32 +162,30 @@ impl KvStore {
         &self,
         store: &impl Store,
         encryption_key: &[u8; 32],
-    ) -> Result<BTreeMap<String, BTreeMap<String, String>>> {
+    ) -> Result<BTreeMap<String, BTreeMap<String, KvRecord>>> {
         let mut map = BTreeMap::new();
-        let tails = store.tag_tails(KV_TAG).await?;
 
-        if tails.is_empty() {
-            return Ok(map);
-        }
+        // TODO: maybe don't load the entire tag into memory to build the kv
+        // we can be smart about it and only load values since the last build
+        // or, iterate/paginate
+        let tagged = store.all_tagged(KV_TAG).await?;
 
-        let mut record = tails.iter().max_by_key(|r| r.timestamp).unwrap().clone();
-
-        loop {
+        // iterate through all tags and play each KV record at a time
+        // this is "last write wins"
+        // probably good enough for now, but revisit in future
+        for record in tagged {
             let decrypted = match record.version.as_str() {
                 KV_VERSION => record.decrypt::<PASETO_V4>(encryption_key)?,
                 version => bail!("unknown version {version:?}"),
             };
 
-            let kv = KvRecord::deserialize(&decrypted.data, &decrypted.version)?;
+            let kv = KvRecord::deserialize(&decrypted.data, KV_VERSION)?;
 
-            let ns = map.entry(kv.namespace).or_insert_with(BTreeMap::new);
-            ns.entry(kv.key).or_insert_with(|| kv.value);
+            let ns = map
+                .entry(kv.namespace.clone())
+                .or_insert_with(BTreeMap::new);
 
-            if let Some(parent) = decrypted.parent {
-                record = store.get(parent).await?;
-            } else {
-                break;
-            }
+            ns.insert(kv.key.clone(), kv);
         }
 
         Ok(map)
@@ -221,7 +197,7 @@ mod tests {
     use crypto_secretbox::{KeyInit, XSalsa20Poly1305};
     use rand::rngs::OsRng;
 
-    use crate::record::sqlite_store::SqliteStore;
+    use crate::record::sqlite_store::{test_sqlite_store_timeout, SqliteStore};
 
     use super::{KvRecord, KvStore, KV_VERSION};
 
@@ -245,7 +221,9 @@ mod tests {
 
     #[tokio::test]
     async fn build_kv() {
-        let mut store = SqliteStore::new(":memory:").await.unwrap();
+        let mut store = SqliteStore::new(":memory:", test_sqlite_store_timeout())
+            .await
+            .unwrap();
         let kv = KvStore::new();
         let key: [u8; 32] = XSalsa20Poly1305::generate_key(&mut OsRng).into();
         let host_id = atuin_common::record::HostId(atuin_common::utils::uuid_v7());
@@ -261,19 +239,27 @@ mod tests {
         let map = kv.build_kv(&store, &key).await.unwrap();
 
         assert_eq!(
-            map.get("test-kv")
+            *map.get("test-kv")
                 .expect("map namespace not set")
                 .get("foo")
                 .expect("map key not set"),
-            "bar"
+            KvRecord {
+                namespace: String::from("test-kv"),
+                key: String::from("foo"),
+                value: String::from("bar")
+            }
         );
 
         assert_eq!(
-            map.get("test-kv")
+            *map.get("test-kv")
                 .expect("map namespace not set")
                 .get("1")
                 .expect("map key not set"),
-            "2"
+            KvRecord {
+                namespace: String::from("test-kv"),
+                key: String::from("1"),
+                value: String::from("2")
+            }
         );
     }
 }

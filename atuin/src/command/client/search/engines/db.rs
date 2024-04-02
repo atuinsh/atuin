@@ -26,8 +26,8 @@ impl SearchEngine for Search {
                     ..Default::default()
                 },
             )
-            .await?
-            .into_iter()
-            .collect::<Vec<_>>())
+            .await
+            // ignore errors as it may be caused by incomplete regex
+            .map_or(Vec::new(), |r| r.into_iter().collect()))
     }
 }

@@ -1,5 +1,10 @@
 #! /usr/bin/env bash
 
+if [[ "${BASH_VERSION%%.*}" -eq 3 ]]; then
+    echo "Atuin has limited support for Bash 3.2. The Atuin config enter_accept cannot be turned off." >&2
+    echo "To turn off enter_accept, please upgrade your version of bash (possibly via homebrew or ports)" >&2
+fi
+
 set -euo pipefail
 
 cat << EOF
@@ -66,9 +71,9 @@ __atuin_install_arch(){
 
 }
 
-__atuin_install_ubuntu(){
+__atuin_install_deb_based(){
 	if [ "$(dpkg --print-architecture)" = "amd64" ]; then
-		echo "Ubuntu detected"
+		echo "Detected distro: $OS"
 		ARTIFACT_URL="https://github.com/atuinsh/atuin/releases/download/$LATEST_VERSION/atuin_${LATEST_VERSION//v/}_amd64.deb"
 		TEMP_DEB="$(mktemp)".deb &&
 		curl -Lo "$TEMP_DEB" "$ARTIFACT_URL"
@@ -79,7 +84,7 @@ __atuin_install_ubuntu(){
 		fi
 		rm -f "$TEMP_DEB"
 	else
-		echo "Ubuntu detected, but not amd64"
+		echo "$OS detected, but not amd64"
 		__atuin_install_unsupported
 	fi
 }
@@ -98,8 +103,8 @@ __atuin_install_linux(){
 	case "$OS" in
 		"arch" | "manjarolinux" | "endeavouros")
 			__atuin_install_arch;;
-		"ubuntu" | "ubuntuwsl" | "debian" | "linuxmint" | "parrot" | "kali" | "elementary" | "pop")
-			__atuin_install_ubuntu;;
+		"ubuntu" | "ubuntuwsl" | "debian" | "linuxmint" | "parrot" | "kali" | "elementary" | "pop" | "neon")
+			__atuin_install_deb_based;;
 		*)
 			# TODO: download a binary or smth
 			__atuin_install_unsupported;;
@@ -183,8 +188,8 @@ esac
 # TODO: Check which shell is in use
 # Use of single quotes around $() is intentional here
 # shellcheck disable=SC2016
-if ! grep -q "atuin init zsh" ~/.zshrc; then
-  printf '\neval "$(atuin init zsh)"\n' >> ~/.zshrc
+if ! grep -q "atuin init zsh" "${ZDOTDIR:-$HOME}/.zshrc"; then
+  printf '\neval "$(atuin init zsh)"\n' >> "${ZDOTDIR:-$HOME}/.zshrc"
 fi
 
 # Use of single quotes around $() is intentional here
@@ -212,7 +217,7 @@ cat << EOF
 
 Thanks for installing Atuin! I really hope you like it.
 
-If you have any issues, please open an issue on GitHub or visit our Discord (https://discord.gg/dPhv2B3x)!
+If you have any issues, please open an issue on GitHub or visit our Discord (https://discord.gg/jR3tfchVvW)!
 
 If you love Atuin, please give us a star on GitHub! It really helps ⭐️ https://github.com/atuinsh/atuin
 

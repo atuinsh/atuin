@@ -1,23 +1,28 @@
 use std::{
-    env,
     fmt::{self, Display},
-    io::{self, Write},
+    io::{self, IsTerminal, Write},
     time::Duration,
 };
 
-use atuin_common::utils;
+use atuin_common::utils::{self, Escapable as _};
 use clap::Subcommand;
 use eyre::{Context, Result};
 use runtime_format::{FormatKey, FormatKeyError, ParseSegment, ParsedFmt};
 
 use atuin_client::{
     database::{current_context, Database},
-    history::History,
-    settings::Settings,
+    encryption,
+    history::{store::HistoryStore, History},
+    record::sqlite_store::SqliteStore,
+    settings::{
+        FilterMode::{Directory, Global, Session},
+        Settings, Timezone,
+    },
 };
 
 #[cfg(feature = "sync")]
-use atuin_client::sync;
+use atuin_client::{record, sync};
+
 use log::{debug, warn};
 use time::{macros::format_description, OffsetDateTime};
 
@@ -27,13 +32,17 @@ use super::search::format_duration_into;
 #[command(infer_subcommands = true)]
 pub enum Cmd {
     /// Begins a new command in the history
-    Start { command: Vec<String> },
+    Start {
+        command: Vec<String>,
+    },
 
     /// Finishes a new command in the history (adds time, exit code)
     End {
         id: String,
         #[arg(long, short)]
         exit: i64,
+        #[arg(long, short)]
+        duration: Option<u64>,
     },
 
     /// List all items in history
@@ -62,6 +71,14 @@ pub enum Cmd {
         #[arg(action = clap::ArgAction::Set)]
         reverse: bool,
 
+        /// Display the command time in another timezone other than the configured default.
+        ///
+        /// This option takes one of the following kinds of values:
+        /// - the special value "local" (or "l") which refers to the system time zone
+        /// - an offset from UTC (e.g. "+9", "-2:30")
+        #[arg(long, visible_alias = "tz")]
+        timezone: Option<Timezone>,
+
         /// Available variables: {command}, {directory}, {duration}, {user}, {host}, {exit} and {time}.
         /// Example: --format "{time} - [{duration}] - {directory}$\t{command}"
         #[arg(long, short)]
@@ -77,10 +94,27 @@ pub enum Cmd {
         #[arg(long)]
         cmd_only: bool,
 
+        /// Display the command time in another timezone other than the configured default.
+        ///
+        /// This option takes one of the following kinds of values:
+        /// - the special value "local" (or "l") which refers to the system time zone
+        /// - an offset from UTC (e.g. "+9", "-2:30")
+        #[arg(long, visible_alias = "tz")]
+        timezone: Option<Timezone>,
+
         /// Available variables: {command}, {directory}, {duration}, {user}, {host} and {time}.
         /// Example: --format "{time} - [{duration}] - {directory}$\t{command}"
         #[arg(long, short)]
         format: Option<String>,
+    },
+
+    InitStore,
+
+    /// Delete history entries matching the configured exclusion filters
+    Prune {
+        /// List matching history lines without performing the actual deletion.
+        #[arg(short = 'n', long)]
+        dry_run: bool,
     },
 }
 
@@ -110,6 +144,7 @@ pub fn print_list(
     format: Option<&str>,
     print0: bool,
     reverse: bool,
+    tz: Timezone,
 ) {
     let w = std::io::stdout();
     let mut w = w.lock();
@@ -139,51 +174,61 @@ pub fn print_list(
     let entry_terminator = if print0 { "\0" } else { "\n" };
     let flush_each_line = print0;
 
-    for h in iterator {
-        match write!(
-            w,
-            "{}{}",
-            parsed_fmt.with_args(&FmtHistory(h)),
-            entry_terminator
-        ) {
-            Ok(()) => {}
-            // ignore broken pipe (issue #626)
-            Err(e) if e.kind() == io::ErrorKind::BrokenPipe => {
-                return;
-            }
-            Err(err) => {
-                eprintln!("ERROR: History output failed with the following error: {err}");
-                std::process::exit(1);
-            }
+    for history in iterator {
+        let fh = FmtHistory {
+            history,
+            cmd_format: CmdFormat::for_output(&w),
+            tz: &tz,
+        };
+        let args = parsed_fmt.with_args(&fh);
+        let write = write!(w, "{args}{entry_terminator}");
+        if let Err(err) = args.status() {
+            eprintln!("ERROR: history output failed with: {err}");
+            std::process::exit(1);
         }
+        check_for_write_errors(write);
         if flush_each_line {
-            match w.flush() {
-                Ok(()) => {}
-                // ignore broken pipe (issue #626)
-                Err(e) if e.kind() == io::ErrorKind::BrokenPipe => {}
-                Err(err) => {
-                    eprintln!("ERROR: History output failed with the following error: {err}");
-                    std::process::exit(1);
-                }
-            }
+            check_for_write_errors(w.flush());
         }
     }
 
     if !flush_each_line {
-        match w.flush() {
-            Ok(()) => {}
-            // ignore broken pipe (issue #626)
-            Err(e) if e.kind() == io::ErrorKind::BrokenPipe => {}
-            Err(err) => {
-                eprintln!("ERROR: History output failed with the following error: {err}");
-                std::process::exit(1);
-            }
+        check_for_write_errors(w.flush());
+    }
+}
+
+fn check_for_write_errors(write: Result<(), io::Error>) {
+    if let Err(err) = write {
+        // Ignore broken pipe (issue #626)
+        if err.kind() != io::ErrorKind::BrokenPipe {
+            eprintln!("ERROR: History output failed with the following error: {err}");
+            std::process::exit(1);
         }
     }
 }
 
-/// type wrapper around `History` so we can implement traits
-struct FmtHistory<'a>(&'a History);
+/// Type wrapper around `History` with formatting settings.
+#[derive(Clone, Copy, Debug)]
+struct FmtHistory<'a> {
+    history: &'a History,
+    cmd_format: CmdFormat,
+    tz: &'a Timezone,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum CmdFormat {
+    Literal,
+    Escaped,
+}
+impl CmdFormat {
+    fn for_output<O: IsTerminal>(out: &O) -> Self {
+        if out.is_terminal() {
+            Self::Escaped
+        } else {
+            Self::Literal
+        }
+    }
+}
 
 static TIME_FMT: &[time::format_description::FormatItem<'static>] =
     format_description!("[year]-[month]-[day] [hour repr:24]:[minute]:[second]");
@@ -193,32 +238,41 @@ impl FormatKey for FmtHistory<'_> {
     #[allow(clippy::cast_sign_loss)]
     fn fmt(&self, key: &str, f: &mut fmt::Formatter<'_>) -> Result<(), FormatKeyError> {
         match key {
-            "command" => f.write_str(self.0.command.trim())?,
-            "directory" => f.write_str(self.0.cwd.trim())?,
-            "exit" => f.write_str(&self.0.exit.to_string())?,
+            "command" => match self.cmd_format {
+                CmdFormat::Literal => f.write_str(self.history.command.trim()),
+                CmdFormat::Escaped => f.write_str(&self.history.command.trim().escape_control()),
+            }?,
+            "directory" => f.write_str(self.history.cwd.trim())?,
+            "exit" => f.write_str(&self.history.exit.to_string())?,
             "duration" => {
-                let dur = Duration::from_nanos(std::cmp::max(self.0.duration, 0) as u64);
+                let dur = Duration::from_nanos(std::cmp::max(self.history.duration, 0) as u64);
                 format_duration_into(dur, f)?;
             }
             "time" => {
-                self.0
+                self.history
                     .timestamp
+                    .to_offset(self.tz.0)
                     .format(TIME_FMT)
                     .map_err(|_| fmt::Error)?
                     .fmt(f)?;
             }
             "relativetime" => {
-                let since = OffsetDateTime::now_utc() - self.0.timestamp;
+                let since = OffsetDateTime::now_utc() - self.history.timestamp;
                 let d = Duration::try_from(since).unwrap_or_default();
                 format_duration_into(d, f)?;
             }
             "host" => f.write_str(
-                self.0
+                self.history
                     .hostname
                     .split_once(':')
-                    .map_or(&self.0.hostname, |(host, _)| host),
+                    .map_or(&self.history.hostname, |(host, _)| host),
             )?,
-            "user" => f.write_str(self.0.hostname.split_once(':').map_or("", |(_, user)| user))?,
+            "user" => f.write_str(
+                self.history
+                    .hostname
+                    .split_once(':')
+                    .map_or("", |(_, user)| user),
+            )?,
             _ => return Err(FormatKeyError::UnknownKey),
         }
         Ok(())
@@ -264,14 +318,19 @@ impl Cmd {
         // we use this as the key for calling end
         println!("{}", h.id);
         db.save(&h).await?;
+
         Ok(())
     }
 
+    #[allow(unused_variables)]
     async fn handle_end(
         db: &impl Database,
+        store: SqliteStore,
+        history_store: HistoryStore,
         settings: &Settings,
         id: &str,
         exit: i64,
+        duration: Option<u64>,
     ) -> Result<()> {
         if id.trim() == "" {
             return Ok(());
@@ -290,16 +349,27 @@ impl Cmd {
         }
 
         h.exit = exit;
-        h.duration = i64::try_from((OffsetDateTime::now_utc() - h.timestamp).whole_nanoseconds())
-            .context("command took over 292 years")?;
+        h.duration = match duration {
+            Some(value) => i64::try_from(value).context("command took over 292 years")?,
+            None => i64::try_from((OffsetDateTime::now_utc() - h.timestamp).whole_nanoseconds())
+                .context("command took over 292 years")?,
+        };
 
         db.update(&h).await?;
+        history_store.push(h).await?;
 
         if settings.should_sync()? {
             #[cfg(feature = "sync")]
             {
-                debug!("running periodic background sync");
-                sync::sync(settings, false, db).await?;
+                if settings.sync.records {
+                    let (_, downloaded) = record::sync::sync(settings, &store).await?;
+                    Settings::save_sync_time()?;
+
+                    history_store.incremental_build(db, &downloaded).await?;
+                } else {
+                    debug!("running periodic background sync");
+                    sync::sync(settings, false, db).await?;
+                }
             }
             #[cfg(not(feature = "sync"))]
             debug!("not compiled with sync support");
@@ -323,50 +393,108 @@ impl Cmd {
         include_deleted: bool,
         print0: bool,
         reverse: bool,
+        tz: Timezone,
     ) -> Result<()> {
-        let session = if session {
-            Some(env::var("ATUIN_SESSION")?)
-        } else {
-            None
-        };
-        let cwd = if cwd {
-            Some(utils::get_current_dir())
-        } else {
-            None
+        let filters = match (session, cwd) {
+            (true, true) => [Session, Directory],
+            (true, false) => [Session, Global],
+            (false, true) => [Global, Directory],
+            (false, false) => [settings.filter_mode, Global],
         };
 
-        let history = match (session, cwd) {
-            (None, None) => {
-                db.list(settings.filter_mode, &context, None, false, include_deleted)
-                    .await?
-            }
-            (None, Some(cwd)) => {
-                let query = format!("select * from history where cwd = '{cwd}';");
-                db.query_history(&query).await?
-            }
-            (Some(session), None) => {
-                let query = format!("select * from history where session = '{session}';");
-                db.query_history(&query).await?
-            }
-            (Some(session), Some(cwd)) => {
-                let query = format!(
-                    "select * from history where cwd = '{cwd}' and session = '{session}';",
-                );
-                db.query_history(&query).await?
-            }
-        };
+        let history = db
+            .list(&filters, &context, None, false, include_deleted)
+            .await?;
 
-        print_list(&history, mode, format.as_deref(), print0, reverse);
+        print_list(
+            &history,
+            mode,
+            match format {
+                None => Some(settings.history_format.as_str()),
+                _ => format.as_deref(),
+            },
+            print0,
+            reverse,
+            tz,
+        );
 
         Ok(())
     }
 
-    pub async fn run(self, settings: &Settings, db: &impl Database) -> Result<()> {
+    async fn handle_prune(
+        db: &impl Database,
+        settings: &Settings,
+        store: SqliteStore,
+        context: atuin_client::database::Context,
+        dry_run: bool,
+    ) -> Result<()> {
+        // Grab all executed commands and filter them using History::should_save.
+        // We could iterate or paginate here if memory usage becomes an issue.
+        let matches: Vec<History> = db
+            .list(&[Global], &context, None, false, false)
+            .await?
+            .into_iter()
+            .filter(|h| !h.should_save(settings))
+            .collect();
+
+        match matches.len() {
+            0 => {
+                println!("No entries to prune.");
+                return Ok(());
+            }
+            1 => println!("Found 1 entry to prune."),
+            n => println!("Found {n} entries to prune."),
+        }
+
+        if dry_run {
+            print_list(
+                &matches,
+                ListMode::Human,
+                Some(settings.history_format.as_str()),
+                false,
+                false,
+                settings.timezone,
+            );
+        } else {
+            let encryption_key: [u8; 32] = encryption::load_key(settings)
+                .context("could not load encryption key")?
+                .into();
+            let host_id = Settings::host_id().expect("failed to get host_id");
+            let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
+
+            for entry in matches {
+                eprintln!("deleting {}", entry.id);
+                if settings.sync.records {
+                    let (id, _) = history_store.delete(entry.id.clone()).await?;
+                    history_store.incremental_build(db, &[id]).await?;
+                } else {
+                    db.delete(entry.clone()).await?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn run(
+        self,
+        settings: &Settings,
+        db: &impl Database,
+        store: SqliteStore,
+    ) -> Result<()> {
         let context = current_context();
+
+        let encryption_key: [u8; 32] = encryption::load_key(settings)
+            .context("could not load encryption key")?
+            .into();
+
+        let host_id = Settings::host_id().expect("failed to get host_id");
+        let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
         match self {
             Self::Start { command } => Self::handle_start(db, settings, &command).await,
-            Self::End { id, exit } => Self::handle_end(db, settings, &id, exit).await,
+            Self::End { id, exit, duration } => {
+                Self::handle_end(db, store, history_store, settings, &id, exit, duration).await
+            }
             Self::List {
                 session,
                 cwd,
@@ -374,11 +502,13 @@ impl Cmd {
                 cmd_only,
                 print0,
                 reverse,
+                timezone,
                 format,
             } => {
                 let mode = ListMode::from_flags(human, cmd_only);
+                let tz = timezone.unwrap_or(settings.timezone);
                 Self::handle_list(
-                    db, settings, context, session, cwd, mode, format, false, print0, reverse,
+                    db, settings, context, session, cwd, mode, format, false, print0, reverse, tz,
                 )
                 .await
             }
@@ -386,19 +516,31 @@ impl Cmd {
             Self::Last {
                 human,
                 cmd_only,
+                timezone,
                 format,
             } => {
                 let last = db.last().await?;
                 let last = last.as_ref().map(std::slice::from_ref).unwrap_or_default();
+                let tz = timezone.unwrap_or(settings.timezone);
                 print_list(
                     last,
                     ListMode::from_flags(human, cmd_only),
-                    format.as_deref(),
+                    match format {
+                        None => Some(settings.history_format.as_str()),
+                        _ => format.as_deref(),
+                    },
                     false,
                     true,
+                    tz,
                 );
 
                 Ok(())
+            }
+
+            Self::InitStore => history_store.init_store(db).await,
+
+            Self::Prune { dry_run } => {
+                Self::handle_prune(db, settings, store, context, dry_run).await
             }
         }
     }

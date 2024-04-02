@@ -3,45 +3,61 @@ use std::{
     time::Duration,
 };
 
-use atuin_common::utils;
+use atuin_common::utils::{self, Escapable as _};
 use crossterm::{
+    cursor::SetCursorStyle,
     event::{
         self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers,
-        MouseEvent,
+        KeyboardEnhancementFlags, MouseEvent, PopKeyboardEnhancementFlags,
+        PushKeyboardEnhancementFlags,
     },
     execute, terminal,
 };
 use eyre::Result;
 use futures_util::FutureExt;
 use semver::Version;
+use time::OffsetDateTime;
 use unicode_width::UnicodeWidthStr;
 
 use atuin_client::{
     database::{current_context, Database},
-    history::History,
-    settings::{ExitMode, FilterMode, SearchMode, Settings},
+    history::{store::HistoryStore, History, HistoryStats},
+    settings::{CursorStyle, ExitMode, FilterMode, KeymapMode, SearchMode, Settings},
 };
 
 use super::{
     cursor::Cursor,
     engines::{SearchEngine, SearchState},
     history_list::{HistoryList, ListState, PREFIX_LENGTH},
+    sort,
 };
+
 use crate::{command::client::search::engines, VERSION};
+
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Alignment, Constraint, Direction, Layout},
+    prelude::*,
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, BorderType, Borders, Paragraph},
+    widgets::{block::Title, Block, BorderType, Borders, Padding, Paragraph, Tabs},
     Frame, Terminal, TerminalOptions, Viewport,
 };
 
-const RETURN_ORIGINAL: usize = usize::MAX;
-const RETURN_QUERY: usize = usize::MAX - 1;
-const COPY_QUERY: usize = usize::MAX - 2;
+const TAB_TITLES: [&str; 2] = ["Search", "Inspect"];
 
-struct State {
+pub enum InputAction {
+    Accept(usize),
+    Copy(usize),
+    Delete(usize),
+    ReturnOriginal,
+    ReturnQuery,
+    Continue,
+    Redraw,
+}
+
+#[allow(clippy::struct_field_names)]
+pub struct State {
     history_count: i64,
     update_needed: Option<Version>,
     results_state: ListState,
@@ -49,9 +65,14 @@ struct State {
     search_mode: SearchMode,
     results_len: usize,
     accept: bool,
+    keymap_mode: KeymapMode,
+    prefix: bool,
+    current_cursor: Option<CursorStyle>,
+    tab_index: usize,
 
     search: SearchState,
     engine: Box<dyn SearchEngine>,
+    now: Box<dyn Fn() -> OffsetDateTime + Send>,
 }
 
 #[derive(Clone, Copy)]
@@ -62,11 +83,21 @@ struct StyleState {
 }
 
 impl State {
-    async fn query_results(&mut self, db: &mut dyn Database) -> Result<Vec<History>> {
+    async fn query_results(
+        &mut self,
+        db: &mut dyn Database,
+        smart_sort: bool,
+    ) -> Result<Vec<History>> {
         let results = self.engine.query(&self.search, db).await?;
+
         self.results_state.select(0);
         self.results_len = results.len();
-        Ok(results)
+
+        if smart_sort {
+            Ok(sort::sort(self.search.input.as_str(), results))
+        } else {
+            Ok(results)
+        }
     }
 
     fn handle_input<W>(
@@ -74,7 +105,7 @@ impl State {
         settings: &Settings,
         input: &Event,
         w: &mut W,
-    ) -> Result<Option<usize>>
+    ) -> Result<InputAction>
     where
         W: Write,
     {
@@ -83,13 +114,13 @@ impl State {
             Event::Key(k) => self.handle_key_input(settings, k),
             Event::Mouse(m) => self.handle_mouse_input(*m),
             Event::Paste(d) => self.handle_paste_input(d),
-            _ => None,
+            _ => InputAction::Continue,
         };
         execute!(w, DisableMouseCapture)?;
         Ok(r)
     }
 
-    fn handle_mouse_input(&mut self, input: MouseEvent) -> Option<usize> {
+    fn handle_mouse_input(&mut self, input: MouseEvent) -> InputAction {
         match input.kind {
             event::MouseEventKind::ScrollDown => {
                 self.scroll_down(1);
@@ -99,23 +130,153 @@ impl State {
             }
             _ => {}
         }
-        None
+        InputAction::Continue
     }
 
-    fn handle_paste_input(&mut self, input: &str) -> Option<usize> {
+    fn handle_paste_input(&mut self, input: &str) -> InputAction {
         for i in input.chars() {
             self.search.input.insert(i);
         }
-        None
+        InputAction::Continue
+    }
+
+    fn cast_cursor_style(style: CursorStyle) -> SetCursorStyle {
+        match style {
+            CursorStyle::DefaultUserShape => SetCursorStyle::DefaultUserShape,
+            CursorStyle::BlinkingBlock => SetCursorStyle::BlinkingBlock,
+            CursorStyle::SteadyBlock => SetCursorStyle::SteadyBlock,
+            CursorStyle::BlinkingUnderScore => SetCursorStyle::BlinkingUnderScore,
+            CursorStyle::SteadyUnderScore => SetCursorStyle::SteadyUnderScore,
+            CursorStyle::BlinkingBar => SetCursorStyle::BlinkingBar,
+            CursorStyle::SteadyBar => SetCursorStyle::SteadyBar,
+        }
+    }
+
+    fn set_keymap_cursor(&mut self, settings: &Settings, keymap_name: &str) {
+        let cursor_style = if keymap_name == "__clear__" {
+            None
+        } else {
+            settings.keymap_cursor.get(keymap_name).copied()
+        }
+        .or_else(|| self.current_cursor.map(|_| CursorStyle::DefaultUserShape));
+
+        if cursor_style != self.current_cursor {
+            if let Some(style) = cursor_style {
+                self.current_cursor = cursor_style;
+                let _ = execute!(stdout(), Self::cast_cursor_style(style));
+            }
+        }
+    }
+
+    pub fn initialize_keymap_cursor(&mut self, settings: &Settings) {
+        match self.keymap_mode {
+            KeymapMode::Emacs => self.set_keymap_cursor(settings, "emacs"),
+            KeymapMode::VimNormal => self.set_keymap_cursor(settings, "vim_normal"),
+            KeymapMode::VimInsert => self.set_keymap_cursor(settings, "vim_insert"),
+            KeymapMode::Auto => {}
+        }
+    }
+
+    pub fn finalize_keymap_cursor(&mut self, settings: &Settings) {
+        match settings.keymap_mode_shell {
+            KeymapMode::Emacs => self.set_keymap_cursor(settings, "emacs"),
+            KeymapMode::VimNormal => self.set_keymap_cursor(settings, "vim_normal"),
+            KeymapMode::VimInsert => self.set_keymap_cursor(settings, "vim_insert"),
+            KeymapMode::Auto => self.set_keymap_cursor(settings, "__clear__"),
+        }
+    }
+
+    fn handle_key_exit(settings: &Settings) -> InputAction {
+        match settings.exit_mode {
+            ExitMode::ReturnOriginal => InputAction::ReturnOriginal,
+            ExitMode::ReturnQuery => InputAction::ReturnQuery,
+        }
+    }
+
+    fn handle_key_input(&mut self, settings: &Settings, input: &KeyEvent) -> InputAction {
+        if input.kind == event::KeyEventKind::Release {
+            return InputAction::Continue;
+        }
+
+        let ctrl = input.modifiers.contains(KeyModifiers::CONTROL);
+        let esc_allow_exit = !(self.tab_index == 0 && self.keymap_mode == KeymapMode::VimInsert);
+
+        // support ctrl-a prefix, like screen or tmux
+        if ctrl && input.code == KeyCode::Char('a') {
+            self.prefix = true;
+            return InputAction::Continue;
+        }
+
+        // core input handling, common for all tabs
+        let common: Option<InputAction> = match input.code {
+            KeyCode::Char('c' | 'g') if ctrl => Some(InputAction::ReturnOriginal),
+            KeyCode::Esc if esc_allow_exit => Some(Self::handle_key_exit(settings)),
+            KeyCode::Char('[') if ctrl && esc_allow_exit => Some(Self::handle_key_exit(settings)),
+            KeyCode::Tab => Some(InputAction::Accept(self.results_state.selected())),
+            KeyCode::Char('o') if ctrl => {
+                self.tab_index = (self.tab_index + 1) % TAB_TITLES.len();
+
+                Some(InputAction::Continue)
+            }
+
+            _ => None,
+        };
+
+        if let Some(ret) = common {
+            self.prefix = false;
+
+            return ret;
+        }
+
+        // handle tab-specific input
+        let action = match self.tab_index {
+            0 => self.handle_search_input(settings, input),
+
+            1 => super::inspector::input(self, settings, self.results_state.selected(), input),
+
+            _ => panic!("invalid tab index on input"),
+        };
+
+        self.prefix = false;
+
+        action
+    }
+
+    fn handle_search_scroll_one_line(
+        &mut self,
+        settings: &Settings,
+        enable_exit: bool,
+        is_down: bool,
+    ) -> InputAction {
+        if is_down {
+            if settings.keys.scroll_exits && enable_exit && self.results_state.selected() == 0 {
+                return Self::handle_key_exit(settings);
+            }
+            self.scroll_down(1);
+        } else {
+            self.scroll_up(1);
+        }
+        InputAction::Continue
+    }
+
+    fn handle_search_up(&mut self, settings: &Settings, enable_exit: bool) -> InputAction {
+        self.handle_search_scroll_one_line(settings, enable_exit, settings.invert)
+    }
+
+    fn handle_search_down(&mut self, settings: &Settings, enable_exit: bool) -> InputAction {
+        self.handle_search_scroll_one_line(settings, enable_exit, !settings.invert)
+    }
+
+    fn handle_search_accept(&mut self, settings: &Settings) -> InputAction {
+        if settings.enter_accept {
+            self.accept = true;
+        }
+        InputAction::Accept(self.results_state.selected())
     }
 
     #[allow(clippy::too_many_lines)]
     #[allow(clippy::cognitive_complexity)]
-    fn handle_key_input(&mut self, settings: &Settings, input: &KeyEvent) -> Option<usize> {
-        if input.kind == event::KeyEventKind::Release {
-            return None;
-        }
-
+    fn handle_search_input(&mut self, settings: &Settings, input: &KeyEvent) -> InputAction {
         let ctrl = input.modifiers.contains(KeyModifiers::CONTROL);
         let alt = input.modifiers.contains(KeyModifiers::ALT);
 
@@ -124,30 +285,97 @@ impl State {
 
         // reset the state, will be set to true later if user really did change it
         self.switched_search_mode = false;
-        match input.code {
-            KeyCode::Char('c' | 'g') if ctrl => return Some(RETURN_ORIGINAL),
-            KeyCode::Esc => {
-                return Some(match settings.exit_mode {
-                    ExitMode::ReturnOriginal => RETURN_ORIGINAL,
-                    ExitMode::ReturnQuery => RETURN_QUERY,
-                })
-            }
-            KeyCode::Tab => {
-                return Some(self.results_state.selected());
-            }
-            KeyCode::Enter => {
-                if settings.enter_accept {
-                    self.accept = true;
-                }
 
-                return Some(self.results_state.selected());
+        // first up handle prefix mappings. these take precedence over all others
+        // eg, if a user types ctrl-a d, delete the history
+        if self.prefix {
+            // It'll be expanded.
+            #[allow(clippy::single_match)]
+            match input.code {
+                KeyCode::Char('d') => {
+                    return InputAction::Delete(self.results_state.selected());
+                }
+                _ => {}
             }
+        }
+
+        // handle keymap specific keybindings.
+        match self.keymap_mode {
+            KeymapMode::VimNormal => match input.code {
+                KeyCode::Char('/') if !ctrl => {
+                    self.search.input.clear();
+                    self.set_keymap_cursor(settings, "vim_insert");
+                    self.keymap_mode = KeymapMode::VimInsert;
+                    return InputAction::Continue;
+                }
+                KeyCode::Char('?') if !ctrl => {
+                    self.search.input.clear();
+                    self.set_keymap_cursor(settings, "vim_insert");
+                    self.keymap_mode = KeymapMode::VimInsert;
+                    return InputAction::Continue;
+                }
+                KeyCode::Char('j') if !ctrl => {
+                    return self.handle_search_down(settings, true);
+                }
+                KeyCode::Char('k') if !ctrl => {
+                    return self.handle_search_up(settings, true);
+                }
+                KeyCode::Char('h') if !ctrl => {
+                    self.search.input.left();
+                    return InputAction::Continue;
+                }
+                KeyCode::Char('l') if !ctrl => {
+                    self.search.input.right();
+                    return InputAction::Continue;
+                }
+                KeyCode::Char('a') if !ctrl => {
+                    self.search.input.right();
+                    self.set_keymap_cursor(settings, "vim_insert");
+                    self.keymap_mode = KeymapMode::VimInsert;
+                    return InputAction::Continue;
+                }
+                KeyCode::Char('A') if !ctrl => {
+                    self.search.input.end();
+                    self.set_keymap_cursor(settings, "vim_insert");
+                    self.keymap_mode = KeymapMode::VimInsert;
+                    return InputAction::Continue;
+                }
+                KeyCode::Char('i') if !ctrl => {
+                    self.set_keymap_cursor(settings, "vim_insert");
+                    self.keymap_mode = KeymapMode::VimInsert;
+                    return InputAction::Continue;
+                }
+                KeyCode::Char('I') if !ctrl => {
+                    self.search.input.start();
+                    self.set_keymap_cursor(settings, "vim_insert");
+                    self.keymap_mode = KeymapMode::VimInsert;
+                    return InputAction::Continue;
+                }
+                KeyCode::Char(_) if !ctrl => {
+                    return InputAction::Continue;
+                }
+                _ => {}
+            },
+            KeymapMode::VimInsert => {
+                if input.code == KeyCode::Esc || (ctrl && input.code == KeyCode::Char('[')) {
+                    self.set_keymap_cursor(settings, "vim_normal");
+                    self.keymap_mode = KeymapMode::VimNormal;
+                    return InputAction::Continue;
+                }
+            }
+            _ => {}
+        }
+
+        match input.code {
+            KeyCode::Enter => return self.handle_search_accept(settings),
+            KeyCode::Char('m') if ctrl => return self.handle_search_accept(settings),
             KeyCode::Char('y') if ctrl => {
-                return Some(COPY_QUERY);
+                return InputAction::Copy(self.results_state.selected());
             }
             KeyCode::Char(c @ '1'..='9') if modfr => {
-                let c = c.to_digit(10)? as usize;
-                return Some(self.results_state.selected() + c);
+                return c.to_digit(10).map_or(InputAction::Continue, |c| {
+                    InputAction::Accept(self.results_state.selected() + c as usize)
+                })
             }
             KeyCode::Left if ctrl => self
                 .search
@@ -158,9 +386,6 @@ impl State {
                 .input
                 .prev_word(&settings.word_chars, settings.word_jump_mode),
             KeyCode::Left => {
-                self.search.input.left();
-            }
-            KeyCode::Char('h') if ctrl => {
                 self.search.input.left();
             }
             KeyCode::Char('b') if ctrl => {
@@ -175,9 +400,7 @@ impl State {
                 .input
                 .next_word(&settings.word_chars, settings.word_jump_mode),
             KeyCode::Right => self.search.input.right(),
-            KeyCode::Char('l') if ctrl => self.search.input.right(),
             KeyCode::Char('f') if ctrl => self.search.input.right(),
-            KeyCode::Char('a') if ctrl => self.search.input.start(),
             KeyCode::Home => self.search.input.start(),
             KeyCode::Char('e') if ctrl => self.search.input.end(),
             KeyCode::End => self.search.input.end(),
@@ -186,6 +409,21 @@ impl State {
                 .input
                 .remove_prev_word(&settings.word_chars, settings.word_jump_mode),
             KeyCode::Backspace => {
+                self.search.input.back();
+            }
+            KeyCode::Char('h' | '?') if ctrl => {
+                // Depending on the terminal, [Backspace] can be transmitted as
+                // \x08 or \x7F.  Also, [Ctrl+Backspace] can be transmitted as
+                // \x08 or \x7F or \x1F.  On the other hand, [Ctrl+h] and
+                // [Ctrl+?] are also transmitted as \x08 or \x7F by the
+                // terminals.
+                //
+                // The crossterm library translates \x08 and \x7F to C-h and
+                // Backspace, respectively.  With the extended keyboard
+                // protocol enabled, crossterm can faithfully translate
+                // [Ctrl+h] and [Ctrl+?] to C-h and C-?.  There is no perfect
+                // solution, but we treat C-h and C-? the same as backspace to
+                // suppress quirks as much as possible.
                 self.search.input.back();
             }
             KeyCode::Delete if ctrl => self
@@ -197,7 +435,7 @@ impl State {
             }
             KeyCode::Char('d') if ctrl => {
                 if self.search.input.as_str().is_empty() {
-                    return Some(RETURN_ORIGINAL);
+                    return InputAction::ReturnOriginal;
                 }
                 self.search.input.remove();
             }
@@ -241,43 +479,24 @@ impl State {
                 self.search_mode = self.search_mode.next(settings);
                 self.engine = engines::engine(self.search_mode);
             }
-            KeyCode::Down if !settings.invert && self.results_state.selected() == 0 => {
-                return Some(match settings.exit_mode {
-                    ExitMode::ReturnOriginal => RETURN_ORIGINAL,
-                    ExitMode::ReturnQuery => RETURN_QUERY,
-                })
+            KeyCode::Down => {
+                return self.handle_search_down(settings, true);
             }
-            KeyCode::Up if settings.invert && self.results_state.selected() == 0 => {
-                return Some(match settings.exit_mode {
-                    ExitMode::ReturnOriginal => RETURN_ORIGINAL,
-                    ExitMode::ReturnQuery => RETURN_QUERY,
-                })
+            KeyCode::Up => {
+                return self.handle_search_up(settings, true);
             }
-            KeyCode::Down if !settings.invert => {
-                self.scroll_down(1);
+            KeyCode::Char('n' | 'j') if ctrl => {
+                return self.handle_search_down(settings, false);
             }
-            KeyCode::Up if settings.invert => {
-                self.scroll_down(1);
+            KeyCode::Char('p' | 'k') if ctrl => {
+                return self.handle_search_up(settings, false);
             }
-            KeyCode::Char('n' | 'j') if ctrl && !settings.invert => {
-                self.scroll_down(1);
+            KeyCode::Char('l') if ctrl => {
+                return InputAction::Redraw;
             }
-            KeyCode::Char('n' | 'j') if ctrl && settings.invert => {
-                self.scroll_up(1);
+            KeyCode::Char(c) => {
+                self.search.input.insert(c);
             }
-            KeyCode::Up if !settings.invert => {
-                self.scroll_up(1);
-            }
-            KeyCode::Down if settings.invert => {
-                self.scroll_up(1);
-            }
-            KeyCode::Char('p' | 'k') if ctrl && !settings.invert => {
-                self.scroll_up(1);
-            }
-            KeyCode::Char('p' | 'k') if ctrl && settings.invert => {
-                self.scroll_down(1);
-            }
-            KeyCode::Char(c) => self.search.input.insert(c),
             KeyCode::PageDown if !settings.invert => {
                 let scroll_len = self.results_state.max_entries() - settings.scroll_context_lines;
                 self.scroll_down(scroll_len);
@@ -297,7 +516,7 @@ impl State {
             _ => {}
         };
 
-        None
+        InputAction::Continue
     }
 
     fn scroll_down(&mut self, scroll_len: usize) {
@@ -312,7 +531,14 @@ impl State {
 
     #[allow(clippy::cast_possible_truncation)]
     #[allow(clippy::bool_to_int_with_if)]
-    fn draw(&mut self, f: &mut Frame, results: &[History], settings: &Settings) {
+    #[allow(clippy::too_many_lines)]
+    fn draw(
+        &mut self,
+        f: &mut Frame,
+        results: &[History],
+        stats: Option<HistoryStats>,
+        settings: &Settings,
+    ) {
         let compact = match settings.style {
             atuin_client::settings::Style::Auto => f.size().height < 14,
             atuin_client::settings::Style::Compact => true,
@@ -322,21 +548,40 @@ impl State {
         let border_size = if compact { 0 } else { 1 };
         let preview_width = f.size().width - 2;
 
-        let preview_height = if settings.show_preview {
-            let selected_length = results
-                .get(self.results_state.selected())
-                .map_or(0, |v| v.command.len() as u16);
+        // let preview_height = if settings.show_preview {
+        //     let selected_length = results
+        //         .get(self.results_state.selected())
+        //         .map_or(0, |v| v.command.len() as u16);
+        //
+        //     let row_width = preview_width - border_size;
+        //     let rows = (selected_length + preview_width - 1 - border_size) / row_width;
+        //
+        //     rows.min(4) + border_size * 2
+        // } else if compact {
 
-            let row_width = preview_width - border_size;
-            let rows = (selected_length + preview_width - 1 - border_size) / row_width;
-
-            rows.min(4) + border_size * 2
-        } else if compact {
+        let preview_height = if settings.show_preview && self.tab_index == 0 {
+            let longest_command = results
+                .iter()
+                .max_by(|h1, h2| h1.command.len().cmp(&h2.command.len()));
+            longest_command.map_or(0, |v| {
+                std::cmp::min(
+                    settings.max_preview_height,
+                    v.command
+                        .split('\n')
+                        .map(|line| {
+                            (line.len() as u16 + preview_width - 1 - border_size)
+                                / (preview_width - border_size)
+                        })
+                        .sum(),
+                )
+            }) + border_size * 2
+        } else if compact || self.tab_index == 1 {
             0
         } else {
             1
         };
         let show_help = settings.show_help && (!compact || f.size().height > 1);
+        let show_tabs = settings.show_tabs;
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .margin(0)
@@ -347,11 +592,13 @@ impl State {
                         Constraint::Length(1 + border_size),               // input
                         Constraint::Min(1),                                // results list
                         Constraint::Length(preview_height),                // preview
+                        Constraint::Length(if show_tabs { 1 } else { 0 }), // tabs
                         Constraint::Length(if show_help { 1 } else { 0 }), // header (sic)
                     ]
                 } else {
                     [
                         Constraint::Length(if show_help { 1 } else { 0 }), // header
+                        Constraint::Length(if show_tabs { 1 } else { 0 }), // tabs
                         Constraint::Min(1),                                // results list
                         Constraint::Length(1 + border_size),               // input
                         Constraint::Length(preview_height),                // preview
@@ -360,10 +607,25 @@ impl State {
                 .as_ref(),
             )
             .split(f.size());
-        let input_chunk = if invert { chunks[0] } else { chunks[2] };
-        let results_list_chunk = chunks[1];
-        let preview_chunk = if invert { chunks[2] } else { chunks[3] };
-        let header_chunk = if invert { chunks[3] } else { chunks[0] };
+
+        let input_chunk = if invert { chunks[0] } else { chunks[3] };
+        let results_list_chunk = if invert { chunks[1] } else { chunks[2] };
+        let preview_chunk = if invert { chunks[2] } else { chunks[4] };
+        let tabs_chunk = if invert { chunks[3] } else { chunks[1] };
+        let header_chunk = if invert { chunks[4] } else { chunks[0] };
+
+        // TODO: this should be split so that we have one interactive search container that is
+        // EITHER a search box or an inspector. But I'm not doing that now, way too much atm.
+        // also allocate less 🙈
+        let titles = TAB_TITLES.iter().copied().map(Line::from).collect();
+
+        let tabs = Tabs::new(titles)
+            .block(Block::default().borders(Borders::NONE))
+            .select(self.tab_index)
+            .style(Style::default())
+            .highlight_style(Style::default().bold().white().on_black());
+
+        f.render_widget(tabs, tabs_chunk);
 
         let style = StyleState {
             compact,
@@ -375,9 +637,9 @@ impl State {
             .direction(Direction::Horizontal)
             .constraints(
                 [
-                    Constraint::Ratio(1, 3),
-                    Constraint::Ratio(1, 3),
-                    Constraint::Ratio(1, 3),
+                    Constraint::Ratio(1, 5),
+                    Constraint::Ratio(3, 5),
+                    Constraint::Ratio(1, 5),
                 ]
                 .as_ref(),
             )
@@ -389,15 +651,59 @@ impl State {
         let help = self.build_help();
         f.render_widget(help, header_chunks[1]);
 
-        let stats = self.build_stats();
-        f.render_widget(stats, header_chunks[2]);
+        let stats_tab = self.build_stats();
+        f.render_widget(stats_tab, header_chunks[2]);
 
-        let results_list = Self::build_results_list(style, results);
-        f.render_stateful_widget(results_list, results_list_chunk, &mut self.results_state);
+        match self.tab_index {
+            0 => {
+                let results_list =
+                    Self::build_results_list(style, results, self.keymap_mode, &self.now);
+                f.render_stateful_widget(results_list, results_list_chunk, &mut self.results_state);
+            }
+
+            1 => {
+                if results.is_empty() {
+                    let message = Paragraph::new("Nothing to inspect")
+                        .block(
+                            Block::new()
+                                .title(
+                                    Title::from(" Info ".to_string()).alignment(Alignment::Center),
+                                )
+                                .borders(Borders::ALL)
+                                .padding(Padding::vertical(2)),
+                        )
+                        .alignment(Alignment::Center);
+                    f.render_widget(message, results_list_chunk);
+                } else {
+                    super::inspector::draw(
+                        f,
+                        results_list_chunk,
+                        &results[self.results_state.selected()],
+                        &stats.expect("Drawing inspector, but no stats"),
+                    );
+                }
+
+                // HACK: I'm following up with abstracting this into the UI container, with a
+                // sub-widget for search + for inspector
+                let feedback = Paragraph::new("The inspector is new - please give feedback (good, or bad) at https://forum.atuin.sh");
+                f.render_widget(feedback, input_chunk);
+
+                return;
+            }
+
+            _ => {
+                panic!("invalid tab index");
+            }
+        }
 
         let input = self.build_input(style);
         f.render_widget(input, input_chunk);
 
+        let preview_width = if compact {
+            preview_width
+        } else {
+            preview_width - 2
+        };
         let preview =
             self.build_preview(results, compact, preview_width, preview_chunk.width.into());
         f.render_widget(preview, preview_chunk);
@@ -414,30 +720,52 @@ impl State {
 
     fn build_title(&mut self) -> Paragraph {
         let title = if self.update_needed.is_some() {
-            let version = self.update_needed.clone().unwrap();
-
             Paragraph::new(Text::from(Span::styled(
-                format!(" Atuin v{VERSION} - UPDATE AVAILABLE {version}"),
+                format!("Atuin v{VERSION} - UPGRADE"),
                 Style::default().add_modifier(Modifier::BOLD).fg(Color::Red),
             )))
         } else {
             Paragraph::new(Text::from(Span::styled(
-                format!(" Atuin v{VERSION}"),
+                format!("Atuin v{VERSION}"),
                 Style::default().add_modifier(Modifier::BOLD),
             )))
         };
-        title
+        title.alignment(Alignment::Left)
     }
 
     #[allow(clippy::unused_self)]
-    fn build_help(&mut self) -> Paragraph {
-        let help = Paragraph::new(Text::from(Line::from(vec![
-            Span::styled("Esc", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw(" to exit"),
-        ])))
+    fn build_help(&self) -> Paragraph {
+        match self.tab_index {
+            // search
+            0 => Paragraph::new(Text::from(Line::from(vec![
+                Span::styled("<esc>", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(": exit"),
+                Span::raw(", "),
+                Span::styled("<tab>", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(": edit"),
+                Span::raw(", "),
+                Span::styled("<enter>", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(": run"),
+                Span::raw(", "),
+                Span::styled("<ctrl-o>", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(": inspect"),
+            ]))),
+
+            1 => Paragraph::new(Text::from(Line::from(vec![
+                Span::styled("<esc>", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(": exit"),
+                Span::raw(", "),
+                Span::styled("<ctrl-o>", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(": search"),
+                Span::raw(", "),
+                Span::styled("<ctrl-d>", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(": delete"),
+            ]))),
+
+            _ => unreachable!("invalid tab index"),
+        }
         .style(Style::default().fg(Color::DarkGray))
-        .alignment(Alignment::Center);
-        help
+        .alignment(Alignment::Center)
     }
 
     fn build_stats(&mut self) -> Paragraph {
@@ -450,8 +778,19 @@ impl State {
         stats
     }
 
-    fn build_results_list(style: StyleState, results: &[History]) -> HistoryList {
-        let results_list = HistoryList::new(results, style.invert);
+    fn build_results_list<'a>(
+        style: StyleState,
+        results: &'a [History],
+        keymap_mode: KeymapMode,
+        now: &'a dyn Fn() -> OffsetDateTime,
+    ) -> HistoryList<'a> {
+        let results_list = HistoryList::new(
+            results,
+            style.invert,
+            keymap_mode == KeymapMode::VimNormal,
+            now,
+        );
+
         if style.compact {
             results_list
         } else if style.invert {
@@ -521,7 +860,7 @@ impl State {
                         .map(|(i, _)| i)
                         .chain(Some(line.len()))
                         .tuple_windows()
-                        .map(|(a, b)| &line[a..b])
+                        .map(|(a, b)| (&line[a..b]).escape_control().to_string())
                 })
                 .join("\n")
         };
@@ -548,14 +887,27 @@ impl Stdout {
     pub fn new(inline_mode: bool) -> std::io::Result<Self> {
         terminal::enable_raw_mode()?;
         let mut stdout = stdout();
+
         if !inline_mode {
             execute!(stdout, terminal::EnterAlternateScreen)?;
         }
+
         execute!(
             stdout,
             event::EnableMouseCapture,
             event::EnableBracketedPaste,
         )?;
+
+        #[cfg(not(target_os = "windows"))]
+        execute!(
+            stdout,
+            PushKeyboardEnhancementFlags(
+                KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                    | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
+                    | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
+            ),
+        )?;
+
         Ok(Self {
             stdout,
             inline_mode,
@@ -565,6 +917,9 @@ impl Stdout {
 
 impl Drop for Stdout {
     fn drop(&mut self) {
+        #[cfg(not(target_os = "windows"))]
+        execute!(self.stdout, PopKeyboardEnhancementFlags).unwrap();
+
         if !self.inline_mode {
             execute!(self.stdout, terminal::LeaveAlternateScreen).unwrap();
         }
@@ -574,6 +929,7 @@ impl Drop for Stdout {
             event::DisableBracketedPaste,
         )
         .unwrap();
+
         terminal::disable_raw_mode().unwrap();
     }
 }
@@ -596,6 +952,7 @@ pub async fn history(
     query: &[String],
     settings: &Settings,
     mut db: impl Database,
+    history_store: &HistoryStore,
 ) -> Result<String> {
     let stdout = Stdout::new(settings.inline_height > 0)?;
     let backend = CrosstermBackend::new(stdout);
@@ -634,6 +991,7 @@ pub async fn history(
         update_needed: None,
         switched_search_mode: false,
         search_mode,
+        tab_index: 0,
         search: SearchState {
             input,
             filter_mode: if settings.workspaces && context.git_root.is_some() {
@@ -650,13 +1008,28 @@ pub async fn history(
         engine: engines::engine(search_mode),
         results_len: 0,
         accept: false,
+        keymap_mode: match settings.keymap_mode {
+            KeymapMode::Auto => KeymapMode::Emacs,
+            value => value,
+        },
+        current_cursor: None,
+        now: if settings.prefers_reduced_motion {
+            let now = OffsetDateTime::now_utc();
+            Box::new(move || now)
+        } else {
+            Box::new(OffsetDateTime::now_utc)
+        },
+        prefix: false,
     };
 
-    let mut results = app.query_results(&mut db).await?;
+    app.initialize_keymap_cursor(settings);
 
+    let mut results = app.query_results(&mut db, settings.smart_sort).await?;
+
+    let mut stats: Option<HistoryStats> = None;
     let accept;
-    let index = 'render: loop {
-        terminal.draw(|f| app.draw(f, &results, settings))?;
+    let result = 'render: loop {
+        terminal.draw(|f| app.draw(f, &results, stats.clone(), settings))?;
 
         let initial_input = app.search.input.as_str().to_owned();
         let initial_filter_mode = app.search.filter_mode;
@@ -668,9 +1041,34 @@ pub async fn history(
             event_ready = event_ready => {
                 if event_ready?? {
                     loop {
-                        if let Some(i) = app.handle_input(settings, &event::read()?, &mut std::io::stdout())? {
-                            accept = app.accept;
-                            break 'render i;
+                        match app.handle_input(settings, &event::read()?, &mut std::io::stdout())? {
+                            InputAction::Continue => {},
+                            InputAction::Delete(index) => {
+                                app.results_len -= 1;
+                                let selected = app.results_state.selected();
+                                if selected == app.results_len {
+                                    app.results_state.select(selected - 1);
+                                }
+
+                                let entry = results.remove(index);
+
+                                if settings.sync.records {
+                                    let (id, _) = history_store.delete(entry.id).await?;
+                                    history_store.incremental_build(&db, &[id]).await?;
+                                } else {
+                                    db.delete(entry.clone()).await?;
+                                }
+
+                                app.tab_index  = 0;
+                            },
+                            InputAction::Redraw => {
+                                terminal.clear()?;
+                                terminal.draw(|f| app.draw(f, &results, stats.clone(), settings))?;
+                            },
+                            r => {
+                                accept = app.accept;
+                                break 'render r;
+                            },
                         }
                         if !event::poll(Duration::ZERO)? {
                             break;
@@ -687,32 +1085,67 @@ pub async fn history(
             || initial_filter_mode != app.search.filter_mode
             || initial_search_mode != app.search_mode
         {
-            results = app.query_results(&mut db).await?;
+            results = app.query_results(&mut db, settings.smart_sort).await?;
         }
+
+        stats = if app.tab_index == 0 {
+            None
+        } else if !results.is_empty() {
+            let selected = results[app.results_state.selected()].clone();
+            Some(db.stats(&selected).await?)
+        } else {
+            None
+        };
     };
+
+    app.finalize_keymap_cursor(settings);
 
     if settings.inline_height > 0 {
         terminal.clear()?;
     }
 
-    if index < results.len() {
-        let mut command = results.swap_remove(index).command;
-        if accept && (utils::is_zsh() || utils::is_fish() || utils::is_bash()) {
-            command = String::from("__atuin_accept__:") + &command;
-        }
+    match result {
+        InputAction::Accept(index) if index < results.len() => {
+            let mut command = results.swap_remove(index).command;
+            if accept
+                && (utils::is_zsh() || utils::is_fish() || utils::is_bash() || utils::is_xonsh())
+            {
+                command = String::from("__atuin_accept__:") + &command;
+            }
 
-        // index is in bounds so we return that entry
-        Ok(command)
-    } else if index == RETURN_ORIGINAL {
-        Ok(String::new())
-    } else if index == COPY_QUERY {
-        let cmd = results.swap_remove(app.results_state.selected()).command;
-        cli_clipboard::set_contents(cmd).unwrap();
-        Ok(String::new())
-    } else {
-        // Either:
-        // * index == RETURN_QUERY, in which case we should return the input
-        // * out of bounds -> usually implies no selected entry so we return the input
-        Ok(app.search.input.into_inner())
+            // index is in bounds so we return that entry
+            Ok(command)
+        }
+        InputAction::ReturnOriginal => Ok(String::new()),
+        InputAction::Copy(index) => {
+            let cmd = results.swap_remove(index).command;
+            set_clipboard(cmd);
+            Ok(String::new())
+        }
+        InputAction::ReturnQuery | InputAction::Accept(_) => {
+            // Either:
+            // * index == RETURN_QUERY, in which case we should return the input
+            // * out of bounds -> usually implies no selected entry so we return the input
+            Ok(app.search.input.into_inner())
+        }
+        InputAction::Continue | InputAction::Redraw | InputAction::Delete(_) => {
+            unreachable!("should have been handled!")
+        }
     }
 }
+
+// cli-clipboard only works on Windows, Mac, and Linux.
+
+#[cfg(all(
+    feature = "clipboard",
+    any(target_os = "windows", target_os = "macos", target_os = "linux")
+))]
+fn set_clipboard(s: String) {
+    cli_clipboard::set_contents(s).unwrap();
+}
+
+#[cfg(not(all(
+    feature = "clipboard",
+    any(target_os = "windows", target_os = "macos", target_os = "linux")
+)))]
+fn set_clipboard(_s: String) {}
