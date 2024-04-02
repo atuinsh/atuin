@@ -22,7 +22,10 @@ use unicode_width::UnicodeWidthStr;
 use atuin_client::{
     database::{current_context, Database},
     history::{store::HistoryStore, History, HistoryStats},
-    settings::{CursorStyle, ExitMode, FilterMode, KeymapMode, SearchMode, Settings},
+    settings::{
+        preview::PreviewHeightStrategy, CursorStyle, ExitMode, FilterMode, KeymapMode, SearchMode,
+        Settings,
+    },
 };
 
 use super::{
@@ -548,33 +551,36 @@ impl State {
         let border_size = if compact { 0 } else { 1 };
         let preview_width = f.size().width - 2;
 
-        // let preview_height = if settings.show_preview {
-        //     let selected_length = results
-        //         .get(self.results_state.selected())
-        //         .map_or(0, |v| v.command.len() as u16);
-        //
-        //     let row_width = preview_width - border_size;
-        //     let rows = (selected_length + preview_width - 1 - border_size) / row_width;
-        //
-        //     rows.min(4) + border_size * 2
-        // } else if compact {
-
         let preview_height = if settings.show_preview && self.tab_index == 0 {
-            let longest_command = results
-                .iter()
-                .max_by(|h1, h2| h1.command.len().cmp(&h2.command.len()));
-            longest_command.map_or(0, |v| {
-                std::cmp::min(
-                    settings.max_preview_height,
-                    v.command
-                        .split('\n')
-                        .map(|line| {
-                            (line.len() as u16 + preview_width - 1 - border_size)
-                                / (preview_width - border_size)
-                        })
-                        .sum(),
-                )
-            }) + border_size * 2
+            match settings.preview.height_strategy {
+                PreviewHeightStrategy::AllResults => {
+                    let longest_command = results
+                        .iter()
+                        .max_by(|h1, h2| h1.command.len().cmp(&h2.command.len()));
+                    longest_command.map_or(0, |v| {
+                        std::cmp::min(
+                            settings.max_preview_height,
+                            v.command
+                                .split('\n')
+                                .map(|line| {
+                                    (line.len() as u16 + preview_width - 1 - border_size)
+                                        / (preview_width - border_size)
+                                })
+                                .sum(),
+                        )
+                    }) + border_size * 2
+                }
+                PreviewHeightStrategy::SelectedResult => {
+                    let selected_length = results
+                        .get(self.results_state.selected())
+                        .map_or(0, |v| v.command.len() as u16);
+
+                    let row_width = preview_width - border_size;
+                    let rows = (selected_length + preview_width - 1 - border_size) / row_width;
+
+                    rows.min(4) + border_size * 2
+                }
+            }
         } else if compact || self.tab_index == 1 {
             0
         } else {

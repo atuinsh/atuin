@@ -34,6 +34,7 @@ pub const HOST_ID_FILENAME: &str = "host_id";
 static EXAMPLE_CONFIG: &str = include_str!("../config.toml");
 
 mod dotfiles;
+pub mod preview;
 
 #[derive(Clone, Debug, Deserialize, Copy, ValueEnum, PartialEq)]
 pub enum SearchMode {
@@ -398,6 +399,9 @@ pub struct Settings {
 
     #[serde(default)]
     pub dotfiles: dotfiles::Settings,
+
+    #[serde(default)]
+    pub preview: preview::Settings,
 
     // This is automatically loaded when settings is created. Do not set in
     // config! Keep secrets and settings apart.
