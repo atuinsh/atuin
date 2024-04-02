@@ -16,7 +16,7 @@ All notable changes to this project will be documented in this file.
 - Ensure sync time is saved for sync v2 ([#1758](https://github.com/atuinsh/atuin/issues/1758))
 - No panic on empty inspector ([#1768](https://github.com/atuinsh/atuin/issues/1768))
 - Enable multiple command stats to be shown using unicode_segmentation ([#1739](https://github.com/atuinsh/atuin/issues/1739))
-- Readd up-arrow keybinding, now with menu handling ([#1770](https://github.com/atuinsh/atuin/issues/1770))
+- Re-add up-arrow keybinding, now with menu handling ([#1770](https://github.com/atuinsh/atuin/issues/1770))
 - Missing characters in preview ([#1803](https://github.com/atuinsh/atuin/issues/1803))
 - Check store length after sync, not before ([#1805](https://github.com/atuinsh/atuin/issues/1805))
 - Disable regex error logs ([#1806](https://github.com/atuinsh/atuin/issues/1806))
