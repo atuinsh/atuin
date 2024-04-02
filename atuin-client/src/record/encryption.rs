@@ -36,7 +36,7 @@ See
  - <https://www.yubico.com/gb/product/yubihsm-2-fips/>
  - <https://cheatsheetseries.owasp.org/cheatsheets/Cryptographic_Storage_Cheat_Sheet.html#encrypting-stored-keys>
 
-Why would we care? In the past we have recieved some requests for company solutions. If in future we can configure a
+Why would we care? In the past we have received some requests for company solutions. If in future we can configure a
 KMS service with little effort, then that would solve a lot of issues for their security team.
 
 Even for personal use, if a user is not comfortable with sharing keys between hosts,

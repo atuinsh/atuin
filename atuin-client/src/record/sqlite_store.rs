@@ -171,7 +171,7 @@ impl Store for SqliteStore {
 
         match res {
             Err(sqlx::Error::RowNotFound) => Ok(None),
-            Err(e) => Err(eyre!("an error occured: {}", e)),
+            Err(e) => Err(eyre!("an error occurred: {}", e)),
             Ok(record) => Ok(Some(record)),
         }
     }
@@ -238,7 +238,7 @@ impl Store for SqliteStore {
 
         match res {
             Err(sqlx::Error::RowNotFound) => Ok(None),
-            Err(e) => Err(eyre!("an error occured: {}", e)),
+            Err(e) => Err(eyre!("an error occurred: {}", e)),
             Ok(v) => Ok(Some(v)),
         }
     }
@@ -603,7 +603,7 @@ mod tests {
 
         // reencrypt the store, then check if
         // 1) it cannot be decrypted with the old key
-        // 2) it can be decrypted wiht the new key
+        // 2) it can be decrypted with the new key
 
         let (new_key, _) = generate_encoded_key().unwrap();
         store

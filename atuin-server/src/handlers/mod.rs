@@ -16,7 +16,7 @@ pub async fn index<DB: Database>(state: State<AppState<DB>>) -> Json<IndexRespon
     let homage = r#""Through the fathomless deeps of space swims the star turtle Great A'Tuin, bearing on its back the four giant elephants who carry on their shoulders the mass of the Discworld." -- Sir Terry Pratchett"#;
 
     // Error with a -1 response
-    // It's super unlikley this will happen
+    // It's super unlikely this will happen
     let count = state.database.total_history().await.unwrap_or(-1);
 
     Json(IndexResponse {

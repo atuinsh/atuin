@@ -5,7 +5,7 @@ use atuin_common::record::{EncryptedData, HostId, Record, RecordId, RecordIdx, R
 
 /// A record store stores records
 /// In more detail - we tend to need to process this into _another_ format to actually query it.
-/// As is, the record store is intended as the source of truth for arbitratry data, which could
+/// As is, the record store is intended as the source of truth for arbitrary data, which could
 /// be shell history, kvs, etc.
 #[async_trait]
 pub trait Store {

@@ -3,8 +3,8 @@ use clap_complete::{generate, generate_to, Generator, Shell};
 use clap_complete_nushell::Nushell;
 use eyre::Result;
 
-// clap put nushell completions into a seperate package due to the maintainers
-// being a little less commited to support them.
+// clap put nushell completions into a separate package due to the maintainers
+// being a little less committed to support them.
 // This means we have to do a tiny bit of legwork to combine these completions
 // into one command.
 #[derive(Debug, Clone, ValueEnum)]

@@ -277,7 +277,7 @@ All notable changes to this project will be documented in this file.
 - Make `atuin account delete` void session + key ([#1393](https://github.com/atuinsh/atuin/issues/1393))
 - New clippy lints ([#1395](https://github.com/atuinsh/atuin/issues/1395))
 - Accept multiline commands ([#1418](https://github.com/atuinsh/atuin/issues/1418))
-- Reenable enter_accept for bash ([#1408](https://github.com/atuinsh/atuin/issues/1408))
+- Re-enable enter_accept for bash ([#1408](https://github.com/atuinsh/atuin/issues/1408))
 - Respect ZSH's $ZDOTDIR environment variable ([#942](https://github.com/atuinsh/atuin/issues/942))
 
 ### Documentation
@@ -354,7 +354,7 @@ All notable changes to this project will be documented in this file.
 
 ### Features
 
-- Do not allow empty passwords durring account creation ([#1029](https://github.com/atuinsh/atuin/issues/1029))
+- Do not allow empty passwords during account creation ([#1029](https://github.com/atuinsh/atuin/issues/1029))
 
 ### Skim
 
@@ -441,7 +441,7 @@ All notable changes to this project will be documented in this file.
 
 ### Miscellaneous Tasks
 
-- Allow specifiying the limited of returned entries ([#364](https://github.com/atuinsh/atuin/issues/364))
+- Allow specifying the limited of returned entries ([#364](https://github.com/atuinsh/atuin/issues/364))
 
 ## [0.9.0] - 2022-04-23
 
