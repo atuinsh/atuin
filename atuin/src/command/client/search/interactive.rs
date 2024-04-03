@@ -531,6 +531,52 @@ impl State {
 
     #[allow(clippy::cast_possible_truncation)]
     #[allow(clippy::bool_to_int_with_if)]
+    fn calc_preview_height(
+        settings: &Settings,
+        results: &[History],
+        selected: usize,
+        tab_index: usize,
+        compact: bool,
+        border_size: u16,
+        preview_width: u16,
+    ) -> u16 {
+        if settings.show_preview_auto && tab_index == 0 && !results.is_empty() {
+            let length_current_cmd = results[selected].command.len() as u16;
+            // The '- 19' takes the characters before the command (duration and time) into account
+            if length_current_cmd > preview_width - 19 {
+                std::cmp::min(
+                    settings.max_preview_height,
+                    (length_current_cmd + preview_width - 1 - border_size)
+                        / (preview_width - border_size),
+                ) + border_size * 2
+            } else {
+                1
+            }
+        } else if settings.show_preview && !settings.show_preview_auto && tab_index == 0 {
+            let longest_command = results
+                .iter()
+                .max_by(|h1, h2| h1.command.len().cmp(&h2.command.len()));
+            longest_command.map_or(0, |v| {
+                std::cmp::min(
+                    settings.max_preview_height,
+                    v.command
+                        .split('\n')
+                        .map(|line| {
+                            (line.len() as u16 + preview_width - 1 - border_size)
+                                / (preview_width - border_size)
+                        })
+                        .sum(),
+                )
+            }) + border_size * 2
+        } else if compact || tab_index == 1 {
+            0
+        } else {
+            1
+        }
+    }
+
+    #[allow(clippy::cast_possible_truncation)]
+    #[allow(clippy::bool_to_int_with_if)]
     #[allow(clippy::too_many_lines)]
     fn draw(
         &mut self,
@@ -547,41 +593,15 @@ impl State {
         let invert = settings.invert;
         let border_size = if compact { 0 } else { 1 };
         let preview_width = f.size().width - 2;
-        let preview_height =
-            if settings.show_preview_auto && self.tab_index == 0 && !results.is_empty() {
-                let length_current_cmd =
-                    results[self.results_state.selected()].command.len() as u16;
-                // The '- 19' takes the characters before the command (duration and time) into account
-                if length_current_cmd > preview_width - 19 {
-                    std::cmp::min(
-                        settings.max_preview_height,
-                        (length_current_cmd + preview_width - 1 - border_size)
-                            / (preview_width - border_size),
-                    ) + border_size * 2
-                } else {
-                    1
-                }
-            } else if settings.show_preview && self.tab_index == 0 {
-                let longest_command = results
-                    .iter()
-                    .max_by(|h1, h2| h1.command.len().cmp(&h2.command.len()));
-                longest_command.map_or(0, |v| {
-                    std::cmp::min(
-                        settings.max_preview_height,
-                        v.command
-                            .split('\n')
-                            .map(|line| {
-                                (line.len() as u16 + preview_width - 1 - border_size)
-                                    / (preview_width - border_size)
-                            })
-                            .sum(),
-                    )
-                }) + border_size * 2
-            } else if compact || self.tab_index == 1 {
-                0
-            } else {
-                1
-            };
+        let preview_height = Self::calc_preview_height(
+            settings,
+            results,
+            self.results_state.selected(),
+            self.tab_index,
+            compact,
+            border_size,
+            preview_width,
+        );
         let show_help = settings.show_help && (!compact || f.size().height > 1);
         let show_tabs = settings.show_tabs;
         let chunks = Layout::default()
@@ -1151,3 +1171,135 @@ fn set_clipboard(s: String) {
     any(target_os = "windows", target_os = "macos", target_os = "linux")
 )))]
 fn set_clipboard(_s: String) {}
+
+#[cfg(test)]
+mod tests {
+    use atuin_client::history::History;
+    use atuin_client::settings::Settings;
+
+    use super::State;
+
+    #[test]
+    fn calc_preview_height_test() {
+        let settings_preview_auto = Settings {
+            show_preview_auto: true,
+            ..Settings::utc()
+        };
+
+        let settings_preview_auto_h2 = Settings {
+            show_preview_auto: true,
+            max_preview_height: 2,
+            ..Settings::utc()
+        };
+
+        let settings_preview_h4 = Settings {
+            show_preview_auto: false,
+            show_preview: true,
+            max_preview_height: 4,
+            ..Settings::utc()
+        };
+
+        let cmd_60: History = History::capture()
+            .timestamp(time::OffsetDateTime::now_utc())
+            .command("for i in $(seq -w 10); do echo \"item number $i - abcd\"; done")
+            .cwd("/")
+            .build()
+            .into();
+
+        let cmd_124: History = History::capture()
+            .timestamp(time::OffsetDateTime::now_utc())
+            .command("echo 'Aurea prima sata est aetas, quae vindice nullo, sponte sua, sine lege fidem rectumque colebat. Poena metusque aberant'")
+            .cwd("/")
+            .build()
+            .into();
+
+        let cmd_200: History = History::capture()
+            .timestamp(time::OffsetDateTime::now_utc())
+            .command("CREATE USER atuin WITH ENCRYPTED PASSWORD 'supersecretpassword'; CREATE DATABASE atuin WITH OWNER = atuin; \\c atuin; REVOKE ALL PRIVILEGES ON SCHEMA public FROM PUBLIC; echo 'All done. 200 characters'")
+            .cwd("/")
+            .build()
+            .into();
+
+        let results: Vec<History> = vec![cmd_60, cmd_124, cmd_200];
+
+        // the selected command does not require a preview
+        let no_preview = State::calc_preview_height(
+            &settings_preview_auto,
+            &results,
+            0 as usize,
+            0 as usize,
+            false,
+            1,
+            80,
+        );
+        // the selected command requires 2 lines
+        let preview_h2 = State::calc_preview_height(
+            &settings_preview_auto,
+            &results,
+            1 as usize,
+            0 as usize,
+            false,
+            1,
+            80,
+        );
+        // the selected command requires 3 lines
+        let preview_h3 = State::calc_preview_height(
+            &settings_preview_auto,
+            &results,
+            2 as usize,
+            0 as usize,
+            false,
+            1,
+            80,
+        );
+        // the selected command requires a preview of 1 line (happens when the command is between preview_width-19 and preview_width)
+        let preview_one_line = State::calc_preview_height(
+            &settings_preview_auto,
+            &results,
+            0 as usize,
+            0 as usize,
+            false,
+            1,
+            66,
+        );
+        // the selected command requires 3 lines, but we have a max preview height limit of 2
+        let preview_limit_at_2 = State::calc_preview_height(
+            &settings_preview_auto_h2,
+            &results,
+            2 as usize,
+            0 as usize,
+            false,
+            1,
+            80,
+        );
+        // the longest command requires 3 lines
+        let preview_static_h3 = State::calc_preview_height(
+            &settings_preview_h4,
+            &results,
+            1 as usize,
+            0 as usize,
+            false,
+            1,
+            80,
+        );
+        // the longest command requires 10 lines, but we have a max preview height limit of 4
+        let preview_static_limit_at_4 = State::calc_preview_height(
+            &settings_preview_h4,
+            &results,
+            1 as usize,
+            0 as usize,
+            false,
+            1,
+            20,
+        );
+
+        assert_eq!(no_preview, 1);
+        // 1*2 is the space for the border
+        assert_eq!(preview_h2, 2 + 1 * 2);
+        assert_eq!(preview_h3, 3 + 1 * 2);
+        assert_eq!(preview_one_line, 1 + 1 * 2);
+        assert_eq!(preview_limit_at_2, 2 + 1 * 2);
+        assert_eq!(preview_static_h3, 3 + 1 * 2);
+        assert_eq!(preview_static_limit_at_4, 4 + 1 * 2);
+    }
+}
