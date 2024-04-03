@@ -8,6 +8,9 @@ use command::AtuinCmd;
 
 mod command;
 
+#[cfg(feature = "sync")]
+mod sync;
+
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const SHA: &str = env!("GIT_HASH");
 

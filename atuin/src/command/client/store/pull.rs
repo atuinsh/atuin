@@ -1,10 +1,8 @@
 use clap::Args;
-use eyre::{Result, WrapErr};
+use eyre::Result;
 
 use atuin_client::{
     database::Database,
-    encryption,
-    history::store::HistoryStore,
     record::store::Store,
     record::sync::Operation,
     record::{sqlite_store::SqliteStore, sync},
@@ -73,13 +71,7 @@ impl Pull {
 
         println!("Downloaded {} records", downloaded.len());
 
-        let encryption_key: [u8; 32] = encryption::load_key(settings)
-            .context("could not load encryption key")?
-            .into();
-
-        let host_id = Settings::host_id().expect("failed to get host_id");
-        let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
-        history_store.incremental_build(db, &downloaded).await?;
+        crate::sync::build(settings, &store, db, Some(&downloaded)).await?;
 
         Ok(())
     }

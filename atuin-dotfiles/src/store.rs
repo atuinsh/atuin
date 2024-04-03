@@ -136,6 +136,54 @@ impl AliasStore {
         }
     }
 
+    pub async fn posix(&self) -> Result<String> {
+        let aliases = self.aliases().await?;
+
+        let mut config = String::new();
+
+        for alias in aliases {
+            config.push_str(&format!("alias {}='{}'\n", alias.name, alias.value));
+        }
+
+        Ok(config)
+    }
+
+    pub async fn xonsh(&self) -> Result<String> {
+        let aliases = self.aliases().await?;
+
+        let mut config = String::new();
+
+        for alias in aliases {
+            config.push_str(&format!("aliases['{}'] ='{}'\n", alias.name, alias.value));
+        }
+
+        Ok(config)
+    }
+
+    pub async fn build(&self) -> Result<()> {
+        let dir = atuin_common::utils::dotfiles_cache_dir();
+        tokio::fs::create_dir_all(dir.clone()).await?;
+
+        // Build for all supported shells
+        let posix = self.posix().await?;
+        let xonsh = self.xonsh().await?;
+
+        // All the same contents, maybe optimize in the future or perhaps there will be quirks
+        // per-shell
+        // I'd prefer separation atm
+        let zsh = dir.join("aliases.zsh");
+        let bash = dir.join("aliases.bash");
+        let fish = dir.join("aliases.fish");
+        let xsh = dir.join("aliases.xsh");
+
+        tokio::fs::write(zsh, &posix).await?;
+        tokio::fs::write(bash, &posix).await?;
+        tokio::fs::write(fish, &posix).await?;
+        tokio::fs::write(xsh, &xonsh).await?;
+
+        Ok(())
+    }
+
     pub async fn set(&self, name: &str, value: &str) -> Result<()> {
         if name.len() + value.len() > CONFIG_SHELL_ALIAS_FIELD_MAX_LEN {
             return Err(eyre!(
@@ -169,6 +217,9 @@ impl AliasStore {
             .push(&record.encrypt::<PASETO_V4>(&self.encryption_key))
             .await?;
 
+        // set mutates shell config, so build again
+        self.build().await?;
+
         Ok(())
     }
 
@@ -201,6 +252,9 @@ impl AliasStore {
         self.store
             .push(&record.encrypt::<PASETO_V4>(&self.encryption_key))
             .await?;
+
+        // delete mutates shell config, so build again
+        self.build().await?;
 
         Ok(())
     }
