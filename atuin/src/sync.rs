@@ -25,7 +25,7 @@ pub async fn build(
 
     let host_id = Settings::host_id().expect("failed to get host_id");
 
-    let downloaded = downloaded.unwrap_or_else(|| &[]);
+    let downloaded = downloaded.unwrap_or(&[]);
 
     let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
     let alias_store = AliasStore::new(store.clone(), host_id, encryption_key);

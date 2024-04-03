@@ -1,11 +1,9 @@
-use atuin_dotfiles::store::AliasStore;
+
 use clap::Args;
-use eyre::{Result, WrapErr};
+use eyre::{Result};
 
 use atuin_client::{
     database::Database,
-    encryption,
-    history::store::HistoryStore,
     record::store::Store,
     record::sync::Operation,
     record::{sqlite_store::SqliteStore, sync},

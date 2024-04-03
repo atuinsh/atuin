@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+
 
 use atuin_client::record::sqlite_store::SqliteStore;
 // Sync aliases

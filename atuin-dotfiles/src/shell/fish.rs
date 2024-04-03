@@ -5,15 +5,15 @@ use crate::store::AliasStore;
 
 async fn cached_aliases(path: PathBuf, store: &AliasStore) -> String {
     match tokio::fs::read_to_string(path).await {
-        Ok(aliases) => return aliases,
+        Ok(aliases) => aliases,
         Err(r) => {
             // we failed to read the file for some reason, but the file does exist
             // fallback to generating new aliases on the fly
-            let aliases = store.posix().await.unwrap_or_else(|e| {
-                format!("echo 'Atuin: failed to read and generate aliases: \n{r}\n{e}'",)
-            });
+            
 
-            return aliases;
+            store.posix().await.unwrap_or_else(|e| {
+                format!("echo 'Atuin: failed to read and generate aliases: \n{r}\n{e}'",)
+            })
         }
     }
 }
