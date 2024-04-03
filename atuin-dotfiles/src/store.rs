@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 use atuin_client::record::sqlite_store::SqliteStore;
 // Sync aliases
@@ -136,7 +137,7 @@ impl AliasStore {
         }
     }
 
-    pub async fn zsh(&self) -> Result<String> {
+    pub async fn posix(&self) -> Result<String> {
         let aliases = self.aliases().await?;
 
         let mut config = String::new();
@@ -148,22 +149,38 @@ impl AliasStore {
         Ok(config)
     }
 
-    async fn build_zsh(&self) -> Result<()> {
-        let config = self.zsh().await?;
+    pub async fn xonsh(&self) -> Result<String> {
+        let aliases = self.aliases().await?;
 
-        let dir = atuin_common::utils::dotfiles_cache_dir();
-        tokio::fs::create_dir_all(dir.clone()).await?;
+        let mut config = String::new();
 
-        let cached = dir.join("aliases.zsh");
+        for alias in aliases {
+            config.push_str(&format!("aliases['{}'] ='{}'\n", alias.name, alias.value));
+        }
 
-        tokio::fs::write(cached, config).await?;
-
-        Ok(())
+        Ok(config)
     }
 
     pub async fn build(&self) -> Result<()> {
+        let dir = atuin_common::utils::dotfiles_cache_dir();
+        tokio::fs::create_dir_all(dir.clone()).await?;
+
         // Build for all supported shells
-        self.build_zsh().await?;
+        let posix = self.posix().await?;
+        let xonsh = self.xonsh().await?;
+
+        // All the same contents, maybe optimize in the future or perhaps there will be quirks
+        // per-shell
+        // I'd prefer separation atm
+        let zsh = dir.join("aliases.zsh");
+        let bash = dir.join("aliases.bash");
+        let fish = dir.join("aliases.fish");
+        let xsh = dir.join("aliases.xsh");
+
+        tokio::fs::write(zsh, &posix).await?;
+        tokio::fs::write(bash, &posix).await?;
+        tokio::fs::write(fish, &posix).await?;
+        tokio::fs::write(xsh, &xonsh).await?;
 
         Ok(())
     }

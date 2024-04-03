@@ -37,8 +37,7 @@ bind -M insert \e\[A _atuin_bind_up";
 pub async fn init(store: AliasStore, disable_up_arrow: bool, disable_ctrl_r: bool) -> Result<()> {
     init_static(disable_up_arrow, disable_ctrl_r);
 
-    let aliases = store.aliases().await?;
-    let aliases = atuin_dotfiles::shell::fish::build(&aliases[..]);
+    let aliases = atuin_dotfiles::shell::fish::config(&store).await;
 
     println!("{aliases}");
 

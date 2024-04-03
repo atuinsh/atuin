@@ -23,8 +23,7 @@ pub fn init_static(disable_up_arrow: bool, disable_ctrl_r: bool) {
 pub async fn init(store: AliasStore, disable_up_arrow: bool, disable_ctrl_r: bool) -> Result<()> {
     init_static(disable_up_arrow, disable_ctrl_r);
 
-    let aliases = store.aliases().await?;
-    let aliases = atuin_dotfiles::shell::xonsh::build(&aliases[..]);
+    let aliases = atuin_dotfiles::shell::xonsh::config(&store).await;
 
     println!("{aliases}");
 

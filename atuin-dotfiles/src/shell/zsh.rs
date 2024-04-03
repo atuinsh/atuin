@@ -8,7 +8,7 @@ async fn cached_aliases(path: PathBuf, store: &AliasStore) -> String {
         Err(r) => {
             // we failed to read the file for some reason, but the file does exist
             // fallback to generating new aliases on the fly
-            let aliases = store.zsh().await.unwrap_or_else(|e| {
+            let aliases = store.posix().await.unwrap_or_else(|e| {
                 format!("echo 'Atuin: failed to read and generate aliases: \n{r}\n{e}'",)
             });
 
