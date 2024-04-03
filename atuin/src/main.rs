@@ -7,6 +7,7 @@ use eyre::Result;
 use command::AtuinCmd;
 
 mod command;
+mod sync;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const SHA: &str = env!("GIT_HASH");

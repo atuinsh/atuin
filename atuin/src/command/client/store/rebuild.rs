@@ -1,3 +1,4 @@
+use atuin_dotfiles::store::AliasStore;
 use clap::Args;
 use eyre::{bail, Result};
 
@@ -28,6 +29,10 @@ impl Rebuild {
                     .await?;
             }
 
+            "dotfiles" => {
+                self.rebuild_dotfiles(settings, store.clone()).await?;
+            }
+
             tag => bail!("unknown tag: {tag}"),
         }
 
@@ -46,6 +51,17 @@ impl Rebuild {
         let history_store = HistoryStore::new(store, host_id, encryption_key);
 
         history_store.build(database).await?;
+
+        Ok(())
+    }
+
+    async fn rebuild_dotfiles(&self, settings: &Settings, store: SqliteStore) -> Result<()> {
+        let encryption_key: [u8; 32] = encryption::load_key(settings)?.into();
+
+        let host_id = Settings::host_id().expect("failed to get host_id");
+        let alias_store = AliasStore::new(store, host_id, encryption_key);
+
+        alias_store.build().await?;
 
         Ok(())
     }

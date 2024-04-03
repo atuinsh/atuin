@@ -365,7 +365,7 @@ impl Cmd {
                     let (_, downloaded) = record::sync::sync(settings, &store).await?;
                     Settings::save_sync_time()?;
 
-                    history_store.incremental_build(db, &downloaded).await?;
+                    crate::sync::build(settings, &store, db, Some(&downloaded)).await?;
                 } else {
                     debug!("running periodic background sync");
                     sync::sync(settings, false, db).await?;

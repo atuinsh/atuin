@@ -90,7 +90,7 @@ async fn run(
 
         let (uploaded, downloaded) = sync::sync(settings, &store).await?;
 
-        history_store.incremental_build(db, &downloaded).await?;
+        crate::sync::build(settings, &store, db, Some(&downloaded)).await?;
 
         println!("{uploaded}/{} up/down to record store", downloaded.len());
 
@@ -113,7 +113,7 @@ async fn run(
             // we'll want to run sync once more, as there will now be stuff to upload
             let (uploaded, downloaded) = sync::sync(settings, &store).await?;
 
-            history_store.incremental_build(db, &downloaded).await?;
+            crate::sync::build(settings, &store, db, Some(&downloaded)).await?;
 
             println!("{uploaded}/{} up/down to record store", downloaded.len());
         }

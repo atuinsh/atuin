@@ -1,11 +1,11 @@
 // do a sync :O
 use std::{cmp::Ordering, fmt::Write};
 
-use eyre::Result;
+use eyre::{Context, Result};
 use thiserror::Error;
 
-use super::store::Store;
-use crate::{api_client::Client, settings::Settings};
+use super::{sqlite_store::SqliteStore, store::Store};
+use crate::{api_client::Client, history::store::HistoryStore, settings::Settings};
 
 use atuin_common::record::{Diff, HostId, RecordId, RecordIdx, RecordStatus};
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
