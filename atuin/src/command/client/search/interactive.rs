@@ -295,6 +295,10 @@ impl State {
                 KeyCode::Char('d') => {
                     return InputAction::Delete(self.results_state.selected());
                 }
+                KeyCode::Char('a') => {
+                    self.search.input.start();
+                    return InputAction::Continue;
+                }
                 _ => {}
             }
         }
