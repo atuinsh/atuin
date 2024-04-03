@@ -75,6 +75,14 @@ pub fn data_dir() -> PathBuf {
     data_dir.join("atuin")
 }
 
+pub fn dotfiles_cache_dir() -> PathBuf {
+    // In most cases, this will be  ~/.local/share/atuin/dotfiles/cache
+    let data_dir = std::env::var("XDG_DATA_HOME")
+        .map_or_else(|_| home_dir().join(".local").join("share"), PathBuf::from);
+
+    data_dir.join("atuin").join("dotfiles").join("cache")
+}
+
 pub fn get_current_dir() -> String {
     // Prefer PWD environment variable over cwd if available to better support symbolic links
     match env::var("PWD") {

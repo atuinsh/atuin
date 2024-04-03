@@ -136,6 +136,38 @@ impl AliasStore {
         }
     }
 
+    pub async fn zsh(&self) -> Result<String> {
+        let aliases = self.aliases().await?;
+
+        let mut config = String::new();
+
+        for alias in aliases {
+            config.push_str(&format!("alias {}='{}'\n", alias.name, alias.value));
+        }
+
+        Ok(config)
+    }
+
+    async fn build_zsh(&self) -> Result<()> {
+        let config = self.zsh().await?;
+
+        let dir = atuin_common::utils::dotfiles_cache_dir();
+        tokio::fs::create_dir_all(dir.clone()).await?;
+
+        let cached = dir.join("aliases.zsh");
+
+        tokio::fs::write(cached, config).await?;
+
+        Ok(())
+    }
+
+    pub async fn build(&self) -> Result<()> {
+        // Build for all supported shells
+        self.build_zsh().await?;
+
+        Ok(())
+    }
+
     pub async fn set(&self, name: &str, value: &str) -> Result<()> {
         if name.len() + value.len() > CONFIG_SHELL_ALIAS_FIELD_MAX_LEN {
             return Err(eyre!(
@@ -169,6 +201,9 @@ impl AliasStore {
             .push(&record.encrypt::<PASETO_V4>(&self.encryption_key))
             .await?;
 
+        // set mutates shell config, so build again
+        self.build().await?;
+
         Ok(())
     }
 
@@ -201,6 +236,9 @@ impl AliasStore {
         self.store
             .push(&record.encrypt::<PASETO_V4>(&self.encryption_key))
             .await?;
+
+        // delete mutates shell config, so build again
+        self.build().await?;
 
         Ok(())
     }
