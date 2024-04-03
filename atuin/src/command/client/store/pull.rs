@@ -1,6 +1,5 @@
-
 use clap::Args;
-use eyre::{Result};
+use eyre::Result;
 
 use atuin_client::{
     database::Database,

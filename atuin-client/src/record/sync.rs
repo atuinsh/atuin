@@ -1,10 +1,10 @@
 // do a sync :O
 use std::{cmp::Ordering, fmt::Write};
 
-use eyre::{Result};
+use eyre::Result;
 use thiserror::Error;
 
-use super::{store::Store};
+use super::store::Store;
 use crate::{api_client::Client, settings::Settings};
 
 use atuin_common::record::{Diff, HostId, RecordId, RecordIdx, RecordStatus};

@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 
-
 use atuin_client::record::sqlite_store::SqliteStore;
 // Sync aliases
 // This will be noticeable similar to the kv store, though I expect the two shall diverge
