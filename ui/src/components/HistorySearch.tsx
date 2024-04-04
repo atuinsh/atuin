@@ -1,25 +1,30 @@
-import { useState } from 'react'
+import { useState } from "react";
 import {
   AdjustmentsHorizontalIcon,
-} from '@heroicons/react/24/outline'
-import { MagnifyingGlassIcon } from '@heroicons/react/20/solid'
-import { invoke } from '@tauri-apps/api/core';
+  ArrowPathIcon,
+} from "@heroicons/react/24/outline";
+import { MagnifyingGlassIcon } from "@heroicons/react/20/solid";
+import { invoke } from "@tauri-apps/api/core";
 
-export default function HistorySearch(props){
+export default function HistorySearch(props) {
   const search = (query) => {
-    invoke("search", { query: query.target.value }).then((res) => {
-      props.setHistory(res);
-    }).catch((e) => {
-      console.log(e);
-    })
+    invoke("search", { query: query.target.value })
+      .then((res) => {
+        props.setHistory(res);
+      })
+      .catch((e) => {
+        console.log(e);
+      });
   };
 
   return (
     <div className="flex flex-1 gap-x-4 self-stretch lg:gap-x-6">
-      <form className="relative flex flex-1" onSubmit={(e) => {
+      <form
+        className="relative flex flex-1"
+        onSubmit={(e) => {
           e.preventDefault();
-        }
-      }>
+        }}
+      >
         <label htmlFor="search-field" className="sr-only">
           Search
         </label>
@@ -41,11 +46,13 @@ export default function HistorySearch(props){
         />
       </form>
       <div className="flex items-center gap-x-4 lg:gap-x-6">
-        <button type="button" className="-m-2.5 p-2.5 text-gray-400 hover:text-gray-500">
-          <span className="sr-only">View notifications</span>
-          <AdjustmentsHorizontalIcon className="h-6 w-6" aria-hidden="true" />
+        <button
+          type="button"
+          className="-m-2.5 p-2.5 text-gray-400 hover:text-gray-500"
+          onClick={props.refreshHistory}
+        >
+          <ArrowPathIcon className="h-6 w-6" aria-hidden="true" />
         </button>
-
       </div>
     </div>
   );
