@@ -6,6 +6,7 @@
 // ending up in the main crate.
 
 use serde::Serialize;
+use sqlx::{sqlite::SqliteRow, Row};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -131,7 +132,7 @@ impl HistoryDB {
         };
 
         let filters = OptFilters {
-            limit: Some(20),
+            limit: Some(200),
             ..OptFilters::default()
         };
 
@@ -157,10 +158,6 @@ impl HistoryDB {
     }
 
     pub async fn global_stats(&self) -> Result<GlobalStats, String> {
-        let history = self.list(None, false).await?;
-
-        let total = history.len();
-
         let day_ago = time::OffsetDateTime::now_utc() - time::Duration::days(1);
         let day_ago = day_ago.unix_timestamp_nanos();
 
@@ -169,6 +166,38 @@ impl HistoryDB {
 
         let month_ago = time::OffsetDateTime::now_utc() - time::Duration::days(30);
         let month_ago = month_ago.unix_timestamp_nanos();
+
+        // get the last 30 days of shell history
+        let history: Vec<UIHistory> = sqlx::query("SELECT * FROM history WHERE timestamp > ?")
+            .bind(month_ago as i64)
+            .map(|row: SqliteRow| {
+                History::from_db()
+                    .id(row.get("id"))
+                    .timestamp(
+                        time::OffsetDateTime::from_unix_timestamp_nanos(
+                            row.get::<i64, _>("timestamp") as i128,
+                        )
+                        .unwrap(),
+                    )
+                    .duration(row.get("duration"))
+                    .exit(row.get("exit"))
+                    .command(row.get("command"))
+                    .cwd(row.get("cwd"))
+                    .session(row.get("session"))
+                    .hostname(row.get("hostname"))
+                    .deleted_at(None)
+                    .build()
+                    .into()
+            })
+            .map(to_ui_history)
+            .fetch_all(&self.0.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let total: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM history")
+            .fetch_one(&self.0.pool)
+            .await
+            .map_err(|e| e.to_string())?;
 
         let mut day = 0;
         let mut week = 0;
@@ -206,7 +235,7 @@ impl HistoryDB {
         daily.sort_by(|a, b| a.name.cmp(&b.name));
 
         Ok(GlobalStats {
-            total_history: total as u64,
+            total_history: total.0 as u64,
             last_30d: month,
             last_7d: week,
             last_1d: day,

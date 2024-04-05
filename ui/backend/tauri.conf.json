@@ -10,10 +10,12 @@
     "windows": [
       {
         "fullscreen": false,
-        "height": 800,
         "resizable": true,
         "title": "Atuin",
-        "width": 1200
+        "width": 1200,
+        "height": 800,
+        "minWidth": 1000,
+        "minHeight": 500
       }
     ]
   },

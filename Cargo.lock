@@ -211,8 +211,8 @@ name = "atuin"
 version = "18.1.0"
 dependencies = [
  "async-trait",
- "atuin-client 18.1.0",
- "atuin-common 18.1.0",
+ "atuin-client",
+ "atuin-common",
  "atuin-dotfiles",
  "atuin-server",
  "atuin-server-postgres",
@@ -259,7 +259,7 @@ name = "atuin-client"
 version = "18.1.0"
 dependencies = [
  "async-trait",
- "atuin-common 18.1.0",
+ "atuin-common",
  "base64 0.21.7",
  "clap",
  "config",
@@ -278,55 +278,6 @@ dependencies = [
  "minspan",
  "parse_duration",
  "pretty_assertions",
- "rand 0.8.5",
- "regex",
- "reqwest 0.11.27",
- "rmp",
- "rusty_paserk",
- "rusty_paseto",
- "semver",
- "serde",
- "serde_json",
- "serde_regex",
- "serde_with",
- "sha2",
- "shellexpand",
- "sql-builder",
- "sqlx",
- "thiserror",
- "time",
- "tokio",
- "typed-builder",
- "urlencoding",
- "uuid",
- "whoami",
-]
-
-[[package]]
-name = "atuin-client"
-version = "18.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "77e9a498df343384538ad59c448021261d738de71b0b649f7f655a3a1dc14b81"
-dependencies = [
- "async-trait",
- "atuin-common 18.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "base64 0.21.7",
- "clap",
- "config",
- "crypto_secretbox",
- "directories",
- "eyre",
- "fs-err",
- "futures",
- "generic-array",
- "hex",
- "indicatif",
- "interim",
- "itertools",
- "log",
- "memchr",
- "minspan",
- "parse_duration",
  "rand 0.8.5",
  "regex",
  "reqwest 0.11.27",
@@ -370,28 +321,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "atuin-common"
-version = "18.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "50ea0a2a4a59bf3f3c0e6090c201e1920287dd9357fcb5b5861a9a6caca6722b"
-dependencies = [
- "eyre",
- "lazy_static",
- "rand 0.8.5",
- "semver",
- "serde",
- "sqlx",
- "time",
- "typed-builder",
- "uuid",
-]
-
-[[package]]
 name = "atuin-dotfiles"
 version = "0.1.0"
 dependencies = [
- "atuin-client 18.1.0",
- "atuin-common 18.1.0",
+ "atuin-client",
+ "atuin-common",
  "crypto_secretbox",
  "eyre",
  "rand 0.8.5",
@@ -405,7 +339,7 @@ version = "18.1.0"
 dependencies = [
  "argon2",
  "async-trait",
- "atuin-common 18.1.0",
+ "atuin-common",
  "atuin-server-database",
  "axum",
  "axum-server",
@@ -435,7 +369,7 @@ name = "atuin-server-database"
 version = "18.1.0"
 dependencies = [
  "async-trait",
- "atuin-common 18.1.0",
+ "atuin-common",
  "eyre",
  "serde",
  "time",
@@ -448,7 +382,7 @@ name = "atuin-server-postgres"
 version = "18.1.0"
 dependencies = [
  "async-trait",
- "atuin-common 18.1.0",
+ "atuin-common",
  "atuin-server-database",
  "eyre",
  "futures-util",
@@ -6180,9 +6114,10 @@ name = "ui"
 version = "0.0.0"
 dependencies = [
  "async-trait",
- "atuin-client 18.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "atuin-client",
  "serde",
  "serde_json",
+ "sqlx",
  "syntect",
  "tauri",
  "tauri-build",

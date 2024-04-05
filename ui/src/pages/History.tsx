@@ -13,40 +13,44 @@ import { invoke } from "@tauri-apps/api/core";
 
 import HistoryList from "../components/HistoryList.tsx";
 import HistorySearch from "../components/HistorySearch.tsx";
+import Stats from "../components/Stats.tsx";
 
 function refreshHistory(
   setHistory: React.Dispatch<React.SetStateAction<never[]>>,
+  query: String | null,
 ) {
-  invoke("list").then((h: any[]) => {
-    setHistory(h);
-  });
+  if (query) {
+    invoke("search", { query: query })
+      .then((res: any[]) => {
+        setHistory(res);
+      })
+      .catch((e) => {
+        console.log(e);
+      });
+  } else {
+    invoke("list").then((h: any[]) => {
+      setHistory(h);
+    });
+  }
 }
 
 export default function Search() {
   let [history, setHistory] = useState([]);
 
   useEffect(() => {
-    refreshHistory(setHistory);
+    refreshHistory(setHistory, null);
   }, []);
 
   return (
     <>
-      <div className="lg:pl-60">
-        <div className="sticky top-0 z-40 flex h-16 shrink-0 items-center gap-x-4 border-b border-gray-200 bg-white px-4 shadow-sm sm:gap-x-6 sm:px-6 lg:px-8">
-          <button
-            type="button"
-            className="-m-2.5 p-2.5 text-gray-700 lg:hidden"
-            onClick={() => setSidebarOpen(true)}
-          >
-            <span className="sr-only">Open sidebar</span>
-            <Bars3Icon className="h-6 w-6" aria-hidden="true" />
-          </button>
+      <div className="pl-60">
+        <Stats />
 
-          <div className="h-6 w-px bg-gray-200 lg:hidden" aria-hidden="true" />
-
+        <div className="flex h-16 shrink-0 items-center gap-x-4 border-b border-t border-gray-200 bg-white px-4 shadow-sm sm:gap-x-6 sm:px-6 lg:px-8">
           <HistorySearch
-            setHistory={setHistory}
-            refreshHistory={() => refreshHistory(setHistory)}
+            refreshHistory={(query: String | null) =>
+              refreshHistory(setHistory, query)
+            }
           />
         </div>
 
