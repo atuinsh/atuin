@@ -15,7 +15,7 @@ pub enum SyncError {
     #[error("the local store is ahead of the remote, but for another host. has remote lost data?")]
     LocalAheadOtherHost,
 
-    #[error("an issue with the local database occured: {msg:?}")]
+    #[error("an issue with the local database occurred: {msg:?}")]
     LocalStoreError { msg: String },
 
     #[error("something has gone wrong with the sync logic: {msg:?}")]

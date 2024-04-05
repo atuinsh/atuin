@@ -107,7 +107,7 @@ async fn fuzzy_search(
                 // 1. find either the position that this command ranks
                 // 2. find the same command positioned better than our rank.
                 for i in 0..set.len() {
-                    // do we out score the corrent position?
+                    // do we out score the current position?
                     if ranks[i] > score {
                         ranks.insert(i, score);
                         set.insert(i, history.clone());
