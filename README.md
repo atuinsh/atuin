@@ -186,6 +186,15 @@ sudo port install atuin
   
 And then follow [the shell setup](#shell-plugin)
 
+### Cave
+
+Atuin is available in the Exherbo Linux [rust repository](https://gitlab.exherbo.org/exherbo/rust/-/tree/master/packages/app-shells/atuin):
+
+```
+cave resolve -x repository/rust
+cave resolve -x atuin
+```
+
 ### Nix
 
 This repository is a flake, and can be installed using `nix profile`:
