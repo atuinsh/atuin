@@ -1,15 +1,16 @@
 # Include guard
-[[ ${__atuin_initialized-} == true ]] && return 0
-__atuin_initialized=true
-
-# Enable only in interactive shells
-[[ $- == *i* ]] || return 0
-
-# Require bash >= 3.1
-if ((BASH_VERSINFO[0] < 3 || BASH_VERSINFO[0] == 3 && BASH_VERSINFO[1] < 1)); then
+if [[ ${__atuin_initialized-} == true ]]; then
+    false
+elif [[ $- != *i* ]]; then
+    # Enable only in interactive shells
+    false
+elif ((BASH_VERSINFO[0] < 3 || BASH_VERSINFO[0] == 3 && BASH_VERSINFO[1] < 1)); then
+    # Require bash >= 3.1
     [[ -t 2 ]] && printf 'atuin: requires bash >= 3.1 for the integration.\n' >&2
-    return 0
-fi
+    false
+else # (include guard) beginning of main content
+#------------------------------------------------------------------------------
+__atuin_initialized=true
 
 ATUIN_SESSION=$(atuin uuid)
 ATUIN_STTY=$(stty -g)
@@ -318,3 +319,6 @@ if [[ $__atuin_bind_up_arrow == true ]]; then
         bind -m vi-command -x '"k": "\C-x\C-p"'
     fi
 fi
+
+#------------------------------------------------------------------------------
+fi # (include guard) end of main content
