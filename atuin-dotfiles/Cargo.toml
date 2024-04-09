@@ -2,7 +2,7 @@
 name = "atuin-dotfiles"
 description = "The dotfiles crate for Atuin"
 edition = "2021"
-version = "0.1.0" # intentionally not the same as the rest
+version = "0.1.0"                            # intentionally not the same as the rest
 
 authors.workspace = true
 rust-version.workspace = true
@@ -21,4 +21,5 @@ eyre = { workspace = true }
 tokio = { workspace = true }
 rmp = { version = "0.8.11" }
 rand = { workspace = true }
+serde = { workspace = true }
 crypto_secretbox = "0.1.1"

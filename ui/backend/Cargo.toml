@@ -13,6 +13,7 @@ tauri-build = { version = "2.0.0-beta", features = [] }
 
 [dependencies]
 atuin-client = { path = "../../atuin-client", version = "18.1.0" }
+atuin-dotfiles = { path = "../../atuin-dotfiles", version = "0.1.0" }
 
 tauri = { version = "2.0.0-beta", features = ["tray-icon"] }
 serde = { version = "1.0", features = ["derive"] }

@@ -330,6 +330,7 @@ dependencies = [
  "eyre",
  "rand 0.8.5",
  "rmp",
+ "serde",
  "tokio",
 ]
 
@@ -6115,6 +6116,7 @@ version = "0.0.0"
 dependencies = [
  "async-trait",
  "atuin-client",
+ "atuin-dotfiles",
  "serde",
  "serde_json",
  "sqlx",

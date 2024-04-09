@@ -1,7 +1,9 @@
 use std::{ffi::OsStr, process::Command};
 
-use atuin_common::shell::{shell, shell_name, ShellError};
 use eyre::Result;
+use serde::Serialize;
+
+use atuin_common::shell::{shell, shell_name, ShellError};
 
 use crate::store::AliasStore;
 
@@ -10,7 +12,7 @@ pub mod fish;
 pub mod xonsh;
 pub mod zsh;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Alias {
     pub name: String,
     pub value: String,

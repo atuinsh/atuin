@@ -20,8 +20,11 @@ use atuin_client::{
 };
 
 mod db;
+mod dotfiles;
+mod store;
 
 use db::{GlobalStats, HistoryDB, UIHistory};
+use dotfiles::aliases::aliases;
 
 #[tauri::command]
 async fn list() -> Result<Vec<UIHistory>, String> {
@@ -66,7 +69,12 @@ fn main() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![list, search, global_stats])
+        .invoke_handler(tauri::generate_handler![
+            list,
+            search,
+            global_stats,
+            aliases
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
