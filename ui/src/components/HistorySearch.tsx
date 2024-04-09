@@ -36,7 +36,7 @@ export default function HistorySearch(props) {
           name="search"
           onChange={(query) => {
             setSearchQuery(query.target.value);
-            props.refreshHistory(query.target.value);
+            props.refresh(query.target.value);
           }}
         />
       </form>
@@ -45,7 +45,7 @@ export default function HistorySearch(props) {
           type="button"
           className="-m-2.5 p-2.5 text-gray-400 hover:text-gray-500"
           onClick={() => {
-            props.refreshHistory(searchQuery);
+            props.refresh(searchQuery);
           }}
         >
           <ArrowPathIcon className="h-6 w-6" aria-hidden="true" />
