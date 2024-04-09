@@ -527,7 +527,13 @@ impl Settings {
         if !self.needs_update_check()? {
             // Worst case, we don't want Atuin to fail to start because something funky is going on with
             // version checking.
-            let version = match Settings::read_from_data_dir(LATEST_VERSION_FILENAME) {
+            let version = tokio::task::spawn_blocking(|| {
+                Settings::read_from_data_dir(LATEST_VERSION_FILENAME)
+            })
+            .await
+            .expect("file task panicked");
+
+            let version = match version {
                 Some(v) => Version::parse(&v).unwrap_or(current),
                 None => current,
             };
@@ -541,8 +547,14 @@ impl Settings {
         #[cfg(not(feature = "sync"))]
         let latest = current;
 
-        Settings::save_version_check_time()?;
-        Settings::save_to_data_dir(LATEST_VERSION_FILENAME, latest.to_string().as_str())?;
+        let latest_encoded = latest.to_string();
+        tokio::task::spawn_blocking(move || {
+            Settings::save_version_check_time()?;
+            Settings::save_to_data_dir(LATEST_VERSION_FILENAME, &latest_encoded)?;
+            Ok::<(), eyre::Report>(())
+        })
+        .await
+        .expect("file task panicked")?;
 
         Ok(latest)
     }
