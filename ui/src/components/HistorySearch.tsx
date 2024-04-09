@@ -1,12 +1,12 @@
 import { useState } from "react";
-import {
-  AdjustmentsHorizontalIcon,
-  ArrowPathIcon,
-} from "@heroicons/react/24/outline";
+import { ArrowPathIcon } from "@heroicons/react/24/outline";
 import { MagnifyingGlassIcon } from "@heroicons/react/20/solid";
-import { invoke } from "@tauri-apps/api/core";
 
-export default function HistorySearch(props) {
+interface HistorySearchProps {
+  refresh: (query: string) => void;
+}
+
+export default function HistorySearch(props: HistorySearchProps) {
   let [searchQuery, setSearchQuery] = useState("");
 
   return (
@@ -31,7 +31,7 @@ export default function HistorySearch(props) {
           autoComplete="off"
           autoCapitalize="off"
           autoCorrect="off"
-          spellCheck="off"
+          spellCheck="false"
           type="search"
           name="search"
           onChange={(query) => {
