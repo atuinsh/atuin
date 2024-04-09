@@ -122,7 +122,13 @@ atuin sync
 ```
 
 Then restart your shell!
-  
+
+> [!NOTE]
+>
+> **For Bash users**: The above sets up `bash-preexec` for necessary hooks, but
+> `bash-preexec` has limitations.  For details, please see the [Bash](#bash)
+> section below.
+
 ## Offline only (no sync)
   
 ```
@@ -287,11 +293,15 @@ With ble.sh (>= 0.4) installed, just add atuin to your .bashrc
 echo 'eval "$(atuin init bash)"' >> ~/.bashrc
 ```
 
-Please make sure that the above line comes after sourcing ble.sh so atuin knows the presence of ble.sh.
+> [!IMPORTANT]
+>
+> Please make sure that the above line comes after sourcing ble.sh, so Atuin detects ble.sh.
 
 #### [bash-preexec](https://github.com/rcaloras/bash-preexec)
 
-[Bash-preexec](https://github.com/rcaloras/bash-preexec) can also be used, but you may experience some minor problems with the recorded duration and exit status of some commands.
+[Bash-preexec](https://github.com/rcaloras/bash-preexec) can also be used, but
+you may experience minor problems of missing commands, ignored `HISTCONTROL`,
+wrong recorded duration and exit status of some commands.
 
 To use bash-preexec, download and initialize it
 
@@ -306,11 +316,25 @@ Then set up Atuin
 echo 'eval "$(atuin init bash)"' >> ~/.bashrc
 ```
 
-**PLEASE NOTE**
+> [!NOTE]
+>
+> bash-preexec cannot properly invoke the `preexec` hook for subshell commands
+> `(...)`, function definitions `func() { ...; }`, empty for-in-statements `for
+> i in; do ...; done`, etc., so those commands may not be recorded in the
+> Atuin's history.
+>
+> bash-preexec currently has an issue where it will stop honoring
+> `HISTCONTROL=ignorespace`. While Atuin will ignore commands prefixed with
+> whitespace, they may still end up in your bash history. Please check your
+> configuration!  All other shells do not have this issue.
+>
+> Also, there can be problems in the recorded duration and the exit status of
+> some commands.
 
-bash-preexec currently has an issue where it will stop honoring `ignorespace`. While Atuin will ignore commands prefixed with whitespace, they may still end up in your bash history. Please check your configuration! All other shells do not have this issue.
-
-To use Atuin in `bash < 4` with bash-preexec, the option `enter_accept` needs to be turned on (which is so by default).
+> [!IMPORTANT]
+>
+> To use Atuin in `bash < 4` with bash-preexec, the option `enter_accept` needs
+> to be turned on (which is so by default).
 
 ### fish
 
