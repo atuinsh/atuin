@@ -45,6 +45,18 @@ pub async fn delete_alias(name: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub async fn set_alias(name: String, value: String) -> Result<(), String> {
+    let alias_store = alias_store().await.map_err(|e| e.to_string())?;
+
+    alias_store
+        .set(name.as_str(), value.as_str())
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn import_aliases() -> Result<Vec<Alias>, String> {
     let store = alias_store().await.map_err(|e| e.to_string())?;
     let shell = Shell::default_shell().map_err(|e| e.to_string())?;

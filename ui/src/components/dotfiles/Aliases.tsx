@@ -13,8 +13,11 @@ import {
 } from "@/components/ui/dropdown-menu";
 
 import { invoke } from "@tauri-apps/api/core";
+import Drawer from "@/components/Drawer";
 
-function loadAliases(setAliases: React.Dispatch<React.SetStateAction<any[]>>) {
+function loadAliases(
+  setAliases: React.Dispatch<React.SetStateAction<never[]>>,
+) {
   invoke("aliases").then((aliases: any) => {
     setAliases(aliases);
   });
@@ -25,52 +28,112 @@ type Alias = {
   value: string;
 };
 
-function deleteAlias(name: string) {
+function deleteAlias(
+  name: string,
+  setAliases: React.Dispatch<React.SetStateAction<never[]>>,
+) {
   invoke("delete_alias", { name: name })
     .then(() => {
       console.log("Deleted alias");
+      loadAliases(setAliases);
     })
     .catch(() => {
       console.error("Failed to delete alias");
     });
 }
 
-const columns: ColumnDef<Alias>[] = [
-  {
-    accessorKey: "name",
-    header: "Name",
-  },
-  {
-    accessorKey: "value",
-    header: "Value",
-  },
-  {
-    id: "actions",
-    cell: ({ row }) => {
-      const alias = row.original;
+function AddAlias({ onAdd: onAdd }: { onAdd?: () => void }) {
+  let [name, setName] = useState("");
+  let [value, setValue] = useState("");
 
-      return (
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="ghost" className="h-8 w-8 p-0 float-right">
-              <span className="sr-only">Open menu</span>
-              <MoreHorizontal className="h-4 w-4 text-right" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuLabel>Actions</DropdownMenuLabel>
-            <DropdownMenuItem onClick={() => deleteAlias(alias.name)}>
-              Delete
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      );
-    },
-  },
-];
+  // simple form to add aliases
+  return (
+    <div className="p-4">
+      <h2 className="text-xl font-semibold leading-6 text-gray-900">
+        Add alias
+      </h2>
+      <p className="mt-2">Add a new alias to your shell</p>
+
+      <form
+        className="mt-4"
+        onSubmit={(e) => {
+          e.preventDefault();
+
+          invoke("set_alias", { name: name, value: value })
+            .then(() => {
+              console.log("Added alias");
+
+              if (onAdd) onAdd();
+            })
+            .catch(() => {
+              console.error("Failed to add alias");
+            });
+        }}
+      >
+        <input
+          className="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-md focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5"
+          type="text"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="Alias name"
+        />
+
+        <input
+          className="mt-4 bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-md focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5"
+          type="text"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          placeholder="Alias value"
+        />
+
+        <input
+          type="submit"
+          className="block mt-4 rounded-md bg-green-600 px-3 py-2 text-center text-sm font-semibold text-white shadow-sm hover:bg-green-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-green-600"
+          value="Add alias"
+        />
+      </form>
+    </div>
+  );
+}
 
 export default function Aliases() {
   let [aliases, setAliases] = useState([]);
+
+  const columns: ColumnDef<Alias>[] = [
+    {
+      accessorKey: "name",
+      header: "Name",
+    },
+    {
+      accessorKey: "value",
+      header: "Value",
+    },
+    {
+      id: "actions",
+      cell: ({ row }: any) => {
+        const alias = row.original;
+
+        return (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" className="h-8 w-8 p-0 float-right">
+                <span className="sr-only">Open menu</span>
+                <MoreHorizontal className="h-4 w-4 text-right" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuLabel>Actions</DropdownMenuLabel>
+              <DropdownMenuItem
+                onClick={() => deleteAlias(alias.name, setAliases)}
+              >
+                Delete
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        );
+      },
+    },
+  ];
 
   useEffect(() => {
     loadAliases(setAliases);
@@ -89,12 +152,19 @@ export default function Aliases() {
           </p>
         </div>
         <div className="mt-4 sm:ml-16 sm:mt-0 flex-row">
-          <button
-            type="button"
-            className="block rounded-md bg-green-600 px-3 py-2 text-center text-sm font-semibold text-white shadow-sm hover:bg-green-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-green-600"
+          <Drawer
+            width="30%"
+            trigger={
+              <button
+                type="button"
+                className="block rounded-md bg-green-600 px-3 py-2 text-center text-sm font-semibold text-white shadow-sm hover:bg-green-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-green-600"
+              >
+                Add
+              </button>
+            }
           >
-            Add
-          </button>
+            <AddAlias onAdd={() => loadAliases(setAliases)} />
+          </Drawer>
         </div>
       </div>
       <div className="mt-8 flow-root">
