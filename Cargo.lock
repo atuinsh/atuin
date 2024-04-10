@@ -285,6 +285,8 @@ dependencies = [
  "semver",
  "serde",
  "sqlx",
+ "sysinfo",
+ "thiserror",
  "time",
  "typed-builder",
  "uuid",
