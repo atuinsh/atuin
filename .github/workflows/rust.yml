@@ -2,9 +2,9 @@ name: Rust
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
 env:
   CARGO_TERM_COLOR: always
@@ -17,32 +17,35 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-    - uses: actions/checkout@v3
+      - uses: actions/checkout@v3
 
-    - name: Install rust
-      uses: dtolnay/rust-toolchain@master
-      with:
+      - name: Install rust
+        uses: dtolnay/rust-toolchain@master
+        with:
           toolchain: stable
 
-    - uses: actions/cache@v3
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
+      - uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
 
-    - name: Run cargo build common
-      run: cargo build -p atuin-common --locked --release
+      - name: Install dependencies
+        run: apt update && apt install libgtk-3-dev
 
-    - name: Run cargo build client
-      run: cargo build -p atuin-client --locked --release
+      - name: Run cargo build common
+        run: cargo build -p atuin-common --locked --release
 
-    - name: Run cargo build server
-      run: cargo build -p atuin-server --locked --release
+      - name: Run cargo build client
+        run: cargo build -p atuin-client --locked --release
 
-    - name: Run cargo build main
-      run: cargo build --all --locked --release 
+      - name: Run cargo build server
+        run: cargo build -p atuin-server --locked --release
+
+      - name: Run cargo build main
+        run: cargo build --all --locked --release
 
   cross-compile:
     strategy:
@@ -54,32 +57,32 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v3
+      - uses: actions/checkout@v3
 
-    - name: Install cross
-      uses: taiki-e/install-action@v1
-      with:
-        tool: cross
+      - name: Install cross
+        uses: taiki-e/install-action@v1
+        with:
+          tool: cross
 
-    - uses: actions/cache@v3
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ matrix.target }}-cross-compile-${{ hashFiles('**/Cargo.lock') }}
+      - uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ matrix.target }}-cross-compile-${{ hashFiles('**/Cargo.lock') }}
 
-    - name: Run cross build common
-      run: cross build -p atuin-common --locked --target ${{ matrix.target }}
+      - name: Run cross build common
+        run: cross build -p atuin-common --locked --target ${{ matrix.target }}
 
-    - name: Run cross build client
-      run: cross build -p atuin-client --locked --target ${{ matrix.target }}
+      - name: Run cross build client
+        run: cross build -p atuin-client --locked --target ${{ matrix.target }}
 
-    - name: Run cross build server
-      run: cross build -p atuin-server --locked --target ${{ matrix.target }}
+      - name: Run cross build server
+        run: cross build -p atuin-server --locked --target ${{ matrix.target }}
 
-    - name: Run cross build main
-      run: cross build --all --locked --target ${{ matrix.target }}
+      - name: Run cross build main
+        run: cross build --all --locked --target ${{ matrix.target }}
 
   unit-test:
     strategy:
@@ -88,29 +91,31 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-    - uses: actions/checkout@v3
+      - uses: actions/checkout@v3
 
-    - name: Install rust
-      uses: dtolnay/rust-toolchain@master
-      with:
+      - name: Install rust
+        uses: dtolnay/rust-toolchain@master
+        with:
           toolchain: stable
 
-    - uses: taiki-e/install-action@v2
-      name: Install nextest
-      with:
-        tool: cargo-nextest
+      - name: Install dependencies
+        run: apt update && apt install libgtk-3-dev
 
+      - uses: taiki-e/install-action@v2
+        name: Install nextest
+        with:
+          tool: cargo-nextest
 
-    - uses: actions/cache@v3
-      with:
-        path: |
-         ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${ runner.os }-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
+      - uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+             ~/.cargo/git
+             target
+          key: ${ runner.os }-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
 
-    - name: Run cargo test
-      run: cargo nextest run --lib --bins
+      - name: Run cargo test
+        run: cargo nextest run --lib --bins
 
   check:
     strategy:
@@ -119,35 +124,38 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-    - uses: actions/checkout@v3
+      - uses: actions/checkout@v3
 
-    - name: Install rust
-      uses: dtolnay/rust-toolchain@master
-      with:
+      - name: Install rust
+        uses: dtolnay/rust-toolchain@master
+        with:
           toolchain: stable
 
-    - uses: actions/cache@v3
-      with:
-        path: |
-         ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${ runner.os }-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
+      - name: Install dependencies
+        run: apt update && apt install libgtk-3-dev
 
-    - name: Run cargo check (all features)
-      run: cargo check --all-features --workspace
+      - uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+             ~/.cargo/git
+             target
+          key: ${ runner.os }-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
 
-    - name: Run cargo check (no features)
-      run: cargo check --no-default-features --workspace
+      - name: Run cargo check (all features)
+        run: cargo check --all-features --workspace
 
-    - name: Run cargo check (sync)
-      run: cargo check --no-default-features --features sync --workspace
+      - name: Run cargo check (no features)
+        run: cargo check --no-default-features --workspace
 
-    - name: Run cargo check (server)
-      run: cargo check --no-default-features --features server --workspace
+      - name: Run cargo check (sync)
+        run: cargo check --no-default-features --features sync --workspace
 
-    - name: Run cargo check (client only)
-      run: cargo check --no-default-features --features client --workspace
+      - name: Run cargo check (server)
+        run: cargo check --no-default-features --features server --workspace
+
+      - name: Run cargo check (client only)
+        run: cargo check --no-default-features --features client --workspace
 
   integration-test:
     runs-on: ubuntu-latest
@@ -163,66 +171,68 @@ jobs:
           - 5432:5432
 
     steps:
-    - uses: actions/checkout@v3
+      - uses: actions/checkout@v3
 
-    - name: Install rust
-      uses: dtolnay/rust-toolchain@master
-      with:
+      - name: Install rust
+        uses: dtolnay/rust-toolchain@master
+        with:
           toolchain: stable
 
-    - uses: taiki-e/install-action@v2
-      name: Install nextest
-      with:
-        tool: cargo-nextest
+      - uses: taiki-e/install-action@v2
+        name: Install nextest
+        with:
+          tool: cargo-nextest
 
+      - uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+             ~/.cargo/git
+             target
+          key: ${ runner.os }-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
 
-    - uses: actions/cache@v3
-      with:
-        path: |
-         ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${ runner.os }-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
-
-    - name: Run cargo test
-      run: cargo nextest run --test '*'
-      env:
-        ATUIN_DB_URI: postgres://atuin:pass@localhost:5432/atuin
+      - name: Run cargo test
+        run: cargo nextest run --test '*'
+        env:
+          ATUIN_DB_URI: postgres://atuin:pass@localhost:5432/atuin
 
   clippy:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v3
+      - uses: actions/checkout@v3
 
-    - name: Install latest rust
-      uses: dtolnay/rust-toolchain@master
-      with:
+      - name: Install latest rust
+        uses: dtolnay/rust-toolchain@master
+        with:
           toolchain: stable
           components: clippy
 
-    - uses: actions/cache@v3
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ runner.os }}-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
+      - name: Install dependencies
+        run: apt update && apt install libgtk-3-dev
 
-    - name: Run clippy
-      run: cargo clippy -- -D warnings
-        
+      - uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run clippy
+        run: cargo clippy -- -D warnings
+
   format:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v3
+      - uses: actions/checkout@v3
 
-    - name: Install latest rust
-      uses: dtolnay/rust-toolchain@master
-      with:
+      - name: Install latest rust
+        uses: dtolnay/rust-toolchain@master
+        with:
           toolchain: stable
           components: rustfmt
 
-    - name: Format
-      run: cargo fmt -- --check
+      - name: Format
+        run: cargo fmt -- --check
