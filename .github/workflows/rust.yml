@@ -33,6 +33,7 @@ jobs:
           key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Install dependencies
+        if: matrix.os != 'macos-14'
         run: sudo apt update && sudo apt install libgtk-3-dev
 
       - name: Run cargo build common
@@ -99,6 +100,7 @@ jobs:
           toolchain: stable
 
       - name: Install dependencies
+        if: matrix.os != 'macos-14'
         run: sudo apt update && sudo apt install libgtk-3-dev
 
       - uses: taiki-e/install-action@v2
@@ -132,6 +134,7 @@ jobs:
           toolchain: stable
 
       - name: Install dependencies
+        if: matrix.os != 'macos-14'
         run: sudo apt update && sudo apt install libgtk-3-dev
 
       - uses: actions/cache@v3
@@ -209,6 +212,7 @@ jobs:
           components: clippy
 
       - name: Install dependencies
+        if: matrix.os != 'macos-14'
         run: sudo apt update && sudo apt install libgtk-3-dev
 
       - uses: actions/cache@v3
