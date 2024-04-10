@@ -1,7 +1,7 @@
 use std::{ffi::OsStr, process::Command};
 
 use atuin_common::shell::{shell, shell_name, ShellError};
-use eyre::{eyre, Result};
+use eyre::Result;
 
 use crate::store::AliasStore;
 
@@ -52,9 +52,7 @@ pub fn existing_aliases() -> Result<Vec<Alias>, ShellError> {
 
     // This will return a list of aliases, each on its own line
     // They will be in the form foo=bar
-    let aliases = run_interactive(["alias"]);
-    println!("{}", aliases);
-
+    let aliases = run_interactive(["alias"])?;
     let aliases: Vec<Alias> = aliases.lines().map(parse_alias).collect();
 
     Ok(aliases)
