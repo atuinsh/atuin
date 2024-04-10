@@ -27,7 +27,7 @@ pub async fn aliases() -> Result<Vec<Alias>, String> {
     let aliases = alias_store
         .aliases()
         .await
-        .map_err(|e| format!("failed to load aliases: {}", e.to_string()))?;
+        .map_err(|e| format!("failed to load aliases: {}", e))?;
 
     Ok(aliases)
 }

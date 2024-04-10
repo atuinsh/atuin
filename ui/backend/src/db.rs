@@ -56,7 +56,7 @@ pub struct UIHistory {
 }
 
 pub fn to_ui_history(history: History) -> UIHistory {
-    let parts: Vec<String> = history.hostname.split(":").map(str::to_string).collect();
+    let parts: Vec<String> = history.hostname.split(':').map(str::to_string).collect();
 
     let (host, user) = if parts.len() == 2 {
         (parts[0].clone(), parts[1].clone())
