@@ -56,29 +56,30 @@ __atuin_precmd() {
     fi
 
     local duration=""
-    if ((BASH_VERSINFO[0] >= 5)); then
-        # We use the high-resolution duration based on EPOCHREALTIME (bash >=
-        # 5.0) if available.
-        # shellcheck disable=SC2154,SC2309
-        if [[ ${BLE_ATTACHED-} && ${_ble_exec_time_ata-} ]]; then
-            # With ble.sh, we utilize the shell variable `_ble_exec_time_ata`
-            # recorded by ble.sh.
-            duration=${_ble_exec_time_ata}000
+    # shellcheck disable=SC2154,SC2309
+    if [[ ${BLE_ATTACHED-} && ${_ble_exec_time_ata-} ]]; then
+        # With ble.sh, we utilize the shell variable `_ble_exec_time_ata`
+        # recorded by ble.sh.  It is more accurate than the measurements by
+        # Atuin, which includes the spawn cost of Atuin.  ble.sh uses the
+        # special shell variable `EPOCHREALTIME` in bash >= 5.0 with the
+        # microsecond resolution, or the builtin `time` in bash < 5.0 with the
+        # millisecond resolution.
+        duration=${_ble_exec_time_ata}000
+    elif ((BASH_VERSINFO[0] >= 5)); then
+        # We calculate the high-resolution duration based on EPOCHREALTIME
+        # (bash >= 5.0) recorded by precmd/preexec, though it might not be as
+        # accurate as `_ble_exec_time_ata` provided by ble.sh because it
+        # includes the extra time of the precmd/preexec handling.  Since Bash
+        # does not offer floating-point arithmetic, we remove the non-digit
+        # characters and perform the integral arithmetic.  The fraction part of
+        # EPOCHREALTIME is fixed to have 6 digits in Bash.  We remove all the
+        # non-digit characters because the decimal point is not necessarily a
+        # period depending on the locale.
+        duration=$((${__atuin_precmd_time//[!0-9]} - ${__atuin_preexec_time//[!0-9]}))
+        if ((duration >= 0)); then
+            duration=${duration}000
         else
-            # With bash-preexec, we calculate the time duration here, though it
-            # might not be as accurate as `_ble_exec_time_ata` because it also
-            # includes the time for precmd/preexec handling.  Bash does not
-            # allow floating-point arithmetic, so we remove the non-digit
-            # characters and perform the integral arithmetic.  The fraction
-            # part of EPOCHREALTIME is fixed to have 6 digits in Bash.  We
-            # remove all the non-digit characters because the decimal point is
-            # not necessarily a period depending on the locale.
-            duration=$((${__atuin_precmd_time//[!0-9]} - ${__atuin_preexec_time//[!0-9]}))
-            if ((duration >= 0)); then
-                duration=${duration}000
-            else
-                duration="" # clear the result on overflow
-            fi
+            duration="" # clear the result on overflow
         fi
     fi
 
