@@ -2,6 +2,7 @@ use std::process::Command;
 use std::{env, path::PathBuf, str::FromStr};
 
 use atuin_client::settings::Settings;
+use atuin_common::shell::shell_name;
 use colored::Colorize;
 use eyre::Result;
 use serde::{Deserialize, Serialize};
@@ -144,9 +145,7 @@ impl ShellInfo {
             .process(process.parent().expect("Atuin running with no parent!"))
             .expect("Process with parent pid does not exist");
 
-        let shell = parent.name().trim().to_lowercase();
-        let shell = shell.strip_prefix('-').unwrap_or(&shell);
-        let name = shell.to_string();
+        let name = shell_name(Some(parent));
 
         let plugins = ShellInfo::plugins(name.as_str(), parent);
 

@@ -8,9 +8,17 @@ use atuin_dotfiles::{shell::Alias, store::AliasStore};
 #[derive(Subcommand, Debug)]
 #[command(infer_subcommands = true)]
 pub enum Cmd {
+    /// Set an alias
     Set { name: String, value: String },
+
+    /// Delete an alias
     Delete { name: String },
+
+    /// List all aliases
     List,
+
+    /// Import aliases set in the current shell
+    Import,
 }
 
 impl Cmd {
@@ -53,6 +61,16 @@ impl Cmd {
         Ok(())
     }
 
+    async fn import(&self, store: AliasStore) -> Result<()> {
+        let aliases = atuin_dotfiles::shell::import_aliases(store).await?;
+
+        for i in aliases {
+            println!("Importing {}={}", i.name, i.value);
+        }
+
+        Ok(())
+    }
+
     pub async fn run(&self, settings: &Settings, store: SqliteStore) -> Result<()> {
         if !settings.dotfiles.enabled {
             eprintln!("Dotfiles are not enabled. Add\n\n[dotfiles]\nenabled = true\n\nto your configuration file to enable them.\n");
@@ -71,6 +89,7 @@ impl Cmd {
             Self::Set { name, value } => self.set(alias_store, name.clone(), value.clone()).await,
             Self::Delete { name } => self.delete(alias_store, name.clone()).await,
             Self::List => self.list(alias_store).await,
+            Self::Import => self.import(alias_store).await,
         }
     }
 }
