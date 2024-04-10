@@ -80,6 +80,10 @@ function AddAlias({ onAdd: onAdd }: { onAdd?: () => void }) {
 
         <input
           className="mt-4 bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-md focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5"
+          autoComplete="off"
+          autoCapitalize="off"
+          autoCorrect="off"
+          spellCheck="false"
           type="text"
           value={value}
           onChange={(e) => setValue(e.target.value)}
@@ -98,6 +102,7 @@ function AddAlias({ onAdd: onAdd }: { onAdd?: () => void }) {
 
 export default function Aliases() {
   let [aliases, setAliases] = useState([]);
+  let [aliasDrawerOpen, setAliasDrawerOpen] = useState(false);
 
   const columns: ColumnDef<Alias>[] = [
     {
@@ -153,6 +158,8 @@ export default function Aliases() {
         </div>
         <div className="mt-4 sm:ml-16 sm:mt-0 flex-row">
           <Drawer
+            open={aliasDrawerOpen}
+            onOpenChange={setAliasDrawerOpen}
             width="30%"
             trigger={
               <button
@@ -163,7 +170,12 @@ export default function Aliases() {
               </button>
             }
           >
-            <AddAlias onAdd={() => loadAliases(setAliases)} />
+            <AddAlias
+              onAdd={() => {
+                loadAliases(setAliases);
+                setAliasDrawerOpen(false);
+              }}
+            />
           </Drawer>
         </div>
       </div>
