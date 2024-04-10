@@ -1,4 +1,17 @@
 import React, { useEffect, useState } from "react";
+
+import DataTable from "@/components/ui/data-table";
+import { Button } from "@/components/ui/button";
+import { MoreHorizontal } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+
 import { invoke } from "@tauri-apps/api/core";
 
 function loadAliases(setAliases: React.Dispatch<React.SetStateAction<any[]>>) {
@@ -6,6 +19,55 @@ function loadAliases(setAliases: React.Dispatch<React.SetStateAction<any[]>>) {
     setAliases(aliases);
   });
 }
+
+type Alias = {
+  name: string;
+  value: string;
+};
+
+function deleteAlias(name: string) {
+  invoke("delete_alias", { name: name })
+    .then(() => {
+      console.log("Deleted alias");
+    })
+    .catch(() => {
+      console.error("Failed to delete alias");
+    });
+}
+
+const columns: ColumnDef<Alias>[] = [
+  {
+    accessorKey: "name",
+    header: "Name",
+  },
+  {
+    accessorKey: "value",
+    header: "Value",
+  },
+  {
+    id: "actions",
+    cell: ({ row }) => {
+      const alias = row.original;
+
+      return (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" className="h-8 w-8 p-0 float-right">
+              <span className="sr-only">Open menu</span>
+              <MoreHorizontal className="h-4 w-4 text-right" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuLabel>Actions</DropdownMenuLabel>
+            <DropdownMenuItem onClick={() => deleteAlias(alias.name)}>
+              Delete
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      );
+    },
+  },
+];
 
 export default function Aliases() {
   let [aliases, setAliases] = useState([]);
@@ -22,14 +84,14 @@ export default function Aliases() {
             Aliases
           </h1>
           <p className="mt-2 text-sm text-gray-700">
-            All configured shell aliases. Aliases allow you to condense long
-            commands into short, easy-to-remember commands.
+            Aliases allow you to condense long commands into short,
+            easy-to-remember commands.
           </p>
         </div>
         <div className="mt-4 sm:ml-16 sm:mt-0 flex-row">
           <button
             type="button"
-            className="block rounded-md bg-indigo-600 px-3 py-2 text-center text-sm font-semibold text-white shadow-sm hover:bg-indigo-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600"
+            className="block rounded-md bg-green-600 px-3 py-2 text-center text-sm font-semibold text-white shadow-sm hover:bg-green-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-green-600"
           >
             Add
           </button>
@@ -38,36 +100,7 @@ export default function Aliases() {
       <div className="mt-8 flow-root">
         <div className="-mx-4 -my-2 overflow-x-auto sm:-mx-6 lg:-mx-8">
           <div className="inline-block min-w-full py-2 align-middle sm:px-6 lg:px-8">
-            <table className="min-w-full divide-y divide-gray-300">
-              <thead>
-                <tr className="divide-x divide-gray-200">
-                  <th
-                    scope="col"
-                    className="py-3.5 pl-4 pr-4 text-left text-sm font-semibold text-gray-900 sm:pl-0"
-                  >
-                    Name
-                  </th>
-                  <th
-                    scope="col"
-                    className="px-4 py-3.5 text-left text-sm font-semibold text-gray-900"
-                  >
-                    Value
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-200 bg-white">
-                {aliases.map((person) => (
-                  <tr key={person.name} className="divide-x divide-gray-200">
-                    <td className="whitespace-nowrap py-4 pl-4 pr-4 text-sm font-medium text-gray-900 sm:pl-0">
-                      {person.name}
-                    </td>
-                    <td className="whitespace-nowrap p-4 text-sm text-gray-500">
-                      {person.value}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <DataTable columns={columns} data={aliases} />
           </div>
         </div>
       </div>
