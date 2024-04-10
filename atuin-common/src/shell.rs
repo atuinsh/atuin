@@ -16,6 +16,9 @@ pub enum Shell {
 pub enum ShellError {
     #[error("shell not supported")]
     NotSupported,
+
+    #[error("failed to execute shell command: {0}")]
+    ExecError(String),
 }
 
 pub fn shell() -> Shell {

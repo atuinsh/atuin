@@ -16,16 +16,20 @@ pub struct Alias {
     pub value: String,
 }
 
-pub fn run_interactive<I, S>(args: I) -> String
+pub fn run_interactive<I, S>(args: I) -> Result<String, ShellError>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
     let shell = shell_name(None);
 
-    let output = Command::new(shell).arg("-ic").args(args).output().unwrap();
+    let output = Command::new(shell)
+        .arg("-ic")
+        .args(args)
+        .output()
+        .map_err(|e| ShellError::ExecError(e.to_string()))?;
 
-    String::from_utf8(output.stdout).unwrap()
+    Ok(String::from_utf8(output.stdout).unwrap())
 }
 
 pub fn parse_alias(line: &str) -> Alias {
@@ -62,6 +66,7 @@ pub fn existing_aliases() -> Result<Vec<Alias>, ShellError> {
 pub async fn import_aliases(store: AliasStore) -> Result<Vec<Alias>> {
     let shell_aliases = existing_aliases()?;
     let store_aliases = store.aliases().await?;
+
     let mut res = Vec::new();
 
     for alias in shell_aliases {
