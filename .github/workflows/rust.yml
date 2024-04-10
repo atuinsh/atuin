@@ -33,8 +33,17 @@ jobs:
           key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Install dependencies
-        if: matrix.os != 'macos-14'
-        run: sudo apt update && sudo apt install libgtk-3-dev
+        if: matrix.os != 'macos-14' && matrix.os != 'windows-latest'
+        run: |
+          sudo apt update
+          sudo apt install libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
 
       - name: Run cargo build common
         run: cargo build -p atuin-common --locked --release
@@ -100,8 +109,17 @@ jobs:
           toolchain: stable
 
       - name: Install dependencies
-        if: matrix.os != 'macos-14'
-        run: sudo apt update && sudo apt install libgtk-3-dev
+        if: matrix.os != 'macos-14' && matrix.os != 'windows-latest'
+        run: |
+          sudo apt update
+          sudo apt install libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
 
       - uses: taiki-e/install-action@v2
         name: Install nextest
@@ -134,8 +152,17 @@ jobs:
           toolchain: stable
 
       - name: Install dependencies
-        if: matrix.os != 'macos-14'
-        run: sudo apt update && sudo apt install libgtk-3-dev
+        if: matrix.os != 'macos-14' && matrix.os != 'windows-latest'
+        run: |
+          sudo apt update
+          sudo apt install libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
 
       - uses: actions/cache@v3
         with:
@@ -212,8 +239,17 @@ jobs:
           components: clippy
 
       - name: Install dependencies
-        if: matrix.os != 'macos-14'
-        run: sudo apt update && sudo apt install libgtk-3-dev
+        if: matrix.os != 'macos-14' && matrix.os != 'windows-latest'
+        run: |
+          sudo apt update
+          sudo apt install libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
 
       - uses: actions/cache@v3
         with:
