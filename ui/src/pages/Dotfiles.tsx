@@ -1,6 +1,11 @@
+import { useState } from "react";
+
 import { Cog6ToothIcon } from "@heroicons/react/24/outline";
 
 import Aliases from "@/components/dotfiles/Aliases";
+
+import { Drawer } from "@/components/drawer";
+import { invoke } from "@tauri-apps/api/core";
 
 function Header() {
   return (
@@ -9,14 +14,6 @@ function Header() {
         <h2 className="text-2xl font-bold leading-7 text-gray-900 sm:truncate sm:text-3xl sm:tracking-tight">
           Dotfiles
         </h2>
-      </div>
-      <div className="mt-4 flex md:ml-4 md:mt-0">
-        <button
-          type="button"
-          className="inline-flex items-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600"
-        >
-          Import
-        </button>
       </div>
     </div>
   );

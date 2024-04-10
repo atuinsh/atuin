@@ -6139,9 +6139,10 @@ checksum = "42ff0bf0c66b8238c6f3b578df37d0b7848e55df8577b3f74f92a69acceeb825"
 name = "ui"
 version = "0.0.0"
 dependencies = [
- "async-trait",
  "atuin-client",
+ "atuin-common",
  "atuin-dotfiles",
+ "eyre",
  "serde",
  "serde_json",
  "sqlx",

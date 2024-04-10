@@ -14,8 +14,6 @@ struct ShellInfo {
     pub name: String,
 
     // best-effort, not supported on all OSes
-
-    // best-effort, not supported on all OSes
     pub default: String,
 
     // Detect some shell plugins that the user has installed.

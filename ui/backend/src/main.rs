@@ -73,7 +73,8 @@ fn main() {
             list,
             search,
             global_stats,
-            aliases
+            aliases,
+            dotfiles::aliases::import_aliases,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -28,8 +28,12 @@ pub fn parse_alias(line: &str) -> Alias {
     }
 }
 
-pub fn existing_aliases() -> Result<Vec<Alias>, ShellError> {
-    let shell = Shell::current();
+pub fn existing_aliases(shell: Option<Shell>) -> Result<Vec<Alias>, ShellError> {
+    let shell = if let Some(shell) = shell {
+        shell
+    } else {
+        Shell::current()
+    };
 
     // this only supports posix-y shells atm
     if !shell.is_posixish() {
@@ -48,7 +52,7 @@ pub fn existing_aliases() -> Result<Vec<Alias>, ShellError> {
 /// This will not import aliases already in the store
 /// Returns aliases that were set
 pub async fn import_aliases(store: AliasStore) -> Result<Vec<Alias>> {
-    let shell_aliases = existing_aliases()?;
+    let shell_aliases = existing_aliases(None)?;
     let store_aliases = store.aliases().await?;
 
     let mut res = Vec::new();

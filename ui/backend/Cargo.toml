@@ -13,16 +13,19 @@ tauri-build = { version = "2.0.0-beta", features = [] }
 
 [dependencies]
 atuin-client = { path = "../../atuin-client", version = "18.1.0" }
+atuin-common = { path = "../../atuin-common", version = "18.1.0" }
+
 atuin-dotfiles = { path = "../../atuin-dotfiles", version = "0.1.0" }
+
+sqlx = { workspace = true, features = ["sqlite", "regexp"] }
+eyre = { workspace = true }
 
 tauri = { version = "2.0.0-beta", features = ["tray-icon"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-sqlx = { workspace = true, features = ["sqlite", "regexp"] }
 time = "0.3.34"
 uuid = "1.7.0"
 syntect = "5.2.0"
-async-trait = { workspace = true }
 
 [features]
 # this feature is used for production builds or when `devPath` points to the filesystem
