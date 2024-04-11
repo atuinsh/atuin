@@ -25,7 +25,7 @@ time = "0.3.34"
 uuid = "1.7.0"
 syntect = "5.2.0"
 
-[workspace.dependencies.sqlx]
+[dependencies.sqlx]
 version = "=0.7.3"
 features = ["runtime-tokio-rustls", "time", "postgres", "uuid"]
 

@@ -10,6 +10,7 @@ members = [
 ]
 
 resolver = "2"
+exclude = ["ui/backend"]
 
 [workspace.package]
 version = "18.1.0"
