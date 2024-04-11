@@ -2,7 +2,7 @@ use std::process::Command;
 use std::{env, path::PathBuf, str::FromStr};
 
 use atuin_client::settings::Settings;
-use atuin_common::shell::shell_name;
+use atuin_common::shell::{shell_name, Shell};
 use colored::Colorize;
 use eyre::Result;
 use serde::{Deserialize, Serialize};
@@ -12,6 +12,9 @@ use sysinfo::{get_current_pid, Disks, System};
 #[derive(Debug, Serialize, Deserialize)]
 struct ShellInfo {
     pub name: String,
+
+    // best-effort, not supported on all OSes
+    pub default: String,
 
     // Detect some shell plugins that the user has installed.
     // I'm just going to start with preexec/blesh
@@ -135,6 +138,8 @@ impl ShellInfo {
     }
 
     pub fn new() -> Self {
+        // TODO: rework to use atuin_common::Shell
+
         let sys = System::new_all();
 
         let process = sys
@@ -149,7 +154,13 @@ impl ShellInfo {
 
         let plugins = ShellInfo::plugins(name.as_str(), parent);
 
-        Self { name, plugins }
+        let default = Shell::default_shell().unwrap_or(Shell::Unknown).to_string();
+
+        Self {
+            name,
+            default,
+            plugins,
+        }
     }
 }
 

@@ -1,7 +1,7 @@
-use std::{ffi::OsStr, process::Command};
-
-use atuin_common::shell::{shell, shell_name, ShellError};
 use eyre::Result;
+use serde::Serialize;
+
+use atuin_common::shell::{Shell, ShellError};
 
 use crate::store::AliasStore;
 
@@ -10,26 +10,10 @@ pub mod fish;
 pub mod xonsh;
 pub mod zsh;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Alias {
     pub name: String,
     pub value: String,
-}
-
-pub fn run_interactive<I, S>(args: I) -> Result<String, ShellError>
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<OsStr>,
-{
-    let shell = shell_name(None);
-
-    let output = Command::new(shell)
-        .arg("-ic")
-        .args(args)
-        .output()
-        .map_err(|e| ShellError::ExecError(e.to_string()))?;
-
-    Ok(String::from_utf8(output.stdout).unwrap())
 }
 
 pub fn parse_alias(line: &str) -> Alias {
@@ -44,15 +28,21 @@ pub fn parse_alias(line: &str) -> Alias {
     }
 }
 
-pub fn existing_aliases() -> Result<Vec<Alias>, ShellError> {
+pub fn existing_aliases(shell: Option<Shell>) -> Result<Vec<Alias>, ShellError> {
+    let shell = if let Some(shell) = shell {
+        shell
+    } else {
+        Shell::current()
+    };
+
     // this only supports posix-y shells atm
-    if !shell().is_posixish() {
+    if !shell.is_posixish() {
         return Err(ShellError::NotSupported);
     }
 
     // This will return a list of aliases, each on its own line
     // They will be in the form foo=bar
-    let aliases = run_interactive(["alias"])?;
+    let aliases = shell.run_interactive(["alias"])?;
     let aliases: Vec<Alias> = aliases.lines().map(parse_alias).collect();
 
     Ok(aliases)
@@ -62,7 +52,7 @@ pub fn existing_aliases() -> Result<Vec<Alias>, ShellError> {
 /// This will not import aliases already in the store
 /// Returns aliases that were set
 pub async fn import_aliases(store: AliasStore) -> Result<Vec<Alias>> {
-    let shell_aliases = existing_aliases()?;
+    let shell_aliases = existing_aliases(None)?;
     let store_aliases = store.aliases().await?;
 
     let mut res = Vec::new();
