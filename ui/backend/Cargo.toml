@@ -17,15 +17,17 @@ atuin-common = { path = "../../atuin-common", version = "18.1.0" }
 
 atuin-dotfiles = { path = "../../atuin-dotfiles", version = "0.1.0" }
 
-sqlx = { workspace = true, features = ["sqlite", "regexp"] }
-eyre = { workspace = true }
-
+eyre = "0.6"
 tauri = { version = "2.0.0-beta", features = ["tray-icon"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 time = "0.3.34"
 uuid = "1.7.0"
 syntect = "5.2.0"
+
+[workspace.dependencies.sqlx]
+version = "=0.7.3"
+features = ["runtime-tokio-rustls", "time", "postgres", "uuid"]
 
 [features]
 # this feature is used for production builds or when `devPath` points to the filesystem
