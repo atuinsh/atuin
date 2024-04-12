@@ -45,18 +45,23 @@ pub enum Cmd {
     #[command(flatten)]
     Sync(sync::Cmd),
 
+    /// Manage your sync account
     #[cfg(feature = "sync")]
     Account(account::Cmd),
 
+    /// Get or set small key-value pairs
     #[command(subcommand)]
     Kv(kv::Cmd),
 
+    /// Manage the atuin data store
     #[command(subcommand)]
     Store(store::Cmd),
 
+    /// Manage your dotfiles with Atuin
     #[command(subcommand)]
     Dotfiles(dotfiles::Cmd),
 
+    /// Print Atuin's shell init script
     #[command()]
     Init(init::Cmd),
 
@@ -64,6 +69,7 @@ pub enum Cmd {
     #[command()]
     Info,
 
+    /// Run the doctor to check for common issues
     #[command()]
     Doctor,
 

@@ -27,9 +27,10 @@ pub enum Commands {
     /// Log out
     Logout,
 
-    // Delete your account, and all synced data
+    /// Delete your account, and all synced data
     Delete,
 
+    /// Change your password
     ChangePassword(change_password::Cmd),
 }
 
