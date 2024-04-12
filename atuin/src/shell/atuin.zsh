@@ -1,3 +1,4 @@
+# shellcheck shell=bash # doesn't know about zsh
 # shellcheck disable=SC2034,SC2153,SC2086,SC2155
 
 # Above line is because shellcheck doesn't support zsh, per
@@ -28,8 +29,14 @@ export ATUIN_SESSION=$(atuin uuid)
 ATUIN_HISTORY_ID=""
 
 _atuin_preexec() {
+    # remove ^J from end of $1 as it's passed by zshaddhistory
+    local cmd="${1[0, -2]}"
+    # skip history for empty calls
+    # remove space, \t, \n, and literal '\'
+    # shellcheck disable=SC2299 # shellcheck doesn't know about zsh
+    [[ -n "${${1//[[:space:]]/}//\\/}" ]] || return
     local id
-    id=$(atuin history start -- "$1")
+    id=$(atuin history start -- "$cmd")
     export ATUIN_HISTORY_ID="$id"
     __atuin_preexec_time=${EPOCHREALTIME-}
 }
@@ -93,7 +100,7 @@ _atuin_up_search_viins() {
     _atuin_up_search --keymap-mode=vim-insert
 }
 
-add-zsh-hook preexec _atuin_preexec
+add-zsh-hook zshaddhistory _atuin_preexec
 add-zsh-hook precmd _atuin_precmd
 
 zle -N atuin-search _atuin_search
