@@ -44,6 +44,13 @@
 ## possible values: global, host, session, directory
 # filter_mode = "global"
 
+## List of filter modes and how to cycle them
+## For example, setting this to ["session", "host", "global"] makes you only
+## cycle through these three, with "session" being the default, "host" coming
+## next and "global" being last.
+## possible values: global, host, session, directory, workspace
+# filter_mode_list = ["global", "host", "session", "directory", "workspace"]
+
 ## With workspace filtering enabled, Atuin will filter for commands executed
 ## in any directory within a git repository tree (default: false)
 # workspaces = false
