@@ -16,7 +16,7 @@ RUN cargo chef cook --release --recipe-path recipe.json
 COPY . .
 RUN cargo build --release --bin atuin
 
-FROM debian:bullseye-20240211-slim AS runtime
+FROM debian:bullseye-20240408-slim AS runtime
 
 RUN useradd -c 'atuin user' atuin && mkdir /config && chown atuin:atuin /config
 # Install ca-certificates for webhooks to work
