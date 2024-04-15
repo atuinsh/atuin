@@ -2,6 +2,56 @@
 
 All notable changes to this project will be documented in this file.
 
+## [18.2.0] - 2024-04-15
+
+### Bug Fixes
+
+- Add missing description ([#1861](https://github.com/atuinsh/atuin/issues/1861))
+- Allow empty search ([#1866](https://github.com/atuinsh/atuin/issues/1866))
+- Pass search query in via env ([#1865](https://github.com/atuinsh/atuin/issues/1865))
+- Pass search query in via env for *Nushell* ([#1874](https://github.com/atuinsh/atuin/issues/1874))
+- Case insensitive hostname filtering ([#1883](https://github.com/atuinsh/atuin/issues/1883))
+- Update atuin.nu to resolve 0.92 deprecation ([#1913](https://github.com/atuinsh/atuin/issues/1913))
+- Detect preexec plugin using env ATUIN_PREEXEC_BACKEND  ([#1856](https://github.com/atuinsh/atuin/issues/1856))
+- Install script echo ([#1899](https://github.com/atuinsh/atuin/issues/1899))
+- Report non-decodable errors correctly ([#1915](https://github.com/atuinsh/atuin/issues/1915))
+- Do not use "return" to cancel initialization ([#1928](https://github.com/atuinsh/atuin/issues/1928))
+- Use spawn_blocking for file access during async context ([#1936](https://github.com/atuinsh/atuin/issues/1936))
+
+### Documentation
+
+- Add security contact ([#1867](https://github.com/atuinsh/atuin/issues/1867))
+- Add install instructions for cave/exherbo linux in README.md ([#1927](https://github.com/atuinsh/atuin/issues/1927))
+- Describe the limitation of missing commands ([#1937](https://github.com/atuinsh/atuin/issues/1937))
+- Add missing cli help text ([#1945](https://github.com/atuinsh/atuin/issues/1945))
+
+### Features
+
+- Process [C-h] and [C-?] as representations of backspace ([#1857](https://github.com/atuinsh/atuin/issues/1857))
+- Allow specifying search query as an env var ([#1863](https://github.com/atuinsh/atuin/issues/1863))
+- Check PG version before running migrations ([#1868](https://github.com/atuinsh/atuin/issues/1868))
+- Add atuin prefix binding ([#1875](https://github.com/atuinsh/atuin/issues/1875))
+- Update install.sh to support KDE Neon ([#1908](https://github.com/atuinsh/atuin/issues/1908))
+- Add better search scoring ([#1885](https://github.com/atuinsh/atuin/issues/1885))
+- Sync v2 default for new installs ([#1914](https://github.com/atuinsh/atuin/issues/1914))
+- Add 'ctrl-a a' to jump to beginning of line ([#1917](https://github.com/atuinsh/atuin/issues/1917))
+- Prevents stderr from going to the screen ([#1933](https://github.com/atuinsh/atuin/issues/1933))
+- Add alias import ([#1938](https://github.com/atuinsh/atuin/issues/1938))
+- Use _ble_exec_time_ata for duration even in bash < 5 ([#1940](https://github.com/atuinsh/atuin/issues/1940))
+- Add base structure ([#1935](https://github.com/atuinsh/atuin/issues/1935))
+
+### Miscellaneous Tasks
+
+- Add issue form ([#1871](https://github.com/atuinsh/atuin/issues/1871))
+- Require atuin doctor in issue form ([#1872](https://github.com/atuinsh/atuin/issues/1872))
+- Add section to issue form ([#1873](https://github.com/atuinsh/atuin/issues/1873))
+- Add codespell support (config, workflow) and make it fix some typos ([#1916](https://github.com/atuinsh/atuin/issues/1916))
+- Cargo update ([#1943](https://github.com/atuinsh/atuin/issues/1943))
+
+### Performance
+
+- Cache aliases and read straight from file ([#1918](https://github.com/atuinsh/atuin/issues/1918))
+
 ## [18.1.0] - 2024-03-11
 
 ### Bug Fixes
@@ -16,7 +66,7 @@ All notable changes to this project will be documented in this file.
 - Ensure sync time is saved for sync v2 ([#1758](https://github.com/atuinsh/atuin/issues/1758))
 - No panic on empty inspector ([#1768](https://github.com/atuinsh/atuin/issues/1768))
 - Enable multiple command stats to be shown using unicode_segmentation ([#1739](https://github.com/atuinsh/atuin/issues/1739))
-- Re-add up-arrow keybinding, now with menu handling ([#1770](https://github.com/atuinsh/atuin/issues/1770))
+- Readd up-arrow keybinding, now with menu handling ([#1770](https://github.com/atuinsh/atuin/issues/1770))
 - Missing characters in preview ([#1803](https://github.com/atuinsh/atuin/issues/1803))
 - Check store length after sync, not before ([#1805](https://github.com/atuinsh/atuin/issues/1805))
 - Disable regex error logs ([#1806](https://github.com/atuinsh/atuin/issues/1806))
@@ -26,6 +76,8 @@ All notable changes to this project will be documented in this file.
 - Make atuin compile on non-win/mac/linux platforms ([#1825](https://github.com/atuinsh/atuin/issues/1825))
 - Set meta.mainProgram in the package ([#1823](https://github.com/atuinsh/atuin/issues/1823))
 - Re-sync after running auto store init ([#1834](https://github.com/atuinsh/atuin/issues/1834))
+- Doctor shell wording ([#1858](https://github.com/atuinsh/atuin/issues/1858))
+- Use latest client ([#1859](https://github.com/atuinsh/atuin/issues/1859))
 
 ### Documentation
 
@@ -277,7 +329,7 @@ All notable changes to this project will be documented in this file.
 - Make `atuin account delete` void session + key ([#1393](https://github.com/atuinsh/atuin/issues/1393))
 - New clippy lints ([#1395](https://github.com/atuinsh/atuin/issues/1395))
 - Accept multiline commands ([#1418](https://github.com/atuinsh/atuin/issues/1418))
-- Re-enable enter_accept for bash ([#1408](https://github.com/atuinsh/atuin/issues/1408))
+- Reenable enter_accept for bash ([#1408](https://github.com/atuinsh/atuin/issues/1408))
 - Respect ZSH's $ZDOTDIR environment variable ([#942](https://github.com/atuinsh/atuin/issues/942))
 
 ### Documentation
@@ -354,7 +406,7 @@ All notable changes to this project will be documented in this file.
 
 ### Features
 
-- Do not allow empty passwords during account creation ([#1029](https://github.com/atuinsh/atuin/issues/1029))
+- Do not allow empty passwords durring account creation ([#1029](https://github.com/atuinsh/atuin/issues/1029))
 
 ### Skim
 
@@ -441,7 +493,7 @@ All notable changes to this project will be documented in this file.
 
 ### Miscellaneous Tasks
 
-- Allow specifying the limited of returned entries ([#364](https://github.com/atuinsh/atuin/issues/364))
+- Allow specifiying the limited of returned entries ([#364](https://github.com/atuinsh/atuin/issues/364))
 
 ## [0.9.0] - 2022-04-23
 
