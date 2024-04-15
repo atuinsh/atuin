@@ -8,6 +8,7 @@ mod alias;
 #[derive(Subcommand, Debug)]
 #[command(infer_subcommands = true)]
 pub enum Cmd {
+    /// Manage shell aliases with Atuin
     #[command(subcommand)]
     Alias(alias::Cmd),
 }
