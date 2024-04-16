@@ -303,6 +303,7 @@ fn checks(info: &DoctorDump) {
                 //
     let zfs_error = "[Filesystem] ZFS is known to have some issues with SQLite. Atuin uses SQLite heavily. If you are having poor performance, there are some workarounds here: https://github.com/atuinsh/atuin/issues/952".bold().red();
     let bash_plugin_error = "[Shell] If you are using Bash, Atuin requires that either bash-preexec or ble.sh be installed. An older ble.sh may not be detected. so ignore this if you have it set up! Read more here: https://docs.atuin.sh/guide/installation/#bash".bold().red();
+    let blesh_loading_order_error = "[Shell] Atuin seems to be loaded before ble.sh is sourced. In .bashrc, make sure to initialize Atuin after sourcing ble.sh.".bold().red();
 
     // ZFS: https://github.com/atuinsh/atuin/issues/952
     if info.system.disks.iter().any(|d| d.filesystem == "zfs") {
@@ -310,14 +311,22 @@ fn checks(info: &DoctorDump) {
     }
 
     // Shell
-    if info.shell.name == "bash"
-        && !info
+    if info.shell.name == "bash" {
+        if !info
             .shell
             .plugins
             .iter()
             .any(|p| p == "blesh" || p == "bash-preexec")
-    {
-        println!("{bash_plugin_error}");
+        {
+            println!("{bash_plugin_error}");
+        }
+
+        if info.shell.plugins.iter().any(|plugin| plugin == "atuin")
+            && info.shell.plugins.iter().any(|plugin| plugin == "blesh")
+            && info.shell.preexec.as_ref().is_some_and(|val| val == "none")
+        {
+            println!("{blesh_loading_order_error}");
+        }
     }
 }
 
