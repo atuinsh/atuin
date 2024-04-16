@@ -115,3 +115,8 @@ pub struct DeleteHistoryRequest {
 pub struct MessageResponse {
     pub message: String,
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct MeResponse {
+    pub username: String,
+}
