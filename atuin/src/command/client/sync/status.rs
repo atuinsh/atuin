@@ -23,8 +23,6 @@ pub async fn run(settings: &Settings, db: &impl Database) -> Result<()> {
 
     let status = client.status().await?;
     let last_sync = Settings::last_sync()?;
-    let local_count = db.history_count(false).await?;
-    let deleted_count = db.history_count(true).await? - local_count;
 
     println!("Atuin v{VERSION} - Build rev {SHA}\n");
 
@@ -36,6 +34,9 @@ pub async fn run(settings: &Settings, db: &impl Database) -> Result<()> {
     }
 
     if !settings.sync.records {
+        let local_count = db.history_count(false).await?;
+        let deleted_count = db.history_count(true).await? - local_count;
+
         println!("History count: {local_count}");
         println!("Deleted history count: {deleted_count}\n");
     }
