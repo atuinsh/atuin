@@ -19,6 +19,9 @@ struct ShellInfo {
     // Detect some shell plugins that the user has installed.
     // I'm just going to start with preexec/blesh
     pub plugins: Vec<String>,
+
+    // The preexec framework used in the current session, if Atuin is loaded.
+    pub preexec: Option<String>,
 }
 
 impl ShellInfo {
@@ -41,6 +44,31 @@ impl ShellInfo {
             });
 
         cmd.contains("ATUIN_DOCTOR_ENV_FOUND")
+    }
+
+    fn detect_preexec_framework(shell: &str) -> Option<String> {
+        if env::var("ATUIN_SESSION").ok().is_none() {
+            None
+        } else if shell.starts_with("bash") || shell == "sh" {
+            env::var("ATUIN_PREEXEC_BACKEND")
+                .ok()
+                .filter(|value| !value.is_empty())
+                .and_then(|atuin_preexec_backend| {
+                    atuin_preexec_backend.rfind(':').and_then(|pos_colon| {
+                        u32::from_str(&atuin_preexec_backend[..pos_colon])
+                            .ok()
+                            .is_some_and(|preexec_shlvl| {
+                                env::var("SHLVL")
+                                    .ok()
+                                    .and_then(|shlvl| u32::from_str(&shlvl).ok())
+                                    .is_some_and(|shlvl| shlvl == preexec_shlvl)
+                            })
+                            .then(|| atuin_preexec_backend[pos_colon + 1..].to_string())
+                    })
+                })
+        } else {
+            Some("built-in".to_string())
+        }
     }
 
     fn validate_plugin_blesh(
@@ -156,10 +184,13 @@ impl ShellInfo {
 
         let default = Shell::default_shell().unwrap_or(Shell::Unknown).to_string();
 
+        let preexec = Self::detect_preexec_framework(name.as_str());
+
         Self {
             name,
             default,
             plugins,
+            preexec,
         }
     }
 }
@@ -272,6 +303,7 @@ fn checks(info: &DoctorDump) {
                 //
     let zfs_error = "[Filesystem] ZFS is known to have some issues with SQLite. Atuin uses SQLite heavily. If you are having poor performance, there are some workarounds here: https://github.com/atuinsh/atuin/issues/952".bold().red();
     let bash_plugin_error = "[Shell] If you are using Bash, Atuin requires that either bash-preexec or ble.sh be installed. An older ble.sh may not be detected. so ignore this if you have it set up! Read more here: https://docs.atuin.sh/guide/installation/#bash".bold().red();
+    let blesh_loading_order_error = "[Shell] Atuin seems to be loaded before ble.sh is sourced. In .bashrc, make sure to initialize Atuin after sourcing ble.sh.".bold().red();
 
     // ZFS: https://github.com/atuinsh/atuin/issues/952
     if info.system.disks.iter().any(|d| d.filesystem == "zfs") {
@@ -279,14 +311,22 @@ fn checks(info: &DoctorDump) {
     }
 
     // Shell
-    if info.shell.name == "bash"
-        && !info
+    if info.shell.name == "bash" {
+        if !info
             .shell
             .plugins
             .iter()
             .any(|p| p == "blesh" || p == "bash-preexec")
-    {
-        println!("{bash_plugin_error}");
+        {
+            println!("{bash_plugin_error}");
+        }
+
+        if info.shell.plugins.iter().any(|plugin| plugin == "atuin")
+            && info.shell.plugins.iter().any(|plugin| plugin == "blesh")
+            && info.shell.preexec.as_ref().is_some_and(|val| val == "none")
+        {
+            println!("{blesh_loading_order_error}");
+        }
     }
 }
 

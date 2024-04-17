@@ -17,6 +17,19 @@ ATUIN_STTY=$(stty -g)
 export ATUIN_SESSION
 ATUIN_HISTORY_ID=""
 
+export ATUIN_PREEXEC_BACKEND=$SHLVL:none
+__atuin_update_preexec_backend() {
+    if [[ ${BLE_ATTACHED-} ]]; then
+        ATUIN_PREEXEC_BACKEND=$SHLVL:blesh-${BLE_VERSION-}
+    elif [[ ${bash_preexec_imported-} ]]; then
+        ATUIN_PREEXEC_BACKEND=$SHLVL:bash-preexec
+    elif [[ ${__bp_imported-} ]]; then
+        ATUIN_PREEXEC_BACKEND="$SHLVL:bash-preexec (old)"
+    else
+        ATUIN_PREEXEC_BACKEND=$SHLVL:unknown
+    fi
+}
+
 __atuin_preexec() {
     # Workaround for old versions of bash-preexec
     if [[ ! ${BLE_ATTACHED-} ]]; then
@@ -32,6 +45,10 @@ __atuin_preexec() {
             return 0
         fi
     fi
+
+    # Note: We update ATUIN_PREEXEC_BACKEND on every preexec because blesh's
+    # attaching state can dynamically change.
+    __atuin_update_preexec_backend
 
     local id
     id=$(atuin history start -- "$1")
