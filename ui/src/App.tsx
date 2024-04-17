@@ -1,14 +1,9 @@
 import "./App.css";
 
-import { Fragment, useState, useEffect, ReactElement } from "react";
-import { Dialog, Transition } from "@headlessui/react";
+import { useState, ReactElement } from "react";
 import {
-  Bars3Icon,
-  ChartPieIcon,
   Cog6ToothIcon,
   HomeIcon,
-  XMarkIcon,
-  MagnifyingGlassIcon,
   ClockIcon,
   WrenchScrewdriverIcon,
 } from "@heroicons/react/24/outline";
@@ -18,16 +13,20 @@ function classNames(...classes: any) {
   return classes.filter(Boolean).join(" ");
 }
 
+import Home from "./pages/Home.tsx";
 import History from "./pages/History.tsx";
 import Dotfiles from "./pages/Dotfiles.tsx";
 
 enum Section {
+  Home,
   History,
   Dotfiles,
 }
 
 function renderMain(section: Section): ReactElement {
   switch (section) {
+    case Section.Home:
+      return <Home />;
     case Section.History:
       return <History />;
     case Section.Dotfiles:
@@ -39,9 +38,14 @@ function App() {
   // routers don't really work in Tauri. It's not a browser!
   // I think hashrouter may work, but I'd rather avoiding thinking of them as
   // pages
-  const [section, setSection] = useState(Section.History);
+  const [section, setSection] = useState(Section.Home);
 
   const navigation = [
+    {
+      name: "Home",
+      icon: HomeIcon,
+      section: Section.Home,
+    },
     {
       name: "History",
       icon: ClockIcon,

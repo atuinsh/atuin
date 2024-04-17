@@ -5,29 +5,18 @@ import PacmanLoader from "react-spinners/PacmanLoader";
 import {
   BarChart,
   Bar,
-  Rectangle,
   XAxis,
   YAxis,
-  CartesianGrid,
   Tooltip,
-  Legend,
   ResponsiveContainer,
 } from "recharts";
 
-const tabs = [
-  { name: "Daily", href: "#", current: true },
-  { name: "Weekly", href: "#", current: false },
-  { name: "Monthly", href: "#", current: false },
-];
-
-function classNames(...classes) {
-  return classes.filter(Boolean).join(" ");
-}
-
 function renderLoading() {
-  <div className="flex items-center justify-center h-full">
-    <PacmanLoader color="#26bd65" />
-  </div>;
+  return (
+    <div className="flex items-center justify-center h-full">
+      <PacmanLoader color="#26bd65" />
+    </div>
+  );
 }
 
 export default function Stats() {
@@ -77,7 +66,7 @@ export default function Stats() {
     <div className="flex flex-col">
       <div className="flexfull">
         <dl className="grid grid-cols-1 sm:grid-cols-4 w-full">
-          {stats.map((item) => (
+          {stats.map((item: any) => (
             <div
               key={item.name}
               className="overflow-hidden bg-white px-4 py-5 shadow sm:p-6"
@@ -94,39 +83,6 @@ export default function Stats() {
       </div>
 
       <div className="flex flex-col h-54 py-4 pl-5">
-        <div className="sm:hidden">
-          {/* Use an "onChange" listener to redirect the user to the selected tab URL. */}
-          <select
-            id="tabs"
-            name="tabs"
-            className="block w-full rounded-md border-gray-300 focus:border-green-500 focus:ring-green-500"
-            defaultValue={tabs.find((tab) => tab.current).name}
-          >
-            {tabs.map((tab) => (
-              <option key={tab.name}>{tab.name}</option>
-            ))}
-          </select>
-        </div>
-        <div className="hidden sm:block">
-          <nav className="flex space-x-4" aria-label="Tabs">
-            {tabs.map((tab) => (
-              <a
-                key={tab.name}
-                href={tab.href}
-                className={classNames(
-                  tab.current
-                    ? "bg-gray-100 text-gray-700"
-                    : "text-gray-500 hover:text-gray-700",
-                  "rounded-md px-3 py-2 text-sm font-medium",
-                )}
-                aria-current={tab.current ? "page" : undefined}
-              >
-                {tab.name}
-              </a>
-            ))}
-          </nav>
-        </div>
-
         <div className="flex flex-col h-48 pt-5 pr-5">
           <ResponsiveContainer width="100%" height="100%">
             <BarChart width={500} height={300} data={chart}>

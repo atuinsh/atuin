@@ -212,7 +212,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-client"
-version = "18.1.0"
+version = "18.2.0"
 dependencies = [
  "async-trait",
  "atuin-common",
@@ -259,7 +259,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-common"
-version = "18.1.0"
+version = "18.2.0"
 dependencies = [
  "eyre",
  "lazy_static",
@@ -276,7 +276,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-dotfiles"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "atuin-client",
  "atuin-common",

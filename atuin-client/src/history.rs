@@ -18,7 +18,7 @@ mod builder;
 pub mod store;
 
 const HISTORY_VERSION: &str = "v0";
-const HISTORY_TAG: &str = "history";
+pub const HISTORY_TAG: &str = "history";
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct HistoryId(pub String);
