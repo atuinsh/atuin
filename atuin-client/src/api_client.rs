@@ -11,7 +11,7 @@ use reqwest::{
 use atuin_common::{
     api::{
         AddHistoryRequest, ChangePasswordRequest, CountResponse, DeleteHistoryRequest,
-        ErrorResponse, LoginRequest, LoginResponse, RegisterResponse, StatusResponse,
+        ErrorResponse, LoginRequest, LoginResponse, MeResponse, RegisterResponse, StatusResponse,
         SyncHistoryResponse,
     },
     record::RecordStatus,
@@ -230,6 +230,18 @@ impl<'a> Client<'a> {
         }
 
         let status = resp.json::<StatusResponse>().await?;
+
+        Ok(status)
+    }
+
+    pub async fn me(&self) -> Result<MeResponse> {
+        let url = format!("{}/api/v0/me", self.sync_addr);
+        let url = Url::parse(url.as_str())?;
+
+        let resp = self.client.get(url).send().await?;
+        let resp = handle_resp_error(resp).await?;
+
+        let status = resp.json::<MeResponse>().await?;
 
         Ok(status)
     }

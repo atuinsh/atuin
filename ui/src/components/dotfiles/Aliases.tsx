@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 
 import DataTable from "@/components/ui/data-table";
 import { Button } from "@/components/ui/button";
@@ -8,34 +8,21 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+
+import { ColumnDef } from "@tanstack/react-table";
 
 import { invoke } from "@tauri-apps/api/core";
 import Drawer from "@/components/Drawer";
 
-function loadAliases(
-  setAliases: React.Dispatch<React.SetStateAction<never[]>>,
-) {
-  invoke("aliases").then((aliases: any) => {
-    setAliases(aliases);
-  });
-}
+import { Alias } from "@/state/models";
+import { useStore } from "@/state/store";
 
-type Alias = {
-  name: string;
-  value: string;
-};
-
-function deleteAlias(
-  name: string,
-  setAliases: React.Dispatch<React.SetStateAction<never[]>>,
-) {
+function deleteAlias(name: string, refreshAliases: () => void) {
   invoke("delete_alias", { name: name })
     .then(() => {
-      console.log("Deleted alias");
-      loadAliases(setAliases);
+      refreshAliases();
     })
     .catch(() => {
       console.error("Failed to delete alias");
@@ -101,7 +88,9 @@ function AddAlias({ onAdd: onAdd }: { onAdd?: () => void }) {
 }
 
 export default function Aliases() {
-  let [aliases, setAliases] = useState([]);
+  const aliases = useStore((state) => state.aliases);
+  const refreshAliases = useStore((state) => state.refreshAliases);
+
   let [aliasDrawerOpen, setAliasDrawerOpen] = useState(false);
 
   const columns: ColumnDef<Alias>[] = [
@@ -129,7 +118,7 @@ export default function Aliases() {
             <DropdownMenuContent align="end">
               <DropdownMenuLabel>Actions</DropdownMenuLabel>
               <DropdownMenuItem
-                onClick={() => deleteAlias(alias.name, setAliases)}
+                onClick={() => deleteAlias(alias.name, refreshAliases)}
               >
                 Delete
               </DropdownMenuItem>
@@ -141,7 +130,7 @@ export default function Aliases() {
   ];
 
   useEffect(() => {
-    loadAliases(setAliases);
+    refreshAliases();
   }, []);
 
   return (
@@ -172,7 +161,7 @@ export default function Aliases() {
           >
             <AddAlias
               onAdd={() => {
-                loadAliases(setAliases);
+                refreshAliases();
                 setAliasDrawerOpen(false);
               }}
             />

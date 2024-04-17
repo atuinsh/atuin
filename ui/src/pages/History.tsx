@@ -1,40 +1,10 @@
-import { Fragment, useState, useEffect } from "react";
-import { Dialog, Transition } from "@headlessui/react";
-import {
-  Bars3Icon,
-  ChartPieIcon,
-  Cog6ToothIcon,
-  HomeIcon,
-  XMarkIcon,
-} from "@heroicons/react/24/outline";
-
-import Logo from "../assets/logo-light.svg";
-
-import { invoke } from "@tauri-apps/api/core";
+import { useEffect } from "react";
 
 import HistoryList from "@/components/HistoryList.tsx";
 import HistorySearch from "@/components/HistorySearch.tsx";
 import Stats from "@/components/history/Stats.tsx";
 import Drawer from "@/components/Drawer.tsx";
-
-function refreshHistory(
-  setHistory: React.Dispatch<React.SetStateAction<never[]>>,
-  query: String | null,
-) {
-  if (query) {
-    invoke("search", { query: query })
-      .then((res: any[]) => {
-        setHistory(res);
-      })
-      .catch((e) => {
-        console.log(e);
-      });
-  } else {
-    invoke("list").then((h: any[]) => {
-      setHistory(h);
-    });
-  }
-}
+import { useStore } from "@/state/store";
 
 function Header() {
   return (
@@ -44,7 +14,7 @@ function Header() {
           Shell History
         </h2>
       </div>
-      <div className="mt-4 flex md:ml-4 md:mt-0">
+      <div className="flex">
         <Drawer
           width="70%"
           trigger={
@@ -77,10 +47,11 @@ function Header() {
 }
 
 export default function Search() {
-  let [history, setHistory] = useState([]);
+  const history = useStore((state) => state.shellHistory);
+  const refreshHistory = useStore((state) => state.refreshShellHistory);
 
   useEffect(() => {
-    refreshHistory(setHistory, null);
+    refreshHistory();
   }, []);
 
   return (
@@ -93,8 +64,8 @@ export default function Search() {
 
         <div className="flex h-16 shrink-0 items-center gap-x-4 border-b border-t border-gray-200 bg-white px-4 shadow-sm sm:gap-x-6 sm:px-6 lg:px-8">
           <HistorySearch
-            refresh={(query: String | null) => {
-              refreshHistory(setHistory, query);
+            refresh={(query?: string) => {
+              refreshHistory(query);
             }}
           />
         </div>

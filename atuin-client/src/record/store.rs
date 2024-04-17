@@ -25,6 +25,7 @@ pub trait Store {
     async fn delete(&self, id: RecordId) -> Result<()>;
     async fn delete_all(&self) -> Result<()>;
 
+    async fn len_all(&self) -> Result<u64>;
     async fn len(&self, host: HostId, tag: &str) -> Result<u64>;
     async fn len_tag(&self, tag: &str) -> Result<u64>;
 

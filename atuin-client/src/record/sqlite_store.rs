@@ -180,6 +180,16 @@ impl Store for SqliteStore {
         self.idx(host, tag, 0).await
     }
 
+    async fn len_all(&self) -> Result<u64> {
+        let res: Result<(i64,), sqlx::Error> = sqlx::query_as("select count(*) from store")
+            .fetch_one(&self.pool)
+            .await;
+        match res {
+            Err(e) => Err(eyre!("failed to fetch local store len: {}", e)),
+            Ok(v) => Ok(v.0 as u64),
+        }
+    }
+
     async fn len_tag(&self, tag: &str) -> Result<u64> {
         let res: Result<(i64,), sqlx::Error> =
             sqlx::query_as("select count(*) from store where tag=?1")

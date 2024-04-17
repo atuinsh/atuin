@@ -1,5 +1,3 @@
-import * as React from "react";
-
 import { Drawer as VDrawer } from "vaul";
 
 export default function Drawer({

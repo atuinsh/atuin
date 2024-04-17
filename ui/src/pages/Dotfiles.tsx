@@ -1,11 +1,4 @@
-import { useState } from "react";
-
-import { Cog6ToothIcon } from "@heroicons/react/24/outline";
-
 import Aliases from "@/components/dotfiles/Aliases";
-
-import { Drawer } from "@/components/drawer";
-import { invoke } from "@tauri-apps/api/core";
 
 function Header() {
   return (
