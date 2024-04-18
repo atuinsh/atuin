@@ -1,12 +1,6 @@
 [workspace]
 members = [
-    "atuin",
-    "atuin-client",
-    "atuin-server",
-    "atuin-server-postgres",
-    "atuin-server-database",
-    "atuin-common",
-    "atuin-dotfiles",
+  "crates/*"
 ]
 
 resolver = "2"
