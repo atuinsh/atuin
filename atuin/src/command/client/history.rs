@@ -348,6 +348,15 @@ impl Cmd {
             return Ok(());
         }
 
+        if !settings.store_failed && h.exit != 0 {
+            debug!("history has non-zero exit code, and store_failed is false");
+
+            // the history has already been inserted half complete. remove it
+            db.delete(h).await?;
+
+            return Ok(());
+        }
+
         h.exit = exit;
         h.duration = match duration {
             Some(value) => i64::try_from(value).context("command took over 292 years")?,

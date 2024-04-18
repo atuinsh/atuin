@@ -370,6 +370,7 @@ pub struct Settings {
     pub scroll_context_lines: usize,
     pub history_format: String,
     pub prefers_reduced_motion: bool,
+    pub store_failed: bool,
 
     #[serde(with = "serde_regex", default = "RegexSet::empty")]
     pub history_filter: RegexSet,
@@ -645,6 +646,7 @@ impl Settings {
             .set_default("keymap_mode_shell", "auto")?
             .set_default("keymap_cursor", HashMap::<String, String>::new())?
             .set_default("smart_sort", false)?
+            .set_default("store_failed", true)?
             .set_default(
                 "prefers_reduced_motion",
                 std::env::var("NO_MOTION")
