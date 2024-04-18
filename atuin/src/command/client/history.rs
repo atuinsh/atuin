@@ -351,6 +351,9 @@ impl Cmd {
         if !settings.store_failed && h.exit != 0 {
             debug!("history has non-zero exit code, and store_failed is false");
 
+            // the history has already been inserted half complete. remove it
+            db.delete(h).await?;
+
             return Ok(());
         }
 
