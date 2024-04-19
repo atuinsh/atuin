@@ -67,26 +67,25 @@ impl Shell {
 
         // TODO: Support Linux
         // I'm pretty sure we can use /etc/passwd there, though there will probably be some issues
-        if sys.contains("darwin") {
+        let path = if sys.contains("darwin") {
             // This works in my testing so far
-            let path = Shell::Sh.run_interactive([
+            Shell::Sh.run_interactive([
                 "dscl localhost -read \"/Local/Default/Users/$USER\" shell | awk '{print $2}'",
-            ])?;
-
-            let path = Path::new(path.trim());
-
-            let shell = path.file_name();
-
-            if shell.is_none() {
-                return Err(ShellError::NotSupported);
-            }
-
-            Ok(Shell::from_string(
-                shell.unwrap().to_string_lossy().to_string(),
-            ))
+            ])?
         } else {
-            Err(ShellError::NotSupported)
+            Shell::Sh.run_interactive(["getent passwd $LOGNAME | cut -d: -f7"])?
+        };
+
+        let path = Path::new(path.trim());
+        let shell = path.file_name();
+
+        if shell.is_none() {
+            return Err(ShellError::NotSupported);
         }
+
+        Ok(Shell::from_string(
+            shell.unwrap().to_string_lossy().to_string(),
+        ))
     }
 
     pub fn from_string(name: String) -> Shell {
