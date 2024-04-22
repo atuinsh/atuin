@@ -17,7 +17,21 @@ pub struct Alias {
 }
 
 pub fn parse_alias(line: &str) -> Option<Alias> {
-    let parts: Vec<&str> = line.split('=').collect();
+    // consider the fact we might be importing a fish alias
+    // 'alias' output
+    // fish: alias foo bar
+    // posix: foo=bar
+
+    let is_fish = line.split(' ').next().unwrap_or("") == "alias";
+
+    let parts: Vec<&str> = if is_fish {
+        line.split(' ')
+            .enumerate()
+            .filter_map(|(n, i)| if n == 0 { None } else { Some(i) })
+            .collect()
+    } else {
+        line.split('=').collect()
+    };
 
     if parts.len() <= 1 {
         return None;
@@ -108,6 +122,13 @@ mod tests {
             .expect("failed to parse alias");
         assert_eq!(alias.name, "emacs");
         assert_eq!(alias.value, "'TERM=xterm-24bits emacs -nw --foo=bar'");
+    }
+
+    #[test]
+    fn test_parse_fish() {
+        let alias = super::parse_alias("alias foo bar").expect("failed to parse alias");
+        assert_eq!(alias.name, "foo");
+        assert_eq!(alias.value, "bar");
     }
 
     #[test]
