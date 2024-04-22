@@ -40,7 +40,12 @@ pub fn parse_alias(line: &str) -> Option<Alias> {
     let mut parts = parts.iter().map(|s| s.to_string());
 
     let name = parts.next().unwrap().to_string();
-    let remaining = parts.collect::<Vec<String>>().join("=").to_string();
+
+    let remaining = if is_fish {
+        parts.collect::<Vec<String>>().join(" ").to_string()
+    } else {
+        parts.collect::<Vec<String>>().join("=").to_string()
+    };
 
     Some(Alias {
         name,
@@ -129,6 +134,16 @@ mod tests {
         let alias = super::parse_alias("alias foo bar").expect("failed to parse alias");
         assert_eq!(alias.name, "foo");
         assert_eq!(alias.value, "bar");
+
+        let alias =
+            super::parse_alias("alias x 'exa --icons --git --classify --group-directories-first'")
+                .expect("failed to parse alias");
+
+        assert_eq!(alias.name, "x");
+        assert_eq!(
+            alias.value,
+            "'exa --icons --git --classify --group-directories-first'"
+        );
     }
 
     #[test]
