@@ -23,6 +23,7 @@ mod import;
 mod info;
 mod init;
 mod kv;
+mod run;
 mod search;
 mod stats;
 mod store;
@@ -79,6 +80,10 @@ pub enum Cmd {
     #[cfg(feature = "daemon")]
     #[command()]
     Daemon,
+
+    /// Execute a runbook or workflow
+    #[command()]
+    Run,
 
     /// Print example configuration
     #[command()]
@@ -149,6 +154,8 @@ impl Cmd {
             }
 
             Self::Doctor => doctor::run(&settings).await,
+
+            Self::Run => run::run(),
 
             Self::DefaultConfig => {
                 default_config::run();
