@@ -250,7 +250,7 @@ And then follow [the shell setup](#shell-plugin)
 
 ```
 git clone https://github.com/atuinsh/atuin.git
-cd atuin/atuin
+cd atuin/crates/atuin
 cargo install --path .
 ```
   
