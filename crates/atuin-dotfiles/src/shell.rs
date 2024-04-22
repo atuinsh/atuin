@@ -16,16 +16,22 @@ pub struct Alias {
     pub value: String,
 }
 
-pub fn parse_alias(line: &str) -> Alias {
-    let mut parts = line.split('=');
+pub fn parse_alias(line: &str) -> Option<Alias> {
+    let parts: Vec<&str> = line.split('=').collect();
+
+    if parts.len() <= 1 {
+        return None;
+    }
+
+    let mut parts = parts.iter().map(|s| s.to_string());
 
     let name = parts.next().unwrap().to_string();
-    let remaining = parts.collect::<Vec<&str>>().join("=").to_string();
+    let remaining = parts.collect::<Vec<String>>().join("=").to_string();
 
-    Alias {
+    Some(Alias {
         name,
-        value: remaining,
-    }
+        value: remaining.trim().to_string(),
+    })
 }
 
 pub fn existing_aliases(shell: Option<Shell>) -> Result<Vec<Alias>, ShellError> {
@@ -43,7 +49,8 @@ pub fn existing_aliases(shell: Option<Shell>) -> Result<Vec<Alias>, ShellError> 
     // This will return a list of aliases, each on its own line
     // They will be in the form foo=bar
     let aliases = shell.run_interactive(["alias"])?;
-    let aliases: Vec<Alias> = aliases.lines().map(parse_alias).collect();
+
+    let aliases: Vec<Alias> = aliases.lines().filter_map(parse_alias).collect();
 
     Ok(aliases)
 }
@@ -73,28 +80,63 @@ pub async fn import_aliases(store: AliasStore) -> Result<Vec<Alias>> {
 
 #[cfg(test)]
 mod tests {
+    use crate::shell::{parse_alias, Alias};
+
     #[test]
     fn test_parse_simple_alias() {
-        let alias = super::parse_alias("foo=bar");
+        let alias = super::parse_alias("foo=bar").expect("failed to parse alias");
         assert_eq!(alias.name, "foo");
         assert_eq!(alias.value, "bar");
     }
 
     #[test]
     fn test_parse_quoted_alias() {
-        let alias = super::parse_alias("emacs='TERM=xterm-24bits emacs -nw'");
+        let alias = super::parse_alias("emacs='TERM=xterm-24bits emacs -nw'")
+            .expect("failed to parse alias");
+
         assert_eq!(alias.name, "emacs");
         assert_eq!(alias.value, "'TERM=xterm-24bits emacs -nw'");
 
-        let git_alias = super::parse_alias("gwip='git add -A; git rm $(git ls-files --deleted) 2> /dev/null; git commit --no-verify --no-gpg-sign --message \"--wip-- [skip ci]\"'");
+        let git_alias = super::parse_alias("gwip='git add -A; git rm $(git ls-files --deleted) 2> /dev/null; git commit --no-verify --no-gpg-sign --message \"--wip-- [skip ci]\"'").expect("failed to parse alias");
         assert_eq!(git_alias.name, "gwip");
         assert_eq!(git_alias.value, "'git add -A; git rm $(git ls-files --deleted) 2> /dev/null; git commit --no-verify --no-gpg-sign --message \"--wip-- [skip ci]\"'");
     }
 
     #[test]
     fn test_parse_quoted_alias_equals() {
-        let alias = super::parse_alias("emacs='TERM=xterm-24bits emacs -nw --foo=bar'");
+        let alias = super::parse_alias("emacs='TERM=xterm-24bits emacs -nw --foo=bar'")
+            .expect("failed to parse alias");
         assert_eq!(alias.name, "emacs");
         assert_eq!(alias.value, "'TERM=xterm-24bits emacs -nw --foo=bar'");
+    }
+
+    #[test]
+    fn test_parse_with_fortune() {
+        // Because we run the alias command in an interactive subshell
+        // there may be other output.
+        // Ensure that the parser can handle it
+        // Annoyingly not all aliases are picked up all the time if we use
+        // a non-interactive subshell. Boo.
+        let shell = "
+/ In a consumer society there are     \\
+| inevitably two kinds of slaves: the |
+| prisoners of addiction and the      |
+\\ prisoners of envy.                  /
+ ------------------------------------- 
+        \\   ^__^
+         \\  (oo)\\_______
+            (__)\\       )\\/\\
+                ||----w |
+                ||     ||
+emacs='TERM=xterm-24bits emacs -nw --foo=bar'
+k=kubectl 
+";
+
+        let aliases: Vec<Alias> = shell.lines().filter_map(parse_alias).collect();
+        assert_eq!(aliases[0].name, "emacs");
+        assert_eq!(aliases[0].value, "'TERM=xterm-24bits emacs -nw --foo=bar'");
+
+        assert_eq!(aliases[1].name, "k");
+        assert_eq!(aliases[1].value, "kubectl");
     }
 }
