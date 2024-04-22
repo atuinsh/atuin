@@ -75,7 +75,7 @@ tiny-bip39 = "1"
 futures-util = "0.3"
 fuzzy-matcher = "0.3.7"
 colored = "2.0.4"
-ratatui = "0.25"
+ratatui = "0.26"
 tracing = "0.1"
 uuid = { workspace = true }
 unicode-segmentation = "1.11.0"

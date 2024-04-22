@@ -643,7 +643,7 @@ impl State {
         // TODO: this should be split so that we have one interactive search container that is
         // EITHER a search box or an inspector. But I'm not doing that now, way too much atm.
         // also allocate less 🙈
-        let titles = TAB_TITLES.iter().copied().map(Line::from).collect();
+        let titles: Vec<_> = TAB_TITLES.iter().copied().map(Line::from).collect();
 
         let tabs = Tabs::new(titles)
             .block(Block::default().borders(Borders::NONE))
