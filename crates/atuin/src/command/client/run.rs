@@ -1,6 +1,6 @@
 use eyre::Result;
 
-use atuin_run::markdown::parse;
+use atuin_run::{markdown::parse, pty::run_pty};
 
 pub fn run() -> Result<()> {
     let blocks = parse(
@@ -18,5 +18,8 @@ echo 'bar'
     );
 
     println!("{:?}", blocks);
+
+    run_pty();
+
     Ok(())
 }
