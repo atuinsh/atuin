@@ -33,6 +33,8 @@ pub async fn status<DB: Database>(
         },
     };
 
+    tracing::debug!(user = user.username, "requested sync status");
+
     Ok(Json(StatusResponse {
         count,
         deleted,

@@ -240,10 +240,13 @@ pub async fn login<DB: Database>(
     let verified = verify_str(user.password.as_str(), login.password.borrow());
 
     if !verified {
+        debug!(user = user.username, "login failed");
         return Err(
             ErrorResponse::reply("password is not correct").with_status(StatusCode::UNAUTHORIZED)
         );
     }
+
+    debug!(user = user.username, "login success");
 
     Ok(Json(LoginResponse {
         session: session.token,
