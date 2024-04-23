@@ -6,6 +6,7 @@ use atuin_client::record::sqlite_store::SqliteStore;
 // While we will support a range of shell config, I'd rather have a larger number of small records
 // + stores, rather than one mega config store.
 use atuin_common::record::{DecryptedData, Host, HostId};
+use atuin_common::utils::unquote;
 use eyre::{bail, ensure, eyre, Result};
 
 use atuin_client::record::encryption::PASETO_V4;
@@ -142,7 +143,11 @@ impl AliasStore {
         let mut config = String::new();
 
         for alias in aliases {
-            config.push_str(&format!("alias {}='{}'\n", alias.name, alias.value));
+            // If it's quoted, remove the quotes. If it's not quoted, do nothing.
+            let value = unquote(alias.value.as_str()).unwrap_or(alias.value.clone());
+
+            // we're about to quote it ourselves anyway!
+            config.push_str(&format!("alias {}='{}'\n", alias.name, value));
         }
 
         Ok(config)
@@ -171,7 +176,7 @@ impl AliasStore {
         // All the same contents, maybe optimize in the future or perhaps there will be quirks
         // per-shell
         // I'd prefer separation atm
-        let zsh = dir.join("aliases.zsh");
+        let zsh = dir.join("aliases.zsh-boop");
         let bash = dir.join("aliases.bash");
         let fish = dir.join("aliases.fish");
         let xsh = dir.join("aliases.xsh");

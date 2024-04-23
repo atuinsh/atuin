@@ -2,6 +2,8 @@ use std::borrow::Cow;
 use std::env;
 use std::path::PathBuf;
 
+use eyre::{eyre, Result};
+
 use rand::RngCore;
 use uuid::Uuid;
 
@@ -142,6 +144,30 @@ pub trait Escapable: AsRef<str> {
             buf.into()
         }
     }
+}
+
+pub fn unquote(s: &str) -> Result<String> {
+    if s.chars().count() < 2 {
+        return Err(eyre!("not enough chars"));
+    }
+
+    let quote = s.chars().next().unwrap();
+
+    // not quoted, do nothing
+    if quote != '"' && quote != '\'' && quote != '`' {
+        return Ok(s.to_string());
+    }
+
+    if s.chars().last().unwrap() != quote {
+        return Err(eyre!("unexpected eof, quotes do not match"));
+    }
+
+    // removes quote characters
+    // the sanity checks performed above ensure that the quotes will be ASCII and this will not
+    // panic
+    let s = &s[1..s.len() - 1];
+
+    Ok(s.to_string())
 }
 
 impl<T: AsRef<str>> Escapable for T {}
