@@ -6,6 +6,7 @@ use atuin_client::record::sqlite_store::SqliteStore;
 // While we will support a range of shell config, I'd rather have a larger number of small records
 // + stores, rather than one mega config store.
 use atuin_common::record::{DecryptedData, Host, HostId};
+use atuin_common::utils::unquote;
 use eyre::{bail, ensure, eyre, Result};
 
 use atuin_client::record::encryption::PASETO_V4;
@@ -142,7 +143,11 @@ impl AliasStore {
         let mut config = String::new();
 
         for alias in aliases {
-            config.push_str(&format!("alias {}='{}'\n", alias.name, alias.value));
+            // If it's quoted, remove the quotes. If it's not quoted, do nothing.
+            let value = unquote(alias.value.as_str()).unwrap_or(alias.value.clone());
+
+            // we're about to quote it ourselves anyway!
+            config.push_str(&format!("alias {}='{}'\n", alias.name, value));
         }
 
         Ok(config)
@@ -336,14 +341,17 @@ mod tests {
         let alias = AliasStore::new(store, host_id, key);
 
         alias.set("k", "kubectl").await.unwrap();
-
         alias.set("gp", "git push").await.unwrap();
+        alias
+            .set("kgap", "'kubectl get pods --all-namespaces'")
+            .await
+            .unwrap();
 
         let mut aliases = alias.aliases().await.unwrap();
 
         aliases.sort_by_key(|a| a.name.clone());
 
-        assert_eq!(aliases.len(), 2);
+        assert_eq!(aliases.len(), 3);
 
         assert_eq!(
             aliases[0],
@@ -360,5 +368,23 @@ mod tests {
                 value: String::from("kubectl")
             }
         );
+
+        assert_eq!(
+            aliases[2],
+            Alias {
+                name: String::from("kgap"),
+                value: String::from("'kubectl get pods --all-namespaces'")
+            }
+        );
+
+        let build = alias.posix().await.expect("failed to build aliases");
+
+        assert_eq!(
+            build,
+            "alias gp='git push'
+alias k='kubectl'
+alias kgap='kubectl get pods --all-namespaces'
+"
+        )
     }
 }
