@@ -176,7 +176,7 @@ impl AliasStore {
         // All the same contents, maybe optimize in the future or perhaps there will be quirks
         // per-shell
         // I'd prefer separation atm
-        let zsh = dir.join("aliases.zsh-boop");
+        let zsh = dir.join("aliases.zsh");
         let bash = dir.join("aliases.bash");
         let fish = dir.join("aliases.fish");
         let xsh = dir.join("aliases.xsh");
@@ -341,14 +341,17 @@ mod tests {
         let alias = AliasStore::new(store, host_id, key);
 
         alias.set("k", "kubectl").await.unwrap();
-
         alias.set("gp", "git push").await.unwrap();
+        alias
+            .set("kgap", "'kubectl get pods --all-namespaces'")
+            .await
+            .unwrap();
 
         let mut aliases = alias.aliases().await.unwrap();
 
         aliases.sort_by_key(|a| a.name.clone());
 
-        assert_eq!(aliases.len(), 2);
+        assert_eq!(aliases.len(), 3);
 
         assert_eq!(
             aliases[0],
@@ -365,5 +368,23 @@ mod tests {
                 value: String::from("kubectl")
             }
         );
+
+        assert_eq!(
+            aliases[2],
+            Alias {
+                name: String::from("kgap"),
+                value: String::from("'kubectl get pods --all-namespaces'")
+            }
+        );
+
+        let build = alias.posix().await.expect("failed to build aliases");
+
+        assert_eq!(
+            build,
+            "alias gp='git push'
+alias k='kubectl'
+alias kgap='kubectl get pods --all-namespaces'
+"
+        )
     }
 }
