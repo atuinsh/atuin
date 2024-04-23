@@ -4,7 +4,7 @@ use comrak::{
     parse_document, Arena, ComrakOptions,
 };
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Block {
     pub info: String,
     pub code: String,

@@ -51,6 +51,9 @@ atuin-history = { path = "../atuin-history", version = "0.1.0" }
 atuin-daemon = { path = "../atuin-daemon", version = "0.1.0" }
 atuin-run = { path = "../atuin-run", version = "0.1.0" }
 
+ratatui.workspace = true
+crossterm.workspace = true
+
 log = { workspace = true }
 env_logger = "0.11.2"
 time = { workspace = true }
@@ -59,7 +62,6 @@ directories = { workspace = true }
 indicatif = "0.17.5"
 serde = { workspace = true }
 serde_json = { workspace = true }
-crossterm = { version = "0.27", features = ["use-dev-tty"] }
 unicode-width = "0.1"
 itertools = { workspace = true }
 tokio = { workspace = true }
@@ -79,7 +81,6 @@ tiny-bip39 = "1"
 futures-util = "0.3"
 fuzzy-matcher = "0.3.7"
 colored = "2.0.4"
-ratatui = "0.26"
 tracing = "0.1"
 tracing-subscriber = { workspace = true }
 uuid = { workspace = true }

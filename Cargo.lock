@@ -394,9 +394,14 @@ dependencies = [
 name = "atuin-run"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "comrak",
+ "crossterm",
  "eyre",
  "portable-pty",
+ "ratatui",
+ "tokio",
+ "tui-term",
  "vt100",
 ]
 
@@ -4560,6 +4565,16 @@ name = "try-lock"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
+
+[[package]]
+name = "tui-term"
+version = "0.1.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c276fa6f3dbd87715b2124b55e3f7479e9b5f632704a37bf6660bdb1410420d2"
+dependencies = [
+ "ratatui",
+ "vt100",
+]
 
 [[package]]
 name = "typed-arena"

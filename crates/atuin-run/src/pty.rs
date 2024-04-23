@@ -1,96 +1,178 @@
 /// Create and manage pseudoterminals
-use eyre::Result;
+use std::{
+    io::{self, BufWriter, Read, Write},
+    sync::{Arc, RwLock},
+    time::Duration,
+};
+
+use bytes::Bytes;
+use crossterm::{
+    event::{self, Event, KeyCode, KeyEventKind},
+    execute,
+    style::ResetColor,
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+};
 use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
-use std::sync::mpsc::channel;
+use ratatui::{
+    backend::{Backend, CrosstermBackend},
+    layout::Alignment,
+    style::{Modifier, Style},
+    widgets::{Block, Borders, Paragraph},
+    Frame, Terminal,
+};
+use tokio::{
+    sync::mpsc::{channel, Sender},
+    task,
+};
+use tui_term::widget::PseudoTerminal;
 use vt100::Screen;
 
-/// Run a command in a pty, return output. Pty is closed once the command has completed.
-/// If a child process would work, prefer that approach - this is a bit slower and heavier.
-pub fn run_pty() -> Result<String> {
+#[derive(Debug)]
+struct Size {
+    cols: u16,
+    rows: u16,
+}
+
+pub async fn run_pty(blocks: Vec<crate::markdown::Block>) -> io::Result<()> {
+    let mut stdout = io::stdout();
+    execute!(stdout, ResetColor)?;
+    enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+
     let pty_system = NativePtySystem::default();
+    let cwd = std::env::current_dir().unwrap();
+    let mut cmd = CommandBuilder::new_default_prog();
+    cmd.cwd(cwd);
+
+    let size = Size {
+        rows: terminal.size()?.height,
+        cols: terminal.size()?.width,
+    };
 
     let pair = pty_system
         .openpty(PtySize {
-            rows: 24,
-            cols: 80,
+            rows: size.rows,
+            cols: size.cols,
             pixel_width: 0,
             pixel_height: 0,
         })
         .unwrap();
-
-    let cmd = CommandBuilder::new("bash");
-    let mut child = pair.slave.spawn_command(cmd).unwrap();
-
-    // Release any handles owned by the slave: we don't need it now
-    // that we've spawned the child.
-    drop(pair.slave);
-
-    // Read the output in another thread.
-    // This is important because it is easy to encounter a situation
-    // where read/write buffers fill and block either your process
-    // or the spawned process.
-    let (tx, rx) = channel();
-    let mut reader = pair.master.try_clone_reader().unwrap();
-
-    std::thread::spawn(move || {
-        // Consume the output from the child
-        let mut s = String::new();
-        reader.read_to_string(&mut s).unwrap();
-        tx.send(s).unwrap();
+    // Wait for the child to complete
+    task::spawn_blocking(move || {
+        let mut child = pair.slave.spawn_command(cmd).unwrap();
+        let _child_exit_status = child.wait().unwrap();
+        drop(pair.slave);
     });
 
+    let mut reader = pair.master.try_clone_reader().unwrap();
+    let parser = Arc::new(RwLock::new(vt100::Parser::new(size.rows, size.cols, 0)));
+
     {
-        // Obtain the writer.
-        // When the writer is dropped, EOF will be sent to
-        // the program that was spawned.
-        // It is important to take the writer even if you don't
-        // send anything to its stdin so that EOF can be
-        // generated, otherwise you risk deadlocking yourself.
-        let mut writer = pair.master.take_writer().unwrap();
+        let parser = parser.clone();
+        task::spawn_blocking(move || {
+            // Consume the output from the child
+            // Can't read the full buffer, since that would wait for EOF
+            let mut buf = [0u8; 8192];
+            let mut processed_buf = Vec::new();
+            loop {
+                let size = reader.read(&mut buf).unwrap();
+                if size == 0 {
+                    break;
+                }
+                if size > 0 {
+                    processed_buf.extend_from_slice(&buf[..size]);
+                    let mut parser = parser.write().unwrap();
+                    parser.process(&processed_buf);
 
-        if cfg!(target_os = "macos") {
-            // macOS quirk: the child and reader must be started and
-            // allowed a brief grace period to run before we allow
-            // the writer to drop. Otherwise, the data we send to
-            // the kernel to trigger EOF is interleaved with the
-            // data read by the reader! WTF!?
-            // This appears to be a race condition for very short
-            // lived processes on macOS.
-            // I'd love to find a more deterministic solution to
-            // this than sleeping.
-            std::thread::sleep(std::time::Duration::from_millis(20));
+                    // Clear the processed portion of the buffer
+                    processed_buf.clear();
+                }
+            }
+        });
+    }
+
+    let (tx, mut rx) = channel::<Bytes>(32);
+
+    let mut writer = BufWriter::new(pair.master.take_writer().unwrap());
+
+    // Drop writer on purpose
+    tokio::spawn(async move {
+        while let Some(bytes) = rx.recv().await {
+            writer.write_all(&bytes).unwrap();
+            writer.flush().unwrap();
         }
+        drop(pair.master);
+    });
 
-        // This example doesn't need to write anything, but if you
-        // want to send data to the child, you'd set `to_write` to
-        // that data and do it like this:
-        let to_write = "echo 'omg the pty DID SOMETHING'\r\nexit\r\n";
-        if !to_write.is_empty() {
-            // To avoid deadlock, wrt. reading and waiting, we send
-            // data to the stdin of the child in a different thread.
-            std::thread::spawn(move || {
-                writer.write_all(to_write.as_bytes()).unwrap();
-            });
+    println!("{blocks:?}");
+    run(&mut terminal, parser, tx, blocks).await?;
+
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    // restore terminal
+    disable_raw_mode()?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen,)?;
+    terminal.show_cursor()?;
+
+    Ok(())
+}
+
+async fn run<B: Backend>(
+    terminal: &mut Terminal<B>,
+    parser: Arc<RwLock<vt100::Parser>>,
+    sender: Sender<Bytes>,
+    blocks: Vec<crate::markdown::Block>,
+) -> io::Result<()> {
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    for i in blocks {
+        terminal.draw(|f| ui(f, parser.read().unwrap().screen()))?;
+
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        for line in i.code.lines() {
+            let b = Bytes::from(line.trim_end().to_string().into_bytes());
+
+            sender.send(b).await;
+            sender.send(Bytes::from(vec![b'\n'])).await;
+
+            terminal.draw(|f| ui(f, parser.read().unwrap().screen()))?;
+            tokio::time::sleep(Duration::from_millis(500)).await;
         }
     }
 
-    // Wait for the child to complete
-    println!("child status: {:?}", child.wait().unwrap());
+    terminal.draw(|f| ui(f, parser.read().unwrap().screen()))?;
 
-    // Take care to drop the master after our processes are
-    // done, as some platforms get unhappy if it is dropped
-    // sooner than that.
-    drop(pair.master);
+    tokio::time::sleep(Duration::from_millis(1500)).await;
 
-    // Now wait for the output to be read by our reader thread
-    let output = rx.recv().unwrap();
+    Ok(())
+}
 
-    // We print with escapes escaped because the windows conpty
-    // implementation synthesizes title change escape sequences
-    // in the output stream and it can be confusing to see those
-    // printed out raw in another terminal.
-    let out = output.to_string();
-    println!("{out}");
+fn ui(f: &mut Frame, screen: &Screen) {
+    let chunks = ratatui::layout::Layout::default()
+        .direction(ratatui::layout::Direction::Vertical)
+        .margin(1)
+        .constraints(
+            [
+                ratatui::layout::Constraint::Percentage(100),
+                ratatui::layout::Constraint::Min(1),
+            ]
+            .as_ref(),
+        )
+        .split(f.size());
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .style(Style::default().add_modifier(Modifier::BOLD));
 
-    Ok("".to_string())
+    let pseudo_term = PseudoTerminal::new(screen).block(block);
+    f.render_widget(pseudo_term, chunks[0]);
+
+    let explanation = "Press q to exit".to_string();
+    let explanation = Paragraph::new(explanation)
+        .style(Style::default().add_modifier(Modifier::BOLD | Modifier::REVERSED))
+        .alignment(Alignment::Center);
+    f.render_widget(explanation, chunks[1]);
 }

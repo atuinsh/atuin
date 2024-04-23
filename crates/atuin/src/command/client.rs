@@ -82,8 +82,8 @@ pub enum Cmd {
     Daemon,
 
     /// Execute a runbook or workflow
-    #[command()]
-    Run,
+    #[command(subcommand)]
+    Run(run::Cmd),
 
     /// Print example configuration
     #[command()]
@@ -155,7 +155,7 @@ impl Cmd {
 
             Self::Doctor => doctor::run(&settings).await,
 
-            Self::Run => run::run(),
+            Self::Run(r) => r.run().await,
 
             Self::DefaultConfig => {
                 default_config::run();

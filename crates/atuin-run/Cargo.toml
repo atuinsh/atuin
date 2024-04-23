@@ -13,6 +13,11 @@ readme.workspace = true
 
 [dependencies]
 eyre.workspace = true
+ratatui.workspace = true
+tokio.workspace = true
+crossterm.workspace = true
 comrak = "0.22"
 portable-pty = "0.8.1" 
 vt100 = "0.15.2"
+tui-term = "0.1.10"
+bytes = "1.6.0"

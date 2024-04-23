@@ -1,25 +1,32 @@
-use eyre::Result;
+use std::path::PathBuf;
+
+use clap::Subcommand;
+use eyre::{eyre, Result};
 
 use atuin_run::{markdown::parse, pty::run_pty};
+use rustix::path::Arg;
 
-pub fn run() -> Result<()> {
-    let blocks = parse(
-        "
-1. do a thing
-```sh
-echo 'foo'
-```
+#[derive(Debug, Subcommand)]
+pub enum Cmd {
+    Markdown { path: String },
+}
 
-2. do another thing
-```sh
-echo 'bar'
-```
-",
-    );
+impl Cmd {
+    pub async fn run(&self) -> Result<()> {
+        match self {
+            Cmd::Markdown { path } => {
+                let file = PathBuf::from(path);
 
-    println!("{:?}", blocks);
+                if !file.exists() {
+                    return Err(eyre!("File does not exist at {path}"));
+                }
 
-    run_pty();
+                let md = tokio::fs::read_to_string(file).await?;
+                let blocks = parse(md.as_str());
+                run_pty(blocks).await?;
+            }
+        }
 
-    Ok(())
+        Ok(())
+    }
 }
