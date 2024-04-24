@@ -18,6 +18,9 @@ const CONFIG_SHELL_ALIAS_VERSION: &str = "v0";
 const CONFIG_SHELL_ALIAS_TAG: &str = "config-shell-alias";
 const CONFIG_SHELL_ALIAS_FIELD_MAX_LEN: usize = 20000; // 20kb max total len, way more than should be needed.
 
+mod alias;
+pub mod var;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AliasRecord {
     Create(Alias),  // create a full record

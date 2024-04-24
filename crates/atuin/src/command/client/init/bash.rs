@@ -1,4 +1,4 @@
-use atuin_dotfiles::store::AliasStore;
+use atuin_dotfiles::store::{var::VarStore, AliasStore};
 use eyre::Result;
 
 pub fn init_static(disable_up_arrow: bool, disable_ctrl_r: bool) {
@@ -15,12 +15,19 @@ pub fn init_static(disable_up_arrow: bool, disable_ctrl_r: bool) {
     println!("{base}");
 }
 
-pub async fn init(store: AliasStore, disable_up_arrow: bool, disable_ctrl_r: bool) -> Result<()> {
+pub async fn init(
+    aliases: AliasStore,
+    vars: VarStore,
+    disable_up_arrow: bool,
+    disable_ctrl_r: bool,
+) -> Result<()> {
     init_static(disable_up_arrow, disable_ctrl_r);
 
-    let aliases = atuin_dotfiles::shell::bash::config(&store).await;
+    let aliases = atuin_dotfiles::shell::bash::alias_config(&aliases).await;
+    let vars = atuin_dotfiles::shell::bash::var_config(&vars).await;
 
     println!("{aliases}");
+    println!("{vars}");
 
     Ok(())
 }

@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use atuin_client::{encryption, record::sqlite_store::SqliteStore, settings::Settings};
-use atuin_dotfiles::store::AliasStore;
+use atuin_dotfiles::store::{var::VarStore, AliasStore};
 use clap::{Parser, ValueEnum};
 use eyre::{Result, WrapErr};
 
@@ -112,21 +112,46 @@ $env.config = (
             .into();
         let host_id = Settings::host_id().expect("failed to get host_id");
 
-        let alias_store = AliasStore::new(sqlite_store, host_id, encryption_key);
+        let alias_store = AliasStore::new(sqlite_store.clone(), host_id, encryption_key);
+        let var_store = VarStore::new(sqlite_store.clone(), host_id, encryption_key);
 
         match self.shell {
             Shell::Zsh => {
-                zsh::init(alias_store, self.disable_up_arrow, self.disable_ctrl_r).await?;
+                zsh::init(
+                    alias_store,
+                    var_store,
+                    self.disable_up_arrow,
+                    self.disable_ctrl_r,
+                )
+                .await?;
             }
             Shell::Bash => {
-                bash::init(alias_store, self.disable_up_arrow, self.disable_ctrl_r).await?;
+                bash::init(
+                    alias_store,
+                    var_store,
+                    self.disable_up_arrow,
+                    self.disable_ctrl_r,
+                )
+                .await?;
             }
             Shell::Fish => {
-                fish::init(alias_store, self.disable_up_arrow, self.disable_ctrl_r).await?;
+                fish::init(
+                    alias_store,
+                    var_store,
+                    self.disable_up_arrow,
+                    self.disable_ctrl_r,
+                )
+                .await?;
             }
             Shell::Nu => self.init_nu(),
             Shell::Xonsh => {
-                xonsh::init(alias_store, self.disable_up_arrow, self.disable_ctrl_r).await?;
+                xonsh::init(
+                    alias_store,
+                    var_store,
+                    self.disable_up_arrow,
+                    self.disable_ctrl_r,
+                )
+                .await?;
             }
         }
 

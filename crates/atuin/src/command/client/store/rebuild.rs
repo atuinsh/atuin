@@ -1,4 +1,4 @@
-use atuin_dotfiles::store::AliasStore;
+use atuin_dotfiles::store::{var::VarStore, AliasStore};
 use clap::Args;
 use eyre::{bail, Result};
 
@@ -59,9 +59,12 @@ impl Rebuild {
         let encryption_key: [u8; 32] = encryption::load_key(settings)?.into();
 
         let host_id = Settings::host_id().expect("failed to get host_id");
-        let alias_store = AliasStore::new(store, host_id, encryption_key);
+
+        let alias_store = AliasStore::new(store.clone(), host_id, encryption_key);
+        let var_store = VarStore::new(store.clone(), host_id, encryption_key);
 
         alias_store.build().await?;
+        var_store.build().await?;
 
         Ok(())
     }
