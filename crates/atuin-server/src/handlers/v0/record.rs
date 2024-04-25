@@ -70,6 +70,8 @@ pub async fn index<DB: Database>(
         }
     };
 
+    tracing::debug!(user = user.username, "record index request");
+
     Ok(Json(record_index))
 }
 
