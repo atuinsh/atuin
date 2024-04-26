@@ -31,7 +31,17 @@ let _atuin_pre_prompt = {||
 }
 
 def _atuin_search_cmd [...flags: string] {
-    let nu_version = ($env.NU_VERSION | split row '.' | each { || into int })
+    let nu_version = do {
+        let version = version
+        let major = $version.major?
+        if $major != null {
+            # These members are only available in versions > 0.92.2
+            [$major $version.minor $version.patch]
+        } else {
+            # So fall back to the slower parsing when they're missing
+            $version.version | split row '.' | into int
+        }
+    }
     [
         $ATUIN_KEYBINDING_TOKEN,
         ([
