@@ -8,9 +8,9 @@ use crate::store::AliasStore;
 
 pub mod bash;
 pub mod fish;
+pub mod nu;
 pub mod xonsh;
 pub mod zsh;
-pub mod nu;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Alias {
