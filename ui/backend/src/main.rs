@@ -118,6 +118,9 @@ fn main() {
             dotfiles::aliases::import_aliases,
             dotfiles::aliases::delete_alias,
             dotfiles::aliases::set_alias,
+            dotfiles::vars::vars,
+            dotfiles::vars::delete_var,
+            dotfiles::vars::set_var,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
