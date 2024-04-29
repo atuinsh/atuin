@@ -19,10 +19,12 @@ interface AtuinState {
   user: User;
   homeInfo: HomeInfo;
   aliases: Alias[];
+  vars: Var[];
   shellHistory: ShellHistory[];
 
   refreshHomeInfo: () => void;
   refreshAliases: () => void;
+  refreshVars: () => void;
   refreshShellHistory: (query?: string) => void;
 }
 
@@ -30,11 +32,18 @@ export const useStore = create<AtuinState>()((set) => ({
   user: DefaultUser,
   homeInfo: DefaultHomeInfo,
   aliases: [],
+  vars: [],
   shellHistory: [],
 
   refreshAliases: () => {
     invoke("aliases").then((aliases: any) => {
       set({ aliases: aliases });
+    });
+  },
+
+  refreshVars: () => {
+    invoke("vars").then((vars: any) => {
+      set({ vars: vars });
     });
   },
 

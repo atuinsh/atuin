@@ -32,3 +32,9 @@ export interface Alias {
   name: string;
   value: string;
 }
+
+export interface Var {
+  name: string;
+  value: string;
+  export: bool;
+}
