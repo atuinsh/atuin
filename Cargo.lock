@@ -186,6 +186,7 @@ dependencies = [
  "atuin-client",
  "atuin-common",
  "atuin-dotfiles",
+ "atuin-history",
  "atuin-server",
  "atuin-server-postgres",
  "base64 0.21.7",
@@ -304,6 +305,36 @@ dependencies = [
  "rmp",
  "serde",
  "tokio",
+]
+
+[[package]]
+name = "atuin-history"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "atuin-client",
+ "atuin-common",
+ "base64 0.21.7",
+ "crossterm",
+ "directories",
+ "eyre",
+ "fs-err",
+ "futures-util",
+ "indicatif",
+ "interim",
+ "itertools",
+ "log",
+ "semver",
+ "serde",
+ "serde_json",
+ "sysinfo",
+ "time",
+ "tokio",
+ "tracing",
+ "unicode-segmentation",
+ "unicode-width",
+ "uuid",
+ "whoami",
 ]
 
 [[package]]

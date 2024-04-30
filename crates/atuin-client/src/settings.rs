@@ -17,7 +17,7 @@ use fs_err::{create_dir_all, File};
 use parse_duration::parse;
 use regex::RegexSet;
 use semver::Version;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_with::DeserializeFromStr;
 use time::{
     format_description::{well_known::Rfc3339, FormatItem},
@@ -35,7 +35,7 @@ static EXAMPLE_CONFIG: &str = include_str!("../config.toml");
 
 mod dotfiles;
 
-#[derive(Clone, Debug, Deserialize, Copy, ValueEnum, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Copy, ValueEnum, PartialEq, Serialize)]
 pub enum SearchMode {
     #[serde(rename = "prefix")]
     Prefix,
@@ -72,7 +72,7 @@ impl SearchMode {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Copy, PartialEq, Eq, ValueEnum)]
+#[derive(Clone, Debug, Deserialize, Copy, PartialEq, Eq, ValueEnum, Serialize)]
 pub enum FilterMode {
     #[serde(rename = "global")]
     Global = 0,
@@ -102,7 +102,7 @@ impl FilterMode {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Copy)]
+#[derive(Clone, Debug, Deserialize, Copy, Serialize)]
 pub enum ExitMode {
     #[serde(rename = "return-original")]
     ReturnOriginal,
@@ -113,7 +113,7 @@ pub enum ExitMode {
 
 // FIXME: Can use upstream Dialect enum if https://github.com/stevedonovan/chrono-english/pull/16 is merged
 // FIXME: Above PR was merged, but dependency was changed to interim (fork of chrono-english) in the ... interim
-#[derive(Clone, Debug, Deserialize, Copy)]
+#[derive(Clone, Debug, Deserialize, Copy, Serialize)]
 pub enum Dialect {
     #[serde(rename = "us")]
     Us,
@@ -137,7 +137,7 @@ impl From<Dialect> for interim::Dialect {
 /// multithreaded runtime, otherwise it will fail on most Unix systems.
 ///
 /// See: https://github.com/atuinsh/atuin/pull/1517#discussion_r1447516426
-#[derive(Clone, Copy, Debug, Eq, PartialEq, DeserializeFromStr)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, DeserializeFromStr, Serialize)]
 pub struct Timezone(pub UtcOffset);
 impl fmt::Display for Timezone {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -180,7 +180,7 @@ impl FromStr for Timezone {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Copy)]
+#[derive(Clone, Debug, Deserialize, Copy, Serialize)]
 pub enum Style {
     #[serde(rename = "auto")]
     Auto,
@@ -192,7 +192,7 @@ pub enum Style {
     Compact,
 }
 
-#[derive(Clone, Debug, Deserialize, Copy)]
+#[derive(Clone, Debug, Deserialize, Copy, Serialize)]
 pub enum WordJumpMode {
     #[serde(rename = "emacs")]
     Emacs,
@@ -201,7 +201,7 @@ pub enum WordJumpMode {
     Subl,
 }
 
-#[derive(Clone, Debug, Deserialize, Copy, PartialEq, Eq, ValueEnum)]
+#[derive(Clone, Debug, Deserialize, Copy, PartialEq, Eq, ValueEnum, Serialize)]
 pub enum KeymapMode {
     #[serde(rename = "emacs")]
     Emacs,
@@ -232,7 +232,7 @@ impl KeymapMode {
 // It seems impossible to implement Deserialize for external types when it is
 // used in HashMap (https://stackoverflow.com/questions/67142663).  We instead
 // define an adapter type.
-#[derive(Clone, Debug, Deserialize, Copy, PartialEq, Eq, ValueEnum)]
+#[derive(Clone, Debug, Deserialize, Copy, PartialEq, Eq, ValueEnum, Serialize)]
 pub enum CursorStyle {
     #[serde(rename = "default")]
     DefaultUserShape,
@@ -270,7 +270,7 @@ impl CursorStyle {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Stats {
     #[serde(default = "Stats::common_prefix_default")]
     pub common_prefix: Vec<String>, // sudo, etc. commands we want to strip off
@@ -327,17 +327,17 @@ impl Default for Stats {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Default)]
+#[derive(Clone, Debug, Deserialize, Default, Serialize)]
 pub struct Sync {
     pub records: bool,
 }
 
-#[derive(Clone, Debug, Deserialize, Default)]
+#[derive(Clone, Debug, Deserialize, Default, Serialize)]
 pub struct Keys {
     pub scroll_exits: bool,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Settings {
     pub dialect: Dialect,
     pub timezone: Timezone,
@@ -373,10 +373,10 @@ pub struct Settings {
     pub prefers_reduced_motion: bool,
     pub store_failed: bool,
 
-    #[serde(with = "serde_regex", default = "RegexSet::empty")]
+    #[serde(with = "serde_regex", default = "RegexSet::empty", skip_serializing)]
     pub history_filter: RegexSet,
 
-    #[serde(with = "serde_regex", default = "RegexSet::empty")]
+    #[serde(with = "serde_regex", default = "RegexSet::empty", skip_serializing)]
     pub cwd_filter: RegexSet,
 
     pub secrets_filter: bool,
