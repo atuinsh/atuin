@@ -350,7 +350,7 @@ impl Default for Preview {
     }
 }
 
-// The preview hight strategy also takes max_preview_height into account.
+// The preview height strategy also takes max_preview_height into account.
 #[derive(Clone, Debug, Deserialize, Copy, PartialEq, Eq, ValueEnum, Serialize)]
 pub enum PreviewStrategy {
     // Preview height is calculated for the length of the selected command.
