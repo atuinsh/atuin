@@ -1,15 +1,10 @@
-use std::collections::{HashMap, HashSet};
-
 use clap::Parser;
-use crossterm::style::{Color, ResetColor, SetAttribute, SetForegroundColor};
 use eyre::Result;
 use interim::parse_date_string;
 use time::{Duration, OffsetDateTime, Time};
-use unicode_segmentation::UnicodeSegmentation;
 
 use atuin_client::{
     database::{current_context, Database},
-    history::History,
     settings::Settings,
 };
 
