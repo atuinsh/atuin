@@ -71,12 +71,7 @@
 
 ## enable or disable showing a preview of the selected command
 ## useful when the command is longer than the terminal width and is cut off
-# show_preview = false
-
-## enable or disable automatic preview. It shows a preview, if the command is
-## longer than the width of the terminal. It respects max_preview_height.
-## (default: true)
-# show_preview_auto = true
+# show_preview = true
 
 ## what to do when the escape key is pressed when searching
 ## possible values: return-original, return-query
@@ -208,3 +203,10 @@ enter_accept = true
 # This ensures that sync v2 is enabled for new installs only
 # In a later release it will become the default across the board
 records = true
+
+[preview]
+## which preview strategy to use to calculate the preview height (respects max_preview_height).
+## possible values: auto, static
+## auto: length of the selected command.
+## static: length of the longest command stored in the history.
+# strategy = auto
