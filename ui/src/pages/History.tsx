@@ -4,7 +4,12 @@ import HistoryList from "@/components/HistoryList.tsx";
 import HistorySearch from "@/components/HistorySearch.tsx";
 import Stats from "@/components/history/Stats.tsx";
 import Drawer from "@/components/Drawer.tsx";
+import InfiniteHistory from "@/components/InfiniteHistory.tsx";
+
 import { useStore } from "@/state/store";
+
+import { inspectHistory, listHistory } from "@/state/models";
+import { invoke } from "@tauri-apps/api/core";
 
 function Header() {
   return (
@@ -51,18 +56,22 @@ export default function Search() {
   const refreshHistory = useStore((state) => state.refreshShellHistory);
 
   useEffect(() => {
+    (async () => {
+      // nothing rn
+    })();
+
     refreshHistory();
   }, []);
 
   return (
     <>
       <div className="pl-60">
-        <div className="p-10">
+        <div className="p-10 history-header">
           <Header />
           <p>A history of all the commands you run in your shell.</p>
         </div>
 
-        <div className="flex h-16 shrink-0 items-center gap-x-4 border-b border-t border-gray-200 bg-white px-4 shadow-sm sm:gap-x-6 sm:px-6 lg:px-8">
+        <div className="flex h-16 shrink-0 items-center gap-x-4 border-b border-t border-gray-200 bg-white px-4 shadow-sm sm:gap-x-6 sm:px-6 lg:px-8 history-search">
           <HistorySearch
             refresh={(query?: string) => {
               refreshHistory(query);
@@ -70,7 +79,7 @@ export default function Search() {
           />
         </div>
 
-        <main>
+        <main className="overflow-y-scroll">
           <HistoryList history={history} />
         </main>
       </div>

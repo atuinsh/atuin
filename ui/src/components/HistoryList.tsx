@@ -21,7 +21,7 @@ export default function HistoryList(props: any) {
   return (
     <ul
       role="list"
-      className="divide-y divide-gray-100 overflow-hidden bg-white shadow-sm ring-1 ring-gray-900/5"
+      className="divide-y divide-gray-100 bg-white shadow-sm ring-1 ring-gray-900/5 overflow-auto history-list"
     >
       {props.history.map((h: any) => (
         <li
@@ -68,12 +68,7 @@ export default function HistoryList(props: any) {
                   </time>
                 </p>
               ) : (
-                <div className="mt-1 flex items-center gap-x-1.5">
-                  <div className="flex-none rounded-full bg-emerald-500/20 p-1">
-                    <div className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                  </div>
-                  <p className="text-xs leading-5 text-gray-500">Online</p>
-                </div>
+                <div />
               )}
             </div>
             <ChevronRightIcon

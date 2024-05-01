@@ -289,6 +289,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "atuin-history"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "atuin-client",
+ "atuin-common",
+ "base64 0.21.7",
+ "crossterm",
+ "directories",
+ "eyre",
+ "fs-err",
+ "futures-util",
+ "indicatif",
+ "interim",
+ "itertools",
+ "log",
+ "semver",
+ "serde",
+ "serde_json",
+ "sysinfo",
+ "time",
+ "tokio",
+ "tracing",
+ "unicode-segmentation",
+ "unicode-width",
+ "uuid",
+ "whoami",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -861,6 +891,32 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "248e3bacc7dc6baa3b21e405ee045c3047101a49145e7e9eca583ab4c2ca5345"
 
 [[package]]
+name = "crossterm"
+version = "0.27.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f476fe445d41c9e991fd07515a6f463074b782242ccf4a5b7b1d1012e70824df"
+dependencies = [
+ "bitflags 2.5.0",
+ "crossterm_winapi",
+ "filedescriptor",
+ "libc",
+ "mio",
+ "parking_lot",
+ "signal-hook",
+ "signal-hook-mio",
+ "winapi",
+]
+
+[[package]]
+name = "crossterm_winapi"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "acdd7c62a3665c7f6830a51635d9ac9b23ed385797f70a83bb8bafe9c572ab2b"
+dependencies = [
+ "winapi",
+]
+
+[[package]]
 name = "crypto-common"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1322,6 +1378,17 @@ checksum = "38e2275cc4e4fc009b0669731a1e5ab7ebf11f469eaede2bab9309a5b4d6057f"
 dependencies = [
  "memoffset",
  "rustc_version",
+]
+
+[[package]]
+name = "filedescriptor"
+version = "0.8.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7199d965852c3bac31f779ef99cbb4537f80e952e2d6aa0ffeb30cce00f4f46e"
+dependencies = [
+ "libc",
+ "thiserror",
+ "winapi",
 ]
 
 [[package]]
@@ -2602,6 +2669,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a4a650543ca06a924e8b371db273b2756685faae30f8487da1b56505a8f78b0c"
 dependencies = [
  "libc",
+ "log",
  "wasi 0.11.0+wasi-snapshot-preview1",
  "windows-sys 0.48.0",
 ]
@@ -4115,6 +4183,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "signal-hook"
+version = "0.3.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8621587d4798caf8eb44879d42e56b9a93ea5dcd315a6487c357130095b62801"
+dependencies = [
+ "libc",
+ "signal-hook-registry",
+]
+
+[[package]]
+name = "signal-hook-mio"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "29ad2e15f37ec9a6cc544097b78a1ec90001e9f71b81338ca39f430adaca99af"
+dependencies = [
+ "libc",
+ "mio",
+ "signal-hook",
+]
+
+[[package]]
 name = "signal-hook-registry"
 version = "1.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4820,6 +4909,41 @@ dependencies = [
 ]
 
 [[package]]
+name = "tauri-plugin"
+version = "2.0.0-beta.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6baaee0a083db1e04a1b7a3b0670d86a4d95dd2a54e7cbfb5547762b8ed098d9"
+dependencies = [
+ "anyhow",
+ "glob",
+ "plist",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tauri-utils",
+ "toml 0.8.12",
+ "walkdir",
+]
+
+[[package]]
+name = "tauri-plugin-sql"
+version = "2.0.0-beta.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "90c17360ef831e2789aab5439c241c8d7787ebd7c4fc40540181539b151f93bb"
+dependencies = [
+ "futures-core",
+ "log",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tauri",
+ "tauri-plugin",
+ "thiserror",
+ "time",
+ "tokio",
+]
+
+[[package]]
 name = "tauri-runtime"
 version = "2.0.0-beta.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4864,16 +4988,16 @@ dependencies = [
 
 [[package]]
 name = "tauri-utils"
-version = "2.0.0-beta.11"
+version = "2.0.0-beta.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0a148adf8077e1891c8b7d1c2be90c1c8eb8c7a071c35bb8edbdfe7cd9d8e23c"
+checksum = "d4709765385f035338ecc330f3fba753b8ee283c659c235da9768949cdb25469"
 dependencies = [
  "brotli",
  "cargo_metadata",
  "ctor",
  "dunce",
  "glob",
- "heck 0.4.1",
+ "heck 0.5.0",
  "html5ever",
  "infer",
  "json-patch",
@@ -5316,6 +5440,7 @@ dependencies = [
  "atuin-client",
  "atuin-common",
  "atuin-dotfiles",
+ "atuin-history",
  "eyre",
  "serde",
  "serde_json",
@@ -5323,6 +5448,7 @@ dependencies = [
  "syntect",
  "tauri",
  "tauri-build",
+ "tauri-plugin-sql",
  "time",
  "uuid",
 ]

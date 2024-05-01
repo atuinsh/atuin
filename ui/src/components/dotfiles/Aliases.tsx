@@ -16,7 +16,7 @@ import { ColumnDef } from "@tanstack/react-table";
 import { invoke } from "@tauri-apps/api/core";
 import Drawer from "@/components/Drawer";
 
-import { Alias } from "@/state/models";
+import { Alias, inspectHistory } from "@/state/models";
 import { useStore } from "@/state/store";
 
 function deleteAlias(name: string, refreshAliases: () => void) {

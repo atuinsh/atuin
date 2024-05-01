@@ -8,6 +8,7 @@ import {
   DefaultHomeInfo,
   Alias,
   ShellHistory,
+  Var,
 } from "./models";
 
 import { invoke } from "@tauri-apps/api/core";
@@ -26,6 +27,7 @@ interface AtuinState {
   refreshAliases: () => void;
   refreshVars: () => void;
   refreshShellHistory: (query?: string) => void;
+  historyNextPage: () => void;
 }
 
 export const useStore = create<AtuinState>()((set) => ({
@@ -77,5 +79,16 @@ export const useStore = create<AtuinState>()((set) => ({
       .catch((e) => {
         console.log(e);
       });
+  },
+  historyNextPage: () => {
+    set((state) => {
+      let newHistory = state.shellHistory.concat(
+        state.shellHistory.slice(0, 100),
+      );
+
+      return {
+        shellHistory: newHistory,
+      };
+    });
   },
 }));
