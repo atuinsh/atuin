@@ -338,6 +338,31 @@ pub struct Keys {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Preview {
+    pub strategy: PreviewStrategy,
+}
+
+impl Default for Preview {
+    fn default() -> Self {
+        Self {
+            strategy: PreviewStrategy::Auto,
+        }
+    }
+}
+
+// The preview height strategy also takes max_preview_height into account.
+#[derive(Clone, Debug, Deserialize, Copy, PartialEq, Eq, ValueEnum, Serialize)]
+pub enum PreviewStrategy {
+    // Preview height is calculated for the length of the selected command.
+    #[serde(rename = "auto")]
+    Auto,
+
+    // Preview height is calculated for the length of the longest command stored in the history.
+    #[serde(rename = "static")]
+    Static,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Settings {
     pub dialect: Dialect,
     pub timezone: Timezone,
@@ -358,7 +383,6 @@ pub struct Settings {
     pub inline_height: u16,
     pub invert: bool,
     pub show_preview: bool,
-    pub show_preview_auto: bool,
     pub max_preview_height: u16,
     pub show_help: bool,
     pub show_tabs: bool,
@@ -397,6 +421,9 @@ pub struct Settings {
 
     #[serde(default)]
     pub keys: Keys,
+
+    #[serde(default)]
+    pub preview: Preview,
 
     #[serde(default)]
     pub dotfiles: dotfiles::Settings,
@@ -615,8 +642,7 @@ impl Settings {
             .set_default("filter_mode", "global")?
             .set_default("style", "auto")?
             .set_default("inline_height", 0)?
-            .set_default("show_preview", false)?
-            .set_default("show_preview_auto", true)?
+            .set_default("show_preview", true)?
             .set_default("max_preview_height", 4)?
             .set_default("show_help", true)?
             .set_default("show_tabs", true)?

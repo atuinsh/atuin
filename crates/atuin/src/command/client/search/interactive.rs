@@ -22,7 +22,9 @@ use unicode_width::UnicodeWidthStr;
 use atuin_client::{
     database::{current_context, Database},
     history::{store::HistoryStore, History, HistoryStats},
-    settings::{CursorStyle, ExitMode, FilterMode, KeymapMode, SearchMode, Settings},
+    settings::{
+        CursorStyle, ExitMode, FilterMode, KeymapMode, PreviewStrategy, SearchMode, Settings,
+    },
 };
 
 use super::{
@@ -544,7 +546,11 @@ impl State {
         border_size: u16,
         preview_width: u16,
     ) -> u16 {
-        if settings.show_preview_auto && tab_index == 0 && !results.is_empty() {
+        if settings.show_preview
+            && settings.preview.strategy == PreviewStrategy::Auto
+            && tab_index == 0
+            && !results.is_empty()
+        {
             let length_current_cmd = results[selected].command.len() as u16;
             // The '- 19' takes the characters before the command (duration and time) into account
             if length_current_cmd > preview_width - 19 {
@@ -556,7 +562,10 @@ impl State {
             } else {
                 1
             }
-        } else if settings.show_preview && !settings.show_preview_auto && tab_index == 0 {
+        } else if settings.show_preview
+            && settings.preview.strategy == PreviewStrategy::Static
+            && tab_index == 0
+        {
             let longest_command = results
                 .iter()
                 .max_by(|h1, h2| h1.command.len().cmp(&h2.command.len()));
@@ -1179,25 +1188,33 @@ fn set_clipboard(_s: String) {}
 #[cfg(test)]
 mod tests {
     use atuin_client::history::History;
-    use atuin_client::settings::Settings;
+    use atuin_client::settings::{Preview, PreviewStrategy, Settings};
 
     use super::State;
 
     #[test]
     fn calc_preview_height_test() {
         let settings_preview_auto = Settings {
-            show_preview_auto: true,
+            preview: Preview {
+                strategy: PreviewStrategy::Auto,
+            },
+            show_preview: true,
             ..Settings::utc()
         };
 
         let settings_preview_auto_h2 = Settings {
-            show_preview_auto: true,
+            preview: Preview {
+                strategy: PreviewStrategy::Auto,
+            },
+            show_preview: true,
             max_preview_height: 2,
             ..Settings::utc()
         };
 
         let settings_preview_h4 = Settings {
-            show_preview_auto: false,
+            preview: Preview {
+                strategy: PreviewStrategy::Static,
+            },
             show_preview: true,
             max_preview_height: 4,
             ..Settings::utc()
