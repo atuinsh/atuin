@@ -1,5 +1,5 @@
 use clap::Subcommand;
-use eyre::{Context, Result};
+use eyre::{eyre, Context, Result};
 
 use atuin_client::{encryption, record::sqlite_store::SqliteStore, settings::Settings};
 
@@ -17,12 +17,19 @@ pub enum Cmd {
     /// List all aliases
     List,
 
-    /// Import aliases set in the current shell
-    Import,
+    /// Delete all aliases
+    Clear,
+    // There are too many edge cases to parse at the moment. Disable for now.
+    // Import,
 }
 
 impl Cmd {
-    async fn set(&self, store: AliasStore, name: String, value: String) -> Result<()> {
+    async fn set(&self, store: &AliasStore, name: String, value: String) -> Result<()> {
+        let illegal_char = regex::Regex::new("[ \t\n&();<>|\\\"'`$/]").unwrap();
+        if illegal_char.is_match(name.as_str()) {
+            return Err(eyre!("Illegal character in alias name"));
+        }
+
         let aliases = store.aliases().await?;
         let found: Vec<Alias> = aliases.into_iter().filter(|a| a.name == name).collect();
 
@@ -40,7 +47,7 @@ impl Cmd {
         Ok(())
     }
 
-    async fn list(&self, store: AliasStore) -> Result<()> {
+    async fn list(&self, store: &AliasStore) -> Result<()> {
         let aliases = store.aliases().await?;
 
         for i in aliases {
@@ -50,7 +57,17 @@ impl Cmd {
         Ok(())
     }
 
-    async fn delete(&self, store: AliasStore, name: String) -> Result<()> {
+    async fn clear(&self, store: &AliasStore) -> Result<()> {
+        let aliases = store.aliases().await?;
+
+        for i in aliases {
+            self.delete(store, i.name).await?;
+        }
+
+        Ok(())
+    }
+
+    async fn delete(&self, store: &AliasStore, name: String) -> Result<()> {
         let mut aliases = store.aliases().await?.into_iter();
         if let Some(alias) = aliases.find(|alias| alias.name == name) {
             println!("Deleting '{name}={}'.", alias.value);
@@ -61,7 +78,8 @@ impl Cmd {
         Ok(())
     }
 
-    async fn import(&self, store: AliasStore) -> Result<()> {
+    /*
+    async fn import(&self, store: &AliasStore) -> Result<()> {
         let aliases = atuin_dotfiles::shell::import_aliases(store).await?;
 
         for i in aliases {
@@ -70,6 +88,7 @@ impl Cmd {
 
         Ok(())
     }
+    */
 
     pub async fn run(&self, settings: &Settings, store: SqliteStore) -> Result<()> {
         if !settings.dotfiles.enabled {
@@ -86,10 +105,10 @@ impl Cmd {
         let alias_store = AliasStore::new(store, host_id, encryption_key);
 
         match self {
-            Self::Set { name, value } => self.set(alias_store, name.clone(), value.clone()).await,
-            Self::Delete { name } => self.delete(alias_store, name.clone()).await,
-            Self::List => self.list(alias_store).await,
-            Self::Import => self.import(alias_store).await,
+            Self::Set { name, value } => self.set(&alias_store, name.clone(), value.clone()).await,
+            Self::Delete { name } => self.delete(&alias_store, name.clone()).await,
+            Self::List => self.list(&alias_store).await,
+            Self::Clear => self.clear(&alias_store).await,
         }
     }
 }
