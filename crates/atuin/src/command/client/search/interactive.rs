@@ -308,13 +308,7 @@ impl State {
         // handle keymap specific keybindings.
         match self.keymap_mode {
             KeymapMode::VimNormal => match input.code {
-                KeyCode::Char('/') if !ctrl => {
-                    self.search.input.clear();
-                    self.set_keymap_cursor(settings, "vim_insert");
-                    self.keymap_mode = KeymapMode::VimInsert;
-                    return InputAction::Continue;
-                }
-                KeyCode::Char('?') if !ctrl => {
+                KeyCode::Char('?' | '/') if !ctrl => {
                     self.search.input.clear();
                     self.set_keymap_cursor(settings, "vim_insert");
                     self.keymap_mode = KeymapMode::VimInsert;

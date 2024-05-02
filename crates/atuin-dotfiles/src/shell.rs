@@ -136,7 +136,7 @@ pub fn existing_aliases(shell: Option<Shell>) -> Result<Vec<Alias>, ShellError> 
 /// Import aliases from the current shell
 /// This will not import aliases already in the store
 /// Returns aliases that were set
-pub async fn import_aliases(store: AliasStore) -> Result<Vec<Alias>> {
+pub async fn import_aliases(store: &AliasStore) -> Result<Vec<Alias>> {
     let shell_aliases = existing_aliases(None)?;
     let store_aliases = store.aliases().await?;
 

@@ -207,6 +207,7 @@ dependencies = [
  "itertools",
  "log",
  "ratatui",
+ "regex",
  "rpassword",
  "runtime-format",
  "rustix",
