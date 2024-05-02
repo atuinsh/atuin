@@ -67,9 +67,9 @@ export default function Search() {
   const parentRef = useRef();
 
   const rowVirtualizer = useVirtualizer({
-    count: history.length(),
+    count: history.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => 100,
+    estimateSize: () => 90,
     overscan: 5,
   });
 
@@ -89,8 +89,12 @@ export default function Search() {
           />
         </div>
 
-        <main className="overflow-y-scroll">
-          <HistoryList history={history} ref={parentRef} />
+        <main className="overflow-y-scroll history-list" ref={parentRef}>
+          <HistoryList
+            history={history}
+            items={rowVirtualizer.getVirtualItems()}
+            height={rowVirtualizer.getTotalSize()}
+          />
         </main>
       </div>
     </>

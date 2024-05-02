@@ -21,3 +21,7 @@ html {
 .history-list {
     height: calc(100vh - 150px - 64px);
 }
+
+.history-item {
+    height: 90px;
+}
