@@ -1,14 +1,16 @@
 use std::collections::{HashMap, HashSet};
 
 use crossterm::style::{Color, ResetColor, SetAttribute, SetForegroundColor};
-
-use atuin_client::{history::History, settings::Settings};
+use serde::{Deserialize, Serialize};
 use unicode_segmentation::UnicodeSegmentation;
 
-pub struct Stats<'a> {
+use atuin_client::{history::History, settings::Settings};
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Stats {
     pub total_commands: usize,
     pub unique_commands: usize,
-    pub top: Vec<(Vec<&'a str>, usize)>,
+    pub top: Vec<(Vec<String>, usize)>,
 }
 
 fn first_non_whitespace(s: &str) -> Option<usize> {
@@ -161,12 +163,12 @@ pub fn pretty_print(stats: Stats, ngram_size: usize) {
     println!("Unique commands:  {}", stats.unique_commands);
 }
 
-pub fn compute<'a>(
+pub fn compute(
     settings: &Settings,
-    history: &'a [History],
+    history: &[History],
     count: usize,
     ngram_size: usize,
-) -> Option<Stats<'a>> {
+) -> Option<Stats> {
     let mut commands = HashSet::<&str>::with_capacity(history.len());
     let mut total_unignored = 0;
     let mut prefixes = HashMap::<Vec<&str>, usize>::with_capacity(history.len());
@@ -212,7 +214,10 @@ pub fn compute<'a>(
     Some(Stats {
         unique_commands: unique,
         total_commands: total_unignored,
-        top,
+        top: top
+            .into_iter()
+            .map(|t| (t.0.into_iter().map(|s| s.to_string()).collect(), t.1))
+            .collect(),
     })
 }
 

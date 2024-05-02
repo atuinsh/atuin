@@ -1,4 +1,5 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 
 import HistoryList from "@/components/HistoryList.tsx";
 import HistorySearch from "@/components/HistorySearch.tsx";
@@ -63,6 +64,15 @@ export default function Search() {
     refreshHistory();
   }, []);
 
+  const parentRef = useRef();
+
+  const rowVirtualizer = useVirtualizer({
+    count: history.length(),
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => 100,
+    overscan: 5,
+  });
+
   return (
     <>
       <div className="pl-60">
@@ -80,7 +90,7 @@ export default function Search() {
         </div>
 
         <main className="overflow-y-scroll">
-          <HistoryList history={history} />
+          <HistoryList history={history} ref={parentRef} />
         </main>
       </div>
     </>

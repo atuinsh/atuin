@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import { ChevronRightIcon } from "@heroicons/react/20/solid";
 
 // @ts-ignore
@@ -22,6 +23,7 @@ export default function HistoryList(props: any) {
     <ul
       role="list"
       className="divide-y divide-gray-100 bg-white shadow-sm ring-1 ring-gray-900/5 overflow-auto history-list"
+      ref={props.ref}
     >
       {props.history.map((h: any) => (
         <li
