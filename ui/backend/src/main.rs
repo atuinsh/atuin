@@ -26,14 +26,14 @@ struct HomeInfo {
 }
 
 #[tauri::command]
-async fn list(minTimestamp: Option<u64>) -> Result<Vec<UIHistory>, String> {
+async fn list(offset: Option<u64>) -> Result<Vec<UIHistory>, String> {
     let settings = Settings::new().map_err(|e| e.to_string())?;
 
     let db_path = PathBuf::from(settings.db_path.as_str());
     let db = HistoryDB::new(db_path, settings.local_timeout).await?;
 
     let history = db
-        .list(minTimestamp.unwrap_or(time::OffsetDateTime::now_utc().unix_timestamp_nanos() as u64), Some(100))
+        .list(Some(offset.unwrap_or(0)), Some(100))
         .await?
         .into_iter()
         .map(|h| h.into())
@@ -43,13 +43,13 @@ async fn list(minTimestamp: Option<u64>) -> Result<Vec<UIHistory>, String> {
 }
 
 #[tauri::command]
-async fn search(query: String) -> Result<Vec<UIHistory>, String> {
+async fn search(query: String, offset: Option<u64>) -> Result<Vec<UIHistory>, String> {
     let settings = Settings::new().map_err(|e| e.to_string())?;
 
     let db_path = PathBuf::from(settings.db_path.as_str());
     let db = HistoryDB::new(db_path, settings.local_timeout).await?;
 
-    let history = db.search(query.as_str()).await?;
+    let history = db.search(offset, query.as_str()).await?;
 
     Ok(history)
 }
@@ -62,7 +62,7 @@ async fn global_stats() -> Result<GlobalStats, String> {
 
     let mut stats = db.global_stats().await?;
 
-    let history = db.list(0, None).await?;
+    let history = db.list(None, None).await?;
     let history_stats = stats::compute(&settings, &history, 10, 1);
 
     stats.stats = history_stats;

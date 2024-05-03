@@ -3,12 +3,12 @@ import { ArrowPathIcon } from "@heroicons/react/24/outline";
 import { MagnifyingGlassIcon } from "@heroicons/react/20/solid";
 
 interface HistorySearchProps {
-  refresh: (query: string) => void;
+  query: string;
+  refresh: () => void;
+  setQuery: (query: string) => void;
 }
 
 export default function HistorySearch(props: HistorySearchProps) {
-  let [searchQuery, setSearchQuery] = useState("");
-
   return (
     <div className="flex flex-1 gap-x-4 self-stretch lg:gap-x-6">
       <form
@@ -35,8 +35,8 @@ export default function HistorySearch(props: HistorySearchProps) {
           type="search"
           name="search"
           onChange={(query) => {
-            setSearchQuery(query.target.value);
-            props.refresh(query.target.value);
+            props.setQuery(query.target.value);
+            props.refresh();
           }}
         />
       </form>
@@ -45,7 +45,7 @@ export default function HistorySearch(props: HistorySearchProps) {
           type="button"
           className="-m-2.5 p-2.5 text-gray-400 hover:text-gray-500"
           onClick={() => {
-            props.refresh(searchQuery);
+            props.refresh();
           }}
         >
           <ArrowPathIcon className="h-6 w-6" aria-hidden="true" />

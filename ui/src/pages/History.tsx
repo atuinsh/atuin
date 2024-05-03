@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 
 import HistoryList from "@/components/HistoryList.tsx";
@@ -57,6 +57,8 @@ export default function Search() {
   const refreshHistory = useStore((state) => state.refreshShellHistory);
   const historyNextPage = useStore((state) => state.historyNextPage);
 
+  let [query, setQuery] = useState("");
+
   useEffect(() => {
     (async () => {
       // nothing rn
@@ -81,7 +83,7 @@ export default function Search() {
     if (lastItem.index < history.length - 1) return; // if we're not at the end yet, bail
 
     // we're at the end! more rows plz!
-    historyNextPage();
+    historyNextPage(query);
   }, [rowVirtualizer.getVirtualItems()]);
 
   return (
@@ -94,7 +96,12 @@ export default function Search() {
 
         <div className="flex h-16 shrink-0 items-center gap-x-4 border-b border-t border-gray-200 bg-white px-4 shadow-sm sm:gap-x-6 sm:px-6 lg:px-8 history-search">
           <HistorySearch
-            refresh={(query?: string) => {
+            query={query}
+            setQuery={(q) => {
+              setQuery(q);
+              refreshHistory(q);
+            }}
+            refresh={() => {
               refreshHistory(query);
             }}
           />

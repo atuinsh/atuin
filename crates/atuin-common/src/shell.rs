@@ -116,7 +116,7 @@ impl Shell {
         let shell = self.to_string();
 
         let output = Command::new(shell)
-            .arg("-c")
+            .arg("-ic")
             .args(args)
             .output()
             .map_err(|e| ShellError::ExecError(e.to_string()))?;

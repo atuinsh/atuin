@@ -98,16 +98,17 @@ impl HistoryDB {
         Ok(Self(sqlite))
     }
 
-    pub async fn list(&self, end: u64, limit: Option<usize>) -> Result<Vec<History>, String> {
+    pub async fn list(
+        &self,
+        offset: Option<u64>,
+        limit: Option<usize>,
+    ) -> Result<Vec<History>, String> {
         let query = if let Some(limit) = limit {
-            sqlx::query(
-                "select * from history where timestamp < ?1 order by timestamp desc limit ?2",
-            )
-            .bind(end as i64)
-            .bind(limit as i64)
+            sqlx::query("select * from history order by timestamp desc limit ?1 offset ?2")
+                .bind(limit as i64)
+                .bind(offset.unwrap_or(0) as i64)
         } else {
-            sqlx::query("select * from history where timestamp < ?1 order by timestamp desc")
-                .bind(end as i64)
+            sqlx::query("select * from history order by timestamp desc")
         };
 
         let history: Vec<History> = query
@@ -137,7 +138,7 @@ impl HistoryDB {
         Ok(history)
     }
 
-    pub async fn search(&self, query: &str) -> Result<Vec<UIHistory>, String> {
+    pub async fn search(&self, offset: Option<u64>, query: &str) -> Result<Vec<UIHistory>, String> {
         let context = Context {
             session: "".to_string(),
             cwd: "".to_string(),
@@ -148,6 +149,7 @@ impl HistoryDB {
 
         let filters = OptFilters {
             limit: Some(200),
+            offset: offset.map(|offset| offset as i64),
             ..OptFilters::default()
         };
 

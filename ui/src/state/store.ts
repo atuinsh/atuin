@@ -27,7 +27,7 @@ interface AtuinState {
   refreshAliases: () => void;
   refreshVars: () => void;
   refreshShellHistory: (query?: string) => void;
-  historyNextPage: () => void;
+  historyNextPage: (query?: string) => void;
 }
 
 export const useStore = create<AtuinState>()((set, get) => ({
@@ -83,20 +83,18 @@ export const useStore = create<AtuinState>()((set, get) => ({
 
   historyNextPage: (query?: string) => {
     let history = get().shellHistory;
-    let minTimestamp = history[history.length - 1].timestamp;
-    console.log(minTimestamp);
+    let offset = history.length - 1;
 
     if (query) {
-      invoke("search", { query: query, minTimestamp: minTimestamp })
+      invoke("search", { query: query, offset: offset })
         .then((res: any) => {
-          set({ shellHistory: res });
+          set({ shellHistory: [...history, ...res] });
         })
         .catch((e) => {
           console.log(e);
         });
     } else {
-      invoke("list", { minTimestamp: minTimestamp }).then((res: any) => {
-        console.log(res, history);
+      invoke("list", { offset: offset }).then((res: any) => {
         set({ shellHistory: [...history, ...res] });
       });
     }
