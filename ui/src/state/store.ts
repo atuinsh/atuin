@@ -30,7 +30,7 @@ interface AtuinState {
   historyNextPage: () => void;
 }
 
-export const useStore = create<AtuinState>()((set) => ({
+export const useStore = create<AtuinState>()((set, get) => ({
   user: DefaultUser,
   homeInfo: DefaultHomeInfo,
   aliases: [],
@@ -80,15 +80,25 @@ export const useStore = create<AtuinState>()((set) => ({
         console.log(e);
       });
   },
-  historyNextPage: () => {
-    set((state) => {
-      let newHistory = state.shellHistory.concat(
-        state.shellHistory.slice(0, 100),
-      );
 
-      return {
-        shellHistory: newHistory,
-      };
-    });
+  historyNextPage: (query?: string) => {
+    let history = get().shellHistory;
+    let minTimestamp = history[history.length - 1].timestamp;
+    console.log(minTimestamp);
+
+    if (query) {
+      invoke("search", { query: query, minTimestamp: minTimestamp })
+        .then((res: any) => {
+          set({ shellHistory: res });
+        })
+        .catch((e) => {
+          console.log(e);
+        });
+    } else {
+      invoke("list", { minTimestamp: minTimestamp }).then((res: any) => {
+        console.log(res, history);
+        set({ shellHistory: [...history, ...res] });
+      });
+    }
   },
 }));

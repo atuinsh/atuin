@@ -26,14 +26,14 @@ struct HomeInfo {
 }
 
 #[tauri::command]
-async fn list() -> Result<Vec<UIHistory>, String> {
+async fn list(minTimestamp: Option<u64>) -> Result<Vec<UIHistory>, String> {
     let settings = Settings::new().map_err(|e| e.to_string())?;
 
     let db_path = PathBuf::from(settings.db_path.as_str());
     let db = HistoryDB::new(db_path, settings.local_timeout).await?;
 
     let history = db
-        .list(0, Some(100))
+        .list(minTimestamp.unwrap_or(time::OffsetDateTime::now_utc().unix_timestamp_nanos() as u64), Some(100))
         .await?
         .into_iter()
         .map(|h| h.into())

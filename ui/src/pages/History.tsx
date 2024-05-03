@@ -55,6 +55,7 @@ function Header() {
 export default function Search() {
   const history = useStore((state) => state.shellHistory);
   const refreshHistory = useStore((state) => state.refreshShellHistory);
+  const historyNextPage = useStore((state) => state.historyNextPage);
 
   useEffect(() => {
     (async () => {
@@ -72,6 +73,16 @@ export default function Search() {
     estimateSize: () => 90,
     overscan: 5,
   });
+
+  useEffect(() => {
+    const [lastItem] = rowVirtualizer.getVirtualItems().slice(-1);
+
+    if (!lastItem) return; // no undefined plz
+    if (lastItem.index < history.length - 1) return; // if we're not at the end yet, bail
+
+    // we're at the end! more rows plz!
+    historyNextPage();
+  }, [rowVirtualizer.getVirtualItems()]);
 
   return (
     <>

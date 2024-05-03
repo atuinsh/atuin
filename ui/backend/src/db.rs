@@ -98,16 +98,16 @@ impl HistoryDB {
         Ok(Self(sqlite))
     }
 
-    pub async fn list(&self, start: u64, limit: Option<usize>) -> Result<Vec<History>, String> {
+    pub async fn list(&self, end: u64, limit: Option<usize>) -> Result<Vec<History>, String> {
         let query = if let Some(limit) = limit {
             sqlx::query(
-                "select * from history where timestamp > ?1 order by timestamp desc limit ?2",
+                "select * from history where timestamp < ?1 order by timestamp desc limit ?2",
             )
-            .bind(start as i64)
+            .bind(end as i64)
             .bind(limit as i64)
         } else {
-            sqlx::query("select * from history where timestamp > ?1 order by timestamp desc")
-                .bind(start as i64)
+            sqlx::query("select * from history where timestamp < ?1 order by timestamp desc")
+                .bind(end as i64)
         };
 
         let history: Vec<History> = query
