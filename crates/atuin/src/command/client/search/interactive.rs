@@ -49,13 +49,19 @@ use ratatui::{
 const TAB_TITLES: [&str; 2] = ["Search", "Inspect"];
 
 pub enum InputAction {
-    Accept(usize),
+    Accept(usize, InputAcceptKind),
     Copy(usize),
     Delete(usize),
     ReturnOriginal,
     ReturnQuery,
     Continue,
     Redraw,
+}
+pub enum InputAcceptKind {
+    Default,
+    Backspace,
+    Space,
+    Offset(i64),
 }
 
 #[allow(clippy::struct_field_names)]
@@ -214,7 +220,10 @@ impl State {
             KeyCode::Char('c' | 'g') if ctrl => Some(InputAction::ReturnOriginal),
             KeyCode::Esc if esc_allow_exit => Some(Self::handle_key_exit(settings)),
             KeyCode::Char('[') if ctrl && esc_allow_exit => Some(Self::handle_key_exit(settings)),
-            KeyCode::Tab => Some(InputAction::Accept(self.results_state.selected())),
+            KeyCode::Tab => Some(InputAction::Accept(
+                self.results_state.selected(),
+                InputAcceptKind::Default,
+            )),
             KeyCode::Char('o') if ctrl => {
                 self.tab_index = (self.tab_index + 1) % TAB_TITLES.len();
 
@@ -273,7 +282,7 @@ impl State {
         if settings.enter_accept {
             self.accept = true;
         }
-        InputAction::Accept(self.results_state.selected())
+        InputAction::Accept(self.results_state.selected(), InputAcceptKind::Default)
     }
 
     #[allow(clippy::too_many_lines)]
@@ -374,7 +383,10 @@ impl State {
             }
             KeyCode::Char(c @ '1'..='9') if modfr => {
                 return c.to_digit(10).map_or(InputAction::Continue, |c| {
-                    InputAction::Accept(self.results_state.selected() + c as usize)
+                    InputAction::Accept(
+                        self.results_state.selected() + c as usize,
+                        InputAcceptKind::Default,
+                    )
                 })
             }
             KeyCode::Left if ctrl => self
@@ -386,6 +398,12 @@ impl State {
                 .input
                 .prev_word(&settings.word_chars, settings.word_jump_mode),
             KeyCode::Left => {
+                if settings.exit_with_cursor_left && self.search.input.is_empty() {
+                    return InputAction::Accept(
+                        self.results_state.selected(),
+                        InputAcceptKind::Offset(-1),
+                    );
+                }
                 self.search.input.left();
             }
             KeyCode::Char('b') if ctrl => {
@@ -401,7 +419,15 @@ impl State {
                 .next_word(&settings.word_chars, settings.word_jump_mode),
             KeyCode::Right => self.search.input.right(),
             KeyCode::Char('f') if ctrl => self.search.input.right(),
-            KeyCode::Home => self.search.input.start(),
+            KeyCode::Home => {
+                if settings.exit_with_home && self.search.input.is_empty() {
+                    return InputAction::Accept(
+                        self.results_state.selected(),
+                        InputAcceptKind::Offset(0),
+                    );
+                }
+                self.search.input.start();
+            }
             KeyCode::Char('e') if ctrl => self.search.input.end(),
             KeyCode::End => self.search.input.end(),
             KeyCode::Backspace if ctrl => self
@@ -409,6 +435,12 @@ impl State {
                 .input
                 .remove_prev_word(&settings.word_chars, settings.word_jump_mode),
             KeyCode::Backspace => {
+                if settings.exit_with_backspace && self.search.input.is_empty() {
+                    return InputAction::Accept(
+                        self.results_state.selected(),
+                        InputAcceptKind::Backspace,
+                    );
+                }
                 self.search.input.back();
             }
             KeyCode::Char('h' | '?') if ctrl => {
@@ -493,6 +525,15 @@ impl State {
             }
             KeyCode::Char('l') if ctrl => {
                 return InputAction::Redraw;
+            }
+            KeyCode::Char(' ') => {
+                if settings.exit_with_space && self.search.input.is_empty() {
+                    return InputAction::Accept(
+                        self.results_state.selected(),
+                        InputAcceptKind::Space,
+                    );
+                }
+                self.search.input.insert(' ');
             }
             KeyCode::Char(c) => {
                 self.search.input.insert(c);
@@ -1134,12 +1175,53 @@ pub async fn history(
     }
 
     match result {
-        InputAction::Accept(index) if index < results.len() => {
+        InputAction::Accept(index, kind) if index < results.len() => {
             let mut command = results.swap_remove(index).command;
             if accept
                 && (utils::is_zsh() || utils::is_fish() || utils::is_bash() || utils::is_xonsh())
             {
                 command = String::from("__atuin_accept__:") + &command;
+            } else {
+                match kind {
+                    InputAcceptKind::Default => {}
+                    InputAcceptKind::Backspace => {
+                        // trim the end of the selected command *and* remove the
+                        // last character, as tab-completion might have added
+                        // trailing whitespace (which can't be seen in the UI)
+                        command = command.trim_end().to_string();
+                        command.pop();
+                    }
+                    InputAcceptKind::Space => {
+                        // trim the end and add one space character
+                        command = command.trim_end().to_string() + " ";
+                    }
+                    InputAcceptKind::Offset(offset) => {
+                        if settings.exit_positions_cursor {
+                            // for negative offsets (move left), remove trailing whitespace
+                            if offset < 0 {
+                                command = command.trim_end().to_string();
+                            }
+                            #[allow(clippy::cast_possible_wrap)]
+                            let length = command.len() as i64;
+                            let position = if offset >= 0 {
+                                // start editing at specified position,
+                                // counting from the start
+                                length.min(offset)
+                            } else {
+                                // start editing at specified position,
+                                // counting from the (trimmed) end
+                                0.max(length - offset.abs())
+                            };
+                            // Bash's READLINE_POINT is required or positioning the cursor; we still allow
+                            // to go back to the shell even when not using bash (if user's configure the
+                            // respective options), but the actual positioning is only possible with bash
+                            // (and only implemented in the bash shell integration)
+                            if utils::is_bash() {
+                                command = format!("__atuin_edit_at__:{position}:{command}");
+                            }
+                        }
+                    }
+                }
             }
 
             // index is in bounds so we return that entry
@@ -1151,7 +1233,7 @@ pub async fn history(
             set_clipboard(cmd);
             Ok(String::new())
         }
-        InputAction::ReturnQuery | InputAction::Accept(_) => {
+        InputAction::ReturnQuery | InputAction::Accept(_, _) => {
             // Either:
             // * index == RETURN_QUERY, in which case we should return the input
             // * out of bounds -> usually implies no selected entry so we return the input
