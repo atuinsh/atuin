@@ -674,7 +674,7 @@ impl State {
         let title = self.build_title();
         f.render_widget(title, header_chunks[0]);
 
-        let help = self.build_help();
+        let help = self.build_help(settings);
         f.render_widget(help, header_chunks[1]);
 
         let stats_tab = self.build_stats();
@@ -760,7 +760,7 @@ impl State {
     }
 
     #[allow(clippy::unused_self)]
-    fn build_help(&self) -> Paragraph {
+    fn build_help(&self, settings: &Settings) -> Paragraph {
         match self.tab_index {
             // search
             0 => Paragraph::new(Text::from(Line::from(vec![
@@ -771,7 +771,11 @@ impl State {
                 Span::raw(": edit"),
                 Span::raw(", "),
                 Span::styled("<enter>", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(": run"),
+                Span::raw(if settings.enter_accept {
+                    ": run"
+                } else {
+                    ": edit"
+                }),
                 Span::raw(", "),
                 Span::styled("<ctrl-o>", Style::default().add_modifier(Modifier::BOLD)),
                 Span::raw(": inspect"),
