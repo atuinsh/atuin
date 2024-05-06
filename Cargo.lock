@@ -326,6 +326,7 @@ dependencies = [
  "eyre",
  "prost",
  "prost-types",
+ "rand",
  "time",
  "tokio",
  "tokio-stream",

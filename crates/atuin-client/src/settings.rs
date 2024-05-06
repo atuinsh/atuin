@@ -344,7 +344,14 @@ pub struct Preview {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Daemon {
+    /// Use the daemon to sync
+    /// If enabled, requires a running daemon with `atuin daemon`
     pub enabled: bool,
+
+    /// The daemon will handle sync on an interval. How often to sync, in seconds.
+    pub sync_frequency: u64,
+
+    /// The path to the unix socket used by the daemon
     pub socket_path: String,
 }
 
@@ -360,6 +367,7 @@ impl Default for Daemon {
     fn default() -> Self {
         Self {
             enabled: false,
+            sync_frequency: 300,
             socket_path: "".to_string(),
         }
     }
@@ -693,6 +701,7 @@ impl Settings {
             .set_default("keymap_cursor", HashMap::<String, String>::new())?
             .set_default("smart_sort", false)?
             .set_default("store_failed", true)?
+            .set_default("daemon.sync_frequency", 300)?
             .set_default(
                 "prefers_reduced_motion",
                 std::env::var("NO_MOTION")
