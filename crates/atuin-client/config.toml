@@ -209,4 +209,4 @@ records = true
 ## possible values: auto, static
 ## auto: length of the selected command.
 ## static: length of the longest command stored in the history.
-# strategy = auto
+# strategy = "auto"
