@@ -52,7 +52,7 @@ thiserror = { workspace = true }
 futures = "0.3"
 crypto_secretbox = "0.1.1"
 generic-array = { version = "0.14", features = ["serde"] }
-serde_with = "3.5.1"
+serde_with = "3.8.1"
 
 # encryption
 rusty_paseto = { version = "0.6.0", default-features = false }
