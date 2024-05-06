@@ -4,11 +4,7 @@ use clap::Subcommand;
 use eyre::{Result, WrapErr};
 
 use atuin_client::{database::Sqlite, record::sqlite_store::SqliteStore, settings::Settings};
-use tracing_subscriber::{
-    filter::{EnvFilter, LevelFilter},
-    fmt,
-    prelude::*,
-};
+use tracing_subscriber::{filter::EnvFilter, fmt, prelude::*};
 
 #[cfg(feature = "sync")]
 mod sync;

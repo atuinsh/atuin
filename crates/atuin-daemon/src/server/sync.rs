@@ -28,8 +28,8 @@ pub async fn worker(settings: Settings, store: SqliteStore) -> Result<()> {
 
             let new_interval = ticker.period().as_secs_f64() * rng.gen_range(2.0..2.2);
 
-            // Don't backoff by more than 2hrs
-            if new_interval > 2.0 * 60.0 * 60.0 {
+            // Don't backoff by more than 30 mins
+            if new_interval > 60.0 * 30.0 {
                 continue;
             }
 
