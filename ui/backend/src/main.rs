@@ -13,6 +13,7 @@ mod store;
 use atuin_client::{
     encryption, history::HISTORY_TAG, record::sqlite_store::SqliteStore, record::store::Store,
 };
+use atuin_history::stats;
 use db::{GlobalStats, HistoryDB, UIHistory};
 use dotfiles::aliases::aliases;
 
@@ -25,25 +26,30 @@ struct HomeInfo {
 }
 
 #[tauri::command]
-async fn list() -> Result<Vec<UIHistory>, String> {
+async fn list(offset: Option<u64>) -> Result<Vec<UIHistory>, String> {
     let settings = Settings::new().map_err(|e| e.to_string())?;
 
     let db_path = PathBuf::from(settings.db_path.as_str());
     let db = HistoryDB::new(db_path, settings.local_timeout).await?;
 
-    let history = db.list(Some(100), false).await?;
+    let history = db
+        .list(Some(offset.unwrap_or(0)), Some(100))
+        .await?
+        .into_iter()
+        .map(|h| h.into())
+        .collect();
 
     Ok(history)
 }
 
 #[tauri::command]
-async fn search(query: String) -> Result<Vec<UIHistory>, String> {
+async fn search(query: String, offset: Option<u64>) -> Result<Vec<UIHistory>, String> {
     let settings = Settings::new().map_err(|e| e.to_string())?;
 
     let db_path = PathBuf::from(settings.db_path.as_str());
     let db = HistoryDB::new(db_path, settings.local_timeout).await?;
 
-    let history = db.search(query.as_str()).await?;
+    let history = db.search(offset, query.as_str()).await?;
 
     Ok(history)
 }
@@ -54,9 +60,19 @@ async fn global_stats() -> Result<GlobalStats, String> {
     let db_path = PathBuf::from(settings.db_path.as_str());
     let db = HistoryDB::new(db_path, settings.local_timeout).await?;
 
-    let stats = db.global_stats().await?;
+    let mut stats = db.global_stats().await?;
+
+    let history = db.list(None, None).await?;
+    let history_stats = stats::compute(&settings, &history, 10, 1);
+
+    stats.stats = history_stats;
 
     Ok(stats)
+}
+
+#[tauri::command]
+async fn config() -> Result<Settings, String> {
+    Settings::new().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -115,6 +131,7 @@ fn main() {
             global_stats,
             aliases,
             home_info,
+            config,
             dotfiles::aliases::import_aliases,
             dotfiles::aliases::delete_alias,
             dotfiles::aliases::set_alias,
@@ -122,6 +139,7 @@ fn main() {
             dotfiles::vars::delete_var,
             dotfiles::vars::set_var,
         ])
+        .plugin(tauri_plugin_sql::Builder::default().build())
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

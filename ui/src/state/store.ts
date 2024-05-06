@@ -8,6 +8,7 @@ import {
   DefaultHomeInfo,
   Alias,
   ShellHistory,
+  Var,
 } from "./models";
 
 import { invoke } from "@tauri-apps/api/core";
@@ -26,9 +27,10 @@ interface AtuinState {
   refreshAliases: () => void;
   refreshVars: () => void;
   refreshShellHistory: (query?: string) => void;
+  historyNextPage: (query?: string) => void;
 }
 
-export const useStore = create<AtuinState>()((set) => ({
+export const useStore = create<AtuinState>()((set, get) => ({
   user: DefaultUser,
   homeInfo: DefaultHomeInfo,
   aliases: [],
@@ -77,5 +79,24 @@ export const useStore = create<AtuinState>()((set) => ({
       .catch((e) => {
         console.log(e);
       });
+  },
+
+  historyNextPage: (query?: string) => {
+    let history = get().shellHistory;
+    let offset = history.length - 1;
+
+    if (query) {
+      invoke("search", { query: query, offset: offset })
+        .then((res: any) => {
+          set({ shellHistory: [...history, ...res] });
+        })
+        .catch((e) => {
+          console.log(e);
+        });
+    } else {
+      invoke("list", { offset: offset }).then((res: any) => {
+        set({ shellHistory: [...history, ...res] });
+      });
+    }
   },
 }));

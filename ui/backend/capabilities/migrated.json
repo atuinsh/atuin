@@ -2,9 +2,7 @@
   "identifier": "migrated",
   "description": "permissions that were migrated from v1",
   "context": "local",
-  "windows": [
-    "main"
-  ],
+  "windows": ["main"],
   "permissions": [
     "path:default",
     "event:default",
@@ -12,13 +10,10 @@
     "app:default",
     "resources:default",
     "menu:default",
-    "tray:default"
+    "tray:default",
+    "sql:allow-load",
+    "sql:allow-execute",
+    "sql:allow-select"
   ],
-  "platforms": [
-    "linux",
-    "macOS",
-    "windows",
-    "android",
-    "iOS"
-  ]
+  "platforms": ["linux", "macOS", "windows", "android", "iOS"]
 }

@@ -15,6 +15,7 @@ use atuin_client::{
     database::{Context, Database, OptFilters, Sqlite},
     history::History,
 };
+use atuin_history::stats;
 
 // useful for preprocessing data for the frontend
 #[derive(Serialize, Debug)]
@@ -28,6 +29,7 @@ pub struct GlobalStats {
     pub total_history: u64,
 
     pub daily: Vec<NameValue<u64>>,
+    pub stats: Option<stats::Stats>,
 
     pub last_1d: u64,
     pub last_7d: u64,
@@ -55,31 +57,33 @@ pub struct UIHistory {
     pub host: String,
 }
 
-pub fn to_ui_history(history: History) -> UIHistory {
-    let parts: Vec<String> = history.hostname.split(':').map(str::to_string).collect();
+impl From<History> for UIHistory {
+    fn from(history: History) -> Self {
+        let parts: Vec<String> = history.hostname.split(':').map(str::to_string).collect();
 
-    let (host, user) = if parts.len() == 2 {
-        (parts[0].clone(), parts[1].clone())
-    } else {
-        ("no-host".to_string(), "no-user".to_string())
-    };
+        let (host, user) = if parts.len() == 2 {
+            (parts[0].clone(), parts[1].clone())
+        } else {
+            ("no-host".to_string(), "no-user".to_string())
+        };
 
-    let mac = format!("/Users/{}", user);
-    let linux = format!("/home/{}", user);
+        let mac = format!("/Users/{}", user);
+        let linux = format!("/home/{}", user);
 
-    let cwd = history.cwd.replace(mac.as_str(), "~");
-    let cwd = cwd.replace(linux.as_str(), "~");
+        let cwd = history.cwd.replace(mac.as_str(), "~");
+        let cwd = cwd.replace(linux.as_str(), "~");
 
-    UIHistory {
-        id: history.id.0,
-        timestamp: history.timestamp.unix_timestamp_nanos(),
-        duration: history.duration,
-        exit: history.exit,
-        command: history.command,
-        session: history.session,
-        host,
-        user,
-        cwd,
+        UIHistory {
+            id: history.id.0,
+            timestamp: history.timestamp.unix_timestamp_nanos(),
+            duration: history.duration,
+            exit: history.exit,
+            command: history.command,
+            session: history.session,
+            host,
+            user,
+            cwd,
+        }
     }
 }
 
@@ -94,35 +98,47 @@ impl HistoryDB {
         Ok(Self(sqlite))
     }
 
-    pub async fn list(&self, limit: Option<usize>, unique: bool) -> Result<Vec<UIHistory>, String> {
-        let filters = vec![];
-
-        // bit of a hack but provide an empty context
-        // shell context makes _no sense_ in a GUI
-        let context = Context {
-            session: "".to_string(),
-            cwd: "".to_string(),
-            host_id: "".to_string(),
-            hostname: "".to_string(),
-            git_root: None,
+    pub async fn list(
+        &self,
+        offset: Option<u64>,
+        limit: Option<usize>,
+    ) -> Result<Vec<History>, String> {
+        let query = if let Some(limit) = limit {
+            sqlx::query("select * from history order by timestamp desc limit ?1 offset ?2")
+                .bind(limit as i64)
+                .bind(offset.unwrap_or(0) as i64)
+        } else {
+            sqlx::query("select * from history order by timestamp desc")
         };
 
-        let history = self
-            .0
-            .list(&filters, &context, limit, unique, false)
+        let history: Vec<History> = query
+            .map(|row: SqliteRow| {
+                History::from_db()
+                    .id(row.get("id"))
+                    .timestamp(
+                        time::OffsetDateTime::from_unix_timestamp_nanos(
+                            row.get::<i64, _>("timestamp") as i128,
+                        )
+                        .unwrap(),
+                    )
+                    .duration(row.get("duration"))
+                    .exit(row.get("exit"))
+                    .command(row.get("command"))
+                    .cwd(row.get("cwd"))
+                    .session(row.get("session"))
+                    .hostname(row.get("hostname"))
+                    .deleted_at(None)
+                    .build()
+                    .into()
+            })
+            .fetch_all(&self.0.pool)
             .await
             .map_err(|e| e.to_string())?;
-
-        let history = history
-            .into_iter()
-            .filter(|h| h.duration > 0)
-            .map(to_ui_history)
-            .collect();
 
         Ok(history)
     }
 
-    pub async fn search(&self, query: &str) -> Result<Vec<UIHistory>, String> {
+    pub async fn search(&self, offset: Option<u64>, query: &str) -> Result<Vec<UIHistory>, String> {
         let context = Context {
             session: "".to_string(),
             cwd: "".to_string(),
@@ -133,6 +149,7 @@ impl HistoryDB {
 
         let filters = OptFilters {
             limit: Some(200),
+            offset: offset.map(|offset| offset as i64),
             ..OptFilters::default()
         };
 
@@ -151,7 +168,7 @@ impl HistoryDB {
         let history = history
             .into_iter()
             .filter(|h| h.duration > 0)
-            .map(to_ui_history)
+            .map(|h| h.into())
             .collect();
 
         Ok(history)
@@ -189,7 +206,7 @@ impl HistoryDB {
                     .build()
                     .into()
             })
-            .map(to_ui_history)
+            .map(|h: History| h.into())
             .fetch_all(&self.0.pool)
             .await
             .map_err(|e| e.to_string())?;
@@ -240,6 +257,7 @@ impl HistoryDB {
             last_7d: week,
             last_1d: day,
             daily,
+            stats: None,
         })
     }
 }

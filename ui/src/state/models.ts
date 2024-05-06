@@ -1,3 +1,5 @@
+import Database from "@tauri-apps/plugin-sql";
+
 export interface User {
   username: string;
 }
@@ -18,7 +20,7 @@ export const DefaultHomeInfo: HomeInfo = {
   lastSyncTime: new Date(),
 };
 
-export interface ShellHistory {
+export class ShellHistory {
   id: string;
   timestamp: number;
   command: string;
@@ -26,6 +28,24 @@ export interface ShellHistory {
   host: string;
   cwd: string;
   duration: number;
+
+  constructor(
+    id: string,
+    timestamp: number,
+    command: string,
+    user: string,
+    host: string,
+    cwd: string,
+    duration: number,
+  ) {
+    this.id = id;
+    this.timestamp = timestamp;
+    this.command = command;
+    this.user = user;
+    this.host = host;
+    this.cwd = cwd;
+    this.duration = duration;
+  }
 }
 
 export interface Alias {
@@ -36,5 +56,15 @@ export interface Alias {
 export interface Var {
   name: string;
   value: string;
-  export: bool;
+  export: boolean;
+}
+
+export async function inspectHistory(id: string): Promise<any> {
+  const db = await Database.load(
+    "sqlite:/Users/ellie/.local/share/atuin/history.db",
+  );
+
+  let res = await db.select("select * from history where id=$1", [id]);
+
+  return res;
 }

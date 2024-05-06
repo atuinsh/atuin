@@ -1,10 +1,16 @@
-import { useEffect } from "react";
+import { useEffect, useState, useRef } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 
 import HistoryList from "@/components/HistoryList.tsx";
 import HistorySearch from "@/components/HistorySearch.tsx";
 import Stats from "@/components/history/Stats.tsx";
 import Drawer from "@/components/Drawer.tsx";
+import InfiniteHistory from "@/components/InfiniteHistory.tsx";
+
 import { useStore } from "@/state/store";
+
+import { inspectHistory, listHistory } from "@/state/models";
+import { invoke } from "@tauri-apps/api/core";
 
 function Header() {
   return (
@@ -49,29 +55,64 @@ function Header() {
 export default function Search() {
   const history = useStore((state) => state.shellHistory);
   const refreshHistory = useStore((state) => state.refreshShellHistory);
+  const historyNextPage = useStore((state) => state.historyNextPage);
+
+  let [query, setQuery] = useState("");
 
   useEffect(() => {
+    (async () => {
+      // nothing rn
+    })();
+
     refreshHistory();
   }, []);
+
+  const parentRef = useRef();
+
+  const rowVirtualizer = useVirtualizer({
+    count: history.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => 90,
+    overscan: 5,
+  });
+
+  useEffect(() => {
+    const [lastItem] = rowVirtualizer.getVirtualItems().slice(-1);
+
+    if (!lastItem) return; // no undefined plz
+    if (lastItem.index < history.length - 1) return; // if we're not at the end yet, bail
+
+    // we're at the end! more rows plz!
+    historyNextPage(query);
+  }, [rowVirtualizer.getVirtualItems()]);
 
   return (
     <>
       <div className="pl-60">
-        <div className="p-10">
+        <div className="p-10 history-header">
           <Header />
           <p>A history of all the commands you run in your shell.</p>
         </div>
 
-        <div className="flex h-16 shrink-0 items-center gap-x-4 border-b border-t border-gray-200 bg-white px-4 shadow-sm sm:gap-x-6 sm:px-6 lg:px-8">
+        <div className="flex h-16 shrink-0 items-center gap-x-4 border-b border-t border-gray-200 bg-white px-4 shadow-sm sm:gap-x-6 sm:px-6 lg:px-8 history-search">
           <HistorySearch
-            refresh={(query?: string) => {
+            query={query}
+            setQuery={(q) => {
+              setQuery(q);
+              refreshHistory(q);
+            }}
+            refresh={() => {
               refreshHistory(query);
             }}
           />
         </div>
 
-        <main>
-          <HistoryList history={history} />
+        <main className="overflow-y-scroll history-list" ref={parentRef}>
+          <HistoryList
+            history={history}
+            items={rowVirtualizer.getVirtualItems()}
+            height={rowVirtualizer.getTotalSize()}
+          />
         </main>
       </div>
     </>

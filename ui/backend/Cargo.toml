@@ -14,8 +14,8 @@ tauri-build = { version = "2.0.0-beta", features = [] }
 [dependencies]
 atuin-client = { path = "../../crates/atuin-client", version = "18.2.0" }
 atuin-common = { path = "../../crates/atuin-common", version = "18.2.0" }
-
 atuin-dotfiles = { path = "../../crates/atuin-dotfiles", version = "0.2.0" }
+atuin-history = { path = "../../crates/atuin-history", version = "0.1.0" }
 
 eyre = "0.6"
 tauri = { version = "2.0.0-beta", features = ["tray-icon"] }
@@ -36,3 +36,7 @@ custom-protocol = ["tauri/custom-protocol"]
 
 #[lib]
 #crate-type = ["staticlib", "cdylib", "rlib"]
+
+[dependencies.tauri-plugin-sql]
+features = ["sqlite"]  # or "postgres", or "mysql"
+version = "2.0.0-beta"

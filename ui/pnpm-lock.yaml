@@ -23,9 +23,15 @@ dependencies:
   '@tanstack/react-table':
     specifier: ^8.15.3
     version: 8.15.3(react-dom@18.2.0)(react@18.2.0)
+  '@tanstack/react-virtual':
+    specifier: ^3.5.0
+    version: 3.5.0(react-dom@18.2.0)(react@18.2.0)
   '@tauri-apps/api':
     specifier: 2.0.0-beta.7
     version: 2.0.0-beta.7
+  '@tauri-apps/plugin-sql':
+    specifier: 2.0.0-beta.2
+    version: 2.0.0-beta.2
   class-variance-authority:
     specifier: ^0.7.0
     version: 0.7.0
@@ -56,6 +62,12 @@ dependencies:
   react-spinners:
     specifier: ^0.13.8
     version: 0.13.8(react-dom@18.2.0)(react@18.2.0)
+  react-window:
+    specifier: ^1.8.10
+    version: 1.8.10(react-dom@18.2.0)(react@18.2.0)
+  react-window-infinite-loader:
+    specifier: ^1.0.9
+    version: 1.0.9(react-dom@18.2.0)(react@18.2.0)
   recharts:
     specifier: ^2.12.4
     version: 2.12.4(react-dom@18.2.0)(react@18.2.0)
@@ -584,7 +596,7 @@ packages:
       react: ^16 || ^17 || ^18
       react-dom: ^16 || ^17 || ^18
     dependencies:
-      '@tanstack/react-virtual': 3.2.0(react-dom@18.2.0)(react@18.2.0)
+      '@tanstack/react-virtual': 3.5.0(react-dom@18.2.0)(react@18.2.0)
       client-only: 0.0.1
       react: 18.2.0
       react-dom: 18.2.0(react@18.2.0)
@@ -1300,13 +1312,13 @@ packages:
       react-dom: 18.2.0(react@18.2.0)
     dev: false
 
-  /@tanstack/react-virtual@3.2.0(react-dom@18.2.0)(react@18.2.0):
-    resolution: {integrity: sha512-OEdMByf2hEfDa6XDbGlZN8qO6bTjlNKqjM3im9JG+u3mCL8jALy0T/67oDI001raUUPh1Bdmfn4ZvPOV5knpcg==}
+  /@tanstack/react-virtual@3.5.0(react-dom@18.2.0)(react@18.2.0):
+    resolution: {integrity: sha512-rtvo7KwuIvqK9zb0VZ5IL7fiJAEnG+0EiFZz8FUOs+2mhGqdGmjKIaT1XU7Zq0eFqL0jonLlhbayJI/J2SA/Bw==}
     peerDependencies:
       react: ^16.8.0 || ^17.0.0 || ^18.0.0
       react-dom: ^16.8.0 || ^17.0.0 || ^18.0.0
     dependencies:
-      '@tanstack/virtual-core': 3.2.0
+      '@tanstack/virtual-core': 3.5.0
       react: 18.2.0
       react-dom: 18.2.0(react@18.2.0)
     dev: false
@@ -1316,8 +1328,13 @@ packages:
     engines: {node: '>=12'}
     dev: false
 
-  /@tanstack/virtual-core@3.2.0:
-    resolution: {integrity: sha512-P5XgYoAw/vfW65byBbJQCw+cagdXDT/qH6wmABiLt4v4YBT2q2vqCOhihe+D1Nt325F/S/0Tkv6C5z0Lv+VBQQ==}
+  /@tanstack/virtual-core@3.5.0:
+    resolution: {integrity: sha512-KnPRCkQTyqhanNC0K63GBG3wA8I+D1fQuVnAvcBF8f13akOKeQp1gSbu6f77zCxhEk727iV5oQnbHLYzHrECLg==}
+    dev: false
+
+  /@tauri-apps/api@2.0.0-beta.4:
+    resolution: {integrity: sha512-Nxtj28NYUo5iwYkpYslxmOPkdI2WkELU2e3UH9nbJm9Ydki2CQwJVGQxx4EANtdZcMNsEsUzRqaDTvEUYH1l6w==}
+    engines: {node: '>= 18', npm: '>= 6.6.0', yarn: '>= 1.19.1'}
     dev: false
 
   /@tauri-apps/api@2.0.0-beta.7:
@@ -1431,6 +1448,12 @@ packages:
       '@tauri-apps/cli-win32-ia32-msvc': 2.0.0-beta.2
       '@tauri-apps/cli-win32-x64-msvc': 2.0.0-beta.2
     dev: true
+
+  /@tauri-apps/plugin-sql@2.0.0-beta.2:
+    resolution: {integrity: sha512-gNX/4VjGl0TD4Ct58ar4bLF82iRp2L5sS79FmtzKlXYj7tVbkxenIi+mGIBz3Ut1JQP5WNL4/5wq74bkDlBggA==}
+    dependencies:
+      '@tauri-apps/api': 2.0.0-beta.4
+    dev: false
 
   /@types/babel__core@7.20.5:
     resolution: {integrity: sha512-qoQprZvz5wQFJwMDqeseRXWv3rqMvhgpbXFfVyWhbx9X47POIA6i/+dXefEmZKoAgOaTdaIgNSMqMIU61yRyzA==}
@@ -2107,6 +2130,10 @@ packages:
     engines: {node: '>=12'}
     dev: false
 
+  /memoize-one@5.2.1:
+    resolution: {integrity: sha512-zYiwtZUcYyXKo/np96AGZAckk+FWWsUdJ3cHGGmld7+AhvcWmQyGCYUh1hc4Q/pkOhb65dQR/pqCyK0cOaHz4Q==}
+    dev: false
+
   /merge2@1.4.1:
     resolution: {integrity: sha512-8q7VEgMJW4J8tcfVPy8g09NcQwZdbwFEqhe/WZkoIzjn/3TGDwtOCYtXGxA3O8tPzpczCCDgv+P2P5y00ZJOOg==}
     engines: {node: '>= 8'}
@@ -2377,6 +2404,30 @@ packages:
       dom-helpers: 5.2.1
       loose-envify: 1.4.0
       prop-types: 15.8.1
+      react: 18.2.0
+      react-dom: 18.2.0(react@18.2.0)
+    dev: false
+
+  /react-window-infinite-loader@1.0.9(react-dom@18.2.0)(react@18.2.0):
+    resolution: {integrity: sha512-5Hg89IdU4Vrp0RT8kZYKeTIxWZYhNkVXeI1HbKo01Vm/Z7qztDvXljwx16sMzsa9yapRJQW3ODZfMUw38SOWHw==}
+    engines: {node: '>8.0.0'}
+    peerDependencies:
+      react: ^15.3.0 || ^16.0.0-alpha || ^17.0.0 || ^18.0.0
+      react-dom: ^15.3.0 || ^16.0.0-alpha || ^17.0.0 || ^18.0.0
+    dependencies:
+      react: 18.2.0
+      react-dom: 18.2.0(react@18.2.0)
+    dev: false
+
+  /react-window@1.8.10(react-dom@18.2.0)(react@18.2.0):
+    resolution: {integrity: sha512-Y0Cx+dnU6NLa5/EvoHukUD0BklJ8qITCtVEPY1C/nL8wwoZ0b5aEw8Ff1dOVHw7fCzMt55XfJDd8S8W8LCaUCg==}
+    engines: {node: '>8.0.0'}
+    peerDependencies:
+      react: ^15.0.0 || ^16.0.0 || ^17.0.0 || ^18.0.0
+      react-dom: ^15.0.0 || ^16.0.0 || ^17.0.0 || ^18.0.0
+    dependencies:
+      '@babel/runtime': 7.24.4
+      memoize-one: 5.2.1
       react: 18.2.0
       react-dom: 18.2.0(react@18.2.0)
     dev: false

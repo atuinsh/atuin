@@ -19,11 +19,59 @@ function renderLoading() {
   );
 }
 
+function TopTable({ stats }: any) {
+  console.log(stats);
+  return (
+    <div className="px-4 sm:px-6 lg:px-8">
+      <div className="flex items-center">
+        <div className="flex-auto">
+          <h1 className="text-base font-semibold">Top commands</h1>
+        </div>
+      </div>
+      <div className="mt-4 flow-root">
+        <div className="-mx-4 -my-2 overflow-x-auto sm:-mx-6 lg:-mx-8">
+          <div className="inline-block min-w-full py-2 align-middle">
+            <table className="min-w-full divide-y divide-gray-300">
+              <thead>
+                <tr>
+                  <th
+                    scope="col"
+                    className="py-3.5 pl-4 pr-3 text-left text-sm font-semibold text-gray-900 sm:pl-6 lg:pl-8"
+                  >
+                    Command
+                  </th>
+                  <th
+                    scope="col"
+                    className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900"
+                  >
+                    Count
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-200 bg-white">
+                {stats.map((stat) => (
+                  <tr>
+                    <td className="whitespace-nowrap py-4 pl-4 pr-3 text-sm font-medium text-gray-900 sm:pl-6 lg:pl-8">
+                      {stat[0][0]}
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
+                      {stat[1]}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function Stats() {
   const [stats, setStats]: any = useState([]);
+  const [top, setTop]: any = useState([]);
   const [chart, setChart]: any = useState([]);
-
-  console.log("Stats mounted");
 
   useEffect(() => {
     if (stats.length != 0) return;
@@ -36,6 +84,10 @@ export default function Stats() {
           {
             name: "Total history",
             stat: s.total_history.toLocaleString(),
+          },
+          {
+            name: "Unique history",
+            stat: s.stats.unique_commands.toLocaleString(),
           },
           {
             name: "Last 1d",
@@ -52,20 +104,23 @@ export default function Stats() {
         ]);
 
         setChart(s.daily);
+
+        setTop(s.stats);
       })
       .catch((e) => {
         console.log(e);
       });
   }, []);
+  console.log(top);
 
   if (stats.length == 0) {
     return renderLoading();
   }
 
   return (
-    <div className="flex flex-col">
+    <div className="flex flex-col overflow-y-scroll">
       <div className="flexfull">
-        <dl className="grid grid-cols-1 sm:grid-cols-4 w-full">
+        <dl className="grid grid-cols-1 sm:grid-cols-5 w-full">
           {stats.map((item: any) => (
             <div
               key={item.name}
@@ -93,6 +148,10 @@ export default function Stats() {
             </BarChart>
           </ResponsiveContainer>
         </div>
+      </div>
+
+      <div>
+        <TopTable stats={top.top} />
       </div>
     </div>
   );
