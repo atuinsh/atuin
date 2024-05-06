@@ -1,7 +1,6 @@
 [workspace]
 members = [
   "crates/*",
-  "./atuin-daemon"
 ]
 
 resolver = "2"

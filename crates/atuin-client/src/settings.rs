@@ -342,13 +342,12 @@ pub struct Preview {
     pub strategy: PreviewStrategy,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Daemon {
     pub enabled: bool,
     pub socket_path: String,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
 impl Default for Preview {
     fn default() -> Self {
         Self {
@@ -357,7 +356,6 @@ impl Default for Preview {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
 impl Default for Daemon {
     fn default() -> Self {
         Self {
