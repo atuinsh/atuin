@@ -648,6 +648,7 @@ impl Settings {
         let data_dir = atuin_common::utils::data_dir();
         let db_path = data_dir.join("history.db");
         let record_store_path = data_dir.join("records.db");
+        let socket_path = data_dir.join("atuin.sock");
 
         let key_path = data_dir.join("key");
         let session_path = data_dir.join("session");
@@ -669,6 +670,7 @@ impl Settings {
             .set_default("style", "auto")?
             .set_default("inline_height", 0)?
             .set_default("show_preview", true)?
+            .set_default("preview.strategy", "auto")?
             .set_default("max_preview_height", 4)?
             .set_default("show_help", true)?
             .set_default("show_tabs", true)?
@@ -702,6 +704,8 @@ impl Settings {
             .set_default("smart_sort", false)?
             .set_default("store_failed", true)?
             .set_default("daemon.sync_frequency", 300)?
+            .set_default("daemon.enabled", false)?
+            .set_default("daemon.socket_path", socket_path.to_str())?
             .set_default(
                 "prefers_reduced_motion",
                 std::env::var("NO_MOTION")

@@ -74,6 +74,9 @@ jobs:
         override: true
         profile: minimal # minimal component installation (ie, no documentation)
 
+    - name: Install Protoc
+      uses: arduino/setup-protoc@v3
+
     - name: Show version information (Rust, cargo, GCC)
       shell: bash
       run: |

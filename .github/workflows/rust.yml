@@ -24,6 +24,9 @@ jobs:
         with:
           toolchain: stable
 
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+
       - uses: actions/cache@v3
         with:
           path: |
@@ -36,7 +39,7 @@ jobs:
         if: matrix.os != 'macos-14' && matrix.os != 'windows-latest'
         run: |
           sudo apt update
-          sudo apt install libwebkit2gtk-4.1-dev \
+          sudo apt install libwebkit2gtk-4.1-dev \ 
             build-essential \
             curl \
             wget \
@@ -108,6 +111,9 @@ jobs:
         with:
           toolchain: stable
 
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+
       - name: Install dependencies
         if: matrix.os != 'macos-14' && matrix.os != 'windows-latest'
         run: |
@@ -150,6 +156,9 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: stable
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
 
       - name: Install dependencies
         if: matrix.os != 'macos-14' && matrix.os != 'windows-latest'
@@ -207,6 +216,9 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: stable
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
 
       - uses: taiki-e/install-action@v2
         name: Install nextest
