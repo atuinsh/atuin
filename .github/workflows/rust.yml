@@ -24,6 +24,10 @@ jobs:
         with:
           toolchain: stable
 
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: actions/cache@v3
         with:
@@ -37,17 +41,7 @@ jobs:
         if: matrix.os != 'macos-14' && matrix.os != 'windows-latest'
         run: |
           sudo apt update
-          sudo apt install \ 
-            build-essential \
-            curl \
-            wget \
-            file \
-            libssl-dev
-
-      - name: Install Protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          sudo apt install curl
 
       - name: Run cargo build common
         run: cargo build -p atuin-common --locked --release
