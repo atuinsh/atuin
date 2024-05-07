@@ -77,6 +77,11 @@ jobs:
         with:
           tool: cross
 
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
       - uses: actions/cache@v3
         with:
           path: |
@@ -255,6 +260,11 @@ jobs:
         with:
           toolchain: stable
           components: clippy
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install dependencies
         if: matrix.os != 'macos-14' && matrix.os != 'windows-latest'
