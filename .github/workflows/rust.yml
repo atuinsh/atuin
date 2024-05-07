@@ -24,10 +24,6 @@ jobs:
         with:
           toolchain: stable
 
-      - name: Install Protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: actions/cache@v3
         with:
@@ -47,6 +43,11 @@ jobs:
             wget \
             file \
             libssl-dev
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run cargo build common
         run: cargo build -p atuin-common --locked --release
