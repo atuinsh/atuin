@@ -57,7 +57,6 @@ jobs:
         # warning: libelf.so.2, needed by <...>/libkvm.so, not found (try using -rpath or -rpath-link)
         target: [x86_64-unknown-illumos]
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v3
 
@@ -66,10 +65,10 @@ jobs:
         with:
           tool: cross
 
-      - name: Install Protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y protobuf-compiler libprotobuf-dev
 
       - uses: actions/cache@v3
         with:
