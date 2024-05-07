@@ -89,8 +89,7 @@ jobs:
 
       - name: Run cross build main
         run: |
-          ls -lah $(which protoc)
-          echo $USER
+          sudo chmod 755 $(which protoc) # cross is being weird
           PROTOC=/usr/bin/protoc cross build --all --locked --target ${{ matrix.target }}
 
   unit-test:
