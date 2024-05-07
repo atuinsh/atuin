@@ -26,6 +26,8 @@ jobs:
 
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: actions/cache@v3
         with:
@@ -111,6 +113,8 @@ jobs:
 
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install dependencies
         if: matrix.os != 'macos-14' && matrix.os != 'windows-latest'
@@ -157,6 +161,8 @@ jobs:
 
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install dependencies
         if: matrix.os != 'macos-14' && matrix.os != 'windows-latest'
@@ -217,6 +223,8 @@ jobs:
 
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: taiki-e/install-action@v2
         name: Install nextest
