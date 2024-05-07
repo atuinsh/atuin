@@ -69,6 +69,7 @@ jobs:
         run: |
           sudo apt update
           sudo apt install -y protobuf-compiler libprotobuf-dev
+          echo $(which protoc)
 
       - uses: actions/cache@v3
         with:
