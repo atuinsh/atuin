@@ -33,9 +33,10 @@ buildflags = ["--release"]
 atuin = { path = "/usr/bin/atuin" }
 
 [features]
-default = ["client", "sync", "server", "clipboard", "check-update"]
+default = ["client", "sync", "server", "clipboard", "check-update", "daemon"]
 client = ["atuin-client"]
 sync = ["atuin-client/sync"]
+daemon = ["atuin-client/daemon"]
 server = ["atuin-server", "atuin-server-postgres"]
 clipboard = ["cli-clipboard"]
 check-update = ["atuin-client/check-update"]
@@ -88,7 +89,6 @@ regex="1.10.4"
 
 [target.'cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))'.dependencies]
 cli-clipboard = { version = "0.4.0", optional = true }
-
 
 [dev-dependencies]
 tracing-tree = "0.3"

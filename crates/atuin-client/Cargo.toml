@@ -13,8 +13,9 @@ repository = { workspace = true }
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
-default = ["sync"]
+default = ["sync", "daemon"]
 sync = ["urlencoding", "reqwest", "sha2", "hex"]
+daemon = []
 check-update = []
 
 [dependencies]

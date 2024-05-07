@@ -12,7 +12,9 @@ mod sync;
 #[cfg(feature = "sync")]
 mod account;
 
+#[cfg(feature = "daemon")]
 mod daemon;
+
 mod default_config;
 mod doctor;
 mod dotfiles;
@@ -74,6 +76,7 @@ pub enum Cmd {
     #[command()]
     Doctor,
 
+    #[cfg(feature = "daemon")]
     #[command()]
     Daemon,
 
@@ -146,6 +149,7 @@ impl Cmd {
                 Ok(())
             }
 
+            #[cfg(feature = "daemon")]
             Self::Daemon => daemon::run(settings, sqlite_store, db).await,
         }
     }
