@@ -69,7 +69,6 @@ jobs:
         run: |
           sudo apt update
           sudo apt install -y protobuf-compiler libprotobuf-dev
-          echo $(which protoc)
 
       - uses: actions/cache@v3
         with:
@@ -89,7 +88,10 @@ jobs:
         run: cross build -p atuin-server --locked --target ${{ matrix.target }}
 
       - name: Run cross build main
-        run: cross build --all --locked --target ${{ matrix.target }}
+        run: |
+          ls -lah $(which protoc)
+          echo $USER
+          PROTOC=/usr/bin/protoc cross build --all --locked --target ${{ matrix.target }}
 
   unit-test:
     strategy:
