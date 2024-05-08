@@ -12,7 +12,7 @@ use atuin_common::record::{DecryptedData, Host, HostId, Record, RecordId, Record
 
 use super::{History, HistoryId, HISTORY_TAG, HISTORY_VERSION};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct HistoryStore {
     pub store: SqliteStore,
     pub host_id: HostId,

@@ -13,6 +13,8 @@ readme.workspace = true
 
 [dependencies]
 atuin-client = { path = "../atuin-client", version = "18.0.1" }
+atuin-dotfiles = { path = "../atuin-dotfiles", version = "0.2.0" }
+atuin-history = { path = "../atuin-history", version = "0.1.0" }
 
 time = { workspace = true }
 uuid = { workspace = true }

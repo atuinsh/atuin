@@ -166,7 +166,7 @@ pub async fn listen(
     let host_id = Settings::host_id().expect("failed to get host_id");
     let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
-    let history = HistoryService::new(history_store, history_db);
+    let history = HistoryService::new(history_store.clone(), history_db.clone());
 
     let socket = settings.daemon.socket_path.clone();
     let uds = UnixListener::bind(socket.clone())?;
@@ -175,7 +175,12 @@ pub async fn listen(
     tracing::info!("listening on unix socket {:?}", socket);
 
     // start services
-    tokio::spawn(sync::worker(settings.clone(), store));
+    tokio::spawn(sync::worker(
+        settings.clone(),
+        store,
+        history_store,
+        history_db,
+    ));
 
     Server::builder()
         .add_service(HistoryServer::new(history))

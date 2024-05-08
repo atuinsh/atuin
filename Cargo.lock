@@ -322,6 +322,8 @@ name = "atuin-daemon"
 version = "0.1.0"
 dependencies = [
  "atuin-client",
+ "atuin-dotfiles",
+ "atuin-history",
  "dashmap",
  "eyre",
  "prost",

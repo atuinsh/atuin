@@ -2,13 +2,31 @@ use eyre::Result;
 use rand::Rng;
 use tokio::time::{self, MissedTickBehavior};
 
+use atuin_client::database::Sqlite as HistoryDatabase;
 use atuin_client::{
+    encryption,
+    history::store::HistoryStore,
     record::{sqlite_store::SqliteStore, sync},
     settings::Settings,
 };
 
-pub async fn worker(settings: Settings, store: SqliteStore) -> Result<()> {
+use atuin_dotfiles::store::{var::VarStore, AliasStore};
+
+pub async fn worker(
+    settings: Settings,
+    store: SqliteStore,
+    history_store: HistoryStore,
+    history_db: HistoryDatabase,
+) -> Result<()> {
     tracing::info!("booting sync worker");
+
+    let encryption_key: [u8; 32] = encryption::load_key(&settings)?.into();
+    let host_id = Settings::host_id().expect("failed to get host_id");
+    let alias_store = AliasStore::new(store.clone(), host_id, encryption_key);
+    let var_store = VarStore::new(store.clone(), host_id, encryption_key);
+
+    // Don't backoff by more than 30 mins (with a random jitter of up to 1 min)
+    let max_interval: f64 = 60.0 * 30.0 + rand::thread_rng().gen_range(0.0..60.0);
 
     let mut ticker = time::interval(time::Duration::from_secs(settings.daemon.sync_frequency));
 
@@ -24,13 +42,13 @@ pub async fn worker(settings: Settings, store: SqliteStore) -> Result<()> {
 
         if let Err(e) = res {
             tracing::error!("sync tick failed with {e}");
+
             let mut rng = rand::thread_rng();
 
-            let new_interval = ticker.period().as_secs_f64() * rng.gen_range(2.0..2.2);
+            let mut new_interval = ticker.period().as_secs_f64() * rng.gen_range(2.0..2.2);
 
-            // Don't backoff by more than 30 mins
-            if new_interval > 60.0 * 30.0 {
-                continue;
+            if new_interval > max_interval {
+                new_interval = max_interval;
             }
 
             ticker = time::interval(time::Duration::from_secs(new_interval as u64));
@@ -45,6 +63,13 @@ pub async fn worker(settings: Settings, store: SqliteStore) -> Result<()> {
                 downloaded = ?downloaded,
                 "sync complete"
             );
+
+            history_store
+                .incremental_build(&history_db, &downloaded)
+                .await?;
+
+            alias_store.build().await?;
+            var_store.build().await?;
 
             // Reset backoff on success
             if ticker.period().as_secs() != settings.daemon.sync_frequency {
