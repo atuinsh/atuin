@@ -28,7 +28,7 @@ async-trait = { workspace = true }
 axum = "0.7.4"
 axum-server = { version = "0.6.0", features = ["tls-rustls"] }
 fs-err = { workspace = true }
-tower = "0.4"
+tower = { workspace = true }
 tower-http = { version = "0.5.1", features = ["trace"] }
 reqwest = { workspace = true }
 rustls = "0.21"

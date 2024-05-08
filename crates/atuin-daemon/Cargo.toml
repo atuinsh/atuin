@@ -1,0 +1,34 @@
+[package]
+name = "atuin-daemon"
+edition = "2021"
+version = "0.1.0"
+authors.workspace = true
+rust-version.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+atuin-client = { path = "../atuin-client", version = "18.0.1" }
+
+time = { workspace = true }
+uuid = { workspace = true }
+tokio = { workspace = true }
+tower = { workspace = true }
+eyre = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+dashmap = "5.5.3"
+tonic-types = "0.11.0"
+tonic = "0.11"
+prost = "0.12"
+prost-types = "0.12"
+tokio-stream = {version="0.1.14", features=["net"]}
+rand.workspace = true
+
+[build-dependencies]
+tonic-build = "0.11"

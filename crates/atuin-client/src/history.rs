@@ -303,6 +303,48 @@ impl History {
         builder::HistoryCaptured::builder()
     }
 
+    /// Builder for a history entry that is captured via hook, and sent to the daemon.
+    ///
+    /// This builder is used only at the `start` step of the hook,
+    /// so it doesn't have any fields which are known only after
+    /// the command is finished, such as `exit` or `duration`.
+    ///
+    /// It does, however, include information that can usually be inferred.
+    ///
+    /// This is because the daemon we are sending a request to lacks the context of the command
+    ///
+    /// ## Examples
+    /// ```rust
+    /// use atuin_client::history::History;
+    ///
+    /// let history: History = History::daemon()
+    ///     .timestamp(time::OffsetDateTime::now_utc())
+    ///     .command("ls -la")
+    ///     .cwd("/home/user")
+    ///     .session("018deb6e8287781f9973ef40e0fde76b")
+    ///     .hostname("computer:ellie")
+    ///     .build()
+    ///     .into();
+    /// ```
+    ///
+    /// Command without any required info cannot be captured, which is forced at compile time:
+    ///
+    /// ```compile_fail
+    /// use atuin_client::history::History;
+    ///
+    /// // this will not compile because `hostname` is missing
+    /// let history: History = History::daemon()
+    ///     .timestamp(time::OffsetDateTime::now_utc())
+    ///     .command("ls -la")
+    ///     .cwd("/home/user")
+    ///     .session("018deb6e8287781f9973ef40e0fde76b")
+    ///     .build()
+    ///     .into();
+    /// ```
+    pub fn daemon() -> builder::HistoryDaemonCaptureBuilder {
+        builder::HistoryDaemonCapture::builder()
+    }
+
     /// Builder for a history entry that is imported from the database.
     ///
     /// All fields are required, as they are all present in the database.

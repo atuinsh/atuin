@@ -4,13 +4,16 @@ use clap::Subcommand;
 use eyre::{Result, WrapErr};
 
 use atuin_client::{database::Sqlite, record::sqlite_store::SqliteStore, settings::Settings};
-use env_logger::Builder;
+use tracing_subscriber::{filter::EnvFilter, fmt, prelude::*};
 
 #[cfg(feature = "sync")]
 mod sync;
 
 #[cfg(feature = "sync")]
 mod account;
+
+#[cfg(feature = "daemon")]
+mod daemon;
 
 mod default_config;
 mod doctor;
@@ -73,6 +76,10 @@ pub enum Cmd {
     #[command()]
     Doctor,
 
+    #[cfg(feature = "daemon")]
+    #[command()]
+    Daemon,
+
     /// Print example configuration
     #[command()]
     DefaultConfig,
@@ -94,10 +101,12 @@ impl Cmd {
     }
 
     async fn run_inner(self, mut settings: Settings) -> Result<()> {
-        Builder::new()
-            .filter_level(log::LevelFilter::Off)
-            .filter_module("sqlx_sqlite::regexp", log::LevelFilter::Off)
-            .parse_env("ATUIN_LOG")
+        let filter =
+            EnvFilter::from_env("ATUIN_LOG").add_directive("sqlx_sqlite::regexp=off".parse()?);
+
+        tracing_subscriber::registry()
+            .with(fmt::layer())
+            .with(filter)
             .init();
 
         tracing::trace!(command = ?self, "client command");
@@ -139,6 +148,9 @@ impl Cmd {
                 default_config::run();
                 Ok(())
             }
+
+            #[cfg(feature = "daemon")]
+            Self::Daemon => daemon::run(settings, sqlite_store, db).await,
         }
     }
 }

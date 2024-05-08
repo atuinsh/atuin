@@ -120,6 +120,7 @@ pub trait Database: Send + Sync + 'static {
 
 // Intended for use on a developer machine and not a sync server.
 // TODO: implement IntoIterator
+#[derive(Debug)]
 pub struct Sqlite {
     pub pool: SqlitePool,
 }

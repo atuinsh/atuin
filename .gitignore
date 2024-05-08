@@ -6,3 +6,6 @@
 .vscode/
 result
 publish.sh
+
+ui/backend/target
+ui/backend/gen

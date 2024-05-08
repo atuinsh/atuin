@@ -342,10 +342,33 @@ pub struct Preview {
     pub strategy: PreviewStrategy,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Daemon {
+    /// Use the daemon to sync
+    /// If enabled, requires a running daemon with `atuin daemon`
+    pub enabled: bool,
+
+    /// The daemon will handle sync on an interval. How often to sync, in seconds.
+    pub sync_frequency: u64,
+
+    /// The path to the unix socket used by the daemon
+    pub socket_path: String,
+}
+
 impl Default for Preview {
     fn default() -> Self {
         Self {
             strategy: PreviewStrategy::Auto,
+        }
+    }
+}
+
+impl Default for Daemon {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            sync_frequency: 300,
+            socket_path: "".to_string(),
         }
     }
 }
@@ -427,6 +450,9 @@ pub struct Settings {
 
     #[serde(default)]
     pub dotfiles: dotfiles::Settings,
+
+    #[serde(default)]
+    pub daemon: Daemon,
 
     // This is automatically loaded when settings is created. Do not set in
     // config! Keep secrets and settings apart.
@@ -622,6 +648,7 @@ impl Settings {
         let data_dir = atuin_common::utils::data_dir();
         let db_path = data_dir.join("history.db");
         let record_store_path = data_dir.join("records.db");
+        let socket_path = data_dir.join("atuin.sock");
 
         let key_path = data_dir.join("key");
         let session_path = data_dir.join("session");
@@ -643,6 +670,7 @@ impl Settings {
             .set_default("style", "auto")?
             .set_default("inline_height", 0)?
             .set_default("show_preview", true)?
+            .set_default("preview.strategy", "auto")?
             .set_default("max_preview_height", 4)?
             .set_default("show_help", true)?
             .set_default("show_tabs", true)?
@@ -675,6 +703,9 @@ impl Settings {
             .set_default("keymap_cursor", HashMap::<String, String>::new())?
             .set_default("smart_sort", false)?
             .set_default("store_failed", true)?
+            .set_default("daemon.sync_frequency", 300)?
+            .set_default("daemon.enabled", false)?
+            .set_default("daemon.socket_path", socket_path.to_str())?
             .set_default(
                 "prefers_reduced_motion",
                 std::env::var("NO_MOTION")
