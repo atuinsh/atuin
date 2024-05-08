@@ -65,10 +65,10 @@ jobs:
         with:
           tool: cross
 
-      - name: Install dependencies
-        run: |
-          sudo apt update
-          sudo apt install -y protobuf-compiler libprotobuf-dev
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: actions/cache@v3
         with:
@@ -89,8 +89,13 @@ jobs:
 
       - name: Run cross build main
         run: |
-          sudo chmod 755 $(which protoc) # cross is being weird
-          PROTOC=/usr/bin/protoc cross build --all --locked --target ${{ matrix.target }}
+          # For some reason, cross fails to find protoc
+          # This is pretty gross. 
+          cp `which protoc` ./protoc
+          sudo chown runner: ./protoc
+          export PROTOC=./protoc 
+
+          cross build --all --locked --target ${{ matrix.target }}
 
   unit-test:
     strategy:
