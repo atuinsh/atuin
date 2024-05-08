@@ -89,12 +89,6 @@ jobs:
 
       - name: Run cross build main
         run: |
-          # For some reason, cross fails to find protoc
-          # This is pretty gross. 
-          cp `which protoc` ./protoc
-          sudo chown runner: ./protoc
-          export PROTOC=./protoc 
-
           cross build --all --locked --target ${{ matrix.target }}
 
   unit-test:
