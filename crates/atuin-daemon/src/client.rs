@@ -47,7 +47,7 @@ impl HistoryClient {
     pub async fn end_history(
         &mut self,
         id: String,
-        duration: Option<u64>,
+        duration: u64,
         exit: i64,
     ) -> Result<(String, u64)> {
         let req = EndHistoryRequest { id, duration, exit };

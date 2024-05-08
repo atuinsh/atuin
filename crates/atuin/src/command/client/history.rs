@@ -352,7 +352,7 @@ impl Cmd {
         if settings.daemon.enabled {
             atuin_daemon::client::HistoryClient::new(settings.daemon.socket_path.clone())
                 .await?
-                .end_history(id.to_string(), duration, exit)
+                .end_history(id.to_string(), duration.unwrap_or(0), exit)
                 .await?;
 
             return Ok(());

@@ -96,11 +96,11 @@ impl HistorySvc for HistoryService {
         if let Some((_, mut history)) = running.remove(&id) {
             history.exit = req.exit;
             history.duration = match req.duration {
-                Some(value) => i64::try_from(value).expect("failed to get i64 duration"),
-                None => i64::try_from(
+                0 => i64::try_from(
                     (OffsetDateTime::now_utc() - history.timestamp).whole_nanoseconds(),
                 )
                 .expect("failed to convert calculated duration to i64"),
+                value => i64::try_from(value).expect("failed to get i64 duration"),
             };
 
             // Perhaps allow the incremental build to handle this entirely.
