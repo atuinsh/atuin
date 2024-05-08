@@ -2,7 +2,12 @@
 
 Thank you so much for considering contributing to Atuin! We really appreciate it <3
 
-Atuin doesn't require anything super special to develop - standard Rust tooling will do you just fine. We commit to supporting the latest stable version of Rust - nothing more, nothing less, no nightly.
+Development dependencies
+
+1. A rust toolchain ([rustup](https://rustup.rs) recommended)
+2. [Protobuf compiler](https://grpc.io/docs/protoc-installation/)
+
+We commit to supporting the latest stable version of Rust - nothing more, nothing less, no nightly.
 
 Before working on anything, we suggest taking a copy of your Atuin data directory (`~/.local/share/atuin` on most \*nix platforms). If anything goes wrong, you can always restore it!
 
