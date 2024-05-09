@@ -13,7 +13,9 @@ use atuin_client::database::{Database, Sqlite as HistoryDatabase};
 use atuin_client::history::{History, HistoryId};
 use dashmap::DashMap;
 use eyre::Result;
+#[cfg(not(windows))]
 use tokio::net::UnixListener;
+#[cfg(not(windows))]
 use tokio_stream::wrappers::UnixListenerStream;
 use tonic::{transport::Server, Request, Response, Status};
 
@@ -134,6 +136,7 @@ impl HistorySvc for HistoryService {
     }
 }
 
+#[cfg(target_family = "unix")]
 async fn shutdown_signal(socket: PathBuf) {
     let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
         .expect("failed to register sigterm handler");
@@ -145,6 +148,17 @@ async fn shutdown_signal(socket: PathBuf) {
         _  = int.recv() => {},
     }
 
+    eprintln!("Removing socket...");
+    std::fs::remove_file(socket).expect("failed to remove socket");
+    eprintln!("Shutting down...");
+}
+
+#[cfg(target_family = "windows")]
+async fn shutdown_signal(socket: PathBuf) {
+    signal::windows::ctrl_c()
+        .expect("failed to register signal handler")
+        .recv()
+        .await;
     eprintln!("Removing socket...");
     std::fs::remove_file(socket).expect("failed to remove socket");
     eprintln!("Shutting down...");
