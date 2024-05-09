@@ -1,7 +1,13 @@
 // @ts-ignore
 import { DateTime } from "luxon";
 import { ChevronRightIcon } from "@heroicons/react/20/solid";
+import { Highlight, themes } from "prism-react-renderer";
+
+import Prism from "prismjs";
+import "prismjs/components/prism-bash";
+
 import Drawer from "../Drawer";
+import HistoryInspect from "./HistoryInspect";
 
 function msToTime(ms: number) {
   let milliseconds = parseInt(ms.toFixed(1));
@@ -44,10 +50,29 @@ export default function HistoryRow({ h, size, start }: any) {
             )}
           </p>
         </div>
-        <div className="min-w-0 flex-col justify-center">
-          <pre className="whitespace-pre-wrap">
-            <code className="text-sm">{h.command}</code>
-          </pre>
+        <div className="min-w-0 flex-col justify-center truncate">
+          <Highlight
+            theme={themes.github}
+            code={h.command}
+            language="bash"
+            prism={Prism}
+          >
+            {({ className, style, tokens, getLineProps, getTokenProps }) => (
+              <pre style={style} className="!bg-inherit">
+                {tokens &&
+                  tokens.map((line, i) => {
+                    if (i != 0) return;
+                    return (
+                      <div key={i} {...getLineProps({ line })}>
+                        {line.map((token, key) => (
+                          <span key={key} {...getTokenProps({ token })} />
+                        ))}
+                      </div>
+                    );
+                  })}
+              </pre>
+            )}
+          </Highlight>
           <p className="mt-1 flex text-xs leading-5 text-gray-500">
             <span className="relative truncate ">{h.user}</span>
 
@@ -75,7 +100,7 @@ export default function HistoryRow({ h, size, start }: any) {
           )}
         </div>
         <Drawer
-          width="70%"
+          width="60%"
           trigger={
             <button type="button">
               <ChevronRightIcon
@@ -84,7 +109,9 @@ export default function HistoryRow({ h, size, start }: any) {
               />
             </button>
           }
-        ></Drawer>
+        >
+          <HistoryInspect history={h} />
+        </Drawer>
       </div>
     </li>
   );
