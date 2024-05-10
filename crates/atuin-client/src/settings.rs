@@ -729,7 +729,7 @@ impl Settings {
 
         create_dir_all(&data_dir).wrap_err_with(|| format!("could not create dir {data_dir:?}"))?;
 
-        let mut config_file = if let Ok(p) = std::env::var("ATUIN_CONFIG_DIR") {
+        let mut config_file = if let Some(p) = crate::utils::get_env_var("ATUIN_CONFIG_DIR") {
             PathBuf::from(p)
         } else {
             let mut config_file = PathBuf::new();
