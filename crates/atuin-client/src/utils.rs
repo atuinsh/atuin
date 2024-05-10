@@ -18,17 +18,16 @@ pub(crate) fn get_host_user() -> String {
 pub(crate) fn get_env_var<K: AsRef<OsStr>>(key: K) -> Option<String> {
     // Try to retrieve the environment variable using std::env::var.
     // If it fails (e.g., variable contains non-UTF-8 bytes), fall back to std::env::var_os and convert it lossily.
-    std::env::var(key.as_ref()).ok().or_else(|| {
-        std::env::var_os(key.as_ref())
-            .map(|v| v.to_string_lossy().into_owned())
-    })
+    std::env::var(key.as_ref())
+        .ok()
+        .or_else(|| std::env::var_os(key.as_ref()).map(|v| v.to_string_lossy().into_owned()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{env, ffi};
     use std::os::unix::ffi::OsStrExt;
+    use std::{env, ffi};
 
     #[test]
     fn test_get_env_var_existing() {
@@ -53,7 +52,10 @@ mod tests {
 
         // Set an environment variable with non-UTF-8 bytes for the purpose of this test.
         env::set_var("TEST_NON_UTF8", os_str);
-        assert_eq!(get_env_var("TEST_NON_UTF8").unwrap(), "\u{FFFD}\u{FFFD}\u{FFFD}");
+        assert_eq!(
+            get_env_var("TEST_NON_UTF8").unwrap(),
+            "\u{FFFD}\u{FFFD}\u{FFFD}"
+        );
         env::remove_var("TEST_NON_UTF8");
     }
 }
