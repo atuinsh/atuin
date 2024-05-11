@@ -210,3 +210,18 @@ records = true
 ## auto: length of the selected command.
 ## static: length of the longest command stored in the history.
 # strategy = "auto"
+
+[daemon]
+## Enables using the daemon to sync. Requires the daemon to be running in the background. Start it with `atuin daemon`
+# enabled = false
+
+## How often the daemon should sync in seconds
+# sync_frequency = 300
+
+## The path to the unix socket used by the daemon (on unix systems)
+## linux/mac: ~/.local/share/atuin/atuin.sock
+## windows: Not Supported
+# socket_path = "~/atuin.sock"
+
+## The port that should be used for TCP on non unix systems
+# tcp_port = 2468
