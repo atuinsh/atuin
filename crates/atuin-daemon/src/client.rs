@@ -19,7 +19,7 @@ pub struct HistoryClient {
 
 // Wrap the grpc client
 impl HistoryClient {
-    pub async fn new(path: String) -> Result<Self> {
+    pub async fn new(path: String, port: u64) -> Result<Self> {
         let channel = Endpoint::try_from("http://atuin_local_daemon:0")?
             .connect_with_connector(service_fn(move |_: Uri| {
                 let path = path.to_string();
@@ -30,7 +30,7 @@ impl HistoryClient {
                 }
                 #[cfg(windows)]
                 {
-                    let url = format!("127.0.0.1:{}", settings.daemon.tcp_port);
+                    let url = format!("127.0.0.1:{}", port);
                     TcpStream::connect(url)
                 }
             }))

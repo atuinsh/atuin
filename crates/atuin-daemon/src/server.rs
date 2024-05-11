@@ -156,6 +156,7 @@ async fn shutdown_signal() {
         .expect("failed to register signal handler")
         .recv()
         .await;
+    eprintln!("Shutting down...");
 }
 
 // break the above down when we end up with multiple services
@@ -206,9 +207,12 @@ pub async fn listen(
         use tokio::net::TcpListener;
         use tokio_stream::wrappers::TcpListenerStream;
 
-        let url = format!("127.0.0.1:{}", settings.daemon.tcp_port);
+        let port = settings.daemon.tcp_port;
+        let url = format!("127.0.0.1:{}", port);
         let tcp = TcpListener::bind(url).await?;
         let tcp_stream = TcpListenerStream::new(tcp);
+
+        tracing::info!("listening on tcp port {:?}", port);
 
         Server::builder()
             .add_service(HistoryServer::new(history))
