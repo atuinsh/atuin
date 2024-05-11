@@ -19,6 +19,8 @@ pub struct HistoryClient {
 
 // Wrap the grpc client
 impl HistoryClient {
+    // Allow unused because the port won't be used on unix and the path won't be on non-unix.
+    #[allow(unused_variables)]
     pub async fn new(path: String, port: u64) -> Result<Self> {
         let channel = Endpoint::try_from("http://atuin_local_daemon:0")?
             .connect_with_connector(service_fn(move |_: Uri| {
