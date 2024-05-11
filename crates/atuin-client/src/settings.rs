@@ -353,6 +353,9 @@ pub struct Daemon {
 
     /// The path to the unix socket used by the daemon
     pub socket_path: String,
+
+    // The port that should be used if using tcp (mainly on windows)
+    pub tcp_port: u64,
 }
 
 impl Default for Preview {
@@ -369,6 +372,7 @@ impl Default for Daemon {
             enabled: false,
             sync_frequency: 300,
             socket_path: "".to_string(),
+            tcp_port: 2468,
         }
     }
 }

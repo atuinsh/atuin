@@ -30,7 +30,8 @@ impl HistoryClient {
                 }
                 #[cfg(windows)]
                 {
-                    TcpStream::connect("127.0.0.1:2345")
+                    let url = format!("127.0.0.1:{}", settings.daemon.tcp_port);
+                    TcpStream::connect(url)
                 }
             }))
             .await
