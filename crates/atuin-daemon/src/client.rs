@@ -1,7 +1,11 @@
 use eyre::{eyre, Result};
-use tokio::net::UnixStream;
+#[cfg(windows)]
+use tokio::net::TcpStream;
 use tonic::transport::{Channel, Endpoint, Uri};
 use tower::service_fn;
+
+#[cfg(unix)]
+use tokio::net::UnixStream;
 
 use atuin_client::history::History;
 
@@ -20,7 +24,14 @@ impl HistoryClient {
             .connect_with_connector(service_fn(move |_: Uri| {
                 let path = path.to_string();
 
-                UnixStream::connect(path)
+                #[cfg(unix)]
+                {
+                    UnixStream::connect(path)
+                }
+                #[cfg(windows)]
+                {
+                    TcpStream::connect("127.0.0.1:2345")
+                }
             }))
             .await
             .map_err(|_| eyre!("failed to connect to local atuin daemon. Is it running?"))?;
