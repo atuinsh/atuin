@@ -710,6 +710,7 @@ impl Settings {
             .set_default("daemon.sync_frequency", 300)?
             .set_default("daemon.enabled", false)?
             .set_default("daemon.socket_path", socket_path.to_str())?
+            .set_default("daemon.tcp_port", 2468)?
             .set_default(
                 "prefers_reduced_motion",
                 std::env::var("NO_MOTION")
