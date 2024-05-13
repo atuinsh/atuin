@@ -20,7 +20,6 @@ function renderLoading() {
 }
 
 function TopTable({ stats }: any) {
-  console.log(stats);
   return (
     <div className="px-4 sm:px-6 lg:px-8">
       <div className="flex items-center">
@@ -111,7 +110,6 @@ export default function Stats() {
         console.log(e);
       });
   }, []);
-  console.log(top);
 
   if (stats.length == 0) {
     return renderLoading();
