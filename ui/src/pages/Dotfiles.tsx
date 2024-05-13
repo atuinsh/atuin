@@ -5,7 +5,7 @@ import Vars from "@/components/dotfiles/Vars";
 enum Section {
   Aliases,
   Vars,
-  Scripts,
+  Snippets,
 }
 
 function renderDotfiles(current: Section) {
@@ -14,7 +14,7 @@ function renderDotfiles(current: Section) {
       return <Aliases />;
     case Section.Vars:
       return <Vars />;
-    case Section.Scripts:
+    case Section.Snippets:
       return <div />;
   }
 }
@@ -60,9 +60,9 @@ function Tabs({ current, setCurrent }: TabsProps) {
       section: Section.Vars,
     },
     {
-      name: "Scripts",
-      isCurrent: () => current === Section.Scripts,
-      section: Section.Scripts,
+      name: "Snippets",
+      isCurrent: () => current === Section.Snippets,
+      section: Section.Snippets,
     },
   ];
 

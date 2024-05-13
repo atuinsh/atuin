@@ -23,19 +23,11 @@ function msToTime(ms: number) {
   else return days + " Days";
 }
 
-export default function HistoryRow({ h, size, start }: any) {
+export default function HistoryRow({ h }: any) {
   return (
     <li
       key={h.id}
       className="relative flex justify-between gap-x-6 px-4 py-5 hover:bg-gray-50 sm:px-6"
-      style={{
-        position: "absolute",
-        top: 0,
-        left: 0,
-        width: "100%",
-        height: `${size}px`,
-        transform: `translateY(${start}px)`,
-      }}
     >
       <div className="flex min-w-0 gap-x-4">
         <div className="flex flex-col justify-center">

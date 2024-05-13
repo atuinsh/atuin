@@ -14,7 +14,20 @@ export default function HistoryList(props: any) {
       {props.items.map((i: any) => {
         let h = props.history[i.index];
 
-        return <HistoryRow h={h} size={i.size} start={i.start} />;
+        return (
+          <div
+            style={{
+              position: "absolute",
+              top: 0,
+              left: 0,
+              width: "100%",
+              height: `${i.size}px`,
+              transform: `translateY(${i.start}px)`,
+            }}
+          >
+            <HistoryRow h={h} />
+          </div>
+        );
       })}
     </div>
   );
