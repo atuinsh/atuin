@@ -58,7 +58,7 @@ export default function HistoryRow({ h, size, start }: any) {
             prism={Prism}
           >
             {({ className, style, tokens, getLineProps, getTokenProps }) => (
-              <pre style={style} className="!bg-inherit">
+              <pre style={style} className="!bg-inherit text-sm">
                 {tokens &&
                   tokens.map((line, i) => {
                     if (i != 0) return;
