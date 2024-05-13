@@ -1212,11 +1212,12 @@ pub async fn history(
                                 // counting from the (trimmed) end
                                 0.max(length - offset.abs())
                             };
-                            // Bash's READLINE_POINT is required for positioning the cursor; we still allow
-                            // to go back to the shell even when not using bash (if user's configure the
-                            // respective options), but the actual positioning is only possible with bash
-                            // (and only implemented in the bash shell integration)
-                            if utils::is_bash() {
+                            // One of bash's READLINE_POINT or zsh's LBUFFER/RBUFFER is required
+                            // for positioning the cursor; we still allow to go back to the shell
+                            // even when not using these shells (if users configure the respective
+                            // options), but the actual positioning is only possible with bash/zsh
+                            // (and is only implemented in the bash and zsh shell integrations)
+                            if utils::is_bash() || utils::is_zsh() {
                                 command = format!("__atuin_edit_at__:{position}:{command}");
                             }
                         }

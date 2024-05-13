@@ -251,6 +251,7 @@ __atuin_history() {
     # We do nothing when the search is canceled.
     [[ $__atuin_output ]] || return 0
 
+    local __atuin_edit_at_rx='^__atuin_edit_at__:([0-9]+):(.*)$'
     if [[ $__atuin_output == __atuin_accept__:* ]]; then
         # Execute selected command
         __atuin_output=${__atuin_output#__atuin_accept__:}
@@ -264,7 +265,7 @@ __atuin_history() {
 
         READLINE_LINE=""
         READLINE_POINT=${#READLINE_LINE}
-    elif [[ $__atuin_output == $__atuin_edit_at_rx ]]; then
+    elif [[ $__atuin_output =~ $__atuin_edit_at_rx ]]; then
         # Edit selected command at specified cursor position
         READLINE_LINE="${BASH_REMATCH[2]}"
         READLINE_POINT=${BASH_REMATCH[1]}

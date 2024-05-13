@@ -68,6 +68,12 @@ _atuin_search() {
         then
             LBUFFER=${LBUFFER#__atuin_accept__:}
             zle accept-line
+        elif [[ $LBUFFER =~ ^__atuin_edit_at__:([0-9]+):(.*)$ ]]
+        then
+            local POS=${match[1]}
+            local LINE=${match[2]}
+            LBUFFER="${LINE[0,${POS}]}"
+            RBUFFER="${LINE[$((POS+1)),${#LINE}]}"
         fi
     fi
 }
