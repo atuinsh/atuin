@@ -175,7 +175,7 @@ cargo install atuin
 And then follow [the shell setup](#shell-plugin)
 
 #### Daemon Build Dependencies
-[Protocol](https://grpc.io/docs/protoc-installation/) is required to build the daemon, which is enabled by default.
+[Protoc](https://grpc.io/docs/protoc-installation/) is required to build the daemon, which is enabled by default. This is because we use protobufs for the message serialization
 
 ### Homebrew
 
