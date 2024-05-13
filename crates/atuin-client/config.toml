@@ -224,4 +224,4 @@ records = true
 # socket_path = "~/atuin.sock"
 
 ## The port that should be used for TCP on non unix systems
-# tcp_port = 2468
+# tcp_port = 8889
