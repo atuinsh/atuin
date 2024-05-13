@@ -36,7 +36,6 @@ export default function HistorySearch(props: HistorySearchProps) {
           name="search"
           onChange={(query) => {
             props.setQuery(query.target.value);
-            props.refresh();
           }}
         />
       </form>
