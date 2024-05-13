@@ -1212,7 +1212,7 @@ pub async fn history(
                                 // counting from the (trimmed) end
                                 0.max(length - offset.abs())
                             };
-                            // Bash's READLINE_POINT is required or positioning the cursor; we still allow
+                            // Bash's READLINE_POINT is required for positioning the cursor; we still allow
                             // to go back to the shell even when not using bash (if user's configure the
                             // respective options), but the actual positioning is only possible with bash
                             // (and only implemented in the bash shell integration)
