@@ -316,7 +316,7 @@ impl Cmd {
 
         if settings.daemon.enabled {
             #[cfg(unix)]
-            let resp = atuin_daemon::client::HistoryClient::new(settings.daemon.socket_path)
+            let resp = atuin_daemon::client::HistoryClient::new(settings.daemon.socket_path.clone())
                 .await?
                 .start_history(h)
                 .await?;
