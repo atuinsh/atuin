@@ -315,16 +315,15 @@ impl Cmd {
         }
 
         if settings.daemon.enabled {
-            #[cfg(unix)]
-            let resp = atuin_daemon::client::HistoryClient::new(settings.daemon.socket_path.clone())
-                .await?
-                .start_history(h)
-                .await?;
-            #[cfg(not(unix))]
-            let resp = atuin_daemon::client::HistoryClient::new(settings.daemon.tcp_port)
-                .await?
-                .start_history(h)
-                .await?;
+            let resp = atuin_daemon::client::HistoryClient::new(
+                #[cfg(not(unix))]
+                settings.daemon.tcp_port,
+                #[cfg(unix)]
+                settings.daemon.socket_path.clone(),
+            )
+            .await?
+            .start_history(h)
+            .await?;
 
             // print the ID
             // we use this as the key for calling end
@@ -355,17 +354,15 @@ impl Cmd {
         // We will need to keep the old code around for a while.
         // At the very least, while this is opt-in
         if settings.daemon.enabled {
-            #[cfg(unix)]
-            atuin_daemon::client::HistoryClient::new(settings.daemon.socket_path.clone())
-                .await?
-                .end_history(id.to_string(), duration.unwrap_or(0), exit)
-                .await?;
-
-            #[cfg(not(unix))]
-            atuin_daemon::client::HistoryClient::new(settings.daemon.tcp_port)
-                .await?
-                .end_history(id.to_string(), duration.unwrap_or(0), exit)
-                .await?;
+            let resp = atuin_daemon::client::HistoryClient::new(
+                #[cfg(not(unix))]
+                settings.daemon.tcp_port,
+                #[cfg(unix)]
+                settings.daemon.socket_path.clone(),
+            )
+            .await?
+            .end_history(id.to_string(), duration.unwrap_or(0), exit)
+            .await?;
 
             return Ok(());
         }
