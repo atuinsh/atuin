@@ -353,6 +353,9 @@ pub struct Daemon {
 
     /// The path to the unix socket used by the daemon
     pub socket_path: String,
+
+    /// The port that should be used for TCP on non unix systems
+    pub tcp_port: u64,
 }
 
 impl Default for Preview {
@@ -369,6 +372,7 @@ impl Default for Daemon {
             enabled: false,
             sync_frequency: 300,
             socket_path: "".to_string(),
+            tcp_port: 8889,
         }
     }
 }
@@ -706,6 +710,7 @@ impl Settings {
             .set_default("daemon.sync_frequency", 300)?
             .set_default("daemon.enabled", false)?
             .set_default("daemon.socket_path", socket_path.to_str())?
+            .set_default("daemon.tcp_port", 8889)?
             .set_default(
                 "prefers_reduced_motion",
                 std::env::var("NO_MOTION")
