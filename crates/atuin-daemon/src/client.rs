@@ -19,22 +19,28 @@ pub struct HistoryClient {
 
 // Wrap the grpc client
 impl HistoryClient {
-    // Allow unused because the port won't be used on unix and the path won't be on non-unix.
-    #[allow(unused_variables)]
-    pub async fn new(path: String, port: u64) -> Result<Self> {
+    #[cfg(unix)]
+    pub async fn new(path: String) -> Result<Self> {
         let channel = Endpoint::try_from("http://atuin_local_daemon:0")?
             .connect_with_connector(service_fn(move |_: Uri| {
                 let path = path.to_string();
 
-                #[cfg(unix)]
-                {
-                    UnixStream::connect(path)
-                }
-                #[cfg(windows)]
-                {
-                    let url = format!("127.0.0.1:{}", port);
-                    TcpStream::connect(url)
-                }
+                UnixStream::connect(path)
+            }))
+            .await
+            .map_err(|_| eyre!("failed to connect to local atuin daemon. Is it running?"))?;
+
+        let client = HistoryServiceClient::new(channel);
+
+        Ok(HistoryClient { client })
+    }
+
+    #[cfg(not(unix))]
+    pub async fn new(port: u64) -> Result<Self> {
+        let channel = Endpoint::try_from("http://atuin_local_daemon:0")?
+            .connect_with_connector(service_fn(move |_: Uri| {
+                let url = format!("127.0.0.1:{}", port);
+                TcpStream::connect(url)
             }))
             .await
             .map_err(|_| eyre!("failed to connect to local atuin daemon. Is it running?"))?;

@@ -158,6 +158,43 @@ async fn shutdown_signal() {
     eprintln!("Shutting down...");
 }
 
+#[cfg(unix)]
+async fn start_server(settings: Settings, history: HistoryService) -> Result<()> {
+    use tokio::net::UnixListener;
+    use tokio_stream::wrappers::UnixListenerStream;
+
+    let socket = settings.daemon.socket_path.clone();
+
+    let uds = UnixListener::bind(socket.clone())?;
+    let uds_stream = UnixListenerStream::new(uds);
+
+    tracing::info!("listening on unix socket {:?}", socket);
+    Server::builder()
+        .add_service(HistoryServer::new(history))
+        .serve_with_incoming_shutdown(uds_stream, shutdown_signal(socket.into()))
+        .await?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+async fn start_server(settings: Settings, history: HistoryService) -> Result<()> {
+    use tokio::net::TcpListener;
+    use tokio_stream::wrappers::TcpListenerStream;
+
+    let port = settings.daemon.tcp_port;
+    let url = format!("127.0.0.1:{}", port);
+    let tcp = TcpListener::bind(url).await?;
+    let tcp_stream = TcpListenerStream::new(tcp);
+
+    tracing::info!("listening on tcp port {:?}", port);
+
+    Server::builder()
+        .add_service(HistoryServer::new(history))
+        .serve_with_incoming_shutdown(tcp_stream, shutdown_signal())
+        .await?;
+    Ok(())
+}
+
 // break the above down when we end up with multiple services
 
 /// Listen on a unix socket
@@ -184,40 +221,5 @@ pub async fn listen(
         history_db,
     ));
 
-    #[cfg(unix)]
-    {
-        use tokio::net::UnixListener;
-        use tokio_stream::wrappers::UnixListenerStream;
-
-        let socket = settings.daemon.socket_path.clone();
-
-        let uds = UnixListener::bind(socket.clone())?;
-        let uds_stream = UnixListenerStream::new(uds);
-
-        tracing::info!("listening on unix socket {:?}", socket);
-        Server::builder()
-            .add_service(HistoryServer::new(history))
-            .serve_with_incoming_shutdown(uds_stream, shutdown_signal(socket.into()))
-            .await?;
-    }
-
-    #[cfg(not(unix))]
-    {
-        use tokio::net::TcpListener;
-        use tokio_stream::wrappers::TcpListenerStream;
-
-        let port = settings.daemon.tcp_port;
-        let url = format!("127.0.0.1:{}", port);
-        let tcp = TcpListener::bind(url).await?;
-        let tcp_stream = TcpListenerStream::new(tcp);
-
-        tracing::info!("listening on tcp port {:?}", port);
-
-        Server::builder()
-            .add_service(HistoryServer::new(history))
-            .serve_with_incoming_shutdown(tcp_stream, shutdown_signal())
-            .await?;
-    }
-
-    Ok(())
+    start_server(settings, history).await
 }
