@@ -264,17 +264,10 @@ __atuin_history() {
 
         READLINE_LINE=""
         READLINE_POINT=${#READLINE_LINE}
-    elif [[ $__atuin_output == __atuin_edit_at__:* ]]; then
+    elif [[ $__atuin_output == $__atuin_edit_at_rx ]]; then
         # Edit selected command at specified cursor position
-        __atuin_output=${__atuin_output#__atuin_edit_at__:}
-        local __atuin_edit_at_rx='^([0-9]+):(.*)$'
-        if [[ $__atuin_output =~ $__atuin_edit_at_rx ]]; then
-            READLINE_LINE="${BASH_REMATCH[2]}"
-            READLINE_POINT=${BASH_REMATCH[1]}
-        else
-            READLINE_LINE=$__atuin_output
-            READLINE_POINT=${#READLINE_LINE}
-        fi
+        READLINE_LINE="${BASH_REMATCH[2]}"
+        READLINE_POINT=${BASH_REMATCH[1]}
     else
         READLINE_LINE=$__atuin_output
         READLINE_POINT=${#READLINE_LINE}
