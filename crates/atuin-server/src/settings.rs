@@ -104,6 +104,7 @@ pub fn example_config() -> &'static str {
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct Tls {
+    #[serde(alias = "enabled")]
     pub enable: bool,
 
     pub cert_path: PathBuf,

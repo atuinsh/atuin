@@ -346,6 +346,7 @@ pub struct Preview {
 pub struct Daemon {
     /// Use the daemon to sync
     /// If enabled, requires a running daemon with `atuin daemon`
+    #[serde(alias = "enable")]
     pub enabled: bool,
 
     /// The daemon will handle sync on an interval. How often to sync, in seconds.
