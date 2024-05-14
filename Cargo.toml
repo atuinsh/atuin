@@ -17,7 +17,7 @@ readme = "README.md"
 
 [workspace.dependencies]
 async-trait = "0.1.58"
-base64 = "0.21"
+base64 = "0.22"
 log = "0.4"
 time = { version = "=0.3.34", features = [
     "serde-human-readable",
