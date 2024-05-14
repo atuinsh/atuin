@@ -5,7 +5,6 @@ import HistoryList from "@/components/HistoryList.tsx";
 import HistorySearch from "@/components/HistorySearch.tsx";
 import Stats from "@/components/history/Stats.tsx";
 import Drawer from "@/components/Drawer.tsx";
-import InfiniteHistory from "@/components/InfiniteHistory.tsx";
 
 import { useStore } from "@/state/store";
 

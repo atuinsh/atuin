@@ -26,6 +26,8 @@
     "highlight.js": "^11.9.0",
     "lucide-react": "^0.367.0",
     "luxon": "^3.4.4",
+    "prism-react-renderer": "^2.3.1",
+    "prismjs": "^1.29.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-spinners": "^0.13.8",

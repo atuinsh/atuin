@@ -26,7 +26,7 @@ export default function HistorySearch(props: HistorySearchProps) {
         />
         <input
           id="search-field"
-          className="block h-full w-full border-0 py-0 pl-8 pr-0 text-gray-900 placeholder:text-gray-400 focus:ring-0 sm:text-sm"
+          className="block h-full w-full border-0 py-0 pl-8 pr-0 text-gray-900 placeholder:text-gray-400 focus:ring-0 sm:text-sm outline-none"
           placeholder="Search..."
           autoComplete="off"
           autoCapitalize="off"
@@ -36,7 +36,6 @@ export default function HistorySearch(props: HistorySearchProps) {
           name="search"
           onChange={(query) => {
             props.setQuery(query.target.value);
-            props.refresh();
           }}
         />
       </form>
