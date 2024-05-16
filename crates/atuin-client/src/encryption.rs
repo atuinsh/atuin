@@ -140,7 +140,7 @@ pub fn decrypt(mut encrypted_history: EncryptedHistory, key: &Key) -> Result<His
             &[],
             &mut encrypted_history.ciphertext,
         )
-        .map_err(|_| eyre!("could not encrypt"))?;
+        .map_err(|_| eyre!("could not decrypt history"))?;
     let plaintext = encrypted_history.ciphertext;
 
     let history = decode(&plaintext)?;
