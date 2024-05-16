@@ -100,9 +100,6 @@ impl Cmd {
                         println!("Detected Nushell");
                         import::<Nu, DB>(db).await
                     }
-                } else if shell.ends_with("/replxx") {
-                    println!("Detected Replxx");
-                    import::<Replxx, DB>(db).await
                 } else {
                     println!("cannot import {shell} history");
                     Ok(())

@@ -45,7 +45,7 @@ impl Importer for Replxx {
                 Some(t) => timestamp = t,
                 None => {
                     // replxx uses ETB character (0x17) as line breaker
-                    let cmd = s.replace("\u{0017}", "\n");
+                    let cmd = s.replace('\u{0017}', "\n");
                     let imported = History::import().timestamp(timestamp).command(cmd);
 
                     h.push(imported.build().into()).await?;
