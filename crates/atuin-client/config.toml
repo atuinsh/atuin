@@ -221,7 +221,7 @@ records = true
 ## The path to the unix socket used by the daemon (on unix systems)
 ## linux/mac: ~/.local/share/atuin/atuin.sock
 ## windows: Not Supported
-# socket_path = "~/atuin.sock"
+# socket_path = "~/.local/share/atuin/atuin.sock"
 
 ## The port that should be used for TCP on non unix systems
 # tcp_port = 8889
