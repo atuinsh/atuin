@@ -68,3 +68,52 @@ fn try_parse_line_as_timestamp(line: &str) -> Option<OffsetDateTime> {
     // For simplicity let's just assume UTC.
     Some(primitive_date_time.assume_utc())
 }
+
+#[cfg(test)]
+mod test {
+
+    use crate::import::{tests::TestLoader, Importer};
+
+    use super::Replxx;
+
+    #[tokio::test]
+    async fn parse_complex() {
+        let bytes = r#"### 2024-02-10 22:16:28.302
+select * from remote('127.0.0.1:20222', view(select 1))
+### 2024-02-10 22:16:36.919
+select * from numbers(10)
+### 2024-02-10 22:16:41.710
+select * from system.numbers
+### 2024-02-10 22:19:28.655
+select 1
+### 2024-02-22 11:15:33.046
+CREATE TABLE test( stamp DateTime('UTC'))ENGINE = MergeTreePARTITION BY toDate(stamp)order by tuple() as select toDateTime('2020-01-01')+number*60 from numbers(80000);
+"#
+        .as_bytes()
+        .to_owned();
+
+        let replxx = Replxx { bytes };
+
+        let mut loader = TestLoader::default();
+        replxx.load(&mut loader).await.unwrap();
+        let mut history = loader.buf.into_iter();
+
+        // simple wrapper for replxx history entry
+        macro_rules! history {
+            ($timestamp:expr, $command:expr) => {
+                let h = history.next().expect("missing entry in history");
+                assert_eq!(h.command.as_str(), $command);
+                assert_eq!(h.timestamp.unix_timestamp(), $timestamp);
+            };
+        }
+
+        history!(
+            1707603388,
+            "select * from remote('127.0.0.1:20222', view(select 1))"
+        );
+        history!(1707603396, "select * from numbers(10)");
+        history!(1707603401, "select * from system.numbers");
+        history!(1707603568, "select 1");
+        history!(1708600533, "CREATE TABLE test\n( stamp DateTime('UTC'))\nENGINE = MergeTree\nPARTITION BY toDate(stamp)\norder by tuple() as select toDateTime('2020-01-01')+number*60 from numbers(80000);");
+    }
+}
