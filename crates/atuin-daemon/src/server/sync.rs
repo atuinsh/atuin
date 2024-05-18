@@ -75,6 +75,9 @@ pub async fn worker(
             if ticker.period().as_secs() != settings.daemon.sync_frequency {
                 ticker = time::interval(time::Duration::from_secs(settings.daemon.sync_frequency));
             }
+
+            // store sync time
+            tokio::task::spawn_blocking(Settings::save_sync_time).await??;
         }
     }
 }
