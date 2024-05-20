@@ -442,6 +442,7 @@ dependencies = [
  "sqlx",
  "time",
  "tracing",
+ "url",
  "uuid",
 ]
 

@@ -21,3 +21,4 @@ sqlx = { workspace = true }
 async-trait = { workspace = true }
 uuid = { workspace = true }
 futures-util = "0.3"
+url = "2.5.0"

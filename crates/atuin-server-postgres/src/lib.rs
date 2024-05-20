@@ -1,3 +1,4 @@
+use std::fmt::Debug;
 use std::ops::Range;
 
 use async_trait::async_trait;
@@ -23,9 +24,24 @@ pub struct Postgres {
     pool: sqlx::Pool<sqlx::postgres::Postgres>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct PostgresSettings {
     pub db_uri: String,
+}
+
+// Do our best to redact passwords so they're not logged in the event of an error.
+impl Debug for PostgresSettings {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let redacted_uri = url::Url::parse(&self.db_uri)
+            .map(|mut url| {
+                let _ = url.set_password(Some("****"));
+                url.to_string()
+            })
+            .unwrap_or(self.db_uri.clone());
+        f.debug_struct("PostgresSettings")
+            .field("db_uri", &redacted_uri)
+            .finish()
+    }
 }
 
 fn fix_error(error: sqlx::Error) -> DbError {
