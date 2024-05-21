@@ -23,7 +23,7 @@ atuin-common = { path = "../atuin-common", version = "18.2.0" }
 
 log = { workspace = true }
 base64 = { workspace = true }
-time = { workspace = true, features = ["macros", "formatting"] }
+time = { workspace = true, features = ["macros", "formatting", "parsing"] }
 clap = { workspace = true }
 eyre = { workspace = true }
 directories = { workspace = true }

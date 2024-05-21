@@ -12,6 +12,7 @@ pub mod bash;
 pub mod fish;
 pub mod nu;
 pub mod nu_histdb;
+pub mod replxx;
 pub mod resh;
 pub mod xonsh;
 pub mod xonsh_sqlite;
