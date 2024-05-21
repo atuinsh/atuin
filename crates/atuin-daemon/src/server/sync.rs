@@ -38,6 +38,11 @@ pub async fn worker(
         ticker.tick().await;
         tracing::info!("sync worker tick");
 
+        if !settings.logged_in() {
+            tracing::debug!("not logged in, skipping sync tick");
+            continue;
+        }
+
         let res = sync::sync(&settings, &store).await;
 
         if let Err(e) = res {

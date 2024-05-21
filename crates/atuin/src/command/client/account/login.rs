@@ -35,9 +35,7 @@ fn get_input() -> Result<String> {
 
 impl Cmd {
     pub async fn run(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
-        let session_path = settings.session_path.as_str();
-
-        if PathBuf::from(session_path).exists() {
+        if settings.logged_in() {
             println!(
                 "You are already logged in! Please run 'atuin logout' if you wish to login again"
             );

@@ -55,7 +55,10 @@ pub async fn diff(
 ) -> Result<(Vec<Diff>, RecordStatus), SyncError> {
     let client = Client::new(
         &settings.sync_address,
-        &settings.session_token,
+        settings
+            .session_token()
+            .map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?
+            .as_str(),
         settings.network_connect_timeout,
         settings.network_timeout,
     )
@@ -270,7 +273,10 @@ pub async fn sync_remote(
 ) -> Result<(i64, Vec<RecordId>), SyncError> {
     let client = Client::new(
         &settings.sync_address,
-        &settings.session_token,
+        settings
+            .session_token()
+            .map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?
+            .as_str(),
         settings.network_connect_timeout,
         settings.network_timeout,
     )
