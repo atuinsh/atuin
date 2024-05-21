@@ -39,7 +39,7 @@ pub async fn worker(
         tracing::info!("sync worker tick");
 
         if !settings.logged_in() {
-            tracing::trace!("not logged in, skipping sync tick");
+            tracing::debug!("not logged in, skipping sync tick");
             continue;
         }
 

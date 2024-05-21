@@ -16,7 +16,7 @@ pub async fn run(settings: &Settings, db: &impl Database) -> Result<()> {
 
     let client = api_client::Client::new(
         &settings.sync_address,
-        &settings.session_token,
+        settings.session_token()?.as_str(),
         settings.network_connect_timeout,
         settings.network_timeout,
     )?;

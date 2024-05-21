@@ -1,10 +1,5 @@
 use std::{
-    collections::HashMap,
-    convert::TryFrom,
-    fmt,
-    io::prelude::*,
-    path::{Path, PathBuf},
-    str::FromStr,
+    collections::HashMap, convert::TryFrom, fmt, io::prelude::*, path::PathBuf, str::FromStr,
 };
 
 use atuin_common::record::HostId;
@@ -458,11 +453,6 @@ pub struct Settings {
 
     #[serde(default)]
     pub daemon: Daemon,
-
-    // This is automatically loaded when settings is created. Do not set in
-    // config! Keep secrets and settings apart.
-    #[serde(skip)]
-    pub session_token: String,
 }
 
 impl Settings {
@@ -572,6 +562,15 @@ impl Settings {
         let session_path = self.session_path.as_str();
 
         PathBuf::from(session_path).exists()
+    }
+
+    pub fn session_token(&self) -> Result<String> {
+        if !self.logged_in() {
+            return Err(eyre!("Tried to load session; not logged in"));
+        }
+
+        let session_path = self.session_path.as_str();
+        Ok(fs_err::read_to_string(session_path)?)
     }
 
     #[cfg(feature = "check-update")]
@@ -694,7 +693,6 @@ impl Settings {
             )?
             .set_default("scroll_context_lines", 1)?
             .set_default("shell_up_key_binding", false)?
-            .set_default("session_token", "")?
             .set_default("workspaces", false)?
             .set_default("ctrl_n_shortcuts", false)?
             .set_default("secrets_filter", true)?
@@ -783,14 +781,6 @@ impl Settings {
         let session_path = settings.session_path;
         let session_path = shellexpand::full(&session_path)?;
         settings.session_path = session_path.to_string();
-
-        // Finally, set the auth token
-        if Path::new(session_path.to_string().as_str()).exists() {
-            let token = fs_err::read_to_string(session_path.to_string())?;
-            settings.session_token = token.trim().to_string();
-        } else {
-            settings.session_token = String::from("not logged in");
-        }
 
         Ok(settings)
     }
