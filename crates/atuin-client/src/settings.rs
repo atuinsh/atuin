@@ -568,6 +568,12 @@ impl Settings {
         }
     }
 
+    pub fn logged_in(&self) -> bool {
+        let session_path = self.session_path.as_str();
+
+        PathBuf::from(session_path).exists()
+    }
+
     #[cfg(feature = "check-update")]
     fn needs_update_check(&self) -> Result<bool> {
         let last_check = Settings::last_version_check()?;
