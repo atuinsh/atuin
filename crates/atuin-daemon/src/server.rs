@@ -133,7 +133,7 @@ impl HistorySvc for HistoryService {
 }
 
 #[cfg(unix)]
-async fn shutdown_signal(socket: PathBuf) {
+async fn shutdown_signal(socket: Option<PathBuf>) {
     let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
         .expect("failed to register sigterm handler");
     let mut int = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
@@ -145,7 +145,9 @@ async fn shutdown_signal(socket: PathBuf) {
     }
 
     eprintln!("Removing socket...");
-    std::fs::remove_file(socket).expect("failed to remove socket");
+    if let Some(socket) = socket {
+        std::fs::remove_file(socket).expect("failed to remove socket");
+    }
     eprintln!("Shutting down...");
 }
 
@@ -163,15 +165,54 @@ async fn start_server(settings: Settings, history: HistoryService) -> Result<()>
     use tokio::net::UnixListener;
     use tokio_stream::wrappers::UnixListenerStream;
 
-    let socket = settings.daemon.socket_path.clone();
+    let socket_path = settings.daemon.socket_path;
 
-    let uds = UnixListener::bind(socket.clone())?;
+    let (uds, cleanup) = if cfg!(target_os = "linux") && settings.daemon.systemd_socket {
+        #[cfg(target_os = "linux")]
+        {
+            use eyre::OptionExt;
+            tracing::info!("getting systemd socket");
+            let listener = listenfd::ListenFd::from_env()
+                .take_unix_listener(0)?
+                .ok_or_eyre("missing systemd socket")?;
+            listener.set_nonblocking(true)?;
+            let actual_path = listener
+                .local_addr()
+                .context("getting systemd socket's path")
+                .and_then(|addr| {
+                    addr.as_pathname()
+                        .ok_or_eyre("systemd socket missing path")
+                        .map(|path| path.to_owned())
+                });
+            match actual_path {
+                Ok(actual_path) => {
+                    tracing::info!("listening on systemd socket: {actual_path:?}");
+                    if actual_path != std::path::Path::new(&socket_path) {
+                        tracing::warn!(
+                            "systemd socket is not at configured client path: {socket_path:?}"
+                        );
+                    }
+                }
+                Err(err) => {
+                    tracing::warn!("could not detect systemd socket path, ensure that it's at the configured path: {socket_path:?}, error: {err:?}");
+                }
+            }
+            (UnixListener::from_std(listener)?, false)
+        }
+        #[cfg(not(target_os = "linux"))]
+        unreachable!()
+    } else {
+        tracing::info!("listening on unix socket {socket_path:?}");
+        (UnixListener::bind(socket_path.clone())?, true)
+    };
+
     let uds_stream = UnixListenerStream::new(uds);
-
-    tracing::info!("listening on unix socket {:?}", socket);
     Server::builder()
         .add_service(HistoryServer::new(history))
-        .serve_with_incoming_shutdown(uds_stream, shutdown_signal(socket.into()))
+        .serve_with_incoming_shutdown(
+            uds_stream,
+            shutdown_signal(cleanup.then_some(socket_path.into())),
+        )
         .await?;
     Ok(())
 }

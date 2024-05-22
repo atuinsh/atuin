@@ -223,5 +223,10 @@ records = true
 ## windows: Not Supported
 # socket_path = "~/.local/share/atuin/atuin.sock"
 
+## Use systemd socket activation rather than opening the given path (the path must still be correct for the client)
+## linux: false
+## mac/windows: Not Supported
+# systemd_socket = false
+
 ## The port that should be used for TCP on non unix systems
 # tcp_port = 8889

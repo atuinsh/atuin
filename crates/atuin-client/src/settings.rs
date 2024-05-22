@@ -350,6 +350,9 @@ pub struct Daemon {
     /// The path to the unix socket used by the daemon
     pub socket_path: String,
 
+    /// Use a socket passed via systemd's socket activation protocol, instead of the path
+    pub systemd_socket: bool,
+
     /// The port that should be used for TCP on non unix systems
     pub tcp_port: u64,
 }
@@ -368,6 +371,7 @@ impl Default for Daemon {
             enabled: false,
             sync_frequency: 300,
             socket_path: "".to_string(),
+            systemd_socket: false,
             tcp_port: 8889,
         }
     }
@@ -715,6 +719,7 @@ impl Settings {
             .set_default("daemon.sync_frequency", 300)?
             .set_default("daemon.enabled", false)?
             .set_default("daemon.socket_path", socket_path.to_str())?
+            .set_default("daemon.systemd_socket", false)?
             .set_default("daemon.tcp_port", 8889)?
             .set_default(
                 "prefers_reduced_motion",
