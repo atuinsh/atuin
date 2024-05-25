@@ -111,6 +111,15 @@ impl Cmd {
 
         tracing::trace!(command = ?self, "client command");
 
+        // Skip initializing any databases for history
+        // This is a pretty hot path, as it runs before and after every single command the user
+        // runs
+        match self {
+            Self::History(history) => return history.run(&settings).await,
+            Self::Init(init) => return init.run(&settings).await,
+            _ => {}
+        }
+
         let db_path = PathBuf::from(settings.db_path.as_str());
         let record_store_path = PathBuf::from(settings.record_store_path.as_str());
 
@@ -118,7 +127,6 @@ impl Cmd {
         let sqlite_store = SqliteStore::new(record_store_path, settings.local_timeout).await?;
 
         match self {
-            Self::History(history) => history.run(&settings, &db, sqlite_store).await,
             Self::Import(import) => import.run(&db).await,
             Self::Stats(stats) => stats.run(&db, &settings).await,
             Self::Search(search) => search.run(db, &mut settings, sqlite_store).await,
@@ -135,8 +143,6 @@ impl Cmd {
 
             Self::Dotfiles(dotfiles) => dotfiles.run(&settings, sqlite_store).await,
 
-            Self::Init(init) => init.run(&settings).await,
-
             Self::Info => {
                 info::run(&settings);
                 Ok(())
@@ -151,6 +157,8 @@ impl Cmd {
 
             #[cfg(feature = "daemon")]
             Self::Daemon => daemon::run(settings, sqlite_store, db).await,
+
+            _ => unimplemented!(),
         }
     }
 }
