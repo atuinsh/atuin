@@ -1,5 +1,9 @@
 import { Highlight, themes } from "prism-react-renderer";
+
+// @ts-ignore
 import Prism from "prismjs";
+
+// @ts-ignore
 import "prismjs/components/prism-bash";
 
 export default function CodeBlock({ code, language }: any) {
@@ -11,7 +15,7 @@ export default function CodeBlock({ code, language }: any) {
         prism={Prism}
         language={language}
       >
-        {({ className, style, tokens, getLineProps, getTokenProps }) => (
+        {({ style, tokens, getLineProps, getTokenProps }) => (
           <pre style={style} className="p-4 break-words whitespace-pre-wrap">
             {tokens.map((line, i) => (
               <div key={i} {...getLineProps({ line })} data-vaul-no-drag>

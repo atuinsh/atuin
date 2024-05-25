@@ -32,7 +32,7 @@ function deleteVar(name: string, refreshVars: () => void) {
 function AddVar({ onAdd: onAdd }: { onAdd?: () => void }) {
   let [name, setName] = useState("");
   let [value, setValue] = useState("");
-  let [exp, setExport] = useState(false);
+  let [exp, setExport] = useState<boolean>(false);
 
   // simple form to add vars
   return (
@@ -85,7 +85,7 @@ function AddVar({ onAdd: onAdd }: { onAdd?: () => void }) {
               autoCorrect="off"
               spellCheck="false"
               type="checkbox"
-              value={exp}
+              value={exp.toString()}
               onChange={(e) => setExport(e.target.checked)}
             />
             Export the var and make it visible to subprocesses

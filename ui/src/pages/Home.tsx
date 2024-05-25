@@ -15,7 +15,7 @@ function Stats({ stats }: any) {
             <dt className="truncate text-sm font-medium text-gray-500">
               {item.name}
             </dt>
-            <dd className="mt-1 text-3xl font-semibold tracking-tight text-gray-900">
+            <dd className="mt-1 text-xl font-semibold tracking-tight text-gray-900">
               {item.stat}
             </dd>
           </div>
@@ -44,10 +44,13 @@ function Header({ name }: any) {
 
 export default function Home() {
   const homeInfo = useStore((state) => state.homeInfo);
+  const user = useStore((state) => state.user);
   const refreshHomeInfo = useStore((state) => state.refreshHomeInfo);
+  const refreshUser = useStore((state) => state.refreshUser);
 
   useEffect(() => {
     refreshHomeInfo();
+    refreshUser();
   }, []);
 
   if (!homeInfo) {

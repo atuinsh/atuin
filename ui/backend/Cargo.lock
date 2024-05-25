@@ -217,7 +217,7 @@ version = "18.2.0"
 dependencies = [
  "async-trait",
  "atuin-common",
- "base64 0.21.7",
+ "base64 0.22.1",
  "clap",
  "config",
  "crypto_secretbox",
@@ -296,7 +296,7 @@ dependencies = [
  "async-trait",
  "atuin-client",
  "atuin-common",
- "base64 0.21.7",
+ "base64 0.22.1",
  "crossterm",
  "directories",
  "eyre",
@@ -4014,18 +4014,18 @@ dependencies = [
 
 [[package]]
 name = "serde"
-version = "1.0.200"
+version = "1.0.202"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ddc6f9cc94d67c0e21aaf7eda3a010fd3af78ebf6e096aa6e2e13c79749cce4f"
+checksum = "226b61a0d411b2ba5ff6d7f73a476ac4f8bb900373459cd00fab8512828ba395"
 dependencies = [
  "serde_derive",
 ]
 
 [[package]]
 name = "serde_derive"
-version = "1.0.200"
+version = "1.0.202"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "856f046b9400cee3c8c94ed572ecdb752444c24528c035cd35882aad6f492bcb"
+checksum = "6048858004bcff69094cd972ed40a32500f153bd3be9f716b2eed2e8217c4838"
 dependencies = [
  "proc-macro2",
  "quote",

@@ -1,4 +1,3 @@
-import { useRef } from "react";
 import HistoryRow from "./history/HistoryRow";
 
 export default function HistoryList(props: any) {

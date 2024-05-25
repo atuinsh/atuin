@@ -8,9 +8,6 @@ import Drawer from "@/components/Drawer.tsx";
 
 import { useStore } from "@/state/store";
 
-import { inspectHistory, listHistory } from "@/state/models";
-import { invoke } from "@tauri-apps/api/core";
-
 function Header() {
   return (
     <div className="md:flex md:items-center md:justify-between">
@@ -66,7 +63,7 @@ export default function Search() {
     refreshHistory();
   }, []);
 
-  const parentRef = useRef();
+  const parentRef = useRef<HTMLElement | null>(null);
 
   const rowVirtualizer = useVirtualizer({
     count: history.length,

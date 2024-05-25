@@ -48,7 +48,7 @@ function TopTable({ stats }: any) {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200 bg-white">
-                {stats.map((stat) => (
+                {stats.map((stat: any) => (
                   <tr>
                     <td className="whitespace-nowrap py-4 pl-4 pr-3 text-sm font-medium text-gray-900 sm:pl-6 lg:pl-8">
                       {stat[0][0]}

@@ -69,6 +69,46 @@ export interface InspectHistory {
   other: ShellHistory[];
 }
 
+// Not yet complete. Not all types are defined here.
+// Gonna hold off until the settings refactoring.
+export interface Settings {
+  auto_sync: boolean;
+  update_check: boolean;
+  sync_address: string;
+  sync_frequency: string;
+  db_path: string;
+  record_store_path: string;
+  key_path: string;
+  session_path: string;
+  shell_up_key_binding: boolean;
+  inline_height: number;
+  invert: boolean;
+  show_preview: boolean;
+  max_preview_height: number;
+  show_help: boolean;
+  show_tabs: boolean;
+  word_chars: string;
+  scroll_context_lines: number;
+  history_format: string;
+  prefers_reduced_motion: boolean;
+  store_failed: boolean;
+  secrets_filter: boolean;
+  workspaces: boolean;
+  ctrl_n_shortcuts: boolean;
+  network_connect_timeout: number;
+  network_timeout: number;
+  local_timeout: number;
+  enter_accept: boolean;
+  smart_sort: boolean;
+  sync: Sync;
+}
+
+interface Sync {
+  records: boolean;
+}
+
+// Define other interfaces (Dialect, Timezone, Style, SearchMode, FilterMode, ExitMode, KeymapMode, CursorStyle, WordJumpMode, RegexSet, Stats) accordingly.
+
 export async function inspectCommandHistory(
   h: ShellHistory,
 ): Promise<InspectHistory> {

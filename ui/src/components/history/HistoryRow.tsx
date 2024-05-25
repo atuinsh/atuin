@@ -3,7 +3,10 @@ import { DateTime } from "luxon";
 import { ChevronRightIcon } from "@heroicons/react/20/solid";
 import { Highlight, themes } from "prism-react-renderer";
 
+// @ts-ignore
 import Prism from "prismjs";
+
+// @ts-ignore
 import "prismjs/components/prism-bash";
 
 import Drawer from "../Drawer";
@@ -49,7 +52,7 @@ export default function HistoryRow({ h }: any) {
             language="bash"
             prism={Prism}
           >
-            {({ className, style, tokens, getLineProps, getTokenProps }) => (
+            {({ style, tokens, getLineProps, getTokenProps }) => (
               <pre style={style} className="!bg-inherit text-sm">
                 {tokens &&
                   tokens.map((line, i) => {
