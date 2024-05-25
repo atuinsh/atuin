@@ -32,5 +32,8 @@ prost-types = "0.12"
 tokio-stream = {version="0.1.14", features=["net"]}
 rand.workspace = true
 
+[target.'cfg(target_os = "linux")'.dependencies]
+listenfd = "1.0.1"
+
 [build-dependencies]
 tonic-build = "0.11"
