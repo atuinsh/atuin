@@ -1,4 +1,4 @@
-create virtual table history_fts using fts5(command, cwd, hostname, exit, content='history', tokenize='trigram');
+create virtual table history_fts using fts5(command, cwd, hostname, exit, content='history', tokenize="unicode61 tokenchars '@-_$'");
 
 insert into history_fts(rowid, command, cwd, exit, hostname) select rowid, command, cwd, exit, hostname from history;
 
@@ -10,5 +10,5 @@ CREATE TRIGGER history_fts_begin AFTER INSERT ON history BEGIN
 END;
 
 CREATE TRIGGER history_fts_delete AFTER DELETE ON history BEGIN
-  INSERT INTO history_fts(history_fts, rowid, command, cwd, exit, hostname) VALUES('delete', old.command, old.cwd, old.exit, old.hostname);
+  INSERT INTO history_fts(history_fts, rowid, command, cwd, exit, hostname) VALUES('delete', old.rowid, old.command, old.cwd, old.exit, old.hostname);
 END;

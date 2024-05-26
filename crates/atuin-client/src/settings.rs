@@ -44,6 +44,9 @@ pub enum SearchMode {
 
     #[serde(rename = "skim")]
     Skim,
+
+    #[serde(rename = "fts5")]
+    Fts5,
 }
 
 impl SearchMode {
@@ -53,6 +56,7 @@ impl SearchMode {
             SearchMode::FullText => "FULLTXT",
             SearchMode::Fuzzy => "FUZZY",
             SearchMode::Skim => "SKIM",
+            SearchMode::Fts5 => "FTS5",
         }
     }
     pub fn next(&self, settings: &Settings) -> Self {
@@ -62,7 +66,7 @@ impl SearchMode {
             SearchMode::FullText if settings.search_mode == SearchMode::Skim => SearchMode::Skim,
             // otherwise fuzzy.
             SearchMode::FullText => SearchMode::Fuzzy,
-            SearchMode::Fuzzy | SearchMode::Skim => SearchMode::Prefix,
+            SearchMode::Fuzzy | SearchMode::Skim | SearchMode::Fts5 => SearchMode::Prefix,
         }
     }
 }
