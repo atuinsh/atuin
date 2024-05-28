@@ -89,7 +89,6 @@ async fn home_info() -> Result<HomeInfo, String> {
         .map_err(|e| e.to_string())?;
 
 
-    let session_path = settings.session_path.as_str();
     let last_sync = Settings::last_sync()
         .map_err(|e| e.to_string())?
         .format(&Rfc3339)
@@ -101,7 +100,7 @@ async fn home_info() -> Result<HomeInfo, String> {
         .await
         .map_err(|e| e.to_string())?;
 
-    let info = if settings.logged_in() {
+    let info = if !settings.logged_in() {
         HomeInfo {
             username: None,
             last_sync: None,
