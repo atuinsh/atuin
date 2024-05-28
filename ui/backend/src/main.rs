@@ -146,6 +146,7 @@ fn main() {
             dotfiles::vars::set_var,
         ])
         .plugin(tauri_plugin_sql::Builder::default().build())
+        .plugin(tauri_plugin_http::init())
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

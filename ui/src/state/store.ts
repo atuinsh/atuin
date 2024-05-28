@@ -1,6 +1,8 @@
 import { create } from "zustand";
 import { parseISO } from "date-fns";
 
+import { fetch } from "@tauri-apps/plugin-http";
+
 import {
   User,
   DefaultUser,
@@ -89,10 +91,11 @@ export const useStore = create<AtuinState>()((set, get) => ({
     let session = await sessionToken();
     let url = config.sync_address + "/api/v0/me";
 
-    const headers: HeadersInit = {
-      Authorization: `Token ${session}`,
-    };
-    let res = await fetch(url, headers);
+    let res = await fetch(url, {
+      headers: {
+        Authorization: `Token ${session}`,
+      },
+    });
     let me = await res.json();
 
     set({ user: me });

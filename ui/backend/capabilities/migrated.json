@@ -13,7 +13,11 @@
     "tray:default",
     "sql:allow-load",
     "sql:allow-execute",
-    "sql:allow-select"
+    "sql:allow-select",
+    {
+      "identifier": "http:default",
+      "allow": ["https://api.atuin.sh/*"]
+    }
   ],
   "platforms": ["linux", "macOS", "windows", "android", "iOS"]
 }

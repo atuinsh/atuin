@@ -60,7 +60,7 @@ export default function Home() {
   return (
     <div className="pl-60">
       <div className="p-10">
-        <Header name={"Ellie"} />
+        <Header name={user.username} />
 
         <div className="pt-10">
           <h2 className="text-xl font-bold">Sync</h2>
