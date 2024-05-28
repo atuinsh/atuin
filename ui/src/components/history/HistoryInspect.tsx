@@ -4,7 +4,7 @@ import PacmanLoader from "react-spinners/PacmanLoader";
 
 import CodeBlock from "@/components/CodeBlock";
 import HistoryRow from "@/components/history/HistoryRow";
-import { inspectCommandHistory } from "@/state/models";
+import { ShellHistory, inspectCommandHistory } from "@/state/models";
 
 function renderLoading() {
   return (
@@ -15,7 +15,7 @@ function renderLoading() {
 }
 
 export default function HistoryInspect({ history }: any) {
-  let [other, setOther] = useState([]);
+  let [other, setOther] = useState<ShellHistory[]>([]);
 
   useEffect(() => {
     (async () => {

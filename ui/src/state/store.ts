@@ -1,6 +1,8 @@
 import { create } from "zustand";
 import { parseISO } from "date-fns";
 
+import { fetch } from "@tauri-apps/plugin-http";
+
 import {
   User,
   DefaultUser,
@@ -9,9 +11,11 @@ import {
   Alias,
   ShellHistory,
   Var,
+  Settings,
 } from "./models";
 
 import { invoke } from "@tauri-apps/api/core";
+import { sessionToken, settings } from "./client";
 
 // I'll probs want to slice this up at some point, but for now a
 // big blobby lump of state is fine.
@@ -26,6 +30,7 @@ interface AtuinState {
   refreshHomeInfo: () => void;
   refreshAliases: () => void;
   refreshVars: () => void;
+  refreshUser: () => void;
   refreshShellHistory: (query?: string) => void;
   historyNextPage: (query?: string) => void;
 }
@@ -79,6 +84,21 @@ export const useStore = create<AtuinState>()((set, get) => ({
       .catch((e) => {
         console.log(e);
       });
+  },
+
+  refreshUser: async () => {
+    let config = await settings();
+    let session = await sessionToken();
+    let url = config.sync_address + "/api/v0/me";
+
+    let res = await fetch(url, {
+      headers: {
+        Authorization: `Token ${session}`,
+      },
+    });
+    let me = await res.json();
+
+    set({ user: me });
   },
 
   historyNextPage: (query?: string) => {

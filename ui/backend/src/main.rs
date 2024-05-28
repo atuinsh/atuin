@@ -76,6 +76,11 @@ async fn config() -> Result<Settings, String> {
 }
 
 #[tauri::command]
+async fn session() -> Result<String, String> {
+    Settings::new().map_err(|e|e.to_string())?.session_token().map_err(|e|e.to_string())
+}
+
+#[tauri::command]
 async fn home_info() -> Result<HomeInfo, String> {
     let settings = Settings::new().map_err(|e| e.to_string())?;
     let record_store_path = PathBuf::from(settings.record_store_path.as_str());
@@ -85,7 +90,7 @@ async fn home_info() -> Result<HomeInfo, String> {
 
     let client = atuin_client::api_client::Client::new(
         &settings.sync_address,
-        &settings.session_token,
+        settings.session_token().map_err(|e|e.to_string())?.as_str(),
         settings.network_connect_timeout,
         settings.network_timeout,
     )
@@ -132,6 +137,7 @@ fn main() {
             aliases,
             home_info,
             config,
+            session,
             dotfiles::aliases::import_aliases,
             dotfiles::aliases::delete_alias,
             dotfiles::aliases::set_alias,
@@ -140,6 +146,7 @@ fn main() {
             dotfiles::vars::set_var,
         ])
         .plugin(tauri_plugin_sql::Builder::default().build())
+        .plugin(tauri_plugin_http::init())
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

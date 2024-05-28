@@ -24,6 +24,7 @@ serde_json = "1.0"
 time = "0.3.36"
 uuid = "1.7.0"
 syntect = "5.2.0"
+tauri-plugin-http = "2.0.0-beta"
 
 [dependencies.sqlx]
 version = "=0.7.3"
