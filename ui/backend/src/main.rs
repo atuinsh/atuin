@@ -101,7 +101,7 @@ async fn home_info() -> Result<HomeInfo, String> {
         .await
         .map_err(|e| e.to_string())?;
 
-    let info = if !PathBuf::from(session_path).exists() {
+    let info = if settings.logged_in() {
         HomeInfo {
             username: None,
             last_sync: None,
