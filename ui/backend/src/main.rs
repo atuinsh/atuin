@@ -19,10 +19,10 @@ use dotfiles::aliases::aliases;
 
 #[derive(Debug, serde::Serialize)]
 struct HomeInfo {
-    pub username: String,
     pub record_count: u64,
     pub history_count: u64,
-    pub last_sync: String,
+    pub username: Option<String>,
+    pub last_sync: Option<String>,
 }
 
 #[tauri::command]
@@ -88,38 +88,40 @@ async fn home_info() -> Result<HomeInfo, String> {
         .await
         .map_err(|e| e.to_string())?;
 
-    let client = atuin_client::api_client::Client::new(
-        &settings.sync_address,
-        settings.session_token().map_err(|e|e.to_string())?.as_str(),
-        settings.network_connect_timeout,
-        settings.network_timeout,
-    )
-    .map_err(|e| e.to_string())?;
 
     let session_path = settings.session_path.as_str();
     let last_sync = Settings::last_sync()
         .map_err(|e| e.to_string())?
         .format(&Rfc3339)
         .map_err(|e| e.to_string())?;
+
     let record_count = sqlite_store.len_all().await.map_err(|e| e.to_string())?;
     let history_count = sqlite_store
         .len_tag(HISTORY_TAG)
         .await
         .map_err(|e| e.to_string())?;
 
-    let info = if !PathBuf::from(session_path).exists() {
+    let info = if settings.logged_in() {
         HomeInfo {
-            username: String::from(""),
-            last_sync: last_sync.to_string(),
+            username: None,
+            last_sync: None,
             record_count,
             history_count,
         }
     } else {
+        let client = atuin_client::api_client::Client::new(
+            &settings.sync_address,
+            settings.session_token().map_err(|e|e.to_string())?.as_str(),
+            settings.network_connect_timeout,
+            settings.network_timeout,
+        )
+        .map_err(|e| e.to_string())?;
+
         let me = client.me().await.map_err(|e| e.to_string())?;
 
         HomeInfo {
-            username: me.username,
-            last_sync: last_sync.to_string(),
+            username: Some(me.username),
+            last_sync: Some(last_sync.to_string()),
             record_count,
             history_count,
         }

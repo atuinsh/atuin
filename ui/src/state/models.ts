@@ -11,7 +11,7 @@ export const DefaultUser: User = {
 export interface HomeInfo {
   historyCount: number;
   recordCount: number;
-  lastSyncTime: Date;
+  lastSyncTime: Date | null;
 }
 
 export const DefaultHomeInfo: HomeInfo = {

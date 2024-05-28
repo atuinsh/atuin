@@ -77,7 +77,7 @@ export const useStore = create<AtuinState>()((set, get) => ({
           homeInfo: {
             historyCount: res.history_count,
             recordCount: res.record_count,
-            lastSyncTime: parseISO(res.last_sync),
+            lastSyncTime: (res.last_sync && parseISO(res.last_sync)) || null,
           },
         });
       })
@@ -88,7 +88,14 @@ export const useStore = create<AtuinState>()((set, get) => ({
 
   refreshUser: async () => {
     let config = await settings();
-    let session = await sessionToken();
+    let session;
+
+    try {
+      session = await sessionToken();
+    } catch (e) {
+      console.log("Not logged in, so not refreshing user");
+      return;
+    }
     let url = config.sync_address + "/api/v0/me";
 
     let res = await fetch(url, {
