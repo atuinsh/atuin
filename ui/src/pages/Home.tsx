@@ -68,7 +68,10 @@ export default function Home() {
             stats={[
               {
                 name: "Last Sync",
-                stat: formatRelative(homeInfo.lastSyncTime, new Date()),
+                stat:
+                  (homeInfo.lastSyncTime &&
+                    formatRelative(homeInfo.lastSyncTime, new Date())) ||
+                  "Never",
               },
               {
                 name: "Total history records",
