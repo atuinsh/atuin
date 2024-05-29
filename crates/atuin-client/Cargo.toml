@@ -56,8 +56,8 @@ generic-array = { version = "0.14", features = ["serde"] }
 serde_with = "3.8.1"
 
 # encryption
-rusty_paseto = { version = "0.6.0", default-features = false }
-rusty_paserk = { version = "0.3.0", default-features = false, features = [
+rusty_paseto = { version = "0.7.0", default-features = false }
+rusty_paserk = { version = "0.4.0", default-features = false, features = [
   "v4",
   "serde",
 ] }
