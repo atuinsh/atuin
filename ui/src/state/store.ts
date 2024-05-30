@@ -94,6 +94,7 @@ export const useStore = create<AtuinState>()((set, get) => ({
       session = await sessionToken();
     } catch (e) {
       console.log("Not logged in, so not refreshing user");
+      set({ user: DefaultUser });
       return;
     }
     let url = config.sync_address + "/api/v0/me";
@@ -105,7 +106,7 @@ export const useStore = create<AtuinState>()((set, get) => ({
     });
     let me = await res.json();
 
-    set({ user: me });
+    set({ user: new User(me.username) });
   },
 
   historyNextPage: (query?: string) => {

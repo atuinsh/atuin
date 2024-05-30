@@ -292,6 +292,7 @@ dependencies = [
  "sqlx",
  "thiserror",
  "time",
+ "tiny-bip39",
  "tokio",
  "typed-builder",
  "urlencoding",

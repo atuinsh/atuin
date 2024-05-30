@@ -1,6 +1,19 @@
 import "./App.css";
 
 import { useState, ReactElement } from "react";
+import { useStore } from "@/state/store";
+
+import Button, { ButtonStyle } from "@/components/Button";
+
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+
 import {
   Cog6ToothIcon,
   HomeIcon,
@@ -16,6 +29,7 @@ function classNames(...classes: any) {
 import Home from "./pages/Home.tsx";
 import History from "./pages/History.tsx";
 import Dotfiles from "./pages/Dotfiles.tsx";
+import LoginOrRegister from "./components/LoginOrRegister.tsx";
 
 enum Section {
   Home,
@@ -39,6 +53,8 @@ function App() {
   // I think hashrouter may work, but I'd rather avoiding thinking of them as
   // pages
   const [section, setSection] = useState(Section.Home);
+  const user = useStore((state) => state.user);
+  console.log(user);
 
   const navigation = [
     {
@@ -96,16 +112,19 @@ function App() {
                 </ul>
               </li>
               <li className="mt-auto">
-                <a
-                  href="#"
-                  className="group -mx-2 flex gap-x-3 rounded-md p-2 text-sm font-semibold leading-6 text-gray-700 hover:bg-gray-50 hover:text-green-600"
-                >
-                  <Cog6ToothIcon
-                    className="h-6 w-6 shrink-0 text-gray-400 group-hover:text-green-600"
-                    aria-hidden="true"
-                  />
-                  Settings
-                </a>
+                {user && !user.isLoggedIn() && (
+                  <Dialog>
+                    <DialogTrigger className="w-full">
+                      <Button
+                        text={"Login or Register"}
+                        style={ButtonStyle.PrimarySmFill}
+                      />
+                    </DialogTrigger>
+                    <DialogContent>
+                      <LoginOrRegister />
+                    </DialogContent>
+                  </Dialog>
+                )}
               </li>
             </ul>
           </nav>
