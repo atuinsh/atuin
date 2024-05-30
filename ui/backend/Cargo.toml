@@ -27,7 +27,7 @@ syntect = "5.2.0"
 tauri-plugin-http = "2.0.0-beta"
 
 [dependencies.sqlx]
-version = "=0.7.3"
+version = "0.7.3"
 features = ["runtime-tokio-rustls", "time", "postgres", "uuid"]
 
 [features]
