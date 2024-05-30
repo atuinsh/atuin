@@ -329,12 +329,12 @@ if [[ $__atuin_bind_up_arrow == true ]]; then
         bind -m emacs '"\e[A": "\C-x\C-p"'
         bind -m emacs '"\eOA": "\C-x\C-p"'
         bind -m vi-insert -x '"\C-x\C-p": __atuin_history --shell-up-key-binding --keymap-mode=vim-insert'
-        bind -m vi-insert -x '"\e[A": "\C-x\C-p"'
-        bind -m vi-insert -x '"\eOA": "\C-x\C-p"'
+        bind -m vi-insert '"\e[A": "\C-x\C-p"'
+        bind -m vi-insert '"\eOA": "\C-x\C-p"'
         bind -m vi-command -x '"\C-x\C-p": __atuin_history --shell-up-key-binding --keymap-mode=vim-normal'
-        bind -m vi-command -x '"\e[A": "\C-x\C-p"'
-        bind -m vi-command -x '"\eOA": "\C-x\C-p"'
-        bind -m vi-command -x '"k": "\C-x\C-p"'
+        bind -m vi-command '"\e[A": "\C-x\C-p"'
+        bind -m vi-command '"\eOA": "\C-x\C-p"'
+        bind -m vi-command '"k": "\C-x\C-p"'
     fi
 fi
 
