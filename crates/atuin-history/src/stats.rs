@@ -92,7 +92,7 @@ fn split_at_pipe(command: &str) -> Vec<&str> {
             "\\" => if graphemes.next().is_some() {},
             "|" => {
                 if !quoted {
-                    if command[start..].starts_with('|') {
+                    if current > start && command[start..].starts_with('|') {
                         start += 1;
                     }
                     result.push(&command[start..current]);
@@ -394,6 +394,22 @@ mod tests {
         assert_eq!(
             split_at_pipe("git commit -m \"🚀\""),
             ["git commit -m \"🚀\""]
+        );
+    }
+
+    #[test]
+    fn starts_with_pipe() {
+        assert_eq!(
+            split_at_pipe("| sed 's/[0-9a-f]//g'"),
+            ["", " sed 's/[0-9a-f]//g'"]
+        );
+    }
+
+    #[test]
+    fn starts_with_spaces_and_pipe() {
+        assert_eq!(
+            split_at_pipe("  | sed 's/[0-9a-f]//g'"),
+            ["  ", " sed 's/[0-9a-f]//g'"]
         );
     }
 }
