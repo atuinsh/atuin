@@ -77,7 +77,41 @@ async fn config() -> Result<Settings, String> {
 
 #[tauri::command]
 async fn session() -> Result<String, String> {
-    Settings::new().map_err(|e|e.to_string())?.session_token().map_err(|e|e.to_string())
+    Settings::new()
+        .map_err(|e| e.to_string())?
+        .session_token()
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn login(username: String, password: String, key: String) -> Result<String, String> {
+    let settings = Settings::new().map_err(|e| e.to_string())?;
+
+    let record_store_path = PathBuf::from(settings.record_store_path.as_str());
+    let store = SqliteStore::new(record_store_path, settings.local_timeout)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if settings.logged_in() {
+        return Err(String::from("Already logged in"));
+    }
+
+    let session = atuin_client::login::login(&settings, &store, username, password, key)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(session)
+}
+
+#[tauri::command]
+async fn register(username: String, email: String, password: String) -> Result<String, String> {
+    let settings = Settings::new().map_err(|e| e.to_string())?;
+
+    let session = atuin_client::register::register(&settings, username, email, password)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(session)
 }
 
 #[tauri::command]
@@ -87,7 +121,6 @@ async fn home_info() -> Result<HomeInfo, String> {
     let sqlite_store = SqliteStore::new(record_store_path, settings.local_timeout)
         .await
         .map_err(|e| e.to_string())?;
-
 
     let last_sync = Settings::last_sync()
         .map_err(|e| e.to_string())?
@@ -110,7 +143,10 @@ async fn home_info() -> Result<HomeInfo, String> {
     } else {
         let client = atuin_client::api_client::Client::new(
             &settings.sync_address,
-            settings.session_token().map_err(|e|e.to_string())?.as_str(),
+            settings
+                .session_token()
+                .map_err(|e| e.to_string())?
+                .as_str(),
             settings.network_connect_timeout,
             settings.network_timeout,
         )
@@ -139,6 +175,8 @@ fn main() {
             home_info,
             config,
             session,
+            login,
+            register,
             dotfiles::aliases::import_aliases,
             dotfiles::aliases::delete_alias,
             dotfiles::aliases::set_alias,

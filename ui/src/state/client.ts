@@ -11,3 +11,19 @@ export async function sessionToken(): Promise<String> {
 export async function settings(): Promise<Settings> {
   return await invoke("config");
 }
+
+export async function login(
+  username: string,
+  password: string,
+  key: string,
+): Promise<string> {
+  return await invoke("login", { username, password, key });
+}
+
+export async function register(
+  username: string,
+  email: string,
+  password: string,
+): Promise<string> {
+  return await invoke("register", { username, email, password });
+}

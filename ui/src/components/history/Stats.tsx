@@ -13,8 +13,13 @@ import {
 
 function renderLoading() {
   return (
-    <div className="flex items-center justify-center h-full">
-      <PacmanLoader color="#26bd65" />
+    <div className="flex flex-col items-center justify-center h-full ">
+      <div>
+        <PacmanLoader color="#26bd65" />
+      </div>
+      <div className="block mt-4">
+        <p>Crunching the latest numbers...</p>
+      </div>
     </div>
   );
 }
