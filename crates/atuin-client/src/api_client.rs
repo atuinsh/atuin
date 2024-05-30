@@ -86,6 +86,10 @@ pub async fn login(address: &str, req: LoginRequest) -> Result<LoginResponse> {
         .send()
         .await?;
 
+    if resp.status() == StatusCode::TOO_MANY_REQUESTS {
+        bail!("Rate limited. Too many login attempts.");
+    }
+
     if !ensure_version(&resp)? {
         bail!("could not login due to version mismatch");
     }
@@ -155,6 +159,10 @@ async fn handle_resp_error(resp: Response) -> Result<Response> {
         bail!(
             "Service unavailable: check https://status.atuin.sh (or get in touch with your host)"
         );
+    }
+
+    if status == StatusCode::TOO_MANY_REQUESTS {
+        bail!("Rate limited; please wait before doing that again");
     }
 
     if !status.is_success() {
