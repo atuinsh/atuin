@@ -336,6 +336,7 @@ pub struct Keys {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Preview {
     pub strategy: PreviewStrategy,
+    pub position: PreviewPosition,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -374,6 +375,7 @@ impl Default for Preview {
     fn default() -> Self {
         Self {
             strategy: PreviewStrategy::Auto,
+            position: PreviewPosition::Bottom,
         }
     }
 }
@@ -410,6 +412,18 @@ pub enum PreviewStrategy {
     // Preview height is calculated for the length of the longest command stored in the history.
     #[serde(rename = "static")]
     Static,
+}
+
+// The preview position.
+#[derive(Clone, Debug, Deserialize, Copy, PartialEq, Eq, ValueEnum, Serialize)]
+pub enum PreviewPosition {
+    // Preview position Top.
+    #[serde(rename = "top")]
+    Top,
+
+    // Preview position Bottom.
+    #[serde(rename = "bottom")]
+    Bottom,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -715,6 +729,7 @@ impl Settings {
             .set_default("inline_height", 0)?
             .set_default("show_preview", true)?
             .set_default("preview.strategy", "auto")?
+            .set_default("preview.position", "bottom")?
             .set_default("max_preview_height", 4)?
             .set_default("show_help", true)?
             .set_default("show_tabs", true)?

@@ -23,7 +23,8 @@ use atuin_client::{
     database::{current_context, Database},
     history::{store::HistoryStore, History, HistoryStats},
     settings::{
-        CursorStyle, ExitMode, FilterMode, KeymapMode, PreviewStrategy, SearchMode, Settings,
+        CursorStyle, ExitMode, FilterMode, KeymapMode, PreviewPosition, PreviewStrategy,
+        SearchMode, Settings,
     },
 };
 
@@ -42,7 +43,10 @@ use ratatui::{
     prelude::*,
     style::{Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{block::Title, Block, BorderType, Borders, Padding, Paragraph, Tabs},
+    widgets::{
+        block::{title, Title},
+        Block, BorderType, Borders, Padding, Paragraph, Tabs,
+    },
     Frame, Terminal, TerminalOptions, Viewport,
 };
 
@@ -82,6 +86,7 @@ struct StyleState {
     compact: bool,
     invert: bool,
     inner_width: usize,
+    position_bottom: bool,
 }
 
 impl State {
@@ -593,6 +598,7 @@ impl State {
     #[allow(clippy::cast_possible_truncation)]
     #[allow(clippy::bool_to_int_with_if)]
     #[allow(clippy::too_many_lines)]
+    #[allow(clippy::cognitive_complexity)]
     fn draw(
         &mut self,
         f: &mut Frame,
@@ -620,12 +626,13 @@ impl State {
         );
         let show_help = settings.show_help && (!compact || f.size().height > 1);
         let show_tabs = settings.show_tabs;
+        let position_bottom = settings.preview.position == PreviewPosition::Bottom;
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .margin(0)
             .horizontal_margin(1)
             .constraints::<&[Constraint]>(
-                if invert {
+                if position_bottom && invert {
                     [
                         Constraint::Length(1 + border_size),               // input
                         Constraint::Min(1),                                // results list
@@ -633,7 +640,7 @@ impl State {
                         Constraint::Length(if show_tabs { 1 } else { 0 }), // tabs
                         Constraint::Length(if show_help { 1 } else { 0 }), // header (sic)
                     ]
-                } else {
+                } else if position_bottom && !invert {
                     [
                         Constraint::Length(if show_help { 1 } else { 0 }), // header
                         Constraint::Length(if show_tabs { 1 } else { 0 }), // tabs
@@ -641,14 +648,50 @@ impl State {
                         Constraint::Length(1 + border_size),               // input
                         Constraint::Length(preview_height),                // preview
                     ]
+                } else if !position_bottom && invert {
+                    [
+                        Constraint::Length(preview_height),                // preview
+                        Constraint::Length(1 + border_size),               // input
+                        Constraint::Min(1),                                // results list
+                        Constraint::Length(if show_tabs { 1 } else { 0 }), // tabs
+                        Constraint::Length(if show_help { 1 } else { 0 }), // header (sic)
+                    ]
+                } else {
+                    [
+                        Constraint::Length(if show_help { 1 } else { 0 }), // header
+                        Constraint::Length(if show_tabs { 1 } else { 0 }), // tabs
+                        Constraint::Length(preview_height),                // preview
+                        Constraint::Min(1),                                // results list
+                        Constraint::Length(1 + border_size),               // input
+                    ]
                 }
                 .as_ref(),
             )
             .split(f.size());
 
-        let input_chunk = if invert { chunks[0] } else { chunks[3] };
-        let results_list_chunk = if invert { chunks[1] } else { chunks[2] };
-        let preview_chunk = if invert { chunks[2] } else { chunks[4] };
+        let input_chunk = if position_bottom && invert {
+            chunks[0]
+        } else if position_bottom && !invert {
+            chunks[3]
+        } else if !position_bottom && invert {
+            chunks[1]
+        } else {
+            chunks[4]
+        };
+        let results_list_chunk = if position_bottom && invert {
+            chunks[1]
+        } else if !position_bottom && !invert {
+            chunks[3]
+        } else {
+            chunks[2]
+        };
+        let preview_chunk = if position_bottom && !invert {
+            chunks[4]
+        } else if !position_bottom && invert {
+            chunks[0]
+        } else {
+            chunks[2]
+        };
         let tabs_chunk = if invert { chunks[3] } else { chunks[1] };
         let header_chunk = if invert { chunks[4] } else { chunks[0] };
 
@@ -669,6 +712,7 @@ impl State {
             compact,
             invert,
             inner_width: input_chunk.width.into(),
+            position_bottom,
         };
 
         let header_chunks = Layout::default()
@@ -685,7 +729,7 @@ impl State {
 
         let title = self.build_title(theme);
         f.render_widget(title, header_chunks[0]);
-
+        
         let help = self.build_help(settings, theme);
         f.render_widget(help, header_chunks[1]);
 
@@ -745,7 +789,7 @@ impl State {
         };
         let preview = self.build_preview(
             results,
-            compact,
+            style,
             preview_width,
             preview_chunk.width.into(),
             theme,
@@ -754,11 +798,12 @@ impl State {
 
         let extra_width = UnicodeWidthStr::width(self.search.input.substring());
 
-        let cursor_offset = if compact { 0 } else { 1 };
+        let compact_cursor_offset = if compact { 0 } else { 1 };
+        let position_cursor_offset = if !compact && !position_bottom { 1 } else { 0 };
         f.set_cursor(
             // Put cursor past the end of the input text
-            input_chunk.x + extra_width as u16 + PREFIX_LENGTH + 1 + cursor_offset,
-            input_chunk.y + cursor_offset,
+            input_chunk.x + extra_width as u16 + PREFIX_LENGTH + 1 + compact_cursor_offset,
+            input_chunk.y + compact_cursor_offset - position_cursor_offset,
         );
     }
 
@@ -847,18 +892,33 @@ impl State {
 
         if style.compact {
             results_list
-        } else if style.invert {
+        } else if style.position_bottom && style.invert {
             results_list.block(
                 Block::default()
                     .borders(Borders::LEFT | Borders::RIGHT)
                     .border_type(BorderType::Rounded)
-                    .title(format!("{:─>width$}", "", width = style.inner_width - 2)),
+                    .title(format!("{:─>width$}", "", width = style.inner_width - 2))
+                    .title_position(title::Position::Top),
             )
-        } else {
+        } else if style.position_bottom && !style.invert {
             results_list.block(
                 Block::default()
                     .borders(Borders::TOP | Borders::LEFT | Borders::RIGHT)
                     .border_type(BorderType::Rounded),
+            )
+        } else if !style.position_bottom && style.invert {
+            results_list.block(
+                Block::default()
+                    .borders(Borders::BOTTOM | Borders::LEFT | Borders::RIGHT)
+                    .border_type(BorderType::Rounded),
+            )
+        } else {
+            results_list.block(
+                Block::default()
+                    .borders(Borders::LEFT | Borders::RIGHT)
+                    .border_type(BorderType::Rounded)
+                    .title(format!("{:─>width$}", "", width = style.inner_width - 2))
+                    .title_position(title::Position::Bottom),
             )
         }
     }
@@ -878,26 +938,42 @@ impl State {
         let input = Paragraph::new(input);
         if style.compact {
             input
-        } else if style.invert {
+        } else if style.position_bottom && style.invert {
             input.block(
                 Block::default()
                     .borders(Borders::LEFT | Borders::RIGHT | Borders::TOP)
                     .border_type(BorderType::Rounded),
             )
-        } else {
+        } else if style.position_bottom && !style.invert {
             input.block(
                 Block::default()
                     .borders(Borders::LEFT | Borders::RIGHT)
                     .border_type(BorderType::Rounded)
-                    .title(format!("{:─>width$}", "", width = style.inner_width - 2)),
+                    .title(format!("{:─>width$}", "", width = style.inner_width - 2))
+                    .title_position(title::Position::Top),
+            )
+        } else if !style.position_bottom && style.invert {
+            input.block(
+                Block::default()
+                    .borders(Borders::LEFT | Borders::RIGHT)
+                    .border_type(BorderType::Rounded)
+                    .title(format!("{:─>width$}", "", width = style.inner_width - 2))
+                    .title_position(title::Position::Bottom),
+            )
+        } else {
+            input.block(
+                Block::default()
+                    .borders(Borders::LEFT | Borders::RIGHT | Borders::BOTTOM)
+                    .border_type(BorderType::Rounded),
             )
         }
     }
 
+    #[allow(clippy::if_same_then_else)] // for code legibility
     fn build_preview(
         &mut self,
         results: &[History],
-        compact: bool,
+        style: StyleState,
         preview_width: u16,
         chunk_width: usize,
         theme: &Theme,
@@ -919,14 +995,39 @@ impl State {
                 })
                 .join("\n")
         };
-        let preview = if compact {
+        let preview = if style.compact {
             Paragraph::new(command).style(theme.as_style(Meaning::Annotation))
-        } else {
+        } else if style.position_bottom && style.invert {
             Paragraph::new(command).block(
                 Block::default()
                     .borders(Borders::BOTTOM | Borders::LEFT | Borders::RIGHT)
                     .border_type(BorderType::Rounded)
-                    .title(format!("{:─>width$}", "", width = chunk_width - 2)),
+                    .title(format!("{:─>width$}", "", width = chunk_width - 2))
+                    .title_position(title::Position::Top),
+            )
+        } else if style.position_bottom && !style.invert {
+            Paragraph::new(command).block(
+                Block::default()
+                    .borders(Borders::BOTTOM | Borders::LEFT | Borders::RIGHT)
+                    .border_type(BorderType::Rounded)
+                    .title(format!("{:─>width$}", "", width = chunk_width - 2))
+                    .title_position(title::Position::Top),
+            )
+        } else if !style.position_bottom && style.invert {
+            Paragraph::new(command).block(
+                Block::default()
+                    .borders(Borders::TOP | Borders::LEFT | Borders::RIGHT)
+                    .border_type(BorderType::Rounded)
+                    .title(format!("{:─>width$}", "", width = chunk_width - 2))
+                    .title_position(title::Position::Bottom),
+            )
+        } else {
+            Paragraph::new(command).block(
+                Block::default()
+                    .borders(Borders::TOP | Borders::LEFT | Borders::RIGHT)
+                    .border_type(BorderType::Rounded)
+                    .title(format!("{:─>width$}", "", width = chunk_width - 2))
+                    .title_position(title::Position::Bottom),
             )
         };
         preview
@@ -1212,7 +1313,7 @@ fn set_clipboard(_s: String) {}
 #[cfg(test)]
 mod tests {
     use atuin_client::history::History;
-    use atuin_client::settings::{Preview, PreviewStrategy, Settings};
+    use atuin_client::settings::{Preview, PreviewPosition, PreviewStrategy, Settings};
 
     use super::State;
 
@@ -1221,6 +1322,7 @@ mod tests {
         let settings_preview_auto = Settings {
             preview: Preview {
                 strategy: PreviewStrategy::Auto,
+                position: PreviewPosition::Bottom,
             },
             show_preview: true,
             ..Settings::utc()
@@ -1229,6 +1331,7 @@ mod tests {
         let settings_preview_auto_h2 = Settings {
             preview: Preview {
                 strategy: PreviewStrategy::Auto,
+                position: PreviewPosition::Bottom,
             },
             show_preview: true,
             max_preview_height: 2,
@@ -1238,6 +1341,7 @@ mod tests {
         let settings_preview_h4 = Settings {
             preview: Preview {
                 strategy: PreviewStrategy::Static,
+                position: PreviewPosition::Bottom,
             },
             show_preview: true,
             max_preview_height: 4,
