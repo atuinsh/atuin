@@ -156,6 +156,10 @@ __atuin_install_cargo(){
 
 	fi
 
+ 	# Log cargo and rustc versions for support
+	cargo --version
+ 	rustc --version
+  
 	cargo install atuin
 }
 
