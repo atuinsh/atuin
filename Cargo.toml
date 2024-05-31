@@ -55,5 +55,5 @@ features = ["json", "rustls-tls-native-roots"]
 default-features = false
 
 [workspace.dependencies.sqlx]
-version = "0.7.4"
+version = "0.7"
 features = ["runtime-tokio-rustls", "time", "postgres", "uuid"]
