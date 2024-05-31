@@ -1,6 +1,6 @@
 [workspace]
 members = [
-  "crates/*",
+    "crates/*",
 ]
 
 resolver = "2"
@@ -9,7 +9,7 @@ exclude = ["ui/backend"]
 [workspace.package]
 version = "18.2.0"
 authors = ["Ellie Huxtable <ellie@elliehuxtable.com>"]
-rust-version = "1.70"
+rust-version = "1.74"
 license = "MIT"
 homepage = "https://atuin.sh"
 repository = "https://github.com/atuinsh/atuin"
