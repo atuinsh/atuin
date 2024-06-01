@@ -33,7 +33,7 @@ interim = { workspace = true }
 config = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-parse_duration = "2.1.1"
+humantime = "2.1.0"
 async-trait = { workspace = true }
 itertools = { workspace = true }
 rand = { workspace = true }
