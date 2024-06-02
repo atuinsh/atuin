@@ -1,6 +1,7 @@
 use std::process::Command;
 use std::{env, path::PathBuf, str::FromStr};
 
+use atuin_client::database::Sqlite;
 use atuin_client::settings::Settings;
 use atuin_common::shell::{shell_name, Shell};
 use colored::Colorize;
@@ -261,10 +262,12 @@ struct AtuinInfo {
     /// Whether the main Atuin sync server is in use
     /// I'm just calling it Atuin Cloud for lack of a better name atm
     pub sync: Option<SyncInfo>,
+
+    pub sqlite_version: String,
 }
 
 impl AtuinInfo {
-    pub fn new(settings: &Settings) -> Self {
+    pub async fn new(settings: &Settings) -> Self {
         let session_path = settings.session_path.as_str();
         let logged_in = PathBuf::from(session_path).exists();
 
@@ -274,9 +277,18 @@ impl AtuinInfo {
             None
         };
 
+        let sqlite_version = match Sqlite::new("sqlite::memory:", 0.1).await {
+            Ok(db) => db
+                .sqlite_version()
+                .await
+                .unwrap_or_else(|_| "unknown".to_string()),
+            Err(_) => "error".to_string(),
+        };
+
         Self {
             version: crate::VERSION.to_string(),
             sync,
+            sqlite_version,
         }
     }
 }
@@ -289,9 +301,9 @@ struct DoctorDump {
 }
 
 impl DoctorDump {
-    pub fn new(settings: &Settings) -> Self {
+    pub async fn new(settings: &Settings) -> Self {
         Self {
-            atuin: AtuinInfo::new(settings),
+            atuin: AtuinInfo::new(settings).await,
             shell: ShellInfo::new(),
             system: SystemInfo::new(),
         }
@@ -330,10 +342,10 @@ fn checks(info: &DoctorDump) {
     }
 }
 
-pub fn run(settings: &Settings) -> Result<()> {
+pub async fn run(settings: &Settings) -> Result<()> {
     println!("{}", "Atuin Doctor".bold());
     println!("Checking for diagnostics");
-    let dump = DoctorDump::new(settings);
+    let dump = DoctorDump::new(settings).await;
 
     checks(&dump);
 

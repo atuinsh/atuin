@@ -148,7 +148,7 @@ impl Cmd {
                 Ok(())
             }
 
-            Self::Doctor => doctor::run(&settings),
+            Self::Doctor => doctor::run(&settings).await,
 
             Self::DefaultConfig => {
                 default_config::run();
