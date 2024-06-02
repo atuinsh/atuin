@@ -61,14 +61,10 @@ pub async fn register(
         .json(&map)
         .send()
         .await?;
+    let resp = handle_resp_error(resp).await?;
 
     if !ensure_version(&resp)? {
         bail!("could not register user due to version mismatch");
-    }
-
-    if !resp.status().is_success() {
-        let error = resp.json::<ErrorResponse>().await?;
-        bail!("failed to register user: {}", error.reason);
     }
 
     let session = resp.json::<RegisterResponse>().await?;
@@ -85,18 +81,10 @@ pub async fn login(address: &str, req: LoginRequest) -> Result<LoginResponse> {
         .json(&req)
         .send()
         .await?;
-
-    if resp.status() == StatusCode::TOO_MANY_REQUESTS {
-        bail!("Rate limited. Too many login attempts.");
-    }
+    let resp = handle_resp_error(resp).await?;
 
     if !ensure_version(&resp)? {
-        bail!("could not login due to version mismatch");
-    }
-
-    if resp.status() != reqwest::StatusCode::OK {
-        let error = resp.json::<ErrorResponse>().await?;
-        bail!("invalid login details: {}", error.reason);
+        bail!("Could not login due to version mismatch");
     }
 
     let session = resp.json::<LoginResponse>().await?;
@@ -115,11 +103,7 @@ pub async fn latest_version() -> Result<Version> {
         .header(USER_AGENT, APP_USER_AGENT)
         .send()
         .await?;
-
-    if resp.status() != reqwest::StatusCode::OK {
-        let error = resp.json::<ErrorResponse>().await?;
-        bail!("failed to check latest version: {}", error.reason);
-    }
+    let resp = handle_resp_error(resp).await?;
 
     let index = resp.json::<IndexResponse>().await?;
     let version = Version::parse(index.version.as_str())?;
@@ -136,8 +120,7 @@ pub fn ensure_version(response: &Response) -> Result<bool> {
             Err(e) => bail!("failed to parse server version: {:?}", e),
         }
     } else {
-        // if there is no version header, then the newest this server can possibly be is 17.1.0
-        Version::parse("17.1.0")
+        bail!("Server not reporting its version: it is either too old or unhealthy");
     }?;
 
     // If the client is newer than the server
@@ -170,7 +153,7 @@ async fn handle_resp_error(resp: Response) -> Result<Response> {
             let reason = error.reason;
 
             if status.is_client_error() {
-                bail!("Could not fetch history, client error {status}: {reason}.")
+                bail!("Invalid request to the service: {status} - {reason}.")
             }
 
             bail!("There was an error with the atuin sync service, server error {status}: {reason}.\nIf the problem persists, contact the host")
