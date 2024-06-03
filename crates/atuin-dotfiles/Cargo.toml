@@ -19,7 +19,7 @@ atuin-client = { path = "../atuin-client", version = "18.2.0" }
 
 eyre = { workspace = true }
 tokio = { workspace = true }
-rmp = { version = "0.8.11" }
+rmp = { version = "0.8.14" }
 rand = { workspace = true }
 serde = { workspace = true }
 crypto_secretbox = "0.1.1"
