@@ -9,7 +9,7 @@ use config::{
 };
 use eyre::{bail, eyre, Context, Error, Result};
 use fs_err::{create_dir_all, File};
-use parse_duration::parse;
+use humantime::parse_duration;
 use regex::RegexSet;
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -553,7 +553,7 @@ impl Settings {
             return Ok(false);
         }
 
-        match parse(self.sync_frequency.as_str()) {
+        match parse_duration(self.sync_frequency.as_str()) {
             Ok(d) => {
                 let d = time::Duration::try_from(d).unwrap();
                 Ok(OffsetDateTime::now_utc() - Settings::last_sync()? >= d)
