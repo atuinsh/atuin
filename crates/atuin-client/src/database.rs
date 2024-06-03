@@ -154,6 +154,12 @@ impl Sqlite {
         Ok(Self { pool })
     }
 
+    pub async fn sqlite_version(&self) -> Result<String> {
+        sqlx::query_scalar("SELECT sqlite_version()")
+            .fetch_one(&self.pool)
+            .await
+    }
+
     async fn setup_db(pool: &SqlitePool) -> Result<()> {
         debug!("running sqlite database setup");
 
