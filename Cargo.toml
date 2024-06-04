@@ -65,13 +65,26 @@ ci = "github"
 # The installers to generate for each app
 installers = ["shell"]
 # Target platforms to build apps for (Rust target-triple syntax)
-targets = ["aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl", "x86_64-pc-windows-msvc"]
+targets = [
+  "aarch64-apple-darwin", 
+  "aarch64-unknown-linux-gnu", 
+  "aarch64-unknown-linux-musl",
+  "x86_64-apple-darwin", 
+  "x86_64-unknown-linux-gnu", 
+  "x86_64-unknown-linux-musl", 
+]
 # Publish jobs to run in CI
 pr-run-mode = "plan"
 # Whether to install an updater program
 install-updater = true
+# The archive format to use for non-windows builds (defaults .tar.xz)
+unix-archive = ".tar.gz"
 
 # The profile that 'cargo dist' will build with
 [profile.dist]
 inherits = "release"
 lto = "thin"
+
+[workspace.metadata.dist.github-customer-runners]
+aarch64-unknown-linux-gnu = "buildjet-8vcpu-ubuntu-2204-arm"
+aarch64-unknown-linux-musl = "buildjet-8vcpu-ubuntu-2204-arm"
