@@ -349,7 +349,7 @@ pub async fn run(settings: &Settings) -> Result<()> {
 
     checks(&dump);
 
-    let dump = serde_yaml::to_string(&dump)?;
+    let dump = serde_json::to_string_pretty(&dump)?;
 
     println!("\nPlease include the output below with any bug reports or issues\n");
     println!("{dump}");
