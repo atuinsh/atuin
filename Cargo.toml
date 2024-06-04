@@ -88,3 +88,9 @@ lto = "thin"
 [workspace.metadata.dist.github-customer-runners]
 aarch64-unknown-linux-gnu = "buildjet-8vcpu-ubuntu-2204-arm"
 aarch64-unknown-linux-musl = "buildjet-8vcpu-ubuntu-2204-arm"
+
+[workspace.metadata.dist.dependencies.homebrew]
+protobuf = '*'
+
+[workspace.metadata.dist.dependencies.apt]
+protobuf-compiler = '*'
