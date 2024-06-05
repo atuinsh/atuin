@@ -102,9 +102,9 @@ dependencies = [
 
 [[package]]
 name = "anstyle-query"
-version = "1.0.3"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a64c907d4e79225ac72e2a354c9ce84d50ebb4586dee56c82b3ee73004f537f5"
+checksum = "ad186efb764318d35165f1758e7dcef3b10628e26d41a44bc5550652e6804391"
 dependencies = [
  "windows-sys 0.52.0",
 ]
@@ -199,7 +199,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
 name = "atuin"
-version = "18.2.0"
+version = "18.3.0-prerelease.1"
 dependencies = [
  "async-trait",
  "atuin-client",
@@ -249,7 +249,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-client"
-version = "18.2.0"
+version = "18.3.0-prerelease.1"
 dependencies = [
  "async-trait",
  "atuin-common",
@@ -298,7 +298,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-common"
-version = "18.2.0"
+version = "18.3.0-prerelease.1"
 dependencies = [
  "eyre",
  "lazy_static",
@@ -385,7 +385,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-server"
-version = "18.2.0"
+version = "18.3.0-prerelease.1"
 dependencies = [
  "argon2",
  "async-trait",
@@ -416,7 +416,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-server-database"
-version = "18.2.0"
+version = "18.3.0-prerelease.1"
 dependencies = [
  "async-trait",
  "atuin-common",
@@ -429,7 +429,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-server-postgres"
-version = "18.2.0"
+version = "18.3.0-prerelease.1"
 dependencies = [
  "async-trait",
  "atuin-common",
@@ -3693,9 +3693,9 @@ dependencies = [
 
 [[package]]
 name = "strum_macros"
-version = "0.26.3"
+version = "0.26.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f7993a8e3a9e88a00351486baae9522c91b123a088f76469e5bd5cc17198ea87"
+checksum = "4c6bee85a5a24955dc440386795aa378cd9cf82acd5f764469152d2270e581be"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
@@ -4237,9 +4237,9 @@ dependencies = [
 
 [[package]]
 name = "unicode-width"
-version = "0.1.12"
+version = "0.1.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "68f5e5f3158ecfd4b8ff6fe086db7c8467a2dfdac97fe420f2b7c4aa97af66d6"
+checksum = "0336d538f7abc86d282a4189614dfaa90810dfc2c6f6427eaf88e16311dd225d"
 
 [[package]]
 name = "unicode_categories"
