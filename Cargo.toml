@@ -58,6 +58,7 @@ features = ["runtime-tokio-rustls", "time", "postgres", "uuid"]
 
 # Config for 'cargo dist'
 [workspace.metadata.dist]
+install-path = "~/.atuin/bin"
 # The preferred cargo-dist version to use in CI (Cargo.toml SemVer syntax)
 cargo-dist-version = "0.15.0"
 # CI backends to support
@@ -74,7 +75,7 @@ targets = [
   "x86_64-unknown-linux-musl", 
 ]
 # Publish jobs to run in CI
-pr-run-mode = "upload"
+pr-run-mode = "plan"
 # Whether to install an updater program
 install-updater = true
 # The archive format to use for non-windows builds (defaults .tar.xz)
