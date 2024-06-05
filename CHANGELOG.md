@@ -2,6 +2,84 @@
 
 All notable changes to this project will be documented in this file.
 
+## [unreleased]
+
+### Bug Fixes
+
+- Support not-mac for default shell ([#1960](https://github.com/atuinsh/atuin/issues/1960))
+- Alias import with init output ([#1970](https://github.com/atuinsh/atuin/issues/1970))
+- Fish alias import ([#1972](https://github.com/atuinsh/atuin/issues/1972))
+- More fish alias import ([#1974](https://github.com/atuinsh/atuin/issues/1974))
+- Unquote aliases before quoting ([#1976](https://github.com/atuinsh/atuin/issues/1976))
+- Release workflow ([#1978](https://github.com/atuinsh/atuin/issues/1978))
+- Allow clearing aliases, disable import ([#1995](https://github.com/atuinsh/atuin/issues/1995))
+- Adapt help to `enter_accept` config ([#2001](https://github.com/atuinsh/atuin/issues/2001))
+- Add quotes for strategy value in comment ([#1993](https://github.com/atuinsh/atuin/issues/1993))
+- Add protobuf compiler to docker image ([#2009](https://github.com/atuinsh/atuin/issues/2009))
+- Add incremental rebuild to daemon loop ([#2010](https://github.com/atuinsh/atuin/issues/2010))
+- Alias enable/enabled in settings ([#2021](https://github.com/atuinsh/atuin/issues/2021))
+- Bogus error message wording ([#1283](https://github.com/atuinsh/atuin/issues/1283))
+- Save sync time in daemon ([#2029](https://github.com/atuinsh/atuin/issues/2029))
+- Redact password in database URI when logging ([#2032](https://github.com/atuinsh/atuin/issues/2032))
+- Do not try to sync if logged out ([#2037](https://github.com/atuinsh/atuin/issues/2037))
+- Save sync time in daemon ([#2051](https://github.com/atuinsh/atuin/issues/2051))
+- Handle being logged out gracefully ([#2052](https://github.com/atuinsh/atuin/issues/2052))
+- Fix mistake in last pr ([#2053](https://github.com/atuinsh/atuin/issues/2053))
+- Generation for commands starting with a pipe ([#2058](https://github.com/atuinsh/atuin/issues/2058))
+- Fix a workaround for bash-5.2 keybindings ([#2060](https://github.com/atuinsh/atuin/issues/2060))
+- Replace parse_duration with humantime ([#2074](https://github.com/atuinsh/atuin/issues/2074))
+- Better error reporting on login/registration ([#2076](https://github.com/atuinsh/atuin/issues/2076))
+- Replace serde_yaml::to_string with serde_json::to_string_yaml ([#2087](https://github.com/atuinsh/atuin/issues/2087))
+
+### Documentation
+
+- Fix "From source" `cd` command ([#1973](https://github.com/atuinsh/atuin/issues/1973))
+
+### Features
+
+- Add me endpoint ([#1954](https://github.com/atuinsh/atuin/issues/1954))
+- Detect active preexec framework ([#1955](https://github.com/atuinsh/atuin/issues/1955))
+- Work on home page, sort state ([#1956](https://github.com/atuinsh/atuin/issues/1956))
+- Allow ignoring failed commands ([#1957](https://github.com/atuinsh/atuin/issues/1957))
+- Show preview auto ([#1804](https://github.com/atuinsh/atuin/issues/1804))
+- Support syncing shell/env vars ([#1977](https://github.com/atuinsh/atuin/issues/1977))
+- Add vars ([#1989](https://github.com/atuinsh/atuin/issues/1989))
+- Create atuin-history, add stats to it ([#1990](https://github.com/atuinsh/atuin/issues/1990))
+- Scroll history infinitely ([#1999](https://github.com/atuinsh/atuin/issues/1999))
+- Add background daemon ([#2006](https://github.com/atuinsh/atuin/issues/2006))
+- Add support for daemon on windows ([#2014](https://github.com/atuinsh/atuin/issues/2014))
+- Add Tuxedo OS ([#2018](https://github.com/atuinsh/atuin/issues/2018))
+- Add history explore ([#2022](https://github.com/atuinsh/atuin/issues/2022))
+- Support importing from replxx history files ([#2024](https://github.com/atuinsh/atuin/issues/2024))
+- Support systemd socket activation for daemon ([#2039](https://github.com/atuinsh/atuin/issues/2039))
+- Use correct username on welcome screen ([#2050](https://github.com/atuinsh/atuin/issues/2050))
+- Add login/register dialog ([#2056](https://github.com/atuinsh/atuin/issues/2056))
+- Report sqlite version ([#2075](https://github.com/atuinsh/atuin/issues/2075))
+
+### Miscellaneous Tasks
+
+- Move crates into crates/ dir ([#1958](https://github.com/atuinsh/atuin/issues/1958))
+- Fix atuin crate readme ([#1959](https://github.com/atuinsh/atuin/issues/1959))
+- Add some more logging to handlers ([#1971](https://github.com/atuinsh/atuin/issues/1971))
+- Add some more debug logs ([#1979](https://github.com/atuinsh/atuin/issues/1979))
+- Clarify default config file ([#2026](https://github.com/atuinsh/atuin/issues/2026))
+- Ignore CODE_OF_CONDUCT ([#2044](https://github.com/atuinsh/atuin/issues/2044))
+- Handle rate limited responses ([#2057](https://github.com/atuinsh/atuin/issues/2057))
+- Log cargo and rustc version ([#2068](https://github.com/atuinsh/atuin/issues/2068))
+- Don't run "Update Nix Deps" CI on forks ([#2070](https://github.com/atuinsh/atuin/issues/2070))
+- Add Systemd config for self-hosted server ([#1879](https://github.com/atuinsh/atuin/issues/1879))
+- Switch to cargo dist for releases ([#2085](https://github.com/atuinsh/atuin/issues/2085))
+- V18.3.0-prerelease.1
+
+### Performance
+
+- Use version.(major|minor|patch) if available ([#1963](https://github.com/atuinsh/atuin/issues/1963))
+- Only open the database for commands if strictly required ([#2043](https://github.com/atuinsh/atuin/issues/2043))
+
+### Refactor
+
+- Preview_auto to use enum and different option ([#1991](https://github.com/atuinsh/atuin/issues/1991))
+
 ## [18.2.0] - 2024-04-15
 
 ### Bug Fixes
