@@ -85,7 +85,7 @@ unix-archive = ".tar.gz"
 inherits = "release"
 lto = "thin"
 
-[workspace.metadata.dist.github-customer-runners]
+[workspace.metadata.dist.github-custom-runners]
 aarch64-apple-darwin = "macos-14"
 aarch64-unknown-linux-gnu = "buildjet-8vcpu-ubuntu-2204-arm"
 aarch64-unknown-linux-musl = "buildjet-8vcpu-ubuntu-2204-arm"
