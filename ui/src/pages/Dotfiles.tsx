@@ -68,7 +68,7 @@ function Tabs({ current, setCurrent }: TabsProps) {
 
   return (
     <div>
-      <div className="mt-4">
+      <div>
         <nav className="flex space-x-4" aria-label="Tabs">
           {tabs.map((tab) => (
             <button
