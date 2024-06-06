@@ -27,7 +27,7 @@ static HELP_TEMPLATE: &str = "\
 /// Magical shell history
 #[derive(Parser)]
 #[command(
-    author = "Ellie Huxtable <e@elm.sh>",
+    author = "Ellie Huxtable <ellie@atuin.sh>",
     version = VERSION,
     help_template(HELP_TEMPLATE),
 )]

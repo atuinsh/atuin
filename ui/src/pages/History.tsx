@@ -22,7 +22,7 @@ function Header() {
           trigger={
             <button
               type="button"
-              className="inline-flex border-2 items-center hover:shadow-xl rounded-md px-2 py-2 text-sm font-semibold shadow-sm"
+              className="inline-flex border-2 items-center hover:shadow-xl rounded-md text-sm font-semibold shadow-sm"
             >
               <svg
                 xmlns="http://www.w3.org/2000/svg"
