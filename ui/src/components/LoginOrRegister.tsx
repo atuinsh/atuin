@@ -25,7 +25,7 @@ function Login(props: LoginProps) {
       await login(username, password, key);
       refreshUser();
       console.log("Logged in");
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
       setErrors(e);
     }
@@ -190,7 +190,7 @@ function Register(props: RegisterProps) {
       await register(username, email, password);
       refreshUser();
       console.log("Logged in");
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
       setErrors(e);
     }

@@ -2,14 +2,15 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::path::PathBuf;
-use time::format_description::well_known::Rfc3339;
 
-use atuin_client::settings::Settings;
+use tauri::{AppHandle, Manager};
+use time::format_description::well_known::Rfc3339;
 
 mod db;
 mod dotfiles;
 mod store;
 
+use atuin_client::settings::Settings;
 use atuin_client::{
     encryption, history::HISTORY_TAG, record::sqlite_store::SqliteStore, record::store::Store,
 };
@@ -165,6 +166,17 @@ async fn home_info() -> Result<HomeInfo, String> {
     Ok(info)
 }
 
+fn show_window(app: &AppHandle) {
+    let windows = app.webview_windows();
+
+    windows
+        .values()
+        .next()
+        .expect("Sorry, no window found")
+        .set_focus()
+        .expect("Can't Bring Window to Focus");
+}
+
 fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
@@ -186,6 +198,9 @@ fn main() {
         ])
         .plugin(tauri_plugin_sql::Builder::default().build())
         .plugin(tauri_plugin_http::init())
+        .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
+            let _ = show_window(app);
+        }))
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

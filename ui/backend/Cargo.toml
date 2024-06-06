@@ -12,8 +12,8 @@ edition = "2021"
 tauri-build = { version = "2.0.0-beta", features = [] }
 
 [dependencies]
-atuin-client = { path = "../../crates/atuin-client", version = "18.2.0" }
-atuin-common = { path = "../../crates/atuin-common", version = "18.2.0" }
+atuin-client = { path = "../../crates/atuin-client", version = "18.3.0-prerelease.1" }
+atuin-common = { path = "../../crates/atuin-common", version = "18.3.0-prerelease.1" }
 atuin-dotfiles = { path = "../../crates/atuin-dotfiles", version = "0.2.0" }
 atuin-history = { path = "../../crates/atuin-history", version = "0.1.0" }
 
@@ -25,6 +25,7 @@ time = "0.3.36"
 uuid = "1.7.0"
 syntect = "5.2.0"
 tauri-plugin-http = "2.0.0-beta"
+tauri-plugin-single-instance = "2.0.0-beta.9"
 
 [dependencies.sqlx]
 version = "0.7"
