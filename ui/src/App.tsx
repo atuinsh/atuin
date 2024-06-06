@@ -5,17 +5,9 @@ import { useStore } from "@/state/store";
 
 import Button, { ButtonStyle } from "@/components/Button";
 
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogTrigger } from "@/components/ui/dialog";
 
 import {
-  Cog6ToothIcon,
   HomeIcon,
   ClockIcon,
   WrenchScrewdriverIcon,

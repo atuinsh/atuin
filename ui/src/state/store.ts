@@ -11,7 +11,6 @@ import {
   Alias,
   ShellHistory,
   Var,
-  Settings,
 } from "./models";
 
 import { invoke } from "@tauri-apps/api/core";
