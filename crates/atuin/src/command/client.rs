@@ -1,4 +1,5 @@
-use std::path::PathBuf;
+use bytes::Bytes;
+use std::{io::BufRead, path::PathBuf};
 
 use clap::Subcommand;
 use eyre::{Result, WrapErr};
@@ -83,6 +84,8 @@ pub enum Cmd {
     /// Print example configuration
     #[command()]
     DefaultConfig,
+
+    Boop,
 }
 
 impl Cmd {
@@ -157,6 +160,28 @@ impl Cmd {
 
             #[cfg(feature = "daemon")]
             Self::Daemon => daemon::run(settings, sqlite_store, db).await,
+
+            Self::Boop => {
+                let pty =
+                    atuin_run::run::Pty::open_shell(24, 18, "/bin/zsh", "/Users/ellie").await?;
+
+                pty.send_single_string("ls\necho 'foo'\nsleep 5\npwd\n")
+                    .await;
+
+                let mut reader = pty.reader().unwrap();
+                tokio::task::spawn_blocking(|| {
+                    // Consume the output from the child
+                    // Can't read the full buffer, since that would wait for EOF
+                    let lines = std::io::BufReader::new(reader).lines();
+
+                    for line in lines.flatten() {
+                        println!("{line}");
+                    }
+                })
+                .await;
+
+                Ok(())
+            }
 
             _ => unimplemented!(),
         }

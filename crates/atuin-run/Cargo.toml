@@ -1,0 +1,19 @@
+[package]
+name = "atuin-run"
+edition = "2021"
+version = "0.1.0"
+authors.workspace = true
+rust-version.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+eyre.workspace = true
+tokio.workspace = true
+portable-pty = "0.8.1" 
+vt100 = "0.15.2"
+bytes = "1.6.0"
