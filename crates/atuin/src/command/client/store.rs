@@ -22,15 +22,26 @@ mod verify;
 #[derive(Subcommand, Debug)]
 #[command(infer_subcommands = true)]
 pub enum Cmd {
+    /// Print the current status of the record store
     Status,
+
+    /// Rebuild a store (eg atuin store rebuild history)
     Rebuild(rebuild::Rebuild),
+
+    /// Re-encrypt the store with a new key (potential for data loss!)
     Rekey(rekey::Rekey),
+
+    /// Delete all records in the store that cannot be decrypted with the current key
     Purge(purge::Purge),
+
+    /// Verify that all records in the store can be decrypted with the current key
     Verify(verify::Verify),
 
+    /// Push all records to the remote sync server (one way sync)
     #[cfg(feature = "sync")]
     Push(push::Push),
 
+    /// Pull records from the remote sync server (one way sync)
     #[cfg(feature = "sync")]
     Pull(pull::Pull),
 }
