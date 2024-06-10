@@ -2,6 +2,8 @@
 name = "atuin-daemon"
 edition = "2021"
 version = "0.2.0"
+description = "The daemon crate for Atuin"
+
 authors.workspace = true
 rust-version.workspace = true
 license.workspace = true
