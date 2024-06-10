@@ -35,11 +35,6 @@ elif ! command -v sed &> /dev/null; then
     exit
 fi
 
-LATEST_RELEASE=$(curl -L -s -H 'Accept: application/json' https://github.com/atuinsh/atuin/releases/latest)
-# Allow sed; sometimes it's more readable than ${variable//search/replace}
-# shellcheck disable=SC2001
-LATEST_VERSION=$(echo "$LATEST_RELEASE" | sed -e 's/.*"tag_name":"\([^"]*\)".*/\1/')
-
 __atuin_install_arch(){
 	echo "Arch Linux detected!"
 
