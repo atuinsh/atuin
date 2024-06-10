@@ -2,24 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [unreleased]
-
-### Documentation
-
-- *(No Category)* Add docs for store subcommand ([#2097](https://github.com/atuinsh/atuin/issues/2097))
-
-
-### Features
-
-- *(ui)* Setup single-instance ([#2093](https://github.com/atuinsh/atuin/issues/2093))
-
-
-### Miscellaneous Tasks
-
-- *(No Category)* Update email, gitignore, tweak ui ([#2094](https://github.com/atuinsh/atuin/issues/2094))
-
-
-## [18.3.0-prerelease.1] - 2024-06-05
+## [18.3.0] - 2024-06-10
 
 ### Bug Fixes
 
@@ -37,21 +20,22 @@ All notable changes to this project will be documented in this file.
 - *(stats)* Generation for commands starting with a pipe ([#2058](https://github.com/atuinsh/atuin/issues/2058))
 - *(ui)* Handle being logged out gracefully ([#2052](https://github.com/atuinsh/atuin/issues/2052))
 - *(ui)* Fix mistake in last pr ([#2053](https://github.com/atuinsh/atuin/issues/2053))
-- *(No Category)* Support not-mac for default shell ([#1960](https://github.com/atuinsh/atuin/issues/1960))
-- *(No Category)* Adapt help to `enter_accept` config ([#2001](https://github.com/atuinsh/atuin/issues/2001))
-- *(No Category)* Add protobuf compiler to docker image ([#2009](https://github.com/atuinsh/atuin/issues/2009))
-- *(No Category)* Add incremental rebuild to daemon loop ([#2010](https://github.com/atuinsh/atuin/issues/2010))
-- *(No Category)* Alias enable/enabled in settings ([#2021](https://github.com/atuinsh/atuin/issues/2021))
-- *(No Category)* Bogus error message wording ([#1283](https://github.com/atuinsh/atuin/issues/1283))
-- *(No Category)* Save sync time in daemon ([#2029](https://github.com/atuinsh/atuin/issues/2029))
-- *(No Category)* Redact password in database URI when logging ([#2032](https://github.com/atuinsh/atuin/issues/2032))
-- *(No Category)* Save sync time in daemon ([#2051](https://github.com/atuinsh/atuin/issues/2051))
-- *(No Category)* Replace serde_yaml::to_string with serde_json::to_string_yaml ([#2087](https://github.com/atuinsh/atuin/issues/2087))
+- Support not-mac for default shell ([#1960](https://github.com/atuinsh/atuin/issues/1960))
+- Adapt help to `enter_accept` config ([#2001](https://github.com/atuinsh/atuin/issues/2001))
+- Add protobuf compiler to docker image ([#2009](https://github.com/atuinsh/atuin/issues/2009))
+- Add incremental rebuild to daemon loop ([#2010](https://github.com/atuinsh/atuin/issues/2010))
+- Alias enable/enabled in settings ([#2021](https://github.com/atuinsh/atuin/issues/2021))
+- Bogus error message wording ([#1283](https://github.com/atuinsh/atuin/issues/1283))
+- Save sync time in daemon ([#2029](https://github.com/atuinsh/atuin/issues/2029))
+- Redact password in database URI when logging ([#2032](https://github.com/atuinsh/atuin/issues/2032))
+- Save sync time in daemon ([#2051](https://github.com/atuinsh/atuin/issues/2051))
+- Replace serde_yaml::to_string with serde_json::to_string_yaml ([#2087](https://github.com/atuinsh/atuin/issues/2087))
 
 
 ### Documentation
 
-- *(No Category)* Fix "From source" `cd` command ([#1973](https://github.com/atuinsh/atuin/issues/1973))
+- Fix "From source" `cd` command ([#1973](https://github.com/atuinsh/atuin/issues/1973))
+- Add docs for store subcommand ([#2097](https://github.com/atuinsh/atuin/issues/2097))
 
 
 ### Features
@@ -68,12 +52,13 @@ All notable changes to this project will be documented in this file.
 - *(ui)* Add history explore ([#2022](https://github.com/atuinsh/atuin/issues/2022))
 - *(ui)* Use correct username on welcome screen ([#2050](https://github.com/atuinsh/atuin/issues/2050))
 - *(ui)* Add login/register dialog ([#2056](https://github.com/atuinsh/atuin/issues/2056))
+- *(ui)* Setup single-instance ([#2093](https://github.com/atuinsh/atuin/issues/2093))
 - *(ui/dotfiles)* Add vars ([#1989](https://github.com/atuinsh/atuin/issues/1989))
-- *(No Category)* Allow ignoring failed commands ([#1957](https://github.com/atuinsh/atuin/issues/1957))
-- *(No Category)* Show preview auto ([#1804](https://github.com/atuinsh/atuin/issues/1804))
-- *(No Category)* Add background daemon ([#2006](https://github.com/atuinsh/atuin/issues/2006))
-- *(No Category)* Support importing from replxx history files ([#2024](https://github.com/atuinsh/atuin/issues/2024))
-- *(No Category)* Support systemd socket activation for daemon ([#2039](https://github.com/atuinsh/atuin/issues/2039))
+- Allow ignoring failed commands ([#1957](https://github.com/atuinsh/atuin/issues/1957))
+- Show preview auto ([#1804](https://github.com/atuinsh/atuin/issues/1804))
+- Add background daemon ([#2006](https://github.com/atuinsh/atuin/issues/2006))
+- Support importing from replxx history files ([#2024](https://github.com/atuinsh/atuin/issues/2024))
+- Support systemd socket activation for daemon ([#2039](https://github.com/atuinsh/atuin/issues/2039))
 
 
 ### Miscellaneous Tasks
@@ -82,25 +67,27 @@ All notable changes to this project will be documented in this file.
 - *(codespell)* Ignore CODE_OF_CONDUCT ([#2044](https://github.com/atuinsh/atuin/issues/2044))
 - *(install)* Log cargo and rustc version ([#2068](https://github.com/atuinsh/atuin/issues/2068))
 - *(release)* V18.3.0-prerelease.1 ([#2090](https://github.com/atuinsh/atuin/issues/2090))
-- *(No Category)* Move crates into crates/ dir ([#1958](https://github.com/atuinsh/atuin/issues/1958))
-- *(No Category)* Fix atuin crate readme ([#1959](https://github.com/atuinsh/atuin/issues/1959))
-- *(No Category)* Add some more logging to handlers ([#1971](https://github.com/atuinsh/atuin/issues/1971))
-- *(No Category)* Add some more debug logs ([#1979](https://github.com/atuinsh/atuin/issues/1979))
-- *(No Category)* Clarify default config file ([#2026](https://github.com/atuinsh/atuin/issues/2026))
-- *(No Category)* Handle rate limited responses ([#2057](https://github.com/atuinsh/atuin/issues/2057))
-- *(No Category)* Add Systemd config for self-hosted server ([#1879](https://github.com/atuinsh/atuin/issues/1879))
-- *(No Category)* Switch to cargo dist for releases ([#2085](https://github.com/atuinsh/atuin/issues/2085))
+- Move crates into crates/ dir ([#1958](https://github.com/atuinsh/atuin/issues/1958))
+- Fix atuin crate readme ([#1959](https://github.com/atuinsh/atuin/issues/1959))
+- Add some more logging to handlers ([#1971](https://github.com/atuinsh/atuin/issues/1971))
+- Add some more debug logs ([#1979](https://github.com/atuinsh/atuin/issues/1979))
+- Clarify default config file ([#2026](https://github.com/atuinsh/atuin/issues/2026))
+- Handle rate limited responses ([#2057](https://github.com/atuinsh/atuin/issues/2057))
+- Add Systemd config for self-hosted server ([#1879](https://github.com/atuinsh/atuin/issues/1879))
+- Switch to cargo dist for releases ([#2085](https://github.com/atuinsh/atuin/issues/2085))
+- Update email, gitignore, tweak ui ([#2094](https://github.com/atuinsh/atuin/issues/2094))
+- Show scope in changelog ([#2102](https://github.com/atuinsh/atuin/issues/2102))
 
 
 ### Performance
 
 - *(nushell)* Use version.(major|minor|patch) if available ([#1963](https://github.com/atuinsh/atuin/issues/1963))
-- *(No Category)* Only open the database for commands if strictly required ([#2043](https://github.com/atuinsh/atuin/issues/2043))
+- Only open the database for commands if strictly required ([#2043](https://github.com/atuinsh/atuin/issues/2043))
 
 
 ### Refactor
 
-- *(No Category)* Preview_auto to use enum and different option ([#1991](https://github.com/atuinsh/atuin/issues/1991))
+- Preview_auto to use enum and different option ([#1991](https://github.com/atuinsh/atuin/issues/1991))
 
 
 ## [18.2.0] - 2024-04-15
@@ -114,18 +101,18 @@ All notable changes to this project will be documented in this file.
 - *(nu)* Update atuin.nu to resolve 0.92 deprecation ([#1913](https://github.com/atuinsh/atuin/issues/1913))
 - *(search)* Allow empty search ([#1866](https://github.com/atuinsh/atuin/issues/1866))
 - *(search)* Case insensitive hostname filtering ([#1883](https://github.com/atuinsh/atuin/issues/1883))
-- *(No Category)* Pass search query in via env ([#1865](https://github.com/atuinsh/atuin/issues/1865))
-- *(No Category)* Pass search query in via env for *Nushell* ([#1874](https://github.com/atuinsh/atuin/issues/1874))
-- *(No Category)* Report non-decodable errors correctly ([#1915](https://github.com/atuinsh/atuin/issues/1915))
-- *(No Category)* Use spawn_blocking for file access during async context ([#1936](https://github.com/atuinsh/atuin/issues/1936))
+- Pass search query in via env ([#1865](https://github.com/atuinsh/atuin/issues/1865))
+- Pass search query in via env for *Nushell* ([#1874](https://github.com/atuinsh/atuin/issues/1874))
+- Report non-decodable errors correctly ([#1915](https://github.com/atuinsh/atuin/issues/1915))
+- Use spawn_blocking for file access during async context ([#1936](https://github.com/atuinsh/atuin/issues/1936))
 
 
 ### Documentation
 
 - *(bash-preexec)* Describe the limitation of missing commands ([#1937](https://github.com/atuinsh/atuin/issues/1937))
-- *(No Category)* Add security contact ([#1867](https://github.com/atuinsh/atuin/issues/1867))
-- *(No Category)* Add install instructions for cave/exherbo linux in README.md ([#1927](https://github.com/atuinsh/atuin/issues/1927))
-- *(No Category)* Add missing cli help text ([#1945](https://github.com/atuinsh/atuin/issues/1945))
+- Add security contact ([#1867](https://github.com/atuinsh/atuin/issues/1867))
+- Add install instructions for cave/exherbo linux in README.md ([#1927](https://github.com/atuinsh/atuin/issues/1927))
+- Add missing cli help text ([#1945](https://github.com/atuinsh/atuin/issues/1945))
 
 
 ### Features
@@ -138,19 +125,19 @@ All notable changes to this project will be documented in this file.
 - *(search)* Allow specifying search query as an env var ([#1863](https://github.com/atuinsh/atuin/issues/1863))
 - *(search)* Add better search scoring ([#1885](https://github.com/atuinsh/atuin/issues/1885))
 - *(server)* Check PG version before running migrations ([#1868](https://github.com/atuinsh/atuin/issues/1868))
-- *(No Category)* Add atuin prefix binding ([#1875](https://github.com/atuinsh/atuin/issues/1875))
-- *(No Category)* Sync v2 default for new installs ([#1914](https://github.com/atuinsh/atuin/issues/1914))
-- *(No Category)* Add 'ctrl-a a' to jump to beginning of line ([#1917](https://github.com/atuinsh/atuin/issues/1917))
-- *(No Category)* Prevents stderr from going to the screen ([#1933](https://github.com/atuinsh/atuin/issues/1933))
+- Add atuin prefix binding ([#1875](https://github.com/atuinsh/atuin/issues/1875))
+- Sync v2 default for new installs ([#1914](https://github.com/atuinsh/atuin/issues/1914))
+- Add 'ctrl-a a' to jump to beginning of line ([#1917](https://github.com/atuinsh/atuin/issues/1917))
+- Prevents stderr from going to the screen ([#1933](https://github.com/atuinsh/atuin/issues/1933))
 
 
 ### Miscellaneous Tasks
 
 - *(ci)* Add codespell support (config, workflow) and make it fix some typos ([#1916](https://github.com/atuinsh/atuin/issues/1916))
 - *(gui)* Cargo update ([#1943](https://github.com/atuinsh/atuin/issues/1943))
-- *(No Category)* Add issue form ([#1871](https://github.com/atuinsh/atuin/issues/1871))
-- *(No Category)* Require atuin doctor in issue form ([#1872](https://github.com/atuinsh/atuin/issues/1872))
-- *(No Category)* Add section to issue form ([#1873](https://github.com/atuinsh/atuin/issues/1873))
+- Add issue form ([#1871](https://github.com/atuinsh/atuin/issues/1871))
+- Require atuin doctor in issue form ([#1872](https://github.com/atuinsh/atuin/issues/1872))
+- Add section to issue form ([#1873](https://github.com/atuinsh/atuin/issues/1873))
 
 
 ### Performance
@@ -178,19 +165,19 @@ All notable changes to this project will be documented in this file.
 - *(tz)* Attempt to fix timezone reading ([#1810](https://github.com/atuinsh/atuin/issues/1810))
 - *(ui)* Don't preserve for empty space ([#1712](https://github.com/atuinsh/atuin/issues/1712))
 - *(xonsh)* Add xonsh to auto import, respect $HISTFILE in xonsh import, and fix issue with up-arrow keybinding in xonsh ([#1711](https://github.com/atuinsh/atuin/issues/1711))
-- *(No Category)* Fish init ([#1725](https://github.com/atuinsh/atuin/issues/1725))
-- *(No Category)* Typo ([#1741](https://github.com/atuinsh/atuin/issues/1741))
-- *(No Category)* Check session file exists for status command ([#1756](https://github.com/atuinsh/atuin/issues/1756))
-- *(No Category)* Ensure sync time is saved for sync v2 ([#1758](https://github.com/atuinsh/atuin/issues/1758))
-- *(No Category)* Missing characters in preview ([#1803](https://github.com/atuinsh/atuin/issues/1803))
-- *(No Category)* Doctor shell wording ([#1858](https://github.com/atuinsh/atuin/issues/1858))
+- Fish init ([#1725](https://github.com/atuinsh/atuin/issues/1725))
+- Typo ([#1741](https://github.com/atuinsh/atuin/issues/1741))
+- Check session file exists for status command ([#1756](https://github.com/atuinsh/atuin/issues/1756))
+- Ensure sync time is saved for sync v2 ([#1758](https://github.com/atuinsh/atuin/issues/1758))
+- Missing characters in preview ([#1803](https://github.com/atuinsh/atuin/issues/1803))
+- Doctor shell wording ([#1858](https://github.com/atuinsh/atuin/issues/1858))
 
 
 ### Documentation
 
-- *(No Category)* Minor formatting updates to the default config.toml ([#1689](https://github.com/atuinsh/atuin/issues/1689))
-- *(No Category)* Update docker compose ([#1818](https://github.com/atuinsh/atuin/issues/1818))
-- *(No Category)* Use db name env variable also in uri ([#1840](https://github.com/atuinsh/atuin/issues/1840))
+- Minor formatting updates to the default config.toml ([#1689](https://github.com/atuinsh/atuin/issues/1689))
+- Update docker compose ([#1818](https://github.com/atuinsh/atuin/issues/1818))
+- Use db name env variable also in uri ([#1840](https://github.com/atuinsh/atuin/issues/1840))
 
 
 ### Features
@@ -204,49 +191,49 @@ All notable changes to this project will be documented in this file.
 - *(stats)* Normalize formatting of default config, suggest nix ([#1764](https://github.com/atuinsh/atuin/issues/1764))
 - *(stats)* Add linux sysadmin commands to common_subcommands ([#1784](https://github.com/atuinsh/atuin/issues/1784))
 - *(ui)* Add config setting for showing tabs ([#1755](https://github.com/atuinsh/atuin/issues/1755))
-- *(No Category)* Use ATUIN_TEST_SQLITE_STORE_TIMEOUT to specify test timeout of SQLite store ([#1703](https://github.com/atuinsh/atuin/issues/1703))
-- *(No Category)* Add 'a', 'A', 'h', and 'l' bindings to vim-normal mode ([#1697](https://github.com/atuinsh/atuin/issues/1697))
-- *(No Category)* Add xonsh history import ([#1678](https://github.com/atuinsh/atuin/issues/1678))
-- *(No Category)* Add 'ignored_commands' option to stats ([#1722](https://github.com/atuinsh/atuin/issues/1722))
-- *(No Category)* Support syncing aliases ([#1721](https://github.com/atuinsh/atuin/issues/1721))
-- *(No Category)* Change fulltext to do multi substring match ([#1660](https://github.com/atuinsh/atuin/issues/1660))
-- *(No Category)* Add history prune subcommand ([#1743](https://github.com/atuinsh/atuin/issues/1743))
-- *(No Category)* Add alias feedback and list command ([#1747](https://github.com/atuinsh/atuin/issues/1747))
-- *(No Category)* Add PHP package manager "composer" to list of default common subcommands ([#1757](https://github.com/atuinsh/atuin/issues/1757))
-- *(No Category)* Add '/', '?', and 'I' bindings to vim-normal mode ([#1760](https://github.com/atuinsh/atuin/issues/1760))
-- *(No Category)* Add `CTRL+[` binding as `<Esc>` alias ([#1787](https://github.com/atuinsh/atuin/issues/1787))
-- *(No Category)* Add atuin doctor ([#1796](https://github.com/atuinsh/atuin/issues/1796))
-- *(No Category)* Add checks for common setup issues ([#1799](https://github.com/atuinsh/atuin/issues/1799))
-- *(No Category)* Support regex with r/.../ syntax ([#1745](https://github.com/atuinsh/atuin/issues/1745))
-- *(No Category)* Guard against ancient versions of bash where this does not work. ([#1794](https://github.com/atuinsh/atuin/issues/1794))
-- *(No Category)* Add automatic history store init ([#1831](https://github.com/atuinsh/atuin/issues/1831))
-- *(No Category)* Adds info command to show env vars and config files ([#1841](https://github.com/atuinsh/atuin/issues/1841))
+- Use ATUIN_TEST_SQLITE_STORE_TIMEOUT to specify test timeout of SQLite store ([#1703](https://github.com/atuinsh/atuin/issues/1703))
+- Add 'a', 'A', 'h', and 'l' bindings to vim-normal mode ([#1697](https://github.com/atuinsh/atuin/issues/1697))
+- Add xonsh history import ([#1678](https://github.com/atuinsh/atuin/issues/1678))
+- Add 'ignored_commands' option to stats ([#1722](https://github.com/atuinsh/atuin/issues/1722))
+- Support syncing aliases ([#1721](https://github.com/atuinsh/atuin/issues/1721))
+- Change fulltext to do multi substring match ([#1660](https://github.com/atuinsh/atuin/issues/1660))
+- Add history prune subcommand ([#1743](https://github.com/atuinsh/atuin/issues/1743))
+- Add alias feedback and list command ([#1747](https://github.com/atuinsh/atuin/issues/1747))
+- Add PHP package manager "composer" to list of default common subcommands ([#1757](https://github.com/atuinsh/atuin/issues/1757))
+- Add '/', '?', and 'I' bindings to vim-normal mode ([#1760](https://github.com/atuinsh/atuin/issues/1760))
+- Add `CTRL+[` binding as `<Esc>` alias ([#1787](https://github.com/atuinsh/atuin/issues/1787))
+- Add atuin doctor ([#1796](https://github.com/atuinsh/atuin/issues/1796))
+- Add checks for common setup issues ([#1799](https://github.com/atuinsh/atuin/issues/1799))
+- Support regex with r/.../ syntax ([#1745](https://github.com/atuinsh/atuin/issues/1745))
+- Guard against ancient versions of bash where this does not work. ([#1794](https://github.com/atuinsh/atuin/issues/1794))
+- Add automatic history store init ([#1831](https://github.com/atuinsh/atuin/issues/1831))
+- Adds info command to show env vars and config files ([#1841](https://github.com/atuinsh/atuin/issues/1841))
 
 
 ### Miscellaneous Tasks
 
 - *(ci)* Add cross-compile job for illumos ([#1830](https://github.com/atuinsh/atuin/issues/1830))
 - *(ci)* Setup nextest ([#1848](https://github.com/atuinsh/atuin/issues/1848))
-- *(No Category)* Do not show history table stats when using records ([#1835](https://github.com/atuinsh/atuin/issues/1835))
+- Do not show history table stats when using records ([#1835](https://github.com/atuinsh/atuin/issues/1835))
 
 
 ### Performance
 
-- *(No Category)* Optimize history init-store ([#1691](https://github.com/atuinsh/atuin/issues/1691))
+- Optimize history init-store ([#1691](https://github.com/atuinsh/atuin/issues/1691))
 
 
 ### Refactor
 
 - *(alias)* Clarify operation result for working with aliases ([#1748](https://github.com/atuinsh/atuin/issues/1748))
 - *(nushell)* Update `commandline` syntax, closes #1733 ([#1735](https://github.com/atuinsh/atuin/issues/1735))
-- *(No Category)* Rename atuin-config to atuin-dotfiles ([#1817](https://github.com/atuinsh/atuin/issues/1817))
+- Rename atuin-config to atuin-dotfiles ([#1817](https://github.com/atuinsh/atuin/issues/1817))
 
 
 ## [18.0.1] - 2024-02-12
 
 ### Bug Fixes
 
-- *(No Category)* Reorder the exit of enhanced keyboard mode ([#1694](https://github.com/atuinsh/atuin/issues/1694))
+- Reorder the exit of enhanced keyboard mode ([#1694](https://github.com/atuinsh/atuin/issues/1694))
 
 
 ## [18.0.0] - 2024-02-09
@@ -271,35 +258,35 @@ All notable changes to this project will be documented in this file.
 - *(tests)* Add Settings::utc() for utc settings ([#1677](https://github.com/atuinsh/atuin/issues/1677))
 - *(tui)* Dedupe was removing history ([#1610](https://github.com/atuinsh/atuin/issues/1610))
 - *(windows)* Disables unix specific stuff for windows ([#1557](https://github.com/atuinsh/atuin/issues/1557))
-- *(No Category)* Prevent input to be interpreted as options for zsh autosuggestions ([#1506](https://github.com/atuinsh/atuin/issues/1506))
-- *(No Category)* Disable musl deb building ([#1525](https://github.com/atuinsh/atuin/issues/1525))
-- *(No Category)* Shorten text, use ctrl-o for inspector ([#1561](https://github.com/atuinsh/atuin/issues/1561))
-- *(No Category)* Print literal control characters to non terminals ([#1586](https://github.com/atuinsh/atuin/issues/1586))
-- *(No Category)* Escape control characters in command preview ([#1588](https://github.com/atuinsh/atuin/issues/1588))
-- *(No Category)* Use existing db querying for history list ([#1589](https://github.com/atuinsh/atuin/issues/1589))
-- *(No Category)* Add acquire timeout to sqlite database connection ([#1590](https://github.com/atuinsh/atuin/issues/1590))
-- *(No Category)* Only escape control characters when writing to terminal ([#1593](https://github.com/atuinsh/atuin/issues/1593))
-- *(No Category)* Check for format errors when printing history ([#1623](https://github.com/atuinsh/atuin/issues/1623))
-- *(No Category)* Skip padding time if it will overflow the allowed prefix length ([#1630](https://github.com/atuinsh/atuin/issues/1630))
-- *(No Category)* Never overwrite the key ([#1657](https://github.com/atuinsh/atuin/issues/1657))
-- *(No Category)* Set durability for sqlite to recommended settings ([#1667](https://github.com/atuinsh/atuin/issues/1667))
-- *(No Category)* Correct download list for incremental builds ([#1672](https://github.com/atuinsh/atuin/issues/1672))
+- Prevent input to be interpreted as options for zsh autosuggestions ([#1506](https://github.com/atuinsh/atuin/issues/1506))
+- Disable musl deb building ([#1525](https://github.com/atuinsh/atuin/issues/1525))
+- Shorten text, use ctrl-o for inspector ([#1561](https://github.com/atuinsh/atuin/issues/1561))
+- Print literal control characters to non terminals ([#1586](https://github.com/atuinsh/atuin/issues/1586))
+- Escape control characters in command preview ([#1588](https://github.com/atuinsh/atuin/issues/1588))
+- Use existing db querying for history list ([#1589](https://github.com/atuinsh/atuin/issues/1589))
+- Add acquire timeout to sqlite database connection ([#1590](https://github.com/atuinsh/atuin/issues/1590))
+- Only escape control characters when writing to terminal ([#1593](https://github.com/atuinsh/atuin/issues/1593))
+- Check for format errors when printing history ([#1623](https://github.com/atuinsh/atuin/issues/1623))
+- Skip padding time if it will overflow the allowed prefix length ([#1630](https://github.com/atuinsh/atuin/issues/1630))
+- Never overwrite the key ([#1657](https://github.com/atuinsh/atuin/issues/1657))
+- Set durability for sqlite to recommended settings ([#1667](https://github.com/atuinsh/atuin/issues/1667))
+- Correct download list for incremental builds ([#1672](https://github.com/atuinsh/atuin/issues/1672))
 
 
 ### Documentation
 
 - *(README)* Clarify prerequisites for Bash ([#1686](https://github.com/atuinsh/atuin/issues/1686))
 - *(readme)* Add repology badge ([#1494](https://github.com/atuinsh/atuin/issues/1494))
-- *(No Category)* Add forum link to contributing ([#1498](https://github.com/atuinsh/atuin/issues/1498))
-- *(No Category)* Refer to image with multi-arch support ([#1513](https://github.com/atuinsh/atuin/issues/1513))
-- *(No Category)* Remove activity graph
-- *(No Category)* Fix `Destination file already exists` in Nushell ([#1530](https://github.com/atuinsh/atuin/issues/1530))
-- *(No Category)* Clarify enter/tab usage ([#1538](https://github.com/atuinsh/atuin/issues/1538))
-- *(No Category)* Improve style ([#1537](https://github.com/atuinsh/atuin/issues/1537))
-- *(No Category)* Remove old docusaurus ([#1581](https://github.com/atuinsh/atuin/issues/1581))
-- *(No Category)* Mention environment variables for custom paths ([#1614](https://github.com/atuinsh/atuin/issues/1614))
-- *(No Category)* Create pull_request_template.md ([#1632](https://github.com/atuinsh/atuin/issues/1632))
-- *(No Category)* Update CONTRIBUTING.md ([#1633](https://github.com/atuinsh/atuin/issues/1633))
+- Add forum link to contributing ([#1498](https://github.com/atuinsh/atuin/issues/1498))
+- Refer to image with multi-arch support ([#1513](https://github.com/atuinsh/atuin/issues/1513))
+- Remove activity graph
+- Fix `Destination file already exists` in Nushell ([#1530](https://github.com/atuinsh/atuin/issues/1530))
+- Clarify enter/tab usage ([#1538](https://github.com/atuinsh/atuin/issues/1538))
+- Improve style ([#1537](https://github.com/atuinsh/atuin/issues/1537))
+- Remove old docusaurus ([#1581](https://github.com/atuinsh/atuin/issues/1581))
+- Mention environment variables for custom paths ([#1614](https://github.com/atuinsh/atuin/issues/1614))
+- Create pull_request_template.md ([#1632](https://github.com/atuinsh/atuin/issues/1632))
+- Update CONTRIBUTING.md ([#1633](https://github.com/atuinsh/atuin/issues/1633))
 
 
 ### Features
@@ -313,32 +300,32 @@ All notable changes to this project will be documented in this file.
 - *(ui)* Vim mode ([#1553](https://github.com/atuinsh/atuin/issues/1553))
 - *(ui)* When in vim-normal mode apply an alternative highlighting to the selected line ([#1574](https://github.com/atuinsh/atuin/issues/1574))
 - *(zsh)* Update widget names ([#1631](https://github.com/atuinsh/atuin/issues/1631))
-- *(No Category)* Enable enhanced keyboard mode ([#1505](https://github.com/atuinsh/atuin/issues/1505))
-- *(No Category)* Rework record sync for improved reliability ([#1478](https://github.com/atuinsh/atuin/issues/1478))
-- *(No Category)* Include atuin login in secret patterns ([#1518](https://github.com/atuinsh/atuin/issues/1518))
-- *(No Category)* Make it clear what you are registering for ([#1523](https://github.com/atuinsh/atuin/issues/1523))
-- *(No Category)* Add extended help ([#1540](https://github.com/atuinsh/atuin/issues/1540))
-- *(No Category)* Add interactive command inspector ([#1296](https://github.com/atuinsh/atuin/issues/1296))
-- *(No Category)* Add better error handling for sync ([#1572](https://github.com/atuinsh/atuin/issues/1572))
-- *(No Category)* Add history rebuild ([#1575](https://github.com/atuinsh/atuin/issues/1575))
-- *(No Category)* Make deleting from the UI work with record store sync ([#1580](https://github.com/atuinsh/atuin/issues/1580))
-- *(No Category)* Add metrics counter for records downloaded ([#1584](https://github.com/atuinsh/atuin/issues/1584))
-- *(No Category)* Make store init idempotent ([#1609](https://github.com/atuinsh/atuin/issues/1609))
-- *(No Category)* Don't stop with invalid key ([#1612](https://github.com/atuinsh/atuin/issues/1612))
-- *(No Category)* Add registered and deleted metrics ([#1622](https://github.com/atuinsh/atuin/issues/1622))
-- *(No Category)* Make history list format configurable ([#1638](https://github.com/atuinsh/atuin/issues/1638))
-- *(No Category)* Add change-password command & support on server ([#1615](https://github.com/atuinsh/atuin/issues/1615))
-- *(No Category)* Automatically init history store when record sync is enabled ([#1634](https://github.com/atuinsh/atuin/issues/1634))
-- *(No Category)* Add store push ([#1649](https://github.com/atuinsh/atuin/issues/1649))
-- *(No Category)* Reencrypt/rekey local store ([#1662](https://github.com/atuinsh/atuin/issues/1662))
-- *(No Category)* Add prefers_reduced_motion flag ([#1645](https://github.com/atuinsh/atuin/issues/1645))
-- *(No Category)* Add verify command to local store
-- *(No Category)* Add store purge command
-- *(No Category)* Failure to decrypt history = failure to sync
-- *(No Category)* Add `store push --force`
-- *(No Category)* Add `store pull`
-- *(No Category)* Disable auto record store init ([#1671](https://github.com/atuinsh/atuin/issues/1671))
-- *(No Category)* Add progress bars to sync and store init ([#1684](https://github.com/atuinsh/atuin/issues/1684))
+- Enable enhanced keyboard mode ([#1505](https://github.com/atuinsh/atuin/issues/1505))
+- Rework record sync for improved reliability ([#1478](https://github.com/atuinsh/atuin/issues/1478))
+- Include atuin login in secret patterns ([#1518](https://github.com/atuinsh/atuin/issues/1518))
+- Make it clear what you are registering for ([#1523](https://github.com/atuinsh/atuin/issues/1523))
+- Add extended help ([#1540](https://github.com/atuinsh/atuin/issues/1540))
+- Add interactive command inspector ([#1296](https://github.com/atuinsh/atuin/issues/1296))
+- Add better error handling for sync ([#1572](https://github.com/atuinsh/atuin/issues/1572))
+- Add history rebuild ([#1575](https://github.com/atuinsh/atuin/issues/1575))
+- Make deleting from the UI work with record store sync ([#1580](https://github.com/atuinsh/atuin/issues/1580))
+- Add metrics counter for records downloaded ([#1584](https://github.com/atuinsh/atuin/issues/1584))
+- Make store init idempotent ([#1609](https://github.com/atuinsh/atuin/issues/1609))
+- Don't stop with invalid key ([#1612](https://github.com/atuinsh/atuin/issues/1612))
+- Add registered and deleted metrics ([#1622](https://github.com/atuinsh/atuin/issues/1622))
+- Make history list format configurable ([#1638](https://github.com/atuinsh/atuin/issues/1638))
+- Add change-password command & support on server ([#1615](https://github.com/atuinsh/atuin/issues/1615))
+- Automatically init history store when record sync is enabled ([#1634](https://github.com/atuinsh/atuin/issues/1634))
+- Add store push ([#1649](https://github.com/atuinsh/atuin/issues/1649))
+- Reencrypt/rekey local store ([#1662](https://github.com/atuinsh/atuin/issues/1662))
+- Add prefers_reduced_motion flag ([#1645](https://github.com/atuinsh/atuin/issues/1645))
+- Add verify command to local store
+- Add store purge command
+- Failure to decrypt history = failure to sync
+- Add `store push --force`
+- Add `store pull`
+- Disable auto record store init ([#1671](https://github.com/atuinsh/atuin/issues/1671))
+- Add progress bars to sync and store init ([#1684](https://github.com/atuinsh/atuin/issues/1684))
 
 
 ### Miscellaneous Tasks
@@ -346,14 +333,14 @@ All notable changes to this project will be documented in this file.
 - *(ci)* Use github m1 for release builds ([#1658](https://github.com/atuinsh/atuin/issues/1658))
 - *(ci)* Re-enable test cache, add separate check step ([#1663](https://github.com/atuinsh/atuin/issues/1663))
 - *(ci)* Run rust build/test/check on 3 platforms ([#1675](https://github.com/atuinsh/atuin/issues/1675))
-- *(No Category)* Remove the teapot response ([#1496](https://github.com/atuinsh/atuin/issues/1496))
-- *(No Category)* Schema cleanup ([#1522](https://github.com/atuinsh/atuin/issues/1522))
-- *(No Category)* Update funding ([#1543](https://github.com/atuinsh/atuin/issues/1543))
-- *(No Category)* Make clipboard dep optional as a feature ([#1558](https://github.com/atuinsh/atuin/issues/1558))
-- *(No Category)* Add feature to allow always disable check update ([#1628](https://github.com/atuinsh/atuin/issues/1628))
-- *(No Category)* Use resolver 2, update editions + cargo ([#1635](https://github.com/atuinsh/atuin/issues/1635))
-- *(No Category)* Disable nix tests ([#1646](https://github.com/atuinsh/atuin/issues/1646))
-- *(No Category)* Set ATUIN_ variables for development in devshell ([#1653](https://github.com/atuinsh/atuin/issues/1653))
+- Remove the teapot response ([#1496](https://github.com/atuinsh/atuin/issues/1496))
+- Schema cleanup ([#1522](https://github.com/atuinsh/atuin/issues/1522))
+- Update funding ([#1543](https://github.com/atuinsh/atuin/issues/1543))
+- Make clipboard dep optional as a feature ([#1558](https://github.com/atuinsh/atuin/issues/1558))
+- Add feature to allow always disable check update ([#1628](https://github.com/atuinsh/atuin/issues/1628))
+- Use resolver 2, update editions + cargo ([#1635](https://github.com/atuinsh/atuin/issues/1635))
+- Disable nix tests ([#1646](https://github.com/atuinsh/atuin/issues/1646))
+- Set ATUIN_ variables for development in devshell ([#1653](https://github.com/atuinsh/atuin/issues/1653))
 
 
 ### Refactor
@@ -361,8 +348,8 @@ All notable changes to this project will be documented in this file.
 - *(search)* Refactor vim mode ([#1559](https://github.com/atuinsh/atuin/issues/1559))
 - *(search)* Refactor handling of key inputs ([#1606](https://github.com/atuinsh/atuin/issues/1606))
 - *(shell)* Refactor and localize `HISTORY => __atuin_output` ([#1535](https://github.com/atuinsh/atuin/issues/1535))
-- *(No Category)* Use enum instead of magic numbers ([#1499](https://github.com/atuinsh/atuin/issues/1499))
-- *(No Category)* String -> HistoryId ([#1512](https://github.com/atuinsh/atuin/issues/1512))
+- Use enum instead of magic numbers ([#1499](https://github.com/atuinsh/atuin/issues/1499))
+- String -> HistoryId ([#1512](https://github.com/atuinsh/atuin/issues/1512))
 
 
 ### Styling
@@ -372,12 +359,12 @@ All notable changes to this project will be documented in this file.
 
 ### Testing
 
-- *(No Category)* Add multi-user integration tests ([#1648](https://github.com/atuinsh/atuin/issues/1648))
+- Add multi-user integration tests ([#1648](https://github.com/atuinsh/atuin/issues/1648))
 
 
 ### Stats
 
-- *(No Category)* Misc improvements ([#1613](https://github.com/atuinsh/atuin/issues/1613))
+- Misc improvements ([#1613](https://github.com/atuinsh/atuin/issues/1613))
 
 
 ## [17.2.1] - 2024-01-03
@@ -413,29 +400,29 @@ All notable changes to this project will be documented in this file.
 - *(readme)* Add actuated linkback
 - *(readme)* Fix light/dark mode logo
 - *(readme)* Use picture element for logo
-- *(No Category)* Add link to forum
-- *(No Category)* Align setup links in docs and readme ([#1446](https://github.com/atuinsh/atuin/issues/1446))
-- *(No Category)* Add Void Linux install instruction ([#1445](https://github.com/atuinsh/atuin/issues/1445))
-- *(No Category)* Add fish install script ([#1447](https://github.com/atuinsh/atuin/issues/1447))
-- *(No Category)* Correct link
-- *(No Category)* Add docs for zsh-autosuggestion integration ([#1480](https://github.com/atuinsh/atuin/issues/1480))
-- *(No Category)* Remove stray character from README
-- *(No Category)* Update logo ([#1481](https://github.com/atuinsh/atuin/issues/1481))
+- Add link to forum
+- Align setup links in docs and readme ([#1446](https://github.com/atuinsh/atuin/issues/1446))
+- Add Void Linux install instruction ([#1445](https://github.com/atuinsh/atuin/issues/1445))
+- Add fish install script ([#1447](https://github.com/atuinsh/atuin/issues/1447))
+- Correct link
+- Add docs for zsh-autosuggestion integration ([#1480](https://github.com/atuinsh/atuin/issues/1480))
+- Remove stray character from README
+- Update logo ([#1481](https://github.com/atuinsh/atuin/issues/1481))
 
 
 ### Features
 
 - *(bash)* Provide auto-complete source for ble.sh ([#1487](https://github.com/atuinsh/atuin/issues/1487))
 - *(shell)* Support high-resolution duration if available ([#1484](https://github.com/atuinsh/atuin/issues/1484))
-- *(No Category)* Add semver checking to client requests ([#1456](https://github.com/atuinsh/atuin/issues/1456))
-- *(No Category)* Add TLS to atuin-server ([#1457](https://github.com/atuinsh/atuin/issues/1457))
-- *(No Category)* Integrate with zsh-autosuggestions ([#1479](https://github.com/atuinsh/atuin/issues/1479))
+- Add semver checking to client requests ([#1456](https://github.com/atuinsh/atuin/issues/1456))
+- Add TLS to atuin-server ([#1457](https://github.com/atuinsh/atuin/issues/1457))
+- Integrate with zsh-autosuggestions ([#1479](https://github.com/atuinsh/atuin/issues/1479))
 
 
 ### Miscellaneous Tasks
 
 - *(repo)* Remove issue config ([#1433](https://github.com/atuinsh/atuin/issues/1433))
-- *(No Category)* Remove issue template ([#1444](https://github.com/atuinsh/atuin/issues/1444))
+- Remove issue template ([#1444](https://github.com/atuinsh/atuin/issues/1444))
 
 
 ### Refactor
@@ -454,38 +441,38 @@ All notable changes to this project will be documented in this file.
 - *(nix)* Add Appkit to the package build ([#1358](https://github.com/atuinsh/atuin/issues/1358))
 - *(zsh)* Bind in the most popular modes ([#1360](https://github.com/atuinsh/atuin/issues/1360))
 - *(zsh)* Only trigger up-arrow on first line ([#1359](https://github.com/atuinsh/atuin/issues/1359))
-- *(No Category)* Initial list of history in workspace mode ([#1356](https://github.com/atuinsh/atuin/issues/1356))
-- *(No Category)* Make `atuin account delete` void session + key ([#1393](https://github.com/atuinsh/atuin/issues/1393))
-- *(No Category)* New clippy lints ([#1395](https://github.com/atuinsh/atuin/issues/1395))
-- *(No Category)* Reenable enter_accept for bash ([#1408](https://github.com/atuinsh/atuin/issues/1408))
-- *(No Category)* Respect ZSH's $ZDOTDIR environment variable ([#942](https://github.com/atuinsh/atuin/issues/942))
+- Initial list of history in workspace mode ([#1356](https://github.com/atuinsh/atuin/issues/1356))
+- Make `atuin account delete` void session + key ([#1393](https://github.com/atuinsh/atuin/issues/1393))
+- New clippy lints ([#1395](https://github.com/atuinsh/atuin/issues/1395))
+- Reenable enter_accept for bash ([#1408](https://github.com/atuinsh/atuin/issues/1408))
+- Respect ZSH's $ZDOTDIR environment variable ([#942](https://github.com/atuinsh/atuin/issues/942))
 
 
 ### Documentation
 
-- *(No Category)* Update sync.md ([#1409](https://github.com/atuinsh/atuin/issues/1409))
-- *(No Category)* Update Arch Linux package URL in advanced-install.md ([#1407](https://github.com/atuinsh/atuin/issues/1407))
-- *(No Category)* New stats config ([#1412](https://github.com/atuinsh/atuin/issues/1412))
+- Update sync.md ([#1409](https://github.com/atuinsh/atuin/issues/1409))
+- Update Arch Linux package URL in advanced-install.md ([#1407](https://github.com/atuinsh/atuin/issues/1407))
+- New stats config ([#1412](https://github.com/atuinsh/atuin/issues/1412))
 
 
 ### Features
 
 - *(nix)* Add a nixpkgs overlay ([#1357](https://github.com/atuinsh/atuin/issues/1357))
-- *(No Category)* Add metrics server and http metrics ([#1394](https://github.com/atuinsh/atuin/issues/1394))
-- *(No Category)* Add some metrics related to Atuin as an app ([#1399](https://github.com/atuinsh/atuin/issues/1399))
-- *(No Category)* Allow configuring stats prefix ([#1411](https://github.com/atuinsh/atuin/issues/1411))
-- *(No Category)* Allow spaces in stats prefixes ([#1414](https://github.com/atuinsh/atuin/issues/1414))
+- Add metrics server and http metrics ([#1394](https://github.com/atuinsh/atuin/issues/1394))
+- Add some metrics related to Atuin as an app ([#1399](https://github.com/atuinsh/atuin/issues/1399))
+- Allow configuring stats prefix ([#1411](https://github.com/atuinsh/atuin/issues/1411))
+- Allow spaces in stats prefixes ([#1414](https://github.com/atuinsh/atuin/issues/1414))
 
 
 ### Miscellaneous Tasks
 
 - *(readme)* Add contributor image to README ([#1430](https://github.com/atuinsh/atuin/issues/1430))
-- *(No Category)* Update to sqlx 0.7.3 ([#1416](https://github.com/atuinsh/atuin/issues/1416))
-- *(No Category)* `cargo update` ([#1419](https://github.com/atuinsh/atuin/issues/1419))
-- *(No Category)* Update rusty_paseto and rusty_paserk ([#1420](https://github.com/atuinsh/atuin/issues/1420))
-- *(No Category)* Run dependabot weekly, not daily ([#1423](https://github.com/atuinsh/atuin/issues/1423))
-- *(No Category)* Don't group deps ([#1424](https://github.com/atuinsh/atuin/issues/1424))
-- *(No Category)* Setup git cliff ([#1431](https://github.com/atuinsh/atuin/issues/1431))
+- Update to sqlx 0.7.3 ([#1416](https://github.com/atuinsh/atuin/issues/1416))
+- `cargo update` ([#1419](https://github.com/atuinsh/atuin/issues/1419))
+- Update rusty_paseto and rusty_paserk ([#1420](https://github.com/atuinsh/atuin/issues/1420))
+- Run dependabot weekly, not daily ([#1423](https://github.com/atuinsh/atuin/issues/1423))
+- Don't group deps ([#1424](https://github.com/atuinsh/atuin/issues/1424))
+- Setup git cliff ([#1431](https://github.com/atuinsh/atuin/issues/1431))
 
 
 ## [17.0.1] - 2023-10-28
@@ -509,26 +496,26 @@ All notable changes to this project will be documented in this file.
 
 ### Documentation
 
-- *(No Category)* Update `workspace` config key to `workspaces` ([#1174](https://github.com/atuinsh/atuin/issues/1174))
-- *(No Category)* Document the available format options of History list command ([#1234](https://github.com/atuinsh/atuin/issues/1234))
+- Update `workspace` config key to `workspaces` ([#1174](https://github.com/atuinsh/atuin/issues/1174))
+- Document the available format options of History list command ([#1234](https://github.com/atuinsh/atuin/issues/1234))
 
 
 ### Features
 
 - *(installer)* Try installing via paru for the AUR ([#1262](https://github.com/atuinsh/atuin/issues/1262))
 - *(keyup)* Configure SearchMode for KeyUp invocation #1216 ([#1224](https://github.com/atuinsh/atuin/issues/1224))
-- *(No Category)* Mouse selection support ([#1209](https://github.com/atuinsh/atuin/issues/1209))
-- *(No Category)* Copy to clipboard ([#1249](https://github.com/atuinsh/atuin/issues/1249))
+- Mouse selection support ([#1209](https://github.com/atuinsh/atuin/issues/1209))
+- Copy to clipboard ([#1249](https://github.com/atuinsh/atuin/issues/1249))
 
 
 ### Refactor
 
-- *(No Category)* Duplications reduced in order to align implementations of reading history files ([#1247](https://github.com/atuinsh/atuin/issues/1247))
+- Duplications reduced in order to align implementations of reading history files ([#1247](https://github.com/atuinsh/atuin/issues/1247))
 
 
 ### Config.md
 
-- *(No Category)* Invert mode detailed options ([#1225](https://github.com/atuinsh/atuin/issues/1225))
+- Invert mode detailed options ([#1225](https://github.com/atuinsh/atuin/issues/1225))
 
 
 ## [16.0.0] - 2023-08-07
@@ -538,43 +525,43 @@ All notable changes to this project will be documented in this file.
 - *(docs)* List all presently documented commands ([#1140](https://github.com/atuinsh/atuin/issues/1140))
 - *(docs)* Correct command overview paths ([#1145](https://github.com/atuinsh/atuin/issues/1145))
 - *(server)* Teapot is a cup of coffee ([#1137](https://github.com/atuinsh/atuin/issues/1137))
-- *(No Category)* Adjust broken link to supported shells ([#1013](https://github.com/atuinsh/atuin/issues/1013))
-- *(No Category)* Fixes unix specific impl of shutdown_signal ([#1061](https://github.com/atuinsh/atuin/issues/1061))
-- *(No Category)* Nushell empty hooks ([#1138](https://github.com/atuinsh/atuin/issues/1138))
+- Adjust broken link to supported shells ([#1013](https://github.com/atuinsh/atuin/issues/1013))
+- Fixes unix specific impl of shutdown_signal ([#1061](https://github.com/atuinsh/atuin/issues/1061))
+- Nushell empty hooks ([#1138](https://github.com/atuinsh/atuin/issues/1138))
 
 
 ### Features
 
-- *(No Category)* Do not allow empty passwords durring account creation ([#1029](https://github.com/atuinsh/atuin/issues/1029))
+- Do not allow empty passwords durring account creation ([#1029](https://github.com/atuinsh/atuin/issues/1029))
 
 
 ### Skim
 
-- *(No Category)* Fix filtering aggregates ([#1114](https://github.com/atuinsh/atuin/issues/1114))
+- Fix filtering aggregates ([#1114](https://github.com/atuinsh/atuin/issues/1114))
 
 
 ## [15.0.0] - 2023-05-28
 
 ### Documentation
 
-- *(No Category)* Fix broken links in README.md ([#920](https://github.com/atuinsh/atuin/issues/920))
-- *(No Category)* Fix "From source" `cd` command ([#937](https://github.com/atuinsh/atuin/issues/937))
+- Fix broken links in README.md ([#920](https://github.com/atuinsh/atuin/issues/920))
+- Fix "From source" `cd` command ([#937](https://github.com/atuinsh/atuin/issues/937))
 
 
 ### Features
 
-- *(No Category)* Add delete account option (attempt 2) ([#980](https://github.com/atuinsh/atuin/issues/980))
+- Add delete account option (attempt 2) ([#980](https://github.com/atuinsh/atuin/issues/980))
 
 
 ### Miscellaneous Tasks
 
-- *(No Category)* Uuhhhhhh crypto lol ([#805](https://github.com/atuinsh/atuin/issues/805))
-- *(No Category)* Fix participle "be ran" -> "be run" ([#939](https://github.com/atuinsh/atuin/issues/939))
+- Uuhhhhhh crypto lol ([#805](https://github.com/atuinsh/atuin/issues/805))
+- Fix participle "be ran" -> "be run" ([#939](https://github.com/atuinsh/atuin/issues/939))
 
 
 ### Cwd_filter
 
-- *(No Category)* Much like history_filter, only it applies to cwd ([#904](https://github.com/atuinsh/atuin/issues/904))
+- Much like history_filter, only it applies to cwd ([#904](https://github.com/atuinsh/atuin/issues/904))
 
 
 ## [14.0.0] - 2023-04-01
@@ -583,10 +570,10 @@ All notable changes to this project will be documented in this file.
 
 - *(client)* Always read session_path from settings ([#757](https://github.com/atuinsh/atuin/issues/757))
 - *(installer)* Use case-insensitive comparison ([#776](https://github.com/atuinsh/atuin/issues/776))
-- *(No Category)* Many wins were broken :memo: ([#789](https://github.com/atuinsh/atuin/issues/789))
-- *(No Category)* Paste into terminal after switching modes ([#793](https://github.com/atuinsh/atuin/issues/793))
-- *(No Category)* Record negative exit codes ([#821](https://github.com/atuinsh/atuin/issues/821))
-- *(No Category)* Allow nix package to fetch dependencies from git ([#832](https://github.com/atuinsh/atuin/issues/832))
+- Many wins were broken :memo: ([#789](https://github.com/atuinsh/atuin/issues/789))
+- Paste into terminal after switching modes ([#793](https://github.com/atuinsh/atuin/issues/793))
+- Record negative exit codes ([#821](https://github.com/atuinsh/atuin/issues/821))
+- Allow nix package to fetch dependencies from git ([#832](https://github.com/atuinsh/atuin/issues/832))
 
 
 ### Documentation
@@ -596,21 +583,21 @@ All notable changes to this project will be documented in this file.
 
 ### Features
 
-- *(No Category)* Add common default keybindings ([#719](https://github.com/atuinsh/atuin/issues/719))
-- *(No Category)* Add an inline view mode ([#648](https://github.com/atuinsh/atuin/issues/648))
-- *(No Category)* Add *Nushell* support ([#788](https://github.com/atuinsh/atuin/issues/788))
-- *(No Category)* Add github action to test the nix builds ([#833](https://github.com/atuinsh/atuin/issues/833))
+- Add common default keybindings ([#719](https://github.com/atuinsh/atuin/issues/719))
+- Add an inline view mode ([#648](https://github.com/atuinsh/atuin/issues/648))
+- Add *Nushell* support ([#788](https://github.com/atuinsh/atuin/issues/788))
+- Add github action to test the nix builds ([#833](https://github.com/atuinsh/atuin/issues/833))
 
 
 ### Miscellaneous Tasks
 
-- *(No Category)* Remove tui vendoring ([#804](https://github.com/atuinsh/atuin/issues/804))
-- *(No Category)* Use fork of skim ([#803](https://github.com/atuinsh/atuin/issues/803))
+- Remove tui vendoring ([#804](https://github.com/atuinsh/atuin/issues/804))
+- Use fork of skim ([#803](https://github.com/atuinsh/atuin/issues/803))
 
 
 ### Nix
 
-- *(No Category)* Add flake-compat ([#743](https://github.com/atuinsh/atuin/issues/743))
+- Add flake-compat ([#743](https://github.com/atuinsh/atuin/issues/743))
 
 
 ## [13.0.0] - 2023-02-26
@@ -618,8 +605,8 @@ All notable changes to this project will be documented in this file.
 ### Documentation
 
 - *(README)* Add static activity graph example ([#680](https://github.com/atuinsh/atuin/issues/680))
-- *(No Category)* Remove human short flag from docs, duplicate of help -h ([#663](https://github.com/atuinsh/atuin/issues/663))
-- *(No Category)* Fix typo in zh-CN/README.md ([#666](https://github.com/atuinsh/atuin/issues/666))
+- Remove human short flag from docs, duplicate of help -h ([#663](https://github.com/atuinsh/atuin/issues/663))
+- Fix typo in zh-CN/README.md ([#666](https://github.com/atuinsh/atuin/issues/666))
 
 
 ### Features
@@ -629,96 +616,96 @@ All notable changes to this project will be documented in this file.
 
 ### Fish
 
-- *(No Category)* Fix `atuin init` for the fish shell ([#699](https://github.com/atuinsh/atuin/issues/699))
+- Fix `atuin init` for the fish shell ([#699](https://github.com/atuinsh/atuin/issues/699))
 
 
 ### Install.sh
 
-- *(No Category)* Fallback to using cargo ([#639](https://github.com/atuinsh/atuin/issues/639))
+- Fallback to using cargo ([#639](https://github.com/atuinsh/atuin/issues/639))
 
 
 ## [12.0.0] - 2022-11-06
 
 ### Documentation
 
-- *(No Category)* Add more details about date parsing in the stats command ([#579](https://github.com/atuinsh/atuin/issues/579))
+- Add more details about date parsing in the stats command ([#579](https://github.com/atuinsh/atuin/issues/579))
 
 
 ## [0.10.0] - 2022-06-06
 
 ### Miscellaneous Tasks
 
-- *(No Category)* Allow specifiying the limited of returned entries ([#364](https://github.com/atuinsh/atuin/issues/364))
+- Allow specifiying the limited of returned entries ([#364](https://github.com/atuinsh/atuin/issues/364))
 
 
 ## [0.9.0] - 2022-04-23
 
 ### README
 
-- *(No Category)* Add MacPorts installation instructions ([#302](https://github.com/atuinsh/atuin/issues/302))
+- Add MacPorts installation instructions ([#302](https://github.com/atuinsh/atuin/issues/302))
 
 
 ## [0.8.1] - 2022-04-12
 
 ### Bug Fixes
 
-- *(No Category)* Get install.sh working on UbuntuWSL ([#260](https://github.com/atuinsh/atuin/issues/260))
+- Get install.sh working on UbuntuWSL ([#260](https://github.com/atuinsh/atuin/issues/260))
 
 
 ## [0.8.0] - 2021-12-17
 
 ### Bug Fixes
 
-- *(No Category)* Resolve some issues with install.sh ([#188](https://github.com/atuinsh/atuin/issues/188))
+- Resolve some issues with install.sh ([#188](https://github.com/atuinsh/atuin/issues/188))
 
 
 ### Features
 
-- *(No Category)* Login/register no longer blocking ([#216](https://github.com/atuinsh/atuin/issues/216))
+- Login/register no longer blocking ([#216](https://github.com/atuinsh/atuin/issues/216))
 
 
 ## [0.7.2] - 2021-12-08
 
 ### Bug Fixes
 
-- *(No Category)* Dockerfile with correct glibc ([#198](https://github.com/atuinsh/atuin/issues/198))
+- Dockerfile with correct glibc ([#198](https://github.com/atuinsh/atuin/issues/198))
 
 
 ### Features
 
-- *(No Category)* Allow input of credentials from stdin ([#185](https://github.com/atuinsh/atuin/issues/185))
+- Allow input of credentials from stdin ([#185](https://github.com/atuinsh/atuin/issues/185))
 
 
 ### Miscellaneous Tasks
 
-- *(No Category)* Some new linting ([#201](https://github.com/atuinsh/atuin/issues/201))
-- *(No Category)* Supply pre-build docker image ([#199](https://github.com/atuinsh/atuin/issues/199))
-- *(No Category)* Add more eyre contexts ([#200](https://github.com/atuinsh/atuin/issues/200))
-- *(No Category)* Improve build times ([#213](https://github.com/atuinsh/atuin/issues/213))
+- Some new linting ([#201](https://github.com/atuinsh/atuin/issues/201))
+- Supply pre-build docker image ([#199](https://github.com/atuinsh/atuin/issues/199))
+- Add more eyre contexts ([#200](https://github.com/atuinsh/atuin/issues/200))
+- Improve build times ([#213](https://github.com/atuinsh/atuin/issues/213))
 
 
 ## [0.7.1] - 2021-05-10
 
 ### Features
 
-- *(No Category)* Build individual crates ([#109](https://github.com/atuinsh/atuin/issues/109))
+- Build individual crates ([#109](https://github.com/atuinsh/atuin/issues/109))
 
 
 ## [0.6.3] - 2021-04-26
 
 ### Bug Fixes
 
-- *(No Category)* Help text
+- Help text
 
 
 ### Features
 
-- *(No Category)* Use directories project data dir
+- Use directories project data dir
 
 
 ### Miscellaneous Tasks
 
-- *(No Category)* Use structopt wrapper instead of building clap by hand
+- Use structopt wrapper instead of building clap by hand
 
 
 <!-- generated by git-cliff -->
