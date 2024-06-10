@@ -33,7 +33,7 @@ body = """
     {%- for commit in commits %}
         {%- if commit.scope -%}
         {% else -%}
-            - *(No Category)* {{ commit.message | upper_first }}
+            - {{ commit.message | upper_first }}
             {% if commit.breaking -%}
             {% raw %}  {% endraw %}- **BREAKING**: {{commit.breaking_description}}
             {% endif -%}
@@ -91,7 +91,7 @@ tag_pattern = "v[0-9].*"
 # regex for skipping tags
 skip_tags = "v0.1.0-beta.1"
 # regex for ignoring tags
-ignore_tags = ""
+ignore_tags = ".*prerelease.*"
 # sort the tags topologically
 topo_order = false
 # sort the commits inside sections by oldest/newest order
