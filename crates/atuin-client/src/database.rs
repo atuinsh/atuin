@@ -144,10 +144,21 @@ impl Sqlite {
             .with_regexp()
             .create_if_missing(true);
 
-        let pool = SqlitePoolOptions::new()
-            .acquire_timeout(Duration::from_secs_f64(timeout))
-            .connect_with(opts)
-            .await?;
+        let mut pool_opts = SqlitePoolOptions::new()
+            .acquire_timeout(Duration::from_secs_f64(timeout));
+
+        // Workaround for sqlx-sqlite in-memory failure.
+        // Make sure a single connection is created to avoid overwriting the database.
+        // Safe to use in this case since memory databases are only used for testing.
+        // https://github.com/launchbadge/sqlx/issues/2510
+        if path.to_str().unwrap().ends_with(":memory:"){
+            pool_opts = pool_opts
+                .max_connections(1)
+                .idle_timeout(None)
+                .max_lifetime(None);
+        }
+
+        let pool = pool_opts.connect_with(opts).await?;
 
         Self::setup_db(&pool).await?;
 
