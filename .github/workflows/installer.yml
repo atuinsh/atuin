@@ -1,0 +1,38 @@
+name: Install
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  install:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-14]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install zsh for ubuntu
+        if: matrix.os == 'ubuntu-latest' 
+        run: | 
+          sudo apt install zsh
+
+      - name: Test install script on bash
+        run: | 
+          /bin/bash -c "$(curl --proto '=https' --tlsv1.2 -sSf https://setup.atuin.sh)"
+          [ -d "$HOME/.atuin" ] && source $HOME/.atuin/bin/env
+          atuin --help
+
+      - name: Test install script on zsh
+        shell: zsh {0}
+        run: | 
+          /bin/bash -c "$(curl --proto '=https' --tlsv1.2 -sSf https://setup.atuin.sh)"
+          [ -d "$HOME/.atuin" ] && source $HOME/.atuin/bin/env
+          atuin --help
