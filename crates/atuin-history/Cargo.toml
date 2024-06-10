@@ -1,5 +1,6 @@
 [package]
 name = "atuin-history"
+description = "The history crate for Atuin"
 edition = "2021"
 version = "0.2.0"
 
