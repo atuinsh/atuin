@@ -342,7 +342,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
 name = "atuin-client"
-version = "18.3.0-prerelease.1"
+version = "18.3.0"
 dependencies = [
  "async-trait",
  "atuin-common",
@@ -390,7 +390,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-common"
-version = "18.3.0-prerelease.1"
+version = "18.3.0"
 dependencies = [
  "eyre",
  "lazy_static",
@@ -407,7 +407,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-dotfiles"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "atuin-client",
  "atuin-common",
@@ -421,7 +421,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-history"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "atuin-client",
