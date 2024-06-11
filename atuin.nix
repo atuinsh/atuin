@@ -13,7 +13,6 @@
   Security,
   SystemConfiguration,
   AppKit,
-  protobuf,
 }:
 rustPlatform.buildRustPackage {
   name = "atuin";
@@ -28,9 +27,7 @@ rustPlatform.buildRustPackage {
 
   nativeBuildInputs = [installShellFiles];
 
-  buildInputs = lib.optionals stdenv.isDarwin [libiconv Security SystemConfiguration AppKit protobuf];
-
-  env.PROTOC = lib.getExe' protobuf "protoc";
+  buildInputs = lib.optionals stdenv.isDarwin [libiconv Security SystemConfiguration AppKit];
 
   postInstall = ''
     installShellCompletion --cmd atuin \

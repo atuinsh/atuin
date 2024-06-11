@@ -5,7 +5,6 @@ Thank you so much for considering contributing to Atuin! We really appreciate it
 Development dependencies
 
 1. A rust toolchain ([rustup](https://rustup.rs) recommended)
-2. [Protobuf compiler](https://grpc.io/docs/protoc-installation/)
 
 We commit to supporting the latest stable version of Rust - nothing more, nothing less, no nightly.
 

@@ -38,4 +38,5 @@ rand.workspace = true
 listenfd = "1.0.1"
 
 [build-dependencies]
+protox = "0.6.0"
 tonic-build = "0.11"

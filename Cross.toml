@@ -1,4 +1,0 @@
-[build]
-pre-build = [
-  "apt update && apt install -y protobuf-compiler"
-]
