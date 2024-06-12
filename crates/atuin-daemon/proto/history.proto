@@ -1,8 +1,6 @@
 syntax = "proto3";
 package history;
 
-import "google/protobuf/timestamp.proto";
-
 message StartHistoryRequest {
   // If people are still using my software in ~530 years, they can figure out a u128 migration
   uint64 timestamp = 1; // nanosecond unix epoch
