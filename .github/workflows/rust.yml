@@ -24,11 +24,6 @@ jobs:
         with:
           toolchain: stable
 
-      - name: Install Protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-
       - uses: actions/cache@v3
         with:
           path: |
@@ -65,11 +60,6 @@ jobs:
         with:
           tool: cross
 
-      - name: Install Protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-
       - uses: actions/cache@v3
         with:
           path: |
@@ -105,11 +95,6 @@ jobs:
         with:
           toolchain: stable
 
-      - name: Install Protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-
       - uses: taiki-e/install-action@v2
         name: Install nextest
         with:
@@ -139,11 +124,6 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: stable
-
-      - name: Install Protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: actions/cache@v3
         with:
@@ -189,11 +169,6 @@ jobs:
         with:
           toolchain: stable
 
-      - name: Install Protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-
       - uses: taiki-e/install-action@v2
         name: Install nextest
         with:
@@ -223,11 +198,6 @@ jobs:
         with:
           toolchain: stable
           components: clippy
-
-      - name: Install Protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: actions/cache@v3
         with:
