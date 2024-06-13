@@ -31,9 +31,10 @@ fs-err = { workspace = true }
 tower = { workspace = true }
 tower-http = { version = "0.5.1", features = ["trace"] }
 reqwest = { workspace = true }
-rustls = "0.21"
+rustls = "0.23"
 rustls-pemfile = "2.1"
 argon2 = "0.5"
 semver = { workspace = true }
 metrics-exporter-prometheus = "0.12.1"
 metrics = "0.21.1"
+rustls-pki-types = "1.7.0"

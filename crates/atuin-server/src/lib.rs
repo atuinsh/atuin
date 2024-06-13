@@ -14,7 +14,6 @@ mod metrics;
 mod router;
 mod utils;
 
-use rustls::ServerConfig;
 pub use settings::example_config;
 pub use settings::Settings;
 
@@ -86,8 +85,7 @@ async fn launch_with_tls<Db: Database>(
     let certificates = settings.tls.certificates()?;
     let pkey = settings.tls.private_key()?;
 
-    let server_config = ServerConfig::builder()
-        .with_safe_defaults()
+    let server_config = rustls::server::ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(certificates, pkey)?;
 

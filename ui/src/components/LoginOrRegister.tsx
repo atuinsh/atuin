@@ -21,6 +21,7 @@ function Login(props: LoginProps) {
     const key = form.key.value;
 
     console.log("Logging in...");
+
     try {
       await login(username, password, key);
       refreshUser();
