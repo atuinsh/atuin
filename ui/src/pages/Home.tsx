@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { formatRelative } from "date-fns";
 
 import { useStore } from "@/state/store";
+import { invoke } from "@tauri-apps/api/core";
 
 function Stats({ stats }: any) {
   return (
@@ -51,6 +52,16 @@ export default function Home() {
   useEffect(() => {
     refreshHomeInfo();
     refreshUser();
+
+    invoke("is_cli_installed").then((installed) => {
+      console.log("cli installed", installed);
+
+      if (!installed) {
+        invoke("install_cli").then(() => {
+          console.log("installed CLI!");
+        });
+      }
+    });
   }, []);
 
   if (!homeInfo) {

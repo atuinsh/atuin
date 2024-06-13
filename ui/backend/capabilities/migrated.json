@@ -19,5 +19,5 @@
       "allow": ["https://api.atuin.sh/*"]
     }
   ],
-  "platforms": ["linux", "macOS", "windows", "android", "iOS"]
+  "platforms": ["linux", "macOS", "windows"]
 }

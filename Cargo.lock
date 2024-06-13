@@ -300,6 +300,7 @@ dependencies = [
 name = "atuin-common"
 version = "18.3.0"
 dependencies = [
+ "directories",
  "eyre",
  "lazy_static",
  "pretty_assertions",

@@ -9,6 +9,7 @@ use time::format_description::well_known::Rfc3339;
 mod db;
 mod dotfiles;
 mod store;
+mod install;
 
 use atuin_client::settings::Settings;
 use atuin_client::{
@@ -189,6 +190,8 @@ fn main() {
             session,
             login,
             register,
+            install::install_cli,
+            install::is_cli_installed,
             dotfiles::aliases::import_aliases,
             dotfiles::aliases::delete_alias,
             dotfiles::aliases::set_alias,
