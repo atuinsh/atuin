@@ -18,7 +18,7 @@
     "@tailwindcss/forms": "^0.5.7",
     "@tanstack/react-table": "^8.17.3",
     "@tanstack/react-virtual": "^3.5.1",
-    "@tauri-apps/api": "2.0.0-beta.7",
+    "@tauri-apps/api": "2.0.0-beta.13",
     "@tauri-apps/plugin-http": "2.0.0-beta.5",
     "@tauri-apps/plugin-sql": "2.0.0-beta.2",
     "class-variance-authority": "^0.7.0",

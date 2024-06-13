@@ -30,8 +30,8 @@ dependencies:
     specifier: ^3.5.1
     version: 3.5.1(react-dom@18.3.1)(react@18.3.1)
   '@tauri-apps/api':
-    specifier: 2.0.0-beta.7
-    version: 2.0.0-beta.7
+    specifier: 2.0.0-beta.13
+    version: 2.0.0-beta.13
   '@tauri-apps/plugin-http':
     specifier: 2.0.0-beta.5
     version: 2.0.0-beta.5
@@ -1467,11 +1467,6 @@ packages:
 
   /@tauri-apps/api@2.0.0-beta.4:
     resolution: {integrity: sha512-Nxtj28NYUo5iwYkpYslxmOPkdI2WkELU2e3UH9nbJm9Ydki2CQwJVGQxx4EANtdZcMNsEsUzRqaDTvEUYH1l6w==}
-    engines: {node: '>= 18', npm: '>= 6.6.0', yarn: '>= 1.19.1'}
-    dev: false
-
-  /@tauri-apps/api@2.0.0-beta.7:
-    resolution: {integrity: sha512-cM7SJQP4DBkLLMOdybLFYUURWn/tng2FEdAnXlu42f3NhFxKL4KVeeQTkuwlgC7ePwwwvDSqiXGiF+dKOadY7w==}
     engines: {node: '>= 18', npm: '>= 6.6.0', yarn: '>= 1.19.1'}
     dev: false
 
