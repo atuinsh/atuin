@@ -40,7 +40,7 @@ rand = { workspace = true }
 shellexpand = "3"
 sqlx = { workspace = true, features = ["sqlite", "regexp"] }
 minspan = "0.1.1"
-regex = "1.10.4"
+regex = "1.10.5"
 serde_regex = "1.1.0"
 fs-err = { workspace = true }
 sql-builder = "3"
