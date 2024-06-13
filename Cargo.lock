@@ -403,6 +403,7 @@ dependencies = [
  "reqwest",
  "rustls 0.23.9",
  "rustls-pemfile 2.1.2",
+ "rustls-pki-types",
  "semver",
  "serde",
  "serde_json",

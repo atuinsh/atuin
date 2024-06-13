@@ -37,3 +37,4 @@ argon2 = "0.5"
 semver = { workspace = true }
 metrics-exporter-prometheus = "0.12.1"
 metrics = "0.21.1"
+rustls-pki-types = "1.7.0"
