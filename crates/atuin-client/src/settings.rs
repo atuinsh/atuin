@@ -553,6 +553,10 @@ impl Settings {
             return Ok(false);
         }
 
+        if self.sync_frequency == "0" {
+            return Ok(true);
+        }
+
         match parse_duration(self.sync_frequency.as_str()) {
             Ok(d) => {
                 let d = time::Duration::try_from(d).unwrap();
