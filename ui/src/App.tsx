@@ -4,6 +4,7 @@ import { useState, ReactElement } from "react";
 import { useStore } from "@/state/store";
 
 import Button, { ButtonStyle } from "@/components/Button";
+import { Toaster } from "@/components/ui/toaster";
 
 import { Dialog, DialogContent, DialogTrigger } from "@/components/ui/dialog";
 
@@ -124,6 +125,7 @@ function App() {
       </div>
 
       {renderMain(section)}
+      <Toaster />
     </div>
   );
 }

@@ -2,6 +2,8 @@ import { useEffect } from "react";
 import { formatRelative } from "date-fns";
 
 import { useStore } from "@/state/store";
+import { useToast } from "@/components/ui/use-toast";
+import { invoke } from "@tauri-apps/api/core";
 
 function Stats({ stats }: any) {
   return (
@@ -47,10 +49,36 @@ export default function Home() {
   const user = useStore((state) => state.user);
   const refreshHomeInfo = useStore((state) => state.refreshHomeInfo);
   const refreshUser = useStore((state) => state.refreshUser);
+  const { toast } = useToast();
 
   useEffect(() => {
     refreshHomeInfo();
     refreshUser();
+
+    let setup = async () => {
+      let installed = await invoke("is_cli_installed");
+      console.log("CLI installation status:", installed);
+
+      if (!installed) {
+        toast({
+          title: "Atuin CLI",
+          description: "Started CLI setup and installation...",
+        });
+
+        console.log("Installing CLI...");
+        await invoke("install_cli");
+
+        console.log("Setting up plugin...");
+        await invoke("setup_cli");
+
+        toast({
+          title: "Atuin CLI",
+          description: "Installation complete",
+        });
+      }
+    };
+
+    setup();
   }, []);
 
   if (!homeInfo) {

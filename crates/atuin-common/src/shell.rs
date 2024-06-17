@@ -59,6 +59,25 @@ impl Shell {
         Shell::from_string(shell.to_string())
     }
 
+    pub fn config_file(&self) -> Option<std::path::PathBuf> {
+        let mut path = if let Some(base) = directories::BaseDirs::new() {
+            base.home_dir().to_owned()
+        } else {
+            return None;
+        };
+
+        // TODO: handle all shells
+        match self {
+            Shell::Bash => path.push(".bashrc"),
+            Shell::Zsh => path.push(".zshrc"),
+            Shell::Fish => path.push(".config/fish/config.fish"),
+
+            _ => return None,
+        };
+
+        Some(path)
+    }
+
     /// Best-effort attempt to determine the default shell
     /// This implementation will be different across different platforms
     /// Caller should ensure to handle Shell::Unknown correctly

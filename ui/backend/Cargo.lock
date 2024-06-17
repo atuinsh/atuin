@@ -392,6 +392,7 @@ dependencies = [
 name = "atuin-common"
 version = "18.3.0"
 dependencies = [
+ "directories",
  "eyre",
  "lazy_static",
  "rand 0.8.5",
@@ -6122,6 +6123,7 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tauri-plugin-sql",
  "time",
+ "tokio",
  "uuid",
 ]
 
