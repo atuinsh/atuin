@@ -36,8 +36,8 @@ dependencies:
     specifier: 2.0.0-beta.5
     version: 2.0.0-beta.5
   '@tauri-apps/plugin-sql':
-    specifier: 2.0.0-beta.2
-    version: 2.0.0-beta.2
+    specifier: 2.0.0-beta.5
+    version: 2.0.0-beta.5
   class-variance-authority:
     specifier: ^0.7.0
     version: 0.7.0
@@ -1465,11 +1465,6 @@ packages:
     engines: {node: '>= 18', npm: '>= 6.6.0', yarn: '>= 1.19.1'}
     dev: false
 
-  /@tauri-apps/api@2.0.0-beta.4:
-    resolution: {integrity: sha512-Nxtj28NYUo5iwYkpYslxmOPkdI2WkELU2e3UH9nbJm9Ydki2CQwJVGQxx4EANtdZcMNsEsUzRqaDTvEUYH1l6w==}
-    engines: {node: '>= 18', npm: '>= 6.6.0', yarn: '>= 1.19.1'}
-    dev: false
-
   /@tauri-apps/cli-darwin-arm64@2.0.0-beta.20:
     resolution: {integrity: sha512-oCJOCib7GuYkwkBXx+ekamR8NZZU+2i3MLP+DHpDxK5gS2uhCE+CBkamJkNt6y1x6xdVnwyqZOm5RvN4SRtyIA==}
     engines: {node: '>= 10'}
@@ -1583,10 +1578,10 @@ packages:
       '@tauri-apps/api': 2.0.0-beta.13
     dev: false
 
-  /@tauri-apps/plugin-sql@2.0.0-beta.2:
-    resolution: {integrity: sha512-gNX/4VjGl0TD4Ct58ar4bLF82iRp2L5sS79FmtzKlXYj7tVbkxenIi+mGIBz3Ut1JQP5WNL4/5wq74bkDlBggA==}
+  /@tauri-apps/plugin-sql@2.0.0-beta.5:
+    resolution: {integrity: sha512-EuhrMeIGmIQmGYuzxk6i+PPqIMMgT+nApNsjYbpuVwYuav60RiI0pIC76B77BfmO5J7Sj9ueJyhiugwUevsYmQ==}
     dependencies:
-      '@tauri-apps/api': 2.0.0-beta.4
+      '@tauri-apps/api': 2.0.0-beta.13
     dev: false
 
   /@types/babel__core@7.20.5:
