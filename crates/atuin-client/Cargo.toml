@@ -44,7 +44,7 @@ regex = "1.10.5"
 serde_regex = "1.1.0"
 fs-err = { workspace = true }
 sql-builder = "3"
-memchr = "2.5"
+memchr = "2.7"
 rmp = { version = "0.8.14" }
 typed-builder = { workspace = true }
 tokio = { workspace = true }
