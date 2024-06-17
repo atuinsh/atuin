@@ -5965,6 +5965,7 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tauri-plugin-sql",
  "time",
+ "tokio",
  "uuid",
 ]
 

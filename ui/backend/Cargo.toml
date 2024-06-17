@@ -25,7 +25,8 @@ time = "0.3.36"
 uuid = "1.7.0"
 syntect = "5.2.0"
 tauri-plugin-http = "2.0.0-beta"
-tauri-plugin-single-instance = "2.0.0-beta.9"
+tauri-plugin-single-instance = "2.0.0-beta"
+tokio = "1.38.0"
 
 [dependencies.sqlx]
 version = "0.7"
