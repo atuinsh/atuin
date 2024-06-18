@@ -1,4 +1,4 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import { formatRelative } from "date-fns";
 import { Tooltip as ReactTooltip } from "react-tooltip";
 
@@ -53,6 +53,8 @@ const explicitTheme: ThemeInput = {
 };
 
 export default function Home() {
+  const [weekStart, setWeekStart] = useState(0);
+
   const homeInfo = useStore((state) => state.homeInfo);
   const user = useStore((state) => state.user);
   const calendar = useStore((state) => state.calendar);
@@ -64,6 +66,10 @@ export default function Home() {
   const { toast } = useToast();
 
   useEffect(() => {
+    let locale = new Intl.Locale(navigator.language);
+    let weekinfo = locale.getWeekInfo();
+    setWeekStart(weekinfo.firstDay);
+
     refreshHomeInfo();
     refreshUser();
     refreshCalendar();
@@ -130,6 +136,7 @@ export default function Home() {
           <ActivityCalendar
             theme={explicitTheme}
             data={calendar}
+            weekStart={weekStart}
             renderBlock={(block, activity) =>
               React.cloneElement(block, {
                 "data-tooltip-id": "react-tooltip",
