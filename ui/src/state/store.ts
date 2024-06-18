@@ -25,8 +25,10 @@ interface AtuinState {
   aliases: Alias[];
   vars: Var[];
   shellHistory: ShellHistory[];
+  calendar: any[];
 
   refreshHomeInfo: () => void;
+  refreshCalendar: () => void;
   refreshAliases: () => void;
   refreshVars: () => void;
   refreshUser: () => void;
@@ -40,10 +42,17 @@ export const useStore = create<AtuinState>()((set, get) => ({
   aliases: [],
   vars: [],
   shellHistory: [],
+  calendar: [],
 
   refreshAliases: () => {
     invoke("aliases").then((aliases: any) => {
       set({ aliases: aliases });
+    });
+  },
+
+  refreshCalendar: () => {
+    invoke("history_calendar").then((calendar: any) => {
+      set({ calendar: calendar });
     });
   },
 

@@ -174,6 +174,24 @@ impl HistoryDB {
         Ok(history)
     }
 
+    pub async fn calendar(&self) -> Result<Vec<(String, u64)>, String> {
+        let query = "select count(1) as count, strftime('%F', datetime(timestamp / 1000000000, 'unixepoch')) as day from history where timestamp > ((unixepoch() - 31536000) * 1000000000) group by day;";
+
+        let calendar: Vec<(String, u64)> = sqlx::query(query)
+            // safe to cast, count(x) is never < 0
+            .map(|row: SqliteRow| {
+                (
+                    row.get::<String, _>("day"),
+                    row.get::<i64, _>("count") as u64,
+                )
+            })
+            .fetch_all(&self.0.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        Ok(calendar)
+    }
+
     pub async fn global_stats(&self) -> Result<GlobalStats, String> {
         let day_ago = time::OffsetDateTime::now_utc() - time::Duration::days(1);
         let day_ago = day_ago.unix_timestamp_nanos();
