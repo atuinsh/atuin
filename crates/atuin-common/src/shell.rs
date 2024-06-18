@@ -95,7 +95,7 @@ impl Shell {
                 "dscl localhost -read \"/Local/Default/Users/$USER\" shell | awk '{print $2}'",
             ])?
         } else if cfg!(windows) {
-            return Ok(Shell::Powershell)
+            return Ok(Shell::Powershell);
         } else {
             Shell::Sh.run_interactive(["getent passwd $LOGNAME | cut -d: -f7"])?
         };
