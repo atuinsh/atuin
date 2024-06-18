@@ -330,6 +330,7 @@ pub struct Sync {
 #[derive(Clone, Debug, Deserialize, Default, Serialize)]
 pub struct Keys {
     pub scroll_exits: bool,
+    pub prefix: char,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -715,6 +716,7 @@ impl Settings {
             .set_default("enter_accept", false)?
             .set_default("sync.records", false)?
             .set_default("keys.scroll_exits", true)?
+            .set_default("keys.prefix", 'a')?
             .set_default("keymap_mode", "emacs")?
             .set_default("keymap_mode_shell", "auto")?
             .set_default("keymap_cursor", HashMap::<String, String>::new())?
