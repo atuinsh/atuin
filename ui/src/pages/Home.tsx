@@ -56,27 +56,26 @@ export default function Home() {
     refreshUser();
 
     let setup = async () => {
-      invoke("is_cli_installed").then(async installed => {
-        console.log("CLI installation status:", installed);
-        if (!installed) {
-          toast({
-            title: "Atuin CLI",
-            description: "Started CLI setup and installation...",
-          });
+      let installed = await invoke("is_cli_installed");
+      console.log("CLI installation status:", installed);
 
-          console.log("Installing CLI...");
-          await invoke("install_cli");
+      if (!installed) {
+        toast({
+          title: "Atuin CLI",
+          description: "Started CLI setup and installation...",
+        });
 
-          console.log("Setting up plugin...");
-          await invoke("setup_cli");
+        console.log("Installing CLI...");
+        await invoke("install_cli");
 
-          toast({
-            title: "Atuin CLI",
-            description: "Installation complete",
-          });
-        }
-      }).catch((e) => console.log(e))
+        console.log("Setting up plugin...");
+        await invoke("setup_cli");
 
+        toast({
+          title: "Atuin CLI",
+          description: "Installation complete",
+        });
+      }
     };
 
     setup();
