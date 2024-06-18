@@ -269,8 +269,10 @@ __atuin_history() {
     fi
 }
 
-# shellcheck disable=SC2154
-if [[ ${BLE_VERSION-} ]] && ((_ble_version >= 400)); then
+__atuin_initialize_blesh() {
+    # shellcheck disable=SC2154
+    [[ ${BLE_VERSION-} ]] && ((_ble_version >= 400)) || return 0
+
     ble-import contrib/integration/bash-preexec
 
     # Define and register an autosuggestion source for ble.sh's auto-complete.
@@ -295,7 +297,9 @@ if [[ ${BLE_VERSION-} ]] && ((_ble_version >= 400)); then
     # BLE_SESSION_ID.  We explicitly export the variable because it was not
     # exported in older versions of ble.sh.
     [[ ${BLE_SESSION_ID-} ]] && export BLE_SESSION_ID
-fi
+}
+__atuin_initialize_blesh
+BLE_ONLOAD+=(__atuin_initialize_blesh)
 precmd_functions+=(__atuin_precmd)
 preexec_functions+=(__atuin_preexec)
 
