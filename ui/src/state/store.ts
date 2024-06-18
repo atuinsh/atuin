@@ -26,6 +26,7 @@ interface AtuinState {
   vars: Var[];
   shellHistory: ShellHistory[];
   calendar: any[];
+  weekStart: number;
 
   refreshHomeInfo: () => void;
   refreshCalendar: () => void;
@@ -43,6 +44,7 @@ export const useStore = create<AtuinState>()((set, get) => ({
   vars: [],
   shellHistory: [],
   calendar: [],
+  weekStart: new Intl.Locale(navigator.language).getWeekInfo().firstDay,
 
   refreshAliases: () => {
     invoke("aliases").then((aliases: any) => {
