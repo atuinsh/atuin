@@ -167,6 +167,54 @@ async fn home_info() -> Result<HomeInfo, String> {
     Ok(info)
 }
 
+// Match the format that the frontend library we use expects
+// All the processing in Rust, not JS.
+// Faaaassssssst af ⚡️🦀
+#[derive(Debug, serde::Serialize)]
+pub struct HistoryCalendarDay {
+    pub date: String,
+    pub count: u64,
+    pub level: u8,
+}
+
+#[tauri::command]
+async fn history_calendar() -> Result<Vec<HistoryCalendarDay>, String> {
+    let settings = Settings::new().map_err(|e| e.to_string())?;
+    let db_path = PathBuf::from(settings.db_path.as_str());
+    let db = HistoryDB::new(db_path, settings.local_timeout).await?;
+
+    let calendar = db.calendar().await?;
+
+    // probs don't want to iterate _this_ many times, but it's only the last year. so 365
+    // iterations at max. should be quick.
+
+    let max = calendar
+        .iter()
+        .max_by_key(|d| d.1)
+        .expect("Can't find max count");
+
+    let ret = calendar
+        .iter()
+        .map(|d| {
+            // calculate the "level". we have 5, so figure out which 5th it fits into
+            let percent: f64 = d.1 as f64 / max.1 as f64;
+            let level = if d.1 == 0 {
+                0.0
+            } else {
+                (percent / 0.2).round() + 1.0
+            };
+
+            HistoryCalendarDay {
+                date: d.0.clone(),
+                count: d.1,
+                level: std::cmp::min(4, level as u8),
+            }
+        })
+        .collect();
+
+    Ok(ret)
+}
+
 fn show_window(app: &AppHandle) {
     let windows = app.webview_windows();
 
@@ -190,6 +238,7 @@ fn main() {
             session,
             login,
             register,
+            history_calendar,
             install::install_cli,
             install::is_cli_installed,
             install::setup_cli,

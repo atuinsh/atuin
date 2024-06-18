@@ -1,9 +1,12 @@
-import { useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import { formatRelative } from "date-fns";
+import { Tooltip as ReactTooltip } from "react-tooltip";
 
 import { useStore } from "@/state/store";
 import { useToast } from "@/components/ui/use-toast";
 import { invoke } from "@tauri-apps/api/core";
+
+import ActivityCalendar from "react-activity-calendar";
 
 function Stats({ stats }: any) {
   return (
@@ -44,16 +47,32 @@ function Header({ name }: any) {
   );
 }
 
+const explicitTheme: ThemeInput = {
+  light: ["#f0f0f0", "#c4edde", "#7ac7c4", "#f73859", "#384259"],
+  dark: ["#383838", "#4D455D", "#7DB9B6", "#F5E9CF", "#E96479"],
+};
+
 export default function Home() {
+  const [weekStart, setWeekStart] = useState(0);
+
   const homeInfo = useStore((state) => state.homeInfo);
   const user = useStore((state) => state.user);
+  const calendar = useStore((state) => state.calendar);
+
   const refreshHomeInfo = useStore((state) => state.refreshHomeInfo);
   const refreshUser = useStore((state) => state.refreshUser);
+  const refreshCalendar = useStore((state) => state.refreshCalendar);
+
   const { toast } = useToast();
 
   useEffect(() => {
+    let locale = new Intl.Locale(navigator.language);
+    let weekinfo = locale.getWeekInfo();
+    setWeekStart(weekinfo.firstDay);
+
     refreshHomeInfo();
     refreshUser();
+    refreshCalendar();
 
     let setup = async () => {
       let installed = await invoke("is_cli_installed");
@@ -111,6 +130,24 @@ export default function Home() {
               },
             ]}
           />
+        </div>
+
+        <div className="pt-10">
+          <ActivityCalendar
+            theme={explicitTheme}
+            data={calendar}
+            weekStart={weekStart}
+            renderBlock={(block, activity) =>
+              React.cloneElement(block, {
+                "data-tooltip-id": "react-tooltip",
+                "data-tooltip-html": `${activity.count} commands on ${activity.date}`,
+              })
+            }
+            labels={{
+              totalCount: "{{count}} history records in the last year",
+            }}
+          />
+          <ReactTooltip id="react-tooltip" />
         </div>
       </div>
     </div>
