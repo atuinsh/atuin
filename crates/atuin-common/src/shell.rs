@@ -4,6 +4,7 @@ use serde::Serialize;
 use sysinfo::{get_current_pid, Process, System};
 use thiserror::Error;
 
+#[derive(PartialEq)]
 pub enum Shell {
     Sh,
     Bash,
@@ -11,6 +12,7 @@ pub enum Shell {
     Zsh,
     Xonsh,
     Nu,
+    Powershell,
 
     Unknown,
 }
@@ -24,6 +26,7 @@ impl std::fmt::Display for Shell {
             Shell::Nu => "nu",
             Shell::Xonsh => "xonsh",
             Shell::Sh => "sh",
+            Shell::Powershell => "powershell",
 
             Shell::Unknown => "unknown",
         };
@@ -91,6 +94,8 @@ impl Shell {
             Shell::Sh.run_interactive([
                 "dscl localhost -read \"/Local/Default/Users/$USER\" shell | awk '{print $2}'",
             ])?
+        } else if cfg!(windows) {
+            return Ok(Shell::Powershell);
         } else {
             Shell::Sh.run_interactive(["getent passwd $LOGNAME | cut -d: -f7"])?
         };
@@ -115,6 +120,7 @@ impl Shell {
             "xonsh" => Shell::Xonsh,
             "nu" => Shell::Nu,
             "sh" => Shell::Sh,
+            "powershell" => Shell::Powershell,
 
             _ => Shell::Unknown,
         }
@@ -133,12 +139,18 @@ impl Shell {
         S: AsRef<OsStr>,
     {
         let shell = self.to_string();
-
-        let output = Command::new(shell)
-            .arg("-ic")
-            .args(args)
-            .output()
-            .map_err(|e| ShellError::ExecError(e.to_string()))?;
+        let output = if self == &Self::Powershell {
+            Command::new(shell)
+                .args(args)
+                .output()
+                .map_err(|e| ShellError::ExecError(e.to_string()))?
+        } else {
+            Command::new(shell)
+                .arg("-ic")
+                .args(args)
+                .output()
+                .map_err(|e| ShellError::ExecError(e.to_string()))?
+        };
 
         Ok(String::from_utf8(output.stdout).unwrap())
     }
