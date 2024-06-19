@@ -53,11 +53,10 @@ const explicitTheme: ThemeInput = {
 };
 
 export default function Home() {
-  const [weekStart, setWeekStart] = useState(0);
-
   const homeInfo = useStore((state) => state.homeInfo);
   const user = useStore((state) => state.user);
   const calendar = useStore((state) => state.calendar);
+  const weekStart = useStore((state) => state.weekStart);
 
   const refreshHomeInfo = useStore((state) => state.refreshHomeInfo);
   const refreshUser = useStore((state) => state.refreshUser);
@@ -66,10 +65,6 @@ export default function Home() {
   const { toast } = useToast();
 
   useEffect(() => {
-    let locale = new Intl.Locale(navigator.language);
-    let weekinfo = locale.getWeekInfo();
-    setWeekStart(weekinfo.firstDay);
-
     refreshHomeInfo();
     refreshUser();
     refreshCalendar();
@@ -110,7 +105,6 @@ export default function Home() {
         <Header name={user.username} />
 
         <div className="pt-10">
-          <h2 className="text-xl font-bold">Sync</h2>
           <Stats
             stats={[
               {
@@ -132,7 +126,7 @@ export default function Home() {
           />
         </div>
 
-        <div className="pt-10">
+        <div className="pt-10 flex justify-around">
           <ActivityCalendar
             theme={explicitTheme}
             data={calendar}

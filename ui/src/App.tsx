@@ -105,7 +105,7 @@ function App() {
                 </ul>
               </li>
               <li className="mt-auto">
-                {user && !user.isLoggedIn() && (
+                {user && user.username === "" && !user.username && (
                   <Dialog>
                     <DialogTrigger className="w-full">
                       <Button

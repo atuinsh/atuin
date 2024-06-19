@@ -1,4 +1,6 @@
 import { create } from "zustand";
+import { persist, createJSONStorage } from "zustand/middleware";
+
 import { parseISO } from "date-fns";
 
 import { fetch } from "@tauri-apps/plugin-http";
@@ -26,6 +28,7 @@ interface AtuinState {
   vars: Var[];
   shellHistory: ShellHistory[];
   calendar: any[];
+  weekStart: number;
 
   refreshHomeInfo: () => void;
   refreshCalendar: () => void;
@@ -36,13 +39,14 @@ interface AtuinState {
   historyNextPage: (query?: string) => void;
 }
 
-export const useStore = create<AtuinState>()((set, get) => ({
+let state = (set, get): AtuinState => ({
   user: DefaultUser,
   homeInfo: DefaultHomeInfo,
   aliases: [],
   vars: [],
   shellHistory: [],
   calendar: [],
+  weekStart: new Intl.Locale(navigator.language).getWeekInfo().firstDay,
 
   refreshAliases: () => {
     invoke("aliases").then((aliases: any) => {
@@ -135,4 +139,8 @@ export const useStore = create<AtuinState>()((set, get) => ({
       });
     }
   },
-}));
+});
+
+export const useStore = create<AtuinState>()(
+  persist(state, { name: "atuin-storage" }),
+);
