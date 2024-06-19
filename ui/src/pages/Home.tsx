@@ -105,7 +105,6 @@ export default function Home() {
         <Header name={user.username} />
 
         <div className="pt-10">
-          <h2 className="text-xl font-bold">Sync</h2>
           <Stats
             stats={[
               {
@@ -127,7 +126,7 @@ export default function Home() {
           />
         </div>
 
-        <div className="pt-10">
+        <div className="pt-10 flex justify-around">
           <ActivityCalendar
             theme={explicitTheme}
             data={calendar}

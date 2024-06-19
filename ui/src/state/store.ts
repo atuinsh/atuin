@@ -1,4 +1,6 @@
 import { create } from "zustand";
+import { persist, createJSONStorage } from "zustand/middleware";
+
 import { parseISO } from "date-fns";
 
 import { fetch } from "@tauri-apps/plugin-http";
@@ -37,7 +39,7 @@ interface AtuinState {
   historyNextPage: (query?: string) => void;
 }
 
-export const useStore = create<AtuinState>()((set, get) => ({
+let state = (set, get): AtuinState => ({
   user: DefaultUser,
   homeInfo: DefaultHomeInfo,
   aliases: [],
@@ -137,4 +139,8 @@ export const useStore = create<AtuinState>()((set, get) => ({
       });
     }
   },
-}));
+});
+
+export const useStore = create<AtuinState>()(
+  persist(state, { name: "atuin-storage" }),
+);
