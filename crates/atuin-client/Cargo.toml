@@ -1,0 +1,75 @@
+[package]
+name = "atuin-client"
+edition = "2021"
+description = "client library for atuin"
+
+rust-version = { workspace = true }
+version = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[features]
+default = ["sync", "daemon"]
+sync = ["urlencoding", "reqwest", "sha2", "hex"]
+daemon = []
+check-update = []
+
+[dependencies]
+atuin-common = { path = "../atuin-common", version = "18.3.0" }
+
+log = { workspace = true }
+base64 = { workspace = true }
+time = { workspace = true, features = ["macros", "formatting", "parsing"] }
+clap = { workspace = true }
+eyre = { workspace = true }
+directories = { workspace = true }
+uuid = { workspace = true }
+whoami = { workspace = true }
+interim = { workspace = true }
+config = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+humantime = "2.1.0"
+async-trait = { workspace = true }
+itertools = { workspace = true }
+rand = { workspace = true }
+shellexpand = "3"
+sqlx = { workspace = true, features = ["sqlite", "regexp"] }
+minspan = "0.1.1"
+regex = "1.10.5"
+serde_regex = "1.1.0"
+fs-err = { workspace = true }
+sql-builder = "3"
+memchr = "2.7"
+rmp = { version = "0.8.14" }
+typed-builder = { workspace = true }
+tokio = { workspace = true }
+semver = { workspace = true }
+thiserror = { workspace = true }
+futures = "0.3"
+crypto_secretbox = "0.1.1"
+generic-array = { version = "0.14", features = ["serde"] }
+serde_with = "3.8.1"
+
+# encryption
+rusty_paseto = { version = "0.7.0", default-features = false }
+rusty_paserk = { version = "0.4.0", default-features = false, features = [
+  "v4",
+  "serde",
+] }
+
+# sync
+urlencoding = { version = "2.1.0", optional = true }
+reqwest = { workspace = true, optional = true }
+hex = { version = "0.4", optional = true }
+sha2 = { version = "0.10", optional = true }
+indicatif = "0.17.7"
+tiny-bip39 = "1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+pretty_assertions = { workspace = true }

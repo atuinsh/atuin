@@ -1,0 +1,31 @@
+syntax = "proto3";
+package history;
+
+message StartHistoryRequest {
+  // If people are still using my software in ~530 years, they can figure out a u128 migration
+  uint64 timestamp = 1; // nanosecond unix epoch
+  string command = 2;
+  string cwd = 3;
+  string session = 4;
+  string hostname = 5;
+}
+
+message EndHistoryRequest {
+  string id = 1;
+  int64 exit = 2;
+  uint64 duration = 3;
+}
+
+message StartHistoryReply {
+  string id = 1;
+}
+
+message EndHistoryReply {
+  string id = 1;
+  uint64 idx = 2;
+}
+
+service History {
+  rpc StartHistory(StartHistoryRequest) returns (StartHistoryReply);
+  rpc EndHistory(EndHistoryRequest) returns (EndHistoryReply);
+}

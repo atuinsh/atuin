@@ -1,0 +1,9 @@
+[advisories]
+ignore = [
+  # This is a vuln on RSA. RSA is in our lockfile, but not in cargo-tree. 
+  # It is a issue with sqlx/cargo, and does not affect Atuin.
+  # See:
+  # - https://github.com/launchbadge/sqlx/issues/3211
+  # - https://github.com/rust-lang/cargo/issues/10801
+  "RUSTSEC-2023-0071"
+]

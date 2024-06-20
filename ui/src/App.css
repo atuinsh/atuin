@@ -1,0 +1,27 @@
+html {
+    overscroll-behavior: none;
+}
+
+.logo.vite:hover {
+    filter: drop-shadow(0 0 2em #747bff);
+}
+
+.logo.react:hover {
+    filter: drop-shadow(0 0 2em #61dafb);
+}
+
+.history-header {
+    height: 150px;
+}
+
+.history-search {
+    height: 64px;
+}
+
+.history-list {
+    height: calc(100vh - 150px - 64px);
+}
+
+.history-item {
+    height: 90px;
+}

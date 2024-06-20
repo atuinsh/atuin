@@ -1,0 +1,34 @@
+## host to bind, can also be passed via CLI args
+# host = "127.0.0.1"
+
+## port to bind, can also be passed via CLI args
+# port = 8888
+
+## whether to allow anyone to register an account
+# open_registration = false
+
+## URI for postgres (using development creds here)
+# db_uri="postgres://username:password@localhost/atuin"
+
+## Maximum size for one history entry
+# max_history_length = 8192
+
+## Maximum size for one record entry
+## 1024 * 1024 * 1024
+# max_record_size = 1073741824
+
+## Webhook to be called when user registers on the servers
+# register_webhook_username = ""
+
+## Default page size for requests
+# page_size = 1100
+
+# [metrics]
+# enable = false
+# host = 127.0.0.1
+# port = 9001
+
+# [tls]
+# enable = false
+# cert_path = ""
+# pkey_path = ""

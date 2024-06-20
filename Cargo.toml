@@ -1,18 +1,13 @@
 [workspace]
-members = [
-  "atuin",
-  "atuin-client",
-  "atuin-server",
-  "atuin-server-postgres",
-  "atuin-server-database",
-  "atuin-common",
-]
+members = ["crates/*"]
+
+resolver = "2"
+exclude = ["ui/backend"]
 
 [workspace.package]
-name = "atuin"
-version = "16.0.0"
+version = "18.3.0"
 authors = ["Ellie Huxtable <ellie@elliehuxtable.com>"]
-rust-version = "1.67"
+rust-version = "1.77"
 license = "MIT"
 homepage = "https://atuin.sh"
 repository = "https://github.com/atuinsh/atuin"
@@ -20,28 +15,37 @@ readme = "README.md"
 
 [workspace.dependencies]
 async-trait = "0.1.58"
-base64 = "0.21"
+base64 = "0.22"
 log = "0.4"
-time = { version = "0.3", features = ["serde-human-readable", "macros", "local-offset"] }
-clap = { version = "4.0.18", features = ["derive"] }
+time = { version = "0.3.36", features = [
+    "serde-human-readable",
+    "macros",
+    "local-offset",
+] }
+clap = { version = "4.5.7", features = ["derive"] }
 config = { version = "0.13", default-features = false, features = ["toml"] }
-directories = "4"
+directories = "5.0.1"
 eyre = "0.6"
 fs-err = "2.9"
 interim = { version = "0.1.0", features = ["time"] }
-itertools = "0.11.0"
+itertools = "0.12.0"
 rand = { version = "0.8.5", features = ["std"] }
-semver = "1.0.14"
-# https://github.com/serde-rs/serde/issues/2538
-# I don't trust dtolnay with our user's builds. especially as we
-# have things like encryption keys
-serde = { version = "1.0.145, <=1.0.171", features = ["derive"] }
-serde_json = "1.0.99"
+semver = "1.0.20"
+serde = { version = "1.0.202", features = ["derive"] }
+serde_json = "1.0.116"
 tokio = { version = "1", features = ["full"] }
-uuid = { version = "1.3", features = ["v4", "serde"] }
-whoami = "1.1.2"
-typed-builder = "0.15.0"
+uuid = { version = "1.8", features = ["v4", "v7", "serde"] }
+whoami = "1.5.1"
+typed-builder = "0.18.2"
 pretty_assertions = "1.3.0"
+thiserror = "1.0"
+rustix = { version = "0.38.34", features = ["process", "fs"] }
+tower = "0.4"
+tracing = "0.1"
+
+[workspace.dependencies.tracing-subscriber]
+version = "0.3"
+features = ["ansi", "fmt", "registry", "env-filter"]
 
 [workspace.dependencies.reqwest]
 version = "0.11"
@@ -49,10 +53,36 @@ features = ["json", "rustls-tls-native-roots"]
 default-features = false
 
 [workspace.dependencies.sqlx]
-version = "0.7.1"
-features = [
-  "runtime-tokio-rustls",
-  "time",
-  "postgres",
-  "uuid",
-]
+version = "0.7"
+features = ["runtime-tokio-rustls", "time", "postgres", "uuid"]
+
+# Config for 'cargo dist'
+[workspace.metadata.dist]
+# Path that installers should place binaries in
+install-path = "~/.atuin/bin"
+# The preferred cargo-dist version to use in CI (Cargo.toml SemVer syntax)
+cargo-dist-version = "0.16.0"
+# CI backends to support
+ci = "github"
+# The installers to generate for each app
+installers = ["shell"]
+# Target platforms to build apps for (Rust target-triple syntax)
+targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "aarch64-unknown-linux-musl", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl"]
+# Publish jobs to run in CI
+pr-run-mode = "plan"
+# Whether to install an updater program
+install-updater = true
+# The archive format to use for non-windows builds (defaults .tar.xz)
+unix-archive = ".tar.gz"
+# Whether to enable GitHub Attestations
+github-attestations = true
+
+# The profile that 'cargo dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
+
+[workspace.metadata.dist.github-custom-runners]
+aarch64-apple-darwin = "macos-14"
+aarch64-unknown-linux-gnu = "buildjet-2vcpu-ubuntu-2204-arm"
+aarch64-unknown-linux-musl = "buildjet-2vcpu-ubuntu-2204-arm"

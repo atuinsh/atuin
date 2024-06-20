@@ -1,0 +1,31 @@
+[package]
+name = "atuin-common"
+edition = "2021"
+description = "common library for atuin"
+
+rust-version = { workspace = true }
+version = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+time = { workspace = true }
+serde = { workspace = true }
+uuid = { workspace = true }
+rand = { workspace = true }
+typed-builder = { workspace = true }
+eyre = { workspace = true }
+sqlx = { workspace = true }
+semver = { workspace = true }
+thiserror = { workspace = true }
+directories = { workspace = true }
+sysinfo = "0.30.7"
+
+lazy_static = "1.4.0"
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }

@@ -1,0 +1,29 @@
+[Unit]
+Description=Start the Atuin server syncing service
+After=network-online.target
+Wants=network-online.target systemd-networkd-wait-online.service
+
+[Service]
+ExecStart=atuin server start
+Restart=on-failure
+User=atuin
+Group=atuin
+
+Environment=ATUIN_CONFIG_DIR=/etc/atuin
+ReadWritePaths=/etc/atuin
+
+# Hardening options
+CapabilityBoundingSet=
+AmbientCapabilities=
+NoNewPrivileges=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+PrivateTmp=true
+PrivateDevices=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

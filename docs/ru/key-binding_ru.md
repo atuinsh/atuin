@@ -15,17 +15,17 @@ eval "$(atuin init zsh)"
 
 # zsh
 
-Autin устанавливает виджет ZLE "\_atuin_search_widget"
+Autin устанавливает виджет ZLE "atuin-search"
 
 ```
 export ATUIN_NOBIND="true"
 eval "$(atuin init zsh)"
 
-bindkey '^r' _atuin_search_widget
+bindkey '^r' atuin-search
 
 # зависит от режима терминала
-bindkey '^[[A' _atuin_search_widget
-bindkey '^[OA' _atuin_search_widget
+bindkey '^[[A' atuin-search
+bindkey '^[OA' atuin-search
 ```
 
 # bash

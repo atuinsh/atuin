@@ -1,7 +1,7 @@
 # Atuin package definition
 #
 # This file will be similar to the package definition in nixpkgs:
-#     https://github.com/NixOS/nixpkgs/blob/master/pkgs/tools/misc/atuin/default.nix
+#     https://github.com/NixOS/nixpkgs/blob/master/pkgs/by-name/at/atuin/package.nix
 #
 # Helpful documentation: https://github.com/NixOS/nixpkgs/blob/master/doc/languages-frameworks/rust.section.md
 {
@@ -12,6 +12,7 @@
   libiconv,
   Security,
   SystemConfiguration,
+  AppKit,
 }:
 rustPlatform.buildRustPackage {
   name = "atuin";
@@ -26,7 +27,7 @@ rustPlatform.buildRustPackage {
 
   nativeBuildInputs = [installShellFiles];
 
-  buildInputs = lib.optionals stdenv.isDarwin [libiconv Security SystemConfiguration];
+  buildInputs = lib.optionals stdenv.isDarwin [libiconv Security SystemConfiguration AppKit];
 
   postInstall = ''
     installShellCompletion --cmd atuin \
@@ -35,15 +36,12 @@ rustPlatform.buildRustPackage {
       --zsh <($out/bin/atuin gen-completions -s zsh)
   '';
 
-  # Additional flags passed to the cargo test binary, see `cargo test -- --help`
-  checkFlags = [
-    # Registration tests require a postgres server
-    "--skip=registration"
-  ];
+  doCheck = false;
 
   meta = with lib; {
     description = "Replacement for a shell history which records additional commands context with optional encrypted synchronization between machines";
     homepage = "https://github.com/atuinsh/atuin";
     license = licenses.mit;
+    mainProgram = "atuin";
   };
 }

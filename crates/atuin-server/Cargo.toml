@@ -1,0 +1,39 @@
+[package]
+name = "atuin-server"
+edition = "2021"
+description = "server library for atuin"
+
+rust-version = { workspace = true }
+version = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+
+[dependencies]
+atuin-common = { path = "../atuin-common", version = "18.3.0" }
+atuin-server-database = { path = "../atuin-server-database", version = "18.3.0" }
+
+tracing = "0.1"
+time = { workspace = true }
+eyre = { workspace = true }
+uuid = { workspace = true }
+config = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+base64 = { workspace = true }
+rand = { workspace = true }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+axum = "0.7.4"
+axum-server = { version = "0.6.0", features = ["tls-rustls"] }
+fs-err = { workspace = true }
+tower = { workspace = true }
+tower-http = { version = "0.5.1", features = ["trace"] }
+reqwest = { workspace = true }
+rustls = "0.21"
+rustls-pemfile = "2.1"
+argon2 = "0.5"
+semver = { workspace = true }
+metrics-exporter-prometheus = "0.12.1"
+metrics = "0.21.1"

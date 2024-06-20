@@ -1,5 +1,10 @@
 #! /usr/bin/env bash
 
+if [[ "${BASH_VERSION%%.*}" -eq 3 ]]; then
+    echo "Atuin has limited support for Bash 3.2. The Atuin config enter_accept cannot be turned off." >&2
+    echo "To turn off enter_accept, please upgrade your version of bash (possibly via homebrew or ports)" >&2
+fi
+
 set -euo pipefail
 
 cat << EOF
@@ -30,11 +35,6 @@ elif ! command -v sed &> /dev/null; then
     exit
 fi
 
-LATEST_RELEASE=$(curl -L -s -H 'Accept: application/json' https://github.com/atuinsh/atuin/releases/latest)
-# Allow sed; sometimes it's more readable than ${variable//search/replace}
-# shellcheck disable=SC2001
-LATEST_VERSION=$(echo "$LATEST_RELEASE" | sed -e 's/.*"tag_name":"\([^"]*\)".*/\1/')
-
 __atuin_install_arch(){
 	echo "Arch Linux detected!"
 
@@ -44,7 +44,10 @@ __atuin_install_arch(){
 		sudo pacman -S atuin
 	else
 		echo "Attempting AUR install"
-		if command -v yaourt &> /dev/null; then
+		if command -v paru &> /dev/null; then
+			echo "Found paru"
+			paru -S atuin
+		elif command -v yaourt &> /dev/null; then
 			echo "Found yaourt"
 			yaourt -S atuin
 		elif command -v yay &> /dev/null; then
@@ -63,22 +66,8 @@ __atuin_install_arch(){
 
 }
 
-__atuin_install_ubuntu(){
-	if [ "$(dpkg --print-architecture)" = "amd64" ]; then
-		echo "Ubuntu detected"
-		ARTIFACT_URL="https://github.com/atuinsh/atuin/releases/download/$LATEST_VERSION/atuin_${LATEST_VERSION//v/}_amd64.deb"
-		TEMP_DEB="$(mktemp)".deb &&
-		curl -Lo "$TEMP_DEB" "$ARTIFACT_URL"
-		if command -v sudo &> /dev/null; then
-			sudo apt install "$TEMP_DEB"
-		else
-			su -l -c "apt install '$TEMP_DEB'"
-		fi
-		rm -f "$TEMP_DEB"
-	else
-		echo "Ubuntu detected, but not amd64"
-		__atuin_install_unsupported
-	fi
+__atuin_install_binary(){
+  curl --proto '=https' --tlsv1.2 -LsSf https://github.com/atuinsh/atuin/releases/latest/download/atuin-installer.sh | sh
 }
 
 __atuin_install_linux(){
@@ -95,11 +84,10 @@ __atuin_install_linux(){
 	case "$OS" in
 		"arch" | "manjarolinux" | "endeavouros")
 			__atuin_install_arch;;
-		"ubuntu" | "ubuntuwsl" | "debian" | "linuxmint" | "parrot" | "kali" | "elementary" | "pop")
-			__atuin_install_ubuntu;;
+		"ubuntu" | "ubuntuwsl" | "debian" | "linuxmint" | "parrot" | "kali" | "elementary" | "pop" | "neon" | "tuxedo")
+			__atuin_install_binary;;
 		*)
-			# TODO: download a binary or smth
-			__atuin_install_unsupported;;
+			__atuin_install_binary;;
 	esac
 }
 
@@ -111,8 +99,8 @@ __atuin_install_mac(){
 		echo "Installing with brew"
 		brew install atuin
 	else
-		echo "Could not find brew, installing with Cargo"
-		__atuin_install_unsupported
+		echo "Could not find brew, installing a binary"
+		__atuin_install_binary
 	fi
 
 }
@@ -148,6 +136,10 @@ __atuin_install_cargo(){
 
 	fi
 
+ 	# Log cargo and rustc versions for support
+	cargo --version
+ 	rustc --version
+  
 	cargo install atuin
 }
 
@@ -180,8 +172,8 @@ esac
 # TODO: Check which shell is in use
 # Use of single quotes around $() is intentional here
 # shellcheck disable=SC2016
-if ! grep -q "atuin init zsh" ~/.zshrc; then
-  printf '\neval "$(atuin init zsh)"\n' >> ~/.zshrc
+if ! grep -q "atuin init zsh" "${ZDOTDIR:-$HOME}/.zshrc"; then
+  printf '\neval "$(atuin init zsh)"\n' >> "${ZDOTDIR:-$HOME}/.zshrc"
 fi
 
 # Use of single quotes around $() is intentional here
@@ -209,7 +201,7 @@ cat << EOF
 
 Thanks for installing Atuin! I really hope you like it.
 
-If you have any issues, please open an issue on GitHub or visit our Discord (https://discord.gg/dPhv2B3x)!
+If you have any issues, please open an issue on GitHub or visit our Discord (https://discord.gg/jR3tfchVvW)!
 
 If you love Atuin, please give us a star on GitHub! It really helps ⭐️ https://github.com/atuinsh/atuin
 
