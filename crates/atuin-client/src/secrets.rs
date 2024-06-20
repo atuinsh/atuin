@@ -8,6 +8,26 @@ pub static SECRET_PATTERNS: &[(&str, &str, &str)] = &[
         "AKIAIOSFODNN7EXAMPLE",
     ),
     (
+        "AWS secret access key env var",
+        "AWS_ACCESS_KEY_ID",
+        "export AWS_ACCESS_KEY_ID=KEYDATA",
+    ),
+    (
+        "AWS secret access key env var",
+        "AWS_ACCESS_KEY_ID",
+        "export AWS_ACCESS_KEY_ID=KEYDATA",
+    ),
+    (
+        "Microsoft Azure secret access key env var",
+        "AZURE_.*_KEY",
+        "export AZURE_STORAGE_ACCOUNT_KEY=KEYDATA",
+    ),
+    (
+        "Google cloud platform key env var",
+        "GOOGLE_SERVICE_ACCOUNT_KEY",
+        "export GOOGLE_SERVICE_ACCOUNT_KEY=KEYDATA",
+    ),
+    (
         "Atuin login",
         r"atuin\s+login",
         "atuin login -u mycoolusername -p mycoolpassword -k \"lots of random words\"",
