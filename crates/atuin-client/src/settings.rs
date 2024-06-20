@@ -667,7 +667,7 @@ impl Settings {
         let data_dir = atuin_common::utils::data_dir();
         let db_path = data_dir.join("history.db");
         let record_store_path = data_dir.join("records.db");
-        let socket_path = data_dir.join("atuin.sock");
+        let socket_path = atuin_common::utils::runtime_dir().join("atuin.sock");
 
         let key_path = data_dir.join("key");
         let session_path = data_dir.join("session");
