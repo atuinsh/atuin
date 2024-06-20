@@ -21,7 +21,7 @@ pub enum Commands {
     /// Login to the configured server
     Login(login::Cmd),
 
-    // Register a new account
+    /// Register a new account
     Register(register::Cmd),
 
     /// Log out
