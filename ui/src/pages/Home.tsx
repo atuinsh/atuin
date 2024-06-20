@@ -4,6 +4,7 @@ import { Tooltip as ReactTooltip } from "react-tooltip";
 
 import { useStore } from "@/state/store";
 import { useToast } from "@/components/ui/use-toast";
+import { ToastAction } from "@/components/ui/toast";
 import { invoke } from "@tauri-apps/api/core";
 
 import ActivityCalendar from "react-activity-calendar";
@@ -76,18 +77,34 @@ export default function Home() {
       if (!installed) {
         toast({
           title: "Atuin CLI",
-          description: "Started CLI setup and installation...",
-        });
+          description: "CLI not detected - install?",
+          action: (
+            <ToastAction
+              altText="Install"
+              onClick={() => {
+                let install = async () => {
+                  toast({
+                    title: "Atuin CLI",
+                    description: "Install in progress...",
+                  });
 
-        console.log("Installing CLI...");
-        await invoke("install_cli");
+                  console.log("Installing CLI...");
+                  await invoke("install_cli");
 
-        console.log("Setting up plugin...");
-        await invoke("setup_cli");
+                  console.log("Setting up plugin...");
+                  await invoke("setup_cli");
 
-        toast({
-          title: "Atuin CLI",
-          description: "Installation complete",
+                  toast({
+                    title: "Atuin CLI",
+                    description: "Installation complete",
+                  });
+                };
+                install();
+              }}
+            >
+              Install
+            </ToastAction>
+          ),
         });
       }
     };
