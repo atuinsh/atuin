@@ -109,6 +109,31 @@ impl Database for Postgres {
     }
 
     #[instrument(skip_all)]
+    async fn user_verified(&self, id: i64) -> DbResult<bool> {
+        let res: (bool,) =
+            sqlx::query_as("select verified_at is not null from users where id = $1")
+                .bind(id)
+                .fetch_one(&self.pool)
+                .await
+                .map_err(fix_error)?;
+
+        Ok(res.0)
+    }
+
+    #[instrument(skip_all)]
+    async fn verify_user(&self, id: i64) -> DbResult<()> {
+        sqlx::query(
+            "update users set verified_at = (current_timestamp at time zone 'utc') where id=$1",
+        )
+        .bind(id)
+        .execute(&self.pool)
+        .await
+        .map_err(fix_error)?;
+
+        Ok(())
+    }
+
+    #[instrument(skip_all)]
     async fn get_session_user(&self, token: &str) -> DbResult<User> {
         sqlx::query_as(
             "select users.id, users.username, users.email, users.password from users 
