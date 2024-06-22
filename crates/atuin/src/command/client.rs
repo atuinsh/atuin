@@ -81,7 +81,7 @@ pub enum Cmd {
     #[command()]
     Daemon,
 
-    /// Print a default atuin configuration (config.toml)
+    /// Print the default atuin configuration (config.toml)
     #[command()]
     DefaultConfig,
 }
