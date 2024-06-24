@@ -34,7 +34,7 @@ pub enum Commands {
     /// Change your password
     ChangePassword(change_password::Cmd),
 
-    /// Change your password
+    /// Verify your account
     Verify(verify::Cmd),
 }
 
