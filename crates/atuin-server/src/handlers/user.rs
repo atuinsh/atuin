@@ -209,26 +209,6 @@ pub async fn send_verification<DB: Database>(
 
     let db = &state.0.database;
 
-    match db.user_verified(user.id).await {
-        Ok(true) => {
-            info!("User requested verification, but is already verified");
-
-            return Ok(Json(SendVerificationResponse {
-                email_sent: false,
-                verified: true,
-            }));
-        }
-
-        Ok(false) => {}
-
-        Err(e) => {
-            error!("failed to check if user is verified: {}", e);
-
-            return Err(ErrorResponse::reply("internal error")
-                .with_status(StatusCode::INTERNAL_SERVER_ERROR));
-        }
-    }
-
     let verification_token = db
         .user_verification_token(user.id)
         .await
@@ -261,6 +241,42 @@ pub async fn send_verification<DB: Database>(
         email_sent: true,
         verified: false,
     }))
+}
+
+#[instrument(skip_all, fields(user.id = user.id))]
+pub async fn verify_user<DB: Database>(
+    UserAuth(user): UserAuth,
+    state: State<AppState<DB>>,
+    Json(token_request): Json<VerificationTokenRequest>,
+) -> Result<Json<VerificationTokenResponse>, ErrorResponseStatus<'static>> {
+    let db = state.0.database;
+
+    if user.verified.is_some() {
+        return Ok(Json(VerificationTokenResponse { verified: true }));
+    }
+
+    let token = db.user_verification_token(user.id).await.map_err(|e| {
+        error!("Failed to read user token: {e}");
+
+        ErrorResponse::reply("Failed to verify").with_status(StatusCode::INTERNAL_SERVER_ERROR)
+    })?;
+
+    if token_request.token == token {
+        db.verify_user(user.id).await.map_err(|e| {
+            error!("Failed to verify user: {e}");
+
+            ErrorResponse::reply("Failed to verify").with_status(StatusCode::INTERNAL_SERVER_ERROR)
+        })?;
+    } else {
+        info!(
+            "Incorrect verification token {} vs {}",
+            token_request.token, token
+        );
+
+        return Ok(Json(VerificationTokenResponse { verified: false }));
+    }
+
+    Ok(Json(VerificationTokenResponse { verified: true }))
 }
 
 #[instrument(skip_all, fields(user.id = user.id, change_password))]

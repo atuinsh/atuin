@@ -12,7 +12,7 @@ use sqlx::postgres::PgPoolOptions;
 use sqlx::Row;
 
 use time::{OffsetDateTime, PrimitiveDateTime, UtcOffset};
-use tracing::instrument;
+use tracing::{instrument, trace};
 use uuid::Uuid;
 use wrappers::{DbHistory, DbRecord, DbSession, DbUser};
 
@@ -102,7 +102,7 @@ impl Database for Postgres {
     #[instrument(skip_all)]
     async fn get_user(&self, username: &str) -> DbResult<User> {
         sqlx::query_as(
-            "select id, username, email, password, verified from users where username = $1",
+            "select id, username, email, password, verified_at from users where username = $1",
         )
         .bind(username)
         .fetch_one(&self.pool)
@@ -154,6 +154,8 @@ impl Database for Postgres {
         .map_err(fix_error)?;
 
         let token = if let Some((token, valid_until)) = token {
+            trace!("Token for user {id} valid until {valid_until}");
+
             // We have a token, AND it's still valid
             if valid_until > time::OffsetDateTime::now_utc() {
                 token
@@ -161,9 +163,10 @@ impl Database for Postgres {
                 // token has expired. generate a new one, return it
                 let token = crypto_random_string::<24>();
 
-                sqlx::query("update user_verification_token set token = $2 where user_id=$1")
+                sqlx::query("update user_verification_token set token = $2, valid_until = $3 where user_id=$1")
                     .bind(id)
                     .bind(&token)
+                    .bind(time::OffsetDateTime::now_utc() + time::Duration::minutes(TOKEN_VALID_MINUTES))
                     .execute(&self.pool)
                     .await
                     .map_err(fix_error)?;
@@ -191,7 +194,7 @@ impl Database for Postgres {
     #[instrument(skip_all)]
     async fn get_session_user(&self, token: &str) -> DbResult<User> {
         sqlx::query_as(
-            "select users.id, users.username, users.email, users.password from users 
+            "select users.id, users.username, users.email, users.password, users.verified_at from users 
             inner join sessions 
             on users.id = sessions.user_id 
             and sessions.token = $1",

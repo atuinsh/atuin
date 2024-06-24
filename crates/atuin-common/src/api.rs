@@ -40,6 +40,16 @@ pub struct SendVerificationResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct VerificationTokenRequest {
+    pub token: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct VerificationTokenResponse {
+    pub verified: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ChangePasswordRequest {
     pub current_password: String,
     pub new_password: String,
