@@ -273,6 +273,22 @@ echo 'eval "$(atuin init zsh)"' >> ~/.zshrc
 zinit load atuinsh/atuin
 ```
 
+Or a more complex scenario which downloads the precompiled atuin directly from github release, 
+pregenerates the init script and shell completions at download time, activates it in the background 
+during shell startup, and uses atuin for zsh autosuggest:
+
+```zsh
+# for the lbin ice
+zinit light-mode depth"1" for @zdharma-continuum/zinit-annex-binary-symlink \
+
+zinit as'null' from"gh-r" nocompile completions mv"atuin*/atuin -> atuin" lbin"!atuin -> atuin" \
+    bpick"atuin-*.tar.gz" \
+    atclone'./atuin init zsh >> zhook.zsh && ./atuin gen-completions --shell zsh > _atuin' atpull'%atclone' \
+    src="zhook.zsh" wait'0b' lucid  \
+    atload'ZSH_AUTOSUGGEST_STRATEGY=(atuin);_zsh_autosuggest_strategy_atuin() { typeset -g suggestion; suggestion="$(atuin search --limit 1 --search-mode prefix --cmd-only "$1")"; }' for \
+  @atuinsh/atuin
+```
+
 #### Antigen
 
 ```sh
