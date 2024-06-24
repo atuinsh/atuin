@@ -3,8 +3,12 @@ name: Rust
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - 'ui/**'
   pull_request:
     branches: [main]
+    paths-ignore:
+      - 'ui/**'
 
 env:
   CARGO_TERM_COLOR: always
