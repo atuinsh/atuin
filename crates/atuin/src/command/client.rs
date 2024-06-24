@@ -76,11 +76,12 @@ pub enum Cmd {
     #[command()]
     Doctor,
 
+    /// *Experimental* Start the background daemon
     #[cfg(feature = "daemon")]
     #[command()]
     Daemon,
 
-    /// Print example configuration
+    /// Print the default atuin configuration (config.toml)
     #[command()]
     DefaultConfig,
 }
