@@ -143,7 +143,7 @@ pub async fn register<DB: Database>(
         .await;
     }
 
-    counter!("atuin_users_registered", 1);
+    counter!("atuin_users_registered").increment(1);
 
     match db.add_session(&new_session).await {
         Ok(_) => Ok(Json(RegisterResponse { session: token })),
@@ -170,7 +170,7 @@ pub async fn delete<DB: Database>(
             .with_status(StatusCode::INTERNAL_SERVER_ERROR));
     };
 
-    counter!("atuin_users_deleted", 1);
+    counter!("atuin_users_deleted").increment(1);
 
     Ok(Json(DeleteUserResponse {}))
 }
