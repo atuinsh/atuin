@@ -3,6 +3,7 @@ use std::ops::Range;
 
 use async_trait::async_trait;
 use atuin_common::record::{EncryptedData, HostId, Record, RecordIdx, RecordStatus};
+use atuin_common::utils::crypto_random_string;
 use atuin_server_database::models::{History, NewHistory, NewSession, NewUser, Session, User};
 use atuin_server_database::{Database, DbError, DbResult};
 use futures_util::TryStreamExt;
@@ -100,12 +101,14 @@ impl Database for Postgres {
 
     #[instrument(skip_all)]
     async fn get_user(&self, username: &str) -> DbResult<User> {
-        sqlx::query_as("select id, username, email, password from users where username = $1")
-            .bind(username)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(fix_error)
-            .map(|DbUser(user)| user)
+        sqlx::query_as(
+            "select id, username, email, password, verified from users where username = $1",
+        )
+        .bind(username)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(fix_error)
+        .map(|DbUser(user)| user)
     }
 
     #[instrument(skip_all)]
@@ -131,6 +134,58 @@ impl Database for Postgres {
         .map_err(fix_error)?;
 
         Ok(())
+    }
+
+    /// Return a valid verification token for the user
+    /// If the user does not have any token, create one, insert it, and return
+    /// If the user has a token, but it's invalid, delete it, create a new one, return
+    /// If the user already has a valid token, return it
+    #[instrument(skip_all)]
+    async fn user_verification_token(&self, id: i64) -> DbResult<String> {
+        const TOKEN_VALID_MINUTES: i64 = 15;
+
+        // First we check if there is a verification token
+        let token: Option<(String, sqlx::types::time::OffsetDateTime)> = sqlx::query_as(
+            "select token, valid_until from user_verification_token where user_id = $1",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(fix_error)?;
+
+        let token = if let Some((token, valid_until)) = token {
+            // We have a token, AND it's still valid
+            if valid_until > time::OffsetDateTime::now_utc() {
+                token
+            } else {
+                // token has expired. generate a new one, return it
+                let token = crypto_random_string::<24>();
+
+                sqlx::query("update user_verification_token set token = $2 where user_id=$1")
+                    .bind(id)
+                    .bind(&token)
+                    .execute(&self.pool)
+                    .await
+                    .map_err(fix_error)?;
+
+                token
+            }
+        } else {
+            // No token in the database! Generate one, insert it
+            let token = crypto_random_string::<24>();
+
+            sqlx::query("insert into user_verification_token (user_id, token, valid_until) values ($1, $2, $3)")
+                .bind(id)
+                .bind(&token)
+                .bind(time::OffsetDateTime::now_utc() + time::Duration::minutes(TOKEN_VALID_MINUTES))
+                .execute(&self.pool)
+                .await
+                .map_err(fix_error)?;
+
+            token
+        };
+
+        Ok(token)
     }
 
     #[instrument(skip_all)]

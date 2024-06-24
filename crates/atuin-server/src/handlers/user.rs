@@ -12,9 +12,11 @@ use axum::{
     Json,
 };
 use metrics::counter;
+
+use postmark::{reqwest::PostmarkClient, Query};
+
 use rand::rngs::OsRng;
 use tracing::{debug, error, info, instrument};
-use uuid::Uuid;
 
 use super::{ErrorResponse, ErrorResponseStatus, RespExt};
 use crate::router::{AppState, UserAuth};
@@ -25,7 +27,7 @@ use atuin_server_database::{
 
 use reqwest::header::CONTENT_TYPE;
 
-use atuin_common::api::*;
+use atuin_common::{api::*, utils::crypto_random_string};
 
 pub fn verify_str(hash: &str, password: &str) -> bool {
     let arg2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, Params::default());
@@ -126,7 +128,8 @@ pub async fn register<DB: Database>(
         }
     };
 
-    let token = Uuid::new_v4().as_simple().to_string();
+    // 24 bytes encoded as base64
+    let token = crypto_random_string::<24>();
 
     let new_session = NewSession {
         user_id,
@@ -173,6 +176,91 @@ pub async fn delete<DB: Database>(
     counter!("atuin_users_deleted", 1);
 
     Ok(Json(DeleteUserResponse {}))
+}
+
+#[instrument(skip_all, fields(user.id = user.id))]
+pub async fn send_verification<DB: Database>(
+    UserAuth(user): UserAuth,
+    state: State<AppState<DB>>,
+) -> Result<Json<SendVerificationResponse>, ErrorResponseStatus<'static>> {
+    let settings = state.0.settings;
+
+    if !settings.mail.enabled {
+        return Ok(Json(SendVerificationResponse {
+            email_sent: false,
+            verified: false,
+        }));
+    }
+
+    if user.verified.is_some() {
+        return Ok(Json(SendVerificationResponse {
+            email_sent: false,
+            verified: true,
+        }));
+    }
+
+    // TODO: if we ever add another mail provider, can match on them all here.
+    let postmark_token = if let Some(token) = settings.mail.postmark.token {
+        token
+    } else {
+        return Err(ErrorResponse::reply("mail not configured")
+            .with_status(StatusCode::INTERNAL_SERVER_ERROR));
+    };
+
+    let db = &state.0.database;
+
+    match db.user_verified(user.id).await {
+        Ok(true) => {
+            info!("User requested verification, but is already verified");
+
+            return Ok(Json(SendVerificationResponse {
+                email_sent: false,
+                verified: true,
+            }));
+        }
+
+        Ok(false) => {}
+
+        Err(e) => {
+            error!("failed to check if user is verified: {}", e);
+
+            return Err(ErrorResponse::reply("internal error")
+                .with_status(StatusCode::INTERNAL_SERVER_ERROR));
+        }
+    }
+
+    let verification_token = db
+        .user_verification_token(user.id)
+        .await
+        .expect("Failed to verify");
+
+    debug!("Generated verification token, emailing user");
+
+    let client = PostmarkClient::builder()
+        .base_url("https://api.postmarkapp.com/")
+        .token(postmark_token)
+        .build();
+
+    let req = postmark::api::email::SendEmailRequest::builder()
+        .from(settings.mail.verification.from)
+        .subject(settings.mail.verification.subject)
+        .to(user.email)
+        .body(postmark::api::Body::text(format!(
+            "Your verification token is {}",
+            verification_token
+        )))
+        .build();
+
+    req.execute(&client)
+        .await
+        .expect("postmark email request failed");
+
+    debug!("Email sent");
+
+    Ok(Json(SendVerificationResponse {
+        email_sent: true,
+        verified: false,
+    }))
 }
 
 #[instrument(skip_all, fields(user.id = user.id, change_password))]

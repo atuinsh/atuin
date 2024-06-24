@@ -300,8 +300,10 @@ dependencies = [
 name = "atuin-common"
 version = "18.3.0"
 dependencies = [
+ "base64 0.22.1",
  "directories",
  "eyre",
+ "getrandom",
  "lazy_static",
  "pretty_assertions",
  "rand",
@@ -401,6 +403,7 @@ dependencies = [
  "fs-err",
  "metrics",
  "metrics-exporter-prometheus",
+ "postmark",
  "rand",
  "reqwest",
  "rustls",
@@ -2742,6 +2745,23 @@ name = "portable-atomic"
 version = "1.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7170ef9988bc169ba16dd36a7fa041e5c4cbeb6a35b76d4c03daded371eae7c0"
+
+[[package]]
+name = "postmark"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a3bc71e3fdb4e15d2636d67f5784f17488a612324235086dde765ab6016a43fa"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "http 0.2.12",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "typed-builder",
+ "url",
+]
 
 [[package]]
 name = "powerfmt"
