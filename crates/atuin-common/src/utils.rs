@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use eyre::{eyre, Result};
 
-use base64::prelude::{Engine, BASE64_STANDARD};
+use base64::prelude::{Engine, BASE64_URL_SAFE_NO_PAD};
 use getrandom::getrandom;
 use uuid::Uuid;
 
@@ -23,7 +23,9 @@ pub fn crypto_random_bytes<const N: usize>() -> [u8; N] {
 pub fn crypto_random_string<const N: usize>() -> String {
     let bytes = crypto_random_bytes::<N>();
 
-    BASE64_STANDARD.encode(bytes)
+    // We only use this to create a random string, and won't be reversing it to find the original
+    // data - no padding is OK there. It may be in URLs.
+    BASE64_URL_SAFE_NO_PAD.encode(bytes)
 }
 
 pub fn uuid_v7() -> Uuid {
