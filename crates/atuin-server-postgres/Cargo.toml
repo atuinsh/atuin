@@ -20,6 +20,6 @@ serde = { workspace = true }
 sqlx = { workspace = true }
 async-trait = { workspace = true }
 uuid = { workspace = true }
-metrics = "0.21.1"
+metrics = "0.24"
 futures-util = "0.3"
 rand.workspace = true
