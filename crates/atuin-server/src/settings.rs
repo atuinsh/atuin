@@ -7,7 +7,7 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 static EXAMPLE_CONFIG: &str = include_str!("../server.toml");
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Default, Clone, Debug, Deserialize, Serialize)]
 pub struct Mail {
     #[serde(alias = "enable")]
     pub enabled: bool,
@@ -19,13 +19,13 @@ pub struct Mail {
     pub verification: MailVerification,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Default, Clone, Debug, Deserialize, Serialize)]
 pub struct Postmark {
     #[serde(alias = "enable")]
     pub token: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Default, Clone, Debug, Deserialize, Serialize)]
 pub struct MailVerification {
     #[serde(alias = "enable")]
     pub from: String,
