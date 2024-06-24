@@ -11,8 +11,9 @@ use reqwest::{
 use atuin_common::{
     api::{
         AddHistoryRequest, ChangePasswordRequest, CountResponse, DeleteHistoryRequest,
-        ErrorResponse, LoginRequest, LoginResponse, MeResponse, RegisterResponse, StatusResponse,
-        SyncHistoryResponse,
+        ErrorResponse, LoginRequest, LoginResponse, MeResponse, RegisterResponse,
+        SendVerificationResponse, StatusResponse, SyncHistoryResponse, VerificationTokenRequest,
+        VerificationTokenResponse,
     },
     record::RecordStatus,
 };
@@ -402,5 +403,36 @@ impl<'a> Client<'a> {
         } else {
             bail!("Unknown error");
         }
+    }
+
+    // Either request a verification email if token is null, or validate a token
+    pub async fn verify(&self, token: Option<String>) -> Result<(bool, bool)> {
+        // could dedupe this a bit, but it's simple at the moment
+        let (email_sent, verified) = if let Some(token) = token {
+            let url = format!("{}/api/v0/account/verify", self.sync_addr);
+            let url = Url::parse(url.as_str())?;
+
+            let resp = self
+                .client
+                .post(url)
+                .json(&VerificationTokenRequest { token })
+                .send()
+                .await?;
+            let resp = handle_resp_error(resp).await?;
+            let resp = resp.json::<VerificationTokenResponse>().await?;
+
+            (false, resp.verified)
+        } else {
+            let url = format!("{}/api/v0/account/send-verification", self.sync_addr);
+            let url = Url::parse(url.as_str())?;
+
+            let resp = self.client.post(url).send().await?;
+            let resp = handle_resp_error(resp).await?;
+            let resp = resp.json::<SendVerificationResponse>().await?;
+
+            (resp.email_sent, resp.verified)
+        };
+
+        Ok((email_sent, verified))
     }
 }
