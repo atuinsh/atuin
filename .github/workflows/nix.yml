@@ -5,8 +5,12 @@ name: Nix
 on:
   push:
     branches: [ main ]
+    paths-ignore:
+      - 'ui/**'
   pull_request:
     branches: [ main ]
+    paths-ignore:
+      - 'ui/**'
 
 jobs:
   check:
