@@ -34,6 +34,22 @@ pub struct RegisterResponse {
 pub struct DeleteUserResponse {}
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct SendVerificationResponse {
+    pub email_sent: bool,
+    pub verified: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct VerificationTokenRequest {
+    pub token: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct VerificationTokenResponse {
+    pub verified: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ChangePasswordRequest {
     pub current_password: String,
     pub new_password: String,

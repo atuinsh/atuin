@@ -4,15 +4,28 @@ use std::path::PathBuf;
 
 use eyre::{eyre, Result};
 
-use rand::RngCore;
+use base64::prelude::{Engine, BASE64_URL_SAFE_NO_PAD};
+use getrandom::getrandom;
 use uuid::Uuid;
 
-pub fn random_bytes<const N: usize>() -> [u8; N] {
+/// Generate N random bytes, using a cryptographically secure source
+pub fn crypto_random_bytes<const N: usize>() -> [u8; N] {
+    // rand say they are in principle safe for crypto purposes, but that it is perhaps a better
+    // idea to use getrandom for things such as passwords.
     let mut ret = [0u8; N];
 
-    rand::thread_rng().fill_bytes(&mut ret);
+    getrandom(&mut ret).expect("Failed to generate random bytes!");
 
     ret
+}
+
+/// Generate N random bytes using a cryptographically secure source, return encoded as a string
+pub fn crypto_random_string<const N: usize>() -> String {
+    let bytes = crypto_random_bytes::<N>();
+
+    // We only use this to create a random string, and won't be reversing it to find the original
+    // data - no padding is OK there. It may be in URLs.
+    BASE64_URL_SAFE_NO_PAD.encode(bytes)
 }
 
 pub fn uuid_v7() -> Uuid {
@@ -178,6 +191,7 @@ impl<T: AsRef<str>> Escapable for T {}
 
 #[cfg(test)]
 mod tests {
+    use pretty_assertions::assert_ne;
     use time::Month;
 
     use super::*;
@@ -291,5 +305,18 @@ mod tests {
             "with \x1b[31mcontrol\x1b[0m characters".escape_control(),
             Cow::Owned(_)
         ));
+    }
+
+    #[test]
+    fn dumb_random_test() {
+        // Obviously not a test of randomness, but make sure we haven't made some
+        // catastrophic error
+
+        assert_ne!(crypto_random_string::<1>(), crypto_random_string::<1>());
+        assert_ne!(crypto_random_string::<2>(), crypto_random_string::<2>());
+        assert_ne!(crypto_random_string::<4>(), crypto_random_string::<4>());
+        assert_ne!(crypto_random_string::<8>(), crypto_random_string::<8>());
+        assert_ne!(crypto_random_string::<16>(), crypto_random_string::<16>());
+        assert_ne!(crypto_random_string::<32>(), crypto_random_string::<32>());
     }
 }

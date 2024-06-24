@@ -38,6 +38,7 @@ pub async fn start_server(path: &str) -> (String, oneshot::Sender<()>, JoinHandl
         db_settings: PostgresSettings { db_uri },
         metrics: atuin_server::settings::Metrics::default(),
         tls: atuin_server::settings::Tls::default(),
+        mail: atuin_server::settings::Mail::default(),
     };
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();

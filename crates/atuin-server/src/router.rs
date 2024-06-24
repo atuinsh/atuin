@@ -126,6 +126,11 @@ pub fn router<DB: Database>(database: DB, settings: Settings<DB::Settings>) -> R
         .route("/record", get(handlers::record::index::<DB>))
         .route("/record/next", get(handlers::record::next))
         .route("/api/v0/me", get(handlers::v0::me::get))
+        .route("/api/v0/account/verify", post(handlers::user::verify_user))
+        .route(
+            "/api/v0/account/send-verification",
+            post(handlers::user::send_verification),
+        )
         .route("/api/v0/record", post(handlers::v0::record::post))
         .route("/api/v0/record", get(handlers::v0::record::index))
         .route("/api/v0/record/next", get(handlers::v0::record::next))

@@ -24,6 +24,8 @@ semver = { workspace = true }
 thiserror = { workspace = true }
 directories = { workspace = true }
 sysinfo = "0.30.7"
+base64 = { workspace = true }
+getrandom = "0.2"
 
 lazy_static = "1.4.0"
 

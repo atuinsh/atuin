@@ -7,8 +7,34 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 static EXAMPLE_CONFIG: &str = include_str!("../server.toml");
 
+#[derive(Default, Clone, Debug, Deserialize, Serialize)]
+pub struct Mail {
+    #[serde(alias = "enable")]
+    pub enabled: bool,
+
+    /// Configuration for the postmark api client
+    /// This is what we use for Atuin Cloud, the forum, etc.
+    pub postmark: Postmark,
+
+    pub verification: MailVerification,
+}
+
+#[derive(Default, Clone, Debug, Deserialize, Serialize)]
+pub struct Postmark {
+    #[serde(alias = "enable")]
+    pub token: Option<String>,
+}
+
+#[derive(Default, Clone, Debug, Deserialize, Serialize)]
+pub struct MailVerification {
+    #[serde(alias = "enable")]
+    pub from: String,
+    pub subject: String,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Metrics {
+    #[serde(alias = "enabled")]
     pub enable: bool,
     pub host: String,
     pub port: u16,
@@ -37,6 +63,7 @@ pub struct Settings<DbSettings> {
     pub register_webhook_username: String,
     pub metrics: Metrics,
     pub tls: Tls,
+    pub mail: Mail,
 
     #[serde(flatten)]
     pub db_settings: DbSettings,
