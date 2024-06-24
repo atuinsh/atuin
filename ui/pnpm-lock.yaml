@@ -6,8 +6,8 @@ settings:
 
 dependencies:
   '@headlessui/react':
-    specifier: ^2.0.4
-    version: 2.0.4(react-dom@18.3.1)(react@18.3.1)
+    specifier: ^2.1.0
+    version: 2.1.0(react-dom@18.3.1)(react@18.3.1)
   '@heroicons/react':
     specifier: ^2.1.4
     version: 2.1.4(react@18.3.1)
@@ -630,8 +630,8 @@ packages:
     resolution: {integrity: sha512-J4yDIIthosAsRZ5CPYP/jQvUAQtlZTTD/4suA08/FEnlxqW3sKS9iAhgsa9VYLZ6vDHn/ixJgIqRQPotoBjxIw==}
     dev: false
 
-  /@headlessui/react@2.0.4(react-dom@18.3.1)(react@18.3.1):
-    resolution: {integrity: sha512-16d/rOLeYsFsmPlRmXGu8DCBzrWD0zV1Ccx3n73wN87yFu8Y9+X04zflv8EJEt9TAYRyLKOmQXUnOnqQl6NgpA==}
+  /@headlessui/react@2.1.0(react-dom@18.3.1)(react@18.3.1):
+    resolution: {integrity: sha512-/MizQk2xqR5ELkmCI1xWy3VgJULvR8gcAXtZhcK7sY53TNRCPeMdeODEXKSv9LPSSRlEAyzW1+NGJiaXq6dLRw==}
     engines: {node: '>=10'}
     peerDependencies:
       react: ^18
