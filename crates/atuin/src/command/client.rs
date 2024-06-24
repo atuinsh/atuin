@@ -76,7 +76,7 @@ pub enum Cmd {
     #[command()]
     Doctor,
 
-    /// *Experimental* Enable a background daemon
+    /// *Experimental* Start the background daemon
     #[cfg(feature = "daemon")]
     #[command()]
     Daemon,
