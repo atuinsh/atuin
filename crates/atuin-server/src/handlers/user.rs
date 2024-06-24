@@ -226,7 +226,7 @@ pub async fn send_verification<DB: Database>(
         .subject(settings.mail.verification.subject)
         .to(user.email)
         .body(postmark::api::Body::text(format!(
-            "Your verification token is {}",
+            "Please run the following command to finalize your Atuin account verification. It is valid for 15 minutes:\n\natuin account verify --token '{}'",
             verification_token
         )))
         .build();

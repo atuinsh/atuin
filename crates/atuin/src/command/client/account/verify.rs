@@ -1,8 +1,7 @@
 use clap::Parser;
-use eyre::{bail, Result};
+use eyre::Result;
 
 use atuin_client::{api_client, settings::Settings};
-use rpassword::prompt_password;
 
 #[derive(Parser, Debug)]
 pub struct Cmd {
