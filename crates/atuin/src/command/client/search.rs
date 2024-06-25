@@ -21,7 +21,6 @@ mod engines;
 mod history_list;
 mod inspector;
 mod interactive;
-mod sort;
 
 pub use duration::format_duration_into;
 

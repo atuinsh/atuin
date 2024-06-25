@@ -39,3 +39,12 @@ tracing = "0.1"
 uuid = { workspace = true }
 unicode-segmentation = "1.11.0"
 sysinfo = "0.30.7"
+
+[dev-dependencies]
+tracing-tree = "0.3"
+divan = "0.1.14"
+rand = { workspace = true }
+
+[[bench]]
+name = "smart_sort"
+harness = false
