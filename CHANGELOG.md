@@ -18,6 +18,7 @@ All notable changes to this project will be documented in this file.
 
 ### Features
 
+- *(client)* Identify several other GitHub token types as secrets 
 - *(daemon)* Follow XDG_RUNTIME_DIR if set ([#2171](https://github.com/atuinsh/atuin/issues/2171))
 - *(gui)* Automatically install and setup the cli/shell ([#2139](https://github.com/atuinsh/atuin/issues/2139))
 - *(gui)* Add activity calendar to the homepage ([#2160](https://github.com/atuinsh/atuin/issues/2160))
