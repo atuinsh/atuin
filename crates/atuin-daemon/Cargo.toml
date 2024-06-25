@@ -1,7 +1,7 @@
 [package]
 name = "atuin-daemon"
 edition = "2021"
-version = "0.2.0"
+version = "0.3.0"
 description = "The daemon crate for Atuin"
 
 authors.workspace = true
@@ -14,9 +14,9 @@ readme.workspace = true
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-atuin-client = { path = "../atuin-client", version = "18.3.0" }
-atuin-dotfiles = { path = "../atuin-dotfiles", version = "0.3.0" }
-atuin-history = { path = "../atuin-history", version = "0.2.0" }
+atuin-client = { path = "../atuin-client", version = "18.4.0-beta.1" }
+atuin-dotfiles = { path = "../atuin-dotfiles", version = "0.4.0" }
+atuin-history = { path = "../atuin-history", version = "0.3.0" }
 
 time = { workspace = true }
 uuid = { workspace = true }

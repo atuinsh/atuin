@@ -2,6 +2,50 @@
 
 All notable changes to this project will be documented in this file.
 
+## [18.4.0-beta.1] - 2024-06-25
+
+### Bug Fixes
+
+- *(crate)* Add missing description ([#2106](https://github.com/atuinsh/atuin/issues/2106))
+- *(crate)* Add description to daemon crate ([#2107](https://github.com/atuinsh/atuin/issues/2107))
+- *(gui)* Update deps ([#2116](https://github.com/atuinsh/atuin/issues/2116))
+- *(gui)* Add support for checking if the cli is installed on windows ([#2162](https://github.com/atuinsh/atuin/issues/2162))
+- Cargo binstall config ([#2112](https://github.com/atuinsh/atuin/issues/2112))
+- Unitless sync_frequence = 0 not parsed by humantime ([#2154](https://github.com/atuinsh/atuin/issues/2154))
+- Some --help comments didn't show properly ([#2176](https://github.com/atuinsh/atuin/issues/2176))
+- Ensure we cleanup all tables when deleting ([#2191](https://github.com/atuinsh/atuin/issues/2191))
+
+
+### Features
+
+- *(daemon)* Follow XDG_RUNTIME_DIR if set ([#2171](https://github.com/atuinsh/atuin/issues/2171))
+- *(gui)* Automatically install and setup the cli/shell ([#2139](https://github.com/atuinsh/atuin/issues/2139))
+- *(gui)* Add activity calendar to the homepage ([#2160](https://github.com/atuinsh/atuin/issues/2160))
+- *(gui)* Cache zustand store in localstorage ([#2168](https://github.com/atuinsh/atuin/issues/2168))
+- *(gui)* Toast with prompt for cli install, rather than auto ([#2173](https://github.com/atuinsh/atuin/issues/2173))
+- *(history)* Filter out various environment variables containing potential secrets ([#2174](https://github.com/atuinsh/atuin/issues/2174))
+- *(tui)* Configurable prefix character ([#2157](https://github.com/atuinsh/atuin/issues/2157))
+- Use cargo-dist installer from our install script ([#2108](https://github.com/atuinsh/atuin/issues/2108))
+- Add user account verification ([#2190](https://github.com/atuinsh/atuin/issues/2190))
+
+
+### Miscellaneous Tasks
+
+- *(build)* Compile protobufs with protox ([#2122](https://github.com/atuinsh/atuin/issues/2122))
+- *(ci)* Do not run current ci for ui ([#2189](https://github.com/atuinsh/atuin/issues/2189))
+- *(deps-dev)* Bump @tauri-apps/cli in /ui ([#2135](https://github.com/atuinsh/atuin/issues/2135))
+- *(deps-dev)* Bump vite from 5.2.13 to 5.3.1 in /ui ([#2150](https://github.com/atuinsh/atuin/issues/2150))
+- *(nix)* De-couple atuin nix build from nixpkgs rustc version ([#2123](https://github.com/atuinsh/atuin/issues/2123))
+- Add installer e2e tests ([#2110](https://github.com/atuinsh/atuin/issues/2110))
+- Remove unnecessary proto import ([#2120](https://github.com/atuinsh/atuin/issues/2120))
+- Update to rust 1.78
+- Add audit config, ignore RUSTSEC-2023-0071 ([#2126](https://github.com/atuinsh/atuin/issues/2126))
+- Setup dependabot for the ui ([#2128](https://github.com/atuinsh/atuin/issues/2128))
+- Cargo and pnpm update ([#2127](https://github.com/atuinsh/atuin/issues/2127))
+- Update to rust 1.79 ([#2138](https://github.com/atuinsh/atuin/issues/2138))
+- Update to cargo-dist 0.16, enable attestations ([#2156](https://github.com/atuinsh/atuin/issues/2156))
+
+
 ## [18.3.0] - 2024-06-10
 
 ### Bug Fixes
