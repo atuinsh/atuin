@@ -43,6 +43,11 @@ pub static SECRET_PATTERNS: &[(&str, &str, &str)] = &[
         "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", // also legit, also expired
     ),
     (
+        "GitLab PAT",
+        "glpat-[a-zA-Z0-9_]{20}",
+        "glpat-RkE_BG5p_bbjML21WSfy",
+    ),
+    (
         "Slack OAuth v2 bot",
         "xoxb-[0-9]{11}-[0-9]{11}-[0-9a-zA-Z]{24}",
         "xoxb-17653672481-19874698323-pdFZKVeTuE8sk7oOcBrzbqgy",
