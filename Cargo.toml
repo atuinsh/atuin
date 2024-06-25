@@ -69,7 +69,7 @@ installers = ["shell"]
 # Target platforms to build apps for (Rust target-triple syntax)
 targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "aarch64-unknown-linux-musl", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl"]
 # Publish jobs to run in CI
-pr-run-mode = "upload"
+pr-run-mode = "plan"
 # Whether to install an updater program
 install-updater = true
 # The archive format to use for non-windows builds (defaults .tar.xz)
