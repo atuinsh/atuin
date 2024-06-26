@@ -102,11 +102,7 @@ This will sign you up for the Atuin Cloud sync server. Everything is end-to-end 
 Read more in the [docs](https://docs.atuin.sh) for an offline setup, self hosted server, and more.
 
 ```
-# bash/zsh/etc
-bash <(curl --proto '=https' --tlsv1.2 -sSf https://setup.atuin.sh)
-
-# fish
-bash (curl --proto '=https' --tlsv1.2 -sSf https://setup.atuin.sh | psub)
+curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | sh
 
 atuin register -u <USERNAME> -e <EMAIL>
 atuin import auto
