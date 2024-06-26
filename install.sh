@@ -1,12 +1,5 @@
-#! /usr/bin/env bash
-
-
-if [[ "${BASH_VERSION%%.*}" -eq 3 ]]; then
-    echo "Atuin has limited support for Bash 3.2. The Atuin config enter_accept cannot be turned off." >&2
-    echo "To turn off enter_accept, please upgrade your version of bash (possibly via homebrew or ports)" >&2
-fi
-
-set -euo pipefail
+#! /bin/sh
+set -eu
 
 cat << EOF
  _______  _______  __   __  ___   __    _
@@ -33,10 +26,10 @@ __atuin_install_binary(){
   curl --proto '=https' --tlsv1.2 -LsSf https://github.com/atuinsh/atuin/releases/latest/download/atuin-installer.sh | sh
 }
 
-if ! command -v curl &> /dev/null; then
+if ! command -v curl > /dev/null; then
     echo "curl not installed. Please install curl."
     exit
-elif ! command -v sed &> /dev/null; then
+elif ! command -v sed > /dev/null; then
     echo "sed not installed. Please install sed."
     exit
 fi
