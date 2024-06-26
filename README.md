@@ -114,8 +114,9 @@ Then restart your shell!
 > [!NOTE]
 >
 > **For Bash users**: The above sets up `bash-preexec` for necessary hooks, but
-> `bash-preexec` has limitations.  For details, please see the [Bash](#bash)
-> section below.
+> `bash-preexec` has limitations.  For details, please see the
+> [Bash](https://docs.atuin.sh/guide/installation/#installing-the-shell-plugin)
+> section of the shell plugin documentation.
 
 # Security
 
