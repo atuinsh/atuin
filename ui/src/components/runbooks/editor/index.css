@@ -1,0 +1,7 @@
+.editor a {
+    color: #0000ee;
+}
+
+.editor a:hover {
+    cursor: pointer;
+}

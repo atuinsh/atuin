@@ -41,7 +41,15 @@ function Header({ name }: any) {
           {greeting}
         </h2>
         <h3 className="text-xl leading-7 text-gray-900 pt-4">
-          Welcome to Atuin.
+          Welcome to{" "}
+          <a
+            href="https://atuin.sh"
+            target="_blank"
+            rel="noopener noreferrer nofollow"
+          >
+            Atuin
+          </a>
+          .
         </h3>
       </div>
     </div>

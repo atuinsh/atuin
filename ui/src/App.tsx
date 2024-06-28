@@ -12,6 +12,7 @@ import {
   HomeIcon,
   ClockIcon,
   WrenchScrewdriverIcon,
+  BookOpenIcon,
 } from "@heroicons/react/24/outline";
 import Logo from "./assets/logo-light.svg";
 
@@ -23,11 +24,13 @@ import Home from "./pages/Home.tsx";
 import History from "./pages/History.tsx";
 import Dotfiles from "./pages/Dotfiles.tsx";
 import LoginOrRegister from "./components/LoginOrRegister.tsx";
+import Runbooks from "./pages/Runbooks.tsx";
 
 enum Section {
   Home,
   History,
   Dotfiles,
+  Runbooks,
 }
 
 function renderMain(section: Section): ReactElement {
@@ -38,6 +41,8 @@ function renderMain(section: Section): ReactElement {
       return <History />;
     case Section.Dotfiles:
       return <Dotfiles />;
+    case Section.Runbooks:
+      return <Runbooks />;
   }
 }
 
@@ -64,6 +69,11 @@ function App() {
       name: "Dotfiles",
       icon: WrenchScrewdriverIcon,
       section: Section.Dotfiles,
+    },
+    {
+      name: "Runbooks",
+      icon: BookOpenIcon,
+      section: Section.Runbooks,
     },
   ];
 
