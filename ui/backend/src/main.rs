@@ -215,6 +215,19 @@ async fn history_calendar() -> Result<Vec<HistoryCalendarDay>, String> {
     Ok(ret)
 }
 
+#[tauri::command]
+async fn prefix_search(query: &str) -> Result<Vec<String>, String> {
+    let settings = Settings::new().map_err(|e| e.to_string())?;
+
+    let db_path = PathBuf::from(settings.db_path.as_str());
+    let db = HistoryDB::new(db_path, settings.local_timeout).await?;
+
+    let history = db.prefix_search(query).await?;
+    let commands = history.into_iter().map(|h| h.command).collect();
+
+    Ok(commands)
+}
+
 fn show_window(app: &AppHandle) {
     let windows = app.webview_windows();
 
@@ -232,6 +245,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             list,
             search,
+            prefix_search,
             global_stats,
             aliases,
             home_info,

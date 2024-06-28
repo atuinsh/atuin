@@ -1,11 +1,13 @@
 import { createReactBlockSpec } from "@blocknote/react";
-import "./code.css";
+import "./index.css";
 
 import CodeMirror from "@uiw/react-codemirror";
 import { langs } from "@uiw/codemirror-extensions-langs";
 
 import { Play, Square } from "lucide-react";
 import { useState } from "react";
+
+import { extensions } from "./extensions";
 
 interface RunBlockProps {
   onChange: (val: string) => void;
@@ -66,7 +68,8 @@ const RunBlock = ({
             width="100%"
             autoFocus
             onChange={onChange}
-            extensions={[langs.shell()]}
+            extensions={[...extensions(), langs.shell()]}
+            basicSetup={false}
           />
           <div
             className={`overflow-hidden transition-all duration-300 ease-in-out ${
@@ -111,6 +114,13 @@ export default createReactBlockSpec(
           type={type}
           isEditable={editor.isEditable}
         />
+      );
+    },
+    toExternalHTML: ({ block }) => {
+      return (
+        <pre lang="beep boop">
+          <code lang="bash">{block?.props?.code}</code>
+        </pre>
       );
     },
   },

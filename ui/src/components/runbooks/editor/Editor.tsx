@@ -22,8 +22,8 @@ import { BlockNoteView } from "@blocknote/mantine";
 
 import { Code } from "lucide-react";
 
-import RunBlock from "@/components/runbooks/editor/RunBlock";
-import { DeleteBlock } from "@/components/runbooks/editor/DeleteBlock";
+import RunBlock from "@/components/runbooks/editor/blocks/RunBlock";
+import { DeleteBlock } from "@/components/runbooks/editor/ui/DeleteBlockButton";
 
 // Our schema with block specs, which contain the configs and implementations for blocks
 // that we want our editor to use.
@@ -58,6 +58,12 @@ export default function Editor() {
       {
         type: "heading",
         content: "Atuin runbooks",
+      },
+      {
+        type: "paragraph",
+        content: [
+          { type: "text", text: "runbooks that run", styles: { italic: true } },
+        ],
       },
       {
         type: "run",

@@ -14,6 +14,27 @@ dependencies:
   '@blocknote/react':
     specifier: ^0.14.2
     version: 0.14.2(@tiptap/pm@2.4.0)(react-dom@18.3.1)(react@18.3.1)
+  '@codemirror/autocomplete':
+    specifier: ^6.16.3
+    version: 6.16.3(@codemirror/language@6.10.2)(@codemirror/state@6.4.1)(@codemirror/view@6.28.2)(@lezer/common@1.2.1)
+  '@codemirror/commands':
+    specifier: ^6.6.0
+    version: 6.6.0
+  '@codemirror/language':
+    specifier: ^6.10.2
+    version: 6.10.2
+  '@codemirror/lint':
+    specifier: ^6.8.1
+    version: 6.8.1
+  '@codemirror/search':
+    specifier: ^6.5.6
+    version: 6.5.6
+  '@codemirror/state':
+    specifier: ^6.4.1
+    version: 6.4.1
+  '@codemirror/view':
+    specifier: ^6.28.2
+    version: 6.28.2
   '@headlessui/react':
     specifier: ^2.1.1
     version: 2.1.1(react-dom@18.3.1)(react@18.3.1)

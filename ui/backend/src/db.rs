@@ -174,6 +174,41 @@ impl HistoryDB {
         Ok(history)
     }
 
+    pub async fn prefix_search(&self, query: &str) -> Result<Vec<UIHistory>, String> {
+        let context = Context {
+            session: "".to_string(),
+            cwd: "".to_string(),
+            host_id: "".to_string(),
+            hostname: "".to_string(),
+            git_root: None,
+        };
+
+        let filters = OptFilters {
+            limit: Some(5),
+            ..OptFilters::default()
+        };
+
+        let history = self
+            .0
+            .search(
+                SearchMode::Prefix,
+                FilterMode::Global,
+                &context,
+                query,
+                filters,
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let history = history
+            .into_iter()
+            .filter(|h| h.duration > 0)
+            .map(|h| h.into())
+            .collect();
+
+        Ok(history)
+    }
+
     pub async fn calendar(&self) -> Result<Vec<(String, u64)>, String> {
         let query = "select count(1) as count, strftime('%F', datetime(timestamp / 1000000000, 'unixepoch')) as day from history where timestamp > ((unixepoch() - 31536000) * 1000000000) group by day;";
 
