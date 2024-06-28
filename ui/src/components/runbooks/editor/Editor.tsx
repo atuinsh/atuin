@@ -1,5 +1,7 @@
 import "@blocknote/core/fonts/inter.css";
 import "@blocknote/mantine/style.css";
+import "./index.css";
+
 import {
   BlockNoteSchema,
   defaultBlockSpecs,
@@ -7,17 +9,21 @@ import {
   insertOrUpdateBlock,
 } from "@blocknote/core";
 import "@blocknote/core/fonts/inter.css";
+
 import {
   SuggestionMenuController,
+  AddBlockButton,
   getDefaultReactSlashMenuItems,
   useCreateBlockNote,
+  SideMenu,
+  SideMenuController,
 } from "@blocknote/react";
-
 import { BlockNoteView } from "@blocknote/mantine";
-import "@blocknote/mantine/style.css";
 
-import "./index.css";
+import { Code } from "lucide-react";
+
 import RunBlock from "@/components/runbooks/editor/RunBlock";
+import { DeleteBlock } from "@/components/runbooks/editor/DeleteBlock";
 
 // Our schema with block specs, which contain the configs and implementations for blocks
 // that we want our editor to use.
@@ -33,22 +39,15 @@ const schema = BlockNoteSchema.create({
 
 // Slash menu item to insert an Alert block
 const insertRun = (editor: typeof schema.BlockNoteEditor) => ({
-  title: "Code",
+  title: "Code block",
   onItemClick: () => {
     insertOrUpdateBlock(editor, {
       type: "run",
     });
   },
-  aliases: [
-    "alert",
-    "notification",
-    "emphasize",
-    "warning",
-    "error",
-    "info",
-    "success",
-  ],
-  group: "Other",
+  icon: <Code size={18} />,
+  aliases: ["code", "run"],
+  group: "Code",
 });
 
 export default function Editor() {
@@ -57,8 +56,8 @@ export default function Editor() {
     schema,
     initialContent: [
       {
-        type: "paragraph",
-        content: "Welcome to this demo!",
+        type: "heading",
+        content: "Atuin runbooks",
       },
       {
         type: "run",
@@ -70,18 +69,27 @@ export default function Editor() {
 
   // Renders the editor instance.
   return (
-    <BlockNoteView editor={editor} slashMenu={false} sideMenu={false}>
-      {/* Replaces the default Slash Menu. */}
-      <SuggestionMenuController
-        triggerCharacter={"/"}
-        getItems={async (query) =>
-          // Gets all default slash menu items and `insertAlert` item.
-          filterSuggestionItems(
-            [...getDefaultReactSlashMenuItems(editor), insertRun(editor)],
-            query,
-          )
-        }
-      />
-    </BlockNoteView>
+    <div>
+      <BlockNoteView editor={editor} slashMenu={false} sideMenu={false}>
+        <SuggestionMenuController
+          triggerCharacter={"/"}
+          getItems={async (query) =>
+            filterSuggestionItems(
+              [...getDefaultReactSlashMenuItems(editor), insertRun(editor)],
+              query,
+            )
+          }
+        />
+
+        <SideMenuController
+          sideMenu={(props) => (
+            <SideMenu {...props}>
+              <AddBlockButton {...props} />
+              <DeleteBlock {...props} />
+            </SideMenu>
+          )}
+        />
+      </BlockNoteView>
+    </div>
   );
 }

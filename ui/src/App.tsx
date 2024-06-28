@@ -14,6 +14,9 @@ import {
   WrenchScrewdriverIcon,
   BookOpenIcon,
 } from "@heroicons/react/24/outline";
+
+import { ChevronRightSquare } from "lucide-react";
+
 import Logo from "./assets/logo-light.svg";
 
 function classNames(...classes: any) {
@@ -72,7 +75,7 @@ function App() {
     },
     {
       name: "Runbooks",
-      icon: BookOpenIcon,
+      icon: ChevronRightSquare,
       section: Section.Runbooks,
     },
   ];

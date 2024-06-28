@@ -2,10 +2,29 @@ import { createReactBlockSpec } from "@blocknote/react";
 import "./code.css";
 
 import CodeMirror from "@uiw/react-codemirror";
-import { Play, Square } from "lucide-react";
-import React, { useState } from "react";
+import { langs } from "@uiw/codemirror-extensions-langs";
 
-const RunBlock = ({ onChange, onPlay, id, code, type, isEditable }) => {
+import { Play, Square } from "lucide-react";
+import { useState } from "react";
+
+interface RunBlockProps {
+  onChange: (val: string) => void;
+  onPlay?: () => void;
+  onStop?: () => void;
+  id: string;
+  code: string;
+  type: string;
+  isEditable: boolean;
+}
+
+const RunBlock = ({
+  onChange,
+  onPlay,
+  id,
+  code,
+  type,
+  isEditable,
+}: RunBlockProps) => {
   const [isRunning, setIsRunning] = useState(false);
   const [showTerminal, setShowTerminal] = useState(false);
 
@@ -20,7 +39,7 @@ const RunBlock = ({ onChange, onPlay, id, code, type, isEditable }) => {
   };
 
   return (
-    <div className="w-full outline-none">
+    <div className="w-full !outline-none">
       <div className="flex items-start">
         <button
           onClick={handleToggle}
@@ -45,7 +64,9 @@ const RunBlock = ({ onChange, onPlay, id, code, type, isEditable }) => {
             value={code}
             editable={isEditable}
             width="100%"
+            autoFocus
             onChange={onChange}
+            extensions={[langs.shell()]}
           />
           <div
             className={`overflow-hidden transition-all duration-300 ease-in-out ${
