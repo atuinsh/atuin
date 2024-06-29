@@ -211,6 +211,10 @@ records = true
 ## static: length of the longest command stored in the history.
 # strategy = "auto"
 
+## Sets the position of the preview window.
+## possible values: bottom, top
+#position = "bottom"
+
 [daemon]
 ## Enables using the daemon to sync. Requires the daemon to be running in the background. Start it with `atuin daemon`
 # enabled = false
