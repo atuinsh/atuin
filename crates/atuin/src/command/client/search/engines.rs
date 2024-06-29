@@ -20,7 +20,8 @@ pub fn engine(search_mode: SearchMode) -> Box<dyn SearchEngine> {
 
 pub struct SearchState {
     pub input: Cursor,
-    pub filter_mode: FilterMode,
+    pub filter_mode_index: usize,
+    pub available_filter_modes: Vec<FilterMode>,
     pub context: Context,
 }
 
@@ -35,7 +36,13 @@ pub trait SearchEngine: Send + Sync + 'static {
     async fn query(&mut self, state: &SearchState, db: &mut dyn Database) -> Result<Vec<History>> {
         if state.input.as_str().is_empty() {
             Ok(db
-                .list(&[state.filter_mode], &state.context, Some(200), true, false)
+                .list(
+                    &[state.available_filter_modes[state.filter_mode_index]],
+                    &state.context,
+                    Some(200),
+                    true,
+                    false,
+                )
                 .await?
                 .into_iter()
                 .collect::<Vec<_>>())
