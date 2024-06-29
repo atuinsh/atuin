@@ -68,6 +68,14 @@ _atuin_search() {
         then
             LBUFFER=${LBUFFER#__atuin_accept__:}
             zle accept-line
+        elif [[ $LBUFFER =~ ^__atuin_edit_at__:([0-9]+):(.*)$ ]]
+        then
+            # shellcheck disable=SC2154 # $match array contains the regexp groups
+            local POS=${match[1]}
+            # shellcheck disable=SC2154 # $match array contains the regexp groups
+            local LINE=${match[2]}
+            LBUFFER="${LINE[0,${POS}]}"
+            RBUFFER="${LINE[$((POS+1)),${#LINE}]}"
         fi
     fi
 }
