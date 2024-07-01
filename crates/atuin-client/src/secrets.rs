@@ -97,6 +97,21 @@ pub static SECRET_PATTERNS: &[(&str, &str, TestValue)] = &[
     ),
     ("Stripe test key", "sk_test_[0-9a-zA-Z]{24}", TestValue::Single("sk_test_1234567890abcdefghijklmnop")),
     ("Stripe live key", "sk_live_[0-9a-zA-Z]{24}", TestValue::Single("sk_live_1234567890abcdefghijklmnop")),
+    (
+        "Netlify authentication token",
+        "nf[pcoub]_[0-9a-zA-Z]{36}",
+        TestValue::Single("nfp_nBh7BdJxUwyaBBwFzpyD29MMFT6pZ9wq5634"),
+    ),
+    (
+        "npm token",
+        "npm_[A-Za-z0-9]{36}",
+        TestValue::Single("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"),
+    ),
+    (
+        "Pulumi personal access token",
+        "pul-[0-9a-f]{40}",
+        TestValue::Single("pul-683c2770662c51d960d72ec27613be7653c5cb26"),
+    ),
 ];
 
 #[cfg(test)]
