@@ -37,4 +37,4 @@ argon2 = "0.5"
 semver = { workspace = true }
 metrics-exporter-prometheus = "0.12.1"
 metrics = "0.21.1"
-postmark = {version= "0.10.0", features=["reqwest"]}
+postmark = {version= "0.10.1", features=["reqwest"]}
