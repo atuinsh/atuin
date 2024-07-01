@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { persist, createJSONStorage } from "zustand/middleware";
+import { persist } from "zustand/middleware";
 
 import { parseISO } from "date-fns";
 
@@ -39,13 +39,15 @@ interface AtuinState {
   historyNextPage: (query?: string) => void;
 }
 
-let state = (set, get): AtuinState => ({
+let state = (set: any, get: any): AtuinState => ({
   user: DefaultUser,
   homeInfo: DefaultHomeInfo,
   aliases: [],
   vars: [],
   shellHistory: [],
   calendar: [],
+
+  // @ts-ignore
   weekStart: new Intl.Locale(navigator.language).getWeekInfo().firstDay,
 
   refreshAliases: () => {

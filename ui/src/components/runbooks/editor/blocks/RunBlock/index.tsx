@@ -24,7 +24,6 @@ const RunBlock = ({
   onPlay,
   id,
   code,
-  type,
   isEditable,
 }: RunBlockProps) => {
   const [isRunning, setIsRunning] = useState(false);
@@ -35,8 +34,6 @@ const RunBlock = ({
     setShowTerminal(!isRunning);
     if (!isRunning) {
       if (onPlay) onPlay();
-    } else {
-      if (onStop) onStop();
     }
   };
 
@@ -99,6 +96,7 @@ export default createReactBlockSpec(
     content: "none",
   },
   {
+    // @ts-ignore
     render: ({ block, editor, code, type }) => {
       const onInputChange = (val: string) => {
         editor.updateBlock(block, {
