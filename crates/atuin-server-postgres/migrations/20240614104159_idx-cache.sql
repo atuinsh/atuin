@@ -1,7 +1,5 @@
 -- using group by and max is slow. as the store grows, latency is creeping up.
 -- get a handle on it!
--- Really this sort of workload (lots of aggregation) is better suited to OLAP,
--- but let's just stick with postgres until we can't any more
 
 create table store_idx_cache(
   id bigserial primary key, 
