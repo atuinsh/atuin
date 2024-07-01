@@ -36,7 +36,6 @@ import {
 
 import { lintKeymap } from "@codemirror/lint";
 import { invoke } from "@tauri-apps/api/core";
-import { langs } from "@uiw/codemirror-extensions-langs";
 
 export interface MinimalSetupOptions {
   highlightSpecialChars?: boolean;
@@ -78,6 +77,7 @@ function myCompletions(context: CompletionContext) {
   if (word.from == word.to && !context.explicit) return null;
 
   return invoke("prefix_search", { query: word.text }).then(
+    // @ts-ignore
     (results: string[]) => {
       console.log(results);
 
@@ -91,15 +91,6 @@ function myCompletions(context: CompletionContext) {
       };
     },
   );
-
-  return {
-    from: word.from,
-    options: [
-      { label: "match", type: "keyword" },
-      { label: "hello", type: "variable", info: "(World)" },
-      { label: "magic", type: "text", apply: "⠁⭒*.✩.*⭒⠁", detail: "macro" },
-    ],
-  };
 }
 
 const buildAutocomplete = (): Extension => {

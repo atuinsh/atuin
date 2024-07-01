@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect } from "react";
 import { formatRelative } from "date-fns";
 import { Tooltip as ReactTooltip } from "react-tooltip";
 
@@ -56,9 +56,9 @@ function Header({ name }: any) {
   );
 }
 
-const explicitTheme: ThemeInput = {
+const explicitTheme = {
   light: ["#f0f0f0", "#c4edde", "#7ac7c4", "#f73859", "#384259"],
-  dark: ["#383838", "#4D455D", "#7DB9B6", "#F5E9CF", "#E96479"],
+  dark: ["#f0f0f0", "#c4edde", "#7ac7c4", "#f73859", "#384259"],
 };
 
 export default function Home() {
@@ -155,7 +155,7 @@ export default function Home() {
           <ActivityCalendar
             theme={explicitTheme}
             data={calendar}
-            weekStart={weekStart}
+            weekStart={weekStart as any}
             renderBlock={(block, activity) =>
               React.cloneElement(block, {
                 "data-tooltip-id": "react-tooltip",

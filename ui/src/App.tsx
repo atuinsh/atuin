@@ -12,7 +12,6 @@ import {
   HomeIcon,
   ClockIcon,
   WrenchScrewdriverIcon,
-  BookOpenIcon,
 } from "@heroicons/react/24/outline";
 
 import { ChevronRightSquare } from "lucide-react";
