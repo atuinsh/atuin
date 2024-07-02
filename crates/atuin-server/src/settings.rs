@@ -67,6 +67,13 @@ pub struct Settings<DbSettings> {
     pub tls: Tls,
     pub mail: Mail,
 
+    /// Advertise a version that is not what we are _actually_ running
+    /// Many clients compare their version with api.atuin.sh, and if they differ, notify the user
+    /// that an update is available.
+    /// Now that we take beta releases, we should be able to advertise a different version to avoid
+    /// notifying users when the server runs something that is not a stable release.
+    pub fake_version: Option<String>,
+
     #[serde(flatten)]
     pub db_settings: DbSettings,
 }
