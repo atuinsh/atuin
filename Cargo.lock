@@ -447,6 +447,7 @@ dependencies = [
  "atuin-server-database",
  "eyre",
  "futures-util",
+ "metrics",
  "serde",
  "sqlx",
  "time",
