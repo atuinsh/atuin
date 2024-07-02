@@ -14,8 +14,10 @@ pub struct Mail {
 
     /// Configuration for the postmark api client
     /// This is what we use for Atuin Cloud, the forum, etc.
+    #[serde(default)]
     pub postmark: Postmark,
 
+    #[serde(default)]
     pub verification: MailVerification,
 }
 
