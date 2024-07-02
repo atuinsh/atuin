@@ -19,10 +19,16 @@ pub async fn index<DB: Database>(state: State<AppState<DB>>) -> Json<IndexRespon
     // It's super unlikely this will happen
     let count = state.database.total_history().await.unwrap_or(-1);
 
+    let version = state
+        .settings
+        .fake_version
+        .clone()
+        .unwrap_or(VERSION.to_string());
+
     Json(IndexResponse {
         homage: homage.to_string(),
-        version: VERSION.to_string(),
         total_history: count,
+        version,
     })
 }
 
