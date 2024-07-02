@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::ops::Range;
 
@@ -519,6 +520,15 @@ impl Database for Postgres {
     async fn add_records(&self, user: &User, records: &[Record<EncryptedData>]) -> DbResult<()> {
         let mut tx = self.pool.begin().await.map_err(fix_error)?;
 
+        // We won't have uploaded this data if it wasn't the max. Therefore, we can deduce the max
+        // idx without having to make further database queries. Doing the query on this small
+        // amount of data should be much, much faster.
+        //
+        // Worst case, say we get this wrong. We end up caching data that isn't actually the max
+        // idx, so clients upload again. The cache logic can be verified with a sql query anyway :)
+
+        let mut heads = HashMap::<(HostId, &str), u64>::new();
+
         for i in records {
             let id = atuin_common::utils::uuid_v7();
 
@@ -539,6 +549,34 @@ impl Database for Postgres {
             .bind(&i.data.data)
             .bind(&i.data.content_encryption_key)
             .bind(user.id)
+            .execute(&mut *tx)
+            .await
+            .map_err(fix_error)?;
+
+            // we're already iterating sooooo
+            heads
+                .entry((i.host.id, &i.tag))
+                .and_modify(|e| {
+                    if i.idx > *e {
+                        *e = i.idx
+                    }
+                })
+                .or_insert(i.idx);
+        }
+
+        // we've built the map of heads for this push, so commit it to the database
+        for ((host, tag), idx) in heads {
+            sqlx::query(
+                "insert into store_idx_cache
+                    (user_id, host, tag, idx) 
+                values ($1, $2, $3, $4)
+                on conflict(user_id, host, tag) do update set idx = $4
+                ",
+            )
+            .bind(user.id)
+            .bind(host)
+            .bind(tag)
+            .bind(idx as i64)
             .execute(&mut *tx)
             .await
             .map_err(fix_error)?;
