@@ -219,15 +219,16 @@ impl Store for SqliteStore {
         idx: RecordIdx,
         limit: u64,
     ) -> Result<Vec<Record<EncryptedData>>> {
-        let res =
-            sqlx::query("select * from store where idx >= ?1 and host = ?2 and tag = ?3 limit ?4")
-                .bind(idx as i64)
-                .bind(host.0.as_hyphenated().to_string())
-                .bind(tag)
-                .bind(limit as i64)
-                .map(Self::query_row)
-                .fetch_all(&self.pool)
-                .await?;
+        let res = sqlx::query(
+            "select * from store where idx >= ?1 and host = ?2 and tag = ?3 order by idx asc limit ?4",
+        )
+        .bind(idx as i64)
+        .bind(host.0.as_hyphenated().to_string())
+        .bind(tag)
+        .bind(limit as i64)
+        .map(Self::query_row)
+        .fetch_all(&self.pool)
+        .await?;
 
         Ok(res)
     }

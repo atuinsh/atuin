@@ -571,7 +571,7 @@ impl Database for Postgres {
                 "insert into store_idx_cache
                     (user_id, host, tag, idx) 
                 values ($1, $2, $3, $4)
-                on conflict(user_id, host, tag) do update set idx = $4
+                on conflict(user_id, host, tag) do update set idx = greatest(idx, $4)
                 ",
             )
             .bind(user.id)
