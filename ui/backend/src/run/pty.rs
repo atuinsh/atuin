@@ -30,10 +30,12 @@ pub async fn pty_open<'a>(
             Ok(n) => {
                 println!("read {n} bytes");
 
-                let buf = buf.to_vec();
-                let out = String::from_utf8(buf).expect("Invalid utf8");
+                // TODO: sort inevitable encoding issues
+                let out = String::from_utf8_lossy(&buf).to_string();
                 let out = out.trim_matches(char::from(0));
-                app.emit(format!("pty-{id}").as_str(), out).unwrap();
+                let channel = format!("pty-{id}");
+
+                app.emit(channel.as_str(), out).unwrap();
             }
 
             Err(e) => {
@@ -55,7 +57,7 @@ pub(crate) async fn pty_write(
     state: tauri::State<'_, AtuinState>,
 ) -> Result<(), String> {
     let sessions = state.pty_sessions.read().await;
-    let pty = sessions.get(&pid).ok_or("Pty not found")?.clone();
+    let pty = sessions.get(&pid).ok_or("Pty not found")?;
 
     let bytes = data.as_bytes().to_vec();
     pty.send_bytes(bytes.into())
@@ -65,21 +67,27 @@ pub(crate) async fn pty_write(
 }
 
 #[tauri::command]
-pub(crate) async fn pty_read(
+pub(crate) async fn pty_resize(
+    pid: uuid::Uuid,
+    rows: u16,
+    cols: u16,
+    state: tauri::State<'_, AtuinState>,
+) -> Result<(), String> {
+    let sessions = state.pty_sessions.read().await;
+    let pty = sessions.get(&pid).ok_or("Pty not found")?;
+
+    pty.resize(rows, cols).await.map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
+pub(crate) async fn pty_kill(
     pid: uuid::Uuid,
     state: tauri::State<'_, AtuinState>,
-) -> Result<Vec<u8>, String> {
-    let sessions = state.pty_sessions.read().await;
-    let pty = sessions.get(&pid).ok_or("Pty not found")?.clone();
+) -> Result<(), String> {
+    let pty = state.pty_sessions.write().await.remove(&pid).unwrap();
+    println!("RIP {pid:?}");
 
-    let mut buf = [0u8; 512];
-
-    let n = pty
-        .reader
-        .lock()
-        .map_err(|e| e.to_string())?
-        .read(&mut buf)
-        .map_err(|e| e.to_string())?;
-
-    Ok(buf.to_vec())
+    Ok(())
 }

@@ -10,10 +10,7 @@ import { useState, useEffect } from "react";
 import { extensions } from "./extensions";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-
-import { Terminal } from "@xterm/xterm";
-import { FitAddon } from "@xterm/addon-fit";
-import { WebglAddon } from "@xterm/addon-webgl";
+import { openTerm } from "./terminal";
 
 import "@xterm/xterm/css/xterm.css";
 
@@ -46,35 +43,15 @@ const RunBlock = ({ onPlay, id, code, isEditable }: RunBlockProps) => {
   const [value, setValue] = useState<String>(code);
 
   const [blockId, setBlockId] = useState<string>(randomId(10));
-
-  const [terminal, setTerminal] = useState<Terminal>(null);
+  const [terminal, setTerminal] = useState<any>(null);
+  const [unlisten, setUnlisten] = useState<any>(null);
+  const [pty, setPty] = useState<string | null>(null);
 
   const onChange = (val) => {
     setValue(val);
   };
 
-  const openTerm = (pty) => {
-    if (terminal) {
-      terminal.clear();
-      return terminal;
-    }
-
-    const term = new Terminal({
-      fontSize: 12,
-      fontFamily: "Courier New",
-    });
-    term.open(document.getElementById(`terminal-${blockId}`));
-
-    const fitAddon = new FitAddon();
-    term.loadAddon(fitAddon);
-    term.loadAddon(new WebglAddon());
-
-    fitAddon.fit();
-
-    return term;
-  };
-
-  const handleToggle = (event) => {
+  const handleToggle = async (event) => {
     event.stopPropagation();
 
     // If there's no code, don't do anything
@@ -83,22 +60,28 @@ const RunBlock = ({ onPlay, id, code, isEditable }: RunBlockProps) => {
     setIsRunning(!isRunning);
     setShowTerminal(!isRunning);
 
+    if (isRunning) {
+      // send sigkill
+      console.log("sending sigkill");
+      await invoke("pty_kill", { pid: pty });
+      if (unlisten) unlisten();
+    }
+
     if (!isRunning) {
       if (onPlay) onPlay();
 
-      invoke("pty_open").then(async (res) => {
-        let terminal = openTerm(res);
+      let pty = await invoke<string>("pty_open");
+      let term = openTerm(pty, `terminal-${blockId}`);
+      setTerminal(term);
+      setPty(pty);
 
-        const unlisten = await listen(`pty-${res}`, (event) => {
-          console.log(terminal);
-          if (terminal) terminal.write(event.payload);
-        });
-
-        let val = !value.endsWith("\n") ? value + "\n" : value;
-        console.log(val);
-        await invoke("pty_write", { pid: res, data: val });
-        console.log("written to pid", res);
+      const ul = await listen(`pty-${pty}`, (event) => {
+        term.write(event.payload);
       });
+      setUnlisten(() => ul);
+
+      let val = !value.endsWith("\n") ? value + "\n" : value;
+      await invoke("pty_write", { pid: pty, data: val });
     }
   };
 
@@ -135,7 +118,7 @@ const RunBlock = ({ onPlay, id, code, isEditable }: RunBlockProps) => {
           />
           <div
             className={`overflow-hidden transition-all duration-300 ease-in-out ${
-              showTerminal ? "h-48" : "max-h-0"
+              showTerminal ? "" : "max-h-0"
             }`}
           >
             <div

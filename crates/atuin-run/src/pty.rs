@@ -15,6 +15,7 @@ struct Size {
 
 pub struct Pty {
     tx: tokio::sync::mpsc::Sender<Bytes>,
+
     pub master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
     pub reader: Arc<Mutex<Box<dyn std::io::Read + Send>>>,
 }
@@ -36,7 +37,6 @@ impl Pty {
 
         tokio::task::spawn_blocking(move || {
             let mut child = pair.slave.spawn_command(cmd).unwrap();
-
             // Wait for the child to exit
             let _ = child.wait().unwrap();
 
@@ -73,6 +73,24 @@ impl Pty {
             master: Arc::new(Mutex::new(pair.master)),
             reader: Arc::new(Mutex::new(reader)),
         })
+    }
+
+    pub async fn resize(&self, rows: u16, cols: u16) -> Result<()> {
+        let master = self
+            .master
+            .lock()
+            .map_err(|e| eyre!("Failed to lock pty master: {e}"))?;
+
+        master
+            .resize(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|e| eyre!("Failed to resize terminal: {e}"))?;
+
+        Ok(())
     }
 
     pub async fn send_bytes(&self, bytes: Bytes) -> Result<()> {

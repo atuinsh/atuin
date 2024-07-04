@@ -79,8 +79,6 @@ function myCompletions(context: CompletionContext) {
   return invoke("prefix_search", { query: word.text }).then(
     // @ts-ignore
     (results: string[]) => {
-      console.log(results);
-
       let options = results.map((i) => {
         return { label: i, type: "text" };
       });

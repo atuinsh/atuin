@@ -11,9 +11,9 @@ use time::format_description::well_known::Rfc3339;
 mod db;
 mod dotfiles;
 mod install;
-mod store;
 mod run;
 mod state;
+mod store;
 
 use atuin_client::settings::Settings;
 use atuin_client::{
@@ -22,7 +22,6 @@ use atuin_client::{
 use atuin_history::stats;
 use db::{GlobalStats, HistoryDB, UIHistory};
 use dotfiles::aliases::aliases;
-
 
 #[derive(Debug, serde::Serialize)]
 struct HomeInfo {
@@ -260,8 +259,9 @@ fn main() {
             register,
             history_calendar,
             run::pty::pty_open,
-            run::pty::pty_read,
             run::pty::pty_write,
+            run::pty::pty_resize,
+            run::pty::pty_kill,
             install::install_cli,
             install::is_cli_installed,
             install::setup_cli,
