@@ -5,9 +5,17 @@ import CodeMirror from "@uiw/react-codemirror";
 import { langs } from "@uiw/codemirror-extensions-langs";
 
 import { Play, Square } from "lucide-react";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 
 import { extensions } from "./extensions";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+
+import { Terminal } from "@xterm/xterm";
+import { FitAddon } from "@xterm/addon-fit";
+import { WebglAddon } from "@xterm/addon-webgl";
+
+import "@xterm/xterm/css/xterm.css";
 
 interface RunBlockProps {
   onChange: (val: string) => void;
@@ -19,21 +27,78 @@ interface RunBlockProps {
   isEditable: boolean;
 }
 
-const RunBlock = ({
-  onChange,
-  onPlay,
-  id,
-  code,
-  isEditable,
-}: RunBlockProps) => {
+function randomId(length: number) {
+  let result = "";
+  const characters =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  const charactersLength = characters.length;
+  let counter = 0;
+  while (counter < length) {
+    result += characters.charAt(Math.floor(Math.random() * charactersLength));
+    counter += 1;
+  }
+  return result;
+}
+
+const RunBlock = ({ onPlay, id, code, isEditable }: RunBlockProps) => {
   const [isRunning, setIsRunning] = useState(false);
   const [showTerminal, setShowTerminal] = useState(false);
+  const [value, setValue] = useState<String>(code);
 
-  const handleToggle = () => {
+  const [blockId, setBlockId] = useState<string>(randomId(10));
+
+  const [terminal, setTerminal] = useState<Terminal>(null);
+
+  const onChange = (val) => {
+    setValue(val);
+  };
+
+  const openTerm = (pty) => {
+    if (terminal) {
+      terminal.clear();
+      return terminal;
+    }
+
+    const term = new Terminal({
+      fontSize: 12,
+      fontFamily: "Courier New",
+    });
+    term.open(document.getElementById(`terminal-${blockId}`));
+
+    const fitAddon = new FitAddon();
+    term.loadAddon(fitAddon);
+    term.loadAddon(new WebglAddon());
+
+    fitAddon.fit();
+
+    return term;
+  };
+
+  const handleToggle = (event) => {
+    event.stopPropagation();
+
+    // If there's no code, don't do anything
+    if (!value) return;
+
     setIsRunning(!isRunning);
     setShowTerminal(!isRunning);
+
     if (!isRunning) {
       if (onPlay) onPlay();
+
+      invoke("pty_open").then(async (res) => {
+        let terminal = openTerm(res);
+
+        const unlisten = await listen(`pty-${res}`, (event) => {
+          console.log(terminal);
+          if (terminal) terminal.write(event.payload);
+        });
+
+        let val = !value.endsWith("\n") ? value + "\n" : value;
+        console.log(val);
+        await invoke("pty_write", { pid: res, data: val });
+        console.log("written to pid", res);
+      });
     }
   };
 
@@ -70,13 +135,13 @@ const RunBlock = ({
           />
           <div
             className={`overflow-hidden transition-all duration-300 ease-in-out ${
-              showTerminal ? "max-h-48" : "max-h-0"
+              showTerminal ? "h-48" : "max-h-0"
             }`}
           >
-            <div className="bg-gray-900 text-green-400 p-4 rounded-b font-mono">
-              {/* Terminal content will go here */}$ echo "Terminal output will
-              appear here"
-            </div>
+            <div
+              id={`terminal-${blockId}`}
+              style={{ height: "300px", overflowY: "scroll" }}
+            ></div>
           </div>
         </div>
       </div>

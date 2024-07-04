@@ -1,6 +1,8 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use tauri::State;
+
 use std::path::PathBuf;
 
 use tauri::{AppHandle, Manager};
@@ -10,6 +12,8 @@ mod db;
 mod dotfiles;
 mod install;
 mod store;
+mod run;
+mod state;
 
 use atuin_client::settings::Settings;
 use atuin_client::{
@@ -18,6 +22,7 @@ use atuin_client::{
 use atuin_history::stats;
 use db::{GlobalStats, HistoryDB, UIHistory};
 use dotfiles::aliases::aliases;
+
 
 #[derive(Debug, serde::Serialize)]
 struct HomeInfo {
@@ -168,7 +173,7 @@ async fn home_info() -> Result<HomeInfo, String> {
 }
 
 // Match the format that the frontend library we use expects
-// All the processing in Rust, not JS.
+// All the processing in Rust, not JSunwrap.
 // Faaaassssssst af ⚡️🦀
 #[derive(Debug, serde::Serialize)]
 pub struct HistoryCalendarDay {
@@ -254,6 +259,9 @@ fn main() {
             login,
             register,
             history_calendar,
+            run::pty::pty_open,
+            run::pty::pty_read,
+            run::pty::pty_write,
             install::install_cli,
             install::is_cli_installed,
             install::setup_cli,
@@ -269,6 +277,7 @@ fn main() {
         .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
             let _ = show_window(app);
         }))
+        .manage(state::AtuinState::default())
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

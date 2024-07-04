@@ -16,6 +16,7 @@ atuin-client = { path = "../../crates/atuin-client", version = "18.4.0-beta.1" }
 atuin-common = { path = "../../crates/atuin-common", version = "18.4.0-beta.1" }
 atuin-dotfiles = { path = "../../crates/atuin-dotfiles", version = "0.4.0" }
 atuin-history = { path = "../../crates/atuin-history", version = "0.3.0" }
+atuin-run = { path = "../../crates/atuin-run", version = "0.1.0" }
 
 eyre = "0.6"
 tauri = { version = "2.0.0-beta", features = ["tray-icon"] }
