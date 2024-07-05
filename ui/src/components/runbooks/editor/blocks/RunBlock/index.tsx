@@ -65,6 +65,10 @@ const RunBlock = ({ onPlay, id, code, isEditable }: RunBlockProps) => {
       console.log("sending sigkill");
       await invoke("pty_kill", { pid: pty });
       if (unlisten) unlisten();
+      if (terminal) {
+        terminal.clear();
+        terminal.dispose();
+      }
     }
 
     if (!isRunning) {
