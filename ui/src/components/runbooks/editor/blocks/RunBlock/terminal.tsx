@@ -45,6 +45,7 @@ const TerminalComponent = ({ pty }: any) => {
 
   useEffect(() => {
     if (pty == null) return;
+    if (!terminalRef.current) return;
 
     const terminal = new Terminal();
     const fitAddon = new FitAddon();
@@ -58,7 +59,7 @@ const TerminalComponent = ({ pty }: any) => {
       fitAddon.fit();
     };
 
-    listen(`pty-${pty}`, (event) => {
+    listen(`pty-${pty}`, (event: any) => {
       terminal.write(event.payload);
     }).then(() => {
       console.log("Listening for pty events");
