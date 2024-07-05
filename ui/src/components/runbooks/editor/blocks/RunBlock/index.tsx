@@ -5,12 +5,11 @@ import CodeMirror from "@uiw/react-codemirror";
 import { langs } from "@uiw/codemirror-extensions-langs";
 
 import { Play, Square } from "lucide-react";
-import { useState, useEffect } from "react";
+import { useState } from "react";
 
 import { extensions } from "./extensions";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
-import { openTerm } from "./terminal";
+import Terminal from "./terminal.tsx";
 
 import "@xterm/xterm/css/xterm.css";
 
@@ -42,9 +41,6 @@ const RunBlock = ({ onPlay, id, code, isEditable }: RunBlockProps) => {
   const [showTerminal, setShowTerminal] = useState(false);
   const [value, setValue] = useState<String>(code);
 
-  const [blockId, setBlockId] = useState<string>(randomId(10));
-  const [terminal, setTerminal] = useState<any>(null);
-  const [unlisten, setUnlisten] = useState<any>(null);
   const [pty, setPty] = useState<string | null>(null);
 
   const onChange = (val) => {
@@ -64,25 +60,14 @@ const RunBlock = ({ onPlay, id, code, isEditable }: RunBlockProps) => {
       // send sigkill
       console.log("sending sigkill");
       await invoke("pty_kill", { pid: pty });
-      if (unlisten) unlisten();
-      if (terminal) {
-        terminal.clear();
-        terminal.dispose();
-      }
     }
 
     if (!isRunning) {
       if (onPlay) onPlay();
 
       let pty = await invoke<string>("pty_open");
-      let term = openTerm(pty, `terminal-${blockId}`);
-      setTerminal(term);
       setPty(pty);
-
-      const ul = await listen(`pty-${pty}`, (event) => {
-        term.write(event.payload);
-      });
-      setUnlisten(() => ul);
+      console.log(pty);
 
       let val = !value.endsWith("\n") ? value + "\n" : value;
       await invoke("pty_write", { pid: pty, data: val });
@@ -122,13 +107,10 @@ const RunBlock = ({ onPlay, id, code, isEditable }: RunBlockProps) => {
           />
           <div
             className={`overflow-hidden transition-all duration-300 ease-in-out ${
-              showTerminal ? "" : "max-h-0"
+              showTerminal ? "block" : "hidden"
             }`}
           >
-            <div
-              id={`terminal-${blockId}`}
-              style={{ height: "300px", overflowY: "scroll" }}
-            ></div>
+            {pty && <Terminal pty={pty} />}
           </div>
         </div>
       </div>

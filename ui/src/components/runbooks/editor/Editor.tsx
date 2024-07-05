@@ -58,20 +58,10 @@ export default function Editor() {
       {
         type: "heading",
         content: "Atuin runbooks",
-      },
-      {
-        type: "paragraph",
-        content: [
-          { type: "text", text: "runbooks that run", styles: { italic: true } },
-        ],
-      },
-      {
-        type: "run",
+        id: "foo",
       },
     ],
   });
-
-  console.log(JSON.stringify(editor.document));
 
   // Renders the editor instance.
   return (
