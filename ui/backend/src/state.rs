@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use tauri::async_runtime::RwLock;
 
-use atuin_run::pty::Pty;
+use crate::pty::Pty;
 
 #[derive(Default)]
 pub(crate) struct AtuinState {

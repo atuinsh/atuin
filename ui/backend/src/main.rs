@@ -11,6 +11,7 @@ use time::format_description::well_known::Rfc3339;
 mod db;
 mod dotfiles;
 mod install;
+mod pty;
 mod run;
 mod state;
 mod store;

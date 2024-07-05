@@ -13,7 +13,7 @@ pub async fn pty_open<'a>(
     state: State<'a, AtuinState>,
 ) -> Result<uuid::Uuid, String> {
     let id = uuid::Uuid::new_v4();
-    let pty = atuin_run::pty::Pty::open(24, 80).await.unwrap();
+    let pty = crate::pty::Pty::open(24, 80).await.unwrap();
 
     let reader = pty.reader.clone();
 
