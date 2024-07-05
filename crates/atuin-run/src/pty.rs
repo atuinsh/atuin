@@ -1,17 +1,11 @@
 use std::{
-    io::{self, Read, Write},
-    sync::{mpsc::SendError, Arc, Mutex},
+    io::Write,
+    sync::{Arc, Mutex},
 };
 
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
 use eyre::{eyre, Result};
-use portable_pty::{CommandBuilder, MasterPty, NativePtySystem, PtySize, PtySystem};
-
-#[derive(Debug)]
-struct Size {
-    cols: u16,
-    rows: u16,
-}
+use portable_pty::{CommandBuilder, MasterPty, PtySize};
 
 pub struct Pty {
     tx: tokio::sync::mpsc::Sender<Bytes>,
