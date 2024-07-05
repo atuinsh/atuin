@@ -19,3 +19,6 @@ portable-pty = "0.8.1"
 vt100 = "0.15.2"
 bytes = "1.6.0"
 nix = "0.29.0"
+
+[target.'cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))'.dependencies]
+portable-pty = "0.8.1" 
