@@ -94,7 +94,7 @@ impl Cmd {
             .unwrap();
 
         let settings = Settings::new().wrap_err("could not load client settings")?;
-        let theme_manager = theme::ThemeManager::new();
+        let theme_manager = theme::ThemeManager::new(settings.theme.debug);
         let res = runtime.block_on(self.run_inner(settings, theme_manager));
 
         runtime.shutdown_timeout(std::time::Duration::from_millis(50));
@@ -128,7 +128,7 @@ impl Cmd {
         let db = Sqlite::new(db_path, settings.local_timeout).await?;
         let sqlite_store = SqliteStore::new(record_store_path, settings.local_timeout).await?;
 
-        let theme_name = settings.theme.clone();
+        let theme_name = settings.theme.name.clone();
         let theme = theme_manager.load_theme(theme_name.as_str());
 
         match self {

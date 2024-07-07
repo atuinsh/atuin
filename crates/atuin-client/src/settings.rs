@@ -339,6 +339,15 @@ pub struct Preview {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Theme {
+    /// Name of desired theme ("" for base)
+    pub name: String,
+
+    /// Whether any available additional theme debug should be shown
+    pub debug: Option<bool>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Daemon {
     /// Use the daemon to sync
     /// If enabled, requires a running daemon with `atuin daemon`
@@ -362,6 +371,15 @@ impl Default for Preview {
     fn default() -> Self {
         Self {
             strategy: PreviewStrategy::Auto,
+        }
+    }
+}
+
+impl Default for Theme {
+    fn default() -> Self {
+        Self {
+            name: "".to_string(),
+            debug: None::<bool>,
         }
     }
 }
@@ -424,7 +442,6 @@ pub struct Settings {
     pub history_format: String,
     pub prefers_reduced_motion: bool,
     pub store_failed: bool,
-    pub theme: String,
 
     #[serde(with = "serde_regex", default = "RegexSet::empty", skip_serializing)]
     pub history_filter: RegexSet,
@@ -459,6 +476,9 @@ pub struct Settings {
 
     #[serde(default)]
     pub daemon: Daemon,
+
+    #[serde(default)]
+    pub theme: Theme,
 }
 
 impl Settings {
@@ -728,6 +748,8 @@ impl Settings {
             .set_default("daemon.socket_path", socket_path.to_str())?
             .set_default("daemon.systemd_socket", false)?
             .set_default("daemon.tcp_port", 8889)?
+            .set_default("theme.name", "")?
+            .set_default("theme.debug", None::<bool>)?
             .set_default(
                 "prefers_reduced_motion",
                 std::env::var("NO_MOTION")
@@ -735,7 +757,6 @@ impl Settings {
                     .map(|_| config::Value::new(None, config::ValueKind::Boolean(true)))
                     .unwrap_or_else(|| config::Value::new(None, config::ValueKind::Boolean(false))),
             )?
-            .set_default("theme", "")?
             .add_source(
                 Environment::with_prefix("atuin")
                     .prefix_separator("_")

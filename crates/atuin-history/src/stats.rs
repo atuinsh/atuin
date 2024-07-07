@@ -225,7 +225,6 @@ pub fn compute(
 mod tests {
     use atuin_client::history::History;
     use atuin_client::settings::Settings;
-    use crate::command::client::theme::ThemeManager;
     use time::OffsetDateTime;
 
     use super::compute;
@@ -249,8 +248,7 @@ mod tests {
                 .into(),
         ];
 
-        let mut theme = ThemeManager::new().load_theme("");
-        let stats = compute(&settings, &history, 10, 1, &theme).expect("failed to compute stats");
+        let stats = compute(&settings, &history, 10, 1).expect("failed to compute stats");
         assert_eq!(stats.total_commands, 1);
         assert_eq!(stats.unique_commands, 1);
     }
