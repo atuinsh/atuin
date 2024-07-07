@@ -198,8 +198,8 @@ impl ThemeManager {
             theme_file
         };
 
-        let theme_yaml = format!["{}.yaml", name];
-        theme_file.push(theme_yaml);
+        let theme_toml = format!["{}.toml", name];
+        theme_file.push(theme_toml);
 
         let mut config_builder = Config::builder();
 
