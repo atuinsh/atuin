@@ -1,6 +1,7 @@
 use strum_macros;
 use std::path::PathBuf;
-use std::error::Error;
+use std::error;
+use std::io::{Error, ErrorKind};
 use config::{
     Config, File as ConfigFile, FileFormat,
 };
@@ -176,18 +177,27 @@ pub struct ThemeManager {
 
 // Theme-loading logic
 impl ThemeManager {
-    pub fn new(debug: Option<bool>) -> Self {
+    pub fn new(debug: Option<bool>, theme_dir: Option<String>) -> Self {
         Self {
             loaded_themes: HashMap::new(),
             debug: debug.unwrap_or(false),
-            override_theme_dir: std::env::var("ATUIN_THEME_DIR").ok(),
+            override_theme_dir: match theme_dir {
+                Some(theme_dir) => Some(theme_dir),
+                None => std::env::var("ATUIN_THEME_DIR").ok()
+            },
         }
     }
 
     // Try to load a theme from a `{name}.toml` file in the theme directory. If an override is set
     // for the theme dir (via ATUIN_THEME_DIR env) we should load the theme from there
-    pub fn load_theme_from_file(&mut self, name: &str) -> Result<&Theme, Box<dyn Error>> {
+    pub fn load_theme_from_file(&mut self, name: &str) -> Result<&Theme, Box<dyn error::Error>> {
         let mut theme_file = if let Some(p) = &self.override_theme_dir {
+            if p.is_empty() {
+                return Err(Box::new(Error::new(
+                    ErrorKind::NotFound,
+                    "Empty theme directory override and could not find theme elsewhere"
+                )));
+            }
             PathBuf::from(p)
         } else {
             let config_dir = atuin_common::utils::config_dir();
@@ -230,7 +240,7 @@ impl ThemeManager {
             None => match self.load_theme_from_file(name) {
                 Ok(theme) => theme,
                 Err(err) => {
-                    print!["Could not load theme {}: {}", name, err];
+                    println!["Could not load theme {}: {}", name, err];
                     built_ins.get("").unwrap()
                 }
             }
@@ -244,8 +254,8 @@ mod theme_tests {
 
     #[test]
     fn load_theme() {
-        let mut manager = ThemeManager::new(Some(false));
+        let mut manager = ThemeManager::new(Some(false), Some("".to_string()));
         let theme = manager.load_theme("autumn");
-        assert_eq!(theme.as_style(Meaning::Annotation).foreground_color, Some(Color::DarkGrey));
+        assert_eq!(theme.as_style(Meaning::Guidance).foreground_color, from_named("brown").ok());
     }
 }

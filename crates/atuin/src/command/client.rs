@@ -94,7 +94,7 @@ impl Cmd {
             .unwrap();
 
         let settings = Settings::new().wrap_err("could not load client settings")?;
-        let theme_manager = theme::ThemeManager::new(settings.theme.debug);
+        let theme_manager = theme::ThemeManager::new(settings.theme.debug, None);
         let res = runtime.block_on(self.run_inner(settings, theme_manager));
 
         runtime.shutdown_timeout(std::time::Duration::from_millis(50));
