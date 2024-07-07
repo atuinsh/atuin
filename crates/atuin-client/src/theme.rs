@@ -121,10 +121,11 @@ lazy_static! {
                 (Meaning::Guidance, from_named("brown")),
             ])),
             ("marine", HashMap::from([
-                (Meaning::AlertError, from_named("seagreen")),
-                (Meaning::AlertWarning, from_named("turquoise")),
-                (Meaning::AlertInfo, from_named("cyan")),
-                (Meaning::Annotation, from_named("midnightblue")),
+                (Meaning::AlertError, from_named("yellowgreen")),
+                (Meaning::AlertWarning, from_named("cyan")),
+                (Meaning::AlertInfo, from_named("turquoise")),
+                (Meaning::Annotation, from_named("steelblue")),
+                (Meaning::Base, from_named("lightsteelblue")),
                 (Meaning::Guidance, from_named("teal")),
             ]))
         ]).iter().map(|(name, theme)| (*name, make_theme(theme))).collect()
