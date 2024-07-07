@@ -126,21 +126,21 @@ pub fn pretty_print(stats: Stats, ngram_size: usize, theme: &Theme) {
         });
 
     for (command, count) in stats.top {
-        let gray = SetForegroundColor(theme.get_base().into());
+        let gray = SetForegroundColor(theme.get_base());
         let bold = SetAttribute(crossterm::style::Attribute::Bold);
 
         let in_ten = 10 * count / max;
 
         print!("[");
-        print!("{}", SetForegroundColor(theme.get_error().into()));
+        print!("{}", SetForegroundColor(theme.get_error()));
 
         for i in 0..in_ten {
             if i == 2 {
-                print!("{}", SetForegroundColor(theme.get_warning().into()));
+                print!("{}", SetForegroundColor(theme.get_warning()));
             }
 
             if i == 5 {
-                print!("{}", SetForegroundColor(theme.get_info().into()));
+                print!("{}", SetForegroundColor(theme.get_info()));
             }
 
             print!("▮");

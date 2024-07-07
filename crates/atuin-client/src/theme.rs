@@ -74,9 +74,10 @@ impl Theme {
 
     // General access - if you have a meaning, this will give you a (crossterm) style
     pub fn as_style(&self, meaning: Meaning) -> ContentStyle {
-        let mut style = ContentStyle::default();
-        style.foreground_color = Some(self.colors[&meaning]);
-        style
+        ContentStyle {
+            foreground_color: Some(self.colors[&meaning]),
+            .. ContentStyle::default()
+        }
     }
 
     // Turns a map of meanings to colornames into a theme
@@ -88,9 +89,7 @@ impl Theme {
         let colors: HashMap::<Meaning, Color> =
             colors.iter().map(|(name, color)| { (*name, from_named(color).unwrap_or_else(|msg: String| {
                 if debug {
-                    print!["Could not load theme color: {} -> {}\n", msg, color];
-                } else {
-                    print!["Could not load theme color: {}\n", msg];
+                    println!["Could not load theme color: {} -> {}", msg, color];
                 }
                 Color::Grey
             })) }).collect();

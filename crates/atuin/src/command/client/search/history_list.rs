@@ -196,7 +196,7 @@ impl DrawState<'_> {
         {
             // if not applying alternative highlighting to the whole row, color the command
             style = self.theme.as_style(Meaning::AlertError);
-            style.attributes.set(crossterm::style::Attribute::Bold)
+            style.attributes.set(crossterm::style::Attribute::Bold);
         }
 
         for section in h.command.escape_control().split_ascii_whitespace() {

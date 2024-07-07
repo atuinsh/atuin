@@ -133,8 +133,8 @@ impl Cmd {
 
         match self {
             Self::Import(import) => import.run(&db).await,
-            Self::Stats(stats) => stats.run(&db, &settings, &theme).await,
-            Self::Search(search) => search.run(db, &mut settings, sqlite_store, &theme).await,
+            Self::Stats(stats) => stats.run(&db, &settings, theme).await,
+            Self::Search(search) => search.run(db, &mut settings, sqlite_store, theme).await,
 
             #[cfg(feature = "sync")]
             Self::Sync(sync) => sync.run(settings, &db, sqlite_store).await,
