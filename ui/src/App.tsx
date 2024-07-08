@@ -13,6 +13,9 @@ import {
   ClockIcon,
   WrenchScrewdriverIcon,
 } from "@heroicons/react/24/outline";
+
+import { ChevronRightSquare } from "lucide-react";
+
 import Logo from "./assets/logo-light.svg";
 
 function classNames(...classes: any) {
@@ -23,11 +26,13 @@ import Home from "./pages/Home.tsx";
 import History from "./pages/History.tsx";
 import Dotfiles from "./pages/Dotfiles.tsx";
 import LoginOrRegister from "./components/LoginOrRegister.tsx";
+import Runbooks from "./pages/Runbooks.tsx";
 
 enum Section {
   Home,
   History,
   Dotfiles,
+  Runbooks,
 }
 
 function renderMain(section: Section): ReactElement {
@@ -38,6 +43,8 @@ function renderMain(section: Section): ReactElement {
       return <History />;
     case Section.Dotfiles:
       return <Dotfiles />;
+    case Section.Runbooks:
+      return <Runbooks />;
   }
 }
 
@@ -64,6 +71,11 @@ function App() {
       name: "Dotfiles",
       icon: WrenchScrewdriverIcon,
       section: Section.Dotfiles,
+    },
+    {
+      name: "Runbooks",
+      icon: ChevronRightSquare,
+      section: Section.Runbooks,
     },
   ];
 

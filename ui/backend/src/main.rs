@@ -1,6 +1,8 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use tauri::State;
+
 use std::path::PathBuf;
 
 use tauri::{AppHandle, Manager};
@@ -9,6 +11,9 @@ use time::format_description::well_known::Rfc3339;
 mod db;
 mod dotfiles;
 mod install;
+mod pty;
+mod run;
+mod state;
 mod store;
 
 use atuin_client::settings::Settings;
@@ -168,7 +173,7 @@ async fn home_info() -> Result<HomeInfo, String> {
 }
 
 // Match the format that the frontend library we use expects
-// All the processing in Rust, not JS.
+// All the processing in Rust, not JSunwrap.
 // Faaaassssssst af ⚡️🦀
 #[derive(Debug, serde::Serialize)]
 pub struct HistoryCalendarDay {
@@ -215,6 +220,19 @@ async fn history_calendar() -> Result<Vec<HistoryCalendarDay>, String> {
     Ok(ret)
 }
 
+#[tauri::command]
+async fn prefix_search(query: &str) -> Result<Vec<String>, String> {
+    let settings = Settings::new().map_err(|e| e.to_string())?;
+
+    let db_path = PathBuf::from(settings.db_path.as_str());
+    let db = HistoryDB::new(db_path, settings.local_timeout).await?;
+
+    let history = db.prefix_search(query).await?;
+    let commands = history.into_iter().map(|h| h.command).collect();
+
+    Ok(commands)
+}
+
 fn show_window(app: &AppHandle) {
     let windows = app.webview_windows();
 
@@ -228,9 +246,11 @@ fn show_window(app: &AppHandle) {
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![
             list,
             search,
+            prefix_search,
             global_stats,
             aliases,
             home_info,
@@ -239,6 +259,10 @@ fn main() {
             login,
             register,
             history_calendar,
+            run::pty::pty_open,
+            run::pty::pty_write,
+            run::pty::pty_resize,
+            run::pty::pty_kill,
             install::install_cli,
             install::is_cli_installed,
             install::setup_cli,
@@ -254,6 +278,7 @@ fn main() {
         .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
             let _ = show_window(app);
         }))
+        .manage(state::AtuinState::default())
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

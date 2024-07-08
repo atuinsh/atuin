@@ -24,7 +24,8 @@ pub(crate) async fn install_cli() -> Result<(), String> {
 pub(crate) async fn is_cli_installed() -> Result<bool, String> {
     let shell = Shell::default_shell().map_err(|e| format!("Failed to get default shell: {e}"))?;
     let output = if shell == Shell::Powershell {
-        shell.run_interactive(&["atuin --version; if ($?) {echo 'ATUIN FOUND'}"])
+        shell
+            .run_interactive(&["atuin --version; if ($?) {echo 'ATUIN FOUND'}"])
             .map_err(|e| format!("Failed to run interactive command"))?
     } else {
         shell
