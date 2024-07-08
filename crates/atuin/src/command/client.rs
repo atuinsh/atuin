@@ -3,7 +3,9 @@ use std::path::PathBuf;
 use clap::Subcommand;
 use eyre::{Result, WrapErr};
 
-use atuin_client::{database::Sqlite, record::sqlite_store::SqliteStore, settings::Settings, theme};
+use atuin_client::{
+    database::Sqlite, record::sqlite_store::SqliteStore, settings::Settings, theme,
+};
 use tracing_subscriber::{filter::EnvFilter, fmt, prelude::*};
 
 #[cfg(feature = "sync")]
@@ -102,7 +104,11 @@ impl Cmd {
         res
     }
 
-    async fn run_inner(self, mut settings: Settings, mut theme_manager: theme::ThemeManager) -> Result<()> {
+    async fn run_inner(
+        self,
+        mut settings: Settings,
+        mut theme_manager: theme::ThemeManager,
+    ) -> Result<()> {
         let filter =
             EnvFilter::from_env("ATUIN_LOG").add_directive("sqlx_sqlite::regexp=off".parse()?);
 

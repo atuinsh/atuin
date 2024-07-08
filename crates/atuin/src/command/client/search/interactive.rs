@@ -33,8 +33,8 @@ use super::{
     history_list::{HistoryList, ListState, PREFIX_LENGTH},
 };
 
+use crate::command::client::theme::{Meaning, Theme};
 use crate::{command::client::search::engines, VERSION};
-use crate::command::client::theme::{Theme, Meaning};
 
 use ratatui::{
     backend::CrosstermBackend,
@@ -718,7 +718,7 @@ impl State {
                         results_list_chunk,
                         &results[self.results_state.selected()],
                         &stats.expect("Drawing inspector, but no stats"),
-                        theme
+                        theme,
                     );
                 }
 
@@ -743,8 +743,13 @@ impl State {
         } else {
             preview_width - 2
         };
-        let preview =
-            self.build_preview(results, compact, preview_width, preview_chunk.width.into(), theme);
+        let preview = self.build_preview(
+            results,
+            compact,
+            preview_width,
+            preview_chunk.width.into(),
+            theme,
+        );
         f.render_widget(preview, preview_chunk);
 
         let extra_width = UnicodeWidthStr::width(self.search.input.substring());
@@ -761,12 +766,16 @@ impl State {
         let title = if self.update_needed.is_some() {
             Paragraph::new(Text::from(Span::styled(
                 format!("Atuin v{VERSION} - UPGRADE"),
-                Style::default().add_modifier(Modifier::BOLD).fg(theme.get_error().into()),
+                Style::default()
+                    .add_modifier(Modifier::BOLD)
+                    .fg(theme.get_error().into()),
             )))
         } else {
             Paragraph::new(Text::from(Span::styled(
                 format!("Atuin v{VERSION}"),
-                Style::default().add_modifier(Modifier::BOLD).fg(theme.get_base().into()),
+                Style::default()
+                    .add_modifier(Modifier::BOLD)
+                    .fg(theme.get_base().into()),
             )))
         };
         title.alignment(Alignment::Left)
@@ -826,7 +835,7 @@ impl State {
         results: &'a [History],
         keymap_mode: KeymapMode,
         now: &'a dyn Fn() -> OffsetDateTime,
-        theme: &'a Theme
+        theme: &'a Theme,
     ) -> HistoryList<'a> {
         let results_list = HistoryList::new(
             results,
@@ -891,7 +900,7 @@ impl State {
         compact: bool,
         preview_width: u16,
         chunk_width: usize,
-        theme: &Theme
+        theme: &Theme,
     ) -> Paragraph {
         let selected = self.results_state.selected();
         let command = if results.is_empty() {

@@ -1,17 +1,17 @@
-use strum_macros;
-use std::path::PathBuf;
+use config::{Config, File as ConfigFile, FileFormat};
+use lazy_static::lazy_static;
+use palette::named;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::error;
 use std::io::{Error, ErrorKind};
-use config::{
-    Config, File as ConfigFile, FileFormat,
-};
-use std::collections::HashMap;
-use palette::named;
-use serde::{Serialize, Deserialize};
-use lazy_static::lazy_static;
+use std::path::PathBuf;
+use strum_macros;
 
 // Standard log-levels that may occur in the interface.
-#[derive(Serialize, Deserialize, Copy, Clone, Hash, Debug, Eq, PartialEq, strum_macros::Display)]
+#[derive(
+    Serialize, Deserialize, Copy, Clone, Hash, Debug, Eq, PartialEq, strum_macros::Display,
+)]
 #[strum(serialize_all = "camel_case")]
 pub enum Level {
     Info,
@@ -20,7 +20,9 @@ pub enum Level {
 }
 
 // Collection of settable "meanings" that can have colors set.
-#[derive(Serialize, Deserialize, Copy, Clone, Hash, Debug, Eq, PartialEq, strum_macros::Display)]
+#[derive(
+    Serialize, Deserialize, Copy, Clone, Hash, Debug, Eq, PartialEq, strum_macros::Display,
+)]
 #[strum(serialize_all = "camel_case")]
 pub enum Meaning {
     AlertInfo,
@@ -32,14 +34,12 @@ pub enum Meaning {
     Important,
 }
 
-use crossterm::{
-    style::{Color, ContentStyle},
-};
+use crossterm::style::{Color, ContentStyle};
 
 // For now, a theme is specifically a mapping of meanings to colors, but it may be desirable to
 // expand that in the future to general styles.
 pub struct Theme {
-    pub colors: HashMap::<Meaning, Color>
+    pub colors: HashMap<Meaning, Color>,
 }
 
 // Themes have a number of convenience functions for the most commonly used meanings.
@@ -69,7 +69,7 @@ impl Theme {
         self.colors[ALERT_TYPES.get(&severity).unwrap()]
     }
 
-    pub fn new(colors: HashMap::<Meaning, Color>) -> Theme {
+    pub fn new(colors: HashMap<Meaning, Color>) -> Theme {
         Theme { colors }
     }
 
@@ -77,7 +77,7 @@ impl Theme {
     pub fn as_style(&self, meaning: Meaning) -> ContentStyle {
         ContentStyle {
             foreground_color: Some(self.colors[&meaning]),
-            .. ContentStyle::default()
+            ..ContentStyle::default()
         }
     }
 
@@ -86,14 +86,21 @@ impl Theme {
     // but we do not have this on in general, as it could print unfiltered text to the terminal
     // from a theme TOML file. However, it will always return a theme, falling back to
     // defaults on error, so that a TOML file does not break loading
-    pub fn from_named(colors: HashMap::<Meaning, String>, debug: bool) -> Theme {
-        let colors: HashMap::<Meaning, Color> =
-            colors.iter().map(|(name, color)| { (*name, from_named(color).unwrap_or_else(|msg: String| {
-                if debug {
-                    println!["Could not load theme color: {} -> {}", msg, color];
-                }
-                Color::Grey
-            })) }).collect();
+    pub fn from_named(colors: HashMap<Meaning, String>, debug: bool) -> Theme {
+        let colors: HashMap<Meaning, Color> = colors
+            .iter()
+            .map(|(name, color)| {
+                (
+                    *name,
+                    from_named(color).unwrap_or_else(|msg: String| {
+                        if debug {
+                            println!["Could not load theme color: {} -> {}", msg, color];
+                        }
+                        Color::Grey
+                    }),
+                )
+            })
+            .collect();
         make_theme(&colors)
     }
 }
@@ -125,12 +132,13 @@ fn make_theme(overrides: &HashMap<Meaning, Color>) -> Theme {
         (Meaning::Guidance, Color::Blue),
         (Meaning::Important, Color::White),
         (Meaning::Base, Color::Grey),
-    ]).iter().map(|(name, color)| {
-        match overrides.get(name) {
-            Some(value) => (*name, *value),
-            None => (*name, *color)
-        }
-    }).collect();
+    ])
+    .iter()
+    .map(|(name, color)| match overrides.get(name) {
+        Some(value) => (*name, *value),
+        None => (*name, *color),
+    })
+    .collect();
     Theme::new(colors)
 }
 
@@ -145,32 +153,40 @@ lazy_static! {
             (Level::Error, Meaning::AlertError),
         ])
     };
-
     static ref BUILTIN_THEMES: HashMap<&'static str, Theme> = {
         HashMap::from([
             ("", HashMap::new()),
-            ("autumn", HashMap::from([
-                (Meaning::AlertError, _from_known("saddlebrown")),
-                (Meaning::AlertWarning, _from_known("darkorange")),
-                (Meaning::AlertInfo, _from_known("gold")),
-                (Meaning::Annotation, Color::DarkGrey),
-                (Meaning::Guidance, _from_known("brown")),
-            ])),
-            ("marine", HashMap::from([
-                (Meaning::AlertError, _from_known("yellowgreen")),
-                (Meaning::AlertWarning, _from_known("cyan")),
-                (Meaning::AlertInfo, _from_known("turquoise")),
-                (Meaning::Annotation, _from_known("steelblue")),
-                (Meaning::Base, _from_known("lightsteelblue")),
-                (Meaning::Guidance, _from_known("teal")),
-            ]))
-        ]).iter().map(|(name, theme)| (*name, make_theme(theme))).collect()
+            (
+                "autumn",
+                HashMap::from([
+                    (Meaning::AlertError, _from_known("saddlebrown")),
+                    (Meaning::AlertWarning, _from_known("darkorange")),
+                    (Meaning::AlertInfo, _from_known("gold")),
+                    (Meaning::Annotation, Color::DarkGrey),
+                    (Meaning::Guidance, _from_known("brown")),
+                ]),
+            ),
+            (
+                "marine",
+                HashMap::from([
+                    (Meaning::AlertError, _from_known("yellowgreen")),
+                    (Meaning::AlertWarning, _from_known("cyan")),
+                    (Meaning::AlertInfo, _from_known("turquoise")),
+                    (Meaning::Annotation, _from_known("steelblue")),
+                    (Meaning::Base, _from_known("lightsteelblue")),
+                    (Meaning::Guidance, _from_known("teal")),
+                ]),
+            ),
+        ])
+        .iter()
+        .map(|(name, theme)| (*name, make_theme(theme)))
+        .collect()
     };
 }
 
 // To avoid themes being repeatedly loaded, we store them in a theme manager
 pub struct ThemeManager {
-    loaded_themes: HashMap::<String, Theme>,
+    loaded_themes: HashMap<String, Theme>,
     debug: bool,
     override_theme_dir: Option<String>,
 }
@@ -183,7 +199,7 @@ impl ThemeManager {
             debug: debug.unwrap_or(false),
             override_theme_dir: match theme_dir {
                 Some(theme_dir) => Some(theme_dir),
-                None => std::env::var("ATUIN_THEME_DIR").ok()
+                None => std::env::var("ATUIN_THEME_DIR").ok(),
             },
         }
     }
@@ -195,7 +211,7 @@ impl ThemeManager {
             if p.is_empty() {
                 return Err(Box::new(Error::new(
                     ErrorKind::NotFound,
-                    "Empty theme directory override and could not find theme elsewhere"
+                    "Empty theme directory override and could not find theme elsewhere",
                 )));
             }
             PathBuf::from(p)
@@ -220,7 +236,8 @@ impl ThemeManager {
         let config = config_builder.build()?;
         let colors: HashMap<Meaning, String> = config
             .try_deserialize()
-            .map_err(|e| println!("failed to deserialize: {}", e)).unwrap();
+            .map_err(|e| println!("failed to deserialize: {}", e))
+            .unwrap();
         let theme = Theme::from_named(colors, self.debug);
         let name = name.to_string();
         self.loaded_themes.insert(name.clone(), theme);
@@ -243,7 +260,7 @@ impl ThemeManager {
                     println!["Could not load theme {}: {}", name, err];
                     built_ins.get("").unwrap()
                 }
-            }
+            },
         }
     }
 }
@@ -256,6 +273,9 @@ mod theme_tests {
     fn load_theme() {
         let mut manager = ThemeManager::new(Some(false), Some("".to_string()));
         let theme = manager.load_theme("autumn");
-        assert_eq!(theme.as_style(Meaning::Guidance).foreground_color, from_named("brown").ok());
+        assert_eq!(
+            theme.as_style(Meaning::Guidance).foreground_color,
+            from_named("brown").ok()
+        );
     }
 }

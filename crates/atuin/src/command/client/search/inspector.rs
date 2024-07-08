@@ -16,8 +16,8 @@ use ratatui::{
 
 use super::duration::format_duration;
 
+use super::super::theme::{Meaning, Theme};
 use super::interactive::{InputAction, State};
-use super::super::theme::{Theme, Meaning};
 
 #[allow(clippy::cast_sign_loss)]
 fn u64_or_zero(num: i64) -> u64 {
@@ -28,7 +28,13 @@ fn u64_or_zero(num: i64) -> u64 {
     }
 }
 
-pub fn draw_commands(f: &mut Frame<'_>, parent: Rect, history: &History, stats: &HistoryStats, theme: &Theme) {
+pub fn draw_commands(
+    f: &mut Frame<'_>,
+    parent: Rect,
+    history: &History,
+    stats: &HistoryStats,
+    theme: &Theme,
+) {
     let commands = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -79,7 +85,13 @@ pub fn draw_commands(f: &mut Frame<'_>, parent: Rect, history: &History, stats: 
     f.render_widget(next, commands[2]);
 }
 
-pub fn draw_stats_table(f: &mut Frame<'_>, parent: Rect, history: &History, stats: &HistoryStats, theme: &Theme) {
+pub fn draw_stats_table(
+    f: &mut Frame<'_>,
+    parent: Rect,
+    history: &History,
+    stats: &HistoryStats,
+    theme: &Theme,
+) {
     let duration = Duration::from_nanos(u64_or_zero(history.duration));
     let avg_duration = Duration::from_nanos(stats.average_duration);
 
@@ -189,7 +201,7 @@ fn draw_stats_charts(f: &mut Frame<'_>, parent: Rect, stats: &HistoryStats, them
             Block::default()
                 .title("Runs per day")
                 .style(theme.as_style(Meaning::Base))
-                .borders(Borders::ALL)
+                .borders(Borders::ALL),
         )
         .bar_width(3)
         .bar_gap(1)
@@ -238,7 +250,13 @@ fn draw_stats_charts(f: &mut Frame<'_>, parent: Rect, stats: &HistoryStats, them
     f.render_widget(duration_over_time, layout[2]);
 }
 
-pub fn draw(f: &mut Frame<'_>, chunk: Rect, history: &History, stats: &HistoryStats, theme: &Theme) {
+pub fn draw(
+    f: &mut Frame<'_>,
+    chunk: Rect,
+    history: &History,
+    stats: &HistoryStats,
+    theme: &Theme,
+) {
     let vert_layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Ratio(1, 5), Constraint::Ratio(4, 5)])

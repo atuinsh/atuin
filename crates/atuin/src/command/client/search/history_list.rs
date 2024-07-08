@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use atuin_client::{
     history::History,
-    theme::{Theme, Meaning},
+    theme::{Meaning, Theme},
 };
 use atuin_common::utils::Escapable as _;
 use ratatui::{
@@ -74,7 +74,7 @@ impl<'a> StatefulWidget for HistoryList<'a> {
             inverted: self.inverted,
             alternate_highlight: self.alternate_highlight,
             now: &self.now,
-            theme: self.theme
+            theme: self.theme,
         };
 
         for item in self.history.iter().skip(state.offset).take(end - start) {
@@ -96,7 +96,7 @@ impl<'a> HistoryList<'a> {
         inverted: bool,
         alternate_highlight: bool,
         now: &'a dyn Fn() -> OffsetDateTime,
-        theme: &'a Theme
+        theme: &'a Theme,
     ) -> Self {
         Self {
             history,
