@@ -27,6 +27,7 @@ export type SidebarItem = {
   title: string;
   icon?: string;
   href?: string;
+  onPress?: () => void;
   type?: SidebarItemType.Nest;
   startContent?: React.ReactNode;
   endContent?: React.ReactNode;

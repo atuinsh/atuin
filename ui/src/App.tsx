@@ -30,10 +30,16 @@ import Runbooks from "./pages/Runbooks.tsx";
 
 import {
   Avatar,
+  User,
   Button,
   ScrollShadow,
   Spacer,
   Tooltip,
+  Dropdown,
+  DropdownItem,
+  DropdownMenu,
+  DropdownSection,
+  DropdownTrigger,
 } from "@nextui-org/react";
 import { cn } from "@/lib/utils";
 import { sectionItems } from "@/components/Sidebar/sidebar-items";
@@ -100,19 +106,13 @@ function App() {
           title: "Dotfiles",
           onPress: () => setSection(Section.Dotfiles),
         },
-        {
-          key: "settings",
-          icon: "solar:settings-linear",
-          title: "Settings",
-          onPress: () => setSection(Section.Settings),
-        },
       ],
     },
   ];
 
   return (
     <div className="flex h-dvh w-full select-none">
-      <div className="relative flex h-full flex-col !border-r-small border-divider p-6 transition-width px-2 py-6 w-16 items-center">
+      <div className="relative flex h-full flex-col !border-r-small border-divider p-6 transition-width px-2 pb-6 pt-9 w-16 items-center">
         <div className="flex items-center gap-0 px-3 justify-center">
           <div className="flex h-8 w-8">
             <img src={icon} alt="icon" className="h-8 w-8" />
@@ -121,7 +121,46 @@ function App() {
         <Spacer y={8} />
 
         <div className="flex items-center gap-3 px-3">
-          <Avatar isBordered className="flex-none" size="sm" />
+          <Dropdown showArrow placement="right-start">
+            <DropdownTrigger>
+              <Button
+                disableRipple
+                isIconOnly
+                className="-mr-1"
+                radius="full"
+                variant="light"
+              >
+                <Avatar isBordered className="flex-none" size="sm" />
+              </Button>
+            </DropdownTrigger>
+            <DropdownMenu
+              aria-label="Custom item styles"
+              disabledKeys={["profile"]}
+            >
+              <DropdownItem
+                key="profile"
+                isReadOnly
+                className="h-14 gap-2 opacity-100"
+                textValue="Signed in as"
+              >
+                <User
+                  avatarProps={{
+                    size: "sm",
+                    imgProps: {
+                      className: "transition-none",
+                    },
+                  }}
+                  classNames={{
+                    name: "text-default-600",
+                    description: "text-default-500",
+                  }}
+                  description={user.bio}
+                  name={user.username}
+                />
+              </DropdownItem>
+              <DropdownItem key="settings">Settings</DropdownItem>
+            </DropdownMenu>
+          </Dropdown>
         </div>
 
         <ScrollShadow className="-mr-6 h-full max-h-full py-6 pr-6">
