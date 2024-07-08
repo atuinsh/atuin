@@ -67,8 +67,6 @@ function App() {
   // pages
   const [section, setSection] = useState(Section.Home);
   const user = useStore((state) => state.user);
-  const [isCollapsed, setIsCollapsed] = useState(false);
-  const isCompact = true;
 
   const navigation: SidebarItem[] = [
     {
@@ -114,177 +112,56 @@ function App() {
 
   return (
     <div className="flex h-dvh w-full">
-      <div
-        className={cn(
-          "relative flex h-full w-72 flex-col !border-r-small border-divider p-6 transition-width",
-          {
-            "w-16 items-center px-2 py-6": isCollapsed,
-          },
-        )}
-      >
-        <div
-          className={cn(
-            "flex items-center gap-3 px-3",
-
-            {
-              "justify-center gap-0": isCollapsed,
-            },
-          )}
-        >
-          {isCollapsed && (
-            <div className="flex h-8 w-8">
-              <img src={icon} alt="icon" className="h-8 w-8" />
-            </div>
-          )}
-
-          {!isCollapsed && (
-            <div className="flex w-1/2">
-              <img src={iconText} alt="icon" className="w-full" />
-            </div>
-          )}
+      <div className="relative flex h-full flex-col !border-r-small border-divider p-6 transition-width px-2 py-6 w-16 items-center">
+        <div className="flex items-center gap-0 px-3 justify-center">
+          <div className="flex h-8 w-8">
+            <img src={icon} alt="icon" className="h-8 w-8" />
+          </div>
         </div>
         <Spacer y={8} />
 
         <div className="flex items-center gap-3 px-3">
           <Avatar isBordered className="flex-none" size="sm" />
-          <div
-            className={cn("flex max-w-full flex-col", { hidden: isCollapsed })}
-          >
-            <p className="truncate text-small font-medium text-default-600">
-              {user.username}
-            </p>
-            <p className="truncate text-tiny text-default-400">
-              {user.bio || ""}
-            </p>
-          </div>
         </div>
 
         <ScrollShadow className="-mr-6 h-full max-h-full py-6 pr-6">
           <Sidebar
             defaultSelectedKey="home"
-            isCompact={isCollapsed}
+            isCompact={true}
             items={navigation}
           />
         </ScrollShadow>
 
         <Spacer y={2} />
 
-        <div
-          className={cn("mt-auto flex flex-col", {
-            "items-center": isCollapsed,
-          })}
-        >
-          <Tooltip
-            content={(isCollapsed && "Expand menu") || "Collapse menu"}
-            isDisabled={!isCollapsed}
-            placement="right"
+        <Tooltip content={"Help & Feedback"} placement="right">
+          <Button
+            fullWidth
+            className="justify-center truncate text-default-500 data-[hover=true]:text-foreground"
+            isIconOnly={true}
+            variant="light"
           >
-            <Button
-              onClick={() => setIsCollapsed(!isCollapsed)}
-              fullWidth
-              className={cn(
-                "justify-start truncate text-default-500 data-[hover=true]:text-foreground",
-                {
-                  "justify-center": isCollapsed,
-                },
-              )}
-              isIconOnly={isCollapsed}
-              startContent={
-                isCollapsed ? null : (
-                  <Icon
-                    className="flex-none text-default-500"
-                    icon="solar:round-double-alt-arrow-left-line-duotone"
-                    width={24}
-                  />
-                )
-              }
-              variant="light"
-            >
-              {isCollapsed ? (
-                <Icon
-                  className="text-default-500"
-                  icon="solar:round-double-alt-arrow-right-line-duotone"
-                  width={24}
-                />
-              ) : (
-                "Collapse menu"
-              )}
-            </Button>
-          </Tooltip>
+            <Icon
+              className="text-default-500"
+              icon="solar:info-circle-line-duotone"
+              width={24}
+            />
+          </Button>
+        </Tooltip>
 
-          <Tooltip
-            content="Help & Feedback"
-            isDisabled={!isCollapsed}
-            placement="right"
+        <Tooltip content="Log Out" placement="right">
+          <Button
+            className="justify-center text-default-500 data-[hover=true]:text-foreground"
+            isIconOnly={true}
+            variant="light"
           >
-            <Button
-              fullWidth
-              className={cn(
-                "justify-start truncate text-default-500 data-[hover=true]:text-foreground",
-                {
-                  "justify-center": isCollapsed,
-                },
-              )}
-              isIconOnly={isCollapsed}
-              startContent={
-                isCollapsed ? null : (
-                  <Icon
-                    className="flex-none text-default-500"
-                    icon="solar:info-circle-line-duotone"
-                    width={24}
-                  />
-                )
-              }
-              variant="light"
-            >
-              {isCollapsed ? (
-                <Icon
-                  className="text-default-500"
-                  icon="solar:info-circle-line-duotone"
-                  width={24}
-                />
-              ) : (
-                "Help & Information"
-              )}
-            </Button>
-          </Tooltip>
-
-          <Tooltip
-            content="Log Out"
-            isDisabled={!isCollapsed}
-            placement="right"
-          >
-            <Button
-              className={cn(
-                "justify-start text-default-500 data-[hover=true]:text-foreground",
-                {
-                  "justify-center": isCollapsed,
-                },
-              )}
-              isIconOnly={isCollapsed}
-              startContent={
-                isCollapsed ? null : (
-                  <Icon
-                    className="flex-none rotate-180 text-default-500"
-                    icon="solar:minus-circle-line-duotone"
-                    width={24}
-                  />
-                )
-              }
-              variant="light"
-            >
-              {isCollapsed ? (
-                <Icon
-                  className="rotate-180 text-default-500"
-                  icon="solar:minus-circle-line-duotone"
-                  width={24}
-                />
-              ) : (
-                "Log Out"
-              )}
-            </Button>
-          </Tooltip>
-        </div>
+            <Icon
+              className="rotate-180 text-default-500"
+              icon="solar:minus-circle-line-duotone"
+              width={24}
+            />
+          </Button>
+        </Tooltip>
       </div>
 
       {renderMain(section)}

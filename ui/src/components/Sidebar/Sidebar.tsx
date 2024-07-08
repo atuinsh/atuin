@@ -7,7 +7,6 @@ import {
   type ListboxSectionProps,
   type Selection,
 } from "@nextui-org/react";
-
 import React from "react";
 import {
   Listbox,
@@ -28,7 +27,6 @@ export type SidebarItem = {
   title: string;
   icon?: string;
   href?: string;
-  onPress?: () => void;
   type?: SidebarItemType.Nest;
   startContent?: React.ReactNode;
   endContent?: React.ReactNode;
