@@ -84,7 +84,7 @@ export default function Search() {
 
   return (
     <>
-      <div className="pl-60">
+      <div className="w-full flex-1 flex-col p-4">
         <div className="p-10 history-header">
           <Header />
           <p>A history of all the commands you run in your shell.</p>
