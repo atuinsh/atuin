@@ -6481,6 +6481,7 @@ dependencies = [
  "atuin-dotfiles",
  "atuin-history",
  "bytes",
+ "cocoa",
  "comrak",
  "eyre",
  "nix 0.29.0",
