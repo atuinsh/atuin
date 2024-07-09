@@ -6,6 +6,7 @@ import { useStore } from "@/state/store";
 
 interface LoginProps {
   toggleRegister: () => void;
+  onClose: () => void;
 }
 
 function Login(props: LoginProps) {
@@ -24,7 +25,7 @@ function Login(props: LoginProps) {
     try {
       await login(username, password, key);
       refreshUser();
-      console.log("Logged in");
+      props.onClose();
     } catch (e: any) {
       console.error(e);
       setErrors(e);
@@ -171,6 +172,7 @@ function Login(props: LoginProps) {
 
 interface RegisterProps {
   toggleLogin: () => void;
+  onClose: () => void;
 }
 
 function Register(props: RegisterProps) {
@@ -185,13 +187,11 @@ function Register(props: RegisterProps) {
     const email = form.email.value;
     const password = form.password.value;
 
-    console.log("Logging in...");
     try {
       await register(username, email, password);
       refreshUser();
-      console.log("Logged in");
+      props.onClose();
     } catch (e: any) {
-      console.error(e);
       setErrors(e);
     }
   };
@@ -330,12 +330,12 @@ function Register(props: RegisterProps) {
   );
 }
 
-export default function LoginOrRegister() {
+export default function LoginOrRegister({ onClose }: { onClose: () => void }) {
   let [login, setLogin] = useState<boolean>(false);
 
   if (login) {
-    return <Login toggleRegister={() => setLogin(false)} />;
+    return <Login onClose={onClose} toggleRegister={() => setLogin(false)} />;
   }
 
-  return <Register toggleLogin={() => setLogin(true)} />;
+  return <Register onClose={onClose} toggleLogin={() => setLogin(true)} />;
 }

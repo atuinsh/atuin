@@ -4,6 +4,12 @@ import { useState, ReactElement, useEffect } from "react";
 import { useStore } from "@/state/store";
 
 import { Toaster } from "@/components/ui/toaster";
+import {
+  SettingsIcon,
+  CircleHelpIcon,
+  KeyRoundIcon,
+  LogOutIcon,
+} from "lucide-react";
 import { Icon } from "@iconify/react";
 
 import { Dialog, DialogContent, DialogTrigger } from "@/components/ui/dialog";
@@ -40,12 +46,22 @@ import {
   DropdownMenu,
   DropdownSection,
   DropdownTrigger,
+  Modal,
+  ModalContent,
+  ModalHeader,
+  ModalBody,
+  ModalFooter,
+  useDisclosure,
+  Checkbox,
+  Input,
+  Link,
 } from "@nextui-org/react";
 import { cn } from "@/lib/utils";
 import { sectionItems } from "@/components/Sidebar/sidebar-items";
 import Sidebar, { SidebarItem } from "@/components/Sidebar";
 import icon from "@/assets/icon.svg";
 import iconText from "@/assets/logo-light.svg";
+import { logout } from "./state/client.ts";
 
 enum Section {
   Home,
@@ -73,6 +89,8 @@ function App() {
   // pages
   const [section, setSection] = useState(Section.Home);
   const user = useStore((state) => state.user);
+  const refreshUser = useStore((state) => state.refreshUser);
+  const { isOpen, onOpen, onOpenChange } = useDisclosure();
 
   const navigation: SidebarItem[] = [
     {
@@ -118,50 +136,6 @@ function App() {
             <img src={icon} alt="icon" className="h-8 w-8" />
           </div>
         </div>
-        <Spacer y={8} />
-
-        <div className="flex items-center gap-3 px-3">
-          <Dropdown showArrow placement="right-start">
-            <DropdownTrigger>
-              <Button
-                disableRipple
-                isIconOnly
-                className="-mr-1"
-                radius="full"
-                variant="light"
-              >
-                <Avatar isBordered className="flex-none" size="sm" />
-              </Button>
-            </DropdownTrigger>
-            <DropdownMenu
-              aria-label="Custom item styles"
-              disabledKeys={["profile"]}
-            >
-              <DropdownItem
-                key="profile"
-                isReadOnly
-                className="h-14 gap-2 opacity-100"
-                textValue="Signed in as"
-              >
-                <User
-                  avatarProps={{
-                    size: "sm",
-                    imgProps: {
-                      className: "transition-none",
-                    },
-                  }}
-                  classNames={{
-                    name: "text-default-600",
-                    description: "text-default-500",
-                  }}
-                  description={user.bio}
-                  name={user.username}
-                />
-              </DropdownItem>
-              <DropdownItem key="settings">Settings</DropdownItem>
-            </DropdownMenu>
-          </Dropdown>
-        </div>
 
         <ScrollShadow className="-mr-6 h-full max-h-full py-6 pr-6">
           <Sidebar
@@ -173,39 +147,106 @@ function App() {
 
         <Spacer y={2} />
 
-        <Tooltip content={"Help & Feedback"} placement="right">
-          <Button
-            fullWidth
-            className="justify-center truncate text-default-500 data-[hover=true]:text-foreground"
-            isIconOnly={true}
-            variant="light"
-          >
-            <Icon
-              className="text-default-500"
-              icon="solar:info-circle-line-duotone"
-              width={24}
-            />
-          </Button>
-        </Tooltip>
+        <div className="flex items-center gap-3 px-3">
+          <Dropdown showArrow placement="right-start">
+            <DropdownTrigger>
+              <Button disableRipple isIconOnly radius="full" variant="light">
+                <Avatar
+                  isBordered
+                  className="flex-none"
+                  size="sm"
+                  name={user.username || ""}
+                />
+              </Button>
+            </DropdownTrigger>
+            <DropdownMenu aria-label="Custom item styles">
+              <DropdownItem
+                key="profile"
+                isReadOnly
+                className="h-14 opacity-100"
+                textValue="Signed in as"
+              >
+                <User
+                  avatarProps={{
+                    size: "sm",
+                    name: user.username || "Anonymous User",
+                    showFallback: true,
+                    imgProps: {
+                      className: "transition-none",
+                    },
+                  }}
+                  classNames={{
+                    name: "text-default-600",
+                    description: "text-default-500",
+                  }}
+                  description={
+                    user.bio || (user.username && "No bio") || "Sign up now"
+                  }
+                  name={user.username || "Anonymous User"}
+                />
+              </DropdownItem>
 
-        <Tooltip content="Log Out" placement="right">
-          <Button
-            className="justify-center text-default-500 data-[hover=true]:text-foreground"
-            isIconOnly={true}
-            variant="light"
-          >
-            <Icon
-              className="rotate-180 text-default-500"
-              icon="solar:minus-circle-line-duotone"
-              width={24}
-            />
-          </Button>
-        </Tooltip>
+              <DropdownItem
+                key="settings"
+                description="Configure Atuin"
+                startContent={<Icon icon="solar:settings-linear" width={24} />}
+              >
+                Settings
+              </DropdownItem>
+
+              <DropdownSection aria-label="Help & Feedback">
+                <DropdownItem
+                  key="help_and_feedback"
+                  description="Get in touch"
+                  startContent={
+                    <Icon width={24} icon="solar:question-circle-linear" />
+                  }
+                >
+                  Help & Feedback
+                </DropdownItem>
+
+                {(user.username && (
+                  <DropdownItem
+                    key="logout"
+                    startContent={
+                      <Icon width={24} icon="solar:logout-broken" />
+                    }
+                    onClick={() => {
+                      logout();
+                      refreshUser();
+                    }}
+                  >
+                    Log Out
+                  </DropdownItem>
+                )) || (
+                  <DropdownItem
+                    key="signup"
+                    description="Sync, backup and share your data"
+                    className="bg-emerald-100"
+                    startContent={<KeyRoundIcon size="18px" />}
+                    onPress={onOpen}
+                  >
+                    Log in or Register
+                  </DropdownItem>
+                )}
+              </DropdownSection>
+            </DropdownMenu>
+          </Dropdown>
+        </div>
       </div>
 
       {renderMain(section)}
 
       <Toaster />
+      <Modal isOpen={isOpen} onOpenChange={onOpenChange} placement="top-center">
+        <ModalContent className="p-8">
+          {(onClose) => (
+            <>
+              <LoginOrRegister onClose={onClose} />
+            </>
+          )}
+        </ModalContent>
+      </Modal>
     </div>
   );
 }

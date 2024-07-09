@@ -20,6 +20,10 @@ export async function login(
   return await invoke("login", { username, password, key });
 }
 
+export async function logout(): Promise<string> {
+  return await invoke("logout");
+}
+
 export async function register(
   username: string,
   email: string,
