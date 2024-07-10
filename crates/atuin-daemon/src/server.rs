@@ -207,6 +207,7 @@ async fn start_server(settings: Settings, history: HistoryService) -> Result<()>
     };
 
     let uds_stream = UnixListenerStream::new(uds);
+
     Server::builder()
         .add_service(HistoryServer::new(history))
         .serve_with_incoming_shutdown(
@@ -214,6 +215,7 @@ async fn start_server(settings: Settings, history: HistoryService) -> Result<()>
             shutdown_signal(cleanup.then_some(socket_path.into())),
         )
         .await?;
+
     Ok(())
 }
 
