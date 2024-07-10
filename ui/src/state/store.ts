@@ -17,6 +17,7 @@ import {
 
 import { invoke } from "@tauri-apps/api/core";
 import { sessionToken, settings } from "./client";
+import { getWeekInfo } from "@/lib/utils";
 
 // I'll probs want to slice this up at some point, but for now a
 // big blobby lump of state is fine.
@@ -47,8 +48,7 @@ let state = (set: any, get: any): AtuinState => ({
   shellHistory: [],
   calendar: [],
 
-  // @ts-ignore
-  weekStart: new Intl.Locale(navigator.language).getWeekInfo().firstDay,
+  weekStart: getWeekInfo().firstDay,
 
   refreshAliases: () => {
     invoke("aliases").then((aliases: any) => {
