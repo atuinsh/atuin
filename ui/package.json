@@ -50,7 +50,7 @@
     "react": "^18.3.1",
     "react-activity-calendar": "^2.2.10",
     "react-dom": "^18.3.1",
-    "react-spinners": "^0.13.8",
+    "react-spinners": "^0.14.1",
     "react-tooltip": "^5.27.0",
     "react-window": "^1.8.10",
     "react-window-infinite-loader": "^1.0.9",
