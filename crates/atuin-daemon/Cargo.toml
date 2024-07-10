@@ -27,16 +27,18 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 dashmap = "5.5.3"
-tonic-types = "0.11.0"
-tonic = "0.11"
-prost = "0.12"
+tonic-types = "0.12.0"
+tonic = "0.12"
+prost = "0.13"
 prost-types = "0.12"
 tokio-stream = {version="0.1.14", features=["net"]}
+hyper-util = "0.1"
+
 rand.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 listenfd = "1.0.1"
 
 [build-dependencies]
-protox = "0.6.0"
-tonic-build = "0.11"
+protox = "0.7.0"
+tonic-build = "0.12"

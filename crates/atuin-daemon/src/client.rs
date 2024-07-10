@@ -4,6 +4,8 @@ use tokio::net::TcpStream;
 use tonic::transport::{Channel, Endpoint, Uri};
 use tower::service_fn;
 
+use hyper_util::rt::TokioIo;
+
 #[cfg(unix)]
 use tokio::net::UnixStream;
 
@@ -23,9 +25,11 @@ impl HistoryClient {
     pub async fn new(path: String) -> Result<Self> {
         let channel = Endpoint::try_from("http://atuin_local_daemon:0")?
             .connect_with_connector(service_fn(move |_: Uri| {
-                let path = path.to_string();
+                let path = path.clone();
 
-                UnixStream::connect(path)
+                async move {
+                    Ok::<_, std::io::Error>(TokioIo::new(UnixStream::connect(path.clone()).await?))
+                }
             }))
             .await
             .map_err(|_| eyre!("failed to connect to local atuin daemon. Is it running?"))?;
@@ -40,6 +44,7 @@ impl HistoryClient {
         let channel = Endpoint::try_from("http://atuin_local_daemon:0")?
             .connect_with_connector(service_fn(move |_: Uri| {
                 let url = format!("127.0.0.1:{}", port);
+
                 TcpStream::connect(url)
             }))
             .await
