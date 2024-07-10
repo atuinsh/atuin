@@ -29,3 +29,20 @@ const twMerge = extendTailwindMerge({
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
+
+// edge still uses the old one
+export function getWeekInfo() {
+  let locale = new Intl.Locale(navigator.language);
+
+  // @ts-ignore
+  if (locale.getWeekInfo) {
+    // @ts-ignore
+    return locale.getWeekInfo();
+    // @ts-ignore
+  } else if (locale.weekInfo) {
+    // @ts-ignore
+    return locale.weekInfo;
+  }
+
+  throw new Error("Could not fetch week info via new or old api");
+}
