@@ -38,7 +38,7 @@ client = ["atuin-client"]
 sync = ["atuin-client/sync"]
 daemon = ["atuin-client/daemon"]
 server = ["atuin-server", "atuin-server-postgres"]
-clipboard = ["cli-clipboard"]
+clipboard = ["arboard"]
 check-update = ["atuin-client/check-update"]
 
 [dependencies]
@@ -86,8 +86,11 @@ unicode-segmentation = "1.11.0"
 sysinfo = "0.30.7"
 regex="1.10.5"
 
-[target.'cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))'.dependencies]
-cli-clipboard = { version = "0.4.0", optional = true }
+[target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
+arboard = { version = "3.4", optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+arboard = { version = "3.4", optional = true, features = ["wayland-data-control"] }
 
 [dev-dependencies]
 tracing-tree = "0.3"
