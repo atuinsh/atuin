@@ -1,10 +1,17 @@
 import "./App.css";
+import { open } from "@tauri-apps/plugin-shell";
 
-import { useState, ReactElement } from "react";
+import { useState, ReactElement, useEffect } from "react";
 import { useStore } from "@/state/store";
 
-import Button, { ButtonStyle } from "@/components/Button";
 import { Toaster } from "@/components/ui/toaster";
+import {
+  SettingsIcon,
+  CircleHelpIcon,
+  KeyRoundIcon,
+  LogOutIcon,
+} from "lucide-react";
+import { Icon } from "@iconify/react";
 
 import { Dialog, DialogContent, DialogTrigger } from "@/components/ui/dialog";
 
@@ -27,6 +34,35 @@ import History from "./pages/History.tsx";
 import Dotfiles from "./pages/Dotfiles.tsx";
 import LoginOrRegister from "./components/LoginOrRegister.tsx";
 import Runbooks from "./pages/Runbooks.tsx";
+
+import {
+  Avatar,
+  User,
+  Button,
+  ScrollShadow,
+  Spacer,
+  Tooltip,
+  Dropdown,
+  DropdownItem,
+  DropdownMenu,
+  DropdownSection,
+  DropdownTrigger,
+  Modal,
+  ModalContent,
+  ModalHeader,
+  ModalBody,
+  ModalFooter,
+  useDisclosure,
+  Checkbox,
+  Input,
+  Link,
+} from "@nextui-org/react";
+import { cn } from "@/lib/utils";
+import { sectionItems } from "@/components/Sidebar/sidebar-items";
+import Sidebar, { SidebarItem } from "@/components/Sidebar";
+import icon from "@/assets/icon.svg";
+import iconText from "@/assets/logo-light.svg";
+import { logout } from "./state/client.ts";
 
 enum Section {
   Home,
@@ -54,90 +90,165 @@ function App() {
   // pages
   const [section, setSection] = useState(Section.Home);
   const user = useStore((state) => state.user);
-  console.log(user);
+  const refreshUser = useStore((state) => state.refreshUser);
+  const { isOpen, onOpen, onOpenChange } = useDisclosure();
 
-  const navigation = [
+  const navigation: SidebarItem[] = [
     {
-      name: "Home",
-      icon: HomeIcon,
-      section: Section.Home,
-    },
-    {
-      name: "History",
-      icon: ClockIcon,
-      section: Section.History,
-    },
-    {
-      name: "Dotfiles",
-      icon: WrenchScrewdriverIcon,
-      section: Section.Dotfiles,
-    },
-    {
-      name: "Runbooks",
-      icon: ChevronRightSquare,
-      section: Section.Runbooks,
+      key: "personal",
+      title: "Personal",
+      items: [
+        {
+          key: "home",
+          icon: "solar:home-2-linear",
+          title: "Home",
+          onPress: () => setSection(Section.Home),
+        },
+        {
+          key: "runbooks",
+          icon: "solar:notebook-linear",
+          title: "Runbooks",
+          onPress: () => {
+            console.log("runbooks");
+            setSection(Section.Runbooks);
+          },
+        },
+        {
+          key: "history",
+          icon: "solar:history-outline",
+          title: "History",
+          onPress: () => setSection(Section.History),
+        },
+        {
+          key: "dotfiles",
+          icon: "solar:file-smile-linear",
+          title: "Dotfiles",
+          onPress: () => setSection(Section.Dotfiles),
+        },
+      ],
     },
   ];
 
   return (
-    <div>
-      <div className="fixed inset-y-0 z-50 flex w-60 flex-col">
-        <div className="flex grow flex-col gap-y-5 overflow-y-auto border-r border-gray-200 bg-white px-6 pb-4">
-          <div className="flex h-16 shrink-0 items-center">
-            <img className="h-8 w-auto" src={Logo} alt="Atuin" />
+    <div className="flex h-dvh w-full select-none">
+      <div className="relative flex h-full flex-col !border-r-small border-divider p-6 transition-width px-2 pb-6 pt-9 w-16 items-center">
+        <div className="flex items-center gap-0 px-3 justify-center">
+          <div className="flex h-8 w-8">
+            <img src={icon} alt="icon" className="h-8 w-8" />
           </div>
-          <nav className="flex flex-1 flex-col">
-            <ul role="list" className="flex flex-1 flex-col gap-y-7">
-              <li>
-                <ul role="list" className="-mx-2 space-y-1 w-full">
-                  {navigation.map((item) => (
-                    <li key={item.name}>
-                      <button
-                        onClick={() => setSection(item.section)}
-                        className={classNames(
-                          section == item.section
-                            ? "bg-gray-50 text-green-600"
-                            : "text-gray-700 hover:text-green-600 hover:bg-gray-50",
-                          "group flex gap-x-3 rounded-md p-2 text-sm leading-6 font-semibold w-full",
-                        )}
-                      >
-                        <item.icon
-                          className={classNames(
-                            section == item.section
-                              ? "text-green-600"
-                              : "text-gray-400 group-hover:text-green-600",
-                            "h-6 w-6 shrink-0",
-                          )}
-                          aria-hidden="true"
-                        />
-                        {item.name}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              </li>
-              <li className="mt-auto">
-                {user && user.username === "" && !user.username && (
-                  <Dialog>
-                    <DialogTrigger className="w-full">
-                      <Button
-                        text={"Login or Register"}
-                        style={ButtonStyle.PrimarySmFill}
-                      />
-                    </DialogTrigger>
-                    <DialogContent>
-                      <LoginOrRegister />
-                    </DialogContent>
-                  </Dialog>
+        </div>
+
+        <ScrollShadow className="-mr-6 h-full max-h-full py-6 pr-6">
+          <Sidebar
+            defaultSelectedKey="home"
+            isCompact={true}
+            items={navigation}
+          />
+        </ScrollShadow>
+
+        <Spacer y={2} />
+
+        <div className="flex items-center gap-3 px-3">
+          <Dropdown showArrow placement="right-start">
+            <DropdownTrigger>
+              <Button disableRipple isIconOnly radius="full" variant="light">
+                <Avatar
+                  isBordered
+                  className="flex-none"
+                  size="sm"
+                  name={user.username || ""}
+                />
+              </Button>
+            </DropdownTrigger>
+            <DropdownMenu aria-label="Custom item styles">
+              <DropdownItem
+                key="profile"
+                isReadOnly
+                className="h-14 opacity-100"
+                textValue="Signed in as"
+              >
+                <User
+                  avatarProps={{
+                    size: "sm",
+                    name: user.username || "Anonymous User",
+                    showFallback: true,
+                    imgProps: {
+                      className: "transition-none",
+                    },
+                  }}
+                  classNames={{
+                    name: "text-default-600",
+                    description: "text-default-500",
+                  }}
+                  description={
+                    user.bio || (user.username && "No bio") || "Sign up now"
+                  }
+                  name={user.username || "Anonymous User"}
+                />
+              </DropdownItem>
+
+              <DropdownItem
+                key="settings"
+                description="Configure Atuin"
+                startContent={<Icon icon="solar:settings-linear" width={24} />}
+              >
+                Settings
+              </DropdownItem>
+
+              <DropdownSection aria-label="Help & Feedback">
+                <DropdownItem
+                  key="help_and_feedback"
+                  description="Get in touch"
+                  onPress={() => open("https://forum.atuin.sh")}
+                  startContent={
+                    <Icon width={24} icon="solar:question-circle-linear" />
+                  }
+                >
+                  Help & Feedback
+                </DropdownItem>
+
+                {(user.username && (
+                  <DropdownItem
+                    key="logout"
+                    startContent={
+                      <Icon width={24} icon="solar:logout-broken" />
+                    }
+                    onClick={() => {
+                      logout();
+                      refreshUser();
+                    }}
+                  >
+                    Log Out
+                  </DropdownItem>
+                )) || (
+                  <DropdownItem
+                    key="signup"
+                    description="Sync, backup and share your data"
+                    className="bg-emerald-100"
+                    startContent={<KeyRoundIcon size="18px" />}
+                    onPress={onOpen}
+                  >
+                    Log in or Register
+                  </DropdownItem>
                 )}
-              </li>
-            </ul>
-          </nav>
+              </DropdownSection>
+            </DropdownMenu>
+          </Dropdown>
         </div>
       </div>
 
       {renderMain(section)}
+
       <Toaster />
+      <Modal isOpen={isOpen} onOpenChange={onOpenChange} placement="top-center">
+        <ModalContent className="p-8">
+          {(onClose) => (
+            <>
+              <LoginOrRegister onClose={onClose} />
+            </>
+          )}
+        </ModalContent>
+      </Modal>
     </div>
   );
 }

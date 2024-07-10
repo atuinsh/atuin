@@ -15,6 +15,7 @@
     "sql:allow-load",
     "sql:allow-execute",
     "sql:allow-select",
+    "window:allow-start-dragging",
     {
       "identifier": "http:default",
       "allow": ["https://api.atuin.sh/*"]

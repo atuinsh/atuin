@@ -125,7 +125,7 @@ export default function Home() {
   }
 
   return (
-    <div className="pl-60">
+    <div className="w-full flex-1 flex-col p-4">
       <div className="p-10">
         <Header name={user.username} />
 

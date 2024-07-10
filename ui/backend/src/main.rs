@@ -111,6 +111,16 @@ async fn login(username: String, password: String, key: String) -> Result<String
 }
 
 #[tauri::command]
+async fn logout() -> Result<(), String> {
+    let settings = Settings::new().map_err(|e| e.to_string())?;
+
+    atuin_client::logout::logout(&settings)
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
 async fn register(username: String, email: String, password: String) -> Result<String, String> {
     let settings = Settings::new().map_err(|e| e.to_string())?;
 
@@ -257,6 +267,7 @@ fn main() {
             config,
             session,
             login,
+            logout,
             register,
             history_calendar,
             run::pty::pty_open,

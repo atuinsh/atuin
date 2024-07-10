@@ -60,6 +60,10 @@ export default function Editor() {
         content: "Atuin runbooks",
         id: "foo",
       },
+      {
+        type: "run",
+        id: "bar",
+      },
     ],
   });
 

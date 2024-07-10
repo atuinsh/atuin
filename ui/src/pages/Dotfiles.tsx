@@ -98,7 +98,7 @@ export default function Dotfiles() {
   console.log(current);
 
   return (
-    <div className="pl-60">
+    <div className="w-full flex-1 flex-col p-4">
       <div className="p-10">
         <Header current={current} setCurrent={setCurrent} />
         Manage your shell aliases, variables and paths
