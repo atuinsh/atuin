@@ -322,8 +322,8 @@ dependencies = [
  "eyre",
  "hyper-util",
  "listenfd",
- "prost 0.13.1",
- "prost-types 0.12.6",
+ "prost",
+ "prost-types",
  "protox",
  "rand",
  "time",
@@ -2671,22 +2671,12 @@ dependencies = [
 
 [[package]]
 name = "prost"
-version = "0.12.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "deb1435c188b76130da55f17a466d252ff7b1418b2ad3e037d127b94e3411f29"
-dependencies = [
- "bytes",
- "prost-derive 0.12.6",
-]
-
-[[package]]
-name = "prost"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e13db3d3fde688c61e2446b4d843bc27a7e8af269a69440c0308021dc92333cc"
 dependencies = [
  "bytes",
- "prost-derive 0.13.1",
+ "prost-derive",
 ]
 
 [[package]]
@@ -2703,24 +2693,11 @@ dependencies = [
  "once_cell",
  "petgraph",
  "prettyplease",
- "prost 0.13.1",
- "prost-types 0.13.1",
+ "prost",
+ "prost-types",
  "regex",
  "syn 2.0.68",
  "tempfile",
-]
-
-[[package]]
-name = "prost-derive"
-version = "0.12.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "81bddcdb20abf9501610992b6759a4c888aef7d1a7247ef75e2404275ac24af1"
-dependencies = [
- "anyhow",
- "itertools 0.12.1",
- "proc-macro2",
- "quote",
- "syn 2.0.68",
 ]
 
 [[package]]
@@ -2745,17 +2722,8 @@ dependencies = [
  "logos",
  "miette",
  "once_cell",
- "prost 0.13.1",
- "prost-types 0.13.1",
-]
-
-[[package]]
-name = "prost-types"
-version = "0.12.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9091c90b0a32608e984ff2fa4091273cbdd755d54935c51d520887f4a1dbd5b0"
-dependencies = [
- "prost 0.12.6",
+ "prost",
+ "prost-types",
 ]
 
 [[package]]
@@ -2764,7 +2732,7 @@ version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cee5168b05f49d4b0ca581206eb14a7b22fafd963efe729ac48eb03266e25cc2"
 dependencies = [
- "prost 0.13.1",
+ "prost",
 ]
 
 [[package]]
@@ -2775,9 +2743,9 @@ checksum = "70cdc4ca5487c1fddc30fa2bebba28c0f250f80c944190652ccaaeb157349175"
 dependencies = [
  "bytes",
  "miette",
- "prost 0.13.1",
+ "prost",
  "prost-reflect",
- "prost-types 0.13.1",
+ "prost-types",
  "protox-parse",
  "thiserror",
 ]
@@ -2790,7 +2758,7 @@ checksum = "a3a462d115462c080ae000c29a47f0b3985737e5d3a995fcdbcaa5c782068dde"
 dependencies = [
  "logos",
  "miette",
- "prost-types 0.13.1",
+ "prost-types",
  "thiserror",
 ]
 
@@ -4139,7 +4107,7 @@ dependencies = [
  "hyper-util",
  "percent-encoding",
  "pin-project",
- "prost 0.13.1",
+ "prost",
  "socket2",
  "tokio",
  "tokio-stream",
@@ -4168,8 +4136,8 @@ version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f0509febcea1e686cc699f7a6c5d322fef27f19a4dd7e7feacd587fd3d9b4360"
 dependencies = [
- "prost 0.13.1",
- "prost-types 0.13.1",
+ "prost",
+ "prost-types",
  "tonic",
 ]
 
