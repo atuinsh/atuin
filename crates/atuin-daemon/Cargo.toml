@@ -30,7 +30,7 @@ dashmap = "5.5.3"
 tonic-types = "0.12.0"
 tonic = "0.12"
 prost = "0.13"
-prost-types = "0.12"
+prost-types = "0.13"
 tokio-stream = {version="0.1.14", features=["net"]}
 hyper-util = "0.1"
 
