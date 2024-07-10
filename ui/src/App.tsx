@@ -1,4 +1,5 @@
 import "./App.css";
+import { open } from "@tauri-apps/plugin-shell";
 
 import { useState, ReactElement, useEffect } from "react";
 import { useStore } from "@/state/store";
@@ -198,6 +199,7 @@ function App() {
                 <DropdownItem
                   key="help_and_feedback"
                   description="Get in touch"
+                  onPress={() => open("https://forum.atuin.sh")}
                   startContent={
                     <Icon width={24} icon="solar:question-circle-linear" />
                   }
