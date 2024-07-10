@@ -206,7 +206,10 @@ impl State {
         let esc_allow_exit = !(self.tab_index == 0 && self.keymap_mode == KeymapMode::VimInsert);
 
         // support ctrl-a prefix, like screen or tmux
-        if ctrl && input.code == KeyCode::Char(settings.keys.prefix.chars().next().unwrap_or('a')) {
+        if !self.prefix
+            && ctrl
+            && input.code == KeyCode::Char(settings.keys.prefix.chars().next().unwrap_or('a'))
+        {
             self.prefix = true;
             return InputAction::Continue;
         }
@@ -301,6 +304,8 @@ impl State {
                 }
                 KeyCode::Char('a') => {
                     self.search.input.start();
+                    //  This prevents pressing ctrl-a twice while still in prefix mode
+                    self.prefix = false;
                     return InputAction::Continue;
                 }
                 _ => {}
