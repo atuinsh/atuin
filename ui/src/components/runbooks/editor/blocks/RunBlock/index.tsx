@@ -56,7 +56,7 @@ const RunBlock = ({ onPlay, id, code, isEditable }: RunBlockProps) => {
       setPty(pty);
       console.log(pty);
 
-      let val = !value.endsWith("\n") ? value + "\n" : value;
+      let val = !value.endsWith("\n") ? value + "\r\n" : value;
       await invoke("pty_write", { pid: pty, data: val });
     }
   };
