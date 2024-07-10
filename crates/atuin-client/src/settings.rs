@@ -686,8 +686,8 @@ impl Settings {
             .set_default("sync_frequency", "10m")?
             .set_default("search_mode", "fuzzy")?
             .set_default("filter_mode", "global")?
-            .set_default("style", "auto")?
-            .set_default("inline_height", 0)?
+            .set_default("style", "compact")?
+            .set_default("inline_height", 40)?
             .set_default("show_preview", true)?
             .set_default("preview.strategy", "auto")?
             .set_default("max_preview_height", 4)?
