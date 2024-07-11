@@ -714,7 +714,7 @@ impl Settings {
             // muscle memory.
             // New users will get the new default, that is more similar to what they are used to.
             .set_default("enter_accept", false)?
-            .set_default("sync.records", false)?
+            .set_default("sync.records", true)?
             .set_default("keys.scroll_exits", true)?
             .set_default("keys.prefix", "a")?
             .set_default("keymap_mode", "emacs")?
