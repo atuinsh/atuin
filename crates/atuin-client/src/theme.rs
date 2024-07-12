@@ -1,4 +1,5 @@
 use config::{Config, File as ConfigFile, FileFormat};
+use itertools::Itertools;
 use lazy_static::lazy_static;
 use palette::named;
 use serde::{Deserialize, Serialize};
@@ -86,13 +87,13 @@ impl Theme {
     // but we do not have this on in general, as it could print unfiltered text to the terminal
     // from a theme TOML file. However, it will always return a theme, falling back to
     // defaults on error, so that a TOML file does not break loading
-    pub fn from_named(colors: HashMap<Meaning, String>, debug: bool) -> Theme {
+    pub fn from_map(colors: HashMap<Meaning, String>, debug: bool) -> Theme {
         let colors: HashMap<Meaning, Color> = colors
             .iter()
             .map(|(name, color)| {
                 (
                     *name,
-                    from_named(color).unwrap_or_else(|msg: String| {
+                    from_string(color).unwrap_or_else(|msg: String| {
                         if debug {
                             println!["Could not load theme color: {} -> {}", msg, color];
                         }
@@ -106,19 +107,41 @@ impl Theme {
 }
 
 // Use palette to get a color from a string name, if possible
-fn from_named(name: &str) -> Result<Color, String> {
-    let srgb = named::from_str(name).ok_or("No such color in palette")?;
-    Ok(Color::Rgb {
-        r: srgb.red,
-        g: srgb.green,
-        b: srgb.blue,
-    })
+fn from_string(name: &str) -> Result<Color, String> {
+    if name.len() == 0 {
+        return Err("Empty string".into());
+    }
+    if name.starts_with("#") {
+        let hexcode = &name[1..];
+        let vec: Vec<u8> = hexcode
+            .chars()
+            .collect::<Vec<char>>()
+            .chunks(2)
+            .map(|pair| u8::from_str_radix(pair.iter().collect::<String>().as_str(), 16))
+            .filter_map(|n| n.ok())
+            .collect();
+        if vec.len() != 3 {
+            return Err("Could not parse 3 hex values from string".into());
+        }
+        Ok(Color::Rgb {
+            r: vec[0],
+            g: vec[1],
+            b: vec[2],
+        })
+    } else {
+        let srgb = named::from_str(name).ok_or("No such color in palette")?;
+        Ok(Color::Rgb {
+            r: srgb.red,
+            g: srgb.green,
+            b: srgb.blue,
+        })
+    }
 }
 
 // For succinctness, if we are confident that the name will be known,
 // this routine is available to keep the code readable
 fn _from_known(name: &str) -> Color {
-    from_named(name).unwrap()
+    from_string(name).unwrap()
 }
 
 // Boil down a meaning-color hashmap into a theme, by taking the defaults
@@ -238,7 +261,7 @@ impl ThemeManager {
             .try_deserialize()
             .map_err(|e| println!("failed to deserialize: {}", e))
             .unwrap();
-        let theme = Theme::from_named(colors, self.debug);
+        let theme = Theme::from_map(colors, self.debug);
         let name = name.to_string();
         self.loaded_themes.insert(name.clone(), theme);
         let theme = self.loaded_themes.get(&name).unwrap();
@@ -275,7 +298,7 @@ mod theme_tests {
         let theme = manager.load_theme("autumn");
         assert_eq!(
             theme.as_style(Meaning::Guidance).foreground_color,
-            from_named("brown").ok()
+            from_string("brown").ok()
         );
     }
 }
