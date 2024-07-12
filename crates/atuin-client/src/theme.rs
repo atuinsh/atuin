@@ -1,5 +1,4 @@
 use config::{Config, File as ConfigFile, FileFormat};
-use itertools::Itertools;
 use lazy_static::lazy_static;
 use palette::named;
 use serde::{Deserialize, Serialize};
@@ -7,6 +6,7 @@ use std::collections::HashMap;
 use std::error;
 use std::io::{Error, ErrorKind};
 use std::path::PathBuf;
+use log;
 use strum_macros;
 
 // Standard log-levels that may occur in the interface.
@@ -33,6 +33,7 @@ pub enum Meaning {
     Base,
     Guidance,
     Important,
+    Title,
 }
 
 use crossterm::style::{Color, ContentStyle};
@@ -74,10 +75,20 @@ impl Theme {
         Theme { colors }
     }
 
+    pub fn closest_meaning<'a>(&self, meaning: &'a Meaning) -> &'a Meaning {
+        if self.colors.contains_key(meaning) {
+            meaning
+        } else if MEANING_FALLBACKS.contains_key(meaning) {
+            self.closest_meaning(&MEANING_FALLBACKS[meaning])
+        } else {
+            &Meaning::Base
+        }
+    }
+
     // General access - if you have a meaning, this will give you a (crossterm) style
     pub fn as_style(&self, meaning: Meaning) -> ContentStyle {
         ContentStyle {
-            foreground_color: Some(self.colors[&meaning]),
+            foreground_color: Some(self.colors[&self.closest_meaning(&meaning)]),
             ..ContentStyle::default()
         }
     }
@@ -95,7 +106,7 @@ impl Theme {
                     *name,
                     from_string(color).unwrap_or_else(|msg: String| {
                         if debug {
-                            println!["Could not load theme color: {} -> {}", msg, color];
+                            log::warn!("Could not load theme color: {} -> {}", msg, color);
                         }
                         Color::Grey
                     }),
@@ -174,6 +185,13 @@ lazy_static! {
             (Level::Info, Meaning::AlertInfo),
             (Level::Warning, Meaning::AlertWarning),
             (Level::Error, Meaning::AlertError),
+        ])
+    };
+    static ref MEANING_FALLBACKS: HashMap<Meaning, Meaning> = {
+        HashMap::from([
+            (Meaning::Guidance, Meaning::AlertInfo),
+            (Meaning::Annotation, Meaning::AlertInfo),
+            (Meaning::Title, Meaning::Important),
         ])
     };
     static ref BUILTIN_THEMES: HashMap<&'static str, Theme> = {
@@ -257,9 +275,13 @@ impl ThemeManager {
         ));
 
         let config = config_builder.build()?;
+        self.load_theme_from_config(name, config)
+    }
+
+    pub fn load_theme_from_config(&mut self, name: &str, config: Config) -> Result<&Theme, Box<dyn error::Error>> {
         let colors: HashMap<Meaning, String> = config
             .try_deserialize()
-            .map_err(|e| println!("failed to deserialize: {}", e))
+            .map_err(|e| log::warn!("failed to deserialize: {}", e))
             .unwrap();
         let theme = Theme::from_map(colors, self.debug);
         let name = name.to_string();
@@ -280,7 +302,7 @@ impl ThemeManager {
             None => match self.load_theme_from_file(name) {
                 Ok(theme) => theme,
                 Err(err) => {
-                    println!["Could not load theme {}: {}", name, err];
+                    log::warn!("Could not load theme {}: {}", name, err);
                     built_ins.get("").unwrap()
                 }
             },
@@ -293,12 +315,121 @@ mod theme_tests {
     use super::*;
 
     #[test]
-    fn load_theme() {
+    fn test_can_load_builtin_theme() {
         let mut manager = ThemeManager::new(Some(false), Some("".to_string()));
         let theme = manager.load_theme("autumn");
         assert_eq!(
             theme.as_style(Meaning::Guidance).foreground_color,
             from_string("brown").ok()
         );
+    }
+
+    #[test]
+    fn test_can_create_theme() {
+        let mut manager = ThemeManager::new(Some(false), Some("".to_string()));
+        let mytheme = Theme::new(HashMap::from([
+            (Meaning::AlertError, _from_known("yellowgreen")),
+        ]));
+        manager.loaded_themes.insert("mytheme".to_string(), mytheme);
+        let theme = manager.load_theme("mytheme");
+        assert_eq!(
+            theme.as_style(Meaning::AlertError).foreground_color,
+            from_string("yellowgreen").ok()
+        );
+    }
+
+    #[test]
+    fn test_can_fallback_when_meaning_missing() {
+        let mut manager = ThemeManager::new(Some(false), Some("".to_string()));
+
+        // We use title as an example of a meaning that is not defined
+        // even in the base theme.
+        assert!(!BUILTIN_THEMES[""].colors.contains_key(&Meaning::Title));
+
+        let config = Config::builder()
+            .set_default("Guidance", "white").unwrap()
+            .set_default("AlertInfo", "zomp").unwrap()
+            .build().unwrap();
+        let theme = manager.load_theme_from_config("config_theme", config).unwrap();
+
+        // Correctly picks overridden color.
+        assert_eq!(
+            theme.as_style(Meaning::Guidance).foreground_color,
+            from_string("white").ok()
+        );
+
+        // Falls back to grey as general "unknown" color.
+        assert_eq!(
+            theme.as_style(Meaning::AlertInfo).foreground_color,
+            Some(Color::Grey)
+        );
+
+        // Falls back to red as meaning missing from theme, so picks base default.
+        assert_eq!(
+            theme.as_style(Meaning::AlertError).foreground_color,
+            Some(Color::Red)
+        );
+
+        // Falls back to Important as Title not available.
+        assert_eq!(
+            theme.as_style(Meaning::Title).foreground_color,
+            theme.as_style(Meaning::Important).foreground_color,
+        );
+
+        let title_config = Config::builder()
+            .set_default("Title", "white").unwrap()
+            .set_default("AlertInfo", "zomp").unwrap()
+            .build().unwrap();
+        let title_theme = manager.load_theme_from_config("title_theme", title_config).unwrap();
+
+        assert_eq!(
+            title_theme.as_style(Meaning::Title).foreground_color,
+            Some(Color::White)
+        );
+    }
+
+    #[test]
+    fn test_no_fallbacks_are_circular() {
+        let mytheme = Theme::new(HashMap::from([]));
+        MEANING_FALLBACKS.iter().for_each(|pair| {
+            assert_eq!(mytheme.closest_meaning(pair.0), &Meaning::Base)
+        })
+    }
+
+    #[test]
+    fn test_can_get_colors_via_convenience_functions() {
+        let mut manager = ThemeManager::new(Some(true), Some("".to_string()));
+        let theme = manager.load_theme("");
+        assert_eq!(theme.get_error(), Color::Red);
+        assert_eq!(theme.get_warning(), Color::Yellow);
+        assert_eq!(theme.get_info(), Color::Green);
+        assert_eq!(theme.get_base(), Color::Grey);
+        assert_eq!(theme.get_alert(Level::Error), Color::Red)
+    }
+
+    #[test]
+    fn test_can_debug_theme() {
+        let mut manager = ThemeManager::new(Some(true), Some("".to_string()));
+        let theme = manager.load_theme("autumn");
+        assert_eq!(
+            theme.as_style(Meaning::Guidance).foreground_color,
+            from_string("brown").ok()
+        );
+    }
+
+    #[test]
+    fn test_can_parse_color_strings_correctly() {
+        assert_eq!(from_string("brown").unwrap(), Color::Rgb { r: 165, g: 42, b: 42 });
+
+        assert_eq!(from_string(""), Err("Empty string".into()));
+
+        ["manatee", "caput mortuum", "123456"].iter().for_each(|inp| {
+            assert_eq!(from_string(inp), Err("No such color in palette".into()));
+        });
+
+        assert_eq!(from_string("#ff1122").unwrap(), Color::Rgb { r: 255, g: 17, b: 34 });
+        ["#1122", "#ffaa112", "#brown"].iter().for_each(|inp| {
+            assert_eq!(from_string(inp), Err("Could not parse 3 hex values from string".into()));
+        });
     }
 }
