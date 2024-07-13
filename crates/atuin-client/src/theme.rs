@@ -1,12 +1,12 @@
 use config::{Config, File as ConfigFile, FileFormat};
 use lazy_static::lazy_static;
+use log;
 use palette::named;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::error;
 use std::io::{Error, ErrorKind};
 use std::path::PathBuf;
-use log;
 use strum_macros;
 
 static DEFAULT_MAX_DEPTH: u8 = 10;
@@ -37,7 +37,7 @@ pub struct ThemeConfig {
     pub theme: ThemeDefinitionConfigBlock,
 
     // Colors
-    pub colors: HashMap<Meaning, String>
+    pub colors: HashMap<Meaning, String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -87,7 +87,11 @@ impl Theme {
     }
 
     pub fn new(name: String, parent: Option<String>, colors: HashMap<Meaning, Color>) -> Theme {
-        Theme { name, parent, colors }
+        Theme {
+            name,
+            parent,
+            colors,
+        }
     }
 
     pub fn closest_meaning<'a>(&self, meaning: &'a Meaning) -> &'a Meaning {
@@ -103,7 +107,7 @@ impl Theme {
     // General access - if you have a meaning, this will give you a (crossterm) style
     pub fn as_style(&self, meaning: Meaning) -> ContentStyle {
         ContentStyle {
-            foreground_color: Some(self.colors[&self.closest_meaning(&meaning)]),
+            foreground_color: Some(self.colors[self.closest_meaning(&meaning)]),
             ..ContentStyle::default()
         }
     }
@@ -113,7 +117,12 @@ impl Theme {
     // but we do not have this on in general, as it could print unfiltered text to the terminal
     // from a theme TOML file. However, it will always return a theme, falling back to
     // defaults on error, so that a TOML file does not break loading
-    pub fn from_map(name: String, parent: Option<&Theme>, colors: HashMap<Meaning, String>, debug: bool) -> Theme {
+    pub fn from_map(
+        name: String,
+        parent: Option<&Theme>,
+        colors: HashMap<Meaning, String>,
+        debug: bool,
+    ) -> Theme {
         let colors: HashMap<Meaning, Color> = colors
             .iter()
             .map(|(name, color)| {
@@ -134,11 +143,11 @@ impl Theme {
 
 // Use palette to get a color from a string name, if possible
 fn from_string(name: &str) -> Result<Color, String> {
-    if name.len() == 0 {
+    if name.is_empty() {
         return Err("Empty string".into());
     }
-    if name.starts_with("#") {
-        let hexcode = &name[1..];
+    if let Some(name) = name.strip_prefix('#') {
+        let hexcode = name;
         let vec: Vec<u8> = hexcode
             .chars()
             .collect::<Vec<char>>()
@@ -183,7 +192,7 @@ fn make_theme(name: String, parent: Option<&Theme>, overrides: &HashMap<Meaning,
             (Meaning::Guidance, Color::Blue),
             (Meaning::Important, Color::White),
             (Meaning::Base, Color::Grey),
-        ]))
+        ])),
     }
     .iter()
     .map(|(name, color)| match overrides.get(name) {
@@ -191,7 +200,7 @@ fn make_theme(name: String, parent: Option<&Theme>, overrides: &HashMap<Meaning,
         None => (*name, *color),
     })
     .collect();
-    Theme::new(name, parent.map_or(None, |p| Some(p.name.clone())), colors)
+    Theme::new(name, parent.map(|p| p.name.clone()), colors)
 }
 
 // Built-in themes. Rather than having extra files added before any theming
@@ -265,7 +274,11 @@ impl ThemeManager {
 
     // Try to load a theme from a `{name}.toml` file in the theme directory. If an override is set
     // for the theme dir (via ATUIN_THEME_DIR env) we should load the theme from there
-    pub fn load_theme_from_file(&mut self, name: &str, max_depth: u8) -> Result<&Theme, Box<dyn error::Error>> {
+    pub fn load_theme_from_file(
+        &mut self,
+        name: &str,
+        max_depth: u8,
+    ) -> Result<&Theme, Box<dyn error::Error>> {
         let mut theme_file = if let Some(p) = &self.override_theme_dir {
             if p.is_empty() {
                 return Err(Box::new(Error::new(
@@ -296,14 +309,26 @@ impl ThemeManager {
         self.load_theme_from_config(name, config, max_depth)
     }
 
-    pub fn load_theme_from_config(&mut self, name: &str, config: Config, max_depth: u8) -> Result<&Theme, Box<dyn error::Error>> {
+    pub fn load_theme_from_config(
+        &mut self,
+        name: &str,
+        config: Config,
+        max_depth: u8,
+    ) -> Result<&Theme, Box<dyn error::Error>> {
         let debug = self.debug;
         let theme_config: ThemeConfig = match config.try_deserialize() {
             Ok(tc) => tc,
             Err(e) => {
                 return Err(Box::new(Error::new(
                     ErrorKind::InvalidInput,
-                    format!("Failed to deserialize theme: {}", if debug { e.to_string() } else { "set theme debug on for more info".to_string() })
+                    format!(
+                        "Failed to deserialize theme: {}",
+                        if debug {
+                            e.to_string()
+                        } else {
+                            "set theme debug on for more info".to_string()
+                        }
+                    ),
                 )))
             }
         };
@@ -314,23 +339,22 @@ impl ThemeManager {
                     return Err(Box::new(Error::new(
                         ErrorKind::InvalidInput,
                         "Parent requested but we hit the recursion limit",
-                    )))
+                    )));
                 }
                 Some(self.load_theme(parent_name.as_str(), Some(max_depth - 1)))
-            },
-            None => None
+            }
+            None => None,
         };
 
         if debug && name != theme_config.theme.name {
-            log::warn!("Your theme config name is not the name of your loaded theme {} != {}", name, theme_config.theme.name);
+            log::warn!(
+                "Your theme config name is not the name of your loaded theme {} != {}",
+                name,
+                theme_config.theme.name
+            );
         }
 
-        let theme = Theme::from_map(
-            theme_config.theme.name,
-            parent,
-            colors,
-            debug
-        );
+        let theme = Theme::from_map(theme_config.theme.name, parent, colors, debug);
         let name = name.to_string();
         self.loaded_themes.insert(name.clone(), theme);
         let theme = self.loaded_themes.get(&name).unwrap();
@@ -374,9 +398,11 @@ mod theme_tests {
     #[test]
     fn test_can_create_theme() {
         let mut manager = ThemeManager::new(Some(false), Some("".to_string()));
-        let mytheme = Theme::new("mytheme".to_string(), None, HashMap::from([
-            (Meaning::AlertError, _from_known("yellowgreen")),
-        ]));
+        let mytheme = Theme::new(
+            "mytheme".to_string(),
+            None,
+            HashMap::from([(Meaning::AlertError, _from_known("yellowgreen"))]),
+        );
         manager.loaded_themes.insert("mytheme".to_string(), mytheme);
         let theme = manager.load_theme("mytheme", None);
         assert_eq!(
@@ -393,15 +419,23 @@ mod theme_tests {
         // even in the base theme.
         assert!(!BUILTIN_THEMES[""].colors.contains_key(&Meaning::Title));
 
-        let config = Config::builder().add_source(ConfigFile::from_str("
+        let config = Config::builder()
+            .add_source(ConfigFile::from_str(
+                "
         [theme]
         name = \"title_theme\"
 
         [colors]
         Guidance = \"white\"
         AlertInfo = \"zomp\"
-        ", FileFormat::Toml)).build().unwrap();
-        let theme = manager.load_theme_from_config("config_theme", config, None).unwrap();
+        ",
+                FileFormat::Toml,
+            ))
+            .build()
+            .unwrap();
+        let theme = manager
+            .load_theme_from_config("config_theme", config, 1)
+            .unwrap();
 
         // Correctly picks overridden color.
         assert_eq!(
@@ -427,15 +461,23 @@ mod theme_tests {
             theme.as_style(Meaning::Important).foreground_color,
         );
 
-        let title_config = Config::builder().add_source(ConfigFile::from_str("
+        let title_config = Config::builder()
+            .add_source(ConfigFile::from_str(
+                "
         [theme]
         name = \"title_theme\"
 
         [colors]
         Title = \"white\"
         AlertInfo = \"zomp\"
-        ", FileFormat::Toml)).build().unwrap();
-        let title_theme = manager.load_theme_from_config("title_theme", title_config, None).unwrap();
+        ",
+                FileFormat::Toml,
+            ))
+            .build()
+            .unwrap();
+        let title_theme = manager
+            .load_theme_from_config("title_theme", title_config, 1)
+            .unwrap();
 
         assert_eq!(
             title_theme.as_style(Meaning::Title).foreground_color,
@@ -446,9 +488,9 @@ mod theme_tests {
     #[test]
     fn test_no_fallbacks_are_circular() {
         let mytheme = Theme::new("mytheme".to_string(), None, HashMap::from([]));
-        MEANING_FALLBACKS.iter().for_each(|pair| {
-            assert_eq!(mytheme.closest_meaning(pair.0), &Meaning::Base)
-        })
+        MEANING_FALLBACKS
+            .iter()
+            .for_each(|pair| assert_eq!(mytheme.closest_meaning(pair.0), &Meaning::Base))
     }
 
     #[test]
@@ -469,61 +511,91 @@ mod theme_tests {
         let mut manager = ThemeManager::new(Some(false), Some("".to_string()));
 
         // First, we introduce a base theme
-        let solarized = Config::builder().add_source(ConfigFile::from_str("
+        let solarized = Config::builder()
+            .add_source(ConfigFile::from_str(
+                "
         [theme]
         name = \"solarized\"
 
         [colors]
         Guidance = \"white\"
         AlertInfo = \"pink\"
-        ", FileFormat::Toml)).build().unwrap();
-        let solarized_theme = manager.load_theme_from_config("solarized", solarized, Some(1)).unwrap();
+        ",
+                FileFormat::Toml,
+            ))
+            .build()
+            .unwrap();
+        let solarized_theme = manager
+            .load_theme_from_config("solarized", solarized, 1)
+            .unwrap();
 
         assert_eq!(
-            solarized_theme.as_style(Meaning::AlertInfo).foreground_color,
+            solarized_theme
+                .as_style(Meaning::AlertInfo)
+                .foreground_color,
             from_string("pink").ok()
         );
 
         // Then we introduce a derived theme
-        let unsolarized = Config::builder().add_source(ConfigFile::from_str("
+        let unsolarized = Config::builder()
+            .add_source(ConfigFile::from_str(
+                "
         [theme]
         name = \"unsolarized\"
         parent = \"solarized\"
 
         [colors]
         AlertInfo = \"red\"
-        ", FileFormat::Toml)).build().unwrap();
-        let unsolarized_theme = manager.load_theme_from_config("unsolarized", unsolarized, Some(1)).unwrap();
+        ",
+                FileFormat::Toml,
+            ))
+            .build()
+            .unwrap();
+        let unsolarized_theme = manager
+            .load_theme_from_config("unsolarized", unsolarized, 1)
+            .unwrap();
 
         // It will take its own values
         assert_eq!(
-            unsolarized_theme.as_style(Meaning::AlertInfo).foreground_color,
+            unsolarized_theme
+                .as_style(Meaning::AlertInfo)
+                .foreground_color,
             from_string("red").ok()
         );
 
         // ...or fall back to the parent
         assert_eq!(
-            unsolarized_theme.as_style(Meaning::Guidance).foreground_color,
+            unsolarized_theme
+                .as_style(Meaning::Guidance)
+                .foreground_color,
             from_string("white").ok()
         );
 
-        testing_logger::validate(|captured_logs| {
-            assert_eq!(captured_logs.len(), 0)
-        });
+        testing_logger::validate(|captured_logs| assert_eq!(captured_logs.len(), 0));
 
         // If the parent is not found, we end up with the base theme colors
-        let nunsolarized = Config::builder().add_source(ConfigFile::from_str("
+        let nunsolarized = Config::builder()
+            .add_source(ConfigFile::from_str(
+                "
         [theme]
         name = \"nunsolarized\"
         parent = \"nonsolarized\"
 
         [colors]
         AlertInfo = \"red\"
-        ", FileFormat::Toml)).build().unwrap();
-        let nunsolarized_theme = manager.load_theme_from_config("nunsolarized", nunsolarized, Some(1)).unwrap();
+        ",
+                FileFormat::Toml,
+            ))
+            .build()
+            .unwrap();
+        let nunsolarized_theme = manager
+            .load_theme_from_config("nunsolarized", nunsolarized, 1)
+            .unwrap();
 
         assert_eq!(
-            nunsolarized_theme.as_style(Meaning::Guidance).foreground_color,
+            nunsolarized_theme
+                .as_style(Meaning::Guidance)
+                .foreground_color,
             Some(Color::Blue)
         );
 
@@ -541,20 +613,36 @@ mod theme_tests {
         testing_logger::setup();
         [true, false].iter().for_each(|debug| {
             let mut manager = ThemeManager::new(Some(*debug), Some("".to_string()));
-            let config = Config::builder().add_source(ConfigFile::from_str("
+            let config = Config::builder()
+                .add_source(ConfigFile::from_str(
+                    "
             [theme]
             name = \"mytheme\"
 
             [colors]
             Guidance = \"white\"
             AlertInfo = \"xinetic\"
-            ", FileFormat::Toml)).build().unwrap();
-            manager.load_theme_from_config("config_theme", config, 1).unwrap();
+            ",
+                    FileFormat::Toml,
+                ))
+                .build()
+                .unwrap();
+            manager
+                .load_theme_from_config("config_theme", config, 1)
+                .unwrap();
             testing_logger::validate(|captured_logs| {
                 if *debug {
-                    assert_eq!(captured_logs.len(), 1);
-                    assert_eq!(captured_logs[0].body, "Could not load theme color: No such color in palette -> xinetic");
-                    assert_eq!(captured_logs[0].level, log::Level::Warn)
+                    assert_eq!(captured_logs.len(), 2);
+                    assert_eq!(
+                        captured_logs[0].body,
+                        "Your theme config name is not the name of your loaded theme config_theme != mytheme"
+                    );
+                    assert_eq!(captured_logs[0].level, log::Level::Warn);
+                    assert_eq!(
+                        captured_logs[1].body,
+                        "Could not load theme color: No such color in palette -> xinetic"
+                    );
+                    assert_eq!(captured_logs[1].level, log::Level::Warn)
                 } else {
                     assert_eq!(captured_logs.len(), 0)
                 }
@@ -564,17 +652,36 @@ mod theme_tests {
 
     #[test]
     fn test_can_parse_color_strings_correctly() {
-        assert_eq!(from_string("brown").unwrap(), Color::Rgb { r: 165, g: 42, b: 42 });
+        assert_eq!(
+            from_string("brown").unwrap(),
+            Color::Rgb {
+                r: 165,
+                g: 42,
+                b: 42
+            }
+        );
 
         assert_eq!(from_string(""), Err("Empty string".into()));
 
-        ["manatee", "caput mortuum", "123456"].iter().for_each(|inp| {
-            assert_eq!(from_string(inp), Err("No such color in palette".into()));
-        });
+        ["manatee", "caput mortuum", "123456"]
+            .iter()
+            .for_each(|inp| {
+                assert_eq!(from_string(inp), Err("No such color in palette".into()));
+            });
 
-        assert_eq!(from_string("#ff1122").unwrap(), Color::Rgb { r: 255, g: 17, b: 34 });
+        assert_eq!(
+            from_string("#ff1122").unwrap(),
+            Color::Rgb {
+                r: 255,
+                g: 17,
+                b: 34
+            }
+        );
         ["#1122", "#ffaa112", "#brown"].iter().for_each(|inp| {
-            assert_eq!(from_string(inp), Err("Could not parse 3 hex values from string".into()));
+            assert_eq!(
+                from_string(inp),
+                Err("Could not parse 3 hex values from string".into())
+            );
         });
     }
 }
