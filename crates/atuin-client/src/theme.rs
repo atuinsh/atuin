@@ -320,6 +320,11 @@ impl ThemeManager {
             },
             None => None
         };
+
+        if debug && name != theme_config.theme.name {
+            log::warn!("Your theme config name is not the name of your loaded theme {} != {}", name, theme_config.theme.name);
+        }
+
         let theme = Theme::from_map(
             theme_config.theme.name,
             parent,
