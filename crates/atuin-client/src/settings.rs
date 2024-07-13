@@ -345,6 +345,9 @@ pub struct Theme {
 
     /// Whether any available additional theme debug should be shown
     pub debug: Option<bool>,
+
+    /// How many levels of parenthood will be traversed if needed
+    pub max_depth: Option<u8>
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -380,6 +383,7 @@ impl Default for Theme {
         Self {
             name: "".to_string(),
             debug: None::<bool>,
+            max_depth: Some(10)
         }
     }
 }

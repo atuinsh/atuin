@@ -135,7 +135,7 @@ impl Cmd {
         let sqlite_store = SqliteStore::new(record_store_path, settings.local_timeout).await?;
 
         let theme_name = settings.theme.name.clone();
-        let theme = theme_manager.load_theme(theme_name.as_str());
+        let theme = theme_manager.load_theme(theme_name.as_str(), settings.theme.max_depth);
 
         match self {
             Self::Import(import) => import.run(&db).await,
