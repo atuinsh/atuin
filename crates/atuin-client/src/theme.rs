@@ -9,17 +9,6 @@ use std::path::PathBuf;
 use log;
 use strum_macros;
 
-// Standard log-levels that may occur in the interface.
-#[derive(
-    Serialize, Deserialize, Copy, Clone, Hash, Debug, Eq, PartialEq, strum_macros::Display,
-)]
-#[strum(serialize_all = "camel_case")]
-pub enum Level {
-    Info,
-    Warning,
-    Error,
-}
-
 // Collection of settable "meanings" that can have colors set.
 #[derive(
     Serialize, Deserialize, Copy, Clone, Hash, Debug, Eq, PartialEq, strum_macros::Display,
@@ -27,7 +16,7 @@ pub enum Level {
 #[strum(serialize_all = "camel_case")]
 pub enum Meaning {
     AlertInfo,
-    AlertWarning,
+    AlertWarn,
     AlertError,
     Annotation,
     Base,
@@ -54,20 +43,20 @@ impl Theme {
     }
 
     pub fn get_info(&self) -> Color {
-        self.get_alert(Level::Info)
+        self.get_alert(log::Level::Info)
     }
 
     pub fn get_warning(&self) -> Color {
-        self.get_alert(Level::Warning)
+        self.get_alert(log::Level::Warn)
     }
 
     pub fn get_error(&self) -> Color {
-        self.get_alert(Level::Error)
+        self.get_alert(log::Level::Error)
     }
 
     // The alert meanings may be chosen by the Level enum, rather than the methods above
     // or the full Meaning enum, to simplify programmatic selection of a log-level.
-    pub fn get_alert(&self, severity: Level) -> Color {
+    pub fn get_alert(&self, severity: log::Level) -> Color {
         self.colors[ALERT_TYPES.get(&severity).unwrap()]
     }
 
@@ -160,7 +149,7 @@ fn _from_known(name: &str) -> Color {
 fn make_theme(overrides: &HashMap<Meaning, Color>) -> Theme {
     let colors = HashMap::from([
         (Meaning::AlertError, Color::Red),
-        (Meaning::AlertWarning, Color::Yellow),
+        (Meaning::AlertWarn, Color::Yellow),
         (Meaning::AlertInfo, Color::Green),
         (Meaning::Annotation, Color::DarkGrey),
         (Meaning::Guidance, Color::Blue),
@@ -180,11 +169,11 @@ fn make_theme(overrides: &HashMap<Meaning, Color>) -> Theme {
 // is available, this gives a couple of basic options, demonstrating the use
 // of themes: autumn and marine
 lazy_static! {
-    static ref ALERT_TYPES: HashMap<Level, Meaning> = {
+    static ref ALERT_TYPES: HashMap<log::Level, Meaning> = {
         HashMap::from([
-            (Level::Info, Meaning::AlertInfo),
-            (Level::Warning, Meaning::AlertWarning),
-            (Level::Error, Meaning::AlertError),
+            (log::Level::Info, Meaning::AlertInfo),
+            (log::Level::Warn, Meaning::AlertWarn),
+            (log::Level::Error, Meaning::AlertError),
         ])
     };
     static ref MEANING_FALLBACKS: HashMap<Meaning, Meaning> = {
@@ -201,7 +190,7 @@ lazy_static! {
                 "autumn",
                 HashMap::from([
                     (Meaning::AlertError, _from_known("saddlebrown")),
-                    (Meaning::AlertWarning, _from_known("darkorange")),
+                    (Meaning::AlertWarn, _from_known("darkorange")),
                     (Meaning::AlertInfo, _from_known("gold")),
                     (Meaning::Annotation, Color::DarkGrey),
                     (Meaning::Guidance, _from_known("brown")),
@@ -211,7 +200,7 @@ lazy_static! {
                 "marine",
                 HashMap::from([
                     (Meaning::AlertError, _from_known("yellowgreen")),
-                    (Meaning::AlertWarning, _from_known("cyan")),
+                    (Meaning::AlertWarn, _from_known("cyan")),
                     (Meaning::AlertInfo, _from_known("turquoise")),
                     (Meaning::Annotation, _from_known("steelblue")),
                     (Meaning::Base, _from_known("lightsteelblue")),
@@ -404,17 +393,29 @@ mod theme_tests {
         assert_eq!(theme.get_warning(), Color::Yellow);
         assert_eq!(theme.get_info(), Color::Green);
         assert_eq!(theme.get_base(), Color::Grey);
-        assert_eq!(theme.get_alert(Level::Error), Color::Red)
+        assert_eq!(theme.get_alert(log::Level::Error), Color::Red)
     }
 
     #[test]
     fn test_can_debug_theme() {
-        let mut manager = ThemeManager::new(Some(true), Some("".to_string()));
-        let theme = manager.load_theme("autumn");
-        assert_eq!(
-            theme.as_style(Meaning::Guidance).foreground_color,
-            from_string("brown").ok()
-        );
+        testing_logger::setup();
+        [true, false].iter().for_each(|debug| {
+            let mut manager = ThemeManager::new(Some(*debug), Some("".to_string()));
+            let config = Config::builder()
+                .set_default("Guidance", "white").unwrap()
+                .set_default("AlertInfo", "xinetic").unwrap()
+                .build().unwrap();
+            manager.load_theme_from_config("config_theme", config).unwrap();
+            testing_logger::validate(|captured_logs| {
+                if *debug {
+                    assert_eq!(captured_logs.len(), 1);
+                    assert_eq!(captured_logs[0].body, "Could not load theme color: No such color in palette -> xinetic");
+                    assert_eq!(captured_logs[0].level, log::Level::Warn)
+                } else {
+                    assert_eq!(captured_logs.len(), 0)
+                }
+            })
+        })
     }
 
     #[test]

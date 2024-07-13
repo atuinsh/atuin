@@ -313,6 +313,7 @@ dependencies = [
  "sqlx",
  "strum",
  "strum_macros",
+ "testing_logger",
  "thiserror",
  "time",
  "tiny-bip39",
@@ -4226,6 +4227,15 @@ checksum = "21bebf2b7c9e0a515f6e0f8c51dc0f8e4696391e6f1ff30379559f8365fb0df7"
 dependencies = [
  "rustix",
  "windows-sys 0.48.0",
+]
+
+[[package]]
+name = "testing_logger"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6d92b727cb45d33ae956f7f46b966b25f1bc712092aeef9dba5ac798fc89f720"
+dependencies = [
+ "log",
 ]
 
 [[package]]
