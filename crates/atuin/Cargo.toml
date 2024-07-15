@@ -93,4 +93,4 @@ arboard = { version = "3.4", optional = true }
 arboard = { version = "3.4", optional = true, features = ["wayland-data-control"] }
 
 [dev-dependencies]
-tracing-tree = "0.3"
+tracing-tree = "0.4"
