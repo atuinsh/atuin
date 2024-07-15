@@ -66,7 +66,7 @@ async-trait = { workspace = true }
 interim = { workspace = true }
 base64 = { workspace = true }
 clap = { workspace = true }
-clap_complete = "4.5.3"
+clap_complete = "4.5.8"
 clap_complete_nushell = "4.5.2"
 fs-err = { workspace = true }
 whoami = { workspace = true }
