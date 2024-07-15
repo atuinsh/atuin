@@ -15,8 +15,8 @@ importers:
         specifier: ^0.14.2
         version: 0.14.2(@tiptap/pm@2.4.0)(@types/react@18.3.3)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       '@blocknote/react':
-        specifier: ^0.14.2
-        version: 0.14.2(@tiptap/pm@2.4.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+        specifier: ^0.14.6
+        version: 0.14.6(@tiptap/pm@2.4.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       '@codemirror/autocomplete':
         specifier: ^6.16.3
         version: 6.16.3(@codemirror/language@6.10.2)(@codemirror/state@6.4.1)(@codemirror/view@6.28.4)(@lezer/common@1.2.1)
@@ -328,8 +328,8 @@ packages:
       react: ^18
       react-dom: ^18
 
-  '@blocknote/react@0.14.2':
-    resolution: {integrity: sha512-NNG2BaJp8h3l7DyBl+SQQZyNewqmrtCeYpWlSBygR4Fnp53SGRcgHj0pJcEBBb1Bw6Qq5x+PoO5xB7sRso0mUw==}
+  '@blocknote/react@0.14.6':
+    resolution: {integrity: sha512-j5BOwhmS90FIFeF4q7SG0JiC4oOTQY6PHF0O7Wxr6qx1cQIXwuXufnzf38BvTZzH6yH0ezZY3fGIm1T6dFWF9A==}
     peerDependencies:
       react: ^18
       react-dom: ^18
@@ -4333,7 +4333,7 @@ snapshots:
   '@blocknote/mantine@0.14.2(@tiptap/pm@2.4.0)(@types/react@18.3.3)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)':
     dependencies:
       '@blocknote/core': 0.14.5
-      '@blocknote/react': 0.14.2(@tiptap/pm@2.4.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      '@blocknote/react': 0.14.6(@tiptap/pm@2.4.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       '@mantine/core': 7.11.0(@mantine/hooks@7.11.0(react@18.3.1))(@types/react@18.3.3)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       '@mantine/hooks': 7.11.0(react@18.3.1)
       '@mantine/utils': 6.0.21(react@18.3.1)
@@ -4346,7 +4346,7 @@ snapshots:
       - '@types/react'
       - supports-color
 
-  '@blocknote/react@0.14.2(@tiptap/pm@2.4.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)':
+  '@blocknote/react@0.14.6(@tiptap/pm@2.4.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)':
     dependencies:
       '@blocknote/core': 0.14.5
       '@floating-ui/react': 0.26.17(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
@@ -4356,7 +4356,6 @@ snapshots:
       react: 18.3.1
       react-dom: 18.3.1(react@18.3.1)
       react-icons: 5.2.1(react@18.3.1)
-      use-prefers-color-scheme: 1.1.3(react@18.3.1)
     transitivePeerDependencies:
       - '@tiptap/pm'
       - supports-color

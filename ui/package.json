@@ -12,7 +12,7 @@
   "dependencies": {
     "@blocknote/core": "^0.14.5",
     "@blocknote/mantine": "^0.14.2",
-    "@blocknote/react": "^0.14.2",
+    "@blocknote/react": "^0.14.6",
     "@codemirror/autocomplete": "^6.16.3",
     "@codemirror/commands": "^6.6.0",
     "@codemirror/language": "^6.10.2",
