@@ -24,7 +24,7 @@
     "@heroicons/react": "^2.1.4",
     "@nextui-org/react": "^2.4.2",
     "@radix-ui/react-dialog": "^1.1.1",
-    "@radix-ui/react-dropdown-menu": "^2.0.6",
+    "@radix-ui/react-dropdown-menu": "^2.1.1",
     "@radix-ui/react-slot": "^1.1.0",
     "@radix-ui/react-toast": "^1.2.1",
     "@tailwindcss/forms": "^0.5.7",
