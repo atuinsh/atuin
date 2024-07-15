@@ -19,7 +19,7 @@
     "@codemirror/lint": "^6.8.1",
     "@codemirror/search": "^6.5.6",
     "@codemirror/state": "^6.4.1",
-    "@codemirror/view": "^6.28.2",
+    "@codemirror/view": "^6.28.4",
     "@headlessui/react": "^2.1.1",
     "@heroicons/react": "^2.1.4",
     "@nextui-org/react": "^2.4.2",
