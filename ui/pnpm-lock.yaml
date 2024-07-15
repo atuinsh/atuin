@@ -75,8 +75,8 @@ importers:
         specifier: 2.0.0-beta.5
         version: 2.0.0-beta.5
       '@tauri-apps/plugin-shell':
-        specifier: 2.0.0-beta.6
-        version: 2.0.0-beta.6
+        specifier: 2.0.0-beta.8
+        version: 2.0.0-beta.8
       '@tauri-apps/plugin-sql':
         specifier: 2.0.0-beta.5
         version: 2.0.0-beta.5
@@ -2335,8 +2335,8 @@ packages:
   '@tauri-apps/plugin-http@2.0.0-beta.5':
     resolution: {integrity: sha512-zRWWWCNw/TdewCSrBY8Racm2dwMpkzMOnFmHGExEIoklqUUIq3FU/hkqcX/67Nplf+t1y+WljOxKpCHbm1fOQw==}
 
-  '@tauri-apps/plugin-shell@2.0.0-beta.6':
-    resolution: {integrity: sha512-g3nM9cQQGl7Iv4MvyFuco/aPTiwOI/MixcoKso3VQIg5Aqd64NqR0r+GfsB0qx52txItqzSXwmeaj1eZjO9Q6Q==}
+  '@tauri-apps/plugin-shell@2.0.0-beta.8':
+    resolution: {integrity: sha512-rFXI6MvsCdSGbuKbDu/NaOePREb9YTVTdeugHdvvljnKWW3dvmThBb2h/8Hxj+Z7Cd8MUoRxPeJWUZbPbJ2Imw==}
 
   '@tauri-apps/plugin-sql@2.0.0-beta.5':
     resolution: {integrity: sha512-EuhrMeIGmIQmGYuzxk6i+PPqIMMgT+nApNsjYbpuVwYuav60RiI0pIC76B77BfmO5J7Sj9ueJyhiugwUevsYmQ==}
@@ -7221,9 +7221,9 @@ snapshots:
     dependencies:
       '@tauri-apps/api': 2.0.0-beta.13
 
-  '@tauri-apps/plugin-shell@2.0.0-beta.6':
+  '@tauri-apps/plugin-shell@2.0.0-beta.8':
     dependencies:
-      '@tauri-apps/api': 2.0.0-beta.13
+      '@tauri-apps/api': 2.0.0-beta.15
 
   '@tauri-apps/plugin-sql@2.0.0-beta.5':
     dependencies:
