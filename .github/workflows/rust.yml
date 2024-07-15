@@ -28,7 +28,7 @@ jobs:
         with:
           toolchain: stable
 
-      - uses: actions/cache@v3
+      - uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
@@ -64,7 +64,7 @@ jobs:
         with:
           tool: cross
 
-      - uses: actions/cache@v3
+      - uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
@@ -104,7 +104,7 @@ jobs:
         with:
           tool: cargo-nextest
 
-      - uses: actions/cache@v3
+      - uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
@@ -129,7 +129,7 @@ jobs:
         with:
           toolchain: stable
 
-      - uses: actions/cache@v3
+      - uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
@@ -178,7 +178,7 @@ jobs:
         with:
           tool: cargo-nextest
 
-      - uses: actions/cache@v3
+      - uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
@@ -203,7 +203,7 @@ jobs:
           toolchain: stable
           components: clippy
 
-      - uses: actions/cache@v3
+      - uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
