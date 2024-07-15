@@ -58,7 +58,7 @@
     "react-window": "^1.8.10",
     "react-window-infinite-loader": "^1.0.9",
     "recharts": "^2.12.7",
-    "tailwind-merge": "^2.3.0",
+    "tailwind-merge": "^2.4.0",
     "tailwindcss-animate": "^1.0.7",
     "usehooks-ts": "^3.1.0",
     "vaul": "^0.9.1",
