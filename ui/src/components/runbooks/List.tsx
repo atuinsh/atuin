@@ -23,15 +23,13 @@ import { DateTime } from "luxon";
 import { NotebookPenIcon } from "lucide-react";
 import Runbook from "@/state/runbooks/runbook";
 import { useStore } from "@/state/store";
-import { cn } from "@/lib/utils";
 
 const NoteSidebar = () => {
   const runbooks = useStore((state) => state.runbooks);
   const refreshRunbooks = useStore((state) => state.refreshRunbooks);
+
   const currentRunbook = useStore((state) => state.currentRunbook);
   const setCurrentRunbook = useStore((state) => state.setCurrentRunbook);
-
-  console.log(currentRunbook);
 
   useEffect(() => {
     refreshRunbooks();
@@ -46,6 +44,7 @@ const NoteSidebar = () => {
           variant="flat"
           aria-label="Runbook list"
           selectionMode="single"
+          selectedKeys={[currentRunbook]}
           itemClasses={{ base: "data-[selected=true]:bg-gray-200" }}
           topContent={
             <ButtonGroup>
