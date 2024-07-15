@@ -7,8 +7,10 @@ import "./styles.css";
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
     <NextUIProvider>
-      <div data-tauri-drag-region className="w-full h-8 absolute" />
-      <App />
+      <main className="text-foreground bg-background">
+        <div data-tauri-drag-region className="w-full h-8 absolute" />
+        <App />
+      </main>
     </NextUIProvider>
   </React.StrictMode>,
 );

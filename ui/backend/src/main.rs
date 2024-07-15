@@ -284,12 +284,19 @@ fn main() {
             dotfiles::vars::delete_var,
             dotfiles::vars::set_var,
         ])
-        .plugin(tauri_plugin_sql::Builder::default().build())
+        .plugin(tauri_plugin_sql::Builder::default().add_migrations("sqlite:runbooks.db", run::migrations::migrations()).build())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
             let _ = show_window(app);
+
         }))
         .manage(state::AtuinState::default())
+        .setup(|app|{
+            println!("{}", app.path().config_dir().unwrap_or(std::path::PathBuf::new()).to_string_lossy());
+            println!("{}", app.path().data_dir().unwrap_or(std::path::PathBuf::new()).to_string_lossy());
+
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

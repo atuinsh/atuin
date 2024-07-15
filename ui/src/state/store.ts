@@ -18,6 +18,7 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import { sessionToken, settings } from "./client";
 import { getWeekInfo } from "@/lib/utils";
+import Runbook from "./runbooks/runbook";
 
 // I'll probs want to slice this up at some point, but for now a
 // big blobby lump of state is fine.
@@ -30,12 +31,15 @@ interface AtuinState {
   shellHistory: ShellHistory[];
   calendar: any[];
   weekStart: number;
+  runbooks: Runbook[];
+  currentRunbook: Runbook | null;
 
   refreshHomeInfo: () => void;
   refreshCalendar: () => void;
   refreshAliases: () => void;
   refreshVars: () => void;
   refreshUser: () => void;
+  refreshRunbooks: () => void;
   refreshShellHistory: (query?: string) => void;
   historyNextPage: (query?: string) => void;
 }
@@ -47,6 +51,8 @@ let state = (set: any, get: any): AtuinState => ({
   vars: [],
   shellHistory: [],
   calendar: [],
+  runbooks: [],
+  currentRunbook: null,
 
   weekStart: getWeekInfo().firstDay,
 
@@ -66,6 +72,11 @@ let state = (set: any, get: any): AtuinState => ({
     invoke("vars").then((vars: any) => {
       set({ vars: vars });
     });
+  },
+
+  refreshRunbooks: async () => {
+    let runbooks = await Runbook.all();
+    set({ runbooks });
   },
 
   refreshShellHistory: (query?: string) => {

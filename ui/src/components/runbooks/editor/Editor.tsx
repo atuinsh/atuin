@@ -69,7 +69,7 @@ export default function Editor() {
 
   // Renders the editor instance.
   return (
-    <div>
+    <div className="p-4 w-full">
       <BlockNoteView editor={editor} slashMenu={false} sideMenu={false}>
         <SuggestionMenuController
           triggerCharacter={"/"}
