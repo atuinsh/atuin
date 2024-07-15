@@ -3,7 +3,9 @@ use std::path::PathBuf;
 use clap::Subcommand;
 use eyre::{Result, WrapErr};
 
-use atuin_client::{database::Sqlite, record::sqlite_store::SqliteStore, settings::Settings};
+use atuin_client::{
+    database::Sqlite, record::sqlite_store::SqliteStore, settings::Settings, theme,
+};
 use tracing_subscriber::{filter::EnvFilter, fmt, prelude::*};
 
 #[cfg(feature = "sync")]
@@ -94,14 +96,19 @@ impl Cmd {
             .unwrap();
 
         let settings = Settings::new().wrap_err("could not load client settings")?;
-        let res = runtime.block_on(self.run_inner(settings));
+        let theme_manager = theme::ThemeManager::new(settings.theme.debug, None);
+        let res = runtime.block_on(self.run_inner(settings, theme_manager));
 
         runtime.shutdown_timeout(std::time::Duration::from_millis(50));
 
         res
     }
 
-    async fn run_inner(self, mut settings: Settings) -> Result<()> {
+    async fn run_inner(
+        self,
+        mut settings: Settings,
+        mut theme_manager: theme::ThemeManager,
+    ) -> Result<()> {
         let filter =
             EnvFilter::from_env("ATUIN_LOG").add_directive("sqlx_sqlite::regexp=off".parse()?);
 
@@ -127,10 +134,13 @@ impl Cmd {
         let db = Sqlite::new(db_path, settings.local_timeout).await?;
         let sqlite_store = SqliteStore::new(record_store_path, settings.local_timeout).await?;
 
+        let theme_name = settings.theme.name.clone();
+        let theme = theme_manager.load_theme(theme_name.as_str(), settings.theme.max_depth);
+
         match self {
             Self::Import(import) => import.run(&db).await,
-            Self::Stats(stats) => stats.run(&db, &settings).await,
-            Self::Search(search) => search.run(db, &mut settings, sqlite_store).await,
+            Self::Stats(stats) => stats.run(&db, &settings, theme).await,
+            Self::Search(search) => search.run(db, &mut settings, sqlite_store, theme).await,
 
             #[cfg(feature = "sync")]
             Self::Sync(sync) => sync.run(settings, &db, sqlite_store).await,

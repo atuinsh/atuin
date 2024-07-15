@@ -16,6 +16,7 @@ use ratatui::{
 
 use super::duration::format_duration;
 
+use super::super::theme::{Meaning, Theme};
 use super::interactive::{InputAction, State};
 
 #[allow(clippy::cast_sign_loss)]
@@ -27,7 +28,13 @@ fn u64_or_zero(num: i64) -> u64 {
     }
 }
 
-pub fn draw_commands(f: &mut Frame<'_>, parent: Rect, history: &History, stats: &HistoryStats) {
+pub fn draw_commands(
+    f: &mut Frame<'_>,
+    parent: Rect,
+    history: &History,
+    stats: &HistoryStats,
+    theme: &Theme,
+) {
     let commands = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -41,6 +48,7 @@ pub fn draw_commands(f: &mut Frame<'_>, parent: Rect, history: &History, stats: 
         Block::new()
             .borders(Borders::ALL)
             .title("Command")
+            .style(theme.as_style(Meaning::Base))
             .padding(Padding::horizontal(1)),
     );
 
@@ -54,6 +62,7 @@ pub fn draw_commands(f: &mut Frame<'_>, parent: Rect, history: &History, stats: 
         Block::new()
             .borders(Borders::ALL)
             .title("Previous command")
+            .style(theme.as_style(Meaning::Annotation))
             .padding(Padding::horizontal(1)),
     );
 
@@ -67,6 +76,7 @@ pub fn draw_commands(f: &mut Frame<'_>, parent: Rect, history: &History, stats: 
         Block::new()
             .borders(Borders::ALL)
             .title("Next command")
+            .style(theme.as_style(Meaning::Annotation))
             .padding(Padding::horizontal(1)),
     );
 
@@ -75,7 +85,13 @@ pub fn draw_commands(f: &mut Frame<'_>, parent: Rect, history: &History, stats: 
     f.render_widget(next, commands[2]);
 }
 
-pub fn draw_stats_table(f: &mut Frame<'_>, parent: Rect, history: &History, stats: &HistoryStats) {
+pub fn draw_stats_table(
+    f: &mut Frame<'_>,
+    parent: Rect,
+    history: &History,
+    stats: &HistoryStats,
+    theme: &Theme,
+) {
     let duration = Duration::from_nanos(u64_or_zero(history.duration));
     let avg_duration = Duration::from_nanos(stats.average_duration);
 
@@ -98,6 +114,7 @@ pub fn draw_stats_table(f: &mut Frame<'_>, parent: Rect, history: &History, stat
         Block::default()
             .title("Command stats")
             .borders(Borders::ALL)
+            .style(theme.as_style(Meaning::Base))
             .padding(Padding::vertical(1)),
     );
 
@@ -144,7 +161,7 @@ fn sort_duration_over_time(durations: &[(String, i64)]) -> Vec<(String, i64)> {
         .collect()
 }
 
-fn draw_stats_charts(f: &mut Frame<'_>, parent: Rect, stats: &HistoryStats) {
+fn draw_stats_charts(f: &mut Frame<'_>, parent: Rect, stats: &HistoryStats, theme: &Theme) {
     let exits: Vec<Bar> = stats
         .exits
         .iter()
@@ -159,6 +176,7 @@ fn draw_stats_charts(f: &mut Frame<'_>, parent: Rect, stats: &HistoryStats) {
         .block(
             Block::default()
                 .title("Exit code distribution")
+                .style(theme.as_style(Meaning::Base))
                 .borders(Borders::ALL),
         )
         .bar_width(3)
@@ -179,7 +197,12 @@ fn draw_stats_charts(f: &mut Frame<'_>, parent: Rect, stats: &HistoryStats) {
         .collect();
 
     let day_of_week = BarChart::default()
-        .block(Block::default().title("Runs per day").borders(Borders::ALL))
+        .block(
+            Block::default()
+                .title("Runs per day")
+                .style(theme.as_style(Meaning::Base))
+                .borders(Borders::ALL),
+        )
         .bar_width(3)
         .bar_gap(1)
         .bar_style(Style::default())
@@ -203,6 +226,7 @@ fn draw_stats_charts(f: &mut Frame<'_>, parent: Rect, stats: &HistoryStats) {
         .block(
             Block::default()
                 .title("Duration over time")
+                .style(theme.as_style(Meaning::Base))
                 .borders(Borders::ALL),
         )
         .bar_width(5)
@@ -226,7 +250,13 @@ fn draw_stats_charts(f: &mut Frame<'_>, parent: Rect, stats: &HistoryStats) {
     f.render_widget(duration_over_time, layout[2]);
 }
 
-pub fn draw(f: &mut Frame<'_>, chunk: Rect, history: &History, stats: &HistoryStats) {
+pub fn draw(
+    f: &mut Frame<'_>,
+    chunk: Rect,
+    history: &History,
+    stats: &HistoryStats,
+    theme: &Theme,
+) {
     let vert_layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Ratio(1, 5), Constraint::Ratio(4, 5)])
@@ -237,9 +267,9 @@ pub fn draw(f: &mut Frame<'_>, chunk: Rect, history: &History, stats: &HistorySt
         .constraints([Constraint::Ratio(1, 3), Constraint::Ratio(2, 3)])
         .split(vert_layout[1]);
 
-    draw_commands(f, vert_layout[0], history, stats);
-    draw_stats_table(f, stats_layout[0], history, stats);
-    draw_stats_charts(f, stats_layout[1], stats);
+    draw_commands(f, vert_layout[0], history, stats, theme);
+    draw_stats_table(f, stats_layout[0], history, stats, theme);
+    draw_stats_charts(f, stats_layout[1], stats, theme);
 }
 
 // I'm going to break this out more, but just starting to move things around before changing

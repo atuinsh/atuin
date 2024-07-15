@@ -70,6 +70,14 @@ sha2 = { version = "0.10", optional = true }
 indicatif = "0.17.7"
 tiny-bip39 = "1"
 
+# theme
+crossterm = "0.27.0"
+palette = { version = "0.7.5", features = ["serializing"] }
+lazy_static = "1.4.0"
+strum_macros = "0.26.3"
+strum = { version = "0.26.2", features = ["strum_macros"] }
+
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
 pretty_assertions = { workspace = true }
+testing_logger = "0.1.1"

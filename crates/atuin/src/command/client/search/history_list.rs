@@ -1,11 +1,14 @@
 use std::time::Duration;
 
-use atuin_client::history::History;
+use atuin_client::{
+    history::History,
+    theme::{Meaning, Theme},
+};
 use atuin_common::utils::Escapable as _;
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     widgets::{Block, StatefulWidget, Widget},
 };
 use time::OffsetDateTime;
@@ -19,6 +22,7 @@ pub struct HistoryList<'a> {
     /// Apply an alternative highlighting to the selected row
     alternate_highlight: bool,
     now: &'a dyn Fn() -> OffsetDateTime,
+    theme: &'a Theme,
 }
 
 #[derive(Default)]
@@ -70,6 +74,7 @@ impl<'a> StatefulWidget for HistoryList<'a> {
             inverted: self.inverted,
             alternate_highlight: self.alternate_highlight,
             now: &self.now,
+            theme: self.theme,
         };
 
         for item in self.history.iter().skip(state.offset).take(end - start) {
@@ -91,6 +96,7 @@ impl<'a> HistoryList<'a> {
         inverted: bool,
         alternate_highlight: bool,
         now: &'a dyn Fn() -> OffsetDateTime,
+        theme: &'a Theme,
     ) -> Self {
         Self {
             history,
@@ -98,6 +104,7 @@ impl<'a> HistoryList<'a> {
             inverted,
             alternate_highlight,
             now,
+            theme,
         }
     }
 
@@ -130,6 +137,7 @@ struct DrawState<'a> {
     inverted: bool,
     alternate_highlight: bool,
     now: &'a dyn Fn() -> OffsetDateTime,
+    theme: &'a Theme,
 }
 
 // longest line prefix I could come up with
@@ -151,18 +159,18 @@ impl DrawState<'_> {
     }
 
     fn duration(&mut self, h: &History) {
-        let status = Style::default().fg(if h.success() {
-            Color::Green
+        let status = self.theme.as_style(if h.success() {
+            Meaning::AlertInfo
         } else {
-            Color::Red
+            Meaning::AlertError
         });
         let duration = Duration::from_nanos(u64::try_from(h.duration).unwrap_or(0));
-        self.draw(&format_duration(duration), status);
+        self.draw(&format_duration(duration), status.into());
     }
 
     #[allow(clippy::cast_possible_truncation)] // we know that time.len() will be <6
     fn time(&mut self, h: &History) {
-        let style = Style::default().fg(Color::Blue);
+        let style = self.theme.as_style(Meaning::Guidance);
 
         // Account for the chance that h.timestamp is "in the future"
         // This would mean that "since" is negative, and the unwrap here
@@ -178,26 +186,27 @@ impl DrawState<'_> {
             usize::from(PREFIX_LENGTH).saturating_sub(usize::from(self.x) + 4 + time.len());
         self.draw(&SPACES[..padding], Style::default());
 
-        self.draw(&time, style);
-        self.draw(" ago", style);
+        self.draw(&time, style.into());
+        self.draw(" ago", style.into());
     }
 
     fn command(&mut self, h: &History) {
-        let mut style = Style::default();
+        let mut style = self.theme.as_style(Meaning::Base);
         if !self.alternate_highlight && (self.y as usize + self.state.offset == self.state.selected)
         {
             // if not applying alternative highlighting to the whole row, color the command
-            style = style.fg(Color::Red).add_modifier(Modifier::BOLD);
+            style = self.theme.as_style(Meaning::AlertError);
+            style.attributes.set(crossterm::style::Attribute::Bold);
         }
 
         for section in h.command.escape_control().split_ascii_whitespace() {
-            self.draw(" ", style);
+            self.draw(" ", style.into());
             if self.x > self.list_area.width {
                 // Avoid attempting to draw a command section beyond the width
                 // of the list
                 return;
             }
-            self.draw(section, style);
+            self.draw(section, style.into());
         }
     }
 

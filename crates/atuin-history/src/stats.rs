@@ -1,10 +1,10 @@
 use std::collections::{HashMap, HashSet};
 
-use crossterm::style::{Color, ResetColor, SetAttribute, SetForegroundColor};
+use crossterm::style::{ResetColor, SetAttribute, SetForegroundColor};
 use serde::{Deserialize, Serialize};
 use unicode_segmentation::UnicodeSegmentation;
 
-use atuin_client::{history::History, settings::Settings};
+use atuin_client::{history::History, settings::Settings, theme::Theme};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Stats {
@@ -109,7 +109,7 @@ fn split_at_pipe(command: &str) -> Vec<&str> {
     result
 }
 
-pub fn pretty_print(stats: Stats, ngram_size: usize) {
+pub fn pretty_print(stats: Stats, ngram_size: usize, theme: &Theme) {
     let max = stats.top.iter().map(|x| x.1).max().unwrap();
     let num_pad = max.ilog10() as usize + 1;
 
@@ -126,21 +126,21 @@ pub fn pretty_print(stats: Stats, ngram_size: usize) {
         });
 
     for (command, count) in stats.top {
-        let gray = SetForegroundColor(Color::Grey);
+        let gray = SetForegroundColor(theme.get_base());
         let bold = SetAttribute(crossterm::style::Attribute::Bold);
 
         let in_ten = 10 * count / max;
 
         print!("[");
-        print!("{}", SetForegroundColor(Color::Red));
+        print!("{}", SetForegroundColor(theme.get_error()));
 
         for i in 0..in_ten {
             if i == 2 {
-                print!("{}", SetForegroundColor(Color::Yellow));
+                print!("{}", SetForegroundColor(theme.get_warning()));
             }
 
             if i == 5 {
-                print!("{}", SetForegroundColor(Color::Green));
+                print!("{}", SetForegroundColor(theme.get_info()));
             }
 
             print!("▮");

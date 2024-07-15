@@ -339,6 +339,18 @@ pub struct Preview {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Theme {
+    /// Name of desired theme ("" for base)
+    pub name: String,
+
+    /// Whether any available additional theme debug should be shown
+    pub debug: Option<bool>,
+
+    /// How many levels of parenthood will be traversed if needed
+    pub max_depth: Option<u8>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Daemon {
     /// Use the daemon to sync
     /// If enabled, requires a running daemon with `atuin daemon`
@@ -362,6 +374,16 @@ impl Default for Preview {
     fn default() -> Self {
         Self {
             strategy: PreviewStrategy::Auto,
+        }
+    }
+}
+
+impl Default for Theme {
+    fn default() -> Self {
+        Self {
+            name: "".to_string(),
+            debug: None::<bool>,
+            max_depth: Some(10),
         }
     }
 }
@@ -458,6 +480,9 @@ pub struct Settings {
 
     #[serde(default)]
     pub daemon: Daemon,
+
+    #[serde(default)]
+    pub theme: Theme,
 }
 
 impl Settings {
@@ -727,6 +752,8 @@ impl Settings {
             .set_default("daemon.socket_path", socket_path.to_str())?
             .set_default("daemon.systemd_socket", false)?
             .set_default("daemon.tcp_port", 8889)?
+            .set_default("theme.name", "")?
+            .set_default("theme.debug", None::<bool>)?
             .set_default(
                 "prefers_reduced_motion",
                 std::env::var("NO_MOTION")

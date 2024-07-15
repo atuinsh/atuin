@@ -33,13 +33,14 @@ use super::{
     history_list::{HistoryList, ListState, PREFIX_LENGTH},
 };
 
+use crate::command::client::theme::{Meaning, Theme};
 use crate::{command::client::search::engines, VERSION};
 
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Alignment, Constraint, Direction, Layout},
     prelude::*,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span, Text},
     widgets::{block::Title, Block, BorderType, Borders, Padding, Paragraph, Tabs},
     Frame, Terminal, TerminalOptions, Viewport,
@@ -598,6 +599,7 @@ impl State {
         results: &[History],
         stats: Option<HistoryStats>,
         settings: &Settings,
+        theme: &Theme,
     ) {
         let compact = match settings.style {
             atuin_client::settings::Style::Auto => f.size().height < 14,
@@ -622,7 +624,7 @@ impl State {
             .direction(Direction::Vertical)
             .margin(0)
             .horizontal_margin(1)
-            .constraints(
+            .constraints::<&[Constraint]>(
                 if invert {
                     [
                         Constraint::Length(1 + border_size),               // input
@@ -671,7 +673,7 @@ impl State {
 
         let header_chunks = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints(
+            .constraints::<&[Constraint]>(
                 [
                     Constraint::Ratio(1, 5),
                     Constraint::Ratio(3, 5),
@@ -681,19 +683,19 @@ impl State {
             )
             .split(header_chunk);
 
-        let title = self.build_title();
+        let title = self.build_title(theme);
         f.render_widget(title, header_chunks[0]);
 
-        let help = self.build_help(settings);
+        let help = self.build_help(settings, theme);
         f.render_widget(help, header_chunks[1]);
 
-        let stats_tab = self.build_stats();
+        let stats_tab = self.build_stats(theme);
         f.render_widget(stats_tab, header_chunks[2]);
 
         match self.tab_index {
             0 => {
                 let results_list =
-                    Self::build_results_list(style, results, self.keymap_mode, &self.now);
+                    Self::build_results_list(style, results, self.keymap_mode, &self.now, theme);
                 f.render_stateful_widget(results_list, results_list_chunk, &mut self.results_state);
             }
 
@@ -716,6 +718,7 @@ impl State {
                         results_list_chunk,
                         &results[self.results_state.selected()],
                         &stats.expect("Drawing inspector, but no stats"),
+                        theme,
                     );
                 }
 
@@ -740,8 +743,13 @@ impl State {
         } else {
             preview_width - 2
         };
-        let preview =
-            self.build_preview(results, compact, preview_width, preview_chunk.width.into());
+        let preview = self.build_preview(
+            results,
+            compact,
+            preview_width,
+            preview_chunk.width.into(),
+            theme,
+        );
         f.render_widget(preview, preview_chunk);
 
         let extra_width = UnicodeWidthStr::width(self.search.input.substring());
@@ -754,23 +762,27 @@ impl State {
         );
     }
 
-    fn build_title(&mut self) -> Paragraph {
+    fn build_title(&mut self, theme: &Theme) -> Paragraph {
         let title = if self.update_needed.is_some() {
             Paragraph::new(Text::from(Span::styled(
                 format!("Atuin v{VERSION} - UPGRADE"),
-                Style::default().add_modifier(Modifier::BOLD).fg(Color::Red),
+                Style::default()
+                    .add_modifier(Modifier::BOLD)
+                    .fg(theme.get_error().into()),
             )))
         } else {
             Paragraph::new(Text::from(Span::styled(
                 format!("Atuin v{VERSION}"),
-                Style::default().add_modifier(Modifier::BOLD),
+                Style::default()
+                    .add_modifier(Modifier::BOLD)
+                    .fg(theme.get_base().into()),
             )))
         };
         title.alignment(Alignment::Left)
     }
 
     #[allow(clippy::unused_self)]
-    fn build_help(&self, settings: &Settings) -> Paragraph {
+    fn build_help(&self, settings: &Settings, theme: &Theme) -> Paragraph {
         match self.tab_index {
             // search
             0 => Paragraph::new(Text::from(Line::from(vec![
@@ -804,16 +816,16 @@ impl State {
 
             _ => unreachable!("invalid tab index"),
         }
-        .style(Style::default().fg(Color::DarkGray))
+        .style(theme.as_style(Meaning::Annotation))
         .alignment(Alignment::Center)
     }
 
-    fn build_stats(&mut self) -> Paragraph {
+    fn build_stats(&mut self, theme: &Theme) -> Paragraph {
         let stats = Paragraph::new(Text::from(Span::raw(format!(
             "history count: {}",
             self.history_count,
         ))))
-        .style(Style::default().fg(Color::DarkGray))
+        .style(theme.as_style(Meaning::Annotation))
         .alignment(Alignment::Right);
         stats
     }
@@ -823,12 +835,14 @@ impl State {
         results: &'a [History],
         keymap_mode: KeymapMode,
         now: &'a dyn Fn() -> OffsetDateTime,
+        theme: &'a Theme,
     ) -> HistoryList<'a> {
         let results_list = HistoryList::new(
             results,
             style.invert,
             keymap_mode == KeymapMode::VimNormal,
             now,
+            theme,
         );
 
         if style.compact {
@@ -886,6 +900,7 @@ impl State {
         compact: bool,
         preview_width: u16,
         chunk_width: usize,
+        theme: &Theme,
     ) -> Paragraph {
         let selected = self.results_state.selected();
         let command = if results.is_empty() {
@@ -905,7 +920,7 @@ impl State {
                 .join("\n")
         };
         let preview = if compact {
-            Paragraph::new(command).style(Style::default().fg(Color::DarkGray))
+            Paragraph::new(command).style(theme.as_style(Meaning::Annotation))
         } else {
             Paragraph::new(command).block(
                 Block::default()
@@ -993,6 +1008,7 @@ pub async fn history(
     settings: &Settings,
     mut db: impl Database,
     history_store: &HistoryStore,
+    theme: &Theme,
 ) -> Result<String> {
     let stdout = Stdout::new(settings.inline_height > 0)?;
     let backend = CrosstermBackend::new(stdout);
@@ -1069,7 +1085,7 @@ pub async fn history(
     let mut stats: Option<HistoryStats> = None;
     let accept;
     let result = 'render: loop {
-        terminal.draw(|f| app.draw(f, &results, stats.clone(), settings))?;
+        terminal.draw(|f| app.draw(f, &results, stats.clone(), settings, theme))?;
 
         let initial_input = app.search.input.as_str().to_owned();
         let initial_filter_mode = app.search.filter_mode;
@@ -1103,7 +1119,7 @@ pub async fn history(
                             },
                             InputAction::Redraw => {
                                 terminal.clear()?;
-                                terminal.draw(|f| app.draw(f, &results, stats.clone(), settings))?;
+                                terminal.draw(|f| app.draw(f, &results, stats.clone(), settings, theme))?;
                             },
                             r => {
                                 accept = app.accept;
