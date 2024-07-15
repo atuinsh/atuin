@@ -2,19 +2,19 @@ import Database from "@tauri-apps/plugin-sql";
 import { uuidv7 } from "uuidv7";
 
 export default class Runbook {
-  id: String;
+  id: string;
   created: Date;
   updated: Date;
 
-  private _name: String;
-  private _content: String;
+  private _name: string;
+  private _content: string;
 
-  set name(value: String) {
+  set name(value: string) {
     this.updated = new Date();
     this._name = value;
   }
 
-  set content(value: String) {
+  set content(value: string) {
     this.updated = new Date();
     this._content = value;
   }
@@ -28,9 +28,9 @@ export default class Runbook {
   }
 
   constructor(
-    id: String,
-    name: String,
-    content: String,
+    id: string,
+    name: string,
+    content: string,
     created: Date,
     updated: Date,
   ) {
@@ -114,5 +114,11 @@ export default class Runbook {
         this.updated.getTime() * 1000000,
       ],
     );
+  }
+
+  public static async delete(id: string) {
+    const db = await Database.load("sqlite:runbooks.db");
+
+    await db.execute("delete from runbooks where id=$1", [id]);
   }
 }

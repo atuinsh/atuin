@@ -43,7 +43,7 @@ interface AtuinState {
   refreshShellHistory: (query?: string) => void;
   historyNextPage: (query?: string) => void;
 
-  setCurrentRunbook: (runbook: Runbook) => void;
+  setCurrentRunbook: (id: String) => void;
 }
 
 let state = (set: any, get: any): AtuinState => ({
@@ -155,8 +155,8 @@ let state = (set: any, get: any): AtuinState => ({
     }
   },
 
-  setCurrentRunbook: (runbook: Runbook) => {
-    set({ currentRunbook: runbook.id });
+  setCurrentRunbook: (id: String) => {
+    set({ currentRunbook: id });
   },
 });
 

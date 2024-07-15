@@ -8,7 +8,16 @@ import {
   CardHeader,
   Divider,
   Tooltip,
+  Listbox,
+  ListboxItem,
+  Dropdown,
+  DropdownTrigger,
+  DropdownMenu,
+  DropdownItem,
 } from "@nextui-org/react";
+
+import { EllipsisVerticalIcon } from "lucide-react";
+
 import { DateTime } from "luxon";
 
 import { NotebookPenIcon } from "lucide-react";
@@ -19,9 +28,10 @@ import { cn } from "@/lib/utils";
 const NoteSidebar = () => {
   const runbooks = useStore((state) => state.runbooks);
   const refreshRunbooks = useStore((state) => state.refreshRunbooks);
-
   const currentRunbook = useStore((state) => state.currentRunbook);
   const setCurrentRunbook = useStore((state) => state.setCurrentRunbook);
+
+  console.log(currentRunbook);
 
   useEffect(() => {
     refreshRunbooks();
@@ -29,51 +39,80 @@ const NoteSidebar = () => {
 
   return (
     <div className="min-w-48 h-screen flex flex-col border-r-1">
-      <div className="flex flex-row">
-        <ButtonGroup>
-          <Tooltip showArrow content="New Runbook" closeDelay={50}>
-            <Button
-              isIconOnly
-              aria-label="New note"
-              variant="light"
-              size="sm"
-              onPress={async () => {
-                let runbook = await Runbook.create();
-                setCurrentRunbook(runbook);
-                refreshRunbooks();
-              }}
-            >
-              <NotebookPenIcon className="p-[0.15rem]" />
-            </Button>
-          </Tooltip>
-        </ButtonGroup>
-      </div>
-
       <div className="overflow-y-auto flex-grow">
-        {runbooks.map((runbook) => (
-          <Card
-            isPressable
-            key={runbook.id.toString()}
-            onPress={() => {
-              setCurrentRunbook(runbook);
-            }}
-            className={cn("cursor-pointer hover:bg-gray-200 w-full", {
-              "bg-gray-100": currentRunbook?.id == runbook.id,
-            })}
-            radius="sm"
-            shadow="none"
-          >
-            <CardBody className="px-3 flex flex-col">
-              <h1 className="text-md">{runbook.name || "Untitled"}</h1>
-
-              <div className="flex flex-row">
-                <div className="text-xs flex-1">
-                  {runbook.updated.toLocaleString()}
+        <Listbox
+          hideSelectedIcon
+          items={runbooks}
+          variant="flat"
+          aria-label="Runbook list"
+          selectionMode="single"
+          itemClasses={{ base: "data-[selected=true]:bg-gray-200" }}
+          topContent={
+            <ButtonGroup>
+              <Tooltip showArrow content="New Runbook" closeDelay={50}>
+                <Button
+                  isIconOnly
+                  aria-label="New note"
+                  variant="light"
+                  size="sm"
+                  onPress={async () => {
+                    let runbook = await Runbook.create();
+                    setCurrentRunbook(runbook.id);
+                    refreshRunbooks();
+                  }}
+                >
+                  <NotebookPenIcon className="p-[0.15rem]" />
+                </Button>
+              </Tooltip>
+            </ButtonGroup>
+          }
+        >
+          {(runbook) => (
+            <ListboxItem
+              key={runbook.id}
+              onPress={() => {
+                setCurrentRunbook(runbook.id);
+              }}
+              textValue={runbook.name || "Untitled"}
+              endContent={
+                <Dropdown>
+                  <DropdownTrigger className="bg-transparent">
+                    <Button isIconOnly>
+                      <EllipsisVerticalIcon
+                        size="16px"
+                        className="bg-transparent"
+                      />
+                    </Button>
+                  </DropdownTrigger>
+                  <DropdownMenu aria-label="Dynamic Actions">
+                    <DropdownItem
+                      key={"delete"}
+                      color="danger"
+                      className="text-danger"
+                      onPress={async () => {
+                        await Runbook.delete(runbook.id);
+                        refreshRunbooks();
+                      }}
+                    >
+                      Delete
+                    </DropdownItem>
+                  </DropdownMenu>
+                </Dropdown>
+              }
+            >
+              <div className="flex flex-col">
+                <div className="text-md">{runbook.name || "Untitled"}</div>
+                <div className="text-xs text-gray-500">
+                  <em>
+                    {DateTime.fromJSDate(runbook.updated).toLocaleString(
+                      DateTime.DATETIME_SIMPLE,
+                    )}
+                  </em>
                 </div>
               </div>
-            </CardBody>
-          </Card>
-        ))}
+            </ListboxItem>
+          )}
+        </Listbox>
       </div>
     </div>
   );

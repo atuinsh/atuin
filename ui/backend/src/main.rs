@@ -292,9 +292,6 @@ fn main() {
         }))
         .manage(state::AtuinState::default())
         .setup(|app|{
-            println!("{}", app.path().config_dir().unwrap_or(std::path::PathBuf::new()).to_string_lossy());
-            println!("{}", app.path().data_dir().unwrap_or(std::path::PathBuf::new()).to_string_lossy());
-
             Ok(())
         })
         .run(tauri::generate_context!())
