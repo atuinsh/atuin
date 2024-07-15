@@ -19,6 +19,14 @@ export default class Runbook {
     this._content = value;
   }
 
+  get content() {
+    return this._content;
+  }
+
+  get name() {
+    return this._name;
+  }
+
   constructor(
     id: String,
     name: String,
@@ -34,11 +42,34 @@ export default class Runbook {
   }
 
   /// Create a new Runbook, and automatically generate an ID.
-  static create(name: String, content: String): Runbook {
+  public static async create(): Promise<Runbook> {
     let now = new Date();
 
     // Initialize with the same value for created/updated, to avoid needing null.
-    return new Runbook(uuidv7(), name, content, now, now);
+    let runbook = new Runbook(uuidv7(), "", "", now, now);
+    await runbook.save();
+
+    return runbook;
+  }
+
+  public static async load(id: String): Promise<Runbook | null> {
+    const db = await Database.load("sqlite:runbooks.db");
+
+    let res = await db.select<any[]>("select * from runbooks where id = $1", [
+      id,
+    ]);
+
+    if (res.length == 0) return null;
+
+    let rb = res[0];
+
+    return new Runbook(
+      rb.id,
+      rb.name,
+      rb.content,
+      new Date(rb.created / 1000000),
+      new Date(rb.updated / 1000000),
+    );
   }
 
   static async all(): Promise<Runbook[]> {
@@ -59,7 +90,7 @@ export default class Runbook {
     });
   }
 
-  async save() {
+  public async save() {
     const db = await Database.load("sqlite:runbooks.db");
 
     await db.execute(

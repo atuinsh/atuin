@@ -32,7 +32,7 @@ interface AtuinState {
   calendar: any[];
   weekStart: number;
   runbooks: Runbook[];
-  currentRunbook: Runbook | null;
+  currentRunbook: String | null;
 
   refreshHomeInfo: () => void;
   refreshCalendar: () => void;
@@ -42,6 +42,8 @@ interface AtuinState {
   refreshRunbooks: () => void;
   refreshShellHistory: (query?: string) => void;
   historyNextPage: (query?: string) => void;
+
+  setCurrentRunbook: (runbook: Runbook) => void;
 }
 
 let state = (set: any, get: any): AtuinState => ({
@@ -52,7 +54,7 @@ let state = (set: any, get: any): AtuinState => ({
   shellHistory: [],
   calendar: [],
   runbooks: [],
-  currentRunbook: null,
+  currentRunbook: "",
 
   weekStart: getWeekInfo().firstDay,
 
@@ -151,6 +153,10 @@ let state = (set: any, get: any): AtuinState => ({
         set({ shellHistory: [...history, ...res] });
       });
     }
+  },
+
+  setCurrentRunbook: (runbook: Runbook) => {
+    set({ currentRunbook: runbook.id });
   },
 });
 

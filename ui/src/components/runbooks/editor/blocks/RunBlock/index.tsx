@@ -23,16 +23,19 @@ interface RunBlockProps {
   isEditable: boolean;
 }
 
-const RunBlock = ({ onPlay, id, code, isEditable }: RunBlockProps) => {
+const RunBlock = ({
+  onChange,
+  onPlay,
+  id,
+  code,
+  isEditable,
+}: RunBlockProps) => {
+  console.log(code);
   const [isRunning, setIsRunning] = useState(false);
   const [showTerminal, setShowTerminal] = useState(false);
   const [value, setValue] = useState<String>(code);
 
   const [pty, setPty] = useState<string | null>(null);
-
-  const onChange = (val: any) => {
-    setValue(val);
-  };
 
   const handleToggle = async (event: any) => {
     event.stopPropagation();
@@ -88,7 +91,10 @@ const RunBlock = ({ onPlay, id, code, isEditable }: RunBlockProps) => {
             editable={isEditable}
             width="100%"
             autoFocus
-            onChange={onChange}
+            onChange={(val) => {
+              setValue(val);
+              onChange(val);
+            }}
             extensions={[...extensions(), langs.shell()]}
             basicSetup={false}
           />
@@ -123,14 +129,15 @@ export default createReactBlockSpec(
         editor.updateBlock(block, {
           props: { ...block.props, code: val },
         });
+        console.log(block.props);
       };
 
       return (
         <RunBlock
           onChange={onInputChange}
           id={block?.id}
-          code={code}
-          type={type}
+          code={block.props.code}
+          type={block.props.type}
           isEditable={editor.isEditable}
         />
       );
