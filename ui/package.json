@@ -10,7 +10,7 @@
     "tauri": "tauri"
   },
   "dependencies": {
-    "@blocknote/core": "^0.14.2",
+    "@blocknote/core": "^0.14.5",
     "@blocknote/mantine": "^0.14.2",
     "@blocknote/react": "^0.14.2",
     "@codemirror/autocomplete": "^6.16.3",
