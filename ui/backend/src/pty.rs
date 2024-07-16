@@ -12,6 +12,7 @@ pub struct Pty {
 
     pub master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
     pub reader: Arc<Mutex<Box<dyn std::io::Read + Send>>>,
+    pub child: Arc<Mutex<Box<dyn portable_pty::Child + Send>>>,
 }
 
 impl Pty {
@@ -29,15 +30,8 @@ impl Pty {
 
         let cmd = CommandBuilder::new_default_prog();
 
-        tokio::task::spawn_blocking(move || {
-            let mut child = pair.slave.spawn_command(cmd).unwrap();
-            // Wait for the child to exit
-            let _ = child.wait().unwrap();
-
-            // Ensure slave is dropped
-            // This closes file handles, we can deadlock if this is not done correctly.
-            drop(pair.slave);
-        });
+        let child = pair.slave.spawn_command(cmd).unwrap();
+        drop(pair.slave);
 
         // Handle input -> write to master writer
         let (master_tx, mut master_rx) = tokio::sync::mpsc::channel::<Bytes>(32);
@@ -66,6 +60,7 @@ impl Pty {
             tx: master_tx,
             master: Arc::new(Mutex::new(pair.master)),
             reader: Arc::new(Mutex::new(reader)),
+            child: Arc::new(Mutex::new(child)),
         })
     }
 
@@ -108,5 +103,18 @@ impl Pty {
         let bytes = Bytes::from(bytes);
 
         self.send_bytes(bytes).await
+    }
+
+    pub async fn kill_child(&self) -> Result<()> {
+        let mut child = self
+            .child
+            .lock()
+            .map_err(|e| eyre!("Failed to lock pty child: {e}"))?;
+
+        child
+            .kill()
+            .map_err(|e| eyre!("Failed to kill child: {e}"))?;
+
+        Ok(())
     }
 }
