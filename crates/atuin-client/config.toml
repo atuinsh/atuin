@@ -209,6 +209,7 @@ records = true
 ## possible values: auto, static
 ## auto: length of the selected command.
 ## static: length of the longest command stored in the history.
+## fixed: use max_preview_height as fixed height.
 # strategy = "auto"
 
 [daemon]

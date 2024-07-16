@@ -583,6 +583,8 @@ impl State {
                         .sum(),
                 )
             }) + border_size * 2
+        } else if settings.show_preview && settings.preview.strategy == PreviewStrategy::Fixed {
+            settings.max_preview_height + border_size * 2
         } else if compact || tab_index == 1 {
             0
         } else {

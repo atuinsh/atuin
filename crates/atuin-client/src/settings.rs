@@ -410,6 +410,10 @@ pub enum PreviewStrategy {
     // Preview height is calculated for the length of the longest command stored in the history.
     #[serde(rename = "static")]
     Static,
+
+    // max_preview_height is used as fixed height.
+    #[serde(rename = "fixed")]
+    Fixed,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
