@@ -1246,6 +1246,15 @@ mod tests {
             ..Settings::utc()
         };
 
+        let settings_preview_fixed = Settings {
+            preview: Preview {
+                strategy: PreviewStrategy::Fixed,
+            },
+            show_preview: true,
+            max_preview_height: 15,
+            ..Settings::utc()
+        };
+
         let cmd_60: History = History::capture()
             .timestamp(time::OffsetDateTime::now_utc())
             .command("for i in $(seq -w 10); do echo \"item number $i - abcd\"; done")
@@ -1339,14 +1348,26 @@ mod tests {
             1,
             20,
         );
+        // the longest command requires 10 lines, but we have a max preview height of 15 and a fixed preview strategy
+        let settings_preview_fixed = State::calc_preview_height(
+            &settings_preview_fixed,
+            &results,
+            1 as usize,
+            0 as usize,
+            false,
+            1,
+            20,
+        );
 
         assert_eq!(no_preview, 1);
-        // 1*2 is the space for the border
-        assert_eq!(preview_h2, 2 + 1 * 2);
-        assert_eq!(preview_h3, 3 + 1 * 2);
-        assert_eq!(preview_one_line, 1 + 1 * 2);
-        assert_eq!(preview_limit_at_2, 2 + 1 * 2);
-        assert_eq!(preview_static_h3, 3 + 1 * 2);
-        assert_eq!(preview_static_limit_at_4, 4 + 1 * 2);
+        // 1 * 2 is the space for the border
+        let border_space = 1 * 2;
+        assert_eq!(preview_h2, 2 + border_space);
+        assert_eq!(preview_h3, 3 + border_space);
+        assert_eq!(preview_one_line, 1 + border_space);
+        assert_eq!(preview_limit_at_2, 2 + border_space);
+        assert_eq!(preview_static_h3, 3 + border_space);
+        assert_eq!(preview_static_limit_at_4, 4 + border_space);
+        assert_eq!(settings_preview_fixed, 15 + border_space);
     }
 }
