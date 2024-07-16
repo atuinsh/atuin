@@ -87,6 +87,7 @@ pub(crate) async fn pty_kill(
     state: tauri::State<'_, AtuinState>,
 ) -> Result<(), String> {
     let pty = state.pty_sessions.write().await.remove(&pid).unwrap();
+    pty.kill_child().await.map_err(|e|e.to_string())?;
     println!("RIP {pid:?}");
 
     Ok(())
