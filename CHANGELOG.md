@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [18.4.0-beta.1] - 2024-06-25
+## [unreleased]
 
 ### Bug Fixes
 
@@ -10,24 +10,47 @@ All notable changes to this project will be documented in this file.
 - *(crate)* Add description to daemon crate ([#2107](https://github.com/atuinsh/atuin/issues/2107))
 - *(gui)* Update deps ([#2116](https://github.com/atuinsh/atuin/issues/2116))
 - *(gui)* Add support for checking if the cli is installed on windows ([#2162](https://github.com/atuinsh/atuin/issues/2162))
+- *(gui)* WeekInfo call on Edge ([#2252](https://github.com/atuinsh/atuin/issues/2252))
+- *(gui)* Add \r for windows (shouldn't effect unix bc they should ignore it) ([#2253](https://github.com/atuinsh/atuin/issues/2253))
+- *(tui)* Press ctrl-a twice should jump to beginning of line ([#2246](https://github.com/atuinsh/atuin/issues/2246))
 - Cargo binstall config ([#2112](https://github.com/atuinsh/atuin/issues/2112))
 - Unitless sync_frequence = 0 not parsed by humantime ([#2154](https://github.com/atuinsh/atuin/issues/2154))
 - Some --help comments didn't show properly ([#2176](https://github.com/atuinsh/atuin/issues/2176))
 - Ensure we cleanup all tables when deleting ([#2191](https://github.com/atuinsh/atuin/issues/2191))
+- Add idx cache unique index ([#2226](https://github.com/atuinsh/atuin/issues/2226))
+- Idx cache inconsistency ([#2231](https://github.com/atuinsh/atuin/issues/2231))
+- Ambiguous column name ([#2232](https://github.com/atuinsh/atuin/issues/2232))
+
+
+### Documentation
+
+- *(README)* Fix broken link ([#2206](https://github.com/atuinsh/atuin/issues/2206))
+- Streamline readme ([#2203](https://github.com/atuinsh/atuin/issues/2203))
+- Update quickstart install command ([#2205](https://github.com/atuinsh/atuin/issues/2205))
 
 
 ### Features
 
-- *(client)* Identify several other GitHub token types as secrets 
+- *(bash/blesh)* Hook into BLE_ONLOAD to resolve loading order issue ([#2234](https://github.com/atuinsh/atuin/issues/2234))
 - *(daemon)* Follow XDG_RUNTIME_DIR if set ([#2171](https://github.com/atuinsh/atuin/issues/2171))
 - *(gui)* Automatically install and setup the cli/shell ([#2139](https://github.com/atuinsh/atuin/issues/2139))
 - *(gui)* Add activity calendar to the homepage ([#2160](https://github.com/atuinsh/atuin/issues/2160))
 - *(gui)* Cache zustand store in localstorage ([#2168](https://github.com/atuinsh/atuin/issues/2168))
 - *(gui)* Toast with prompt for cli install, rather than auto ([#2173](https://github.com/atuinsh/atuin/issues/2173))
+- *(gui)* Runbooks that run ([#2233](https://github.com/atuinsh/atuin/issues/2233))
+- *(gui)* Use fancy new side nav ([#2243](https://github.com/atuinsh/atuin/issues/2243))
+- *(gui)* Add runbook list, ability to create and delete, sql storage ([#2282](https://github.com/atuinsh/atuin/issues/2282))
+- *(gui)* Add runbook list, ability to create and delete, sql storage ([#2282](https://github.com/atuinsh/atuin/issues/2282))
 - *(history)* Filter out various environment variables containing potential secrets ([#2174](https://github.com/atuinsh/atuin/issues/2174))
 - *(tui)* Configurable prefix character ([#2157](https://github.com/atuinsh/atuin/issues/2157))
+- *(tui)* Customizable Themes ([#2236](https://github.com/atuinsh/atuin/issues/2236))
 - Use cargo-dist installer from our install script ([#2108](https://github.com/atuinsh/atuin/issues/2108))
 - Add user account verification ([#2190](https://github.com/atuinsh/atuin/issues/2190))
+- Add GitLab PAT to secret patterns ([#2196](https://github.com/atuinsh/atuin/issues/2196))
+- Add several other GitHub access token patterns ([#2200](https://github.com/atuinsh/atuin/issues/2200))
+- Add npm, Netlify and Pulumi tokens to secret patterns ([#2210](https://github.com/atuinsh/atuin/issues/2210))
+- Allow advertising a fake version to clients ([#2228](https://github.com/atuinsh/atuin/issues/2228))
+- Monitor idx cache consistency before switching ([#2229](https://github.com/atuinsh/atuin/issues/2229))
 
 
 ### Miscellaneous Tasks
@@ -36,6 +59,8 @@ All notable changes to this project will be documented in this file.
 - *(ci)* Do not run current ci for ui ([#2189](https://github.com/atuinsh/atuin/issues/2189))
 - *(deps-dev)* Bump @tauri-apps/cli in /ui ([#2135](https://github.com/atuinsh/atuin/issues/2135))
 - *(deps-dev)* Bump vite from 5.2.13 to 5.3.1 in /ui ([#2150](https://github.com/atuinsh/atuin/issues/2150))
+- *(deps-dev)* Bump @tauri-apps/cli in /ui ([#2277](https://github.com/atuinsh/atuin/issues/2277))
+- *(install)* Use posix sh, not bash ([#2204](https://github.com/atuinsh/atuin/issues/2204))
 - *(nix)* De-couple atuin nix build from nixpkgs rustc version ([#2123](https://github.com/atuinsh/atuin/issues/2123))
 - Add installer e2e tests ([#2110](https://github.com/atuinsh/atuin/issues/2110))
 - Remove unnecessary proto import ([#2120](https://github.com/atuinsh/atuin/issues/2120))
@@ -45,6 +70,20 @@ All notable changes to this project will be documented in this file.
 - Cargo and pnpm update ([#2127](https://github.com/atuinsh/atuin/issues/2127))
 - Update to rust 1.79 ([#2138](https://github.com/atuinsh/atuin/issues/2138))
 - Update to cargo-dist 0.16, enable attestations ([#2156](https://github.com/atuinsh/atuin/issues/2156))
+- Do not use package managers in installer ([#2201](https://github.com/atuinsh/atuin/issues/2201))
+- Enable record sync by default ([#2255](https://github.com/atuinsh/atuin/issues/2255))
+
+
+### Performance
+
+- *(search)* Benchmark smart sort ([#2202](https://github.com/atuinsh/atuin/issues/2202))
+- Create idx cache table ([#2140](https://github.com/atuinsh/atuin/issues/2140))
+- Write to the idx cache ([#2225](https://github.com/atuinsh/atuin/issues/2225))
+
+
+### Flake.lock
+
+- Update ([#2213](https://github.com/atuinsh/atuin/issues/2213))
 
 
 ## [18.3.0] - 2024-06-10
