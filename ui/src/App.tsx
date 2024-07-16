@@ -130,8 +130,11 @@ function App() {
   ];
 
   return (
-    <div className="flex h-dvh w-full select-none">
-      <div className="relative flex h-full flex-col !border-r-small border-divider transition-width pb-6 pt-9 min-w-[4.5rem] items-center">
+    <div
+      className="flex h-dvh w-screen select-none"
+      style={{ maxWidth: "100vw" }}
+    >
+      <div className="relative flex h-full flex-col !border-r-small border-divider transition-width pb-6 pt-9 items-center">
         <div className="flex items-center gap-0 px-3 justify-center">
           <div className="flex h-8 w-8">
             <img src={icon} alt="icon" className="h-8 w-8" />

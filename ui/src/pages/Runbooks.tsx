@@ -6,7 +6,7 @@ export default function Runbooks() {
   const currentRunbook = useStore((store) => store.currentRunbook);
 
   return (
-    <div className="w-full flex flex-row ">
+    <div className="flex w-full !max-w-full flex-row ">
       <List />
       {currentRunbook && <Editor />}
 
