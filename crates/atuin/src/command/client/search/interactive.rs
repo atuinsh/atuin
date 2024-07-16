@@ -729,7 +729,7 @@ impl State {
 
         let title = self.build_title(theme);
         f.render_widget(title, header_chunks[0]);
-        
+
         let help = self.build_help(settings, theme);
         f.render_widget(help, header_chunks[1]);
 
