@@ -55,6 +55,7 @@ const TerminalComponent = ({ pty }: any) => {
     terminal.loadAddon(fitAddon);
     terminal.onResize(onResize(pty));
 
+    fitAddon.fit();
     const windowResize = () => {
       fitAddon.fit();
     };
@@ -67,8 +68,6 @@ const TerminalComponent = ({ pty }: any) => {
 
     window.addEventListener("resize", windowResize);
 
-    fitAddon.fit();
-
     // Customize further as needed
     return () => {
       terminal.dispose();
@@ -76,7 +75,9 @@ const TerminalComponent = ({ pty }: any) => {
     };
   }, [pty]);
 
-  return <div ref={terminalRef} />;
+  return (
+    <div className="!max-w-full min-w-0 overflow-hidden" ref={terminalRef} />
+  );
 };
 
 export default TerminalComponent;
