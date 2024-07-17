@@ -384,7 +384,7 @@ impl Cmd {
             return Ok(());
         }
 
-        if !settings.store_failed && h.exit != 0 {
+        if !settings.store_failed && exit > 0 {
             debug!("history has non-zero exit code, and store_failed is false");
 
             // the history has already been inserted half complete. remove it
