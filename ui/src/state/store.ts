@@ -44,6 +44,10 @@ interface AtuinState {
   historyNextPage: (query?: string) => void;
 
   setCurrentRunbook: (id: String) => void;
+  setPtyTerm: (pty: string, terminal: any) => void;
+  cleanupPtyTerm: (pty: string) => void;
+
+  terminals: {};
 }
 
 let state = (set: any, get: any): AtuinState => ({
@@ -55,6 +59,7 @@ let state = (set: any, get: any): AtuinState => ({
   calendar: [],
   runbooks: [],
   currentRunbook: "",
+  terminals: {},
 
   weekStart: getWeekInfo().firstDay,
 
@@ -158,8 +163,33 @@ let state = (set: any, get: any): AtuinState => ({
   setCurrentRunbook: (id: String) => {
     set({ currentRunbook: id });
   },
+
+  setPtyTerm: (pty: string, terminal: any) => {
+    set({
+      terminals: { ...get().terminals, [pty]: terminal },
+    });
+  },
+
+  cleanupPtyTerm: (pty: string) => {
+    set((state: AtuinState) => {
+      const terminals = Object.keys(state.terminals).reduce((newTerms, key) => {
+        if (key !== pty) {
+          newTerms[key] = state.terminals[key];
+        }
+        return newTerms;
+      }, {});
+
+      return { terminals };
+    });
+  },
 });
 
 export const useStore = create<AtuinState>()(
-  persist(state, { name: "atuin-storage" }),
+  persist(state, {
+    name: "atuin-storage",
+    partialize: (state) =>
+      Object.fromEntries(
+        Object.entries(state).filter(([key]) => !["terminals"].includes(key)),
+      ),
+  }),
 );

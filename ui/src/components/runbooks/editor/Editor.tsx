@@ -4,6 +4,8 @@ import "@blocknote/core/fonts/inter.css";
 import "@blocknote/mantine/style.css";
 import "./index.css";
 
+import { Spinner } from "@nextui-org/react";
+
 import {
   BlockNoteSchema,
   BlockNoteEditor,
@@ -119,7 +121,11 @@ export default function Editor() {
   };
 
   if (editor === undefined) {
-    return "Loading content...";
+    return (
+      <div className="flex w-full h-full flex-col justify-center items-center">
+        <Spinner />
+      </div>
+    );
   }
 
   // Renders the editor instance.

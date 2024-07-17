@@ -131,127 +131,136 @@ function App() {
 
   return (
     <div
-      className="flex h-dvh w-screen select-none"
-      style={{ maxWidth: "100vw" }}
+      className="flex w-screen select-none"
+      style={{ maxWidth: "100vw", height: "calc(100dvh - 2rem)" }}
     >
-      <div className="relative flex h-full flex-col !border-r-small border-divider transition-width pb-6 pt-9 items-center">
-        <div className="flex items-center gap-0 px-3 justify-center">
-          <div className="flex h-8 w-8">
-            <img src={icon} alt="icon" className="h-8 w-8" />
+      <div className="flex w-full">
+        <div className="relative flex flex-col !border-r-small border-divider transition-width pb-6 pt-4 items-center">
+          <div className="flex items-center gap-0 px-3 justify-center">
+            <div className="flex h-8 w-8">
+              <img src={icon} alt="icon" className="h-8 w-8" />
+            </div>
+          </div>
+
+          <ScrollShadow className="-mr-6 h-full max-h-full py-6 pr-6">
+            <Sidebar
+              defaultSelectedKey="home"
+              isCompact={true}
+              items={navigation}
+              className="z-50"
+            />
+          </ScrollShadow>
+
+          <Spacer y={2} />
+
+          <div className="flex items-center gap-3 px-3">
+            <Dropdown showArrow placement="right-start">
+              <DropdownTrigger>
+                <Button disableRipple isIconOnly radius="full" variant="light">
+                  <Avatar
+                    isBordered
+                    className="flex-none"
+                    size="sm"
+                    name={user.username || ""}
+                  />
+                </Button>
+              </DropdownTrigger>
+              <DropdownMenu aria-label="Custom item styles">
+                <DropdownItem
+                  key="profile"
+                  isReadOnly
+                  className="h-14 opacity-100"
+                  textValue="Signed in as"
+                >
+                  <User
+                    avatarProps={{
+                      size: "sm",
+                      name: user.username || "Anonymous User",
+                      showFallback: true,
+                      imgProps: {
+                        className: "transition-none",
+                      },
+                    }}
+                    classNames={{
+                      name: "text-default-600",
+                      description: "text-default-500",
+                    }}
+                    description={
+                      user.bio || (user.username && "No bio") || "Sign up now"
+                    }
+                    name={user.username || "Anonymous User"}
+                  />
+                </DropdownItem>
+
+                <DropdownItem
+                  key="settings"
+                  description="Configure Atuin"
+                  startContent={
+                    <Icon icon="solar:settings-linear" width={24} />
+                  }
+                >
+                  Settings
+                </DropdownItem>
+
+                <DropdownSection aria-label="Help & Feedback">
+                  <DropdownItem
+                    key="help_and_feedback"
+                    description="Get in touch"
+                    onPress={() => open("https://forum.atuin.sh")}
+                    startContent={
+                      <Icon width={24} icon="solar:question-circle-linear" />
+                    }
+                  >
+                    Help & Feedback
+                  </DropdownItem>
+
+                  {(user.username && (
+                    <DropdownItem
+                      key="logout"
+                      startContent={
+                        <Icon width={24} icon="solar:logout-broken" />
+                      }
+                      onClick={() => {
+                        logout();
+                        refreshUser();
+                      }}
+                    >
+                      Log Out
+                    </DropdownItem>
+                  )) || (
+                    <DropdownItem
+                      key="signup"
+                      description="Sync, backup and share your data"
+                      className="bg-emerald-100"
+                      startContent={<KeyRoundIcon size="18px" />}
+                      onPress={onOpen}
+                    >
+                      Log in or Register
+                    </DropdownItem>
+                  )}
+                </DropdownSection>
+              </DropdownMenu>
+            </Dropdown>
           </div>
         </div>
 
-        <ScrollShadow className="-mr-6 h-full max-h-full py-6 pr-6">
-          <Sidebar
-            defaultSelectedKey="home"
-            isCompact={true}
-            items={navigation}
-          />
-        </ScrollShadow>
+        {renderMain(section)}
 
-        <Spacer y={2} />
-
-        <div className="flex items-center gap-3 px-3">
-          <Dropdown showArrow placement="right-start">
-            <DropdownTrigger>
-              <Button disableRipple isIconOnly radius="full" variant="light">
-                <Avatar
-                  isBordered
-                  className="flex-none"
-                  size="sm"
-                  name={user.username || ""}
-                />
-              </Button>
-            </DropdownTrigger>
-            <DropdownMenu aria-label="Custom item styles">
-              <DropdownItem
-                key="profile"
-                isReadOnly
-                className="h-14 opacity-100"
-                textValue="Signed in as"
-              >
-                <User
-                  avatarProps={{
-                    size: "sm",
-                    name: user.username || "Anonymous User",
-                    showFallback: true,
-                    imgProps: {
-                      className: "transition-none",
-                    },
-                  }}
-                  classNames={{
-                    name: "text-default-600",
-                    description: "text-default-500",
-                  }}
-                  description={
-                    user.bio || (user.username && "No bio") || "Sign up now"
-                  }
-                  name={user.username || "Anonymous User"}
-                />
-              </DropdownItem>
-
-              <DropdownItem
-                key="settings"
-                description="Configure Atuin"
-                startContent={<Icon icon="solar:settings-linear" width={24} />}
-              >
-                Settings
-              </DropdownItem>
-
-              <DropdownSection aria-label="Help & Feedback">
-                <DropdownItem
-                  key="help_and_feedback"
-                  description="Get in touch"
-                  onPress={() => open("https://forum.atuin.sh")}
-                  startContent={
-                    <Icon width={24} icon="solar:question-circle-linear" />
-                  }
-                >
-                  Help & Feedback
-                </DropdownItem>
-
-                {(user.username && (
-                  <DropdownItem
-                    key="logout"
-                    startContent={
-                      <Icon width={24} icon="solar:logout-broken" />
-                    }
-                    onClick={() => {
-                      logout();
-                      refreshUser();
-                    }}
-                  >
-                    Log Out
-                  </DropdownItem>
-                )) || (
-                  <DropdownItem
-                    key="signup"
-                    description="Sync, backup and share your data"
-                    className="bg-emerald-100"
-                    startContent={<KeyRoundIcon size="18px" />}
-                    onPress={onOpen}
-                  >
-                    Log in or Register
-                  </DropdownItem>
-                )}
-              </DropdownSection>
-            </DropdownMenu>
-          </Dropdown>
-        </div>
+        <Toaster />
+        <Modal
+          isOpen={isOpen}
+          onOpenChange={onOpenChange}
+          placement="top-center"
+        >
+          <ModalContent className="p-8">
+            {(onClose) => (
+              <>
+                <LoginOrRegister onClose={onClose} />
+              </>
+            )}
+          </ModalContent>
+        </Modal>
       </div>
-
-      {renderMain(section)}
-
-      <Toaster />
-      <Modal isOpen={isOpen} onOpenChange={onOpenChange} placement="top-center">
-        <ModalContent className="p-8">
-          {(onClose) => (
-            <>
-              <LoginOrRegister onClose={onClose} />
-            </>
-          )}
-        </ModalContent>
-      </Modal>
     </div>
   );
 }

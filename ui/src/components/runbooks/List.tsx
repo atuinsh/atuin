@@ -36,7 +36,7 @@ const NoteSidebar = () => {
   }, []);
 
   return (
-    <div className="min-w-48 h-screen flex flex-col border-r-1">
+    <div className="w-48 flex flex-col border-r-1">
       <div className="overflow-y-auto flex-grow">
         <Listbox
           hideSelectedIcon
@@ -47,7 +47,7 @@ const NoteSidebar = () => {
           selectedKeys={[currentRunbook]}
           itemClasses={{ base: "data-[selected=true]:bg-gray-200" }}
           topContent={
-            <ButtonGroup>
+            <ButtonGroup className="z-20">
               <Tooltip showArrow content="New Runbook" closeDelay={50}>
                 <Button
                   isIconOnly
