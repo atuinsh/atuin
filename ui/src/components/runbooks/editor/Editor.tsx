@@ -104,7 +104,7 @@ export default function Editor() {
 
   const debouncedOnChange = useDebounceCallback(onChange, 1000);
 
-  const fetchName = (): String => {
+  const fetchName = (): string => {
     // Infer the title from the first text block
 
     let blocks = editor.document;

@@ -14,7 +14,7 @@ import { invoke } from "@tauri-apps/api/core";
 import Terminal from "./terminal.tsx";
 
 import "@xterm/xterm/css/xterm.css";
-import { useStore } from "@/state/store.ts";
+import { AtuinState, useStore } from "@/state/store.ts";
 
 interface RunBlockProps {
   onChange: (val: string) => void;
@@ -37,8 +37,16 @@ const RunBlock = ({
   pty,
 }: RunBlockProps) => {
   const [value, setValue] = useState<String>(code);
-  const cleanupPtyTerm = useStore((store) => store.cleanupPtyTerm);
-  const terminals = useStore((store) => store.terminals);
+  const cleanupPtyTerm = useStore((store: AtuinState) => store.cleanupPtyTerm);
+  const terminals = useStore((store: AtuinState) => store.terminals);
+
+  const [currentRunbook, incRunbookPty, decRunbookPty] = useStore(
+    (store: AtuinState) => [
+      store.currentRunbook,
+      store.incRunbookPty,
+      store.decRunbookPty,
+    ],
+  );
 
   const isRunning = pty !== null;
 
@@ -51,15 +59,18 @@ const RunBlock = ({
     if (isRunning) {
       await invoke("pty_kill", { pid: pty });
 
-      terminals[pty].dispose();
+      terminals[pty].terminal.dispose();
       cleanupPtyTerm(pty);
 
       if (onStop) onStop(pty);
+      decRunbookPty(currentRunbook);
     }
 
     if (!isRunning) {
       let pty = await invoke<string>("pty_open");
       if (onRun) onRun(pty);
+
+      incRunbookPty(currentRunbook);
 
       let val = !value.endsWith("\n") ? value + "\r\n" : value;
       await invoke("pty_write", { pid: pty, data: val });

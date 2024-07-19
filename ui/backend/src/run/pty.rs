@@ -86,9 +86,17 @@ pub(crate) async fn pty_kill(
     pid: uuid::Uuid,
     state: tauri::State<'_, AtuinState>,
 ) -> Result<(), String> {
-    let pty = state.pty_sessions.write().await.remove(&pid).unwrap();
-    pty.kill_child().await.map_err(|e|e.to_string())?;
-    println!("RIP {pid:?}");
+    let pty = state.pty_sessions.write().await.remove(&pid);
+
+    match pty {
+        Some(pty)=>{
+
+            pty.kill_child().await.map_err(|e|e.to_string())?;
+            println!("RIP {pid:?}");
+        }
+        None=>{}
+    }
+
 
     Ok(())
 }

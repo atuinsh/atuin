@@ -19,11 +19,24 @@ import { invoke } from "@tauri-apps/api/core";
 import { sessionToken, settings } from "./client";
 import { getWeekInfo } from "@/lib/utils";
 import Runbook from "./runbooks/runbook";
+import { Terminal } from "@xterm/xterm";
+import { FitAddon } from "@xterm/addon-fit";
+import { WebglAddon } from "@xterm/addon-webgl";
+
+export class TerminalData {
+  terminal: Terminal;
+  fitAddon: FitAddon;
+
+  constructor(terminal: Terminal, fit: FitAddon) {
+    this.terminal = terminal;
+    this.fitAddon = fit;
+  }
+}
 
 // I'll probs want to slice this up at some point, but for now a
 // big blobby lump of state is fine.
 // Totally just hoping that structure will be emergent in the future.
-interface AtuinState {
+export interface AtuinState {
   user: User;
   homeInfo: HomeInfo;
   aliases: Alias[];
@@ -32,7 +45,7 @@ interface AtuinState {
   calendar: any[];
   weekStart: number;
   runbooks: Runbook[];
-  currentRunbook: String | null;
+  currentRunbook: string | null;
 
   refreshHomeInfo: () => void;
   refreshCalendar: () => void;
@@ -45,9 +58,15 @@ interface AtuinState {
 
   setCurrentRunbook: (id: String) => void;
   setPtyTerm: (pty: string, terminal: any) => void;
+  newPtyTerm: (pty: string, runbook: string) => TerminalData;
   cleanupPtyTerm: (pty: string) => void;
 
-  terminals: {};
+  terminals: { [pty: string]: TerminalData };
+
+  // Store ephemeral state for runbooks, that is not persisted to the database
+  runbookInfo: { [runbook: string]: { ptys: number } };
+  incRunbookPty: (runbook: string) => void;
+  decRunbookPty: (runbook: string) => void;
 }
 
 let state = (set: any, get: any): AtuinState => ({
@@ -60,6 +79,7 @@ let state = (set: any, get: any): AtuinState => ({
   runbooks: [],
   currentRunbook: "",
   terminals: {},
+  runbookInfo: {},
 
   weekStart: getWeekInfo().firstDay,
 
@@ -164,7 +184,7 @@ let state = (set: any, get: any): AtuinState => ({
     set({ currentRunbook: id });
   },
 
-  setPtyTerm: (pty: string, terminal: any) => {
+  setPtyTerm: (pty: string, terminal: TerminalData) => {
     set({
       terminals: { ...get().terminals, [pty]: terminal },
     });
@@ -172,14 +192,79 @@ let state = (set: any, get: any): AtuinState => ({
 
   cleanupPtyTerm: (pty: string) => {
     set((state: AtuinState) => {
-      const terminals = Object.keys(state.terminals).reduce((newTerms, key) => {
-        if (key !== pty) {
-          newTerms[key] = state.terminals[key];
-        }
-        return newTerms;
-      }, {});
+      const terminals = Object.keys(state.terminals).reduce(
+        (terms: { [pty: string]: TerminalData }, key) => {
+          if (key !== pty) {
+            terms[key] = state.terminals[key];
+          }
+          return terms;
+        },
+        {},
+      );
 
       return { terminals };
+    });
+  },
+
+  newPtyTerm: (pty: string) => {
+    let terminal = new Terminal();
+
+    // TODO: fallback to canvas, also some sort of setting to allow disabling webgl usage
+    // probs fine for now though, it's widely supported. maybe issues on linux.
+    terminal.loadAddon(new WebglAddon());
+
+    let fitAddon = new FitAddon();
+    terminal.loadAddon(fitAddon);
+
+    const onResize = (size: { cols: number; rows: number }) => {
+      invoke("pty_resize", {
+        pid: pty,
+        cols: size.cols,
+        rows: size.rows,
+      });
+    };
+
+    terminal.onResize(onResize);
+
+    let td = new TerminalData(terminal, fitAddon);
+
+    set({
+      terminals: { ...get().terminals, [pty]: td },
+    });
+
+    return td;
+  },
+
+  incRunbookPty: (runbook: string) => {
+    set((state: AtuinState) => {
+      let oldVal = state.runbookInfo[runbook] || { ptys: 0 };
+      let newVal = { ptys: oldVal.ptys + 1 };
+      console.log(newVal);
+
+      return {
+        runbookInfo: {
+          ...state.runbookInfo,
+          [runbook]: newVal,
+        },
+      };
+    });
+  },
+
+  decRunbookPty: (runbook: string) => {
+    set((state: AtuinState) => {
+      let newVal = state.runbookInfo[runbook];
+      if (!newVal) {
+        return;
+      }
+
+      newVal.ptys--;
+
+      return {
+        runbookInfo: {
+          ...state.runbookInfo,
+          [runbook]: newVal,
+        },
+      };
     });
   },
 });
@@ -187,6 +272,9 @@ let state = (set: any, get: any): AtuinState => ({
 export const useStore = create<AtuinState>()(
   persist(state, {
     name: "atuin-storage",
+
+    // don't serialize the terminals map
+    // it won't work as JSON. too cyclical
     partialize: (state) =>
       Object.fromEntries(
         Object.entries(state).filter(([key]) => !["terminals"].includes(key)),
