@@ -623,7 +623,7 @@ impl State {
         let show_help = settings.show_help && (!compact || f.size().height > 1);
         // This is an OR, as it seems more likely for someone to wish to override
         // tabs unexpectedly being missed, than unexpectedly present.
-        let hide_extra = !settings.always_show_tabs && (compact && f.size().height < 8);
+        let hide_extra = settings.auto_hide_height != 0 && compact && f.size().height <= settings.auto_hide_height;
         let show_tabs = settings.show_tabs && !hide_extra;
         let chunks = Layout::default()
             .direction(Direction::Vertical)
