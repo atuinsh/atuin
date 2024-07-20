@@ -132,15 +132,15 @@ pub fn pretty_print(stats: Stats, ngram_size: usize, theme: &Theme) {
         let in_ten = 10 * count / max;
 
         print!("[");
-        print!("{}", SetForegroundColor(theme.get_error()));
+        print!("{}", SetForegroundColor(theme.get_error().foreground_color.unwrap()));
 
         for i in 0..in_ten {
             if i == 2 {
-                print!("{}", SetForegroundColor(theme.get_warning()));
+                print!("{}", SetForegroundColor(theme.get_warning().foreground_color.unwrap()));
             }
 
             if i == 5 {
-                print!("{}", SetForegroundColor(theme.get_info()));
+                print!("{}", SetForegroundColor(theme.get_info().foreground_color.unwrap()));
             }
 
             print!("▮");

@@ -57,7 +57,7 @@ use crossterm::style::{Color, ContentStyle};
 pub struct Theme {
     pub name: String,
     pub parent: Option<String>,
-    pub colors: HashMap<Meaning, Option<Color>>,
+    pub styles: HashMap<Meaning, ContentStyle>,
 }
 
 // Themes have a number of convenience functions for the most commonly used meanings.
@@ -65,38 +65,38 @@ pub struct Theme {
 // theme-related boilerplate minimal, the convenience functions give a color.
 impl Theme {
     // This is the base "default" color, for general text
-    pub fn get_base(&self) -> Option<Color> {
-        self.colors[&Meaning::Base]
+    pub fn get_base(&self) -> ContentStyle {
+        self.styles[&Meaning::Base]
     }
 
-    pub fn get_info(&self) -> Color {
+    pub fn get_info(&self) -> ContentStyle {
         self.get_alert(log::Level::Info)
     }
 
-    pub fn get_warning(&self) -> Color {
+    pub fn get_warning(&self) -> ContentStyle {
         self.get_alert(log::Level::Warn)
     }
 
-    pub fn get_error(&self) -> Color {
+    pub fn get_error(&self) -> ContentStyle {
         self.get_alert(log::Level::Error)
     }
 
     // The alert meanings may be chosen by the Level enum, rather than the methods above
     // or the full Meaning enum, to simplify programmatic selection of a log-level.
-    pub fn get_alert(&self, severity: log::Level) -> Color {
-        self.colors[ALERT_TYPES.get(&severity).unwrap()].unwrap()
+    pub fn get_alert(&self, severity: log::Level) -> ContentStyle {
+        self.styles[ALERT_TYPES.get(&severity).unwrap()]
     }
 
-    pub fn new(name: String, parent: Option<String>, colors: HashMap<Meaning, Option<Color>>) -> Theme {
+    pub fn new(name: String, parent: Option<String>, styles: HashMap<Meaning, ContentStyle>) -> Theme {
         Theme {
             name,
             parent,
-            colors,
+            styles,
         }
     }
 
     pub fn closest_meaning<'a>(&self, meaning: &'a Meaning) -> &'a Meaning {
-        if self.colors.contains_key(meaning) {
+        if self.styles.contains_key(meaning) {
             meaning
         } else if MEANING_FALLBACKS.contains_key(meaning) {
             self.closest_meaning(&MEANING_FALLBACKS[meaning])
@@ -107,10 +107,11 @@ impl Theme {
 
     // General access - if you have a meaning, this will give you a (crossterm) style
     pub fn as_style(&self, meaning: Meaning) -> ContentStyle {
-        ContentStyle {
-            foreground_color: self.colors[self.closest_meaning(&meaning)],
-            ..ContentStyle::default()
-        }
+        self.styles[self.closest_meaning(&meaning)]
+        // ContentStyle {
+        //     foreground_color: self.styles[self.closest_meaning(&meaning)],
+        //     ..ContentStyle::default()
+        // }
     }
 
     // Turns a map of meanings to colornames into a theme
@@ -121,27 +122,29 @@ impl Theme {
     pub fn from_map(
         name: String,
         parent: Option<&Theme>,
-        colors: HashMap<Meaning, String>,
+        foreground_colors: HashMap<Meaning, String>,
         debug: bool,
     ) -> Theme {
-        let colors: HashMap<Meaning, Option<Color>> = colors
+        let styles: HashMap<Meaning, ContentStyle> = foreground_colors
             .iter()
             .map(|(name, color)| {
                 (
                     *name,
-                    match from_string(color) {
-                        Ok(color) => Some(color),
-                        Err(msg) => {
-                            if debug {
-                                log::warn!("Could not load theme color: {} -> {}", msg, color);
-                            }
-                            Some(Color::Grey)
+                    StyleFactory::from_fg_string(color).unwrap_or_else(|err| {
+                        if debug {
+                            log::warn!(
+                                "Tried to load string as a color unsuccessfully: ({}={}) {}",
+                                name,
+                                color,
+                                err
+                            );
                         }
-                    }
+                        ContentStyle::default()
+                    })
                 )
             })
             .collect();
-        make_theme(name, parent, &colors)
+        make_theme(name, parent, &styles)
     }
 }
 
@@ -177,18 +180,36 @@ fn from_string(name: &str) -> Result<Color, String> {
     }
 }
 
-// For succinctness, if we are confident that the name will be known,
-// this routine is available to keep the code readable
-fn _from_known(name: &str) -> Color {
-    from_string(name).unwrap()
+pub struct StyleFactory {}
+
+impl StyleFactory {
+    fn from_fg_string(name: &str) -> Result<ContentStyle, String> {
+        match from_string(name) {
+            Ok(color) => Ok(Self::from_fg_color(color)),
+            Err(err) => Err(err)
+        }
+    }
+
+    // For succinctness, if we are confident that the name will be known,
+    // this routine is available to keep the code readable
+    fn known_fg_string(name: &str) -> ContentStyle {
+        Self::from_fg_string(name).unwrap()
+    }
+
+    fn from_fg_color(color: Color) -> ContentStyle {
+        ContentStyle {
+            foreground_color: Some(color),
+            ..ContentStyle::default()
+        }
+    }
 }
 
 // Boil down a meaning-color hashmap into a theme, by taking the defaults
 // for any unknown colors
-fn make_theme(name: String, parent: Option<&Theme>, overrides: &HashMap<Meaning, Option<Color>>) -> Theme {
-    let colors = match parent {
-        Some(theme) => Box::new(theme.colors.clone()),
-        None => Box::new(DEFAULT_THEME.colors.clone()),
+fn make_theme(name: String, parent: Option<&Theme>, overrides: &HashMap<Meaning, ContentStyle>) -> Theme {
+    let styles = match parent {
+        Some(theme) => Box::new(theme.styles.clone()),
+        None => Box::new(DEFAULT_THEME.styles.clone()),
     }
     .iter()
     .map(|(name, color)| match overrides.get(name) {
@@ -196,7 +217,7 @@ fn make_theme(name: String, parent: Option<&Theme>, overrides: &HashMap<Meaning,
         None => (*name, *color),
     })
     .collect();
-    Theme::new(name, parent.map(|p| p.name.clone()), colors)
+    Theme::new(name, parent.map(|p| p.name.clone()), styles)
 }
 
 // Built-in themes. Rather than having extra files added before any theming
@@ -222,14 +243,14 @@ lazy_static! {
             "default".to_string(),
             None,
             HashMap::from([
-                (Meaning::AlertError, Some(Color::Red)),
-                (Meaning::AlertWarn, Some(Color::Yellow)),
-                (Meaning::AlertInfo, Some(Color::Green)),
-                (Meaning::Annotation, Some(Color::DarkGrey)),
-                (Meaning::Guidance, Some(Color::Blue)),
-                (Meaning::Important, Some(Color::White)),
-                (Meaning::Muted, Some(Color::Grey)),
-                (Meaning::Base, None),
+                (Meaning::AlertError, StyleFactory::from_fg_color(Color::Red)),
+                (Meaning::AlertWarn, StyleFactory::from_fg_color(Color::Yellow)),
+                (Meaning::AlertInfo, StyleFactory::from_fg_color(Color::Green)),
+                (Meaning::Annotation, StyleFactory::from_fg_color(Color::DarkGrey)),
+                (Meaning::Guidance, StyleFactory::from_fg_color(Color::Blue)),
+                (Meaning::Important, StyleFactory::from_fg_color(Color::White)),
+                (Meaning::Muted, StyleFactory::from_fg_color(Color::Grey)),
+                (Meaning::Base, ContentStyle::default()),
             ])
         )
     };
@@ -239,22 +260,22 @@ lazy_static! {
             (
                 "autumn",
                 HashMap::from([
-                    (Meaning::AlertError, Some(_from_known("saddlebrown"))),
-                    (Meaning::AlertWarn, Some(_from_known("darkorange"))),
-                    (Meaning::AlertInfo, Some(_from_known("gold"))),
-                    (Meaning::Annotation, Some(Color::DarkGrey)),
-                    (Meaning::Guidance, Some(_from_known("brown"))),
+                    (Meaning::AlertError, StyleFactory::known_fg_string("saddlebrown")),
+                    (Meaning::AlertWarn, StyleFactory::known_fg_string("darkorange")),
+                    (Meaning::AlertInfo, StyleFactory::known_fg_string("gold")),
+                    (Meaning::Annotation, StyleFactory::from_fg_color(Color::DarkGrey)),
+                    (Meaning::Guidance, StyleFactory::known_fg_string("brown")),
                 ]),
             ),
             (
                 "marine",
                 HashMap::from([
-                    (Meaning::AlertError, Some(_from_known("yellowgreen"))),
-                    (Meaning::AlertWarn, Some(_from_known("cyan"))),
-                    (Meaning::AlertInfo, Some(_from_known("turquoise"))),
-                    (Meaning::Annotation, Some(_from_known("steelblue"))),
-                    (Meaning::Base, Some(_from_known("lightsteelblue"))),
-                    (Meaning::Guidance, Some(_from_known("teal"))),
+                    (Meaning::AlertError, StyleFactory::known_fg_string("yellowgreen")),
+                    (Meaning::AlertWarn, StyleFactory::known_fg_string("cyan")),
+                    (Meaning::AlertInfo, StyleFactory::known_fg_string("turquoise")),
+                    (Meaning::Annotation, StyleFactory::known_fg_string("steelblue")),
+                    (Meaning::Base, StyleFactory::known_fg_string("lightsteelblue")),
+                    (Meaning::Guidance, StyleFactory::known_fg_string("teal")),
                 ]),
             ),
         ])
@@ -413,7 +434,7 @@ mod theme_tests {
         let mytheme = Theme::new(
             "mytheme".to_string(),
             None,
-            HashMap::from([(Meaning::AlertError, Some(_from_known("yellowgreen")))]),
+            HashMap::from([(Meaning::AlertError, StyleFactory::known_fg_string("yellowgreen"))]),
         );
         manager.loaded_themes.insert("mytheme".to_string(), mytheme);
         let theme = manager.load_theme("mytheme", None);
@@ -429,7 +450,7 @@ mod theme_tests {
 
         // We use title as an example of a meaning that is not defined
         // even in the base theme.
-        assert!(!DEFAULT_THEME.colors.contains_key(&Meaning::Title));
+        assert!(!DEFAULT_THEME.styles.contains_key(&Meaning::Title));
 
         let config = Config::builder()
             .add_source(ConfigFile::from_str(
@@ -455,16 +476,16 @@ mod theme_tests {
             from_string("white").ok()
         );
 
-        // Falls back to grey as general "unknown" color.
+        // Does not fall back to any color.
         assert_eq!(
             theme.as_style(Meaning::AlertInfo).foreground_color,
-            Some(Color::Grey)
+            None
         );
 
-        // Unless it is the base, which may be None.
+        // Even for the base.
         assert_eq!(
-            theme.as_style(Meaning::AlertInfo).foreground_color,
-            Some(Color::Grey)
+            theme.as_style(Meaning::Base).foreground_color,
+            None
         );
 
         // Falls back to red as meaning missing from theme, so picks base default.
@@ -515,11 +536,11 @@ mod theme_tests {
     fn test_can_get_colors_via_convenience_functions() {
         let mut manager = ThemeManager::new(Some(true), Some("".to_string()));
         let theme = manager.load_theme("default", None);
-        assert_eq!(theme.get_error(), Color::Red);
-        assert_eq!(theme.get_warning(), Color::Yellow);
-        assert_eq!(theme.get_info(), Color::Green);
-        assert_eq!(theme.get_base(), None);
-        assert_eq!(theme.get_alert(log::Level::Error), Color::Red)
+        assert_eq!(theme.get_error().foreground_color.unwrap(), Color::Red);
+        assert_eq!(theme.get_warning().foreground_color.unwrap(), Color::Yellow);
+        assert_eq!(theme.get_info().foreground_color.unwrap(), Color::Green);
+        assert_eq!(theme.get_base().foreground_color, None);
+        assert_eq!(theme.get_alert(log::Level::Error).foreground_color.unwrap(), Color::Red)
     }
 
     #[test]
@@ -658,7 +679,7 @@ mod theme_tests {
                     assert_eq!(captured_logs[0].level, log::Level::Warn);
                     assert_eq!(
                         captured_logs[1].body,
-                        "Could not load theme color: No such color in palette -> xinetic"
+                        "Tried to load string as a color unsuccessfully: (AlertInfo=xinetic) No such color in palette"
                     );
                     assert_eq!(captured_logs[1].level, log::Level::Warn)
                 } else {

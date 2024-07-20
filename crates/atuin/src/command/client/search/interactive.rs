@@ -770,7 +770,7 @@ impl State {
                 format!("Atuin v{VERSION} - UPGRADE"),
                 Style::default()
                     .add_modifier(Modifier::BOLD)
-                    .fg(theme.get_error().into()),
+                    .fg(theme.get_error().foreground_color.unwrap().into()),
             )))
         } else {
             let style: Style = theme.as_style(Meaning::Base).into();
