@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use crossterm::style::{ResetColor, SetAttribute, SetForegroundColor};
+use crossterm::style::{ResetColor, SetAttribute, SetForegroundColor, Color};
 use serde::{Deserialize, Serialize};
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -126,21 +126,33 @@ pub fn pretty_print(stats: Stats, ngram_size: usize, theme: &Theme) {
         });
 
     for (command, count) in stats.top {
-        let gray = SetForegroundColor(theme.as_style(Meaning::Muted).foreground_color.unwrap());
+        let gray = SetForegroundColor(match theme.as_style(Meaning::Muted).foreground_color {
+            Some(color) => color,
+            None => Color::Grey
+        });
         let bold = SetAttribute(crossterm::style::Attribute::Bold);
 
         let in_ten = 10 * count / max;
 
         print!("[");
-        print!("{}", SetForegroundColor(theme.get_error().foreground_color.unwrap()));
+        print!("{}", SetForegroundColor(match theme.get_error().foreground_color {
+            Some(color) => color,
+            None => Color::Red
+        }));
 
         for i in 0..in_ten {
             if i == 2 {
-                print!("{}", SetForegroundColor(theme.get_warning().foreground_color.unwrap()));
+                print!("{}", SetForegroundColor(match theme.get_warning().foreground_color {
+                    Some(color) => color,
+                    None => Color::Yellow
+                }));
             }
 
             if i == 5 {
-                print!("{}", SetForegroundColor(theme.get_info().foreground_color.unwrap()));
+                print!("{}", SetForegroundColor(match theme.get_info().foreground_color {
+                    Some(color) => color,
+                    None => Color::Green
+                }));
             }
 
             print!("▮");

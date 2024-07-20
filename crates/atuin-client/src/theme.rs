@@ -108,10 +108,6 @@ impl Theme {
     // General access - if you have a meaning, this will give you a (crossterm) style
     pub fn as_style(&self, meaning: Meaning) -> ContentStyle {
         self.styles[self.closest_meaning(&meaning)]
-        // ContentStyle {
-        //     foreground_color: self.styles[self.closest_meaning(&meaning)],
-        //     ..ContentStyle::default()
-        // }
     }
 
     // Turns a map of meanings to colornames into a theme
