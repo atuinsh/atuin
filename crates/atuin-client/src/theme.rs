@@ -43,7 +43,7 @@ pub struct ThemeConfig {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ThemeDefinitionConfigBlock {
-    /// Name of theme ("" for base)
+    /// Name of theme ("default" for base)
     pub name: String,
 
     /// Whether any theme should be treated as a parent _if available_
@@ -219,7 +219,7 @@ lazy_static! {
     };
     static ref DEFAULT_THEME: Theme = {
         Theme::new(
-            "".to_string(),
+            "default".to_string(),
             None,
             HashMap::from([
                 (Meaning::AlertError, Some(Color::Red)),
@@ -235,7 +235,7 @@ lazy_static! {
     };
     static ref BUILTIN_THEMES: HashMap<&'static str, Theme> = {
         HashMap::from([
-            ("", HashMap::new()),
+            ("default", HashMap::new()),
             (
                 "autumn",
                 HashMap::from([
@@ -386,7 +386,7 @@ impl ThemeManager {
                 Ok(theme) => theme,
                 Err(err) => {
                     log::warn!("Could not load theme {}: {}", name, err);
-                    built_ins.get("").unwrap()
+                    built_ins.get("default").unwrap()
                 }
             },
         }
@@ -429,7 +429,7 @@ mod theme_tests {
 
         // We use title as an example of a meaning that is not defined
         // even in the base theme.
-        assert!(!BUILTIN_THEMES[""].colors.contains_key(&Meaning::Title));
+        assert!(!DEFAULT_THEME.colors.contains_key(&Meaning::Title));
 
         let config = Config::builder()
             .add_source(ConfigFile::from_str(
@@ -514,7 +514,7 @@ mod theme_tests {
     #[test]
     fn test_can_get_colors_via_convenience_functions() {
         let mut manager = ThemeManager::new(Some(true), Some("".to_string()));
-        let theme = manager.load_theme("", None);
+        let theme = manager.load_theme("default", None);
         assert_eq!(theme.get_error(), Color::Red);
         assert_eq!(theme.get_warning(), Color::Yellow);
         assert_eq!(theme.get_info(), Color::Green);

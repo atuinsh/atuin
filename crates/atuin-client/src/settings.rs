@@ -340,7 +340,7 @@ pub struct Preview {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Theme {
-    /// Name of desired theme ("" for base)
+    /// Name of desired theme ("default" for base)
     pub name: String,
 
     /// Whether any available additional theme debug should be shown
@@ -756,7 +756,7 @@ impl Settings {
             .set_default("daemon.socket_path", socket_path.to_str())?
             .set_default("daemon.systemd_socket", false)?
             .set_default("daemon.tcp_port", 8889)?
-            .set_default("theme.name", "")?
+            .set_default("theme.name", "default")?
             .set_default("theme.debug", None::<bool>)?
             .set_default(
                 "prefers_reduced_motion",
