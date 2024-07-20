@@ -773,11 +773,10 @@ impl State {
                     .fg(theme.get_error().into()),
             )))
         } else {
+            let style: Style = theme.as_style(Meaning::Base).into();
             Paragraph::new(Text::from(Span::styled(
                 format!("Atuin v{VERSION}"),
-                Style::default()
-                    .add_modifier(Modifier::BOLD)
-                    .fg(theme.get_base().into()),
+                style.add_modifier(Modifier::BOLD)
             )))
         };
         title.alignment(Alignment::Left)

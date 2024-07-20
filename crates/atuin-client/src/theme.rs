@@ -29,6 +29,7 @@ pub enum Meaning {
     Guidance,
     Important,
     Title,
+    Muted,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -56,7 +57,7 @@ use crossterm::style::{Color, ContentStyle};
 pub struct Theme {
     pub name: String,
     pub parent: Option<String>,
-    pub colors: HashMap<Meaning, Color>,
+    pub colors: HashMap<Meaning, Option<Color>>,
 }
 
 // Themes have a number of convenience functions for the most commonly used meanings.
@@ -64,7 +65,7 @@ pub struct Theme {
 // theme-related boilerplate minimal, the convenience functions give a color.
 impl Theme {
     // This is the base "default" color, for general text
-    pub fn get_base(&self) -> Color {
+    pub fn get_base(&self) -> Option<Color> {
         self.colors[&Meaning::Base]
     }
 
@@ -83,10 +84,10 @@ impl Theme {
     // The alert meanings may be chosen by the Level enum, rather than the methods above
     // or the full Meaning enum, to simplify programmatic selection of a log-level.
     pub fn get_alert(&self, severity: log::Level) -> Color {
-        self.colors[ALERT_TYPES.get(&severity).unwrap()]
+        self.colors[ALERT_TYPES.get(&severity).unwrap()].unwrap()
     }
 
-    pub fn new(name: String, parent: Option<String>, colors: HashMap<Meaning, Color>) -> Theme {
+    pub fn new(name: String, parent: Option<String>, colors: HashMap<Meaning, Option<Color>>) -> Theme {
         Theme {
             name,
             parent,
@@ -107,7 +108,7 @@ impl Theme {
     // General access - if you have a meaning, this will give you a (crossterm) style
     pub fn as_style(&self, meaning: Meaning) -> ContentStyle {
         ContentStyle {
-            foreground_color: Some(self.colors[self.closest_meaning(&meaning)]),
+            foreground_color: self.colors[self.closest_meaning(&meaning)],
             ..ContentStyle::default()
         }
     }
@@ -123,17 +124,20 @@ impl Theme {
         colors: HashMap<Meaning, String>,
         debug: bool,
     ) -> Theme {
-        let colors: HashMap<Meaning, Color> = colors
+        let colors: HashMap<Meaning, Option<Color>> = colors
             .iter()
             .map(|(name, color)| {
                 (
                     *name,
-                    from_string(color).unwrap_or_else(|msg: String| {
-                        if debug {
-                            log::warn!("Could not load theme color: {} -> {}", msg, color);
+                    match from_string(color) {
+                        Ok(color) => Some(color),
+                        Err(msg) => {
+                            if debug {
+                                log::warn!("Could not load theme color: {} -> {}", msg, color);
+                            }
+                            Some(Color::Grey)
                         }
-                        Color::Grey
-                    }),
+                    }
                 )
             })
             .collect();
@@ -181,17 +185,18 @@ fn _from_known(name: &str) -> Color {
 
 // Boil down a meaning-color hashmap into a theme, by taking the defaults
 // for any unknown colors
-fn make_theme(name: String, parent: Option<&Theme>, overrides: &HashMap<Meaning, Color>) -> Theme {
+fn make_theme(name: String, parent: Option<&Theme>, overrides: &HashMap<Meaning, Option<Color>>) -> Theme {
     let colors = match parent {
         Some(theme) => Box::new(theme.colors.clone()),
         None => Box::new(HashMap::from([
-            (Meaning::AlertError, Color::Red),
-            (Meaning::AlertWarn, Color::Yellow),
-            (Meaning::AlertInfo, Color::Green),
-            (Meaning::Annotation, Color::DarkGrey),
-            (Meaning::Guidance, Color::Blue),
-            (Meaning::Important, Color::White),
-            (Meaning::Base, Color::Grey),
+            (Meaning::AlertError, Some(Color::Red)),
+            (Meaning::AlertWarn, Some(Color::Yellow)),
+            (Meaning::AlertInfo, Some(Color::Green)),
+            (Meaning::Annotation, Some(Color::DarkGrey)),
+            (Meaning::Guidance, Some(Color::Blue)),
+            (Meaning::Important, Some(Color::White)),
+            (Meaning::Muted, Some(Color::Grey)),
+            (Meaning::Base, None),
         ])),
     }
     .iter()
@@ -227,22 +232,22 @@ lazy_static! {
             (
                 "autumn",
                 HashMap::from([
-                    (Meaning::AlertError, _from_known("saddlebrown")),
-                    (Meaning::AlertWarn, _from_known("darkorange")),
-                    (Meaning::AlertInfo, _from_known("gold")),
-                    (Meaning::Annotation, Color::DarkGrey),
-                    (Meaning::Guidance, _from_known("brown")),
+                    (Meaning::AlertError, Some(_from_known("saddlebrown"))),
+                    (Meaning::AlertWarn, Some(_from_known("darkorange"))),
+                    (Meaning::AlertInfo, Some(_from_known("gold"))),
+                    (Meaning::Annotation, Some(Color::DarkGrey)),
+                    (Meaning::Guidance, Some(_from_known("brown"))),
                 ]),
             ),
             (
                 "marine",
                 HashMap::from([
-                    (Meaning::AlertError, _from_known("yellowgreen")),
-                    (Meaning::AlertWarn, _from_known("cyan")),
-                    (Meaning::AlertInfo, _from_known("turquoise")),
-                    (Meaning::Annotation, _from_known("steelblue")),
-                    (Meaning::Base, _from_known("lightsteelblue")),
-                    (Meaning::Guidance, _from_known("teal")),
+                    (Meaning::AlertError, Some(_from_known("yellowgreen"))),
+                    (Meaning::AlertWarn, Some(_from_known("cyan"))),
+                    (Meaning::AlertInfo, Some(_from_known("turquoise"))),
+                    (Meaning::Annotation, Some(_from_known("steelblue"))),
+                    (Meaning::Base, Some(_from_known("lightsteelblue"))),
+                    (Meaning::Guidance, Some(_from_known("teal"))),
                 ]),
             ),
         ])
@@ -401,7 +406,7 @@ mod theme_tests {
         let mytheme = Theme::new(
             "mytheme".to_string(),
             None,
-            HashMap::from([(Meaning::AlertError, _from_known("yellowgreen"))]),
+            HashMap::from([(Meaning::AlertError, Some(_from_known("yellowgreen")))]),
         );
         manager.loaded_themes.insert("mytheme".to_string(), mytheme);
         let theme = manager.load_theme("mytheme", None);
@@ -444,6 +449,12 @@ mod theme_tests {
         );
 
         // Falls back to grey as general "unknown" color.
+        assert_eq!(
+            theme.as_style(Meaning::AlertInfo).foreground_color,
+            Some(Color::Grey)
+        );
+
+        // Unless it is the base, which may be None.
         assert_eq!(
             theme.as_style(Meaning::AlertInfo).foreground_color,
             Some(Color::Grey)
@@ -500,7 +511,7 @@ mod theme_tests {
         assert_eq!(theme.get_error(), Color::Red);
         assert_eq!(theme.get_warning(), Color::Yellow);
         assert_eq!(theme.get_info(), Color::Green);
-        assert_eq!(theme.get_base(), Color::Grey);
+        assert_eq!(theme.get_base(), None);
         assert_eq!(theme.get_alert(log::Level::Error), Color::Red)
     }
 

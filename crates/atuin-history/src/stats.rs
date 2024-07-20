@@ -4,7 +4,7 @@ use crossterm::style::{ResetColor, SetAttribute, SetForegroundColor};
 use serde::{Deserialize, Serialize};
 use unicode_segmentation::UnicodeSegmentation;
 
-use atuin_client::{history::History, settings::Settings, theme::Theme};
+use atuin_client::{history::History, settings::Settings, theme::Theme, theme::Meaning};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Stats {
@@ -126,7 +126,7 @@ pub fn pretty_print(stats: Stats, ngram_size: usize, theme: &Theme) {
         });
 
     for (command, count) in stats.top {
-        let gray = SetForegroundColor(theme.get_base());
+        let gray = SetForegroundColor(theme.as_style(Meaning::Muted).foreground_color.unwrap());
         let bold = SetAttribute(crossterm::style::Attribute::Bold);
 
         let in_ten = 10 * count / max;
