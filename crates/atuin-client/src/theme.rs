@@ -188,16 +188,7 @@ fn _from_known(name: &str) -> Color {
 fn make_theme(name: String, parent: Option<&Theme>, overrides: &HashMap<Meaning, Option<Color>>) -> Theme {
     let colors = match parent {
         Some(theme) => Box::new(theme.colors.clone()),
-        None => Box::new(HashMap::from([
-            (Meaning::AlertError, Some(Color::Red)),
-            (Meaning::AlertWarn, Some(Color::Yellow)),
-            (Meaning::AlertInfo, Some(Color::Green)),
-            (Meaning::Annotation, Some(Color::DarkGrey)),
-            (Meaning::Guidance, Some(Color::Blue)),
-            (Meaning::Important, Some(Color::White)),
-            (Meaning::Muted, Some(Color::Grey)),
-            (Meaning::Base, None),
-        ])),
+        None => Box::new(DEFAULT_THEME.colors.clone()),
     }
     .iter()
     .map(|(name, color)| match overrides.get(name) {
@@ -225,6 +216,22 @@ lazy_static! {
             (Meaning::Annotation, Meaning::AlertInfo),
             (Meaning::Title, Meaning::Important),
         ])
+    };
+    static ref DEFAULT_THEME: Theme = {
+        Theme::new(
+            "".to_string(),
+            None,
+            HashMap::from([
+                (Meaning::AlertError, Some(Color::Red)),
+                (Meaning::AlertWarn, Some(Color::Yellow)),
+                (Meaning::AlertInfo, Some(Color::Green)),
+                (Meaning::Annotation, Some(Color::DarkGrey)),
+                (Meaning::Guidance, Some(Color::Blue)),
+                (Meaning::Important, Some(Color::White)),
+                (Meaning::Muted, Some(Color::Grey)),
+                (Meaning::Base, None),
+            ])
+        )
     };
     static ref BUILTIN_THEMES: HashMap<&'static str, Theme> = {
         HashMap::from([
