@@ -119,7 +119,7 @@ impl Theme {
     // but we do not have this on in general, as it could print unfiltered text to the terminal
     // from a theme TOML file. However, it will always return a theme, falling back to
     // defaults on error, so that a TOML file does not break loading
-    pub fn from_map(
+    pub fn from_foreground_colors(
         name: String,
         parent: Option<&Theme>,
         foreground_colors: HashMap<Meaning, String>,
@@ -144,7 +144,23 @@ impl Theme {
                 )
             })
             .collect();
-        make_theme(name, parent, &styles)
+        Theme::from_map(name, parent, &styles)
+    }
+
+    // Boil down a meaning-color hashmap into a theme, by taking the defaults
+    // for any unknown colors
+    fn from_map(name: String, parent: Option<&Theme>, overrides: &HashMap<Meaning, ContentStyle>) -> Theme {
+        let styles = match parent {
+            Some(theme) => Box::new(theme.styles.clone()),
+            None => Box::new(DEFAULT_THEME.styles.clone()),
+        }
+        .iter()
+        .map(|(name, color)| match overrides.get(name) {
+            Some(value) => (*name, *value),
+            None => (*name, *color),
+        })
+        .collect();
+        Theme::new(name, parent.map(|p| p.name.clone()), styles)
     }
 }
 
@@ -202,22 +218,6 @@ impl StyleFactory {
             ..ContentStyle::default()
         }
     }
-}
-
-// Boil down a meaning-color hashmap into a theme, by taking the defaults
-// for any unknown colors
-fn make_theme(name: String, parent: Option<&Theme>, overrides: &HashMap<Meaning, ContentStyle>) -> Theme {
-    let styles = match parent {
-        Some(theme) => Box::new(theme.styles.clone()),
-        None => Box::new(DEFAULT_THEME.styles.clone()),
-    }
-    .iter()
-    .map(|(name, color)| match overrides.get(name) {
-        Some(value) => (*name, *value),
-        None => (*name, *color),
-    })
-    .collect();
-    Theme::new(name, parent.map(|p| p.name.clone()), styles)
 }
 
 // Built-in themes. Rather than having extra files added before any theming
@@ -280,7 +280,7 @@ lazy_static! {
             ),
         ])
         .iter()
-        .map(|(name, theme)| (*name, make_theme(name.to_string(), None, theme)))
+        .map(|(name, theme)| (*name, Theme::from_map(name.to_string(), None, theme)))
         .collect()
     };
 }
@@ -387,7 +387,7 @@ impl ThemeManager {
             );
         }
 
-        let theme = Theme::from_map(theme_config.theme.name, parent, colors, debug);
+        let theme = Theme::from_foreground_colors(theme_config.theme.name, parent, colors, debug);
         let name = name.to_string();
         self.loaded_themes.insert(name.clone(), theme);
         let theme = self.loaded_themes.get(&name).unwrap();
