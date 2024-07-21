@@ -3,6 +3,7 @@ use lazy_static::lazy_static;
 use log;
 use palette::named;
 use serde::{Deserialize, Serialize};
+use serde_json;
 use std::collections::HashMap;
 use std::error;
 use std::io::{Error, ErrorKind};
@@ -173,30 +174,40 @@ fn from_string(name: &str) -> Result<Color, String> {
     if name.is_empty() {
         return Err("Empty string".into());
     }
-    if let Some(name) = name.strip_prefix('#') {
-        let hexcode = name;
-        let vec: Vec<u8> = hexcode
-            .chars()
-            .collect::<Vec<char>>()
-            .chunks(2)
-            .map(|pair| u8::from_str_radix(pair.iter().collect::<String>().as_str(), 16))
-            .filter_map(|n| n.ok())
-            .collect();
-        if vec.len() != 3 {
-            return Err("Could not parse 3 hex values from string".into());
+    let first_char = name.chars().next().unwrap();
+    match first_char {
+        '#' => {
+            let hexcode = &name[1..];
+            let vec: Vec<u8> = hexcode
+                .chars()
+                .collect::<Vec<char>>()
+                .chunks(2)
+                .map(|pair| u8::from_str_radix(pair.iter().collect::<String>().as_str(), 16))
+                .filter_map(|n| n.ok())
+                .collect();
+            if vec.len() != 3 {
+                return Err("Could not parse 3 hex values from string".into());
+            }
+            Ok(Color::Rgb {
+                r: vec[0],
+                g: vec[1],
+                b: vec[2],
+            })
         }
-        Ok(Color::Rgb {
-            r: vec[0],
-            g: vec[1],
-            b: vec[2],
-        })
-    } else {
-        let srgb = named::from_str(name).ok_or("No such color in palette")?;
-        Ok(Color::Rgb {
-            r: srgb.red,
-            g: srgb.green,
-            b: srgb.blue,
-        })
+        '@' => {
+            // For full fleixibility, we need to use serde_json, given
+            // crossterm's approach.
+            serde_json::from_str::<Color>(format!("\"{}\"", &name[1..]).as_str())
+                .map_err(|_| format!("Could not convert color name {} to Crossterm color", name))
+        }
+        _ => {
+            let srgb = named::from_str(name).ok_or("No such color in palette")?;
+            Ok(Color::Rgb {
+                r: srgb.red,
+                g: srgb.green,
+                b: srgb.blue,
+            })
+        }
     }
 }
 
@@ -759,5 +770,27 @@ mod theme_tests {
                 Err("Could not parse 3 hex values from string".into())
             );
         });
+
+        assert_eq!(from_string("@dark_grey").unwrap(), Color::DarkGrey);
+        assert_eq!(
+            from_string("@rgb_(255,255,255)").unwrap(),
+            Color::Rgb {
+                r: 255,
+                g: 255,
+                b: 255
+            }
+        );
+        assert_eq!(from_string("@ansi_(255)").unwrap(), Color::AnsiValue(255));
+        ["@", "@DarkGray", "@Dark 4ay", "@ansi(256)"]
+            .iter()
+            .for_each(|inp| {
+                assert_eq!(
+                    from_string(inp),
+                    Err(format!(
+                        "Could not convert color name {} to Crossterm color",
+                        inp
+                    ))
+                );
+            });
     }
 }
