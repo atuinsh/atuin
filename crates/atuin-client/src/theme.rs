@@ -87,7 +87,11 @@ impl Theme {
         self.styles[ALERT_TYPES.get(&severity).unwrap()]
     }
 
-    pub fn new(name: String, parent: Option<String>, styles: HashMap<Meaning, ContentStyle>) -> Theme {
+    pub fn new(
+        name: String,
+        parent: Option<String>,
+        styles: HashMap<Meaning, ContentStyle>,
+    ) -> Theme {
         Theme {
             name,
             parent,
@@ -136,7 +140,7 @@ impl Theme {
                             );
                         }
                         ContentStyle::default()
-                    })
+                    }),
                 )
             })
             .collect();
@@ -145,7 +149,11 @@ impl Theme {
 
     // Boil down a meaning-color hashmap into a theme, by taking the defaults
     // for any unknown colors
-    fn from_map(name: String, parent: Option<&Theme>, overrides: &HashMap<Meaning, ContentStyle>) -> Theme {
+    fn from_map(
+        name: String,
+        parent: Option<&Theme>,
+        overrides: &HashMap<Meaning, ContentStyle>,
+    ) -> Theme {
         let styles = match parent {
             Some(theme) => Box::new(theme.styles.clone()),
             None => Box::new(DEFAULT_THEME.styles.clone()),
@@ -198,7 +206,7 @@ impl StyleFactory {
     fn from_fg_string(name: &str) -> Result<ContentStyle, String> {
         match from_string(name) {
             Ok(color) => Ok(Self::from_fg_color(color)),
-            Err(err) => Err(err)
+            Err(err) => Err(err),
         }
     }
 
@@ -240,14 +248,26 @@ lazy_static! {
             None,
             HashMap::from([
                 (Meaning::AlertError, StyleFactory::from_fg_color(Color::Red)),
-                (Meaning::AlertWarn, StyleFactory::from_fg_color(Color::Yellow)),
-                (Meaning::AlertInfo, StyleFactory::from_fg_color(Color::Green)),
-                (Meaning::Annotation, StyleFactory::from_fg_color(Color::DarkGrey)),
+                (
+                    Meaning::AlertWarn,
+                    StyleFactory::from_fg_color(Color::Yellow),
+                ),
+                (
+                    Meaning::AlertInfo,
+                    StyleFactory::from_fg_color(Color::Green),
+                ),
+                (
+                    Meaning::Annotation,
+                    StyleFactory::from_fg_color(Color::DarkGrey),
+                ),
                 (Meaning::Guidance, StyleFactory::from_fg_color(Color::Blue)),
-                (Meaning::Important, StyleFactory::from_fg_color(Color::White)),
+                (
+                    Meaning::Important,
+                    StyleFactory::from_fg_color(Color::White),
+                ),
                 (Meaning::Muted, StyleFactory::from_fg_color(Color::Grey)),
                 (Meaning::Base, ContentStyle::default()),
-            ])
+            ]),
         )
     };
     static ref BUILTIN_THEMES: HashMap<&'static str, Theme> = {
@@ -256,21 +276,42 @@ lazy_static! {
             (
                 "autumn",
                 HashMap::from([
-                    (Meaning::AlertError, StyleFactory::known_fg_string("saddlebrown")),
-                    (Meaning::AlertWarn, StyleFactory::known_fg_string("darkorange")),
+                    (
+                        Meaning::AlertError,
+                        StyleFactory::known_fg_string("saddlebrown"),
+                    ),
+                    (
+                        Meaning::AlertWarn,
+                        StyleFactory::known_fg_string("darkorange"),
+                    ),
                     (Meaning::AlertInfo, StyleFactory::known_fg_string("gold")),
-                    (Meaning::Annotation, StyleFactory::from_fg_color(Color::DarkGrey)),
+                    (
+                        Meaning::Annotation,
+                        StyleFactory::from_fg_color(Color::DarkGrey),
+                    ),
                     (Meaning::Guidance, StyleFactory::known_fg_string("brown")),
                 ]),
             ),
             (
                 "marine",
                 HashMap::from([
-                    (Meaning::AlertError, StyleFactory::known_fg_string("yellowgreen")),
+                    (
+                        Meaning::AlertError,
+                        StyleFactory::known_fg_string("yellowgreen"),
+                    ),
                     (Meaning::AlertWarn, StyleFactory::known_fg_string("cyan")),
-                    (Meaning::AlertInfo, StyleFactory::known_fg_string("turquoise")),
-                    (Meaning::Annotation, StyleFactory::known_fg_string("steelblue")),
-                    (Meaning::Base, StyleFactory::known_fg_string("lightsteelblue")),
+                    (
+                        Meaning::AlertInfo,
+                        StyleFactory::known_fg_string("turquoise"),
+                    ),
+                    (
+                        Meaning::Annotation,
+                        StyleFactory::known_fg_string("steelblue"),
+                    ),
+                    (
+                        Meaning::Base,
+                        StyleFactory::known_fg_string("lightsteelblue"),
+                    ),
                     (Meaning::Guidance, StyleFactory::known_fg_string("teal")),
                 ]),
             ),
@@ -430,7 +471,10 @@ mod theme_tests {
         let mytheme = Theme::new(
             "mytheme".to_string(),
             None,
-            HashMap::from([(Meaning::AlertError, StyleFactory::known_fg_string("yellowgreen"))]),
+            HashMap::from([(
+                Meaning::AlertError,
+                StyleFactory::known_fg_string("yellowgreen"),
+            )]),
         );
         manager.loaded_themes.insert("mytheme".to_string(), mytheme);
         let theme = manager.load_theme("mytheme", None);
@@ -473,16 +517,10 @@ mod theme_tests {
         );
 
         // Does not fall back to any color.
-        assert_eq!(
-            theme.as_style(Meaning::AlertInfo).foreground_color,
-            None
-        );
+        assert_eq!(theme.as_style(Meaning::AlertInfo).foreground_color, None);
 
         // Even for the base.
-        assert_eq!(
-            theme.as_style(Meaning::Base).foreground_color,
-            None
-        );
+        assert_eq!(theme.as_style(Meaning::Base).foreground_color, None);
 
         // Falls back to red as meaning missing from theme, so picks base default.
         assert_eq!(
@@ -536,7 +574,10 @@ mod theme_tests {
         assert_eq!(theme.get_warning().foreground_color.unwrap(), Color::Yellow);
         assert_eq!(theme.get_info().foreground_color.unwrap(), Color::Green);
         assert_eq!(theme.get_base().foreground_color, None);
-        assert_eq!(theme.get_alert(log::Level::Error).foreground_color.unwrap(), Color::Red)
+        assert_eq!(
+            theme.get_alert(log::Level::Error).foreground_color.unwrap(),
+            Color::Red
+        )
     }
 
     #[test]

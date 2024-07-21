@@ -775,7 +775,7 @@ impl State {
             let style: Style = theme.as_style(Meaning::Base).into();
             Paragraph::new(Text::from(Span::styled(
                 format!("Atuin v{VERSION}"),
-                style.add_modifier(Modifier::BOLD)
+                style.add_modifier(Modifier::BOLD),
             )))
         };
         title.alignment(Alignment::Left)
