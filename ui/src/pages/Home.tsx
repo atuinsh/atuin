@@ -52,7 +52,7 @@ function TopChart({ chartData }: any) {
   const chartConfig = {
     command: {
       label: "Command",
-      color: "#7ac7c4",
+      color: "#c4edde",
     },
   } satisfies ChartConfig;
 
@@ -77,7 +77,7 @@ function TopChart({ chartData }: any) {
           hide
         />
         <XAxis dataKey="count" type="number" hide />
-        <Bar dataKey="count" layout="vertical" fill="#7ac7c4" radius={4}>
+        <Bar dataKey="count" layout="vertical" fill="#c4edde" radius={4}>
           <LabelList
             dataKey="command"
             position="insideLeft"
@@ -274,7 +274,7 @@ export default function Home() {
             <h2 className="uppercase text-gray-500">Recent commands</h2>
           </CardHeader>
           <CardBody>
-            {homeInfo.recentCommands.map((i) => {
+            {homeInfo.recentCommands?.map((i) => {
               return <HistoryRow compact h={i} />;
             })}
           </CardBody>
