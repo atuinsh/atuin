@@ -63,7 +63,7 @@
     "usehooks-ts": "^3.1.0",
     "uuidv7": "^1.0.1",
     "vaul": "^0.9.1",
-    "zustand": "^4.5.2"
+    "zustand": "^4.5.4"
   },
   "devDependencies": {
     "@iconify/react": "^5.0.1",
