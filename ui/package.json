@@ -44,7 +44,7 @@
     "core": "link:@tauri-apps/api/core",
     "date-fns": "^3.6.0",
     "framer-motion": "^11.2.13",
-    "highlight.js": "^11.9.0",
+    "highlight.js": "^11.10.0",
     "lucide-react": "^0.402.0",
     "luxon": "^3.4.4",
     "prism-react-renderer": "^2.3.1",
