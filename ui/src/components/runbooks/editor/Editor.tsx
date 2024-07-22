@@ -93,7 +93,7 @@ export default function Editor() {
     if (!runbook) return undefined;
     if (runbook.content) {
       return BlockNoteEditor.create({
-        initialContent: JSON.parse(runbook.content || []),
+        initialContent: JSON.parse(runbook.content),
         schema,
       });
     }

@@ -244,7 +244,7 @@ function App() {
           </div>
         </div>
 
-        {renderMain(section)}
+        <div className="overflow-y-auto">{renderMain(section)}</div>
 
         <Toaster />
         <Modal

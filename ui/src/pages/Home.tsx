@@ -50,16 +50,9 @@ function StatCard({ name, stat }: any) {
 
 function TopChart({ chartData }: any) {
   const chartConfig = {
-    desktop: {
-      label: "Desktop",
-      color: "hsl(var(--chart-1))",
-    },
-    mobile: {
-      label: "Mobile",
-      color: "hsl(var(--chart-2))",
-    },
-    label: {
-      color: "hsl(var(--background))",
+    command: {
+      label: "Command",
+      color: "#7ac7c4",
     },
   } satisfies ChartConfig;
 
@@ -75,7 +68,7 @@ function TopChart({ chartData }: any) {
       >
         <CartesianGrid horizontal={false} />
         <YAxis
-          dataKey="month"
+          dataKey="command"
           type="category"
           tickLine={false}
           tickMargin={10}
@@ -83,26 +76,17 @@ function TopChart({ chartData }: any) {
           tickFormatter={(value) => value.slice(0, 3)}
           hide
         />
-        <XAxis dataKey="desktop" type="number" hide />
-        <ChartTooltip
-          cursor={false}
-          content={<ChartTooltipContent indicator="line" />}
-        />
-        <Bar
-          dataKey="desktop"
-          layout="vertical"
-          fill="var(--color-desktop)"
-          radius={4}
-        >
+        <XAxis dataKey="count" type="number" hide />
+        <Bar dataKey="count" layout="vertical" fill="#7ac7c4" radius={4}>
           <LabelList
-            dataKey="month"
+            dataKey="command"
             position="insideLeft"
             offset={8}
             className="fill-[--color-label]"
             fontSize={12}
           />
           <LabelList
-            dataKey="desktop"
+            dataKey="count"
             position="right"
             offset={8}
             className="fill-foreground"
@@ -300,7 +284,9 @@ export default function Home() {
           <CardHeader>
             <h2 className="uppercase text-gray-500">Top commands</h2>
           </CardHeader>
-          <CardBody></CardBody>
+          <CardBody>
+            <TopChart chartData={homeInfo.topCommands} />
+          </CardBody>
         </Card>
       </div>
     </div>
