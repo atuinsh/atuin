@@ -125,11 +125,14 @@ let state = (set: any, get: any): AtuinState => ({
   refreshHomeInfo: () => {
     invoke("home_info")
       .then((res: any) => {
+        console.log(res);
         set({
           homeInfo: {
             historyCount: res.history_count,
             recordCount: res.record_count,
             lastSyncTime: (res.last_sync && parseISO(res.last_sync)) || null,
+            recentCommands: res.recent_commands,
+            topCommands: res.top_commands,
           },
         });
       })

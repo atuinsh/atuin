@@ -76,21 +76,6 @@ export default function Editor() {
     fetchRunbook();
   }, [runbookId]);
 
-  const editor = useMemo(() => {
-    if (!runbook) {
-      return undefined;
-    }
-
-    if (runbook.content) {
-      return BlockNoteEditor.create({
-        initialContent: JSON.parse(runbook.content),
-        schema,
-      });
-    }
-
-    return BlockNoteEditor.create({ schema });
-  }, [runbook]);
-
   const onChange = async () => {
     if (!runbook) return;
 
@@ -99,10 +84,22 @@ export default function Editor() {
     runbook.content = JSON.stringify(editor.document);
 
     await runbook.save();
-    await refreshRunbooks();
+    refreshRunbooks();
   };
 
   const debouncedOnChange = useDebounceCallback(onChange, 1000);
+
+  const editor = useMemo(() => {
+    if (!runbook) return undefined;
+    if (runbook.content) {
+      return BlockNoteEditor.create({
+        initialContent: JSON.parse(runbook.content || []),
+        schema,
+      });
+    }
+
+    return BlockNoteEditor.create({ schema });
+  }, [runbook]);
 
   const fetchName = (): string => {
     // Infer the title from the first text block
@@ -119,6 +116,14 @@ export default function Editor() {
 
     return "Untitled";
   };
+
+  if (!runbook) {
+    return (
+      <div className="flex w-full h-full flex-col justify-center items-center">
+        <Spinner />
+      </div>
+    );
+  }
 
   if (editor === undefined) {
     return (

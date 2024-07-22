@@ -6,28 +6,111 @@ import { useStore } from "@/state/store";
 import { useToast } from "@/components/ui/use-toast";
 import { ToastAction } from "@/components/ui/toast";
 import { invoke } from "@tauri-apps/api/core";
+import {
+  Card,
+  CardHeader,
+  CardBody,
+  Listbox,
+  ListboxItem,
+} from "@nextui-org/react";
+
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  LabelList,
+  XAxis,
+  YAxis,
+} from "recharts";
+import {
+  ChartConfig,
+  ChartContainer,
+  ChartTooltip,
+  ChartTooltipContent,
+} from "@/components/ui/chart";
+
+import { Clock, Terminal } from "lucide-react";
 
 import ActivityCalendar from "react-activity-calendar";
+import HistoryList from "@/components/HistoryList";
+import HistoryRow from "@/components/history/HistoryRow";
 
-function Stats({ stats }: any) {
+function StatCard({ name, stat }: any) {
   return (
-    <div>
-      <dl className="mt-5 grid grid-cols-1 gap-5 sm:grid-cols-3">
-        {stats.map((item: any) => (
-          <div
-            key={item.name}
-            className="overflow-hidden rounded-lg bg-white px-4 py-5 shadow sm:p-6"
-          >
-            <dt className="truncate text-sm font-medium text-gray-500">
-              {item.name}
-            </dt>
-            <dd className="mt-1 text-xl font-semibold tracking-tight text-gray-900">
-              {item.stat}
-            </dd>
-          </div>
-        ))}
-      </dl>
-    </div>
+    <Card shadow="sm">
+      <CardHeader>
+        <h3 className="uppercase text-gray-500">{name}</h3>
+      </CardHeader>
+      <CardBody>
+        <h2 className="font-bold text-xl">{stat}</h2>
+      </CardBody>
+    </Card>
+  );
+}
+
+function TopChart({ chartData }: any) {
+  const chartConfig = {
+    desktop: {
+      label: "Desktop",
+      color: "hsl(var(--chart-1))",
+    },
+    mobile: {
+      label: "Mobile",
+      color: "hsl(var(--chart-2))",
+    },
+    label: {
+      color: "hsl(var(--background))",
+    },
+  } satisfies ChartConfig;
+
+  return (
+    <ChartContainer config={chartConfig}>
+      <BarChart
+        accessibilityLayer
+        data={chartData}
+        layout="vertical"
+        margin={{
+          right: 16,
+        }}
+      >
+        <CartesianGrid horizontal={false} />
+        <YAxis
+          dataKey="month"
+          type="category"
+          tickLine={false}
+          tickMargin={10}
+          axisLine={false}
+          tickFormatter={(value) => value.slice(0, 3)}
+          hide
+        />
+        <XAxis dataKey="desktop" type="number" hide />
+        <ChartTooltip
+          cursor={false}
+          content={<ChartTooltipContent indicator="line" />}
+        />
+        <Bar
+          dataKey="desktop"
+          layout="vertical"
+          fill="var(--color-desktop)"
+          radius={4}
+        >
+          <LabelList
+            dataKey="month"
+            position="insideLeft"
+            offset={8}
+            className="fill-[--color-label]"
+            fontSize={12}
+          />
+          <LabelList
+            dataKey="desktop"
+            position="right"
+            offset={8}
+            className="fill-foreground"
+            fontSize={12}
+          />
+        </Bar>
+      </BarChart>
+    </ChartContainer>
   );
 }
 
@@ -65,11 +148,13 @@ export default function Home() {
   const homeInfo = useStore((state) => state.homeInfo);
   const user = useStore((state) => state.user);
   const calendar = useStore((state) => state.calendar);
+  const runbooks = useStore((state) => state.runbooks);
   const weekStart = useStore((state) => state.weekStart);
 
   const refreshHomeInfo = useStore((state) => state.refreshHomeInfo);
   const refreshUser = useStore((state) => state.refreshUser);
   const refreshCalendar = useStore((state) => state.refreshCalendar);
+  const refreshRunbooks = useStore((state) => state.refreshRunbooks);
 
   const { toast } = useToast();
 
@@ -77,6 +162,9 @@ export default function Home() {
     refreshHomeInfo();
     refreshUser();
     refreshCalendar();
+    refreshRunbooks();
+
+    console.log(homeInfo);
 
     let setup = async () => {
       let installed = await invoke("is_cli_installed");
@@ -126,48 +214,94 @@ export default function Home() {
 
   return (
     <div className="w-full flex-1 flex-col p-4">
-      <div className="p-10">
+      <div className="pl-10">
         <Header name={user.username} />
+      </div>
+      <div className="p-10 grid grid-cols-4 gap-4">
+        <StatCard
+          name="Last Sync"
+          stat={
+            (homeInfo.lastSyncTime &&
+              formatRelative(homeInfo.lastSyncTime, new Date())) ||
+            "Never"
+          }
+        />
+        <StatCard
+          name="Total Commands"
+          stat={homeInfo.historyCount.toLocaleString()}
+        />
+        <StatCard
+          name="Total Runbooks"
+          stat={runbooks.length.toLocaleString()}
+        />
+        <StatCard
+          name="Other Records"
+          stat={homeInfo.recordCount - homeInfo.historyCount}
+        />
 
-        <div className="pt-10">
-          <Stats
-            stats={[
-              {
-                name: "Last Sync",
-                stat:
-                  (homeInfo.lastSyncTime &&
-                    formatRelative(homeInfo.lastSyncTime, new Date())) ||
-                  "Never",
-              },
-              {
-                name: "Total history records",
-                stat: homeInfo.historyCount.toLocaleString(),
-              },
-              {
-                name: "Other records",
-                stat: homeInfo.recordCount - homeInfo.historyCount,
-              },
-            ]}
-          />
-        </div>
+        <Card shadow="sm" className="col-span-3">
+          <CardHeader>
+            <h2 className="uppercase text-gray-500">Activity graph</h2>
+          </CardHeader>
+          <CardBody>
+            <ActivityCalendar
+              hideTotalCount
+              theme={explicitTheme}
+              data={calendar}
+              weekStart={weekStart as any}
+              renderBlock={(block, activity) =>
+                React.cloneElement(block, {
+                  "data-tooltip-id": "react-tooltip",
+                  "data-tooltip-html": `${activity.count} commands on ${activity.date}`,
+                })
+              }
+            />
+            <ReactTooltip id="react-tooltip" />
+          </CardBody>
+        </Card>
 
-        <div className="pt-10 flex justify-around">
-          <ActivityCalendar
-            theme={explicitTheme}
-            data={calendar}
-            weekStart={weekStart as any}
-            renderBlock={(block, activity) =>
-              React.cloneElement(block, {
-                "data-tooltip-id": "react-tooltip",
-                "data-tooltip-html": `${activity.count} commands on ${activity.date}`,
-              })
-            }
-            labels={{
-              totalCount: "{{count}} history records in the last year",
-            }}
-          />
-          <ReactTooltip id="react-tooltip" />
-        </div>
+        <Card shadow="sm">
+          <CardHeader>
+            <h2 className="uppercase text-gray-500">Quick actions </h2>
+          </CardHeader>
+
+          <CardBody>
+            <Listbox variant="flat" aria-label="Quick actions">
+              <ListboxItem
+                key="new-runbook"
+                description="Create an executable runbook"
+                startContent={<Terminal />}
+              >
+                New runbook
+              </ListboxItem>
+              <ListboxItem
+                key="shell-history"
+                description="Search and explore shell history"
+                startContent={<Clock />}
+              >
+                Shell History
+              </ListboxItem>
+            </Listbox>
+          </CardBody>
+        </Card>
+
+        <Card shadow="sm" className="col-span-2">
+          <CardHeader>
+            <h2 className="uppercase text-gray-500">Recent commands</h2>
+          </CardHeader>
+          <CardBody>
+            {homeInfo.recentCommands.map((i) => {
+              return <HistoryRow compact h={i} />;
+            })}
+          </CardBody>
+        </Card>
+
+        <Card shadow="sm" className="col-span-2">
+          <CardHeader>
+            <h2 className="uppercase text-gray-500">Top commands</h2>
+          </CardHeader>
+          <CardBody></CardBody>
+        </Card>
       </div>
     </div>
   );
