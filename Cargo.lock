@@ -246,7 +246,7 @@ dependencies = [
  "fuzzy-matcher",
  "indicatif",
  "interim",
- "itertools 0.12.1",
+ "itertools",
  "log",
  "ratatui",
  "regex",
@@ -289,7 +289,7 @@ dependencies = [
  "humantime",
  "indicatif",
  "interim",
- "itertools 0.12.1",
+ "itertools",
  "lazy_static",
  "log",
  "memchr",
@@ -402,7 +402,7 @@ dependencies = [
  "futures-util",
  "indicatif",
  "interim",
- "itertools 0.12.1",
+ "itertools",
  "log",
  "rand",
  "semver",
@@ -2062,15 +2062,6 @@ dependencies = [
 
 [[package]]
 name = "itertools"
-version = "0.12.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba291022dbbd398a455acf126c1e341954079855bc60dfdda641363bd6922569"
-dependencies = [
- "either",
-]
-
-[[package]]
-name = "itertools"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "413ee7dfc52ee1a4949ceeb7dbc8a33f2d6c088194d9f922fb8318faf1f01186"
@@ -2978,7 +2969,7 @@ checksum = "5bb182580f71dd070f88d01ce3de9f4da5021db7115d2e1c3605a754153b77c1"
 dependencies = [
  "bytes",
  "heck 0.5.0",
- "itertools 0.13.0",
+ "itertools",
  "log",
  "multimap",
  "once_cell",
@@ -2998,7 +2989,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "18bec9b0adc4eba778b33684b7ba3e7137789434769ee3ce3930463ef904cfca"
 dependencies = [
  "anyhow",
- "itertools 0.13.0",
+ "itertools",
  "proc-macro2",
  "quote",
  "syn 2.0.70",
@@ -3127,7 +3118,7 @@ dependencies = [
  "cassowary",
  "compact_str",
  "crossterm",
- "itertools 0.13.0",
+ "itertools",
  "lru",
  "paste",
  "stability",
@@ -4681,7 +4672,7 @@ version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b3644627a5af5fa321c95b9b235a72fd24cd29c648c2c379431e6628655627bf"
 dependencies = [
- "itertools 0.13.0",
+ "itertools",
  "unicode-segmentation",
  "unicode-width",
 ]
