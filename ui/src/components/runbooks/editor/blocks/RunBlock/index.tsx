@@ -1,7 +1,9 @@
+import React from "react";
 import { createReactBlockSpec } from "@blocknote/react";
 import "./index.css";
 
 import CodeMirror from "@uiw/react-codemirror";
+import { keymap } from "@codemirror/view";
 import { langs } from "@uiw/codemirror-extensions-langs";
 
 import { Play, Square } from "lucide-react";
@@ -12,57 +14,80 @@ import { invoke } from "@tauri-apps/api/core";
 import Terminal from "./terminal.tsx";
 
 import "@xterm/xterm/css/xterm.css";
+import { AtuinState, useStore } from "@/state/store.ts";
 
 interface RunBlockProps {
   onChange: (val: string) => void;
-  onPlay?: () => void;
-  onStop?: () => void;
+  onRun?: (pty: string) => void;
+  onStop?: (pty: string) => void;
   id: string;
   code: string;
   type: string;
+  pty: string;
   isEditable: boolean;
 }
 
 const RunBlock = ({
   onChange,
-  onPlay,
   id,
   code,
   isEditable,
+  onRun,
+  onStop,
+  pty,
 }: RunBlockProps) => {
-  console.log(code);
-  const [isRunning, setIsRunning] = useState(false);
-  const [showTerminal, setShowTerminal] = useState(false);
   const [value, setValue] = useState<String>(code);
+  const cleanupPtyTerm = useStore((store: AtuinState) => store.cleanupPtyTerm);
+  const terminals = useStore((store: AtuinState) => store.terminals);
 
-  const [pty, setPty] = useState<string | null>(null);
+  const [currentRunbook, incRunbookPty, decRunbookPty] = useStore(
+    (store: AtuinState) => [
+      store.currentRunbook,
+      store.incRunbookPty,
+      store.decRunbookPty,
+    ],
+  );
 
-  const handleToggle = async (event: any) => {
-    event.stopPropagation();
+  const isRunning = pty !== null;
+
+  const handleToggle = async (event: any | null) => {
+    if (event) event.stopPropagation();
 
     // If there's no code, don't do anything
     if (!value) return;
 
-    setIsRunning(!isRunning);
-    setShowTerminal(!isRunning);
-
     if (isRunning) {
-      // send sigkill
-      console.log("sending sigkill");
       await invoke("pty_kill", { pid: pty });
+
+      terminals[pty].terminal.dispose();
+      cleanupPtyTerm(pty);
+
+      if (onStop) onStop(pty);
+      decRunbookPty(currentRunbook);
     }
 
     if (!isRunning) {
-      if (onPlay) onPlay();
-
       let pty = await invoke<string>("pty_open");
-      setPty(pty);
-      console.log(pty);
+      if (onRun) onRun(pty);
+
+      incRunbookPty(currentRunbook);
 
       let val = !value.endsWith("\n") ? value + "\r\n" : value;
       await invoke("pty_write", { pid: pty, data: val });
     }
   };
+
+  const handleCmdEnter = (view) => {
+    handleToggle(null);
+    return true;
+  };
+
+  const customKeymap = keymap.of([
+    {
+      key: "Mod-Enter",
+      run: handleCmdEnter,
+    },
+  ]);
 
   return (
     <div className="w-full !max-w-full !outline-none overflow-none">
@@ -96,12 +121,12 @@ const RunBlock = ({
               setValue(val);
               onChange(val);
             }}
-            extensions={[...extensions(), langs.shell()]}
+            extensions={[customKeymap, ...extensions(), langs.shell()]}
             basicSetup={false}
           />
           <div
             className={`overflow-hidden transition-all duration-300 ease-in-out min-w-0 ${
-              showTerminal ? "block" : "hidden"
+              isRunning ? "block" : "hidden"
             }`}
           >
             {pty && <Terminal pty={pty} />}
@@ -120,6 +145,7 @@ export default createReactBlockSpec(
         default: "bash",
       },
       code: { default: "" },
+      pty: { default: null },
     },
     content: "none",
   },
@@ -130,7 +156,18 @@ export default createReactBlockSpec(
         editor.updateBlock(block, {
           props: { ...block.props, code: val },
         });
-        console.log(block.props);
+      };
+
+      const onRun = (pty: string) => {
+        editor.updateBlock(block, {
+          props: { ...block.props, pty: pty },
+        });
+      };
+
+      const onStop = (pty: string) => {
+        editor.updateBlock(block, {
+          props: { ...block.props, pty: null },
+        });
       };
 
       return (
@@ -139,7 +176,10 @@ export default createReactBlockSpec(
           id={block?.id}
           code={block.props.code}
           type={block.props.type}
+          pty={block.props.pty}
           isEditable={editor.isEditable}
+          onRun={onRun}
+          onStop={onStop}
         />
       );
     },

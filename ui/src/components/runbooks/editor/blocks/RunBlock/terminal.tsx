@@ -1,79 +1,98 @@
-/*
-export const openTerm = (pty: string, id: string) => {
-  const term = new Terminal({
-    fontSize: 12,
-    fontFamily: "Courier New",
-  });
-
-  let element = document.getElementById(id);
-  term.open(element);
-
-  //term.onResize(onResize(pty));
-
-  //const fitAddon = new FitAddon();
-  //term.loadAddon(fitAddon);
-  //term.loadAddon(new WebglAddon());
-
-  /*
-  const onSize = (e) => {
-    e.stopPropagation();
-    fitAddon.fit();
-  };
-  fitAddon.fit();
-
-  window.addEventListener("resize", onSize, false);
-  */
-
-import { useEffect, useRef } from "react";
-import { Terminal } from "@xterm/xterm";
+import { useState, useEffect, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { FitAddon } from "@xterm/addon-fit";
-import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
-import { invoke } from "@tauri-apps/api/core";
+import { useStore } from "@/state/store";
 
-const onResize = (pty: string) => async (size: any) => {
-  await invoke("pty_resize", {
-    pid: pty,
-    cols: size.cols,
-    rows: size.rows,
-  });
+const usePersistentTerminal = (pty: string) => {
+  const newPtyTerm = useStore((store) => store.newPtyTerm);
+  const terminals = useStore((store) => store.terminals);
+  const [isReady, setIsReady] = useState(false);
+
+  useEffect(() => {
+    if (!terminals.hasOwnProperty(pty)) {
+      // create a new terminal and store it in the store.
+      // this means we can resume the same instance even across mount/dismount
+      newPtyTerm(pty);
+    }
+
+    setIsReady(true);
+
+    return () => {
+      // We don't dispose of the terminal when the component unmounts
+    };
+  }, [pty, terminals, newPtyTerm]);
+
+  return { terminalData: terminals[pty], isReady };
 };
 
 const TerminalComponent = ({ pty }: any) => {
   const terminalRef = useRef(null);
+  const { terminalData, isReady } = usePersistentTerminal(pty);
+  const [isAttached, setIsAttached] = useState(false);
+  const cleanupListenerRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
+    // no pty? no terminal
     if (pty == null) return;
-    if (!terminalRef.current) return;
 
-    const terminal = new Terminal();
-    const fitAddon = new FitAddon();
+    // the terminal may still be being created so hold off
+    if (!isReady) return;
 
-    terminal.open(terminalRef.current);
-    terminal.loadAddon(new WebglAddon());
-    terminal.loadAddon(fitAddon);
-    terminal.onResize(onResize(pty));
-
-    fitAddon.fit();
     const windowResize = () => {
-      fitAddon.fit();
+      if (!terminalData || !terminalData.fitAddon) return;
+
+      terminalData.fitAddon.fit();
     };
 
-    listen(`pty-${pty}`, (event: any) => {
-      terminal.write(event.payload);
-    }).then(() => {
-      console.log("Listening for pty events");
-    });
+    // terminal object needs attaching to a ref to a div
+    if (!isAttached && terminalData && terminalData.terminal) {
+      // If it's never been attached, attach it
+      if (!terminalData.terminal.element && terminalRef.current) {
+        terminalData.terminal.open(terminalRef.current);
 
-    window.addEventListener("resize", windowResize);
+        // it might have been previously attached, but need moving elsewhere
+      } else if (terminalData && terminalRef.current) {
+        // @ts-ignore
+        terminalRef.current.appendChild(terminalData.terminal.element);
+      }
+
+      terminalData.fitAddon.fit();
+      setIsAttached(true);
+
+      window.addEventListener("resize", windowResize);
+    }
+
+    listen(`pty-${pty}`, (event: any) => {
+      terminalData.terminal.write(event.payload);
+    }).then((ul) => {
+      cleanupListenerRef.current = ul;
+    });
 
     // Customize further as needed
     return () => {
-      terminal.dispose();
+      if (
+        terminalData &&
+        terminalData.terminal &&
+        terminalData.terminal.element
+      ) {
+        // Instead of removing, we just detach
+        if (terminalData.terminal.element.parentElement) {
+          terminalData.terminal.element.parentElement.removeChild(
+            terminalData.terminal.element,
+          );
+        }
+        setIsAttached(false);
+      }
+
+      if (cleanupListenerRef.current) {
+        cleanupListenerRef.current();
+      }
+
       window.removeEventListener("resize", windowResize);
     };
-  }, [pty]);
+  }, [terminalData, isReady]);
+
+  if (!isReady) return null;
 
   return (
     <div className="!max-w-full min-w-0 overflow-hidden" ref={terminalRef} />

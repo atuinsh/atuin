@@ -14,6 +14,7 @@ import {
   DropdownTrigger,
   DropdownMenu,
   DropdownItem,
+  Badge,
 } from "@nextui-org/react";
 
 import { EllipsisVerticalIcon } from "lucide-react";
@@ -22,32 +23,39 @@ import { DateTime } from "luxon";
 
 import { NotebookPenIcon } from "lucide-react";
 import Runbook from "@/state/runbooks/runbook";
-import { useStore } from "@/state/store";
+import { AtuinState, useStore } from "@/state/store";
 
 const NoteSidebar = () => {
-  const runbooks = useStore((state) => state.runbooks);
-  const refreshRunbooks = useStore((state) => state.refreshRunbooks);
+  const runbooks = useStore((state: AtuinState) => state.runbooks);
+  const refreshRunbooks = useStore(
+    (state: AtuinState) => state.refreshRunbooks,
+  );
 
-  const currentRunbook = useStore((state) => state.currentRunbook);
-  const setCurrentRunbook = useStore((state) => state.setCurrentRunbook);
+  const currentRunbook = useStore((state: AtuinState) => state.currentRunbook);
+  const setCurrentRunbook = useStore(
+    (state: AtuinState) => state.setCurrentRunbook,
+  );
+  const runbookInfo = useStore((state: AtuinState) => state.runbookInfo);
 
   useEffect(() => {
     refreshRunbooks();
   }, []);
 
   return (
-    <div className="min-w-48 h-screen flex flex-col border-r-1">
+    <div className="w-48 flex flex-col border-r-1">
       <div className="overflow-y-auto flex-grow">
         <Listbox
           hideSelectedIcon
-          items={runbooks}
+          items={runbooks.map((runbook) => {
+            return [runbook, runbookInfo[runbook.id]];
+          })}
           variant="flat"
           aria-label="Runbook list"
           selectionMode="single"
           selectedKeys={[currentRunbook]}
           itemClasses={{ base: "data-[selected=true]:bg-gray-200" }}
           topContent={
-            <ButtonGroup>
+            <ButtonGroup className="z-20">
               <Tooltip showArrow content="New Runbook" closeDelay={50}>
                 <Button
                   isIconOnly
@@ -66,7 +74,7 @@ const NoteSidebar = () => {
             </ButtonGroup>
           }
         >
-          {(runbook) => (
+          {([runbook, info]) => (
             <ListboxItem
               key={runbook.id}
               onPress={() => {
@@ -75,14 +83,26 @@ const NoteSidebar = () => {
               textValue={runbook.name || "Untitled"}
               endContent={
                 <Dropdown>
-                  <DropdownTrigger className="bg-transparent">
-                    <Button isIconOnly>
-                      <EllipsisVerticalIcon
-                        size="16px"
-                        className="bg-transparent"
-                      />
-                    </Button>
-                  </DropdownTrigger>
+                  <Badge
+                    content={info?.ptys}
+                    color="primary"
+                    style={
+                      info && info?.ptys > 0
+                        ? {}
+                        : {
+                            display: "none",
+                          }
+                    }
+                  >
+                    <DropdownTrigger className="bg-transparent">
+                      <Button isIconOnly>
+                        <EllipsisVerticalIcon
+                          size="16px"
+                          className="bg-transparent"
+                        />
+                      </Button>
+                    </DropdownTrigger>
+                  </Badge>
                   <DropdownMenu aria-label="Dynamic Actions">
                     <DropdownItem
                       key={"delete"}
