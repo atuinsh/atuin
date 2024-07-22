@@ -2,7 +2,7 @@ import React, { useEffect } from "react";
 import { formatRelative } from "date-fns";
 import { Tooltip as ReactTooltip } from "react-tooltip";
 
-import { useStore } from "@/state/store";
+import { AtuinState, useStore } from "@/state/store";
 import { useToast } from "@/components/ui/use-toast";
 import { ToastAction } from "@/components/ui/toast";
 import { invoke } from "@tauri-apps/api/core";
@@ -22,18 +22,13 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import {
-  ChartConfig,
-  ChartContainer,
-  ChartTooltip,
-  ChartTooltipContent,
-} from "@/components/ui/chart";
+import { ChartConfig, ChartContainer } from "@/components/ui/chart";
 
 import { Clock, Terminal } from "lucide-react";
 
 import ActivityCalendar from "react-activity-calendar";
-import HistoryList from "@/components/HistoryList";
 import HistoryRow from "@/components/history/HistoryRow";
+import { ShellHistory } from "@/state/models";
 
 function StatCard({ name, stat }: any) {
   return (
@@ -57,7 +52,7 @@ function TopChart({ chartData }: any) {
   } satisfies ChartConfig;
 
   return (
-    <ChartContainer config={chartConfig}>
+    <ChartContainer config={chartConfig} className="max-h-72">
       <BarChart
         accessibilityLayer
         data={chartData}
@@ -129,16 +124,22 @@ const explicitTheme = {
 };
 
 export default function Home() {
-  const homeInfo = useStore((state) => state.homeInfo);
-  const user = useStore((state) => state.user);
-  const calendar = useStore((state) => state.calendar);
-  const runbooks = useStore((state) => state.runbooks);
-  const weekStart = useStore((state) => state.weekStart);
+  const homeInfo = useStore((state: AtuinState) => state.homeInfo);
+  const user = useStore((state: AtuinState) => state.user);
+  const calendar = useStore((state: AtuinState) => state.calendar);
+  const runbooks = useStore((state: AtuinState) => state.runbooks);
+  const weekStart = useStore((state: AtuinState) => state.weekStart);
 
-  const refreshHomeInfo = useStore((state) => state.refreshHomeInfo);
-  const refreshUser = useStore((state) => state.refreshUser);
-  const refreshCalendar = useStore((state) => state.refreshCalendar);
-  const refreshRunbooks = useStore((state) => state.refreshRunbooks);
+  const refreshHomeInfo = useStore(
+    (state: AtuinState) => state.refreshHomeInfo,
+  );
+  const refreshUser = useStore((state: AtuinState) => state.refreshUser);
+  const refreshCalendar = useStore(
+    (state: AtuinState) => state.refreshCalendar,
+  );
+  const refreshRunbooks = useStore(
+    (state: AtuinState) => state.refreshRunbooks,
+  );
 
   const { toast } = useToast();
 
@@ -197,7 +198,7 @@ export default function Home() {
   }
 
   return (
-    <div className="w-full flex-1 flex-col p-4">
+    <div className="w-full flex-1 flex-col p-4 overflow-y-auto">
       <div className="pl-10">
         <Header name={user.username} />
       </div>
@@ -274,7 +275,7 @@ export default function Home() {
             <h2 className="uppercase text-gray-500">Recent commands</h2>
           </CardHeader>
           <CardBody>
-            {homeInfo.recentCommands?.map((i) => {
+            {homeInfo.recentCommands?.map((i: ShellHistory) => {
               return <HistoryRow compact h={i} />;
             })}
           </CardBody>

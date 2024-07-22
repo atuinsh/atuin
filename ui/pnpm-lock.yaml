@@ -77,6 +77,9 @@ dependencies:
   '@tauri-apps/plugin-sql':
     specifier: 2.0.0-beta.5
     version: 2.0.0-beta.5
+  '@types/luxon':
+    specifier: ^3.4.2
+    version: 3.4.2
   '@uiw/codemirror-extensions-langs':
     specifier: ^4.23.0
     version: 4.23.0(@codemirror/autocomplete@6.17.0)(@codemirror/language-data@6.5.1)(@codemirror/language@6.10.2)(@codemirror/legacy-modes@6.4.0)(@codemirror/state@6.4.1)(@codemirror/view@6.28.6)(@lezer/common@1.2.1)(@lezer/highlight@1.2.0)(@lezer/javascript@1.4.17)(@lezer/lr@1.4.1)
@@ -5498,6 +5501,10 @@ packages:
 
   /@types/lodash@4.17.7:
     resolution: {integrity: sha512-8wTvZawATi/lsmNu10/j2hk1KEP0IvjubqPE3cu1Xz7xfXXt5oCq3SNUz4fMIP4XGF9Ky+Ue2tBA3hcS7LSBlA==}
+    dev: false
+
+  /@types/luxon@3.4.2:
+    resolution: {integrity: sha512-TifLZlFudklWlMBfhubvgqTXRzLDI5pCbGa4P8a3wPyUQSW+1xQ5eDsreP9DWHX3tjq1ke96uYG/nwundroWcA==}
     dev: false
 
   /@types/mdast@3.0.15:

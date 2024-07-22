@@ -58,7 +58,7 @@ export interface AtuinState {
 
   setCurrentRunbook: (id: String) => void;
   setPtyTerm: (pty: string, terminal: any) => void;
-  newPtyTerm: (pty: string, runbook: string) => TerminalData;
+  newPtyTerm: (pty: string) => TerminalData;
   cleanupPtyTerm: (pty: string) => void;
 
   terminals: { [pty: string]: TerminalData };
@@ -132,7 +132,7 @@ let state = (set: any, get: any): AtuinState => ({
             recordCount: res.record_count,
             lastSyncTime: (res.last_sync && parseISO(res.last_sync)) || null,
             recentCommands: res.recent_commands,
-            topCommands: res.top_commands.map((top) => ({
+            topCommands: res.top_commands.map((top: any) => ({
               command: top[0],
               count: top[1],
             })),

@@ -1,12 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import {
-  Input,
   Button,
   ButtonGroup,
-  Card,
-  CardBody,
-  CardHeader,
-  Divider,
   Tooltip,
   Listbox,
   ListboxItem,
@@ -46,13 +41,13 @@ const NoteSidebar = () => {
       <div className="overflow-y-auto flex-grow">
         <Listbox
           hideSelectedIcon
-          items={runbooks.map((runbook) => {
+          items={runbooks.map((runbook: any): any => {
             return [runbook, runbookInfo[runbook.id]];
           })}
           variant="flat"
           aria-label="Runbook list"
           selectionMode="single"
-          selectedKeys={[currentRunbook]}
+          selectedKeys={currentRunbook ? [currentRunbook] : []}
           itemClasses={{ base: "data-[selected=true]:bg-gray-200" }}
           topContent={
             <ButtonGroup className="z-20">
@@ -74,7 +69,7 @@ const NoteSidebar = () => {
             </ButtonGroup>
           }
         >
-          {([runbook, info]) => (
+          {([runbook, info]: [Runbook, { ptys: number }]) => (
             <ListboxItem
               key={runbook.id}
               onPress={() => {
@@ -124,7 +119,7 @@ const NoteSidebar = () => {
                 <div className="text-xs text-gray-500">
                   <em>
                     {DateTime.fromJSDate(runbook.updated).toLocaleString(
-                      DateTime.DATETIME_SIMPLE,
+                      DateTime.DATETIME_SHORT,
                     )}
                   </em>
                 </div>
