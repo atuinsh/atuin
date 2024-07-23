@@ -1,10 +1,10 @@
 use std::collections::{HashMap, HashSet};
 
-use crossterm::style::{ResetColor, SetAttribute, SetForegroundColor};
+use crossterm::style::{Color, ResetColor, SetAttribute, SetForegroundColor};
 use serde::{Deserialize, Serialize};
 use unicode_segmentation::UnicodeSegmentation;
 
-use atuin_client::{history::History, settings::Settings, theme::Theme};
+use atuin_client::{history::History, settings::Settings, theme::Meaning, theme::Theme};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Stats {
@@ -126,21 +126,42 @@ pub fn pretty_print(stats: Stats, ngram_size: usize, theme: &Theme) {
         });
 
     for (command, count) in stats.top {
-        let gray = SetForegroundColor(theme.get_base());
+        let gray = SetForegroundColor(match theme.as_style(Meaning::Muted).foreground_color {
+            Some(color) => color,
+            None => Color::Grey,
+        });
         let bold = SetAttribute(crossterm::style::Attribute::Bold);
 
         let in_ten = 10 * count / max;
 
         print!("[");
-        print!("{}", SetForegroundColor(theme.get_error()));
+        print!(
+            "{}",
+            SetForegroundColor(match theme.get_error().foreground_color {
+                Some(color) => color,
+                None => Color::Red,
+            })
+        );
 
         for i in 0..in_ten {
             if i == 2 {
-                print!("{}", SetForegroundColor(theme.get_warning()));
+                print!(
+                    "{}",
+                    SetForegroundColor(match theme.get_warning().foreground_color {
+                        Some(color) => color,
+                        None => Color::Yellow,
+                    })
+                );
             }
 
             if i == 5 {
-                print!("{}", SetForegroundColor(theme.get_info()));
+                print!(
+                    "{}",
+                    SetForegroundColor(match theme.get_info().foreground_color {
+                        Some(color) => color,
+                        None => Color::Green,
+                    })
+                );
             }
 
             print!("▮");

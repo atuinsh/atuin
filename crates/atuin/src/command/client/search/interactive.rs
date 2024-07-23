@@ -766,18 +766,16 @@ impl State {
 
     fn build_title(&mut self, theme: &Theme) -> Paragraph {
         let title = if self.update_needed.is_some() {
+            let error_style: Style = theme.get_error().into();
             Paragraph::new(Text::from(Span::styled(
                 format!("Atuin v{VERSION} - UPGRADE"),
-                Style::default()
-                    .add_modifier(Modifier::BOLD)
-                    .fg(theme.get_error().into()),
+                error_style.add_modifier(Modifier::BOLD),
             )))
         } else {
+            let style: Style = theme.as_style(Meaning::Base).into();
             Paragraph::new(Text::from(Span::styled(
                 format!("Atuin v{VERSION}"),
-                Style::default()
-                    .add_modifier(Modifier::BOLD)
-                    .fg(theme.get_base().into()),
+                style.add_modifier(Modifier::BOLD),
             )))
         };
         title.alignment(Alignment::Left)

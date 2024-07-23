@@ -234,7 +234,7 @@ records = true
 
 # [theme]
 ## Color theme to use for rendering in the terminal.
-## There are some built-in themes, including the base theme which has the default colors,
+## There are some built-in themes, including the base theme ("default"),
 ## "autumn" and "marine". You can add your own themes to the "./themes" subdirectory of your
 ## Atuin config (or ATUIN_THEME_DIR, if provided) as TOML files whose keys should be one or
 ## more of AlertInfo, AlertWarn, AlertError, Annotation, Base, Guidance, Important, and
