@@ -48,7 +48,7 @@ const RunBlock = ({
     ],
   );
 
-  const isRunning = pty !== null;
+  const isRunning = pty !== null && pty !== "";
 
   const handleToggle = async (event: any | null) => {
     if (event) event.stopPropagation();
