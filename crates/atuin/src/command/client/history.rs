@@ -323,6 +323,7 @@ impl Cmd {
         Ok(())
     }
 
+    #[cfg(feature = "daemon")]
     async fn handle_daemon_start(settings: &Settings, command: &[String]) -> Result<()> {
         let command = command.join(" ");
 
@@ -425,6 +426,7 @@ impl Cmd {
         Ok(())
     }
 
+    #[cfg(feature = "daemon")]
     #[allow(unused_variables)]
     async fn handle_daemon_end(
         settings: &Settings,
@@ -543,6 +545,7 @@ impl Cmd {
     pub async fn run(self, settings: &Settings) -> Result<()> {
         let context = current_context();
 
+        #[cfg(feature = "daemon")]
         // Skip initializing any databases for start/end, if the daemon is enabled
         if settings.daemon.enabled {
             match self {
