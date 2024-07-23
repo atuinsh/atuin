@@ -18,12 +18,16 @@ export interface HomeInfo {
   historyCount: number;
   recordCount: number;
   lastSyncTime: Date | null;
+  recentCommands: ShellHistory[];
+  topCommands: ShellHistory[];
 }
 
 export const DefaultHomeInfo: HomeInfo = {
   historyCount: 0,
   recordCount: 0,
   lastSyncTime: new Date(),
+  recentCommands: [],
+  topCommands: [],
 };
 
 export class ShellHistory {

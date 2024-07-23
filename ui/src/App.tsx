@@ -1,33 +1,12 @@
 import "./App.css";
 import { open } from "@tauri-apps/plugin-shell";
 
-import { useState, ReactElement, useEffect } from "react";
+import { useState, ReactElement } from "react";
 import { useStore } from "@/state/store";
 
 import { Toaster } from "@/components/ui/toaster";
-import {
-  SettingsIcon,
-  CircleHelpIcon,
-  KeyRoundIcon,
-  LogOutIcon,
-} from "lucide-react";
+import { KeyRoundIcon } from "lucide-react";
 import { Icon } from "@iconify/react";
-
-import { Dialog, DialogContent, DialogTrigger } from "@/components/ui/dialog";
-
-import {
-  HomeIcon,
-  ClockIcon,
-  WrenchScrewdriverIcon,
-} from "@heroicons/react/24/outline";
-
-import { ChevronRightSquare } from "lucide-react";
-
-import Logo from "./assets/logo-light.svg";
-
-function classNames(...classes: any) {
-  return classes.filter(Boolean).join(" ");
-}
 
 import Home from "./pages/Home.tsx";
 import History from "./pages/History.tsx";
@@ -41,7 +20,6 @@ import {
   Button,
   ScrollShadow,
   Spacer,
-  Tooltip,
   Dropdown,
   DropdownItem,
   DropdownMenu,
@@ -49,19 +27,10 @@ import {
   DropdownTrigger,
   Modal,
   ModalContent,
-  ModalHeader,
-  ModalBody,
-  ModalFooter,
   useDisclosure,
-  Checkbox,
-  Input,
-  Link,
 } from "@nextui-org/react";
-import { cn } from "@/lib/utils";
-import { sectionItems } from "@/components/Sidebar/sidebar-items";
 import Sidebar, { SidebarItem } from "@/components/Sidebar";
 import icon from "@/assets/icon.svg";
-import iconText from "@/assets/logo-light.svg";
 import { logout } from "./state/client.ts";
 
 enum Section {
@@ -89,8 +58,8 @@ function App() {
   // I think hashrouter may work, but I'd rather avoiding thinking of them as
   // pages
   const [section, setSection] = useState(Section.Home);
-  const user = useStore((state) => state.user);
-  const refreshUser = useStore((state) => state.refreshUser);
+  const user = useStore((state: any) => state.user);
+  const refreshUser = useStore((state: any) => state.refreshUser);
   const { isOpen, onOpen, onOpenChange } = useDisclosure();
 
   const navigation: SidebarItem[] = [

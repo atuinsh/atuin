@@ -36,7 +36,7 @@ pub struct GlobalStats {
     pub last_30d: u64,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug)]
 pub struct UIHistory {
     pub id: String,
     /// When the command was run.

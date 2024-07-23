@@ -11,6 +11,7 @@ import "prismjs/components/prism-bash";
 
 import Drawer from "../Drawer";
 import HistoryInspect from "./HistoryInspect";
+import { cn } from "@/lib/utils";
 
 function msToTime(ms: number) {
   let milliseconds = parseInt(ms.toFixed(1));
@@ -26,25 +27,31 @@ function msToTime(ms: number) {
   else return days + " Days";
 }
 
-export default function HistoryRow({ h }: any) {
+export default function HistoryRow({ h, compact }: any) {
   return (
     <li
       key={h.id}
-      className="relative flex justify-between gap-x-6 px-4 py-5 hover:bg-gray-50 sm:px-6"
+      className={cn(
+        "relative flex justify-between gap-x-6 px-4 py-5 hover:bg-gray-50 sm:px-6",
+        { "py-5": !compact },
+        { "py-1": compact },
+      )}
     >
       <div className="flex min-w-0 gap-x-4">
-        <div className="flex flex-col justify-center">
-          <p className="flex text-xs text-gray-500 justify-center">
-            {DateTime.fromMillis(h.timestamp / 1000000).toLocaleString(
-              DateTime.TIME_WITH_SECONDS,
-            )}
-          </p>
-          <p className="flex text-xs mt-1 text-gray-400 justify-center">
-            {DateTime.fromMillis(h.timestamp / 1000000).toLocaleString(
-              DateTime.DATE_SHORT,
-            )}
-          </p>
-        </div>
+        {!compact && (
+          <div className="flex flex-col justify-center">
+            <p className="flex text-xs text-gray-500 justify-center">
+              {DateTime.fromMillis(h.timestamp / 1000000).toLocaleString(
+                DateTime.TIME_WITH_SECONDS,
+              )}
+            </p>
+            <p className="flex text-xs mt-1 text-gray-400 justify-center">
+              {DateTime.fromMillis(h.timestamp / 1000000).toLocaleString(
+                DateTime.DATE_SHORT,
+              )}
+            </p>
+          </div>
+        )}
         <div className="min-w-0 flex-col justify-center truncate">
           <Highlight
             theme={themes.github}

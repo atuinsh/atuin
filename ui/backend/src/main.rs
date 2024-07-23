@@ -30,6 +30,8 @@ struct HomeInfo {
     pub history_count: u64,
     pub username: Option<String>,
     pub last_sync: Option<String>,
+    pub top_commands: Vec<(String, u64)>,
+    pub recent_commands: Vec<UIHistory>,
 }
 
 #[tauri::command]
@@ -138,6 +140,8 @@ async fn home_info() -> Result<HomeInfo, String> {
     let sqlite_store = SqliteStore::new(record_store_path, settings.local_timeout)
         .await
         .map_err(|e| e.to_string())?;
+    let db_path = PathBuf::from(settings.db_path.as_str());
+    let db = HistoryDB::new(db_path, settings.local_timeout).await?;
 
     let last_sync = Settings::last_sync()
         .map_err(|e| e.to_string())?
@@ -150,12 +154,20 @@ async fn home_info() -> Result<HomeInfo, String> {
         .await
         .map_err(|e| e.to_string())?;
 
+
+    let history = db.list(None, None).await?;
+    let stats = stats::compute(&settings, &history, 10, 1).map_or(vec![], |stats|stats.top[0..5].to_vec()).iter().map(|(commands, count)| (commands.join(" "), *count as u64)).collect();
+    let recent = if history.len() > 5 {history[0..5].to_vec()} else {vec![]};
+    let recent = recent.into_iter().map(|h|h.into()).collect();
+
     let info = if !settings.logged_in() {
         HomeInfo {
             username: None,
             last_sync: None,
             record_count,
             history_count,
+            top_commands: stats,
+            recent_commands: recent,
         }
     } else {
         let client = atuin_client::api_client::Client::new(
@@ -176,6 +188,8 @@ async fn home_info() -> Result<HomeInfo, String> {
             last_sync: Some(last_sync.to_string()),
             record_count,
             history_count,
+            top_commands: stats,
+            recent_commands: recent,
         }
     };
 

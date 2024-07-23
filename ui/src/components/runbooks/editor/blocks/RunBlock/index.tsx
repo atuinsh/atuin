@@ -1,4 +1,4 @@
-import React from "react";
+// @ts-ignore
 import { createReactBlockSpec } from "@blocknote/react";
 import "./index.css";
 
@@ -48,7 +48,7 @@ const RunBlock = ({
     ],
   );
 
-  const isRunning = pty !== null;
+  const isRunning = pty !== null && pty !== "";
 
   const handleToggle = async (event: any | null) => {
     if (event) event.stopPropagation();
@@ -63,21 +63,21 @@ const RunBlock = ({
       cleanupPtyTerm(pty);
 
       if (onStop) onStop(pty);
-      decRunbookPty(currentRunbook);
+      if (currentRunbook) decRunbookPty(currentRunbook);
     }
 
     if (!isRunning) {
       let pty = await invoke<string>("pty_open");
       if (onRun) onRun(pty);
 
-      incRunbookPty(currentRunbook);
+      if (currentRunbook) incRunbookPty(currentRunbook);
 
       let val = !value.endsWith("\n") ? value + "\r\n" : value;
       await invoke("pty_write", { pid: pty, data: val });
     }
   };
 
-  const handleCmdEnter = (view) => {
+  const handleCmdEnter = () => {
     handleToggle(null);
     return true;
   };
@@ -145,7 +145,7 @@ export default createReactBlockSpec(
         default: "bash",
       },
       code: { default: "" },
-      pty: { default: null },
+      pty: { default: "" },
     },
     content: "none",
   },
@@ -154,19 +154,21 @@ export default createReactBlockSpec(
     render: ({ block, editor, code, type }) => {
       const onInputChange = (val: string) => {
         editor.updateBlock(block, {
+          // @ts-ignore
           props: { ...block.props, code: val },
         });
       };
 
       const onRun = (pty: string) => {
         editor.updateBlock(block, {
+          // @ts-ignore
           props: { ...block.props, pty: pty },
         });
       };
 
-      const onStop = (pty: string) => {
-        editor.updateBlock(block, {
-          props: { ...block.props, pty: null },
+      const onStop = (_pty: string) => {
+        editor?.updateBlock(block, {
+          props: { ...block.props, pty: "" },
         });
       };
 
