@@ -36,10 +36,12 @@ import { BlockNoteView } from "@blocknote/mantine";
 import "@blocknote/core/fonts/inter.css";
 import "@blocknote/mantine/style.css";
 
-import { Code } from "lucide-react";
+import { CodeIcon, FolderOpenIcon } from "lucide-react";
 import { useDebounceCallback } from "usehooks-ts";
 
-import RunBlock from "@/components/runbooks/editor/blocks/RunBlock";
+import Run from "@/components/runbooks/editor/blocks/Run";
+import Directory from "@/components/runbooks/editor/blocks/Directory";
+
 import { DeleteBlock } from "@/components/runbooks/editor/ui/DeleteBlockButton";
 import { AtuinState, useStore } from "@/state/store";
 import Runbook from "@/state/runbooks/runbook";
@@ -52,21 +54,34 @@ const schema = BlockNoteSchema.create({
     ...defaultBlockSpecs,
 
     // Adds the code block.
-    run: RunBlock,
+    run: Run,
+    directory: Directory,
   },
 });
 
 // Slash menu item to insert an Alert block
 const insertRun = (editor: typeof schema.BlockNoteEditor) => ({
-  title: "Code block",
+  title: "Code",
   onItemClick: () => {
     insertOrUpdateBlock(editor, {
       type: "run",
     });
   },
-  icon: <Code size={18} />,
+  icon: <CodeIcon size={18} />,
   aliases: ["code", "run"],
-  group: "Code",
+  group: "Execute",
+});
+
+const insertDirectory = (editor: typeof schema.BlockNoteEditor) => ({
+  title: "Directory",
+  onItemClick: () => {
+    insertOrUpdateBlock(editor, {
+      type: "directory",
+    });
+  },
+  icon: <FolderOpenIcon size={18} />,
+  aliases: ["directory", "dir", "folder"],
+  group: "Execute",
 });
 
 export default function Editor() {
@@ -161,7 +176,11 @@ export default function Editor() {
           triggerCharacter={"/"}
           getItems={async (query: any) =>
             filterSuggestionItems(
-              [...getDefaultReactSlashMenuItems(editor), insertRun(editor)],
+              [
+                ...getDefaultReactSlashMenuItems(editor),
+                insertRun(editor),
+                insertDirectory(editor),
+              ],
               query,
             )
           }

@@ -16,7 +16,7 @@ pub struct Pty {
 }
 
 impl Pty {
-    pub async fn open<'a>(rows: u16, cols: u16) -> Result<Self> {
+    pub async fn open<'a>(rows: u16, cols: u16, cwd: Option<String>) -> Result<Self> {
         let sys = portable_pty::native_pty_system();
 
         let pair = sys
@@ -28,7 +28,11 @@ impl Pty {
             })
             .map_err(|e| eyre!("Failed to open pty: {}", e))?;
 
-        let cmd = CommandBuilder::new_default_prog();
+        let mut cmd = CommandBuilder::new_default_prog();
+
+        if let Some(cwd) = cwd {
+            cmd.cwd(cwd);
+        }
 
         let child = pair.slave.spawn_command(cmd).unwrap();
         drop(pair.slave);

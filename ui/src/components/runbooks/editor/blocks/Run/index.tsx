@@ -1,5 +1,6 @@
 // @ts-ignore
 import { createReactBlockSpec } from "@blocknote/react";
+
 import "./index.css";
 
 import CodeMirror from "@uiw/react-codemirror";
@@ -26,7 +27,24 @@ interface RunBlockProps {
   type: string;
   pty: string;
   isEditable: boolean;
+  editor: any;
 }
+
+const findFirstParentOfType = (editor: any, id: string, type: string): any => {
+  // TODO: the types for blocknote aren't working. Now I'm doing this sort of shit,
+  // really need to fix that.
+  const document = editor.document;
+  var lastOfType = null;
+
+  // Iterate through ALL of the blocks.
+  for (let i = 0; i < document.length; i++) {
+    if (document[i].id == id) return lastOfType;
+
+    if (document[i].type == type) lastOfType = document[i];
+  }
+
+  return lastOfType;
+};
 
 const RunBlock = ({
   onChange,
@@ -36,6 +54,7 @@ const RunBlock = ({
   onRun,
   onStop,
   pty,
+  editor,
 }: RunBlockProps) => {
   const [value, setValue] = useState<String>(code);
   const cleanupPtyTerm = useStore((store: AtuinState) => store.cleanupPtyTerm);
@@ -68,7 +87,9 @@ const RunBlock = ({
     }
 
     if (!isRunning) {
-      let pty = await invoke<string>("pty_open");
+      const cwd = findFirstParentOfType(editor, id, "directory");
+      console.log(cwd.props.path);
+      let pty = await invoke<string>("pty_open", { cwd: cwd.props.path });
       if (onRun) onRun(pty);
 
       if (currentRunbook) incRunbookPty(currentRunbook);
@@ -150,6 +171,7 @@ export default createReactBlockSpec(
       },
       code: { default: "" },
       pty: { default: "" },
+      global: { default: false },
     },
     content: "none",
   },
@@ -186,6 +208,7 @@ export default createReactBlockSpec(
           isEditable={editor.isEditable}
           onRun={onRun}
           onStop={onStop}
+          editor={editor}
         />
       );
     },

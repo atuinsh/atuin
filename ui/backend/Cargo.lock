@@ -6482,6 +6482,7 @@ dependencies = [
  "portable-pty",
  "serde",
  "serde_json",
+ "shellexpand",
  "sqlx",
  "syntect",
  "tauri",

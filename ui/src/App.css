@@ -19,7 +19,7 @@ html {
 }
 
 .history-list {
-    height: calc(100vh - 150px - 64px);
+    height: calc(100dvh - 4rem - 2rem);
 }
 
 .history-item {
