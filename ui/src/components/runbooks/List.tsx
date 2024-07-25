@@ -58,6 +58,9 @@ const NoteSidebar = () => {
                   variant="light"
                   size="sm"
                   onPress={async () => {
+                    // otherwise the cursor is weirdly positioned in the new document
+                    window.getSelection()?.removeAllRanges();
+
                     let runbook = await Runbook.create();
                     setCurrentRunbook(runbook.id);
                     refreshRunbooks();
@@ -105,6 +108,10 @@ const NoteSidebar = () => {
                       className="text-danger"
                       onPress={async () => {
                         await Runbook.delete(runbook.id);
+
+                        if (runbook.id == currentRunbook)
+                          setCurrentRunbook(null);
+
                         refreshRunbooks();
                       }}
                     >
