@@ -11,9 +11,12 @@ use atuin_client::{database::Sqlite, record::sqlite_store::SqliteStore, settings
 pub async fn pty_open<'a>(
     app: tauri::AppHandle,
     state: State<'a, AtuinState>,
+    cwd: Option<String>,
 ) -> Result<uuid::Uuid, String> {
     let id = uuid::Uuid::new_v4();
-    let pty = crate::pty::Pty::open(24, 80).await.unwrap();
+
+    let cwd = cwd.map(|c|shellexpand::tilde(c.as_str()).to_string());
+    let pty = crate::pty::Pty::open(24, 80, cwd).await.unwrap();
 
     let reader = pty.reader.clone();
 

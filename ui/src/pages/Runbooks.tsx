@@ -1,5 +1,8 @@
 import Editor from "@/components/runbooks/editor/Editor";
 import List from "@/components/runbooks/List";
+
+import { Checkbox } from "@nextui-org/react";
+
 import { useStore } from "@/state/store";
 
 export default function Runbooks() {
@@ -8,7 +11,11 @@ export default function Runbooks() {
   return (
     <div className="flex w-full !max-w-full flex-row ">
       <List />
-      {currentRunbook && <Editor />}
+      {currentRunbook && (
+        <div className="flex w-full">
+          <Editor />
+        </div>
+      )}
 
       {!currentRunbook && (
         <div className="flex align-middle justify-center flex-col h-screen w-full">

@@ -109,8 +109,7 @@ const NoteSidebar = () => {
                       onPress={async () => {
                         await Runbook.delete(runbook.id);
 
-                        if (runbook.id == currentRunbook)
-                          setCurrentRunbook(null);
+                        if (runbook.id == currentRunbook) setCurrentRunbook("");
 
                         refreshRunbooks();
                       }}

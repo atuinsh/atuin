@@ -6,7 +6,7 @@ import HistorySearch from "@/components/HistorySearch.tsx";
 import Stats from "@/components/history/Stats.tsx";
 import Drawer from "@/components/Drawer.tsx";
 
-import { useStore } from "@/state/store";
+import { AtuinState, useStore } from "@/state/store";
 
 function Header() {
   return (
@@ -49,9 +49,13 @@ function Header() {
 }
 
 export default function Search() {
-  const history = useStore((state) => state.shellHistory);
-  const refreshHistory = useStore((state) => state.refreshShellHistory);
-  const historyNextPage = useStore((state) => state.historyNextPage);
+  const history = useStore((state: AtuinState) => state.shellHistory);
+  const refreshHistory = useStore(
+    (state: AtuinState) => state.refreshShellHistory,
+  );
+  const historyNextPage = useStore(
+    (state: AtuinState) => state.historyNextPage,
+  );
 
   let [query, setQuery] = useState("");
 
@@ -84,12 +88,7 @@ export default function Search() {
 
   return (
     <>
-      <div className="w-full flex-1 flex-col p-4">
-        <div className="p-10 history-header">
-          <Header />
-          <p>A history of all the commands you run in your shell.</p>
-        </div>
-
+      <div className="w-full flex-1 flex-col">
         <div className="flex h-16 shrink-0 items-center gap-x-4 border-b border-t border-gray-200 bg-white px-4 shadow-sm sm:gap-x-6 sm:px-6 lg:px-8 history-search">
           <HistorySearch
             query={query}
