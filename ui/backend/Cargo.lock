@@ -351,7 +351,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
 name = "atuin-client"
-version = "18.4.0-beta.2"
+version = "18.4.0-beta.3"
 dependencies = [
  "async-trait",
  "atuin-common",
@@ -404,7 +404,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-common"
-version = "18.4.0-beta.2"
+version = "18.4.0-beta.3"
 dependencies = [
  "base64 0.22.1",
  "directories",
@@ -424,7 +424,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-dotfiles"
-version = "18.4.0-beta.2"
+version = "18.4.0-beta.3"
 dependencies = [
  "atuin-client",
  "atuin-common",
@@ -438,7 +438,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-history"
-version = "18.4.0-beta.2"
+version = "18.4.0-beta.3"
 dependencies = [
  "async-trait",
  "atuin-client",
@@ -1108,6 +1108,7 @@ dependencies = [
  "libc",
  "mio",
  "parking_lot",
+ "serde",
  "signal-hook",
  "signal-hook-mio",
  "winapi",

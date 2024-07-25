@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import Database from "@tauri-apps/plugin-sql";
 
 export class User {
@@ -122,9 +123,8 @@ interface Sync {
 export async function inspectCommandHistory(
   h: ShellHistory,
 ): Promise<InspectHistory> {
-  const db = await Database.load(
-    "sqlite:/Users/ellie/.local/share/atuin/history.db",
-  );
+  const settings: Settings = await invoke("cli_settings");
+  const db = await Database.load("sqlite:" + settings.db_path);
 
   let other: any[] = await db.select(
     "select * from history where command=?1 order by timestamp desc",
@@ -151,9 +151,8 @@ export async function inspectCommandHistory(
 export async function inspectDirectoryHistory(
   h: ShellHistory,
 ): Promise<InspectHistory> {
-  const db = await Database.load(
-    "sqlite:/Users/ellie/.local/share/atuin/history.db",
-  );
+  const settings: Settings = await invoke("cli_settings");
+  const db = await Database.load("sqlite:" + settings.db_path);
 
   let other: any[] = await db.select(
     "select * from history where cwd=?1 order by timestamp desc",

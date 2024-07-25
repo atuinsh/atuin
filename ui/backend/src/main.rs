@@ -116,8 +116,7 @@ async fn login(username: String, password: String, key: String) -> Result<String
 async fn logout() -> Result<(), String> {
     let settings = Settings::new().map_err(|e| e.to_string())?;
 
-    atuin_client::logout::logout(&settings)
-        .map_err(|e| e.to_string())?;
+    atuin_client::logout::logout(&settings).map_err(|e| e.to_string())?;
 
     Ok(())
 }
@@ -154,11 +153,18 @@ async fn home_info() -> Result<HomeInfo, String> {
         .await
         .map_err(|e| e.to_string())?;
 
-
     let history = db.list(None, None).await?;
-    let stats = stats::compute(&settings, &history, 10, 1).map_or(vec![], |stats|stats.top[0..5].to_vec()).iter().map(|(commands, count)| (commands.join(" "), *count as u64)).collect();
-    let recent = if history.len() > 5 {history[0..5].to_vec()} else {vec![]};
-    let recent = recent.into_iter().map(|h|h.into()).collect();
+    let stats = stats::compute(&settings, &history, 10, 1)
+        .map_or(vec![], |stats| stats.top[0..5].to_vec())
+        .iter()
+        .map(|(commands, count)| (commands.join(" "), *count as u64))
+        .collect();
+    let recent = if history.len() > 5 {
+        history[0..5].to_vec()
+    } else {
+        vec![]
+    };
+    let recent = recent.into_iter().map(|h| h.into()).collect();
 
     let info = if !settings.logged_in() {
         HomeInfo {
@@ -257,6 +263,12 @@ async fn prefix_search(query: &str) -> Result<Vec<String>, String> {
     Ok(commands)
 }
 
+#[tauri::command]
+async fn cli_settings() -> Result<Settings, String> {
+    let settings = Settings::new().map_err(|e| e.to_string())?;
+    Ok(settings)
+}
+
 fn show_window(app: &AppHandle) {
     let windows = app.webview_windows();
 
@@ -284,6 +296,7 @@ fn main() {
             logout,
             register,
             history_calendar,
+            cli_settings,
             run::pty::pty_open,
             run::pty::pty_write,
             run::pty::pty_resize,
@@ -298,16 +311,17 @@ fn main() {
             dotfiles::vars::delete_var,
             dotfiles::vars::set_var,
         ])
-        .plugin(tauri_plugin_sql::Builder::default().add_migrations("sqlite:runbooks.db", run::migrations::migrations()).build())
+        .plugin(
+            tauri_plugin_sql::Builder::default()
+                .add_migrations("sqlite:runbooks.db", run::migrations::migrations())
+                .build(),
+        )
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
             let _ = show_window(app);
-
         }))
         .manage(state::AtuinState::default())
-        .setup(|app|{
-            Ok(())
-        })
+        .setup(|app| Ok(()))
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
