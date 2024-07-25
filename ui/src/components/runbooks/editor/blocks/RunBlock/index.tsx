@@ -10,6 +10,7 @@ import { Play, Square } from "lucide-react";
 import { useState } from "react";
 
 import { extensions } from "./extensions";
+import { platform } from "@tauri-apps/plugin-os";
 import { invoke } from "@tauri-apps/api/core";
 import Terminal from "./terminal.tsx";
 
@@ -72,7 +73,10 @@ const RunBlock = ({
 
       if (currentRunbook) incRunbookPty(currentRunbook);
 
-      let val = !value.endsWith("\n") ? value + "\r\n" : value;
+      let isWindows = platform() == "windows";
+      let cmdEnd = isWindows ? "\r\n" : "\n";
+
+      let val = !value.endsWith("\n") ? value + cmdEnd : value;
       await invoke("pty_write", { pid: pty, data: val });
     }
   };

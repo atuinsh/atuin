@@ -71,6 +71,9 @@ dependencies:
   '@tauri-apps/plugin-http':
     specifier: 2.0.0-beta.8
     version: 2.0.0-beta.8
+  '@tauri-apps/plugin-os':
+    specifier: 2.0.0-beta.7
+    version: 2.0.0-beta.7
   '@tauri-apps/plugin-shell':
     specifier: 2.0.0-beta.8
     version: 2.0.0-beta.8
@@ -5144,6 +5147,12 @@ packages:
 
   /@tauri-apps/plugin-http@2.0.0-beta.8:
     resolution: {integrity: sha512-FhZP4WtS1o69Mn7z2RpNIdVS+2nPqmXyz6LhqweuP1FTjgTVraVxIfGLQCOMLpEUwo8zWY2uChllolV6WGYZ/A==}
+    dependencies:
+      '@tauri-apps/api': 2.0.0-beta.15
+    dev: false
+
+  /@tauri-apps/plugin-os@2.0.0-beta.7:
+    resolution: {integrity: sha512-CHo09ecxUU0NFkAqctXeQzdaXw02EXulqcaZnbjrBfRJ2ulmGq7zaUCsHihfcqWcdnmNwmP9Wh/gyznMc1JF9Q==}
     dependencies:
       '@tauri-apps/api': 2.0.0-beta.15
     dev: false

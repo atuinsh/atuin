@@ -15,11 +15,13 @@
     "sql:allow-load",
     "sql:allow-execute",
     "sql:allow-select",
+    "os:allow-platform",
     "window:allow-start-dragging",
     {
       "identifier": "http:default",
       "allow": ["https://api.atuin.sh/*"]
-    }
+    },
+    "os:default"
   ],
   "platforms": ["linux", "macOS", "windows"]
 }
