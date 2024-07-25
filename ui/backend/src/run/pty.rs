@@ -3,7 +3,7 @@ use std::io::BufRead;
 use std::path::PathBuf;
 
 use crate::state::AtuinState;
-use tauri::{Manager, State};
+use tauri::{Manager, State, Emitter};
 
 use atuin_client::{database::Sqlite, record::sqlite_store::SqliteStore, settings::Settings};
 
