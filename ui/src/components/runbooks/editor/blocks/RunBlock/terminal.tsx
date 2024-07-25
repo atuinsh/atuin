@@ -2,6 +2,8 @@ import { useState, useEffect, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import "@xterm/xterm/css/xterm.css";
 import { useStore } from "@/state/store";
+import { invoke } from "@tauri-apps/api/core";
+import { IDisposable } from "@xterm/xterm";
 
 const usePersistentTerminal = (pty: string) => {
   const newPtyTerm = useStore((store) => store.newPtyTerm);
@@ -30,6 +32,7 @@ const TerminalComponent = ({ pty }: any) => {
   const { terminalData, isReady } = usePersistentTerminal(pty);
   const [isAttached, setIsAttached] = useState(false);
   const cleanupListenerRef = useRef<(() => void) | null>(null);
+  const keyDispose = useRef<IDisposable | null>(null);
 
   useEffect(() => {
     // no pty? no terminal
@@ -60,6 +63,12 @@ const TerminalComponent = ({ pty }: any) => {
       setIsAttached(true);
 
       window.addEventListener("resize", windowResize);
+
+      const disposeOnKey = terminalData.terminal.onKey(async (event) => {
+        await invoke("pty_write", { pid: pty, data: event.key });
+      });
+
+      keyDispose.current = disposeOnKey;
     }
 
     listen(`pty-${pty}`, (event: any) => {
@@ -87,6 +96,8 @@ const TerminalComponent = ({ pty }: any) => {
       if (cleanupListenerRef.current) {
         cleanupListenerRef.current();
       }
+
+      if (keyDispose.current) keyDispose.current.dispose();
 
       window.removeEventListener("resize", windowResize);
     };
