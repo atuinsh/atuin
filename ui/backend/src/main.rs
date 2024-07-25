@@ -257,6 +257,12 @@ async fn prefix_search(query: &str) -> Result<Vec<String>, String> {
     Ok(commands)
 }
 
+#[tauri::command]
+async fn cli_settings() -> Result<Settings, String>{
+    let settings = Settings::new().map_err(|e| e.to_string())?;
+    Ok(settings)
+}
+
 fn show_window(app: &AppHandle) {
     let windows = app.webview_windows();
 
@@ -284,6 +290,7 @@ fn main() {
             logout,
             register,
             history_calendar,
+            cli_settings,
             run::pty::pty_open,
             run::pty::pty_write,
             run::pty::pty_resize,
