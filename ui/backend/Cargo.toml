@@ -37,6 +37,7 @@ tauri-plugin-http = "2.0.0-beta"
 tauri-plugin-single-instance = "2.0.0-beta"
 tauri-plugin-os = "2.0.0-beta.8"
 tauri-plugin-shell = "2.0.0-beta.7"
+tauri-plugin-dialog = "2.0.0-beta.11"
 
 [target."cfg(target_os = \"macos\")".dependencies]
 cocoa = "0.25"

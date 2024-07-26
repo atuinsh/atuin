@@ -3,7 +3,7 @@ use std::io::BufRead;
 use std::path::PathBuf;
 
 use crate::state::AtuinState;
-use tauri::{Manager, State, Emitter};
+use tauri::{Emitter, Manager, State};
 
 use atuin_client::{database::Sqlite, record::sqlite_store::SqliteStore, settings::Settings};
 
@@ -15,7 +15,7 @@ pub async fn pty_open<'a>(
 ) -> Result<uuid::Uuid, String> {
     let id = uuid::Uuid::new_v4();
 
-    let cwd = cwd.map(|c|shellexpand::tilde(c.as_str()).to_string());
+    let cwd = cwd.map(|c| shellexpand::tilde(c.as_str()).to_string());
     let pty = crate::pty::Pty::open(24, 80, cwd).await.unwrap();
 
     let reader = pty.reader.clone();
