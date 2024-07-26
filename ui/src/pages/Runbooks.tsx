@@ -1,8 +1,6 @@
 import Editor from "@/components/runbooks/editor/Editor";
 import List from "@/components/runbooks/List";
 
-import { Checkbox } from "@nextui-org/react";
-
 import { useStore } from "@/state/store";
 
 export default function Runbooks() {
