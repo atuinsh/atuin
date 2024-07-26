@@ -87,9 +87,15 @@ const RunBlock = ({
     }
 
     if (!isRunning) {
-      const cwd = findFirstParentOfType(editor, id, "directory");
-      console.log(cwd.props.path);
-      let pty = await invoke<string>("pty_open", { cwd: cwd.props.path });
+      let cwd = findFirstParentOfType(editor, id, "directory");
+
+      if (cwd) {
+        cwd = cwd.props.path;
+      } else {
+        cwd = "~";
+      }
+
+      let pty = await invoke<string>("pty_open", { cwd });
       if (onRun) onRun(pty);
 
       if (currentRunbook) incRunbookPty(currentRunbook);

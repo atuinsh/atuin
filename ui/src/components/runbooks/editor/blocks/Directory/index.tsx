@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Input, Tooltip, Button } from "@nextui-org/react";
-import { FolderInputIcon, HelpCircleIcon } from "lucide-react";
+import { FolderInputIcon } from "lucide-react";
 
 // @ts-ignore
 import { createReactBlockSpec } from "@blocknote/react";
@@ -9,7 +9,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 
 interface DirectoryProps {
   path: string;
-  onInputChange: (string) => void;
+  onInputChange: (val: string) => void;
 }
 
 const Directory = ({ path, onInputChange }: DirectoryProps) => {
@@ -21,8 +21,8 @@ const Directory = ({ path, onInputChange }: DirectoryProps) => {
       directory: true,
     });
 
-    setValue(path);
-    onInputChange(path);
+    setValue(path || "");
+    onInputChange(path || "");
   };
 
   return (
