@@ -1,9 +1,11 @@
 import { useState } from "react";
-import { Input, Tooltip } from "@nextui-org/react";
+import { Input, Tooltip, Button } from "@nextui-org/react";
 import { FolderInputIcon, HelpCircleIcon } from "lucide-react";
 
 // @ts-ignore
 import { createReactBlockSpec } from "@blocknote/react";
+
+import { open } from "@tauri-apps/plugin-dialog";
 
 interface DirectoryProps {
   path: string;
@@ -13,27 +15,49 @@ interface DirectoryProps {
 const Directory = ({ path, onInputChange }: DirectoryProps) => {
   const [value, setValue] = useState(path);
 
+  const selectFolder = async () => {
+    const path = await open({
+      multiple: false,
+      directory: true,
+    });
+
+    setValue(path);
+    onInputChange(path);
+  };
+
   return (
     <div className="w-full !max-w-full !outline-none overflow-none">
       <Tooltip
         content="Change working directory for all subsequent code blocks"
         delay={1000}
       >
-        <Input
-          label="Directory"
-          placeholder="~"
-          labelPlacement="outside"
-          value={value}
-          autoComplete="off"
-          autoCapitalize="off"
-          autoCorrect="off"
-          spellCheck="false"
-          onValueChange={(val) => {
-            setValue(val);
-            onInputChange(val);
-          }}
-          startContent={<FolderInputIcon />}
-        />
+        <div className="flex flex-row">
+          <div className="mr-2">
+            <Button
+              isIconOnly
+              variant="flat"
+              aria-label="Select folder"
+              onPress={selectFolder}
+            >
+              <FolderInputIcon />
+            </Button>
+          </div>
+
+          <div className="w-full">
+            <Input
+              placeholder="~"
+              value={value}
+              autoComplete="off"
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck="false"
+              onValueChange={(val) => {
+                setValue(val);
+                onInputChange(val);
+              }}
+            />
+          </div>
+        </div>
       </Tooltip>
     </div>
   );
