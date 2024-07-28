@@ -1260,7 +1260,7 @@ pub async fn history(
                 inspecting.as_ref(),
                 settings,
                 theme,
-            )
+            );
         })?;
 
         let initial_input = app.search.input.as_str().to_owned();
