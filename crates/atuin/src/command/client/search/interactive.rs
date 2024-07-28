@@ -21,7 +21,7 @@ use unicode_width::UnicodeWidthStr;
 
 use atuin_client::{
     database::{current_context, Database},
-    history::{store::HistoryStore, History, HistoryStats, HistoryId},
+    history::{store::HistoryStore, History, HistoryId, HistoryStats},
     settings::{
         CursorStyle, ExitMode, FilterMode, KeymapMode, PreviewStrategy, SearchMode, Settings,
     },
@@ -61,28 +61,28 @@ pub enum InputAction {
 
 #[derive(Clone)]
 pub struct InspectingState {
-    current_id: Option<HistoryId>,
-    next_id: Option<HistoryId>,
-    previous_id: Option<HistoryId>,
+    current: Option<HistoryId>,
+    next: Option<HistoryId>,
+    previous: Option<HistoryId>,
 }
 
 impl InspectingState {
-    pub fn to_previous(&mut self) {
-        let previous = self.previous_id.clone();
+    pub fn move_to_previous(&mut self) {
+        let previous = self.previous.clone();
         self.reset();
-        self.current_id = previous;
+        self.current = previous;
     }
 
-    pub fn to_next(&mut self) {
-        let next = self.next_id.clone();
+    pub fn move_to_next(&mut self) {
+        let next = self.next.clone();
         self.reset();
-        self.current_id = next;
+        self.current = next;
     }
 
     pub fn reset(&mut self) {
-        self.current_id = None;
-        self.next_id = None;
-        self.previous_id = None;
+        self.current = None;
+        self.next = None;
+        self.previous = None;
     }
 }
 
@@ -122,7 +122,11 @@ impl State {
     ) -> Result<Vec<History>> {
         let results = self.engine.query(&self.search, db).await?;
 
-        self.inspecting_state = InspectingState { current_id: None, next_id: None, previous_id: None };
+        self.inspecting_state = InspectingState {
+            current: None,
+            next: None,
+            previous: None,
+        };
         self.results_state.select(0);
         self.results_len = results.len();
 
@@ -251,15 +255,13 @@ impl State {
             KeyCode::Char('c' | 'g') if ctrl => Some(InputAction::ReturnOriginal),
             KeyCode::Esc if esc_allow_exit => Some(Self::handle_key_exit(settings)),
             KeyCode::Char('[') if ctrl && esc_allow_exit => Some(Self::handle_key_exit(settings)),
-            KeyCode::Tab => {
-                match self.tab_index {
-                    0 => Some(InputAction::Accept(self.results_state.selected())),
+            KeyCode::Tab => match self.tab_index {
+                0 => Some(InputAction::Accept(self.results_state.selected())),
 
-                    1 => Some(InputAction::AcceptInspecting),
+                1 => Some(InputAction::AcceptInspecting),
 
-                    _ => panic!("invalid tab index on input"),
-                }
-            }
+                _ => panic!("invalid tab index on input"),
+            },
             KeyCode::Char('o') if ctrl => {
                 self.tab_index = (self.tab_index + 1) % TAB_TITLES.len();
 
@@ -665,7 +667,9 @@ impl State {
         let show_help = settings.show_help && (!compact || f.size().height > 1);
         // This is an OR, as it seems more likely for someone to wish to override
         // tabs unexpectedly being missed, than unexpectedly present.
-        let hide_extra = settings.auto_hide_height != 0 && compact && f.size().height <= settings.auto_hide_height;
+        let hide_extra = settings.auto_hide_height != 0
+            && compact
+            && f.size().height <= settings.auto_hide_height;
         let show_tabs = settings.show_tabs && !hide_extra;
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -683,7 +687,7 @@ impl State {
                 } else if hide_extra {
                     [
                         Constraint::Length(if show_help { 1 } else { 0 }), // header
-                        Constraint::Length(0), // tabs
+                        Constraint::Length(0),                             // tabs
                         Constraint::Min(1),                                // results list
                         Constraint::Length(0),
                         Constraint::Length(0),
@@ -754,13 +758,22 @@ impl State {
         } else if self.switched_search_mode {
             format!("S{}>", self.search_mode.as_str().chars().next().unwrap())
         } else {
-            format!("{}> ", self.search.filter_mode.as_str().chars().next().unwrap())
+            format!(
+                "{}> ",
+                self.search.filter_mode.as_str().chars().next().unwrap()
+            )
         };
 
         match self.tab_index {
             0 => {
-                let results_list =
-                    Self::build_results_list(style, results, self.keymap_mode, &self.now, indicator.as_str(), theme);
+                let results_list = Self::build_results_list(
+                    style,
+                    results,
+                    self.keymap_mode,
+                    &self.now,
+                    indicator.as_str(),
+                    theme,
+                );
                 f.render_stateful_widget(results_list, results_list_chunk, &mut self.results_state);
             }
 
@@ -780,14 +793,14 @@ impl State {
                 } else {
                     let inspecting = match inspecting {
                         Some(inspecting) => inspecting,
-                        None => &results[self.results_state.selected()]
+                        None => &results[self.results_state.selected()],
                     };
                     super::inspector::draw(
                         f,
                         results_list_chunk,
                         inspecting,
                         &stats.expect("Drawing inspector, but no stats"),
-                        &settings,
+                        settings,
                         theme,
                     );
                 }
@@ -1120,7 +1133,11 @@ pub async fn history(
         switched_search_mode: false,
         search_mode,
         tab_index: 0,
-        inspecting_state: InspectingState { current_id: None, next_id: None, previous_id: None },
+        inspecting_state: InspectingState {
+            current: None,
+            next: None,
+            previous: None,
+        },
         search: SearchState {
             input,
             filter_mode: if settings.workspaces && context.git_root.is_some() {
@@ -1159,7 +1176,16 @@ pub async fn history(
     let mut inspecting: Option<History> = None;
     let accept;
     let result = 'render: loop {
-        terminal.draw(|f| app.draw(f, &results, stats.clone(), inspecting.as_ref(), settings, theme))?;
+        terminal.draw(|f| {
+            app.draw(
+                f,
+                &results,
+                stats.clone(),
+                inspecting.as_ref(),
+                settings,
+                theme,
+            )
+        })?;
 
         let initial_input = app.search.input.as_str().to_owned();
         let initial_filter_mode = app.search.filter_mode;
@@ -1219,16 +1245,16 @@ pub async fn history(
             results = app.query_results(&mut db, settings.smart_sort).await?;
         }
 
-        let inspecting_id = app.inspecting_state.clone().current_id;
+        let inspecting_id = app.inspecting_state.clone().current;
         // If inspecting ID is not the current inspecting History, update it.
         match inspecting_id {
             Some(inspecting_id) => {
                 if inspecting.is_none() || inspecting_id != inspecting.clone().unwrap().id {
-                    inspecting = db.load(inspecting_id.0.as_str()).await?
+                    inspecting = db.load(inspecting_id.0.as_str()).await?;
                 }
-            },
+            }
             _ => {
-                inspecting = None
+                inspecting = None;
             }
         };
 
@@ -1239,12 +1265,18 @@ pub async fn history(
             // around a database object, or a full stats object.
             let selected = match inspecting.clone() {
                 Some(insp) => insp,
-                None => results[app.results_state.selected()].clone()
+                None => results[app.results_state.selected()].clone(),
             };
             let stats = db.stats(&selected).await?;
-            app.inspecting_state.current_id = Some(selected.id);
-            app.inspecting_state.previous_id = match stats.previous.clone() { Some(p) => { Some(p.id) }, _ => None };
-            app.inspecting_state.next_id = match stats.next.clone() { Some(p) => { Some(p.id) }, _ => None };
+            app.inspecting_state.current = Some(selected.id);
+            app.inspecting_state.previous = match stats.previous.clone() {
+                Some(p) => Some(p.id),
+                _ => None,
+            };
+            app.inspecting_state.next = match stats.next.clone() {
+                Some(p) => Some(p.id),
+                _ => None,
+            };
             Some(stats)
         } else {
             None
@@ -1263,15 +1295,18 @@ pub async fn history(
                 Some(result) => {
                     let mut command = result.command;
                     if accept
-                        && (utils::is_zsh() || utils::is_fish() || utils::is_bash() || utils::is_xonsh())
+                        && (utils::is_zsh()
+                            || utils::is_fish()
+                            || utils::is_bash()
+                            || utils::is_xonsh())
                     {
                         command = String::from("__atuin_accept__:") + &command;
                     }
 
                     // index is in bounds so we return that entry
                     Ok(command)
-                },
-                None => Ok(String::new())
+                }
+                None => Ok(String::new()),
             }
         }
         InputAction::Accept(index) if index < results.len() => {
@@ -1393,8 +1428,8 @@ mod tests {
         let no_preview = State::calc_preview_height(
             &settings_preview_auto,
             &results,
-            0 as usize,
-            0 as usize,
+            0_usize,
+            0_usize,
             false,
             1,
             80,
@@ -1403,8 +1438,8 @@ mod tests {
         let preview_h2 = State::calc_preview_height(
             &settings_preview_auto,
             &results,
-            1 as usize,
-            0 as usize,
+            1_usize,
+            0_usize,
             false,
             1,
             80,
@@ -1413,8 +1448,8 @@ mod tests {
         let preview_h3 = State::calc_preview_height(
             &settings_preview_auto,
             &results,
-            2 as usize,
-            0 as usize,
+            2_usize,
+            0_usize,
             false,
             1,
             80,
@@ -1423,8 +1458,8 @@ mod tests {
         let preview_one_line = State::calc_preview_height(
             &settings_preview_auto,
             &results,
-            0 as usize,
-            0 as usize,
+            0_usize,
+            0_usize,
             false,
             1,
             66,
@@ -1433,8 +1468,8 @@ mod tests {
         let preview_limit_at_2 = State::calc_preview_height(
             &settings_preview_auto_h2,
             &results,
-            2 as usize,
-            0 as usize,
+            2_usize,
+            0_usize,
             false,
             1,
             80,
@@ -1443,8 +1478,8 @@ mod tests {
         let preview_static_h3 = State::calc_preview_height(
             &settings_preview_h4,
             &results,
-            1 as usize,
-            0 as usize,
+            1_usize,
+            0_usize,
             false,
             1,
             80,
@@ -1453,8 +1488,8 @@ mod tests {
         let preview_static_limit_at_4 = State::calc_preview_height(
             &settings_preview_h4,
             &results,
-            1 as usize,
-            0 as usize,
+            1_usize,
+            0_usize,
             false,
             1,
             20,
@@ -1463,8 +1498,8 @@ mod tests {
         let settings_preview_fixed = State::calc_preview_height(
             &settings_preview_fixed,
             &results,
-            1 as usize,
-            0 as usize,
+            1_usize,
+            0_usize,
             false,
             1,
             20,
@@ -1472,7 +1507,7 @@ mod tests {
 
         assert_eq!(no_preview, 1);
         // 1 * 2 is the space for the border
-        let border_space = 1 * 2;
+        let border_space = 2;
         assert_eq!(preview_h2, 2 + border_space);
         assert_eq!(preview_h3, 3 + border_space);
         assert_eq!(preview_one_line, 1 + border_space);

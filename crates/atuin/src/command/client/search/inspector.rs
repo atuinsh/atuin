@@ -38,42 +38,43 @@ pub fn draw_commands(
     theme: &Theme,
 ) {
     let commands = Layout::default()
-        .direction(if compact { Direction::Vertical } else { Direction::Horizontal })
-        .constraints(
-            if compact {
-                [
-                    Constraint::Length(1),
-                    Constraint::Length(1),
-                    Constraint::Min(0),
-                ]
-            } else {
-                [
-                    Constraint::Ratio(1, 4),
-                    Constraint::Ratio(1, 2),
-                    Constraint::Ratio(1, 4),
-                ]
-            }
-        )
+        .direction(if compact {
+            Direction::Vertical
+        } else {
+            Direction::Horizontal
+        })
+        .constraints(if compact {
+            [
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Min(0),
+            ]
+        } else {
+            [
+                Constraint::Ratio(1, 4),
+                Constraint::Ratio(1, 2),
+                Constraint::Ratio(1, 4),
+            ]
+        })
         .split(parent);
 
-    let command = Paragraph::new(
-        Text::from(Span::styled(
-            history.command.clone(),
-            Style::default().add_modifier(Modifier::BOLD).fg(Color::White),
-        ))
-    ).block(
-        if compact {
-            Block::new()
-                .borders(Borders::NONE)
-                .style(theme.as_style(Meaning::Base))
-        } else {
-            Block::new()
-                .borders(Borders::ALL)
-                .style(theme.as_style(Meaning::Base))
-                .title("Command")
-                .padding(Padding::horizontal(1))
-        }
-    );
+    let command = Paragraph::new(Text::from(Span::styled(
+        history.command.clone(),
+        Style::default()
+            .add_modifier(Modifier::BOLD)
+            .fg(Color::White),
+    )))
+    .block(if compact {
+        Block::new()
+            .borders(Borders::NONE)
+            .style(theme.as_style(Meaning::Base))
+    } else {
+        Block::new()
+            .borders(Borders::ALL)
+            .style(theme.as_style(Meaning::Base))
+            .title("Command")
+            .padding(Padding::horizontal(1))
+    });
 
     let previous = Paragraph::new(
         stats
@@ -81,19 +82,17 @@ pub fn draw_commands(
             .clone()
             .map_or("[No previous command]".to_string(), |prev| prev.command),
     )
-    .block(
-        if compact {
-            Block::new()
-                .borders(Borders::NONE)
-                .style(theme.as_style(Meaning::Annotation))
-        } else {
-            Block::new()
-                .borders(Borders::ALL)
-                .style(theme.as_style(Meaning::Annotation))
-                .title("Previous command")
-                .padding(Padding::horizontal(1))
-        }
-    );
+    .block(if compact {
+        Block::new()
+            .borders(Borders::NONE)
+            .style(theme.as_style(Meaning::Annotation))
+    } else {
+        Block::new()
+            .borders(Borders::ALL)
+            .style(theme.as_style(Meaning::Annotation))
+            .title("Previous command")
+            .padding(Padding::horizontal(1))
+    });
 
     let next = Paragraph::new(
         stats
@@ -101,19 +100,17 @@ pub fn draw_commands(
             .clone()
             .map_or("[No next command]".to_string(), |next| next.command),
     )
-    .block(
-        if compact {
-            Block::new()
-                .borders(Borders::NONE)
-                .style(theme.as_style(Meaning::Annotation))
-        } else {
-            Block::new()
-                .borders(Borders::ALL)
-                .title("Next command")
-                .padding(Padding::horizontal(1))
-                .style(theme.as_style(Meaning::Annotation))
-        }
-    );
+    .block(if compact {
+        Block::new()
+            .borders(Borders::NONE)
+            .style(theme.as_style(Meaning::Annotation))
+    } else {
+        Block::new()
+            .borders(Borders::ALL)
+            .title("Next command")
+            .padding(Padding::horizontal(1))
+            .style(theme.as_style(Meaning::Annotation))
+    });
 
     f.render_widget(previous, commands[0]);
     f.render_widget(command, commands[1]);
@@ -300,17 +297,29 @@ pub fn draw(
     };
 
     if compact {
-        draw_compact(f, chunk, history, stats, theme)
+        draw_compact(f, chunk, history, stats, theme);
     } else {
-        draw_full(f, chunk, history, stats, theme)
+        draw_full(f, chunk, history, stats, theme);
     }
 }
 
-pub fn draw_compact(f: &mut Frame<'_>, chunk: Rect, history: &History, stats: &HistoryStats, theme: &Theme) {
+pub fn draw_compact(
+    f: &mut Frame<'_>,
+    chunk: Rect,
+    history: &History,
+    stats: &HistoryStats,
+    theme: &Theme,
+) {
     draw_commands(f, chunk, history, stats, true, theme);
 }
 
-pub fn draw_full(f: &mut Frame<'_>, chunk: Rect, history: &History, stats: &HistoryStats, theme: &Theme) {
+pub fn draw_full(
+    f: &mut Frame<'_>,
+    chunk: Rect,
+    history: &History,
+    stats: &HistoryStats,
+    theme: &Theme,
+) {
     let vert_layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Ratio(1, 5), Constraint::Ratio(4, 5)])
@@ -339,13 +348,13 @@ pub fn input(
     match input.code {
         KeyCode::Char('d') if ctrl => InputAction::Delete(selected),
         KeyCode::Up => {
-            state.inspecting_state.to_previous();
+            state.inspecting_state.move_to_previous();
             InputAction::Redraw
-        },
+        }
         KeyCode::Down => {
-            state.inspecting_state.to_next();
+            state.inspecting_state.move_to_next();
             InputAction::Redraw
-        },
+        }
         _ => InputAction::Continue,
     }
 }
