@@ -45,7 +45,10 @@ impl HistoryClient {
             .connect_with_connector(service_fn(move |_: Uri| {
                 let url = format!("127.0.0.1:{}", port);
 
-                TcpStream::connect(url)
+                
+                async move {
+                    Ok::<_, std::io::Error>(TokioIo::new(TcpStream::connect(url.clone()).await?))
+                }
             }))
             .await
             .map_err(|_| eyre!("failed to connect to local atuin daemon. Is it running?"))?;
