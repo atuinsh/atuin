@@ -69,7 +69,7 @@
     "zustand": "^4.5.4"
   },
   "devDependencies": {
-    "@iconify/react": "^5.0.1",
+    "@iconify/react": "^5.0.2",
     "@tauri-apps/cli": "2.0.0-beta.22",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
