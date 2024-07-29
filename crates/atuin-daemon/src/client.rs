@@ -45,7 +45,6 @@ impl HistoryClient {
             .connect_with_connector(service_fn(move |_: Uri| {
                 let url = format!("127.0.0.1:{}", port);
 
-                
                 async move {
                     Ok::<_, std::io::Error>(TokioIo::new(TcpStream::connect(url.clone()).await?))
                 }
