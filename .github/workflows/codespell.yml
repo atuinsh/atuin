@@ -25,4 +25,4 @@ jobs:
           # This is regenerated from commit history
           # we cannot rewrite commit history, and I'd rather not correct it
           # every time
-          exclude_file: CHANGELOG.md,ui/pnpm-lock.yaml
+          exclude_file: CHANGELOG.md
