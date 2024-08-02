@@ -367,7 +367,7 @@ pub(crate) fn test_sqlite_store_timeout() -> f64 {
     std::env::var("ATUIN_TEST_SQLITE_STORE_TIMEOUT")
         .ok()
         .and_then(|x| x.parse().ok())
-        .unwrap_or(0.1)
+        .unwrap_or(crate::settings::test_local_timeout())
 }
 
 #[cfg(test)]
