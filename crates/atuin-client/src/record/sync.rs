@@ -328,11 +328,14 @@ mod tests {
     use atuin_common::record::{Diff, EncryptedData, HostId, Record};
     use pretty_assertions::assert_eq;
 
-    use crate::record::{
-        encryption::PASETO_V4,
-        sqlite_store::{test_sqlite_store_timeout, SqliteStore},
-        store::Store,
-        sync::{self, Operation},
+    use crate::{
+        record::{
+            encryption::PASETO_V4,
+            sqlite_store::SqliteStore,
+            store::Store,
+            sync::{self, Operation},
+        },
+        settings::test_local_timeout,
     };
 
     fn test_record() -> Record<EncryptedData> {
@@ -357,10 +360,10 @@ mod tests {
         local_records: Vec<Record<EncryptedData>>,
         remote_records: Vec<Record<EncryptedData>>,
     ) -> (SqliteStore, Vec<Diff>) {
-        let local_store = SqliteStore::new(":memory:", test_sqlite_store_timeout())
+        let local_store = SqliteStore::new(":memory:", test_local_timeout())
             .await
             .expect("failed to open in memory sqlite");
-        let remote_store = SqliteStore::new(":memory:", test_sqlite_store_timeout())
+        let remote_store = SqliteStore::new(":memory:", test_local_timeout())
             .await
             .expect("failed to open in memory sqlite"); // "remote"
 

@@ -287,22 +287,14 @@ impl VarStore {
 }
 
 #[cfg(test)]
-pub(crate) fn test_sqlite_store_timeout() -> f64 {
-    std::env::var("ATUIN_TEST_SQLITE_STORE_TIMEOUT")
-        .ok()
-        .and_then(|x| x.parse().ok())
-        .unwrap_or(0.1)
-}
-
-#[cfg(test)]
 mod tests {
     use rand::rngs::OsRng;
 
     use atuin_client::record::sqlite_store::SqliteStore;
 
-    use crate::shell::Var;
+    use crate::{shell::Var, store::test_local_timeout};
 
-    use super::{test_sqlite_store_timeout, VarRecord, VarStore, DOTFILES_VAR_VERSION};
+    use super::{VarRecord, VarStore, DOTFILES_VAR_VERSION};
     use crypto_secretbox::{KeyInit, XSalsa20Poly1305};
 
     #[test]
@@ -327,7 +319,7 @@ mod tests {
 
     #[tokio::test]
     async fn build_vars() {
-        let store = SqliteStore::new(":memory:", test_sqlite_store_timeout())
+        let store = SqliteStore::new(":memory:", test_local_timeout())
             .await
             .unwrap();
         let key: [u8; 32] = XSalsa20Poly1305::generate_key(&mut OsRng).into();
