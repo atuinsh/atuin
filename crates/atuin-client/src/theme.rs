@@ -195,7 +195,7 @@ fn from_string(name: &str) -> Result<Color, String> {
             })
         }
         '@' => {
-            // For full fleixibility, we need to use serde_json, given
+            // For full flexibility, we need to use serde_json, given
             // crossterm's approach.
             serde_json::from_str::<Color>(format!("\"{}\"", &name[1..]).as_str())
                 .map_err(|_| format!("Could not convert color name {} to Crossterm color", name))
