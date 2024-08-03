@@ -258,7 +258,10 @@ lazy_static! {
             "default".to_string(),
             None,
             HashMap::from([
-                (Meaning::AlertError, StyleFactory::from_fg_color(Color::DarkRed)),
+                (
+                    Meaning::AlertError,
+                    StyleFactory::from_fg_color(Color::DarkRed),
+                ),
                 (
                     Meaning::AlertWarn,
                     StyleFactory::from_fg_color(Color::DarkYellow),
@@ -271,7 +274,10 @@ lazy_static! {
                     Meaning::Annotation,
                     StyleFactory::from_fg_color(Color::DarkGrey),
                 ),
-                (Meaning::Guidance, StyleFactory::from_fg_color(Color::DarkBlue)),
+                (
+                    Meaning::Guidance,
+                    StyleFactory::from_fg_color(Color::DarkBlue),
+                ),
                 (
                     Meaning::Important,
                     StyleFactory::from_fg_color(Color::White),
@@ -582,7 +588,10 @@ mod theme_tests {
         let mut manager = ThemeManager::new(Some(true), Some("".to_string()));
         let theme = manager.load_theme("default", None);
         assert_eq!(theme.get_error().foreground_color.unwrap(), Color::DarkRed);
-        assert_eq!(theme.get_warning().foreground_color.unwrap(), Color::DarkYellow);
+        assert_eq!(
+            theme.get_warning().foreground_color.unwrap(),
+            Color::DarkYellow
+        );
         assert_eq!(theme.get_info().foreground_color.unwrap(), Color::DarkGreen);
         assert_eq!(theme.get_base().foreground_color, None);
         assert_eq!(
