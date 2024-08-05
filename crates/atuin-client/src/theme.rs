@@ -195,7 +195,7 @@ fn from_string(name: &str) -> Result<Color, String> {
             })
         }
         '@' => {
-            // For full fleixibility, we need to use serde_json, given
+            // For full flexibility, we need to use serde_json, given
             // crossterm's approach.
             serde_json::from_str::<Color>(format!("\"{}\"", &name[1..]).as_str())
                 .map_err(|_| format!("Could not convert color name {} to Crossterm color", name))
@@ -258,20 +258,26 @@ lazy_static! {
             "default".to_string(),
             None,
             HashMap::from([
-                (Meaning::AlertError, StyleFactory::from_fg_color(Color::Red)),
+                (
+                    Meaning::AlertError,
+                    StyleFactory::from_fg_color(Color::DarkRed),
+                ),
                 (
                     Meaning::AlertWarn,
-                    StyleFactory::from_fg_color(Color::Yellow),
+                    StyleFactory::from_fg_color(Color::DarkYellow),
                 ),
                 (
                     Meaning::AlertInfo,
-                    StyleFactory::from_fg_color(Color::Green),
+                    StyleFactory::from_fg_color(Color::DarkGreen),
                 ),
                 (
                     Meaning::Annotation,
                     StyleFactory::from_fg_color(Color::DarkGrey),
                 ),
-                (Meaning::Guidance, StyleFactory::from_fg_color(Color::Blue)),
+                (
+                    Meaning::Guidance,
+                    StyleFactory::from_fg_color(Color::DarkBlue),
+                ),
                 (
                     Meaning::Important,
                     StyleFactory::from_fg_color(Color::White),
@@ -536,7 +542,7 @@ mod theme_tests {
         // Falls back to red as meaning missing from theme, so picks base default.
         assert_eq!(
             theme.as_style(Meaning::AlertError).foreground_color,
-            Some(Color::Red)
+            Some(Color::DarkRed)
         );
 
         // Falls back to Important as Title not available.
@@ -581,13 +587,16 @@ mod theme_tests {
     fn test_can_get_colors_via_convenience_functions() {
         let mut manager = ThemeManager::new(Some(true), Some("".to_string()));
         let theme = manager.load_theme("default", None);
-        assert_eq!(theme.get_error().foreground_color.unwrap(), Color::Red);
-        assert_eq!(theme.get_warning().foreground_color.unwrap(), Color::Yellow);
-        assert_eq!(theme.get_info().foreground_color.unwrap(), Color::Green);
+        assert_eq!(theme.get_error().foreground_color.unwrap(), Color::DarkRed);
+        assert_eq!(
+            theme.get_warning().foreground_color.unwrap(),
+            Color::DarkYellow
+        );
+        assert_eq!(theme.get_info().foreground_color.unwrap(), Color::DarkGreen);
         assert_eq!(theme.get_base().foreground_color, None);
         assert_eq!(
             theme.get_alert(log::Level::Error).foreground_color.unwrap(),
-            Color::Red
+            Color::DarkRed
         )
     }
 
@@ -683,7 +692,7 @@ mod theme_tests {
             nunsolarized_theme
                 .as_style(Meaning::Guidance)
                 .foreground_color,
-            Some(Color::Blue)
+            Some(Color::DarkBlue)
         );
 
         testing_logger::validate(|captured_logs| {
