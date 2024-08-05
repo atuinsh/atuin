@@ -298,11 +298,13 @@ impl AliasStore {
 }
 
 #[cfg(test)]
-pub(crate) fn test_sqlite_store_timeout() -> f64 {
-    std::env::var("ATUIN_TEST_SQLITE_STORE_TIMEOUT")
+pub(crate) fn test_local_timeout() -> f64 {
+    std::env::var("ATUIN_TEST_LOCAL_TIMEOUT")
         .ok()
         .and_then(|x| x.parse().ok())
-        .unwrap_or(0.1)
+        // this hardcoded value should be replaced by a simple way to get the
+        // default local_timeout of Settings if possible
+        .unwrap_or(2.0)
 }
 
 #[cfg(test)]
@@ -313,7 +315,7 @@ mod tests {
 
     use crate::shell::Alias;
 
-    use super::{test_sqlite_store_timeout, AliasRecord, AliasStore, CONFIG_SHELL_ALIAS_VERSION};
+    use super::{test_local_timeout, AliasRecord, AliasStore, CONFIG_SHELL_ALIAS_VERSION};
     use crypto_secretbox::{KeyInit, XSalsa20Poly1305};
 
     #[test]
@@ -335,7 +337,7 @@ mod tests {
 
     #[tokio::test]
     async fn build_aliases() {
-        let store = SqliteStore::new(":memory:", test_sqlite_store_timeout())
+        let store = SqliteStore::new(":memory:", test_local_timeout())
             .await
             .unwrap();
         let key: [u8; 32] = XSalsa20Poly1305::generate_key(&mut OsRng).into();

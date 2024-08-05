@@ -846,6 +846,16 @@ impl Default for Settings {
 }
 
 #[cfg(test)]
+pub(crate) fn test_local_timeout() -> f64 {
+    std::env::var("ATUIN_TEST_LOCAL_TIMEOUT")
+        .ok()
+        .and_then(|x| x.parse().ok())
+        // this hardcoded value should be replaced by a simple way to get the
+        // default local_timeout of Settings if possible
+        .unwrap_or(2.0)
+}
+
+#[cfg(test)]
 mod tests {
     use std::str::FromStr;
 

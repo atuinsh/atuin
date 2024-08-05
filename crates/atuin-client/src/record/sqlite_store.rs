@@ -363,14 +363,6 @@ impl Store for SqliteStore {
 }
 
 #[cfg(test)]
-pub(crate) fn test_sqlite_store_timeout() -> f64 {
-    std::env::var("ATUIN_TEST_SQLITE_STORE_TIMEOUT")
-        .ok()
-        .and_then(|x| x.parse().ok())
-        .unwrap_or(0.1)
-}
-
-#[cfg(test)]
 mod tests {
     use atuin_common::{
         record::{DecryptedData, EncryptedData, Host, HostId, Record},
@@ -380,9 +372,10 @@ mod tests {
     use crate::{
         encryption::generate_encoded_key,
         record::{encryption::PASETO_V4, store::Store},
+        settings::test_local_timeout,
     };
 
-    use super::{test_sqlite_store_timeout, SqliteStore};
+    use super::SqliteStore;
 
     fn test_record() -> Record<EncryptedData> {
         Record::builder()
@@ -399,7 +392,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_db() {
-        let db = SqliteStore::new(":memory:", test_sqlite_store_timeout()).await;
+        let db = SqliteStore::new(":memory:", test_local_timeout()).await;
 
         assert!(
             db.is_ok(),
@@ -410,7 +403,7 @@ mod tests {
 
     #[tokio::test]
     async fn push_record() {
-        let db = SqliteStore::new(":memory:", test_sqlite_store_timeout())
+        let db = SqliteStore::new(":memory:", test_local_timeout())
             .await
             .unwrap();
         let record = test_record();
@@ -420,7 +413,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_record() {
-        let db = SqliteStore::new(":memory:", test_sqlite_store_timeout())
+        let db = SqliteStore::new(":memory:", test_local_timeout())
             .await
             .unwrap();
         let record = test_record();
@@ -433,7 +426,7 @@ mod tests {
 
     #[tokio::test]
     async fn last() {
-        let db = SqliteStore::new(":memory:", test_sqlite_store_timeout())
+        let db = SqliteStore::new(":memory:", test_local_timeout())
             .await
             .unwrap();
         let record = test_record();
@@ -453,7 +446,7 @@ mod tests {
 
     #[tokio::test]
     async fn first() {
-        let db = SqliteStore::new(":memory:", test_sqlite_store_timeout())
+        let db = SqliteStore::new(":memory:", test_local_timeout())
             .await
             .unwrap();
         let record = test_record();
@@ -473,7 +466,7 @@ mod tests {
 
     #[tokio::test]
     async fn len() {
-        let db = SqliteStore::new(":memory:", test_sqlite_store_timeout())
+        let db = SqliteStore::new(":memory:", test_local_timeout())
             .await
             .unwrap();
         let record = test_record();
@@ -489,7 +482,7 @@ mod tests {
 
     #[tokio::test]
     async fn len_tag() {
-        let db = SqliteStore::new(":memory:", test_sqlite_store_timeout())
+        let db = SqliteStore::new(":memory:", test_local_timeout())
             .await
             .unwrap();
         let record = test_record();
@@ -505,7 +498,7 @@ mod tests {
 
     #[tokio::test]
     async fn len_different_tags() {
-        let db = SqliteStore::new(":memory:", test_sqlite_store_timeout())
+        let db = SqliteStore::new(":memory:", test_local_timeout())
             .await
             .unwrap();
 
@@ -527,7 +520,7 @@ mod tests {
 
     #[tokio::test]
     async fn append_a_bunch() {
-        let db = SqliteStore::new(":memory:", test_sqlite_store_timeout())
+        let db = SqliteStore::new(":memory:", test_local_timeout())
             .await
             .unwrap();
 
@@ -554,7 +547,7 @@ mod tests {
 
     #[tokio::test]
     async fn append_a_big_bunch() {
-        let db = SqliteStore::new(":memory:", test_sqlite_store_timeout())
+        let db = SqliteStore::new(":memory:", test_local_timeout())
             .await
             .unwrap();
 
@@ -579,7 +572,7 @@ mod tests {
 
     #[tokio::test]
     async fn re_encrypt() {
-        let store = SqliteStore::new(":memory:", test_sqlite_store_timeout())
+        let store = SqliteStore::new(":memory:", test_local_timeout())
             .await
             .unwrap();
         let (key, _) = generate_encoded_key().unwrap();

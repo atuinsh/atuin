@@ -197,7 +197,8 @@ mod tests {
     use crypto_secretbox::{KeyInit, XSalsa20Poly1305};
     use rand::rngs::OsRng;
 
-    use crate::record::sqlite_store::{test_sqlite_store_timeout, SqliteStore};
+    use crate::record::sqlite_store::SqliteStore;
+    use crate::settings::test_local_timeout;
 
     use super::{KvRecord, KvStore, KV_VERSION};
 
@@ -221,7 +222,7 @@ mod tests {
 
     #[tokio::test]
     async fn build_kv() {
-        let mut store = SqliteStore::new(":memory:", test_sqlite_store_timeout())
+        let mut store = SqliteStore::new(":memory:", test_local_timeout())
             .await
             .unwrap();
         let kv = KvStore::new();
