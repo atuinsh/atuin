@@ -53,7 +53,7 @@ features = ["json", "rustls-tls-native-roots"]
 default-features = false
 
 [workspace.dependencies.sqlx]
-version = "0.7"
+version = "0.8"
 features = ["runtime-tokio-rustls", "time", "postgres", "uuid"]
 
 # Config for 'cargo dist'
