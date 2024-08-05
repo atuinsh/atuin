@@ -32,7 +32,7 @@ macro_rules! new_uuid {
             Uuid: sqlx::Decode<'r, DB>,
         {
             fn decode(
-                value: <DB as sqlx::database::HasValueRef<'r>>::ValueRef,
+                value: DB::ValueRef<'r>,
             ) -> std::result::Result<Self, sqlx::error::BoxDynError> {
                 Uuid::decode(value).map(Self)
             }
@@ -44,8 +44,9 @@ macro_rules! new_uuid {
         {
             fn encode_by_ref(
                 &self,
-                buf: &mut <DB as sqlx::database::HasArguments<'q>>::ArgumentBuffer,
-            ) -> sqlx::encode::IsNull {
+                buf: &mut DB::ArgumentBuffer<'q>,
+            ) -> Result<sqlx::encode::IsNull, Box<(dyn std::error::Error + Send + Sync + 'static)>>
+            {
                 self.0.encode_by_ref(buf)
             }
         }
