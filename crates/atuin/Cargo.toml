@@ -51,7 +51,7 @@ atuin-history = { path = "../atuin-history", version = "18.4.0-beta.3" }
 atuin-daemon = { path = "../atuin-daemon", version = "18.4.0-beta.3", optional = true, default-features = false }
 
 log = { workspace = true }
-env_logger = "0.11.2"
+env_logger = "0.11.5"
 time = { workspace = true }
 eyre = { workspace = true }
 directories = { workspace = true }
