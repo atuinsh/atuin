@@ -184,6 +184,7 @@ pub async fn send_verification<DB: Database>(
     state: State<AppState<DB>>,
 ) -> Result<Json<SendVerificationResponse>, ErrorResponseStatus<'static>> {
     let settings = state.0.settings;
+    debug!("request to verify user {}", user.username);
 
     if !settings.mail.enabled {
         return Ok(Json(SendVerificationResponse {
