@@ -23,7 +23,7 @@ pub struct Mail {
 
 #[derive(Default, Clone, Debug, Deserialize, Serialize)]
 pub struct Postmark {
-    #[serde(alias = "enable")]
+    #[serde(alias = "token")]
     pub token: Option<String>,
 }
 

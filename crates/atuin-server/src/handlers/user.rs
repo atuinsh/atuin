@@ -203,6 +203,7 @@ pub async fn send_verification<DB: Database>(
     let postmark_token = if let Some(token) = settings.mail.postmark.token {
         token
     } else {
+        error!("Failed to verify email: got None for postmark token");
         return Err(ErrorResponse::reply("mail not configured")
             .with_status(StatusCode::INTERNAL_SERVER_ERROR));
     };
