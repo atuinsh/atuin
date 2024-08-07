@@ -764,7 +764,7 @@ impl State {
         );
     }
 
-    fn build_title(&mut self, theme: &Theme) -> Paragraph {
+    fn build_title(&self, theme: &Theme) -> Paragraph {
         let title = if self.update_needed.is_some() {
             let error_style: Style = theme.get_error().into();
             Paragraph::new(Text::from(Span::styled(
@@ -820,7 +820,7 @@ impl State {
         .alignment(Alignment::Center)
     }
 
-    fn build_stats(&mut self, theme: &Theme) -> Paragraph {
+    fn build_stats(&self, theme: &Theme) -> Paragraph {
         let stats = Paragraph::new(Text::from(Span::raw(format!(
             "history count: {}",
             self.history_count,
@@ -863,7 +863,7 @@ impl State {
         }
     }
 
-    fn build_input(&mut self, style: StyleState) -> Paragraph {
+    fn build_input(&self, style: StyleState) -> Paragraph {
         /// Max width of the UI box showing current mode
         const MAX_WIDTH: usize = 14;
         let (pref, mode) = if self.switched_search_mode {
@@ -895,7 +895,7 @@ impl State {
     }
 
     fn build_preview(
-        &mut self,
+        &self,
         results: &[History],
         compact: bool,
         preview_width: u16,
