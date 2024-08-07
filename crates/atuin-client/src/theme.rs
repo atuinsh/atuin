@@ -53,8 +53,8 @@ pub struct ThemeDefinitionConfigBlock {
 
 use crossterm::style::{Color, ContentStyle};
 
-// For now, a theme is specifically a mapping of meanings to colors, but it may be desirable to
-// expand that in the future to general styles.
+// For now, a theme is loaded as a mapping of meanings to colors, but it may be desirable to
+// expand that in the future to general styles, so we populate a Meaning->ContentStyle hashmap.
 pub struct Theme {
     pub name: String,
     pub parent: Option<String>,

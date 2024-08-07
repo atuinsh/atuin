@@ -22,6 +22,7 @@ pub struct HistoryList<'a> {
     /// Apply an alternative highlighting to the selected row
     alternate_highlight: bool,
     now: &'a dyn Fn() -> OffsetDateTime,
+    indicator: &'a str,
     theme: &'a Theme,
 }
 
@@ -74,6 +75,7 @@ impl<'a> StatefulWidget for HistoryList<'a> {
             inverted: self.inverted,
             alternate_highlight: self.alternate_highlight,
             now: &self.now,
+            indicator: self.indicator,
             theme: self.theme,
         };
 
@@ -96,6 +98,7 @@ impl<'a> HistoryList<'a> {
         inverted: bool,
         alternate_highlight: bool,
         now: &'a dyn Fn() -> OffsetDateTime,
+        indicator: &'a str,
         theme: &'a Theme,
     ) -> Self {
         Self {
@@ -104,6 +107,7 @@ impl<'a> HistoryList<'a> {
             inverted,
             alternate_highlight,
             now,
+            indicator,
             theme,
         }
     }
@@ -137,6 +141,7 @@ struct DrawState<'a> {
     inverted: bool,
     alternate_highlight: bool,
     now: &'a dyn Fn() -> OffsetDateTime,
+    indicator: &'a str,
     theme: &'a Theme,
 }
 
@@ -155,7 +160,12 @@ impl DrawState<'_> {
         let i = self.y as usize + self.state.offset;
         let i = i.checked_sub(self.state.selected);
         let i = i.unwrap_or(10).min(10) * 2;
-        self.draw(&SLICES[i..i + 3], Style::default());
+        let prompt: &str = if i == 0 {
+            self.indicator
+        } else {
+            &SLICES[i..i + 3]
+        };
+        self.draw(prompt, Style::default());
     }
 
     fn duration(&mut self, h: &History) {
