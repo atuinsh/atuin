@@ -392,8 +392,6 @@ impl<'a> Client<'a> {
             .send()
             .await?;
 
-        dbg!(&resp);
-
         if resp.status() == 401 {
             bail!("current password is incorrect")
         } else if resp.status() == 403 {
