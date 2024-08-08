@@ -101,6 +101,11 @@ impl Cursor {
         self.source
     }
 
+    /// Checks if there's currently no input
+    pub fn is_empty(&self) -> bool {
+        self.source.is_empty()
+    }
+
     /// Returns the string before the cursor
     pub fn substring(&self) -> &str {
         &self.source[..self.index]
