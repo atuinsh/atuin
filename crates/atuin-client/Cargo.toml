@@ -52,7 +52,7 @@ semver = { workspace = true }
 thiserror = { workspace = true }
 futures = "0.3"
 crypto_secretbox = "0.1.1"
-generic-array = { version = "0.14", features = ["serde"] }
+generic-array = { version = "1.1", features = ["serde"] }
 serde_with = "3.8.1"
 
 # encryption
