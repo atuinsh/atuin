@@ -623,7 +623,8 @@ impl State {
         let show_help = settings.show_help && (!compact || f.size().height > 1);
         // This is an OR, as it seems more likely for someone to wish to override
         // tabs unexpectedly being missed, than unexpectedly present.
-        let show_tabs = settings.show_tabs && (settings.always_show_tabs || (!compact || f.size().height > 10));
+        let hide_extra = !settings.always_show_tabs && (compact && f.size().height < 8);
+        let show_tabs = settings.show_tabs && !hide_extra;
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .margin(0)
@@ -636,6 +637,14 @@ impl State {
                         Constraint::Length(preview_height),                // preview
                         Constraint::Length(if show_tabs { 1 } else { 0 }), // tabs
                         Constraint::Length(if show_help { 1 } else { 0 }), // header (sic)
+                    ]
+                } else if hide_extra {
+                    [
+                        Constraint::Length(if show_help { 1 } else { 0 }), // header
+                        Constraint::Length(0), // tabs
+                        Constraint::Min(1),                                // results list
+                        Constraint::Length(0),
+                        Constraint::Length(0),
                     ]
                 } else {
                     [
@@ -698,10 +707,18 @@ impl State {
         let stats_tab = self.build_stats(theme);
         f.render_widget(stats_tab, header_chunks[2]);
 
+        let indicator: String = if !hide_extra {
+            " > ".to_string()
+        } else if self.switched_search_mode {
+            format!("S{}>", self.search_mode.as_str().chars().next().unwrap())
+        } else {
+            format!("{}> ", self.search.filter_mode.as_str().chars().next().unwrap())
+        };
+
         match self.tab_index {
             0 => {
                 let results_list =
-                    Self::build_results_list(style, results, self.keymap_mode, &self.now, theme);
+                    Self::build_results_list(style, results, self.keymap_mode, &self.now, indicator.as_str(), theme);
                 f.render_stateful_widget(results_list, results_list_chunk, &mut self.results_state);
             }
 
@@ -741,31 +758,33 @@ impl State {
             }
         }
 
-        let input = self.build_input(style);
-        f.render_widget(input, input_chunk);
+        if !hide_extra {
+            let input = self.build_input(style);
+            f.render_widget(input, input_chunk);
 
-        let preview_width = if compact {
-            preview_width
-        } else {
-            preview_width - 2
-        };
-        let preview = self.build_preview(
-            results,
-            compact,
-            preview_width,
-            preview_chunk.width.into(),
-            theme,
-        );
-        f.render_widget(preview, preview_chunk);
+            let preview_width = if compact {
+                preview_width
+            } else {
+                preview_width - 2
+            };
+            let preview = self.build_preview(
+                results,
+                compact,
+                preview_width,
+                preview_chunk.width.into(),
+                theme,
+            );
+            f.render_widget(preview, preview_chunk);
 
-        let extra_width = UnicodeWidthStr::width(self.search.input.substring());
+            let extra_width = UnicodeWidthStr::width(self.search.input.substring());
 
-        let cursor_offset = if compact { 0 } else { 1 };
-        f.set_cursor(
-            // Put cursor past the end of the input text
-            input_chunk.x + extra_width as u16 + PREFIX_LENGTH + 1 + cursor_offset,
-            input_chunk.y + cursor_offset,
-        );
+            let cursor_offset = if compact { 0 } else { 1 };
+            f.set_cursor(
+                // Put cursor past the end of the input text
+                input_chunk.x + extra_width as u16 + PREFIX_LENGTH + 1 + cursor_offset,
+                input_chunk.y + cursor_offset,
+            );
+        }
     }
 
     fn build_title(&self, theme: &Theme) -> Paragraph {
@@ -839,6 +858,7 @@ impl State {
         results: &'a [History],
         keymap_mode: KeymapMode,
         now: &'a dyn Fn() -> OffsetDateTime,
+        indicator: &'a str,
         theme: &'a Theme,
     ) -> HistoryList<'a> {
         let results_list = HistoryList::new(
@@ -846,6 +866,7 @@ impl State {
             style.invert,
             keymap_mode == KeymapMode::VimNormal,
             now,
+            indicator,
             theme,
         );
 
