@@ -300,17 +300,17 @@ pub fn draw(
     };
 
     if compact {
-        draw_compact(f, chunk, history, stats)
+        draw_compact(f, chunk, history, stats, theme)
     } else {
-        draw_full(f, chunk, history, stats)
+        draw_full(f, chunk, history, stats, theme)
     }
 }
 
-pub fn draw_compact(f: &mut Frame<'_>, chunk: Rect, history: &History, stats: &HistoryStats) {
-    draw_commands(f, chunk, history, stats, true);
+pub fn draw_compact(f: &mut Frame<'_>, chunk: Rect, history: &History, stats: &HistoryStats, theme: &Theme) {
+    draw_commands(f, chunk, history, stats, true, theme);
 }
 
-pub fn draw_full(f: &mut Frame<'_>, chunk: Rect, history: &History, stats: &HistoryStats) {
+pub fn draw_full(f: &mut Frame<'_>, chunk: Rect, history: &History, stats: &HistoryStats, theme: &Theme) {
     let vert_layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Ratio(1, 5), Constraint::Ratio(4, 5)])
