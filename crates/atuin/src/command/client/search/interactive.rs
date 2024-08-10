@@ -90,6 +90,22 @@ impl InspectingState {
     }
 }
 
+pub fn to_compactness(f: &Frame, settings: &Settings) -> Compactness {
+    if match settings.style {
+        atuin_client::settings::Style::Auto => f.area().height < 14,
+        atuin_client::settings::Style::Compact => true,
+        atuin_client::settings::Style::Full => false,
+    } {
+        if settings.auto_hide_height != 0 && f.area().height <= settings.auto_hide_height {
+            Compactness::Ultracompact
+        } else {
+            Compactness::Compact
+        }
+    } else {
+        Compactness::Full
+    }
+}
+
 #[allow(clippy::struct_field_names)]
 pub struct State {
     history_count: i64,
@@ -112,8 +128,15 @@ pub struct State {
 }
 
 #[derive(Clone, Copy)]
+pub enum Compactness {
+    Ultracompact,
+    Compact,
+    Full,
+}
+
+#[derive(Clone, Copy)]
 struct StyleState {
-    compact: bool,
+    compactness: Compactness,
     invert: bool,
     inner_width: usize,
 }
@@ -591,7 +614,7 @@ impl State {
         results: &[History],
         selected: usize,
         tab_index: usize,
-        compact: bool,
+        compactness: Compactness,
         border_size: u16,
         preview_width: u16,
     ) -> u16 {
@@ -651,7 +674,7 @@ impl State {
             }) + border_size * 2
         } else if settings.show_preview && settings.preview.strategy == PreviewStrategy::Fixed {
             settings.max_preview_height + border_size * 2
-        } else if compact || tab_index == 1 {
+        } else if !matches!(compactness, Compactness::Full) || tab_index == 1 {
             0
         } else {
             1
@@ -670,30 +693,27 @@ impl State {
         settings: &Settings,
         theme: &Theme,
     ) {
-        let compact = match settings.style {
-            atuin_client::settings::Style::Auto => f.area().height < 14,
-            atuin_client::settings::Style::Compact => true,
-            atuin_client::settings::Style::Full => false,
-        };
+        let compactness = to_compactness(f, settings);
         let invert = settings.invert;
-        let border_size = if compact { 0 } else { 1 };
+        let border_size = match compactness {
+            Compactness::Full => 1,
+            _ => 0,
+        };
         let preview_width = f.area().width - 2;
         let preview_height = Self::calc_preview_height(
             settings,
             results,
             self.results_state.selected(),
             self.tab_index,
-            compact,
+            compactness,
             border_size,
             preview_width,
         );
-        let show_help = settings.show_help && (!compact || f.area().height > 1);
+        let show_help =
+            settings.show_help && (matches!(compactness, Compactness::Full) || f.area().height > 1);
         // This is an OR, as it seems more likely for someone to wish to override
         // tabs unexpectedly being missed, than unexpectedly present.
-        let hide_extra = settings.auto_hide_height != 0
-            && compact
-            && f.area().height <= settings.auto_hide_height;
-        let show_tabs = settings.show_tabs && !hide_extra;
+        let show_tabs = settings.show_tabs && !matches!(compactness, Compactness::Ultracompact);
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .margin(0)
@@ -707,22 +727,23 @@ impl State {
                         Constraint::Length(if show_tabs { 1 } else { 0 }), // tabs
                         Constraint::Length(if show_help { 1 } else { 0 }), // header (sic)
                     ]
-                } else if hide_extra {
-                    [
-                        Constraint::Length(if show_help { 1 } else { 0 }), // header
-                        Constraint::Length(0),                             // tabs
-                        Constraint::Min(1),                                // results list
-                        Constraint::Length(0),
-                        Constraint::Length(0),
-                    ]
                 } else {
-                    [
-                        Constraint::Length(if show_help { 1 } else { 0 }), // header
-                        Constraint::Length(if show_tabs { 1 } else { 0 }), // tabs
-                        Constraint::Min(1),                                // results list
-                        Constraint::Length(1 + border_size),               // input
-                        Constraint::Length(preview_height),                // preview
-                    ]
+                    match compactness {
+                        Compactness::Ultracompact => [
+                            Constraint::Length(if show_help { 1 } else { 0 }), // header
+                            Constraint::Length(0),                             // tabs
+                            Constraint::Min(1),                                // results list
+                            Constraint::Length(0),
+                            Constraint::Length(0),
+                        ],
+                        _ => [
+                            Constraint::Length(if show_help { 1 } else { 0 }), // header
+                            Constraint::Length(if show_tabs { 1 } else { 0 }), // tabs
+                            Constraint::Min(1),                                // results list
+                            Constraint::Length(1 + border_size),               // input
+                            Constraint::Length(preview_height),                // preview
+                        ],
+                    }
                 }
                 .as_ref(),
             )
@@ -750,7 +771,7 @@ impl State {
         }
 
         let style = StyleState {
-            compact,
+            compactness,
             invert,
             inner_width: input_chunk.width.into(),
         };
@@ -776,15 +797,18 @@ impl State {
         let stats_tab = self.build_stats(theme);
         f.render_widget(stats_tab, header_chunks[2]);
 
-        let indicator: String = if !hide_extra {
-            " > ".to_string()
-        } else if self.switched_search_mode {
-            format!("S{}>", self.search_mode.as_str().chars().next().unwrap())
-        } else {
-            format!(
-                "{}> ",
-                self.search.filter_mode.as_str().chars().next().unwrap()
-            )
+        let indicator: String = match compactness {
+            Compactness::Ultracompact => {
+                if self.switched_search_mode {
+                    format!("S{}>", self.search_mode.as_str().chars().next().unwrap())
+                } else {
+                    format!(
+                        "{}> ",
+                        self.search.filter_mode.as_str().chars().next().unwrap()
+                    )
+                }
+            }
+            _ => " > ".to_string(),
         };
 
         match self.tab_index {
@@ -849,18 +873,17 @@ impl State {
             }
         }
 
-        if !hide_extra {
+        if !matches!(compactness, Compactness::Ultracompact) {
             let input = self.build_input(style);
             f.render_widget(input, input_chunk);
 
-            let preview_width = if compact {
-                preview_width
-            } else {
-                preview_width - 2
+            let preview_width = match compactness {
+                Compactness::Full => preview_width - 2,
+                _ => preview_width,
             };
             let preview = self.build_preview(
                 results,
-                compact,
+                compactness,
                 preview_width,
                 preview_chunk.width.into(),
                 theme,
@@ -869,8 +892,11 @@ impl State {
 
             let extra_width = UnicodeWidthStr::width(self.search.input.substring());
 
-            let cursor_offset = if compact { 0 } else { 1 };
-            f.set_cursor_position((
+            let cursor_offset = match compactness {
+                Compactness::Full => 1,
+                _ => 0,
+            };
+            f.set_cursor_position(
                 // Put cursor past the end of the input text
                 input_chunk.x + extra_width as u16 + PREFIX_LENGTH + 1 + cursor_offset,
                 input_chunk.y + cursor_offset,
@@ -965,21 +991,24 @@ impl State {
             show_numeric_shortcuts,
         );
 
-        if style.compact {
-            results_list
-        } else if style.invert {
-            results_list.block(
-                Block::default()
-                    .borders(Borders::LEFT | Borders::RIGHT)
-                    .border_type(BorderType::Rounded)
-                    .title(format!("{:─>width$}", "", width = style.inner_width - 2)),
-            )
-        } else {
-            results_list.block(
-                Block::default()
-                    .borders(Borders::TOP | Borders::LEFT | Borders::RIGHT)
-                    .border_type(BorderType::Rounded),
-            )
+        match style.compactness {
+            Compactness::Full => {
+                if style.invert {
+                    results_list.block(
+                        Block::default()
+                            .borders(Borders::LEFT | Borders::RIGHT)
+                            .border_type(BorderType::Rounded)
+                            .title(format!("{:─>width$}", "", width = style.inner_width - 2)),
+                    )
+                } else {
+                    results_list.block(
+                        Block::default()
+                            .borders(Borders::TOP | Borders::LEFT | Borders::RIGHT)
+                            .border_type(BorderType::Rounded),
+                    )
+                }
+            }
+            _ => results_list,
         }
     }
 
@@ -996,28 +1025,31 @@ impl State {
         debug_assert!(mode_width >= mode.len(), "mode name '{mode}' is too long!");
         let input = format!("[{pref}{mode:^mode_width$}] {}", self.search.input.as_str(),);
         let input = Paragraph::new(input);
-        if style.compact {
-            input
-        } else if style.invert {
-            input.block(
-                Block::default()
-                    .borders(Borders::LEFT | Borders::RIGHT | Borders::TOP)
-                    .border_type(BorderType::Rounded),
-            )
-        } else {
-            input.block(
-                Block::default()
-                    .borders(Borders::LEFT | Borders::RIGHT)
-                    .border_type(BorderType::Rounded)
-                    .title(format!("{:─>width$}", "", width = style.inner_width - 2)),
-            )
+        match style.compactness {
+            Compactness::Full => {
+                if style.invert {
+                    input.block(
+                        Block::default()
+                            .borders(Borders::LEFT | Borders::RIGHT | Borders::TOP)
+                            .border_type(BorderType::Rounded),
+                    )
+                } else {
+                    input.block(
+                        Block::default()
+                            .borders(Borders::LEFT | Borders::RIGHT)
+                            .border_type(BorderType::Rounded)
+                            .title(format!("{:─>width$}", "", width = style.inner_width - 2)),
+                    )
+                }
+            }
+            _ => input,
         }
     }
 
     fn build_preview(
         &self,
         results: &[History],
-        compact: bool,
+        compactness: Compactness,
         preview_width: u16,
         chunk_width: usize,
         theme: &Theme,
@@ -1040,16 +1072,16 @@ impl State {
                 .join("\n")
         };
 
-        if compact {
-            Paragraph::new(command).style(theme.as_style(Meaning::Annotation))
-        } else {
-            Paragraph::new(command).block(
+        let preview = match compactness {
+            Compactness::Full => Paragraph::new(command).block(
                 Block::default()
                     .borders(Borders::BOTTOM | Borders::LEFT | Borders::RIGHT)
                     .border_type(BorderType::Rounded)
                     .title(format!("{:─>width$}", "", width = chunk_width - 2)),
-            )
+            ),
+            _ => Paragraph::new(command).style(theme.as_style(Meaning::Annotation)),
         }
+        preview
     }
 }
 
@@ -1453,7 +1485,7 @@ mod tests {
     use crate::command::client::search::engines::{self, SearchState};
     use crate::command::client::search::history_list::ListState;
 
-    use super::State;
+    use super::{Compactness, State};
 
     #[test]
     #[allow(clippy::too_many_lines)]
@@ -1522,7 +1554,7 @@ mod tests {
             &results,
             0_usize,
             0_usize,
-            false,
+            Compactness::Full,
             1,
             80,
         );
@@ -1532,7 +1564,7 @@ mod tests {
             &results,
             1_usize,
             0_usize,
-            false,
+            Compactness::Full,
             1,
             80,
         );
@@ -1542,7 +1574,7 @@ mod tests {
             &results,
             2_usize,
             0_usize,
-            false,
+            Compactness::Full,
             1,
             80,
         );
@@ -1552,7 +1584,7 @@ mod tests {
             &results,
             0_usize,
             0_usize,
-            false,
+            Compactness::Full,
             1,
             66,
         );
@@ -1562,7 +1594,7 @@ mod tests {
             &results,
             2_usize,
             0_usize,
-            false,
+            Compactness::Full,
             1,
             80,
         );
@@ -1572,7 +1604,7 @@ mod tests {
             &results,
             1_usize,
             0_usize,
-            false,
+            Compactness::Full,
             1,
             80,
         );
@@ -1582,7 +1614,7 @@ mod tests {
             &results,
             1_usize,
             0_usize,
-            false,
+            Compactness::Full,
             1,
             20,
         );
@@ -1592,7 +1624,7 @@ mod tests {
             &results,
             1_usize,
             0_usize,
-            false,
+            Compactness::Full,
             1,
             20,
         );
