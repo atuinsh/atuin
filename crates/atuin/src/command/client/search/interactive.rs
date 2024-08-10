@@ -623,7 +623,9 @@ impl State {
         let show_help = settings.show_help && (!compact || f.size().height > 1);
         // This is an OR, as it seems more likely for someone to wish to override
         // tabs unexpectedly being missed, than unexpectedly present.
-        let hide_extra = settings.auto_hide_height != 0 && compact && f.size().height <= settings.auto_hide_height;
+        let hide_extra = settings.auto_hide_height != 0
+            && compact
+            && f.size().height <= settings.auto_hide_height;
         let show_tabs = settings.show_tabs && !hide_extra;
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -641,7 +643,7 @@ impl State {
                 } else if hide_extra {
                     [
                         Constraint::Length(if show_help { 1 } else { 0 }), // header
-                        Constraint::Length(0), // tabs
+                        Constraint::Length(0),                             // tabs
                         Constraint::Min(1),                                // results list
                         Constraint::Length(0),
                         Constraint::Length(0),
@@ -712,13 +714,22 @@ impl State {
         } else if self.switched_search_mode {
             format!("S{}>", self.search_mode.as_str().chars().next().unwrap())
         } else {
-            format!("{}> ", self.search.filter_mode.as_str().chars().next().unwrap())
+            format!(
+                "{}> ",
+                self.search.filter_mode.as_str().chars().next().unwrap()
+            )
         };
 
         match self.tab_index {
             0 => {
-                let results_list =
-                    Self::build_results_list(style, results, self.keymap_mode, &self.now, indicator.as_str(), theme);
+                let results_list = Self::build_results_list(
+                    style,
+                    results,
+                    self.keymap_mode,
+                    &self.now,
+                    indicator.as_str(),
+                    theme,
+                );
                 f.render_stateful_widget(results_list, results_list_chunk, &mut self.results_state);
             }
 
