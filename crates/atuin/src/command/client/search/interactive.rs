@@ -681,7 +681,6 @@ impl State {
         }
     }
 
-    #[allow(clippy::cast_possible_truncation)]
     #[allow(clippy::bool_to_int_with_if)]
     #[allow(clippy::too_many_lines)]
     fn draw(
@@ -874,9 +873,6 @@ impl State {
         }
 
         if !matches!(compactness, Compactness::Ultracompact) {
-            let input = self.build_input(style);
-            f.render_widget(input, input_chunk);
-
             let preview_width = match compactness {
                 Compactness::Full => preview_width - 2,
                 _ => preview_width,
@@ -888,20 +884,36 @@ impl State {
                 preview_chunk.width.into(),
                 theme,
             );
-            f.render_widget(preview, preview_chunk);
+            self.draw_preview(f, style, input_chunk, compactness, preview_chunk, preview);
+        };
+    }
 
-            let extra_width = UnicodeWidthStr::width(self.search.input.substring());
+    #[allow(clippy::cast_possible_truncation)]
+    fn draw_preview(
+        &self,
+        f: &mut Frame,
+        style: StyleState,
+        input_chunk: Rect,
+        compactness: Compactness,
+        preview_chunk: Rect,
+        preview: Paragraph,
+    ) {
+        let input = self.build_input(style);
+        f.render_widget(input, input_chunk);
 
-            let cursor_offset = match compactness {
-                Compactness::Full => 1,
-                _ => 0,
-            };
-            f.set_cursor_position(
-                // Put cursor past the end of the input text
-                input_chunk.x + extra_width as u16 + PREFIX_LENGTH + 1 + cursor_offset,
-                input_chunk.y + cursor_offset,
-            ));
-        }
+        f.render_widget(preview, preview_chunk);
+
+        let extra_width = UnicodeWidthStr::width(self.search.input.substring());
+
+        let cursor_offset = match compactness {
+            Compactness::Full => 1,
+            _ => 0,
+        };
+        f.set_cursor_position(
+            // Put cursor past the end of the input text
+            input_chunk.x + extra_width as u16 + PREFIX_LENGTH + 1 + cursor_offset,
+            input_chunk.y + cursor_offset,
+        );
     }
 
     fn build_title(&self, theme: &Theme) -> Paragraph<'_> {
