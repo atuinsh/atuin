@@ -18,7 +18,7 @@ use ratatui::{
 use super::duration::format_duration;
 
 use super::super::theme::{Meaning, Theme};
-use super::interactive::{InputAction, State};
+use super::interactive::{to_compactness, Compactness, InputAction, State};
 
 #[allow(clippy::cast_sign_loss)]
 fn u64_or_zero(num: i64) -> u64 {
@@ -290,20 +290,15 @@ pub fn draw(
     settings: &Settings,
     theme: &Theme,
 ) {
-    let compact = match settings.style {
-        atuin_client::settings::Style::Auto => f.size().height < 14,
-        atuin_client::settings::Style::Compact => true,
-        atuin_client::settings::Style::Full => false,
-    };
+    let compactness = to_compactness(f, settings);
 
-    if compact {
-        draw_compact(f, chunk, history, stats, theme);
-    } else {
-        draw_full(f, chunk, history, stats, theme);
+    match compactness {
+        Compactness::Ultracompact => draw_ultracompact(f, chunk, history, stats, theme),
+        _ => draw_full(f, chunk, history, stats, theme),
     }
 }
 
-pub fn draw_compact(
+pub fn draw_ultracompact(
     f: &mut Frame<'_>,
     chunk: Rect,
     history: &History,
