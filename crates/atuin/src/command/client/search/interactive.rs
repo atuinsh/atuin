@@ -827,7 +827,6 @@ impl State {
                         f,
                         results_list_chunk,
                         inspecting,
-                        &results[self.results_state.selected()],
                         &stats.expect("Drawing inspector, but no stats"),
                         settings,
                         theme,
