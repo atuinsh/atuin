@@ -65,28 +65,28 @@ pub enum InputAction {
 
 #[derive(Clone)]
 pub struct InspectingState {
-    current_id: Option<HistoryId>,
-    next_id: Option<HistoryId>,
-    previous_id: Option<HistoryId>,
+    current: Option<HistoryId>,
+    next: Option<HistoryId>,
+    previous: Option<HistoryId>,
 }
 
 impl InspectingState {
-    pub fn to_previous(&mut self) {
-        let previous = self.previous_id.clone();
+    pub fn move_to_previous(&mut self) {
+        let previous = self.previous.clone();
         self.reset();
-        self.current_id = previous;
+        self.current = previous;
     }
 
-    pub fn to_next(&mut self) {
-        let next = self.next_id.clone();
+    pub fn move_to_next(&mut self) {
+        let next = self.next.clone();
         self.reset();
-        self.current_id = next;
+        self.current = next;
     }
 
     pub fn reset(&mut self) {
-        self.current_id = None;
-        self.next_id = None;
-        self.previous_id = None;
+        self.current = None;
+        self.next = None;
+        self.previous = None;
     }
 }
 
@@ -126,7 +126,11 @@ impl State {
     ) -> Result<Vec<History>> {
         let results = self.engine.query(&self.search, db).await?;
 
-        self.inspecting_state = InspectingState { current_id: None, next_id: None, previous_id: None };
+        self.inspecting_state = InspectingState {
+            current: None,
+            next: None,
+            previous: None,
+        };
         self.results_state.select(0);
         self.results_len = results.len();
 
@@ -258,33 +262,31 @@ impl State {
             KeyCode::Char('c' | 'g') if ctrl => Some(InputAction::ReturnOriginal),
             KeyCode::Esc if esc_allow_exit => Some(Self::handle_key_exit(settings)),
             KeyCode::Char('[') if ctrl && esc_allow_exit => Some(Self::handle_key_exit(settings)),
-            KeyCode::Tab => {
-                match self.tab_index {
-                    0 => Some(InputAction::Accept(self.results_state.selected())),
+            KeyCode::Tab => match self.tab_index {
+                0 => Some(InputAction::Accept(self.results_state.selected())),
 
-                    1 => Some(return InputAction::AcceptInspecting),
+                1 => Some(InputAction::AcceptInspecting),
 
-                    _ => panic!("invalid tab index on input"),
-                }
-            }
+                _ => panic!("invalid tab index on input"),
+            },
             KeyCode::Right if cursor_at_end_of_line && settings.keys.accept_past_line_end => {
                 Some(InputAction::Accept(self.results_state.selected()))
-            }
+            },
             KeyCode::Left if cursor_at_start_of_line && settings.keys.accept_past_line_start => {
                 Some(InputAction::Accept(self.results_state.selected()))
-            }
+            },
             KeyCode::Left if cursor_at_start_of_line && settings.keys.exit_past_line_start => {
                 Some(Self::handle_key_exit(settings))
-            }
+            },
             KeyCode::Backspace
                 if cursor_at_start_of_line && settings.keys.accept_with_backspace =>
             {
                 Some(InputAction::Accept(self.results_state.selected()))
-            }
+            },
             KeyCode::Char('o') if ctrl => {
                 self.tab_index = (self.tab_index + 1) % TAB_TITLES.len();
                 Some(InputAction::Continue)
-            }
+            },
             _ => None,
         };
 
@@ -819,7 +821,7 @@ impl State {
                 } else {
                     let inspecting = match inspecting {
                         Some(inspecting) => inspecting,
-                        None => &results[self.results_state.selected()]
+                        None => &results[self.results_state.selected()],
                     };
                     super::inspector::draw(
                         f,
@@ -827,7 +829,7 @@ impl State {
                         inspecting,
                         &results[self.results_state.selected()],
                         &stats.expect("Drawing inspector, but no stats"),
-                        &settings,
+                        settings,
                         theme,
                         settings.timezone,
                     );
@@ -1206,7 +1208,11 @@ pub async fn history(
         switched_search_mode: false,
         search_mode,
         tab_index: 0,
-        inspecting_state: InspectingState { current_id: None, next_id: None, previous_id: None },
+        inspecting_state: InspectingState {
+            current: None,
+            next: None,
+            previous: None,
+        },
         search: SearchState {
             input,
             filter_mode: settings
@@ -1246,7 +1252,16 @@ pub async fn history(
     let mut inspecting: Option<History> = None;
     let accept;
     let result = 'render: loop {
-        terminal.draw(|f| app.draw(f, &results, stats.clone(), inspecting.as_ref(), settings, theme))?;
+        terminal.draw(|f| {
+            app.draw(
+                f,
+                &results,
+                stats.clone(),
+                inspecting.as_ref(),
+                settings,
+                theme,
+            )
+        })?;
 
         let initial_input = app.search.input.as_str().to_owned();
         let initial_filter_mode = app.search.filter_mode;
@@ -1309,16 +1324,16 @@ pub async fn history(
             results = app.query_results(&mut db, settings.smart_sort).await?;
         }
 
-        let inspecting_id = app.inspecting_state.clone().current_id;
+        let inspecting_id = app.inspecting_state.clone().current;
         // If inspecting ID is not the current inspecting History, update it.
         match inspecting_id {
             Some(inspecting_id) => {
                 if inspecting.is_none() || inspecting_id != inspecting.clone().unwrap().id {
-                    inspecting = db.load(inspecting_id.0.as_str()).await?
+                    inspecting = db.load(inspecting_id.0.as_str()).await?;
                 }
-            },
+            }
             _ => {
-                inspecting = None
+                inspecting = None;
             }
         };
 
@@ -1329,12 +1344,18 @@ pub async fn history(
             // around a database object, or a full stats object.
             let selected = match inspecting.clone() {
                 Some(insp) => insp,
-                None => results[app.results_state.selected()].clone()
+                None => results[app.results_state.selected()].clone(),
             };
             let stats = db.stats(&selected).await?;
-            app.inspecting_state.current_id = Some(selected.id);
-            app.inspecting_state.previous_id = match stats.previous.clone() { Some(p) => { Some(p.id) }, _ => None };
-            app.inspecting_state.next_id = match stats.next.clone() { Some(p) => { Some(p.id) }, _ => None };
+            app.inspecting_state.current = Some(selected.id);
+            app.inspecting_state.previous = match stats.previous.clone() {
+                Some(p) => Some(p.id),
+                _ => None,
+            };
+            app.inspecting_state.next = match stats.next.clone() {
+                Some(p) => Some(p.id),
+                _ => None,
+            };
             Some(stats)
         } else {
             None
@@ -1353,15 +1374,18 @@ pub async fn history(
                 Some(result) => {
                     let mut command = result.command;
                     if accept
-                        && (utils::is_zsh() || utils::is_fish() || utils::is_bash() || utils::is_xonsh())
+                        && (utils::is_zsh()
+                            || utils::is_fish()
+                            || utils::is_bash()
+                            || utils::is_xonsh())
                     {
                         command = String::from("__atuin_accept__:") + &command;
                     }
 
                     // index is in bounds so we return that entry
                     Ok(command)
-                },
-                None => Ok(String::new())
+                }
+                None => Ok(String::new()),
             }
         }
         InputAction::Accept(index) if index < results.len() => {
