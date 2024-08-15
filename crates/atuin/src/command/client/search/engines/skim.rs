@@ -59,25 +59,26 @@ async fn fuzzy_search(
             .as_ref()
             .and_then(|git_root| git_root.to_str())
             .unwrap_or(&context.cwd);
-        match state.filter_mode {
-            FilterMode::Global => {}
+        match state.available_filter_modes.get(state.filter_mode_index) {
+            Some(FilterMode::Global) => {}
             // we aggregate host by ',' separating them
-            FilterMode::Host
+            Some(FilterMode::Host)
                 if history
                     .hostname
                     .split(',')
                     .contains(&context.hostname.as_str()) => {}
             // we aggregate session by concattenating them.
             // sessions are 32 byte simple uuid formats
-            FilterMode::Session
+            Some(FilterMode::Session)
                 if history
                     .session
                     .as_bytes()
                     .chunks(32)
                     .contains(&context.session.as_bytes()) => {}
             // we aggregate directory by ':' separating them
-            FilterMode::Directory if history.cwd.split(':').contains(&context.cwd.as_str()) => {}
-            FilterMode::Workspace if history.cwd.split(':').contains(&git_root) => {}
+            Some(FilterMode::Directory)
+                if history.cwd.split(':').contains(&context.cwd.as_str()) => {}
+            Some(FilterMode::Workspace) if history.cwd.split(':').contains(&git_root) => {}
             _ => continue,
         }
         #[allow(clippy::cast_lossless, clippy::cast_precision_loss)]

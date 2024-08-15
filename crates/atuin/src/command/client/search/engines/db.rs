@@ -18,7 +18,7 @@ impl SearchEngine for Search {
         Ok(db
             .search(
                 self.0,
-                state.filter_mode,
+                state.available_filter_modes[state.filter_mode_index],
                 &state.context,
                 state.input.as_str(),
                 OptFilters {

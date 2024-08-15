@@ -466,7 +466,12 @@ impl Cmd {
             (true, true) => [Session, Directory],
             (true, false) => [Session, Global],
             (false, true) => [Global, Directory],
-            (false, false) => [settings.filter_mode, Global],
+            (false, false) => [
+                settings
+                    .filter_mode
+                    .unwrap_or(*settings.filter_modes.first().unwrap_or(&Global)),
+                Global,
+            ],
         };
 
         let history = db
