@@ -38,7 +38,7 @@ fn unix_byte_lines(input: &[u8]) -> impl DoubleEndedIterator<Item = &[u8]> {
         bytes: input,
         i: 0,
         // Set to the last element
-        i_rev: input.len().checked_sub(1).unwrap_or(0),
+        i_rev: input.len().saturating_sub(1),
     }
 }
 
