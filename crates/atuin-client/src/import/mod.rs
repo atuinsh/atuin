@@ -2,10 +2,11 @@ use std::fs::File;
 use std::io::Read;
 use std::path::PathBuf;
 
-use crate::history::History;
 use async_trait::async_trait;
 use eyre::{bail, Result};
 use memchr::Memchr;
+
+use crate::history::History;
 
 pub mod bash;
 pub mod fish;
@@ -36,16 +37,18 @@ fn unix_byte_lines(input: &[u8]) -> impl DoubleEndedIterator<Item = &[u8]> {
         iter: memchr::memchr_iter(b'\n', input),
         bytes: input,
         i: 0,
-        // Index for iterating in reverse order, set to the last element
-        i_back: input.len().checked_sub(1).unwrap_or(0),
+        // Set to the last element
+        i_rev: input.len().checked_sub(1).unwrap_or(0),
     }
 }
 
 struct UnixByteLines<'a> {
     iter: Memchr<'a>,
     bytes: &'a [u8],
+    // Index for iterating in regular order
     i: usize,
-    i_back: usize,
+    // Index for iterating in reverse order
+    i_rev: usize,
 }
 
 impl<'a> Iterator for UnixByteLines<'a> {
@@ -70,7 +73,7 @@ impl<'a> DoubleEndedIterator for UnixByteLines<'a> {
     fn next_back(&mut self) -> Option<Self::Item> {
         let needle_idx = match self.iter.next_back() {
             Some(v) => {
-                if v == self.i_back {
+                if v == self.i_rev {
                     // The first newline at the very end of the input sequence, skip
                     self.iter.next_back()
                 } else {
@@ -79,17 +82,15 @@ impl<'a> DoubleEndedIterator for UnixByteLines<'a> {
             }
             None => None,
         };
-        let range_start = if needle_idx.is_none() && self.i_back > 0 {
+        let range_start = if needle_idx.is_none() && self.i_rev > 0 {
             // Reached the very beginning of the input sequence
             0
-        } else if needle_idx.is_none() && self.i_back == 0 {
-            return None;
         } else {
             // Do not include the found newline in the range
             needle_idx.map(|v| v + 1)?
         };
-        let out = &self.bytes[range_start..self.i_back];
-        self.i_back = needle_idx.unwrap_or(0);
+        let out = &self.bytes[range_start..self.i_rev];
+        self.i_rev = needle_idx.unwrap_or(0);
         Some(out)
     }
 }

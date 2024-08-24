@@ -71,9 +71,7 @@ impl Importer for Zsh {
                 line.insert_str(0, "\\\n");
                 line.insert_str(0, s);
             } else {
-                if !line.is_empty() {
-                    add_command(&mut line, &mut counter, h).await?;
-                }
+                add_command(&mut line, &mut counter, h).await?;
                 line.push_str(&s);
             }
         }
