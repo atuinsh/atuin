@@ -21,6 +21,25 @@ pub struct Cmd {
     /// Disable the binding of the Up Arrow key to atuin
     #[clap(long)]
     disable_up_arrow: bool,
+
+    /// Limit initialization to a subset of atuin's init, useful for splitting
+    /// when in a shell's lifecycle various configuration is performed.
+    #[clap(long, default_value_t, value_enum)]
+    emit: Emit,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
+pub enum Emit {
+    /// Emit atuin shell init and managed dotfiles (environment variables and aliases)
+    #[default]
+    All,
+    /// Only emit atuin shell init script without any Dotfiles-related setup (no
+    /// env vars, no aliases)
+    Necessary,
+    /// Only emit environment variables (useful for `~/.zsh_env` or `~/.bash_env`)
+    EnvOnly,
+    /// Only emit aliases
+    AliasesOnly,
 }
 
 #[derive(Clone, Copy, ValueEnum, Debug)]
@@ -122,6 +141,7 @@ $env.config = (
                     var_store,
                     self.disable_up_arrow,
                     self.disable_ctrl_r,
+                    self.emit,
                 )
                 .await?;
             }
@@ -131,6 +151,7 @@ $env.config = (
                     var_store,
                     self.disable_up_arrow,
                     self.disable_ctrl_r,
+                    self.emit,
                 )
                 .await?;
             }
@@ -140,6 +161,7 @@ $env.config = (
                     var_store,
                     self.disable_up_arrow,
                     self.disable_ctrl_r,
+                    self.emit,
                 )
                 .await?;
             }
@@ -150,6 +172,7 @@ $env.config = (
                     var_store,
                     self.disable_up_arrow,
                     self.disable_ctrl_r,
+                    self.emit,
                 )
                 .await?;
             }
