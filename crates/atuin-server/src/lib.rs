@@ -2,19 +2,18 @@
 
 use std::future::Future;
 use std::net::SocketAddr;
-use std::sync::Arc;
 
 use atuin_server_database::Database;
 use axum::{serve, Router};
+use axum_server::tls_rustls::RustlsConfig;
 use axum_server::Handle;
-use eyre::{Context, Result};
+use eyre::{eyre, Context, Result};
 
 mod handlers;
 mod metrics;
 mod router;
 mod utils;
 
-use rustls::ServerConfig;
 pub use settings::example_config;
 pub use settings::Settings;
 
@@ -83,16 +82,19 @@ async fn launch_with_tls<Db: Database>(
     addr: SocketAddr,
     shutdown: impl Future<Output = ()>,
 ) -> Result<()> {
-    let certificates = settings.tls.certificates()?;
-    let pkey = settings.tls.private_key()?;
-
-    let server_config = ServerConfig::builder()
-        .with_safe_defaults()
-        .with_no_client_auth()
-        .with_single_cert(certificates, pkey)?;
-
-    let server_config = Arc::new(server_config);
-    let rustls_config = axum_server::tls_rustls::RustlsConfig::from_config(server_config);
+    let crypto_provider = rustls::crypto::ring::default_provider().install_default();
+    if crypto_provider.is_err() {
+        return Err(eyre!("Failed to install default crypto provider"));
+    }
+    let rustls_config = RustlsConfig::from_pem_file(
+        settings.tls.cert_path.clone(),
+        settings.tls.pkey_path.clone(),
+    )
+    .await;
+    if rustls_config.is_err() {
+        return Err(eyre!("Failed to load TLS key and/or certificate"));
+    }
+    let rustls_config = rustls_config.unwrap();
 
     let r = make_router::<Db>(settings).await?;
 
