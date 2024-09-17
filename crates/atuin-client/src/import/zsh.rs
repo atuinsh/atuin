@@ -67,9 +67,16 @@ impl Importer for Zsh {
                 _ => continue, // we can skip past things like invalid utf8
             };
 
-            if let Some(s) = s.strip_suffix('\\') {
-                line.push_str(s);
-                line.push_str("\\\n");
+            if s.ends_with("\\\\") {
+                if let Some(s) = s.strip_suffix("\\\\") {
+                    line.push_str(s);
+                    line.push_str("\\\n");
+                }
+            } else if s.ends_with('\\') {
+                if let Some(s) = s.strip_suffix('\\') {
+                    line.push_str(s);
+                    line.push_str("\\\n");
+                }
             } else {
                 line.push_str(&s);
                 let command = std::mem::take(&mut line);
