@@ -534,7 +534,8 @@ impl State {
 
     fn scroll_up(&mut self, scroll_len: usize) {
         let i = self.results_state.selected() + scroll_len;
-        self.results_state.select(i.min(self.results_len - 1));
+        self.results_state
+            .select(i.min(self.results_len.saturating_sub(1)));
     }
 
     #[allow(clippy::cast_possible_truncation)]
@@ -1211,8 +1212,15 @@ fn set_clipboard(_s: String) {}
 
 #[cfg(test)]
 mod tests {
+    use atuin_client::database::Context;
     use atuin_client::history::History;
-    use atuin_client::settings::{Preview, PreviewStrategy, Settings};
+    use atuin_client::settings::{
+        FilterMode, KeymapMode, Preview, PreviewStrategy, SearchMode, Settings,
+    };
+    use time::OffsetDateTime;
+
+    use crate::command::client::search::engines::{self, SearchState};
+    use crate::command::client::search::history_list::ListState;
 
     use super::State;
 
@@ -1367,5 +1375,39 @@ mod tests {
         assert_eq!(preview_static_h3, 3 + border_space);
         assert_eq!(preview_static_limit_at_4, 4 + border_space);
         assert_eq!(settings_preview_fixed, 15 + border_space);
+    }
+
+    // Test when there's no results, scrolling up or down doesn't underflow
+    #[test]
+    fn state_scroll_up_underflow() {
+        let mut state = State {
+            history_count: 0,
+            update_needed: None,
+            results_state: ListState::default(),
+            switched_search_mode: false,
+            search_mode: SearchMode::Fuzzy,
+            results_len: 0,
+            accept: false,
+            keymap_mode: KeymapMode::Auto,
+            prefix: false,
+            current_cursor: None,
+            tab_index: 0,
+            search: SearchState {
+                input: String::new().into(),
+                filter_mode: FilterMode::Directory,
+                context: Context {
+                    session: String::new(),
+                    cwd: String::new(),
+                    hostname: String::new(),
+                    host_id: String::new(),
+                    git_root: None,
+                },
+            },
+            engine: engines::engine(SearchMode::Fuzzy),
+            now: Box::new(OffsetDateTime::now_utc),
+        };
+
+        state.scroll_up(1);
+        state.scroll_down(1);
     }
 }
