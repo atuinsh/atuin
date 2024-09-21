@@ -1,4 +1,4 @@
-use eyre::{eyre, Result};
+use eyre::{Context, Result};
 #[cfg(windows)]
 use tokio::net::TcpStream;
 use tonic::transport::{Channel, Endpoint, Uri};
@@ -23,6 +23,7 @@ pub struct HistoryClient {
 impl HistoryClient {
     #[cfg(unix)]
     pub async fn new(path: String) -> Result<Self> {
+        let log_path = path.clone();
         let channel = Endpoint::try_from("http://atuin_local_daemon:0")?
             .connect_with_connector(service_fn(move |_: Uri| {
                 let path = path.clone();
@@ -32,7 +33,12 @@ impl HistoryClient {
                 }
             }))
             .await
-            .map_err(|_| eyre!("failed to connect to local atuin daemon. Is it running?"))?;
+            .wrap_err_with(|| {
+                format!(
+                    "failed to connect to local atuin daemon at {}. Is it running?",
+                    &log_path
+                )
+            })?;
 
         let client = HistoryServiceClient::new(channel);
 
@@ -50,7 +56,12 @@ impl HistoryClient {
                 }
             }))
             .await
-            .map_err(|_| eyre!("failed to connect to local atuin daemon. Is it running?"))?;
+            .wrap_err_with(|| {
+                format!(
+                    "failed to connect to local atuin daemon at 127.0.0.1:{}. Is it running?",
+                    port
+                )
+            })?;
 
         let client = HistoryServiceClient::new(channel);
 
