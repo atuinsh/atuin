@@ -51,6 +51,7 @@ pub struct OptFilters {
     pub limit: Option<i64>,
     pub offset: Option<i64>,
     pub reverse: bool,
+    pub include_duplicates: bool,
 }
 
 pub fn current_context() -> Context {
@@ -403,7 +404,9 @@ impl Database for Sqlite {
     ) -> Result<Vec<History>> {
         let mut sql = SqlBuilder::select_from("history");
 
-        sql.group_by("command").having("max(timestamp)");
+        if !filter_options.include_duplicates {
+            sql.group_by("command").having("max(timestamp)");
+        }
 
         if let Some(limit) = filter_options.limit {
             sql.limit(limit);
