@@ -18,7 +18,7 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-      - uses: cachix/install-nix-action@V27
+      - uses: cachix/install-nix-action@v30
 
       - name: Run nix flake check
         run: nix flake check --print-build-logs
@@ -28,7 +28,7 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-      - uses: cachix/install-nix-action@V27
+      - uses: cachix/install-nix-action@v30
 
       - name: Run nix build
         run: nix build --print-build-logs
