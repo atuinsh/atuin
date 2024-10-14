@@ -36,5 +36,5 @@ rustls-pemfile = "2.1"
 argon2 = "0.5"
 semver = { workspace = true }
 metrics-exporter-prometheus = "0.12.1"
-metrics = "0.21.1"
+metrics = "0.24.0"
 postmark = {version= "0.10.2", features=["reqwest", "reqwest-rustls-tls"]}
