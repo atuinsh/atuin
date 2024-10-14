@@ -67,7 +67,7 @@ interim = { workspace = true }
 base64 = { workspace = true }
 clap = { workspace = true }
 clap_complete = "4.5.8"
-clap_complete_nushell = "4.5.2"
+clap_complete_nushell = "4.5.4"
 fs-err = { workspace = true }
 whoami = { workspace = true }
 rpassword = "7.0"
