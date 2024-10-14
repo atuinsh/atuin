@@ -432,7 +432,7 @@ dependencies = [
  "config",
  "eyre",
  "fs-err",
- "metrics",
+ "metrics 0.24.0",
  "metrics-exporter-prometheus",
  "postmark",
  "rand",
@@ -472,7 +472,7 @@ dependencies = [
  "atuin-server-database",
  "eyre",
  "futures-util",
- "metrics",
+ "metrics 0.24.0",
  "serde",
  "sqlx",
  "time",
@@ -2296,6 +2296,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "metrics"
+version = "0.24.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8ae428771d17306715c5091d446327d1cfdedc82185c65ba8423ab404e45bf10"
+dependencies = [
+ "ahash",
+ "portable-atomic",
+]
+
+[[package]]
 name = "metrics-exporter-prometheus"
 version = "0.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2305,7 +2315,7 @@ dependencies = [
  "hyper 0.14.30",
  "indexmap 1.9.3",
  "ipnet",
- "metrics",
+ "metrics 0.21.1",
  "metrics-util",
  "quanta",
  "thiserror",
@@ -2333,7 +2343,7 @@ dependencies = [
  "crossbeam-epoch",
  "crossbeam-utils",
  "hashbrown 0.13.1",
- "metrics",
+ "metrics 0.21.1",
  "num_cpus",
  "quanta",
  "sketches-ddsketch",

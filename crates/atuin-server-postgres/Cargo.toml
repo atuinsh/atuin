@@ -20,6 +20,6 @@ serde = { workspace = true }
 sqlx = { workspace = true }
 async-trait = { workspace = true }
 uuid = { workspace = true }
-metrics = "0.21.1"
+metrics = "0.24.0"
 futures-util = "0.3"
 url = "2.5.2"
