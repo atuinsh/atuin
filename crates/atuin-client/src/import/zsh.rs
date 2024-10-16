@@ -57,42 +57,50 @@ impl Importer for Zsh {
     }
 
     async fn load(self, h: &mut impl Loader) -> Result<()> {
-        let now = OffsetDateTime::now_utc();
         let mut line = String::new();
 
         let mut counter = 0;
-        for b in unix_byte_lines(&self.bytes) {
+        // Reverse order so that recency of history is preserved
+        for b in unix_byte_lines(&self.bytes).rev() {
             let s = match unmetafy(b) {
                 Some(s) => s,
                 _ => continue, // we can skip past things like invalid utf8
             };
-
             if let Some(s) = s.strip_suffix('\\') {
-                line.push_str(s);
-                line.push_str("\\\n");
+                // Prepend command from previous line in the history
+                line.insert_str(0, "\\\n");
+                line.insert_str(0, s);
             } else {
+                add_command(&mut line, &mut counter, h).await?;
                 line.push_str(&s);
-                let command = std::mem::take(&mut line);
-
-                if let Some(command) = command.strip_prefix(": ") {
-                    counter += 1;
-                    h.push(parse_extended(command, counter)).await?;
-                } else {
-                    let offset = time::Duration::seconds(counter);
-                    counter += 1;
-
-                    let imported = History::import()
-                        // preserve ordering
-                        .timestamp(now - offset)
-                        .command(command.trim_end().to_string());
-
-                    h.push(imported.build().into()).await?;
-                }
             }
         }
-
+        add_command(&mut line, &mut counter, h).await?;
         Ok(())
     }
+}
+
+async fn add_command(line: &mut String, counter: &mut i64, h: &mut impl Loader) -> Result<()> {
+    if line.is_empty() {
+        return Ok(());
+    }
+    let now = OffsetDateTime::now_utc();
+    let command = std::mem::take(line);
+    if let Some(command) = command.strip_prefix(": ") {
+        *counter += 1;
+        h.push(parse_extended(command, *counter)).await?;
+    } else {
+        let offset = time::Duration::seconds(*counter);
+        *counter += 1;
+
+        let imported = History::import()
+            // preserve ordering
+            .timestamp(now - offset)
+            .command(command.trim_end().to_string());
+
+        h.push(imported.build().into()).await?;
+    }
+    Ok(())
 }
 
 fn parse_extended(line: &str, counter: i64) -> History {
@@ -203,11 +211,23 @@ cargo update
         assert_equal(
             loader.buf.iter().map(|h| h.command.as_str()),
             [
-                "cargo install atuin",
-                "cargo install atuin; \\\ncargo update",
                 "cargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷",
+                "cargo install atuin; \\\ncargo update",
+                "cargo install atuin",
             ],
         );
+    }
+
+    #[tokio::test]
+    async fn test_parse_empty_file() {
+        let bytes = vec![];
+
+        let mut zsh = Zsh { bytes };
+        assert_eq!(zsh.entries().await.unwrap(), 0);
+
+        let mut loader = TestLoader::default();
+        zsh.load(&mut loader).await.unwrap();
+        assert!(loader.buf.is_empty());
     }
 
     #[tokio::test]
@@ -223,7 +243,7 @@ cargo update
 
         assert_equal(
             loader.buf.iter().map(|h| h.command.as_str()),
-            ["echo 你好", "ls ~/音乐"],
+            ["ls ~/音乐", "echo 你好"],
         );
     }
 }
