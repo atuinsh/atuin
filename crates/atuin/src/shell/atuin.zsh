@@ -27,6 +27,12 @@ fi
 export ATUIN_SESSION=$(atuin uuid)
 ATUIN_HISTORY_ID=""
 
+_atuin_update_title() {
+    if [[ "$TERM" == xterm* ]]; then
+        print -n "\e]0;$1\a"
+    fi
+}
+
 _atuin_preexec() {
     local id
     id=$(atuin history start -- "$1")
@@ -51,7 +57,7 @@ _atuin_precmd() {
 _atuin_search() {
     emulate -L zsh
     zle -I
-
+    _atuin_update_title atuin
     # swap stderr and stdout, so that the tui stuff works
     # TODO: not this
     local output
@@ -64,12 +70,12 @@ _atuin_search() {
         RBUFFER=""
         LBUFFER=$output
 
-        if [[ $LBUFFER == __atuin_accept__:* ]]
-        then
+        if [[ $LBUFFER == __atuin_accept__:* ]]; then
             LBUFFER=${LBUFFER#__atuin_accept__:}
             zle accept-line
         fi
     fi
+    _atuin_update_title zsh
 }
 _atuin_search_vicmd() {
     _atuin_search --keymap-mode=vim-normal
