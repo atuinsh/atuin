@@ -23,7 +23,7 @@
 </p>
 
 
-[English] | [简体中文]
+[English] | [简体中文] | [日本語]
 
 
 Atuin replaces your existing shell history with a SQLite database, and records
@@ -132,3 +132,4 @@ Made with [contrib.rocks](https://contrib.rocks).
 
 [English]: ./README.md
 [简体中文]: ./docs/zh-CN/README.md
+[日本語]: ./docs/ja/README.md
