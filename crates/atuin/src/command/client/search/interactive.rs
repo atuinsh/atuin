@@ -1489,7 +1489,7 @@ mod tests {
     use crate::command::client::search::engines::{self, SearchState};
     use crate::command::client::search::history_list::ListState;
 
-    use super::{Compactness, State};
+    use super::{Compactness, State, InspectingState};
 
     #[test]
     #[allow(clippy::too_many_lines)]
@@ -1660,6 +1660,11 @@ mod tests {
             prefix: false,
             current_cursor: None,
             tab_index: 0,
+            inspecting_state: InspectingState {
+                current: None,
+                next: None,
+                previous: None,
+            },
             search: SearchState {
                 input: String::new().into(),
                 filter_mode: FilterMode::Directory,
