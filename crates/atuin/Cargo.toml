@@ -58,7 +58,7 @@ directories = { workspace = true }
 indicatif = "0.17.5"
 serde = { workspace = true }
 serde_json = { workspace = true }
-crossterm = { version = "0.27", features = ["use-dev-tty"] }
+crossterm = { version = "0.28", features = ["use-dev-tty"] }
 unicode-width = "0.1"
 itertools = { workspace = true }
 tokio = { workspace = true }

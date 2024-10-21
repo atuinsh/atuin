@@ -71,7 +71,7 @@ indicatif = "0.17.7"
 tiny-bip39 = "=1.0.0"
 
 # theme
-crossterm = { version = "0.27.0", features = ["serde"] }
+crossterm = { version = "0.28.1", features = ["serde"] }
 palette = { version = "0.7.5", features = ["serializing"] }
 lazy_static = "1.4.0"
 strum_macros = "0.26.3"
