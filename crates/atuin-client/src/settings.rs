@@ -370,6 +370,12 @@ pub struct Daemon {
     pub tcp_port: u64,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Search {
+    /// The list of enabled filter modes, in order of priority.
+    pub filters: Vec<FilterMode>,
+}
+
 impl Default for Preview {
     fn default() -> Self {
         Self {
@@ -396,6 +402,20 @@ impl Default for Daemon {
             socket_path: "".to_string(),
             systemd_socket: false,
             tcp_port: 8889,
+        }
+    }
+}
+
+impl Default for Search {
+    fn default() -> Self {
+        Self {
+            filters: vec![
+                FilterMode::Global,
+                FilterMode::Host,
+                FilterMode::Session,
+                FilterMode::Workspace,
+                FilterMode::Directory,
+            ],
         }
     }
 }
@@ -430,7 +450,7 @@ pub struct Settings {
     pub key_path: String,
     pub session_path: String,
     pub search_mode: SearchMode,
-    pub filter_mode: FilterMode,
+    pub filter_mode: Option<FilterMode>,
     pub filter_mode_shell_up_key_binding: Option<FilterMode>,
     pub search_mode_shell_up_key_binding: Option<SearchMode>,
     pub shell_up_key_binding: bool,
@@ -485,6 +505,9 @@ pub struct Settings {
 
     #[serde(default)]
     pub daemon: Daemon,
+
+    #[serde(default)]
+    pub search: Search,
 
     #[serde(default)]
     pub theme: Theme,
@@ -688,6 +711,13 @@ impl Settings {
         None
     }
 
+    pub fn default_filter_mode(&self) -> FilterMode {
+        self.filter_mode
+            .filter(|x| self.search.filters.contains(x))
+            .or(self.search.filters.first().copied())
+            .unwrap_or(FilterMode::Global)
+    }
+
     #[cfg(not(feature = "check-update"))]
     pub async fn needs_update(&self) -> Option<Version> {
         None
@@ -715,7 +745,7 @@ impl Settings {
             .set_default("sync_address", "https://api.atuin.sh")?
             .set_default("sync_frequency", "10m")?
             .set_default("search_mode", "fuzzy")?
-            .set_default("filter_mode", "global")?
+            .set_default("filter_mode", None::<String>)?
             .set_default("style", "compact")?
             .set_default("inline_height", 40)?
             .set_default("show_preview", true)?
@@ -758,6 +788,10 @@ impl Settings {
             .set_default("daemon.socket_path", socket_path.to_str())?
             .set_default("daemon.systemd_socket", false)?
             .set_default("daemon.tcp_port", 8889)?
+            .set_default(
+                "search.filters",
+                vec!["global", "host", "session", "workspace", "directory"],
+            )?
             .set_default("theme.name", "default")?
             .set_default("theme.debug", None::<bool>)?
             .set_default(

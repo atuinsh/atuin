@@ -176,7 +176,7 @@ impl Cmd {
             settings.search_mode = self.search_mode.unwrap();
         }
         if self.filter_mode.is_some() {
-            settings.filter_mode = self.filter_mode.unwrap();
+            settings.filter_mode = self.filter_mode;
         }
         if self.inline_height.is_some() {
             settings.inline_height = self.inline_height.unwrap();
@@ -287,12 +287,7 @@ async fn run_non_interactive(
         ..filter_options
     };
 
-    let dir = dir.unwrap_or_else(|| "/".to_string());
-    let filter_mode = if settings.workspaces && utils::has_git_dir(dir.as_str()) {
-        FilterMode::Workspace
-    } else {
-        settings.filter_mode
-    };
+    let filter_mode = settings.default_filter_mode();
 
     let results = db
         .search(
