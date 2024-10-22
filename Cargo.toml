@@ -7,7 +7,7 @@ exclude = ["ui/backend"]
 [workspace.package]
 version = "18.4.0-beta.3"
 authors = ["Ellie Huxtable <ellie@atuin.sh>"]
-rust-version = "1.80"
+rust-version = "1.82"
 license = "MIT"
 homepage = "https://atuin.sh"
 repository = "https://github.com/atuinsh/atuin"
@@ -18,9 +18,9 @@ async-trait = "0.1.58"
 base64 = "0.22"
 log = "0.4"
 time = { version = "0.3.36", features = [
-    "serde-human-readable",
-    "macros",
-    "local-offset",
+  "serde-human-readable",
+  "macros",
+  "local-offset",
 ] }
 clap = { version = "4.5.7", features = ["derive"] }
 config = { version = "0.13", default-features = false, features = ["toml"] }
@@ -67,7 +67,14 @@ ci = "github"
 # The installers to generate for each app
 installers = ["shell"]
 # Target platforms to build apps for (Rust target-triple syntax)
-targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "aarch64-unknown-linux-musl", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl"]
+targets = [
+  "aarch64-apple-darwin",
+  "aarch64-unknown-linux-gnu",
+  "aarch64-unknown-linux-musl",
+  "x86_64-apple-darwin",
+  "x86_64-unknown-linux-gnu",
+  "x86_64-unknown-linux-musl",
+]
 # Publish jobs to run in CI
 pr-run-mode = "plan"
 # Whether to install an updater program
