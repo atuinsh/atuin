@@ -459,29 +459,7 @@ impl State {
                 }
             }
             KeyCode::Char('u') if ctrl => self.search.input.clear(),
-            KeyCode::Char('r') if ctrl => {
-                let filter_modes = if settings.workspaces && self.search.context.git_root.is_some()
-                {
-                    vec![
-                        FilterMode::Global,
-                        FilterMode::Host,
-                        FilterMode::Session,
-                        FilterMode::Directory,
-                        FilterMode::Workspace,
-                    ]
-                } else {
-                    vec![
-                        FilterMode::Global,
-                        FilterMode::Host,
-                        FilterMode::Session,
-                        FilterMode::Directory,
-                    ]
-                };
-
-                let i = self.search.filter_mode as usize;
-                let i = (i + 1) % filter_modes.len();
-                self.search.filter_mode = filter_modes[i];
-            }
+            KeyCode::Char('r') if ctrl => self.search.rotate_filter_mode(settings, 1),
             KeyCode::Char('s') if ctrl => {
                 self.switched_search_mode = true;
                 self.search_mode = self.search_mode.next(settings);
@@ -1087,15 +1065,12 @@ pub async fn history(
         tab_index: 0,
         search: SearchState {
             input,
-            filter_mode: if settings.workspaces && context.git_root.is_some() {
-                FilterMode::Workspace
-            } else if settings.shell_up_key_binding {
-                settings
-                    .filter_mode_shell_up_key_binding
-                    .unwrap_or(settings.filter_mode)
-            } else {
-                settings.filter_mode
-            },
+            filter_mode: settings
+                .filter_mode_shell_up_key_binding
+                .filter(|_| settings.shell_up_key_binding)
+                .or_else(|| Some(settings.default_filter_mode()))
+                .filter(|&x| x != FilterMode::Workspace || context.git_root.is_some())
+                .unwrap_or(FilterMode::Global),
             context,
         },
         engine: engines::engine(search_mode),
