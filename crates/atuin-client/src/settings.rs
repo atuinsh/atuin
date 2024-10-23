@@ -468,6 +468,12 @@ pub struct Settings {
     pub enter_accept: bool,
     pub smart_sort: bool,
 
+    pub exit_with_backspace: bool,
+    pub exit_with_space: bool,
+    pub exit_with_home: bool,
+    pub exit_with_cursor_left: bool,
+    pub exit_positions_cursor: bool,
+
     #[serde(default)]
     pub stats: Stats,
 
@@ -752,6 +758,11 @@ impl Settings {
             .set_default("keymap_mode_shell", "auto")?
             .set_default("keymap_cursor", HashMap::<String, String>::new())?
             .set_default("smart_sort", false)?
+            .set_default("exit_with_backspace", false)?
+            .set_default("exit_with_space", false)?
+            .set_default("exit_with_home", false)?
+            .set_default("exit_with_cursor_left", false)?
+            .set_default("exit_positions_cursor", false)?
             .set_default("store_failed", true)?
             .set_default("daemon.sync_frequency", 300)?
             .set_default("daemon.enabled", false)?
