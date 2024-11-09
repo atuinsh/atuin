@@ -2,12 +2,11 @@ name: build-docker
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
 
 jobs:
-
   publish_x86:
-    concurrency: 
+    concurrency:
       group: ${{ github.ref }}-x86
       cancel-in-progress: true
     permissions:
@@ -19,9 +18,6 @@ jobs:
         with:
           repository: atuinsh/atuin
           path: "./"
-
-      - name: Setup mirror
-        uses: self-actuated/hub-mirror@master
 
       - name: Get Repo Owner
         id: get_repo_owner
@@ -55,9 +51,8 @@ jobs:
           tags: |
             ghcr.io/${{ env.REPO_OWNER }}/atuin:${{ steps.shortsha.outputs.short_sha }}-amd64
 
-
   publish_aarch64:
-    concurrency: 
+    concurrency:
       group: ${{ github.ref }}-aarch64
       cancel-in-progress: true
     permissions:
@@ -109,34 +104,33 @@ jobs:
     runs-on: ubuntu-latest
     needs: [publish_x86, publish_aarch64]
     steps:
-    - uses: actions/checkout@master
-      with:
-        repository: atuinsh/atuin
-        path: "./"
+      - uses: actions/checkout@master
+        with:
+          repository: atuinsh/atuin
+          path: "./"
 
-    - name: Get Repo Owner
-      id: get_repo_owner
-      run: echo "REPO_OWNER=$(echo ${{ github.repository_owner }} | tr '[:upper:]' '[:lower:]')" > $GITHUB_ENV
+      - name: Get Repo Owner
+        id: get_repo_owner
+        run: echo "REPO_OWNER=$(echo ${{ github.repository_owner }} | tr '[:upper:]' '[:lower:]')" > $GITHUB_ENV
 
-    - name: Login to container Registry
-      uses: docker/login-action@v3
-      with:
-        username: ${{ github.repository_owner }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-        registry: ghcr.io
+      - name: Login to container Registry
+        uses: docker/login-action@v3
+        with:
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+          registry: ghcr.io
 
-    - name: Get short sha
-      id: shortsha
-      run: echo "short_sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+      - name: Get short sha
+        id: shortsha
+        run: echo "short_sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
 
-    - name: Create manifest
-      run: |
-        docker manifest create ghcr.io/${{ env.REPO_OWNER }}/atuin:${{ steps.shortsha.outputs.short_sha }} \
-          --amend ghcr.io/${{ env.REPO_OWNER }}/atuin:${{ steps.shortsha.outputs.short_sha }}-amd64 \
-          --amend ghcr.io/${{ env.REPO_OWNER }}/atuin:${{ steps.shortsha.outputs.short_sha }}-aarch64
-        docker manifest annotate --arch amd64 --os linux ghcr.io/${{ env.REPO_OWNER }}/atuin:${{ steps.shortsha.outputs.short_sha }} ghcr.io/${{ env.REPO_OWNER }}/atuin:${{ steps.shortsha.outputs.short_sha }}-amd64
-        docker manifest annotate --arch arm64 --os linux ghcr.io/${{ env.REPO_OWNER }}/atuin:${{ steps.shortsha.outputs.short_sha }} ghcr.io/${{ env.REPO_OWNER }}/atuin:${{ steps.shortsha.outputs.short_sha }}-aarch64
-        docker manifest inspect ghcr.io/${{ env.REPO_OWNER }}/atuin:${{ steps.shortsha.outputs.short_sha }}
+      - name: Create manifest
+        run: |
+          docker manifest create ghcr.io/${{ env.REPO_OWNER }}/atuin:${{ steps.shortsha.outputs.short_sha }} \
+            --amend ghcr.io/${{ env.REPO_OWNER }}/atuin:${{ steps.shortsha.outputs.short_sha }}-amd64 \
+            --amend ghcr.io/${{ env.REPO_OWNER }}/atuin:${{ steps.shortsha.outputs.short_sha }}-aarch64
+          docker manifest annotate --arch amd64 --os linux ghcr.io/${{ env.REPO_OWNER }}/atuin:${{ steps.shortsha.outputs.short_sha }} ghcr.io/${{ env.REPO_OWNER }}/atuin:${{ steps.shortsha.outputs.short_sha }}-amd64
+          docker manifest annotate --arch arm64 --os linux ghcr.io/${{ env.REPO_OWNER }}/atuin:${{ steps.shortsha.outputs.short_sha }} ghcr.io/${{ env.REPO_OWNER }}/atuin:${{ steps.shortsha.outputs.short_sha }}-aarch64
+          docker manifest inspect ghcr.io/${{ env.REPO_OWNER }}/atuin:${{ steps.shortsha.outputs.short_sha }}
 
-        docker manifest push ghcr.io/${{ env.REPO_OWNER }}/atuin:${{ steps.shortsha.outputs.short_sha }}
-
+          docker manifest push ghcr.io/${{ env.REPO_OWNER }}/atuin:${{ steps.shortsha.outputs.short_sha }}
