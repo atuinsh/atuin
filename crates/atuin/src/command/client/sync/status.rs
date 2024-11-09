@@ -30,7 +30,7 @@ pub async fn run(settings: &Settings, db: &impl Database) -> Result<()> {
 
     if settings.auto_sync {
         println!("Sync frequency: {}", settings.sync_frequency);
-        println!("Last sync: {last_sync}");
+        println!("Last sync: {}", last_sync.to_offset(settings.timezone.0));
     }
 
     if !settings.sync.records {
