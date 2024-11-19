@@ -220,14 +220,11 @@ impl State {
             KeyCode::Char('c' | 'g') if ctrl => Some(InputAction::ReturnOriginal),
             KeyCode::Esc if esc_allow_exit => Some(Self::handle_key_exit(settings)),
             KeyCode::Char('[') if ctrl && esc_allow_exit => Some(Self::handle_key_exit(settings)),
-            KeyCode::Tab => Some(InputAction::Accept(self.results_state.selected())),
-            KeyCode::Right => Some(InputAction::Accept(self.results_state.selected())),
             KeyCode::Char('o') if ctrl => {
                 self.tab_index = (self.tab_index + 1) % TAB_TITLES.len();
-
                 Some(InputAction::Continue)
-            }
-
+            },
+            KeyCode::Tab | KeyCode::Right => Some(InputAction::Accept(self.results_state.selected())),
             _ => None,
         };
 
