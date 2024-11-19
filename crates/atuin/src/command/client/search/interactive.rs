@@ -205,6 +205,7 @@ impl State {
 
         let ctrl = input.modifiers.contains(KeyModifiers::CONTROL);
         let esc_allow_exit = !(self.tab_index == 0 && self.keymap_mode == KeymapMode::VimInsert);
+        let cursor_at_end_of_line = self.search.input.position() == UnicodeWidthStr::width(self.search.input.as_str());
 
         // support ctrl-a prefix, like screen or tmux
         if !self.prefix
@@ -220,11 +221,12 @@ impl State {
             KeyCode::Char('c' | 'g') if ctrl => Some(InputAction::ReturnOriginal),
             KeyCode::Esc if esc_allow_exit => Some(Self::handle_key_exit(settings)),
             KeyCode::Char('[') if ctrl && esc_allow_exit => Some(Self::handle_key_exit(settings)),
+            KeyCode::Tab => Some(InputAction::Accept(self.results_state.selected())),
+            KeyCode::Right if cursor_at_end_of_line => Some(InputAction::Accept(self.results_state.selected())),
             KeyCode::Char('o') if ctrl => {
                 self.tab_index = (self.tab_index + 1) % TAB_TITLES.len();
                 Some(InputAction::Continue)
             },
-            KeyCode::Tab | KeyCode::Right => Some(InputAction::Accept(self.results_state.selected())),
             _ => None,
         };
 
