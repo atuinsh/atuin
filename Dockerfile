@@ -20,7 +20,7 @@ FROM debian:bookworm-20241016-slim AS runtime
 
 RUN useradd -c 'atuin user' atuin && mkdir /config && chown atuin:atuin /config
 # Install ca-certificates for webhooks to work
-RUN apt update && apt install ca-certificates -y && rm -rf /var/lib/apt/lists/*
+RUN apt update && apt install ca-certificates curl jq -y && rm -rf /var/lib/apt/lists/*
 WORKDIR app
 
 USER atuin
@@ -30,4 +30,5 @@ ENV RUST_LOG=atuin::api=info
 ENV ATUIN_CONFIG_DIR=/config
 
 COPY --from=builder /app/target/release/atuin /usr/local/bin
+HEALTHCHECK CMD curl -sSf http://localhost:8888 | jq .version || exit 1
 ENTRYPOINT ["/usr/local/bin/atuin"]
