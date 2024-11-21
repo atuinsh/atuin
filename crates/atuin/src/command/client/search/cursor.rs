@@ -203,6 +203,10 @@ impl Cursor {
     pub fn start(&mut self) {
         self.index = 0;
     }
+
+    pub fn position(&self) -> usize {
+        self.index
+    }
 }
 
 #[cfg(test)]
