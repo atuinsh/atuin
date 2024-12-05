@@ -55,6 +55,12 @@ impl Cmd {
         let key_path = settings.key_path.as_str();
         let key_path = PathBuf::from(key_path);
 
+        println!("IMPORTANT");
+        println!("If you are already logged in on another machine, you must ensure that the key you use here is the same as the key you used there.");
+        println!("You can find your key by running 'atuin key' on the other machine");
+        println!("Do not share this key with anyone");
+        println!("\nRead more here: https://docs.atuin.sh/guide/sync/#login \n");
+
         let key = or_user_input(&self.key, "encryption key [blank to use existing key file]");
 
         // if provided, the key may be EITHER base64, or a bip mnemonic
