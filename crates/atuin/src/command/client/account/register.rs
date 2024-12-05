@@ -51,5 +51,8 @@ pub async fn run(
 
     let _key = atuin_client::encryption::load_key(settings)?;
 
+    println!("Registration successful! Please make a note of your key (run 'atuin key') and keep it safe.");
+    println!("You will need it to log in on other devices, and we cannot help recover it if you lose it.");
+
     Ok(())
 }

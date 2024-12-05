@@ -6,7 +6,7 @@ use tokio::{fs::File, io::AsyncWriteExt};
 
 use atuin_client::{
     api_client,
-    encryption::{decode_key, encode_key, load_key, new_key, Key},
+    encryption::{decode_key, encode_key, load_key, Key},
     record::sqlite_store::SqliteStore,
     record::store::Store,
     settings::Settings,
@@ -55,6 +55,12 @@ impl Cmd {
         let key_path = settings.key_path.as_str();
         let key_path = PathBuf::from(key_path);
 
+        println!("IMPORTANT");
+        println!("If you are already logged in on another machine, you must ensure that the key you use here is the same as the key you used there.");
+        println!("You can find your key by running 'atuin key' on the other machine");
+        println!("Do not share this key with anyone");
+        println!("\nRead more here: https://docs.atuin.sh/guide/sync/#login \n");
+
         let key = or_user_input(&self.key, "encryption key [blank to use existing key file]");
 
         // if provided, the key may be EITHER base64, or a bip mnemonic
@@ -97,8 +103,7 @@ impl Cmd {
                     bail!("the key in existing key file was invalid");
                 }
             } else {
-                println!("No key file exists, creating a new");
-                let _key = new_key(settings)?;
+                panic!("No key provided. Please use 'atuin key' on your other machine, or recover your key from a backup.")
             }
         } else if !key_path.exists() {
             if decode_key(key.clone()).is_err() {
