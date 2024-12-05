@@ -42,13 +42,13 @@ clipboard = ["arboard"]
 check-update = ["atuin-client/check-update"]
 
 [dependencies]
-atuin-server-postgres = { path = "../atuin-server-postgres", version = "18.4.0-beta.4", optional = true }
-atuin-server = { path = "../atuin-server", version = "18.4.0-beta.4", optional = true }
-atuin-client = { path = "../atuin-client", version = "18.4.0-beta.4", optional = true, default-features = false }
-atuin-common = { path = "../atuin-common", version = "18.4.0-beta.4" }
-atuin-dotfiles = { path = "../atuin-dotfiles", version = "18.4.0-beta.4" }
-atuin-history = { path = "../atuin-history", version = "18.4.0-beta.4" }
-atuin-daemon = { path = "../atuin-daemon", version = "18.4.0-beta.4", optional = true, default-features = false }
+atuin-server-postgres = { path = "../atuin-server-postgres", version = "18.4.0-beta.5", optional = true }
+atuin-server = { path = "../atuin-server", version = "18.4.0-beta.5", optional = true }
+atuin-client = { path = "../atuin-client", version = "18.4.0-beta.5", optional = true, default-features = false }
+atuin-common = { path = "../atuin-common", version = "18.4.0-beta.5" }
+atuin-dotfiles = { path = "../atuin-dotfiles", version = "18.4.0-beta.5" }
+atuin-history = { path = "../atuin-history", version = "18.4.0-beta.5" }
+atuin-daemon = { path = "../atuin-daemon", version = "18.4.0-beta.5", optional = true, default-features = false }
 
 log = { workspace = true }
 env_logger = "0.11.5"

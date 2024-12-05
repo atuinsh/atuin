@@ -111,6 +111,7 @@ All notable changes to this project will be documented in this file.
 - Update rust to `1.80.1` ([#2362](https://github.com/atuinsh/atuin/issues/2362))
 - Enable inline height and compact by default ([#2249](https://github.com/atuinsh/atuin/issues/2249))
 - Update to rust 1.82 ([#2432](https://github.com/atuinsh/atuin/issues/2432))
+- Update cargo-dist ([#2471](https://github.com/atuinsh/atuin/issues/2471))
 
 
 ### Performance
