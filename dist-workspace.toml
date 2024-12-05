@@ -1,0 +1,28 @@
+[workspace]
+members = ["cargo:."]
+
+# Config for 'dist'
+[dist]
+# Path that installers should place binaries in
+install-path = "~/.atuin/bin"
+# The preferred dist version to use in CI (Cargo.toml SemVer syntax)
+cargo-dist-version = "0.25.1"
+# CI backends to support
+ci = "github"
+# The installers to generate for each app
+installers = ["shell"]
+# Target platforms to build apps for (Rust target-triple syntax)
+targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "aarch64-unknown-linux-musl", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl"]
+# Which actions to run on pull requests
+pr-run-mode = "plan"
+# Whether to install an updater program
+install-updater = true
+# The archive format to use for non-windows builds (defaults .tar.xz)
+unix-archive = ".tar.gz"
+# Whether to enable GitHub Attestations
+github-attestations = true
+
+[dist.github-custom-runners]
+aarch64-apple-darwin = "macos-14"
+aarch64-unknown-linux-gnu = "buildjet-2vcpu-ubuntu-2204-arm"
+aarch64-unknown-linux-musl = "buildjet-2vcpu-ubuntu-2204-arm"
