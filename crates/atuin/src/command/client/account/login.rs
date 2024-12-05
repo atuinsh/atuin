@@ -6,7 +6,7 @@ use tokio::{fs::File, io::AsyncWriteExt};
 
 use atuin_client::{
     api_client,
-    encryption::{decode_key, encode_key, load_key, new_key, Key},
+    encryption::{decode_key, encode_key, load_key, Key},
     record::sqlite_store::SqliteStore,
     record::store::Store,
     settings::Settings,
@@ -103,8 +103,7 @@ impl Cmd {
                     bail!("the key in existing key file was invalid");
                 }
             } else {
-                println!("No key file exists, creating a new");
-                let _key = new_key(settings)?;
+                panic!("No key provided. Please use 'atuin key' on your other machine, or recover your key from a backup.")
             }
         } else if !key_path.exists() {
             if decode_key(key.clone()).is_err() {
