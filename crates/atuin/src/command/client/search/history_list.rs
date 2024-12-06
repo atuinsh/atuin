@@ -7,6 +7,7 @@ use atuin_client::{
 use atuin_common::utils::Escapable as _;
 use ratatui::{
     buffer::Buffer,
+    crossterm::style,
     layout::Rect,
     style::{Modifier, Style},
     widgets::{Block, StatefulWidget, Widget},
@@ -206,7 +207,7 @@ impl DrawState<'_> {
         {
             // if not applying alternative highlighting to the whole row, color the command
             style = self.theme.as_style(Meaning::AlertError);
-            style.attributes.set(crossterm::style::Attribute::Bold);
+            style.attributes.set(style::Attribute::Bold);
         }
 
         for section in h.command.escape_control().split_ascii_whitespace() {
