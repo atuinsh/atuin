@@ -4,15 +4,6 @@ use std::{
 };
 
 use atuin_common::utils::{self, Escapable as _};
-use crossterm::{
-    cursor::SetCursorStyle,
-    event::{
-        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers,
-        KeyboardEnhancementFlags, MouseEvent, PopKeyboardEnhancementFlags,
-        PushKeyboardEnhancementFlags,
-    },
-    execute, terminal,
-};
 use eyre::Result;
 use futures_util::FutureExt;
 use semver::Version;
@@ -38,6 +29,15 @@ use crate::{command::client::search::engines, VERSION};
 
 use ratatui::{
     backend::CrosstermBackend,
+    crossterm::{
+        cursor::SetCursorStyle,
+        event::{
+            self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers,
+            KeyboardEnhancementFlags, MouseEvent, PopKeyboardEnhancementFlags,
+            PushKeyboardEnhancementFlags,
+        },
+        execute, terminal,
+    },
     layout::{Alignment, Constraint, Direction, Layout},
     prelude::*,
     style::{Modifier, Style},
@@ -588,13 +588,13 @@ impl State {
         theme: &Theme,
     ) {
         let compact = match settings.style {
-            atuin_client::settings::Style::Auto => f.size().height < 14,
+            atuin_client::settings::Style::Auto => f.area().height < 14,
             atuin_client::settings::Style::Compact => true,
             atuin_client::settings::Style::Full => false,
         };
         let invert = settings.invert;
         let border_size = if compact { 0 } else { 1 };
-        let preview_width = f.size().width - 2;
+        let preview_width = f.area().width - 2;
         let preview_height = Self::calc_preview_height(
             settings,
             results,
@@ -604,12 +604,12 @@ impl State {
             border_size,
             preview_width,
         );
-        let show_help = settings.show_help && (!compact || f.size().height > 1);
+        let show_help = settings.show_help && (!compact || f.area().height > 1);
         // This is an OR, as it seems more likely for someone to wish to override
         // tabs unexpectedly being missed, than unexpectedly present.
         let hide_extra = settings.auto_hide_height != 0
             && compact
-            && f.size().height <= settings.auto_hide_height;
+            && f.area().height <= settings.auto_hide_height;
         let show_tabs = settings.show_tabs && !hide_extra;
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -643,7 +643,7 @@ impl State {
                 }
                 .as_ref(),
             )
-            .split(f.size());
+            .split(f.area());
 
         let input_chunk = if invert { chunks[0] } else { chunks[3] };
         let results_list_chunk = if invert { chunks[1] } else { chunks[2] };
@@ -722,9 +722,8 @@ impl State {
                     let message = Paragraph::new("Nothing to inspect")
                         .block(
                             Block::new()
-                                .title(
-                                    Title::from(" Info ".to_string()).alignment(Alignment::Center),
-                                )
+                                .title(Title::from(" Info ".to_string()))
+                                .title_alignment(Alignment::Center)
                                 .borders(Borders::ALL)
                                 .padding(Padding::vertical(2)),
                         )
@@ -774,11 +773,11 @@ impl State {
             let extra_width = UnicodeWidthStr::width(self.search.input.substring());
 
             let cursor_offset = if compact { 0 } else { 1 };
-            f.set_cursor(
+            f.set_cursor_position((
                 // Put cursor past the end of the input text
                 input_chunk.x + extra_width as u16 + PREFIX_LENGTH + 1 + cursor_offset,
                 input_chunk.y + cursor_offset,
-            );
+            ));
         }
     }
 

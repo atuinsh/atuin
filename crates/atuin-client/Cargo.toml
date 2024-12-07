@@ -57,10 +57,7 @@ serde_with = "3.8.1"
 
 # encryption
 rusty_paseto = { version = "0.7.0", default-features = false }
-rusty_paserk = { version = "0.4.0", default-features = false, features = [
-  "v4",
-  "serde",
-] }
+rusty_paserk = { version = "0.4.0", default-features = false, features = ["v4", "serde"] }
 
 # sync
 urlencoding = { version = "2.1.0", optional = true }
@@ -71,7 +68,7 @@ indicatif = "0.17.7"
 tiny-bip39 = "=1.0.0"
 
 # theme
-crossterm = { version = "0.27.0", features = ["serde"] }
+crossterm = { version = "0.28.1", features = ["serde"] }
 palette = { version = "0.7.5", features = ["serializing"] }
 lazy_static = "1.4.0"
 strum_macros = "0.26.3"
