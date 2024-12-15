@@ -36,14 +36,24 @@
 ## set it to 0 to sync after every command
 # sync_frequency = "10m"
 
-## which search mode to use
+## which search mode to use when atuin is invoked by the "search" flag  
 ## possible values: prefix, fulltext, fuzzy, skim
 # search_mode = "fuzzy"
 
-## which filter mode to use by default
+## which search mode to use when atuin is invoked from a shell up-key binding
+## the accepted values are identical to those of "search_mode"
+## leave unspecified to use same mode set in "search_mode"
+# search_mode_shell_up_key_binding = "fuzzy"
+
+## which filter mode to use when atuin is invoked by the "search" flag 
 ## possible values: "global", "host", "session", "directory", "workspace"
 ## consider using search.filters to customize the enablement and order of filter modes
 # filter_mode = "global"
+
+## which filter mode to use when atuin is invoked from a shell up-key binding
+## the accepted values are identical to those of "filter_mode"
+## leave unspecified to use same mode set in "filter_mode"
+# filter_mode_shell_up_key_binding = "global"
 
 ## With workspace filtering enabled, Atuin will filter for commands executed
 ## in any directory within a git repository tree (default: false).
@@ -53,17 +63,7 @@
 ## set search.filters to include "workspace" before other filter modes.
 # workspaces = false
 
-## which filter mode to use when atuin is invoked from a shell up-key binding
-## the accepted values are identical to those of "filter_mode"
-## leave unspecified to use same mode set in "filter_mode"
-# filter_mode_shell_up_key_binding = "global"
-
-## which search mode to use when atuin is invoked from a shell up-key binding
-## the accepted values are identical to those of "search_mode"
-## leave unspecified to use same mode set in "search_mode"
-# search_mode_shell_up_key_binding = "fuzzy"
-
-## which style to use
+## which display style to use
 ## possible values: auto, full, compact
 # style = "auto"
 
