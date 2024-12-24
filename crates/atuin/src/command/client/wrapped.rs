@@ -147,19 +147,19 @@ impl WrappedStats {
     }
 }
 
-pub fn print_wrapped_header() {
+pub fn print_wrapped_header(year: i32) {
     let reset = ResetColor;
     let bold = SetAttribute(crossterm::style::Attribute::Bold);
 
     println!("{bold}╭────────────────────────────────────╮{reset}");
-    println!("{bold}│        ATUIN WRAPPED 2024          │{reset}");
+    println!("{bold}│        ATUIN WRAPPED {year}          │{reset}");
     println!("{bold}│    Your Year in Shell History      │{reset}");
     println!("{bold}╰────────────────────────────────────╯{reset}");
     println!();
 }
 
 #[allow(clippy::cast_precision_loss)]
-fn print_fun_facts(wrapped_stats: &WrappedStats, stats: &Stats) {
+fn print_fun_facts(wrapped_stats: &WrappedStats, stats: &Stats, year: i32) {
     let reset = ResetColor;
     let bold = SetAttribute(crossterm::style::Attribute::Bold);
 
@@ -199,12 +199,12 @@ fn print_fun_facts(wrapped_stats: &WrappedStats, stats: &Stats) {
     println!("🔍 Command Evolution:");
 
     // print stats for each half and compare
-    println!("  {bold}Top Commands{reset} in the first half of 2024:");
+    println!("  {bold}Top Commands{reset} in the first half of {year}:");
     for (cmd, count) in wrapped_stats.first_half_commands.iter().take(3) {
         println!("    {bold}{cmd}{reset} ({count} times)");
     }
 
-    println!("  {bold}Top Commands{reset} in the second half of 2024:");
+    println!("  {bold}Top Commands{reset} in the second half of {year}:");
     for (cmd, count) in wrapped_stats.second_half_commands.iter().take(3) {
         println!("    {bold}{cmd}{reset} ({count} times)");
     }
@@ -252,6 +252,7 @@ fn print_fun_facts(wrapped_stats: &WrappedStats, stats: &Stats) {
 
 pub async fn run(db: &impl Database, settings: &Settings, theme: &Theme) -> Result<()> {
     let now = OffsetDateTime::now_utc().to_offset(settings.timezone.0);
+    let year = now.year();
     let last_night = now.replace_time(Time::MIDNIGHT);
 
     // Get history for the whole year
@@ -264,9 +265,9 @@ pub async fn run(db: &impl Database, settings: &Settings, theme: &Theme) -> Resu
     let wrapped_stats = WrappedStats::new(&stats, &history);
 
     // Print wrapped format
-    print_wrapped_header();
+    print_wrapped_header(year);
 
-    println!("🎉 In 2024, you typed {} commands!", stats.total_commands);
+    println!("🎉 In {year}, you typed {} commands!", stats.total_commands);
     println!(
         "   That's ~{} commands every day\n",
         stats.total_commands / 365
@@ -276,7 +277,7 @@ pub async fn run(db: &impl Database, settings: &Settings, theme: &Theme) -> Resu
     atuin_history::stats::pretty_print(stats.clone(), 1, theme);
     println!();
 
-    print_fun_facts(&wrapped_stats, &stats);
+    print_fun_facts(&wrapped_stats, &stats, year);
 
     Ok(())
 }
