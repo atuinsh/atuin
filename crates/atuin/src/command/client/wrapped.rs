@@ -152,16 +152,13 @@ impl WrappedStats {
 }
 
 pub fn print_wrapped_header(theme: &Theme) {
-    let header_style = SetForegroundColor(match theme.as_style(Meaning::Title).foreground_color {
-        Some(color) => color,
-        None => Color::Cyan,
-    });
     let reset = ResetColor;
+    let bold = SetAttribute(crossterm::style::Attribute::Bold);
 
-    println!("{header_style}╭────────────────────────────────────╮{reset}");
-    println!("{header_style}│        ATUIN WRAPPED 2024          │{reset}");
-    println!("{header_style}│   Your Year in Shell History       │{reset}");
-    println!("{header_style}╰────────────────────────────────────╯{reset}");
+    println!("{bold}╭────────────────────────────────────╮{reset}");
+    println!("{bold}│        ATUIN WRAPPED 2024          │{reset}");
+    println!("{bold}│    Your Year in Shell History      │{reset}");
+    println!("{bold}╰────────────────────────────────────╯{reset}");
     println!();
 }
 
