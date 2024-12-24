@@ -6,7 +6,7 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use atuin_client::{history::History, settings::Settings, theme::Meaning, theme::Theme};
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Stats {
     pub total_commands: usize,
     pub unique_commands: usize,
