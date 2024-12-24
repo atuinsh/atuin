@@ -1,11 +1,10 @@
-use clap::Parser;
 use crossterm::style::{Color, ResetColor, SetAttribute, SetForegroundColor};
 use eyre::Result;
 use std::collections::{HashMap, HashSet};
 use time::{Duration, OffsetDateTime, Time};
 
 use atuin_client::{
-    database::{current_context, Database},
+    database::Database,
     settings::Settings,
     theme::{Meaning, Theme},
 };
@@ -16,10 +15,7 @@ use atuin_history::stats::{compute, Stats};
 struct WrappedStats {
     nav_commands: usize,
     pkg_commands: usize,
-    longest_pipeline: usize,
-    most_complex_git: String,
     error_rate: f64,
-    most_error_prone: String,
     first_half_commands: Vec<(String, usize)>,
     second_half_commands: Vec<(String, usize)>,
     git_percentage: f64,
@@ -27,6 +23,7 @@ struct WrappedStats {
 }
 
 impl WrappedStats {
+    #[allow(clippy::too_many_lines)]
     fn new(stats: &Stats, history: &[atuin_client::history::History]) -> Self {
         let nav_commands = stats
             .top
@@ -38,37 +35,49 @@ impl WrappedStats {
             .map(|(_, count)| count)
             .sum();
 
-        let pkg_commands = stats
-            .top
+        let pkg_managers = [
+            "cargo",
+            "npm",
+            "pnpm",
+            "yarn",
+            "pip",
+            "pip3",
+            "pipenv",
+            "poetry",
+            "brew",
+            "apt",
+            "apt-get",
+            "apk",
+            "pacman",
+            "yum",
+            "dnf",
+            "zypper",
+            "pkg",
+            "chocolatey",
+            "choco",
+            "scoop",
+            "winget",
+            "gem",
+            "bundle",
+            "composer",
+            "gradle",
+            "maven",
+            "mvn",
+            "go get",
+            "nuget",
+            "dotnet",
+            "mix",
+            "hex",
+            "rebar3",
+        ];
+
+        let pkg_commands = history
             .iter()
-            .filter(|(cmd, _)| {
-                let cmd = &cmd[0];
-                cmd.starts_with("cargo")
-                    || cmd.starts_with("npm")
-                    || cmd.starts_with("pnpm")
-                    || cmd.starts_with("yarn")
-                    || cmd.starts_with("pip")
-                    || cmd.starts_with("brew")
-                    || cmd.starts_with("apt")
-                    || cmd.starts_with("pacman")
+            .filter(|h| {
+                let cmd = h.command.clone();
+                pkg_managers.iter().any(|pm| cmd.starts_with(pm))
             })
-            .map(|(_, count)| count)
-            .sum();
-
-        let longest_pipeline = stats
-            .top
-            .iter()
-            .map(|(cmd, _)| cmd.len())
-            .max()
-            .unwrap_or(0);
-
-        let most_complex_git = stats
-            .top
-            .iter()
-            .filter(|(cmd, _)| cmd[0].starts_with("git"))
-            .max_by_key(|(cmd, _)| cmd[0].len())
-            .map(|(cmd, _)| cmd[0].clone())
-            .unwrap_or_else(|| "git".to_string());
+            .count();
 
         // Error analysis
         let mut command_errors: HashMap<String, (usize, usize)> = HashMap::new(); // (total_uses, errors)
@@ -99,17 +108,12 @@ impl WrappedStats {
             }
 
             // Track hourly distribution
-            let hour = format!("{:02}:00", entry.timestamp.time().hour());
+            let local_time = entry
+                .timestamp
+                .to_offset(time::UtcOffset::current_local_offset().unwrap_or(time::UtcOffset::UTC));
+            let hour = format!("{:02}:00", local_time.time().hour());
             *hours.entry(hour).or_default() += 1;
         }
-
-        // Calculate error rates
-        let most_error_prone = command_errors
-            .iter()
-            .filter(|(_, (total, _))| *total >= 10)
-            .max_by_key(|(_, (total, errors))| (*errors as f64 / *total as f64 * 10000.0) as usize)
-            .map(|(cmd, _)| cmd.clone())
-            .unwrap_or_else(|| "none".to_string());
 
         let total_errors: usize = command_errors.values().map(|(_, errors)| errors).sum();
         let total_commands: usize = command_errors.values().map(|(total, _)| total).sum();
@@ -138,10 +142,7 @@ impl WrappedStats {
         Self {
             nav_commands,
             pkg_commands,
-            longest_pipeline,
-            most_complex_git,
             error_rate,
-            most_error_prone,
             first_half_commands: first_half,
             second_half_commands: second_half,
             git_percentage,
@@ -172,60 +173,50 @@ pub fn print_fun_facts(wrapped_stats: &WrappedStats, stats: &Stats, theme: &Them
     let reset = ResetColor;
     let bold = SetAttribute(crossterm::style::Attribute::Bold);
 
-    println!("{bold}✨ Fun Facts:{reset}");
-
-    // Git usage
-    println!(
-        "- You're a Git Power User! {highlight}{:.1}%{reset} of your commands were Git operations",
-        wrapped_stats.git_percentage * 100.0
-    );
-    println!(
-        "  Most complex git command: {highlight}{}{reset}",
-        wrapped_stats.most_complex_git
-    );
-
+    if wrapped_stats.git_percentage > 0.05 {
+        println!(
+            "{bold}🌟 You're a Git Power User!{reset} {highlight}{:.1}%{reset} of your commands were Git operations\n",
+            wrapped_stats.git_percentage * 100.0
+        );
+    }
     // Navigation patterns
     let nav_percentage = wrapped_stats.nav_commands as f64 / stats.total_commands as f64 * 100.0;
-    println!(
-        "- File Explorer: {highlight}{:.1}%{reset} of your time was spent navigating directories",
-        nav_percentage
-    );
+    if nav_percentage > 0.05 {
+        println!(
+            "{bold}🚀 You're a Navigator!{reset} {highlight}{nav_percentage:.1}%{reset} of your time was spent navigating directories\n",
+        );
+    }
 
     // Command vocabulary
     println!(
-        "- Command Vocabulary: You know {highlight}{}{reset} unique commands",
+        "{bold}📚 Command Vocabulary{reset}: You know {highlight}{}{reset} unique commands\n",
         stats.unique_commands
-    );
-    println!(
-        "  Your longest command pipeline had {highlight}{}{reset} steps!",
-        wrapped_stats.longest_pipeline
     );
 
     // Package management
     println!(
-        "- Package Management: You ran {highlight}{}{reset} package-related commands",
+        "{bold}📦 Package Management{reset}: You ran {highlight}{}{reset} package-related commands\n",
         wrapped_stats.pkg_commands
     );
 
     // Error patterns
+    let error_percentage = wrapped_stats.error_rate * 100.0;
     println!(
-        "- Terminal Troubles: Your command error rate was {highlight}{:.1}%{reset}",
-        wrapped_stats.error_rate * 100.0
-    );
-    println!(
-        "  Most error-prone command: {highlight}{}{reset} (maybe time for an alias?)",
-        wrapped_stats.most_error_prone
+        "{bold}🚨 Error Analysis{reset}: Your commands failed {highlight}{error_percentage:.1}%{reset} of the time\n",
     );
 
     // Command evolution
-    println!("- Command Evolution:");
-    println!("  First half of 2024:");
+    println!("🔍 Command Evolution:");
+
+    // print stats for each half and compare
+    println!("  {bold}Top Commands{reset} in the first half of 2024:");
     for (cmd, count) in wrapped_stats.first_half_commands.iter().take(3) {
-        println!("    {highlight}{}{reset} ({} times)", cmd, count);
+        println!("    {highlight}{cmd}{reset} ({count} times)");
     }
-    println!("  Second half of 2024:");
+
+    println!("  {bold}Top Commands{reset} in the second half of 2024:");
     for (cmd, count) in wrapped_stats.second_half_commands.iter().take(3) {
-        println!("    {highlight}{}{reset} ({} times)", cmd, count);
+        println!("    {highlight}{cmd}{reset} ({count} times)");
     }
 
     // Find new favorite commands (in top 5 of second half but not in first half)
@@ -242,18 +233,15 @@ pub fn print_fun_facts(wrapped_stats: &WrappedStats, stats: &Stats, theme: &Them
         .collect();
 
     if !new_favorites.is_empty() {
-        println!("  {highlight}New favorites{reset} in the second half:");
+        println!("  {bold}New favorites{reset} in the second half:");
         for (cmd, count) in new_favorites {
-            println!("    {highlight}{}{reset} ({} times)", cmd, count);
+            println!("    {highlight}{cmd}{reset} ({count} times)");
         }
     }
 
     // Time patterns
     if let Some((hour, count)) = &wrapped_stats.busiest_hour {
-        println!(
-            "- Most Productive Hour: {highlight}{}{reset} ({} commands)",
-            hour, count
-        );
+        println!("\n🕘 Most Productive Hour: {highlight}{hour}{reset} ({count} commands)",);
 
         // Night owl or early bird
         let hour_num = hour
@@ -264,7 +252,7 @@ pub fn print_fun_facts(wrapped_stats: &WrappedStats, stats: &Stats, theme: &Them
             .unwrap_or(0);
         if hour_num >= 22 || hour_num <= 4 {
             println!("  You're quite the night owl! 🦉");
-        } else if hour_num >= 5 && hour_num <= 7 {
+        } else if (5..=7).contains(&hour_num) {
             println!("  Early bird gets the worm! 🐦");
         }
     }

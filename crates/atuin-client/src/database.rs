@@ -760,6 +760,46 @@ impl Database for Sqlite {
     }
 }
 
+trait SqlBuilderExt {
+    fn fuzzy_condition<S: ToString, T: ToString>(
+        &mut self,
+        field: S,
+        mask: T,
+        inverse: bool,
+        glob: bool,
+        is_or: bool,
+    ) -> &mut Self;
+}
+
+impl SqlBuilderExt for SqlBuilder {
+    /// adapted from the sql-builder *like functions
+    fn fuzzy_condition<S: ToString, T: ToString>(
+        &mut self,
+        field: S,
+        mask: T,
+        inverse: bool,
+        glob: bool,
+        is_or: bool,
+    ) -> &mut Self {
+        let mut cond = field.to_string();
+        if inverse {
+            cond.push_str(" NOT");
+        }
+        if glob {
+            cond.push_str(" GLOB '");
+        } else {
+            cond.push_str(" LIKE '");
+        }
+        cond.push_str(&esc(mask.to_string()));
+        cond.push('\'');
+        if is_or {
+            self.or_where(cond)
+        } else {
+            self.and_where(cond)
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use crate::settings::test_local_timeout;
@@ -1103,45 +1143,5 @@ mod test {
         let duration = start.elapsed();
 
         assert!(duration < Duration::from_secs(15));
-    }
-}
-
-trait SqlBuilderExt {
-    fn fuzzy_condition<S: ToString, T: ToString>(
-        &mut self,
-        field: S,
-        mask: T,
-        inverse: bool,
-        glob: bool,
-        is_or: bool,
-    ) -> &mut Self;
-}
-
-impl SqlBuilderExt for SqlBuilder {
-    /// adapted from the sql-builder *like functions
-    fn fuzzy_condition<S: ToString, T: ToString>(
-        &mut self,
-        field: S,
-        mask: T,
-        inverse: bool,
-        glob: bool,
-        is_or: bool,
-    ) -> &mut Self {
-        let mut cond = field.to_string();
-        if inverse {
-            cond.push_str(" NOT");
-        }
-        if glob {
-            cond.push_str(" GLOB '");
-        } else {
-            cond.push_str(" LIKE '");
-        }
-        cond.push_str(&esc(mask.to_string()));
-        cond.push('\'');
-        if is_or {
-            self.or_where(cond)
-        } else {
-            self.and_where(cond)
-        }
     }
 }
