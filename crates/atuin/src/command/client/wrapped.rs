@@ -1,13 +1,9 @@
-use crossterm::style::{Color, ResetColor, SetAttribute, SetForegroundColor};
+use crossterm::style::{ResetColor, SetAttribute};
 use eyre::Result;
 use std::collections::{HashMap, HashSet};
 use time::{Duration, OffsetDateTime, Time};
 
-use atuin_client::{
-    database::Database,
-    settings::Settings,
-    theme::{Meaning, Theme},
-};
+use atuin_client::{database::Database, settings::Settings, theme::Theme};
 
 use atuin_history::stats::{compute, Stats};
 
@@ -23,7 +19,7 @@ struct WrappedStats {
 }
 
 impl WrappedStats {
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::too_many_lines, clippy::cast_precision_loss)]
     fn new(stats: &Stats, history: &[atuin_client::history::History]) -> Self {
         let nav_commands = stats
             .top
@@ -151,7 +147,7 @@ impl WrappedStats {
     }
 }
 
-pub fn print_wrapped_header(theme: &Theme) {
+pub fn print_wrapped_header() {
     let reset = ResetColor;
     let bold = SetAttribute(crossterm::style::Attribute::Bold);
 
@@ -162,17 +158,14 @@ pub fn print_wrapped_header(theme: &Theme) {
     println!();
 }
 
-pub fn print_fun_facts(wrapped_stats: &WrappedStats, stats: &Stats, theme: &Theme) {
-    let highlight = SetForegroundColor(match theme.as_style(Meaning::Title).foreground_color {
-        Some(color) => color,
-        None => Color::Yellow,
-    });
+#[allow(clippy::cast_precision_loss)]
+fn print_fun_facts(wrapped_stats: &WrappedStats, stats: &Stats) {
     let reset = ResetColor;
     let bold = SetAttribute(crossterm::style::Attribute::Bold);
 
     if wrapped_stats.git_percentage > 0.05 {
         println!(
-            "{bold}🌟 You're a Git Power User!{reset} {highlight}{:.1}%{reset} of your commands were Git operations\n",
+            "{bold}🌟 You're a Git Power User!{reset} {bold}{:.1}%{reset} of your commands were Git operations\n",
             wrapped_stats.git_percentage * 100.0
         );
     }
@@ -180,26 +173,26 @@ pub fn print_fun_facts(wrapped_stats: &WrappedStats, stats: &Stats, theme: &Them
     let nav_percentage = wrapped_stats.nav_commands as f64 / stats.total_commands as f64 * 100.0;
     if nav_percentage > 0.05 {
         println!(
-            "{bold}🚀 You're a Navigator!{reset} {highlight}{nav_percentage:.1}%{reset} of your time was spent navigating directories\n",
+            "{bold}🚀 You're a Navigator!{reset} {bold}{nav_percentage:.1}%{reset} of your time was spent navigating directories\n",
         );
     }
 
     // Command vocabulary
     println!(
-        "{bold}📚 Command Vocabulary{reset}: You know {highlight}{}{reset} unique commands\n",
+        "{bold}📚 Command Vocabulary{reset}: You know {bold}{}{reset} unique commands\n",
         stats.unique_commands
     );
 
     // Package management
     println!(
-        "{bold}📦 Package Management{reset}: You ran {highlight}{}{reset} package-related commands\n",
+        "{bold}📦 Package Management{reset}: You ran {bold}{}{reset} package-related commands\n",
         wrapped_stats.pkg_commands
     );
 
     // Error patterns
     let error_percentage = wrapped_stats.error_rate * 100.0;
     println!(
-        "{bold}🚨 Error Analysis{reset}: Your commands failed {highlight}{error_percentage:.1}%{reset} of the time\n",
+        "{bold}🚨 Error Analysis{reset}: Your commands failed {bold}{error_percentage:.1}%{reset} of the time\n",
     );
 
     // Command evolution
@@ -208,12 +201,12 @@ pub fn print_fun_facts(wrapped_stats: &WrappedStats, stats: &Stats, theme: &Them
     // print stats for each half and compare
     println!("  {bold}Top Commands{reset} in the first half of 2024:");
     for (cmd, count) in wrapped_stats.first_half_commands.iter().take(3) {
-        println!("    {highlight}{cmd}{reset} ({count} times)");
+        println!("    {bold}{cmd}{reset} ({count} times)");
     }
 
     println!("  {bold}Top Commands{reset} in the second half of 2024:");
     for (cmd, count) in wrapped_stats.second_half_commands.iter().take(3) {
-        println!("    {highlight}{cmd}{reset} ({count} times)");
+        println!("    {bold}{cmd}{reset} ({count} times)");
     }
 
     // Find new favorite commands (in top 5 of second half but not in first half)
@@ -232,13 +225,13 @@ pub fn print_fun_facts(wrapped_stats: &WrappedStats, stats: &Stats, theme: &Them
     if !new_favorites.is_empty() {
         println!("  {bold}New favorites{reset} in the second half:");
         for (cmd, count) in new_favorites {
-            println!("    {highlight}{cmd}{reset} ({count} times)");
+            println!("    {bold}{cmd}{reset} ({count} times)");
         }
     }
 
     // Time patterns
     if let Some((hour, count)) = &wrapped_stats.busiest_hour {
-        println!("\n🕘 Most Productive Hour: {highlight}{hour}{reset} ({count} commands)",);
+        println!("\n🕘 Most Productive Hour: {bold}{hour}{reset} ({count} commands)",);
 
         // Night owl or early bird
         let hour_num = hour
@@ -271,7 +264,7 @@ pub async fn run(db: &impl Database, settings: &Settings, theme: &Theme) -> Resu
     let wrapped_stats = WrappedStats::new(&stats, &history);
 
     // Print wrapped format
-    print_wrapped_header(theme);
+    print_wrapped_header();
 
     println!("🎉 In 2024, you typed {} commands!", stats.total_commands);
     println!(
@@ -283,7 +276,7 @@ pub async fn run(db: &impl Database, settings: &Settings, theme: &Theme) -> Resu
     atuin_history::stats::pretty_print(stats.clone(), 1, theme);
     println!();
 
-    print_fun_facts(&wrapped_stats, &stats, theme);
+    print_fun_facts(&wrapped_stats, &stats);
 
     Ok(())
 }
