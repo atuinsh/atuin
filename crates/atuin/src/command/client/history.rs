@@ -114,8 +114,17 @@ pub enum Cmd {
     /// Delete history entries matching the configured exclusion filters
     Prune {
         /// List matching history lines without performing the actual deletion.
-        #[arg(short = 'n', long)]
+        #[arg(short = 'n', long, default_value = "true")]
+        // accept no value
+        #[arg(num_args(0..=1), default_missing_value("true"))]
+        // accept a value
         dry_run: bool,
+        /// Delete all history lines which are older than the configured minimum age (seconds).
+        #[arg(long)]
+        min_age: Option<u64>,
+        /// Delete all history lines which are longer than the configured maximum length.
+        #[arg(long)]
+        max_length: Option<usize>,
     },
 }
 
@@ -494,15 +503,36 @@ impl Cmd {
         store: SqliteStore,
         context: atuin_client::database::Context,
         dry_run: bool,
+        min_age: Option<u64>,
+        max_length: Option<usize>,
     ) -> Result<()> {
         // Grab all executed commands and filter them using History::should_save.
         // We could iterate or paginate here if memory usage becomes an issue.
-        let matches: Vec<History> = db
-            .list(&[Global], &context, None, false, false)
-            .await?
-            .into_iter()
-            .filter(|h| !h.should_save(settings))
-            .collect();
+        let cmds = db.list(&[Global], &context, None, false, false).await?;
+        let cmd_count = cmds.len();
+        let cmds = cmds.into_iter();
+
+        let mut matches: Vec<History> = Vec::with_capacity(cmd_count / 2);
+
+        for cmd in cmds {
+            if let Some(min_age) = min_age {
+                if cmd.timestamp < OffsetDateTime::now_utc() - Duration::from_secs(min_age) {
+                    matches.push(cmd);
+                    continue;
+                }
+            }
+
+            if let Some(max_length) = max_length {
+                if cmd.command.len() > max_length {
+                    matches.push(cmd);
+                    continue;
+                }
+            }
+
+            if !cmd.should_save(settings) {
+                matches.push(cmd);
+            }
+        }
 
         match matches.len() {
             0 => {
@@ -623,8 +653,13 @@ impl Cmd {
 
             Self::InitStore => history_store.init_store(&db).await,
 
-            Self::Prune { dry_run } => {
-                Self::handle_prune(&db, settings, store, context, dry_run).await
+            Self::Prune {
+                dry_run,
+                min_age,
+                max_length,
+            } => {
+                Self::handle_prune(&db, settings, store, context, dry_run, min_age, max_length)
+                    .await
             }
         }
     }
