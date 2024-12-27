@@ -83,6 +83,7 @@ All notable changes to this project will be documented in this file.
 - Ultracompact Mode (search-only) ([#2357](https://github.com/atuinsh/atuin/issues/2357))
 - Right Arrow to modify selected command ([#2453](https://github.com/atuinsh/atuin/issues/2453))
 - Provide additional clarity around key management ([#2467](https://github.com/atuinsh/atuin/issues/2467))
+- Add `atuin wrapped` ([#2493](https://github.com/atuinsh/atuin/issues/2493))
 
 
 ### Miscellaneous Tasks
