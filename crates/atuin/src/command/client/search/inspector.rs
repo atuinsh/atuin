@@ -5,8 +5,8 @@ use atuin_client::{
     history::{History, HistoryStats},
     settings::Settings,
 };
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
+    crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
     layout::Rect,
     prelude::{Constraint, Direction, Layout},
     style::Style,
