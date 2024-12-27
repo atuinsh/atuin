@@ -1,7 +1,7 @@
 use crossterm::style::{ResetColor, SetAttribute};
 use eyre::Result;
 use std::collections::{HashMap, HashSet};
-use time::{Duration, OffsetDateTime, Time};
+use time::{Date, Duration, Month, OffsetDateTime, Time};
 
 use atuin_client::{database::Database, settings::Settings, theme::Theme};
 
@@ -20,7 +20,7 @@ struct WrappedStats {
 
 impl WrappedStats {
     #[allow(clippy::too_many_lines, clippy::cast_precision_loss)]
-    fn new(stats: &Stats, history: &[atuin_client::history::History]) -> Self {
+    fn new(settings: &Settings, stats: &Stats, history: &[atuin_client::history::History]) -> Self {
         let nav_commands = stats
             .top
             .iter()
@@ -106,7 +106,7 @@ impl WrappedStats {
             // Track hourly distribution
             let local_time = entry
                 .timestamp
-                .to_offset(time::UtcOffset::current_local_offset().unwrap_or(time::UtcOffset::UTC));
+                .to_offset(time::UtcOffset::current_local_offset().unwrap_or(settings.timezone.0));
             let hour = format!("{:02}:00", local_time.time().hour());
             *hours.entry(hour).or_default() += 1;
         }
@@ -250,19 +250,40 @@ fn print_fun_facts(wrapped_stats: &WrappedStats, stats: &Stats, year: i32) {
     println!();
 }
 
-pub async fn run(db: &impl Database, settings: &Settings, theme: &Theme) -> Result<()> {
+pub async fn run(
+    year: Option<i32>,
+    db: &impl Database,
+    settings: &Settings,
+    theme: &Theme,
+) -> Result<()> {
     let now = OffsetDateTime::now_utc().to_offset(settings.timezone.0);
-    let year = now.year();
-    let last_night = now.replace_time(Time::MIDNIGHT);
+    let month = now.month();
 
-    // Get history for the whole year
-    let end = last_night;
-    let start = end - Duration::days(365);
+    // If we're in December, then wrapped is for the current year. If not, it's for the previous year
+    let year = year.unwrap_or_else(|| {
+        if month == Month::December {
+            now.year()
+        } else {
+            now.year() - 1
+        }
+    });
+
+    let start = OffsetDateTime::new_in_offset(
+        Date::from_calendar_date(year, Month::January, 1).unwrap(),
+        Time::MIDNIGHT,
+        now.offset(),
+    );
+    let end = OffsetDateTime::new_in_offset(
+        Date::from_calendar_date(year, Month::December, 31).unwrap(),
+        Time::MIDNIGHT + Duration::days(1) - Duration::nanoseconds(1),
+        now.offset(),
+    );
+
     let history = db.range(start, end).await?;
 
     // Compute overall stats using existing functionality
     let stats = compute(settings, &history, 10, 1).expect("Failed to compute stats");
-    let wrapped_stats = WrappedStats::new(&stats, &history);
+    let wrapped_stats = WrappedStats::new(settings, &stats, &history);
 
     // Print wrapped format
     print_wrapped_header(year);

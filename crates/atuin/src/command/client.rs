@@ -80,7 +80,7 @@ pub enum Cmd {
     Doctor,
 
     #[command()]
-    Wrapped,
+    Wrapped { year: Option<i32> },
 
     /// *Experimental* Start the background daemon
     #[cfg(feature = "daemon")]
@@ -170,7 +170,7 @@ impl Cmd {
                 Ok(())
             }
 
-            Self::Wrapped => wrapped::run(&db, &settings, theme).await,
+            Self::Wrapped { year } => wrapped::run(year, &db, &settings, theme).await,
 
             #[cfg(feature = "daemon")]
             Self::Daemon => daemon::run(settings, sqlite_store, db).await,
