@@ -13,5 +13,5 @@ fn main() -> std::io::Result<()> {
         .build_server(true)
         .file_descriptor_set_path(&file_descriptor_path)
         .skip_protoc_run()
-        .compile(&["history.proto"], &["."])
+        .compile_protos(&["history.proto"], &["."])
 }

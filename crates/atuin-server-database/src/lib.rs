@@ -136,7 +136,7 @@ pub trait Database: Sized + Clone + Send + Sync + 'static {
 
                 Box::new(months.map(move |month| {
                     let start = Date::from_calendar_date(year, month, 1)?;
-                    let days = time::util::days_in_year_month(year, month);
+                    let days = start.month().length(year);
                     let end = start + Duration::days(days as i64);
 
                     Ok((month as u64, start..end))
@@ -144,7 +144,7 @@ pub trait Database: Sized + Clone + Send + Sync + 'static {
             }
 
             TimePeriod::Day { year, month } => {
-                let days = 1..time::util::days_in_year_month(year, month);
+                let days = 1..month.length(year);
                 Box::new(days.map(move |day| {
                     let start = Date::from_calendar_date(year, month, day)?;
                     let end = start
