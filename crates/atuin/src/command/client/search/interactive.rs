@@ -1101,7 +1101,7 @@ pub async fn history(
 
     let mut stats: Option<HistoryStats> = None;
     let accept;
-    
+
     // to avoid overlapping with prompt
     terminal.clear()?;
     let result = 'render: loop {
