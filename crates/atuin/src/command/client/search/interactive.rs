@@ -1304,8 +1304,8 @@ mod tests {
         let no_preview = State::calc_preview_height(
             &settings_preview_auto,
             &results,
-            0 as usize,
-            0 as usize,
+            0_usize,
+            0_usize,
             false,
             1,
             80,
@@ -1314,8 +1314,8 @@ mod tests {
         let preview_h2 = State::calc_preview_height(
             &settings_preview_auto,
             &results,
-            1 as usize,
-            0 as usize,
+            1_usize,
+            0_usize,
             false,
             1,
             80,
@@ -1324,8 +1324,8 @@ mod tests {
         let preview_h3 = State::calc_preview_height(
             &settings_preview_auto,
             &results,
-            2 as usize,
-            0 as usize,
+            2_usize,
+            0_usize,
             false,
             1,
             80,
@@ -1334,8 +1334,8 @@ mod tests {
         let preview_one_line = State::calc_preview_height(
             &settings_preview_auto,
             &results,
-            0 as usize,
-            0 as usize,
+            0_usize,
+            0_usize,
             false,
             1,
             66,
@@ -1344,8 +1344,8 @@ mod tests {
         let preview_limit_at_2 = State::calc_preview_height(
             &settings_preview_auto_h2,
             &results,
-            2 as usize,
-            0 as usize,
+            2_usize,
+            0_usize,
             false,
             1,
             80,
@@ -1354,8 +1354,8 @@ mod tests {
         let preview_static_h3 = State::calc_preview_height(
             &settings_preview_h4,
             &results,
-            1 as usize,
-            0 as usize,
+            1_usize,
+            0_usize,
             false,
             1,
             80,
@@ -1364,8 +1364,8 @@ mod tests {
         let preview_static_limit_at_4 = State::calc_preview_height(
             &settings_preview_h4,
             &results,
-            1 as usize,
-            0 as usize,
+            1_usize,
+            0_usize,
             false,
             1,
             20,
@@ -1374,8 +1374,8 @@ mod tests {
         let settings_preview_fixed = State::calc_preview_height(
             &settings_preview_fixed,
             &results,
-            1 as usize,
-            0 as usize,
+            1_usize,
+            0_usize,
             false,
             1,
             20,
@@ -1383,7 +1383,7 @@ mod tests {
 
         assert_eq!(no_preview, 1);
         // 1 * 2 is the space for the border
-        let border_space = 1 * 2;
+        let border_space = 2;
         assert_eq!(preview_h2, 2 + border_space);
         assert_eq!(preview_h3, 3 + border_space);
         assert_eq!(preview_one_line, 1 + border_space);

@@ -28,6 +28,7 @@ mod kv;
 mod search;
 mod stats;
 mod store;
+mod wrapped;
 
 #[derive(Subcommand, Debug)]
 #[command(infer_subcommands = true)]
@@ -77,6 +78,9 @@ pub enum Cmd {
     /// Run the doctor to check for common issues
     #[command()]
     Doctor,
+
+    #[command()]
+    Wrapped { year: Option<i32> },
 
     /// *Experimental* Start the background daemon
     #[cfg(feature = "daemon")]
@@ -165,6 +169,8 @@ impl Cmd {
                 default_config::run();
                 Ok(())
             }
+
+            Self::Wrapped { year } => wrapped::run(year, &db, &settings, theme).await,
 
             #[cfg(feature = "daemon")]
             Self::Daemon => daemon::run(settings, sqlite_store, db).await,
