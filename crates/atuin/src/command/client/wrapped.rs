@@ -77,7 +77,7 @@ impl WrappedStats {
             "nix",
             "nix-env",
             "cabal",
-            "opam"
+            "opam",
         ];
 
         let pkg_commands = history
