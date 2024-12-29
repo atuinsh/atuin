@@ -1,0 +1,17 @@
+DIRECTORY:
+  en: DIRECTORY
+  ga: COMHADLANN
+GLOBAL:
+  en: GLOBAL
+  ga: UILÍOCH
+HOST:
+  en: HOST
+  ga: ÓSTACH
+SESSION:
+  en: SESSION
+  ga: SEISIÚN
+WORKSPACE:
+  en: WORKSPACE
+  ga: SPÁS OIBRE
+_version: 2
+

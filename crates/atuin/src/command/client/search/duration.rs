@@ -48,7 +48,10 @@ pub fn format_duration_into(dur: Duration, f: &mut fmt::Formatter<'_>) -> fmt::R
     }
 
     match fmt(dur) {
-        ControlFlow::Break((unit, value)) => write!(f, "{value}{unit}"),
+        ControlFlow::Break((unit, value)) => {
+            let unit_str = t!(format!("time.{}", unit), value=value);
+            write!(f, "{}", unit_str)
+        },
         ControlFlow::Continue(()) => write!(f, "0s"),
     }
 }

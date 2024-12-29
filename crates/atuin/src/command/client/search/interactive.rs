@@ -2,6 +2,7 @@ use std::{
     io::{stdout, Write},
     time::Duration,
 };
+use rust_i18n::t;
 
 use atuin_common::utils::{self, Escapable as _};
 use eyre::Result;
@@ -247,7 +248,7 @@ impl State {
 
             1 => super::inspector::input(self, settings, self.results_state.selected(), input),
 
-            _ => panic!("invalid tab index on input"),
+            _ => panic!("{}", t!("invalid tab index on input")),
         };
 
         self.prefix = false;
@@ -654,7 +655,7 @@ impl State {
         // TODO: this should be split so that we have one interactive search container that is
         // EITHER a search box or an inspector. But I'm not doing that now, way too much atm.
         // also allocate less 🙈
-        let titles: Vec<_> = TAB_TITLES.iter().copied().map(Line::from).collect();
+        let titles: Vec<_> = TAB_TITLES.iter().copied().map(|s| t!(s)).map(Line::from).collect();
 
         if show_tabs {
             let tabs = Tabs::new(titles)
@@ -719,7 +720,7 @@ impl State {
 
             1 => {
                 if results.is_empty() {
-                    let message = Paragraph::new("Nothing to inspect")
+                    let message = Paragraph::new(t!("Nothing to inspect"))
                         .block(
                             Block::new()
                                 .title(Title::from(" Info ".to_string()))
@@ -734,14 +735,14 @@ impl State {
                         f,
                         results_list_chunk,
                         &results[self.results_state.selected()],
-                        &stats.expect("Drawing inspector, but no stats"),
+                        &stats.expect(t!("Drawing inspector, but no stats").to_string().as_str()),
                         theme,
                     );
                 }
 
                 // HACK: I'm following up with abstracting this into the UI container, with a
                 // sub-widget for search + for inspector
-                let feedback = Paragraph::new("The inspector is new - please give feedback (good, or bad) at https://forum.atuin.sh");
+                let feedback = Paragraph::new(t!("The inspector is new - please give feedback (good, or bad) at https://forum.atuin.sh"));
                 f.render_widget(feedback, input_chunk);
 
                 return;
@@ -803,32 +804,32 @@ impl State {
         match self.tab_index {
             // search
             0 => Paragraph::new(Text::from(Line::from(vec![
-                Span::styled("<esc>", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(": exit"),
+                Span::styled(t!("<esc>"), Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(format!(": {}", t!("exit"))),
                 Span::raw(", "),
-                Span::styled("<tab>", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(": edit"),
+                Span::styled(t!("<tab>"), Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(format!(": {}", t!("edit"))),
                 Span::raw(", "),
-                Span::styled("<enter>", Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled(t!("<enter>"), Style::default().add_modifier(Modifier::BOLD)),
                 Span::raw(if settings.enter_accept {
                     ": run"
                 } else {
                     ": edit"
                 }),
                 Span::raw(", "),
-                Span::styled("<ctrl-o>", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(": inspect"),
+                Span::styled(t!("keys.ctrl-and", key="o"), Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(format!(": {}", t!("inspect"))),
             ]))),
 
             1 => Paragraph::new(Text::from(Line::from(vec![
                 Span::styled("<esc>", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(": exit"),
+                Span::raw(format!(": {}", t!("exit"))),
                 Span::raw(", "),
-                Span::styled("<ctrl-o>", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(": search"),
+                Span::styled(t!("keys.ctrl-and", key="o"), Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(format!(": {}", t!("search"))),
                 Span::raw(", "),
-                Span::styled("<ctrl-d>", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(": delete"),
+                Span::styled(t!("keys.ctrl-and", key="d"), Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(format!(": {}", t!("delete"))),
             ]))),
 
             _ => unreachable!("invalid tab index"),
@@ -839,7 +840,8 @@ impl State {
 
     fn build_stats(&self, theme: &Theme) -> Paragraph {
         let stats = Paragraph::new(Text::from(Span::raw(format!(
-            "history count: {}",
+            "{}: {}",
+            t!("history count"),
             self.history_count,
         ))))
         .style(theme.as_style(Meaning::Annotation))
@@ -885,8 +887,9 @@ impl State {
     fn build_input(&self, style: StyleState) -> Paragraph {
         /// Max width of the UI box showing current mode
         const MAX_WIDTH: usize = 14;
+        let srch_string: String = format!(" {}:", t!("SRCH").to_string());
         let (pref, mode) = if self.switched_search_mode {
-            (" SRCH:", self.search_mode.as_str())
+            (srch_string.as_str(), self.search_mode.as_str())
         } else {
             ("", self.search.filter_mode.as_str())
         };
@@ -1201,7 +1204,7 @@ pub async fn history(
             Ok(app.search.input.into_inner())
         }
         InputAction::Continue | InputAction::Redraw | InputAction::Delete(_) => {
-            unreachable!("should have been handled!")
+            unreachable!("{}", t!("should have been handled!").to_string())
         }
     }
 }

@@ -1,8 +1,11 @@
 #![warn(clippy::pedantic, clippy::nursery)]
 #![allow(clippy::use_self, clippy::missing_const_for_fn)] // not 100% reliable
+#[macro_use]
+extern crate rust_i18n;
 
 use clap::Parser;
 use eyre::Result;
+use sys_locale::get_locale;
 
 use command::AtuinCmd;
 
@@ -24,6 +27,8 @@ static HELP_TEMPLATE: &str = "\
 
 {all-args}{after-help}";
 
+i18n!("locales", fallback = "en");
+
 /// Magical shell history
 #[derive(Parser)]
 #[command(
@@ -38,6 +43,11 @@ struct Atuin {
 
 impl Atuin {
     fn run(self) -> Result<()> {
+        let locale = get_locale().unwrap_or_else(|| String::from("en"));
+
+        rust_i18n::set_locale(locale.as_str());
+        atuin_client::set_locale(locale.as_str());
+
         self.atuin.run()
     }
 }

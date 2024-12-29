@@ -2,6 +2,7 @@ use std::{
     collections::HashMap, convert::TryFrom, fmt, io::prelude::*, path::PathBuf, str::FromStr,
 };
 
+use lazy_static::lazy_static;
 use atuin_common::record::HostId;
 use clap::ValueEnum;
 use config::{
@@ -67,7 +68,7 @@ impl SearchMode {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Copy, PartialEq, Eq, ValueEnum, Serialize)]
+#[derive(Clone, Debug, Deserialize, Copy, PartialEq, Eq, ValueEnum, Serialize, Hash)]
 pub enum FilterMode {
     #[serde(rename = "global")]
     Global = 0,
@@ -85,15 +86,21 @@ pub enum FilterMode {
     Workspace = 4,
 }
 
+lazy_static! {
+    static ref FILTER_MODES: HashMap<FilterMode, String> = {
+        HashMap::from([
+            (FilterMode::Global, t!("GLOBAL").into_owned()),
+            (FilterMode::Host, t!("HOST").into_owned()),
+            (FilterMode::Session, t!("SESSION").into_owned()),
+            (FilterMode::Directory, t!("DIRECTORY").into_owned()),
+            (FilterMode::Workspace, t!("WORKSPACE").into_owned()),
+        ])
+    };
+}
+
 impl FilterMode {
     pub fn as_str(&self) -> &'static str {
-        match self {
-            FilterMode::Global => "GLOBAL",
-            FilterMode::Host => "HOST",
-            FilterMode::Session => "SESSION",
-            FilterMode::Directory => "DIRECTORY",
-            FilterMode::Workspace => "WORKSPACE",
-        }
+        FILTER_MODES.get(self).unwrap().as_str()
     }
 }
 
