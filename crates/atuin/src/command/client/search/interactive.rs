@@ -909,11 +909,11 @@ impl State {
             Compactness::Full => 1,
             _ => 0,
         };
-        f.set_cursor_position(
+        f.set_cursor_position((
             // Put cursor past the end of the input text
             input_chunk.x + extra_width as u16 + PREFIX_LENGTH + 1 + cursor_offset,
             input_chunk.y + cursor_offset,
-        );
+        ));
     }
 
     fn build_title(&self, theme: &Theme) -> Paragraph<'_> {

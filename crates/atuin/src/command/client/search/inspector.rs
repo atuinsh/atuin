@@ -10,7 +10,7 @@ use ratatui::{
     crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
     layout::Rect,
     prelude::{Constraint, Direction, Layout},
-    style::{Color, Modifier, Style},
+    style::Style,
     text::{Span, Text},
     widgets::{Bar, BarChart, BarGroup, Block, Borders, Padding, Paragraph, Row, Table},
 };
@@ -56,9 +56,7 @@ pub fn draw_commands(
 
     let command = Paragraph::new(Text::from(Span::styled(
         history.command.clone(),
-        Style::default()
-            .add_modifier(Modifier::BOLD)
-            .fg(Color::White),
+        theme.as_style(Meaning::Important)
     )))
     .block(if compact {
         Block::new()
@@ -370,11 +368,7 @@ mod tests {
     use time::OffsetDateTime;
     use super::draw_ultracompact;
 
-    #[test]
-    fn correct_height_for_ultracompact() {
-        let backend = TestBackend::new(22, 5);
-        let mut terminal = Terminal::new(backend).expect("Could not create terminal");
-        let chunk = Rect::new(0, 0, 22, 5);
+    fn mock_history_stats() -> (History, HistoryStats) {
         let history = History {
             id: HistoryId::from("test1".to_string()),
             timestamp: OffsetDateTime::now_utc(),
@@ -417,8 +411,20 @@ mod tests {
             day_of_week: Vec::new(),
             duration_over_time: Vec::new(),
         };
+        (history, stats)
+    }
+
+    #[test]
+    fn test_output_looks_correct_for_ultracompact() {
+        let backend = TestBackend::new(22, 5);
+        let mut terminal = Terminal::new(backend).expect("Could not create terminal");
+        let chunk = Rect::new(0, 0, 22, 5);
+        let (history, stats) = mock_history_stats();
+        let prev = stats.previous.clone().unwrap();
+        let next = stats.next.clone().unwrap();
+
         let mut manager = ThemeManager::new(Some(true), Some("".to_string()));
-        let theme = manager.load_theme("default", None);
+        let theme = manager.load_theme("(none)", None);
         let _ = terminal.draw(|f| draw_ultracompact(
             f,
             chunk,
@@ -426,21 +432,12 @@ mod tests {
             &stats,
             &theme,
         ));
-        let mut lines = ["                     "; 5].map(|l| Line::from(l));
-        let mut l = lines[0].to_string();
-        l.replace_range(0..prev.command.len(), &prev.command);
-        lines[0] = Line::styled(l, Color::DarkGray);
-
-        // Line one highlights just the history command.
-        let l = lines[1].to_string();
-        lines[1] = Line::from(vec![
-            Span::styled(&history.command, Style::new().fg(Color::White).add_modifier(Modifier::BOLD)),
-            Span::styled(&l[history.command.len()..], Color::Reset),
-        ]);
-
-        let mut l = lines[2].to_string();
-        l.replace_range(0..next.command.len(), &next.command);
-        lines[2] = Line::styled(l, Color::DarkGray);
+        let mut lines = ["                      "; 5].map(|l| Line::from(l));
+        for (n, entry) in [prev, history, next].iter().enumerate() {
+            let mut l = lines[n].to_string();
+            l.replace_range(0..entry.command.len(), &entry.command);
+            lines[n] = Line::from(l);
+        }
 
         terminal.backend().assert_buffer_lines(lines);
     }
