@@ -359,3 +359,89 @@ pub fn input(
         _ => InputAction::Continue,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use ratatui::{backend::TestBackend, prelude::*};
+    use atuin_client::{
+        history::{History, HistoryStats, HistoryId},
+        theme::ThemeManager
+    };
+    use time::OffsetDateTime;
+    use super::draw_ultracompact;
+
+    #[test]
+    fn correct_height_for_ultracompact() {
+        let backend = TestBackend::new(22, 5);
+        let mut terminal = Terminal::new(backend).expect("Could not create terminal");
+        let chunk = Rect::new(0, 0, 22, 5);
+        let history = History {
+            id: HistoryId::from("test1".to_string()),
+            timestamp: OffsetDateTime::now_utc(),
+            duration: 3,
+            exit: 0,
+            command: "/bin/cmd".to_string(),
+            cwd: "/toot".to_string(),
+            session: "sesh1".to_string(),
+            hostname: "hostn".to_string(),
+            deleted_at: None
+        };
+        let next = History {
+            id: HistoryId::from("test2".to_string()),
+            timestamp: OffsetDateTime::now_utc(),
+            duration: 2,
+            exit: 0,
+            command: "/bin/cmd -os".to_string(),
+            cwd: "/toot".to_string(),
+            session: "sesh1".to_string(),
+            hostname: "hostn".to_string(),
+            deleted_at: None
+        };
+        let prev = History {
+            id: HistoryId::from("test3".to_string()),
+            timestamp: OffsetDateTime::now_utc(),
+            duration: 1,
+            exit: 0,
+            command: "/bin/cmd -a".to_string(),
+            cwd: "/toot".to_string(),
+            session: "sesh1".to_string(),
+            hostname: "hostn".to_string(),
+            deleted_at: None
+        };
+        let stats = HistoryStats {
+            next: Some(next.clone()),
+            previous: Some(prev.clone()),
+            total: 2,
+            average_duration: 3,
+            exits: Vec::new(),
+            day_of_week: Vec::new(),
+            duration_over_time: Vec::new(),
+        };
+        let mut manager = ThemeManager::new(Some(true), Some("".to_string()));
+        let theme = manager.load_theme("default", None);
+        let _ = terminal.draw(|f| draw_ultracompact(
+            f,
+            chunk,
+            &history,
+            &stats,
+            &theme,
+        ));
+        let mut lines = ["                     "; 5].map(|l| Line::from(l));
+        let mut l = lines[0].to_string();
+        l.replace_range(0..prev.command.len(), &prev.command);
+        lines[0] = Line::styled(l, Color::DarkGray);
+
+        // Line one highlights just the history command.
+        let l = lines[1].to_string();
+        lines[1] = Line::from(vec![
+            Span::styled(&history.command, Style::new().fg(Color::White).add_modifier(Modifier::BOLD)),
+            Span::styled(&l[history.command.len()..], Color::Reset),
+        ]);
+
+        let mut l = lines[2].to_string();
+        l.replace_range(0..next.command.len(), &next.command);
+        lines[2] = Line::styled(l, Color::DarkGray);
+
+        terminal.backend().assert_buffer_lines(lines);
+    }
+}
