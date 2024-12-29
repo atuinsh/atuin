@@ -291,6 +291,7 @@ impl State {
             KeyCode::Right if cursor_at_end_of_line => {
                 Some(InputAction::Accept(self.results_state.selected()))
             }
+            KeyCode::Left if cursor_at_start_of_line => Some(Self::handle_key_exit(settings)),
             KeyCode::Char('o') if ctrl => {
                 self.tab_index = (self.tab_index + 1) % TAB_TITLES.len();
                 Some(InputAction::Continue)
@@ -860,11 +861,11 @@ impl State {
             Compactness::Full => 1,
             _ => 0,
         };
-        f.set_cursor_position(
+        f.set_cursor_position((
             // Put cursor past the end of the input text
             input_chunk.x + extra_width as u16 + PREFIX_LENGTH + 1 + cursor_offset,
             input_chunk.y + cursor_offset,
-        );
+        ));
     }
 
     fn build_title(&self, theme: &Theme) -> Paragraph {
