@@ -1489,7 +1489,7 @@ mod tests {
     use crate::command::client::search::engines::{self, SearchState};
     use crate::command::client::search::history_list::ListState;
 
-    use super::{Compactness, State, InspectingState};
+    use super::{Compactness, InspectingState, State};
 
     #[test]
     #[allow(clippy::too_many_lines)]
