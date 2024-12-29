@@ -51,7 +51,7 @@ pub struct ThemeDefinitionConfigBlock {
     pub parent: Option<String>,
 }
 
-use crossterm::style::{Color, ContentStyle, Attributes, Attribute};
+use crossterm::style::{Attribute, Attributes, Color, ContentStyle};
 
 // For now, a theme is loaded as a mapping of meanings to colors, but it may be desirable to
 // expand that in the future to general styles, so we populate a Meaning->ContentStyle hashmap.
@@ -237,7 +237,7 @@ impl StyleFactory {
     fn from_fg_color_and_attributes(color: Color, attributes: Attributes) -> ContentStyle {
         ContentStyle {
             foreground_color: Some(color),
-            attributes: attributes,
+            attributes,
             ..ContentStyle::default()
         }
     }
@@ -288,7 +288,10 @@ lazy_static! {
                 ),
                 (
                     Meaning::Important,
-                    StyleFactory::from_fg_color_and_attributes(Color::White, Attributes::from(Attribute::Bold)),
+                    StyleFactory::from_fg_color_and_attributes(
+                        Color::White,
+                        Attributes::from(Attribute::Bold),
+                    ),
                 ),
                 (Meaning::Muted, StyleFactory::from_fg_color(Color::Grey)),
                 (Meaning::Base, ContentStyle::default()),
@@ -298,7 +301,8 @@ lazy_static! {
     static ref BUILTIN_THEMES: HashMap<&'static str, Theme> = {
         HashMap::from([
             ("default", HashMap::new()),
-            ("(none)",
+            (
+                "(none)",
                 HashMap::from([
                     (Meaning::AlertError, ContentStyle::default()),
                     (Meaning::AlertWarn, ContentStyle::default()),
@@ -308,7 +312,7 @@ lazy_static! {
                     (Meaning::Important, ContentStyle::default()),
                     (Meaning::Muted, ContentStyle::default()),
                     (Meaning::Base, ContentStyle::default()),
-                ])
+                ]),
             ),
             (
                 "autumn",
