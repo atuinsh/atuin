@@ -51,7 +51,7 @@ pub struct ThemeDefinitionConfigBlock {
     pub parent: Option<String>,
 }
 
-use crossterm::style::{Color, ContentStyle};
+use crossterm::style::{Color, ContentStyle, Attributes, Attribute};
 
 // For now, a theme is loaded as a mapping of meanings to colors, but it may be desirable to
 // expand that in the future to general styles, so we populate a Meaning->ContentStyle hashmap.
@@ -228,6 +228,14 @@ impl StyleFactory {
             ..ContentStyle::default()
         }
     }
+
+    fn from_fg_color_and_attributes(color: Color, attributes: Attributes) -> ContentStyle {
+        ContentStyle {
+            foreground_color: Some(color),
+            attributes: attributes,
+            ..ContentStyle::default()
+        }
+    }
 }
 
 // Built-in themes. Rather than having extra files added before any theming
@@ -275,7 +283,7 @@ lazy_static! {
                 ),
                 (
                     Meaning::Important,
-                    StyleFactory::from_fg_color(Color::White),
+                    StyleFactory::from_fg_color_and_attributes(Color::White, Attributes::from(Attribute::Bold)),
                 ),
                 (Meaning::Muted, StyleFactory::from_fg_color(Color::Grey)),
                 (Meaning::Base, ContentStyle::default()),
@@ -285,6 +293,18 @@ lazy_static! {
     static ref BUILTIN_THEMES: HashMap<&'static str, Theme> = {
         HashMap::from([
             ("default", HashMap::new()),
+            ("(none)",
+                HashMap::from([
+                    (Meaning::AlertError, ContentStyle::default()),
+                    (Meaning::AlertWarn, ContentStyle::default()),
+                    (Meaning::AlertInfo, ContentStyle::default()),
+                    (Meaning::Annotation, ContentStyle::default()),
+                    (Meaning::Guidance, ContentStyle::default()),
+                    (Meaning::Important, ContentStyle::default()),
+                    (Meaning::Muted, ContentStyle::default()),
+                    (Meaning::Base, ContentStyle::default()),
+                ])
+            ),
             (
                 "autumn",
                 HashMap::from([
@@ -461,7 +481,7 @@ impl ThemeManager {
                 Ok(theme) => theme,
                 Err(err) => {
                     log::warn!("Could not load theme {name}: {err}");
-                    built_ins.get("default").unwrap()
+                    built_ins.get("(none)").unwrap()
                 }
             },
         }
