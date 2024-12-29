@@ -693,7 +693,8 @@ mod theme_tests {
 
         testing_logger::validate(|captured_logs| assert_eq!(captured_logs.len(), 0));
 
-        // If the parent is not found, we end up with the base theme colors
+        // If the parent is not found, we end up with the no theme colors or styling
+        // as this is considered a (soft) error state.
         let nunsolarized = Config::builder()
             .add_source(ConfigFile::from_str(
                 "
@@ -716,7 +717,7 @@ mod theme_tests {
             nunsolarized_theme
                 .as_style(Meaning::Guidance)
                 .foreground_color,
-            Some(Color::DarkBlue)
+            None
         );
 
         testing_logger::validate(|captured_logs| {
