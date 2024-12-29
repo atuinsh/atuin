@@ -282,7 +282,7 @@ pub async fn run(
     let history = db.range(start, end).await?;
     if history.is_empty() {
         println!("Your history for {year} is empty!\nMaybe 'atuin import' could help you import your previous history 🪄");
-        return Ok(())
+        return Ok(());
     }
 
     // Compute overall stats using existing functionality
