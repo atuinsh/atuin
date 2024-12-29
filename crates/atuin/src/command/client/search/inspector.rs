@@ -56,7 +56,7 @@ pub fn draw_commands(
 
     let command = Paragraph::new(Text::from(Span::styled(
         history.command.clone(),
-        theme.as_style(Meaning::Important)
+        theme.as_style(Meaning::Important),
     )))
     .block(if compact {
         Block::new()
@@ -360,13 +360,13 @@ pub fn input(
 
 #[cfg(test)]
 mod tests {
-    use ratatui::{backend::TestBackend, prelude::*};
-    use atuin_client::{
-        history::{History, HistoryStats, HistoryId},
-        theme::ThemeManager
-    };
-    use time::OffsetDateTime;
     use super::draw_ultracompact;
+    use atuin_client::{
+        history::{History, HistoryId, HistoryStats},
+        theme::ThemeManager,
+    };
+    use ratatui::{backend::TestBackend, prelude::*};
+    use time::OffsetDateTime;
 
     fn mock_history_stats() -> (History, HistoryStats) {
         let history = History {
@@ -378,7 +378,7 @@ mod tests {
             cwd: "/toot".to_string(),
             session: "sesh1".to_string(),
             hostname: "hostn".to_string(),
-            deleted_at: None
+            deleted_at: None,
         };
         let next = History {
             id: HistoryId::from("test2".to_string()),
@@ -389,7 +389,7 @@ mod tests {
             cwd: "/toot".to_string(),
             session: "sesh1".to_string(),
             hostname: "hostn".to_string(),
-            deleted_at: None
+            deleted_at: None,
         };
         let prev = History {
             id: HistoryId::from("test3".to_string()),
@@ -400,7 +400,7 @@ mod tests {
             cwd: "/toot".to_string(),
             session: "sesh1".to_string(),
             hostname: "hostn".to_string(),
-            deleted_at: None
+            deleted_at: None,
         };
         let stats = HistoryStats {
             next: Some(next.clone()),
@@ -425,13 +425,7 @@ mod tests {
 
         let mut manager = ThemeManager::new(Some(true), Some("".to_string()));
         let theme = manager.load_theme("(none)", None);
-        let _ = terminal.draw(|f| draw_ultracompact(
-            f,
-            chunk,
-            &history,
-            &stats,
-            &theme,
-        ));
+        let _ = terminal.draw(|f| draw_ultracompact(f, chunk, &history, &stats, &theme));
         let mut lines = ["                      "; 5].map(|l| Line::from(l));
         for (n, entry) in [prev, history, next].iter().enumerate() {
             let mut l = lines[n].to_string();
