@@ -1,8 +1,8 @@
+use rust_i18n::t;
 use std::{
     io::{stdout, Write},
     time::Duration,
 };
-use rust_i18n::t;
 
 use atuin_common::utils::{self, Escapable as _};
 use eyre::Result;
@@ -655,7 +655,12 @@ impl State {
         // TODO: this should be split so that we have one interactive search container that is
         // EITHER a search box or an inspector. But I'm not doing that now, way too much atm.
         // also allocate less 🙈
-        let titles: Vec<_> = TAB_TITLES.iter().copied().map(|s| t!(s)).map(Line::from).collect();
+        let titles: Vec<_> = TAB_TITLES
+            .iter()
+            .copied()
+            .map(|s| t!(s))
+            .map(Line::from)
+            .collect();
 
         if show_tabs {
             let tabs = Tabs::new(titles)
@@ -735,7 +740,7 @@ impl State {
                         f,
                         results_list_chunk,
                         &results[self.results_state.selected()],
-                        &stats.expect(t!("Drawing inspector, but no stats").to_string().as_str()),
+                        &stats.expect("Drawing inspector, but no stats"),
                         theme,
                     );
                 }
@@ -817,7 +822,10 @@ impl State {
                     ": edit"
                 }),
                 Span::raw(", "),
-                Span::styled(t!("keys.ctrl-and", key="o"), Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    t!("keys.ctrl-and", key = "o"),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(format!(": {}", t!("inspect"))),
             ]))),
 
@@ -825,10 +833,16 @@ impl State {
                 Span::styled("<esc>", Style::default().add_modifier(Modifier::BOLD)),
                 Span::raw(format!(": {}", t!("exit"))),
                 Span::raw(", "),
-                Span::styled(t!("keys.ctrl-and", key="o"), Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    t!("keys.ctrl-and", key = "o"),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(format!(": {}", t!("search"))),
                 Span::raw(", "),
-                Span::styled(t!("keys.ctrl-and", key="d"), Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    t!("keys.ctrl-and", key = "d"),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(format!(": {}", t!("delete"))),
             ]))),
 
@@ -887,7 +901,7 @@ impl State {
     fn build_input(&self, style: StyleState) -> Paragraph {
         /// Max width of the UI box showing current mode
         const MAX_WIDTH: usize = 14;
-        let srch_string: String = format!(" {}:", t!("SRCH").to_string());
+        let srch_string: String = format!(" {}:", t!("SRCH"));
         let (pref, mode) = if self.switched_search_mode {
             (srch_string.as_str(), self.search_mode.as_str())
         } else {
@@ -1204,7 +1218,7 @@ pub async fn history(
             Ok(app.search.input.into_inner())
         }
         InputAction::Continue | InputAction::Redraw | InputAction::Delete(_) => {
-            unreachable!("{}", t!("should have been handled!").to_string())
+            unreachable!("{}", t!("should have been handled!"))
         }
     }
 }

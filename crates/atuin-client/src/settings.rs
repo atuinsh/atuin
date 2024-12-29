@@ -2,7 +2,6 @@ use std::{
     collections::HashMap, convert::TryFrom, fmt, io::prelude::*, path::PathBuf, str::FromStr,
 };
 
-use lazy_static::lazy_static;
 use atuin_common::record::HostId;
 use clap::ValueEnum;
 use config::{
@@ -11,6 +10,7 @@ use config::{
 use eyre::{bail, eyre, Context, Error, Result};
 use fs_err::{create_dir_all, File};
 use humantime::parse_duration;
+use lazy_static::lazy_static;
 use regex::RegexSet;
 use semver::Version;
 use serde::{Deserialize, Serialize};

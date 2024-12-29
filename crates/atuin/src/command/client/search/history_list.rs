@@ -197,8 +197,8 @@ impl DrawState<'_> {
             usize::from(PREFIX_LENGTH).saturating_sub(usize::from(self.x) + 4 + time.len());
         self.draw(&SPACES[..padding], Style::default());
 
-        let ago = t!("%{time} ago", time=time);
-        self.draw(format!(" {}", ago).to_string().as_str(), style.into());
+        let ago = t!("%{time} ago", time = time);
+        self.draw(format!(" {ago}").as_str(), style.into());
     }
 
     fn command(&mut self, h: &History) {
