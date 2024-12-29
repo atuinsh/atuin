@@ -280,6 +280,10 @@ pub async fn run(
     );
 
     let history = db.range(start, end).await?;
+    if history.is_empty() {
+        println!("Your history for {year} is empty!\nMaybe 'atuin import' could help you import your previous history 🪄");
+        return Ok(())
+    }
 
     // Compute overall stats using existing functionality
     let stats = compute(settings, &history, 10, 1).expect("Failed to compute stats");
