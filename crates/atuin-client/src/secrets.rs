@@ -13,14 +13,14 @@ pub static SECRET_PATTERNS: &[(&str, &str, TestValue)] = &[
         TestValue::Single("AKIAIOSFODNN7EXAMPLE"),
     ),
     (
-        "AWS secret access key env var",
-        "AWS_ACCESS_KEY_ID",
-        TestValue::Single("export AWS_ACCESS_KEY_ID=KEYDATA"),
+        "AWS Secret Access Key env var",
+        "AWS_SECRET_ACCESS_KEY",
+        TestValue::Single("AWS_SECRET_ACCESS_KEY=KEYDATA"),
     ),
     (
-        "AWS secret access key env var",
-        "AWS_ACCESS_KEY_ID",
-        TestValue::Single("export AWS_ACCESS_KEY_ID=KEYDATA"),
+        "AWS Session Token env var",
+        "AWS_SESSION_TOKEN",
+        TestValue::Single("AWS_SESSION_TOKEN=KEYDATA"),
     ),
     (
         "Microsoft Azure secret access key env var",
