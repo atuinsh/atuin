@@ -40,7 +40,6 @@ impl WrappedStats {
             "pip3",
             "pipenv",
             "poetry",
-            "pyenv",
             "pipx",
             "uv",
             "brew",
