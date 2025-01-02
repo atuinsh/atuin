@@ -613,7 +613,7 @@ impl Settings {
 
         match parse_duration(self.sync_frequency.as_str()) {
             Ok(d) => {
-                let d = time::Duration::try_from(d).unwrap();
+                let d = time::Duration::try_from(d)?;
                 Ok(OffsetDateTime::now_utc() - Settings::last_sync()? >= d)
             }
             Err(e) => Err(eyre!("failed to check sync: {}", e)),
