@@ -14,7 +14,7 @@ atuin-common = { path = "../atuin-common", version = "18.4.0" }
 atuin-server-database = { path = "../atuin-server-database", version = "18.4.0" }
 
 eyre = { workspace = true }
-tracing = "0.1"
+tracing = { workspace = true }
 time = { workspace = true }
 serde = { workspace = true }
 sqlx = { workspace = true }

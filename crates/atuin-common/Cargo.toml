@@ -16,7 +16,6 @@ repository = { workspace = true }
 time = { workspace = true }
 serde = { workspace = true }
 uuid = { workspace = true }
-rand = { workspace = true }
 typed-builder = { workspace = true }
 eyre = { workspace = true }
 sqlx = { workspace = true }
