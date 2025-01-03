@@ -6,7 +6,7 @@ mod common;
 #[tokio::test]
 async fn sync() {
     let path = format!("/{}", uuid_v7().as_simple());
-    let (address, shutdown, server) = common::start_server(&path).await;
+    let (address, shutdown, server, postgres) = common::start_server(&path).await;
 
     let client = common::register(&address).await;
     let hostname = uuid_v7().as_simple().to_string();
@@ -42,4 +42,5 @@ async fn sync() {
 
     shutdown.send(()).unwrap();
     server.await.unwrap();
+    postgres.stop().await.unwrap();
 }

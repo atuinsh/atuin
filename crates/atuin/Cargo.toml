@@ -94,3 +94,4 @@ arboard = { version = "3.4", optional = true, features = ["wayland-data-control"
 
 [dev-dependencies]
 tracing-tree = "0.4"
+testcontainers-modules = { version = "0.11.4", features = ["postgres"] }

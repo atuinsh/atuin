@@ -5,7 +5,7 @@ mod common;
 #[tokio::test]
 async fn registration() {
     let path = format!("/{}", uuid_v7().as_simple());
-    let (address, shutdown, server) = common::start_server(&path).await;
+    let (address, shutdown, server, postgres) = common::start_server(&path).await;
     dbg!(&address);
 
     // -- REGISTRATION --
@@ -28,12 +28,13 @@ async fn registration() {
 
     shutdown.send(()).unwrap();
     server.await.unwrap();
+    postgres.stop().await.unwrap();
 }
 
 #[tokio::test]
 async fn change_password() {
     let path = format!("/{}", uuid_v7().as_simple());
-    let (address, shutdown, server) = common::start_server(&path).await;
+    let (address, shutdown, server, postgres) = common::start_server(&path).await;
 
     // -- REGISTRATION --
 
@@ -66,12 +67,13 @@ async fn change_password() {
 
     shutdown.send(()).unwrap();
     server.await.unwrap();
+    postgres.stop().await.unwrap();
 }
 
 #[tokio::test]
 async fn multi_user_test() {
     let path = format!("/{}", uuid_v7().as_simple());
-    let (address, shutdown, server) = common::start_server(&path).await;
+    let (address, shutdown, server, postgres) = common::start_server(&path).await;
     dbg!(&address);
 
     // -- REGISTRATION --
@@ -118,4 +120,5 @@ async fn multi_user_test() {
 
     shutdown.send(()).unwrap();
     server.await.unwrap();
+    postgres.stop().await.unwrap();
 }
