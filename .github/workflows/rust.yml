@@ -155,16 +155,6 @@ jobs:
   integration-test:
     runs-on: ubuntu-latest
 
-    services:
-      postgres:
-        image: postgres
-        env:
-          POSTGRES_USER: atuin
-          POSTGRES_PASSWORD: pass
-          POSTGRES_DB: atuin
-        ports:
-          - 5432:5432
-
     steps:
       - uses: actions/checkout@v4
 
@@ -188,8 +178,6 @@ jobs:
 
       - name: Run cargo test
         run: cargo nextest run --test '*'
-        env:
-          ATUIN_DB_URI: postgres://atuin:pass@localhost:5432/atuin
 
   clippy:
     runs-on: ubuntu-latest

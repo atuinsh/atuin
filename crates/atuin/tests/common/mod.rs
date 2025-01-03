@@ -1,15 +1,25 @@
-use std::{env, time::Duration};
+use std::time::Duration;
 
 use atuin_client::api_client;
 use atuin_common::utils::uuid_v7;
 use atuin_server::{launch_with_tcp_listener, Settings as ServerSettings};
 use atuin_server_postgres::{Postgres, PostgresSettings};
 use futures_util::TryFutureExt;
+use testcontainers_modules::postgres::Postgres as PostgresContainer;
+use testcontainers_modules::testcontainers::runners::AsyncRunner;
+use testcontainers_modules::testcontainers::{ContainerAsync, ImageExt};
 use tokio::{net::TcpListener, sync::oneshot, task::JoinHandle};
 use tracing::{dispatcher, Dispatch};
 use tracing_subscriber::{layer::SubscriberExt, EnvFilter};
 
-pub async fn start_server(path: &str) -> (String, oneshot::Sender<()>, JoinHandle<()>) {
+pub async fn start_server(
+    path: &str,
+) -> (
+    String,
+    oneshot::Sender<()>,
+    JoinHandle<()>,
+    ContainerAsync<PostgresContainer>,
+) {
     let formatting_layer = tracing_tree::HierarchicalLayer::default()
         .with_writer(tracing_subscriber::fmt::TestWriter::new())
         .with_indent_lines(true)
@@ -22,8 +32,14 @@ pub async fn start_server(path: &str) -> (String, oneshot::Sender<()>, JoinHandl
         .with(EnvFilter::new("atuin_server=debug,atuin_client=debug,info"))
         .into();
 
-    let db_uri = env::var("ATUIN_DB_URI")
-        .unwrap_or_else(|_| "postgres://atuin:pass@localhost:5432/atuin".to_owned());
+    let container = PostgresContainer::default()
+        .with_tag("17-alpine")
+        .start()
+        .await
+        .unwrap();
+    let host_port = container.get_host_port_ipv4(5432).await.unwrap();
+    let host = container.get_host().await.unwrap();
+    let db_uri = format!("postgres://postgres:postgres@{host}:{host_port}/postgres",);
 
     let server_settings = ServerSettings {
         host: "127.0.0.1".to_owned(),
@@ -63,7 +79,12 @@ pub async fn start_server(path: &str) -> (String, oneshot::Sender<()>, JoinHandl
     // let the server come online
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    (format!("http://{addr}{path}"), shutdown_tx, server)
+    (
+        format!("http://{addr}{path}"),
+        shutdown_tx,
+        server,
+        container,
+    )
 }
 
 pub async fn register_inner<'a>(
