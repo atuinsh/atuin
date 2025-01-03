@@ -67,9 +67,16 @@ impl Importer for Zsh {
                 _ => continue, // we can skip past things like invalid utf8
             };
 
-            if let Some(s) = s.strip_suffix('\\') {
-                line.push_str(s);
-                line.push_str("\\\n");
+            if s.ends_with("\\\\") {
+                if let Some(s) = s.strip_suffix("\\\\") {
+                    line.push_str(s);
+                    line.push_str("\\\n");
+                }
+            } else if s.ends_with('\\') {
+                if let Some(s) = s.strip_suffix('\\') {
+                    line.push_str(s);
+                    line.push_str("\\\n");
+                }
             } else {
                 line.push_str(&s);
                 let command = std::mem::take(&mut line);
@@ -189,13 +196,15 @@ mod test {
         let bytes = r": 1613322469:0;cargo install atuin
 : 1613322469:10;cargo install atuin; \
 cargo update
+: 1613322469:10;cargo install atuin; \\
+cargo update
 : 1613322469:10;cargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷
 "
         .as_bytes()
         .to_owned();
 
         let mut zsh = Zsh { bytes };
-        assert_eq!(zsh.entries().await.unwrap(), 4);
+        assert_eq!(zsh.entries().await.unwrap(), 6);
 
         let mut loader = TestLoader::default();
         zsh.load(&mut loader).await.unwrap();
@@ -204,6 +213,7 @@ cargo update
             loader.buf.iter().map(|h| h.command.as_str()),
             [
                 "cargo install atuin",
+                "cargo install atuin; \\\ncargo update",
                 "cargo install atuin; \\\ncargo update",
                 "cargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷",
             ],
