@@ -70,6 +70,7 @@ All notable changes to this project will be documented in this file.
 - *(gui)* Directory block, re-org of some code ([#2314](https://github.com/atuinsh/atuin/issues/2314))
 - *(gui)* Folder select dialogue for directory block ([#2315](https://github.com/atuinsh/atuin/issues/2315))
 - *(history)* Filter out various environment variables containing potential secrets ([#2174](https://github.com/atuinsh/atuin/issues/2174))
+- *(init)* Allow splitting environment variable loading from remainder of setup
 - *(tui)* Configurable prefix character ([#2157](https://github.com/atuinsh/atuin/issues/2157))
 - *(tui)* Customizable Themes ([#2236](https://github.com/atuinsh/atuin/issues/2236))
 - *(tui)* Fixed preview height option ([#2286](https://github.com/atuinsh/atuin/issues/2286))
