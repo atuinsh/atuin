@@ -130,5 +130,9 @@ If you find any security issues, we'd appreciate it if you could alert ellie@atu
 
 Made with [contrib.rocks](https://contrib.rocks).
 
+# Star History
+
+[![Star History](https://api.lucabubi.me/chart?username=atuinsh&repository=atuin&color=red)](https://github.com/lucabubi/star-history)
+
 [English]: ./README.md
 [简体中文]: ./docs/zh-CN/README.md
