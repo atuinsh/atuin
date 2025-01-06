@@ -43,13 +43,13 @@ spec:
               memory: 1Gi
           startupProbe:
             httpGet:
-              path: /health
+              path: /healthz
               port: *port
             failureThreshold: 30
             periodSeconds: 10
           livenessProbe:
             httpGet:
-              path: /health
+              path: /healthz
               port: *port
             initialDelaySeconds: 3
             periodSeconds: 3

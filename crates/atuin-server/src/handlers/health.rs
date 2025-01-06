@@ -1,6 +1,4 @@
-use axum::http;
-use axum::response::IntoResponse;
-use axum::Json;
+use axum::{http, response::IntoResponse, Json};
 
 use serde::Serialize;
 
