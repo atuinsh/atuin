@@ -172,14 +172,14 @@ impl Cmd {
             return Ok(());
         }
 
-        if self.search_mode.is_some() {
-            settings.search_mode = self.search_mode.unwrap();
+        if let Some(search_mode) = self.search_mode {
+            settings.search_mode = search_mode;
         }
-        if self.filter_mode.is_some() {
-            settings.filter_mode = self.filter_mode;
+        if let Some(filter_mode) = self.filter_mode {
+            settings.filter_mode = Some(filter_mode);
         }
-        if self.inline_height.is_some() {
-            settings.inline_height = self.inline_height.unwrap();
+        if let Some(inline_height) = self.inline_height {
+            settings.inline_height = inline_height;
         }
 
         settings.shell_up_key_binding = self.shell_up_key_binding;
