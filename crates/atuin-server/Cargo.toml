@@ -14,14 +14,12 @@ repository = { workspace = true }
 atuin-common = { path = "../atuin-common", version = "18.4.0" }
 atuin-server-database = { path = "../atuin-server-database", version = "18.4.0" }
 
-tracing = "0.1"
+tracing = { workspace = true }
 time = { workspace = true }
 eyre = { workspace = true }
-uuid = { workspace = true }
 config = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-base64 = { workspace = true }
 rand = { workspace = true }
 tokio = { workspace = true }
 async-trait = { workspace = true }
@@ -32,7 +30,6 @@ tower = { workspace = true }
 tower-http = { version = "0.5", features = ["trace"] }
 reqwest = { workspace = true }
 rustls = { version = "0.23", features = ["ring"], default-features = false }
-rustls-pemfile = "2.1"
 argon2 = "0.5"
 semver = { workspace = true }
 metrics-exporter-prometheus = "0.12.1"

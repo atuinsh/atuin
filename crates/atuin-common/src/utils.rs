@@ -192,7 +192,6 @@ impl<T: AsRef<str>> Escapable for T {}
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_ne;
-    use time::Month;
 
     use super::*;
     use std::env;
@@ -240,25 +239,6 @@ mod tests {
         env::remove_var("XDG_DATA_HOME");
         assert_eq!(data_dir(), PathBuf::from("/home/user/.local/share/atuin"));
         env::remove_var("HOME");
-    }
-
-    #[test]
-    fn days_from_month() {
-        assert_eq!(time::util::days_in_year_month(2023, Month::January), 31);
-        assert_eq!(time::util::days_in_year_month(2023, Month::February), 28);
-        assert_eq!(time::util::days_in_year_month(2023, Month::March), 31);
-        assert_eq!(time::util::days_in_year_month(2023, Month::April), 30);
-        assert_eq!(time::util::days_in_year_month(2023, Month::May), 31);
-        assert_eq!(time::util::days_in_year_month(2023, Month::June), 30);
-        assert_eq!(time::util::days_in_year_month(2023, Month::July), 31);
-        assert_eq!(time::util::days_in_year_month(2023, Month::August), 31);
-        assert_eq!(time::util::days_in_year_month(2023, Month::September), 30);
-        assert_eq!(time::util::days_in_year_month(2023, Month::October), 31);
-        assert_eq!(time::util::days_in_year_month(2023, Month::November), 30);
-        assert_eq!(time::util::days_in_year_month(2023, Month::December), 31);
-
-        // leap years
-        assert_eq!(time::util::days_in_year_month(2024, Month::February), 29);
     }
 
     #[test]

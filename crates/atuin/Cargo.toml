@@ -51,10 +51,8 @@ atuin-history = { path = "../atuin-history", version = "18.4.0" }
 atuin-daemon = { path = "../atuin-daemon", version = "18.4.0", optional = true, default-features = false }
 
 log = { workspace = true }
-env_logger = "0.11.5"
 time = { workspace = true }
 eyre = { workspace = true }
-directories = { workspace = true }
 indicatif = "0.17.5"
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -64,12 +62,10 @@ itertools = { workspace = true }
 tokio = { workspace = true }
 async-trait = { workspace = true }
 interim = { workspace = true }
-base64 = { workspace = true }
 clap = { workspace = true }
 clap_complete = "4.5.8"
 clap_complete_nushell = "4.5.4"
 fs-err = { workspace = true }
-whoami = { workspace = true }
 rpassword = "7.0"
 semver = { workspace = true }
 rustix = { workspace = true }
@@ -82,7 +78,6 @@ ratatui = "0.29.0"
 tracing = "0.1"
 tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
-unicode-segmentation = "1.11.0"
 sysinfo = "0.30.7"
 regex = "1.10.5"
 

@@ -231,14 +231,11 @@ dependencies = [
  "atuin-history",
  "atuin-server",
  "atuin-server-postgres",
- "base64 0.22.1",
  "clap",
  "clap_complete",
  "clap_complete_nushell",
  "colored",
  "crossterm",
- "directories",
- "env_logger",
  "eyre",
  "fs-err",
  "futures-util",
@@ -262,10 +259,8 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "tracing-tree",
- "unicode-segmentation",
  "unicode-width 0.1.14",
  "uuid",
- "whoami",
 ]
 
 [[package]]
@@ -333,7 +328,6 @@ dependencies = [
  "getrandom",
  "lazy_static",
  "pretty_assertions",
- "rand",
  "semver",
  "serde",
  "sqlx",
@@ -389,33 +383,13 @@ dependencies = [
 name = "atuin-history"
 version = "18.4.0"
 dependencies = [
- "async-trait",
  "atuin-client",
- "atuin-common",
- "base64 0.22.1",
  "crossterm",
- "directories",
  "divan",
- "eyre",
- "fs-err",
- "futures-util",
- "indicatif",
- "interim",
- "itertools",
- "log",
  "rand",
- "semver",
  "serde",
- "serde_json",
- "sysinfo",
  "time",
- "tokio",
- "tracing",
- "tracing-tree",
  "unicode-segmentation",
- "unicode-width 0.1.14",
- "uuid",
- "whoami",
 ]
 
 [[package]]
@@ -428,7 +402,6 @@ dependencies = [
  "atuin-server-database",
  "axum",
  "axum-server",
- "base64 0.22.1",
  "config",
  "eyre",
  "fs-err",
@@ -438,7 +411,6 @@ dependencies = [
  "rand",
  "reqwest 0.11.27",
  "rustls 0.23.20",
- "rustls-pemfile 2.2.0",
  "semver",
  "serde",
  "serde_json",
@@ -447,7 +419,6 @@ dependencies = [
  "tower 0.4.13",
  "tower-http",
  "tracing",
- "uuid",
 ]
 
 [[package]]
@@ -460,7 +431,6 @@ dependencies = [
  "serde",
  "time",
  "tracing",
- "uuid",
 ]
 
 [[package]]
@@ -1325,29 +1295,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "75030f3c4f45dafd7586dd6780965a8c7e8e285a5ecb86713e63a79c5b2766f3"
 dependencies = [
  "cfg-if",
-]
-
-[[package]]
-name = "env_filter"
-version = "0.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "186e05a59d4c50738528153b83b0b0194d3a29507dfec16eccd4b342903397d0"
-dependencies = [
- "log",
- "regex",
-]
-
-[[package]]
-name = "env_logger"
-version = "0.11.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dcaee3d8e3cfc3fd92428d477bc97fc29ec8716d180c0d74c643bb26166660e0"
-dependencies = [
- "anstream",
- "anstyle",
- "env_filter",
- "humantime",
- "log",
 ]
 
 [[package]]
