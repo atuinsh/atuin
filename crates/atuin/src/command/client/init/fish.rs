@@ -18,19 +18,12 @@ bind -M insert \e\[A _atuin_bind_up";
 
         if !disable_ctrl_r {
             println!("{BIND_CTRL_R}");
-        }
-        if !disable_up_arrow {
-            println!("{BIND_UP_ARROW}");
-        }
-
-        println!("if bind -M insert > /dev/null 2>&1");
-        if !disable_ctrl_r {
             println!("{BIND_CTRL_R_INS}");
         }
         if !disable_up_arrow {
+            println!("{BIND_UP_ARROW}");
             println!("{BIND_UP_ARROW_INS}");
         }
-        println!("end");
     }
 }
 
