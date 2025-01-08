@@ -119,6 +119,10 @@ pub struct Cmd {
     /// Set the maximum number of lines Atuin's interface should take up.
     #[arg(long = "inline-height")]
     inline_height: Option<u16>,
+
+    /// Include duplicate commands in the output (non-interactive only)
+    #[arg(long)]
+    include_duplicates: bool,
 }
 
 impl Cmd {
@@ -215,6 +219,7 @@ impl Cmd {
                 limit: self.limit,
                 offset: self.offset,
                 reverse: self.reverse,
+                include_duplicates: self.include_duplicates,
             };
 
             let mut entries =
