@@ -21,19 +21,12 @@ fn print_bindings(
 ) {
     if options.enable_ctrl_r {
         println!("{indent}{bind_ctrl_r}");
+        println!("{indent}{bind_ctrl_r_ins}");
     }
     if options.enable_up_arrow {
         println!("{indent}{bind_up_arrow}");
+        println!("{indent}{bind_up_arrow_ins}");
     }
-
-    println!("{indent}if bind -M insert >/dev/null 2>&1");
-    if options.enable_ctrl_r {
-        println!("{indent}{indent}{bind_ctrl_r_ins}");
-    }
-    if options.enable_up_arrow {
-        println!("{indent}{indent}{bind_up_arrow_ins}");
-    }
-    println!("{indent}end");
 }
 
 pub fn init_static(options: &StaticInitOptions<'_>) {
