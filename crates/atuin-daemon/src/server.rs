@@ -4,6 +4,7 @@ use atuin_client::encryption;
 use atuin_client::history::store::HistoryStore;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
+#[cfg(unix)]
 use std::path::PathBuf;
 use std::sync::Arc;
 use time::OffsetDateTime;
