@@ -1275,7 +1275,7 @@ pub async fn history(
             } else if accept
                 && matches!(
                     Shell::from_env(),
-                    Shell::Zsh | Shell::Fish | Shell::Bash | Shell::Xonsh
+                    Shell::Zsh | Shell::Fish | Shell::Bash | Shell::Xonsh | Shell::Powershell
                 )
             {
                 command = String::from("__atuin_accept__:") + &command;
