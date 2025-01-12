@@ -1410,18 +1410,22 @@ pub async fn history(
         terminal.clear()?;
     }
 
+    let accept = accept
+        && matches!(
+            Shell::from_env(),
+            Shell::Zsh | Shell::Fish | Shell::Bash | Shell::Xonsh | Shell::Nu | Shell::Powershell
+        );
+
+    let accept_prefix = "__atuin_accept__:";
+
     match result {
         InputAction::AcceptInspecting => {
             match inspecting {
                 Some(result) => {
                     let mut command = result.command;
-                    if accept
-                        && matches!(
-                            Shell::from_env(),
-                            Shell::Zsh | Shell::Fish | Shell::Bash | Shell::Xonsh | Shell::Nu
-                        )
-                    {
-                        command = String::from("__atuin_accept__:") + &command;
+
+                    if accept {
+                        command = String::from(accept_prefix) + &command;
                     }
 
                     // index is in bounds so we return that entry
@@ -1435,13 +1439,8 @@ pub async fn history(
 
             if is_command_chaining {
                 command = format!("{} {}", original_query.trim_end(), command);
-            } else if accept
-                && matches!(
-                    Shell::from_env(),
-                    Shell::Zsh | Shell::Fish | Shell::Bash | Shell::Xonsh | Shell::Nu
-                )
-            {
-                command = String::from("__atuin_accept__:") + &command;
+            } else if accept {
+                command = String::from(accept_prefix) + &command;
             }
 
             // index is in bounds so we return that entry
