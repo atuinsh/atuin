@@ -33,7 +33,7 @@ spec:
           image: ghcr.io/atuinsh/atuin:latest
           name: atuin
           ports:
-            - containerPort: 8888
+            - containerPort: &port 8888
           resources:
             limits:
               cpu: 250m
@@ -41,6 +41,23 @@ spec:
             requests:
               cpu: 250m
               memory: 1Gi
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: *port
+            failureThreshold: 30
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: *port
+            initialDelaySeconds: 3
+            periodSeconds: 3
+          readinessProbe:
+            tcpSocket:
+              port: *port
+            initialDelaySeconds: 15
+            periodSeconds: 10
           volumeMounts:
             - mountPath: /config
               name: atuin-claim0
