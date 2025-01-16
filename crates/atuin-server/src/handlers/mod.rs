@@ -4,6 +4,7 @@ use axum::{extract::State, http, response::IntoResponse, Json};
 
 use crate::router::AppState;
 
+pub mod health;
 pub mod history;
 pub mod record;
 pub mod status;

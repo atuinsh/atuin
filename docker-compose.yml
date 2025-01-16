@@ -15,6 +15,11 @@ services:
       ATUIN_OPEN_REGISTRATION: "true"
       ATUIN_DB_URI: postgres://$ATUIN_DB_USERNAME:$ATUIN_DB_PASSWORD@db/$ATUIN_DB_NAME
       RUST_LOG: info,atuin_server=debug
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8888/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
   postgresql:
     image: postgres:14
     restart: unless-stopped
