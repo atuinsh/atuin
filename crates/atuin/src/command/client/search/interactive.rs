@@ -610,8 +610,16 @@ impl State {
         let hide_extra = settings.auto_hide_height != 0
             && compact
             && f.area().height <= settings.auto_hide_height;
-        let tab_col = if settings.show_tabs && !hide_extra { 1 } else { 0 };
-        let help_col = if settings.show_help && (!compact || f.area().height > 1) { 1 } else { 0 };
+        let tab_col = if settings.show_tabs && !hide_extra {
+            1
+        } else {
+            0
+        };
+        let help_col = if settings.show_help && (!compact || f.area().height > 1) {
+            1
+        } else {
+            0
+        };
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .margin(0)
@@ -619,27 +627,27 @@ impl State {
             .constraints::<&[Constraint]>(
                 if invert {
                     [
-                        Constraint::Length(1 + border_size),               // input
-                        Constraint::Min(1),                                // results list
-                        Constraint::Length(preview_height),                // preview
-                        Constraint::Length(tab_col), // tabs
-                        Constraint::Length(help_col), // header (sic)
+                        Constraint::Length(1 + border_size), // input
+                        Constraint::Min(1),                  // results list
+                        Constraint::Length(preview_height),  // preview
+                        Constraint::Length(tab_col),         // tabs
+                        Constraint::Length(help_col),        // header (sic)
                     ]
                 } else if hide_extra {
                     [
                         Constraint::Length(help_col), // header
-                        Constraint::Length(0),                             // tabs
-                        Constraint::Min(1),                                // results list
+                        Constraint::Length(0),        // tabs
+                        Constraint::Min(1),           // results list
                         Constraint::Length(0),
                         Constraint::Length(0),
                     ]
                 } else {
                     [
-                        Constraint::Length(help_col), // header
-                        Constraint::Length(tab_col), // tabs
-                        Constraint::Min(1),                                // results list
-                        Constraint::Length(1 + border_size),               // input
-                        Constraint::Length(preview_height),                // preview
+                        Constraint::Length(help_col),        // header
+                        Constraint::Length(tab_col),         // tabs
+                        Constraint::Min(1),                  // results list
+                        Constraint::Length(1 + border_size), // input
+                        Constraint::Length(preview_height),  // preview
                     ]
                 }
                 .as_ref(),
