@@ -7,8 +7,6 @@ use clap::Parser;
 use eyre::Result;
 use sys_locale::get_locale;
 
-use atuin_client;
-
 use command::AtuinCmd;
 
 mod command;
