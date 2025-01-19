@@ -165,7 +165,7 @@ async fn handle_resp_error(resp: Response) -> Result<Response> {
             bail!(t!("There was an error with the atuin sync service, server error %{status}: %{reason}.\nIf the problem persists, contact the host", status=status, reason=reason))
         }
 
-        bail!(t!("There was an error with the atuin sync service: Status %{status:?}.\nIf the problem persists, contact the host", status=status))
+        bail!(t!("There was an error with the atuin sync service: Status %{status}.\nIf the problem persists, contact the host", status=format!("{status:?}")))
     }
 
     Ok(resp)

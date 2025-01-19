@@ -79,8 +79,8 @@ Server:
   en: 'Service unavailable: check https://status.atuin.sh (or get in touch with your host)'
 'There was an error with the atuin sync service, server error %{status}: %{reason}. If the problem persists, contact the host':
   en: 'There was an error with the atuin sync service, server error %{status}: %{reason}. If the problem persists, contact the host'
-'There was an error with the atuin sync service: Status %{status:?}. If the problem persists, contact the host':
-  en: 'There was an error with the atuin sync service: Status %{status:?}. If the problem persists, contact the host'
+'There was an error with the atuin sync service: Status %{status}. If the problem persists, contact the host':
+  en: 'There was an error with the atuin sync service: Status %{status}. If the problem persists, contact the host'
 Time reversal detected in Bash history! Commands may be ordered incorrectly.:
   en: 'Time reversal detected in Bash history! Commands may be ordered incorrectly.'
 Tried to load session; not logged in:

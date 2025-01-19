@@ -66,7 +66,7 @@ impl KvRecord {
                 })
             }
             _ => {
-                bail!(t!("unknown version %{version:?}"))
+                bail!(t!("unknown version %{version}", version=format!("{version:?}")))
             }
         }
     }
