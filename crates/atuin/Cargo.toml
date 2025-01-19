@@ -81,7 +81,6 @@ uuid = { workspace = true }
 sysinfo = "0.30.7"
 regex = "1.10.5"
 rust-i18n = "3"
-sys-locale = "0.3.2"
 
 [target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
 arboard = { version = "3.4", optional = true }

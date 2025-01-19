@@ -1,5 +1,6 @@
 use clap::Subcommand;
 use eyre::Result;
+use rust_i18n::set_locale;
 
 #[cfg(not(windows))]
 use rustix::{fs::Mode, process::umask};
@@ -37,6 +38,8 @@ pub enum AtuinCmd {
 
 impl AtuinCmd {
     pub fn run(self) -> Result<()> {
+        set_locale(atuin_common::utils::get_locale().as_str());
+
         #[cfg(not(windows))]
         {
             // set umask before we potentially open/create files

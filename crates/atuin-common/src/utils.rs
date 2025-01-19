@@ -2,6 +2,8 @@ use std::borrow::Cow;
 use std::env;
 use std::path::PathBuf;
 
+use sys_locale::get_locale as sys_get_locale;
+
 use eyre::{eyre, Result};
 
 use base64::prelude::{Engine, BASE64_URL_SAFE_NO_PAD};
@@ -41,6 +43,14 @@ pub fn has_git_dir(path: &str) -> bool {
     gitdir.push(".git");
 
     gitdir.exists()
+}
+
+pub fn set_locale() {
+    rust_i18n::set_locale(get_locale().as_str())
+}
+
+pub fn get_locale() -> String {
+    sys_get_locale().unwrap_or_else(|| String::from(crate::DEFAULT_LOCALE))
 }
 
 // detect if any parent dir has a git repo in it

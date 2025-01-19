@@ -94,6 +94,8 @@ pub enum Cmd {
 
 impl Cmd {
     pub fn run(self) -> Result<()> {
+        atuin_common::utils::set_locale();
+
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()

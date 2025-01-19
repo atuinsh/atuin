@@ -5,7 +5,6 @@ extern crate rust_i18n;
 
 use clap::Parser;
 use eyre::Result;
-use sys_locale::get_locale;
 
 use command::AtuinCmd;
 
@@ -43,11 +42,6 @@ struct Atuin {
 
 impl Atuin {
     fn run(self) -> Result<()> {
-        let locale = get_locale().unwrap_or_else(|| String::from("en"));
-
-        rust_i18n::set_locale(locale.as_str());
-        atuin_client::set_locale(locale.as_str());
-
         self.atuin.run()
     }
 }

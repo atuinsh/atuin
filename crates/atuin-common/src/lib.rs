@@ -1,5 +1,11 @@
 #![forbid(unsafe_code)]
 
+#[macro_use]
+extern crate rust_i18n;
+
+pub static DEFAULT_LOCALE: &'static str = "en";
+i18n!("locales", fallback = "en");
+
 /// Defines a new UUID type wrapper
 macro_rules! new_uuid {
     ($name:ident) => {
