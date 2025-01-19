@@ -1,0 +1,22 @@
+$HOME not found:
+  en: $HOME not found
+'%userprofile% not found':
+  en: '%userprofile% not found'
+Atuin running with no parent!:
+  en: Atuin running with no parent!
+Failed to generate random bytes!:
+  en: Failed to generate random bytes!
+Failed to get current PID:
+  en: Failed to get current PID
+Process with current pid does not exist:
+  en: Process with current pid does not exist
+Process with parent pid does not exist:
+  en: Process with parent pid does not exist
+_version: 2
+failed to parse self semver:
+  en: failed to parse self semver
+not enough chars:
+  en: not enough chars
+unexpected eof, quotes do not match:
+  en: unexpected eof, quotes do not match
+

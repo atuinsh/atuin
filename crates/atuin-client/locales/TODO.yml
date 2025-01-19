@@ -1,0 +1,123 @@
+Atuin version mismatch! In order to successfully sync, the server needs to run a newer version of Atuin:
+  en: Atuin version mismatch! In order to successfully sync, the server needs to run a newer version of Atuin
+Client:
+  en: Client
+Could not login due to version mismatch:
+  en: Could not login due to version mismatch
+'ERROR: Failed to find $ATUIN_SESSION in the environment. Check that you have correctly set up your shell.':
+  en: 'ERROR: Failed to find $ATUIN_SESSION in the environment. Check that you have correctly set up your shell.'
+Failed to build secrets regex:
+  en: Failed to build secrets regex
+Failed to remove session file:
+  en: Failed to remove session file
+Invalid request to the service:
+  en: Invalid request to the service
+Rate limited; please wait before doing that again:
+  en: Rate limited; please wait before doing that again
+Re-encrypting local store with new key:
+  en: Re-encrypting local store with new key
+Server:
+  en: Server
+'Server not reporting its version: it is either too old or unhealthy':
+  en: 'Server not reporting its version: it is either too old or unhealthy'
+'Service unavailable: check https://status.atuin.sh (or get in touch with your host)':
+  en: 'Service unavailable: check https://status.atuin.sh (or get in touch with your host)'
+'There was an error with the atuin sync service, server error %{status}: %{reason}. If the problem persists, contact the host':
+  en: 'There was an error with the atuin sync service, server error %{status}: %{reason}. If the problem persists, contact the host'
+'There was an error with the atuin sync service: Status %{status:?}. If the problem persists, contact the host':
+  en: 'There was an error with the atuin sync service: Status %{status:?}. If the problem persists, contact the host'
+Unknown error:
+  en: Unknown error
+Writing new key:
+  en: Writing new key
+You are not logged in:
+  en: You are not logged in
+You have logged out!:
+  en: You have logged out!
+_version: 2
+bug in list query. please report:
+  en: 'bug in list query. please report'
+bug in search query. please report:
+  en: bug in search query. please report
+cannot decrypt history from a newer version of atuin:
+  en: cannot decrypt history from a newer version of atuin
+could not decode encryption key:
+  en: could not decode encryption key
+could not decode provided key - is not valid base64:
+  en: could not decode provided key - is not valid base64
+could not decrypt history:
+  en: could not decrypt history
+could not encode key to message pack:
+  en: could not encode key to message pack
+could not encrypt:
+  en: could not encrypt
+could not register user due to version mismatch:
+  en: could not register user due to version mismatch
+could not sync due to version mismatch:
+  en: could not sync due to version mismatch
+could not sync records due to version mismatch:
+  en: could not sync records due to version mismatch
+current password is incorrect:
+  en: current password is incorrect
+encryption key is not a valid base64 encoding:
+  en: encryption key is not a valid base64 encoding
+encryption key is not the correct size:
+  en: encryption key is not the correct size
+expected an error decrypting with invalid key:
+  en: expected an error decrypting with invalid key
+failed to get count (are you logged in?):
+  en: failed to get count (are you logged in?)
+failed to load host ID:
+  en: failed to load host ID
+failed to parse server version:
+  en: failed to parse server version
+got remote index:
+  en: got remote index
+invalid login details:
+  en: invalid login details
+issue in stats average query:
+  en: issue in stats average query
+issue in stats day of week query:
+  en: issue in stats day of week query
+issue in stats duration over time query:
+  en: issue in stats duration over time query
+issue in stats exits query:
+  en: issue in stats exits query
+issue in stats next query:
+  en: issue in stats next query
+issue in stats previous query:
+  en: issue in stats previous query
+key already exists! cannot overwrite:
+  en: key already exists! cannot overwrite
+key mnemonic was not valid:
+  en: key mnemonic was not valid
+key was not the correct length:
+  en: key was not the correct length
+'kv value too large: max len {len} bytes':
+  en: 'kv value too large: max len {len} bytes'
+listing history:
+  en: listing history
+'listing history from %{from:?} to %{to:?}':
+  en: 'listing history from %{from:?} to %{to:?}'
+loading history item:
+  en: loading history item
+malformed decrypted history:
+  en: malformed decrypted history
+saving history to sqlite:
+  en: saving history to sqlite
+too many entries in v0 kv record:
+  en: too many entries in v0 kv record
+trailing bytes in encoded history. malformed:
+  en: 'trailing bytes in encoded history. malformed'
+trailing bytes in encoded kvrecord. malformed:
+  en: 'trailing bytes in encoded kvrecord. malformed'
+unknown version:
+  en: unknown version
+'unknown version %{version:?}':
+  en: 'unknown version %{version:?}'
+updating sqlite history:
+  en: updating sqlite history
+'uploading %{records} records to %{url}':
+  en: 'uploading %{records} records to %{url}'
+username already in use:
+  en: username already in use
