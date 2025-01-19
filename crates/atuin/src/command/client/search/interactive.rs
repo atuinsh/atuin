@@ -740,7 +740,7 @@ impl State {
                         f,
                         results_list_chunk,
                         &results[self.results_state.selected()],
-                        &stats.expect("Drawing inspector, but no stats"),
+                        &stats.expect(&t!("Drawing inspector, but no stats")),
                         theme,
                     );
                 }
