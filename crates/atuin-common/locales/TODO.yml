@@ -4,8 +4,6 @@ $HOME not found:
   en: '%userprofile% not found'
 Atuin running with no parent!:
   en: Atuin running with no parent!
-Failed to generate random bytes!:
-  en: Failed to generate random bytes!
 Failed to get current PID:
   en: Failed to get current PID
 Process with current pid does not exist:

@@ -93,16 +93,17 @@ impl HistoryRecord {
                 let (id, bytes) = decode::read_str_from_slice(bytes).map_err(error_report)?;
 
                 if !bytes.is_empty() {
-                    bail!(
-                        "trailing bytes decoding HistoryRecord::Delete - malformed? got {bytes:?}"
-                    );
+                    bail!(t!(
+                        "trailing bytes decoding HistoryRecord::Delete - malformed? got %{bytes}",
+                        bytes=format!("{bytes:?}")
+                    ));
                 }
 
                 Ok(HistoryRecord::Delete(id.to_string().into()))
             }
 
             n => {
-                bail!("unknown HistoryRecord type {n}")
+                bail!(t!("unknown HistoryRecord type %{n}", n=n))
             }
         }
     }
@@ -201,7 +202,7 @@ impl HistoryStore {
 
                     HistoryRecord::deserialize(&decrypted.data, HISTORY_VERSION)
                 }
-                version => bail!("unknown history version {version:?}"),
+                version => bail!(t!("unknown history version %{version}", version=format!("{version:?}"))),
             }?;
 
             ret.push(hist);
@@ -299,22 +300,22 @@ impl HistoryStore {
         );
         pb.enable_steady_tick(Duration::from_millis(500));
 
-        pb.set_message("Fetching history from old database");
+        pb.set_message(t!("Fetching history from old database"));
 
         let context = current_context();
         let history = db.list(&[], &context, None, false, true).await?;
 
-        pb.set_message("Fetching history already in store");
+        pb.set_message(t!("Fetching history already in store"));
         let store_ids = self.history_ids().await?;
 
-        pb.set_message("Converting old history to new store");
+        pb.set_message(t!("Converting old history to new store"));
         let mut records = Vec::new();
 
         for i in history {
             debug!("loaded {}", i.id);
 
             if store_ids.contains(&i.id) {
-                debug!("skipping {} - already exists", i.id);
+                debug!("{}", t!("skipping {id} - already exists", id=i.id));
                 continue;
             }
 
@@ -325,13 +326,13 @@ impl HistoryStore {
             }
         }
 
-        pb.set_message("Writing to db");
+        pb.set_message(t!("Writing to db"));
 
         if !records.is_empty() {
             self.push_batch(records.into_iter()).await?;
         }
 
-        pb.finish_with_message("Import complete");
+        pb.finish_with_message(t!("Import complete"));
 
         Ok(())
     }

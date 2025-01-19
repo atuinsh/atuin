@@ -164,13 +164,13 @@ impl History {
         let version = decode::read_u16(&mut bytes).map_err(error_report)?;
 
         if version != 0 {
-            bail!("expected decoding v0 record, found v{version}");
+            bail!(t!("expected decoding v0 record, found v%{version}", version=version));
         }
 
         let nfields = decode::read_array_len(&mut bytes).map_err(error_report)?;
 
         if nfields != 9 {
-            bail!("cannot decrypt history from a different version of Atuin");
+            bail!(t!("cannot decrypt history from a different version of Atuin"));
         }
 
         let bytes = bytes.remaining_slice();
@@ -198,7 +198,7 @@ impl History {
         };
 
         if !bytes.is_empty() {
-            bail!("trailing bytes in encoded history. malformed")
+            bail!(t!("trailing bytes in encoded history. malformed"))
         }
 
         Ok(History {
@@ -220,7 +220,7 @@ impl History {
         match version {
             HISTORY_VERSION => Self::deserialize_v0(bytes),
 
-            _ => bail!("unknown version {version:?}"),
+            _ => bail!(t!("unknown version %{version}", version=format!("{:?}", version))),
         }
     }
 

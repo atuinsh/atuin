@@ -523,13 +523,13 @@ pub struct Settings {
 impl Settings {
     pub fn utc() -> Self {
         Self::builder()
-            .expect("Could not build default")
+            .expect(&t!("Could not build default"))
             .set_override("timezone", "0")
-            .expect("failed to override timezone with UTC")
+            .expect(&t!("failed to override timezone with UTC"))
             .build()
-            .expect("Could not build config")
+            .expect(&t!("Could not build config"))
             .try_deserialize()
-            .expect("Could not deserialize config")
+            .expect(&t!("Could not deserialize config"))
     }
 
     fn save_to_data_dir(filename: &str, value: &str) -> Result<()> {
@@ -597,14 +597,14 @@ impl Settings {
 
         if let Some(id) = id {
             let parsed =
-                Uuid::from_str(id.as_str()).expect("failed to parse host ID from local directory");
+                Uuid::from_str(id.as_str()).expect(&t!("failed to parse host ID from local directory"));
             return Some(HostId(parsed));
         }
 
         let uuid = atuin_common::utils::uuid_v7();
 
         Settings::save_to_data_dir(HOST_ID_FILENAME, uuid.as_simple().to_string().as_ref())
-            .expect("Could not write host ID to data dir");
+            .expect(&t!("Could not write host ID to data dir"));
 
         Some(HostId(uuid))
     }
@@ -623,7 +623,7 @@ impl Settings {
                 let d = time::Duration::try_from(d)?;
                 Ok(OffsetDateTime::now_utc() - Settings::last_sync()? >= d)
             }
-            Err(e) => Err(eyre!("failed to check sync: {}", e)),
+            Err(e) => Err(eyre!("{}: {}", t!("failed to check sync"), e)),
         }
     }
 
@@ -635,7 +635,7 @@ impl Settings {
 
     pub fn session_token(&self) -> Result<String> {
         if !self.logged_in() {
-            return Err(eyre!("Tried to load session; not logged in"));
+            return Err(eyre!(t!("Tried to load session; not logged in")));
         }
 
         let session_path = self.session_path.as_str();
@@ -688,7 +688,7 @@ impl Settings {
             Ok::<(), eyre::Report>(())
         })
         .await
-        .expect("file task panicked")?;
+        .expect(&t!("file task panicked"))?;
 
         Ok(latest)
     }
@@ -820,9 +820,9 @@ impl Settings {
         let data_dir = atuin_common::utils::data_dir();
 
         create_dir_all(&config_dir)
-            .wrap_err_with(|| format!("could not create dir {config_dir:?}"))?;
+            .wrap_err_with(|| t!("could not create dir %{config_dir}", config_dir=format!("{config_dir:?}")))?;
 
-        create_dir_all(&data_dir).wrap_err_with(|| format!("could not create dir {data_dir:?}"))?;
+        create_dir_all(&data_dir).wrap_err_with(|| t!("could not create dir %{data_dir}", data_dir=format!("{data_dir:?}")))?;
 
         let mut config_file = if let Ok(p) = std::env::var("ATUIN_CONFIG_DIR") {
             PathBuf::from(p)
@@ -842,9 +842,9 @@ impl Settings {
                 FileFormat::Toml,
             ))
         } else {
-            let mut file = File::create(config_file).wrap_err("could not create config file")?;
+            let mut file = File::create(config_file).wrap_err(t!("could not create config file"))?;
             file.write_all(EXAMPLE_CONFIG.as_bytes())
-                .wrap_err("could not write default config file")?;
+                .wrap_err(t!("could not write default config file"))?;
 
             config_builder
         };
@@ -852,7 +852,7 @@ impl Settings {
         let config = config_builder.build()?;
         let mut settings: Settings = config
             .try_deserialize()
-            .map_err(|e| eyre!("failed to deserialize: {}", e))?;
+            .map_err(|e| eyre!("{}: {}", t!("failed to deserialize"), e))?;
 
         // all paths should be expanded
         let db_path = settings.db_path;
@@ -880,11 +880,11 @@ impl Default for Settings {
         // if this panics something is very wrong, as the default config
         // does not build or deserialize into the settings struct
         Self::builder()
-            .expect("Could not build default")
+            .expect(&t!("Could not build default"))
             .build()
-            .expect("Could not build config")
+            .expect(&t!("Could not build config"))
             .try_deserialize()
-            .expect("Could not deserialize config")
+            .expect(&t!("Could not deserialize config"))
     }
 }
 

@@ -76,14 +76,14 @@ impl Encryption for PASETO_V4 {
             data: general_purpose::URL_SAFE_NO_PAD.encode(data.0),
         })
         .expect("json encoding can't fail");
-        let nonce = DataKey::<32>::try_new_random().expect("could not source from random");
+        let nonce = DataKey::<32>::try_new_random().expect(&t!("could not source from random"));
         let nonce = PasetoNonce::<V4, LocalPurpose>::from(&nonce);
 
         let token = Paseto::<V4, LocalPurpose>::builder()
             .set_payload(Payload::from(payload.as_str()))
             .set_implicit_assertion(ImplicitAssertion::from(assertions.as_str()))
             .try_encrypt(&random_key.into(), &nonce)
-            .expect("error encrypting atuin data");
+            .expect(&t!("error encrypting atuin data"));
 
         EncryptedData {
             data: token,
@@ -105,7 +105,7 @@ impl Encryption for PASETO_V4 {
             None,
             ImplicitAssertion::from(&*assertions),
         )
-        .context("could not decrypt entry")?;
+        .context(t!("could not decrypt entry"))?;
 
         let payload: AtuinPayload = serde_json::from_str(&payload)?;
         let data = general_purpose::URL_SAFE_NO_PAD.decode(payload.data)?;
@@ -120,7 +120,7 @@ impl PASETO_V4 {
         // let wrapping_key = PasetoSymmetricKey::from(Key::from(key));
 
         let AtuinFooter { kid, wpk } = serde_json::from_str(&wrapped_cek)
-            .context("wrapped cek did not contain the correct contents")?;
+            .context(t!("wrapped cek did not contain the correct contents"))?;
 
         // check that the wrapping key matches the required key to decrypt.
         // In future, we could support multiple keys and use this key to
@@ -131,7 +131,11 @@ impl PASETO_V4 {
 
         ensure!(
             current_kid == kid,
-            "attempting to decrypt with incorrect key. currently using {current_kid}, expecting {kid}"
+            t!(
+                "attempting to decrypt with incorrect key. currently using %{current_kid}, expecting %{kid}",
+                current_kid=current_kid,
+                kid=kid
+            )
         );
 
         // decrypt the random key
@@ -147,7 +151,7 @@ impl PASETO_V4 {
             wpk: cek.wrap_pie(&wrapping_key),
             kid: wrapping_key.to_id(),
         };
-        serde_json::to_string(&wrapped_cek).expect("could not serialize wrapped cek")
+        serde_json::to_string(&wrapped_cek).expect(&t!("could not serialize wrapped cek"))
     }
 }
 
@@ -191,7 +195,7 @@ impl<'a> From<AdditionalData<'a>> for Assertions<'a> {
 
 impl Assertions<'_> {
     fn encode(&self) -> String {
-        serde_json::to_string(self).expect("could not serialize implicit assertions")
+        serde_json::to_string(self).expect(&t!("could not serialize implicit assertions"))
     }
 }
 

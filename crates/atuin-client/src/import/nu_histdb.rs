@@ -73,14 +73,14 @@ async fn hist_from_db_conn(pool: Pool<sqlx::Sqlite>) -> Result<Vec<HistDbEntry>>
 
 impl NuHistDb {
     pub fn histpath() -> Result<PathBuf> {
-        let base = BaseDirs::new().ok_or_else(|| eyre!("could not determine data directory"))?;
+        let base = BaseDirs::new().ok_or_else(|| eyre!(t!("could not determine data directory")))?;
         let config_dir = base.config_dir().join("nushell");
 
         let histdb_path = config_dir.join("history.sqlite3");
         if histdb_path.exists() {
             Ok(histdb_path)
         } else {
-            Err(eyre!("Could not find history file."))
+            Err(eyre!(t!("Could not find history file.")))
         }
     }
 }

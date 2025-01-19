@@ -111,9 +111,9 @@ impl ZshHistDb {
         if histdb_path.exists() {
             Ok(histdb_path)
         } else {
-            Err(eyre!(
+            Err(eyre!(t!(
                 "Could not find history file. Try setting $HISTDB_FILE"
-            ))
+            )))
         }
     }
 }

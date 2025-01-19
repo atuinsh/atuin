@@ -39,7 +39,7 @@ async fn sync_download(
     client: &api_client::Client<'_>,
     db: &impl Database,
 ) -> Result<(i64, i64)> {
-    debug!("starting sync download");
+    debug!("{}", t!("starting sync download"));
 
     let remote_status = client.status().await?;
     let remote_count = remote_status.count;
@@ -70,8 +70,8 @@ async fn sync_download(
             .history
             .iter()
             // TODO: handle deletion earlier in this chain
-            .map(|h| serde_json::from_str(h).expect("invalid base64"))
-            .map(|h| decrypt(h, key).expect("failed to decrypt history! check your key"))
+            .map(|h| serde_json::from_str(h).expect(&t!("invalid base64")))
+            .map(|h| decrypt(h, key).expect(&t!("failed to decrypt history! check your key")))
             .map(|mut h| {
                 if remote_deleted.contains(h.id.0.as_str()) {
                     h.deleted_at = Some(time::OffsetDateTime::now_utc());
@@ -92,7 +92,7 @@ async fn sync_download(
 
         let page_last = history
             .last()
-            .expect("could not get last element of page")
+            .expect(&t!("could not get last element of page"))
             .timestamp;
 
         // in the case of a small sync frequency, it's possible for history to
@@ -113,8 +113,11 @@ async fn sync_download(
             db.delete(h).await?;
         } else {
             info!(
-                "could not delete history with id {}, not found locally",
-                i.as_str()
+                "{}",
+                t!(
+                    "could not delete history with id %{id}, not found locally",
+                    id=i.as_str()
+                )
             );
         }
     }
@@ -139,7 +142,7 @@ async fn sync_upload(
 
     let local_count = db.history_count(true).await?;
 
-    debug!("remote has {}, we have {}", remote_count, local_count);
+    debug!("{}", t!("remote has %{remote_count}, we have %{local_count}", remote_count=remote_count, local_count=local_count));
 
     // first just try the most recent set
     let mut cursor = OffsetDateTime::now_utc();
@@ -171,7 +174,7 @@ async fn sync_upload(
         cursor = buffer.last().unwrap().timestamp;
         remote_count = client.count().await?;
 
-        debug!("upload cursor: {:?}", cursor);
+        debug!("{}: {:?}", t!("upload cursor"), cursor);
     }
 
     let deleted = db.deleted().await?;
@@ -181,7 +184,7 @@ async fn sync_upload(
             continue;
         }
 
-        info!("deleting {} on remote", i.id);
+        info!("{}", t!("deleting %{id} on remote", id=i.id));
         client.delete_history(i).await?;
     }
 
@@ -204,7 +207,7 @@ pub async fn sync(settings: &Settings, force: bool, db: &impl Database) -> Resul
 
     let download = sync_download(&key, force, &client, db).await?;
 
-    debug!("sync downloaded {}", download.0);
+    debug!("{}", t!("sync downloaded %{num}", num=download.0));
 
     Ok(())
 }

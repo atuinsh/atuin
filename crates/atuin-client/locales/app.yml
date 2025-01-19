@@ -1,3 +1,4 @@
+_version: 2
 DIRECTORY:
   en: DIRECTORY
   ga: COMHADLANN
@@ -13,5 +14,3 @@ SESSION:
 WORKSPACE:
   en: WORKSPACE
   ga: SPÁS OIBRE
-_version: 2
-

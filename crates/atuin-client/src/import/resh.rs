@@ -74,7 +74,7 @@ pub struct Resh {
 }
 
 fn default_histpath() -> Result<PathBuf> {
-    let user_dirs = UserDirs::new().ok_or_else(|| eyre!("could not find user directories"))?;
+    let user_dirs = UserDirs::new().ok_or_else(|| eyre!(t!("could not find user directories")))?;
     let home_dir = user_dirs.home_dir();
 
     Ok(home_dir.join(".resh_history.json"))

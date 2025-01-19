@@ -31,7 +31,7 @@ impl SqliteStore {
     pub async fn new(path: impl AsRef<Path>, timeout: f64) -> Result<Self> {
         let path = path.as_ref();
 
-        debug!("opening sqlite database at {:?}", path);
+        debug!("{}", t!("opening sqlite database at %{path}", path=format!("{path:?}")));
 
         let create = !path.exists();
         if create {
@@ -56,7 +56,7 @@ impl SqliteStore {
     }
 
     async fn setup_db(pool: &SqlitePool) -> Result<()> {
-        debug!("running sqlite database setup");
+        debug!("{}", t!("running sqlite database setup"));
 
         sqlx::migrate!("./record-migrations").run(pool).await?;
 
@@ -91,8 +91,8 @@ impl SqliteStore {
         let timestamp: i64 = row.get("timestamp");
 
         // tbh at this point things are pretty fucked so just panic
-        let id = Uuid::from_str(row.get("id")).expect("invalid id UUID format in sqlite DB");
-        let host = Uuid::from_str(row.get("host")).expect("invalid host UUID format in sqlite DB");
+        let id = Uuid::from_str(row.get("id")).expect(&t!("invalid id UUID format in sqlite DB"));
+        let host = Uuid::from_str(row.get("host")).expect(&t!("invalid host UUID format in sqlite DB"));
 
         Record {
             id: RecordId(id),
@@ -171,7 +171,7 @@ impl Store for SqliteStore {
 
         match res {
             Err(sqlx::Error::RowNotFound) => Ok(None),
-            Err(e) => Err(eyre!("an error occurred: {}", e)),
+            Err(e) => Err(eyre!("{}: {}", t!("an error occurred"), e)),
             Ok(record) => Ok(Some(record)),
         }
     }
@@ -185,7 +185,7 @@ impl Store for SqliteStore {
             .fetch_one(&self.pool)
             .await;
         match res {
-            Err(e) => Err(eyre!("failed to fetch local store len: {}", e)),
+            Err(e) => Err(eyre!("{}: {}", t!("failed to fetch local store len"), e)),
             Ok(v) => Ok(v.0 as u64),
         }
     }
@@ -197,7 +197,7 @@ impl Store for SqliteStore {
                 .fetch_one(&self.pool)
                 .await;
         match res {
-            Err(e) => Err(eyre!("failed to fetch local store len: {}", e)),
+            Err(e) => Err(eyre!("{}: {}", t!("failed to fetch local store len"), e)),
             Ok(v) => Ok(v.0 as u64),
         }
     }
@@ -249,7 +249,7 @@ impl Store for SqliteStore {
 
         match res {
             Err(sqlx::Error::RowNotFound) => Ok(None),
-            Err(e) => Err(eyre!("an error occurred: {}", e)),
+            Err(e) => Err(eyre!("{}: {}", t!("an error occurred"), e)),
             Ok(v) => Ok(Some(v)),
         }
     }
@@ -263,13 +263,13 @@ impl Store for SqliteStore {
                 .await;
 
         let res = match res {
-            Err(e) => return Err(eyre!("failed to fetch local store status: {}", e)),
+            Err(e) => return Err(eyre!("{}: {}", t!("failed to fetch local store status"), e)),
             Ok(v) => v,
         };
 
         for i in res {
             let host = HostId(
-                Uuid::from_str(i.0.as_str()).expect("failed to parse uuid for local store status"),
+                Uuid::from_str(i.0.as_str()).expect(&t!("failed to parse uuid for local store status")),
             );
 
             status.set_raw(host, i.1, i.2 as u64);
@@ -349,8 +349,11 @@ impl Store for SqliteStore {
                 Ok(_) => continue,
                 Err(_) => {
                     println!(
-                        "Failed to decrypt {}, deleting",
-                        record.id.0.as_hyphenated()
+                        "{}",
+                        t!(
+                            "Failed to decrypt %{record}, deleting",
+                            record=record.id.0.as_hyphenated()
+                        )
                     );
 
                     self.delete(record.id).await?;

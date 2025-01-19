@@ -309,4 +309,45 @@ mod tests {
         assert_ne!(crypto_random_string::<16>(), crypto_random_string::<16>());
         assert_ne!(crypto_random_string::<32>(), crypto_random_string::<32>());
     }
+
+    #[test]
+    fn ensure_locale_linked_up() {
+        // While there is no value in testing standard functionality of an
+        // external lib, this integration test checks that the locale logic
+        // is in place and the translations are loadable.
+        rust_i18n::set_locale("en");
+
+        assert_eq!(
+            t!("Failed to generate random bytes!"),
+            "Failed to generate random bytes!"
+        );
+
+        // Unfortunately, there is not a built-in way to use the Debug
+        // formatter, so (in line with recommendations for Fill in the std::fmt
+        // docs: https://doc.rust-lang.org/std/fmt/#fillalignment) the next best
+        // option is to explicitly format! it before passing.
+        assert_eq!(
+            t!("unknown version %{version}", version=format!("{:?}", (2, 1, 2))),
+            "unknown version (2, 1, 2)"
+        );
+
+        rust_i18n::set_locale("ga");
+
+        assert_eq!(
+            t!("Failed to generate random bytes!"),
+            "Theip ar ghiniúint beart randamach!"
+        );
+
+        assert_eq!(
+            t!("unknown version %{version}", version=format!("{:?}", (2, 1, 2))),
+            "leagan anaithnid (2, 1, 2)"
+        );
+
+        rust_i18n::set_locale("zx");
+
+        assert_eq!(
+            t!("Failed to generate random bytes!"),
+            "Failed to generate random bytes!"
+        );
+    }
 }

@@ -335,7 +335,7 @@ impl Database for Sqlite {
     }
 
     async fn range(&self, from: OffsetDateTime, to: OffsetDateTime) -> Result<Vec<History>> {
-        debug!("{}", t!("listing history from %{from:?} to %{to:?}", from=from, to=to));
+        debug!("{}", t!("listing history from %{from} to %{to}", from=format!("{from:?}"), to=format!("{to:?}")));
 
         let res = sqlx::query(
             "select * from history where timestamp >= ?1 and timestamp <= ?2 order by timestamp asc",

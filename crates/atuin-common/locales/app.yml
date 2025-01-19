@@ -1,0 +1,8 @@
+_version: 2
+Failed to generate random bytes!:
+  en: Failed to generate random bytes!
+  ga: Theip ar ghiniúint beart randamach!
+  zh-CN: 未能生成随机字节！ # FIXME: confirm with a native speaker - here as an example of non-Latin text for PR refinement
+'unknown version %{version}':
+  en: 'unknown version %{version}'
+  ga: 'leagan anaithnid %{version}'

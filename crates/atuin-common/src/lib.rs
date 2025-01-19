@@ -4,7 +4,7 @@
 extern crate rust_i18n;
 
 pub static DEFAULT_LOCALE: &str = "en";
-i18n!("locales", fallback = "en");
+i18n!("locales");
 
 /// Defines a new UUID type wrapper
 macro_rules! new_uuid {

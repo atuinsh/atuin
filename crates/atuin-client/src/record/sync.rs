@@ -12,19 +12,19 @@ use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 
 #[derive(Error, Debug)]
 pub enum SyncError {
-    #[error("the local store is ahead of the remote, but for another host. has remote lost data?")]
+    #[error("{}", t!("the local store is ahead of the remote, but for another host. has remote lost data?"))]
     LocalAheadOtherHost,
 
-    #[error("an issue with the local database occurred: {msg:?}")]
+    #[error("{}: {msg:?}", t!("an issue with the local database occurred"))]
     LocalStoreError { msg: String },
 
-    #[error("something has gone wrong with the sync logic: {msg:?}")]
+    #[error("{}: {msg:?}", t!("something has gone wrong with the sync logic"))]
     SyncLogicError { msg: String },
 
-    #[error("operational error: {msg:?}")]
+    #[error("{}: {msg:?}", t!("operational error"))]
     OperationalError { msg: String },
 
-    #[error("a request to the sync server failed: {msg:?}")]
+    #[error("{}: {msg:?}", t!("a request to the sync server failed"))]
     RemoteRequestError { msg: String },
 }
 
@@ -130,9 +130,9 @@ pub async fn operations(
             // something is pretty fucked.
             (None, None) => {
                 return Err(SyncError::SyncLogicError {
-                    msg: String::from(
+                    msg: t!(
                         "diff has nothing for local or remote - (host, tag) does not exist",
-                    ),
+                    ).to_string(),
                 })
             }
         };
@@ -176,10 +176,13 @@ async fn sync_upload(
         .progress_chars("#>-"));
 
     println!(
-        "Uploading {} records to {}/{}",
-        expected,
-        host.0.as_simple(),
-        tag
+        "{}",
+        t!(
+            "Uploading %{records} records to %{host}/%{tag}",
+            records=expected,
+            host=host.0.as_simple(),
+            tag=tag
+        )
     );
 
     // preload with the first entry if remote does not know of this store
@@ -188,13 +191,13 @@ async fn sync_upload(
             .next(host, tag.as_str(), remote + progress, upload_page_size)
             .await
             .map_err(|e| {
-                error!("failed to read upload page: {e:?}");
+                error!("{}: {e:?}", t!("failed to read upload page"));
 
                 SyncError::LocalStoreError { msg: e.to_string() }
             })?;
 
         client.post_records(&page).await.map_err(|e| {
-            error!("failed to post records: {e:?}");
+            error!("{}: {e:?}", t!("failed to post records"));
 
             SyncError::RemoteRequestError { msg: e.to_string() }
         })?;
@@ -207,7 +210,7 @@ async fn sync_upload(
         }
     }
 
-    pb.finish_with_message("Uploaded records");
+    pb.finish_with_message(t!("Uploaded records"));
 
     Ok(progress as i64)
 }
@@ -227,10 +230,13 @@ async fn sync_download(
     let mut ret = Vec::new();
 
     println!(
-        "Downloading {} records from {}/{}",
-        expected,
-        host.0.as_simple(),
-        tag
+        "{}",
+        t!(
+            "Downloading %{records} records from %{host}/%{tag}",
+            records=expected,
+            host=host.0.as_simple(),
+            tag=tag
+        )
     );
 
     let pb = ProgressBar::new(expected);
@@ -261,7 +267,7 @@ async fn sync_download(
         }
     }
 
-    pb.finish_with_message("Downloaded records");
+    pb.finish_with_message(t!("Downloaded records"));
 
     Ok(ret)
 }
@@ -280,7 +286,7 @@ pub async fn sync_remote(
         settings.network_connect_timeout,
         settings.network_timeout,
     )
-    .expect("failed to create client");
+    .expect(&t!("failed to create client"));
 
     let mut uploaded = 0;
     let mut downloaded = Vec::new();
@@ -362,10 +368,10 @@ mod tests {
     ) -> (SqliteStore, Vec<Diff>) {
         let local_store = SqliteStore::new(":memory:", test_local_timeout())
             .await
-            .expect("failed to open in memory sqlite");
+            .expect(&t!("failed to open in memory sqlite"));
         let remote_store = SqliteStore::new(":memory:", test_local_timeout())
             .await
-            .expect("failed to open in memory sqlite"); // "remote"
+            .expect(&t!("failed to open in memory sqlite")); // "remote"
 
         for i in local_records {
             local_store.push(&i).await.unwrap();

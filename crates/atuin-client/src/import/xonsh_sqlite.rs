@@ -67,16 +67,16 @@ fn xonsh_db_path(xonsh_data_dir: Option<String>) -> Result<PathBuf> {
     }
 
     // otherwise, fall back to default
-    let base = BaseDirs::new().ok_or_else(|| eyre!("Could not determine home directory"))?;
+    let base = BaseDirs::new().ok_or_else(|| eyre!(t!("Could not determine home directory")))?;
 
     let hist_file = base.data_dir().join("xonsh/xonsh-history.sqlite");
     if hist_file.exists() || cfg!(test) {
         Ok(hist_file)
     } else {
-        Err(eyre!(
-            "Could not find xonsh history db at: {}",
-            hist_file.to_string_lossy()
-        ))
+        Err(eyre!(t!(
+            "Could not find xonsh history db at: %{hist_file}",
+            hist_file=hist_file.to_string_lossy()
+        )))
     }
 }
 
@@ -96,7 +96,8 @@ impl Importer for XonshSqlite {
         let db_path = get_histpath(|| xonsh_db_path(xonsh_data_dir))?;
         let connection_str = db_path.to_str().ok_or_else(|| {
             eyre!(
-                "Invalid path for SQLite database: {}",
+                "{}: {}",
+                t!("Invalid path for SQLite database"),
                 db_path.to_string_lossy()
             )
         })?;
@@ -130,7 +131,7 @@ impl Importer for XonshSqlite {
             count += 1;
         }
 
-        println!("Loaded: {count}");
+        println!("{}", t!("Loaded: %{count}", count=count));
         Ok(())
     }
 }

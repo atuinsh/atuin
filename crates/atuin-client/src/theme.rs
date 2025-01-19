@@ -134,7 +134,8 @@ impl Theme {
                     StyleFactory::from_fg_string(color).unwrap_or_else(|err| {
                         if debug {
                             log::warn!(
-                                "Tried to load string as a color unsuccessfully: ({}={}) {}",
+                                "{}: ({}={}) {}",
+                                t!("Tried to load string as a color unsuccessfully"),
                                 name,
                                 color,
                                 err
@@ -186,7 +187,7 @@ fn from_string(name: &str) -> Result<Color, String> {
                 .filter_map(|n| n.ok())
                 .collect();
             if vec.len() != 3 {
-                return Err("Could not parse 3 hex values from string".into());
+                return Err(t!("Could not parse 3 hex values from string").into());
             }
             Ok(Color::Rgb {
                 r: vec[0],
@@ -198,10 +199,10 @@ fn from_string(name: &str) -> Result<Color, String> {
             // For full flexibility, we need to use serde_json, given
             // crossterm's approach.
             serde_json::from_str::<Color>(format!("\"{}\"", &name[1..]).as_str())
-                .map_err(|_| format!("Could not convert color name {} to Crossterm color", name))
+                .map_err(|_| t!("Could not convert color name %{name} to Crossterm color", name=name).to_string())
         }
         _ => {
-            let srgb = named::from_str(name).ok_or("No such color in palette")?;
+            let srgb = named::from_str(name).ok_or(t!("No such color in palette"))?;
             Ok(Color::Rgb {
                 r: srgb.red,
                 g: srgb.green,
@@ -370,7 +371,7 @@ impl ThemeManager {
             if p.is_empty() {
                 return Err(Box::new(Error::new(
                     ErrorKind::NotFound,
-                    "Empty theme directory override and could not find theme elsewhere",
+                    t!("Empty theme directory override and could not find theme elsewhere"),
                 )));
             }
             PathBuf::from(p)
@@ -409,11 +410,12 @@ impl ThemeManager {
                 return Err(Box::new(Error::new(
                     ErrorKind::InvalidInput,
                     format!(
-                        "Failed to deserialize theme: {}",
+                        "{}: {:?}",
+                        t!("Failed to deserialize theme"),
                         if debug {
                             e.to_string()
                         } else {
-                            "set theme debug on for more info".to_string()
+                            t!("set theme debug on for more info").into()
                         }
                     ),
                 )))
@@ -425,7 +427,7 @@ impl ThemeManager {
                 if max_depth == 0 {
                     return Err(Box::new(Error::new(
                         ErrorKind::InvalidInput,
-                        "Parent requested but we hit the recursion limit",
+                        t!("Parent requested but we hit the recursion limit"),
                     )));
                 }
                 Some(self.load_theme(parent_name.as_str(), Some(max_depth - 1)))
@@ -435,7 +437,8 @@ impl ThemeManager {
 
         if debug && name != theme_config.theme.name {
             log::warn!(
-                "Your theme config name is not the name of your loaded theme {} != {}",
+                "{} {} != {}",
+                t!("Your theme config name is not the name of your loaded theme"),
                 name,
                 theme_config.theme.name
             );
@@ -460,7 +463,7 @@ impl ThemeManager {
             None => match self.load_theme_from_file(name, max_depth.unwrap_or(DEFAULT_MAX_DEPTH)) {
                 Ok(theme) => theme,
                 Err(err) => {
-                    log::warn!("Could not load theme {}: {}", name, err);
+                    log::warn!("{}: {:?}", t!("Could not load theme %{theme}", theme=name), err);
                     built_ins.get("default").unwrap()
                 }
             },
@@ -602,6 +605,7 @@ mod theme_tests {
 
     #[test]
     fn test_can_use_parent_theme_for_fallbacks() {
+        rust_i18n::set_locale("en"); // Ensure error message in expected language.
         testing_logger::setup();
 
         let mut manager = ThemeManager::new(Some(false), Some("".to_string()));
@@ -706,6 +710,7 @@ mod theme_tests {
 
     #[test]
     fn test_can_debug_theme() {
+        rust_i18n::set_locale("en"); // Ensure error message in expected language.
         testing_logger::setup();
         [true, false].iter().for_each(|debug| {
             let mut manager = ThemeManager::new(Some(*debug), Some("".to_string()));

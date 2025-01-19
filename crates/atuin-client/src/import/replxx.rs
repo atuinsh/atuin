@@ -15,7 +15,7 @@ pub struct Replxx {
 }
 
 fn default_histpath() -> Result<PathBuf> {
-    let user_dirs = UserDirs::new().ok_or_else(|| eyre!("could not find user directories"))?;
+    let user_dirs = UserDirs::new().ok_or_else(|| eyre!(t!("could not find user directories")))?;
     let home_dir = user_dirs.home_dir();
 
     // There is no default histfile for replxx.
