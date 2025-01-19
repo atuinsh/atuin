@@ -28,12 +28,12 @@ pub async fn login(
                     // assume they copied in the base64 key
                     bip39::ErrorKind::InvalidWord => key,
                     bip39::ErrorKind::InvalidChecksum => {
-                        bail!("key mnemonic was not valid")
+                        bail!(t!("key mnemonic was not valid"))
                     }
                     bip39::ErrorKind::InvalidKeysize(_)
                     | bip39::ErrorKind::InvalidWordLength(_)
                     | bip39::ErrorKind::InvalidEntropyLength(_, _) => {
-                        bail!("key was not the correct length")
+                        bail!(t!("key was not the correct length"))
                     }
                 }
             } else {
@@ -63,15 +63,15 @@ pub async fn login(
 
         let encoded = key.clone(); // gonna want to save it in a bit
         let new_key: [u8; 32] = decode_key(key)
-            .context("could not decode provided key - is not valid base64")?
+            .context(t!("could not decode provided key - is not valid base64"))?
             .into();
 
         if new_key != current_key {
-            println!("\nRe-encrypting local store with new key");
+            println!("\n{}", t!("Re-encrypting local store with new key"));
 
             store.re_encrypt(&current_key, &new_key).await?;
 
-            println!("Writing new key");
+            println!("{}", t!("Writing new key"));
             let mut file = File::create(key_path).await?;
             file.write_all(encoded.as_bytes()).await?;
         }

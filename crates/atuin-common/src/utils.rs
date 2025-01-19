@@ -16,7 +16,7 @@ pub fn crypto_random_bytes<const N: usize>() -> [u8; N] {
     // idea to use getrandom for things such as passwords.
     let mut ret = [0u8; N];
 
-    getrandom(&mut ret).expect("Failed to generate random bytes!");
+    getrandom(&mut ret).expect(&t!("Failed to generate random bytes!"));
 
     ret
 }
@@ -77,13 +77,13 @@ pub fn in_git_repo(path: &str) -> Option<PathBuf> {
 
 #[cfg(not(target_os = "windows"))]
 pub fn home_dir() -> PathBuf {
-    let home = std::env::var("HOME").expect("$HOME not found");
+    let home = std::env::var("HOME").expect(&t!("$HOME not found"));
     PathBuf::from(home)
 }
 
 #[cfg(target_os = "windows")]
 pub fn home_dir() -> PathBuf {
-    let home = std::env::var("USERPROFILE").expect("%userprofile% not found");
+    let home = std::env::var("USERPROFILE").expect(&t!("%userprofile% not found"));
     PathBuf::from(home)
 }
 
@@ -175,7 +175,7 @@ pub trait Escapable: AsRef<str> {
 
 pub fn unquote(s: &str) -> Result<String> {
     if s.chars().count() < 2 {
-        return Err(eyre!("not enough chars"));
+        return Err(eyre!(t!("not enough chars")));
     }
 
     let quote = s.chars().next().unwrap();
@@ -186,7 +186,7 @@ pub fn unquote(s: &str) -> Result<String> {
     }
 
     if s.chars().last().unwrap() != quote {
-        return Err(eyre!("unexpected eof, quotes do not match"));
+        return Err(eyre!(t!("unexpected eof, quotes do not match")));
     }
 
     // removes quote characters

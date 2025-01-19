@@ -42,7 +42,7 @@ pub fn new_key(settings: &Settings) -> Result<Key> {
     let path = PathBuf::from(path);
 
     if path.exists() {
-        bail!("key already exists! cannot overwrite");
+        bail!(t!("key already exists! cannot overwrite"));
     }
 
     let (key, encoded) = generate_encoded_key()?;
@@ -70,10 +70,10 @@ pub fn load_key(settings: &Settings) -> Result<Key> {
 pub fn encode_key(key: &Key) -> Result<String> {
     let mut buf = vec![];
     rmp::encode::write_array_len(&mut buf, key.len() as u32)
-        .wrap_err("could not encode key to message pack")?;
+        .wrap_err(t!("could not encode key to message pack"))?;
     for b in key {
         rmp::encode::write_uint(&mut buf, *b as u64)
-            .wrap_err("could not encode key to message pack")?;
+            .wrap_err(t!("could not encode key to message pack"))?;
     }
     let buf = BASE64_STANDARD.encode(buf);
 
@@ -85,7 +85,7 @@ pub fn decode_key(key: String) -> Result<Key> {
 
     let buf = BASE64_STANDARD
         .decode(key.trim_end())
-        .wrap_err("encryption key is not a valid base64 encoding")?;
+        .wrap_err(t!("encryption key is not a valid base64 encoding"))?;
 
     // old code wrote the key as a fixed length array of 32 bytes
     // new code writes the key with a length prefix
@@ -97,14 +97,14 @@ pub fn decode_key(key: String) -> Result<Key> {
             match Marker::from_u8(buf[0]) {
                 Marker::Bin8 => {
                     let len = decode::read_bin_len(&mut bytes).map_err(|err| eyre!("{err:?}"))?;
-                    ensure!(len == 32, "encryption key is not the correct size");
+                    ensure!(len == 32, t!("encryption key is not the correct size"));
                     let key = <[u8; 32]>::try_from(bytes.remaining_slice())
-                        .context("could not decode encryption key")?;
+                        .context(t!("could not decode encryption key"))?;
                     Ok(key.into())
                 }
                 Marker::Array16 => {
                     let len = decode::read_array_len(&mut bytes).map_err(|err| eyre!("{err:?}"))?;
-                    ensure!(len == 32, "encryption key is not the correct size");
+                    ensure!(len == 32, t!("encryption key is not the correct size"));
 
                     let mut key = Key::default();
                     for i in &mut key {
@@ -112,7 +112,7 @@ pub fn decode_key(key: String) -> Result<Key> {
                     }
                     Ok(key)
                 }
-                _ => bail!("could not decode encryption key"),
+                _ => bail!(t!("could not decode encryption key")),
             }
         }
     }
@@ -125,7 +125,7 @@ pub fn encrypt(history: &History, key: &Key) -> Result<EncryptedHistory> {
     let nonce = XSalsa20Poly1305::generate_nonce(&mut OsRng);
     XSalsa20Poly1305::new(key)
         .encrypt_in_place(&nonce, &[], &mut buf)
-        .map_err(|_| eyre!("could not encrypt"))?;
+        .map_err(|_| eyre!(t!("could not encrypt")))?;
 
     Ok(EncryptedHistory {
         ciphertext: buf,
@@ -140,7 +140,7 @@ pub fn decrypt(mut encrypted_history: EncryptedHistory, key: &Key) -> Result<His
             &[],
             &mut encrypted_history.ciphertext,
         )
-        .map_err(|_| eyre!("could not decrypt history"))?;
+        .map_err(|_| eyre!(t!("could not decrypt history")))?;
     let plaintext = encrypted_history.ciphertext;
 
     let history = decode(&plaintext)?;
@@ -200,10 +200,10 @@ fn decode(bytes: &[u8]) -> Result<History> {
 
     let nfields = decode::read_array_len(&mut bytes).map_err(error_report)?;
     if nfields < 8 {
-        bail!("malformed decrypted history")
+        bail!(t!("malformed decrypted history"))
     }
     if nfields > 9 {
-        bail!("cannot decrypt history from a newer version of atuin");
+        bail!(t!("cannot decrypt history from a newer version of atuin"));
     }
 
     let bytes = bytes.remaining_slice();
@@ -241,7 +241,7 @@ fn decode(bytes: &[u8]) -> Result<History> {
     }
 
     if !bytes.is_empty() {
-        bail!("trailing bytes in encoded history. malformed")
+        bail!(t!("trailing bytes in encoded history. malformed"))
     }
 
     Ok(History {
@@ -305,7 +305,7 @@ mod test {
         };
 
         // this should err
-        let _ = decrypt(e2, &key1).expect_err("expected an error decrypting with invalid key");
+        let _ = decrypt(e2, &key1).expect_err(t!("expected an error decrypting with invalid key"));
     }
 
     #[test]

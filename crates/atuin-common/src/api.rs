@@ -10,7 +10,7 @@ pub static ATUIN_CARGO_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 lazy_static! {
     pub static ref ATUIN_VERSION: Version =
-        Version::parse(ATUIN_CARGO_VERSION).expect("failed to parse self semver");
+        Version::parse(ATUIN_CARGO_VERSION).expect(&t!("failed to parse self semver"));
 }
 
 #[derive(Debug, Serialize, Deserialize)]

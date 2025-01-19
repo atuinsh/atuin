@@ -50,7 +50,7 @@ pub async fn register(
     let resp = reqwest::get(url).await?;
 
     if resp.status().is_success() {
-        bail!("username already in use");
+        bail!(t!("username already in use"));
     }
 
     let url = format!("{address}/register");
@@ -65,7 +65,7 @@ pub async fn register(
     let resp = handle_resp_error(resp).await?;
 
     if !ensure_version(&resp)? {
-        bail!("could not register user due to version mismatch");
+        bail!(t!("could not register user due to version mismatch"));
     }
 
     let session = resp.json::<RegisterResponse>().await?;
@@ -85,7 +85,7 @@ pub async fn login(address: &str, req: LoginRequest) -> Result<LoginResponse> {
     let resp = handle_resp_error(resp).await?;
 
     if !ensure_version(&resp)? {
-        bail!("Could not login due to version mismatch");
+        bail!(t!("Could not login due to version mismatch"));
     }
 
     let session = resp.json::<LoginResponse>().await?;
@@ -118,17 +118,17 @@ pub fn ensure_version(response: &Response) -> Result<bool> {
     let version = if let Some(version) = version {
         match version.to_str() {
             Ok(v) => Version::parse(v),
-            Err(e) => bail!("failed to parse server version: {:?}", e),
+            Err(e) => bail!("{}: {:?}", t!("failed to parse server version"), e),
         }
     } else {
-        bail!("Server not reporting its version: it is either too old or unhealthy");
+        bail!(t!("Server not reporting its version: it is either too old or unhealthy"));
     }?;
 
     // If the client is newer than the server
     if version.major < ATUIN_VERSION.major {
-        println!("Atuin version mismatch! In order to successfully sync, the server needs to run a newer version of Atuin");
-        println!("Client: {}", ATUIN_CARGO_VERSION);
-        println!("Server: {}", version);
+        println!("{}", t!("Atuin version mismatch! In order to successfully sync, the server needs to run a newer version of Atuin"));
+        println!("{}: {}", t!("Client"), ATUIN_CARGO_VERSION);
+        println!("{}: {}", t!("Server"), version);
 
         return Ok(false);
     }
@@ -141,12 +141,12 @@ async fn handle_resp_error(resp: Response) -> Result<Response> {
 
     if status == StatusCode::SERVICE_UNAVAILABLE {
         bail!(
-            "Service unavailable: check https://status.atuin.sh (or get in touch with your host)"
+            t!("Service unavailable: check https://status.atuin.sh (or get in touch with your host)")
         );
     }
 
     if status == StatusCode::TOO_MANY_REQUESTS {
-        bail!("Rate limited; please wait before doing that again");
+        bail!(t!("Rate limited; please wait before doing that again"));
     }
 
     if !status.is_success() {
@@ -154,13 +154,13 @@ async fn handle_resp_error(resp: Response) -> Result<Response> {
             let reason = error.reason;
 
             if status.is_client_error() {
-                bail!("Invalid request to the service: {status} - {reason}.")
+                bail!("{}: {status} - {reason}.", t!("Invalid request to the service"))
             }
 
-            bail!("There was an error with the atuin sync service, server error {status}: {reason}.\nIf the problem persists, contact the host")
+            bail!(t!("There was an error with the atuin sync service, server error %{status}: %{reason}.\nIf the problem persists, contact the host", status=status, reason=reason))
         }
 
-        bail!("There was an error with the atuin sync service: Status {status:?}.\nIf the problem persists, contact the host")
+        bail!(t!("There was an error with the atuin sync service: Status %{status:?}.\nIf the problem persists, contact the host", status=status))
     }
 
     Ok(resp)
@@ -198,11 +198,11 @@ impl<'a> Client<'a> {
         let resp = handle_resp_error(resp).await?;
 
         if !ensure_version(&resp)? {
-            bail!("could not sync due to version mismatch");
+            bail!(t!("could not sync due to version mismatch"));
         }
 
         if resp.status() != StatusCode::OK {
-            bail!("failed to get count (are you logged in?)");
+            bail!(t!("failed to get count (are you logged in?)"));
         }
 
         let count = resp.json::<CountResponse>().await?;
@@ -218,7 +218,7 @@ impl<'a> Client<'a> {
         let resp = handle_resp_error(resp).await?;
 
         if !ensure_version(&resp)? {
-            bail!("could not sync due to version mismatch");
+            bail!(t!("could not sync due to version mismatch"));
         }
 
         let status = resp.json::<StatusResponse>().await?;
@@ -304,7 +304,7 @@ impl<'a> Client<'a> {
         let url = format!("{}/api/v0/record", self.sync_addr);
         let url = Url::parse(url.as_str())?;
 
-        debug!("uploading {} records to {url}", records.len());
+        debug!("{}", t!("uploading %{records} records to %{url}", records=records.len(), url=url));
 
         let resp = self.client.post(url).json(records).send().await?;
         handle_resp_error(resp).await?;
@@ -349,12 +349,12 @@ impl<'a> Client<'a> {
         let resp = handle_resp_error(resp).await?;
 
         if !ensure_version(&resp)? {
-            bail!("could not sync records due to version mismatch");
+            bail!(t!("could not sync records due to version mismatch"));
         }
 
         let index = resp.json().await?;
 
-        debug!("got remote index {:?}", index);
+        debug!("{} {:?}", t!("got remote index"), index);
 
         Ok(index)
     }
@@ -366,11 +366,11 @@ impl<'a> Client<'a> {
         let resp = self.client.delete(url).send().await?;
 
         if resp.status() == 403 {
-            bail!("invalid login details");
+            bail!(t!("invalid login details"));
         } else if resp.status() == 200 {
             Ok(())
         } else {
-            bail!("Unknown error");
+            bail!(t!("Unknown error"));
         }
     }
 
@@ -393,13 +393,13 @@ impl<'a> Client<'a> {
             .await?;
 
         if resp.status() == 401 {
-            bail!("current password is incorrect")
+            bail!(t!("current password is incorrect"))
         } else if resp.status() == 403 {
-            bail!("invalid login details");
+            bail!(t!("invalid login details"));
         } else if resp.status() == 200 {
             Ok(())
         } else {
-            bail!("Unknown error");
+            bail!(t!("Unknown error"));
         }
     }
 

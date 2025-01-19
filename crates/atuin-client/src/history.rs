@@ -375,7 +375,7 @@ impl History {
 
     pub fn should_save(&self, settings: &Settings) -> bool {
         let secret_regex = SECRET_PATTERNS.iter().map(|f| f.1);
-        let secret_regex = RegexSet::new(secret_regex).expect("Failed to build secrets regex");
+        let secret_regex = RegexSet::new(secret_regex).expect(&t!("Failed to build secrets regex"));
 
         !(self.command.starts_with(' ')
             || settings.history_filter.is_match(&self.command)

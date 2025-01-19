@@ -101,7 +101,7 @@ impl Cmd {
             .build()
             .unwrap();
 
-        let settings = Settings::new().wrap_err("could not load client settings")?;
+        let settings = Settings::new().wrap_err(t!("could not load client settings"))?;
         let theme_manager = theme::ThemeManager::new(settings.theme.debug, None);
         let res = runtime.block_on(self.run_inner(settings, theme_manager));
 

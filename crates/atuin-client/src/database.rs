@@ -55,12 +55,12 @@ pub struct OptFilters {
 
 pub fn current_context() -> Context {
     let Ok(session) = env::var("ATUIN_SESSION") else {
-        eprintln!("ERROR: Failed to find $ATUIN_SESSION in the environment. Check that you have correctly set up your shell.");
+        eprintln!("{}", t!("ERROR: Failed to find $ATUIN_SESSION in the environment. Check that you have correctly set up your shell."));
         std::process::exit(1);
     };
     let hostname = get_host_user();
     let cwd = utils::get_current_dir();
-    let host_id = Settings::host_id().expect("failed to load host ID");
+    let host_id = Settings::host_id().expect(&t!("failed to load host ID"));
     let git_root = utils::in_git_repo(cwd.as_str());
 
     Context {
@@ -226,7 +226,7 @@ impl Sqlite {
 #[async_trait]
 impl Database for Sqlite {
     async fn save(&self, h: &History) -> Result<()> {
-        debug!("saving history to sqlite");
+        debug!("{}", t!("saving history to sqlite"));
         let mut tx = self.pool.begin().await?;
         Self::save_raw(&mut tx, h).await?;
         tx.commit().await?;
@@ -235,7 +235,7 @@ impl Database for Sqlite {
     }
 
     async fn save_bulk(&self, h: &[History]) -> Result<()> {
-        debug!("saving history to sqlite");
+        debug!("{}", t!("saving history to sqlite"));
 
         let mut tx = self.pool.begin().await?;
 
@@ -249,7 +249,7 @@ impl Database for Sqlite {
     }
 
     async fn load(&self, id: &str) -> Result<Option<History>> {
-        debug!("loading history item {}", id);
+        debug!("{} {}", t!("loading history item"), id);
 
         let res = sqlx::query("select * from history where id = ?1")
             .bind(id)
@@ -261,7 +261,7 @@ impl Database for Sqlite {
     }
 
     async fn update(&self, h: &History) -> Result<()> {
-        debug!("updating sqlite history");
+        debug!("{}", t!("updating sqlite history"));
 
         sqlx::query(
             "update history
@@ -292,7 +292,7 @@ impl Database for Sqlite {
         unique: bool,
         include_deleted: bool,
     ) -> Result<Vec<History>> {
-        debug!("listing history");
+        debug!(t!("listing history"));
 
         let mut query = SqlBuilder::select_from(SqlName::new("history").alias("h").baquoted());
         query.field("*").order_desc("timestamp");
@@ -324,7 +324,7 @@ impl Database for Sqlite {
             query.limit(max);
         }
 
-        let query = query.sql().expect("bug in list query. please report");
+        let query = query.sql().expect(&t!("bug in list query. please report"));
 
         let res = sqlx::query(&query)
             .map(Self::query_history)
@@ -335,7 +335,7 @@ impl Database for Sqlite {
     }
 
     async fn range(&self, from: OffsetDateTime, to: OffsetDateTime) -> Result<Vec<History>> {
-        debug!("listing history from {:?} to {:?}", from, to);
+        debug!("{}", t!("listing history from %{from:?} to %{to:?}", from=from, to=to));
 
         let res = sqlx::query(
             "select * from history where timestamp >= ?1 and timestamp <= ?2 order by timestamp asc",
@@ -559,7 +559,7 @@ impl Database for Sqlite {
 
         sql.and_where_is_null("deleted_at");
 
-        let query = sql.sql().expect("bug in search query. please report");
+        let query = sql.sql().expect(&t!("bug in search query. please report"));
 
         let res = sqlx::query(&query)
             .map(Self::query_history)
@@ -579,7 +579,7 @@ impl Database for Sqlite {
     }
 
     async fn all_with_count(&self) -> Result<Vec<(History, i32)>> {
-        debug!("listing history");
+        debug!("{}", t!("listing history"));
 
         let mut query = SqlBuilder::select_from(SqlName::new("history").alias("h").baquoted());
 
@@ -601,7 +601,7 @@ impl Database for Sqlite {
             .and_where("deleted_at is null")
             .order_desc("timestamp");
 
-        let query = query.sql().expect("bug in list query. please report");
+        let query = query.sql().expect(&t!("bug in list query. please report"));
 
         let res = sqlx::query(&query)
             .map(|row: SqliteRow| {
@@ -694,15 +694,15 @@ impl Database for Sqlite {
             .group_by("month_year")
             .having("duration > 0");
 
-        let prev = prev.sql().expect("issue in stats previous query");
-        let next = next.sql().expect("issue in stats next query");
-        let total = total.sql().expect("issue in stats average query");
-        let average = average.sql().expect("issue in stats previous query");
-        let exits = exits.sql().expect("issue in stats exits query");
-        let day_of_week = day_of_week.sql().expect("issue in stats day of week query");
+        let prev = prev.sql().expect(&t!("issue in stats previous query"));
+        let next = next.sql().expect(&t!("issue in stats next query"));
+        let total = total.sql().expect(&t!("issue in stats average query"));
+        let average = average.sql().expect(&t!("issue in stats previous query"));
+        let exits = exits.sql().expect(&t!("issue in stats exits query"));
+        let day_of_week = day_of_week.sql().expect(&t!("issue in stats day of week query"));
         let duration_over_time = duration_over_time
             .sql()
-            .expect("issue in stats duration over time query");
+            .expect(&t!("issue in stats duration over time query"));
 
         let prev = sqlx::query(&prev)
             .bind(h.timestamp.unix_timestamp_nanos() as i64)
