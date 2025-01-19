@@ -469,7 +469,7 @@ impl ThemeManager {
                 Ok(theme) => theme,
                 Err(err) => {
                     log::warn!(
-                        "{}: {:?}",
+                        "{}: {}",
                         t!("Could not load theme %{theme}", theme = name),
                         err
                     );

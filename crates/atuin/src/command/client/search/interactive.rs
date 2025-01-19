@@ -605,13 +605,13 @@ impl State {
             border_size,
             preview_width,
         );
-        let show_help = settings.show_help && (!compact || f.area().height > 1);
         // This is an OR, as it seems more likely for someone to wish to override
         // tabs unexpectedly being missed, than unexpectedly present.
         let hide_extra = settings.auto_hide_height != 0
             && compact
             && f.area().height <= settings.auto_hide_height;
-        let show_tabs = settings.show_tabs && !hide_extra;
+        let tab_col = if settings.show_tabs && !hide_extra { 1 } else { 0 };
+        let help_col = if settings.show_help && (!compact || f.area().height > 1) { 1 } else { 0 };
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .margin(0)
@@ -622,12 +622,12 @@ impl State {
                         Constraint::Length(1 + border_size),               // input
                         Constraint::Min(1),                                // results list
                         Constraint::Length(preview_height),                // preview
-                        Constraint::Length(if show_tabs { 1 } else { 0 }), // tabs
-                        Constraint::Length(if show_help { 1 } else { 0 }), // header (sic)
+                        Constraint::Length(tab_col), // tabs
+                        Constraint::Length(help_col), // header (sic)
                     ]
                 } else if hide_extra {
                     [
-                        Constraint::Length(if show_help { 1 } else { 0 }), // header
+                        Constraint::Length(help_col), // header
                         Constraint::Length(0),                             // tabs
                         Constraint::Min(1),                                // results list
                         Constraint::Length(0),
@@ -635,8 +635,8 @@ impl State {
                     ]
                 } else {
                     [
-                        Constraint::Length(if show_help { 1 } else { 0 }), // header
-                        Constraint::Length(if show_tabs { 1 } else { 0 }), // tabs
+                        Constraint::Length(help_col), // header
+                        Constraint::Length(tab_col), // tabs
                         Constraint::Min(1),                                // results list
                         Constraint::Length(1 + border_size),               // input
                         Constraint::Length(preview_height),                // preview
@@ -662,7 +662,7 @@ impl State {
             .map(Line::from)
             .collect();
 
-        if show_tabs {
+        if tab_col == 1 {
             let tabs = Tabs::new(titles)
                 .block(Block::default().borders(Borders::NONE))
                 .select(self.tab_index)
