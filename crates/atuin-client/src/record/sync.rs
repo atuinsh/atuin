@@ -130,9 +130,8 @@ pub async fn operations(
             // something is pretty fucked.
             (None, None) => {
                 return Err(SyncError::SyncLogicError {
-                    msg: t!(
-                        "diff has nothing for local or remote - (host, tag) does not exist",
-                    ).to_string(),
+                    msg: t!("diff has nothing for local or remote - (host, tag) does not exist",)
+                        .to_string(),
                 })
             }
         };
@@ -179,9 +178,9 @@ async fn sync_upload(
         "{}",
         t!(
             "Uploading %{records} records to %{host}/%{tag}",
-            records=expected,
-            host=host.0.as_simple(),
-            tag=tag
+            records = expected,
+            host = host.0.as_simple(),
+            tag = tag
         )
     );
 
@@ -233,9 +232,9 @@ async fn sync_download(
         "{}",
         t!(
             "Downloading %{records} records from %{host}/%{tag}",
-            records=expected,
-            host=host.0.as_simple(),
-            tag=tag
+            records = expected,
+            host = host.0.as_simple(),
+            tag = tag
         )
     );
 

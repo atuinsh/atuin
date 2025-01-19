@@ -116,7 +116,7 @@ async fn sync_download(
                 "{}",
                 t!(
                     "could not delete history with id %{id}, not found locally",
-                    id=i.as_str()
+                    id = i.as_str()
                 )
             );
         }
@@ -142,7 +142,14 @@ async fn sync_upload(
 
     let local_count = db.history_count(true).await?;
 
-    debug!("{}", t!("remote has %{remote_count}, we have %{local_count}", remote_count=remote_count, local_count=local_count));
+    debug!(
+        "{}",
+        t!(
+            "remote has %{remote_count}, we have %{local_count}",
+            remote_count = remote_count,
+            local_count = local_count
+        )
+    );
 
     // first just try the most recent set
     let mut cursor = OffsetDateTime::now_utc();
@@ -184,7 +191,7 @@ async fn sync_upload(
             continue;
         }
 
-        info!("{}", t!("deleting %{id} on remote", id=i.id));
+        info!("{}", t!("deleting %{id} on remote", id = i.id));
         client.delete_history(i).await?;
     }
 
@@ -207,7 +214,7 @@ pub async fn sync(settings: &Settings, force: bool, db: &impl Database) -> Resul
 
     let download = sync_download(&key, force, &client, db).await?;
 
-    debug!("{}", t!("sync downloaded %{num}", num=download.0));
+    debug!("{}", t!("sync downloaded %{num}", num = download.0));
 
     Ok(())
 }

@@ -99,7 +99,7 @@ impl KvStore {
         if value.len() > KV_VAL_MAX_LEN {
             return Err(eyre!(t!(
                 "kv value too large: max len {len} bytes",
-                len=KV_VAL_MAX_LEN
+                len = KV_VAL_MAX_LEN
             )));
         }
 
@@ -176,7 +176,7 @@ impl KvStore {
         for record in tagged {
             let decrypted = match record.version.as_str() {
                 KV_VERSION => record.decrypt::<PASETO_V4>(encryption_key)?,
-                version => bail!("{} {version:?}", t!("unknown version"), version=version),
+                version => bail!("{} {version:?}", t!("unknown version"), version = version),
             };
 
             let kv = KvRecord::deserialize(&decrypted.data, KV_VERSION)?;

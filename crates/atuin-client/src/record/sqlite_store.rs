@@ -31,7 +31,13 @@ impl SqliteStore {
     pub async fn new(path: impl AsRef<Path>, timeout: f64) -> Result<Self> {
         let path = path.as_ref();
 
-        debug!("{}", t!("opening sqlite database at %{path}", path=format!("{path:?}")));
+        debug!(
+            "{}",
+            t!(
+                "opening sqlite database at %{path}",
+                path = format!("{path:?}")
+            )
+        );
 
         let create = !path.exists();
         if create {
@@ -92,7 +98,8 @@ impl SqliteStore {
 
         // tbh at this point things are pretty fucked so just panic
         let id = Uuid::from_str(row.get("id")).expect(&t!("invalid id UUID format in sqlite DB"));
-        let host = Uuid::from_str(row.get("host")).expect(&t!("invalid host UUID format in sqlite DB"));
+        let host =
+            Uuid::from_str(row.get("host")).expect(&t!("invalid host UUID format in sqlite DB"));
 
         Record {
             id: RecordId(id),
@@ -269,7 +276,8 @@ impl Store for SqliteStore {
 
         for i in res {
             let host = HostId(
-                Uuid::from_str(i.0.as_str()).expect(&t!("failed to parse uuid for local store status")),
+                Uuid::from_str(i.0.as_str())
+                    .expect(&t!("failed to parse uuid for local store status")),
             );
 
             status.set_raw(host, i.1, i.2 as u64);
@@ -352,7 +360,7 @@ impl Store for SqliteStore {
                         "{}",
                         t!(
                             "Failed to decrypt %{record}, deleting",
-                            record=record.id.0.as_hyphenated()
+                            record = record.id.0.as_hyphenated()
                         )
                     );
 

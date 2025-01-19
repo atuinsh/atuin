@@ -327,7 +327,10 @@ mod tests {
         // docs: https://doc.rust-lang.org/std/fmt/#fillalignment) the next best
         // option is to explicitly format! it before passing.
         assert_eq!(
-            t!("unknown version %{version}", version=format!("{:?}", (2, 1, 2))),
+            t!(
+                "unknown version %{version}",
+                version = format!("{:?}", (2, 1, 2))
+            ),
             "unknown version (2, 1, 2)"
         );
 
@@ -339,7 +342,10 @@ mod tests {
         );
 
         assert_eq!(
-            t!("unknown version %{version}", version=format!("{:?}", (2, 1, 2))),
+            t!(
+                "unknown version %{version}",
+                version = format!("{:?}", (2, 1, 2))
+            ),
             "leagan anaithnid (2, 1, 2)"
         );
 

@@ -198,8 +198,13 @@ fn from_string(name: &str) -> Result<Color, String> {
         '@' => {
             // For full flexibility, we need to use serde_json, given
             // crossterm's approach.
-            serde_json::from_str::<Color>(format!("\"{}\"", &name[1..]).as_str())
-                .map_err(|_| t!("Could not convert color name %{name} to Crossterm color", name=name).to_string())
+            serde_json::from_str::<Color>(format!("\"{}\"", &name[1..]).as_str()).map_err(|_| {
+                t!(
+                    "Could not convert color name %{name} to Crossterm color",
+                    name = name
+                )
+                .to_string()
+            })
         }
         _ => {
             let srgb = named::from_str(name).ok_or(t!("No such color in palette"))?;
@@ -463,7 +468,11 @@ impl ThemeManager {
             None => match self.load_theme_from_file(name, max_depth.unwrap_or(DEFAULT_MAX_DEPTH)) {
                 Ok(theme) => theme,
                 Err(err) => {
-                    log::warn!("{}: {:?}", t!("Could not load theme %{theme}", theme=name), err);
+                    log::warn!(
+                        "{}: {:?}",
+                        t!("Could not load theme %{theme}", theme = name),
+                        err
+                    );
                     built_ins.get("default").unwrap()
                 }
             },

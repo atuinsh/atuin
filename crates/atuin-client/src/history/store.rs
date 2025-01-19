@@ -95,7 +95,7 @@ impl HistoryRecord {
                 if !bytes.is_empty() {
                     bail!(t!(
                         "trailing bytes decoding HistoryRecord::Delete - malformed? got %{bytes}",
-                        bytes=format!("{bytes:?}")
+                        bytes = format!("{bytes:?}")
                     ));
                 }
 
@@ -103,7 +103,7 @@ impl HistoryRecord {
             }
 
             n => {
-                bail!(t!("unknown HistoryRecord type %{n}", n=n))
+                bail!(t!("unknown HistoryRecord type %{n}", n = n))
             }
         }
     }
@@ -202,7 +202,10 @@ impl HistoryStore {
 
                     HistoryRecord::deserialize(&decrypted.data, HISTORY_VERSION)
                 }
-                version => bail!(t!("unknown history version %{version}", version=format!("{version:?}"))),
+                version => bail!(t!(
+                    "unknown history version %{version}",
+                    version = format!("{version:?}")
+                )),
             }?;
 
             ret.push(hist);
@@ -315,7 +318,7 @@ impl HistoryStore {
             debug!("loaded {}", i.id);
 
             if store_ids.contains(&i.id) {
-                debug!("{}", t!("skipping {id} - already exists", id=i.id));
+                debug!("{}", t!("skipping {id} - already exists", id = i.id));
                 continue;
             }
 

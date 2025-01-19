@@ -596,8 +596,8 @@ impl Settings {
         let id = Settings::read_from_data_dir(HOST_ID_FILENAME);
 
         if let Some(id) = id {
-            let parsed =
-                Uuid::from_str(id.as_str()).expect(&t!("failed to parse host ID from local directory"));
+            let parsed = Uuid::from_str(id.as_str())
+                .expect(&t!("failed to parse host ID from local directory"));
             return Some(HostId(parsed));
         }
 
@@ -819,10 +819,19 @@ impl Settings {
         let config_dir = atuin_common::utils::config_dir();
         let data_dir = atuin_common::utils::data_dir();
 
-        create_dir_all(&config_dir)
-            .wrap_err_with(|| t!("could not create dir %{config_dir}", config_dir=format!("{config_dir:?}")))?;
+        create_dir_all(&config_dir).wrap_err_with(|| {
+            t!(
+                "could not create dir %{config_dir}",
+                config_dir = format!("{config_dir:?}")
+            )
+        })?;
 
-        create_dir_all(&data_dir).wrap_err_with(|| t!("could not create dir %{data_dir}", data_dir=format!("{data_dir:?}")))?;
+        create_dir_all(&data_dir).wrap_err_with(|| {
+            t!(
+                "could not create dir %{data_dir}",
+                data_dir = format!("{data_dir:?}")
+            )
+        })?;
 
         let mut config_file = if let Ok(p) = std::env::var("ATUIN_CONFIG_DIR") {
             PathBuf::from(p)
@@ -842,7 +851,8 @@ impl Settings {
                 FileFormat::Toml,
             ))
         } else {
-            let mut file = File::create(config_file).wrap_err(t!("could not create config file"))?;
+            let mut file =
+                File::create(config_file).wrap_err(t!("could not create config file"))?;
             file.write_all(EXAMPLE_CONFIG.as_bytes())
                 .wrap_err(t!("could not write default config file"))?;
 

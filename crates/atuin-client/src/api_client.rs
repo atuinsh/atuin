@@ -121,7 +121,9 @@ pub fn ensure_version(response: &Response) -> Result<bool> {
             Err(e) => bail!("{}: {:?}", t!("failed to parse server version"), e),
         }
     } else {
-        bail!(t!("Server not reporting its version: it is either too old or unhealthy"));
+        bail!(t!(
+            "Server not reporting its version: it is either too old or unhealthy"
+        ));
     }?;
 
     // If the client is newer than the server
@@ -140,9 +142,9 @@ async fn handle_resp_error(resp: Response) -> Result<Response> {
     let status = resp.status();
 
     if status == StatusCode::SERVICE_UNAVAILABLE {
-        bail!(
-            t!("Service unavailable: check https://status.atuin.sh (or get in touch with your host)")
-        );
+        bail!(t!(
+            "Service unavailable: check https://status.atuin.sh (or get in touch with your host)"
+        ));
     }
 
     if status == StatusCode::TOO_MANY_REQUESTS {
@@ -154,7 +156,10 @@ async fn handle_resp_error(resp: Response) -> Result<Response> {
             let reason = error.reason;
 
             if status.is_client_error() {
-                bail!("{}: {status} - {reason}.", t!("Invalid request to the service"))
+                bail!(
+                    "{}: {status} - {reason}.",
+                    t!("Invalid request to the service")
+                )
             }
 
             bail!(t!("There was an error with the atuin sync service, server error %{status}: %{reason}.\nIf the problem persists, contact the host", status=status, reason=reason))
@@ -304,7 +309,14 @@ impl<'a> Client<'a> {
         let url = format!("{}/api/v0/record", self.sync_addr);
         let url = Url::parse(url.as_str())?;
 
-        debug!("{}", t!("uploading %{records} records to %{url}", records=records.len(), url=url));
+        debug!(
+            "{}",
+            t!(
+                "uploading %{records} records to %{url}",
+                records = records.len(),
+                url = url
+            )
+        );
 
         let resp = self.client.post(url).json(records).send().await?;
         handle_resp_error(resp).await?;

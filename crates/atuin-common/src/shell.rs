@@ -53,7 +53,11 @@ impl Shell {
             .expect(&t!("Process with current pid does not exist"));
 
         let parent = sys
-            .process(process.parent().expect(&t!("Atuin running with no parent!")))
+            .process(
+                process
+                    .parent()
+                    .expect(&t!("Atuin running with no parent!")),
+            )
             .expect(&t!("Process with parent pid does not exist"));
 
         let shell = parent.name().trim().to_lowercase();
@@ -166,8 +170,12 @@ pub fn shell_name(parent: Option<&Process>) -> String {
             .process(get_current_pid().expect(&t!("Failed to get current PID")))
             .expect(&t!("Process with current pid does not exist"));
 
-        sys.process(process.parent().expect(&t!("Atuin running with no parent!")))
-            .expect(&t!("Process with parent pid does not exist"))
+        sys.process(
+            process
+                .parent()
+                .expect(&t!("Atuin running with no parent!")),
+        )
+        .expect(&t!("Process with parent pid does not exist"))
     };
 
     let shell = parent.name().trim().to_lowercase();

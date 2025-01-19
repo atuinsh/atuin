@@ -89,7 +89,10 @@ fn is_file(p: PathBuf) -> Result<PathBuf> {
     if p.is_file() {
         Ok(p)
     } else {
-        bail!(t!("Could not find history file %{histfile}. Try setting $HISTFILE", histfile=format!("{p:?}")))
+        bail!(t!(
+            "Could not find history file %{histfile}. Try setting $HISTFILE",
+            histfile = format!("{p:?}")
+        ))
     }
 }
 

@@ -335,7 +335,14 @@ impl Database for Sqlite {
     }
 
     async fn range(&self, from: OffsetDateTime, to: OffsetDateTime) -> Result<Vec<History>> {
-        debug!("{}", t!("listing history from %{from} to %{to}", from=format!("{from:?}"), to=format!("{to:?}")));
+        debug!(
+            "{}",
+            t!(
+                "listing history from %{from} to %{to}",
+                from = format!("{from:?}"),
+                to = format!("{to:?}")
+            )
+        );
 
         let res = sqlx::query(
             "select * from history where timestamp >= ?1 and timestamp <= ?2 order by timestamp asc",
@@ -699,7 +706,9 @@ impl Database for Sqlite {
         let total = total.sql().expect(&t!("issue in stats average query"));
         let average = average.sql().expect(&t!("issue in stats previous query"));
         let exits = exits.sql().expect(&t!("issue in stats exits query"));
-        let day_of_week = day_of_week.sql().expect(&t!("issue in stats day of week query"));
+        let day_of_week = day_of_week
+            .sql()
+            .expect(&t!("issue in stats day of week query"));
         let duration_over_time = duration_over_time
             .sql()
             .expect(&t!("issue in stats duration over time query"));

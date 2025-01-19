@@ -75,7 +75,7 @@ fn xonsh_db_path(xonsh_data_dir: Option<String>) -> Result<PathBuf> {
     } else {
         Err(eyre!(t!(
             "Could not find xonsh history db at: %{hist_file}",
-            hist_file=hist_file.to_string_lossy()
+            hist_file = hist_file.to_string_lossy()
         )))
     }
 }
@@ -131,7 +131,7 @@ impl Importer for XonshSqlite {
             count += 1;
         }
 
-        println!("{}", t!("Loaded: %{count}", count=count));
+        println!("{}", t!("Loaded: %{count}", count = count));
         Ok(())
     }
 }
