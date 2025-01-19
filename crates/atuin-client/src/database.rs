@@ -292,7 +292,7 @@ impl Database for Sqlite {
         unique: bool,
         include_deleted: bool,
     ) -> Result<Vec<History>> {
-        debug!(t!("listing history"));
+        debug!("{}", t!("listing history"));
 
         let mut query = SqlBuilder::select_from(SqlName::new("history").alias("h").baquoted());
         query.field("*").order_desc("timestamp");

@@ -305,7 +305,7 @@ mod test {
         };
 
         // this should err
-        let _ = decrypt(e2, &key1).expect_err(t!("expected an error decrypting with invalid key"));
+        let _ = decrypt(e2, &key1).expect_err(&t!("expected an error decrypting with invalid key"));
     }
 
     #[test]
