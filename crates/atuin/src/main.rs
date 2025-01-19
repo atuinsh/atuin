@@ -26,7 +26,7 @@ static HELP_TEMPLATE: &str = "\
 
 {all-args}{after-help}";
 
-i18n!("locales", fallback = "en");
+i18n!("locales");
 
 /// Magical shell history
 #[derive(Parser)]

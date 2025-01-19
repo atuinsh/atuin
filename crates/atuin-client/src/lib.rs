@@ -27,4 +27,4 @@ pub mod theme;
 
 mod utils;
 
-i18n!("locales", fallback = "en");
+i18n!("locales");
