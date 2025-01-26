@@ -90,6 +90,10 @@ pub struct Cmd {
     #[arg(long)]
     cmd_only: bool,
 
+    /// Terminate the output with a null, for better multiline handling
+    #[arg(long)]
+    print0: bool,
+
     /// Delete anything matching this query. Will not print out the match
     #[arg(long)]
     delete: bool,
@@ -255,7 +259,7 @@ impl Cmd {
                     &entries,
                     ListMode::from_flags(self.human, self.cmd_only),
                     format,
-                    false,
+                    self.print0,
                     true,
                     tz,
                 );
