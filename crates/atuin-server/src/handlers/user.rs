@@ -1,5 +1,6 @@
 use std::borrow::Borrow;
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::time::Duration;
 
 use argon2::{
@@ -8,7 +9,7 @@ use argon2::{
 };
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{ConnectInfo, Path, State},
     http::StatusCode,
 };
 use metrics::counter;
@@ -210,8 +211,9 @@ pub async fn change_password<DB: Database>(
     Ok(Json(ChangePasswordResponse {}))
 }
 
-#[instrument(skip_all, fields(user.username = login.username.as_str()))]
+#[instrument(skip_all, err, fields(ip = addr.ip().to_string(), user.username = login.username.as_str()))]
 pub async fn login<DB: Database>(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     state: State<AppState<DB>>,
     login: Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>, ErrorResponseStatus<'static>> {
