@@ -1,3 +1,5 @@
+use std::fmt;
+
 use atuin_common::api::{ErrorResponse, IndexResponse};
 use atuin_server_database::Database;
 use axum::{extract::State, http, response::IntoResponse, Json};
@@ -30,6 +32,12 @@ pub async fn index<DB: Database>(state: State<AppState<DB>>) -> Json<IndexRespon
         total_history: count,
         version,
     })
+}
+
+impl<'a> fmt::Display for ErrorResponseStatus<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "status={}", self.status)
+    }
 }
 
 impl<'a> IntoResponse for ErrorResponseStatus<'a> {
