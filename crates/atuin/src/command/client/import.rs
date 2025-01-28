@@ -9,7 +9,7 @@ use atuin_client::{
     database::Database,
     history::History,
     import::{
-        bash::Bash, fish::Fish, nu::Nu, nu_histdb::NuHistDb, replxx::Replxx, resh::Resh,
+        atuin_histdb::AtuinExternalDb, bash::Bash, fish::Fish, nu::Nu, nu_histdb::NuHistDb, replxx::Replxx, resh::Resh,
         xonsh::Xonsh, xonsh_sqlite::XonshSqlite, zsh::Zsh, zsh_histdb::ZshHistDb, Importer, Loader,
     },
 };
@@ -40,6 +40,8 @@ pub enum Cmd {
     Xonsh,
     /// Import history from xonsh sqlite db
     XonshSqlite,
+    /// Import history from a separate atuin history.db file
+    AtuinExternalDb
 }
 
 const BATCH_SIZE: usize = 100;
@@ -116,6 +118,7 @@ impl Cmd {
             Self::NuHistDb => import::<NuHistDb, DB>(db).await,
             Self::Xonsh => import::<Xonsh, DB>(db).await,
             Self::XonshSqlite => import::<XonshSqlite, DB>(db).await,
+            Self::AtuinExternalDb => import::<AtuinExternalDb, DB>(db).await,
         }
     }
 }
