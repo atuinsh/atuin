@@ -16,7 +16,7 @@ pub struct Bash {
 }
 
 fn default_histpath() -> Result<PathBuf> {
-    let user_dirs = UserDirs::new().ok_or_else(|| eyre!("could not find user directories"))?;
+    let user_dirs = UserDirs::new().ok_or_else(|| eyre!(t!("could not find user directories")))?;
     let home_dir = user_dirs.home_dir();
 
     Ok(home_dir.join(".bash_history"))
@@ -73,7 +73,7 @@ impl Importer for Bash {
                 LineType::Empty => {}                // do nothing
                 LineType::Timestamp(t) => {
                     if t < next_timestamp {
-                        warn!("Time reversal detected in Bash history! Commands may be ordered incorrectly.");
+                        warn!("{}", t!("Time reversal detected in Bash history! Commands may be ordered incorrectly."));
                     }
                     next_timestamp = t;
                 }

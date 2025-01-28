@@ -1,6 +1,9 @@
 #![forbid(unsafe_code)]
 
 #[macro_use]
+extern crate rust_i18n;
+
+#[macro_use]
 extern crate log;
 
 #[cfg(feature = "sync")]
@@ -23,3 +26,5 @@ pub mod settings;
 pub mod theme;
 
 mod utils;
+
+i18n!("locales");

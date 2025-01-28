@@ -1,5 +1,7 @@
 #![warn(clippy::pedantic, clippy::nursery)]
 #![allow(clippy::use_self, clippy::missing_const_for_fn)] // not 100% reliable
+#[macro_use]
+extern crate rust_i18n;
 
 use clap::Parser;
 use eyre::Result;
@@ -23,6 +25,8 @@ static HELP_TEMPLATE: &str = "\
   {usage}
 
 {all-args}{after-help}";
+
+i18n!("locales");
 
 /// Magical shell history
 #[derive(Parser)]

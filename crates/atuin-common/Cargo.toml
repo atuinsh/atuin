@@ -25,6 +25,8 @@ directories = { workspace = true }
 sysinfo = "0.30.7"
 base64 = { workspace = true }
 getrandom = "0.2"
+sys-locale = "0.3.2"
+rust-i18n = "3.1.2"
 
 lazy_static = "1.4.0"
 

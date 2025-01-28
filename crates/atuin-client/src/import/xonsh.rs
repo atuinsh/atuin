@@ -51,13 +51,13 @@ fn xonsh_hist_dir(xonsh_data_dir: Option<String>) -> Result<PathBuf> {
     }
 
     // otherwise, fall back to default
-    let base = BaseDirs::new().ok_or_else(|| eyre!("Could not determine home directory"))?;
+    let base = BaseDirs::new().ok_or_else(|| eyre!(t!("Could not determine home directory")))?;
 
     let hist_dir = base.data_dir().join("xonsh/history_json");
     if hist_dir.exists() || cfg!(test) {
         Ok(hist_dir)
     } else {
-        Err(eyre!("Could not find xonsh history files"))
+        Err(eyre!(t!("Could not find xonsh history files")))
     }
 }
 

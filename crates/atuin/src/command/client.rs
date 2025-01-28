@@ -94,12 +94,14 @@ pub enum Cmd {
 
 impl Cmd {
     pub fn run(self) -> Result<()> {
+        atuin_common::utils::set_locale();
+
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .unwrap();
 
-        let settings = Settings::new().wrap_err("could not load client settings")?;
+        let settings = Settings::new().wrap_err(t!("could not load client settings"))?;
         let theme_manager = theme::ThemeManager::new(settings.theme.debug, None);
         let res = runtime.block_on(self.run_inner(settings, theme_manager));
 

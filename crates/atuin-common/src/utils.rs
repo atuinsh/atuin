@@ -2,6 +2,8 @@ use std::borrow::Cow;
 use std::env;
 use std::path::PathBuf;
 
+use sys_locale::get_locale as sys_get_locale;
+
 use eyre::{eyre, Result};
 
 use base64::prelude::{Engine, BASE64_URL_SAFE_NO_PAD};
@@ -14,7 +16,7 @@ pub fn crypto_random_bytes<const N: usize>() -> [u8; N] {
     // idea to use getrandom for things such as passwords.
     let mut ret = [0u8; N];
 
-    getrandom(&mut ret).expect("Failed to generate random bytes!");
+    getrandom(&mut ret).expect(&t!("Failed to generate random bytes!"));
 
     ret
 }
@@ -43,6 +45,14 @@ pub fn has_git_dir(path: &str) -> bool {
     gitdir.exists()
 }
 
+pub fn set_locale() {
+    rust_i18n::set_locale(get_locale().as_str())
+}
+
+pub fn get_locale() -> String {
+    sys_get_locale().unwrap_or_else(|| String::from(crate::DEFAULT_LOCALE))
+}
+
 // detect if any parent dir has a git repo in it
 // I really don't want to bring in libgit for something simple like this
 // If we start to do anything more advanced, then perhaps
@@ -67,13 +77,13 @@ pub fn in_git_repo(path: &str) -> Option<PathBuf> {
 
 #[cfg(not(target_os = "windows"))]
 pub fn home_dir() -> PathBuf {
-    let home = std::env::var("HOME").expect("$HOME not found");
+    let home = std::env::var("HOME").expect(&t!("$HOME not found"));
     PathBuf::from(home)
 }
 
 #[cfg(target_os = "windows")]
 pub fn home_dir() -> PathBuf {
-    let home = std::env::var("USERPROFILE").expect("%userprofile% not found");
+    let home = std::env::var("USERPROFILE").expect(&t!("%userprofile% not found"));
     PathBuf::from(home)
 }
 
@@ -165,7 +175,7 @@ pub trait Escapable: AsRef<str> {
 
 pub fn unquote(s: &str) -> Result<String> {
     if s.chars().count() < 2 {
-        return Err(eyre!("not enough chars"));
+        return Err(eyre!(t!("not enough chars")));
     }
 
     let quote = s.chars().next().unwrap();
@@ -176,7 +186,7 @@ pub fn unquote(s: &str) -> Result<String> {
     }
 
     if s.chars().last().unwrap() != quote {
-        return Err(eyre!("unexpected eof, quotes do not match"));
+        return Err(eyre!(t!("unexpected eof, quotes do not match")));
     }
 
     // removes quote characters
@@ -298,5 +308,52 @@ mod tests {
         assert_ne!(crypto_random_string::<8>(), crypto_random_string::<8>());
         assert_ne!(crypto_random_string::<16>(), crypto_random_string::<16>());
         assert_ne!(crypto_random_string::<32>(), crypto_random_string::<32>());
+    }
+
+    #[test]
+    fn ensure_locale_linked_up() {
+        // While there is no value in testing standard functionality of an
+        // external lib, this integration test checks that the locale logic
+        // is in place and the translations are loadable.
+        rust_i18n::set_locale("en");
+
+        assert_eq!(
+            t!("Failed to generate random bytes!"),
+            "Failed to generate random bytes!"
+        );
+
+        // Unfortunately, there is not a built-in way to use the Debug
+        // formatter, so (in line with recommendations for Fill in the std::fmt
+        // docs: https://doc.rust-lang.org/std/fmt/#fillalignment) the next best
+        // option is to explicitly format! it before passing.
+        assert_eq!(
+            t!(
+                "unknown version %{version}",
+                version = format!("{:?}", (2, 1, 2))
+            ),
+            "unknown version (2, 1, 2)"
+        );
+
+        rust_i18n::set_locale("ga");
+
+        assert_eq!(
+            t!("Failed to generate random bytes!"),
+            "Theip ar ghiniúint beart randamach!"
+        );
+
+        assert_eq!(
+            t!(
+                "unknown version %{version}",
+                version = format!("{:?}", (2, 1, 2))
+            ),
+            "leagan anaithnid (2, 1, 2)"
+        );
+
+        rust_i18n::set_locale("zx");
+
+        assert_eq!(
+            t!("Failed to generate random bytes!"),
+            "Failed to generate random bytes!"
+        );
     }
 }

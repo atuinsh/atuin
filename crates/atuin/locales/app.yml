@@ -1,0 +1,81 @@
+_version: 2
+<enter>:
+  en: <enter>
+  ga: <iontráil>
+<esc>:
+  en: <esc>
+  ga: <éalaigh>
+<tab>:
+  en: <tab>
+  ga: <táb>
+Drawing inspector, but no stats:
+  en: Drawing inspector, but no stats
+  ga: Ag tarraingt cigire, ach níl statisticí ann
+Nothing to inspect:
+  en: Nothing to inspect
+  ga: Níl aon rud le scrúdú
+SRCH:
+  en: SRCH
+  ga: LORG
+"The inspector is new - please give feedback (good, or bad) at https://forum.atuin.sh":
+  en: "The inspector is new - please give feedback (good, or bad) at https://forum.atuin.sh"
+  ga: "Tá an cigire nua - tabhair aiseolas le do thoil (go maith nó go holc) ag https://forum.atuin.sh"
+delete:
+  en: delete
+  ga: scrios
+edit:
+  en: edit
+  ga: cuir in eager
+exit:
+  en: exit
+  ga: scoir
+inspect:
+  en: inspect
+  ga: scrúdaigh
+invalid tab index on input:
+  en: cluaisín neamhbhailí ar ionchur
+  ga: invalid tab index on input
+keys.ctrl-and:
+  en: <ctrl-%{key}>
+  ga: <ctrl-%{key}>
+search:
+  en: search
+  ga: cuardach
+should have been handled!:
+  en: should have been handled!
+  ga: ba chóir a bheith láimhseáilte!
+Search:
+  en: Search
+  ga: Cuardach
+Inspect:
+  en: Inspect
+  ga: Scrúdaigh
+history count:
+  en: history count
+  ga: comhaireamh na staire
+"%{time} ago":
+  en: "%{time} ago"
+  ga: "%{time} ó shin"
+time.y:
+  en: "%{value}y"
+  ga: "%{value}b"
+time.mo:
+  en: "%{value}mo"
+  ga: "%{value}mí"
+time.d:
+  en: "%{value}d"
+  ga: "%{value}l"
+time.h:
+  en: "%{value}h"
+  ga: "%{value}u"
+time.m:
+  en: "%{value}m"
+  ga: "%{value}n"
+time.s:
+  en: "%{value}s"
+time.ms:
+  en: "%{value}ms"
+time.us:
+  en: "%{value}us"
+time.ns:
+  en: "%{value}ns"

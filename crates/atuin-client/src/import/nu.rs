@@ -18,14 +18,14 @@ pub struct Nu {
 }
 
 fn get_histpath() -> Result<PathBuf> {
-    let base = BaseDirs::new().ok_or_else(|| eyre!("could not determine data directory"))?;
+    let base = BaseDirs::new().ok_or_else(|| eyre!(t!("could not determine data directory")))?;
     let config_dir = base.config_dir().join("nushell");
 
     let histpath = config_dir.join("history.txt");
     if histpath.exists() {
         Ok(histpath)
     } else {
-        Err(eyre!("Could not find history file."))
+        Err(eyre!(t!("Could not find history file.")))
     }
 }
 

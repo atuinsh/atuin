@@ -22,7 +22,7 @@ fn default_histpath() -> Result<PathBuf> {
     // oh-my-zsh sets HISTFILE=~/.zhistory
     // zsh has no default value for this var, but uses ~/.zhistory.
     // we could maybe be smarter about this in the future :)
-    let user_dirs = UserDirs::new().ok_or_else(|| eyre!("could not find user directories"))?;
+    let user_dirs = UserDirs::new().ok_or_else(|| eyre!(t!("could not find user directories")))?;
     let home_dir = user_dirs.home_dir();
 
     let mut candidates = [".zhistory", ".zsh_history"].iter();
@@ -35,9 +35,9 @@ fn default_histpath() -> Result<PathBuf> {
                 }
             }
             None => {
-                break Err(eyre!(
+                break Err(eyre!(t!(
                     "Could not find history file. Try setting and exporting $HISTFILE"
-                ))
+                )))
             }
         }
     }

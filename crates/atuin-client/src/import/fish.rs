@@ -19,7 +19,7 @@ pub struct Fish {
 
 /// see https://fishshell.com/docs/current/interactive.html#searchable-command-history
 fn default_histpath() -> Result<PathBuf> {
-    let base = BaseDirs::new().ok_or_else(|| eyre!("could not determine data directory"))?;
+    let base = BaseDirs::new().ok_or_else(|| eyre!(t!("could not determine data directory")))?;
     let data = std::env::var("XDG_DATA_HOME").map_or_else(
         |_| base.home_dir().join(".local").join("share"),
         PathBuf::from,
@@ -40,7 +40,7 @@ fn default_histpath() -> Result<PathBuf> {
     if histpath.exists() {
         Ok(histpath)
     } else {
-        Err(eyre!("Could not find history file."))
+        Err(eyre!(t!("Could not find history file.")))
     }
 }
 
