@@ -8,10 +8,10 @@ use atuin_common::record::DecryptedData;
 use atuin_common::utils::uuid_v7;
 
 use eyre::{bail, eyre, Result};
-use regex::RegexSet;
 
+use crate::secrets::SECRET_PATTERNS_RE;
+use crate::settings::Settings;
 use crate::utils::get_host_user;
-use crate::{secrets::SECRET_PATTERNS, settings::Settings};
 use time::OffsetDateTime;
 
 mod builder;
@@ -374,13 +374,10 @@ impl History {
     }
 
     pub fn should_save(&self, settings: &Settings) -> bool {
-        let secret_regex = SECRET_PATTERNS.iter().map(|f| f.1);
-        let secret_regex = RegexSet::new(secret_regex).expect("Failed to build secrets regex");
-
         !(self.command.starts_with(' ')
             || settings.history_filter.is_match(&self.command)
             || settings.cwd_filter.is_match(&self.cwd)
-            || (secret_regex.is_match(&self.command)) && settings.secrets_filter)
+            || (settings.secrets_filter && SECRET_PATTERNS_RE.is_match(&self.command)))
     }
 }
 
