@@ -63,28 +63,20 @@ New-Module -Name Atuin -ScriptBlock {
     function RunSearch {
         param([string]$ExtraArgs = "")
 
-        $line = $null
-        [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$line, [ref]$null)
-
-        # Atuin is started through Start-Process to avoid interfering with the current shell,
-        # and to capture its output which is provided in stderr (redirected to a temporary file).
-
-        $suggestion = ""
-        $resultFile = New-TemporaryFile
-        try {
-            $env:ATUIN_SHELL_POWERSHELL = "true"
-            $argString = "search -i $ExtraArgs -- $line"
-            Start-Process -Wait -NoNewWindow -RedirectStandardError $resultFile.FullName -FilePath atuin -ArgumentList $argString
-            $suggestion = (Get-Content -Raw $resultFile -Encoding UTF8 | Out-String).Trim()
-        }
-        finally {
-            $env:ATUIN_SHELL_POWERSHELL = $null
-            Remove-Item $resultFile
-        }
-
         $previousOutputEncoding = [System.Console]::OutputEncoding
+        $resultFile = New-TemporaryFile
+
         try {
             [System.Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+
+            $line = $null
+            [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$line, [ref]$null)
+
+            # Atuin is started through Start-Process to avoid interfering with the current shell.
+            $env:ATUIN_SHELL_POWERSHELL = "true"
+            $argString = "search -i --result-file ""$resultFile"" $ExtraArgs -- $line"
+            Start-Process -Wait -NoNewWindow -FilePath atuin -ArgumentList $argString
+            $suggestion = (Get-Content -Raw $resultFile -Encoding UTF8 | Out-String).Trim()
 
             # PSReadLine maintains its own cursor position, which will no longer be valid if Atuin scrolls the display in inline mode.
             # Fortunately, InvokePrompt can receive a new Y position and reset the internal state.
@@ -108,6 +100,8 @@ New-Module -Name Atuin -ScriptBlock {
         }
         finally {
             [System.Console]::OutputEncoding = $previousOutputEncoding
+            $env:ATUIN_SHELL_POWERSHELL = $null
+            Remove-Item $resultFile
         }
     }
 
