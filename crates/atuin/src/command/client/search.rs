@@ -160,17 +160,17 @@ impl Cmd {
             // when running the equivalent search, but deleting those entries that are
             // displayed with the search would leave any duplicates of those lines which may
             // or may not have been intended to be deleted.
-            println!("\"--limit\" is not compatible with deletion.");
+            eprintln!("\"--limit\" is not compatible with deletion.");
             return Ok(());
         }
 
         if self.delete && query.is_empty() {
-            println!("Please specify a query to match the items you wish to delete. If you wish to delete all history, pass --delete-it-all");
+            eprintln!("Please specify a query to match the items you wish to delete. If you wish to delete all history, pass --delete-it-all");
             return Ok(());
         }
 
         if self.delete_it_all && !query.is_empty() {
-            println!(
+            eprintln!(
                 "--delete-it-all will delete ALL of your history! It does not require a query."
             );
             return Ok(());
