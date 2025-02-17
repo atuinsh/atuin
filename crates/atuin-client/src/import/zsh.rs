@@ -21,11 +21,12 @@ pub struct Zsh {
 fn default_histpath() -> Result<PathBuf> {
     // oh-my-zsh sets HISTFILE=~/.zhistory
     // zsh has no default value for this var, but uses ~/.zhistory.
+    // zsh-newuser-install propose as default .histfile https://github.com/zsh-users/zsh/blob/master/Functions/Newuser/zsh-newuser-install#L794
     // we could maybe be smarter about this in the future :)
     let user_dirs = UserDirs::new().ok_or_else(|| eyre!("could not find user directories"))?;
     let home_dir = user_dirs.home_dir();
 
-    let mut candidates = [".zhistory", ".zsh_history"].iter();
+    let mut candidates = [".zhistory", ".zsh_history", ".histfile"].iter();
     loop {
         match candidates.next() {
             Some(candidate) => {
