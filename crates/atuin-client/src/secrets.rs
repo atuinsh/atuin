@@ -1,11 +1,14 @@
 // This file will probably trigger a lot of scanners. Sorry.
 
+use regex::RegexSet;
+use std::sync::LazyLock;
+
 pub enum TestValue<'a> {
     Single(&'a str),
     Multiple(&'a [&'a str]),
 }
 
-// A list of (name, regex, test), where test should match against regex
+/// A list of `(name, regex, test)`, where `test` should match against `regex`.
 pub static SECRET_PATTERNS: &[(&str, &str, TestValue)] = &[
     (
         "AWS Access Key ID",
@@ -113,6 +116,12 @@ pub static SECRET_PATTERNS: &[(&str, &str, TestValue)] = &[
         TestValue::Single("pul-683c2770662c51d960d72ec27613be7653c5cb26"),
     ),
 ];
+
+/// The `regex` expressions from [`SECRET_PATTERNS`] compiled into a `RegexSet`.
+pub static SECRET_PATTERNS_RE: LazyLock<RegexSet> = LazyLock::new(|| {
+    let exprs = SECRET_PATTERNS.iter().map(|f| f.1);
+    RegexSet::new(exprs).expect("Failed to build secrets regex")
+});
 
 #[cfg(test)]
 mod tests {
