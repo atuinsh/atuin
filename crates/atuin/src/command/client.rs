@@ -129,6 +129,7 @@ impl Cmd {
         match self {
             Self::History(history) => return history.run(&settings).await,
             Self::Init(init) => return init.run(&settings).await,
+            Self::Doctor => return doctor::run(&settings).await,
             _ => {}
         }
 
@@ -163,8 +164,6 @@ impl Cmd {
                 Ok(())
             }
 
-            Self::Doctor => doctor::run(&settings).await,
-
             Self::DefaultConfig => {
                 default_config::run();
                 Ok(())
@@ -175,7 +174,7 @@ impl Cmd {
             #[cfg(feature = "daemon")]
             Self::Daemon => daemon::run(settings, sqlite_store, db).await,
 
-            _ => unimplemented!(),
+            Self::History(_) | Self::Init(_) | Self::Doctor => unreachable!(),
         }
     }
 }

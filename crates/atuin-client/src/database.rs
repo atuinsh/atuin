@@ -118,6 +118,40 @@ pub trait Database: Send + Sync + 'static {
     async fn stats(&self, h: &History) -> Result<HistoryStats>;
 }
 
+macro_rules! create_sqlite_pool {
+    ($db:tt, $path:expr, $timeout:expr) => {{
+        use atuin_common::utils;
+
+        let path = $path.as_ref();
+        debug!("opening sqlite database at {:?}", path);
+
+        if utils::broken_symlink(path) {
+            eprintln!("Atuin: Sqlite db path ({path:?}) is a broken symlink. Unable to read or create replacement.");
+            std::process::exit(1);
+        }
+
+        if !path.exists() {
+            if let Some(dir) = path.parent() {
+                fs::create_dir_all(dir)?;
+            }
+        }
+
+        let opts = SqliteConnectOptions::from_str(path.as_os_str().to_str().unwrap())?
+            .journal_mode(SqliteJournalMode::Wal)
+            .create_if_missing(true);
+        let opts = $db::modify_connection_opts(opts);
+
+        let pool = SqlitePoolOptions::new()
+            .acquire_timeout(Duration::from_secs_f64($timeout))
+            .connect_with(opts)
+            .await?;
+
+        $db::setup_db(&pool).await?;
+        pool
+    }};
+}
+pub(crate) use create_sqlite_pool;
+
 // Intended for use on a developer machine and not a sync server.
 // TODO: implement IntoIterator
 #[derive(Debug, Clone)]
@@ -127,31 +161,14 @@ pub struct Sqlite {
 
 impl Sqlite {
     pub async fn new(path: impl AsRef<Path>, timeout: f64) -> Result<Self> {
-        let path = path.as_ref();
-        debug!("opening sqlite database at {:?}", path);
+        let pool = create_sqlite_pool!(Self, path, timeout);
+        Ok(Self { pool })
+    }
 
-        let create = !path.exists();
-        if create {
-            if let Some(dir) = path.parent() {
-                fs::create_dir_all(dir)?;
-            }
-        }
-
-        let opts = SqliteConnectOptions::from_str(path.as_os_str().to_str().unwrap())?
-            .journal_mode(SqliteJournalMode::Wal)
-            .optimize_on_close(true, None)
+    fn modify_connection_opts(opts: SqliteConnectOptions) -> SqliteConnectOptions {
+        opts.optimize_on_close(true, None)
             .synchronous(SqliteSynchronous::Normal)
             .with_regexp()
-            .create_if_missing(true);
-
-        let pool = SqlitePoolOptions::new()
-            .acquire_timeout(Duration::from_secs_f64(timeout))
-            .connect_with(opts)
-            .await?;
-
-        Self::setup_db(&pool).await?;
-
-        Ok(Self { pool })
     }
 
     pub async fn sqlite_version(&self) -> Result<String> {

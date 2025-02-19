@@ -19,6 +19,8 @@ use atuin_common::record::{
 };
 use uuid::Uuid;
 
+use crate::database::create_sqlite_pool;
+
 use super::encryption::PASETO_V4;
 use super::store::Store;
 
@@ -29,30 +31,12 @@ pub struct SqliteStore {
 
 impl SqliteStore {
     pub async fn new(path: impl AsRef<Path>, timeout: f64) -> Result<Self> {
-        let path = path.as_ref();
-
-        debug!("opening sqlite database at {:?}", path);
-
-        let create = !path.exists();
-        if create {
-            if let Some(dir) = path.parent() {
-                fs::create_dir_all(dir)?;
-            }
-        }
-
-        let opts = SqliteConnectOptions::from_str(path.as_os_str().to_str().unwrap())?
-            .journal_mode(SqliteJournalMode::Wal)
-            .foreign_keys(true)
-            .create_if_missing(true);
-
-        let pool = SqlitePoolOptions::new()
-            .acquire_timeout(Duration::from_secs_f64(timeout))
-            .connect_with(opts)
-            .await?;
-
-        Self::setup_db(&pool).await?;
-
+        let pool = create_sqlite_pool!(Self, path, timeout);
         Ok(Self { pool })
+    }
+
+    fn modify_connection_opts(opts: SqliteConnectOptions) -> SqliteConnectOptions {
+        opts.foreign_keys(true)
     }
 
     async fn setup_db(pool: &SqlitePool) -> Result<()> {
