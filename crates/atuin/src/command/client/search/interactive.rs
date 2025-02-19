@@ -1116,6 +1116,9 @@ pub async fn history(
                         match app.handle_input(settings, &event::read()?, &mut std::io::stdout())? {
                             InputAction::Continue => {},
                             InputAction::Delete(index) => {
+                                if results.is_empty() {
+                                    break;
+                                }
                                 app.results_len -= 1;
                                 let selected = app.results_state.selected();
                                 if selected == app.results_len {
