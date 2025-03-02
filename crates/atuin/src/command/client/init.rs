@@ -162,7 +162,13 @@ $env.config = (
                 .await?;
             }
             Shell::PowerShell => {
-                powershell::init_static(self.disable_up_arrow, self.disable_ctrl_r);
+                powershell::init(
+                    alias_store,
+                    var_store,
+                    self.disable_up_arrow,
+                    self.disable_ctrl_r,
+                )
+                .await?;
             }
         }
 
