@@ -53,20 +53,19 @@ if ! grep -q "atuin init bash" ~/.bashrc; then
   echo 'eval "$(atuin init bash)"' >> ~/.bashrc
 fi
 
-# Detect BSD or GNU sed
-if sed --version >/dev/null 2>&1; then
-    set -- "sed" "-i"   # GNU sed
-else
-    set -- "sed" "-i" ""   # BSD sed (macOS)
-fi
-
-SED_CMD="$*"
-
 if [ -f "$HOME/.config/fish/config.fish" ]; then
-    # Check if the line already exists to prevent duplicates
-    if ! grep -q "atuin init fish | source" "$HOME/.config/fish/config.fish"; then
-      $SED_CMD '/^if status is-interactive/,/^end/ s/^end$/    atuin init fish | source\
-end/' "$HOME/.config/fish/config.fish"
+  # Check if the line already exists to prevent duplicates
+  if ! grep -q "atuin init fish" "$HOME/.config/fish/config.fish"; then
+        # Detect BSD or GNU sed
+        if sed --version >/dev/null 2>&1; then
+          # GNU
+          sed -i '/^if status is-interactive/,/^end/ s/^end$/    atuin init fish | source\
+    end/' "$HOME/.config/fish/config.fish"
+        else
+          # BSD (macOS)
+            sed -i '' '/^if status is-interactive/,/^end/ s/^end$/    atuin init fish | source\
+end/' "$HOME/.config/fish/config.fish" 
+        fi
     fi
 fi
 
