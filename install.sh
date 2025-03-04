@@ -60,11 +60,11 @@ if [ -f "$HOME/.config/fish/config.fish" ]; then
         if sed --version >/dev/null 2>&1; then
           # GNU
           sed -i '/^if status is-interactive/,/^end/ s/^end$/    atuin init fish | source\
-    end/' "$HOME/.config/fish/config.fish"
+end/' "$HOME/.config/fish/config.fish"
         else
           # BSD (macOS)
             sed -i '' '/^if status is-interactive/,/^end/ s/^end$/    atuin init fish | source\
-end/' "$HOME/.config/fish/config.fish" 
+end/' "$HOME/.config/fish/config.fish"
         fi
     fi
 fi
