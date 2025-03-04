@@ -65,7 +65,7 @@ SED_CMD="$*"
 if [ -f "$HOME/.config/fish/config.fish" ]; then
     # Check if the line already exists to prevent duplicates
     if ! grep -q "atuin init fish | source" "$HOME/.config/fish/config.fish"; then
-        $SED_CMD sed -i '' '/^if status is-interactive/,/^end/ s/^end$/    atuin init fish | source\
+      $SED_CMD '/^if status is-interactive/,/^end/ s/^end$/    atuin init fish | source\
 end/' "$HOME/.config/fish/config.fish"
     fi
 fi
