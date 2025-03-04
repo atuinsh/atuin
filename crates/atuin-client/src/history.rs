@@ -375,6 +375,7 @@ impl History {
 
     pub fn should_save(&self, settings: &Settings) -> bool {
         !(self.command.starts_with(' ')
+            || self.command.is_empty()
             || settings.history_filter.is_match(&self.command)
             || settings.cwd_filter.is_match(&self.cwd)
             || (settings.secrets_filter && SECRET_PATTERNS_RE.is_match(&self.command)))
@@ -413,6 +414,13 @@ mod tests {
             .build()
             .into();
 
+        let empty: History = History::capture()
+            .timestamp(time::OffsetDateTime::now_utc())
+            .command("")
+            .cwd("/")
+            .build()
+            .into();
+
         let stripe_key: History = History::capture()
             .timestamp(time::OffsetDateTime::now_utc())
             .command("curl foo.com/bar?key=sk_test_1234567890abcdefghijklmnop")
@@ -436,6 +444,7 @@ mod tests {
 
         assert!(normal_command.should_save(&settings));
         assert!(!with_space.should_save(&settings));
+        assert!(!empty.should_save(&settings));
         assert!(!stripe_key.should_save(&settings));
         assert!(!secret_dir.should_save(&settings));
         assert!(!with_psql.should_save(&settings));
