@@ -112,6 +112,7 @@ pub struct Cmd {
     /// - the special value "local" (or "l") which refers to the system time zone
     /// - an offset from UTC (e.g. "+9", "-2:30")
     #[arg(long, visible_alias = "tz")]
+    #[arg(allow_hyphen_values = true)] // allows values like -5:00
     timezone: Option<Timezone>,
 
     /// Available variables: {command}, {directory}, {duration}, {user}, {host}, {time}, {exit} and
