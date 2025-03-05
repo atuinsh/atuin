@@ -330,6 +330,8 @@ pub struct Sync {
 #[derive(Clone, Debug, Deserialize, Default, Serialize)]
 pub struct Keys {
     pub scroll_exits: bool,
+    pub exit_past_line_start: bool,
+    pub accept_past_line_end: bool,
     pub prefix: String,
 }
 
@@ -777,6 +779,8 @@ impl Settings {
             .set_default("enter_accept", false)?
             .set_default("sync.records", true)?
             .set_default("keys.scroll_exits", true)?
+            .set_default("keys.accept_past_line_end", true)?
+            .set_default("keys.exit_past_line_start", true)?
             .set_default("keys.prefix", "a")?
             .set_default("keymap_mode", "emacs")?
             .set_default("keymap_mode_shell", "auto")?
