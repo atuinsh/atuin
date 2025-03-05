@@ -113,7 +113,7 @@ pub struct Cmd {
     /// - an offset from UTC (e.g. "+9", "-2:30")
     #[arg(long, visible_alias = "tz")]
     #[arg(allow_hyphen_values = true)] // allows values like -5:00
-    timezone: Option<Timezone>,
+    timezone: Option<Option<Timezone>>,
 
     /// Available variables: {command}, {directory}, {duration}, {user}, {host}, {time}, {exit} and
     /// {relativetime}.
@@ -254,7 +254,11 @@ impl Cmd {
                     None => Some(settings.history_format.as_str()),
                     _ => self.format.as_deref(),
                 };
-                let tz = self.timezone.unwrap_or(settings.timezone);
+                let tz = match self.timezone {
+                    Some(Some(tz)) => tz,            // User provided a value
+                    Some(None) => settings.timezone, // User passed `--timezone` without a value
+                    None => settings.timezone,       // User didn't pass `--timezone`
+                };
 
                 super::history::print_list(
                     &entries,
