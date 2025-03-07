@@ -1,3 +1,4 @@
+use super::Import;
 use atuin_dotfiles::store::{var::VarStore, AliasStore};
 use eyre::Result;
 
@@ -39,17 +40,16 @@ pub async fn init(
     vars: VarStore,
     disable_up_arrow: bool,
     disable_ctrl_r: bool,
-    only_env: bool,
-    skip_env: bool,
+    import: Import,
 ) -> Result<()> {
-    if !only_env {
+    if import != Import::EnvOnly {
         init_static(disable_up_arrow, disable_ctrl_r);
 
         let aliases = atuin_dotfiles::shell::fish::alias_config(&aliases).await;
         println!("{aliases}");
     }
 
-    if !skip_env {
+    if import != Import::AliasesOnly {
         let vars = atuin_dotfiles::shell::fish::var_config(&vars).await;
         println!("{vars}");
     }
