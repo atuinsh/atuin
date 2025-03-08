@@ -28,13 +28,13 @@ pub struct Cmd {
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
 pub enum Import {
-  /// Import environment variables and aliases
-  #[default]
-  All,
-  /// Only import environment variables (useful for `~/.zsh_env` or `~/.bash_env`)
-  EnvOnly,
-  /// Skip importing environment variables (useful if already imported)
-  AliasesOnly,
+    /// Import environment variables and aliases
+    #[default]
+    All,
+    /// Only import environment variables (useful for `~/.zsh_env` or `~/.bash_env`)
+    EnvOnly,
+    /// Skip importing environment variables (useful if already imported)
+    AliasesOnly,
 }
 
 #[derive(Clone, Copy, ValueEnum, Debug)]
