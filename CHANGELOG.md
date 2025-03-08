@@ -84,6 +84,7 @@ All notable changes to this project will be documented in this file.
 - Right Arrow to modify selected command ([#2453](https://github.com/atuinsh/atuin/issues/2453))
 - Provide additional clarity around key management ([#2467](https://github.com/atuinsh/atuin/issues/2467))
 - Add `atuin wrapped` ([#2493](https://github.com/atuinsh/atuin/issues/2493))
+- *(init)* Allow splitting environment variable loading from remainder of setup
 
 
 ### Miscellaneous Tasks
@@ -523,7 +524,7 @@ All notable changes to this project will be documented in this file.
 - *(install)* Discord broken link
 - *(shell)* Respect ZSH's $ZDOTDIR environment variable ([#1441](https://github.com/atuinsh/atuin/issues/1441))
 - *(stats)* Don't require all fields under [stats] ([#1437](https://github.com/atuinsh/atuin/issues/1437))
-- *(stats)* Time now_local not working 
+- *(stats)* Time now_local not working
 - *(zsh)* Zsh_autosuggest_strategy for no-unset environment ([#1486](https://github.com/atuinsh/atuin/issues/1486))
 
 

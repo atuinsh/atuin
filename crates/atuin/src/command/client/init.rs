@@ -21,6 +21,20 @@ pub struct Cmd {
     /// Disable the binding of the Up Arrow key to atuin
     #[clap(long)]
     disable_up_arrow: bool,
+
+    #[clap(long, default_value_t, value_enum)]
+    import: Import,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
+pub enum Import {
+    /// Import environment variables and aliases
+    #[default]
+    All,
+    /// Only import environment variables (useful for `~/.zsh_env` or `~/.bash_env`)
+    EnvOnly,
+    /// Skip importing environment variables (useful if already imported)
+    AliasesOnly,
 }
 
 #[derive(Clone, Copy, ValueEnum, Debug)]
@@ -122,6 +136,7 @@ $env.config = (
                     var_store,
                     self.disable_up_arrow,
                     self.disable_ctrl_r,
+                    self.import,
                 )
                 .await?;
             }
@@ -131,6 +146,7 @@ $env.config = (
                     var_store,
                     self.disable_up_arrow,
                     self.disable_ctrl_r,
+                    self.import,
                 )
                 .await?;
             }
@@ -140,6 +156,7 @@ $env.config = (
                     var_store,
                     self.disable_up_arrow,
                     self.disable_ctrl_r,
+                    self.import,
                 )
                 .await?;
             }
@@ -150,6 +167,7 @@ $env.config = (
                     var_store,
                     self.disable_up_arrow,
                     self.disable_ctrl_r,
+                    self.import,
                 )
                 .await?;
             }
