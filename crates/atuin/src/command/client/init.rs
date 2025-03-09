@@ -159,6 +159,11 @@ $env.config = (
     }
 
     pub async fn run(self, settings: &Settings) -> Result<()> {
+        if !settings.paths_ok() {
+            eprintln!("Atuin settings paths are broken. Disabling atuin shell hooks. Run `atuin doctor` to diagnose.");
+            return Ok(());
+        }
+
         if settings.dotfiles.enabled {
             self.dotfiles_init(settings).await?;
         } else {

@@ -17,6 +17,7 @@ use sqlx::{
 use atuin_common::record::{
     EncryptedData, Host, HostId, Record, RecordId, RecordIdx, RecordStatus,
 };
+use atuin_common::utils;
 use uuid::Uuid;
 
 use super::encryption::PASETO_V4;
@@ -33,8 +34,12 @@ impl SqliteStore {
 
         debug!("opening sqlite database at {:?}", path);
 
-        let create = !path.exists();
-        if create {
+        if utils::broken_symlink(path) {
+            eprintln!("Atuin: Sqlite db path ({path:?}) is a broken symlink. Unable to read or create replacement.");
+            std::process::exit(1);
+        }
+
+        if !path.exists() {
             if let Some(dir) = path.parent() {
                 fs::create_dir_all(dir)?;
             }
