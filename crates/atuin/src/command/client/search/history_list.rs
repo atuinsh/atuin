@@ -48,7 +48,7 @@ impl ListState {
     }
 }
 
-impl<'a> StatefulWidget for HistoryList<'a> {
+impl StatefulWidget for HistoryList<'_> {
     type State = ListState;
 
     fn render(mut self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {

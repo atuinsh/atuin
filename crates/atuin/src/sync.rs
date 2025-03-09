@@ -7,8 +7,8 @@ use atuin_client::{
 };
 use atuin_common::record::RecordId;
 
-/// This is the only crate that ties together all other crates.
-/// Therefore, it's the only crate where functions tying together all stores can live
+// This is the only crate that ties together all other crates.
+// Therefore, it's the only crate where functions tying together all stores can live
 
 /// Rebuild all stores after a sync
 /// Note: for history, this only does an _incremental_ sync. Hence the need to specify downloaded
