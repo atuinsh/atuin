@@ -15,14 +15,14 @@ pub struct Cmd {
 
 impl Cmd {
     pub async fn run(self, settings: &Settings) -> Result<()> {
-        run(settings, &self.current_password, &self.new_password).await
+        run(settings, self.current_password, self.new_password).await
     }
 }
 
 pub async fn run(
     settings: &Settings,
-    current_password: &Option<String>,
-    new_password: &Option<String>,
+    current_password: Option<String>,
+    new_password: Option<String>,
 ) -> Result<()> {
     let client = api_client::Client::new(
         &settings.sync_address,

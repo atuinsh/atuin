@@ -49,7 +49,7 @@ impl Cmd {
             return Ok(());
         }
 
-        let username = or_user_input(&self.username, "username");
+        let username = or_user_input(self.username.clone(), "username");
         let password = self.password.clone().unwrap_or_else(read_user_password);
 
         let key_path = settings.key_path.as_str();
@@ -61,7 +61,10 @@ impl Cmd {
         println!("Do not share this key with anyone");
         println!("\nRead more here: https://docs.atuin.sh/guide/sync/#login \n");
 
-        let key = or_user_input(&self.key, "encryption key [blank to use existing key file]");
+        let key = or_user_input(
+            self.key.clone(),
+            "encryption key [blank to use existing key file]",
+        );
 
         // if provided, the key may be EITHER base64, or a bip mnemonic
         // try to normalize on base64
@@ -152,8 +155,8 @@ impl Cmd {
     }
 }
 
-pub(super) fn or_user_input(value: &'_ Option<String>, name: &'static str) -> String {
-    value.clone().unwrap_or_else(|| read_user_input(name))
+pub(super) fn or_user_input(value: Option<String>, name: &'static str) -> String {
+    value.unwrap_or_else(|| read_user_input(name))
 }
 
 pub(super) fn read_user_password() -> String {

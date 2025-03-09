@@ -18,15 +18,15 @@ pub struct Cmd {
 
 impl Cmd {
     pub async fn run(self, settings: &Settings) -> Result<()> {
-        run(settings, &self.username, &self.email, &self.password).await
+        run(settings, self.username, self.email, self.password).await
     }
 }
 
 pub async fn run(
     settings: &Settings,
-    username: &Option<String>,
-    email: &Option<String>,
-    password: &Option<String>,
+    username: Option<String>,
+    email: Option<String>,
+    password: Option<String>,
 ) -> Result<()> {
     use super::login::or_user_input;
     println!("Registering for an Atuin Sync account");

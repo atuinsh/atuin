@@ -145,7 +145,7 @@ impl<'db, DB: Database> HistoryImporter<'db, DB> {
 }
 
 #[async_trait]
-impl<'db, DB: Database> Loader for HistoryImporter<'db, DB> {
+impl<DB: Database> Loader for HistoryImporter<'_, DB> {
     async fn push(&mut self, hist: History) -> Result<()> {
         self.pb.inc(1);
         self.buf.push(hist);
