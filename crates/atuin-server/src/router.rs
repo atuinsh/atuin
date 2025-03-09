@@ -111,6 +111,7 @@ pub struct AppState<DB: Database> {
 pub fn router<DB: Database>(database: DB, settings: Settings<DB::Settings>) -> Router {
     let routes = Router::new()
         .route("/", get(handlers::index))
+        .route("/healthz", get(handlers::health::health_check))
         .route("/sync/count", get(handlers::history::count))
         .route("/sync/history", get(handlers::history::list))
         .route("/sync/calendar/:focus", get(handlers::history::calendar))
