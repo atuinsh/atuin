@@ -61,7 +61,10 @@ impl Cmd {
         println!("Do not share this key with anyone");
         println!("\nRead more here: https://docs.atuin.sh/guide/sync/#login \n");
 
-        let key = or_user_input(self.key.clone(), "encryption key [blank to use existing key file]");
+        let key = or_user_input(
+            self.key.clone(),
+            "encryption key [blank to use existing key file]",
+        );
 
         // if provided, the key may be EITHER base64, or a bip mnemonic
         // try to normalize on base64
