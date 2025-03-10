@@ -138,6 +138,11 @@ pub fn is_xonsh() -> bool {
     env::var("ATUIN_SHELL_XONSH").is_ok()
 }
 
+pub fn is_powershell() -> bool {
+    // only set on powershell
+    env::var("ATUIN_SHELL_POWERSHELL").is_ok()
+}
+
 /// Extension trait for anything that can behave like a string to make it easy to escape control
 /// characters.
 ///
