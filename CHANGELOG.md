@@ -6,6 +6,50 @@ All notable changes to this project will be documented in this file.
 
 ### Bug Fixes
 
+- *(bash)* Fix preexec of child Bash session started by enter_accept ([#2558](https://github.com/atuinsh/atuin/issues/2558))
+- *(wrapped)* Fix crash when history is empty ([#2508](https://github.com/atuinsh/atuin/issues/2508))
+- Add .histfile as file to look for when doing atuin import zsh ([#2588](https://github.com/atuinsh/atuin/issues/2588))
+- Panic when invoking delete on empty tui ([#2584](https://github.com/atuinsh/atuin/issues/2584))
+- Sql files checksums ([#2601](https://github.com/atuinsh/atuin/issues/2601))
+- Up binding with fish 4.0 ([#2613](https://github.com/atuinsh/atuin/issues/2613)) ([#2616](https://github.com/atuinsh/atuin/issues/2616))
+- Don't save empty commands ([#2605](https://github.com/atuinsh/atuin/issues/2605))
+- Improve broken symlink error handling ([#2589](https://github.com/atuinsh/atuin/issues/2589))
+
+
+### Features
+
+- *(client)* Update AWS secrets env var handling checks ([#2501](https://github.com/atuinsh/atuin/issues/2501))
+- *(health)* Add health check endpoint at `/healthz` ([#2549](https://github.com/atuinsh/atuin/issues/2549))
+- *(wrapped)* Add more pkg managers ([#2503](https://github.com/atuinsh/atuin/issues/2503))
+- Add the --print0 option to search ([#2562](https://github.com/atuinsh/atuin/issues/2562))
+- Make new arrow key behavior configurable ([#2606](https://github.com/atuinsh/atuin/issues/2606))
+
+
+### Miscellaneous Tasks
+
+- Remove unneeded dependencies ([#2523](https://github.com/atuinsh/atuin/issues/2523))
+- Update rust toolchain to 1.85 ([#2618](https://github.com/atuinsh/atuin/issues/2618))
+
+
+### Performance
+
+- Cache `SECRET_PATTERNS`'s `RegexSet` ([#2570](https://github.com/atuinsh/atuin/issues/2570))
+
+
+### Styling
+
+- Avoid calling `unwrap()` when we don't have to ([#2519](https://github.com/atuinsh/atuin/issues/2519))
+
+
+### Flake.lock
+
+- Update ([#2463](https://github.com/atuinsh/atuin/issues/2463))
+
+
+## [18.4.0] - 2024-12-27
+
+### Bug Fixes
+
 - *(crate)* Add missing description ([#2106](https://github.com/atuinsh/atuin/issues/2106))
 - *(crate)* Add description to daemon crate ([#2107](https://github.com/atuinsh/atuin/issues/2107))
 - *(daemon)* Add context to error when unable to connect ([#2394](https://github.com/atuinsh/atuin/issues/2394))
