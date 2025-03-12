@@ -42,7 +42,9 @@ thiserror = "1.0"
 rustix = { version = "0.38.34", features = ["process", "fs"] }
 tower = "0.4"
 tracing = "0.1"
-aws-lc-rs = { version = "1.12", features = ["bindgen"] }
+rustls = { version = "0.23", default-features = true }
+aws-lc-rs = { version = "1", features = ["bindgen"] }
+
 
 [workspace.dependencies.tracing-subscriber]
 version = "0.3"
