@@ -746,7 +746,7 @@ impl Settings {
             .set_default("auto_sync", true)?
             .set_default("update_check", cfg!(feature = "check-update"))?
             .set_default("sync_address", "https://api.atuin.sh")?
-            .set_default("sync_frequency", "10m")?
+            .set_default("sync_frequency", "5m")?
             .set_default("search_mode", "fuzzy")?
             .set_default("filter_mode", None::<String>)?
             .set_default("style", "compact")?
