@@ -823,34 +823,58 @@ impl State {
     fn build_help(&self, settings: &Settings, theme: &Theme) -> Paragraph {
         match self.tab_index {
             // search
-            0 => Paragraph::new(Text::from(Line::from(vec![
-                Span::styled("<esc>", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(": exit"),
-                Span::raw(", "),
-                Span::styled("<tab>", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(": edit"),
-                Span::raw(", "),
-                Span::styled("<enter>", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(if settings.enter_accept {
-                    ": run"
-                } else {
-                    ": edit"
-                }),
-                Span::raw(", "),
-                Span::styled("<ctrl-o>", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(": inspect"),
-            ]))),
+            0 => Paragraph::new(Text::from(Line::from({
+                let mut line = vec![
+                    Span::styled("<esc>", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::raw(": exit"),
+                    Span::raw(", "),
+                    Span::styled("<tab>", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::raw(": edit"),
+                    Span::raw(", "),
+                    Span::styled("<enter>", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::raw(if settings.enter_accept {
+                        ": run"
+                    } else {
+                        ": edit"
+                    }),
+                    Span::raw(", "),
+                    Span::styled("<ctrl-o>", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::raw(": inspect"),
+                ];
 
-            1 => Paragraph::new(Text::from(Line::from(vec![
-                Span::styled("<esc>", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(": exit"),
-                Span::raw(", "),
-                Span::styled("<ctrl-o>", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(": search"),
-                Span::raw(", "),
-                Span::styled("<ctrl-d>", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(": delete"),
-            ]))),
+                if settings.search.filters.len() > 1 {
+                    line.extend_from_slice(&[
+                        Span::raw(", "),
+                        Span::styled("<ctrl-r>", Style::default().add_modifier(Modifier::BOLD)),
+                        Span::raw(": filter mode"),
+                    ]);
+                }
+
+                line
+            }))),
+
+            1 => Paragraph::new(Text::from(Line::from({
+                let mut line = vec![
+                    Span::styled("<esc>", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::raw(": exit"),
+                    Span::raw(", "),
+                    Span::styled("<ctrl-o>", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::raw(": search"),
+                    Span::raw(", "),
+                    Span::styled("<ctrl-d>", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::raw(": delete"),
+                ];
+
+                if settings.search.filters.len() > 1 {
+                    line.extend_from_slice(&[
+                        Span::raw(", "),
+                        Span::styled("<ctrl-r>", Style::default().add_modifier(Modifier::BOLD)),
+                        Span::raw(": filter mode"),
+                    ]);
+                }
+
+                line
+            }))),
 
             _ => unreachable!("invalid tab index"),
         }
