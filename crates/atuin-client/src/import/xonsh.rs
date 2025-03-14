@@ -10,7 +10,7 @@ use time::OffsetDateTime;
 use uuid::timestamp::{context::NoContext, Timestamp};
 use uuid::Uuid;
 
-use super::{get_histpath, Importer, Loader};
+use super::{get_histdir, Importer, Loader};
 use crate::history::History;
 use crate::utils::get_host_user;
 
@@ -102,7 +102,7 @@ impl Importer for Xonsh {
     async fn new() -> Result<Self> {
         // wrap xonsh-specific path resolver in general one so that it respects $HISTPATH
         let xonsh_data_dir = env::var("XONSH_DATA_DIR").ok();
-        let hist_dir = get_histpath(|| xonsh_hist_dir(xonsh_data_dir))?;
+        let hist_dir = get_histdir(|| xonsh_hist_dir(xonsh_data_dir))?;
         let sessions = load_sessions(&hist_dir)?;
         let hostname = get_host_user();
         Ok(Xonsh { sessions, hostname })
