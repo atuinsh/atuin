@@ -24,14 +24,15 @@ rand = { workspace = true }
 tokio = { workspace = true }
 async-trait = { workspace = true }
 axum = "0.7"
-axum-server = { version = "0.7", features = ["tls-rustls-no-provider"] }
+axum-server = { version = "0.7", features = ["tls-rustls"] }
 fs-err = { workspace = true }
 tower = { workspace = true }
 tower-http = { version = "0.5", features = ["trace"] }
 reqwest = { workspace = true }
-rustls = { version = "0.23", features = ["ring"], default-features = false }
+rustls = { workspace = true }
+aws-lc-rs = { version = "1", features = ["bindgen"] }
 argon2 = "0.5"
 semver = { workspace = true }
 metrics-exporter-prometheus = "0.12.1"
 metrics = "0.21.1"
-postmark = {version= "0.10.2", features=["reqwest", "reqwest-rustls-tls"]}
+postmark = { version = "0.10.2", features = ["reqwest", "reqwest-rustls-tls"] }

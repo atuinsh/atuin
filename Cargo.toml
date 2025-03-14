@@ -42,19 +42,23 @@ thiserror = "1.0"
 rustix = { version = "0.38.34", features = ["process", "fs"] }
 tower = "0.4"
 tracing = "0.1"
+rustls = { version = "0.23", default-features = true }
+aws-lc-rs = { version = "1", features = ["bindgen"] }
+
 
 [workspace.dependencies.tracing-subscriber]
 version = "0.3"
 features = ["ansi", "fmt", "registry", "env-filter"]
 
 [workspace.dependencies.reqwest]
-version = "0.11"
+version = "0.12"
 features = ["json", "rustls-tls-native-roots"]
 default-features = false
 
 [workspace.dependencies.sqlx]
 version = "0.8"
 features = ["runtime-tokio-rustls", "time", "postgres", "uuid"]
+
 
 # The profile that 'cargo dist' will build with
 [profile.dist]

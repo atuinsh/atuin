@@ -59,10 +59,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: install gcc-multilib
+        run: sudo apt update && sudo apt install gcc-multilib
+
       - name: Install cross
         uses: taiki-e/install-action@v2
         with:
           tool: cross
+      - name: Install bindgen-cli
+        uses: taiki-e/cache-cargo-install-action@v2
+        with:
+          tool: bindgen-cli
 
       - uses: actions/cache@v4
         with:
