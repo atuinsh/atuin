@@ -6,7 +6,7 @@ use eyre::{eyre, Result};
 use itertools::Itertools;
 use time::{Duration, OffsetDateTime};
 
-use super::{get_histpath, unix_byte_lines, Importer, Loader};
+use super::{get_histfile, unix_byte_lines, Importer, Loader};
 use crate::history::History;
 use crate::import::read_to_end;
 
@@ -27,7 +27,7 @@ impl Importer for Bash {
     const NAME: &'static str = "bash";
 
     async fn new() -> Result<Self> {
-        let bytes = read_to_end(get_histpath(default_histpath)?)?;
+        let bytes = read_to_end(get_histfile(default_histpath)?)?;
         Ok(Self { bytes })
     }
 
