@@ -18,6 +18,7 @@ pub mod xonsh;
 pub mod xonsh_sqlite;
 pub mod zsh;
 pub mod zsh_histdb;
+pub mod atuin_histdb;
 
 #[async_trait]
 pub trait Importer: Sized {

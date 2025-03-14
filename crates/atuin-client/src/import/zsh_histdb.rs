@@ -48,11 +48,6 @@ use crate::import::Loader;
 use crate::utils::{get_hostname, get_username};
 
 #[derive(sqlx::FromRow, Debug)]
-pub struct HistDbEntryCount {
-    pub count: usize,
-}
-
-#[derive(sqlx::FromRow, Debug)]
 pub struct HistDbEntry {
     pub id: i64,
     pub start_time: PrimitiveDateTime,
