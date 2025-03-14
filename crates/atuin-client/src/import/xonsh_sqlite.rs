@@ -10,7 +10,7 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 use uuid::timestamp::{Timestamp, context::NoContext};
 
-use super::{Importer, Loader, get_histpath};
+use super::{Importer, Loader, get_histfile_path};
 use crate::history::History;
 use crate::utils::get_host_user;
 
@@ -93,7 +93,7 @@ impl Importer for XonshSqlite {
     async fn new() -> Result<Self> {
         // wrap xonsh-specific path resolver in general one so that it respects $HISTPATH
         let xonsh_data_dir = env::var("XONSH_DATA_DIR").ok();
-        let db_path = get_histpath(|| xonsh_db_path(xonsh_data_dir))?;
+        let db_path = get_histfile_path(|| xonsh_db_path(xonsh_data_dir))?;
         let connection_str = db_path.to_str().ok_or_else(|| {
             eyre!(
                 "Invalid path for SQLite database: {}",
