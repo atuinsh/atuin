@@ -214,36 +214,48 @@ mod tests {
     }
 
     fn test_config_dir_xdg() {
-        env::remove_var("HOME");
-        env::set_var("XDG_CONFIG_HOME", "/home/user/custom_config");
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::remove_var("HOME") };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::set_var("XDG_CONFIG_HOME", "/home/user/custom_config") };
         assert_eq!(
             config_dir(),
             PathBuf::from("/home/user/custom_config/atuin")
         );
-        env::remove_var("XDG_CONFIG_HOME");
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::remove_var("XDG_CONFIG_HOME") };
     }
 
     fn test_config_dir() {
-        env::set_var("HOME", "/home/user");
-        env::remove_var("XDG_CONFIG_HOME");
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::set_var("HOME", "/home/user") };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::remove_var("XDG_CONFIG_HOME") };
 
         assert_eq!(config_dir(), PathBuf::from("/home/user/.config/atuin"));
 
-        env::remove_var("HOME");
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::remove_var("HOME") };
     }
 
     fn test_data_dir_xdg() {
-        env::remove_var("HOME");
-        env::set_var("XDG_DATA_HOME", "/home/user/custom_data");
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::remove_var("HOME") };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::set_var("XDG_DATA_HOME", "/home/user/custom_data") };
         assert_eq!(data_dir(), PathBuf::from("/home/user/custom_data/atuin"));
-        env::remove_var("XDG_DATA_HOME");
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::remove_var("XDG_DATA_HOME") };
     }
 
     fn test_data_dir() {
-        env::set_var("HOME", "/home/user");
-        env::remove_var("XDG_DATA_HOME");
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::set_var("HOME", "/home/user") };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::remove_var("XDG_DATA_HOME") };
         assert_eq!(data_dir(), PathBuf::from("/home/user/.local/share/atuin"));
-        env::remove_var("HOME");
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::remove_var("HOME") };
     }
 
     #[test]

@@ -100,7 +100,7 @@ CREATE TABLE test( stamp DateTime('UTC'))ENGINE = MergeTreePARTITION BY toDat
 
         // simple wrapper for replxx history entry
         macro_rules! history {
-            ($timestamp:expr, $command:expr) => {
+            ($timestamp:expr_2021, $command:expr_2021) => {
                 let h = history.next().expect("missing entry in history");
                 assert_eq!(h.command.as_str(), $command);
                 assert_eq!(h.timestamp.unix_timestamp(), $timestamp);

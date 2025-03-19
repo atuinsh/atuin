@@ -75,7 +75,7 @@ impl Cmd {
             match bip39::Mnemonic::from_phrase(&key, bip39::Language::English) {
                 Ok(mnemonic) => encode_key(Key::from_slice(mnemonic.entropy()))?,
                 Err(err) => {
-                    if let Some(err) = err.downcast_ref::<bip39::ErrorKind>() {
+                    match err.downcast_ref::<bip39::ErrorKind>() { Some(err) => {
                         match err {
                             // assume they copied in the base64 key
                             bip39::ErrorKind::InvalidWord => key,
@@ -88,10 +88,10 @@ impl Cmd {
                                 bail!("key was not the correct length")
                             }
                         }
-                    } else {
+                    } _ => {
                         // unknown error. assume they copied the base64 key
                         key
-                    }
+                    }}
                 }
             }
         };

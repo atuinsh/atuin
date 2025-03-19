@@ -201,13 +201,13 @@ pub async fn send_verification<DB: Database>(
     }
 
     // TODO: if we ever add another mail provider, can match on them all here.
-    let postmark_token = if let Some(token) = settings.mail.postmark.token {
+    let postmark_token = match settings.mail.postmark.token { Some(token) => {
         token
-    } else {
+    } _ => {
         error!("Failed to verify email: got None for postmark token");
         return Err(ErrorResponse::reply("mail not configured")
             .with_status(StatusCode::INTERNAL_SERVER_ERROR));
-    };
+    }};
 
     let db = &state.0.database;
 

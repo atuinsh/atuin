@@ -1,6 +1,6 @@
 [package]
 name = "atuin-common"
-edition = "2021"
+edition = "2024"
 description = "common library for atuin"
 
 rust-version = { workspace = true }

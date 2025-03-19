@@ -246,11 +246,11 @@ impl HistoryStore {
         for id in ids {
             let record = self.store.get(*id).await;
 
-            let record = if let Ok(record) = record {
+            let record = match record { Ok(record) => {
                 record
-            } else {
+            } _ => {
                 continue;
-            };
+            }};
 
             if record.tag != HISTORY_TAG {
                 continue;

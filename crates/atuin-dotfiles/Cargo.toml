@@ -1,7 +1,7 @@
 [package]
 name = "atuin-dotfiles"
 description = "The dotfiles crate for Atuin"
-edition = "2021"
+edition = "2024"
 version = { workspace = true }
 
 authors.workspace = true
