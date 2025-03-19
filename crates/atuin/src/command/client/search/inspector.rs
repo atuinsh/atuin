@@ -90,9 +90,11 @@ pub fn draw_stats_table(
 ) {
     let duration = Duration::from_nanos(u64_or_zero(history.duration));
     let avg_duration = Duration::from_nanos(stats.average_duration);
+    let (host, user) = history.hostname.split_once(':').unwrap_or(("", ""));
 
     let rows = [
-        Row::new(vec!["Host:User".to_string(), history.hostname.to_string()]),
+        Row::new(vec!["Host".to_string(), host.to_string()]),
+        Row::new(vec!["User".to_string(), user.to_string()]),
         Row::new(vec!["Time".to_string(), history.timestamp.to_string()]),
         Row::new(vec!["Duration".to_string(), format_duration(duration)]),
         Row::new(vec![
