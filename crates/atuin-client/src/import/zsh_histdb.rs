@@ -178,6 +178,8 @@ mod test {
     use sqlx::sqlite::SqlitePoolOptions;
     use std::env;
     #[tokio::test(flavor = "multi_thread")]
+
+    #[allow(unsafe_code)]
     async fn test_env_vars() {
         let test_env_db = "nonstd-zsh-history.db";
         let key = "HISTDB_FILE";

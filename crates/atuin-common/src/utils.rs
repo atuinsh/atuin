@@ -194,6 +194,7 @@ pub fn unquote(s: &str) -> Result<String> {
 
 impl<T: AsRef<str>> Escapable for T {}
 
+#[allow(unsafe_code)]
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_ne;
