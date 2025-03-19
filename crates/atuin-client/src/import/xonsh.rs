@@ -4,13 +4,13 @@ use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 use directories::BaseDirs;
-use eyre::{eyre, Result};
+use eyre::{Result, eyre};
 use serde::Deserialize;
 use time::OffsetDateTime;
-use uuid::timestamp::{context::NoContext, Timestamp};
 use uuid::Uuid;
+use uuid::timestamp::{Timestamp, context::NoContext};
 
-use super::{get_histpath, Importer, Loader};
+use super::{Importer, Loader, get_histpath};
 use crate::history::History;
 use crate::utils::get_host_user;
 

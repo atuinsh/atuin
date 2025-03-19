@@ -12,7 +12,7 @@ use tokio::net::UnixStream;
 use atuin_client::history::History;
 
 use crate::history::{
-    history_client::HistoryClient as HistoryServiceClient, EndHistoryRequest, StartHistoryRequest,
+    EndHistoryRequest, StartHistoryRequest, history_client::HistoryClient as HistoryServiceClient,
 };
 
 pub struct HistoryClient {

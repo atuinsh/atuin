@@ -1,9 +1,9 @@
 use std::{io::prelude::*, path::PathBuf};
 
 use config::{Config, Environment, File as ConfigFile, FileFormat};
-use eyre::{eyre, Result};
-use fs_err::{create_dir_all, File};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use eyre::{Result, eyre};
+use fs_err::{File, create_dir_all};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 static EXAMPLE_CONFIG: &str = include_str!("../server.toml");
 

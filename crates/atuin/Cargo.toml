@@ -1,6 +1,6 @@
 [package]
 name = "atuin"
-edition = "2021"
+edition = "2024"
 description = "atuin - magical shell history"
 readme = "./README.md"
 

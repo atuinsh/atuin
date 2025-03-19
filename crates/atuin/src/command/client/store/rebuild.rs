@@ -1,6 +1,6 @@
-use atuin_dotfiles::store::{var::VarStore, AliasStore};
+use atuin_dotfiles::store::{AliasStore, var::VarStore};
 use clap::Args;
-use eyre::{bail, Result};
+use eyre::{Result, bail};
 
 use atuin_client::{
     database::Database, encryption, history::store::HistoryStore,

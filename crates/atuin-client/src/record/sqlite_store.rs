@@ -6,12 +6,12 @@ use std::str::FromStr;
 use std::{path::Path, time::Duration};
 
 use async_trait::async_trait;
-use eyre::{eyre, Result};
+use eyre::{Result, eyre};
 use fs_err as fs;
 
 use sqlx::{
-    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteRow},
     Row,
+    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteRow},
 };
 
 use atuin_common::record::{
@@ -35,7 +35,9 @@ impl SqliteStore {
         debug!("opening sqlite database at {:?}", path);
 
         if utils::broken_symlink(path) {
-            eprintln!("Atuin: Sqlite db path ({path:?}) is a broken symlink. Unable to read or create replacement.");
+            eprintln!(
+                "Atuin: Sqlite db path ({path:?}) is a broken symlink. Unable to read or create replacement."
+            );
             std::process::exit(1);
         }
 

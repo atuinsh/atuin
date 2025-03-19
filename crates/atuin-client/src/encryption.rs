@@ -10,17 +10,17 @@
 
 use std::{io::prelude::*, path::PathBuf};
 
-use base64::prelude::{Engine, BASE64_STANDARD};
+use base64::prelude::{BASE64_STANDARD, Engine};
 pub use crypto_secretbox::Key;
 use crypto_secretbox::{
-    aead::{Nonce, OsRng},
     AeadCore, AeadInPlace, KeyInit, XSalsa20Poly1305,
+    aead::{Nonce, OsRng},
 };
-use eyre::{bail, ensure, eyre, Context, Result};
+use eyre::{Context, Result, bail, ensure, eyre};
 use fs_err as fs;
-use rmp::{decode::Bytes, Marker};
+use rmp::{Marker, decode::Bytes};
 use serde::{Deserialize, Serialize};
-use time::{format_description::well_known::Rfc3339, macros::format_description, OffsetDateTime};
+use time::{OffsetDateTime, format_description::well_known::Rfc3339, macros::format_description};
 
 use crate::{history::History, settings::Settings};
 
@@ -265,9 +265,9 @@ fn error_report<E: std::fmt::Debug>(err: E) -> eyre::Report {
 
 #[cfg(test)]
 mod test {
-    use crypto_secretbox::{aead::OsRng, KeyInit, XSalsa20Poly1305};
+    use crypto_secretbox::{KeyInit, XSalsa20Poly1305, aead::OsRng};
     use pretty_assertions::assert_eq;
-    use time::{macros::datetime, OffsetDateTime};
+    use time::{OffsetDateTime, macros::datetime};
 
     use crate::history::History;
 
@@ -392,7 +392,7 @@ mod test {
 
     #[test]
     fn key_encodings() {
-        use super::{decode_key, encode_key, Key};
+        use super::{Key, decode_key, encode_key};
 
         // a history of our key encodings.
         // v11.0.0 xCAbWypb0msJ2Kq+8j4GVEWUlDX7deKnrTRSIopuqXxc5Q==

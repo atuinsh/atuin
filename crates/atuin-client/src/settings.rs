@@ -6,19 +6,19 @@ use atuin_common::record::HostId;
 use atuin_common::utils;
 use clap::ValueEnum;
 use config::{
-    builder::DefaultState, Config, ConfigBuilder, Environment, File as ConfigFile, FileFormat,
+    Config, ConfigBuilder, Environment, File as ConfigFile, FileFormat, builder::DefaultState,
 };
-use eyre::{bail, eyre, Context, Error, Result};
-use fs_err::{create_dir_all, File};
+use eyre::{Context, Error, Result, bail, eyre};
+use fs_err::{File, create_dir_all};
 use humantime::parse_duration;
 use regex::RegexSet;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use serde_with::DeserializeFromStr;
 use time::{
-    format_description::{well_known::Rfc3339, FormatItem},
-    macros::format_description,
     OffsetDateTime, UtcOffset,
+    format_description::{FormatItem, well_known::Rfc3339},
+    macros::format_description,
 };
 use uuid::Uuid;
 
@@ -141,8 +141,9 @@ impl fmt::Display for Timezone {
     }
 }
 /// format: <+|-><hour>[:<minute>[:<second>]]
-static OFFSET_FMT: &[FormatItem<'_>] =
-    format_description!("[offset_hour sign:mandatory padding:none][optional [:[offset_minute padding:none][optional [:[offset_second padding:none]]]]]");
+static OFFSET_FMT: &[FormatItem<'_>] = format_description!(
+    "[offset_hour sign:mandatory padding:none][optional [:[offset_minute padding:none][optional [:[offset_second padding:none]]]]]"
+);
 impl FromStr for Timezone {
     type Err = Error;
 

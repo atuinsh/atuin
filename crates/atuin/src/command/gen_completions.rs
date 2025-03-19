@@ -1,5 +1,5 @@
 use clap::{CommandFactory, Parser, ValueEnum};
-use clap_complete::{generate, generate_to, Generator, Shell};
+use clap_complete::{Generator, Shell, generate, generate_to};
 use clap_complete_nushell::Nushell;
 use eyre::Result;
 

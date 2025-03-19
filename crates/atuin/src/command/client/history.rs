@@ -11,9 +11,9 @@ use eyre::{Context, Result};
 use runtime_format::{FormatKey, FormatKeyError, ParseSegment, ParsedFmt};
 
 use atuin_client::{
-    database::{current_context, Database, Sqlite},
+    database::{Database, Sqlite, current_context},
     encryption,
-    history::{store::HistoryStore, History},
+    history::{History, store::HistoryStore},
     record::sqlite_store::SqliteStore,
     settings::{
         FilterMode::{Directory, Global, Session},
@@ -25,7 +25,7 @@ use atuin_client::{
 use atuin_client::{record, sync};
 
 use log::{debug, warn};
-use time::{macros::format_description, OffsetDateTime};
+use time::{OffsetDateTime, macros::format_description};
 
 use super::search::format_duration_into;
 
@@ -285,7 +285,9 @@ fn parse_fmt(format: &str) -> ParsedFmt {
         Ok(fmt) => fmt,
         Err(err) => {
             eprintln!("ERROR: History formatting failed with the following error: {err}");
-            println!("If your formatting string contains curly braces (eg: {{var}}) you need to escape them this way: {{{{var}}.");
+            println!(
+                "If your formatting string contains curly braces (eg: {{var}}) you need to escape them this way: {{{{var}}."
+            );
             std::process::exit(1)
         }
     }
@@ -550,11 +552,11 @@ impl Cmd {
         if settings.daemon.enabled {
             match self {
                 Self::Start { command } => {
-                    return Self::handle_daemon_start(settings, &command).await
+                    return Self::handle_daemon_start(settings, &command).await;
                 }
 
                 Self::End { id, exit, duration } => {
-                    return Self::handle_daemon_end(settings, &id, exit, duration).await
+                    return Self::handle_daemon_end(settings, &id, exit, duration).await;
                 }
 
                 _ => {}

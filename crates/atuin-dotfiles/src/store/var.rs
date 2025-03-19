@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_common::record::{DecryptedData, Host, HostId};
-use eyre::{bail, ensure, eyre, Result};
+use eyre::{Result, bail, ensure, eyre};
 
 use atuin_client::record::encryption::PASETO_V4;
 use atuin_client::record::store::Store;
@@ -294,7 +294,7 @@ mod tests {
 
     use crate::{shell::Var, store::test_local_timeout};
 
-    use super::{VarRecord, VarStore, DOTFILES_VAR_VERSION};
+    use super::{DOTFILES_VAR_VERSION, VarRecord, VarStore};
     use crypto_secretbox::{KeyInit, XSalsa20Poly1305};
 
     #[test]

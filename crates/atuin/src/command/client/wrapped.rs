@@ -5,7 +5,7 @@ use time::{Date, Duration, Month, OffsetDateTime, Time};
 
 use atuin_client::{database::Database, settings::Settings, theme::Theme};
 
-use atuin_history::stats::{compute, Stats};
+use atuin_history::stats::{Stats, compute};
 
 #[derive(Debug)]
 struct WrappedStats {
@@ -293,7 +293,9 @@ pub async fn run(
 
     let history = db.range(start, end).await?;
     if history.is_empty() {
-        println!("Your history for {year} is empty!\nMaybe 'atuin import' could help you import your previous history 🪄");
+        println!(
+            "Your history for {year} is empty!\nMaybe 'atuin import' could help you import your previous history 🪄"
+        );
         return Ok(());
     }
 

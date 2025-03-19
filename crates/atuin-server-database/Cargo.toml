@@ -1,6 +1,6 @@
 [package]
 name = "atuin-server-database"
-edition = "2021"
+edition = "2024"
 description = "server database library for atuin"
 
 version = { workspace = true }

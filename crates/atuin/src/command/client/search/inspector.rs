@@ -6,12 +6,12 @@ use atuin_client::{
     settings::Settings,
 };
 use ratatui::{
+    Frame,
     crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
     layout::Rect,
     prelude::{Constraint, Direction, Layout},
     style::Style,
     widgets::{Bar, BarChart, BarGroup, Block, Borders, Padding, Paragraph, Row, Table},
-    Frame,
 };
 
 use super::duration::format_duration;
@@ -21,11 +21,7 @@ use super::interactive::{InputAction, State};
 
 #[allow(clippy::cast_sign_loss)]
 fn u64_or_zero(num: i64) -> u64 {
-    if num < 0 {
-        0
-    } else {
-        num as u64
-    }
+    if num < 0 { 0 } else { num as u64 }
 }
 
 pub fn draw_commands(

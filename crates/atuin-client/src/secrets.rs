@@ -38,7 +38,9 @@ pub static SECRET_PATTERNS: &[(&str, &str, TestValue)] = &[
     (
         "Atuin login",
         r"atuin\s+login",
-        TestValue::Single("atuin login -u mycoolusername -p mycoolpassword -k \"lots of random words\""),
+        TestValue::Single(
+            "atuin login -u mycoolusername -p mycoolpassword -k \"lots of random words\"",
+        ),
     ),
     (
         "GitHub PAT (old)",
@@ -51,32 +53,34 @@ pub static SECRET_PATTERNS: &[(&str, &str, TestValue)] = &[
         TestValue::Multiple(&[
             "gh1_1234567890abcdefghijk_1234567890abcdefghijklmnopqrstuvwxyz1234567890abcdefghijklm",
             "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", // also legit, also expired
-        ])
+        ]),
     ),
     (
         "GitHub OAuth Access Token",
         "gho_[A-Za-z0-9]{36}",
-        TestValue::Single("gho_1234567890abcdefghijklmnopqrstuvwx000"),  // not a real token
+        TestValue::Single("gho_1234567890abcdefghijklmnopqrstuvwx000"), // not a real token
     ),
     (
         "GitHub OAuth Access Token (user)",
         "ghu_[A-Za-z0-9]{36}",
-        TestValue::Single("ghu_1234567890abcdefghijklmnopqrstuvwx000"),  // not a real token
+        TestValue::Single("ghu_1234567890abcdefghijklmnopqrstuvwx000"), // not a real token
     ),
     (
         "GitHub App Installation Access Token",
         "ghs_[A-Za-z0-9]{36}",
-        TestValue::Single("ghs_1234567890abcdefghijklmnopqrstuvwx000"),  // not a real token
+        TestValue::Single("ghs_1234567890abcdefghijklmnopqrstuvwx000"), // not a real token
     ),
     (
         "GitHub Refresh Token",
         "ghr_[A-Za-z0-9]{76}",
-        TestValue::Single("ghr_1234567890abcdefghijklmnopqrstuvwx1234567890abcdefghijklmnopqrstuvwx1234567890abcdefghijklmnopqrstuvwx"),  // not a real token
+        TestValue::Single(
+            "ghr_1234567890abcdefghijklmnopqrstuvwx1234567890abcdefghijklmnopqrstuvwx1234567890abcdefghijklmnopqrstuvwx",
+        ), // not a real token
     ),
     (
         "GitHub App Installation Access Token v1",
         "v1\\.[0-9A-Fa-f]{40}",
-        TestValue::Single("v1.1234567890abcdef1234567890abcdef12345678"),  // not a real token
+        TestValue::Single("v1.1234567890abcdef1234567890abcdef12345678"), // not a real token
     ),
     (
         "GitLab PAT",
@@ -96,10 +100,20 @@ pub static SECRET_PATTERNS: &[(&str, &str, TestValue)] = &[
     (
         "Slack webhook",
         "T[a-zA-Z0-9_]{8}/B[a-zA-Z0-9_]{8}/[a-zA-Z0-9_]{24}",
-        TestValue::Single("https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX"),
+        TestValue::Single(
+            "https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX",
+        ),
     ),
-    ("Stripe test key", "sk_test_[0-9a-zA-Z]{24}", TestValue::Single("sk_test_1234567890abcdefghijklmnop")),
-    ("Stripe live key", "sk_live_[0-9a-zA-Z]{24}", TestValue::Single("sk_live_1234567890abcdefghijklmnop")),
+    (
+        "Stripe test key",
+        "sk_test_[0-9a-zA-Z]{24}",
+        TestValue::Single("sk_test_1234567890abcdefghijklmnop"),
+    ),
+    (
+        "Stripe live key",
+        "sk_live_[0-9a-zA-Z]{24}",
+        TestValue::Single("sk_live_1234567890abcdefghijklmnop"),
+    ),
     (
         "Netlify authentication token",
         "nf[pcoub]_[0-9a-zA-Z]{36}",
@@ -127,7 +141,7 @@ pub static SECRET_PATTERNS_RE: LazyLock<RegexSet> = LazyLock::new(|| {
 mod tests {
     use regex::Regex;
 
-    use crate::secrets::{TestValue, SECRET_PATTERNS};
+    use crate::secrets::{SECRET_PATTERNS, TestValue};
 
     #[test]
     fn test_secrets() {

@@ -1,8 +1,8 @@
 use atuin_common::record::{
     AdditionalData, DecryptedData, EncryptedData, Encryption, HostId, RecordId, RecordIdx,
 };
-use base64::{engine::general_purpose, Engine};
-use eyre::{ensure, Context, Result};
+use base64::{Engine, engine::general_purpose};
+use eyre::{Context, Result, ensure};
 use rusty_paserk::{Key, KeyId, Local, PieWrappedKey};
 use rusty_paseto::core::{
     ImplicitAssertion, Key as DataKey, Local as LocalPurpose, Paseto, PasetoNonce, Payload, V4,

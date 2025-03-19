@@ -3,7 +3,7 @@ use std::path::Path;
 use async_trait::async_trait;
 use atuin_client::{database::Database, history::History, settings::FilterMode};
 use eyre::Result;
-use fuzzy_matcher::{skim::SkimMatcherV2, FuzzyMatcher};
+use fuzzy_matcher::{FuzzyMatcher, skim::SkimMatcherV2};
 use itertools::Itertools;
 use time::OffsetDateTime;
 use tokio::task::yield_now;

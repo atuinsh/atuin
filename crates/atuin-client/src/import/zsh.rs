@@ -6,10 +6,10 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 use directories::UserDirs;
-use eyre::{eyre, Result};
+use eyre::{Result, eyre};
 use time::OffsetDateTime;
 
-use super::{get_histpath, unix_byte_lines, Importer, Loader};
+use super::{Importer, Loader, get_histpath, unix_byte_lines};
 use crate::history::History;
 use crate::import::read_to_end;
 
@@ -38,7 +38,7 @@ fn default_histpath() -> Result<PathBuf> {
             None => {
                 break Err(eyre!(
                     "Could not find history file. Try setting and exporting $HISTFILE"
-                ))
+                ));
             }
         }
     }

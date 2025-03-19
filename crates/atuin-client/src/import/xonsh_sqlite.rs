@@ -3,14 +3,14 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 use directories::BaseDirs;
-use eyre::{eyre, Result};
+use eyre::{Result, eyre};
 use futures::TryStreamExt;
-use sqlx::{sqlite::SqlitePool, FromRow, Row};
+use sqlx::{FromRow, Row, sqlite::SqlitePool};
 use time::OffsetDateTime;
-use uuid::timestamp::{context::NoContext, Timestamp};
 use uuid::Uuid;
+use uuid::timestamp::{Timestamp, context::NoContext};
 
-use super::{get_histpath, Importer, Loader};
+use super::{Importer, Loader, get_histpath};
 use crate::history::History;
 use crate::utils::get_host_user;
 

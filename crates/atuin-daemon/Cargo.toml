@@ -1,6 +1,6 @@
 [package]
 name = "atuin-daemon"
-edition = "2021"
+edition = "2024"
 version = { workspace = true }
 description = "The daemon crate for Atuin"
 

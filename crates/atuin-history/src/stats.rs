@@ -178,7 +178,9 @@ pub fn pretty_print(stats: Stats, ngram_size: usize, theme: &Theme) {
             .collect::<Vec<_>>()
             .join(" | ");
 
-        println!("{ResetColor}] {gray}{count:num_pad$}{ResetColor} {bold}{formatted_command}{ResetColor}");
+        println!(
+            "{ResetColor}] {gray}{count:num_pad$}{ResetColor} {bold}{formatted_command}{ResetColor}"
+        );
     }
     println!("Total commands:   {}", stats.total_commands);
     println!("Unique commands:  {}", stats.unique_commands);

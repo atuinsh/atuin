@@ -1,12 +1,12 @@
 use std::{io, path::PathBuf};
 
 use clap::Parser;
-use eyre::{bail, Context, Result};
+use eyre::{Context, Result, bail};
 use tokio::{fs::File, io::AsyncWriteExt};
 
 use atuin_client::{
     api_client,
-    encryption::{decode_key, encode_key, load_key, Key},
+    encryption::{Key, decode_key, encode_key, load_key},
     record::sqlite_store::SqliteStore,
     record::store::Store,
     settings::Settings,
@@ -56,7 +56,9 @@ impl Cmd {
         let key_path = PathBuf::from(key_path);
 
         println!("IMPORTANT");
-        println!("If you are already logged in on another machine, you must ensure that the key you use here is the same as the key you used there.");
+        println!(
+            "If you are already logged in on another machine, you must ensure that the key you use here is the same as the key you used there."
+        );
         println!("You can find your key by running 'atuin key' on the other machine");
         println!("Do not share this key with anyone");
         println!("\nRead more here: https://docs.atuin.sh/guide/sync/#login \n");
@@ -75,22 +77,25 @@ impl Cmd {
             match bip39::Mnemonic::from_phrase(&key, bip39::Language::English) {
                 Ok(mnemonic) => encode_key(Key::from_slice(mnemonic.entropy()))?,
                 Err(err) => {
-                    if let Some(err) = err.downcast_ref::<bip39::ErrorKind>() {
-                        match err {
-                            // assume they copied in the base64 key
-                            bip39::ErrorKind::InvalidWord => key,
-                            bip39::ErrorKind::InvalidChecksum => {
-                                bail!("key mnemonic was not valid")
-                            }
-                            bip39::ErrorKind::InvalidKeysize(_)
-                            | bip39::ErrorKind::InvalidWordLength(_)
-                            | bip39::ErrorKind::InvalidEntropyLength(_, _) => {
-                                bail!("key was not the correct length")
+                    match err.downcast_ref::<bip39::ErrorKind>() {
+                        Some(err) => {
+                            match err {
+                                // assume they copied in the base64 key
+                                bip39::ErrorKind::InvalidWord => key,
+                                bip39::ErrorKind::InvalidChecksum => {
+                                    bail!("key mnemonic was not valid")
+                                }
+                                bip39::ErrorKind::InvalidKeysize(_)
+                                | bip39::ErrorKind::InvalidWordLength(_)
+                                | bip39::ErrorKind::InvalidEntropyLength(_, _) => {
+                                    bail!("key was not the correct length")
+                                }
                             }
                         }
-                    } else {
-                        // unknown error. assume they copied the base64 key
-                        key
+                        _ => {
+                            // unknown error. assume they copied the base64 key
+                            key
+                        }
                     }
                 }
             }
@@ -106,7 +111,9 @@ impl Cmd {
                     bail!("the key in existing key file was invalid");
                 }
             } else {
-                panic!("No key provided. Please use 'atuin key' on your other machine, or recover your key from a backup.")
+                panic!(
+                    "No key provided. Please use 'atuin key' on your other machine, or recover your key from a backup."
+                )
             }
         } else if !key_path.exists() {
             if decode_key(key.clone()).is_err() {
@@ -184,6 +191,9 @@ mod tests {
             .into_phrase();
         let mnemonic = bip39::Mnemonic::from_phrase(&phrase, bip39::Language::English).unwrap();
         assert_eq!(mnemonic.entropy(), key.as_slice());
-        assert_eq!(phrase, "adapt amused able anxiety mother adapt beef gaze amount else seat alcohol cage lottery avoid scare alcohol cactus school avoid coral adjust catch pink");
+        assert_eq!(
+            phrase,
+            "adapt amused able anxiety mother adapt beef gaze amount else seat alcohol cage lottery avoid scare alcohol cactus school avoid coral adjust catch pink"
+        );
     }
 }

@@ -38,8 +38,8 @@ use std::path::{Path, PathBuf};
 use async_trait::async_trait;
 use atuin_common::utils::uuid_v7;
 use directories::UserDirs;
-use eyre::{eyre, Result};
-use sqlx::{sqlite::SqlitePool, Pool};
+use eyre::{Result, eyre};
+use sqlx::{Pool, sqlite::SqlitePool};
 use time::PrimitiveDateTime;
 
 use super::Importer;
@@ -178,10 +178,12 @@ mod test {
     use sqlx::sqlite::SqlitePoolOptions;
     use std::env;
     #[tokio::test(flavor = "multi_thread")]
+    #[allow(unsafe_code)]
     async fn test_env_vars() {
         let test_env_db = "nonstd-zsh-history.db";
         let key = "HISTDB_FILE";
-        env::set_var(key, test_env_db);
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::set_var(key, test_env_db) };
 
         // test the env got set
         assert_eq!(env::var(key).unwrap(), test_env_db.to_string());
