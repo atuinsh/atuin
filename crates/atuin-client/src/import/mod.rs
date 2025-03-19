@@ -3,7 +3,7 @@ use std::io::Read;
 use std::path::PathBuf;
 
 use async_trait::async_trait;
-use eyre::{bail, Result};
+use eyre::{Result, bail};
 use memchr::Memchr;
 
 use crate::history::History;

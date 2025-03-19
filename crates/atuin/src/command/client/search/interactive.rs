@@ -1,5 +1,5 @@
 use std::{
-    io::{stdout, Write},
+    io::{Write, stdout},
     time::Duration,
 };
 
@@ -11,8 +11,8 @@ use time::OffsetDateTime;
 use unicode_width::UnicodeWidthStr;
 
 use atuin_client::{
-    database::{current_context, Database},
-    history::{store::HistoryStore, History, HistoryStats},
+    database::{Database, current_context},
+    history::{History, HistoryStats, store::HistoryStore},
     settings::{
         CursorStyle, ExitMode, FilterMode, KeymapMode, PreviewStrategy, SearchMode, Settings,
     },
@@ -25,9 +25,10 @@ use super::{
 };
 
 use crate::command::client::theme::{Meaning, Theme};
-use crate::{command::client::search::engines, VERSION};
+use crate::{VERSION, command::client::search::engines};
 
 use ratatui::{
+    Frame, Terminal, TerminalOptions, Viewport,
     backend::CrosstermBackend,
     crossterm::{
         cursor::SetCursorStyle,
@@ -42,8 +43,7 @@ use ratatui::{
     prelude::*,
     style::{Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{block::Title, Block, BorderType, Borders, Padding, Paragraph, Tabs},
-    Frame, Terminal, TerminalOptions, Viewport,
+    widgets::{Block, BorderType, Borders, Padding, Paragraph, Tabs, block::Title},
 };
 
 const TAB_TITLES: [&str; 2] = ["Search", "Inspect"];
@@ -390,7 +390,7 @@ impl State {
             KeyCode::Char(c @ '1'..='9') if modfr => {
                 return c.to_digit(10).map_or(InputAction::Continue, |c| {
                     InputAction::Accept(self.results_state.selected() + c as usize)
-                })
+                });
             }
             KeyCode::Left if ctrl => self
                 .search
@@ -763,7 +763,9 @@ impl State {
 
                 // HACK: I'm following up with abstracting this into the UI container, with a
                 // sub-widget for search + for inspector
-                let feedback = Paragraph::new("The inspector is new - please give feedback (good, or bad) at https://forum.atuin.sh");
+                let feedback = Paragraph::new(
+                    "The inspector is new - please give feedback (good, or bad) at https://forum.atuin.sh",
+                );
                 f.render_widget(feedback, input_chunk);
 
                 return;

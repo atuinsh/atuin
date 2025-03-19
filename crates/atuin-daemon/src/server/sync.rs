@@ -10,7 +10,7 @@ use atuin_client::{
     settings::Settings,
 };
 
-use atuin_dotfiles::store::{var::VarStore, AliasStore};
+use atuin_dotfiles::store::{AliasStore, var::VarStore};
 
 pub async fn worker(
     settings: Settings,

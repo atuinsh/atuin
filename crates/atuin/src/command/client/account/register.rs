@@ -1,5 +1,5 @@
 use clap::Parser;
-use eyre::{bail, Result};
+use eyre::{Result, bail};
 use tokio::{fs::File, io::AsyncWriteExt};
 
 use atuin_client::{api_client, settings::Settings};
@@ -51,8 +51,12 @@ pub async fn run(
 
     let _key = atuin_client::encryption::load_key(settings)?;
 
-    println!("Registration successful! Please make a note of your key (run 'atuin key') and keep it safe.");
-    println!("You will need it to log in on other devices, and we cannot help recover it if you lose it.");
+    println!(
+        "Registration successful! Please make a note of your key (run 'atuin key') and keep it safe."
+    );
+    println!(
+        "You will need it to log in on other devices, and we cannot help recover it if you lose it."
+    );
 
     Ok(())
 }

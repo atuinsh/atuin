@@ -1,5 +1,5 @@
 use atuin_client::{api_client, settings::Settings};
-use eyre::{bail, Result};
+use eyre::{Result, bail};
 use std::fs::remove_file;
 use std::path::PathBuf;
 

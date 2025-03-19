@@ -15,7 +15,7 @@ use self::{
 };
 use async_trait::async_trait;
 use atuin_common::record::{EncryptedData, HostId, Record, RecordIdx, RecordStatus};
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 use time::{Date, Duration, Month, OffsetDateTime, Time, UtcOffset};
 use tracing::instrument;
 
@@ -83,7 +83,7 @@ pub trait Database: Sized + Clone + Send + Sync + 'static {
     async fn status(&self, user: &User) -> DbResult<RecordStatus>;
 
     async fn count_history_range(&self, user: &User, range: Range<OffsetDateTime>)
-        -> DbResult<i64>;
+    -> DbResult<i64>;
 
     async fn list_history(
         &self,

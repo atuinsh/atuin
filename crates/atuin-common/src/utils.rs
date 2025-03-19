@@ -2,9 +2,9 @@ use std::borrow::Cow;
 use std::env;
 use std::path::PathBuf;
 
-use eyre::{eyre, Result};
+use eyre::{Result, eyre};
 
-use base64::prelude::{Engine, BASE64_URL_SAFE_NO_PAD};
+use base64::prelude::{BASE64_URL_SAFE_NO_PAD, Engine};
 use getrandom::getrandom;
 use uuid::Uuid;
 

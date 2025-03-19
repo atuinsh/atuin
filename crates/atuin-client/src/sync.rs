@@ -109,14 +109,17 @@ async fn sync_download(
     for i in remote_status.deleted {
         // we will update the stored history to have this data
         // pretty much everything can be nullified
-        match db.load(i.as_str()).await? { Some(h) => {
-            db.delete(h).await?;
-        } _ => {
-            info!(
-                "could not delete history with id {}, not found locally",
-                i.as_str()
-            );
-        }}
+        match db.load(i.as_str()).await? {
+            Some(h) => {
+                db.delete(h).await?;
+            }
+            _ => {
+                info!(
+                    "could not delete history with id {}, not found locally",
+                    i.as_str()
+                );
+            }
+        }
     }
 
     Ok((local_count - initial_local, local_count))

@@ -2,13 +2,13 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 use directories::UserDirs;
-use eyre::{eyre, Result};
+use eyre::{Result, eyre};
 use serde::Deserialize;
 
 use atuin_common::utils::uuid_v7;
 use time::OffsetDateTime;
 
-use super::{get_histpath, unix_byte_lines, Importer, Loader};
+use super::{Importer, Loader, get_histpath, unix_byte_lines};
 use crate::history::History;
 use crate::import::read_to_end;
 

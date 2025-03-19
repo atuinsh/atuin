@@ -5,8 +5,8 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 use directories::BaseDirs;
-use eyre::{eyre, Result};
-use sqlx::{sqlite::SqlitePool, Pool};
+use eyre::{Result, eyre};
+use sqlx::{Pool, sqlite::SqlitePool};
 use time::{Duration, OffsetDateTime};
 
 use super::Importer;

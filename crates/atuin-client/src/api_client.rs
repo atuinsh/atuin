@@ -2,12 +2,16 @@ use std::collections::HashMap;
 use std::env;
 use std::time::Duration;
 
-use eyre::{bail, Result};
+use eyre::{Result, bail};
 use reqwest::{
-    header::{HeaderMap, AUTHORIZATION, USER_AGENT},
     Response, StatusCode, Url,
+    header::{AUTHORIZATION, HeaderMap, USER_AGENT},
 };
 
+use atuin_common::{
+    api::{ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ATUIN_VERSION},
+    record::{EncryptedData, HostId, Record, RecordIdx},
+};
 use atuin_common::{
     api::{
         AddHistoryRequest, ChangePasswordRequest, CountResponse, DeleteHistoryRequest,
@@ -17,14 +21,10 @@ use atuin_common::{
     },
     record::RecordStatus,
 };
-use atuin_common::{
-    api::{ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ATUIN_VERSION},
-    record::{EncryptedData, HostId, Record, RecordIdx},
-};
 
 use semver::Version;
-use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 use crate::{history::History, sync::hash_str, utils::get_host_user};
 
@@ -126,7 +126,9 @@ pub fn ensure_version(response: &Response) -> Result<bool> {
 
     // If the client is newer than the server
     if version.major < ATUIN_VERSION.major {
-        println!("Atuin version mismatch! In order to successfully sync, the server needs to run a newer version of Atuin");
+        println!(
+            "Atuin version mismatch! In order to successfully sync, the server needs to run a newer version of Atuin"
+        );
         println!("Client: {}", ATUIN_CARGO_VERSION);
         println!("Server: {}", version);
 
@@ -157,10 +159,14 @@ async fn handle_resp_error(resp: Response) -> Result<Response> {
                 bail!("Invalid request to the service: {status} - {reason}.")
             }
 
-            bail!("There was an error with the atuin sync service, server error {status}: {reason}.\nIf the problem persists, contact the host")
+            bail!(
+                "There was an error with the atuin sync service, server error {status}: {reason}.\nIf the problem persists, contact the host"
+            )
         }
 
-        bail!("There was an error with the atuin sync service: Status {status:?}.\nIf the problem persists, contact the host")
+        bail!(
+            "There was an error with the atuin sync service: Status {status:?}.\nIf the problem persists, contact the host"
+        )
     }
 
     Ok(resp)

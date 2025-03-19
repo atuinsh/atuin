@@ -1,4 +1,4 @@
-use atuin_dotfiles::store::{var::VarStore, AliasStore};
+use atuin_dotfiles::store::{AliasStore, var::VarStore};
 use eyre::Result;
 
 pub fn init_static(disable_up_arrow: bool, disable_ctrl_r: bool) {

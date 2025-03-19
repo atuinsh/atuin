@@ -1,7 +1,7 @@
 use std::{ffi::OsStr, path::Path, process::Command};
 
 use serde::Serialize;
-use sysinfo::{get_current_pid, Process, System};
+use sysinfo::{Process, System, get_current_pid};
 use thiserror::Error;
 
 #[derive(PartialEq)]

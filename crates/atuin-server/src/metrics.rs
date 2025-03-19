@@ -28,11 +28,10 @@ pub fn setup_metrics_recorder() -> PrometheusHandle {
 pub async fn track_metrics(req: Request, next: Next) -> impl IntoResponse {
     let start = Instant::now();
 
-    let path = match req.extensions().get::<MatchedPath>() { Some(matched_path) => {
-        matched_path.as_str().to_owned()
-    } _ => {
-        req.uri().path().to_owned()
-    }};
+    let path = match req.extensions().get::<MatchedPath>() {
+        Some(matched_path) => matched_path.as_str().to_owned(),
+        _ => req.uri().path().to_owned(),
+    };
 
     let method = req.method().clone();
 

@@ -1,4 +1,4 @@
-use std::io::{stderr, IsTerminal as _};
+use std::io::{IsTerminal as _, stderr};
 
 use atuin_common::utils::{self, Escapable as _};
 use clap::Parser;
@@ -6,9 +6,9 @@ use eyre::Result;
 
 use atuin_client::{
     database::Database,
-    database::{current_context, OptFilters},
+    database::{OptFilters, current_context},
     encryption,
-    history::{store::HistoryStore, History},
+    history::{History, store::HistoryStore},
     record::sqlite_store::SqliteStore,
     settings::{FilterMode, KeymapMode, SearchMode, Settings, Timezone},
     theme::Theme,
@@ -165,7 +165,9 @@ impl Cmd {
         }
 
         if self.delete && query.is_empty() {
-            eprintln!("Please specify a query to match the items you wish to delete. If you wish to delete all history, pass --delete-it-all");
+            eprintln!(
+                "Please specify a query to match the items you wish to delete. If you wish to delete all history, pass --delete-it-all"
+            );
             return Ok(());
         }
 

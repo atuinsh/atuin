@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use atuin_common::record::{DecryptedData, Host, HostId};
-use eyre::{bail, ensure, eyre, Result};
+use eyre::{Result, bail, ensure, eyre};
 use serde::Deserialize;
 
 use crate::record::encryption::PASETO_V4;
@@ -200,7 +200,7 @@ mod tests {
     use crate::record::sqlite_store::SqliteStore;
     use crate::settings::test_local_timeout;
 
-    use super::{KvRecord, KvStore, KV_VERSION};
+    use super::{KV_VERSION, KvRecord, KvStore};
 
     #[test]
     fn encode_decode() {

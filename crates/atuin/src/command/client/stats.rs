@@ -4,7 +4,7 @@ use interim::parse_date_string;
 use time::{Duration, OffsetDateTime, Time};
 
 use atuin_client::{
-    database::{current_context, Database},
+    database::{Database, current_context},
     settings::Settings,
     theme::Theme,
 };

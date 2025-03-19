@@ -1,13 +1,13 @@
 use core::fmt::Formatter;
 use rmp::decode::ValueReadError;
-use rmp::{decode::Bytes, Marker};
+use rmp::{Marker, decode::Bytes};
 use std::env;
 use std::fmt::Display;
 
 use atuin_common::record::DecryptedData;
 use atuin_common::utils::uuid_v7;
 
-use eyre::{bail, eyre, Result};
+use eyre::{Result, bail, eyre};
 
 use crate::secrets::SECRET_PATTERNS_RE;
 use crate::settings::Settings;

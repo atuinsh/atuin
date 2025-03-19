@@ -7,7 +7,7 @@ use atuin_client::record::sqlite_store::SqliteStore;
 // + stores, rather than one mega config store.
 use atuin_common::record::{DecryptedData, Host, HostId};
 use atuin_common::utils::unquote;
-use eyre::{bail, ensure, eyre, Result};
+use eyre::{Result, bail, ensure, eyre};
 
 use atuin_client::record::encryption::PASETO_V4;
 use atuin_client::record::store::Store;
@@ -315,7 +315,7 @@ mod tests {
 
     use crate::shell::Alias;
 
-    use super::{test_local_timeout, AliasRecord, AliasStore, CONFIG_SHELL_ALIAS_VERSION};
+    use super::{AliasRecord, AliasStore, CONFIG_SHELL_ALIAS_VERSION, test_local_timeout};
     use crypto_secretbox::{KeyInit, XSalsa20Poly1305};
 
     #[test]

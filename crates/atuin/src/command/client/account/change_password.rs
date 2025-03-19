@@ -1,5 +1,5 @@
 use clap::Parser;
-use eyre::{bail, Result};
+use eyre::{Result, bail};
 
 use atuin_client::{api_client, settings::Settings};
 use rpassword::prompt_password;

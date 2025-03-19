@@ -1,4 +1,4 @@
-use eyre::{ensure, eyre, Result};
+use eyre::{Result, ensure, eyre};
 use rmp::{decode, encode};
 use serde::Serialize;
 
@@ -158,7 +158,7 @@ pub async fn import_aliases(store: &AliasStore) -> Result<Vec<Alias>> {
 
 #[cfg(test)]
 mod tests {
-    use crate::shell::{parse_alias, Alias};
+    use crate::shell::{Alias, parse_alias};
 
     #[test]
     fn test_parse_simple_alias() {
@@ -177,7 +177,10 @@ mod tests {
 
         let git_alias = super::parse_alias("gwip='git add -A; git rm $(git ls-files --deleted) 2> /dev/null; git commit --no-verify --no-gpg-sign --message \"--wip-- [skip ci]\"'").expect("failed to parse alias");
         assert_eq!(git_alias.name, "gwip");
-        assert_eq!(git_alias.value, "'git add -A; git rm $(git ls-files --deleted) 2> /dev/null; git commit --no-verify --no-gpg-sign --message \"--wip-- [skip ci]\"'");
+        assert_eq!(
+            git_alias.value,
+            "'git add -A; git rm $(git ls-files --deleted) 2> /dev/null; git commit --no-verify --no-gpg-sign --message \"--wip-- [skip ci]\"'"
+        );
     }
 
     #[test]

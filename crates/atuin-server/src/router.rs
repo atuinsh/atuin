@@ -1,12 +1,12 @@
 use async_trait::async_trait;
-use atuin_common::api::{ErrorResponse, ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION};
+use atuin_common::api::{ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ErrorResponse};
 use axum::{
+    Router,
     extract::{FromRequestParts, Request},
     http::{self, request::Parts},
     middleware::Next,
     response::{IntoResponse, Response},
     routing::{delete, get, patch, post},
-    Router,
 };
 use eyre::Result;
 use tower::ServiceBuilder;
@@ -18,7 +18,7 @@ use crate::{
     metrics,
     settings::Settings,
 };
-use atuin_server_database::{models::User, Database, DbError};
+use atuin_server_database::{Database, DbError, models::User};
 
 pub struct UserAuth(pub User);
 

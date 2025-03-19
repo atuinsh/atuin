@@ -1,4 +1,4 @@
-use atuin_dotfiles::store::{var::VarStore, AliasStore};
+use atuin_dotfiles::store::{AliasStore, var::VarStore};
 use eyre::{Context, Result};
 
 use atuin_client::{
