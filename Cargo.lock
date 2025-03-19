@@ -394,6 +394,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "atuin-scripts"
+version = "18.5.0-beta.1"
+dependencies = [
+ "atuin-client",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "atuin-server"
 version = "18.5.0-beta.2"
 dependencies = [
