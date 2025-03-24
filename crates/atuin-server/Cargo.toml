@@ -27,7 +27,7 @@ axum = "0.7"
 axum-server = { version = "0.7", features = ["tls-rustls-no-provider"] }
 fs-err = { workspace = true }
 tower = { workspace = true }
-tower-http = { version = "0.5", features = ["trace"] }
+tower-http = { version = "0.6", features = ["trace"] }
 reqwest = { workspace = true }
 rustls = { version = "0.23", features = ["ring"], default-features = false }
 argon2 = "0.5"
