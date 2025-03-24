@@ -400,11 +400,13 @@ dependencies = [
  "atuin-client",
  "atuin-common",
  "eyre",
+ "pretty_assertions",
  "rmp",
  "serde",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "typed-builder",
  "uuid",
 ]
 

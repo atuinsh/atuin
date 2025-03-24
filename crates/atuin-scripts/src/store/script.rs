@@ -1,34 +1,37 @@
+use atuin_common::record::DecryptedData;
+use eyre::{Result, bail, ensure};
 use uuid::Uuid;
-use std::collections::BTreeMap;
 
-use atuin_client::record::sqlite_store::SqliteStore;
-use atuin_common::record::{DecryptedData, Host, HostId};
-use eyre::{Result, bail, ensure, eyre};
+use rmp::{
+    decode::{self, Bytes},
+    encode,
+};
+use typed_builder::TypedBuilder;
 
-use atuin_client::record::encryption::PASETO_V4;
-use atuin_client::record::store::Store;
-use rmp::{decode::{self, read_str, Bytes}, encode};
+pub const SCRIPT_VERSION: &str = "v0";
+pub const SCRIPT_TAG: &str = "script";
+pub const SCRIPT_LEN: usize = 20000; // 20kb max total len
 
-const SCRIPT_VERSION: &str = "v0";
-const SCRIPT_TAG: &str = "script";
-const SCRIPT_LEN: usize = 20000; // 20kb max total len, way more than should be needed.
-
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, TypedBuilder)]
 /// A script is a set of commands that can be run, with the specified shebang
 pub struct Script {
     /// The id of the script
+    #[builder(default = uuid::Uuid::new_v4())]
     pub id: Uuid,
 
     /// The name of the script
     pub name: String,
 
     /// The description of the script
+    #[builder(default = String::new())]
     pub description: String,
 
     /// The interpreter of the script
+    #[builder(default = String::new())]
     pub shebang: String,
 
     /// The tags of the script
+    #[builder(default = Vec::new())]
     pub tags: Vec<String>,
 
     /// The script content
@@ -36,62 +39,62 @@ pub struct Script {
 }
 
 impl Script {
-    pub fn serialize(&self, output: &mut Vec<u8>) -> Result<()> {
-        encode::write_array_len(output, 6)?;
-        encode::write_str(output, &self.id.to_string())?;
-        encode::write_str(output, &self.name)?;
-        encode::write_str(output, &self.description)?;
-        encode::write_str(output, &self.shebang)?;
-        encode::write_array_len(output, self.tags.len() as u32)?;
+    pub fn serialize(&self) -> Result<DecryptedData> {
+        // sort the tags first, to ensure consistent ordering
+        let mut tags = self.tags.clone();
+        tags.sort();
 
-        for tag in &self.tags {
-            encode::write_str(output, tag)?;
+        let mut output = vec![];
+
+        encode::write_array_len(&mut output, 6)?;
+        encode::write_str(&mut output, &self.id.to_string())?;
+        encode::write_str(&mut output, &self.name)?;
+        encode::write_str(&mut output, &self.description)?;
+        encode::write_str(&mut output, &self.shebang)?;
+        encode::write_array_len(&mut output, self.tags.len() as u32)?;
+
+        for tag in &tags {
+            encode::write_str(&mut output, tag)?;
         }
 
-        encode::write_str(output, &self.script)?;
+        encode::write_str(&mut output, &self.script)?;
 
-        Ok(())
+        Ok(DecryptedData(output))
     }
 
-    pub fn deserialize(bytes: &mut decode::Bytes) -> Result<Self> {
-        fn error_report<E: std::fmt::Debug>(err: E) -> eyre::Report {
-            eyre!("{err:?}")
-        }
+    pub fn deserialize(bytes: &[u8]) -> Result<Self> {
+        let mut bytes = decode::Bytes::new(bytes);
+        let nfields = decode::read_array_len(&mut bytes).unwrap();
 
-        let nfields = decode::read_array_len(bytes).map_err(error_report)?;
-
-        ensure!(
-            nfields == 6,
-            "too many entries in v0 script record"
-        );
+        ensure!(nfields == 6, "too many entries in v0 script record");
 
         let bytes = bytes.remaining_slice();
 
-        let (id, bytes) = decode::read_str_from_slice(bytes).map_err(error_report)?;
-        let (name, bytes) = decode::read_str_from_slice(bytes).map_err(error_report)?;
-        let (description, bytes) = decode::read_str_from_slice(bytes).map_err(error_report)?;
-        let (shebang, bytes) = decode::read_str_from_slice(bytes).map_err(error_report)?;
+        let (id, bytes) = decode::read_str_from_slice(bytes).unwrap();
+        let (name, bytes) = decode::read_str_from_slice(bytes).unwrap();
+        let (description, bytes) = decode::read_str_from_slice(bytes).unwrap();
+        let (shebang, bytes) = decode::read_str_from_slice(bytes).unwrap();
 
         let mut bytes = Bytes::new(bytes);
-        let tags_len = decode::read_array_len(&mut bytes).map_err(error_report)?;
+        let tags_len = decode::read_array_len(&mut bytes).unwrap();
 
         let mut bytes = bytes.remaining_slice();
 
         let mut tags = Vec::new();
         for _ in 0..tags_len {
-            let (tag, remaining) = decode::read_str_from_slice(bytes).map_err(error_report)?;
+            let (tag, remaining) = decode::read_str_from_slice(bytes).unwrap();
             tags.push(tag.to_owned());
             bytes = remaining;
         }
 
-        let (script, bytes) = decode::read_str_from_slice(bytes).map_err(error_report)?;
+        let (script, bytes) = decode::read_str_from_slice(bytes).unwrap();
 
         if !bytes.is_empty() {
             bail!("trailing bytes in encoded script record. malformed")
         }
 
         Ok(Script {
-            id: Uuid::parse_str(id).map_err(error_report)?,
+            id: Uuid::parse_str(id).unwrap(),
             name: name.to_owned(),
             description: description.to_owned(),
             shebang: shebang.to_owned(),
@@ -101,10 +104,32 @@ impl Script {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_serialize() {
+        let script = Script {
+            id: uuid::Uuid::parse_str("0195c825a35f7982bdb016168881cbc6").unwrap(),
+            name: "test".to_string(),
+            description: "test".to_string(),
+            shebang: "test".to_string(),
+            tags: vec!["test".to_string()],
+            script: "test".to_string(),
+        };
+
+        let serialized = script.serialize().unwrap();
+        assert_eq!(
+            serialized.0,
+            vec![
+                150, 217, 36, 48, 49, 57, 53, 99, 56, 50, 53, 45, 97, 51, 53, 102, 45, 55, 57, 56,
+                50, 45, 98, 100, 98, 48, 45, 49, 54, 49, 54, 56, 56, 56, 49, 99, 98, 99, 54, 164,
+                116, 101, 115, 116, 164, 116, 101, 115, 116, 164, 116, 101, 115, 116, 145, 164,
+                116, 101, 115, 116, 164, 116, 101, 115, 116
+            ]
+        );
+    }
 
     #[test]
     fn test_serialize_deserialize() {
@@ -117,10 +142,9 @@ mod tests {
             script: "test".to_string(),
         };
 
-        let mut output = vec![];
-        script.serialize(&mut output).unwrap();
+        let serialized = script.serialize().unwrap();
 
-        let deserialized = Script::deserialize(&mut decode::Bytes::new(&output)).unwrap();
+        let deserialized = Script::deserialize(&serialized.0).unwrap();
 
         assert_eq!(script, deserialized);
     }
