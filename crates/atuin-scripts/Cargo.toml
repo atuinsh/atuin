@@ -24,3 +24,5 @@ uuid = { workspace = true }
 eyre = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
+typed-builder = { workspace = true }
+pretty_assertions = { workspace = true }
