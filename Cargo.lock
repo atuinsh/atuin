@@ -398,8 +398,14 @@ name = "atuin-scripts"
 version = "18.5.0-beta.1"
 dependencies = [
  "atuin-client",
+ "atuin-common",
+ "eyre",
+ "rmp",
+ "serde",
+ "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
