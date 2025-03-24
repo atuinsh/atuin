@@ -1122,6 +1122,10 @@ pub async fn history(
 
     let mut results = app.query_results(&mut db, settings.smart_sort).await?;
 
+    if settings.inline_height > 0 {
+        terminal.clear()?;
+    }
+
     let mut stats: Option<HistoryStats> = None;
     let accept;
     let result = 'render: loop {
