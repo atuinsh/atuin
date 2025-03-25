@@ -1,5 +1,4 @@
 use std::collections::HashSet;
-use std::convert::TryInto;
 use std::iter::FromIterator;
 
 use eyre::Result;
@@ -85,8 +84,9 @@ async fn sync_download(
         db.save_bulk(&history).await?;
 
         local_count = db.history_count(true).await?;
+        let remote_page_size = std::cmp::max(remote_status.page_size, 0) as usize;
 
-        if history.len() < remote_status.page_size.try_into().unwrap() {
+        if history.len() < remote_page_size {
             break;
         }
 
