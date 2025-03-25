@@ -142,7 +142,20 @@ impl AliasStore {
 
     pub async fn posix(&self) -> Result<String> {
         let aliases = self.aliases().await?;
+        Ok(Self::format_posix(&aliases))
+    }
 
+    pub async fn xonsh(&self) -> Result<String> {
+        let aliases = self.aliases().await?;
+        Ok(Self::format_xonsh(&aliases))
+    }
+
+    pub async fn powershell(&self) -> Result<String> {
+        let aliases = self.aliases().await?;
+        Ok(Self::format_powershell(&aliases))
+    }
+
+    fn format_posix(aliases: &[Alias]) -> String {
         let mut config = String::new();
 
         for alias in aliases {
@@ -153,28 +166,39 @@ impl AliasStore {
             config.push_str(&format!("alias {}='{}'\n", alias.name, value));
         }
 
-        Ok(config)
+        config
     }
 
-    pub async fn xonsh(&self) -> Result<String> {
-        let aliases = self.aliases().await?;
-
+    fn format_xonsh(aliases: &[Alias]) -> String {
         let mut config = String::new();
 
         for alias in aliases {
             config.push_str(&format!("aliases['{}'] ='{}'\n", alias.name, alias.value));
         }
 
-        Ok(config)
+        config
+    }
+
+    fn format_powershell(aliases: &[Alias]) -> String {
+        let mut config = String::new();
+
+        for alias in aliases {
+            config.push_str(&crate::shell::powershell::format_alias(alias));
+        }
+
+        config
     }
 
     pub async fn build(&self) -> Result<()> {
         let dir = atuin_common::utils::dotfiles_cache_dir();
         tokio::fs::create_dir_all(dir.clone()).await?;
 
+        let aliases = self.aliases().await?;
+
         // Build for all supported shells
-        let posix = self.posix().await?;
-        let xonsh = self.xonsh().await?;
+        let posix = Self::format_posix(&aliases);
+        let xonsh = Self::format_xonsh(&aliases);
+        let powershell = Self::format_powershell(&aliases);
 
         // All the same contents, maybe optimize in the future or perhaps there will be quirks
         // per-shell
@@ -183,11 +207,13 @@ impl AliasStore {
         let bash = dir.join("aliases.bash");
         let fish = dir.join("aliases.fish");
         let xsh = dir.join("aliases.xsh");
+        let ps1 = dir.join("aliases.ps1");
 
         tokio::fs::write(zsh, &posix).await?;
         tokio::fs::write(bash, &posix).await?;
         tokio::fs::write(fish, &posix).await?;
         tokio::fs::write(xsh, &xonsh).await?;
+        tokio::fs::write(ps1, &powershell).await?;
 
         Ok(())
     }
