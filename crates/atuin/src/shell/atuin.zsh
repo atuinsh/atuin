@@ -60,7 +60,8 @@ _atuin_search() {
 
     zle reset-prompt
     # re-enable bracketed paste
-    echo $zle_bracketed_paste[1] >/dev/tty
+    # shellcheck disable=SC2154
+    echo ${zle_bracketed_paste[1]} >/dev/tty
 
     if [[ -n $output ]]; then
         RBUFFER=""
