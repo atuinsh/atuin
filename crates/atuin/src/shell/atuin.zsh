@@ -59,6 +59,9 @@ _atuin_search() {
     output=$(ATUIN_SHELL_ZSH=t ATUIN_LOG=error ATUIN_QUERY=$BUFFER atuin search $* -i 3>&1 1>&2 2>&3)
 
     zle reset-prompt
+    # re-enable bracketed paste
+    # shellcheck disable=SC2154
+    echo ${zle_bracketed_paste[1]} >/dev/tty
 
     if [[ -n $output ]]; then
         RBUFFER=""
