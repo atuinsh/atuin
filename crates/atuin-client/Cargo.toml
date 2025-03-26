@@ -65,7 +65,7 @@ reqwest = { workspace = true, optional = true }
 hex = { version = "0.4", optional = true }
 sha2 = { version = "0.10", optional = true }
 indicatif = "0.17.7"
-tiny-bip39 = "=1.0.0"
+tiny-bip39 = "2.0.0"
 
 # theme
 crossterm = { version = "0.28.1", features = ["serde"] }
