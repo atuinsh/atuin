@@ -37,6 +37,14 @@ impl SearchEngine for Search {
 
         Ok(fuzzy_search(&self.engine, state, &self.all_history).await)
     }
+
+    fn get_highlight_indices(&self, command: &str, search_input: &str) -> Vec<usize> {
+        let (_, indices) = self
+            .engine
+            .fuzzy_indices(command, search_input)
+            .unwrap_or_default();
+        indices
+    }
 }
 
 async fn fuzzy_search(
