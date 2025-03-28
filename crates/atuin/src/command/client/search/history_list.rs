@@ -221,8 +221,10 @@ impl DrawState<'_> {
 
     fn command(&mut self, h: &History) {
         let mut style = self.theme.as_style(Meaning::Base);
+        let mut row_highlighted = false;
         if !self.alternate_highlight && (self.y as usize + self.state.offset == self.state.selected)
         {
+            row_highlighted = true;
             // if not applying alternative highlighting to the whole row, color the command
             style = self.theme.as_style(Meaning::AlertError);
             style.attributes.set(style::Attribute::Bold);
@@ -247,7 +249,12 @@ impl DrawState<'_> {
                 }
                 let mut style = style;
                 if highlight_indices.contains(&pos) {
-                    style.attributes.toggle(style::Attribute::Bold);
+                    if row_highlighted {
+                        // if the row is highlighted bold is not enough as the whole row is bold
+                        // change the color too
+                        style = self.theme.as_style(Meaning::AlertWarn);
+                    }
+                    style.attributes.set(style::Attribute::Bold);
                 }
                 self.draw(&ch.to_string(), style.into());
                 pos += 1;
