@@ -1,12 +1,12 @@
+use super::{SearchEngine, SearchState};
 use async_trait::async_trait;
 use atuin_client::{
     database::Database, database::OptFilters, history::History, settings::SearchMode,
 };
 use eyre::Result;
-use std::ops::Range;
-use norm::fzf::{FzfParser, FzfV2};
 use norm::Metric;
-use super::{SearchEngine, SearchState};
+use norm::fzf::{FzfParser, FzfV2};
+use std::ops::Range;
 
 pub struct Search(pub SearchMode);
 

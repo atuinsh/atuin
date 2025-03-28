@@ -1,10 +1,13 @@
 use std::time::Duration;
 
+use super::duration::format_duration;
+use super::engines::SearchEngine;
 use atuin_client::{
     history::History,
     theme::{Meaning, Theme},
 };
 use atuin_common::utils::Escapable as _;
+use itertools::Itertools;
 use ratatui::{
     buffer::Buffer,
     crossterm::style,
@@ -13,9 +16,6 @@ use ratatui::{
     widgets::{Block, StatefulWidget, Widget},
 };
 use time::OffsetDateTime;
-use itertools::Itertools;
-use super::duration::format_duration;
-use super::engines::SearchEngine;
 pub struct HistoryList<'a> {
     history: &'a [History],
     block: Option<Block<'a>>,
@@ -216,7 +216,14 @@ impl DrawState<'_> {
             style.attributes.set(style::Attribute::Bold);
         }
 
-        let highlight_indices = engine.get_highlight_indices(h.command.escape_control().split_ascii_whitespace().join(" ").as_str(), search_input);
+        let highlight_indices = engine.get_highlight_indices(
+            h.command
+                .escape_control()
+                .split_ascii_whitespace()
+                .join(" ")
+                .as_str(),
+            search_input,
+        );
 
         let mut pos = 0;
         for section in h.command.escape_control().split_ascii_whitespace() {
