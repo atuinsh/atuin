@@ -98,12 +98,12 @@ pub fn parse_alias(line: &str) -> Option<Alias> {
 
     let mut parts = parts.iter().map(|s| s.to_string());
 
-    let name = parts.next().unwrap().to_string();
+    let name = parts.next().unwrap();
 
     let remaining = if is_fish {
-        parts.collect::<Vec<String>>().join(" ").to_string()
+        parts.collect::<Vec<String>>().join(" ")
     } else {
-        parts.collect::<Vec<String>>().join("=").to_string()
+        parts.collect::<Vec<String>>().join("=")
     };
 
     Some(Alias {

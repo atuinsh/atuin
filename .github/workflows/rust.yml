@@ -212,7 +212,7 @@ jobs:
           key: ${{ runner.os }}-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Run clippy
-        run: cargo clippy -- -D warnings
+        run: cargo clippy -- -D warnings -D clippy::redundant_clone
 
   format:
     runs-on: ubuntu-latest
