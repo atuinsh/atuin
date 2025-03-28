@@ -228,13 +228,13 @@ impl DrawState<'_> {
         let mut pos = 0;
         for section in h.command.escape_control().split_ascii_whitespace() {
             self.draw(" ", style.into());
-            for (_, ch) in section.chars().enumerate() {
+            for ch in section.chars() {
                 if self.x > self.list_area.width {
                     // Avoid attempting to draw a command section beyond the width
                     // of the list
                     return;
                 }
-                let mut style = style.clone();
+                let mut style = style;
                 if highlight_indices.contains(&pos) {
                     style.attributes.toggle(style::Attribute::Bold);
                 }

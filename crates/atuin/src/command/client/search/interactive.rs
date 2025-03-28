@@ -736,7 +736,7 @@ impl State {
                     indicator.as_str(),
                     theme,
                     &self.engine,
-                    &self.search.input.as_str(),
+                    self.search.input.as_str(),
                 );
                 f.render_stateful_widget(results_list, results_list_chunk, &mut self.results_state);
             }
