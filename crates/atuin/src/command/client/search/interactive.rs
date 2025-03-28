@@ -10,6 +10,11 @@ use semver::Version;
 use time::OffsetDateTime;
 use unicode_width::UnicodeWidthStr;
 
+use super::{
+    cursor::Cursor,
+    engines::{SearchEngine, SearchState},
+    history_list::{HistoryList, ListState, PREFIX_LENGTH},
+};
 use atuin_client::{
     database::{Database, current_context},
     history::{History, HistoryStats, store::HistoryStore},
@@ -18,12 +23,7 @@ use atuin_client::{
     },
 };
 
-use super::{
-    cursor::Cursor,
-    engines::{SearchEngine, SearchState},
-    history_list::{HistoryList, ListState, PREFIX_LENGTH},
-};
-
+use crate::command::client::search::history_list::HistoryHighlighter;
 use crate::command::client::theme::{Meaning, Theme};
 use crate::{VERSION, command::client::search::engines};
 
@@ -728,6 +728,10 @@ impl State {
 
         match self.tab_index {
             0 => {
+                let history_highlighter = HistoryHighlighter {
+                    engine: self.engine.as_ref(),
+                    search_input: self.search.input.as_str(),
+                };
                 let results_list = Self::build_results_list(
                     style,
                     results,
@@ -735,8 +739,7 @@ impl State {
                     &self.now,
                     indicator.as_str(),
                     theme,
-                    &self.engine,
-                    self.search.input.as_str(),
+                    history_highlighter,
                 );
                 f.render_stateful_widget(results_list, results_list_chunk, &mut self.results_state);
             }
@@ -880,8 +883,7 @@ impl State {
         now: &'a dyn Fn() -> OffsetDateTime,
         indicator: &'a str,
         theme: &'a Theme,
-        engine: &'a Box<dyn SearchEngine>,
-        search_input: &'a str,
+        history_highlighter: HistoryHighlighter<'a>,
     ) -> HistoryList<'a> {
         let results_list = HistoryList::new(
             results,
@@ -890,8 +892,7 @@ impl State {
             now,
             indicator,
             theme,
-            engine,
-            search_input,
+            history_highlighter,
         );
 
         if style.compact {

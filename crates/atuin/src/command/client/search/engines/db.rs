@@ -44,6 +44,6 @@ impl SearchEngine for Search {
         let _ = fzf.distance_and_ranges(query, command, &mut ranges);
 
         // convert ranges to all indices
-        ranges.into_iter().flat_map(|r| r).collect()
+        ranges.into_iter().flatten().collect()
     }
 }

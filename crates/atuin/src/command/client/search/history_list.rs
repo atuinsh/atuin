@@ -16,6 +16,19 @@ use ratatui::{
     widgets::{Block, StatefulWidget, Widget},
 };
 use time::OffsetDateTime;
+
+pub struct HistoryHighlighter<'a> {
+    pub engine: &'a dyn SearchEngine,
+    pub search_input: &'a str,
+}
+
+impl HistoryHighlighter<'_> {
+    pub fn get_highlight_indices(&self, command: &str) -> Vec<usize> {
+        self.engine
+            .get_highlight_indices(command, self.search_input)
+    }
+}
+
 pub struct HistoryList<'a> {
     history: &'a [History],
     block: Option<Block<'a>>,
@@ -25,8 +38,7 @@ pub struct HistoryList<'a> {
     now: &'a dyn Fn() -> OffsetDateTime,
     indicator: &'a str,
     theme: &'a Theme,
-    engine: &'a Box<dyn SearchEngine>,
-    search_input: &'a str,
+    history_highlighter: HistoryHighlighter<'a>,
 }
 
 #[derive(Default)]
@@ -80,13 +92,14 @@ impl StatefulWidget for HistoryList<'_> {
             now: &self.now,
             indicator: self.indicator,
             theme: self.theme,
+            history_highlighter: self.history_highlighter,
         };
 
         for item in self.history.iter().skip(state.offset).take(end - start) {
             s.index();
             s.duration(item);
             s.time(item);
-            s.command(item, &self.search_input, &self.engine);
+            s.command(item);
 
             // reset line
             s.y += 1;
@@ -103,8 +116,7 @@ impl<'a> HistoryList<'a> {
         now: &'a dyn Fn() -> OffsetDateTime,
         indicator: &'a str,
         theme: &'a Theme,
-        engine: &'a Box<dyn SearchEngine>,
-        search_input: &'a str,
+        history_highlighter: HistoryHighlighter<'a>,
     ) -> Self {
         Self {
             history,
@@ -114,8 +126,7 @@ impl<'a> HistoryList<'a> {
             now,
             indicator,
             theme,
-            engine,
-            search_input,
+            history_highlighter,
         }
     }
 
@@ -150,6 +161,7 @@ struct DrawState<'a> {
     now: &'a dyn Fn() -> OffsetDateTime,
     indicator: &'a str,
     theme: &'a Theme,
+    history_highlighter: HistoryHighlighter<'a>,
 }
 
 // longest line prefix I could come up with
@@ -207,7 +219,7 @@ impl DrawState<'_> {
         self.draw(" ago", style.into());
     }
 
-    fn command(&mut self, h: &History, search_input: &str, engine: &Box<dyn SearchEngine>) {
+    fn command(&mut self, h: &History) {
         let mut style = self.theme.as_style(Meaning::Base);
         if !self.alternate_highlight && (self.y as usize + self.state.offset == self.state.selected)
         {
@@ -216,13 +228,12 @@ impl DrawState<'_> {
             style.attributes.set(style::Attribute::Bold);
         }
 
-        let highlight_indices = engine.get_highlight_indices(
+        let highlight_indices = self.history_highlighter.get_highlight_indices(
             h.command
                 .escape_control()
                 .split_ascii_whitespace()
                 .join(" ")
                 .as_str(),
-            search_input,
         );
 
         let mut pos = 0;
