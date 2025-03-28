@@ -735,6 +735,8 @@ impl State {
                     &self.now,
                     indicator.as_str(),
                     theme,
+                    &self.engine,
+                    &self.search.input.as_str(),
                 );
                 f.render_stateful_widget(results_list, results_list_chunk, &mut self.results_state);
             }
@@ -878,6 +880,8 @@ impl State {
         now: &'a dyn Fn() -> OffsetDateTime,
         indicator: &'a str,
         theme: &'a Theme,
+        engine: &'a Box<dyn SearchEngine>,
+        search_input: &'a str,
     ) -> HistoryList<'a> {
         let results_list = HistoryList::new(
             results,
@@ -886,6 +890,8 @@ impl State {
             now,
             indicator,
             theme,
+            engine,
+            search_input,
         );
 
         if style.compact {

@@ -80,6 +80,7 @@ tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 sysinfo = "0.30.7"
 regex = "1.10.5"
+norm = { version = "0.1.1", features = ["fzf-v2"] }
 
 [target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
 arboard = { version = "3.4", optional = true }

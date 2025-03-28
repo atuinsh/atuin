@@ -13,9 +13,9 @@ use ratatui::{
     widgets::{Block, StatefulWidget, Widget},
 };
 use time::OffsetDateTime;
-
+use itertools::Itertools;
 use super::duration::format_duration;
-
+use super::engines::SearchEngine;
 pub struct HistoryList<'a> {
     history: &'a [History],
     block: Option<Block<'a>>,
@@ -25,6 +25,8 @@ pub struct HistoryList<'a> {
     now: &'a dyn Fn() -> OffsetDateTime,
     indicator: &'a str,
     theme: &'a Theme,
+    engine: &'a Box<dyn SearchEngine>,
+    search_input: &'a str,
 }
 
 #[derive(Default)]
@@ -84,7 +86,7 @@ impl StatefulWidget for HistoryList<'_> {
             s.index();
             s.duration(item);
             s.time(item);
-            s.command(item);
+            s.command(item, &self.search_input, &self.engine);
 
             // reset line
             s.y += 1;
@@ -101,6 +103,8 @@ impl<'a> HistoryList<'a> {
         now: &'a dyn Fn() -> OffsetDateTime,
         indicator: &'a str,
         theme: &'a Theme,
+        engine: &'a Box<dyn SearchEngine>,
+        search_input: &'a str,
     ) -> Self {
         Self {
             history,
@@ -110,6 +114,8 @@ impl<'a> HistoryList<'a> {
             now,
             indicator,
             theme,
+            engine,
+            search_input,
         }
     }
 
@@ -201,7 +207,7 @@ impl DrawState<'_> {
         self.draw(" ago", style.into());
     }
 
-    fn command(&mut self, h: &History) {
+    fn command(&mut self, h: &History, search_input: &str, engine: &Box<dyn SearchEngine>) {
         let mut style = self.theme.as_style(Meaning::Base);
         if !self.alternate_highlight && (self.y as usize + self.state.offset == self.state.selected)
         {
@@ -210,14 +216,25 @@ impl DrawState<'_> {
             style.attributes.set(style::Attribute::Bold);
         }
 
+        let highlight_indices = engine.get_highlight_indices(h.command.escape_control().split_ascii_whitespace().join(" ").as_str(), search_input);
+
+        let mut pos = 0;
         for section in h.command.escape_control().split_ascii_whitespace() {
             self.draw(" ", style.into());
-            if self.x > self.list_area.width {
-                // Avoid attempting to draw a command section beyond the width
-                // of the list
-                return;
+            for (_, ch) in section.chars().enumerate() {
+                if self.x > self.list_area.width {
+                    // Avoid attempting to draw a command section beyond the width
+                    // of the list
+                    return;
+                }
+                let mut style = style.clone();
+                if highlight_indices.contains(&pos) {
+                    style.attributes.toggle(style::Attribute::Bold);
+                }
+                self.draw(&ch.to_string(), style.into());
+                pos += 1;
             }
-            self.draw(section, style.into());
+            pos += 1;
         }
     }
 
