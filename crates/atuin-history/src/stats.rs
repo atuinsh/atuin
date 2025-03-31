@@ -191,7 +191,7 @@ fn strip_leading_env_vars(command: &str) -> &str {
     }
 
     let start_pos = tokens[first_command_idx].2;
-    &command[start_pos..].trim()
+    command[start_pos..].trim()
 }
 
 pub fn pretty_print(stats: Stats, ngram_size: usize, theme: &Theme) {
