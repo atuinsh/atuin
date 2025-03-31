@@ -115,10 +115,7 @@ fn strip_leading_env_vars(command: &str) -> &str {
         return command;
     }
 
-    let cmd_len = command.len();
-    // [(token, is_env_var, start_index)]
-    let mut tokens = Vec::<(String, bool, usize)>::new();
-    let mut current_token = Some(String::with_capacity(cmd_len));
+    let mut in_token = false;
     let mut token_start_pos = 0;
     let mut in_single_quotes = false;
     let mut in_double_quotes = false;
@@ -127,71 +124,48 @@ fn strip_leading_env_vars(command: &str) -> &str {
 
     for (i, g) in UnicodeSegmentation::grapheme_indices(command, true) {
         if escape_next {
-            current_token.as_mut().unwrap().push_str(g);
             escape_next = false;
             continue;
         }
 
-        if current_token.as_ref().unwrap().is_empty() {
+        if !in_token {
             token_start_pos = i;
         }
 
         match g {
             "\\" => {
                 escape_next = true;
-                current_token.as_mut().unwrap().push_str(g);
+                in_token = true;
             }
             "'" if !in_double_quotes => {
                 in_single_quotes = !in_single_quotes;
-                current_token.as_mut().unwrap().push_str(g);
+                in_token = true;
             }
             "\"" if !in_single_quotes => {
                 in_double_quotes = !in_double_quotes;
-                current_token.as_mut().unwrap().push_str(g);
+                in_token = true;
             }
             "=" if !in_single_quotes && !in_double_quotes => {
                 has_equals_outside_quotes = true;
-                current_token.as_mut().unwrap().push_str(g);
+                in_token = true;
             }
             " " | "\t" if !in_single_quotes && !in_double_quotes => {
-                if !current_token.as_ref().unwrap().is_empty() {
-                    tokens.push((
-                        current_token.take().unwrap(),
-                        has_equals_outside_quotes,
-                        token_start_pos,
-                    ));
+                if in_token {
                     if !has_equals_outside_quotes {
                         // if we're not in an env var, we can break early
                         break;
                     }
-                    current_token = Some(String::with_capacity(cmd_len - i));
+                    in_token = false;
                     has_equals_outside_quotes = false;
                 }
             }
             _ => {
-                current_token.as_mut().unwrap().push_str(g);
+                in_token = true;
             }
         }
     }
 
-    // make sure we don't lose the last token if we never found an env var
-    if let Some(token) = current_token {
-        tokens.push((token, has_equals_outside_quotes, token_start_pos));
-    }
-
-    // find the first non-env-var token
-    let first_command_idx = tokens
-        .iter()
-        .position(|(_, is_env_var, _)| !is_env_var)
-        .unwrap_or(tokens.len());
-
-    if first_command_idx >= tokens.len() {
-        // oops, all env vars
-        return "";
-    }
-
-    let start_pos = tokens[first_command_idx].2;
-    command[start_pos..].trim()
+    command[token_start_pos..].trim()
 }
 
 pub fn pretty_print(stats: Stats, ngram_size: usize, theme: &Theme) {
