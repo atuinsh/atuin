@@ -65,7 +65,7 @@ impl AtuinCmd {
                 Ok(())
             }
             Self::GenCompletions(gen_completions) => gen_completions.run(),
-            Self::External(args) => return external::run(&args),
+            Self::External(args) => external::run(&args),
         }
     }
 }
