@@ -89,7 +89,7 @@ pub enum Cmd {
     Daemon,
 
     #[command(external_subcommand)]
-    External(Vec<OsString>),
+    External(Vec<String>),
 
     /// Print the default atuin configuration (config.toml)
     #[command()]

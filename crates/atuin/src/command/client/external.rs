@@ -1,5 +1,5 @@
 use std::fmt::Write as _;
-use std::{ffi::OsString, process::Command};
+use std::process::Command;
 use std::{io, process};
 
 use clap::CommandFactory;
@@ -8,8 +8,8 @@ use eyre::Result;
 
 use crate::Atuin;
 
-pub fn run(args: &[OsString]) -> Result<()> {
-    let subcommand = args[0].to_str().unwrap();
+pub fn run(args: &[String]) -> Result<()> {
+    let subcommand = &args[0];
     let bin = format!("atuin-{subcommand}");
     let mut cmd = Command::new(&bin);
     cmd.args(&args[1..]);
