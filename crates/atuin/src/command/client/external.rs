@@ -35,7 +35,7 @@ pub fn run(args: &[OsString]) -> Result<()> {
             }
         }
         Err(e) => {
-            println!("{}", e.ansi());
+            eprintln!("{}", e.ansi());
             process::exit(1);
         }
     }
