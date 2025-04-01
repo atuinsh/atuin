@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{ffi::OsString, path::PathBuf};
 
 use clap::Subcommand;
 use eyre::{Result, WrapErr};
@@ -20,6 +20,7 @@ mod daemon;
 mod default_config;
 mod doctor;
 mod dotfiles;
+mod external;
 mod history;
 mod import;
 mod info;
@@ -87,6 +88,9 @@ pub enum Cmd {
     #[command()]
     Daemon,
 
+    #[command(external_subcommand)]
+    External(Vec<OsString>),
+
     /// Print the default atuin configuration (config.toml)
     #[command()]
     DefaultConfig,
@@ -130,6 +134,7 @@ impl Cmd {
             Self::History(history) => return history.run(&settings).await,
             Self::Init(init) => return init.run(&settings).await,
             Self::Doctor => return doctor::run(&settings).await,
+            Self::External(args) => return external::run(&args),
             _ => {}
         }
 
@@ -174,7 +179,7 @@ impl Cmd {
             #[cfg(feature = "daemon")]
             Self::Daemon => daemon::run(settings, sqlite_store, db).await,
 
-            Self::History(_) | Self::Init(_) | Self::Doctor => unreachable!(),
+            Self::History(_) | Self::Init(_) | Self::Doctor | Self::External(_) => unreachable!(),
         }
     }
 }
