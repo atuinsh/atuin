@@ -27,3 +27,4 @@ serde = { workspace = true }
 typed-builder = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = "3.19.1"
+sql-builder = { workspace = true }

@@ -1,4 +1,3 @@
-use std::cmp::max;
 use std::collections::HashSet;
 use std::iter::FromIterator;
 
@@ -86,8 +85,6 @@ async fn sync_download(
 
         local_count = db.history_count(true).await?;
         let remote_page_size = std::cmp::max(remote_status.page_size, 0) as usize;
-
-        let remote_page_size = max(remote_status.page_size, 0) as usize;
 
         if history.len() < remote_page_size {
             break;

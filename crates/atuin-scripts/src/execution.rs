@@ -1,7 +1,7 @@
 use eyre::Result;
 use crate::store::script::Script;
-use std::process::{Stdio};
-use tokio::io::{self, AsyncReadExt, AsyncWriteExt, BufReader};
+use std::process::Stdio;
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 use tokio::task;
 use std::fs;
@@ -78,7 +78,7 @@ pub async fn execute_script_interactive(
         },
         _ => {
             
-            let mut temp_file = NamedTempFile::new()?;
+            let temp_file = NamedTempFile::new()?;
             let temp_path = temp_file.path().to_path_buf();
             
             // Write script content to the temp file
@@ -123,11 +123,11 @@ pub async fn execute_script_interactive(
     // handle user stdin
     tokio::spawn(async move {
         while let Some(input) = stdin_rx.recv().await {
-            if let Err(e) = stdin.write_all(input.as_bytes()) {
+            if let Err(e) = stdin.write_all(input.as_bytes()).await {
                 eprintln!("Error writing to stdin: {}", e);
                 break;
             }
-            if let Err(e) = stdin.flush(){
+            if let Err(e) = stdin.flush().await {
                 eprintln!("Error flushing stdin: {}", e);
                 break;
             }
