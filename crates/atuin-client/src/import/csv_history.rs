@@ -1,11 +1,11 @@
-use std::path::PathBuf;
 use std::fs::File;
-use std::io::{BufReader, BufRead};
+use std::io::{BufRead, BufReader};
+use std::path::PathBuf;
 
 use async_trait::async_trait;
+use csv::Reader;
 use eyre::{Result, eyre};
 use time::OffsetDateTime;
-use csv::Reader;
 
 use super::{Importer, Loader};
 use crate::history::History;
@@ -20,7 +20,9 @@ fn default_histpath() -> Result<PathBuf> {
     if histpath.exists() {
         Ok(histpath)
     } else {
-        Err(eyre!("Could not find history file. Please create 'history.csv' in the current directory."))
+        Err(eyre!(
+            "Could not find history file. Please create 'history.csv' in the current directory."
+        ))
     }
 }
 
@@ -45,8 +47,12 @@ impl Importer for CsvHistoryImporter {
 
         for result in reader.records() {
             let record = result?;
-            if let (Some(timestamp), Some(duration), Some(command)) = (record.get(0), record.get(1), record.get(2)) {
-                let timestamp = timestamp.parse::<i64>().ok()
+            if let (Some(timestamp), Some(duration), Some(command)) =
+                (record.get(0), record.get(1), record.get(2))
+            {
+                let timestamp = timestamp
+                    .parse::<i64>()
+                    .ok()
                     .and_then(|t| OffsetDateTime::from_unix_timestamp(t).ok())
                     .unwrap_or_else(OffsetDateTime::now_utc);
                 let duration = duration.parse::<i64>().map_or(-1, |t| t * 1_000_000_000);
@@ -67,10 +73,10 @@ impl Importer for CsvHistoryImporter {
 mod test {
     use super::*;
     use crate::import::tests::TestLoader;
-    use std::io::Write;
-    use std::fs;
-    use tempfile::NamedTempFile;
     use itertools::assert_equal;
+    use std::fs;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
 
     #[tokio::test]
     async fn test_parse_file() {
