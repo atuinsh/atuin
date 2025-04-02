@@ -92,8 +92,8 @@ impl Cmd {
                 // slower, but sorting is probably useful
                 if *all_namespaces {
                     for (ns, kv) in &map {
-                        for (k, v) in kv.iter() {
-                            if let Some(_) = v.value {
+                        for (k, v) in kv {
+                            if v.value.is_some() {
                                 println!("{ns}.{k}");
                             }
                         }
@@ -102,8 +102,8 @@ impl Cmd {
                     let ns = map.get(namespace);
 
                     if let Some(ns) = ns {
-                        for (k, v) in ns.iter() {
-                            if let Some(_) = v.value {
+                        for (k, v) in ns {
+                            if v.value.is_some() {
                                 println!("{k}");
                             }
                         }
