@@ -6,29 +6,52 @@ All notable changes to this project will be documented in this file.
 
 ### Bug Fixes
 
+- *(1289)* Clear terminal area if inline ([#2600](https://github.com/atuinsh/atuin/issues/2600))
 - *(bash)* Fix preexec of child Bash session started by enter_accept ([#2558](https://github.com/atuinsh/atuin/issues/2558))
+- *(build)* Change atuin-daemon build script .proto paths ([#2638](https://github.com/atuinsh/atuin/issues/2638))
+- *(stats)* Ignore leading environment variables when calculating stats ([#2659](https://github.com/atuinsh/atuin/issues/2659))
 - *(wrapped)* Fix crash when history is empty ([#2508](https://github.com/atuinsh/atuin/issues/2508))
+- *(zsh)* Fix an error introduced earilier with support for bracketed paste mode ([#2651](https://github.com/atuinsh/atuin/issues/2651))
 - Add .histfile as file to look for when doing atuin import zsh ([#2588](https://github.com/atuinsh/atuin/issues/2588))
 - Panic when invoking delete on empty tui ([#2584](https://github.com/atuinsh/atuin/issues/2584))
 - Sql files checksums ([#2601](https://github.com/atuinsh/atuin/issues/2601))
 - Up binding with fish 4.0 ([#2613](https://github.com/atuinsh/atuin/issues/2613)) ([#2616](https://github.com/atuinsh/atuin/issues/2616))
 - Don't save empty commands ([#2605](https://github.com/atuinsh/atuin/issues/2605))
 - Improve broken symlink error handling ([#2589](https://github.com/atuinsh/atuin/issues/2589))
+- Multiline command does not honour max_preview_height ([#2624](https://github.com/atuinsh/atuin/issues/2624))
+- Typeerror in client sync code ([#2647](https://github.com/atuinsh/atuin/issues/2647))
+- Add redundant clones to clippy and cleanup instances of it ([#2654](https://github.com/atuinsh/atuin/issues/2654))
+- Allow -ve values for timezone ([#2609](https://github.com/atuinsh/atuin/issues/2609))
+
+
+### Documentation
+
+- Update logo and badges in README for zh-CN ([#2392](https://github.com/atuinsh/atuin/issues/2392))
 
 
 ### Features
 
 - *(client)* Update AWS secrets env var handling checks ([#2501](https://github.com/atuinsh/atuin/issues/2501))
 - *(health)* Add health check endpoint at `/healthz` ([#2549](https://github.com/atuinsh/atuin/issues/2549))
+- *(kv)* Add support for 'atuin kv delete' ([#2660](https://github.com/atuinsh/atuin/issues/2660))
 - *(wrapped)* Add more pkg managers ([#2503](https://github.com/atuinsh/atuin/issues/2503))
+- *(zsh)* Try to go to the position in zsh's history ([#1469](https://github.com/atuinsh/atuin/issues/1469))
+- *(zsh)* Re-enable bracketed paste ([#2646](https://github.com/atuinsh/atuin/issues/2646))
 - Add the --print0 option to search ([#2562](https://github.com/atuinsh/atuin/issues/2562))
 - Make new arrow key behavior configurable ([#2606](https://github.com/atuinsh/atuin/issues/2606))
+- Use readline binding for ctrl-a when it is not the prefix ([#2626](https://github.com/atuinsh/atuin/issues/2626))
+- Option to include duplicate commands when printing history commands ([#2407](https://github.com/atuinsh/atuin/issues/2407))
+- Binaries as subcommands ([#2661](https://github.com/atuinsh/atuin/issues/2661))
 
 
 ### Miscellaneous Tasks
 
 - Remove unneeded dependencies ([#2523](https://github.com/atuinsh/atuin/issues/2523))
 - Update rust toolchain to 1.85 ([#2618](https://github.com/atuinsh/atuin/issues/2618))
+- Align daemon and client sync freq ([#2628](https://github.com/atuinsh/atuin/issues/2628))
+- Migrate to rust 2024 ([#2635](https://github.com/atuinsh/atuin/issues/2635))
+- Show host and user in inspector ([#2634](https://github.com/atuinsh/atuin/issues/2634))
+- Update to rust 1.85.1 ([#2642](https://github.com/atuinsh/atuin/issues/2642))
 
 
 ### Performance
@@ -39,6 +62,11 @@ All notable changes to this project will be documented in this file.
 ### Styling
 
 - Avoid calling `unwrap()` when we don't have to ([#2519](https://github.com/atuinsh/atuin/issues/2519))
+
+
+### Build
+
+- *(nix)* Bump `flake.lock` ([#2637](https://github.com/atuinsh/atuin/issues/2637))
 
 
 ### Flake.lock
