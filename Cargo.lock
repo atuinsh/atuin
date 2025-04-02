@@ -230,6 +230,7 @@ dependencies = [
  "atuin-daemon",
  "atuin-dotfiles",
  "atuin-history",
+ "atuin-scripts",
  "atuin-server",
  "atuin-server-postgres",
  "clap",
@@ -254,6 +255,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sysinfo",
+ "tempfile",
  "time",
  "tiny-bip39",
  "tokio",
@@ -395,7 +397,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-scripts"
-version = "18.5.0-beta.1"
+version = "18.5.0-beta.2"
 dependencies = [
  "atuin-client",
  "atuin-common",
@@ -403,6 +405,8 @@ dependencies = [
  "pretty_assertions",
  "rmp",
  "serde",
+ "sql-builder",
+ "sqlx",
  "tempfile",
  "tokio",
  "tracing",

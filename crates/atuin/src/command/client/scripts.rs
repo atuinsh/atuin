@@ -1,0 +1,284 @@
+use std::path::PathBuf;
+
+use atuin_scripts::{
+    execution::execute_script_interactive,
+    store::{ScriptStore, script::Script},
+};
+use clap::{Parser, Subcommand};
+use eyre::{Result, bail};
+use tempfile::NamedTempFile;
+
+use atuin_client::{record::sqlite_store::SqliteStore, settings::Settings};
+
+#[derive(Parser, Debug)]
+pub struct NewScript {
+    #[arg(short, long)]
+    pub name: String,
+
+    #[arg(short, long)]
+    pub description: Option<String>,
+
+    #[arg(short, long)]
+    pub tags: Vec<String>,
+
+    #[arg(short, long)]
+    pub shebang: Option<String>,
+
+    #[arg(long)]
+    pub script: Option<PathBuf>,
+}
+
+#[derive(Parser, Debug)]
+pub struct Run {
+    pub name: String,
+}
+
+#[derive(Parser, Debug)]
+pub struct List {}
+
+#[derive(Parser, Debug)]
+pub struct Edit {
+    pub name: String,
+
+    #[arg(short, long)]
+    pub description: Option<String>,
+
+    #[arg(short, long)]
+    pub tags: Vec<String>,
+
+    #[arg(short, long)]
+    pub shebang: Option<String>,
+
+    #[arg(long)]
+    pub script: Option<PathBuf>,
+}
+
+#[derive(Parser, Debug)]
+pub struct Delete {
+    pub name: String,
+
+    #[arg(short, long)]
+    pub force: bool,
+}
+
+#[derive(Subcommand, Debug)]
+#[command(infer_subcommands = true)]
+pub enum Cmd {
+    New(NewScript),
+    Run(Run),
+    List(List),
+    Edit(Edit),
+    Delete(Delete),
+}
+
+impl Cmd {
+    async fn handle_new_script(
+        _settings: &Settings,
+        new_script: NewScript,
+        script_store: ScriptStore,
+        script_db: atuin_scripts::database::Database,
+    ) -> Result<()> {
+        let script_content = if let Some(script_path) = new_script.script {
+            let script_content = std::fs::read_to_string(script_path)?;
+            Some(script_content)
+        } else {
+            // If the user does not pass a file in, we should
+            // 1. Create a temporary file
+            // 2. Open the file with $EDITOR
+            // 3. When the user closes the editor, read the file
+            let temp_file = NamedTempFile::new()?;
+            let path = temp_file.into_temp_path();
+
+            let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
+            let status = std::process::Command::new(editor).arg(&path).status()?;
+            if !status.success() {
+                bail!("failed to open editor");
+            }
+
+            let content = std::fs::read_to_string(&path)?;
+            path.close()?;
+            Some(content)
+        };
+
+        let script = Script::builder()
+            .name(new_script.name)
+            .description(new_script.description.unwrap_or_default())
+            .shebang(new_script.shebang.unwrap_or_default())
+            .tags(new_script.tags)
+            .script(script_content.unwrap_or_default())
+            .build();
+
+        script_store.create(script).await?;
+
+        script_store.build(script_db).await?;
+
+        Ok(())
+    }
+
+    async fn handle_run(
+        _settings: &Settings,
+        run: Run,
+        script_db: atuin_scripts::database::Database,
+    ) -> Result<()> {
+        let script = script_db.get_by_name(&run.name).await?;
+
+        if let Some(script) = script {
+            let mut session = execute_script_interactive(&script)
+                .await
+                .expect("failed to execute script");
+            session.wait_for_exit().await;
+        } else {
+            bail!("script not found");
+        }
+        Ok(())
+    }
+
+    async fn handle_list(
+        _settings: &Settings,
+        _list: List,
+        script_db: atuin_scripts::database::Database,
+    ) -> Result<()> {
+        let scripts = script_db.list().await?;
+
+        if scripts.is_empty() {
+            println!("No scripts found");
+        } else {
+            println!("Available scripts:");
+            for script in scripts {
+                if script.tags.is_empty() {
+                    println!("- {}", script.name);
+                } else {
+                    println!("- {} [tags: {}]", script.name, script.tags.join(", "));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn handle_edit(
+        _settings: &Settings,
+        edit: Edit,
+        script_store: ScriptStore,
+        script_db: atuin_scripts::database::Database,
+    ) -> Result<()> {
+        // Find the existing script
+        let existing_script = script_db.get_by_name(&edit.name).await?;
+
+        if let Some(mut script) = existing_script {
+            // Update the script with new values if provided
+            if let Some(description) = edit.description {
+                script.description = description;
+            }
+
+            if !edit.tags.is_empty() {
+                script.tags = edit.tags;
+            }
+
+            if let Some(shebang) = edit.shebang {
+                script.shebang = shebang;
+            }
+
+            // Handle script content update
+            let script_content = if let Some(script_path) = edit.script {
+                // Load script from provided file
+                std::fs::read_to_string(script_path)?
+            } else {
+                // Open the script in editor for interactive editing
+                let temp_file = NamedTempFile::new()?;
+                let path = temp_file.into_temp_path();
+
+                // Write the existing script content to the temp file
+                std::fs::write(&path, &script.script)?;
+
+                // Open the file in the user's preferred editor
+                let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
+                let status = std::process::Command::new(editor).arg(&path).status()?;
+                if !status.success() {
+                    bail!("failed to open editor");
+                }
+
+                // Read back the edited content
+                let content = std::fs::read_to_string(&path)?;
+                path.close()?;
+                content
+            };
+
+            // Update the script content
+            script.script = script_content;
+
+            // Update the script in the store
+            script_store.update(script).await?;
+
+            // Rebuild the database to apply changes
+            script_store.build(script_db).await?;
+
+            println!("Script '{}' updated successfully!", edit.name);
+
+            Ok(())
+        } else {
+            bail!("script '{}' not found", edit.name);
+        }
+    }
+
+    async fn handle_delete(
+        _settings: &Settings,
+        delete: Delete,
+        script_store: ScriptStore,
+        script_db: atuin_scripts::database::Database,
+    ) -> Result<()> {
+        // Find the script by name
+        let script = script_db.get_by_name(&delete.name).await?;
+
+        if let Some(script) = script {
+            // If not force, confirm deletion
+            if !delete.force {
+                println!(
+                    "Are you sure you want to delete script '{}'? [y/N]",
+                    delete.name
+                );
+                let mut input = String::new();
+                std::io::stdin().read_line(&mut input)?;
+
+                let input = input.trim().to_lowercase();
+                if input != "y" && input != "yes" {
+                    println!("Deletion cancelled");
+                    return Ok(());
+                }
+            }
+
+            // Delete the script
+            script_store.delete(script.id).await?;
+
+            // Rebuild the database to apply changes
+            script_store.build(script_db).await?;
+
+            println!("Script '{}' deleted successfully", delete.name);
+            Ok(())
+        } else {
+            bail!("script '{}' not found", delete.name);
+        }
+    }
+
+    pub async fn run(self, settings: &Settings, store: SqliteStore) -> Result<()> {
+        let host_id = Settings::host_id().expect("failed to get host_id");
+        let encryption_key: [u8; 32] = atuin_client::encryption::load_key(settings)?.into();
+
+        let script_store = ScriptStore::new(store, host_id, encryption_key);
+        let script_db =
+            atuin_scripts::database::Database::new(settings.scripts.database_path.clone(), 1.0)
+                .await?;
+
+        match self {
+            Self::New(new_script) => {
+                Self::handle_new_script(settings, new_script, script_store, script_db).await
+            }
+            Self::Run(run) => Self::handle_run(settings, run, script_db).await,
+            Self::List(list) => Self::handle_list(settings, list, script_db).await,
+            Self::Edit(edit) => Self::handle_edit(settings, edit, script_store, script_db).await,
+            Self::Delete(delete) => {
+                Self::handle_delete(settings, delete, script_store, script_db).await
+            }
+        }
+    }
+}

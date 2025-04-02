@@ -83,14 +83,10 @@ impl ScriptRecord {
                         Ok(ScriptRecord::Update(script))
                     }
 
-                    _ => {
-                        return Err(eyre!("unknown script record type {record_type}"));
-                    }
+                    _ => Err(eyre!("unknown script record type {record_type}")),
                 }
             }
-            _ => {
-                return Err(eyre!("unknown version {version:?}"));
-            }
+            _ => Err(eyre!("unknown version {version:?}")),
         }
     }
 }

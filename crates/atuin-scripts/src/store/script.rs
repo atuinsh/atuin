@@ -98,7 +98,7 @@ impl Script {
             name: name.to_owned(),
             description: description.to_owned(),
             shebang: shebang.to_owned(),
-            tags: tags.into_iter().map(|s| s.to_owned()).collect(),
+            tags,
             script: script.to_owned(),
         })
     }
