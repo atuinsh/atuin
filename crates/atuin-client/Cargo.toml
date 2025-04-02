@@ -54,6 +54,7 @@ futures = "0.3"
 crypto_secretbox = "0.1.1"
 generic-array = { version = "0.14", features = ["serde"] }
 serde_with = "3.8.1"
+csv = "1.1"
 
 # encryption
 rusty_paseto = { version = "0.7.0", default-features = false }
@@ -78,3 +79,4 @@ strum = { version = "0.26.2", features = ["strum_macros"] }
 tokio = { version = "1", features = ["full"] }
 pretty_assertions = { workspace = true }
 testing_logger = "0.1.1"
+tempfile ="3.3"
