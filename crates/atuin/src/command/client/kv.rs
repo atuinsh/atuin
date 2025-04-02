@@ -92,16 +92,20 @@ impl Cmd {
                 // slower, but sorting is probably useful
                 if *all_namespaces {
                     for (ns, kv) in &map {
-                        for k in kv.keys() {
-                            println!("{ns}.{k}");
+                        for (k, v) in kv.iter() {
+                            if let Some(_) = v.value {
+                                println!("{ns}.{k}");
+                            }
                         }
                     }
                 } else {
                     let ns = map.get(namespace);
 
                     if let Some(ns) = ns {
-                        for k in ns.keys() {
-                            println!("{k}");
+                        for (k, v) in ns.iter() {
+                            if let Some(_) = v.value {
+                                println!("{k}");
+                            }
                         }
                     }
                 }
