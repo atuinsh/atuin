@@ -10,9 +10,9 @@ use tokio::task;
 /// Represents the communication channels for an interactive script
 pub struct ScriptSession {
     /// Channel to send input to the script
-    stdin_tx: mpsc::Sender<String>,
+    pub stdin_tx: mpsc::Sender<String>,
     /// Exit code of the process once it completes
-    exit_code_rx: mpsc::Receiver<i32>,
+    pub exit_code_rx: mpsc::Receiver<i32>,
 }
 
 impl ScriptSession {

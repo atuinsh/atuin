@@ -37,6 +37,11 @@ pub struct Run {
 pub struct List {}
 
 #[derive(Parser, Debug)]
+pub struct Show {
+    pub name: String,
+}
+
+#[derive(Parser, Debug)]
 pub struct Edit {
     pub name: String,
 
@@ -67,6 +72,7 @@ pub enum Cmd {
     New(NewScript),
     Run(Run),
     List(List),
+    Show(Show),
     Edit(Edit),
     Delete(Delete),
 }
@@ -126,7 +132,61 @@ impl Cmd {
             let mut session = execute_script_interactive(&script)
                 .await
                 .expect("failed to execute script");
-            session.wait_for_exit().await;
+
+            // Create a channel to signal when the process exits
+            let (exit_tx, mut exit_rx) = tokio::sync::oneshot::channel();
+
+            // Set up a task to read from stdin and forward to the script
+            let sender = session.stdin_tx.clone();
+            let stdin_task = tokio::spawn(async move {
+                use tokio::io::AsyncReadExt;
+                use tokio::select;
+
+                let stdin = tokio::io::stdin();
+                let mut reader = tokio::io::BufReader::new(stdin);
+                let mut buffer = vec![0u8; 1024]; // Read in chunks for efficiency
+
+                loop {
+                    // Use select to either read from stdin or detect when the process exits
+                    select! {
+                        // Check if the script process has exited
+                        _ = &mut exit_rx => {
+                            break;
+                        }
+                        // Try to read from stdin
+                        read_result = reader.read(&mut buffer) => {
+                            match read_result {
+                                Ok(0) => break, // EOF
+                                Ok(n) => {
+                                    // Convert the bytes to a string and forward to script
+                                    let input = String::from_utf8_lossy(&buffer[0..n]).to_string();
+                                    if let Err(e) = sender.send(input).await {
+                                        eprintln!("Error sending input to script: {}", e);
+                                        break;
+                                    }
+                                },
+                                Err(e) => {
+                                    eprintln!("Error reading from stdin: {}", e);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+
+            // Wait for the script to complete
+            let exit_code = session.wait_for_exit().await;
+
+            // Signal the stdin task to stop
+            let _ = exit_tx.send(());
+            let _ = stdin_task.await;
+
+            if let Some(code) = exit_code {
+                if code != 0 {
+                    eprintln!("Script exited with code {}", code);
+                }
+            }
         } else {
             bail!("script not found");
         }
@@ -146,14 +206,49 @@ impl Cmd {
             println!("Available scripts:");
             for script in scripts {
                 if script.tags.is_empty() {
-                    println!("- {}", script.name);
+                    println!("- {} ", script.name);
                 } else {
                     println!("- {} [tags: {}]", script.name, script.tags.join(", "));
+                }
+
+                // Print description if it's not empty
+                if !script.description.is_empty() {
+                    println!("  Description: {}", script.description);
                 }
             }
         }
 
         Ok(())
+    }
+
+    async fn handle_show(
+        _settings: &Settings,
+        show: Show,
+        script_db: atuin_scripts::database::Database,
+    ) -> Result<()> {
+        let script = script_db.get_by_name(&show.name).await?;
+
+        if let Some(script) = script {
+            println!("Name: {}", script.name);
+
+            if !script.description.is_empty() {
+                println!("Description: {}", script.description);
+            }
+
+            if !script.tags.is_empty() {
+                println!("Tags: {}", script.tags.join(", "));
+            }
+
+            println!("Shebang: {}", script.shebang);
+            println!("\nScript content:");
+            println!("----------------------------------------");
+            println!("{}", script.script);
+            println!("----------------------------------------");
+
+            Ok(())
+        } else {
+            bail!("script '{}' not found", show.name);
+        }
     }
 
     async fn handle_edit(
@@ -275,6 +370,7 @@ impl Cmd {
             }
             Self::Run(run) => Self::handle_run(settings, run, script_db).await,
             Self::List(list) => Self::handle_list(settings, list, script_db).await,
+            Self::Show(show) => Self::handle_show(settings, show, script_db).await,
             Self::Edit(edit) => Self::handle_edit(settings, edit, script_store, script_db).await,
             Self::Delete(delete) => {
                 Self::handle_delete(settings, delete, script_store, script_db).await

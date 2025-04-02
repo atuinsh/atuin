@@ -11,8 +11,7 @@ CREATE TABLE scripts (
 CREATE TABLE script_tags (
     id INTEGER PRIMARY KEY,
     script_id TEXT NOT NULL,
-    tag TEXT NOT NULL,
-    FOREIGN KEY (script_id) REFERENCES scripts(id)
+    tag TEXT NOT NULL
 );
 
 CREATE UNIQUE INDEX idx_script_tags ON script_tags (script_id, tag);
