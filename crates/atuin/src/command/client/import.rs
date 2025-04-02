@@ -9,8 +9,8 @@ use atuin_client::{
     database::Database,
     history::History,
     import::{
-        bash::Bash, fish::Fish, nu::Nu, nu_histdb::NuHistDb, replxx::Replxx, resh::Resh,
-        xonsh::Xonsh, xonsh_sqlite::XonshSqlite, zsh::Zsh, zsh_histdb::ZshHistDb, Importer, Loader,
+        Importer, Loader, bash::Bash, fish::Fish, nu::Nu, nu_histdb::NuHistDb, replxx::Replxx,
+        resh::Resh, xonsh::Xonsh, xonsh_sqlite::XonshSqlite, zsh::Zsh, zsh_histdb::ZshHistDb,
     },
 };
 
@@ -57,7 +57,9 @@ impl Cmd {
         match self {
             Self::Auto => {
                 if cfg!(windows) {
-                    println!("This feature does not work on windows. Please run atuin import <SHELL>. To view a list of shells, run atuin import.");
+                    println!(
+                        "This feature does not work on windows. Please run atuin import <SHELL>. To view a list of shells, run atuin import."
+                    );
                     return Ok(());
                 }
 
@@ -145,7 +147,7 @@ impl<'db, DB: Database> HistoryImporter<'db, DB> {
 }
 
 #[async_trait]
-impl<'db, DB: Database> Loader for HistoryImporter<'db, DB> {
+impl<DB: Database> Loader for HistoryImporter<'_, DB> {
     async fn push(&mut self, hist: History) -> Result<()> {
         self.pb.inc(1);
         self.buf.push(hist);

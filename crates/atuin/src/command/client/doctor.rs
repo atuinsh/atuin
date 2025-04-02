@@ -3,14 +3,15 @@ use std::{env, path::PathBuf, str::FromStr};
 
 use atuin_client::database::Sqlite;
 use atuin_client::settings::Settings;
-use atuin_common::shell::{shell_name, Shell};
+use atuin_common::shell::{Shell, shell_name};
+use atuin_common::utils;
 use colored::Colorize;
 use eyre::Result;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
-use sysinfo::{get_current_pid, Disks, System};
+use sysinfo::{Disks, System, get_current_pid};
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize)]
 struct ShellInfo {
     pub name: String,
 
@@ -196,13 +197,13 @@ impl ShellInfo {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize)]
 struct DiskInfo {
     pub name: String,
     pub filesystem: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize)]
 struct SystemInfo {
     pub os: String,
 
@@ -233,7 +234,7 @@ impl SystemInfo {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize)]
 struct SyncInfo {
     /// Whether the main Atuin sync server is in use
     /// I'm just calling it Atuin Cloud for lack of a better name atm
@@ -255,7 +256,43 @@ impl SyncInfo {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
+struct SettingPaths {
+    db: String,
+    record_store: String,
+    key: String,
+    session: String,
+}
+
+impl SettingPaths {
+    pub fn new(settings: &Settings) -> Self {
+        Self {
+            db: settings.db_path.clone(),
+            record_store: settings.record_store_path.clone(),
+            key: settings.key_path.clone(),
+            session: settings.session_path.clone(),
+        }
+    }
+
+    pub fn verify(&self) {
+        let paths = vec![
+            ("ATUIN_DB_PATH", &self.db),
+            ("ATUIN_RECORD_STORE", &self.record_store),
+            ("ATUIN_KEY", &self.key),
+            ("ATUIN_SESSION", &self.session),
+        ];
+
+        for (path_env_var, path) in paths {
+            if utils::broken_symlink(path) {
+                eprintln!(
+                    "{path} (${path_env_var}) is a broken symlink. This may cause issues with Atuin."
+                );
+            }
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
 struct AtuinInfo {
     pub version: String,
 
@@ -264,6 +301,9 @@ struct AtuinInfo {
     pub sync: Option<SyncInfo>,
 
     pub sqlite_version: String,
+
+    #[serde(skip)] // probably unnecessary to expose this
+    pub setting_paths: SettingPaths,
 }
 
 impl AtuinInfo {
@@ -289,11 +329,12 @@ impl AtuinInfo {
             version: crate::VERSION.to_string(),
             sync,
             sqlite_version,
+            setting_paths: SettingPaths::new(settings),
         }
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize)]
 struct DoctorDump {
     pub atuin: AtuinInfo,
     pub shell: ShellInfo,
@@ -312,7 +353,7 @@ impl DoctorDump {
 
 fn checks(info: &DoctorDump) {
     println!(); // spacing
-                //
+    //
     let zfs_error = "[Filesystem] ZFS is known to have some issues with SQLite. Atuin uses SQLite heavily. If you are having poor performance, there are some workarounds here: https://github.com/atuinsh/atuin/issues/952".bold().red();
     let bash_plugin_error = "[Shell] If you are using Bash, Atuin requires that either bash-preexec or ble.sh be installed. An older ble.sh may not be detected. so ignore this if you have it set up! Read more here: https://docs.atuin.sh/guide/installation/#bash".bold().red();
     let blesh_integration_error = "[Shell] Atuin and ble.sh seem to be loaded in the session, but the integration does not seem to be working. Please check the setup in .bashrc.".bold().red();
@@ -321,6 +362,8 @@ fn checks(info: &DoctorDump) {
     if info.system.disks.iter().any(|d| d.filesystem == "zfs") {
         println!("{zfs_error}");
     }
+
+    info.atuin.setting_paths.verify();
 
     // Shell
     if info.shell.name == "bash" {

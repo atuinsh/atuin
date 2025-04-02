@@ -1,4 +1,4 @@
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
 /// Defines a new UUID type wrapper
 macro_rules! new_uuid {

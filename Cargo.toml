@@ -5,9 +5,9 @@ resolver = "2"
 exclude = ["ui/backend"]
 
 [workspace.package]
-version = "18.4.0-beta.3"
+version = "18.5.0-beta.2"
 authors = ["Ellie Huxtable <ellie@atuin.sh>"]
-rust-version = "1.82"
+rust-version = "1.85.1"
 license = "MIT"
 homepage = "https://atuin.sh"
 repository = "https://github.com/atuinsh/atuin"
@@ -23,7 +23,7 @@ time = { version = "0.3.36", features = [
   "local-offset",
 ] }
 clap = { version = "4.5.7", features = ["derive"] }
-config = { version = "0.13", default-features = false, features = ["toml"] }
+config = { version = "0.15.8", default-features = false, features = ["toml"] }
 directories = "5.0.1"
 eyre = "0.6"
 fs-err = "2.9"
@@ -56,40 +56,7 @@ default-features = false
 version = "0.8"
 features = ["runtime-tokio-rustls", "time", "postgres", "uuid"]
 
-# Config for 'cargo dist'
-[workspace.metadata.dist]
-# Path that installers should place binaries in
-install-path = "~/.atuin/bin"
-# The preferred cargo-dist version to use in CI (Cargo.toml SemVer syntax)
-cargo-dist-version = "0.16.0"
-# CI backends to support
-ci = "github"
-# The installers to generate for each app
-installers = ["shell"]
-# Target platforms to build apps for (Rust target-triple syntax)
-targets = [
-  "aarch64-apple-darwin",
-  "aarch64-unknown-linux-gnu",
-  "aarch64-unknown-linux-musl",
-  "x86_64-apple-darwin",
-  "x86_64-unknown-linux-gnu",
-  "x86_64-unknown-linux-musl",
-]
-# Publish jobs to run in CI
-pr-run-mode = "plan"
-# Whether to install an updater program
-install-updater = true
-# The archive format to use for non-windows builds (defaults .tar.xz)
-unix-archive = ".tar.gz"
-# Whether to enable GitHub Attestations
-github-attestations = true
-
 # The profile that 'cargo dist' will build with
 [profile.dist]
 inherits = "release"
 lto = "thin"
-
-[workspace.metadata.dist.github-custom-runners]
-aarch64-apple-darwin = "macos-14"
-aarch64-unknown-linux-gnu = "buildjet-2vcpu-ubuntu-2204-arm"
-aarch64-unknown-linux-musl = "buildjet-2vcpu-ubuntu-2204-arm"

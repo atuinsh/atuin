@@ -3,14 +3,14 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 use directories::BaseDirs;
-use eyre::{eyre, Result};
+use eyre::{Result, eyre};
 use futures::TryStreamExt;
-use sqlx::{sqlite::SqlitePool, FromRow, Row};
+use sqlx::{FromRow, Row, sqlite::SqlitePool};
 use time::OffsetDateTime;
-use uuid::timestamp::{context::NoContext, Timestamp};
 use uuid::Uuid;
+use uuid::timestamp::{Timestamp, context::NoContext};
 
-use super::{get_histpath, Importer, Loader};
+use super::{Importer, Loader, get_histfile_path};
 use crate::history::History;
 use crate::utils::get_host_user;
 
@@ -93,7 +93,7 @@ impl Importer for XonshSqlite {
     async fn new() -> Result<Self> {
         // wrap xonsh-specific path resolver in general one so that it respects $HISTPATH
         let xonsh_data_dir = env::var("XONSH_DATA_DIR").ok();
-        let db_path = get_histpath(|| xonsh_db_path(xonsh_data_dir))?;
+        let db_path = get_histfile_path(|| xonsh_db_path(xonsh_data_dir))?;
         let connection_str = db_path.to_str().ok_or_else(|| {
             eyre!(
                 "Invalid path for SQLite database: {}",

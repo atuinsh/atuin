@@ -17,6 +17,14 @@ pub enum Cmd {
         value: String,
     },
 
+    #[command(alias = "rm")]
+    Delete {
+        key: String,
+
+        #[arg(long, short, default_value = "default")]
+        namespace: String,
+    },
+
     // atuin kv get foo => bar baz
     Get {
         key: String,
@@ -51,7 +59,13 @@ impl Cmd {
                 namespace,
             } => {
                 kv_store
-                    .set(store, &encryption_key, host_id, namespace, key, value)
+                    .set(store, &encryption_key, host_id, namespace, key, Some(value))
+                    .await
+            }
+
+            Self::Delete { key, namespace } => {
+                kv_store
+                    .set(store, &encryption_key, host_id, namespace, key, None)
                     .await
             }
 
@@ -59,7 +73,10 @@ impl Cmd {
                 let val = kv_store.get(store, &encryption_key, namespace, key).await?;
 
                 if let Some(kv) = val {
-                    println!("{}", kv.value);
+                    // a `None` for kv.value means the key was deleted
+                    if let Some(value) = kv.value {
+                        println!("{value}");
+                    }
                 }
 
                 Ok(())

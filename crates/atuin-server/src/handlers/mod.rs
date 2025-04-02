@@ -1,9 +1,10 @@
 use atuin_common::api::{ErrorResponse, IndexResponse};
 use atuin_server_database::Database;
-use axum::{extract::State, http, response::IntoResponse, Json};
+use axum::{Json, extract::State, http, response::IntoResponse};
 
 use crate::router::AppState;
 
+pub mod health;
 pub mod history;
 pub mod record;
 pub mod status;
@@ -32,7 +33,7 @@ pub async fn index<DB: Database>(state: State<AppState<DB>>) -> Json<IndexRespon
     })
 }
 
-impl<'a> IntoResponse for ErrorResponseStatus<'a> {
+impl IntoResponse for ErrorResponseStatus<'_> {
     fn into_response(self) -> axum::response::Response {
         (self.status, Json(self.error)).into_response()
     }
@@ -56,7 +57,7 @@ impl<'a> RespExt<'a> for ErrorResponse<'a> {
         }
     }
 
-    fn reply(reason: &'a str) -> ErrorResponse {
+    fn reply(reason: &'a str) -> ErrorResponse<'a> {
         Self {
             reason: reason.into(),
         }

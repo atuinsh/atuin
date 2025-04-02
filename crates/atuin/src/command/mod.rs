@@ -14,6 +14,8 @@ mod contributors;
 
 mod gen_completions;
 
+mod external;
+
 #[derive(Subcommand)]
 #[command(infer_subcommands = true)]
 pub enum AtuinCmd {
@@ -33,6 +35,9 @@ pub enum AtuinCmd {
 
     /// Generate shell completions
     GenCompletions(gen_completions::Cmd),
+
+    #[command(external_subcommand)]
+    External(Vec<String>),
 }
 
 impl AtuinCmd {
@@ -60,6 +65,7 @@ impl AtuinCmd {
                 Ok(())
             }
             Self::GenCompletions(gen_completions) => gen_completions.run(),
+            Self::External(args) => external::run(&args),
         }
     }
 }

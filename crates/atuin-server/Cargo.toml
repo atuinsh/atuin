@@ -1,6 +1,6 @@
 [package]
 name = "atuin-server"
-edition = "2021"
+edition = "2024"
 description = "server library for atuin"
 
 rust-version = { workspace = true }
@@ -11,17 +11,15 @@ homepage = { workspace = true }
 repository = { workspace = true }
 
 [dependencies]
-atuin-common = { path = "../atuin-common", version = "18.4.0-beta.3" }
-atuin-server-database = { path = "../atuin-server-database", version = "18.4.0-beta.3" }
+atuin-common = { path = "../atuin-common", version = "18.5.0-beta.2" }
+atuin-server-database = { path = "../atuin-server-database", version = "18.5.0-beta.2" }
 
-tracing = "0.1"
+tracing = { workspace = true }
 time = { workspace = true }
 eyre = { workspace = true }
-uuid = { workspace = true }
 config = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-base64 = { workspace = true }
 rand = { workspace = true }
 tokio = { workspace = true }
 async-trait = { workspace = true }
@@ -29,10 +27,9 @@ axum = "0.7"
 axum-server = { version = "0.7", features = ["tls-rustls-no-provider"] }
 fs-err = { workspace = true }
 tower = { workspace = true }
-tower-http = { version = "0.5", features = ["trace"] }
+tower-http = { version = "0.6", features = ["trace"] }
 reqwest = { workspace = true }
 rustls = { version = "0.23", features = ["ring"], default-features = false }
-rustls-pemfile = "2.1"
 argon2 = "0.5"
 semver = { workspace = true }
 metrics-exporter-prometheus = "0.12.1"

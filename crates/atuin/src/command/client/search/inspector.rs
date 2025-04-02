@@ -5,13 +5,13 @@ use atuin_client::{
     history::{History, HistoryStats},
     settings::Settings,
 };
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
+    Frame,
+    crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
     layout::Rect,
     prelude::{Constraint, Direction, Layout},
     style::Style,
     widgets::{Bar, BarChart, BarGroup, Block, Borders, Padding, Paragraph, Row, Table},
-    Frame,
 };
 
 use super::duration::format_duration;
@@ -21,11 +21,7 @@ use super::interactive::{InputAction, State};
 
 #[allow(clippy::cast_sign_loss)]
 fn u64_or_zero(num: i64) -> u64 {
-    if num < 0 {
-        0
-    } else {
-        num as u64
-    }
+    if num < 0 { 0 } else { num as u64 }
 }
 
 pub fn draw_commands(
@@ -94,8 +90,11 @@ pub fn draw_stats_table(
 ) {
     let duration = Duration::from_nanos(u64_or_zero(history.duration));
     let avg_duration = Duration::from_nanos(stats.average_duration);
+    let (host, user) = history.hostname.split_once(':').unwrap_or(("", ""));
 
     let rows = [
+        Row::new(vec!["Host".to_string(), host.to_string()]),
+        Row::new(vec!["User".to_string(), user.to_string()]),
         Row::new(vec!["Time".to_string(), history.timestamp.to_string()]),
         Row::new(vec!["Duration".to_string(), format_duration(duration)]),
         Row::new(vec![

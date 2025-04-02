@@ -1,18 +1,9 @@
 use std::{
-    io::{stdout, Write},
+    io::{Write, stdout},
     time::Duration,
 };
 
 use atuin_common::utils::{self, Escapable as _};
-use crossterm::{
-    cursor::SetCursorStyle,
-    event::{
-        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers,
-        KeyboardEnhancementFlags, MouseEvent, PopKeyboardEnhancementFlags,
-        PushKeyboardEnhancementFlags,
-    },
-    execute, terminal,
-};
 use eyre::Result;
 use futures_util::FutureExt;
 use semver::Version;
@@ -20,8 +11,8 @@ use time::OffsetDateTime;
 use unicode_width::UnicodeWidthStr;
 
 use atuin_client::{
-    database::{current_context, Database},
-    history::{store::HistoryStore, History, HistoryStats},
+    database::{Database, current_context},
+    history::{History, HistoryStats, store::HistoryStore},
     settings::{
         CursorStyle, ExitMode, FilterMode, KeymapMode, PreviewStrategy, SearchMode, Settings,
     },
@@ -34,16 +25,25 @@ use super::{
 };
 
 use crate::command::client::theme::{Meaning, Theme};
-use crate::{command::client::search::engines, VERSION};
+use crate::{VERSION, command::client::search::engines};
 
 use ratatui::{
+    Frame, Terminal, TerminalOptions, Viewport,
     backend::CrosstermBackend,
+    crossterm::{
+        cursor::SetCursorStyle,
+        event::{
+            self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers,
+            KeyboardEnhancementFlags, MouseEvent, PopKeyboardEnhancementFlags,
+            PushKeyboardEnhancementFlags,
+        },
+        execute, terminal,
+    },
     layout::{Alignment, Constraint, Direction, Layout},
     prelude::*,
     style::{Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{block::Title, Block, BorderType, Borders, Padding, Paragraph, Tabs},
-    Frame, Terminal, TerminalOptions, Viewport,
+    widgets::{Block, BorderType, Borders, Padding, Paragraph, Tabs, block::Title},
 };
 
 const TAB_TITLES: [&str; 2] = ["Search", "Inspect"];
@@ -224,10 +224,12 @@ impl State {
             KeyCode::Esc if esc_allow_exit => Some(Self::handle_key_exit(settings)),
             KeyCode::Char('[') if ctrl && esc_allow_exit => Some(Self::handle_key_exit(settings)),
             KeyCode::Tab => Some(InputAction::Accept(self.results_state.selected())),
-            KeyCode::Right if cursor_at_end_of_line => {
+            KeyCode::Right if cursor_at_end_of_line && settings.keys.accept_past_line_end => {
                 Some(InputAction::Accept(self.results_state.selected()))
             }
-            KeyCode::Left if cursor_at_start_of_line => Some(Self::handle_key_exit(settings)),
+            KeyCode::Left if cursor_at_start_of_line && settings.keys.exit_past_line_start => {
+                Some(Self::handle_key_exit(settings))
+            }
             KeyCode::Char('o') if ctrl => {
                 self.tab_index = (self.tab_index + 1) % TAB_TITLES.len();
                 Some(InputAction::Continue)
@@ -388,7 +390,7 @@ impl State {
             KeyCode::Char(c @ '1'..='9') if modfr => {
                 return c.to_digit(10).map_or(InputAction::Continue, |c| {
                     InputAction::Accept(self.results_state.selected() + c as usize)
-                })
+                });
             }
             KeyCode::Left if ctrl => self
                 .search
@@ -415,6 +417,7 @@ impl State {
             KeyCode::Right => self.search.input.right(),
             KeyCode::Char('f') if ctrl => self.search.input.right(),
             KeyCode::Home => self.search.input.start(),
+            KeyCode::Char('a') if ctrl => self.search.input.start(),
             KeyCode::Char('e') if ctrl => self.search.input.end(),
             KeyCode::End => self.search.input.end(),
             KeyCode::Backspace if ctrl => self
@@ -538,8 +541,27 @@ impl State {
             && !results.is_empty()
         {
             let length_current_cmd = results[selected].command.len() as u16;
+            // calculate the number of newlines in the command
+            let num_newlines = results[selected]
+                .command
+                .chars()
+                .filter(|&c| c == '\n')
+                .count() as u16;
+            if num_newlines > 0 {
+                std::cmp::min(
+                    settings.max_preview_height,
+                    results[selected]
+                        .command
+                        .split('\n')
+                        .map(|line| {
+                            (line.len() as u16 + preview_width - 1 - border_size)
+                                / (preview_width - border_size)
+                        })
+                        .sum(),
+                ) + border_size * 2
+            }
             // The '- 19' takes the characters before the command (duration and time) into account
-            if length_current_cmd > preview_width - 19 {
+            else if length_current_cmd > preview_width - 19 {
                 std::cmp::min(
                     settings.max_preview_height,
                     (length_current_cmd + preview_width - 1 - border_size)
@@ -588,13 +610,13 @@ impl State {
         theme: &Theme,
     ) {
         let compact = match settings.style {
-            atuin_client::settings::Style::Auto => f.size().height < 14,
+            atuin_client::settings::Style::Auto => f.area().height < 14,
             atuin_client::settings::Style::Compact => true,
             atuin_client::settings::Style::Full => false,
         };
         let invert = settings.invert;
         let border_size = if compact { 0 } else { 1 };
-        let preview_width = f.size().width - 2;
+        let preview_width = f.area().width - 2;
         let preview_height = Self::calc_preview_height(
             settings,
             results,
@@ -604,12 +626,12 @@ impl State {
             border_size,
             preview_width,
         );
-        let show_help = settings.show_help && (!compact || f.size().height > 1);
+        let show_help = settings.show_help && (!compact || f.area().height > 1);
         // This is an OR, as it seems more likely for someone to wish to override
         // tabs unexpectedly being missed, than unexpectedly present.
         let hide_extra = settings.auto_hide_height != 0
             && compact
-            && f.size().height <= settings.auto_hide_height;
+            && f.area().height <= settings.auto_hide_height;
         let show_tabs = settings.show_tabs && !hide_extra;
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -643,7 +665,7 @@ impl State {
                 }
                 .as_ref(),
             )
-            .split(f.size());
+            .split(f.area());
 
         let input_chunk = if invert { chunks[0] } else { chunks[3] };
         let results_list_chunk = if invert { chunks[1] } else { chunks[2] };
@@ -722,9 +744,8 @@ impl State {
                     let message = Paragraph::new("Nothing to inspect")
                         .block(
                             Block::new()
-                                .title(
-                                    Title::from(" Info ".to_string()).alignment(Alignment::Center),
-                                )
+                                .title(Title::from(" Info ".to_string()))
+                                .title_alignment(Alignment::Center)
                                 .borders(Borders::ALL)
                                 .padding(Padding::vertical(2)),
                         )
@@ -742,7 +763,9 @@ impl State {
 
                 // HACK: I'm following up with abstracting this into the UI container, with a
                 // sub-widget for search + for inspector
-                let feedback = Paragraph::new("The inspector is new - please give feedback (good, or bad) at https://forum.atuin.sh");
+                let feedback = Paragraph::new(
+                    "The inspector is new - please give feedback (good, or bad) at https://forum.atuin.sh",
+                );
                 f.render_widget(feedback, input_chunk);
 
                 return;
@@ -774,11 +797,11 @@ impl State {
             let extra_width = UnicodeWidthStr::width(self.search.input.substring());
 
             let cursor_offset = if compact { 0 } else { 1 };
-            f.set_cursor(
+            f.set_cursor_position((
                 // Put cursor past the end of the input text
                 input_chunk.x + extra_width as u16 + PREFIX_LENGTH + 1 + cursor_offset,
                 input_chunk.y + cursor_offset,
-            );
+            ));
         }
     }
 
@@ -1099,6 +1122,10 @@ pub async fn history(
 
     let mut results = app.query_results(&mut db, settings.smart_sort).await?;
 
+    if settings.inline_height > 0 {
+        terminal.clear()?;
+    }
+
     let mut stats: Option<HistoryStats> = None;
     let accept;
     let result = 'render: loop {
@@ -1117,6 +1144,9 @@ pub async fn history(
                         match app.handle_input(settings, &event::read()?, &mut std::io::stdout())? {
                             InputAction::Continue => {},
                             InputAction::Delete(index) => {
+                                if results.is_empty() {
+                                    break;
+                                }
                                 app.results_len -= 1;
                                 let selected = app.results_state.selected();
                                 if selected == app.results_len {
@@ -1304,8 +1334,8 @@ mod tests {
         let no_preview = State::calc_preview_height(
             &settings_preview_auto,
             &results,
-            0 as usize,
-            0 as usize,
+            0_usize,
+            0_usize,
             false,
             1,
             80,
@@ -1314,8 +1344,8 @@ mod tests {
         let preview_h2 = State::calc_preview_height(
             &settings_preview_auto,
             &results,
-            1 as usize,
-            0 as usize,
+            1_usize,
+            0_usize,
             false,
             1,
             80,
@@ -1324,8 +1354,8 @@ mod tests {
         let preview_h3 = State::calc_preview_height(
             &settings_preview_auto,
             &results,
-            2 as usize,
-            0 as usize,
+            2_usize,
+            0_usize,
             false,
             1,
             80,
@@ -1334,8 +1364,8 @@ mod tests {
         let preview_one_line = State::calc_preview_height(
             &settings_preview_auto,
             &results,
-            0 as usize,
-            0 as usize,
+            0_usize,
+            0_usize,
             false,
             1,
             66,
@@ -1344,8 +1374,8 @@ mod tests {
         let preview_limit_at_2 = State::calc_preview_height(
             &settings_preview_auto_h2,
             &results,
-            2 as usize,
-            0 as usize,
+            2_usize,
+            0_usize,
             false,
             1,
             80,
@@ -1354,8 +1384,8 @@ mod tests {
         let preview_static_h3 = State::calc_preview_height(
             &settings_preview_h4,
             &results,
-            1 as usize,
-            0 as usize,
+            1_usize,
+            0_usize,
             false,
             1,
             80,
@@ -1364,8 +1394,8 @@ mod tests {
         let preview_static_limit_at_4 = State::calc_preview_height(
             &settings_preview_h4,
             &results,
-            1 as usize,
-            0 as usize,
+            1_usize,
+            0_usize,
             false,
             1,
             20,
@@ -1374,8 +1404,8 @@ mod tests {
         let settings_preview_fixed = State::calc_preview_height(
             &settings_preview_fixed,
             &results,
-            1 as usize,
-            0 as usize,
+            1_usize,
+            0_usize,
             false,
             1,
             20,
@@ -1383,7 +1413,7 @@ mod tests {
 
         assert_eq!(no_preview, 1);
         // 1 * 2 is the space for the border
-        let border_space = 1 * 2;
+        let border_space = 2;
         assert_eq!(preview_h2, 2 + border_space);
         assert_eq!(preview_h3, 3 + border_space);
         assert_eq!(preview_one_line, 1 + border_space);

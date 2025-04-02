@@ -28,6 +28,7 @@ mod kv;
 mod search;
 mod stats;
 mod store;
+mod wrapped;
 
 #[derive(Subcommand, Debug)]
 #[command(infer_subcommands = true)]
@@ -78,6 +79,9 @@ pub enum Cmd {
     #[command()]
     Doctor,
 
+    #[command()]
+    Wrapped { year: Option<i32> },
+
     /// *Experimental* Start the background daemon
     #[cfg(feature = "daemon")]
     #[command()]
@@ -125,6 +129,7 @@ impl Cmd {
         match self {
             Self::History(history) => return history.run(&settings).await,
             Self::Init(init) => return init.run(&settings).await,
+            Self::Doctor => return doctor::run(&settings).await,
             _ => {}
         }
 
@@ -159,17 +164,17 @@ impl Cmd {
                 Ok(())
             }
 
-            Self::Doctor => doctor::run(&settings).await,
-
             Self::DefaultConfig => {
                 default_config::run();
                 Ok(())
             }
 
+            Self::Wrapped { year } => wrapped::run(year, &db, &settings, theme).await,
+
             #[cfg(feature = "daemon")]
             Self::Daemon => daemon::run(settings, sqlite_store, db).await,
 
-            _ => unimplemented!(),
+            Self::History(_) | Self::Init(_) | Self::Doctor => unreachable!(),
         }
     }
 }

@@ -1,4 +1,4 @@
-use axum::{extract::State, http::StatusCode, Json};
+use axum::{Json, extract::State, http::StatusCode};
 use tracing::instrument;
 
 use super::{ErrorResponse, ErrorResponseStatus, RespExt};
@@ -28,7 +28,7 @@ pub async fn status<DB: Database>(
             Ok(count) => count,
             Err(_) => {
                 return Err(ErrorResponse::reply("failed to query history count")
-                    .with_status(StatusCode::INTERNAL_SERVER_ERROR))
+                    .with_status(StatusCode::INTERNAL_SERVER_ERROR));
             }
         },
     };

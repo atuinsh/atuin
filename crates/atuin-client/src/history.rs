@@ -1,17 +1,17 @@
 use core::fmt::Formatter;
 use rmp::decode::ValueReadError;
-use rmp::{decode::Bytes, Marker};
+use rmp::{Marker, decode::Bytes};
 use std::env;
 use std::fmt::Display;
 
 use atuin_common::record::DecryptedData;
 use atuin_common::utils::uuid_v7;
 
-use eyre::{bail, eyre, Result};
-use regex::RegexSet;
+use eyre::{Result, bail, eyre};
 
+use crate::secrets::SECRET_PATTERNS_RE;
+use crate::settings::Settings;
 use crate::utils::get_host_user;
-use crate::{secrets::SECRET_PATTERNS, settings::Settings};
 use time::OffsetDateTime;
 
 mod builder;
@@ -374,13 +374,11 @@ impl History {
     }
 
     pub fn should_save(&self, settings: &Settings) -> bool {
-        let secret_regex = SECRET_PATTERNS.iter().map(|f| f.1);
-        let secret_regex = RegexSet::new(secret_regex).expect("Failed to build secrets regex");
-
         !(self.command.starts_with(' ')
+            || self.command.is_empty()
             || settings.history_filter.is_match(&self.command)
             || settings.cwd_filter.is_match(&self.cwd)
-            || (secret_regex.is_match(&self.command)) && settings.secrets_filter)
+            || (settings.secrets_filter && SECRET_PATTERNS_RE.is_match(&self.command)))
     }
 }
 
@@ -416,6 +414,13 @@ mod tests {
             .build()
             .into();
 
+        let empty: History = History::capture()
+            .timestamp(time::OffsetDateTime::now_utc())
+            .command("")
+            .cwd("/")
+            .build()
+            .into();
+
         let stripe_key: History = History::capture()
             .timestamp(time::OffsetDateTime::now_utc())
             .command("curl foo.com/bar?key=sk_test_1234567890abcdefghijklmnop")
@@ -439,6 +444,7 @@ mod tests {
 
         assert!(normal_command.should_save(&settings));
         assert!(!with_space.should_save(&settings));
+        assert!(!empty.should_save(&settings));
         assert!(!stripe_key.should_save(&settings));
         assert!(!secret_dir.should_save(&settings));
         assert!(!with_psql.should_save(&settings));

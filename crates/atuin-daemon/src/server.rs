@@ -7,13 +7,13 @@ use atuin_client::settings::Settings;
 use std::path::PathBuf;
 use std::sync::Arc;
 use time::OffsetDateTime;
-use tracing::{instrument, Level};
+use tracing::{Level, instrument};
 
 use atuin_client::database::{Database, Sqlite as HistoryDatabase};
 use atuin_client::history::{History, HistoryId};
 use dashmap::DashMap;
 use eyre::Result;
-use tonic::{transport::Server, Request, Response, Status};
+use tonic::{Request, Response, Status, transport::Server};
 
 use crate::history::history_server::{History as HistorySvc, HistoryServer};
 
@@ -194,7 +194,9 @@ async fn start_server(settings: Settings, history: HistoryService) -> Result<()>
                     }
                 }
                 Err(err) => {
-                    tracing::warn!("could not detect systemd socket path, ensure that it's at the configured path: {socket_path:?}, error: {err:?}");
+                    tracing::warn!(
+                        "could not detect systemd socket path, ensure that it's at the configured path: {socket_path:?}, error: {err:?}"
+                    );
                 }
             }
             (UnixListener::from_std(listener)?, false)

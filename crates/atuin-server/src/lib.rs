@@ -4,18 +4,18 @@ use std::future::Future;
 use std::net::SocketAddr;
 
 use atuin_server_database::Database;
-use axum::{serve, Router};
-use axum_server::tls_rustls::RustlsConfig;
+use axum::{Router, serve};
 use axum_server::Handle;
-use eyre::{eyre, Context, Result};
+use axum_server::tls_rustls::RustlsConfig;
+use eyre::{Context, Result, eyre};
 
 mod handlers;
 mod metrics;
 mod router;
 mod utils;
 
-pub use settings::example_config;
 pub use settings::Settings;
+pub use settings::example_config;
 
 pub mod settings;
 

@@ -5,10 +5,10 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 use directories::BaseDirs;
-use eyre::{eyre, Result};
+use eyre::{Result, eyre};
 use time::OffsetDateTime;
 
-use super::{unix_byte_lines, Importer, Loader};
+use super::{Importer, Loader, unix_byte_lines};
 use crate::history::History;
 use crate::import::read_to_end;
 

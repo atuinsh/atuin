@@ -1,13 +1,13 @@
 use std::collections::BTreeMap;
 
 use atuin_common::record::{DecryptedData, Host, HostId};
-use eyre::{bail, ensure, eyre, Result};
+use eyre::{Result, bail, ensure, eyre};
 use serde::Deserialize;
 
 use crate::record::encryption::PASETO_V4;
 use crate::record::store::Store;
 
-const KV_VERSION: &str = "v0";
+const KV_VERSION: &str = "v1";
 const KV_TAG: &str = "kv";
 const KV_VAL_MAX_LEN: usize = 100 * 1024;
 
@@ -15,7 +15,7 @@ const KV_VAL_MAX_LEN: usize = 100 * 1024;
 pub struct KvRecord {
     pub namespace: String,
     pub key: String,
-    pub value: String,
+    pub value: Option<String>,
 }
 
 impl KvRecord {
@@ -25,11 +25,15 @@ impl KvRecord {
         let mut output = vec![];
 
         // INFO: ensure this is updated when adding new fields
-        encode::write_array_len(&mut output, 3)?;
+        encode::write_array_len(&mut output, 4)?;
 
         encode::write_str(&mut output, &self.namespace)?;
         encode::write_str(&mut output, &self.key)?;
-        encode::write_str(&mut output, &self.value)?;
+        encode::write_bool(&mut output, self.value.is_some())?;
+
+        if let Some(value) = &self.value {
+            encode::write_str(&mut output, value)?;
+        }
 
         Ok(DecryptedData(output))
     }
@@ -42,7 +46,7 @@ impl KvRecord {
         }
 
         match version {
-            KV_VERSION => {
+            "v0" => {
                 let mut bytes = decode::Bytes::new(&data.0);
 
                 let nfields = decode::read_array_len(&mut bytes).map_err(error_report)?;
@@ -62,7 +66,38 @@ impl KvRecord {
                 Ok(KvRecord {
                     namespace: namespace.to_owned(),
                     key: key.to_owned(),
-                    value: value.to_owned(),
+                    value: Some(value.to_owned()),
+                })
+            }
+            KV_VERSION => {
+                let mut bytes = decode::Bytes::new(&data.0);
+
+                let nfields = decode::read_array_len(&mut bytes).map_err(error_report)?;
+                ensure!(nfields == 4, "too many entries in v1 kv record");
+
+                let bytes = bytes.remaining_slice();
+
+                let (namespace, bytes) =
+                    decode::read_str_from_slice(bytes).map_err(error_report)?;
+                let (key, mut bytes) = decode::read_str_from_slice(bytes).map_err(error_report)?;
+                let has_value = decode::read_bool(&mut bytes).map_err(error_report)?;
+
+                let (value, bytes) = if has_value {
+                    let (value, bytes) =
+                        decode::read_str_from_slice(bytes).map_err(error_report)?;
+                    (Some(value.to_owned()), bytes)
+                } else {
+                    (None, bytes)
+                };
+
+                if !bytes.is_empty() {
+                    bail!("trailing bytes in encoded kvrecord. malformed")
+                }
+
+                Ok(KvRecord {
+                    namespace: namespace.to_owned(),
+                    key: key.to_owned(),
+                    value,
                 })
             }
             _ => {
@@ -94,9 +129,9 @@ impl KvStore {
         host_id: HostId,
         namespace: &str,
         key: &str,
-        value: &str,
+        value: Option<&str>,
     ) -> Result<()> {
-        if value.len() > KV_VAL_MAX_LEN {
+        if value.is_some() && value.unwrap().len() > KV_VAL_MAX_LEN {
             return Err(eyre!(
                 "kv value too large: max len {} bytes",
                 KV_VAL_MAX_LEN
@@ -106,7 +141,7 @@ impl KvStore {
         let record = KvRecord {
             namespace: namespace.to_string(),
             key: key.to_string(),
-            value: value.to_string(),
+            value: value.map(|v| v.to_string()),
         };
 
         let bytes = record.serialize()?;
@@ -175,11 +210,11 @@ impl KvStore {
         // probably good enough for now, but revisit in future
         for record in tagged {
             let decrypted = match record.version.as_str() {
-                KV_VERSION => record.decrypt::<PASETO_V4>(encryption_key)?,
+                "v0" | KV_VERSION => record.decrypt::<PASETO_V4>(encryption_key)?,
                 version => bail!("unknown version {version:?}"),
             };
 
-            let kv = KvRecord::deserialize(&decrypted.data, KV_VERSION)?;
+            let kv = KvRecord::deserialize(&decrypted.data, &decrypted.version)?;
 
             let ns = map
                 .entry(kv.namespace.clone())
@@ -200,23 +235,56 @@ mod tests {
     use crate::record::sqlite_store::SqliteStore;
     use crate::settings::test_local_timeout;
 
-    use super::{KvRecord, KvStore, KV_VERSION};
+    use super::{DecryptedData, KV_VERSION, KvRecord, KvStore};
 
     #[test]
-    fn encode_decode() {
+    fn encode_decode_some() {
         let kv = KvRecord {
             namespace: "foo".to_owned(),
             key: "bar".to_owned(),
-            value: "baz".to_owned(),
+            value: Some("baz".to_owned()),
         };
         let snapshot = [
-            0x93, 0xa3, b'f', b'o', b'o', 0xa3, b'b', b'a', b'r', 0xa3, b'b', b'a', b'z',
+            0x94, 0xa3, b'f', b'o', b'o', 0xa3, b'b', b'a', b'r', 0xc3, 0xa3, b'b', b'a', b'z',
         ];
 
         let encoded = kv.serialize().unwrap();
         let decoded = KvRecord::deserialize(&encoded, KV_VERSION).unwrap();
 
         assert_eq!(encoded.0, &snapshot);
+        assert_eq!(decoded, kv);
+    }
+
+    #[test]
+    fn encode_decode_none() {
+        let kv = KvRecord {
+            namespace: "foo".to_owned(),
+            key: "bar".to_owned(),
+            value: None,
+        };
+        let snapshot = [0x94, 0xa3, b'f', b'o', b'o', 0xa3, b'b', b'a', b'r', 0xc2];
+
+        let encoded = kv.serialize().unwrap();
+        let decoded = KvRecord::deserialize(&encoded, KV_VERSION).unwrap();
+
+        assert_eq!(encoded.0, &snapshot);
+        assert_eq!(decoded, kv);
+    }
+
+    #[test]
+    fn decode_v0() {
+        let kv = KvRecord {
+            namespace: "foo".to_owned(),
+            key: "bar".to_owned(),
+            value: Some("baz".to_owned()),
+        };
+
+        let snapshot = vec![
+            0x93, 0xa3, b'f', b'o', b'o', 0xa3, b'b', b'a', b'r', 0xa3, b'b', b'a', b'z',
+        ];
+
+        let decoded = KvRecord::deserialize(&DecryptedData(snapshot), "v0").unwrap();
+
         assert_eq!(decoded, kv);
     }
 
@@ -229,11 +297,26 @@ mod tests {
         let key: [u8; 32] = XSalsa20Poly1305::generate_key(&mut OsRng).into();
         let host_id = atuin_common::record::HostId(atuin_common::utils::uuid_v7());
 
-        kv.set(&mut store, &key, host_id, "test-kv", "foo", "bar")
+        kv.set(&mut store, &key, host_id, "test-kv", "foo", Some("bar"))
             .await
             .unwrap();
 
-        kv.set(&mut store, &key, host_id, "test-kv", "1", "2")
+        kv.set(&mut store, &key, host_id, "test-kv", "1", Some("2"))
+            .await
+            .unwrap();
+
+        kv.set(
+            &mut store,
+            &key,
+            host_id,
+            "test-kv",
+            "deleted",
+            Some("hello"),
+        )
+        .await
+        .unwrap();
+
+        kv.set(&mut store, &key, host_id, "test-kv", "deleted", None)
             .await
             .unwrap();
 
@@ -247,7 +330,7 @@ mod tests {
             KvRecord {
                 namespace: String::from("test-kv"),
                 key: String::from("foo"),
-                value: String::from("bar")
+                value: Some(String::from("bar"))
             }
         );
 
@@ -259,7 +342,19 @@ mod tests {
             KvRecord {
                 namespace: String::from("test-kv"),
                 key: String::from("1"),
-                value: String::from("2")
+                value: Some(String::from("2"))
+            }
+        );
+
+        assert_eq!(
+            *map.get("test-kv")
+                .expect("map namespace not set")
+                .get("deleted")
+                .expect("map key not set"),
+            KvRecord {
+                namespace: String::from("test-kv"),
+                key: String::from("deleted"),
+                value: None
             }
         );
     }

@@ -2,11 +2,11 @@ use std::{path::PathBuf, str};
 
 use async_trait::async_trait;
 use directories::UserDirs;
-use eyre::{eyre, Result};
+use eyre::{Result, eyre};
 use itertools::Itertools;
 use time::{Duration, OffsetDateTime};
 
-use super::{get_histpath, unix_byte_lines, Importer, Loader};
+use super::{Importer, Loader, get_histfile_path, unix_byte_lines};
 use crate::history::History;
 use crate::import::read_to_end;
 
@@ -27,7 +27,7 @@ impl Importer for Bash {
     const NAME: &'static str = "bash";
 
     async fn new() -> Result<Self> {
-        let bytes = read_to_end(get_histpath(default_histpath)?)?;
+        let bytes = read_to_end(get_histfile_path(default_histpath)?)?;
         Ok(Self { bytes })
     }
 
@@ -73,7 +73,9 @@ impl Importer for Bash {
                 LineType::Empty => {}                // do nothing
                 LineType::Timestamp(t) => {
                     if t < next_timestamp {
-                        warn!("Time reversal detected in Bash history! Commands may be ordered incorrectly.");
+                        warn!(
+                            "Time reversal detected in Bash history! Commands may be ordered incorrectly."
+                        );
                     }
                     next_timestamp = t;
                 }
@@ -126,9 +128,9 @@ fn try_parse_line_as_timestamp(line: &str) -> Option<OffsetDateTime> {
 mod test {
     use std::cmp::Ordering;
 
-    use itertools::{assert_equal, Itertools};
+    use itertools::{Itertools, assert_equal};
 
-    use crate::import::{tests::TestLoader, Importer};
+    use crate::import::{Importer, tests::TestLoader};
 
     use super::Bash;
 

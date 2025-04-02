@@ -416,7 +416,7 @@ impl ThemeManager {
                             "set theme debug on for more info".to_string()
                         }
                     ),
-                )))
+                )));
             }
         };
         let colors: HashMap<Meaning, String> = theme_config.colors;
@@ -697,7 +697,8 @@ mod theme_tests {
 
         testing_logger::validate(|captured_logs| {
             assert_eq!(captured_logs.len(), 1);
-            assert_eq!(captured_logs[0].body,
+            assert_eq!(
+                captured_logs[0].body,
                 "Could not load theme nonsolarized: Empty theme directory override and could not find theme elsewhere"
             );
             assert_eq!(captured_logs[0].level, log::Level::Warn)

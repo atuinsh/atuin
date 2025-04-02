@@ -6,17 +6,100 @@ All notable changes to this project will be documented in this file.
 
 ### Bug Fixes
 
+- *(1289)* Clear terminal area if inline ([#2600](https://github.com/atuinsh/atuin/issues/2600))
+- *(bash)* Fix preexec of child Bash session started by enter_accept ([#2558](https://github.com/atuinsh/atuin/issues/2558))
+- *(build)* Change atuin-daemon build script .proto paths ([#2638](https://github.com/atuinsh/atuin/issues/2638))
+- *(stats)* Ignore leading environment variables when calculating stats ([#2659](https://github.com/atuinsh/atuin/issues/2659))
+- *(wrapped)* Fix crash when history is empty ([#2508](https://github.com/atuinsh/atuin/issues/2508))
+- *(zsh)* Fix an error introduced earilier with support for bracketed paste mode ([#2651](https://github.com/atuinsh/atuin/issues/2651))
+- Add .histfile as file to look for when doing atuin import zsh ([#2588](https://github.com/atuinsh/atuin/issues/2588))
+- Panic when invoking delete on empty tui ([#2584](https://github.com/atuinsh/atuin/issues/2584))
+- Sql files checksums ([#2601](https://github.com/atuinsh/atuin/issues/2601))
+- Up binding with fish 4.0 ([#2613](https://github.com/atuinsh/atuin/issues/2613)) ([#2616](https://github.com/atuinsh/atuin/issues/2616))
+- Don't save empty commands ([#2605](https://github.com/atuinsh/atuin/issues/2605))
+- Improve broken symlink error handling ([#2589](https://github.com/atuinsh/atuin/issues/2589))
+- Multiline command does not honour max_preview_height ([#2624](https://github.com/atuinsh/atuin/issues/2624))
+- Typeerror in client sync code ([#2647](https://github.com/atuinsh/atuin/issues/2647))
+- Add redundant clones to clippy and cleanup instances of it ([#2654](https://github.com/atuinsh/atuin/issues/2654))
+- Allow -ve values for timezone ([#2609](https://github.com/atuinsh/atuin/issues/2609))
+
+
+### Documentation
+
+- Update logo and badges in README for zh-CN ([#2392](https://github.com/atuinsh/atuin/issues/2392))
+
+
+### Features
+
+- *(client)* Update AWS secrets env var handling checks ([#2501](https://github.com/atuinsh/atuin/issues/2501))
+- *(health)* Add health check endpoint at `/healthz` ([#2549](https://github.com/atuinsh/atuin/issues/2549))
+- *(kv)* Add support for 'atuin kv delete' ([#2660](https://github.com/atuinsh/atuin/issues/2660))
+- *(wrapped)* Add more pkg managers ([#2503](https://github.com/atuinsh/atuin/issues/2503))
+- *(zsh)* Try to go to the position in zsh's history ([#1469](https://github.com/atuinsh/atuin/issues/1469))
+- *(zsh)* Re-enable bracketed paste ([#2646](https://github.com/atuinsh/atuin/issues/2646))
+- Add the --print0 option to search ([#2562](https://github.com/atuinsh/atuin/issues/2562))
+- Make new arrow key behavior configurable ([#2606](https://github.com/atuinsh/atuin/issues/2606))
+- Use readline binding for ctrl-a when it is not the prefix ([#2626](https://github.com/atuinsh/atuin/issues/2626))
+- Option to include duplicate commands when printing history commands ([#2407](https://github.com/atuinsh/atuin/issues/2407))
+- Binaries as subcommands ([#2661](https://github.com/atuinsh/atuin/issues/2661))
+
+
+### Miscellaneous Tasks
+
+- Remove unneeded dependencies ([#2523](https://github.com/atuinsh/atuin/issues/2523))
+- Update rust toolchain to 1.85 ([#2618](https://github.com/atuinsh/atuin/issues/2618))
+- Align daemon and client sync freq ([#2628](https://github.com/atuinsh/atuin/issues/2628))
+- Migrate to rust 2024 ([#2635](https://github.com/atuinsh/atuin/issues/2635))
+- Show host and user in inspector ([#2634](https://github.com/atuinsh/atuin/issues/2634))
+- Update to rust 1.85.1 ([#2642](https://github.com/atuinsh/atuin/issues/2642))
+
+
+### Performance
+
+- Cache `SECRET_PATTERNS`'s `RegexSet` ([#2570](https://github.com/atuinsh/atuin/issues/2570))
+
+
+### Styling
+
+- Avoid calling `unwrap()` when we don't have to ([#2519](https://github.com/atuinsh/atuin/issues/2519))
+
+
+### Build
+
+- *(nix)* Bump `flake.lock` ([#2637](https://github.com/atuinsh/atuin/issues/2637))
+
+
+### Flake.lock
+
+- Update ([#2463](https://github.com/atuinsh/atuin/issues/2463))
+
+
+## [18.4.0] - 2024-12-27
+
+### Bug Fixes
+
 - *(crate)* Add missing description ([#2106](https://github.com/atuinsh/atuin/issues/2106))
 - *(crate)* Add description to daemon crate ([#2107](https://github.com/atuinsh/atuin/issues/2107))
+- *(daemon)* Add context to error when unable to connect ([#2394](https://github.com/atuinsh/atuin/issues/2394))
+- *(deps)* Pin tiny_bip to 1.0.0 until breaking change resolved ([#2412](https://github.com/atuinsh/atuin/issues/2412))
+- *(docker)* Update Dockerfile ([#2369](https://github.com/atuinsh/atuin/issues/2369))
 - *(gui)* Update deps ([#2116](https://github.com/atuinsh/atuin/issues/2116))
 - *(gui)* Add support for checking if the cli is installed on windows ([#2162](https://github.com/atuinsh/atuin/issues/2162))
 - *(gui)* WeekInfo call on Edge ([#2252](https://github.com/atuinsh/atuin/issues/2252))
 - *(gui)* Add \r for windows (shouldn't effect unix bc they should ignore it) ([#2253](https://github.com/atuinsh/atuin/issues/2253))
 - *(gui)* Terminal resize overflow ([#2285](https://github.com/atuinsh/atuin/issues/2285))
 - *(gui)* Kill child on block stop ([#2288](https://github.com/atuinsh/atuin/issues/2288))
+- *(gui)* Do not hardcode db path ([#2309](https://github.com/atuinsh/atuin/issues/2309))
+- *(gui)* Double return on mac/linux ([#2311](https://github.com/atuinsh/atuin/issues/2311))
+- *(gui)* Cursor positioning on new doc creation ([#2310](https://github.com/atuinsh/atuin/issues/2310))
+- *(gui)* Random ts errors ([#2316](https://github.com/atuinsh/atuin/issues/2316))
 - *(history)* Logic for store_failed=false ([#2284](https://github.com/atuinsh/atuin/issues/2284))
+- *(mail)* Incorrect alias and error logs ([#2346](https://github.com/atuinsh/atuin/issues/2346))
+- *(mail)* Enable correct tls features for postmark client ([#2347](https://github.com/atuinsh/atuin/issues/2347))
+- *(theme)* Restore original colours ([#2339](https://github.com/atuinsh/atuin/issues/2339))
 - *(themes)* Restore default theme, refactor ([#2294](https://github.com/atuinsh/atuin/issues/2294))
 - *(tui)* Press ctrl-a twice should jump to beginning of line ([#2246](https://github.com/atuinsh/atuin/issues/2246))
+- *(tui)* Don't panic when search result is empty and up is pressed ([#2395](https://github.com/atuinsh/atuin/issues/2395))
 - Cargo binstall config ([#2112](https://github.com/atuinsh/atuin/issues/2112))
 - Unitless sync_frequence = 0 not parsed by humantime ([#2154](https://github.com/atuinsh/atuin/issues/2154))
 - Some --help comments didn't show properly ([#2176](https://github.com/atuinsh/atuin/issues/2176))
@@ -24,6 +107,13 @@ All notable changes to this project will be documented in this file.
 - Add idx cache unique index ([#2226](https://github.com/atuinsh/atuin/issues/2226))
 - Idx cache inconsistency ([#2231](https://github.com/atuinsh/atuin/issues/2231))
 - Ambiguous column name ([#2232](https://github.com/atuinsh/atuin/issues/2232))
+- Atuin-daemon optional dependency ([#2306](https://github.com/atuinsh/atuin/issues/2306))
+- Windows build error ([#2321](https://github.com/atuinsh/atuin/issues/2321))
+- Codespell config still references the ui ([#2330](https://github.com/atuinsh/atuin/issues/2330))
+- Remove dbg! macro ([#2355](https://github.com/atuinsh/atuin/issues/2355))
+- Disable mail by default, resolve #2404 ([#2405](https://github.com/atuinsh/atuin/issues/2405))
+- Time offset display in `atuin status` ([#2433](https://github.com/atuinsh/atuin/issues/2433))
+- Disable the actuated mirror on the x86 docker builder ([#2443](https://github.com/atuinsh/atuin/issues/2443))
 
 
 ### Documentation
@@ -37,6 +127,7 @@ All notable changes to this project will be documented in this file.
 ### Features
 
 - *(bash/blesh)* Hook into BLE_ONLOAD to resolve loading order issue ([#2234](https://github.com/atuinsh/atuin/issues/2234))
+- *(client)* Add filter mode enablement and ordering configuration ([#2430](https://github.com/atuinsh/atuin/issues/2430))
 - *(daemon)* Follow XDG_RUNTIME_DIR if set ([#2171](https://github.com/atuinsh/atuin/issues/2171))
 - *(gui)* Automatically install and setup the cli/shell ([#2139](https://github.com/atuinsh/atuin/issues/2139))
 - *(gui)* Add activity calendar to the homepage ([#2160](https://github.com/atuinsh/atuin/issues/2160))
@@ -47,6 +138,9 @@ All notable changes to this project will be documented in this file.
 - *(gui)* Add runbook list, ability to create and delete, sql storage ([#2282](https://github.com/atuinsh/atuin/issues/2282))
 - *(gui)* Background terminals and more ([#2303](https://github.com/atuinsh/atuin/issues/2303))
 - *(gui)* Clean up home page, fix a few bugs ([#2304](https://github.com/atuinsh/atuin/issues/2304))
+- *(gui)* Allow interacting with the embedded terminal ([#2312](https://github.com/atuinsh/atuin/issues/2312))
+- *(gui)* Directory block, re-org of some code ([#2314](https://github.com/atuinsh/atuin/issues/2314))
+- *(gui)* Folder select dialogue for directory block ([#2315](https://github.com/atuinsh/atuin/issues/2315))
 - *(history)* Filter out various environment variables containing potential secrets ([#2174](https://github.com/atuinsh/atuin/issues/2174))
 - *(tui)* Configurable prefix character ([#2157](https://github.com/atuinsh/atuin/issues/2157))
 - *(tui)* Customizable Themes ([#2236](https://github.com/atuinsh/atuin/issues/2236))
@@ -58,12 +152,17 @@ All notable changes to this project will be documented in this file.
 - Add npm, Netlify and Pulumi tokens to secret patterns ([#2210](https://github.com/atuinsh/atuin/issues/2210))
 - Allow advertising a fake version to clients ([#2228](https://github.com/atuinsh/atuin/issues/2228))
 - Monitor idx cache consistency before switching ([#2229](https://github.com/atuinsh/atuin/issues/2229))
+- Ultracompact Mode (search-only) ([#2357](https://github.com/atuinsh/atuin/issues/2357))
+- Right Arrow to modify selected command ([#2453](https://github.com/atuinsh/atuin/issues/2453))
+- Provide additional clarity around key management ([#2467](https://github.com/atuinsh/atuin/issues/2467))
+- Add `atuin wrapped` ([#2493](https://github.com/atuinsh/atuin/issues/2493))
 
 
 ### Miscellaneous Tasks
 
 - *(build)* Compile protobufs with protox ([#2122](https://github.com/atuinsh/atuin/issues/2122))
 - *(ci)* Do not run current ci for ui ([#2189](https://github.com/atuinsh/atuin/issues/2189))
+- *(ci)* Codespell again ([#2332](https://github.com/atuinsh/atuin/issues/2332))
 - *(deps-dev)* Bump @tauri-apps/cli in /ui ([#2135](https://github.com/atuinsh/atuin/issues/2135))
 - *(deps-dev)* Bump vite from 5.2.13 to 5.3.1 in /ui ([#2150](https://github.com/atuinsh/atuin/issues/2150))
 - *(deps-dev)* Bump @tauri-apps/cli in /ui ([#2277](https://github.com/atuinsh/atuin/issues/2277))
@@ -80,6 +179,12 @@ All notable changes to this project will be documented in this file.
 - Update to cargo-dist 0.16, enable attestations ([#2156](https://github.com/atuinsh/atuin/issues/2156))
 - Do not use package managers in installer ([#2201](https://github.com/atuinsh/atuin/issues/2201))
 - Enable record sync by default ([#2255](https://github.com/atuinsh/atuin/issues/2255))
+- Remove ui directory ([#2329](https://github.com/atuinsh/atuin/issues/2329))
+- Update to rust 1.80 ([#2344](https://github.com/atuinsh/atuin/issues/2344))
+- Update rust to `1.80.1` ([#2362](https://github.com/atuinsh/atuin/issues/2362))
+- Enable inline height and compact by default ([#2249](https://github.com/atuinsh/atuin/issues/2249))
+- Update to rust 1.82 ([#2432](https://github.com/atuinsh/atuin/issues/2432))
+- Update cargo-dist ([#2471](https://github.com/atuinsh/atuin/issues/2471))
 
 
 ### Performance
@@ -89,9 +194,16 @@ All notable changes to this project will be documented in this file.
 - Write to the idx cache ([#2225](https://github.com/atuinsh/atuin/issues/2225))
 
 
+### Testing
+
+- Add env ATUIN_TEST_LOCAL_TIMEOUT to control test timeout of SQLite ([#2337](https://github.com/atuinsh/atuin/issues/2337))
+
+
 ### Flake.lock
 
 - Update ([#2213](https://github.com/atuinsh/atuin/issues/2213))
+- Update ([#2378](https://github.com/atuinsh/atuin/issues/2378))
+- Update ([#2402](https://github.com/atuinsh/atuin/issues/2402))
 
 
 ## [18.3.0] - 2024-06-10

@@ -133,7 +133,7 @@ pub async fn operations(
                     msg: String::from(
                         "diff has nothing for local or remote - (host, tag) does not exist",
                     ),
-                })
+                });
             }
         };
 

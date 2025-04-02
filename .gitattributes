@@ -1,0 +1,5 @@
+*.sh eol=lf
+*.nix eol=lf
+*.zsh eol=lf
+
+*.sql eol=lf

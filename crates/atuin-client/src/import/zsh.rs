@@ -6,10 +6,10 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 use directories::UserDirs;
-use eyre::{eyre, Result};
+use eyre::{Result, eyre};
 use time::OffsetDateTime;
 
-use super::{get_histpath, unix_byte_lines, Importer, Loader};
+use super::{Importer, Loader, get_histfile_path, unix_byte_lines};
 use crate::history::History;
 use crate::import::read_to_end;
 
@@ -21,11 +21,12 @@ pub struct Zsh {
 fn default_histpath() -> Result<PathBuf> {
     // oh-my-zsh sets HISTFILE=~/.zhistory
     // zsh has no default value for this var, but uses ~/.zhistory.
+    // zsh-newuser-install propose as default .histfile https://github.com/zsh-users/zsh/blob/master/Functions/Newuser/zsh-newuser-install#L794
     // we could maybe be smarter about this in the future :)
     let user_dirs = UserDirs::new().ok_or_else(|| eyre!("could not find user directories"))?;
     let home_dir = user_dirs.home_dir();
 
-    let mut candidates = [".zhistory", ".zsh_history"].iter();
+    let mut candidates = [".zhistory", ".zsh_history", ".histfile"].iter();
     loop {
         match candidates.next() {
             Some(candidate) => {
@@ -37,7 +38,7 @@ fn default_histpath() -> Result<PathBuf> {
             None => {
                 break Err(eyre!(
                     "Could not find history file. Try setting and exporting $HISTFILE"
-                ))
+                ));
             }
         }
     }
@@ -48,7 +49,7 @@ impl Importer for Zsh {
     const NAME: &'static str = "zsh";
 
     async fn new() -> Result<Self> {
-        let bytes = read_to_end(get_histpath(default_histpath)?)?;
+        let bytes = read_to_end(get_histfile_path(default_histpath)?)?;
         Ok(Self { bytes })
     }
 

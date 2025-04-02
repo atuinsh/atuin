@@ -1,6 +1,6 @@
 [package]
 name = "atuin-common"
-edition = "2021"
+edition = "2024"
 description = "common library for atuin"
 
 rust-version = { workspace = true }
@@ -16,7 +16,6 @@ repository = { workspace = true }
 time = { workspace = true }
 serde = { workspace = true }
 uuid = { workspace = true }
-rand = { workspace = true }
 typed-builder = { workspace = true }
 eyre = { workspace = true }
 sqlx = { workspace = true }

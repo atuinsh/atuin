@@ -1,6 +1,6 @@
 [package]
 name = "atuin"
-edition = "2021"
+edition = "2024"
 description = "atuin - magical shell history"
 readme = "./README.md"
 
@@ -42,34 +42,30 @@ clipboard = ["arboard"]
 check-update = ["atuin-client/check-update"]
 
 [dependencies]
-atuin-server-postgres = { path = "../atuin-server-postgres", version = "18.4.0-beta.3", optional = true }
-atuin-server = { path = "../atuin-server", version = "18.4.0-beta.3", optional = true }
-atuin-client = { path = "../atuin-client", version = "18.4.0-beta.3", optional = true, default-features = false }
-atuin-common = { path = "../atuin-common", version = "18.4.0-beta.3" }
-atuin-dotfiles = { path = "../atuin-dotfiles", version = "18.4.0-beta.3" }
-atuin-history = { path = "../atuin-history", version = "18.4.0-beta.3" }
-atuin-daemon = { path = "../atuin-daemon", version = "18.4.0-beta.3", optional = true, default-features = false }
+atuin-server-postgres = { path = "../atuin-server-postgres", version = "18.5.0-beta.2", optional = true }
+atuin-server = { path = "../atuin-server", version = "18.5.0-beta.2", optional = true }
+atuin-client = { path = "../atuin-client", version = "18.5.0-beta.2", optional = true, default-features = false }
+atuin-common = { path = "../atuin-common", version = "18.5.0-beta.2" }
+atuin-dotfiles = { path = "../atuin-dotfiles", version = "18.5.0-beta.2" }
+atuin-history = { path = "../atuin-history", version = "18.5.0-beta.2" }
+atuin-daemon = { path = "../atuin-daemon", version = "18.5.0-beta.2", optional = true, default-features = false }
 
 log = { workspace = true }
-env_logger = "0.11.5"
 time = { workspace = true }
 eyre = { workspace = true }
-directories = { workspace = true }
 indicatif = "0.17.5"
 serde = { workspace = true }
 serde_json = { workspace = true }
-crossterm = { version = "0.27", features = ["use-dev-tty"] }
+crossterm = { version = "0.28.1", features = ["use-dev-tty"] }
 unicode-width = "0.1"
 itertools = { workspace = true }
 tokio = { workspace = true }
 async-trait = { workspace = true }
 interim = { workspace = true }
-base64 = { workspace = true }
 clap = { workspace = true }
 clap_complete = "4.5.8"
 clap_complete_nushell = "4.5.4"
 fs-err = { workspace = true }
-whoami = { workspace = true }
 rpassword = "7.0"
 semver = { workspace = true }
 rustix = { workspace = true }
@@ -78,13 +74,12 @@ tiny-bip39 = "1"
 futures-util = "0.3"
 fuzzy-matcher = "0.3.7"
 colored = "2.0.4"
-ratatui = "0.27"
+ratatui = "0.29.0"
 tracing = "0.1"
 tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
-unicode-segmentation = "1.11.0"
 sysinfo = "0.30.7"
-regex="1.10.5"
+regex = "1.10.5"
 
 [target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
 arboard = { version = "3.4", optional = true }

@@ -3,17 +3,17 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use argon2::{
-    password_hash::SaltString, Algorithm, Argon2, Params, PasswordHash, PasswordHasher,
-    PasswordVerifier, Version,
+    Algorithm, Argon2, Params, PasswordHash, PasswordHasher, PasswordVerifier, Version,
+    password_hash::SaltString,
 };
 use axum::{
+    Json,
     extract::{Path, State},
     http::StatusCode,
-    Json,
 };
 use metrics::counter;
 
-use postmark::{reqwest::PostmarkClient, Query};
+use postmark::{Query, reqwest::PostmarkClient};
 
 use rand::rngs::OsRng;
 use tracing::{debug, error, info, instrument};
@@ -21,8 +21,8 @@ use tracing::{debug, error, info, instrument};
 use super::{ErrorResponse, ErrorResponseStatus, RespExt};
 use crate::router::{AppState, UserAuth};
 use atuin_server_database::{
-    models::{NewSession, NewUser},
     Database, DbError,
+    models::{NewSession, NewUser},
 };
 
 use reqwest::header::CONTENT_TYPE;
@@ -104,7 +104,7 @@ pub async fn register<DB: Database>(
                 return Err(ErrorResponse::reply(
                     "Only alphanumeric and hyphens (-) are allowed in usernames",
                 )
-                .with_status(StatusCode::BAD_REQUEST))
+                .with_status(StatusCode::BAD_REQUEST));
             }
         }
     }
@@ -201,12 +201,13 @@ pub async fn send_verification<DB: Database>(
     }
 
     // TODO: if we ever add another mail provider, can match on them all here.
-    let postmark_token = if let Some(token) = settings.mail.postmark.token {
-        token
-    } else {
-        error!("Failed to verify email: got None for postmark token");
-        return Err(ErrorResponse::reply("mail not configured")
-            .with_status(StatusCode::INTERNAL_SERVER_ERROR));
+    let postmark_token = match settings.mail.postmark.token {
+        Some(token) => token,
+        _ => {
+            error!("Failed to verify email: got None for postmark token");
+            return Err(ErrorResponse::reply("mail not configured")
+                .with_status(StatusCode::INTERNAL_SERVER_ERROR));
+        }
     };
 
     let db = &state.0.database;

@@ -3,7 +3,7 @@ use std::io::Read;
 use std::path::PathBuf;
 
 use async_trait::async_trait;
-use eyre::{bail, Result};
+use eyre::{Result, bail};
 use memchr::Memchr;
 
 use crate::history::History;
@@ -73,10 +73,24 @@ where
     D: FnOnce() -> Result<PathBuf>,
 {
     if let Ok(p) = std::env::var("HISTFILE") {
-        is_file(PathBuf::from(p))
+        Ok(PathBuf::from(p))
     } else {
-        is_file(def()?)
+        def()
     }
+}
+
+fn get_histfile_path<D>(def: D) -> Result<PathBuf>
+where
+    D: FnOnce() -> Result<PathBuf>,
+{
+    get_histpath(def).and_then(is_file)
+}
+
+fn get_histdir_path<D>(def: D) -> Result<PathBuf>
+where
+    D: FnOnce() -> Result<PathBuf>,
+{
+    get_histpath(def).and_then(is_dir)
 }
 
 fn read_to_end(path: PathBuf) -> Result<Vec<u8>> {
@@ -90,6 +104,16 @@ fn is_file(p: PathBuf) -> Result<PathBuf> {
         Ok(p)
     } else {
         bail!("Could not find history file {:?}. Try setting $HISTFILE", p)
+    }
+}
+fn is_dir(p: PathBuf) -> Result<PathBuf> {
+    if p.is_dir() {
+        Ok(p)
+    } else {
+        bail!(
+            "Could not find history directory {:?}. Try setting $HISTFILE",
+            p
+        )
     }
 }
 

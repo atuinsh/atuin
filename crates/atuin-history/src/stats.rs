@@ -6,7 +6,7 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use atuin_client::{history::History, settings::Settings, theme::Meaning, theme::Theme};
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Stats {
     pub total_commands: usize,
     pub unique_commands: usize,
@@ -109,6 +109,65 @@ fn split_at_pipe(command: &str) -> Vec<&str> {
     result
 }
 
+fn strip_leading_env_vars(command: &str) -> &str {
+    // fast path: no equals sign, no environment variable
+    if !command.contains('=') {
+        return command;
+    }
+
+    let mut in_token = false;
+    let mut token_start_pos = 0;
+    let mut in_single_quotes = false;
+    let mut in_double_quotes = false;
+    let mut escape_next = false;
+    let mut has_equals_outside_quotes = false;
+
+    for (i, g) in UnicodeSegmentation::grapheme_indices(command, true) {
+        if escape_next {
+            escape_next = false;
+            continue;
+        }
+
+        if !in_token {
+            token_start_pos = i;
+        }
+
+        match g {
+            "\\" => {
+                escape_next = true;
+                in_token = true;
+            }
+            "'" if !in_double_quotes => {
+                in_single_quotes = !in_single_quotes;
+                in_token = true;
+            }
+            "\"" if !in_single_quotes => {
+                in_double_quotes = !in_double_quotes;
+                in_token = true;
+            }
+            "=" if !in_single_quotes && !in_double_quotes => {
+                has_equals_outside_quotes = true;
+                in_token = true;
+            }
+            " " | "\t" if !in_single_quotes && !in_double_quotes => {
+                if in_token {
+                    if !has_equals_outside_quotes {
+                        // if we're not in an env var, we can break early
+                        break;
+                    }
+                    in_token = false;
+                    has_equals_outside_quotes = false;
+                }
+            }
+            _ => {
+                in_token = true;
+            }
+        }
+    }
+
+    command[token_start_pos..].trim()
+}
+
 pub fn pretty_print(stats: Stats, ngram_size: usize, theme: &Theme) {
     let max = stats.top.iter().map(|x| x.1).max().unwrap();
     let num_pad = max.ilog10() as usize + 1;
@@ -178,7 +237,9 @@ pub fn pretty_print(stats: Stats, ngram_size: usize, theme: &Theme) {
             .collect::<Vec<_>>()
             .join(" | ");
 
-        println!("{ResetColor}] {gray}{count:num_pad$}{ResetColor} {bold}{formatted_command}{ResetColor}");
+        println!(
+            "{ResetColor}] {gray}{count:num_pad$}{ResetColor} {bold}{formatted_command}{ResetColor}"
+        );
     }
     println!("Total commands:   {}", stats.total_commands);
     println!("Unique commands:  {}", stats.unique_commands);
@@ -196,7 +257,7 @@ pub fn compute(
 
     for i in history {
         // just in case it somehow has a leading tab or space or something (legacy atuin didn't ignore space prefixes)
-        let command = i.command.trim();
+        let command = strip_leading_env_vars(i.command.trim());
         let prefix = interesting_command(settings, command);
 
         if settings.stats.ignored_commands.iter().any(|c| c == prefix) {
@@ -206,7 +267,7 @@ pub fn compute(
         total_unignored += 1;
         commands.insert(command);
 
-        split_at_pipe(i.command.trim())
+        split_at_pipe(command)
             .iter()
             .map(|l| {
                 let command = l.trim();
@@ -249,7 +310,22 @@ mod tests {
     use time::OffsetDateTime;
 
     use super::compute;
-    use super::{interesting_command, split_at_pipe};
+    use super::{interesting_command, split_at_pipe, strip_leading_env_vars};
+
+    #[test]
+    fn ignored_env_vars() {
+        let settings = Settings::utc();
+
+        let history: History = History::capture()
+            .timestamp(time::OffsetDateTime::now_utc())
+            .command("FOO='BAR=🚀' echo foo")
+            .cwd("/")
+            .build()
+            .into();
+
+        let stats = compute(&settings, &[history], 10, 1).expect("failed to compute stats");
+        assert_eq!(stats.top.get(0).unwrap().0, vec!["echo"]);
+    }
 
     #[test]
     fn ignored_commands() {
@@ -432,5 +508,47 @@ mod tests {
             split_at_pipe("  | sed 's/[0-9a-f]//g'"),
             ["  ", " sed 's/[0-9a-f]//g'"]
         );
+    }
+
+    #[test]
+    fn strip_leading_env_vars_simple() {
+        assert_eq!(
+            strip_leading_env_vars("FOO=bar BAZ=quux echo foo"),
+            "echo foo"
+        );
+    }
+
+    #[test]
+    fn strip_leading_env_vars_quoted_single() {
+        assert_eq!(strip_leading_env_vars("FOO='BAR=baz' echo foo"), "echo foo");
+    }
+
+    #[test]
+    fn strip_leading_env_vars_quoted_double() {
+        assert_eq!(
+            strip_leading_env_vars("FOO=\"BAR=baz\" echo foo"),
+            "echo foo"
+        );
+    }
+
+    #[test]
+    fn strip_leading_env_vars_quoted_single_and_double() {
+        assert_eq!(
+            strip_leading_env_vars("FOO='BAR=\"baz\"' echo foo \"BAR=quux\""),
+            "echo foo \"BAR=quux\""
+        );
+    }
+
+    #[test]
+    fn strip_leading_env_vars_emojis() {
+        assert_eq!(
+            strip_leading_env_vars("FOO='BAR=🚀' echo foo \"BAR=quux\" foo"),
+            "echo foo \"BAR=quux\" foo"
+        );
+    }
+
+    #[test]
+    fn strip_leading_env_vars_name_same_as_command() {
+        assert_eq!(strip_leading_env_vars("FOO='bar' bar baz"), "bar baz");
     }
 }
