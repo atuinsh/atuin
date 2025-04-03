@@ -8,6 +8,20 @@ use tokio::sync::mpsc;
 use tokio::task;
 use tracing::debug;
 
+// Helper function to build a complete script with shebang
+pub fn build_executable_script(script: &Script) -> String {
+    if script.shebang.is_empty() {
+        // Default to bash if no shebang is provided
+        format!("#!/usr/bin/env bash\n{}", script.script)
+    } else {
+        if script.shebang.starts_with("#!") {
+            format!("{}\n{}", script.shebang, script.script)
+        } else {
+            format!("#!{}\n{}", script.shebang, script.script)
+        }
+    }
+}
+
 /// Represents the communication channels for an interactive script
 pub struct ScriptSession {
     /// Channel to send input to the script
@@ -46,12 +60,7 @@ pub async fn execute_script_interactive(
     };
 
     // Write script content to the temp file, including the shebang
-    let full_script_content = if script.shebang.is_empty() {
-        // Default to bash if no shebang is provided
-        format!("#!/usr/bin/env bash\n{}", script.script)
-    } else {
-        format!("{}\n{}", script.shebang, script.script)
-    };
+    let full_script_content = build_executable_script(script);
     
     debug!("writing script content to temp file");
     tokio::fs::write(&temp_path, &full_script_content).await?;

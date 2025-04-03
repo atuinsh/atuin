@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use atuin_scripts::{
-    execution::execute_script_interactive,
+    execution::{execute_script_interactive, build_executable_script},
     store::{ScriptStore, script::Script},
 };
 use clap::{Parser, Subcommand};
@@ -42,8 +42,12 @@ pub struct Run {
 pub struct List {}
 
 #[derive(Parser, Debug)]
-pub struct Show {
+pub struct Get{
     pub name: String,
+    
+    #[arg(short, long)]
+    /// Display only the executable script with shebang
+    pub script: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -77,7 +81,8 @@ pub enum Cmd {
     New(NewScript),
     Run(Run),
     List(List),
-    Show(Show),
+
+    Get(Get),
     Edit(Edit),
     Delete(Delete),
 }
@@ -277,33 +282,55 @@ impl Cmd {
         Ok(())
     }
 
-    async fn handle_show(
+    async fn handle_get(
         _settings: &Settings,
-        show: Show,
+        get: Get,
         script_db: atuin_scripts::database::Database,
     ) -> Result<()> {
-        let script = script_db.get_by_name(&show.name).await?;
+        let script = script_db.get_by_name(&get.name).await?;
 
         if let Some(script) = script {
-            println!("Name: {}", script.name);
-
+            if get.script {
+                // Just print the executable script with shebang
+                print!("{}", build_executable_script(&script));
+                return Ok(());
+            }
+            
+            // Create a YAML representation of the script
+            println!("---");
+            println!("name: {}", script.name);
+            println!("id: {}", script.id);
+            
             if !script.description.is_empty() {
-                println!("Description: {}", script.description);
+                println!("description: |");
+                // Indent multiline descriptions properly for YAML
+                for line in script.description.lines() {
+                    println!("  {}", line);
+                }
+            } else {
+                println!("description: \"\"");
             }
-
+            
             if !script.tags.is_empty() {
-                println!("Tags: {}", script.tags.join(", "));
+                println!("tags:");
+                for tag in &script.tags {
+                    println!("  - {}", tag);
+                }
+            } else {
+                println!("tags: []");
             }
-
-            println!("Shebang: {}", script.shebang);
-            println!("\nScript content:");
-            println!("----------------------------------------");
-            println!("{}", script.script);
-            println!("----------------------------------------");
-
+            
+            println!("shebang: {}", script.shebang);
+            
+            println!("script: |");
+            // Indent the script content for proper YAML multiline format
+            for line in script.script.lines() {
+                println!("  {}", line);
+            }
+            
             Ok(())
         } else {
-            bail!("script '{}' not found", show.name);
+            bail!("script '{}' not found", get.name);
         }
     }
 
@@ -426,7 +453,7 @@ impl Cmd {
             }
             Self::Run(run) => Self::handle_run(settings, run, script_db).await,
             Self::List(list) => Self::handle_list(settings, list, script_db).await,
-            Self::Show(show) => Self::handle_show(settings, show, script_db).await,
+            Self::Get(get) => Self::handle_get(settings, get, script_db).await,
             Self::Edit(edit) => Self::handle_edit(settings, edit, script_store, script_db).await,
             Self::Delete(delete) => {
                 Self::handle_delete(settings, delete, script_store, script_db).await
