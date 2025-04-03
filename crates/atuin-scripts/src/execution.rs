@@ -61,7 +61,7 @@ pub async fn execute_script_interactive(
 
     // Write script content to the temp file, including the shebang
     let full_script_content = build_executable_script(script);
-    
+
     debug!("writing script content to temp file");
     tokio::fs::write(&temp_path, &full_script_content).await?;
 
@@ -89,20 +89,20 @@ pub async fn execute_script_interactive(
     // If direct execution fails, try using the interpreter
     if let Err(e) = &child_result {
         debug!("direct execution failed: {}, trying with interpreter", e);
-        
+
         // Parse the interpreter command
         let parts: Vec<&str> = interpreter.split_whitespace().collect();
         if !parts.is_empty() {
             let mut cmd = tokio::process::Command::new(parts[0]);
-            
+
             // Add any interpreter args
             for i in parts.iter().skip(1) {
                 cmd.arg(i);
             }
-            
+
             // Add the script path
             cmd.arg(temp_path.to_str().unwrap());
-            
+
             // Try with the interpreter
             child_result = cmd
                 .stdin(Stdio::piped())
@@ -216,13 +216,13 @@ pub async fn execute_script_interactive(
     tokio::spawn(async move {
         // Keep the temp file alive until the process completes
         let _temp_file_ref = _keep_temp_file_clone;
-        
+
         // Wait for the child process to complete
         let status = match child.wait().await {
             Ok(status) => {
                 debug!("Process exited with status: {:?}", status);
                 status
-            },
+            }
             Err(e) => {
                 eprintln!("Error waiting for child process: {}", e);
                 // Send a default error code

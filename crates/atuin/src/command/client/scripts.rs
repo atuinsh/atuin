@@ -1,14 +1,14 @@
 use std::path::PathBuf;
 
 use atuin_scripts::{
-    execution::{execute_script_interactive, build_executable_script},
+    execution::{build_executable_script, execute_script_interactive},
     store::{ScriptStore, script::Script},
 };
 use clap::{Parser, Subcommand};
 use eyre::{Result, bail};
 use tempfile::NamedTempFile;
 
-use atuin_client::{record::sqlite_store::SqliteStore, settings::Settings, database::Database};
+use atuin_client::{database::Database, record::sqlite_store::SqliteStore, settings::Settings};
 
 #[derive(Parser, Debug)]
 pub struct NewScript {
@@ -26,7 +26,7 @@ pub struct NewScript {
 
     #[arg(long)]
     pub script: Option<PathBuf>,
-    
+
     #[arg(long)]
     /// Use the last command as the script content
     /// Optionally specify a number to use the last N commands
@@ -42,9 +42,9 @@ pub struct Run {
 pub struct List {}
 
 #[derive(Parser, Debug)]
-pub struct Get{
+pub struct Get {
     pub name: String,
-    
+
     #[arg(short, long)]
     /// Display only the executable script with shebang
     pub script: bool,
@@ -99,48 +99,48 @@ impl Cmd {
             // Get the last N commands from history, plus 1 to exclude the command that runs this script
             let count = count_opt.unwrap_or(1) + 1; // Add 1 to the count to exclude the current command
             let context = atuin_client::database::current_context();
-            
+
             // Get the last N+1 commands, filtering by the default mode
-            let filters = [_settings.default_filter_mode(), 
-                           atuin_client::settings::FilterMode::Global];
-                           
+            let filters = [
+                _settings.default_filter_mode(),
+                atuin_client::settings::FilterMode::Global,
+            ];
+
             let mut history = history_db
                 .list(&filters, &context, Some(count), false, false)
                 .await?;
-            
+
             // Reverse to get chronological order
             history.reverse();
-            
+
             // Skip the most recent command (which would be the atuin scripts new command itself)
             if !history.is_empty() {
                 history.pop(); // Remove the most recent command
             }
-            
+
             // Format the commands into a script
-            let commands: Vec<String> = history.iter()
-                .map(|h| h.command.clone())
-                .collect();
-            
+            let commands: Vec<String> = history.iter().map(|h| h.command.clone()).collect();
+
             if commands.is_empty() {
                 bail!("No commands found in history");
             }
-            
+
             let script_text = commands.join("\n");
-            
+
             // Open the editor with the commands pre-loaded
             let temp_file = NamedTempFile::new()?;
             let path = temp_file.into_temp_path();
-            
+
             // Write the existing script content to the temp file
             std::fs::write(&path, &script_text)?;
-            
+
             // Open the file in the user's preferred editor
             let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
             let status = std::process::Command::new(editor).arg(&path).status()?;
             if !status.success() {
                 bail!("failed to open editor");
             }
-            
+
             // Read back the edited content
             let content = std::fs::read_to_string(&path)?;
             path.close()?;
@@ -295,12 +295,12 @@ impl Cmd {
                 print!("{}", build_executable_script(&script));
                 return Ok(());
             }
-            
+
             // Create a YAML representation of the script
             println!("---");
             println!("name: {}", script.name);
             println!("id: {}", script.id);
-            
+
             if !script.description.is_empty() {
                 println!("description: |");
                 // Indent multiline descriptions properly for YAML
@@ -310,7 +310,7 @@ impl Cmd {
             } else {
                 println!("description: \"\"");
             }
-            
+
             if !script.tags.is_empty() {
                 println!("tags:");
                 for tag in &script.tags {
@@ -319,15 +319,15 @@ impl Cmd {
             } else {
                 println!("tags: []");
             }
-            
+
             println!("shebang: {}", script.shebang);
-            
+
             println!("script: |");
             // Indent the script content for proper YAML multiline format
             for line in script.script.lines() {
                 println!("  {}", line);
             }
-            
+
             Ok(())
         } else {
             bail!("script '{}' not found", get.name);
@@ -438,7 +438,12 @@ impl Cmd {
         }
     }
 
-    pub async fn run(self, settings: &Settings, store: SqliteStore, history_db: &impl Database) -> Result<()> {
+    pub async fn run(
+        self,
+        settings: &Settings,
+        store: SqliteStore,
+        history_db: &impl Database,
+    ) -> Result<()> {
         let host_id = Settings::host_id().expect("failed to get host_id");
         let encryption_key: [u8; 32] = atuin_client::encryption::load_key(settings)?.into();
 
@@ -449,7 +454,8 @@ impl Cmd {
 
         match self {
             Self::New(new_script) => {
-                Self::handle_new_script(settings, new_script, script_store, script_db, history_db).await
+                Self::handle_new_script(settings, new_script, script_store, script_db, history_db)
+                    .await
             }
             Self::Run(run) => Self::handle_run(settings, run, script_db).await,
             Self::List(list) => Self::handle_list(settings, list, script_db).await,
