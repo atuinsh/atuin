@@ -164,7 +164,7 @@ impl Cmd {
 
             Self::Dotfiles(dotfiles) => dotfiles.run(&settings, sqlite_store).await,
 
-            Self::Scripts(scripts) => scripts.run(&settings, sqlite_store).await,
+            Self::Scripts(scripts) => scripts.run(&settings, sqlite_store, &db).await,
 
             Self::Info => {
                 info::run(&settings);

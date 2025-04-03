@@ -6,6 +6,7 @@ use tempfile::NamedTempFile;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 use tokio::task;
+use tracing::debug;
 
 /// Represents the communication channels for an interactive script
 pub struct ScriptSession {
@@ -31,81 +32,84 @@ impl ScriptSession {
 pub async fn execute_script_interactive(
     script: &Script,
 ) -> Result<ScriptSession, Box<dyn std::error::Error + Send + Sync>> {
+    // Create a temporary file for the script
+    let temp_file = NamedTempFile::new()?;
+    let temp_path = temp_file.path().to_path_buf();
+
+    debug!("creating temp file at {}", temp_path.display());
+
+    // Extract interpreter from shebang for fallback execution
     let interpreter = if !script.shebang.is_empty() {
         script.shebang.trim_start_matches("#!").trim().to_string()
     } else {
-        "/bin/bash".to_string()
+        "/usr/bin/env bash".to_string()
     };
 
-    let parts: Vec<&str> = interpreter.split_whitespace().collect();
-    let mut cmd = tokio::process::Command::new(parts[0]);
+    // Write script content to the temp file, including the shebang
+    let full_script_content = if script.shebang.is_empty() {
+        // Default to bash if no shebang is provided
+        format!("#!/usr/bin/env bash\n{}", script.script)
+    } else {
+        format!("{}\n{}", script.shebang, script.script)
+    };
+    
+    debug!("writing script content to temp file");
+    tokio::fs::write(&temp_path, &full_script_content).await?;
 
-    for i in parts.iter().skip(1) {
-        cmd.arg(i);
+    // Make it executable on Unix systems
+    #[cfg(unix)]
+    {
+        debug!("making script executable");
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&temp_path)?.permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&temp_path, perms)?;
     }
 
-    // pretty annoying, but different interpreters have different ways to execute from string
-    // handle those cases, fallback to just writing a temp file
+    // Store the temp_file to prevent it from being dropped
+    // This ensures it won't be deleted while the script is running
+    let _keep_temp_file = temp_file;
 
-    let interpreter_base = parts[0].split('/').last().unwrap_or(parts[0]);
-
-    let mut temp_file_opt = None;
-
-    match interpreter_base {
-        "bash" | "sh" | "dash" | "zsh" | "ksh" => {
-            cmd.arg("-c").arg(&script.script);
-        }
-        "python" | "python2" | "python3" => {
-            cmd.arg("-c").arg(&script.script);
-        }
-        "perl" | "perl6" => {
-            cmd.arg("-e").arg(&script.script);
-        }
-        "ruby" => {
-            cmd.arg("-e").arg(&script.script);
-        }
-        "node" | "nodejs" => {
-            cmd.arg("-e").arg(&script.script);
-        }
-        "php" => {
-            cmd.arg("-r").arg(&script.script);
-        }
-        "pwsh" | "powershell" => {
-            cmd.arg("-Command").arg(&script.script);
-        }
-        "R" | "Rscript" => {
-            cmd.arg("-e").arg(&script.script);
-        }
-        _ => {
-            let temp_file = NamedTempFile::new()?;
-            let temp_path = temp_file.path().to_path_buf();
-
-            // Write script content to the temp file
-            tokio::fs::write(&temp_path, &script.script).await?;
-
-            // Make it executable
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let mut perms = fs::metadata(&temp_path)?.permissions();
-                perms.set_mode(0o755);
-                fs::set_permissions(&temp_path, perms)?;
-            }
-
-            // Use the temp file as the script
-            cmd.arg(temp_path.to_str().unwrap());
-
-            // Store temp file to prevent it from being dropped early
-            temp_file_opt = Some(temp_file);
-        }
-    }
-
-    // Configure the command for interactive mode
-    let mut child = cmd
+    debug!("attempting direct script execution");
+    let mut child_result = tokio::process::Command::new(temp_path.to_str().unwrap())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .spawn()?;
+        .spawn();
+
+    // If direct execution fails, try using the interpreter
+    if let Err(e) = &child_result {
+        debug!("direct execution failed: {}, trying with interpreter", e);
+        
+        // Parse the interpreter command
+        let parts: Vec<&str> = interpreter.split_whitespace().collect();
+        if !parts.is_empty() {
+            let mut cmd = tokio::process::Command::new(parts[0]);
+            
+            // Add any interpreter args
+            for i in parts.iter().skip(1) {
+                cmd.arg(i);
+            }
+            
+            // Add the script path
+            cmd.arg(temp_path.to_str().unwrap());
+            
+            // Try with the interpreter
+            child_result = cmd
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn();
+        }
+    }
+
+    // If it still fails, return the error
+    let mut child = match child_result {
+        Ok(child) => child,
+        Err(e) => {
+            return Err(format!("Failed to execute script: {}", e).into());
+        }
+    };
 
     // Get handles to stdin, stdout, stderr
     let mut stdin = child
@@ -126,6 +130,7 @@ pub async fn execute_script_interactive(
     let (exit_code_tx, exit_code_rx) = mpsc::channel::<i32>(1);
 
     // handle user stdin
+    debug!("spawning stdin handler");
     tokio::spawn(async move {
         while let Some(input) = stdin_rx.recv().await {
             if let Err(e) = stdin.write_all(input.as_bytes()).await {
@@ -141,6 +146,7 @@ pub async fn execute_script_interactive(
     });
 
     // handle stdout
+    debug!("spawning stdout handler");
     let stdout_handle = task::spawn(async move {
         let mut stdout_reader = BufReader::new(stdout);
         let mut buffer = [0u8; 1024];
@@ -168,6 +174,7 @@ pub async fn execute_script_interactive(
     });
 
     // Process stderr in a separate task
+    debug!("spawning stderr handler");
     let stderr_handle = task::spawn(async move {
         let mut stderr_reader = BufReader::new(stderr);
         let mut buffer = [0u8; 1024];
@@ -195,13 +202,18 @@ pub async fn execute_script_interactive(
     });
 
     // Spawn a task to wait for the child process to complete
+    debug!("spawning exit code handler");
+    let _keep_temp_file_clone = _keep_temp_file;
     tokio::spawn(async move {
         // Keep the temp file alive until the process completes
-        let _keep_temp_file = temp_file_opt;
-
+        let _temp_file_ref = _keep_temp_file_clone;
+        
         // Wait for the child process to complete
         let status = match child.wait().await {
-            Ok(status) => status,
+            Ok(status) => {
+                debug!("Process exited with status: {:?}", status);
+                status
+            },
             Err(e) => {
                 eprintln!("Error waiting for child process: {}", e);
                 // Send a default error code
@@ -220,7 +232,9 @@ pub async fn execute_script_interactive(
         }
 
         // Send the exit code
-        let _ = exit_code_tx.send(status.code().unwrap_or(-1)).await;
+        let exit_code = status.code().unwrap_or(-1);
+        debug!("Sending exit code: {}", exit_code);
+        let _ = exit_code_tx.send(exit_code).await;
     });
 
     // Return the communication channels as a ScriptSession
