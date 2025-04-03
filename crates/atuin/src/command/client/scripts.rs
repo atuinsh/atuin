@@ -27,6 +27,7 @@ pub struct NewScript {
     #[arg(long)]
     pub script: Option<PathBuf>,
 
+    #[allow(clippy::option_option)]
     #[arg(long)]
     /// Use the last command as the script content
     /// Optionally specify a number to use the last N commands
@@ -89,7 +90,7 @@ pub enum Cmd {
 
 impl Cmd {
     async fn handle_new_script(
-        _settings: &Settings,
+        settings: &Settings,
         new_script: NewScript,
         script_store: ScriptStore,
         script_db: atuin_scripts::database::Database,
@@ -101,10 +102,7 @@ impl Cmd {
             let context = atuin_client::database::current_context();
 
             // Get the last N+1 commands, filtering by the default mode
-            let filters = [
-                _settings.default_filter_mode(),
-                atuin_client::settings::FilterMode::Global,
-            ];
+            let filters = [settings.default_filter_mode()];
 
             let mut history = history_db
                 .list(&filters, &context, Some(count), false, false)
@@ -142,9 +140,9 @@ impl Cmd {
             }
 
             // Read back the edited content
-            let content = std::fs::read_to_string(&path)?;
+            let script = std::fs::read_to_string(&path)?;
             path.close()?;
-            Some(content)
+            Some(script)
         } else if let Some(script_path) = new_script.script {
             let script_content = std::fs::read_to_string(script_path)?;
             Some(script_content)
@@ -222,12 +220,12 @@ impl Cmd {
                                     // Convert the bytes to a string and forward to script
                                     let input = String::from_utf8_lossy(&buffer[0..n]).to_string();
                                     if let Err(e) = sender.send(input).await {
-                                        eprintln!("Error sending input to script: {}", e);
+                                        eprintln!("Error sending input to script: {e}");
                                         break;
                                     }
                                 },
                                 Err(e) => {
-                                    eprintln!("Error reading from stdin: {}", e);
+                                    eprintln!("Error reading from stdin: {e}");
                                     break;
                                 }
                             }
@@ -245,7 +243,7 @@ impl Cmd {
 
             if let Some(code) = exit_code {
                 if code != 0 {
-                    eprintln!("Script exited with code {}", code);
+                    eprintln!("Script exited with code {code}");
                 }
             }
         } else {
@@ -301,23 +299,23 @@ impl Cmd {
             println!("name: {}", script.name);
             println!("id: {}", script.id);
 
-            if !script.description.is_empty() {
+            if script.description.is_empty() {
+                println!("description: \"\"");
+            } else {
                 println!("description: |");
                 // Indent multiline descriptions properly for YAML
                 for line in script.description.lines() {
-                    println!("  {}", line);
+                    println!("  {line}");
                 }
-            } else {
-                println!("description: \"\"");
             }
 
-            if !script.tags.is_empty() {
+            if script.tags.is_empty() {
+                println!("tags: []");
+            } else {
                 println!("tags:");
                 for tag in &script.tags {
-                    println!("  - {}", tag);
+                    println!("  - {tag}");
                 }
-            } else {
-                println!("tags: []");
             }
 
             println!("shebang: {}", script.shebang);
@@ -325,7 +323,7 @@ impl Cmd {
             println!("script: |");
             // Indent the script content for proper YAML multiline format
             for line in script.script.lines() {
-                println!("  {}", line);
+                println!("  {line}");
             }
 
             Ok(())

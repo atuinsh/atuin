@@ -13,12 +13,10 @@ pub fn build_executable_script(script: &Script) -> String {
     if script.shebang.is_empty() {
         // Default to bash if no shebang is provided
         format!("#!/usr/bin/env bash\n{}", script.script)
+    } else if script.shebang.starts_with("#!") {
+        format!("{}\n{}", script.shebang, script.script)
     } else {
-        if script.shebang.starts_with("#!") {
-            format!("{}\n{}", script.shebang, script.script)
-        } else {
-            format!("#!{}\n{}", script.shebang, script.script)
-        }
+        format!("#!{}\n{}", script.shebang, script.script)
     }
 }
 
