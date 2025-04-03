@@ -74,7 +74,7 @@ impl Cmd {
             store.delete(&name).await?;
         } else {
             eprintln!("Cannot delete '{name}': Alias not set.");
-        }
+        };
         Ok(())
     }
 
