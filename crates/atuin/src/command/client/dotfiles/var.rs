@@ -66,7 +66,7 @@ impl Cmd {
             store.delete(&name).await?;
         } else {
             eprintln!("Cannot delete '{name}': Var not set.");
-        };
+        }
 
         Ok(())
     }
