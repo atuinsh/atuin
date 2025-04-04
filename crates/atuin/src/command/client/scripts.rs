@@ -1,6 +1,6 @@
-use std::path::PathBuf;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::path::PathBuf;
 
 use atuin_scripts::execution::template_script;
 use atuin_scripts::{
@@ -45,7 +45,7 @@ pub struct NewScript {
 #[derive(Parser, Debug)]
 pub struct Run {
     pub name: String,
-    
+
     /// Specify template variables in the format KEY=VALUE
     /// Example: -v name=John -v greeting="Hello there"
     #[arg(short, long = "var")]
@@ -199,7 +199,7 @@ impl Cmd {
         if code != 0 {
             eprintln!("Script exited with code {code}");
         }
-        
+
         Ok(code)
     }
 
@@ -279,52 +279,58 @@ impl Cmd {
         if let Some(script) = script {
             // Get variables used in the template
             let variables = template_variables(&script)?;
-            
+
             // Create a hashmap to store variable values
             let mut variable_values: HashMap<String, serde_json::Value> = HashMap::new();
-            
+
             // Parse variables from command-line arguments first
             for var_str in &run.var {
                 if let Some((key, value)) = var_str.split_once('=') {
                     // Add to variable values
-                    variable_values.insert(key.to_string(), serde_json::Value::String(value.to_string()));
+                    variable_values.insert(
+                        key.to_string(),
+                        serde_json::Value::String(value.to_string()),
+                    );
                     debug!("Using CLI variable: {}={}", key, value);
                 } else {
-                    eprintln!("Warning: Ignoring malformed variable specification: {}", var_str);
+                    eprintln!(
+                        "Warning: Ignoring malformed variable specification: {}",
+                        var_str
+                    );
                     eprintln!("Variables should be specified as KEY=VALUE");
                 }
             }
-            
+
             // Collect variables that are still needed (not specified via CLI)
             let remaining_vars: HashSet<String> = variables
                 .into_iter()
                 .filter(|var| !variable_values.contains_key(var))
                 .collect();
-            
+
             // If there are variables in the template that weren't specified on the command line, prompt for them
             if !remaining_vars.is_empty() {
                 println!("This script contains template variables that need values:");
-                
+
                 let stdin = std::io::stdin();
                 let mut input = String::new();
-                
+
                 for var in remaining_vars {
                     input.clear();
-                    
+
                     println!("Enter value for '{}': ", var);
-                    
+
                     if stdin.read_line(&mut input).is_err() {
                         eprintln!("Failed to read input for variable '{}'", var);
                         // Provide an empty string as fallback
                         variable_values.insert(var, serde_json::Value::String("".to_string()));
                         continue;
                     }
-                    
+
                     let value = input.trim().to_string();
                     variable_values.insert(var, serde_json::Value::String(value));
                 }
             }
-            
+
             let final_script = if !variable_values.is_empty() {
                 // If we have variables, we need to template the script
                 debug!("Templating script with variables: {:?}", variable_values);
@@ -333,7 +339,7 @@ impl Cmd {
                 // No variables to template, just use the original script
                 script.script.clone()
             };
-            
+
             // Execute the script (either templated or original)
             Self::execute_script(final_script, script.shebang.clone()).await?;
         } else {

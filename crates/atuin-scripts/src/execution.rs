@@ -50,7 +50,10 @@ fn setup_template(script: &Script) -> Result<minijinja::Environment> {
 }
 
 /// Template a script with the given context
-pub fn template_script(script: &Script, context: &HashMap<String, serde_json::Value>) -> Result<String> {
+pub fn template_script(
+    script: &Script,
+    context: &HashMap<String, serde_json::Value>,
+) -> Result<String> {
     let env = setup_template(script)?;
     let template = env.get_template("script")?;
     let rendered = template.render(context)?;
