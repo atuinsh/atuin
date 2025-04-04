@@ -9,8 +9,9 @@ use atuin_client::{
     database::Database,
     history::History,
     import::{
-        Importer, Loader, bash::Bash, fish::Fish, nu::Nu, nu_histdb::NuHistDb, replxx::Replxx,
-        resh::Resh, xonsh::Xonsh, xonsh_sqlite::XonshSqlite, zsh::Zsh, zsh_histdb::ZshHistDb,
+        Importer, Loader, bash::Bash, csv_history::CsvHistoryImporter, fish::Fish, nu::Nu,
+        nu_histdb::NuHistDb, replxx::Replxx, resh::Resh, xonsh::Xonsh, xonsh_sqlite::XonshSqlite,
+        zsh::Zsh, zsh_histdb::ZshHistDb,
     },
 };
 
@@ -26,6 +27,8 @@ pub enum Cmd {
     ZshHistDb,
     /// Import history from the bash history file
     Bash,
+    /// Import history from user csv history file
+    CsvHistoryImporter,
     /// Import history from the replxx history file
     Replxx,
     /// Import history from the resh history file
@@ -111,6 +114,7 @@ impl Cmd {
             Self::Zsh => import::<Zsh, DB>(db).await,
             Self::ZshHistDb => import::<ZshHistDb, DB>(db).await,
             Self::Bash => import::<Bash, DB>(db).await,
+            Self::CsvHistoryImporter => import::<CsvHistoryImporter, DB>(db).await,
             Self::Replxx => import::<Replxx, DB>(db).await,
             Self::Resh => import::<Resh, DB>(db).await,
             Self::Fish => import::<Fish, DB>(db).await,
