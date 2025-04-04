@@ -1244,10 +1244,12 @@ pub async fn history(
     any(target_os = "windows", target_os = "macos", target_os = "linux")
 ))]
 fn set_clipboard(s: String) {
-    let mut ctx = arboard::Clipboard::new().unwrap();
-    ctx.set_text(s).unwrap();
-    // Use the clipboard context to make sure it is saved
-    ctx.get_text().unwrap();
+    // Do nothing if clipboard cannot be accessed
+    if let Ok(mut ctx) = arboard::Clipboard::new() {
+        ctx.set_text(s).unwrap();
+        // Use the clipboard context to make sure it is saved
+        ctx.get_text().unwrap();
+    }
 }
 
 #[cfg(not(all(
