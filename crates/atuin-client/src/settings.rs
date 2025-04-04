@@ -30,6 +30,7 @@ pub const HOST_ID_FILENAME: &str = "host_id";
 static EXAMPLE_CONFIG: &str = include_str!("../config.toml");
 
 mod dotfiles;
+mod scripts;
 
 #[derive(Clone, Debug, Deserialize, Copy, ValueEnum, PartialEq, Serialize)]
 pub enum SearchMode {
@@ -515,6 +516,9 @@ pub struct Settings {
 
     #[serde(default)]
     pub theme: Theme,
+
+    #[serde(default)]
+    pub scripts: scripts::Settings,
 }
 
 impl Settings {

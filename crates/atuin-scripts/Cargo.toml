@@ -1,0 +1,33 @@
+[package]
+name = "atuin-scripts"
+edition = "2024"
+version = { workspace = true }
+description = "The scripts crate for Atuin"
+
+authors.workspace = true
+rust-version.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+atuin-client = { path = "../atuin-client", version = "18.5.0-beta.1" }
+atuin-common = { path = "../atuin-common", version = "18.5.0-beta.1" }
+
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+rmp = { version = "0.8.14" }
+uuid = { workspace = true }
+eyre = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+typed-builder = { workspace = true }
+pretty_assertions = { workspace = true }
+sql-builder = { workspace = true }
+sqlx = { workspace = true }
+tempfile = { workspace = true }
+minijinja = { workspace = true }
+serde_json = { workspace = true }

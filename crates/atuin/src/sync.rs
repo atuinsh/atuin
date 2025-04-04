@@ -1,4 +1,5 @@
 use atuin_dotfiles::store::{AliasStore, var::VarStore};
+use atuin_scripts::store::ScriptStore;
 use eyre::{Context, Result};
 
 use atuin_client::{
@@ -30,11 +31,16 @@ pub async fn build(
     let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
     let alias_store = AliasStore::new(store.clone(), host_id, encryption_key);
     let var_store = VarStore::new(store.clone(), host_id, encryption_key);
+    let script_store = ScriptStore::new(store.clone(), host_id, encryption_key);
 
     history_store.incremental_build(db, downloaded).await?;
 
     alias_store.build().await?;
     var_store.build().await?;
+
+    let script_db =
+        atuin_scripts::database::Database::new(settings.scripts.database_path.clone(), 1.0).await?;
+    script_store.build(script_db).await?;
 
     Ok(())
 }
