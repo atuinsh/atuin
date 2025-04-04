@@ -402,9 +402,11 @@ dependencies = [
  "atuin-client",
  "atuin-common",
  "eyre",
+ "minijinja",
  "pretty_assertions",
  "rmp",
  "serde",
+ "serde_json",
  "sql-builder",
  "sqlx",
  "tempfile",
@@ -2543,6 +2545,15 @@ name = "mime"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6877bb514081ee2a7ff5ef9de3281f14a4dd4bceac4c09388074a6b5df8a139a"
+
+[[package]]
+name = "minijinja"
+version = "2.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "98642a6dfca91122779a307b77cd07a4aa951fbe32232aaf5bad9febc66be754"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "minimal-lexical"

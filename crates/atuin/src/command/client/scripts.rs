@@ -1,7 +1,10 @@
 use std::path::PathBuf;
+use std::collections::HashMap;
+use std::collections::HashSet;
 
+use atuin_scripts::execution::template_script;
 use atuin_scripts::{
-    execution::{build_executable_script, execute_script_interactive},
+    execution::{build_executable_script, execute_script_interactive, template_variables},
     store::{ScriptStore, script::Script},
 };
 use clap::{Parser, Subcommand};
@@ -33,7 +36,7 @@ pub struct NewScript {
     /// Use the last command as the script content
     /// Optionally specify a number to use the last N commands
     pub last: Option<Option<usize>>,
-    
+
     #[arg(long)]
     /// Skip opening editor when using --last
     pub no_edit: bool,
@@ -42,6 +45,11 @@ pub struct NewScript {
 #[derive(Parser, Debug)]
 pub struct Run {
     pub name: String,
+    
+    /// Specify template variables in the format KEY=VALUE
+    /// Example: -v name=John -v greeting="Hello there"
+    #[arg(short, long = "var")]
+    pub var: Vec<String>,
 }
 
 #[derive(Parser, Debug)]
@@ -66,11 +74,11 @@ pub struct Edit {
     /// Replace all existing tags with these new tags
     #[arg(short, long)]
     pub tags: Vec<String>,
-    
+
     /// Remove all tags from the script
     #[arg(long)]
     pub no_tags: bool,
-    
+
     /// Rename the script
     #[arg(long)]
     pub rename: Option<String>,
@@ -80,7 +88,7 @@ pub struct Edit {
 
     #[arg(long)]
     pub script: Option<PathBuf>,
-    
+
     /// Skip opening editor
     #[arg(long)]
     pub no_edit: bool,
@@ -112,24 +120,87 @@ impl Cmd {
         // Create a temporary file
         let temp_file = NamedTempFile::new()?;
         let path = temp_file.into_temp_path();
-        
+
         // Write initial content to the temp file if provided
         if let Some(content) = initial_content {
             std::fs::write(&path, content)?;
         }
-        
+
         // Open the file in the user's preferred editor
         let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
         let status = std::process::Command::new(editor).arg(&path).status()?;
         if !status.success() {
             bail!("failed to open editor");
         }
-        
+
         // Read back the edited content
         let content = std::fs::read_to_string(&path)?;
         path.close()?;
-        
+
         Ok(content)
+    }
+
+    // Helper function to execute a script and manage stdin/stdout/stderr
+    async fn execute_script(script_content: String, shebang: String) -> Result<i32> {
+        let mut session = execute_script_interactive(script_content, shebang)
+            .await
+            .expect("failed to execute script");
+
+        // Create a channel to signal when the process exits
+        let (exit_tx, mut exit_rx) = tokio::sync::oneshot::channel();
+
+        // Set up a task to read from stdin and forward to the script
+        let sender = session.stdin_tx.clone();
+        let stdin_task = tokio::spawn(async move {
+            use tokio::io::AsyncReadExt;
+            use tokio::select;
+
+            let stdin = tokio::io::stdin();
+            let mut reader = tokio::io::BufReader::new(stdin);
+            let mut buffer = vec![0u8; 1024]; // Read in chunks for efficiency
+
+            loop {
+                // Use select to either read from stdin or detect when the process exits
+                select! {
+                    // Check if the script process has exited
+                    _ = &mut exit_rx => {
+                        break;
+                    }
+                    // Try to read from stdin
+                    read_result = reader.read(&mut buffer) => {
+                        match read_result {
+                            Ok(0) => break, // EOF
+                            Ok(n) => {
+                                // Convert the bytes to a string and forward to script
+                                let input = String::from_utf8_lossy(&buffer[0..n]).to_string();
+                                if let Err(e) = sender.send(input).await {
+                                    eprintln!("Error sending input to script: {e}");
+                                    break;
+                                }
+                            },
+                            Err(e) => {
+                                eprintln!("Error reading from stdin: {e}");
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        // Wait for the script to complete
+        let exit_code = session.wait_for_exit().await;
+
+        // Signal the stdin task to stop
+        let _ = exit_tx.send(());
+        let _ = stdin_task.await;
+
+        let code = exit_code.unwrap_or(-1);
+        if code != 0 {
+            eprintln!("Script exited with code {code}");
+        }
+        
+        Ok(code)
     }
 
     async fn handle_new_script(
@@ -167,7 +238,7 @@ impl Cmd {
             }
 
             let script_text = commands.join("\n");
-            
+
             // Only open editor if --no-edit is not specified
             if new_script.no_edit {
                 Some(script_text)
@@ -206,64 +277,65 @@ impl Cmd {
         let script = script_db.get_by_name(&run.name).await?;
 
         if let Some(script) = script {
-            let mut session = execute_script_interactive(&script)
-                .await
-                .expect("failed to execute script");
-
-            // Create a channel to signal when the process exits
-            let (exit_tx, mut exit_rx) = tokio::sync::oneshot::channel();
-
-            // Set up a task to read from stdin and forward to the script
-            let sender = session.stdin_tx.clone();
-            let stdin_task = tokio::spawn(async move {
-                use tokio::io::AsyncReadExt;
-                use tokio::select;
-
-                let stdin = tokio::io::stdin();
-                let mut reader = tokio::io::BufReader::new(stdin);
-                let mut buffer = vec![0u8; 1024]; // Read in chunks for efficiency
-
-                loop {
-                    // Use select to either read from stdin or detect when the process exits
-                    select! {
-                        // Check if the script process has exited
-                        _ = &mut exit_rx => {
-                            break;
-                        }
-                        // Try to read from stdin
-                        read_result = reader.read(&mut buffer) => {
-                            match read_result {
-                                Ok(0) => break, // EOF
-                                Ok(n) => {
-                                    // Convert the bytes to a string and forward to script
-                                    let input = String::from_utf8_lossy(&buffer[0..n]).to_string();
-                                    if let Err(e) = sender.send(input).await {
-                                        eprintln!("Error sending input to script: {e}");
-                                        break;
-                                    }
-                                },
-                                Err(e) => {
-                                    eprintln!("Error reading from stdin: {e}");
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
-            });
-
-            // Wait for the script to complete
-            let exit_code = session.wait_for_exit().await;
-
-            // Signal the stdin task to stop
-            let _ = exit_tx.send(());
-            let _ = stdin_task.await;
-
-            if let Some(code) = exit_code {
-                if code != 0 {
-                    eprintln!("Script exited with code {code}");
+            // Get variables used in the template
+            let variables = template_variables(&script)?;
+            
+            // Create a hashmap to store variable values
+            let mut variable_values: HashMap<String, serde_json::Value> = HashMap::new();
+            
+            // Parse variables from command-line arguments first
+            for var_str in &run.var {
+                if let Some((key, value)) = var_str.split_once('=') {
+                    // Add to variable values
+                    variable_values.insert(key.to_string(), serde_json::Value::String(value.to_string()));
+                    debug!("Using CLI variable: {}={}", key, value);
+                } else {
+                    eprintln!("Warning: Ignoring malformed variable specification: {}", var_str);
+                    eprintln!("Variables should be specified as KEY=VALUE");
                 }
             }
+            
+            // Collect variables that are still needed (not specified via CLI)
+            let remaining_vars: HashSet<String> = variables
+                .into_iter()
+                .filter(|var| !variable_values.contains_key(var))
+                .collect();
+            
+            // If there are variables in the template that weren't specified on the command line, prompt for them
+            if !remaining_vars.is_empty() {
+                println!("This script contains template variables that need values:");
+                
+                let stdin = std::io::stdin();
+                let mut input = String::new();
+                
+                for var in remaining_vars {
+                    input.clear();
+                    
+                    println!("Enter value for '{}': ", var);
+                    
+                    if stdin.read_line(&mut input).is_err() {
+                        eprintln!("Failed to read input for variable '{}'", var);
+                        // Provide an empty string as fallback
+                        variable_values.insert(var, serde_json::Value::String("".to_string()));
+                        continue;
+                    }
+                    
+                    let value = input.trim().to_string();
+                    variable_values.insert(var, serde_json::Value::String(value));
+                }
+            }
+            
+            let final_script = if !variable_values.is_empty() {
+                // If we have variables, we need to template the script
+                debug!("Templating script with variables: {:?}", variable_values);
+                template_script(&script, &variable_values)?
+            } else {
+                // No variables to template, just use the original script
+                script.script.clone()
+            };
+            
+            // Execute the script (either templated or original)
+            Self::execute_script(final_script, script.shebang.clone()).await?;
         } else {
             bail!("script not found");
         }
@@ -308,7 +380,10 @@ impl Cmd {
         if let Some(script) = script {
             if get.script {
                 // Just print the executable script with shebang
-                print!("{}", build_executable_script(&script));
+                print!(
+                    "{}",
+                    build_executable_script(script.script.clone(), script.shebang.clone())
+                );
                 return Ok(());
             }
 
@@ -366,14 +441,14 @@ impl Cmd {
             if let Some(description) = edit.description {
                 script.description = description;
             }
-            
+
             // Handle renaming if requested
             if let Some(new_name) = edit.rename {
                 // Check if a script with the new name already exists
                 if let Some(_) = script_db.get_by_name(&new_name).await? {
                     bail!("A script named '{}' already exists", new_name);
                 }
-                
+
                 // Update the name
                 script.name = new_name;
             }

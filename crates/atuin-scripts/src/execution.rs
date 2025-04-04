@@ -1,5 +1,6 @@
 use crate::store::script::Script;
 use eyre::Result;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::process::Stdio;
 use tempfile::NamedTempFile;
@@ -9,14 +10,14 @@ use tokio::task;
 use tracing::debug;
 
 // Helper function to build a complete script with shebang
-pub fn build_executable_script(script: &Script) -> String {
-    if script.shebang.is_empty() {
+pub fn build_executable_script(script: String, shebang: String) -> String {
+    if shebang.is_empty() {
         // Default to bash if no shebang is provided
-        format!("#!/usr/bin/env bash\n{}", script.script)
-    } else if script.shebang.starts_with("#!") {
-        format!("{}\n{}", script.shebang, script.script)
+        format!("#!/usr/bin/env bash\n{}", script)
+    } else if script.starts_with("#!") {
+        format!("{}\n{}", shebang, script)
     } else {
-        format!("#!{}\n{}", script.shebang, script.script)
+        format!("#!{}\n{}", shebang, script)
     }
 }
 
@@ -40,9 +41,35 @@ impl ScriptSession {
     }
 }
 
+fn setup_template(script: &Script) -> Result<minijinja::Environment> {
+    let mut env = minijinja::Environment::new();
+    env.set_trim_blocks(true);
+    env.add_template("script", script.script.as_str())?;
+
+    Ok(env)
+}
+
+/// Template a script with the given context
+pub fn template_script(script: &Script, context: &HashMap<String, serde_json::Value>) -> Result<String> {
+    let env = setup_template(script)?;
+    let template = env.get_template("script")?;
+    let rendered = template.render(context)?;
+
+    Ok(rendered)
+}
+
+/// Get the variables that need to be templated in a script
+pub fn template_variables(script: &Script) -> Result<HashSet<String>> {
+    let env = setup_template(script)?;
+    let template = env.get_template("script")?;
+
+    Ok(template.undeclared_variables(true))
+}
+
 /// Execute a script interactively, allowing for ongoing stdin/stdout interaction
 pub async fn execute_script_interactive(
-    script: &Script,
+    script: String,
+    shebang: String,
 ) -> Result<ScriptSession, Box<dyn std::error::Error + Send + Sync>> {
     // Create a temporary file for the script
     let temp_file = NamedTempFile::new()?;
@@ -51,14 +78,14 @@ pub async fn execute_script_interactive(
     debug!("creating temp file at {}", temp_path.display());
 
     // Extract interpreter from shebang for fallback execution
-    let interpreter = if !script.shebang.is_empty() {
-        script.shebang.trim_start_matches("#!").trim().to_string()
+    let interpreter = if !shebang.is_empty() {
+        shebang.trim_start_matches("#!").trim().to_string()
     } else {
         "/usr/bin/env bash".to_string()
     };
 
     // Write script content to the temp file, including the shebang
-    let full_script_content = build_executable_script(script);
+    let full_script_content = build_executable_script(script, shebang);
 
     debug!("writing script content to temp file");
     tokio::fs::write(&temp_path, &full_script_content).await?;
