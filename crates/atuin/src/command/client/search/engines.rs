@@ -69,4 +69,5 @@ pub trait SearchEngine: Send + Sync + 'static {
             self.full_query(state, db).await
         }
     }
+    fn get_highlight_indices(&self, command: &str, search_input: &str) -> Vec<usize>;
 }

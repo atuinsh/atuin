@@ -1,10 +1,13 @@
 use std::time::Duration;
 
+use super::duration::format_duration;
+use super::engines::SearchEngine;
 use atuin_client::{
     history::History,
     theme::{Meaning, Theme},
 };
 use atuin_common::utils::Escapable as _;
+use itertools::Itertools;
 use ratatui::{
     buffer::Buffer,
     crossterm::style,
@@ -14,7 +17,17 @@ use ratatui::{
 };
 use time::OffsetDateTime;
 
-use super::duration::format_duration;
+pub struct HistoryHighlighter<'a> {
+    pub engine: &'a dyn SearchEngine,
+    pub search_input: &'a str,
+}
+
+impl HistoryHighlighter<'_> {
+    pub fn get_highlight_indices(&self, command: &str) -> Vec<usize> {
+        self.engine
+            .get_highlight_indices(command, self.search_input)
+    }
+}
 
 pub struct HistoryList<'a> {
     history: &'a [History],
@@ -25,6 +38,7 @@ pub struct HistoryList<'a> {
     now: &'a dyn Fn() -> OffsetDateTime,
     indicator: &'a str,
     theme: &'a Theme,
+    history_highlighter: HistoryHighlighter<'a>,
 }
 
 #[derive(Default)]
@@ -78,6 +92,7 @@ impl StatefulWidget for HistoryList<'_> {
             now: &self.now,
             indicator: self.indicator,
             theme: self.theme,
+            history_highlighter: self.history_highlighter,
         };
 
         for item in self.history.iter().skip(state.offset).take(end - start) {
@@ -101,6 +116,7 @@ impl<'a> HistoryList<'a> {
         now: &'a dyn Fn() -> OffsetDateTime,
         indicator: &'a str,
         theme: &'a Theme,
+        history_highlighter: HistoryHighlighter<'a>,
     ) -> Self {
         Self {
             history,
@@ -110,6 +126,7 @@ impl<'a> HistoryList<'a> {
             now,
             indicator,
             theme,
+            history_highlighter,
         }
     }
 
@@ -144,6 +161,7 @@ struct DrawState<'a> {
     now: &'a dyn Fn() -> OffsetDateTime,
     indicator: &'a str,
     theme: &'a Theme,
+    history_highlighter: HistoryHighlighter<'a>,
 }
 
 // longest line prefix I could come up with
@@ -203,21 +221,45 @@ impl DrawState<'_> {
 
     fn command(&mut self, h: &History) {
         let mut style = self.theme.as_style(Meaning::Base);
+        let mut row_highlighted = false;
         if !self.alternate_highlight && (self.y as usize + self.state.offset == self.state.selected)
         {
+            row_highlighted = true;
             // if not applying alternative highlighting to the whole row, color the command
             style = self.theme.as_style(Meaning::AlertError);
             style.attributes.set(style::Attribute::Bold);
         }
 
+        let highlight_indices = self.history_highlighter.get_highlight_indices(
+            h.command
+                .escape_control()
+                .split_ascii_whitespace()
+                .join(" ")
+                .as_str(),
+        );
+
+        let mut pos = 0;
         for section in h.command.escape_control().split_ascii_whitespace() {
             self.draw(" ", style.into());
-            if self.x > self.list_area.width {
-                // Avoid attempting to draw a command section beyond the width
-                // of the list
-                return;
+            for ch in section.chars() {
+                if self.x > self.list_area.width {
+                    // Avoid attempting to draw a command section beyond the width
+                    // of the list
+                    return;
+                }
+                let mut style = style;
+                if highlight_indices.contains(&pos) {
+                    if row_highlighted {
+                        // if the row is highlighted bold is not enough as the whole row is bold
+                        // change the color too
+                        style = self.theme.as_style(Meaning::AlertWarn);
+                    }
+                    style.attributes.set(style::Attribute::Bold);
+                }
+                self.draw(&ch.to_string(), style.into());
+                pos += 1;
             }
-            self.draw(section, style.into());
+            pos += 1;
         }
     }
 
