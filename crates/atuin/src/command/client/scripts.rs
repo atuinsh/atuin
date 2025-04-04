@@ -89,6 +89,7 @@ pub struct Edit {
     #[arg(long)]
     pub script: Option<PathBuf>,
 
+    #[allow(clippy::struct_field_names)]
     /// Skip opening editor
     #[arg(long)]
     pub no_edit: bool,
@@ -293,10 +294,7 @@ impl Cmd {
                     );
                     debug!("Using CLI variable: {}={}", key, value);
                 } else {
-                    eprintln!(
-                        "Warning: Ignoring malformed variable specification: {}",
-                        var_str
-                    );
+                    eprintln!("Warning: Ignoring malformed variable specification: {var_str}");
                     eprintln!("Variables should be specified as KEY=VALUE");
                 }
             }
@@ -317,12 +315,12 @@ impl Cmd {
                 for var in remaining_vars {
                     input.clear();
 
-                    println!("Enter value for '{}': ", var);
+                    println!("Enter value for '{var}': ");
 
                     if stdin.read_line(&mut input).is_err() {
-                        eprintln!("Failed to read input for variable '{}'", var);
+                        eprintln!("Failed to read input for variable '{var}'");
                         // Provide an empty string as fallback
-                        variable_values.insert(var, serde_json::Value::String("".to_string()));
+                        variable_values.insert(var, serde_json::Value::String(String::new()));
                         continue;
                     }
 
@@ -331,13 +329,13 @@ impl Cmd {
                 }
             }
 
-            let final_script = if !variable_values.is_empty() {
+            let final_script = if variable_values.is_empty() {
+                // No variables to template, just use the original script
+                script.script.clone()
+            } else {
                 // If we have variables, we need to template the script
                 debug!("Templating script with variables: {:?}", variable_values);
                 template_script(&script, &variable_values)?
-            } else {
-                // No variables to template, just use the original script
-                script.script.clone()
             };
 
             // Execute the script (either templated or original)
@@ -388,7 +386,7 @@ impl Cmd {
                 // Just print the executable script with shebang
                 print!(
                     "{}",
-                    build_executable_script(script.script.clone(), script.shebang.clone())
+                    build_executable_script(script.script.clone(), script.shebang)
                 );
                 return Ok(());
             }
@@ -451,7 +449,7 @@ impl Cmd {
             // Handle renaming if requested
             if let Some(new_name) = edit.rename {
                 // Check if a script with the new name already exists
-                if let Some(_) = script_db.get_by_name(&new_name).await? {
+                if (script_db.get_by_name(&new_name).await?).is_some() {
                     bail!("A script named '{}' already exists", new_name);
                 }
 
