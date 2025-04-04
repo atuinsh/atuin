@@ -88,7 +88,7 @@ pub async fn execute_script_interactive(
     };
 
     // Write script content to the temp file, including the shebang
-    let full_script_content = build_executable_script(script, shebang);
+    let full_script_content = build_executable_script(script.clone(), shebang.clone());
 
     debug!("writing script content to temp file");
     tokio::fs::write(&temp_path, &full_script_content).await?;
@@ -117,6 +117,11 @@ pub async fn execute_script_interactive(
     // If direct execution fails, try using the interpreter
     if let Err(e) = &child_result {
         debug!("direct execution failed: {}, trying with interpreter", e);
+        
+        // When falling back to interpreter, remove the shebang from the file
+        // Some interpreters don't handle scripts with shebangs well
+        debug!("writing script content without shebang for interpreter execution");
+        tokio::fs::write(&temp_path, &script).await?;
 
         // Parse the interpreter command
         let parts: Vec<&str> = interpreter.split_whitespace().collect();

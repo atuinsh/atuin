@@ -16,7 +16,6 @@ use tracing::debug;
 
 #[derive(Parser, Debug)]
 pub struct NewScript {
-    #[arg(short, long)]
     pub name: String,
 
     #[arg(short, long)]
