@@ -34,8 +34,7 @@ use ratatui::{
         cursor::SetCursorStyle,
         event::{
             self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers,
-            KeyboardEnhancementFlags, MouseEvent, PopKeyboardEnhancementFlags,
-            PushKeyboardEnhancementFlags,
+            MouseEvent,
         },
         execute, terminal,
     },
@@ -44,6 +43,11 @@ use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, BorderType, Borders, Padding, Paragraph, Tabs, block::Title},
+};
+
+#[cfg(not(target_os = "windows"))]
+use ratatui::crossterm::event::{
+    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 
 const TAB_TITLES: [&str; 2] = ["Search", "Inspect"];
@@ -1211,7 +1215,11 @@ pub async fn history(
         InputAction::Accept(index) if index < results.len() => {
             let mut command = results.swap_remove(index).command;
             if accept
-                && (utils::is_zsh() || utils::is_fish() || utils::is_bash() || utils::is_xonsh())
+                && (utils::is_zsh()
+                    || utils::is_fish()
+                    || utils::is_bash()
+                    || utils::is_xonsh()
+                    || utils::is_powershell())
             {
                 command = String::from("__atuin_accept__:") + &command;
             }
