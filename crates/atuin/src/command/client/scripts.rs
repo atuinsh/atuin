@@ -9,6 +9,7 @@ use eyre::{Result, bail};
 use tempfile::NamedTempFile;
 
 use atuin_client::{database::Database, record::sqlite_store::SqliteStore, settings::Settings};
+use tracing::debug;
 
 #[derive(Parser, Debug)]
 pub struct NewScript {
@@ -32,6 +33,10 @@ pub struct NewScript {
     /// Use the last command as the script content
     /// Optionally specify a number to use the last N commands
     pub last: Option<Option<usize>>,
+    
+    #[arg(long)]
+    /// Skip opening editor when using --last
+    pub no_edit: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -58,14 +63,27 @@ pub struct Edit {
     #[arg(short, long)]
     pub description: Option<String>,
 
+    /// Replace all existing tags with these new tags
     #[arg(short, long)]
     pub tags: Vec<String>,
+    
+    /// Remove all tags from the script
+    #[arg(long)]
+    pub no_tags: bool,
+    
+    /// Rename the script
+    #[arg(long)]
+    pub rename: Option<String>,
 
     #[arg(short, long)]
     pub shebang: Option<String>,
 
     #[arg(long)]
     pub script: Option<PathBuf>,
+    
+    /// Skip opening editor
+    #[arg(long)]
+    pub no_edit: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -89,6 +107,31 @@ pub enum Cmd {
 }
 
 impl Cmd {
+    // Helper function to open an editor with optional initial content
+    fn open_editor(initial_content: Option<&str>) -> Result<String> {
+        // Create a temporary file
+        let temp_file = NamedTempFile::new()?;
+        let path = temp_file.into_temp_path();
+        
+        // Write initial content to the temp file if provided
+        if let Some(content) = initial_content {
+            std::fs::write(&path, content)?;
+        }
+        
+        // Open the file in the user's preferred editor
+        let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
+        let status = std::process::Command::new(editor).arg(&path).status()?;
+        if !status.success() {
+            bail!("failed to open editor");
+        }
+        
+        // Read back the edited content
+        let content = std::fs::read_to_string(&path)?;
+        path.close()?;
+        
+        Ok(content)
+    }
+
     async fn handle_new_script(
         settings: &Settings,
         new_script: NewScript,
@@ -124,45 +167,20 @@ impl Cmd {
             }
 
             let script_text = commands.join("\n");
-
-            // Open the editor with the commands pre-loaded
-            let temp_file = NamedTempFile::new()?;
-            let path = temp_file.into_temp_path();
-
-            // Write the existing script content to the temp file
-            std::fs::write(&path, &script_text)?;
-
-            // Open the file in the user's preferred editor
-            let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
-            let status = std::process::Command::new(editor).arg(&path).status()?;
-            if !status.success() {
-                bail!("failed to open editor");
+            
+            // Only open editor if --no-edit is not specified
+            if new_script.no_edit {
+                Some(script_text)
+            } else {
+                // Open the editor with the commands pre-loaded
+                Some(Self::open_editor(Some(&script_text))?)
             }
-
-            // Read back the edited content
-            let script = std::fs::read_to_string(&path)?;
-            path.close()?;
-            Some(script)
         } else if let Some(script_path) = new_script.script {
             let script_content = std::fs::read_to_string(script_path)?;
             Some(script_content)
         } else {
-            // If the user does not pass a file in, we should
-            // 1. Create a temporary file
-            // 2. Open the file with $EDITOR
-            // 3. When the user closes the editor, read the file
-            let temp_file = NamedTempFile::new()?;
-            let path = temp_file.into_temp_path();
-
-            let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
-            let status = std::process::Command::new(editor).arg(&path).status()?;
-            if !status.success() {
-                bail!("failed to open editor");
-            }
-
-            let content = std::fs::read_to_string(&path)?;
-            path.close()?;
-            Some(content)
+            // Open editor with empty file
+            Some(Self::open_editor(None)?)
         };
 
         let script = Script::builder()
@@ -338,18 +356,40 @@ impl Cmd {
         script_store: ScriptStore,
         script_db: atuin_scripts::database::Database,
     ) -> Result<()> {
+        debug!("editing script {:?}", edit);
         // Find the existing script
         let existing_script = script_db.get_by_name(&edit.name).await?;
+        debug!("existing script {:?}", existing_script);
 
         if let Some(mut script) = existing_script {
             // Update the script with new values if provided
             if let Some(description) = edit.description {
                 script.description = description;
             }
+            
+            // Handle renaming if requested
+            if let Some(new_name) = edit.rename {
+                // Check if a script with the new name already exists
+                if let Some(_) = script_db.get_by_name(&new_name).await? {
+                    bail!("A script named '{}' already exists", new_name);
+                }
+                
+                // Update the name
+                script.name = new_name;
+            }
 
-            if !edit.tags.is_empty() {
+            // Handle tag updates with priority:
+            // 1. If --no-tags is provided, clear all tags
+            // 2. If --tags is provided, replace all tags
+            // 3. If neither is provided, tags remain unchanged
+            if edit.no_tags {
+                // Clear all tags
+                script.tags.clear();
+            } else if !edit.tags.is_empty() {
+                // Replace all tags
                 script.tags = edit.tags;
             }
+            // If none of the above conditions are met, tags remain unchanged
 
             if let Some(shebang) = edit.shebang {
                 script.shebang = shebang;
@@ -359,25 +399,12 @@ impl Cmd {
             let script_content = if let Some(script_path) = edit.script {
                 // Load script from provided file
                 std::fs::read_to_string(script_path)?
+            } else if !edit.no_edit {
+                // Open the script in editor for interactive editing if --no-edit is not specified
+                Self::open_editor(Some(&script.script))?
             } else {
-                // Open the script in editor for interactive editing
-                let temp_file = NamedTempFile::new()?;
-                let path = temp_file.into_temp_path();
-
-                // Write the existing script content to the temp file
-                std::fs::write(&path, &script.script)?;
-
-                // Open the file in the user's preferred editor
-                let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
-                let status = std::process::Command::new(editor).arg(&path).status()?;
-                if !status.success() {
-                    bail!("failed to open editor");
-                }
-
-                // Read back the edited content
-                let content = std::fs::read_to_string(&path)?;
-                path.close()?;
-                content
+                // If --no-edit is specified, keep the existing script content
+                script.script.clone()
             };
 
             // Update the script content

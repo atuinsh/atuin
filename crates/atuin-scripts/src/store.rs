@@ -91,33 +91,17 @@ impl ScriptStore {
     }
 
     pub async fn build(&self, database: Database) -> Result<()> {
+        // Get all the scripts from the database - they are already sorted by timestamp
         let scripts = self.scripts().await?;
-
-        let mut create_scripts = Vec::new();
-        let mut update_scripts = Vec::new();
-        let mut delete_scripts = Vec::new();
 
         for script in scripts {
             match script {
-                ScriptRecord::Create(script) => create_scripts.push(script),
-                ScriptRecord::Update(script) => update_scripts.push(script),
-                ScriptRecord::Delete(id) => delete_scripts.push(id),
+                ScriptRecord::Create(script) => {
+                    database.save(&script).await?;
+                }
+                ScriptRecord::Update(script) => database.update(&script).await?,
+                ScriptRecord::Delete(id) => database.delete(&id.to_string()).await?,
             }
-        }
-
-        // First, we process all the creates. This ensures that all scripts we need to operate on in the future
-        // exist in the database.
-
-        database.save_bulk(&create_scripts).await?;
-
-        // Then process the updates
-        for script in update_scripts {
-            database.update(&script).await?;
-        }
-
-        // Finally, the deletes. We do this last - otherwise the delete might not find the ID that it references.
-        for id in delete_scripts {
-            database.delete(&id.to_string()).await?;
         }
 
         Ok(())

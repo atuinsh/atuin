@@ -206,16 +206,39 @@ impl Database {
     }
 
     pub async fn update(&self, s: &Script) -> Result<()> {
-        debug!("updating script {}", s.id);
+        debug!("updating script {:?}", s);
 
+        let mut tx = self.pool.begin().await?;
+
+        // Update the script's base fields
         sqlx::query("update scripts set name = ?1, description = ?2, shebang = ?3, script = ?4 where id = ?5")
             .bind(s.name.as_str())
             .bind(s.description.as_str())
             .bind(s.shebang.as_str())
             .bind(s.script.as_str())
             .bind(s.id.to_string())
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
+
+        // Delete all existing tags for this script
+        sqlx::query("delete from script_tags where script_id = ?1")
+            .bind(s.id.to_string())
+            .execute(&mut *tx)
+            .await?;
+
+        // Insert new tags
+        for tag in s.tags.iter() {
+            sqlx::query(
+                "insert or ignore into script_tags(script_id, tag)
+                values(?1, ?2)",
+            )
+            .bind(s.id.to_string())
+            .bind(tag)
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        tx.commit().await?;
 
         Ok(())
     }
@@ -227,7 +250,20 @@ impl Database {
             .fetch_optional(&self.pool)
             .await?;
 
-        Ok(res)
+        let script = if let Some(mut script) = res {
+            let tags = sqlx::query("select tag from script_tags where script_id = ?1")
+                .bind(script.id.to_string())
+                .map(Self::query_script_tags)
+                .fetch_all(&self.pool)
+                .await?;
+
+            script.tags = tags;
+            Some(script)
+        } else {
+            None
+        };
+
+        Ok(script)
     }
 }
 
