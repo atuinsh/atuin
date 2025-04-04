@@ -117,7 +117,7 @@ pub async fn execute_script_interactive(
     // If direct execution fails, try using the interpreter
     if let Err(e) = &child_result {
         debug!("direct execution failed: {}, trying with interpreter", e);
-        
+
         // When falling back to interpreter, remove the shebang from the file
         // Some interpreters don't handle scripts with shebangs well
         debug!("writing script content without shebang for interpreter execution");
