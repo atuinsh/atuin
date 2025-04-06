@@ -14,3 +14,4 @@ pub mod test_utils;
 pub mod time;
 pub mod url;
 pub mod utils;
+pub mod i18n;
