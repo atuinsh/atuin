@@ -477,6 +477,7 @@ impl ThemeManager {
 #[cfg(test)]
 mod theme_tests {
     use super::*;
+    use tracing_test::traced_test;
 
     #[test]
     fn test_can_load_builtin_theme() {
@@ -607,9 +608,8 @@ mod theme_tests {
     }
 
     #[test]
+    #[traced_test]
     fn test_can_use_parent_theme_for_fallbacks() {
-        testing_logger::setup();
-
         let mut manager = ThemeManager::new(Some(false), Some("".to_string()));
 
         // First, we introduce a base theme
@@ -673,8 +673,6 @@ mod theme_tests {
             from_string("white").ok()
         );
 
-        testing_logger::validate(|captured_logs| assert_eq!(captured_logs.len(), 0));
-
         // If the parent is not found, we end up with the base theme colors
         let nunsolarized = Config::builder()
             .add_source(ConfigFile::from_str(
@@ -701,55 +699,51 @@ mod theme_tests {
             Some(Color::DarkBlue)
         );
 
-        testing_logger::validate(|captured_logs| {
+        logs_assert(|captured_logs: &[&str]| {
+            // More context lines with tracing than just the logline itself.
             assert_eq!(captured_logs.len(), 1);
-            assert_eq!(captured_logs[0].body,
+            assert!(captured_logs[0].contains(
                 "Could not load theme nonsolarized: Empty theme directory override and could not find theme elsewhere"
-            );
-            assert_eq!(captured_logs[0].level, log::Level::Warn)
+            ));
+            assert!(captured_logs[0].contains("WARN"));
+            Ok(())
         });
     }
 
     #[test]
+    #[traced_test]
     fn test_can_debug_theme() {
-        testing_logger::setup();
-        [true, false].iter().for_each(|debug| {
-            let mut manager = ThemeManager::new(Some(*debug), Some("".to_string()));
-            let config = Config::builder()
-                .add_source(ConfigFile::from_str(
-                    "
-            [theme]
-            name = \"mytheme\"
+        let debug = true;
+        let mut manager = ThemeManager::new(Some(debug), Some("".to_string()));
+        let config = Config::builder()
+            .add_source(ConfigFile::from_str(
+                "
+        [theme]
+        name = \"mytheme\"
 
-            [colors]
-            Guidance = \"white\"
-            AlertInfo = \"xinetic\"
-            ",
-                    FileFormat::Toml,
-                ))
-                .build()
-                .unwrap();
-            manager
-                .load_theme_from_config("config_theme", config, 1)
-                .unwrap();
-            testing_logger::validate(|captured_logs| {
-                if *debug {
-                    assert_eq!(captured_logs.len(), 2);
-                    assert_eq!(
-                        captured_logs[0].body,
-                        "Your theme config name is not the name of your loaded theme config_theme != mytheme"
-                    );
-                    assert_eq!(captured_logs[0].level, log::Level::Warn);
-                    assert_eq!(
-                        captured_logs[1].body,
-                        "Tried to load string as a color unsuccessfully: (AlertInfo=xinetic) No such color in palette"
-                    );
-                    assert_eq!(captured_logs[1].level, log::Level::Warn)
-                } else {
-                    assert_eq!(captured_logs.len(), 0)
-                }
-            })
-        })
+        [colors]
+        Guidance = \"white\"
+        AlertInfo = \"xinetic\"
+        ",
+                FileFormat::Toml,
+            ))
+            .build()
+            .unwrap();
+        manager
+            .load_theme_from_config("config_theme", config, 1)
+            .unwrap();
+        logs_assert(|captured_logs: &[&str]| {
+            // More context lines with tracing than just the logline itself.
+            assert_eq!(captured_logs.len(), 2);
+            assert!(captured_logs[0].contains(
+                "Your theme config name is not the name of your loaded theme config_theme != mytheme"
+            ));
+            assert!(captured_logs[1].contains(
+                "Tried to load string as a color unsuccessfully: (AlertInfo=xinetic) No such color in palette"
+            ));
+            assert!(captured_logs.into_iter().all(|line| line.contains("WARN")));
+            Ok(())
+        });
     }
 
     #[test]

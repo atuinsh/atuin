@@ -82,3 +82,4 @@ tracing.workspace = true
 tokio = { version = "1", features = ["full"] }
 pretty_assertions = { workspace = true }
 testing_logger = "0.1.1"
+tracing-test = "0.2.5"
