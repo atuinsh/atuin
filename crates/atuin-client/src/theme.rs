@@ -1,6 +1,8 @@
 use config::{Config, File as ConfigFile, FileFormat};
 use lazy_static::lazy_static;
 use log;
+use tracing;
+use tracing::instrument;
 use palette::named;
 use serde::{Deserialize, Serialize};
 use serde_json;
@@ -55,6 +57,7 @@ use crossterm::style::{Color, ContentStyle};
 
 // For now, a theme is loaded as a mapping of meanings to colors, but it may be desirable to
 // expand that in the future to general styles, so we populate a Meaning->ContentStyle hashmap.
+#[derive(Debug)]
 pub struct Theme {
     pub name: String,
     pub parent: Option<String>,
@@ -120,6 +123,7 @@ impl Theme {
     // but we do not have this on in general, as it could print unfiltered text to the terminal
     // from a theme TOML file. However, it will always return a theme, falling back to
     // defaults on error, so that a TOML file does not break loading
+    #[instrument(skip(debug))]
     pub fn from_foreground_colors(
         name: String,
         parent: Option<&Theme>,
@@ -133,7 +137,7 @@ impl Theme {
                     *name,
                     StyleFactory::from_fg_string(color).unwrap_or_else(|err| {
                         if debug {
-                            log::warn!(
+                            tracing::warn!(
                                 "Tried to load string as a color unsuccessfully: ({}={}) {}",
                                 name,
                                 color,
@@ -340,6 +344,7 @@ lazy_static! {
 }
 
 // To avoid themes being repeatedly loaded, we store them in a theme manager
+#[derive(Debug)]
 pub struct ThemeManager {
     loaded_themes: HashMap<String, Theme>,
     debug: bool,
@@ -434,7 +439,7 @@ impl ThemeManager {
         };
 
         if debug && name != theme_config.theme.name {
-            log::warn!(
+            tracing::warn!(
                 "Your theme config name is not the name of your loaded theme {} != {}",
                 name,
                 theme_config.theme.name
@@ -450,6 +455,7 @@ impl ThemeManager {
 
     // Check if the requested theme is loaded and, if not, then attempt to get it
     // from the builtins or, if not there, from file
+    #[instrument(skip(self))]
     pub fn load_theme(&mut self, name: &str, max_depth: Option<u8>) -> &Theme {
         if self.loaded_themes.contains_key(name) {
             return self.loaded_themes.get(name).unwrap();
@@ -460,7 +466,7 @@ impl ThemeManager {
             None => match self.load_theme_from_file(name, max_depth.unwrap_or(DEFAULT_MAX_DEPTH)) {
                 Ok(theme) => theme,
                 Err(err) => {
-                    log::warn!("Could not load theme {}: {}", name, err);
+                    tracing::warn!("Could not load theme {}: {}", name, err);
                     built_ins.get("default").unwrap()
                 }
             },
