@@ -54,7 +54,11 @@ fn render_not_found(subcommand: &str, bin: &str) -> StyledStr {
     let _ = write!(output, "{error}error:{error:#} ");
     let _ = write!(
         output,
-        "unrecognized subcommand '{invalid}{subcommand}{invalid:#}' "
+        "{} ",
+        t!(
+            "unrecognized subcommand '%{subcommand}'",
+            subcommand = format!("{invalid}{subcommand}{invalid:#}")
+        )
     );
     let _ = write!(
         output,
