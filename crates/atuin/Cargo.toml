@@ -5,7 +5,7 @@ description = "atuin - magical shell history"
 readme = "./README.md"
 
 rust-version = { workspace = true }
-version = { workspace = true }
+version = "18.5.0-beta.2"
 authors = { workspace = true }
 license = { workspace = true }
 homepage = { workspace = true }
@@ -82,6 +82,9 @@ uuid = { workspace = true }
 sysinfo = "0.30.7"
 regex = "1.10.5"
 tempfile = { workspace = true }
+i18n-embed = { version = "0.15.3", features = ["fluent", "fluent-system", "tr", "locale_config", "desktop-requester", "walkdir", "gettext-system", "autoreload", "filesystem-assets", "notify"] }
+rust-embed = "8"
+i18n-embed-fl = "0.9.3"
 
 [target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
 arboard = { version = "3.4", optional = true }

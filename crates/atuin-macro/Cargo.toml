@@ -1,7 +1,7 @@
 [package]
-name = "atuin-common"
-edition = "2024"
-description = "common library for atuin"
+name = "atuin-macro"
+edition = "2021"
+description = "macro library for atuin"
 
 rust-version = { workspace = true }
 version = { workspace = true }
@@ -10,11 +10,12 @@ license = { workspace = true }
 homepage = { workspace = true }
 repository = { workspace = true }
 
+[lib]
+proc-macro = true
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-atuin-macro = { path = "../atuin-macro" }
-
 time = { workspace = true }
 serde = { workspace = true }
 uuid = { workspace = true }
@@ -35,6 +36,6 @@ rust-embed = "8"
 i18n-embed-fl = "0.9.3"
 slugify = "0.1.0"
 paste = "1.0.15"
-
-[dev-dependencies]
-pretty_assertions = { workspace = true }
+syn = "2.0.96"
+quote = "1.0.38"
+proc-macro2 = "1.0.93"

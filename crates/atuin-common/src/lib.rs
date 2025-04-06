@@ -57,3 +57,4 @@ pub mod api;
 pub mod record;
 pub mod shell;
 pub mod utils;
+pub mod i18n;
