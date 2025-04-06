@@ -28,3 +28,4 @@ pub mod time;
 pub mod units;
 pub mod url;
 pub mod utils;
+pub mod i18n;

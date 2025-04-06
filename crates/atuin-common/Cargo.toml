@@ -22,6 +22,7 @@ test-utils = ["dep:tracing-subscriber"]
 unicode = ["dep:unicode-width", "dep:unicode-segmentation"]
 
 [dependencies]
+atuin-macro = { path = "../atuin-macro" }
 atuin-vt100 = { workspace = true, optional = true }
 
 async-stream = { workspace = true }
@@ -65,6 +66,14 @@ unicode-width = { workspace = true, optional = true }
 url = { workspace = true }
 uuid = { workspace = true }
 zeroize = { workspace = true }
+sys-locale = "0.3.2"
+
+lazy_static = "1.4.0"
+i18n-embed = { version = "0.15.3", features = ["fluent", "fluent-system", "tr", "locale_config", "desktop-requester", "walkdir", "gettext-system", "autoreload", "filesystem-assets", "notify"] }
+rust-embed = "8"
+i18n-embed-fl = "0.9.3"
+slugify = "0.1.0"
+paste = "1.0.15"
 
 [target.'cfg(unix)'.dependencies]
 rustix = { workspace = true, optional = true }

@@ -139,6 +139,11 @@ unicode-width = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 
+# internationalization (Project Fluent)
+i18n-embed = { version = "0.15.3", features = ["fluent", "fluent-system", "tr", "locale_config", "desktop-requester", "walkdir", "gettext-system", "autoreload", "filesystem-assets", "notify"] }
+rust-embed = "8"
+i18n-embed-fl = "0.9.3"
+
 [target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
 arboard = { workspace = true, optional = true }
 

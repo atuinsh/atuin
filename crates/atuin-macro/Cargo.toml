@@ -1,0 +1,41 @@
+[package]
+name = "atuin-macro"
+edition = "2021"
+description = "macro library for atuin"
+
+rust-version = { workspace = true }
+version = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+
+[lib]
+proc-macro = true
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+time = { workspace = true }
+serde = { workspace = true }
+uuid = { workspace = true }
+typed-builder = { workspace = true }
+eyre = { workspace = true }
+sqlx = { workspace = true }
+semver = { workspace = true }
+thiserror = { workspace = true }
+directories = { workspace = true }
+sysinfo = "0.30.7"
+base64 = { workspace = true }
+getrandom = "0.2"
+sys-locale = "0.3.2"
+
+lazy_static = "1.4.0"
+i18n-embed = { version = "0.15.3", features = ["fluent", "fluent-system", "tr", "locale_config", "desktop-requester", "walkdir", "gettext-system", "autoreload", "filesystem-assets", "notify"] }
+rust-embed = "8"
+i18n-embed-fl = "0.9.3"
+slugify = "0.1.0"
+paste = "1.0.15"
+syn = "2.0.96"
+quote = "1.0.38"
+proc-macro2 = "1.0.93"
