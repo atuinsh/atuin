@@ -508,7 +508,7 @@ impl State {
                 self.scroll_down(scroll_len);
             }
             _ => {}
-        };
+        }
 
         InputAction::Continue
     }

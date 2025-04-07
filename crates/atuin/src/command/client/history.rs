@@ -606,7 +606,7 @@ impl Cmd {
                 format,
             } => {
                 let last = db.last().await?;
-                let last = last.as_ref().map(std::slice::from_ref).unwrap_or_default();
+                let last = last.as_slice();
                 let tz = timezone.unwrap_or(settings.timezone);
                 print_list(
                     last,
