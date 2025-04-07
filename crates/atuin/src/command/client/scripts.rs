@@ -107,10 +107,12 @@ pub struct Delete {
 pub enum Cmd {
     New(NewScript),
     Run(Run),
+    #[command(alias = "ls")]
     List(List),
 
     Get(Get),
     Edit(Edit),
+    #[command(alias = "rm")]
     Delete(Delete),
 }
 
