@@ -42,6 +42,9 @@ thiserror = "1.0"
 rustix = { version = "0.38.34", features = ["process", "fs"] }
 tower = "0.4"
 tracing = "0.1"
+sql-builder = "3"
+tempfile = { version = "3.19" }
+minijinja = "2.9.0"
 
 [workspace.dependencies.tracing-subscriber]
 version = "0.3"
