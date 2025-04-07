@@ -100,7 +100,7 @@ $env.config = (
             Shell::Xonsh => {
                 xonsh::init_static(self.disable_up_arrow, self.disable_ctrl_r);
             }
-        };
+        }
     }
 
     async fn dotfiles_init(&self, settings: &Settings) -> Result<()> {
