@@ -6,19 +6,19 @@ use atuin_common::record::HostId;
 use atuin_common::utils;
 use clap::ValueEnum;
 use config::{
-    Config, ConfigBuilder, Environment, File as ConfigFile, FileFormat, builder::DefaultState,
+    builder::DefaultState, Config, ConfigBuilder, Environment, File as ConfigFile, FileFormat,
 };
-use eyre::{Context, Error, Result, bail, eyre};
-use fs_err::{File, create_dir_all};
+use eyre::{bail, eyre, Context, Error, Result};
+use fs_err::{create_dir_all, File};
 use humantime::parse_duration;
 use regex::RegexSet;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use serde_with::DeserializeFromStr;
 use time::{
-    OffsetDateTime, UtcOffset,
-    format_description::{FormatItem, well_known::Rfc3339},
+    format_description::{well_known::Rfc3339, FormatItem},
     macros::format_description,
+    OffsetDateTime, UtcOffset,
 };
 use uuid::Uuid;
 
@@ -794,7 +794,6 @@ impl Settings {
             .set_default("smart_sort", false)?
             .set_default("store_failed", true)?
             .set_default("daemon.sync_frequency", 300)?
-            .set_default("daemon.enabled", false)?
             .set_default("daemon.socket_path", socket_path.to_str())?
             .set_default("daemon.systemd_socket", false)?
             .set_default("daemon.tcp_port", 8889)?
