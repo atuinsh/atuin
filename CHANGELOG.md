@@ -46,6 +46,7 @@ All notable changes to this project will be documented in this file.
 - Option to include duplicate commands when printing history commands ([#2407](https://github.com/atuinsh/atuin/issues/2407))
 - Binaries as subcommands ([#2661](https://github.com/atuinsh/atuin/issues/2661))
 - Support storing, syncing and executing scripts ([#2644](https://github.com/atuinsh/atuin/issues/2644))
+- Add 'atuin scripts rm' and 'atuin scripts ls' aliases; allow reading from stdin ([#2680](https://github.com/atuinsh/atuin/issues/2680))
 
 
 ### Miscellaneous Tasks
