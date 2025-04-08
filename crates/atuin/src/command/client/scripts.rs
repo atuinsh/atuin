@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::io::IsTerminal;
+use std::io::Read;
 use std::path::PathBuf;
 
 use atuin_scripts::execution::template_script;
@@ -107,10 +109,12 @@ pub struct Delete {
 pub enum Cmd {
     New(NewScript),
     Run(Run),
+    #[command(alias = "ls")]
     List(List),
 
     Get(Get),
     Edit(Edit),
+    #[command(alias = "rm")]
     Delete(Delete),
 }
 
@@ -210,6 +214,7 @@ impl Cmd {
         script_db: atuin_scripts::database::Database,
         history_db: &impl Database,
     ) -> Result<()> {
+        let mut stdin = std::io::stdin();
         let script_content = if let Some(count_opt) = new_script.last {
             // Get the last N commands from history, plus 1 to exclude the command that runs this script
             let count = count_opt.unwrap_or(1) + 1; // Add 1 to the count to exclude the current command
@@ -249,6 +254,10 @@ impl Cmd {
         } else if let Some(script_path) = new_script.script {
             let script_content = std::fs::read_to_string(script_path)?;
             Some(script_content)
+        } else if !stdin.is_terminal() {
+            let mut buffer = String::new();
+            stdin.read_to_string(&mut buffer)?;
+            Some(buffer)
         } else {
             // Open editor with empty file
             Some(Self::open_editor(None)?)
