@@ -72,8 +72,10 @@ I wanted to. And I **really** don't want to.
 ## Documentation
 
 - [Quickstart](#quickstart)
-- [Security](#security)
-- [Contributors](#contributors)
+- [Install](https://docs.atuin.sh/guide/installation/)
+- [Setting up sync](https://docs.atuin.sh/guide/sync/)
+- [Import history](https://docs.atuin.sh/guide/import/)
+- [Basic usage](https://docs.atuin.sh/guide/basic-usage/)
 ## Supported Shells
 
 - zsh
