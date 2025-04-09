@@ -84,14 +84,14 @@ pub async fn register_inner<'a>(
 #[allow(dead_code)]
 pub async fn login(address: &str, username: String, password: String) -> api_client::Client<'_> {
     // registration works
-    let login_respose = api_client::login(
+    let login_response = api_client::login(
         address,
         atuin_common::api::LoginRequest { username, password },
     )
     .await
     .unwrap();
 
-    api_client::Client::new(address, &login_respose.session, 5, 30).unwrap()
+    api_client::Client::new(address, &login_response.session, 5, 30).unwrap()
 }
 
 #[allow(dead_code)]
