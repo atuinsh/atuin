@@ -14,7 +14,7 @@ jobs:
 
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@master
+      - uses: actions/checkout@v4
         with:
           repository: atuinsh/atuin
           path: "./"
@@ -58,15 +58,12 @@ jobs:
     permissions:
       packages: write
 
-    runs-on: actuated-arm64-4cpu-16gb
+    runs-on: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@master
+      - uses: actions/checkout@v4
         with:
           repository: atuinsh/atuin
           path: "./"
-
-      - name: Setup mirror
-        uses: self-actuated/hub-mirror@master
 
       - name: Get Repo Owner
         id: get_repo_owner
@@ -104,7 +101,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [publish_x86, publish_aarch64]
     steps:
-      - uses: actions/checkout@master
+      - uses: actions/checkout@v4
         with:
           repository: atuinsh/atuin
           path: "./"

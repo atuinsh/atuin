@@ -221,7 +221,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
 name = "atuin"
-version = "18.5.0-beta.2"
+version = "18.5.0"
 dependencies = [
  "arboard",
  "async-trait",
@@ -230,6 +230,7 @@ dependencies = [
  "atuin-daemon",
  "atuin-dotfiles",
  "atuin-history",
+ "atuin-scripts",
  "atuin-server",
  "atuin-server-postgres",
  "clap",
@@ -254,6 +255,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sysinfo",
+ "tempfile",
  "time",
  "tiny-bip39",
  "tokio",
@@ -266,7 +268,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-client"
-version = "18.5.0-beta.2"
+version = "18.5.0"
 dependencies = [
  "async-trait",
  "atuin-common",
@@ -323,7 +325,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-common"
-version = "18.5.0-beta.2"
+version = "18.5.0"
 dependencies = [
  "base64 0.22.1",
  "directories",
@@ -343,7 +345,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-daemon"
-version = "18.5.0-beta.2"
+version = "18.5.0"
 dependencies = [
  "atuin-client",
  "atuin-dotfiles",
@@ -370,7 +372,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-dotfiles"
-version = "18.5.0-beta.2"
+version = "18.5.0"
 dependencies = [
  "atuin-client",
  "atuin-common",
@@ -384,7 +386,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-history"
-version = "18.5.0-beta.2"
+version = "18.5.0"
 dependencies = [
  "atuin-client",
  "crossterm",
@@ -396,8 +398,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "atuin-scripts"
+version = "18.5.0"
+dependencies = [
+ "atuin-client",
+ "atuin-common",
+ "eyre",
+ "minijinja",
+ "pretty_assertions",
+ "rmp",
+ "serde",
+ "serde_json",
+ "sql-builder",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "typed-builder",
+ "uuid",
+]
+
+[[package]]
 name = "atuin-server"
-version = "18.5.0-beta.2"
+version = "18.5.0"
 dependencies = [
  "argon2",
  "async-trait",
@@ -426,7 +450,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-server-database"
-version = "18.5.0-beta.2"
+version = "18.5.0"
 dependencies = [
  "async-trait",
  "atuin-common",
@@ -438,7 +462,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-server-postgres"
-version = "18.5.0-beta.2"
+version = "18.5.0"
 dependencies = [
  "async-trait",
  "atuin-common",
@@ -2544,6 +2568,15 @@ name = "mime"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6877bb514081ee2a7ff5ef9de3281f14a4dd4bceac4c09388074a6b5df8a139a"
+
+[[package]]
+name = "minijinja"
+version = "2.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "98642a6dfca91122779a307b77cd07a4aa951fbe32232aaf5bad9febc66be754"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "minimal-lexical"
@@ -4730,9 +4763,9 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "tokio"
-version = "1.44.1"
+version = "1.44.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f382da615b842244d4b8738c82ed1275e6c5dd90c459a30941cd07080b06c91a"
+checksum = "e6b88822cbe49de4185e3a4cbf8321dd487cf5fe0c5c65695fef6346371e9c48"
 dependencies = [
  "backtrace",
  "bytes",

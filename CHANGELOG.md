@@ -9,9 +9,11 @@ All notable changes to this project will be documented in this file.
 - *(1289)* Clear terminal area if inline ([#2600](https://github.com/atuinsh/atuin/issues/2600))
 - *(bash)* Fix preexec of child Bash session started by enter_accept ([#2558](https://github.com/atuinsh/atuin/issues/2558))
 - *(build)* Change atuin-daemon build script .proto paths ([#2638](https://github.com/atuinsh/atuin/issues/2638))
+- *(kv)* Filter deleted keys from `kv list` ([#2665](https://github.com/atuinsh/atuin/issues/2665))
 - *(stats)* Ignore leading environment variables when calculating stats ([#2659](https://github.com/atuinsh/atuin/issues/2659))
 - *(wrapped)* Fix crash when history is empty ([#2508](https://github.com/atuinsh/atuin/issues/2508))
 - *(zsh)* Fix an error introduced earilier with support for bracketed paste mode ([#2651](https://github.com/atuinsh/atuin/issues/2651))
+- *(zsh)* Avoid calling user-defined widgets when searching for history position ([#2670](https://github.com/atuinsh/atuin/issues/2670))
 - Add .histfile as file to look for when doing atuin import zsh ([#2588](https://github.com/atuinsh/atuin/issues/2588))
 - Panic when invoking delete on empty tui ([#2584](https://github.com/atuinsh/atuin/issues/2584))
 - Sql files checksums ([#2601](https://github.com/atuinsh/atuin/issues/2601))
@@ -22,6 +24,7 @@ All notable changes to this project will be documented in this file.
 - Typeerror in client sync code ([#2647](https://github.com/atuinsh/atuin/issues/2647))
 - Add redundant clones to clippy and cleanup instances of it ([#2654](https://github.com/atuinsh/atuin/issues/2654))
 - Allow -ve values for timezone ([#2609](https://github.com/atuinsh/atuin/issues/2609))
+- Fish up binding bug ([#2677](https://github.com/atuinsh/atuin/issues/2677))
 
 
 ### Documentation
@@ -42,6 +45,8 @@ All notable changes to this project will be documented in this file.
 - Use readline binding for ctrl-a when it is not the prefix ([#2626](https://github.com/atuinsh/atuin/issues/2626))
 - Option to include duplicate commands when printing history commands ([#2407](https://github.com/atuinsh/atuin/issues/2407))
 - Binaries as subcommands ([#2661](https://github.com/atuinsh/atuin/issues/2661))
+- Support storing, syncing and executing scripts ([#2644](https://github.com/atuinsh/atuin/issues/2644))
+- Add 'atuin scripts rm' and 'atuin scripts ls' aliases; allow reading from stdin ([#2680](https://github.com/atuinsh/atuin/issues/2680))
 
 
 ### Miscellaneous Tasks
@@ -52,6 +57,7 @@ All notable changes to this project will be documented in this file.
 - Migrate to rust 2024 ([#2635](https://github.com/atuinsh/atuin/issues/2635))
 - Show host and user in inspector ([#2634](https://github.com/atuinsh/atuin/issues/2634))
 - Update to rust 1.85.1 ([#2642](https://github.com/atuinsh/atuin/issues/2642))
+- Update to rust 1.86 ([#2666](https://github.com/atuinsh/atuin/issues/2666))
 
 
 ### Performance
@@ -595,7 +601,7 @@ All notable changes to this project will be documented in this file.
 - *(install)* Discord broken link
 - *(shell)* Respect ZSH's $ZDOTDIR environment variable ([#1441](https://github.com/atuinsh/atuin/issues/1441))
 - *(stats)* Don't require all fields under [stats] ([#1437](https://github.com/atuinsh/atuin/issues/1437))
-- *(stats)* Time now_local not working 
+- *(stats)* Time now_local not working
 - *(zsh)* Zsh_autosuggest_strategy for no-unset environment ([#1486](https://github.com/atuinsh/atuin/issues/1486))
 
 
