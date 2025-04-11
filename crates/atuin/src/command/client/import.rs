@@ -9,9 +9,9 @@ use atuin_client::{
     database::Database,
     history::History,
     import::{
-        Importer, Loader, bash::Bash, csv_history::Csv, fish::Fish, nu::Nu,
-        nu_histdb::NuHistDb, replxx::Replxx, resh::Resh, xonsh::Xonsh, xonsh_sqlite::XonshSqlite,
-        zsh::Zsh, zsh_histdb::ZshHistDb,
+        Importer, Loader, bash::Bash, csv_history::Csv, fish::Fish, nu::Nu, nu_histdb::NuHistDb,
+        replxx::Replxx, resh::Resh, xonsh::Xonsh, xonsh_sqlite::XonshSqlite, zsh::Zsh,
+        zsh_histdb::ZshHistDb,
     },
 };
 
