@@ -13,7 +13,7 @@ use crate::history::History;
 const HISTORY_FILE: &str = "history.csv"; // Global constant for history file
 
 #[derive(Debug)]
-pub struct CsvHistoryImporter;
+pub struct Csv;
 
 fn default_histpath() -> Result<PathBuf> {
     let histpath = PathBuf::from(HISTORY_FILE);
@@ -27,7 +27,7 @@ fn default_histpath() -> Result<PathBuf> {
 }
 
 #[async_trait]
-impl Importer for CsvHistoryImporter {
+impl Importer for Csv {
     const NAME: &'static str = "csv_history";
 
     async fn new() -> Result<Self> {
@@ -89,7 +89,7 @@ mod test {
         let path = file.path().to_path_buf();
         fs::copy(&path, HISTORY_FILE).unwrap();
 
-        let mut importer = CsvHistoryImporter::new().await.unwrap();
+        let mut importer = Csv::new().await.unwrap();
         assert_eq!(importer.entries().await.unwrap(), 3);
 
         let mut loader = TestLoader::default();
