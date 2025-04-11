@@ -27,7 +27,7 @@ config = { version = "0.15.8", default-features = false, features = ["toml"] }
 directories = "5.0.1"
 eyre = "0.6"
 fs-err = "2.9"
-interim = { version = "0.1.0", features = ["time"] }
+interim = { version = "0.2.0", features = ["time_0_3"] }
 itertools = "0.13.0"
 rand = { version = "0.8.5", features = ["std"] }
 semver = "1.0.20"
