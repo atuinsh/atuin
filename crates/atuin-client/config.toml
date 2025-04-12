@@ -172,6 +172,10 @@
 ## Alternatively, set env NO_MOTION=true
 # prefers_reduced_motion = false
 
+## Defaults to true. Configures whether to store commands that failed (those with non-zero 
+## exit status) or not.
+# store_failed = true
+
 [stats]
 ## Set commands where we should consider the subcommand for statistics. Eg, kubectl get vs just kubectl
 # common_subcommands = [
