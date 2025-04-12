@@ -1,5 +1,6 @@
 use std::{
     borrow::Cow,
+    collections::HashSet,
     env,
     path::{Path, PathBuf},
     str::FromStr,
@@ -229,6 +230,178 @@ impl Sqlite {
             .build()
             .into()
     }
+
+    async fn search_inner(
+        &self,
+        search_mode: SearchMode,
+        filter: FilterMode,
+        context: &Context,
+        query: &str,
+        filter_options: OptFilters,
+        before: Option<i64>,
+    ) -> Result<Vec<History>> {
+        let mut sql = SqlBuilder::select_from("history");
+
+        if !filter_options.include_duplicates {
+            sql.group_by("command").having("max(timestamp)");
+        }
+
+        if let Some(limit) = filter_options.limit {
+            sql.limit(limit);
+        }
+
+        if let Some(offset) = filter_options.offset {
+            sql.offset(offset);
+        }
+
+        if filter_options.reverse {
+            sql.order_asc("timestamp");
+        } else {
+            sql.order_desc("timestamp");
+        }
+
+        let git_root = if let Some(git_root) = context.git_root.clone() {
+            git_root.to_str().unwrap_or("/").to_string()
+        } else {
+            context.cwd.clone()
+        };
+
+        match filter {
+            FilterMode::Global => &mut sql,
+            FilterMode::Host => {
+                sql.and_where_eq("lower(hostname)", quote(context.hostname.to_lowercase()))
+            }
+            FilterMode::Session => sql.and_where_eq("session", quote(&context.session)),
+            FilterMode::Directory => sql.and_where_eq("cwd", quote(&context.cwd)),
+            FilterMode::Workspace => sql.and_where_like_left("cwd", git_root),
+        };
+
+        let orig_query = query;
+
+        let mut regexes = Vec::new();
+        match search_mode {
+            SearchMode::Prefix => sql.and_where_like_left("command", query.replace('*', "%")),
+            _ => {
+                let mut is_or = false;
+                let mut regex = None;
+                for part in query.split_inclusive(' ') {
+                    let query_part: Cow<str> = match (&mut regex, part.starts_with("r/")) {
+                        (None, false) => {
+                            if part.trim_end().is_empty() {
+                                continue;
+                            }
+                            Cow::Owned(part.trim_end().replace('*', "%")) // allow wildcard char
+                        }
+                        (None, true) => {
+                            if part[2..].trim_end().ends_with('/') {
+                                let end_pos = part.trim_end().len() - 1;
+                                regexes.push(String::from(&part[2..end_pos]));
+                            } else {
+                                regex = Some(String::from(&part[2..]));
+                            }
+                            continue;
+                        }
+                        (Some(r), _) => {
+                            if part.trim_end().ends_with('/') {
+                                let end_pos = part.trim_end().len() - 1;
+                                r.push_str(&part.trim_end()[..end_pos]);
+                                regexes.push(regex.take().unwrap());
+                            } else {
+                                r.push_str(part);
+                            }
+                            continue;
+                        }
+                    };
+
+                    // TODO smart case mode could be made configurable like in fzf
+                    let (is_glob, glob) = if query_part.contains(char::is_uppercase) {
+                        (true, "*")
+                    } else {
+                        (false, "%")
+                    };
+
+                    let (is_inverse, query_part) = match query_part.strip_prefix('!') {
+                        Some(stripped) => (true, Cow::Borrowed(stripped)),
+                        None => (false, query_part),
+                    };
+
+                    #[allow(clippy::if_same_then_else)]
+                    let param = if query_part == "|" {
+                        if !is_or {
+                            is_or = true;
+                            continue;
+                        } else {
+                            format!("{glob}|{glob}")
+                        }
+                    } else if let Some(term) = query_part.strip_prefix('^') {
+                        format!("{term}{glob}")
+                    } else if let Some(term) = query_part.strip_suffix('$') {
+                        format!("{glob}{term}")
+                    } else if let Some(term) = query_part.strip_prefix('\'') {
+                        format!("{glob}{term}{glob}")
+                    } else if is_inverse {
+                        format!("{glob}{query_part}{glob}")
+                    } else if search_mode == SearchMode::FullText {
+                        format!("{glob}{query_part}{glob}")
+                    } else {
+                        query_part.split("").join(glob)
+                    };
+
+                    sql.fuzzy_condition("command", param, is_inverse, is_glob, is_or);
+                    is_or = false;
+                }
+                if let Some(r) = regex {
+                    regexes.push(r);
+                }
+
+                &mut sql
+            }
+        };
+
+        for regex in regexes {
+            sql.and_where("command regexp ?".bind(&regex));
+        }
+
+        filter_options
+            .exit
+            .map(|exit| sql.and_where_eq("exit", exit));
+
+        filter_options
+            .exclude_exit
+            .map(|exclude_exit| sql.and_where_ne("exit", exclude_exit));
+
+        filter_options
+            .cwd
+            .map(|cwd| sql.and_where_eq("cwd", quote(cwd)));
+
+        filter_options
+            .exclude_cwd
+            .map(|exclude_cwd| sql.and_where_ne("cwd", quote(exclude_cwd)));
+
+        if let Some(before) = before {
+            sql.and_where_lt("timestamp", quote(before));
+        }
+
+        filter_options.after.map(|after| {
+            interim::parse_date_string(
+                after.as_str(),
+                OffsetDateTime::now_utc(),
+                interim::Dialect::Uk,
+            )
+            .map(|after| sql.and_where_gt("timestamp", quote(after.unix_timestamp_nanos() as i64)))
+        });
+
+        sql.and_where_is_null("deleted_at");
+
+        let query = sql.sql().expect("bug in search query. please report");
+
+        let res = sqlx::query(&query)
+            .map(Self::query_history)
+            .fetch_all(&self.pool)
+            .await?;
+
+        Ok(ordering::reorder_fuzzy(search_mode, orig_query, res))
+    }
 }
 
 #[async_trait]
@@ -407,176 +580,57 @@ impl Database for Sqlite {
         filter: FilterMode,
         context: &Context,
         query: &str,
-        filter_options: OptFilters,
+        mut filter_options: OptFilters,
     ) -> Result<Vec<History>> {
-        let mut sql = SqlBuilder::select_from("history");
-
-        if !filter_options.include_duplicates {
-            sql.group_by("command").having("max(timestamp)");
-        }
-
-        if let Some(limit) = filter_options.limit {
-            sql.limit(limit);
-        }
-
-        if let Some(offset) = filter_options.offset {
-            sql.offset(offset);
-        }
-
-        if filter_options.reverse {
-            sql.order_asc("timestamp");
-        } else {
-            sql.order_desc("timestamp");
-        }
-
-        let git_root = if let Some(git_root) = context.git_root.clone() {
-            git_root.to_str().unwrap_or("/").to_string()
-        } else {
-            context.cwd.clone()
-        };
-
-        match filter {
-            FilterMode::Global => &mut sql,
-            FilterMode::Host => {
-                sql.and_where_eq("lower(hostname)", quote(context.hostname.to_lowercase()))
-            }
-            FilterMode::Session => sql.and_where_eq("session", quote(&context.session)),
-            FilterMode::Directory => sql.and_where_eq("cwd", quote(&context.cwd)),
-            FilterMode::Workspace => sql.and_where_like_left("cwd", git_root),
-        };
-
-        let orig_query = query;
-
-        let mut regexes = Vec::new();
-        match search_mode {
-            SearchMode::Prefix => sql.and_where_like_left("command", query.replace('*', "%")),
-            _ => {
-                let mut is_or = false;
-                let mut regex = None;
-                for part in query.split_inclusive(' ') {
-                    let query_part: Cow<str> = match (&mut regex, part.starts_with("r/")) {
-                        (None, false) => {
-                            if part.trim_end().is_empty() {
-                                continue;
-                            }
-                            Cow::Owned(part.trim_end().replace('*', "%")) // allow wildcard char
-                        }
-                        (None, true) => {
-                            if part[2..].trim_end().ends_with('/') {
-                                let end_pos = part.trim_end().len() - 1;
-                                regexes.push(String::from(&part[2..end_pos]));
-                            } else {
-                                regex = Some(String::from(&part[2..]));
-                            }
-                            continue;
-                        }
-                        (Some(r), _) => {
-                            if part.trim_end().ends_with('/') {
-                                let end_pos = part.trim_end().len() - 1;
-                                r.push_str(&part.trim_end()[..end_pos]);
-                                regexes.push(regex.take().unwrap());
-                            } else {
-                                r.push_str(part);
-                            }
-                            continue;
-                        }
-                    };
-
-                    // TODO smart case mode could be made configurable like in fzf
-                    let (is_glob, glob) = if query_part.contains(char::is_uppercase) {
-                        (true, "*")
-                    } else {
-                        (false, "%")
-                    };
-
-                    let (is_inverse, query_part) = match query_part.strip_prefix('!') {
-                        Some(stripped) => (true, Cow::Borrowed(stripped)),
-                        None => (false, query_part),
-                    };
-
-                    #[allow(clippy::if_same_then_else)]
-                    let param = if query_part == "|" {
-                        if !is_or {
-                            is_or = true;
-                            continue;
-                        } else {
-                            format!("{glob}|{glob}")
-                        }
-                    } else if let Some(term) = query_part.strip_prefix('^') {
-                        format!("{term}{glob}")
-                    } else if let Some(term) = query_part.strip_suffix('$') {
-                        format!("{glob}{term}")
-                    } else if let Some(term) = query_part.strip_prefix('\'') {
-                        format!("{glob}{term}{glob}")
-                    } else if is_inverse {
-                        format!("{glob}{query_part}{glob}")
-                    } else if search_mode == SearchMode::FullText {
-                        format!("{glob}{query_part}{glob}")
-                    } else {
-                        query_part.split("").join(glob)
-                    };
-
-                    sql.fuzzy_condition("command", param, is_inverse, is_glob, is_or);
-                    is_or = false;
-                }
-                if let Some(r) = regex {
-                    regexes.push(r);
-                }
-
-                &mut sql
-            }
-        };
-
-        for regex in regexes {
-            sql.and_where("command regexp ?".bind(&regex));
-        }
-
-        filter_options
-            .exit
-            .map(|exit| sql.and_where_eq("exit", exit));
-
-        filter_options
-            .exclude_exit
-            .map(|exclude_exit| sql.and_where_ne("exit", exclude_exit));
-
-        filter_options
-            .cwd
-            .map(|cwd| sql.and_where_eq("cwd", quote(cwd)));
-
-        filter_options
-            .exclude_cwd
-            .map(|exclude_cwd| sql.and_where_ne("cwd", quote(exclude_cwd)));
-
-        filter_options.before.map(|before| {
+        let mut before = filter_options.before.as_ref().and_then(|before| {
             interim::parse_date_string(
                 before.as_str(),
                 OffsetDateTime::now_utc(),
                 interim::Dialect::Uk,
             )
-            .map(|before| {
-                sql.and_where_lt("timestamp", quote(before.unix_timestamp_nanos() as i64))
-            })
+            .ok()
+            .map(|before| before.unix_timestamp_nanos() as i64)
         });
+        if filter_options.include_duplicates || filter_options.limit.is_none() {
+            return self
+                .search_inner(search_mode, filter, context, query, filter_options, before)
+                .await;
+        }
 
-        filter_options.after.map(|after| {
-            interim::parse_date_string(
-                after.as_str(),
-                OffsetDateTime::now_utc(),
-                interim::Dialect::Uk,
-            )
-            .map(|after| sql.and_where_gt("timestamp", quote(after.unix_timestamp_nanos() as i64)))
-        });
+        let mut result = vec![];
+        let mut seen_commands = HashSet::new();
+        let limit = filter_options.limit.unwrap() as usize;
+        let page_size = limit + limit / 2;
+        filter_options.limit = Some(page_size as i64);
+        filter_options.include_duplicates = true;
+        while result.len() < limit {
+            let res = self
+                .search_inner(
+                    search_mode,
+                    filter,
+                    context,
+                    query,
+                    filter_options.clone(),
+                    before,
+                )
+                .await?;
+            let over = res.len() < page_size;
+            if let Some(last) = res.iter().last() {
+                before = Some(last.timestamp.unix_timestamp_nanos() as i64);
+            }
+            for h in res {
+                if !seen_commands.contains(&h.command) {
+                    seen_commands.insert(h.command.clone());
+                    result.push(h);
+                }
+            }
+            if over {
+                break;
+            }
+        }
 
-        sql.and_where_is_null("deleted_at");
-
-        let query = sql.sql().expect("bug in search query. please report");
-
-        let res = sqlx::query(&query)
-            .map(Self::query_history)
-            .fetch_all(&self.pool)
-            .await?;
-
-        Ok(ordering::reorder_fuzzy(search_mode, orig_query, res))
+        result.truncate(limit);
+        Ok(result)
     }
 
     async fn query_history(&self, query: &str) -> Result<Vec<History>> {
