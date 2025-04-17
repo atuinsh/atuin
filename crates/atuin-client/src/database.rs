@@ -119,6 +119,8 @@ pub trait Database: Send + Sync + 'static {
     async fn all_with_count(&self) -> Result<Vec<(History, i32)>>;
 
     async fn stats(&self, h: &History) -> Result<HistoryStats>;
+
+    async fn get_dups(&self, before: i64, dupkeep: u32) -> Result<Vec<History>>;
 }
 
 // Intended for use on a developer machine and not a sync server.
@@ -767,6 +769,26 @@ impl Database for Sqlite {
             day_of_week,
             duration_over_time,
         })
+    }
+
+    async fn get_dups(&self, before: i64, dupkeep: u32) -> Result<Vec<History>> {
+        let res = sqlx::query(
+            "SELECT * FROM (
+                SELECT *, ROW_NUMBER()
+                  OVER (PARTITION BY command, cwd, hostname ORDER BY timestamp DESC)
+                  AS rn
+                  FROM history
+                ) sub
+              WHERE rn > ?1 and timestamp < ?2;
+            ",
+        )
+        .bind(dupkeep)
+        .bind(before)
+        .map(Self::query_history)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(res)
     }
 }
 

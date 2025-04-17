@@ -117,6 +117,21 @@ pub enum Cmd {
         #[arg(short = 'n', long)]
         dry_run: bool,
     },
+
+    /// Delete duplicate history entries (that have the same command, cwd and hostname)
+    Dedup {
+        /// List matching history lines without performing the actual deletion.
+        #[arg(short = 'n', long)]
+        dry_run: bool,
+
+        /// Only delete results added before this date
+        #[arg(long, short)]
+        before: String,
+
+        /// How many recent duplicates to keep
+        #[arg(long)]
+        dupkeep: u32,
+    },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -544,6 +559,54 @@ impl Cmd {
         Ok(())
     }
 
+    async fn handle_dedup(
+        db: &impl Database,
+        settings: &Settings,
+        store: SqliteStore,
+        before: i64,
+        dupkeep: u32,
+        dry_run: bool,
+    ) -> Result<()> {
+        let matches: Vec<History> = db.get_dups(before, dupkeep).await?;
+
+        match matches.len() {
+            0 => {
+                println!("No duplicates to delete.");
+                return Ok(());
+            }
+            1 => println!("Found 1 duplicate to delete."),
+            n => println!("Found {n} duplicates to delete."),
+        }
+
+        if dry_run {
+            print_list(
+                &matches,
+                ListMode::Human,
+                Some(settings.history_format.as_str()),
+                false,
+                false,
+                settings.timezone,
+            );
+        } else {
+            let encryption_key: [u8; 32] = encryption::load_key(settings)
+                .context("could not load encryption key")?
+                .into();
+            let host_id = Settings::host_id().expect("failed to get host_id");
+            let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
+
+            for entry in matches {
+                eprintln!("deleting {}", entry.id);
+                if settings.sync.records {
+                    let (id, _) = history_store.delete(entry.id).await?;
+                    history_store.incremental_build(db, &[id]).await?;
+                } else {
+                    db.delete(entry).await?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub async fn run(self, settings: &Settings) -> Result<()> {
         let context = current_context();
 
@@ -627,6 +690,22 @@ impl Cmd {
 
             Self::Prune { dry_run } => {
                 Self::handle_prune(&db, settings, store, context, dry_run).await
+            }
+
+            Self::Dedup {
+                dry_run,
+                before,
+                dupkeep,
+            } => {
+                let before = i64::try_from(
+                    interim::parse_date_string(
+                        before.as_str(),
+                        OffsetDateTime::now_utc(),
+                        interim::Dialect::Uk,
+                    )?
+                    .unix_timestamp_nanos(),
+                )?;
+                Self::handle_dedup(&db, settings, store, before, dupkeep, dry_run).await
             }
         }
     }
