@@ -1164,7 +1164,10 @@ pub async fn history(
                 if event_ready?? {
                     loop {
                         match app.handle_input(settings, &event::read()?, &mut std::io::stdout(), &results)? {
-                            InputAction::Continue => {},
+                            InputAction::Continue => {
+                                // Redraw the UI to keep it in sync with the selection state
+                                terminal.draw(|f| app.draw(f, &results, stats.clone(), settings, theme))?;
+                            },
                             InputAction::Delete(index) => {
                                 if results.is_empty() {
                                     break;
