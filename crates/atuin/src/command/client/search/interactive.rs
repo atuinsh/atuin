@@ -49,7 +49,7 @@ use ratatui::{
 const TAB_TITLES: [&str; 2] = ["Search", "Inspect"];
 
 pub enum InputAction {
-    Accept(usize, History),
+    Accept(History),
     Copy(usize),
     Delete(usize),
     ReturnOriginal,
@@ -227,7 +227,7 @@ impl State {
             KeyCode::Tab => {
                 let selected = self.results_state.selected();
                 if !results.is_empty() && selected < results.len() {
-                    Some(InputAction::Accept(selected, results[selected].clone()))
+                    Some(InputAction::Accept(results[selected].clone()))
                 } else {
                     Some(InputAction::ReturnQuery)
                 }
@@ -235,7 +235,7 @@ impl State {
             KeyCode::Right if cursor_at_end_of_line => {
                 let selected = self.results_state.selected();
                 if !results.is_empty() && selected < results.len() {
-                    Some(InputAction::Accept(selected, results[selected].clone()))
+                    Some(InputAction::Accept(results[selected].clone()))
                 } else {
                     Some(InputAction::ReturnQuery)
                 }
@@ -299,7 +299,7 @@ impl State {
         }
         let selected = self.results_state.selected();
         if !results.is_empty() && selected < results.len() {
-            InputAction::Accept(selected, results[selected].clone())
+            InputAction::Accept(results[selected].clone())
         } else {
             InputAction::ReturnQuery
         }
@@ -408,7 +408,7 @@ impl State {
                 return c.to_digit(10).map_or(InputAction::Continue, |c| {
                     let new_index = selected + c as usize;
                     if !results.is_empty() && new_index < results.len() {
-                        InputAction::Accept(new_index, results[new_index].clone())
+                        InputAction::Accept(results[new_index].clone())
                     } else {
                         InputAction::ReturnQuery
                     }
@@ -1237,7 +1237,7 @@ pub async fn history(
     }
 
     match result {
-        InputAction::Accept(_, history) => {
+        InputAction::Accept(history) => {
             let mut command = history.command;
             if accept
                 && (utils::is_zsh() || utils::is_fish() || utils::is_bash() || utils::is_xonsh())
