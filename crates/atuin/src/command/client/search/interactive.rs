@@ -199,7 +199,12 @@ impl State {
         }
     }
 
-    fn handle_key_input(&mut self, settings: &Settings, input: &KeyEvent, results: &[History]) -> InputAction {
+    fn handle_key_input(
+        &mut self,
+        settings: &Settings,
+        input: &KeyEvent,
+        results: &[History],
+    ) -> InputAction {
         if input.kind == event::KeyEventKind::Release {
             return InputAction::Continue;
         }
@@ -231,7 +236,7 @@ impl State {
                 } else {
                     Some(InputAction::ReturnQuery)
                 }
-            },
+            }
             KeyCode::Right if cursor_at_end_of_line => {
                 let selected = self.results_state.selected();
                 if !results.is_empty() && selected < results.len() {
@@ -239,7 +244,7 @@ impl State {
                 } else {
                     Some(InputAction::ReturnQuery)
                 }
-            },
+            }
             KeyCode::Left if cursor_at_start_of_line => Some(Self::handle_key_exit(settings)),
             KeyCode::Char('o') if ctrl => {
                 self.tab_index = (self.tab_index + 1) % TAB_TITLES.len();
@@ -307,7 +312,12 @@ impl State {
 
     #[allow(clippy::too_many_lines)]
     #[allow(clippy::cognitive_complexity)]
-    fn handle_search_input(&mut self, settings: &Settings, input: &KeyEvent, results: &[History]) -> InputAction {
+    fn handle_search_input(
+        &mut self,
+        settings: &Settings,
+        input: &KeyEvent,
+        results: &[History],
+    ) -> InputAction {
         let ctrl = input.modifiers.contains(KeyModifiers::CONTROL);
         let alt = input.modifiers.contains(KeyModifiers::ALT);
 
@@ -1256,9 +1266,7 @@ pub async fn history(
             }
             Ok(String::new())
         }
-        InputAction::ReturnQuery => {
-            Ok(app.search.input.into_inner())
-        }
+        InputAction::ReturnQuery => Ok(app.search.input.into_inner()),
         InputAction::Continue | InputAction::Redraw | InputAction::Delete(_) => {
             unreachable!("should have been handled!")
         }
