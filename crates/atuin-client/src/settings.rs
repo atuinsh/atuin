@@ -293,6 +293,7 @@ impl Stats {
             "git",
             "go",
             "ip",
+            "jj",
             "kubectl",
             "nix",
             "nmcli",
