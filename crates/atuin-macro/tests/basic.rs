@@ -24,7 +24,7 @@ lazy_static! {
 }
 
 #[test]
-fn basic_tr_without_parameter() {
+fn basic_tl_without_parameter() {
     assert_eq!(
         tl!(fl, LOADER, "Danger, Bill Bobinson"),
         "Danger, William of Bobinson"
@@ -32,7 +32,7 @@ fn basic_tr_without_parameter() {
 }
 
 #[test]
-fn basic_tr_with_parameter() {
+fn basic_tl_with_parameter() {
     assert_eq!(
         tl!(
             fl,
@@ -45,7 +45,7 @@ fn basic_tr_with_parameter() {
 }
 
 #[test]
-fn tr_with_non_en_range_without_parameter() {
+fn tl_with_non_en_range_without_parameter() {
     let language_loader: FluentLanguageLoader = fluent_language_loader!();
     let requested_languages = vec!["ga-IE".parse().unwrap()];
 
@@ -58,7 +58,7 @@ fn tr_with_non_en_range_without_parameter() {
 }
 
 #[test]
-fn tr_with_non_en_range_with_parameter() {
+fn tl_with_non_en_range_with_parameter() {
     let language_loader: FluentLanguageLoader = fluent_language_loader!();
     let requested_languages = vec!["hi-IN".parse().unwrap()];
 
@@ -76,7 +76,7 @@ fn tr_with_non_en_range_with_parameter() {
 }
 
 #[test]
-fn tr_with_selector_irrelevant() {
+fn tl_with_selector_parameter() {
     let language_loader: FluentLanguageLoader = fluent_language_loader!();
 
     let _result = i18n_embed::select(&language_loader, &Localizations, &vec!["en-GB".parse().unwrap()]);
