@@ -5,7 +5,7 @@ description = "atuin - magical shell history"
 readme = "./README.md"
 
 rust-version = { workspace = true }
-version = "18.5.0-beta.2"
+version = { workspace = true }
 authors = { workspace = true }
 license = { workspace = true }
 homepage = { workspace = true }
