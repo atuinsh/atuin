@@ -294,14 +294,14 @@ impl State {
             },
             KeyCode::Right if cursor_at_end_of_line && settings.keys.accept_past_line_end => {
                 Some(InputAction::Accept(self.results_state.selected()))
-            },
+            }
             KeyCode::Left if cursor_at_start_of_line && settings.keys.exit_past_line_start => {
                 Some(Self::handle_key_exit(settings))
-            },
+            }
             KeyCode::Char('o') if ctrl => {
                 self.tab_index = (self.tab_index + 1) % TAB_TITLES.len();
                 Some(InputAction::Continue)
-            },
+            }
             _ => None,
         };
 
@@ -877,7 +877,7 @@ impl State {
                 theme,
             );
             self.draw_preview(f, style, input_chunk, compactness, preview_chunk, preview);
-        };
+        }
     }
 
     #[allow(clippy::cast_possible_truncation)]
@@ -1370,7 +1370,7 @@ pub async fn history(
             _ => {
                 inspecting = None;
             }
-        };
+        }
 
         stats = if app.tab_index == 0 {
             None
