@@ -1,15 +1,16 @@
-use i18n_embed::{DesktopLanguageRequester, fluent::{
-    FluentLanguageLoader, fluent_language_loader
-}};
-use rust_embed::RustEmbed;
+use i18n_embed::{
+    DesktopLanguageRequester,
+    fluent::{FluentLanguageLoader, fluent_language_loader},
+};
 pub use i18n_embed_fl::fl;
+use rust_embed::RustEmbed;
 
 #[derive(RustEmbed)]
 #[folder = "../../i18n"] // path to the compiled localization resources
 struct Localizations;
 
-use lazy_static::lazy_static;
 pub use atuin_macro::tl;
+use lazy_static::lazy_static;
 
 lazy_static! {
     pub static ref LOADER: FluentLanguageLoader = {
