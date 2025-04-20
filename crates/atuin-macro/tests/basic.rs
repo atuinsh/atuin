@@ -1,8 +1,6 @@
-use i18n_embed::{
-    fluent::{FluentLanguageLoader, fluent_language_loader},
-};
-use lazy_static::lazy_static;
+use i18n_embed::fluent::{fluent_language_loader, FluentLanguageLoader};
 pub use i18n_embed_fl::fl;
+use lazy_static::lazy_static;
 use rust_embed::RustEmbed;
 
 #[derive(RustEmbed)]
@@ -36,7 +34,12 @@ fn basic_tr_without_parameter() {
 #[test]
 fn basic_tr_with_parameter() {
     assert_eq!(
-        tl!(fl, LOADER, "unrecognized subcommand '%{subcommand}'", subcommand = "SUB"),
+        tl!(
+            fl,
+            LOADER,
+            "unrecognized subcommand '%{subcommand}'",
+            subcommand = "SUB"
+        ),
         "unrecognised subcommand '\u{2068}SUB\u{2069}'"
     );
 }
@@ -62,7 +65,12 @@ fn tr_with_non_en_range_with_parameter() {
     let _result = i18n_embed::select(&language_loader, &Localizations, &requested_languages);
 
     assert_eq!(
-        tl!(fl, language_loader, "Hello, my name is %{name}", name = "रीमा"),
+        tl!(
+            fl,
+            language_loader,
+            "Hello, my name is %{name}",
+            name = "रीमा"
+        ),
         "नमस्ते, मेरा नाम \u{2068}रीमा\u{2069} है।"
     );
 }
