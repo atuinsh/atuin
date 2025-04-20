@@ -13,6 +13,8 @@ pub use atuin_macro::tl;
 use lazy_static::lazy_static;
 
 lazy_static! {
+    // We assume that one LOADER is sufficient. Fluent provides more
+    // flexibility, but for now, this simplifies integration.
     pub static ref LOADER: FluentLanguageLoader = {
         // Load languages from central internationalization folder.
         let language_loader: FluentLanguageLoader = fluent_language_loader!();
@@ -26,10 +28,12 @@ lazy_static! {
 
 #[macro_export]
 macro_rules! t {
+    // Case that t!("foo bar") is called with no runtime parameters to interpolate.
     ($message_id:literal) => {
         $crate::i18n::tl!($crate::i18n::fl, $crate::i18n::LOADER, $message_id)
     };
 
+    // Case that t!("foo %{bar}", bar=baz.to_string()) is called with runtime parameters to interpolate.
     ($message_id:literal, $($args:expr),*) => {{
         $crate::i18n::tl!($crate::i18n::fl, $crate::i18n::LOADER, $message_id, $($args), *)
     }};
