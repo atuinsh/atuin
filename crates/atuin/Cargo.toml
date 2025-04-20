@@ -122,7 +122,7 @@ thiserror = { workspace = true }
 toml_edit = { workspace = true }
 
 # internationalization (Project Fluent)
-i18n-embed = { version = "0.15.3", features = ["fluent", "fluent-system", "tr", "locale_config", "desktop-requester", "walkdir", "gettext-system", "autoreload", "filesystem-assets", "notify"] }
+i18n-embed = { version = "0.15.3", features = ["fluent", "fluent-system", "tr", "locale_config", "walkdir", "filesystem-assets"] }
 rust-embed = "8"
 i18n-embed-fl = "0.9.3"
 
