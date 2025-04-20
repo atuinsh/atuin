@@ -1,4 +1,4 @@
-use i18n_embed::fluent::{FluentLanguageLoader, fluent_language_loader};
+use i18n_embed::fluent::{fluent_language_loader, FluentLanguageLoader};
 pub use i18n_embed_fl::fl;
 use lazy_static::lazy_static;
 use rust_embed::RustEmbed;
