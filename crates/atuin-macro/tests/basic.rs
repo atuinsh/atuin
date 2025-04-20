@@ -1,4 +1,4 @@
-use i18n_embed::fluent::{fluent_language_loader, FluentLanguageLoader};
+use i18n_embed::fluent::{FluentLanguageLoader, fluent_language_loader};
 pub use i18n_embed_fl::fl;
 use lazy_static::lazy_static;
 use rust_embed::RustEmbed;
@@ -79,7 +79,11 @@ fn tl_with_non_en_range_with_parameter() {
 fn tl_with_selector_parameter() {
     let language_loader: FluentLanguageLoader = fluent_language_loader!();
 
-    let _result = i18n_embed::select(&language_loader, &Localizations, &vec!["en-GB".parse().unwrap()]);
+    let _result = i18n_embed::select(
+        &language_loader,
+        &Localizations,
+        &vec!["en-GB".parse().unwrap()],
+    );
 
     assert_eq!(
         tl!(fl, language_loader, "the user that has files", gender = "f"),
@@ -91,7 +95,11 @@ fn tl_with_selector_parameter() {
         "the user that has files"
     );
 
-    let _result = i18n_embed::select(&language_loader, &Localizations, &vec!["ga-IE".parse().unwrap()]);
+    let _result = i18n_embed::select(
+        &language_loader,
+        &Localizations,
+        &vec!["ga-IE".parse().unwrap()],
+    );
 
     assert_eq!(
         tl!(fl, language_loader, "the user that has files", gender = "f"),
