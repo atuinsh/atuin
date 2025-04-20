@@ -18,7 +18,7 @@ use ratatui::{
 use super::duration::format_duration;
 
 use super::super::theme::{Meaning, Theme};
-use super::interactive::{to_compactness, Compactness, InputAction, State};
+use super::interactive::{Compactness, InputAction, State, to_compactness};
 
 #[allow(clippy::cast_sign_loss)]
 fn u64_or_zero(num: i64) -> u64 {
