@@ -74,11 +74,6 @@ palette = { version = "0.7.5", features = ["serializing"] }
 lazy_static = "1.4.0"
 strum_macros = "0.26.3"
 strum = { version = "0.26.2", features = ["strum_macros"] }
-fluent = "0.16.1"
-i18n-embed = { version = "0.15.3", features = ["fluent", "fluent-system", "tr", "locale_config", "walkdir", "filesystem-assets"] }
-rust-embed = "8"
-i18n-embed-fl = "0.9.3"
-cargo-i18n = "0.2.13"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
