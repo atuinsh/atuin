@@ -95,6 +95,11 @@ fn tl_with_selector_parameter() {
         "the user that has files"
     );
 
+    assert_eq!(
+        tl!(fl, language_loader, "the user that has files", gender = "o"),
+        "the user that has files"
+    );
+
     let _result = i18n_embed::select(
         &language_loader,
         &Localizations,
@@ -109,5 +114,10 @@ fn tl_with_selector_parameter() {
     assert_eq!(
         tl!(fl, language_loader, "the user that has files", gender = "m"),
         "an t-úsáideoir a bhfuil comhaid aige"
+    );
+
+    assert_eq!(
+        tl!(fl, language_loader, "the user that has files", gender = "o"),
+        "an t-úsáideoir a bhfuil comhaid acu"
     );
 }
