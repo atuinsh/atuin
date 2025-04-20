@@ -31,7 +31,7 @@ getrandom = "0.2"
 sys-locale = "0.3.2"
 
 lazy_static = "1.4.0"
-i18n-embed = { version = "0.15.3", features = ["fluent", "fluent-system", "tr", "locale_config", "walkdir", "filesystem-assets"] }
+i18n-embed = { version = "0.15.3", features = ["fluent", "fluent-system", "tr", "locale_config", "desktop-requester", "walkdir", "filesystem-assets"] }
 rust-embed = "8"
 i18n-embed-fl = "0.9.3"
 slugify = "0.1.0"
