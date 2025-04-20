@@ -74,3 +74,32 @@ fn tr_with_non_en_range_with_parameter() {
         "नमस्ते, मेरा नाम \u{2068}रीमा\u{2069} है।"
     );
 }
+
+#[test]
+fn tr_with_selector_irrelevant() {
+    let language_loader: FluentLanguageLoader = fluent_language_loader!();
+
+    let _result = i18n_embed::select(&language_loader, &Localizations, &vec!["en-GB".parse().unwrap()]);
+
+    assert_eq!(
+        tl!(fl, language_loader, "the user that has files", gender = "f"),
+        "the user that has files"
+    );
+
+    assert_eq!(
+        tl!(fl, language_loader, "the user that has files", gender = "m"),
+        "the user that has files"
+    );
+
+    let _result = i18n_embed::select(&language_loader, &Localizations, &vec!["ga-IE".parse().unwrap()]);
+
+    assert_eq!(
+        tl!(fl, language_loader, "the user that has files", gender = "f"),
+        "an t-úsáideoir a bhfuil comhaid aici"
+    );
+
+    assert_eq!(
+        tl!(fl, language_loader, "the user that has files", gender = "m"),
+        "an t-úsáideoir a bhfuil comhaid aige"
+    );
+}
