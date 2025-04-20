@@ -4,6 +4,7 @@
 pub mod ansi;
 pub mod docs;
 pub mod filter;
+pub mod i18n;
 pub mod logs;
 pub mod path;
 pub mod shell;
@@ -14,4 +15,3 @@ pub mod test_utils;
 pub mod time;
 pub mod url;
 pub mod utils;
-pub mod i18n;
