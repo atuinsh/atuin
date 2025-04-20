@@ -3,7 +3,6 @@ extern crate proc_macro;
 
 use proc_macro::TokenStream;
 use quote::quote;
-use syn;
 use syn::parse::Parser;
 use slugify::slugify;
 
@@ -17,7 +16,7 @@ pub fn tl(tokens: TokenStream) -> TokenStream {
         Some(syn::Expr::Group(arg)) => {
             match *arg.expr.clone() {
                 syn::Expr::Lit(arg) => {
-                    let quoted: String = match arg.lit.clone() {
+                    let quoted: String = match &arg.lit {
                         syn::Lit::Str(message_id) => message_id.value(),
                         _ => panic!("Message ID must be a literal string")
                     };
@@ -28,7 +27,7 @@ pub fn tl(tokens: TokenStream) -> TokenStream {
             }
         },
         Some(syn::Expr::Lit(arg)) => {
-            let quoted: String = match arg.lit.clone() {
+            let quoted: String = match &arg.lit {
                 syn::Lit::Str(message_id) => message_id.value(),
                 _ => panic!("Message ID must be a literal string")
             };
