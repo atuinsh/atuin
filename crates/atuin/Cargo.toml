@@ -82,7 +82,7 @@ uuid = { workspace = true }
 sysinfo = "0.30.7"
 regex = "1.10.5"
 tempfile = { workspace = true }
-i18n-embed = { version = "0.15.3", features = ["fluent", "fluent-system", "tr", "locale_config", "desktop-requester", "walkdir", "gettext-system", "autoreload", "filesystem-assets", "notify"] }
+i18n-embed = { version = "0.15.3", features = ["fluent", "fluent-system", "tr", "locale_config", "walkdir", "filesystem-assets"] }
 rust-embed = "8"
 i18n-embed-fl = "0.9.3"
 
