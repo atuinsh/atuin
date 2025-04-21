@@ -325,12 +325,7 @@ impl<'a> Client<'a> {
         start: RecordIdx,
         count: u64,
     ) -> Result<Vec<Record<EncryptedData>>> {
-        debug!(
-            "fetching record/s from host {}/{}/{}",
-            host.0.to_string(),
-            tag,
-            start
-        );
+        debug!("fetching record/s from host {}/{}/{}", host.0, tag, start);
 
         let url = format!(
             "{}/api/v0/record/next?host={}&tag={}&count={}&start={}",

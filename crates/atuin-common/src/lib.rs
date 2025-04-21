@@ -54,6 +54,7 @@ macro_rules! new_uuid {
 }
 
 pub mod api;
+pub mod i18n;
 pub mod record;
 pub mod shell;
 pub mod utils;

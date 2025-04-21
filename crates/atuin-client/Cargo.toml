@@ -20,6 +20,7 @@ check-update = []
 
 [dependencies]
 atuin-common = { path = "../atuin-common", version = "18.5.0" }
+atuin-macro = { path = "../atuin-macro", version = "18.5.0" }
 
 log = { workspace = true }
 base64 = { workspace = true }
