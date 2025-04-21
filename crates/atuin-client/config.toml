@@ -183,6 +183,7 @@ enter_accept = true
 #   "git",
 #   "go",
 #   "ip",
+#   "jj",
 #   "kubectl",
 #   "nix",
 #   "nmcli",
