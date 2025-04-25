@@ -6,7 +6,8 @@ use atuin_client::{
     record::{sqlite_store::SqliteStore, store::Store},
     settings::Settings,
 };
-use time::OffsetDateTime;
+use itertools::Itertools;
+use time::{OffsetDateTime, UtcOffset};
 
 #[cfg(feature = "sync")]
 mod push;
@@ -70,11 +71,12 @@ impl Cmd {
 
     pub async fn status(&self, store: SqliteStore) -> Result<()> {
         let host_id = Settings::host_id().expect("failed to get host_id");
+        let offset = UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC);
 
         let status = store.status().await?;
 
         // TODO: should probs build some data structure and then pretty-print it or smth
-        for (host, st) in &status.hosts {
+        for (host, st) in status.hosts.iter().sorted_by_key(|(h, _)| *h) {
             let host_string = if host == &host_id {
                 format!("host: {} <- CURRENT HOST", host.0.as_hyphenated())
             } else {
@@ -83,7 +85,7 @@ impl Cmd {
 
             println!("{host_string}");
 
-            for (tag, idx) in st {
+            for (tag, idx) in st.iter().sorted_by_key(|(tag, _)| *tag) {
                 println!("\tstore: {tag}");
 
                 let first = store.first(*host, tag).await?;
@@ -95,7 +97,8 @@ impl Cmd {
                     println!("\t\tfirst: {}", first.id.0.as_hyphenated());
 
                     let time =
-                        OffsetDateTime::from_unix_timestamp_nanos(i128::from(first.timestamp))?;
+                        OffsetDateTime::from_unix_timestamp_nanos(i128::from(first.timestamp))?
+                            .to_offset(offset);
                     println!("\t\t\tcreated: {time}");
                 }
 
@@ -103,7 +106,8 @@ impl Cmd {
                     println!("\t\tlast: {}", last.id.0.as_hyphenated());
 
                     let time =
-                        OffsetDateTime::from_unix_timestamp_nanos(i128::from(last.timestamp))?;
+                        OffsetDateTime::from_unix_timestamp_nanos(i128::from(last.timestamp))?
+                            .to_offset(offset);
                     println!("\t\t\tcreated: {time}");
                 }
             }
