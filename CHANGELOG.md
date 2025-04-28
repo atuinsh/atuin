@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 ## [unreleased]
 
+### Features
+
+- *(stats)* Add jj to default common subcommands ([#2708](https://github.com/atuinsh/atuin/issues/2708))
+- Delete duplicate history ([#2697](https://github.com/atuinsh/atuin/issues/2697))
+
+
+### Miscellaneous Tasks
+
+- Use native github arm64 runner ([#2690](https://github.com/atuinsh/atuin/issues/2690))
+- Fix typos ([#2668](https://github.com/atuinsh/atuin/issues/2668))
+
+
+## [18.5.0] - 2025-04-09
+
 ### Bug Fixes
 
 - *(1289)* Clear terminal area if inline ([#2600](https://github.com/atuinsh/atuin/issues/2600))
@@ -25,6 +39,7 @@ All notable changes to this project will be documented in this file.
 - Add redundant clones to clippy and cleanup instances of it ([#2654](https://github.com/atuinsh/atuin/issues/2654))
 - Allow -ve values for timezone ([#2609](https://github.com/atuinsh/atuin/issues/2609))
 - Fish up binding bug ([#2677](https://github.com/atuinsh/atuin/issues/2677))
+- Switch to astral cargo-dist ([#2687](https://github.com/atuinsh/atuin/issues/2687))
 
 
 ### Documentation
