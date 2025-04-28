@@ -262,7 +262,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "tracing-tree",
- "unicode-width 0.1.14",
+ "unicode-width 0.2.0",
  "uuid",
 ]
 
