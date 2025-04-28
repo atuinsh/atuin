@@ -58,7 +58,7 @@ indicatif = "0.17.5"
 serde = { workspace = true }
 serde_json = { workspace = true }
 crossterm = { version = "0.28.1", features = ["use-dev-tty"] }
-unicode-width = "0.1"
+unicode-width = "0.2"
 itertools = { workspace = true }
 tokio = { workspace = true }
 async-trait = { workspace = true }
