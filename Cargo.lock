@@ -3126,9 +3126,9 @@ checksum = "350e9b48cbc6b0e028b0473b114454c6316e57336ee184ceab6e53f72c178b3e"
 
 [[package]]
 name = "postmark"
-version = "0.10.2"
+version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a8c1982389836857cc378c3f46992bb6712464aa30567831ba0985495b0f6d83"
+checksum = "68343f3a4bf4afeae32c7f4bee549823034c6f754d7b718d8c2459aa1a15406e"
 dependencies = [
  "async-trait",
  "bytes",
@@ -3137,6 +3137,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 1.0.69",
+ "time",
  "typed-builder",
  "url",
 ]
