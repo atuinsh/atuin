@@ -50,6 +50,7 @@ atuin-dotfiles = { path = "../atuin-dotfiles", version = "18.6.0-beta.1" }
 atuin-history = { path = "../atuin-history", version = "18.6.0-beta.1" }
 atuin-daemon = { path = "../atuin-daemon", version = "18.6.0-beta.1", optional = true, default-features = false }
 atuin-scripts = { path = "../atuin-scripts", version = "18.6.0-beta.1" }
+atuin-kv = { path = "../atuin-kv", version = "18.6.0-beta.1" }
 
 log = { workspace = true }
 time = { workspace = true }
@@ -87,7 +88,9 @@ tempfile = { workspace = true }
 arboard = { version = "3.4", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-arboard = { version = "3.4", optional = true, features = ["wayland-data-control"] }
+arboard = { version = "3.4", optional = true, features = [
+  "wayland-data-control",
+] }
 
 [dev-dependencies]
 tracing-tree = "0.4"

@@ -230,6 +230,7 @@ dependencies = [
  "atuin-daemon",
  "atuin-dotfiles",
  "atuin-history",
+ "atuin-kv",
  "atuin-scripts",
  "atuin-server",
  "atuin-server-postgres",
@@ -393,6 +394,22 @@ dependencies = [
  "serde",
  "time",
  "unicode-segmentation",
+]
+
+[[package]]
+name = "atuin-kv"
+version = "18.6.0-beta.1"
+dependencies = [
+ "atuin-client",
+ "atuin-common",
+ "eyre",
+ "pretty_assertions",
+ "rmp",
+ "sqlx",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "typed-builder",
 ]
 
 [[package]]
