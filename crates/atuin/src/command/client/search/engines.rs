@@ -26,15 +26,14 @@ pub struct SearchState {
 
 impl SearchState {
     pub(crate) fn rotate_filter_mode(&mut self, settings: &Settings, offset: isize) {
-        let mut i = settings
-            .search
-            .filters
+        let filters = settings.filter_modes();
+        let mut i = filters
             .iter()
             .position(|&m| m == self.filter_mode)
             .unwrap_or_default();
-        for _ in 0..settings.search.filters.len() {
-            i = (i.wrapping_add_signed(offset)) % settings.search.filters.len();
-            let mode = settings.search.filters[i];
+        for _ in 0..filters.len() {
+            i = (i.wrapping_add_signed(offset)) % filters.len();
+            let mode = filters[i];
             if self.filter_mode_available(mode, settings) {
                 self.filter_mode = mode;
                 break;

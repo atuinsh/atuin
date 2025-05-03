@@ -379,7 +379,28 @@ pub struct Daemon {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Search {
     /// The list of enabled filter modes, in order of priority.
-    pub filters: Vec<FilterMode>,
+    pub filters: EnabledFilterModes,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct EnabledFilterModes(Vec<FilterMode>);
+
+impl EnabledFilterModes {
+    pub fn specified(&self) -> &[FilterMode] {
+        &self.0
+    }
+
+    pub fn resolved(&self, legacy_workspaces: bool) -> &[FilterMode] {
+        if self.0.is_empty() {
+            if legacy_workspaces {
+                DEFAULT_LEGACY_WORKSPACE_FILTER_MODES
+            } else {
+                DEFAULT_FILTER_MODES
+            }
+        } else {
+            &self.0
+        }
+    }
 }
 
 impl Default for Preview {
@@ -415,14 +436,30 @@ impl Default for Daemon {
 impl Default for Search {
     fn default() -> Self {
         Self {
-            filters: vec![
-                FilterMode::Global,
-                FilterMode::Host,
-                FilterMode::Session,
-                FilterMode::Workspace,
-                FilterMode::Directory,
-            ],
+            filters: EnabledFilterModes(vec![]),
         }
+    }
+}
+
+const DEFAULT_FILTER_MODES: &[FilterMode] = &[
+    FilterMode::Global,
+    FilterMode::Host,
+    FilterMode::Session,
+    FilterMode::Workspace,
+    FilterMode::Directory,
+];
+
+const DEFAULT_LEGACY_WORKSPACE_FILTER_MODES: &[FilterMode] = &[
+    FilterMode::Workspace,
+    FilterMode::Global,
+    FilterMode::Host,
+    FilterMode::Session,
+    FilterMode::Directory,
+];
+
+impl Default for EnabledFilterModes {
+    fn default() -> Self {
+        Self(DEFAULT_FILTER_MODES.into())
     }
 }
 
@@ -721,10 +758,19 @@ impl Settings {
     }
 
     pub fn default_filter_mode(&self) -> FilterMode {
+        if self.search.filters.specified().is_empty() && self.workspaces {
+            return FilterMode::Workspace;
+        }
+
+        let filters = self.filter_modes();
         self.filter_mode
-            .filter(|x| self.search.filters.contains(x))
-            .or(self.search.filters.first().copied())
+            .filter(|x| filters.contains(x))
+            .or(filters.first().copied())
             .unwrap_or(FilterMode::Global)
+    }
+
+    pub fn filter_modes(&self) -> &[FilterMode] {
+        self.search.filters.resolved(self.workspaces)
     }
 
     #[cfg(not(feature = "check-update"))]
@@ -799,10 +845,6 @@ impl Settings {
             .set_default("daemon.socket_path", socket_path.to_str())?
             .set_default("daemon.systemd_socket", false)?
             .set_default("daemon.tcp_port", 8889)?
-            .set_default(
-                "search.filters",
-                vec!["global", "host", "session", "workspace", "directory"],
-            )?
             .set_default("theme.name", "default")?
             .set_default("theme.debug", None::<bool>)?
             .set_default(
