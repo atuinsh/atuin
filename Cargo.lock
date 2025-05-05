@@ -362,7 +362,7 @@ dependencies = [
  "tonic",
  "tonic-build",
  "tonic-types",
- "tower 0.4.13",
+ "tower 0.5.2",
  "tracing",
  "tracing-subscriber",
  "uuid",
@@ -441,7 +441,7 @@ dependencies = [
  "serde_json",
  "time",
  "tokio",
- "tower 0.4.13",
+ "tower 0.5.2",
  "tower-http",
  "tracing",
 ]
