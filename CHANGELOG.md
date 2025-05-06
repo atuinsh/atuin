@@ -4,10 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ## [unreleased]
 
+### Bug Fixes
+
+- Selection vs render issue ([#2706](https://github.com/atuinsh/atuin/issues/2706))
+
+
 ### Features
 
 - *(stats)* Add jj to default common subcommands ([#2708](https://github.com/atuinsh/atuin/issues/2708))
 - Delete duplicate history ([#2697](https://github.com/atuinsh/atuin/issues/2697))
+- Sort `atuin store status` output ([#2719](https://github.com/atuinsh/atuin/issues/2719))
+- Implement KV as a write-through cache ([#2732](https://github.com/atuinsh/atuin/issues/2732))
 
 
 ### Miscellaneous Tasks
