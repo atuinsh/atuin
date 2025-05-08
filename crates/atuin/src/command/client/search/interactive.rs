@@ -49,7 +49,7 @@ use ratatui::{
 const TAB_TITLES: [&str; 2] = ["Search", "Inspect"];
 
 pub enum InputAction {
-    Accept(History),
+    Accept(usize),
     Copy(usize),
     Delete(usize),
     ReturnOriginal,
@@ -110,14 +110,13 @@ impl State {
         settings: &Settings,
         input: &Event,
         w: &mut W,
-        results: &[History],
     ) -> Result<InputAction>
     where
         W: Write,
     {
         execute!(w, EnableMouseCapture)?;
         let r = match input {
-            Event::Key(k) => self.handle_key_input(settings, k, results),
+            Event::Key(k) => self.handle_key_input(settings, k),
             Event::Mouse(m) => self.handle_mouse_input(*m),
             Event::Paste(d) => self.handle_paste_input(d),
             _ => InputAction::Continue,
@@ -199,12 +198,7 @@ impl State {
         }
     }
 
-    fn handle_key_input(
-        &mut self,
-        settings: &Settings,
-        input: &KeyEvent,
-        results: &[History],
-    ) -> InputAction {
+    fn handle_key_input(&mut self, settings: &Settings, input: &KeyEvent) -> InputAction {
         if input.kind == event::KeyEventKind::Release {
             return InputAction::Continue;
         }
@@ -229,23 +223,13 @@ impl State {
             KeyCode::Char('c' | 'g') if ctrl => Some(InputAction::ReturnOriginal),
             KeyCode::Esc if esc_allow_exit => Some(Self::handle_key_exit(settings)),
             KeyCode::Char('[') if ctrl && esc_allow_exit => Some(Self::handle_key_exit(settings)),
-            KeyCode::Tab => {
-                let selected = self.results_state.selected();
-                if !results.is_empty() && selected < results.len() {
-                    Some(InputAction::Accept(results[selected].clone()))
-                } else {
-                    Some(InputAction::ReturnQuery)
-                }
+            KeyCode::Tab => Some(InputAction::Accept(self.results_state.selected())),
+            KeyCode::Right if cursor_at_end_of_line && settings.keys.accept_past_line_end => {
+                Some(InputAction::Accept(self.results_state.selected()))
             }
-            KeyCode::Right if cursor_at_end_of_line => {
-                let selected = self.results_state.selected();
-                if !results.is_empty() && selected < results.len() {
-                    Some(InputAction::Accept(results[selected].clone()))
-                } else {
-                    Some(InputAction::ReturnQuery)
-                }
+            KeyCode::Left if cursor_at_start_of_line && settings.keys.exit_past_line_start => {
+                Some(Self::handle_key_exit(settings))
             }
-            KeyCode::Left if cursor_at_start_of_line => Some(Self::handle_key_exit(settings)),
             KeyCode::Char('o') if ctrl => {
                 self.tab_index = (self.tab_index + 1) % TAB_TITLES.len();
                 Some(InputAction::Continue)
@@ -261,7 +245,7 @@ impl State {
 
         // handle tab-specific input
         let action = match self.tab_index {
-            0 => self.handle_search_input(settings, input, results),
+            0 => self.handle_search_input(settings, input),
 
             1 => super::inspector::input(self, settings, self.results_state.selected(), input),
 
@@ -298,26 +282,16 @@ impl State {
         self.handle_search_scroll_one_line(settings, enable_exit, !settings.invert)
     }
 
-    fn handle_search_accept(&mut self, settings: &Settings, results: &[History]) -> InputAction {
+    fn handle_search_accept(&mut self, settings: &Settings) -> InputAction {
         if settings.enter_accept {
             self.accept = true;
         }
-        let selected = self.results_state.selected();
-        if !results.is_empty() && selected < results.len() {
-            InputAction::Accept(results[selected].clone())
-        } else {
-            InputAction::ReturnQuery
-        }
+        InputAction::Accept(self.results_state.selected())
     }
 
     #[allow(clippy::too_many_lines)]
     #[allow(clippy::cognitive_complexity)]
-    fn handle_search_input(
-        &mut self,
-        settings: &Settings,
-        input: &KeyEvent,
-        results: &[History],
-    ) -> InputAction {
+    fn handle_search_input(&mut self, settings: &Settings, input: &KeyEvent) -> InputAction {
         let ctrl = input.modifiers.contains(KeyModifiers::CONTROL);
         let alt = input.modifiers.contains(KeyModifiers::ALT);
 
@@ -408,20 +382,14 @@ impl State {
         }
 
         match input.code {
-            KeyCode::Enter => return self.handle_search_accept(settings, results),
-            KeyCode::Char('m') if ctrl => return self.handle_search_accept(settings, results),
+            KeyCode::Enter => return self.handle_search_accept(settings),
+            KeyCode::Char('m') if ctrl => return self.handle_search_accept(settings),
             KeyCode::Char('y') if ctrl => {
                 return InputAction::Copy(self.results_state.selected());
             }
             KeyCode::Char(c @ '1'..='9') if modfr => {
-                let selected = self.results_state.selected();
                 return c.to_digit(10).map_or(InputAction::Continue, |c| {
-                    let new_index = selected + c as usize;
-                    if !results.is_empty() && new_index < results.len() {
-                        InputAction::Accept(results[new_index].clone())
-                    } else {
-                        InputAction::ReturnQuery
-                    }
+                    InputAction::Accept(self.results_state.selected() + c as usize)
                 });
             }
             KeyCode::Left if ctrl => self
@@ -1173,11 +1141,8 @@ pub async fn history(
             event_ready = event_ready => {
                 if event_ready?? {
                     loop {
-                        match app.handle_input(settings, &event::read()?, &mut std::io::stdout(), &results)? {
-                            InputAction::Continue => {
-                                // Redraw the UI to keep it in sync with the selection state
-                                terminal.draw(|f| app.draw(f, &results, stats.clone(), settings, theme))?;
-                            },
+                        match app.handle_input(settings, &event::read()?, &mut std::io::stdout())? {
+                            InputAction::Continue => {},
                             InputAction::Delete(index) => {
                                 if results.is_empty() {
                                     break;
@@ -1229,12 +1194,8 @@ pub async fn history(
         stats = if app.tab_index == 0 {
             None
         } else if !results.is_empty() {
-            let selected = app.results_state.selected();
-            if selected < results.len() {
-                Some(db.stats(&results[selected]).await?)
-            } else {
-                None
-            }
+            let selected = results[app.results_state.selected()].clone();
+            Some(db.stats(&selected).await?)
         } else {
             None
         };
@@ -1247,26 +1208,29 @@ pub async fn history(
     }
 
     match result {
-        InputAction::Accept(history) => {
-            let mut command = history.command;
+        InputAction::Accept(index) if index < results.len() => {
+            let mut command = results.swap_remove(index).command;
             if accept
                 && (utils::is_zsh() || utils::is_fish() || utils::is_bash() || utils::is_xonsh())
             {
                 command = String::from("__atuin_accept__:") + &command;
             }
 
-            // We have the actual history entry, so use it directly
+            // index is in bounds so we return that entry
             Ok(command)
         }
         InputAction::ReturnOriginal => Ok(String::new()),
         InputAction::Copy(index) => {
-            if !results.is_empty() && index < results.len() {
-                let cmd = results[index].command.clone();
-                set_clipboard(cmd);
-            }
+            let cmd = results.swap_remove(index).command;
+            set_clipboard(cmd);
             Ok(String::new())
         }
-        InputAction::ReturnQuery => Ok(app.search.input.into_inner()),
+        InputAction::ReturnQuery | InputAction::Accept(_) => {
+            // Either:
+            // * index == RETURN_QUERY, in which case we should return the input
+            // * out of bounds -> usually implies no selected entry so we return the input
+            Ok(app.search.input.into_inner())
+        }
         InputAction::Continue | InputAction::Redraw | InputAction::Delete(_) => {
             unreachable!("should have been handled!")
         }
