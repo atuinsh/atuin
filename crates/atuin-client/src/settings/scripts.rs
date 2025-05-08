@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Settings {
-    pub database_path: String,
+    pub db_path: String,
 }
 
 impl Default for Settings {
@@ -11,7 +11,7 @@ impl Default for Settings {
         let path = dir.join("scripts.db");
 
         Self {
-            database_path: path.to_string_lossy().to_string(),
+            db_path: path.to_string_lossy().to_string(),
         }
     }
 }

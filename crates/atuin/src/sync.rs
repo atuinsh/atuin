@@ -44,7 +44,7 @@ pub async fn build(
     kv_store.build().await?;
 
     let script_db =
-        atuin_scripts::database::Database::new(settings.scripts.database_path.clone(), 1.0).await?;
+        atuin_scripts::database::Database::new(settings.scripts.db_path.clone(), 1.0).await?;
     script_store.build(script_db).await?;
     Ok(())
 }

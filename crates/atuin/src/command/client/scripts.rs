@@ -561,8 +561,7 @@ impl Cmd {
 
         let script_store = ScriptStore::new(store, host_id, encryption_key);
         let script_db =
-            atuin_scripts::database::Database::new(settings.scripts.database_path.clone(), 1.0)
-                .await?;
+            atuin_scripts::database::Database::new(settings.scripts.db_path.clone(), 1.0).await?;
 
         match self {
             Self::New(new_script) => {

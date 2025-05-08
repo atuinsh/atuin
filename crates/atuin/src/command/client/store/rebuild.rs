@@ -79,8 +79,7 @@ impl Rebuild {
         let host_id = Settings::host_id().expect("failed to get host_id");
         let script_store = ScriptStore::new(store, host_id, encryption_key);
         let database =
-            atuin_scripts::database::Database::new(settings.scripts.database_path.clone(), 1.0)
-                .await?;
+            atuin_scripts::database::Database::new(settings.scripts.db_path.clone(), 1.0).await?;
 
         script_store.build(database).await?;
 
