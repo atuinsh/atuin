@@ -19,8 +19,9 @@ pub fn run(settings: &Settings) {
     );
 
     let env_vars = format!(
-        "Env Vars:\nATUIN_CONFIG_DIR = {:?}",
-        std::env::var("ATUIN_CONFIG_DIR").unwrap_or_else(|_| "None".into())
+        "Env Vars:\nATUIN_CONFIG_DIR = {:?}\nATUIN_DIR_SUFFIX = {:?}",
+        std::env::var("ATUIN_CONFIG_DIR").unwrap_or_else(|_| "None".into()),
+        std::env::var("ATUIN_DIR_SUFFIX").unwrap_or_else(|_| "None".into())
     );
 
     let general_info = format!("Version info:\nversion: {VERSION}");
