@@ -33,14 +33,20 @@ pub async fn init(
     vars: VarStore,
     disable_up_arrow: bool,
     disable_ctrl_r: bool,
+    only_env: bool,
+    skip_env: bool,
 ) -> Result<()> {
-    init_static(disable_up_arrow, disable_ctrl_r);
+    if !only_env {
+        init_static(disable_up_arrow, disable_ctrl_r);
 
-    let aliases = atuin_dotfiles::shell::zsh::alias_config(&aliases).await;
-    let vars = atuin_dotfiles::shell::zsh::var_config(&vars).await;
+        let aliases = atuin_dotfiles::shell::zsh::alias_config(&aliases).await;
+        println!("{aliases}");
+    }
 
-    println!("{aliases}");
-    println!("{vars}");
+    if !skip_env {
+        let vars = atuin_dotfiles::shell::zsh::var_config(&vars).await;
+        println!("{vars}");
+    }
 
     Ok(())
 }
