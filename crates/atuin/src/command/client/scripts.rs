@@ -121,11 +121,7 @@ pub enum Cmd {
 
 #[cfg(unix)]
 pub async fn save_terminal_state() -> Option<String> {
-    let output = Command::new("stty")
-        .arg("-g")
-        .output()
-        .await
-        .ok()?;
+    let output = Command::new("stty").arg("-g").output().await.ok()?;
 
     let settings = String::from_utf8(output.stdout).ok()?;
     // Remove newline and any surrounding whitespace
@@ -149,7 +145,7 @@ pub async fn save_terminal_state() -> Option<String> {
 
 #[cfg(not(unix))]
 pub async fn restore_terminal_state(settings: &str) -> bool {
-   false
+    false
 }
 
 impl Cmd {
@@ -180,7 +176,6 @@ impl Cmd {
 
     // Helper function to execute a script and manage signals and terminal state
     async fn execute_script(script_content: String, shebang: String) -> Result<i32> {
-
         // NOTE: save terminal state to be restored after script run
         // sometimes interactive scripts mess with terminal and
         // often if script is interrupted by signal it leaves terminal in
