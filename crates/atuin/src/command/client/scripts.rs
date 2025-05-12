@@ -188,8 +188,21 @@ impl Cmd {
         let cancel = session.get_canceler().await;
 
         tokio::spawn(async move {
-            tokio::signal::ctrl_c().await.unwrap();
-            let _ = cancel.send(true).await;
+            use std::time::Instant;
+            let mut last_signal = None;
+
+            loop {
+                tokio::signal::ctrl_c().await.unwrap();
+                let now = Instant::now();
+                if let Some(prev) = last_signal {
+                    if now.duration_since(prev).as_millis() <= 1000 {
+                        debug!("Second Ctrl+C received within 1 second, sending cancellation...");
+                        let _ = cancel.send(true).await;
+                        break;
+                    }
+                }
+                last_signal = Some(now);
+            }
         });
 
         // Wait for the script to completed
