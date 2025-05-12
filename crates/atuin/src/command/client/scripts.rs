@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use std::io::IsTerminal;
 use std::io::Read;
 use std::path::PathBuf;
+use tokio::process::Command;
 
 use atuin_scripts::execution::template_script;
 use atuin_scripts::{
@@ -118,6 +119,39 @@ pub enum Cmd {
     Delete(Delete),
 }
 
+#[cfg(unix)]
+pub async fn save_terminal_state() -> Option<String> {
+    let output = Command::new("stty")
+        .arg("-g")
+        .output()
+        .await
+        .ok()?;
+
+    let settings = String::from_utf8(output.stdout).ok()?;
+    // Remove newline and any surrounding whitespace
+    Some(settings.trim().to_string())
+}
+
+#[cfg(unix)]
+pub async fn restore_terminal_state(settings: &str) -> bool {
+    Command::new("stty")
+        .arg(settings)
+        .status()
+        .await
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+pub async fn save_terminal_state() -> Option<String> {
+    None
+}
+
+#[cfg(not(unix))]
+pub async fn restore_terminal_state(settings: &str) -> bool {
+   false
+}
+
 impl Cmd {
     // Helper function to open an editor with optional initial content
     fn open_editor(initial_content: Option<&str>) -> Result<String> {
@@ -144,64 +178,36 @@ impl Cmd {
         Ok(content)
     }
 
-    // Helper function to execute a script and manage stdin/stdout/stderr
+    // Helper function to execute a script and manage signals and terminal state
     async fn execute_script(script_content: String, shebang: String) -> Result<i32> {
+
+        // NOTE: save terminal state to be restored after script run
+        // sometimes interactive scripts mess with terminal and
+        // often if script is interrupted by signal it leaves terminal in
+        // undesired state.
+        let terminal_state = save_terminal_state().await;
+
         let mut session = execute_script_interactive(script_content, shebang)
             .await
             .expect("failed to execute script");
+        let cancel = session.get_canceler().await;
 
-        // Create a channel to signal when the process exits
-        let (exit_tx, mut exit_rx) = tokio::sync::oneshot::channel();
-
-        // Set up a task to read from stdin and forward to the script
-        let sender = session.stdin_tx.clone();
-        let stdin_task = tokio::spawn(async move {
-            use tokio::io::AsyncReadExt;
-            use tokio::select;
-
-            let stdin = tokio::io::stdin();
-            let mut reader = tokio::io::BufReader::new(stdin);
-            let mut buffer = vec![0u8; 1024]; // Read in chunks for efficiency
-
-            loop {
-                // Use select to either read from stdin or detect when the process exits
-                select! {
-                    // Check if the script process has exited
-                    _ = &mut exit_rx => {
-                        break;
-                    }
-                    // Try to read from stdin
-                    read_result = reader.read(&mut buffer) => {
-                        match read_result {
-                            Ok(0) => break, // EOF
-                            Ok(n) => {
-                                // Convert the bytes to a string and forward to script
-                                let input = String::from_utf8_lossy(&buffer[0..n]).to_string();
-                                if let Err(e) = sender.send(input).await {
-                                    eprintln!("Error sending input to script: {e}");
-                                    break;
-                                }
-                            },
-                            Err(e) => {
-                                eprintln!("Error reading from stdin: {e}");
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
+        tokio::spawn(async move {
+            tokio::signal::ctrl_c().await.unwrap();
+            let _ = cancel.send(true).await;
         });
 
-        // Wait for the script to complete
+        // Wait for the script to completed
         let exit_code = session.wait_for_exit().await;
-
-        // Signal the stdin task to stop
-        let _ = exit_tx.send(());
-        let _ = stdin_task.await;
 
         let code = exit_code.unwrap_or(-1);
         if code != 0 {
             eprintln!("Script exited with code {code}");
+        }
+
+        // Restore terminal state if it was saved
+        if let Some(state) = terminal_state {
+            let _ = restore_terminal_state(&state).await;
         }
 
         Ok(code)
