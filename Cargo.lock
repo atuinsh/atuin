@@ -233,6 +233,7 @@ dependencies = [
  "atuin-kv",
  "atuin-scripts",
  "atuin-server",
+ "atuin-server-database",
  "atuin-server-postgres",
  "clap",
  "clap_complete",
@@ -473,6 +474,7 @@ dependencies = [
  "serde",
  "time",
  "tracing",
+ "url",
 ]
 
 [[package]]
@@ -489,7 +491,6 @@ dependencies = [
  "sqlx",
  "time",
  "tracing",
- "url",
  "uuid",
 ]
 

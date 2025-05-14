@@ -37,11 +37,12 @@ default = ["client", "sync", "server", "clipboard", "check-update", "daemon"]
 client = ["atuin-client"]
 sync = ["atuin-client/sync"]
 daemon = ["atuin-client/daemon", "atuin-daemon"]
-server = ["atuin-server", "atuin-server-postgres"]
+server = ["atuin-server", "atuin-server-database", "atuin-server-postgres"]
 clipboard = ["arboard"]
 check-update = ["atuin-client/check-update"]
 
 [dependencies]
+atuin-server-database = { path = "../atuin-server-database", version = "18.6.1", optional = true }
 atuin-server-postgres = { path = "../atuin-server-postgres", version = "18.6.1", optional = true }
 atuin-server = { path = "../atuin-server", version = "18.6.1", optional = true }
 atuin-client = { path = "../atuin-client", version = "18.6.1", optional = true, default-features = false }

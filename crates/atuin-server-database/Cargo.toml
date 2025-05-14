@@ -17,3 +17,4 @@ time = { workspace = true }
 eyre = { workspace = true }
 serde = { workspace = true }
 async-trait = { workspace = true }
+url = "2.5.2"

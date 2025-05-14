@@ -45,10 +45,7 @@ async fn shutdown_signal() {
     eprintln!("Shutting down gracefully...");
 }
 
-pub async fn launch<Db: Database>(
-    settings: Settings<Db::Settings>,
-    addr: SocketAddr,
-) -> Result<()> {
+pub async fn launch<Db: Database>(settings: Settings, addr: SocketAddr) -> Result<()> {
     if settings.tls.enable {
         launch_with_tls::<Db>(settings, addr, shutdown_signal()).await
     } else {
@@ -64,7 +61,7 @@ pub async fn launch<Db: Database>(
 }
 
 pub async fn launch_with_tcp_listener<Db: Database>(
-    settings: Settings<Db::Settings>,
+    settings: Settings,
     listener: TcpListener,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> Result<()> {
@@ -78,7 +75,7 @@ pub async fn launch_with_tcp_listener<Db: Database>(
 }
 
 async fn launch_with_tls<Db: Database>(
-    settings: Settings<Db::Settings>,
+    settings: Settings,
     addr: SocketAddr,
     shutdown: impl Future<Output = ()>,
 ) -> Result<()> {
@@ -135,9 +132,7 @@ pub async fn launch_metrics_server(host: String, port: u16) -> Result<()> {
     Ok(())
 }
 
-async fn make_router<Db: Database>(
-    settings: Settings<<Db as Database>::Settings>,
-) -> Result<Router, eyre::Error> {
+async fn make_router<Db: Database>(settings: Settings) -> Result<Router, eyre::Error> {
     let db = Db::new(&settings.db_settings)
         .await
         .wrap_err_with(|| format!("failed to connect to db: {:?}", settings.db_settings))?;
