@@ -103,7 +103,10 @@ fn is_file(p: PathBuf) -> Result<PathBuf> {
     if p.is_file() {
         Ok(p)
     } else {
-        bail!("Could not find history file {:?}. Try setting and exporting $HISTFILE", p)
+        bail!(
+            "Could not find history file {:?}. Try setting and exporting $HISTFILE",
+            p
+        )
     }
 }
 fn is_dir(p: PathBuf) -> Result<PathBuf> {
