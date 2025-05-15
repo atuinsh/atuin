@@ -36,10 +36,19 @@ pub struct Client<'a> {
 }
 
 fn make_url(address: &str, path: &str) -> Result<String> {
+    // `join()` expects a trailing `/` in order to join paths
+    // e.g. it treats `http://host:port/subdir` as a file called `subdir`
     let address = if address.ends_with("/") {
         address
     } else {
         &format!("{}/", address)
+    };
+
+    // passing a path with a leading `/` will cause `join()` to replace the entire URL path
+    let path = if path.starts_with("/") {
+        &path[1..]
+    } else {
+        path
     };
 
     let url = Url::parse(address)
