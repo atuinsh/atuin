@@ -36,10 +36,13 @@ pub struct Client<'a> {
 }
 
 fn make_url(address: &str, path: &str) -> Result<String> {
-    let url = Url::parse(address).map_err(|_| eyre!("invalid address"))?;
-    url.join(path)
-        .map(|url| url.to_string())
-        .map_err(|_| eyre!("invalid path"))
+    let mut url = Url::parse(address).map_err(|_| eyre!("invalid address"))?;
+    {
+        let mut segments = url.path_segments_mut().map_err(|_| eyre!("invalid path"))?;
+        segments.push(path);
+    }
+
+    Ok(url.to_string())
 }
 
 pub async fn register(
