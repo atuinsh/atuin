@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::env;
 use std::time::Duration;
 
-use eyre::{Result, bail};
+use eyre::{Result, bail, eyre};
 use reqwest::{
     Response, StatusCode, Url,
     header::{AUTHORIZATION, HeaderMap, USER_AGENT},
@@ -35,20 +35,11 @@ pub struct Client<'a> {
     client: reqwest::Client,
 }
 
-fn make_url(address: &str, path: &str) -> String {
-    let path = if path.starts_with('/') {
-        path.trim_start_matches('/')
-    } else {
-        path
-    };
-
-    let address = if address.ends_with('/') {
-        address.trim_end_matches('/')
-    } else {
-        address
-    };
-
-    format!("{}/{}", address, path)
+fn make_url(address: &str, path: &str) -> Result<String> {
+    let url = Url::parse(address).map_err(|_| eyre!("invalid address"))?;
+    url.join(path)
+        .map(|url| url.to_string())
+        .map_err(|_| eyre!("invalid path"))
 }
 
 pub async fn register(
@@ -62,14 +53,14 @@ pub async fn register(
     map.insert("email", email);
     map.insert("password", password);
 
-    let url = make_url(address, &format!("/user/{username}"));
+    let url = make_url(address, &format!("/user/{username}"))?;
     let resp = reqwest::get(url).await?;
 
     if resp.status().is_success() {
         bail!("username already in use");
     }
 
-    let url = make_url(address, "/register");
+    let url = make_url(address, "/register")?;
     let client = reqwest::Client::new();
     let resp = client
         .post(url)
@@ -89,7 +80,7 @@ pub async fn register(
 }
 
 pub async fn login(address: &str, req: LoginRequest) -> Result<LoginResponse> {
-    let url = make_url(address, "/login");
+    let url = make_url(address, "/login")?;
     let client = reqwest::Client::new();
 
     let resp = client
@@ -213,7 +204,7 @@ impl<'a> Client<'a> {
     }
 
     pub async fn count(&self) -> Result<i64> {
-        let url = make_url(self.sync_addr, "/sync/count");
+        let url = make_url(self.sync_addr, "/sync/count")?;
         let url = Url::parse(url.as_str())?;
 
         let resp = self.client.get(url).send().await?;
@@ -233,7 +224,7 @@ impl<'a> Client<'a> {
     }
 
     pub async fn status(&self) -> Result<StatusResponse> {
-        let url = make_url(self.sync_addr, "/sync/status");
+        let url = make_url(self.sync_addr, "/sync/status")?;
         let url = Url::parse(url.as_str())?;
 
         let resp = self.client.get(url).send().await?;
@@ -249,7 +240,7 @@ impl<'a> Client<'a> {
     }
 
     pub async fn me(&self) -> Result<MeResponse> {
-        let url = make_url(self.sync_addr, "/api/v0/me");
+        let url = make_url(self.sync_addr, "/api/v0/me")?;
         let url = Url::parse(url.as_str())?;
 
         let resp = self.client.get(url).send().await?;
@@ -276,7 +267,7 @@ impl<'a> Client<'a> {
                 urlencoding::encode(history_ts.format(&Rfc3339)?.as_str()),
                 host,
             ),
-        );
+        )?;
 
         let resp = self.client.get(url).send().await?;
         let resp = handle_resp_error(resp).await?;
@@ -286,7 +277,7 @@ impl<'a> Client<'a> {
     }
 
     pub async fn post_history(&self, history: &[AddHistoryRequest]) -> Result<()> {
-        let url = make_url(self.sync_addr, "/history");
+        let url = make_url(self.sync_addr, "/history")?;
         let url = Url::parse(url.as_str())?;
 
         let resp = self.client.post(url).json(history).send().await?;
@@ -296,7 +287,7 @@ impl<'a> Client<'a> {
     }
 
     pub async fn delete_history(&self, h: History) -> Result<()> {
-        let url = make_url(self.sync_addr, "/history");
+        let url = make_url(self.sync_addr, "/history")?;
         let url = Url::parse(url.as_str())?;
 
         let resp = self
@@ -314,7 +305,7 @@ impl<'a> Client<'a> {
     }
 
     pub async fn delete_store(&self) -> Result<()> {
-        let url = make_url(self.sync_addr, "/api/v0/store");
+        let url = make_url(self.sync_addr, "/api/v0/store")?;
         let url = Url::parse(url.as_str())?;
 
         let resp = self.client.delete(url).send().await?;
@@ -325,7 +316,7 @@ impl<'a> Client<'a> {
     }
 
     pub async fn post_records(&self, records: &[Record<EncryptedData>]) -> Result<()> {
-        let url = make_url(self.sync_addr, "/api/v0/record");
+        let url = make_url(self.sync_addr, "/api/v0/record")?;
         let url = Url::parse(url.as_str())?;
 
         debug!("uploading {} records to {url}", records.len());
@@ -356,7 +347,7 @@ impl<'a> Client<'a> {
                 "/api/v0/record/next?host={}&tag={}&count={}&start={}",
                 host.0, tag, count, start
             ),
-        );
+        )?;
 
         let url = Url::parse(url.as_str())?;
 
@@ -369,7 +360,7 @@ impl<'a> Client<'a> {
     }
 
     pub async fn record_status(&self) -> Result<RecordStatus> {
-        let url = make_url(self.sync_addr, "/api/v0/record");
+        let url = make_url(self.sync_addr, "/api/v0/record")?;
         let url = Url::parse(url.as_str())?;
 
         let resp = self.client.get(url).send().await?;
@@ -387,7 +378,7 @@ impl<'a> Client<'a> {
     }
 
     pub async fn delete(&self) -> Result<()> {
-        let url = make_url(self.sync_addr, "/account");
+        let url = make_url(self.sync_addr, "/account")?;
         let url = Url::parse(url.as_str())?;
 
         let resp = self.client.delete(url).send().await?;
@@ -406,7 +397,7 @@ impl<'a> Client<'a> {
         current_password: String,
         new_password: String,
     ) -> Result<()> {
-        let url = make_url(self.sync_addr, "/account/password");
+        let url = make_url(self.sync_addr, "/account/password")?;
         let url = Url::parse(url.as_str())?;
 
         let resp = self
@@ -434,7 +425,7 @@ impl<'a> Client<'a> {
     pub async fn verify(&self, token: Option<String>) -> Result<(bool, bool)> {
         // could dedupe this a bit, but it's simple at the moment
         let (email_sent, verified) = if let Some(token) = token {
-            let url = make_url(self.sync_addr, "/api/v0/account/verify");
+            let url = make_url(self.sync_addr, "/api/v0/account/verify")?;
             let url = Url::parse(url.as_str())?;
 
             let resp = self
@@ -448,7 +439,7 @@ impl<'a> Client<'a> {
 
             (false, resp.verified)
         } else {
-            let url = make_url(self.sync_addr, "/api/v0/account/send-verification");
+            let url = make_url(self.sync_addr, "/api/v0/account/send-verification")?;
             let url = Url::parse(url.as_str())?;
 
             let resp = self.client.post(url).send().await?;
