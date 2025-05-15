@@ -45,11 +45,7 @@ fn make_url(address: &str, path: &str) -> Result<String> {
     };
 
     // passing a path with a leading `/` will cause `join()` to replace the entire URL path
-    let path = if path.starts_with("/") {
-        &path[1..]
-    } else {
-        path
-    };
+    let path = path.strip_prefix("/").unwrap_or(path);
 
     let url = Url::parse(address)
         .map(|url| url.join(path))?
