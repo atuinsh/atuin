@@ -6,6 +6,27 @@ All notable changes to this project will be documented in this file.
 
 ### Bug Fixes
 
+- Selection vs render issue ([#2706](https://github.com/atuinsh/atuin/issues/2706))
+
+
+### Features
+
+- *(stats)* Add jj to default common subcommands ([#2708](https://github.com/atuinsh/atuin/issues/2708))
+- Delete duplicate history ([#2697](https://github.com/atuinsh/atuin/issues/2697))
+- Sort `atuin store status` output ([#2719](https://github.com/atuinsh/atuin/issues/2719))
+- Implement KV as a write-through cache ([#2732](https://github.com/atuinsh/atuin/issues/2732))
+
+
+### Miscellaneous Tasks
+
+- Use native github arm64 runner ([#2690](https://github.com/atuinsh/atuin/issues/2690))
+- Fix typos ([#2668](https://github.com/atuinsh/atuin/issues/2668))
+
+
+## [18.5.0] - 2025-04-09
+
+### Bug Fixes
+
 - *(1289)* Clear terminal area if inline ([#2600](https://github.com/atuinsh/atuin/issues/2600))
 - *(bash)* Fix preexec of child Bash session started by enter_accept ([#2558](https://github.com/atuinsh/atuin/issues/2558))
 - *(build)* Change atuin-daemon build script .proto paths ([#2638](https://github.com/atuinsh/atuin/issues/2638))
@@ -25,6 +46,7 @@ All notable changes to this project will be documented in this file.
 - Add redundant clones to clippy and cleanup instances of it ([#2654](https://github.com/atuinsh/atuin/issues/2654))
 - Allow -ve values for timezone ([#2609](https://github.com/atuinsh/atuin/issues/2609))
 - Fish up binding bug ([#2677](https://github.com/atuinsh/atuin/issues/2677))
+- Switch to astral cargo-dist ([#2687](https://github.com/atuinsh/atuin/issues/2687))
 
 
 ### Documentation

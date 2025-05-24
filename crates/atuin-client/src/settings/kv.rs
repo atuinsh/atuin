@@ -8,7 +8,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         let dir = atuin_common::utils::data_dir();
-        let path = dir.join("scripts.db");
+        let path = dir.join("kv.db");
 
         Self {
             db_path: path.to_string_lossy().to_string(),

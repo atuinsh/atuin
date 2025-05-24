@@ -1,8 +1,8 @@
 [package]
-name = "atuin-dotfiles"
-description = "The dotfiles crate for Atuin"
+name = "atuin-kv"
 edition = "2024"
 version = { workspace = true }
+description = "The kv crate for Atuin"
 
 authors.workspace = true
 rust-version.workspace = true
@@ -14,12 +14,14 @@ readme.workspace = true
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-atuin-common = { path = "../atuin-common", version = "18.6.1" }
 atuin-client = { path = "../atuin-client", version = "18.6.1" }
+atuin-common = { path = "../atuin-common", version = "18.6.1" }
 
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+rmp = { version = "0.8.14" }
 eyre = { workspace = true }
 tokio = { workspace = true }
-rmp = { version = "0.8.14" }
-rand = { workspace = true }
-serde = { workspace = true }
-crypto_secretbox = "0.1.1"
+typed-builder = { workspace = true }
+pretty_assertions = { workspace = true }
+sqlx = { workspace = true }

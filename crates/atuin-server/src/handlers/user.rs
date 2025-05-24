@@ -221,7 +221,7 @@ pub async fn send_verification<DB: Database>(
 
     let client = PostmarkClient::builder()
         .base_url("https://api.postmarkapp.com/")
-        .token(postmark_token)
+        .server_token(postmark_token)
         .build();
 
     let req = postmark::api::email::SendEmailRequest::builder()
