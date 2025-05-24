@@ -10,3 +10,5 @@ publish.sh
 
 ui/backend/target
 ui/backend/gen
+
+sqlite-server.db*

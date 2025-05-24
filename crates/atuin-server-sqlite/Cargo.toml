@@ -1,0 +1,24 @@
+[package]
+name = "atuin-server-sqlite"
+edition = "2024"
+description = "server sqlite database library for atuin"
+
+version = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+
+[dependencies]
+atuin-common = { path = "../atuin-common", version = "18.6.1" }
+atuin-server-database = { path = "../atuin-server-database", version = "18.6.1" }
+
+eyre = { workspace = true }
+tracing = { workspace = true }
+time = { workspace = true }
+serde = { workspace = true }
+sqlx = { workspace = true }
+async-trait = { workspace = true }
+uuid = { workspace = true }
+metrics = "0.21.1"
+futures-util = "0.3"

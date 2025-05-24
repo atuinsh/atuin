@@ -41,7 +41,7 @@ impl std::error::Error for DbError {}
 
 pub type DbResult<T> = Result<T, DbError>;
 
-#[derive(PartialEq)]
+#[derive(Debug, PartialEq)]
 pub enum DbType {
     Postgres,
     Sqlite,
@@ -55,9 +55,9 @@ pub struct DbSettings {
 
 impl DbSettings {
     pub fn db_type(&self) -> DbType {
-        if self.db_uri.starts_with("postgres:") {
+        if self.db_uri.starts_with("postgres://") {
             DbType::Postgres
-        } else if self.db_uri.starts_with("sqlite:") {
+        } else if self.db_uri.starts_with("sqlite://") {
             DbType::Sqlite
         } else {
             DbType::Unknown

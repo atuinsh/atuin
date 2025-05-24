@@ -235,6 +235,7 @@ dependencies = [
  "atuin-server",
  "atuin-server-database",
  "atuin-server-postgres",
+ "atuin-server-sqlite",
  "clap",
  "clap_complete",
  "clap_complete_nushell",
@@ -479,6 +480,23 @@ dependencies = [
 
 [[package]]
 name = "atuin-server-postgres"
+version = "18.6.1"
+dependencies = [
+ "async-trait",
+ "atuin-common",
+ "atuin-server-database",
+ "eyre",
+ "futures-util",
+ "metrics",
+ "serde",
+ "sqlx",
+ "time",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "atuin-server-sqlite"
 version = "18.6.1"
 dependencies = [
  "async-trait",
