@@ -1,10 +1,12 @@
 use std::net::SocketAddr;
 
+use atuin_server_database::DbType;
 use atuin_server_postgres::Postgres;
+use atuin_server_sqlite::Sqlite;
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 use clap::Parser;
-use eyre::{Context, Result};
+use eyre::{Context, Result, eyre};
 
 use atuin_server::{Settings, example_config, launch, launch_metrics_server};
 
@@ -50,7 +52,13 @@ impl Cmd {
                     ));
                 }
 
-                launch::<Postgres>(settings, addr).await
+                match settings.db_settings.db_type() {
+                    DbType::Postgres => launch::<Postgres>(settings, addr).await,
+                    DbType::Sqlite => launch::<Sqlite>(settings, addr).await,
+                    DbType::Unknown => {
+                        Err(eyre!("db_uri must start with postgres:// or sqlite://"))
+                    }
+                }
             }
             Self::DefaultConfig => {
                 println!("{}", example_config());
