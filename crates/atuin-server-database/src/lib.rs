@@ -15,7 +15,7 @@ use self::{
 };
 use async_trait::async_trait;
 use atuin_common::record::{EncryptedData, HostId, Record, RecordIdx, RecordStatus};
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 use time::{Date, Duration, Month, OffsetDateTime, Time, UtcOffset};
 use tracing::instrument;
 
@@ -83,7 +83,7 @@ pub trait Database: Sized + Clone + Send + Sync + 'static {
     async fn status(&self, user: &User) -> DbResult<RecordStatus>;
 
     async fn count_history_range(&self, user: &User, range: Range<OffsetDateTime>)
-        -> DbResult<i64>;
+    -> DbResult<i64>;
 
     async fn list_history(
         &self,
@@ -136,7 +136,7 @@ pub trait Database: Sized + Clone + Send + Sync + 'static {
 
                 Box::new(months.map(move |month| {
                     let start = Date::from_calendar_date(year, month, 1)?;
-                    let days = time::util::days_in_year_month(year, month);
+                    let days = start.month().length(year);
                     let end = start + Duration::days(days as i64);
 
                     Ok((month as u64, start..end))
@@ -144,7 +144,7 @@ pub trait Database: Sized + Clone + Send + Sync + 'static {
             }
 
             TimePeriod::Day { year, month } => {
-                let days = 1..time::util::days_in_year_month(year, month);
+                let days = 1..month.length(year);
                 Box::new(days.map(move |day| {
                     let start = Date::from_calendar_date(year, month, day)?;
                     let end = start

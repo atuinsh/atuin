@@ -10,14 +10,14 @@ use async_trait::async_trait;
 use atuin_common::utils;
 use fs_err as fs;
 use itertools::Itertools;
-use rand::{distributions::Alphanumeric, Rng};
-use sql_builder::{bind::Bind, esc, quote, SqlBuilder, SqlName};
+use rand::{Rng, distributions::Alphanumeric};
+use sql_builder::{SqlBuilder, SqlName, bind::Bind, esc, quote};
 use sqlx::{
+    Result, Row,
     sqlite::{
         SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteRow,
         SqliteSynchronous,
     },
-    Result, Row,
 };
 use time::OffsetDateTime;
 
@@ -51,11 +51,14 @@ pub struct OptFilters {
     pub limit: Option<i64>,
     pub offset: Option<i64>,
     pub reverse: bool,
+    pub include_duplicates: bool,
 }
 
 pub fn current_context() -> Context {
     let Ok(session) = env::var("ATUIN_SESSION") else {
-        eprintln!("ERROR: Failed to find $ATUIN_SESSION in the environment. Check that you have correctly set up your shell.");
+        eprintln!(
+            "ERROR: Failed to find $ATUIN_SESSION in the environment. Check that you have correctly set up your shell."
+        );
         std::process::exit(1);
     };
     let hostname = get_host_user();
@@ -116,6 +119,8 @@ pub trait Database: Send + Sync + 'static {
     async fn all_with_count(&self) -> Result<Vec<(History, i32)>>;
 
     async fn stats(&self, h: &History) -> Result<HistoryStats>;
+
+    async fn get_dups(&self, before: i64, dupkeep: u32) -> Result<Vec<History>>;
 }
 
 // Intended for use on a developer machine and not a sync server.
@@ -130,8 +135,14 @@ impl Sqlite {
         let path = path.as_ref();
         debug!("opening sqlite database at {:?}", path);
 
-        let create = !path.exists();
-        if create {
+        if utils::broken_symlink(path) {
+            eprintln!(
+                "Atuin: Sqlite db path ({path:?}) is a broken symlink. Unable to read or create replacement."
+            );
+            std::process::exit(1);
+        }
+
+        if !path.exists() {
             if let Some(dir) = path.parent() {
                 fs::create_dir_all(dir)?;
             }
@@ -150,7 +161,6 @@ impl Sqlite {
             .await?;
 
         Self::setup_db(&pool).await?;
-
         Ok(Self { pool })
     }
 
@@ -403,7 +413,9 @@ impl Database for Sqlite {
     ) -> Result<Vec<History>> {
         let mut sql = SqlBuilder::select_from("history");
 
-        sql.group_by("command").having("max(timestamp)");
+        if !filter_options.include_duplicates {
+            sql.group_by("command").having("max(timestamp)");
+        }
 
         if let Some(limit) = filter_options.limit {
             sql.limit(limit);
@@ -758,6 +770,66 @@ impl Database for Sqlite {
             duration_over_time,
         })
     }
+
+    async fn get_dups(&self, before: i64, dupkeep: u32) -> Result<Vec<History>> {
+        let res = sqlx::query(
+            "SELECT * FROM (
+                SELECT *, ROW_NUMBER()
+                  OVER (PARTITION BY command, cwd, hostname ORDER BY timestamp DESC)
+                  AS rn
+                  FROM history
+                ) sub
+              WHERE rn > ?1 and timestamp < ?2;
+            ",
+        )
+        .bind(dupkeep)
+        .bind(before)
+        .map(Self::query_history)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(res)
+    }
+}
+
+trait SqlBuilderExt {
+    fn fuzzy_condition<S: ToString, T: ToString>(
+        &mut self,
+        field: S,
+        mask: T,
+        inverse: bool,
+        glob: bool,
+        is_or: bool,
+    ) -> &mut Self;
+}
+
+impl SqlBuilderExt for SqlBuilder {
+    /// adapted from the sql-builder *like functions
+    fn fuzzy_condition<S: ToString, T: ToString>(
+        &mut self,
+        field: S,
+        mask: T,
+        inverse: bool,
+        glob: bool,
+        is_or: bool,
+    ) -> &mut Self {
+        let mut cond = field.to_string();
+        if inverse {
+            cond.push_str(" NOT");
+        }
+        if glob {
+            cond.push_str(" GLOB '");
+        } else {
+            cond.push_str(" LIKE '");
+        }
+        cond.push_str(&esc(mask.to_string()));
+        cond.push('\'');
+        if is_or {
+            self.or_where(cond)
+        } else {
+            self.and_where(cond)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1103,45 +1175,5 @@ mod test {
         let duration = start.elapsed();
 
         assert!(duration < Duration::from_secs(15));
-    }
-}
-
-trait SqlBuilderExt {
-    fn fuzzy_condition<S: ToString, T: ToString>(
-        &mut self,
-        field: S,
-        mask: T,
-        inverse: bool,
-        glob: bool,
-        is_or: bool,
-    ) -> &mut Self;
-}
-
-impl SqlBuilderExt for SqlBuilder {
-    /// adapted from the sql-builder *like functions
-    fn fuzzy_condition<S: ToString, T: ToString>(
-        &mut self,
-        field: S,
-        mask: T,
-        inverse: bool,
-        glob: bool,
-        is_or: bool,
-    ) -> &mut Self {
-        let mut cond = field.to_string();
-        if inverse {
-            cond.push_str(" NOT");
-        }
-        if glob {
-            cond.push_str(" GLOB '");
-        } else {
-            cond.push_str(" LIKE '");
-        }
-        cond.push_str(&esc(mask.to_string()));
-        cond.push('\'');
-        if is_or {
-            self.or_where(cond)
-        } else {
-            self.and_where(cond)
-        }
     }
 }

@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use atuin_client::{encryption, record::sqlite_store::SqliteStore, settings::Settings};
-use atuin_dotfiles::store::{var::VarStore, AliasStore};
+use atuin_dotfiles::store::{AliasStore, var::VarStore};
 use clap::{Parser, ValueEnum};
 use eyre::{Result, WrapErr};
 
@@ -100,7 +100,7 @@ $env.config = (
             Shell::Xonsh => {
                 xonsh::init_static(self.disable_up_arrow, self.disable_ctrl_r);
             }
-        };
+        }
     }
 
     async fn dotfiles_init(&self, settings: &Settings) -> Result<()> {
@@ -159,6 +159,13 @@ $env.config = (
     }
 
     pub async fn run(self, settings: &Settings) -> Result<()> {
+        if !settings.paths_ok() {
+            eprintln!(
+                "Atuin settings paths are broken. Disabling atuin shell hooks. Run `atuin doctor` to diagnose."
+            );
+            return Ok(());
+        }
+
         if settings.dotfiles.enabled {
             self.dotfiles_init(settings).await?;
         } else {

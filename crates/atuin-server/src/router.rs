@@ -1,12 +1,12 @@
 use async_trait::async_trait;
-use atuin_common::api::{ErrorResponse, ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION};
+use atuin_common::api::{ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ErrorResponse};
 use axum::{
+    Router,
     extract::{FromRequestParts, Request},
     http::{self, request::Parts},
     middleware::Next,
     response::{IntoResponse, Response},
     routing::{delete, get, patch, post},
-    Router,
 };
 use eyre::Result;
 use tower::ServiceBuilder;
@@ -18,7 +18,7 @@ use crate::{
     metrics,
     settings::Settings,
 };
-use atuin_server_database::{models::User, Database, DbError};
+use atuin_server_database::{Database, DbError, models::User};
 
 pub struct UserAuth(pub User);
 
@@ -111,6 +111,7 @@ pub struct AppState<DB: Database> {
 pub fn router<DB: Database>(database: DB, settings: Settings<DB::Settings>) -> Router {
     let routes = Router::new()
         .route("/", get(handlers::index))
+        .route("/healthz", get(handlers::health::health_check))
         .route("/sync/count", get(handlers::history::count))
         .route("/sync/history", get(handlers::history::list))
         .route("/sync/calendar/:focus", get(handlers::history::calendar))

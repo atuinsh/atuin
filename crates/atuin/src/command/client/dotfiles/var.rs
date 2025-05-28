@@ -66,14 +66,16 @@ impl Cmd {
             store.delete(&name).await?;
         } else {
             eprintln!("Cannot delete '{name}': Var not set.");
-        };
+        }
 
         Ok(())
     }
 
     pub async fn run(&self, settings: &Settings, store: SqliteStore) -> Result<()> {
         if !settings.dotfiles.enabled {
-            eprintln!("Dotfiles are not enabled. Add\n\n[dotfiles]\nenabled = true\n\nto your configuration file to enable them.\n");
+            eprintln!(
+                "Dotfiles are not enabled. Add\n\n[dotfiles]\nenabled = true\n\nto your configuration file to enable them.\n"
+            );
             eprintln!("The default configuration file is located at ~/.config/atuin/config.toml.");
             return Ok(());
         }

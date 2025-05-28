@@ -1,16 +1,16 @@
 use std::{collections::HashSet, fmt::Write, time::Duration};
 
-use eyre::{bail, eyre, Result};
+use eyre::{Result, bail, eyre};
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 use rmp::decode::Bytes;
 
 use crate::{
-    database::{current_context, Database},
+    database::{Database, current_context},
     record::{encryption::PASETO_V4, sqlite_store::SqliteStore, store::Store},
 };
 use atuin_common::record::{DecryptedData, Host, HostId, Record, RecordId, RecordIdx};
 
-use super::{History, HistoryId, HISTORY_TAG, HISTORY_VERSION};
+use super::{HISTORY_TAG, HISTORY_VERSION, History, HistoryId};
 
 #[derive(Debug, Clone)]
 pub struct HistoryStore {
@@ -246,10 +246,11 @@ impl HistoryStore {
         for id in ids {
             let record = self.store.get(*id).await;
 
-            let record = if let Ok(record) = record {
-                record
-            } else {
-                continue;
+            let record = match record {
+                Ok(record) => record,
+                _ => {
+                    continue;
+                }
             };
 
             if record.tag != HISTORY_TAG {
@@ -342,7 +343,7 @@ mod tests {
     use atuin_common::record::DecryptedData;
     use time::macros::datetime;
 
-    use crate::history::{store::HistoryRecord, HISTORY_VERSION};
+    use crate::history::{HISTORY_VERSION, store::HistoryRecord};
 
     use super::History;
 

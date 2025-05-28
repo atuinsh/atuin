@@ -1,4 +1,4 @@
-use std::io::{stderr, IsTerminal as _};
+use std::io::{IsTerminal as _, stderr};
 
 use atuin_common::utils::{self, Escapable as _};
 use clap::Parser;
@@ -6,9 +6,9 @@ use eyre::Result;
 
 use atuin_client::{
     database::Database,
-    database::{current_context, OptFilters},
+    database::{OptFilters, current_context},
     encryption,
-    history::{store::HistoryStore, History},
+    history::{History, store::HistoryStore},
     record::sqlite_store::SqliteStore,
     settings::{FilterMode, KeymapMode, SearchMode, Settings, Timezone},
     theme::Theme,
@@ -90,6 +90,10 @@ pub struct Cmd {
     #[arg(long)]
     cmd_only: bool,
 
+    /// Terminate the output with a null, for better multiline handling
+    #[arg(long)]
+    print0: bool,
+
     /// Delete anything matching this query. Will not print out the match
     #[arg(long)]
     delete: bool,
@@ -108,7 +112,11 @@ pub struct Cmd {
     /// - the special value "local" (or "l") which refers to the system time zone
     /// - an offset from UTC (e.g. "+9", "-2:30")
     #[arg(long, visible_alias = "tz")]
-    timezone: Option<Timezone>,
+    #[arg(allow_hyphen_values = true)]
+    // Clippy warns about `Option<Option<T>>`, but we suppress it because we need
+    // this distinction for proper argument handling.
+    #[allow(clippy::option_option)]
+    timezone: Option<Option<Timezone>>,
 
     /// Available variables: {command}, {directory}, {duration}, {user}, {host}, {time}, {exit} and
     /// {relativetime}.
@@ -119,6 +127,10 @@ pub struct Cmd {
     /// Set the maximum number of lines Atuin's interface should take up.
     #[arg(long = "inline-height")]
     inline_height: Option<u16>,
+
+    /// Include duplicate commands in the output (non-interactive only)
+    #[arg(long)]
+    include_duplicates: bool,
 }
 
 impl Cmd {
@@ -156,30 +168,32 @@ impl Cmd {
             // when running the equivalent search, but deleting those entries that are
             // displayed with the search would leave any duplicates of those lines which may
             // or may not have been intended to be deleted.
-            println!("\"--limit\" is not compatible with deletion.");
+            eprintln!("\"--limit\" is not compatible with deletion.");
             return Ok(());
         }
 
         if self.delete && query.is_empty() {
-            println!("Please specify a query to match the items you wish to delete. If you wish to delete all history, pass --delete-it-all");
+            eprintln!(
+                "Please specify a query to match the items you wish to delete. If you wish to delete all history, pass --delete-it-all"
+            );
             return Ok(());
         }
 
         if self.delete_it_all && !query.is_empty() {
-            println!(
+            eprintln!(
                 "--delete-it-all will delete ALL of your history! It does not require a query."
             );
             return Ok(());
         }
 
-        if self.search_mode.is_some() {
-            settings.search_mode = self.search_mode.unwrap();
+        if let Some(search_mode) = self.search_mode {
+            settings.search_mode = search_mode;
         }
-        if self.filter_mode.is_some() {
-            settings.filter_mode = self.filter_mode.unwrap();
+        if let Some(filter_mode) = self.filter_mode {
+            settings.filter_mode = Some(filter_mode);
         }
-        if self.inline_height.is_some() {
-            settings.inline_height = self.inline_height.unwrap();
+        if let Some(inline_height) = self.inline_height {
+            settings.inline_height = inline_height;
         }
 
         settings.shell_up_key_binding = self.shell_up_key_binding;
@@ -215,6 +229,7 @@ impl Cmd {
                 limit: self.limit,
                 offset: self.offset,
                 reverse: self.reverse,
+                include_duplicates: self.include_duplicates,
             };
 
             let mut entries =
@@ -249,18 +264,21 @@ impl Cmd {
                     None => Some(settings.history_format.as_str()),
                     _ => self.format.as_deref(),
                 };
-                let tz = self.timezone.unwrap_or(settings.timezone);
+                let tz = match self.timezone {
+                    Some(Some(tz)) => tz,                   // User provided a value
+                    Some(None) | None => settings.timezone, // No value was provided
+                };
 
                 super::history::print_list(
                     &entries,
                     ListMode::from_flags(self.human, self.cmd_only),
                     format,
-                    false,
+                    self.print0,
                     true,
                     tz,
                 );
             }
-        };
+        }
         Ok(())
     }
 }
@@ -287,12 +305,7 @@ async fn run_non_interactive(
         ..filter_options
     };
 
-    let dir = dir.unwrap_or_else(|| "/".to_string());
-    let filter_mode = if settings.workspaces && utils::has_git_dir(dir.as_str()) {
-        FilterMode::Workspace
-    } else {
-        settings.filter_mode
-    };
+    let filter_mode = settings.default_filter_mode();
 
     let results = db
         .search(

@@ -1,9 +1,9 @@
 use std::{collections::HashMap, convert::TryFrom};
 
 use axum::{
+    Json,
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
-    Json,
 };
 use metrics::counter;
 use time::{Month, UtcOffset};
@@ -15,9 +15,9 @@ use crate::{
     utils::client_version_min,
 };
 use atuin_server_database::{
+    Database,
     calendar::{TimePeriod, TimePeriodInfo},
     models::NewHistory,
-    Database,
 };
 
 use atuin_common::api::*;
@@ -223,7 +223,7 @@ pub async fn calendar<DB: Database>(
         "day" => TimePeriod::Day { year, month },
         _ => {
             return Err(ErrorResponse::reply("invalid focus: use year/month/day")
-                .with_status(StatusCode::BAD_REQUEST))
+                .with_status(StatusCode::BAD_REQUEST));
         }
     };
 

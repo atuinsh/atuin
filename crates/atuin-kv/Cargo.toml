@@ -1,0 +1,27 @@
+[package]
+name = "atuin-kv"
+edition = "2024"
+version = { workspace = true }
+description = "The kv crate for Atuin"
+
+authors.workspace = true
+rust-version.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+atuin-client = { path = "../atuin-client", version = "18.6.1" }
+atuin-common = { path = "../atuin-common", version = "18.6.1" }
+
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+rmp = { version = "0.8.14" }
+eyre = { workspace = true }
+tokio = { workspace = true }
+typed-builder = { workspace = true }
+pretty_assertions = { workspace = true }
+sqlx = { workspace = true }

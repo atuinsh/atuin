@@ -184,11 +184,7 @@ impl Cursor {
     }
 
     pub fn back(&mut self) -> Option<char> {
-        if self.left() {
-            self.remove()
-        } else {
-            None
-        }
+        if self.left() { self.remove() } else { None }
     }
 
     pub fn clear(&mut self) {
@@ -202,6 +198,10 @@ impl Cursor {
 
     pub fn start(&mut self) {
         self.index = 0;
+    }
+
+    pub fn position(&self) -> usize {
+        self.index
     }
 }
 

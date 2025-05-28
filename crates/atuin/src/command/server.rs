@@ -1,12 +1,12 @@
 use std::net::SocketAddr;
 
 use atuin_server_postgres::Postgres;
-use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 use clap::Parser;
 use eyre::{Context, Result};
 
-use atuin_server::{example_config, launch, launch_metrics_server, Settings};
+use atuin_server::{Settings, example_config, launch, launch_metrics_server};
 
 #[derive(Parser, Debug)]
 #[clap(infer_subcommands = true)]

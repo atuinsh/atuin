@@ -2,12 +2,12 @@ use std::{env, time::Duration};
 
 use atuin_client::api_client;
 use atuin_common::utils::uuid_v7;
-use atuin_server::{launch_with_tcp_listener, Settings as ServerSettings};
+use atuin_server::{Settings as ServerSettings, launch_with_tcp_listener};
 use atuin_server_postgres::{Postgres, PostgresSettings};
 use futures_util::TryFutureExt;
 use tokio::{net::TcpListener, sync::oneshot, task::JoinHandle};
-use tracing::{dispatcher, Dispatch};
-use tracing_subscriber::{layer::SubscriberExt, EnvFilter};
+use tracing::{Dispatch, dispatcher};
+use tracing_subscriber::{EnvFilter, layer::SubscriberExt};
 
 pub async fn start_server(path: &str) -> (String, oneshot::Sender<()>, JoinHandle<()>) {
     let formatting_layer = tracing_tree::HierarchicalLayer::default()
@@ -84,14 +84,14 @@ pub async fn register_inner<'a>(
 #[allow(dead_code)]
 pub async fn login(address: &str, username: String, password: String) -> api_client::Client<'_> {
     // registration works
-    let login_respose = api_client::login(
+    let login_response = api_client::login(
         address,
         atuin_common::api::LoginRequest { username, password },
     )
     .await
     .unwrap();
 
-    api_client::Client::new(address, &login_respose.session, 5, 30).unwrap()
+    api_client::Client::new(address, &login_response.session, 5, 30).unwrap()
 }
 
 #[allow(dead_code)]

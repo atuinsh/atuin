@@ -7,6 +7,7 @@ use atuin_client::{
 use atuin_common::utils::Escapable as _;
 use ratatui::{
     buffer::Buffer,
+    crossterm::style,
     layout::Rect,
     style::{Modifier, Style},
     widgets::{Block, StatefulWidget, Widget},
@@ -22,6 +23,7 @@ pub struct HistoryList<'a> {
     /// Apply an alternative highlighting to the selected row
     alternate_highlight: bool,
     now: &'a dyn Fn() -> OffsetDateTime,
+    indicator: &'a str,
     theme: &'a Theme,
 }
 
@@ -46,7 +48,7 @@ impl ListState {
     }
 }
 
-impl<'a> StatefulWidget for HistoryList<'a> {
+impl StatefulWidget for HistoryList<'_> {
     type State = ListState;
 
     fn render(mut self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
@@ -74,6 +76,7 @@ impl<'a> StatefulWidget for HistoryList<'a> {
             inverted: self.inverted,
             alternate_highlight: self.alternate_highlight,
             now: &self.now,
+            indicator: self.indicator,
             theme: self.theme,
         };
 
@@ -96,6 +99,7 @@ impl<'a> HistoryList<'a> {
         inverted: bool,
         alternate_highlight: bool,
         now: &'a dyn Fn() -> OffsetDateTime,
+        indicator: &'a str,
         theme: &'a Theme,
     ) -> Self {
         Self {
@@ -104,6 +108,7 @@ impl<'a> HistoryList<'a> {
             inverted,
             alternate_highlight,
             now,
+            indicator,
             theme,
         }
     }
@@ -137,6 +142,7 @@ struct DrawState<'a> {
     inverted: bool,
     alternate_highlight: bool,
     now: &'a dyn Fn() -> OffsetDateTime,
+    indicator: &'a str,
     theme: &'a Theme,
 }
 
@@ -155,7 +161,12 @@ impl DrawState<'_> {
         let i = self.y as usize + self.state.offset;
         let i = i.checked_sub(self.state.selected);
         let i = i.unwrap_or(10).min(10) * 2;
-        self.draw(&SLICES[i..i + 3], Style::default());
+        let prompt: &str = if i == 0 {
+            self.indicator
+        } else {
+            &SLICES[i..i + 3]
+        };
+        self.draw(prompt, Style::default());
     }
 
     fn duration(&mut self, h: &History) {
@@ -196,7 +207,7 @@ impl DrawState<'_> {
         {
             // if not applying alternative highlighting to the whole row, color the command
             style = self.theme.as_style(Meaning::AlertError);
-            style.attributes.set(crossterm::style::Attribute::Bold);
+            style.attributes.set(style::Attribute::Bold);
         }
 
         for section in h.command.escape_control().split_ascii_whitespace() {

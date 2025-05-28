@@ -1,48 +1,74 @@
 use clap::Subcommand;
-use eyre::{Context, Result};
+use eyre::{Context, Result, eyre};
 
-use atuin_client::{encryption, kv::KvStore, record::store::Store, settings::Settings};
+use atuin_client::{encryption, record::sqlite_store::SqliteStore, settings::Settings};
+use atuin_kv::store::KvStore;
 
 #[derive(Subcommand, Debug)]
 #[command(infer_subcommands = true)]
 pub enum Cmd {
-    // atuin kv set foo bar bar
+    /// Set a key-value pair
     Set {
+        /// Key to set
         #[arg(long, short)]
         key: String,
 
-        #[arg(long, short, default_value = "default")]
-        namespace: String,
-
+        /// Value to store
         value: String,
+
+        /// Namespace for the key-value pair
+        #[arg(long, short, default_value = "default")]
+        namespace: String,
     },
 
-    // atuin kv get foo => bar baz
+    /// Delete one or more key-value pairs
+    #[command(alias = "rm")]
+    Delete {
+        /// Keys to delete
+        #[arg(required = true)]
+        keys: Vec<String>,
+
+        /// Namespace for the key-value pair
+        #[arg(long, short, default_value = "default")]
+        namespace: String,
+    },
+
+    /// Retrieve a saved value
     Get {
+        /// Key to retrieve
         key: String,
 
+        /// Namespace for the key-value pair
         #[arg(long, short, default_value = "default")]
         namespace: String,
     },
 
+    /// List all keys in a namespace, or in all namespaces
+    #[command(alias = "ls")]
     List {
+        /// Namespace to list keys from
         #[arg(long, short, default_value = "default")]
         namespace: String,
 
-        #[arg(long, short)]
+        /// List all keys in all namespaces
+        #[arg(long, short, alias = "all")]
         all_namespaces: bool,
     },
+
+    /// Rebuild the KV store
+    Rebuild,
 }
 
 impl Cmd {
-    pub async fn run(&self, settings: &Settings, store: &(impl Store + Send + Sync)) -> Result<()> {
-        let kv_store = KvStore::new();
-
+    pub async fn run(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
         let encryption_key: [u8; 32] = encryption::load_key(settings)
             .context("could not load encryption key")?
             .into();
 
         let host_id = Settings::host_id().expect("failed to get host_id");
+
+        let kv_db = atuin_kv::database::Database::new(settings.kv.db_path.clone(), 1.0).await?;
+        let kv_store = KvStore::new(store.clone(), kv_db, host_id, encryption_key);
 
         match self {
             Self::Set {
@@ -50,16 +76,20 @@ impl Cmd {
                 value,
                 namespace,
             } => {
-                kv_store
-                    .set(store, &encryption_key, host_id, namespace, key, value)
-                    .await
+                if namespace.is_empty() {
+                    return Err(eyre!("namespace cannot be empty"));
+                }
+
+                kv_store.set(namespace, key, value).await
             }
 
-            Self::Get { key, namespace } => {
-                let val = kv_store.get(store, &encryption_key, namespace, key).await?;
+            Self::Delete { keys, namespace } => kv_store.delete(namespace, keys).await,
 
-                if let Some(kv) = val {
-                    println!("{}", kv.value);
+            Self::Get { key, namespace } => {
+                let kv = kv_store.get(namespace, key).await?;
+
+                if let Some(val) = kv {
+                    println!("{val}");
                 }
 
                 Ok(())
@@ -69,28 +99,24 @@ impl Cmd {
                 namespace,
                 all_namespaces,
             } => {
-                // TODO: don't rebuild this every time lol
-                let map = kv_store.build_kv(store, &encryption_key).await?;
-
-                // slower, but sorting is probably useful
-                if *all_namespaces {
-                    for (ns, kv) in &map {
-                        for k in kv.keys() {
-                            println!("{ns}.{k}");
-                        }
-                    }
+                let entries = if *all_namespaces {
+                    kv_store.list(None).await?
                 } else {
-                    let ns = map.get(namespace);
+                    kv_store.list(Some(namespace)).await?
+                };
 
-                    if let Some(ns) = ns {
-                        for k in ns.keys() {
-                            println!("{k}");
-                        }
+                for entry in entries {
+                    if *all_namespaces {
+                        println!("{}.{}", entry.namespace, entry.key);
+                    } else {
+                        println!("{}", entry.key);
                     }
                 }
 
                 Ok(())
             }
+
+            Self::Rebuild {} => kv_store.build().await,
         }
     }
 }

@@ -10,8 +10,8 @@ use atuin_server_database::{Database, DbError, DbResult};
 use futures_util::TryStreamExt;
 use metrics::counter;
 use serde::{Deserialize, Serialize};
-use sqlx::postgres::PgPoolOptions;
 use sqlx::Row;
+use sqlx::postgres::PgPoolOptions;
 
 use time::{OffsetDateTime, PrimitiveDateTime, UtcOffset};
 use tracing::{instrument, trace};

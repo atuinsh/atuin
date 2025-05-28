@@ -13,8 +13,10 @@ Before working on anything, we suggest taking a copy of your Atuin data director
 While data directory backups are always a good idea, you can instruct Atuin to use custom path using the following environment variables:
 
 ```shell
-export ATUIN_DB_PATH=/tmp/atuin_dev.db
 export ATUIN_RECORD_STORE_PATH=/tmp/atuin_records.db
+export ATUIN_DB_PATH=/tmp/atuin_dev.db
+export ATUIN_KV__DB_PATH=/tmp/atuin_kv.db
+export ATUIN_SCRIPTS__DB_PATH=/tmp/atuin_scripts.db
 ```
 
 It is also recommended to update your `$PATH` so that the pre-exec scripts would use the locally built version:
@@ -23,7 +25,7 @@ It is also recommended to update your `$PATH` so that the pre-exec scripts would
 export PATH="./target/release:$PATH"
 ```
 
-These 3 variables can be added in a local `.envrc` file, read by [direnv](https://direnv.net/).
+These 5 variables can be added in a local `.envrc` file, read by [direnv](https://direnv.net/).
 
 ## PRs 
 

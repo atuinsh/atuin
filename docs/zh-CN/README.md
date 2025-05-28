@@ -1,5 +1,8 @@
 <p align="center">
-<img height="250" src="https://user-images.githubusercontent.com/53315310/167610618-284491ac-c5d3-4957-9e4b-604bb97e23e6.png"/>
+ <picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://github.com/atuinsh/atuin/assets/53315310/13216a1d-1ac0-4c99-b0eb-d88290fe0efd">
+  <img alt="Text changing depending on mode. Light: 'So light!' Dark: 'So dark!'" src="https://github.com/atuinsh/atuin/assets/53315310/08bc86d4-a781-4aaa-8d7e-478ae6bcd129">
+</picture>
 </p>
 
 <p align="center">
@@ -9,12 +12,15 @@
 <hr/>
 
 <p align="center">
-  <a href="https://github.com/ellie/atuin/actions?query=workflow%3ARust"><img src="https://img.shields.io/github/workflow/status/ellie/atuin/Rust?style=flat-square" /></a>
+  <a href="https://github.com/atuinsh/atuin/actions?query=workflow%3ARust"><img src="https://img.shields.io/github/actions/workflow/status/atuinsh/atuin/rust.yml?style=flat-square" /></a>
   <a href="https://crates.io/crates/atuin"><img src="https://img.shields.io/crates/v/atuin.svg?style=flat-square" /></a>
   <a href="https://crates.io/crates/atuin"><img src="https://img.shields.io/crates/d/atuin.svg?style=flat-square" /></a>
-  <a href="https://github.com/ellie/atuin/blob/main/LICENSE"><img src="https://img.shields.io/crates/l/atuin.svg?style=flat-square" /></a>
+  <a href="https://github.com/atuinsh/atuin/blob/main/LICENSE"><img src="https://img.shields.io/crates/l/atuin.svg?style=flat-square" /></a>
   <a href="https://discord.gg/Fq8bJSKPHh"><img src="https://img.shields.io/discord/954121165239115808" /></a>
+  <a rel="me" href="https://hachyderm.io/@atuin"><img src="https://img.shields.io/mastodon/follow/109944632283122560?domain=https%3A%2F%2Fhachyderm.io&style=social"/></a>
+  <a href="https://twitter.com/atuinsh"><img src="https://img.shields.io/twitter/follow/atuinsh?style=social" /></a>
 </p>
+
 
 [English] | [简体中文]
 
@@ -67,17 +73,17 @@ atuin search --exit 0 --after "yesterday 3pm" make
 - zsh
 - bash
 - fish
- 
+
 ## 社区
 
 Atuin 有一个 Discord 社区, 可以在 [这里](https://discord.gg/Fq8bJSKPHh) 获得
 
 # 快速开始
-  
+
 ## 使用默认的同步服务器
-  
+
 这将为您注册由我托管的默认同步服务器。 一切都是端到端加密的，所以你的秘密是安全的！
-  
+
 阅读下面的更多信息，了解仅供离线使用或托管您自己的服务器。
 
 ```
@@ -105,10 +111,10 @@ curl https://api.atuin.sh/enable -d $(cat ~/.local/share/atuin/session)
 执行结果为你的活跃图 URL 地址。可以共享或嵌入这个 URL 地址，令牌（token）并<i>不是</i>加密的，只是用来防止被枚举攻击。
 
 ## 仅离线 (不同步)
-  
+
 ```
 bash <(curl https://raw.githubusercontent.com/ellie/atuin/main/install.sh)
-            
+
 atuin import auto
 ```
 
@@ -142,11 +148,11 @@ brew install atuin
 ```
 
 然后可直接看 <a href="#shell-plugin">Shell 插件</a>
-  
+
 ### MacPorts
 
 Atuin 也可以在 [MacPorts](https://ports.macports.org/port/atuin/) 中找到
-  
+
 ```
 sudo port install atuin
 ```

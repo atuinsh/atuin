@@ -40,12 +40,17 @@
 ## possible values: prefix, fulltext, fuzzy, skim
 # search_mode = "fuzzy"
 
-## which filter mode to use
-## possible values: global, host, session, directory
+## which filter mode to use by default
+## possible values: "global", "host", "session", "directory", "workspace"
+## consider using search.filters to customize the enablement and order of filter modes
 # filter_mode = "global"
 
 ## With workspace filtering enabled, Atuin will filter for commands executed
-## in any directory within a git repository tree (default: false)
+## in any directory within a git repository tree (default: false).
+##
+## To use workspace mode by default when available, set this to true and
+## set filter_mode to "workspace" or leave it unspecified and 
+## set search.filters to include "workspace" before other filter modes.
 # workspaces = false
 
 ## which filter mode to use when atuin is invoked from a shell up-key binding
@@ -125,6 +130,13 @@
 ## Configure whether or not to show tabs for search and inspect
 # show_tabs = true
 
+## Configure whether or not the tabs row may be auto-hidden, which includes the current Atuin
+## tab, such as Search or Inspector, and other tabs you may wish to see. This will
+## only be hidden if there are fewer than this count of lines available, and does not affect the use
+## of keyboard shortcuts to switch tab. 0 to never auto-hide, default is 8 (lines).
+## This is ignored except in `compact` mode.
+# auto_hide_height = 8
+
 ## Defaults to true. This matches history against a set of default regex, and will not save it if we get a match. Defaults include
 ## 1. AWS key id
 ## 2. Github pat (old and new)
@@ -171,6 +183,7 @@ enter_accept = true
 #   "git",
 #   "go",
 #   "ip",
+#   "jj",
 #   "kubectl",
 #   "nix",
 #   "nmcli",
@@ -197,6 +210,10 @@ enter_accept = true
 [keys]
 # Defaults to true. If disabled, using the up/down key won't exit the TUI when scrolled past the first/last entry.
 # scroll_exits = true
+# Defaults to true. The left arrow key will exit the TUI when scrolling before the first character
+# exit_past_line_start = true
+# Defaults to true. The right arrow key performs the same functionality as Tab and copies the selected line to the command line to be modified.
+# accept_past_line_end = true
 
 [sync]
 # Enable sync v2 by default
@@ -247,3 +264,9 @@ records = true
 ## Whether the theme manager should output normal or extra information to help fix themes.
 ## Boolean, true or false. If unset, left up to the theme manager.
 # debug = true
+
+[search]
+## The list of enabled filter modes, in order of priority.
+## The "workspace" mode is skipped when not in a workspace or workspaces = false.
+## Default filter mode can be overridden with the filter_mode setting.
+# filters = [ "global", "host", "session", "workspace", "directory" ]

@@ -1,9 +1,9 @@
 use std::{io::prelude::*, path::PathBuf};
 
 use config::{Config, Environment, File as ConfigFile, FileFormat};
-use eyre::{eyre, Result};
-use fs_err::{create_dir_all, File};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use eyre::{Result, eyre};
+use fs_err::{File, create_dir_all};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 static EXAMPLE_CONFIG: &str = include_str!("../server.toml");
 
@@ -104,6 +104,7 @@ impl<DbSettings: DeserializeOwned> Settings<DbSettings> {
             .set_default("metrics.enable", false)?
             .set_default("metrics.host", "127.0.0.1")?
             .set_default("metrics.port", 9001)?
+            .set_default("mail.enable", false)?
             .set_default("tls.enable", false)?
             .set_default("tls.cert_path", "")?
             .set_default("tls.pkey_path", "")?

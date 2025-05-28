@@ -35,11 +35,15 @@ pub async fn run(settings: &Settings, token: Option<String>) -> Result<()> {
         }
 
         (false, false) => {
-            println!("Your Atuin server does not have mail setup. This is not required, though your account cannot be verified. Speak to your admin.");
+            println!(
+                "Your Atuin server does not have mail setup. This is not required, though your account cannot be verified. Speak to your admin."
+            );
         }
 
         _ => {
-            println!("Invalid email and verification status. This is a bug. Please open an issue: https://github.com/atuinsh/atuin");
+            println!(
+                "Invalid email and verification status. This is a bug. Please open an issue: https://github.com/atuinsh/atuin"
+            );
         }
     }
 

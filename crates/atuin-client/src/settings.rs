@@ -3,21 +3,22 @@ use std::{
 };
 
 use atuin_common::record::HostId;
+use atuin_common::utils;
 use clap::ValueEnum;
 use config::{
-    builder::DefaultState, Config, ConfigBuilder, Environment, File as ConfigFile, FileFormat,
+    Config, ConfigBuilder, Environment, File as ConfigFile, FileFormat, builder::DefaultState,
 };
-use eyre::{bail, eyre, Context, Error, Result};
-use fs_err::{create_dir_all, File};
+use eyre::{Context, Error, Result, bail, eyre};
+use fs_err::{File, create_dir_all};
 use humantime::parse_duration;
 use regex::RegexSet;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use serde_with::DeserializeFromStr;
 use time::{
-    format_description::{well_known::Rfc3339, FormatItem},
-    macros::format_description,
     OffsetDateTime, UtcOffset,
+    format_description::{FormatItem, well_known::Rfc3339},
+    macros::format_description,
 };
 use uuid::Uuid;
 
@@ -29,6 +30,8 @@ pub const HOST_ID_FILENAME: &str = "host_id";
 static EXAMPLE_CONFIG: &str = include_str!("../config.toml");
 
 mod dotfiles;
+mod kv;
+mod scripts;
 
 #[derive(Clone, Debug, Deserialize, Copy, ValueEnum, PartialEq, Serialize)]
 pub enum SearchMode {
@@ -140,8 +143,9 @@ impl fmt::Display for Timezone {
     }
 }
 /// format: <+|-><hour>[:<minute>[:<second>]]
-static OFFSET_FMT: &[FormatItem<'_>] =
-    format_description!("[offset_hour sign:mandatory padding:none][optional [:[offset_minute padding:none][optional [:[offset_second padding:none]]]]]");
+static OFFSET_FMT: &[FormatItem<'_>] = format_description!(
+    "[offset_hour sign:mandatory padding:none][optional [:[offset_minute padding:none][optional [:[offset_second padding:none]]]]]"
+);
 impl FromStr for Timezone {
     type Err = Error;
 
@@ -290,6 +294,7 @@ impl Stats {
             "git",
             "go",
             "ip",
+            "jj",
             "kubectl",
             "nix",
             "nmcli",
@@ -330,6 +335,8 @@ pub struct Sync {
 #[derive(Clone, Debug, Deserialize, Default, Serialize)]
 pub struct Keys {
     pub scroll_exits: bool,
+    pub exit_past_line_start: bool,
+    pub accept_past_line_end: bool,
     pub prefix: String,
 }
 
@@ -370,6 +377,12 @@ pub struct Daemon {
     pub tcp_port: u64,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Search {
+    /// The list of enabled filter modes, in order of priority.
+    pub filters: Vec<FilterMode>,
+}
+
 impl Default for Preview {
     fn default() -> Self {
         Self {
@@ -396,6 +409,20 @@ impl Default for Daemon {
             socket_path: "".to_string(),
             systemd_socket: false,
             tcp_port: 8889,
+        }
+    }
+}
+
+impl Default for Search {
+    fn default() -> Self {
+        Self {
+            filters: vec![
+                FilterMode::Global,
+                FilterMode::Host,
+                FilterMode::Session,
+                FilterMode::Workspace,
+                FilterMode::Directory,
+            ],
         }
     }
 }
@@ -430,7 +457,7 @@ pub struct Settings {
     pub key_path: String,
     pub session_path: String,
     pub search_mode: SearchMode,
-    pub filter_mode: FilterMode,
+    pub filter_mode: Option<FilterMode>,
     pub filter_mode_shell_up_key_binding: Option<FilterMode>,
     pub search_mode_shell_up_key_binding: Option<SearchMode>,
     pub shell_up_key_binding: bool,
@@ -440,6 +467,7 @@ pub struct Settings {
     pub max_preview_height: u16,
     pub show_help: bool,
     pub show_tabs: bool,
+    pub auto_hide_height: u16,
     pub exit_mode: ExitMode,
     pub keymap_mode: KeymapMode,
     pub keymap_mode_shell: KeymapMode,
@@ -486,7 +514,16 @@ pub struct Settings {
     pub daemon: Daemon,
 
     #[serde(default)]
+    pub search: Search,
+
+    #[serde(default)]
     pub theme: Theme,
+
+    #[serde(default)]
+    pub scripts: scripts::Settings,
+
+    #[serde(default)]
+    pub kv: kv::Settings,
 }
 
 impl Settings {
@@ -589,7 +626,7 @@ impl Settings {
 
         match parse_duration(self.sync_frequency.as_str()) {
             Ok(d) => {
-                let d = time::Duration::try_from(d).unwrap();
+                let d = time::Duration::try_from(d)?;
                 Ok(OffsetDateTime::now_utc() - Settings::last_sync()? >= d)
             }
             Err(e) => Err(eyre!("failed to check sync: {}", e)),
@@ -687,6 +724,13 @@ impl Settings {
         None
     }
 
+    pub fn default_filter_mode(&self) -> FilterMode {
+        self.filter_mode
+            .filter(|x| self.search.filters.contains(x))
+            .or(self.search.filters.first().copied())
+            .unwrap_or(FilterMode::Global)
+    }
+
     #[cfg(not(feature = "check-update"))]
     pub async fn needs_update(&self) -> Option<Version> {
         None
@@ -696,6 +740,8 @@ impl Settings {
         let data_dir = atuin_common::utils::data_dir();
         let db_path = data_dir.join("history.db");
         let record_store_path = data_dir.join("records.db");
+        let kv_path = data_dir.join("kv.db");
+        let scripts_path = data_dir.join("scripts.db");
         let socket_path = atuin_common::utils::runtime_dir().join("atuin.sock");
 
         let key_path = data_dir.join("key");
@@ -712,9 +758,9 @@ impl Settings {
             .set_default("auto_sync", true)?
             .set_default("update_check", cfg!(feature = "check-update"))?
             .set_default("sync_address", "https://api.atuin.sh")?
-            .set_default("sync_frequency", "10m")?
+            .set_default("sync_frequency", "5m")?
             .set_default("search_mode", "fuzzy")?
-            .set_default("filter_mode", "global")?
+            .set_default("filter_mode", None::<String>)?
             .set_default("style", "compact")?
             .set_default("inline_height", 40)?
             .set_default("show_preview", true)?
@@ -722,6 +768,7 @@ impl Settings {
             .set_default("max_preview_height", 4)?
             .set_default("show_help", true)?
             .set_default("show_tabs", true)?
+            .set_default("auto_hide_height", 8)?
             .set_default("invert", false)?
             .set_default("exit_mode", "return-original")?
             .set_default("word_jump_mode", "emacs")?
@@ -745,6 +792,8 @@ impl Settings {
             .set_default("enter_accept", false)?
             .set_default("sync.records", true)?
             .set_default("keys.scroll_exits", true)?
+            .set_default("keys.accept_past_line_end", true)?
+            .set_default("keys.exit_past_line_start", true)?
             .set_default("keys.prefix", "a")?
             .set_default("keymap_mode", "emacs")?
             .set_default("keymap_mode_shell", "auto")?
@@ -756,6 +805,12 @@ impl Settings {
             .set_default("daemon.socket_path", socket_path.to_str())?
             .set_default("daemon.systemd_socket", false)?
             .set_default("daemon.tcp_port", 8889)?
+            .set_default("kv.db_path", kv_path.to_str())?
+            .set_default("scripts.db_path", scripts_path.to_str())?
+            .set_default(
+                "search.filters",
+                vec!["global", "host", "session", "workspace", "directory"],
+            )?
             .set_default("theme.name", "default")?
             .set_default("theme.debug", None::<bool>)?
             .set_default(
@@ -812,23 +867,32 @@ impl Settings {
             .map_err(|e| eyre!("failed to deserialize: {}", e))?;
 
         // all paths should be expanded
-        let db_path = settings.db_path;
-        let db_path = shellexpand::full(&db_path)?;
-        settings.db_path = db_path.to_string();
-
-        let key_path = settings.key_path;
-        let key_path = shellexpand::full(&key_path)?;
-        settings.key_path = key_path.to_string();
-
-        let session_path = settings.session_path;
-        let session_path = shellexpand::full(&session_path)?;
-        settings.session_path = session_path.to_string();
+        settings.db_path = Self::expand_path(settings.db_path)?;
+        settings.record_store_path = Self::expand_path(settings.record_store_path)?;
+        settings.key_path = Self::expand_path(settings.key_path)?;
+        settings.session_path = Self::expand_path(settings.session_path)?;
 
         Ok(settings)
     }
 
+    fn expand_path(path: String) -> Result<String> {
+        shellexpand::full(&path)
+            .map(|p| p.to_string())
+            .map_err(|e| eyre!("failed to expand path: {}", e))
+    }
+
     pub fn example_config() -> &'static str {
         EXAMPLE_CONFIG
+    }
+
+    pub fn paths_ok(&self) -> bool {
+        let paths = [
+            &self.db_path,
+            &self.record_store_path,
+            &self.key_path,
+            &self.session_path,
+        ];
+        paths.iter().all(|p| !utils::broken_symlink(p))
     }
 }
 

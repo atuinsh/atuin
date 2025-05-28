@@ -25,9 +25,11 @@ mod import;
 mod info;
 mod init;
 mod kv;
+mod scripts;
 mod search;
 mod stats;
 mod store;
+mod wrapped;
 
 #[derive(Subcommand, Debug)]
 #[command(infer_subcommands = true)]
@@ -66,6 +68,10 @@ pub enum Cmd {
     #[command(subcommand)]
     Dotfiles(dotfiles::Cmd),
 
+    /// Manage your scripts with Atuin
+    #[command(subcommand)]
+    Scripts(scripts::Cmd),
+
     /// Print Atuin's shell init script
     #[command()]
     Init(init::Cmd),
@@ -77,6 +83,9 @@ pub enum Cmd {
     /// Run the doctor to check for common issues
     #[command()]
     Doctor,
+
+    #[command()]
+    Wrapped { year: Option<i32> },
 
     /// *Experimental* Start the background daemon
     #[cfg(feature = "daemon")]
@@ -125,6 +134,7 @@ impl Cmd {
         match self {
             Self::History(history) => return history.run(&settings).await,
             Self::Init(init) => return init.run(&settings).await,
+            Self::Doctor => return doctor::run(&settings).await,
             _ => {}
         }
 
@@ -154,22 +164,24 @@ impl Cmd {
 
             Self::Dotfiles(dotfiles) => dotfiles.run(&settings, sqlite_store).await,
 
+            Self::Scripts(scripts) => scripts.run(&settings, sqlite_store, &db).await,
+
             Self::Info => {
                 info::run(&settings);
                 Ok(())
             }
-
-            Self::Doctor => doctor::run(&settings).await,
 
             Self::DefaultConfig => {
                 default_config::run();
                 Ok(())
             }
 
+            Self::Wrapped { year } => wrapped::run(year, &db, &settings, theme).await,
+
             #[cfg(feature = "daemon")]
             Self::Daemon => daemon::run(settings, sqlite_store, db).await,
 
-            _ => unimplemented!(),
+            Self::History(_) | Self::Init(_) | Self::Doctor => unreachable!(),
         }
     }
 }

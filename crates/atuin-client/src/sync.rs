@@ -1,5 +1,4 @@
 use std::collections::HashSet;
-use std::convert::TryInto;
 use std::iter::FromIterator;
 
 use eyre::Result;
@@ -85,8 +84,9 @@ async fn sync_download(
         db.save_bulk(&history).await?;
 
         local_count = db.history_count(true).await?;
+        let remote_page_size = std::cmp::max(remote_status.page_size, 0) as usize;
 
-        if history.len() < remote_status.page_size.try_into().unwrap() {
+        if history.len() < remote_page_size {
             break;
         }
 
@@ -109,13 +109,16 @@ async fn sync_download(
     for i in remote_status.deleted {
         // we will update the stored history to have this data
         // pretty much everything can be nullified
-        if let Some(h) = db.load(i.as_str()).await? {
-            db.delete(h).await?;
-        } else {
-            info!(
-                "could not delete history with id {}, not found locally",
-                i.as_str()
-            );
+        match db.load(i.as_str()).await? {
+            Some(h) => {
+                db.delete(h).await?;
+            }
+            _ => {
+                info!(
+                    "could not delete history with id {}, not found locally",
+                    i.as_str()
+                );
+            }
         }
     }
 

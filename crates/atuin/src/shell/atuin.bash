@@ -189,6 +189,14 @@ __atuin_accept_line() {
     # If extdebug is turned on and any preexec function returns non-zero
     # exit status, we do not run the user command.
     if ! { shopt -q extdebug && ((__atuin_preexec_ret_value)); }; then
+        # Note: When a child Bash session is started by enter_accept, if the
+        # environment variable READLINE_POINT is present, bash-preexec in the
+        # child session does not fire preexec at all because it considers we
+        # are inside Atuin's keybinding of the current session.  To avoid
+        # propagating the environment variable to the child session, we remove
+        # the export attribute of READLINE_LINE and READLINE_POINT.
+        export -n READLINE_LINE READLINE_POINT
+
         # Juggle the terminal settings so that the command can be interacted
         # with
         local __atuin_stty_backup

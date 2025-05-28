@@ -1,7 +1,7 @@
 use ::sqlx::{FromRow, Result};
 use atuin_common::record::{EncryptedData, Host, Record};
 use atuin_server_database::models::{History, Session, User};
-use sqlx::{postgres::PgRow, Row};
+use sqlx::{Row, postgres::PgRow};
 use time::PrimitiveDateTime;
 
 pub struct DbUser(pub User);

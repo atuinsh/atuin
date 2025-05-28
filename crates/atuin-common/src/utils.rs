@@ -2,9 +2,9 @@ use std::borrow::Cow;
 use std::env;
 use std::path::PathBuf;
 
-use eyre::{eyre, Result};
+use eyre::{Result, eyre};
 
-use base64::prelude::{Engine, BASE64_URL_SAFE_NO_PAD};
+use base64::prelude::{BASE64_URL_SAFE_NO_PAD, Engine};
 use getrandom::getrandom;
 use uuid::Uuid;
 
@@ -113,6 +113,11 @@ pub fn get_current_dir() -> String {
     }
 }
 
+pub fn broken_symlink<P: Into<PathBuf>>(path: P) -> bool {
+    let path = path.into();
+    path.is_symlink() && !path.exists()
+}
+
 pub fn is_zsh() -> bool {
     // only set on zsh
     env::var("ATUIN_SHELL_ZSH").is_ok()
@@ -146,7 +151,7 @@ pub trait Escapable: AsRef<str> {
         } else {
             let mut remaining = self.as_ref();
             // Not a perfect way to reserve space but should reduce the allocations
-            let mut buf = String::with_capacity(remaining.as_bytes().len());
+            let mut buf = String::with_capacity(remaining.len());
             while let Some(i) = remaining.find(|c: char| c.is_ascii_control()) {
                 // safe to index with `..i`, `i` and `i+1..` as part[i] is a single byte ascii char
                 buf.push_str(&remaining[..i]);
@@ -189,10 +194,10 @@ pub fn unquote(s: &str) -> Result<String> {
 
 impl<T: AsRef<str>> Escapable for T {}
 
+#[allow(unsafe_code)]
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_ne;
-    use time::Month;
 
     use super::*;
     use std::env;
@@ -210,55 +215,48 @@ mod tests {
     }
 
     fn test_config_dir_xdg() {
-        env::remove_var("HOME");
-        env::set_var("XDG_CONFIG_HOME", "/home/user/custom_config");
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::remove_var("HOME") };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::set_var("XDG_CONFIG_HOME", "/home/user/custom_config") };
         assert_eq!(
             config_dir(),
             PathBuf::from("/home/user/custom_config/atuin")
         );
-        env::remove_var("XDG_CONFIG_HOME");
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::remove_var("XDG_CONFIG_HOME") };
     }
 
     fn test_config_dir() {
-        env::set_var("HOME", "/home/user");
-        env::remove_var("XDG_CONFIG_HOME");
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::set_var("HOME", "/home/user") };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::remove_var("XDG_CONFIG_HOME") };
 
         assert_eq!(config_dir(), PathBuf::from("/home/user/.config/atuin"));
 
-        env::remove_var("HOME");
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::remove_var("HOME") };
     }
 
     fn test_data_dir_xdg() {
-        env::remove_var("HOME");
-        env::set_var("XDG_DATA_HOME", "/home/user/custom_data");
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::remove_var("HOME") };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::set_var("XDG_DATA_HOME", "/home/user/custom_data") };
         assert_eq!(data_dir(), PathBuf::from("/home/user/custom_data/atuin"));
-        env::remove_var("XDG_DATA_HOME");
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::remove_var("XDG_DATA_HOME") };
     }
 
     fn test_data_dir() {
-        env::set_var("HOME", "/home/user");
-        env::remove_var("XDG_DATA_HOME");
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::set_var("HOME", "/home/user") };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::remove_var("XDG_DATA_HOME") };
         assert_eq!(data_dir(), PathBuf::from("/home/user/.local/share/atuin"));
-        env::remove_var("HOME");
-    }
-
-    #[test]
-    fn days_from_month() {
-        assert_eq!(time::util::days_in_year_month(2023, Month::January), 31);
-        assert_eq!(time::util::days_in_year_month(2023, Month::February), 28);
-        assert_eq!(time::util::days_in_year_month(2023, Month::March), 31);
-        assert_eq!(time::util::days_in_year_month(2023, Month::April), 30);
-        assert_eq!(time::util::days_in_year_month(2023, Month::May), 31);
-        assert_eq!(time::util::days_in_year_month(2023, Month::June), 30);
-        assert_eq!(time::util::days_in_year_month(2023, Month::July), 31);
-        assert_eq!(time::util::days_in_year_month(2023, Month::August), 31);
-        assert_eq!(time::util::days_in_year_month(2023, Month::September), 30);
-        assert_eq!(time::util::days_in_year_month(2023, Month::October), 31);
-        assert_eq!(time::util::days_in_year_month(2023, Month::November), 30);
-        assert_eq!(time::util::days_in_year_month(2023, Month::December), 31);
-
-        // leap years
-        assert_eq!(time::util::days_in_year_month(2024, Month::February), 29);
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::remove_var("HOME") };
     }
 
     #[test]

@@ -2,10 +2,10 @@ use std::{path::PathBuf, str};
 
 use async_trait::async_trait;
 use directories::UserDirs;
-use eyre::{eyre, Result};
-use time::{macros::format_description, OffsetDateTime, PrimitiveDateTime};
+use eyre::{Result, eyre};
+use time::{OffsetDateTime, PrimitiveDateTime, macros::format_description};
 
-use super::{get_histpath, unix_byte_lines, Importer, Loader};
+use super::{Importer, Loader, get_histfile_path, unix_byte_lines};
 use crate::history::History;
 use crate::import::read_to_end;
 
@@ -28,7 +28,7 @@ impl Importer for Replxx {
     const NAME: &'static str = "replxx";
 
     async fn new() -> Result<Self> {
-        let bytes = read_to_end(get_histpath(default_histpath)?)?;
+        let bytes = read_to_end(get_histfile_path(default_histpath)?)?;
         Ok(Self { bytes })
     }
 
@@ -72,7 +72,7 @@ fn try_parse_line_as_timestamp(line: &str) -> Option<OffsetDateTime> {
 #[cfg(test)]
 mod test {
 
-    use crate::import::{tests::TestLoader, Importer};
+    use crate::import::{Importer, tests::TestLoader};
 
     use super::Replxx;
 
@@ -100,7 +100,7 @@ CREATE TABLE test( stamp DateTime('UTC'))ENGINE = MergeTreePARTITION BY toDat
 
         // simple wrapper for replxx history entry
         macro_rules! history {
-            ($timestamp:expr, $command:expr) => {
+            ($timestamp:expr_2021, $command:expr_2021) => {
                 let h = history.next().expect("missing entry in history");
                 assert_eq!(h.command.as_str(), $command);
                 assert_eq!(h.timestamp.unix_timestamp(), $timestamp);
@@ -114,6 +114,9 @@ CREATE TABLE test( stamp DateTime('UTC'))ENGINE = MergeTreePARTITION BY toDat
         history!(1707603396, "select * from numbers(10)");
         history!(1707603401, "select * from system.numbers");
         history!(1707603568, "select 1");
-        history!(1708600533, "CREATE TABLE test\n( stamp DateTime('UTC'))\nENGINE = MergeTree\nPARTITION BY toDate(stamp)\norder by tuple() as select toDateTime('2020-01-01')+number*60 from numbers(80000);");
+        history!(
+            1708600533,
+            "CREATE TABLE test\n( stamp DateTime('UTC'))\nENGINE = MergeTree\nPARTITION BY toDate(stamp)\norder by tuple() as select toDateTime('2020-01-01')+number*60 from numbers(80000);"
+        );
     }
 }

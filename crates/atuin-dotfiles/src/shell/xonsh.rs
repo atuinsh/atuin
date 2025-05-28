@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::store::{var::VarStore, AliasStore};
+use crate::store::{AliasStore, var::VarStore};
 
 async fn cached_aliases(path: PathBuf, store: &AliasStore) -> String {
     match tokio::fs::read_to_string(path).await {

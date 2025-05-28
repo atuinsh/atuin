@@ -1,6 +1,6 @@
 [package]
 name = "atuin-client"
-edition = "2021"
+edition = "2024"
 description = "client library for atuin"
 
 rust-version = { workspace = true }
@@ -19,7 +19,7 @@ daemon = []
 check-update = []
 
 [dependencies]
-atuin-common = { path = "../atuin-common", version = "18.4.0-beta.3" }
+atuin-common = { path = "../atuin-common", version = "18.6.1" }
 
 log = { workspace = true }
 base64 = { workspace = true }
@@ -39,11 +39,11 @@ itertools = { workspace = true }
 rand = { workspace = true }
 shellexpand = "3"
 sqlx = { workspace = true, features = ["sqlite", "regexp"] }
-minspan = "0.1.1"
+minspan = "0.1.5"
 regex = "1.10.5"
 serde_regex = "1.1.0"
 fs-err = { workspace = true }
-sql-builder = "3"
+sql-builder = { workspace = true }
 memchr = "2.7"
 rmp = { version = "0.8.14" }
 typed-builder = { workspace = true }
@@ -57,10 +57,7 @@ serde_with = "3.8.1"
 
 # encryption
 rusty_paseto = { version = "0.7.0", default-features = false }
-rusty_paserk = { version = "0.4.0", default-features = false, features = [
-  "v4",
-  "serde",
-] }
+rusty_paserk = { version = "0.4.0", default-features = false, features = ["v4", "serde"] }
 
 # sync
 urlencoding = { version = "2.1.0", optional = true }
@@ -68,10 +65,10 @@ reqwest = { workspace = true, optional = true }
 hex = { version = "0.4", optional = true }
 sha2 = { version = "0.10", optional = true }
 indicatif = "0.17.7"
-tiny-bip39 = "1"
+tiny-bip39 = "=1.0.0"
 
 # theme
-crossterm = { version = "0.27.0", features = ["serde"] }
+crossterm = { version = "0.28.1", features = ["serde"] }
 palette = { version = "0.7.5", features = ["serializing"] }
 lazy_static = "1.4.0"
 strum_macros = "0.26.3"

@@ -1,6 +1,6 @@
 [package]
 name = "atuin-server-postgres"
-edition = "2021"
+edition = "2024"
 description = "server postgres database library for atuin"
 
 version = { workspace = true }
@@ -10,11 +10,11 @@ homepage = { workspace = true }
 repository = { workspace = true }
 
 [dependencies]
-atuin-common = { path = "../atuin-common", version = "18.4.0-beta.3" }
-atuin-server-database = { path = "../atuin-server-database", version = "18.4.0-beta.3" }
+atuin-common = { path = "../atuin-common", version = "18.6.1" }
+atuin-server-database = { path = "../atuin-server-database", version = "18.6.1" }
 
 eyre = { workspace = true }
-tracing = "0.1"
+tracing = { workspace = true }
 time = { workspace = true }
 serde = { workspace = true }
 sqlx = { workspace = true }
