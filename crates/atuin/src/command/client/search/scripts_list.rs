@@ -36,6 +36,7 @@ impl<'a> ScriptsList<'a> {
     }
 }
 
+#[allow(clippy::cast_possible_truncation)]
 impl StatefulWidget for ScriptsList<'_> {
     type State = ListState;
 
@@ -83,7 +84,7 @@ impl StatefulWidget for ScriptsList<'_> {
             // Draw tags if available
             if !script.tags.is_empty() && y + 1 < list_height {
                 let tags_text = format!("  Tags: {}", script.tags.join(", "));
-                let tag_style: ContentStyle = self.theme.as_style(Meaning::Annotation).into();
+                let tag_style: ContentStyle = self.theme.as_style(Meaning::Annotation);
                 buf.set_stringn(x, cy + 1, &tags_text, width, tag_style);
                 y += 2;
             } else {
@@ -99,7 +100,7 @@ pub fn draw(
     f: &mut Frame,
     list_chunk: Rect,
     input_chunk: Rect,
-    scripts: &Option<Vec<Script>>,
+    scripts: Option<&Vec<Script>>,
     scripts_state: &mut ListState,
     theme: &Theme,
 ) {

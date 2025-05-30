@@ -538,11 +538,11 @@ impl State {
         match input.code {
             KeyCode::Enter => {
                 if let Some(ref scripts) = self.scripts {
-                    if !scripts.is_empty() {
+                    if scripts.is_empty() {
+                        InputAction::Continue
+                    } else {
                         let selected_script = &scripts[self.scripts_state.selected];
                         InputAction::ExecuteScript(selected_script.name.clone())
-                    } else {
-                        InputAction::Continue
                     }
                 } else {
                     InputAction::Continue
@@ -845,7 +845,7 @@ impl State {
                     f,
                     results_list_chunk,
                     input_chunk,
-                    &self.scripts,
+                    self.scripts.as_ref(),
                     &mut self.scripts_state,
                     theme,
                 );
@@ -1337,7 +1337,7 @@ pub async fn history(
         }
         InputAction::ExecuteScript(script_name) => {
             // Submit "scripts run" for actual execution.
-            let mut command = format!("atuin scripts run \"{}\"", script_name);
+            let mut command = format!("atuin scripts run \"{script_name}\"");
             if utils::is_zsh() || utils::is_fish() || utils::is_bash() || utils::is_xonsh() {
                 command = String::from("__atuin_accept__:") + &command;
             }
