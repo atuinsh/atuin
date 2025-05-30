@@ -1,4 +1,5 @@
 reorder_imports = true
+style_edition = "2024"
 # uncomment once stable
 #imports_granularity = "crate"
 #group_imports = "StdExternalCrate"
