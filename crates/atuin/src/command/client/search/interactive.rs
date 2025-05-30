@@ -1178,7 +1178,7 @@ pub async fn history(
     };
 
     let script_db =
-        atuin_scripts::database::Database::new(settings.scripts.database_path.clone(), 1.0).await?;
+        atuin_scripts::database::Database::new(settings.scripts.db_path.clone(), 1.0).await?;
 
     let mut app = State {
         history_count,
