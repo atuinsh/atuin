@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::io::IsTerminal;
 use std::io::Read;
 use std::path::PathBuf;
@@ -301,7 +300,7 @@ impl Cmd {
 
         if let Some(script) = script {
             // Get variables used in the template
-            let variables = template_variables(&script)?;
+            let (variables, defaults) = template_variables(&script)?;
 
             // Create a hashmap to store variable values
             let mut variable_values: HashMap<String, serde_json::Value> = HashMap::new();
@@ -322,32 +321,38 @@ impl Cmd {
             }
 
             // Collect variables that are still needed (not specified via CLI)
-            let remaining_vars: HashSet<String> = variables
+            let mut remaining_vars: Vec<String> = variables
                 .into_iter()
                 .filter(|var| !variable_values.contains_key(var))
                 .collect();
+            remaining_vars.sort();
 
             // If there are variables in the template that weren't specified on the command line, prompt for them
             if !remaining_vars.is_empty() {
                 println!("This script contains template variables that need values:");
 
-                let stdin = std::io::stdin();
-                let mut input = String::new();
-
                 for var in remaining_vars {
-                    input.clear();
+                    let default_value = if defaults.contains_key(&var) {
+                        defaults.get(&var).unwrap().clone()
+                    } else {
+                        String::new()
+                    };
 
-                    println!("Enter value for '{var}': ");
+                    debug!("Found default for variable: {}={}", var, default_value);
 
-                    if stdin.read_line(&mut input).is_err() {
-                        eprintln!("Failed to read input for variable '{var}'");
-                        // Provide an empty string as fallback
-                        variable_values.insert(var, serde_json::Value::String(String::new()));
-                        continue;
-                    }
-
-                    let value = input.trim().to_string();
-                    variable_values.insert(var, serde_json::Value::String(value));
+                    let input = inquire::Text::new(&format!("Enter value for '{var}': "))
+                        .with_initial_value(&default_value)
+                        .prompt();
+                    let value = match input {
+                        Ok(value) => value,
+                        Err(e) => {
+                            eprintln!("Failed to read input for variable '{var}': {e}");
+                            return Ok(());
+                        }
+                    };
+                    // Insert the value into the variable values map
+                    variable_values
+                        .insert(var, serde_json::Value::String(value.trim().to_string()));
                 }
             }
 

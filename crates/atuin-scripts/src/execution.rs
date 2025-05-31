@@ -50,7 +50,13 @@ pub fn template_script(
     script: &Script,
     context: &HashMap<String, serde_json::Value>,
 ) -> Result<String> {
-    let env = setup_template(script)?;
+    let mut env = setup_template(script)?;
+
+    // Add the default function - it has no value here, all variables will be provided in context
+    env.add_function("default", move |name: String, value: String| -> String {
+        format!("{name}={value}")
+    });
+
     let template = env.get_template("script")?;
     let rendered = template.render(context)?;
 
@@ -58,11 +64,43 @@ pub fn template_script(
 }
 
 /// Get the variables that need to be templated in a script
-pub fn template_variables(script: &Script) -> Result<HashSet<String>> {
-    let env = setup_template(script)?;
-    let template = env.get_template("script")?;
+pub fn template_variables(script: &Script) -> Result<(HashSet<String>, HashMap<String, String>)> {
+    use std::sync::{Arc, Mutex};
 
-    Ok(template.undeclared_variables(true))
+    let mut env = setup_template(script)?;
+
+    // Use Arc<Mutex> for thread-safe shared mutable state
+    let defaults = Arc::new(Mutex::new(HashMap::new()));
+    let defaults_clone = defaults.clone();
+
+    // Add the default function to collect default values
+    env.add_function("default", move |name: String, value: String| -> String {
+        if let Ok(mut defaults_guard) = defaults_clone.lock() {
+            defaults_guard.insert(name.clone(), value.clone());
+        }
+        println!("default called with {}={}", name, value);
+        format!("{name}={value}")
+    });
+
+    let template = env.get_template("script")?;
+    // Get all undeclared variables
+    let mut undeclared = template.undeclared_variables(true);
+    // Remove the default function from undeclared variables
+    undeclared.remove("default");
+
+    if undeclared.is_empty() {
+        return Ok((HashSet::new(), HashMap::new()));
+    }
+
+    // Render the template with empty context to trigger default function calls
+    let _rendered = template.render(minijinja::context! {})?;
+
+    let defaults_map = defaults
+        .lock()
+        .map_err(|_| eyre::eyre!("Failed to acquire mutex"))?
+        .clone();
+
+    Ok((undeclared, defaults_map))
 }
 
 /// Execute a script interactively, allowing for ongoing stdin/stdout interaction
