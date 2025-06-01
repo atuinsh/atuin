@@ -6,6 +6,7 @@ use eyre::{Result, WrapErr};
 use atuin_client::{
     database::Sqlite, record::sqlite_store::SqliteStore, settings::Settings, theme,
 };
+use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{filter::EnvFilter, fmt, prelude::*};
 
 #[cfg(feature = "sync")]
@@ -120,9 +121,20 @@ impl Cmd {
     ) -> Result<()> {
         let filter =
             EnvFilter::from_env("ATUIN_LOG").add_directive("sqlx_sqlite::regexp=off".parse()?);
-
+        let log_dir = atuin_common::utils::state_dir().join("logs");
+        // Ensure the log directory exists
+        tokio::fs::create_dir_all(&log_dir)
+            .await
+            .wrap_err("could not create log directory")?;
+        let appender = RollingFileAppender::builder()
+            .filename_prefix("atuin.log")
+            .rotation(Rotation::DAILY)
+            .max_log_files(7)
+            .build(log_dir)
+            .map_err(|e| eyre::eyre!("could not create log file: {e}"))?;
+        let (appender, _guard) = tracing_appender::non_blocking(appender);
         tracing_subscriber::registry()
-            .with(fmt::layer())
+            .with(fmt::layer().map_writer(|writer| writer.and(appender)))
             .with(filter)
             .init();
 
