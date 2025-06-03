@@ -220,8 +220,12 @@ pub fn print_list(
             }
             Err(_) => {
                 eprintln!("ERROR: Format string caused a formatting error.");
-                eprintln!("This may be due to an unsupported format string containing special characters.");
-                eprintln!("Please check your format string syntax and ensure literal braces are properly escaped.");
+                eprintln!(
+                    "This may be due to an unsupported format string containing special characters."
+                );
+                eprintln!(
+                    "Please check your format string syntax and ensure literal braces are properly escaped."
+                );
                 std::process::exit(1);
             }
         }
@@ -322,14 +326,16 @@ fn parse_fmt(format: &str) -> ParsedFmt {
         Ok(fmt) => fmt,
         Err(err) => {
             eprintln!("ERROR: History formatting failed with the following error: {err}");
-            
+
             // Provide helpful guidance based on the format string content
             if format.contains('"') && (format.contains(":{") || format.contains(",{")) {
                 eprintln!("It looks like you're trying to create JSON output.");
                 eprintln!("For JSON, you need to escape literal braces by doubling them:");
                 eprintln!("Example: '{{\"command\":\"{{command}}\",\"time\":\"{{time}}\"}}'");
             } else {
-                eprintln!("If your formatting string contains literal curly braces, you need to escape them by doubling:");
+                eprintln!(
+                    "If your formatting string contains literal curly braces, you need to escape them by doubling:"
+                );
                 eprintln!("Use {{{{ for literal {{ and }}}} for literal }}");
             }
             std::process::exit(1)
