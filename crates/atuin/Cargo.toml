@@ -78,6 +78,7 @@ fuzzy-matcher = "0.3.7"
 colored = "2.0.4"
 ratatui = "0.29.0"
 tracing = "0.1"
+tracing-appender = { workspace = true }
 tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 sysinfo = "0.30.7"
@@ -89,7 +90,7 @@ arboard = { version = "3.4", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 arboard = { version = "3.4", optional = true, features = [
-  "wayland-data-control",
+    "wayland-data-control",
 ] }
 
 [dev-dependencies]
