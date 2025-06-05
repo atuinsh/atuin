@@ -233,11 +233,7 @@ impl Database for Sqlite {
 
     #[instrument(skip_all)]
     async fn total_history(&self) -> DbResult<i64> {
-        // The cache is new, and the user might not yet have a cache value.
-        // They will have one as soon as they post up some new history, but handle that
-        // edge case.
-
-        let res: (i64,) = sqlx::query_as("select sum(total) from total_history_count_user")
+        let res: (i64,) = sqlx::query_as("select count(1) from history")
             .fetch_optional(&self.pool)
             .await
             .map_err(fix_error)?
@@ -265,17 +261,8 @@ impl Database for Sqlite {
     }
 
     #[instrument(skip_all)]
-    async fn count_history_cached(&self, user: &User) -> DbResult<i64> {
-        let res: (i32,) = sqlx::query_as(
-            "select total from total_history_count_user
-            where user_id = $1",
-        )
-        .bind(user.id)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(fix_error)?;
-
-        Ok(res.0 as i64)
+    async fn count_history_cached(&self, _user: &User) -> DbResult<i64> {
+        Err(DbError::NotFound)
     }
 
     #[instrument(skip_all)]
@@ -293,12 +280,6 @@ impl Database for Sqlite {
             .map_err(fix_error)?;
 
         sqlx::query("delete from history where user_id = $1")
-            .bind(u.id)
-            .execute(&self.pool)
-            .await
-            .map_err(fix_error)?;
-
-        sqlx::query("delete from total_history_count_user where user_id = $1")
             .bind(u.id)
             .execute(&self.pool)
             .await
