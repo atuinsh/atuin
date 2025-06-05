@@ -327,7 +327,6 @@ fn parse_fmt(format: &str) -> ParsedFmt {
         Err(err) => {
             eprintln!("ERROR: History formatting failed with the following error: {err}");
 
-            // Provide helpful guidance based on the format string content
             if format.contains('"') && (format.contains(":{") || format.contains(",{")) {
                 eprintln!("It looks like you're trying to create JSON output.");
                 eprintln!("For JSON, you need to escape literal braces by doubling them:");
@@ -340,6 +339,27 @@ fn parse_fmt(format: &str) -> ParsedFmt {
             }
             std::process::exit(1)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_string_no_panic() {
+        // Don't panic but provide helpful output (issue #2776)
+        let malformed_json = r#"{"command":"{command}","key":"value"}"#;
+
+        let result = std::panic::catch_unwind(|| parse_fmt(malformed_json));
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_valid_formats_still_work() {
+        assert!(std::panic::catch_unwind(|| parse_fmt("{command}")).is_ok());
+        assert!(std::panic::catch_unwind(|| parse_fmt("{time} - {command}")).is_ok());
     }
 }
 
