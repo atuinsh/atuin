@@ -126,10 +126,24 @@ impl Cmd {
         tokio::fs::create_dir_all(&log_dir)
             .await
             .wrap_err("could not create log directory")?;
+        let max_log_files = std::env::var("ATUIN_MAX_LOG_HISTORY")
+            .ok()
+            .and_then(|s| {
+                match s.parse::<usize>() {
+                    Ok(n) if n > 0 => Some(n),
+                    _ => {
+                        // We can't log an error here because the logger isn't initialized yet, but
+                        // we should let the user know they misconfigured something
+                        eprintln!("ERROR: ATUIN_MAX_LOG_HISTORY value was set, but was not a number. Defaulting to 7.");
+                        None
+                    },
+                }
+            })
+            .unwrap_or(7);
         let appender = RollingFileAppender::builder()
             .filename_prefix("atuin.log")
             .rotation(Rotation::DAILY)
-            .max_log_files(7)
+            .max_log_files(max_log_files)
             .build(log_dir)
             .map_err(|e| eyre::eyre!("could not create log file: {e}"))?;
         let (appender, _guard) = tracing_appender::non_blocking(appender);
