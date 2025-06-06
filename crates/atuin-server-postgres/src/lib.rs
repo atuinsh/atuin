@@ -1,15 +1,13 @@
 use std::collections::HashMap;
-use std::fmt::Debug;
 use std::ops::Range;
 
 use async_trait::async_trait;
 use atuin_common::record::{EncryptedData, HostId, Record, RecordIdx, RecordStatus};
 use atuin_common::utils::crypto_random_string;
 use atuin_server_database::models::{History, NewHistory, NewSession, NewUser, Session, User};
-use atuin_server_database::{Database, DbError, DbResult};
+use atuin_server_database::{Database, DbError, DbResult, DbSettings};
 use futures_util::TryStreamExt;
 use metrics::counter;
-use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use sqlx::postgres::PgPoolOptions;
 
@@ -27,26 +25,6 @@ pub struct Postgres {
     pool: sqlx::Pool<sqlx::postgres::Postgres>,
 }
 
-#[derive(Clone, Deserialize, Serialize)]
-pub struct PostgresSettings {
-    pub db_uri: String,
-}
-
-// Do our best to redact passwords so they're not logged in the event of an error.
-impl Debug for PostgresSettings {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let redacted_uri = url::Url::parse(&self.db_uri)
-            .map(|mut url| {
-                let _ = url.set_password(Some("****"));
-                url.to_string()
-            })
-            .unwrap_or(self.db_uri.clone());
-        f.debug_struct("PostgresSettings")
-            .field("db_uri", &redacted_uri)
-            .finish()
-    }
-}
-
 fn fix_error(error: sqlx::Error) -> DbError {
     match error {
         sqlx::Error::RowNotFound => DbError::NotFound,
@@ -56,8 +34,7 @@ fn fix_error(error: sqlx::Error) -> DbError {
 
 #[async_trait]
 impl Database for Postgres {
-    type Settings = PostgresSettings;
-    async fn new(settings: &PostgresSettings) -> DbResult<Self> {
+    async fn new(settings: &DbSettings) -> DbResult<Self> {
         let pool = PgPoolOptions::new()
             .max_connections(100)
             .connect(settings.db_uri.as_str())

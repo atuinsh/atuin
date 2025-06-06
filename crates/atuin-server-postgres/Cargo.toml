@@ -22,4 +22,3 @@ async-trait = { workspace = true }
 uuid = { workspace = true }
 metrics = "0.21.1"
 futures-util = "0.3"
-url = "2.5.2"

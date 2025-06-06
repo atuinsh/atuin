@@ -233,7 +233,9 @@ dependencies = [
  "atuin-kv",
  "atuin-scripts",
  "atuin-server",
+ "atuin-server-database",
  "atuin-server-postgres",
+ "atuin-server-sqlite",
  "clap",
  "clap_complete",
  "clap_complete_nushell",
@@ -473,6 +475,7 @@ dependencies = [
  "serde",
  "time",
  "tracing",
+ "url",
 ]
 
 [[package]]
@@ -489,7 +492,23 @@ dependencies = [
  "sqlx",
  "time",
  "tracing",
- "url",
+ "uuid",
+]
+
+[[package]]
+name = "atuin-server-sqlite"
+version = "18.6.1"
+dependencies = [
+ "async-trait",
+ "atuin-common",
+ "atuin-server-database",
+ "eyre",
+ "futures-util",
+ "metrics",
+ "serde",
+ "sqlx",
+ "time",
+ "tracing",
  "uuid",
 ]
 

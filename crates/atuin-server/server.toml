@@ -9,6 +9,7 @@
 
 ## URI for postgres (using development creds here)
 # db_uri="postgres://username:password@localhost/atuin"
+# db_uri="sqlite:///config/atuin-server.db"
 
 ## Maximum size for one history entry
 # max_history_length = 8192
