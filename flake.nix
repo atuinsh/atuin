@@ -67,6 +67,8 @@
       )
       pkgsFor;
 
+    formatter = lib.mapAttrs (_: pkgs: pkgs.alejandra) pkgsFor;
+
     overlays = {
       atuin = final: _: let
         toolchain = fenix.packages.${final.system}.fromToolchainFile {
