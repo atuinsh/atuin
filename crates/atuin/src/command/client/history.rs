@@ -197,12 +197,38 @@ pub fn print_list(
             tz: &tz,
         };
         let args = parsed_fmt.with_args(&fh);
-        let write = write!(w, "{args}{entry_terminator}");
+
+        // Check for formatting errors before attempting to write
         if let Err(err) = args.status() {
             eprintln!("ERROR: history output failed with: {err}");
             std::process::exit(1);
         }
-        check_for_write_errors(write);
+
+        let write_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            write!(w, "{args}{entry_terminator}")
+        }));
+
+        match write_result {
+            Ok(Ok(())) => {
+                // Write succeeded
+            }
+            Ok(Err(err)) => {
+                if err.kind() != io::ErrorKind::BrokenPipe {
+                    eprintln!("ERROR: Failed to write history output: {err}");
+                    std::process::exit(1);
+                }
+            }
+            Err(_) => {
+                eprintln!("ERROR: Format string caused a formatting error.");
+                eprintln!(
+                    "This may be due to an unsupported format string containing special characters."
+                );
+                eprintln!(
+                    "Please check your format string syntax and ensure literal braces are properly escaped."
+                );
+                std::process::exit(1);
+            }
+        }
         if flush_each_line {
             check_for_write_errors(w.flush());
         }
@@ -300,11 +326,40 @@ fn parse_fmt(format: &str) -> ParsedFmt {
         Ok(fmt) => fmt,
         Err(err) => {
             eprintln!("ERROR: History formatting failed with the following error: {err}");
-            println!(
-                "If your formatting string contains curly braces (eg: {{var}}) you need to escape them this way: {{{{var}}."
-            );
+
+            if format.contains('"') && (format.contains(":{") || format.contains(",{")) {
+                eprintln!("It looks like you're trying to create JSON output.");
+                eprintln!("For JSON, you need to escape literal braces by doubling them:");
+                eprintln!("Example: '{{\"command\":\"{{command}}\",\"time\":\"{{time}}\"}}'");
+            } else {
+                eprintln!(
+                    "If your formatting string contains literal curly braces, you need to escape them by doubling:"
+                );
+                eprintln!("Use {{{{ for literal {{ and }}}} for literal }}");
+            }
             std::process::exit(1)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_string_no_panic() {
+        // Don't panic but provide helpful output (issue #2776)
+        let malformed_json = r#"{"command":"{command}","key":"value"}"#;
+
+        let result = std::panic::catch_unwind(|| parse_fmt(malformed_json));
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_valid_formats_still_work() {
+        assert!(std::panic::catch_unwind(|| parse_fmt("{command}")).is_ok());
+        assert!(std::panic::catch_unwind(|| parse_fmt("{time} - {command}")).is_ok());
     }
 }
 
