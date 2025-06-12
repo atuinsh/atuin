@@ -21,7 +21,8 @@ use atuin_client::{
 use super::{
     cursor::Cursor,
     engines::{SearchEngine, SearchState},
-    history_list::{HistoryList, ListState, PREFIX_LENGTH},
+    history_list::{HistoryList, PREFIX_LENGTH},
+    liststate::ListState,
 };
 
 use crate::command::client::theme::{Meaning, Theme};
@@ -46,7 +47,7 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Padding, Paragraph, Tabs, block::Title},
 };
 
-const TAB_TITLES: [&str; 2] = ["Search", "Inspect"];
+const TAB_TITLES: [&str; 3] = ["Search", "Inspect", "Scripts"];
 
 pub enum InputAction {
     Accept(usize),
@@ -56,6 +57,7 @@ pub enum InputAction {
     ReturnQuery,
     Continue,
     Redraw,
+    ExecuteScript(String),
 }
 
 #[allow(clippy::struct_field_names)]
@@ -75,6 +77,11 @@ pub struct State {
     search: SearchState,
     engine: Box<dyn SearchEngine>,
     now: Box<dyn Fn() -> OffsetDateTime + Send>,
+
+    // Scripts tab state
+    scripts_state: ListState,
+    scripts: Option<Vec<atuin_scripts::store::script::Script>>,
+    scripts_db: Option<atuin_scripts::database::Database>,
 }
 
 #[derive(Clone, Copy)]
@@ -85,6 +92,16 @@ struct StyleState {
 }
 
 impl State {
+    async fn load_scripts(&mut self) {
+        if self.scripts.is_none() {
+            if let Some(ref script_db) = self.scripts_db {
+                self.scripts = Some(script_db.list().await.unwrap_or_default());
+            } else {
+                self.scripts = Some(Vec::new());
+            }
+        }
+    }
+
     async fn query_results(
         &mut self,
         db: &mut dyn Database,
@@ -223,9 +240,9 @@ impl State {
             KeyCode::Char('c' | 'g') if ctrl => Some(InputAction::ReturnOriginal),
             KeyCode::Esc if esc_allow_exit => Some(Self::handle_key_exit(settings)),
             KeyCode::Char('[') if ctrl && esc_allow_exit => Some(Self::handle_key_exit(settings)),
-            KeyCode::Tab => Some(InputAction::Accept(self.results_state.selected())),
+            KeyCode::Tab => Some(InputAction::Accept(self.results_state.selected)),
             KeyCode::Right if cursor_at_end_of_line && settings.keys.accept_past_line_end => {
-                Some(InputAction::Accept(self.results_state.selected()))
+                Some(InputAction::Accept(self.results_state.selected))
             }
             KeyCode::Left if cursor_at_start_of_line && settings.keys.exit_past_line_start => {
                 Some(Self::handle_key_exit(settings))
@@ -247,7 +264,9 @@ impl State {
         let action = match self.tab_index {
             0 => self.handle_search_input(settings, input),
 
-            1 => super::inspector::input(self, settings, self.results_state.selected(), input),
+            1 => super::inspector::input(self, settings, self.results_state.selected, input),
+
+            2 => self.handle_scripts_input(settings, input),
 
             _ => panic!("invalid tab index on input"),
         };
@@ -264,7 +283,7 @@ impl State {
         is_down: bool,
     ) -> InputAction {
         if is_down {
-            if settings.keys.scroll_exits && enable_exit && self.results_state.selected() == 0 {
+            if settings.keys.scroll_exits && enable_exit && self.results_state.selected == 0 {
                 return Self::handle_key_exit(settings);
             }
             self.scroll_down(1);
@@ -286,7 +305,7 @@ impl State {
         if settings.enter_accept {
             self.accept = true;
         }
-        InputAction::Accept(self.results_state.selected())
+        InputAction::Accept(self.results_state.selected)
     }
 
     #[allow(clippy::too_many_lines)]
@@ -308,7 +327,7 @@ impl State {
             #[allow(clippy::single_match)]
             match input.code {
                 KeyCode::Char('d') => {
-                    return InputAction::Delete(self.results_state.selected());
+                    return InputAction::Delete(self.results_state.selected);
                 }
                 KeyCode::Char('a') => {
                     self.search.input.start();
@@ -385,11 +404,11 @@ impl State {
             KeyCode::Enter => return self.handle_search_accept(settings),
             KeyCode::Char('m') if ctrl => return self.handle_search_accept(settings),
             KeyCode::Char('y') if ctrl => {
-                return InputAction::Copy(self.results_state.selected());
+                return InputAction::Copy(self.results_state.selected);
             }
             KeyCode::Char(c @ '1'..='9') if modfr => {
                 return c.to_digit(10).map_or(InputAction::Continue, |c| {
-                    InputAction::Accept(self.results_state.selected() + c as usize)
+                    InputAction::Accept(self.results_state.selected + c as usize)
                 });
             }
             KeyCode::Left if ctrl => self
@@ -492,19 +511,19 @@ impl State {
                 self.search.input.insert(c);
             }
             KeyCode::PageDown if !settings.invert => {
-                let scroll_len = self.results_state.max_entries() - settings.scroll_context_lines;
+                let scroll_len = self.results_state.max_entries - settings.scroll_context_lines;
                 self.scroll_down(scroll_len);
             }
             KeyCode::PageDown if settings.invert => {
-                let scroll_len = self.results_state.max_entries() - settings.scroll_context_lines;
+                let scroll_len = self.results_state.max_entries - settings.scroll_context_lines;
                 self.scroll_up(scroll_len);
             }
             KeyCode::PageUp if !settings.invert => {
-                let scroll_len = self.results_state.max_entries() - settings.scroll_context_lines;
+                let scroll_len = self.results_state.max_entries - settings.scroll_context_lines;
                 self.scroll_up(scroll_len);
             }
             KeyCode::PageUp if settings.invert => {
-                let scroll_len = self.results_state.max_entries() - settings.scroll_context_lines;
+                let scroll_len = self.results_state.max_entries - settings.scroll_context_lines;
                 self.scroll_down(scroll_len);
             }
             _ => {}
@@ -513,13 +532,63 @@ impl State {
         InputAction::Continue
     }
 
+    fn handle_scripts_input(&mut self, _: &Settings, input: &KeyEvent) -> InputAction {
+        let ctrl = input.modifiers.contains(KeyModifiers::CONTROL);
+
+        match input.code {
+            KeyCode::Enter => {
+                if let Some(ref scripts) = self.scripts {
+                    if scripts.is_empty() {
+                        InputAction::Continue
+                    } else {
+                        let selected_script = &scripts[self.scripts_state.selected];
+                        InputAction::ExecuteScript(selected_script.name.clone())
+                    }
+                } else {
+                    InputAction::Continue
+                }
+            }
+            KeyCode::Down => {
+                if let Some(ref scripts) = self.scripts {
+                    if !scripts.is_empty() {
+                        let next = (self.scripts_state.selected + 1).min(scripts.len() - 1);
+                        self.scripts_state.select(next);
+                    }
+                }
+                InputAction::Continue
+            }
+            KeyCode::Up => {
+                if self.scripts_state.selected > 0 {
+                    self.scripts_state.select(self.scripts_state.selected - 1);
+                }
+                InputAction::Continue
+            }
+            KeyCode::Char('j') if ctrl => {
+                if let Some(ref scripts) = self.scripts {
+                    if !scripts.is_empty() {
+                        let next = (self.scripts_state.selected + 1).min(scripts.len() - 1);
+                        self.scripts_state.select(next);
+                    }
+                }
+                InputAction::Continue
+            }
+            KeyCode::Char('k') if ctrl => {
+                if self.scripts_state.selected > 0 {
+                    self.scripts_state.select(self.scripts_state.selected - 1);
+                }
+                InputAction::Continue
+            }
+            _ => InputAction::Continue,
+        }
+    }
+
     fn scroll_down(&mut self, scroll_len: usize) {
-        let i = self.results_state.selected().saturating_sub(scroll_len);
+        let i = self.results_state.selected.saturating_sub(scroll_len);
         self.results_state.select(i);
     }
 
     fn scroll_up(&mut self, scroll_len: usize) {
-        let i = self.results_state.selected() + scroll_len;
+        let i = self.results_state.selected + scroll_len;
         self.results_state
             .select(i.min(self.results_len.saturating_sub(1)));
     }
@@ -620,7 +689,7 @@ impl State {
         let preview_height = Self::calc_preview_height(
             settings,
             results,
-            self.results_state.selected(),
+            self.results_state.selected,
             self.tab_index,
             compact,
             border_size,
@@ -755,7 +824,7 @@ impl State {
                     super::inspector::draw(
                         f,
                         results_list_chunk,
-                        &results[self.results_state.selected()],
+                        &results[self.results_state.selected],
                         &stats.expect("Drawing inspector, but no stats"),
                         theme,
                     );
@@ -768,6 +837,18 @@ impl State {
                 );
                 f.render_widget(feedback, input_chunk);
 
+                return;
+            }
+
+            2 => {
+                super::scripts_list::draw(
+                    f,
+                    results_list_chunk,
+                    input_chunk,
+                    self.scripts.as_ref(),
+                    &mut self.scripts_state,
+                    theme,
+                );
                 return;
             }
 
@@ -849,10 +930,21 @@ impl State {
                 Span::raw(": exit"),
                 Span::raw(", "),
                 Span::styled("<ctrl-o>", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(": search"),
+                Span::raw(": scripts"),
                 Span::raw(", "),
                 Span::styled("<ctrl-d>", Style::default().add_modifier(Modifier::BOLD)),
                 Span::raw(": delete"),
+            ]))),
+
+            2 => Paragraph::new(Text::from(Line::from(vec![
+                Span::styled("<esc>", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(": exit"),
+                Span::raw(", "),
+                Span::styled("<ctrl-o>", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(": search"),
+                Span::raw(", "),
+                Span::styled("<enter>", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(": execute"),
             ]))),
 
             _ => unreachable!("invalid tab index"),
@@ -945,7 +1037,7 @@ impl State {
         chunk_width: usize,
         theme: &Theme,
     ) -> Paragraph {
-        let selected = self.results_state.selected();
+        let selected = self.results_state.selected;
         let command = if results.is_empty() {
             String::new()
         } else {
@@ -1084,6 +1176,10 @@ pub async fn history(
     } else {
         settings.search_mode
     };
+
+    let script_db =
+        atuin_scripts::database::Database::new(settings.scripts.db_path.clone(), 1.0).await?;
+
     let mut app = State {
         history_count,
         results_state: ListState::default(),
@@ -1116,6 +1212,9 @@ pub async fn history(
             Box::new(OffsetDateTime::now_utc)
         },
         prefix: false,
+        scripts: None,
+        scripts_state: ListState::default(),
+        scripts_db: Some(script_db),
     };
 
     app.initialize_keymap_cursor(settings);
@@ -1148,7 +1247,7 @@ pub async fn history(
                                     break;
                                 }
                                 app.results_len -= 1;
-                                let selected = app.results_state.selected();
+                                let selected = app.results_state.selected;
                                 if selected == app.results_len {
                                     app.results_state.select(selected - 1);
                                 }
@@ -1191,10 +1290,15 @@ pub async fn history(
             results = app.query_results(&mut db, settings.smart_sort).await?;
         }
 
+        // Load scripts when switching to scripts tab
+        if app.tab_index == 2 && app.scripts.is_none() {
+            app.load_scripts().await;
+        }
+
         stats = if app.tab_index == 0 {
             None
         } else if !results.is_empty() {
-            let selected = results[app.results_state.selected()].clone();
+            let selected = results[app.results_state.selected].clone();
             Some(db.stats(&selected).await?)
         } else {
             None
@@ -1231,6 +1335,15 @@ pub async fn history(
             // * out of bounds -> usually implies no selected entry so we return the input
             Ok(app.search.input.into_inner())
         }
+        InputAction::ExecuteScript(script_name) => {
+            // Submit "scripts run" for actual execution.
+            let mut command = format!("atuin scripts run \"{script_name}\"");
+            if utils::is_zsh() || utils::is_fish() || utils::is_bash() || utils::is_xonsh() {
+                command = String::from("__atuin_accept__:") + &command;
+            }
+
+            Ok(command)
+        }
         InputAction::Continue | InputAction::Redraw | InputAction::Delete(_) => {
             unreachable!("should have been handled!")
         }
@@ -1266,7 +1379,7 @@ mod tests {
     use time::OffsetDateTime;
 
     use crate::command::client::search::engines::{self, SearchState};
-    use crate::command::client::search::history_list::ListState;
+    use crate::command::client::search::liststate::ListState;
 
     use super::State;
 
@@ -1451,6 +1564,9 @@ mod tests {
             },
             engine: engines::engine(SearchMode::Fuzzy),
             now: Box::new(OffsetDateTime::now_utc),
+            scripts: None,
+            scripts_state: ListState::default(),
+            scripts_db: None,
         };
 
         state.scroll_up(1);

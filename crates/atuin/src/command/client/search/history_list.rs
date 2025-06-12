@@ -15,6 +15,7 @@ use ratatui::{
 use time::OffsetDateTime;
 
 use super::duration::format_duration;
+use super::liststate::ListState;
 
 pub struct HistoryList<'a> {
     history: &'a [History],
@@ -25,27 +26,6 @@ pub struct HistoryList<'a> {
     now: &'a dyn Fn() -> OffsetDateTime,
     indicator: &'a str,
     theme: &'a Theme,
-}
-
-#[derive(Default)]
-pub struct ListState {
-    offset: usize,
-    selected: usize,
-    max_entries: usize,
-}
-
-impl ListState {
-    pub fn selected(&self) -> usize {
-        self.selected
-    }
-
-    pub fn max_entries(&self) -> usize {
-        self.max_entries
-    }
-
-    pub fn select(&mut self, index: usize) {
-        self.selected = index;
-    }
 }
 
 impl StatefulWidget for HistoryList<'_> {
