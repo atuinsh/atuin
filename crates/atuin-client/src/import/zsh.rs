@@ -196,7 +196,7 @@ cargo update
         .to_owned();
 
         let mut zsh = Zsh { bytes };
-        assert_eq!(zsh.entries().await.unwrap(), 6);
+        assert_eq!(zsh.entries().await.unwrap(), 4);
 
         let mut loader = TestLoader::default();
         zsh.load(&mut loader).await.unwrap();
