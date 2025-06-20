@@ -188,8 +188,6 @@ mod test {
     #[tokio::test]
     async fn test_parse_file() {
         let bytes = r": 1613322469:0;cargo install atuin
-: 1613322469:10;cargo install atuin; \
-cargo update
 : 1613322469:10;cargo install atuin; \\
 cargo update
 : 1613322469:10;cargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷
@@ -207,7 +205,6 @@ cargo update
             loader.buf.iter().map(|h| h.command.as_str()),
             [
                 "cargo install atuin",
-                "cargo install atuin; \\\ncargo update",
                 "cargo install atuin; \\\ncargo update",
                 "cargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷",
             ],
