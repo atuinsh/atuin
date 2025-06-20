@@ -70,7 +70,7 @@ impl Importer for Zsh {
 
             if let Some(s) = s.strip_suffix('\\') {
                 line.push_str(s);
-                line.push_str("\n");
+                line.push("\n");
             } else {
                 line.push_str(&s);
                 let command = std::mem::take(&mut line);
