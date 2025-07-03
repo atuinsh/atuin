@@ -622,6 +622,13 @@ impl Cmd {
         dupkeep: u32,
         dry_run: bool,
     ) -> Result<()> {
+        if dupkeep == 0 {
+            eprintln!(
+                "\"--dupkeep 0\" would keep 0 copies of duplicate commands and thus delete all of them! Use \"atuin search --delete ...\" if you really want that."
+            );
+            std::process::exit(1);
+        }
+
         let matches: Vec<History> = db.get_dups(before, dupkeep).await?;
 
         match matches.len() {
