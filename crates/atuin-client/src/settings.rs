@@ -462,6 +462,7 @@ pub struct Settings {
     pub search_mode_shell_up_key_binding: Option<SearchMode>,
     pub shell_up_key_binding: bool,
     pub inline_height: u16,
+    pub inline_height_shell_up_key_binding: Option<u16>,
     pub invert: bool,
     pub show_preview: bool,
     pub max_preview_height: u16,
