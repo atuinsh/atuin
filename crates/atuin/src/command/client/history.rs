@@ -342,27 +342,6 @@ fn parse_fmt(format: &str) -> ParsedFmt {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_format_string_no_panic() {
-        // Don't panic but provide helpful output (issue #2776)
-        let malformed_json = r#"{"command":"{command}","key":"value"}"#;
-
-        let result = std::panic::catch_unwind(|| parse_fmt(malformed_json));
-
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_valid_formats_still_work() {
-        assert!(std::panic::catch_unwind(|| parse_fmt("{command}")).is_ok());
-        assert!(std::panic::catch_unwind(|| parse_fmt("{time} - {command}")).is_ok());
-    }
-}
-
 impl Cmd {
     #[allow(clippy::too_many_lines, clippy::cast_possible_truncation)]
     async fn handle_start(
@@ -770,5 +749,26 @@ impl Cmd {
                 Self::handle_dedup(&db, settings, store, before, dupkeep, dry_run).await
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_string_no_panic() {
+        // Don't panic but provide helpful output (issue #2776)
+        let malformed_json = r#"{"command":"{command}","key":"value"}"#;
+
+        let result = std::panic::catch_unwind(|| parse_fmt(malformed_json));
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_valid_formats_still_work() {
+        assert!(std::panic::catch_unwind(|| parse_fmt("{command}")).is_ok());
+        assert!(std::panic::catch_unwind(|| parse_fmt("{time} - {command}")).is_ok());
     }
 }

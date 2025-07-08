@@ -437,6 +437,7 @@ impl Cmd {
         }
     }
 
+    #[allow(clippy::cognitive_complexity)]
     async fn handle_edit(
         _settings: &Settings,
         edit: Edit,

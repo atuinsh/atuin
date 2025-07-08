@@ -324,7 +324,7 @@ mod tests {
             .into();
 
         let stats = compute(&settings, &[history], 10, 1).expect("failed to compute stats");
-        assert_eq!(stats.top.get(0).unwrap().0, vec!["echo"]);
+        assert_eq!(stats.top.first().unwrap().0, vec!["echo"]);
     }
 
     #[test]

@@ -7,5 +7,5 @@ fn main() {
         Err(_) => String::from("NO_GIT"),
     };
 
-    println!("cargo:rustc-env=GIT_HASH={}", sha);
+    println!("cargo:rustc-env=GIT_HASH={sha}");
 }

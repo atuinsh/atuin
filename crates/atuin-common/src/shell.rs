@@ -31,7 +31,7 @@ impl std::fmt::Display for Shell {
             Shell::Unknown => "unknown",
         };
 
-        write!(f, "{}", shell)
+        write!(f, "{shell}")
     }
 }
 
