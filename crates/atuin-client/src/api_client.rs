@@ -41,7 +41,7 @@ fn make_url(address: &str, path: &str) -> Result<String> {
     let address = if address.ends_with("/") {
         address
     } else {
-        &format!("{}/", address)
+        &format!("{address}/")
     };
 
     // passing a path with a leading `/` will cause `join()` to replace the entire URL path
@@ -148,8 +148,8 @@ pub fn ensure_version(response: &Response) -> Result<bool> {
         println!(
             "Atuin version mismatch! In order to successfully sync, the server needs to run a newer version of Atuin"
         );
-        println!("Client: {}", ATUIN_CARGO_VERSION);
-        println!("Server: {}", version);
+        println!("Client: {ATUIN_CARGO_VERSION}");
+        println!("Server: {version}");
 
         return Ok(false);
     }

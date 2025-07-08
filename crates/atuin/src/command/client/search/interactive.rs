@@ -862,13 +862,12 @@ impl State {
     }
 
     fn build_stats(&self, theme: &Theme) -> Paragraph {
-        let stats = Paragraph::new(Text::from(Span::raw(format!(
+        Paragraph::new(Text::from(Span::raw(format!(
             "history count: {}",
             self.history_count,
         ))))
         .style(theme.as_style(Meaning::Annotation))
-        .alignment(Alignment::Right);
-        stats
+        .alignment(Alignment::Right)
     }
 
     fn build_results_list<'a>(
@@ -962,7 +961,8 @@ impl State {
                 })
                 .join("\n")
         };
-        let preview = if compact {
+
+        if compact {
             Paragraph::new(command).style(theme.as_style(Meaning::Annotation))
         } else {
             Paragraph::new(command).block(
@@ -971,8 +971,7 @@ impl State {
                     .border_type(BorderType::Rounded)
                     .title(format!("{:─>width$}", "", width = chunk_width - 2)),
             )
-        };
-        preview
+        }
     }
 }
 
@@ -1045,7 +1044,11 @@ impl Write for Stdout {
 // this is a big blob of horrible! clean it up!
 // for now, it works. But it'd be great if it were more easily readable, and
 // modular. I'd like to add some more stats and stuff at some point
-#[allow(clippy::cast_possible_truncation, clippy::too_many_lines)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::too_many_lines,
+    clippy::cognitive_complexity
+)]
 pub async fn history(
     query: &[String],
     settings: &Settings,

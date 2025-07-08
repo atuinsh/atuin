@@ -45,6 +45,7 @@ pub enum Cmd {
 const BATCH_SIZE: usize = 100;
 
 impl Cmd {
+    #[allow(clippy::cognitive_complexity)]
     pub async fn run<DB: Database>(&self, db: &DB) -> Result<()> {
         println!("        Atuin         ");
         println!("======================");
