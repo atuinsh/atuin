@@ -132,7 +132,7 @@ impl Cmd {
 
         // Open the file in the user's preferred editor
         let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
-        if let Err(e) = std::process::Command::new(editor).arg(&path).status() {
+        if let Err(_e) = std::process::Command::new(editor).arg(&path).status() {
             bail!("failed to open editor");
         }
 
