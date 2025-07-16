@@ -221,7 +221,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
 name = "atuin"
-version = "18.7.0"
+version = "18.7.1"
 dependencies = [
  "arboard",
  "async-trait",
@@ -271,7 +271,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-client"
-version = "18.7.0"
+version = "18.7.1"
 dependencies = [
  "async-trait",
  "atuin-common",
@@ -326,7 +326,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-common"
-version = "18.7.0"
+version = "18.7.1"
 dependencies = [
  "base64 0.22.1",
  "directories",
@@ -346,7 +346,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-daemon"
-version = "18.7.0"
+version = "18.7.1"
 dependencies = [
  "atuin-client",
  "atuin-dotfiles",
@@ -373,7 +373,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-dotfiles"
-version = "18.7.0"
+version = "18.7.1"
 dependencies = [
  "atuin-client",
  "atuin-common",
@@ -387,7 +387,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-history"
-version = "18.7.0"
+version = "18.7.1"
 dependencies = [
  "atuin-client",
  "crossterm",
@@ -400,7 +400,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-kv"
-version = "18.7.0"
+version = "18.7.1"
 dependencies = [
  "atuin-client",
  "atuin-common",
@@ -416,7 +416,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-scripts"
-version = "18.7.0"
+version = "18.7.1"
 dependencies = [
  "atuin-client",
  "atuin-common",
@@ -438,7 +438,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-server"
-version = "18.7.0"
+version = "18.7.1"
 dependencies = [
  "argon2",
  "async-trait",
@@ -467,7 +467,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-server-database"
-version = "18.7.0"
+version = "18.7.1"
 dependencies = [
  "async-trait",
  "atuin-common",
@@ -480,7 +480,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-server-postgres"
-version = "18.7.0"
+version = "18.7.1"
 dependencies = [
  "async-trait",
  "atuin-common",
@@ -497,7 +497,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-server-sqlite"
-version = "18.7.0"
+version = "18.7.1"
 dependencies = [
  "async-trait",
  "atuin-common",
