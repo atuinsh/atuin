@@ -54,7 +54,10 @@ pub struct Run {
 }
 
 #[derive(Parser, Debug)]
-pub struct List {}
+pub struct List {
+    #[arg(short, long)]
+    pub tag: Option<String>,
+}
 
 #[derive(Parser, Debug)]
 pub struct Get {
@@ -356,10 +359,14 @@ impl Cmd {
 
     async fn handle_list(
         _settings: &Settings,
-        _list: List,
+        list: List,
         script_db: atuin_scripts::database::Database,
     ) -> Result<()> {
-        let scripts = script_db.list().await?;
+        let scripts = if let Some(tag) = list.tag {
+            script_db.get_by_tag(&tag).await?
+        } else {
+            script_db.list().await?
+        };
 
         if scripts.is_empty() {
             println!("No scripts found");
