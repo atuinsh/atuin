@@ -55,7 +55,7 @@ pub struct DbSettings {
 
 impl DbSettings {
     pub fn db_type(&self) -> DbType {
-        if self.db_uri.starts_with("postgres://") {
+        if self.db_uri.starts_with("postgres://") || self.db_uri.starts_with("postgresql://") {
             DbType::Postgres
         } else if self.db_uri.starts_with("sqlite://") {
             DbType::Sqlite
