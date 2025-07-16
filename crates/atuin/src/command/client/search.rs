@@ -1,4 +1,5 @@
-use std::io::{IsTerminal as _, stderr};
+use std::fs::File;
+use std::io::{IsTerminal as _, Write, stderr};
 
 use atuin_common::utils::{self, Escapable as _};
 use clap::Parser;
@@ -131,6 +132,10 @@ pub struct Cmd {
     /// Include duplicate commands in the output (non-interactive only)
     #[arg(long)]
     include_duplicates: bool,
+
+    /// File name to write the result to (hidden from help as this is meant to be used from a script)
+    #[arg(long = "result-file", hide = true)]
+    result_file: Option<String>,
 }
 
 impl Cmd {
@@ -213,7 +218,11 @@ impl Cmd {
 
         if self.interactive {
             let item = interactive::history(&query, settings, db, &history_store, theme).await?;
-            if stderr().is_terminal() {
+
+            if let Some(result_file) = self.result_file {
+                let mut file = File::create(result_file)?;
+                write!(file, "{item}")?;
+            } else if stderr().is_terminal() {
                 eprintln!("{}", item.escape_control());
             } else {
                 eprintln!("{item}");
