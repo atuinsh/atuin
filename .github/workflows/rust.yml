@@ -26,7 +26,7 @@ jobs:
       - name: Install rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.86
+          toolchain: 1.88
 
       - uses: actions/cache@v4
         with:
@@ -97,7 +97,7 @@ jobs:
       - name: Install rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.86
+          toolchain: 1.88
 
       - uses: taiki-e/install-action@v2
         name: Install nextest
@@ -127,7 +127,7 @@ jobs:
       - name: Install rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.86
+          toolchain: 1.88
 
       - uses: actions/cache@v4
         with:
@@ -171,7 +171,7 @@ jobs:
       - name: Install rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.86
+          toolchain: 1.88
 
       - uses: taiki-e/install-action@v2
         name: Install nextest
@@ -200,7 +200,7 @@ jobs:
       - name: Install latest rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.86
+          toolchain: 1.88
           components: clippy
 
       - uses: actions/cache@v4
@@ -223,7 +223,7 @@ jobs:
       - name: Install latest rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.86
+          toolchain: 1.88
           components: rustfmt
 
       - name: Format

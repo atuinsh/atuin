@@ -300,7 +300,7 @@ mod test {
         // test decryption works
         // this should pass
         match decrypt(e1, &key1) {
-            Err(e) => panic!("failed to decrypt, got {}", e),
+            Err(e) => panic!("failed to decrypt, got {e}"),
             Ok(h) => assert_eq!(h, history),
         };
 
