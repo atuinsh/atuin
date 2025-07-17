@@ -1,3 +1,4 @@
+use super::Emit;
 use atuin_dotfiles::store::{AliasStore, var::VarStore};
 use eyre::Result;
 
@@ -33,14 +34,28 @@ pub async fn init(
     vars: VarStore,
     disable_up_arrow: bool,
     disable_ctrl_r: bool,
+    emit: Emit,
 ) -> Result<()> {
-    init_static(disable_up_arrow, disable_ctrl_r);
-
-    let aliases = atuin_dotfiles::shell::zsh::alias_config(&aliases).await;
-    let vars = atuin_dotfiles::shell::zsh::var_config(&vars).await;
-
-    println!("{aliases}");
-    println!("{vars}");
+    match emit {
+        Emit::All => {
+            init_static(disable_up_arrow, disable_ctrl_r);
+            let aliases = atuin_dotfiles::shell::zsh::alias_config(&aliases).await;
+            println!("{aliases}");
+            let vars = atuin_dotfiles::shell::zsh::var_config(&vars).await;
+            println!("{vars}");
+        }
+        Emit::Necessary => {
+            init_static(disable_up_arrow, disable_ctrl_r);
+        }
+        Emit::EnvOnly => {
+            let vars = atuin_dotfiles::shell::zsh::var_config(&vars).await;
+            println!("{vars}");
+        }
+        Emit::AliasesOnly => {
+            let aliases = atuin_dotfiles::shell::zsh::alias_config(&aliases).await;
+            println!("{aliases}");
+        }
+    }
 
     Ok(())
 }
