@@ -77,17 +77,24 @@ pub fn home_dir() -> PathBuf {
     PathBuf::from(home)
 }
 
+fn dir_suffix(suf: PathBuf) -> PathBuf {
+    match std::env::var("ATUIN_DIR_SUFFIX") {
+        Ok(val) => suf.join("atuin".to_owned() + "-" + &val),
+        Err(_) => suf.join("atuin"),
+    }
+}
+
 pub fn config_dir() -> PathBuf {
     let config_dir =
         std::env::var("XDG_CONFIG_HOME").map_or_else(|_| home_dir().join(".config"), PathBuf::from);
-    config_dir.join("atuin")
+    dir_suffix(config_dir)
 }
 
 pub fn data_dir() -> PathBuf {
     let data_dir = std::env::var("XDG_DATA_HOME")
         .map_or_else(|_| home_dir().join(".local").join("share"), PathBuf::from);
 
-    data_dir.join("atuin")
+    dir_suffix(data_dir)
 }
 
 pub fn runtime_dir() -> PathBuf {
@@ -99,7 +106,7 @@ pub fn dotfiles_cache_dir() -> PathBuf {
     let data_dir = std::env::var("XDG_DATA_HOME")
         .map_or_else(|_| home_dir().join(".local").join("share"), PathBuf::from);
 
-    data_dir.join("atuin").join("dotfiles").join("cache")
+    dir_suffix(data_dir).join("dotfiles").join("cache")
 }
 
 pub fn get_current_dir() -> String {
@@ -209,8 +216,10 @@ mod tests {
     fn test_dirs() {
         // these tests need to be run sequentially to prevent race condition
         test_config_dir_xdg();
+        test_config_dir_suffix();
         test_config_dir();
         test_data_dir_xdg();
+        test_data_dir_suffix();
         test_data_dir();
     }
 
@@ -225,6 +234,24 @@ mod tests {
         );
         // TODO: Audit that the environment access only happens in single-threaded code.
         unsafe { env::remove_var("XDG_CONFIG_HOME") };
+    }
+
+    fn test_config_dir_suffix() {
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::remove_var("HOME") };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::set_var("XDG_CONFIG_HOME", "/home/user/custom_config") };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::set_var("ATUIN_DIR_SUFFIX", "sfx") };
+
+        assert_eq!(
+            config_dir(),
+            PathBuf::from("/home/user/custom_config/atuin-sfx")
+        );
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::remove_var("XDG_CONFIG_HOME") };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::remove_var("ATUIN_DIR_SUFFIX") };
     }
 
     fn test_config_dir() {
@@ -247,6 +274,23 @@ mod tests {
         assert_eq!(data_dir(), PathBuf::from("/home/user/custom_data/atuin"));
         // TODO: Audit that the environment access only happens in single-threaded code.
         unsafe { env::remove_var("XDG_DATA_HOME") };
+    }
+
+    fn test_data_dir_suffix() {
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::remove_var("HOME") };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::set_var("XDG_DATA_HOME", "/home/user/custom_data") };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::set_var("ATUIN_DIR_SUFFIX", "sfx") };
+        assert_eq!(
+            data_dir(),
+            PathBuf::from("/home/user/custom_data/atuin-sfx")
+        );
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::remove_var("XDG_DATA_HOME") };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::remove_var("ATUIN_DIR_SUFFIX") };
     }
 
     fn test_data_dir() {
