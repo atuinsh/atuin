@@ -42,11 +42,9 @@ impl Cmd {
         // I'd quite like to ditch that behaviour, so have not brought it into the library
         // function.
         if settings.logged_in() {
-            println!(
+            bail!(
                 "You are already logged in! Please run 'atuin logout' if you wish to login again"
             );
-
-            return Ok(());
         }
 
         let username = or_user_input(self.username.clone(), "username");
