@@ -62,7 +62,7 @@ atuin-kv = { path = "../atuin-kv", version = "18.7.1" }
 log = { workspace = true }
 time = { workspace = true }
 eyre = { workspace = true }
-indicatif = "0.17.5"
+indicatif = "0.18.0"
 serde = { workspace = true }
 serde_json = { workspace = true }
 crossterm = { version = "0.28.1", features = ["use-dev-tty"] }
