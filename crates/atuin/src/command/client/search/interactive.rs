@@ -1477,5 +1477,4 @@ mod tests {
         state.scroll_up(1);
         state.scroll_down(1);
     }
-
 }
