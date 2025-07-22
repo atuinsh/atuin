@@ -1069,7 +1069,24 @@ pub async fn history(
         },
     )?;
 
-    let mut input = Cursor::from(query.join(" "));
+    let original_query = query.join(" ");
+
+    // Check if this is a command chaining scenario
+    let is_command_chaining = if settings.command_chaining {
+        let trimmed = original_query.trim_end();
+        trimmed.ends_with("&&") || trimmed.ends_with("||")
+    } else {
+        false
+    };
+
+    // For command chaining, start with empty input to allow searching for new commands
+    let search_input = if is_command_chaining {
+        String::new()
+    } else {
+        original_query.clone()
+    };
+
+    let mut input = Cursor::from(search_input);
     // Put the cursor at the end of the query by default
     input.end();
 
@@ -1216,7 +1233,11 @@ pub async fn history(
             if accept
                 && (utils::is_zsh() || utils::is_fish() || utils::is_bash() || utils::is_xonsh())
             {
-                command = String::from("__atuin_accept__:") + &command;
+                if is_command_chaining {
+                    command = String::from("__atuin_chain_command__:") + &command;
+                } else {
+                    command = String::from("__atuin_accept__:") + &command;
+                }
             }
 
             // index is in bounds so we return that entry
