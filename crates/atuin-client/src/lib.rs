@@ -15,6 +15,7 @@ pub mod import;
 pub mod login;
 pub mod logout;
 pub mod ordering;
+pub mod plugin;
 pub mod record;
 pub mod register;
 pub mod secrets;

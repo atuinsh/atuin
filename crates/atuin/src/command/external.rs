@@ -2,6 +2,7 @@ use std::fmt::Write as _;
 use std::process::Command;
 use std::{io, process};
 
+use atuin_client::plugin::OfficialPluginRegistry;
 use clap::CommandFactory;
 use clap::builder::{StyledStr, Styles};
 use eyre::Result;
@@ -44,29 +45,42 @@ pub fn run(args: &[String]) -> Result<()> {
 fn render_not_found(subcommand: &str, bin: &str) -> StyledStr {
     let mut output = StyledStr::new();
     let styles = Styles::styled();
-    let mut atuin_cmd = Atuin::command();
-    let usage = atuin_cmd.render_usage();
+    let registry = OfficialPluginRegistry::new();
 
     let error = styles.get_error();
     let invalid = styles.get_invalid();
     let literal = styles.get_literal();
 
-    let _ = write!(output, "{error}error:{error:#} ");
-    let _ = write!(
-        output,
-        "unrecognized subcommand '{invalid}{subcommand}{invalid:#}' "
-    );
-    let _ = write!(
-        output,
-        "and no executable named '{invalid}{bin}{invalid:#}' found in your PATH"
-    );
-    let _ = write!(output, "\n\n");
-    let _ = write!(output, "{usage}");
-    let _ = write!(output, "\n\n");
-    let _ = write!(
-        output,
-        "For more information, try '{literal}--help{literal:#}'."
-    );
+    // Check if this is an official plugin
+    if let Some(install_message) = registry.get_install_message(subcommand) {
+        let _ = write!(output, "{error}error:{error:#} ");
+        let _ = write!(
+            output,
+            "'{invalid}{subcommand}{invalid:#}' is an official atuin plugin, but it's not installed"
+        );
+        let _ = write!(output, "\n\n");
+        let _ = write!(output, "{install_message}");
+    } else {
+        let mut atuin_cmd = Atuin::command();
+        let usage = atuin_cmd.render_usage();
+
+        let _ = write!(output, "{error}error:{error:#} ");
+        let _ = write!(
+            output,
+            "unrecognized subcommand '{invalid}{subcommand}{invalid:#}' "
+        );
+        let _ = write!(
+            output,
+            "and no executable named '{invalid}{bin}{invalid:#}' found in your PATH"
+        );
+        let _ = write!(output, "\n\n");
+        let _ = write!(output, "{usage}");
+        let _ = write!(output, "\n\n");
+        let _ = write!(
+            output,
+            "For more information, try '{literal}--help{literal:#}'."
+        );
+    }
 
     output
 }
