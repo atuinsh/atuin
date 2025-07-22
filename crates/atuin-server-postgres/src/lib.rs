@@ -55,8 +55,7 @@ impl Database for Postgres {
 
         if pg_major_version < MIN_PG_VERSION {
             return Err(DbError::Other(eyre::Report::msg(format!(
-                "unsupported PostgreSQL version {}, minimum required is {}",
-                pg_major_version, MIN_PG_VERSION
+                "unsupported PostgreSQL version {pg_major_version}, minimum required is {MIN_PG_VERSION}"
             ))));
         }
 
