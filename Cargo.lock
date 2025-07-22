@@ -257,6 +257,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
+ "shlex",
  "sysinfo",
  "tempfile",
  "time",
