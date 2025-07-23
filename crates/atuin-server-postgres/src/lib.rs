@@ -620,9 +620,12 @@ impl Database for Postgres {
         const STATUS_SQL: &str =
             "select host, tag, max(idx) from store where user_id = $1 group by host, tag";
 
+        // Use a transaction to ensure consistent reads from both tables
+        let mut tx = self.pool.begin().await.map_err(fix_error)?;
+
         let mut res: Vec<(Uuid, String, i64)> = sqlx::query_as(STATUS_SQL)
             .bind(user.id)
-            .fetch_all(&self.pool)
+            .fetch_all(&mut *tx)
             .await
             .map_err(fix_error)?;
         res.sort();
@@ -636,10 +639,12 @@ impl Database for Postgres {
         let mut cached_res: Vec<(Uuid, String, i64)> =
             sqlx::query_as("select host, tag, idx from store_idx_cache where user_id = $1")
                 .bind(user.id)
-                .fetch_all(&self.pool)
+                .fetch_all(&mut *tx)
                 .await
                 .map_err(fix_error)?;
         cached_res.sort();
+
+        tx.commit().await.map_err(fix_error)?;
 
         let mut status = RecordStatus::new();
 
