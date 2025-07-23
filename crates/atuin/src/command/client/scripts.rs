@@ -138,7 +138,7 @@ impl Cmd {
         let parts = shlex::split(&editor_str).ok_or_eyre("Failed to parse editor command")?;
         let (command, args) = parts.split_first().ok_or_eyre("No editor command found")?;
 
-        let status = std::process::Command::new(&command)
+        let status = std::process::Command::new(command)
             .args(args)
             .arg(&path)
             .status()?;
