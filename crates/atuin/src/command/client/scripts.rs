@@ -133,7 +133,7 @@ impl Cmd {
         // Open the file in the user's preferred editor
         let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
         if let Err(_e) = std::process::Command::new(editor).arg(&path).status() {
-            bail!("failed to open editor");
+            bail!("failed to open editor. Ensure EDITOR is set");
         }
 
         // Read back the edited content
