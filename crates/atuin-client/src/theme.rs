@@ -376,8 +376,13 @@ impl ThemeManager {
             PathBuf::from(p)
         } else {
             let config_dir = atuin_common::utils::config_dir();
-            let mut theme_file = PathBuf::new();
-            theme_file.push(config_dir);
+            let mut theme_file = if let Ok(p) = std::env::var("ATUIN_CONFIG_DIR") {
+                PathBuf::from(p)
+            } else {
+                let mut theme_file = PathBuf::new();
+                theme_file.push(config_dir);
+                theme_file
+            };
             theme_file.push("themes");
             theme_file
         };
