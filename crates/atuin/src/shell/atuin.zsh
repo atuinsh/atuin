@@ -65,6 +65,7 @@ _atuin_search() {
     echo -n ${zle_bracketed_paste[1]} >/dev/tty
 
     if [[ -n $output ]]; then
+        local original_buffer=$BUFFER
         RBUFFER=""
         LBUFFER=$output
 
@@ -72,6 +73,10 @@ _atuin_search() {
         then
             LBUFFER=${LBUFFER#__atuin_accept__:}
             zle accept-line
+        elif [[ $LBUFFER == __atuin_chain_command__:* ]]
+        then
+            local new_command=${LBUFFER#__atuin_chain_command__:}
+            LBUFFER="$original_buffer $new_command"
         fi
     fi
 }

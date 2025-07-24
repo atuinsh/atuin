@@ -47,22 +47,22 @@ clipboard = ["arboard"]
 check-update = ["atuin-client/check-update"]
 
 [dependencies]
-atuin-server-database = { path = "../atuin-server-database", version = "18.6.1", optional = true }
-atuin-server-postgres = { path = "../atuin-server-postgres", version = "18.6.1", optional = true }
-atuin-server-sqlite = { path = "../atuin-server-sqlite", version = "18.6.1", optional = true }
-atuin-server = { path = "../atuin-server", version = "18.6.1", optional = true }
-atuin-client = { path = "../atuin-client", version = "18.6.1", optional = true, default-features = false }
-atuin-common = { path = "../atuin-common", version = "18.6.1" }
-atuin-dotfiles = { path = "../atuin-dotfiles", version = "18.6.1" }
-atuin-history = { path = "../atuin-history", version = "18.6.1" }
-atuin-daemon = { path = "../atuin-daemon", version = "18.6.1", optional = true, default-features = false }
-atuin-scripts = { path = "../atuin-scripts", version = "18.6.1" }
-atuin-kv = { path = "../atuin-kv", version = "18.6.1" }
+atuin-server-database = { path = "../atuin-server-database", version = "18.7.1", optional = true }
+atuin-server-postgres = { path = "../atuin-server-postgres", version = "18.7.1", optional = true }
+atuin-server-sqlite = { path = "../atuin-server-sqlite", version = "18.7.1", optional = true }
+atuin-server = { path = "../atuin-server", version = "18.7.1", optional = true }
+atuin-client = { path = "../atuin-client", version = "18.7.1", optional = true, default-features = false }
+atuin-common = { path = "../atuin-common", version = "18.7.1" }
+atuin-dotfiles = { path = "../atuin-dotfiles", version = "18.7.1" }
+atuin-history = { path = "../atuin-history", version = "18.7.1" }
+atuin-daemon = { path = "../atuin-daemon", version = "18.7.1", optional = true, default-features = false }
+atuin-scripts = { path = "../atuin-scripts", version = "18.7.1" }
+atuin-kv = { path = "../atuin-kv", version = "18.7.1" }
 
 log = { workspace = true }
 time = { workspace = true }
 eyre = { workspace = true }
-indicatif = "0.17.5"
+indicatif = "0.18.0"
 serde = { workspace = true }
 serde_json = { workspace = true }
 crossterm = { version = "0.28.1", features = ["use-dev-tty"] }
@@ -90,6 +90,7 @@ uuid = { workspace = true }
 sysinfo = "0.30.7"
 regex = "1.10.5"
 tempfile = { workspace = true }
+shlex = "1.3.0"
 
 [target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
 arboard = { version = "3.4", optional = true }

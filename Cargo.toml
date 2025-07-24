@@ -5,9 +5,9 @@ resolver = "2"
 exclude = ["ui/backend"]
 
 [workspace.package]
-version = "18.6.1"
+version = "18.7.1"
 authors = ["Ellie Huxtable <ellie@atuin.sh>"]
-rust-version = "1.86"
+rust-version = "1.88"
 license = "MIT"
 homepage = "https://atuin.sh"
 repository = "https://github.com/atuinsh/atuin"

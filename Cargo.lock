@@ -221,7 +221,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
 name = "atuin"
-version = "18.6.1"
+version = "18.7.1"
 dependencies = [
  "arboard",
  "async-trait",
@@ -257,6 +257,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
+ "shlex",
  "sysinfo",
  "tempfile",
  "time",
@@ -271,7 +272,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-client"
-version = "18.6.1"
+version = "18.7.1"
 dependencies = [
  "async-trait",
  "atuin-common",
@@ -326,7 +327,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-common"
-version = "18.6.1"
+version = "18.7.1"
 dependencies = [
  "base64 0.22.1",
  "directories",
@@ -346,7 +347,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-daemon"
-version = "18.6.1"
+version = "18.7.1"
 dependencies = [
  "atuin-client",
  "atuin-dotfiles",
@@ -373,7 +374,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-dotfiles"
-version = "18.6.1"
+version = "18.7.1"
 dependencies = [
  "atuin-client",
  "atuin-common",
@@ -387,7 +388,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-history"
-version = "18.6.1"
+version = "18.7.1"
 dependencies = [
  "atuin-client",
  "crossterm",
@@ -400,7 +401,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-kv"
-version = "18.6.1"
+version = "18.7.1"
 dependencies = [
  "atuin-client",
  "atuin-common",
@@ -416,7 +417,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-scripts"
-version = "18.6.1"
+version = "18.7.1"
 dependencies = [
  "atuin-client",
  "atuin-common",
@@ -438,7 +439,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-server"
-version = "18.6.1"
+version = "18.7.1"
 dependencies = [
  "argon2",
  "async-trait",
@@ -467,7 +468,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-server-database"
-version = "18.6.1"
+version = "18.7.1"
 dependencies = [
  "async-trait",
  "atuin-common",
@@ -480,7 +481,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-server-postgres"
-version = "18.6.1"
+version = "18.7.1"
 dependencies = [
  "async-trait",
  "atuin-common",
@@ -497,7 +498,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-server-sqlite"
-version = "18.6.1"
+version = "18.7.1"
 dependencies = [
  "async-trait",
  "atuin-common",
@@ -917,15 +918,15 @@ dependencies = [
 
 [[package]]
 name = "console"
-version = "0.15.11"
+version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "054ccb5b10f9f2cbf51eb355ca1d05c2d279ce1804688d0db74b4733a5aeafd8"
+checksum = "2e09ced7ebbccb63b4c65413d821f2e00ce54c5ca4514ddc6b3c892fdbcbc69d"
 dependencies = [
  "encode_unicode",
  "libc",
  "once_cell",
  "unicode-width 0.2.0",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2210,14 +2211,14 @@ dependencies = [
 
 [[package]]
 name = "indicatif"
-version = "0.17.11"
+version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "183b3088984b400f4cfac3620d5e076c84da5364016b4f49473de574b2586235"
+checksum = "70a646d946d06bedbbc4cac4c218acf4bbf2d87757a784857025f4d447e4e1cd"
 dependencies = [
  "console",
- "number_prefix",
  "portable-atomic",
  "unicode-width 0.2.0",
+ "unit-prefix",
  "web-time",
 ]
 
@@ -2753,12 +2754,6 @@ checksum = "5c7398b9c8b70908f6371f47ed36737907c87c52af34c268fed0bf0ceb92ead9"
 dependencies = [
  "libc",
 ]
-
-[[package]]
-name = "number_prefix"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "830b246a0e5f20af87141b25c173cd1b609bd7779a4617d6ec582abaf90870f3"
 
 [[package]]
 name = "objc-sys"
@@ -5168,6 +5163,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1fc81956842c57dac11422a97c3b8195a1ff727f06e85c84ed2e8aa277c9a0fd"
 
 [[package]]
+name = "unit-prefix"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "323402cff2dd658f39ca17c789b502021b3f18707c91cdf22e3838e1b4023817"
+
+[[package]]
 name = "universal-hash"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5518,7 +5519,7 @@ checksum = "4286ad90ddb45071efd1a66dfa43eb02dd0dfbae1545ad6cc3c51cf34d7e8ba3"
 dependencies = [
  "windows-result",
  "windows-strings",
- "windows-targets 0.53.0",
+ "windows-targets 0.53.2",
 ]
 
 [[package]]
@@ -5567,6 +5568,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "windows-sys"
+version = "0.60.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f2f500e4d28234f72040990ec9d39e3a6b950f9f22d3dba18416c35882612bcb"
+dependencies = [
+ "windows-targets 0.53.2",
+]
+
+[[package]]
 name = "windows-targets"
 version = "0.48.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5599,9 +5609,9 @@ dependencies = [
 
 [[package]]
 name = "windows-targets"
-version = "0.53.0"
+version = "0.53.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b1e4c7e8ceaaf9cb7d7507c974735728ab453b67ef8f18febdd7c11fe59dca8b"
+checksum = "c66f69fcc9ce11da9966ddb31a40968cad001c5bedeb5c2b82ede4253ab48aef"
 dependencies = [
  "windows_aarch64_gnullvm 0.53.0",
  "windows_aarch64_msvc 0.53.0",

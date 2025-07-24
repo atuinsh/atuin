@@ -2,7 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
-## [unreleased]
+## [18.7.0] - 2025-07-16
+
+### Bug Fixes
+
+- *(api)* Allow trailing slashes in sync_address ([#2760](https://github.com/atuinsh/atuin/issues/2760))
+- *(doctor)* Mention the required ble.sh version ([#2774](https://github.com/atuinsh/atuin/issues/2774))
+- *(search)* Prevent panic on malformed format strings ([#2776](https://github.com/atuinsh/atuin/issues/2776)) ([#2777](https://github.com/atuinsh/atuin/issues/2777))
+- Clarify that HISTFILE, if used, must be exported ([#2758](https://github.com/atuinsh/atuin/issues/2758))
+- Don't print errors in `zsh_autosuggest` helper ([#2780](https://github.com/atuinsh/atuin/issues/2780))
+- `atuin.nu` enchancements ([#2778](https://github.com/atuinsh/atuin/issues/2778))
+- Refuse "--dupkeep 0" ([#2807](https://github.com/atuinsh/atuin/issues/2807))
+
+
+### Features
+
+- Add sqlite server support for self-hosting ([#2770](https://github.com/atuinsh/atuin/issues/2770))
+
+
+### Miscellaneous Tasks
+
+- *(ci)* Install toolchain that matches rust-toolchain.toml ([#2759](https://github.com/atuinsh/atuin/issues/2759))
+- Allow setting script DB path ([#2750](https://github.com/atuinsh/atuin/issues/2750))
+
+
+## [18.6.1] - 2025-05-08
 
 ### Bug Fixes
 

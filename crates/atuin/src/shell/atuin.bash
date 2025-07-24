@@ -271,6 +271,10 @@ __atuin_history() {
 
         READLINE_LINE=""
         READLINE_POINT=${#READLINE_LINE}
+    elif [[ $__atuin_output == __atuin_chain_command__:* ]]; then
+        local new_command=${__atuin_output#__atuin_chain_command__:}
+        READLINE_LINE="$READLINE_LINE $new_command"
+        READLINE_POINT=${#READLINE_LINE}
     else
         READLINE_LINE=$__atuin_output
         READLINE_POINT=${#READLINE_LINE}
