@@ -232,14 +232,27 @@ impl Database for Postgres {
     }
 
     async fn delete_store(&self, user: &User) -> DbResult<()> {
+        let mut tx = self.pool.begin().await.map_err(fix_error)?;
+
         sqlx::query(
             "delete from store
             where user_id = $1",
         )
         .bind(user.id)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(fix_error)?;
+
+        sqlx::query(
+            "delete from store_idx_cache
+            where user_id = $1",
+        )
+        .bind(user.id)
+        .execute(&mut *tx)
+        .await
+        .map_err(fix_error)?;
+
+        tx.commit().await.map_err(fix_error)?;
 
         Ok(())
     }
@@ -509,7 +522,7 @@ impl Database for Postgres {
         for i in records {
             let id = atuin_common::utils::uuid_v7();
 
-            sqlx::query(
+            let result = sqlx::query(
                 "insert into store
                     (id, client_id, host, idx, timestamp, version, tag, data, cek, user_id) 
                 values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
@@ -530,15 +543,17 @@ impl Database for Postgres {
             .await
             .map_err(fix_error)?;
 
-            // we're already iterating sooooo
-            heads
-                .entry((i.host.id, &i.tag))
-                .and_modify(|e| {
-                    if i.idx > *e {
-                        *e = i.idx
-                    }
-                })
-                .or_insert(i.idx);
+            // Only update heads if we actually inserted the record
+            if result.rows_affected() > 0 {
+                heads
+                    .entry((i.host.id, &i.tag))
+                    .and_modify(|e| {
+                        if i.idx > *e {
+                            *e = i.idx
+                        }
+                    })
+                    .or_insert(i.idx);
+            }
         }
 
         // we've built the map of heads for this push, so commit it to the database
@@ -644,7 +659,7 @@ impl Database for Postgres {
                 .map_err(fix_error)?;
         cached_res.sort();
 
-        tx.commit().await.map_err(fix_error)?;
+        // No need to commit a read-only transaction
 
         let mut status = RecordStatus::new();
 
