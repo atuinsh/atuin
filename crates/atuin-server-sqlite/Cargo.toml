@@ -17,7 +17,7 @@ eyre = { workspace = true }
 tracing = { workspace = true }
 time = { workspace = true }
 serde = { workspace = true }
-sqlx = { workspace = true }
+sqlx = { workspace = true, features = ["sqlite", "regexp"] }
 async-trait = { workspace = true }
 uuid = { workspace = true }
 metrics = "0.21.1"
