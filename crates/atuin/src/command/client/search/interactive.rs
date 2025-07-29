@@ -1,5 +1,7 @@
 use std::{
+    fs,
     io::{Write, stdout},
+    process::Command,
     time::Duration,
 };
 
@@ -7,6 +9,7 @@ use atuin_common::utils::{self, Escapable as _};
 use eyre::Result;
 use futures_util::FutureExt;
 use semver::Version;
+use tempfile::NamedTempFile;
 use time::OffsetDateTime;
 use unicode_width::UnicodeWidthStr;
 
@@ -50,6 +53,7 @@ const TAB_TITLES: [&str; 2] = ["Search", "Inspect"];
 
 pub enum InputAction {
     Accept(usize),
+    EditAccept(usize),
     Copy(usize),
     Delete(usize),
     ReturnOriginal,
@@ -82,6 +86,40 @@ struct StyleState {
     compact: bool,
     invert: bool,
     inner_width: usize,
+}
+
+fn get_visual_editor() -> String {
+    std::env::var("FCEDIT")
+        .or_else(|_| std::env::var("EDITOR"))
+        .or_else(|_| std::env::var("VISUAL"))
+        .unwrap_or_else(|_| "vim".to_string())
+}
+
+fn visual_edit_command(original_command: &str) -> Result<String> {
+    // 1. Create temp file with command
+    let mut temp_file = NamedTempFile::new()?;
+    writeln!(temp_file, "{}", original_command)?;
+    let temp_path = temp_file.path();
+
+    // 2. Get editor
+    let editor = get_visual_editor();
+
+    // 3. Run editor
+    let status = Command::new(&editor)
+        .arg(temp_path)
+        .status()?;
+
+    if !status.success() {
+        return Ok(original_command.to_string());
+    }
+
+    // 4. Read edited command
+    let edited_command = fs::read_to_string(temp_path)?
+        .trim_end()
+        .to_string();
+
+    // 5. Return with execution prefix
+    Ok(format!("__atuin_accept__:{}", edited_command))
 }
 
 impl State {
@@ -383,6 +421,7 @@ impl State {
 
         match input.code {
             KeyCode::Enter => return self.handle_search_accept(settings),
+            KeyCode::Char('v') if ctrl => return InputAction::EditAccept(self.results_state.selected()),
             KeyCode::Char('m') if ctrl => return self.handle_search_accept(settings),
             KeyCode::Char('y') if ctrl => {
                 return InputAction::Copy(self.results_state.selected());
@@ -1251,6 +1290,11 @@ pub async fn history(
             // index is in bounds so we return that entry
             Ok(command)
         }
+        InputAction::EditAccept(index) if index < results.len() => {
+            let original_command = &results[index].command;
+            let edited_command = visual_edit_command(original_command)?;
+            Ok(edited_command)
+        }
         InputAction::ReturnOriginal => Ok(String::new()),
         InputAction::Copy(index) => {
             let cmd = results.swap_remove(index).command;
@@ -1263,7 +1307,7 @@ pub async fn history(
             // * out of bounds -> usually implies no selected entry so we return the input
             Ok(app.search.input.into_inner())
         }
-        InputAction::Continue | InputAction::Redraw | InputAction::Delete(_) => {
+        InputAction::Continue | InputAction::Redraw | InputAction::Delete(_) | InputAction::EditAccept(_) => {
             unreachable!("should have been handled!")
         }
     }
