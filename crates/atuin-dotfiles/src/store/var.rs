@@ -117,31 +117,45 @@ impl VarStore {
 
     pub async fn xonsh(&self) -> Result<String> {
         let env = self.vars().await?;
+        Ok(Self::format_xonsh(&env))
+    }
 
+    pub async fn fish(&self) -> Result<String> {
+        let env = self.vars().await?;
+        Ok(Self::format_fish(&env))
+    }
+
+    pub async fn posix(&self) -> Result<String> {
+        let env = self.vars().await?;
+        Ok(Self::format_posix(&env))
+    }
+
+    pub async fn powershell(&self) -> Result<String> {
+        let env = self.vars().await?;
+        Ok(Self::format_powershell(&env))
+    }
+
+    fn format_xonsh(env: &[Var]) -> String {
         let mut config = String::new();
 
         for env in env {
             config.push_str(&format!("${}={}\n", env.name, env.value));
         }
 
-        Ok(config)
+        config
     }
 
-    pub async fn fish(&self) -> Result<String> {
-        let env = self.vars().await?;
-
+    fn format_fish(env: &[Var]) -> String {
         let mut config = String::new();
 
         for env in env {
             config.push_str(&format!("set -gx {} {}\n", env.name, env.value));
         }
 
-        Ok(config)
+        config
     }
 
-    pub async fn posix(&self) -> Result<String> {
-        let env = self.vars().await?;
-
+    fn format_posix(env: &[Var]) -> String {
         let mut config = String::new();
 
         for env in env {
@@ -152,17 +166,30 @@ impl VarStore {
             }
         }
 
-        Ok(config)
+        config
+    }
+
+    fn format_powershell(env: &[Var]) -> String {
+        let mut config = String::new();
+
+        for var in env {
+            config.push_str(&crate::shell::powershell::format_var(var));
+        }
+
+        config
     }
 
     pub async fn build(&self) -> Result<()> {
         let dir = atuin_common::utils::dotfiles_cache_dir();
         tokio::fs::create_dir_all(dir.clone()).await?;
 
+        let env = self.vars().await?;
+
         // Build for all supported shells
-        let posix = self.posix().await?;
-        let xonsh = self.xonsh().await?;
-        let fsh = self.fish().await?;
+        let posix = Self::format_posix(&env);
+        let xonsh = Self::format_xonsh(&env);
+        let fsh = Self::format_fish(&env);
+        let powershell = Self::format_powershell(&env);
 
         // All the same contents, maybe optimize in the future or perhaps there will be quirks
         // per-shell
@@ -171,11 +198,13 @@ impl VarStore {
         let bash = dir.join("vars.bash");
         let fish = dir.join("vars.fish");
         let xsh = dir.join("vars.xsh");
+        let ps1 = dir.join("vars.ps1");
 
         tokio::fs::write(zsh, &posix).await?;
         tokio::fs::write(bash, &posix).await?;
         tokio::fs::write(fish, &fsh).await?;
         tokio::fs::write(xsh, &xonsh).await?;
+        tokio::fs::write(ps1, &powershell).await?;
 
         Ok(())
     }
