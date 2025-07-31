@@ -85,7 +85,7 @@ pub fn draw_stats_table(
     f: &mut Frame<'_>,
     parent: Rect,
     history: &History,
-    tz: &Timezone,
+    tz: Timezone,
     stats: &HistoryStats,
     theme: &Theme,
 ) {
@@ -259,7 +259,7 @@ pub fn draw(
     history: &History,
     stats: &HistoryStats,
     theme: &Theme,
-    tz: &Timezone,
+    tz: Timezone,
 ) {
     let vert_layout = Layout::default()
         .direction(Direction::Vertical)
