@@ -9,6 +9,7 @@ use memchr::Memchr;
 use crate::history::History;
 
 pub mod bash;
+pub mod csv_history;
 pub mod fish;
 pub mod nu;
 pub mod nu_histdb;
