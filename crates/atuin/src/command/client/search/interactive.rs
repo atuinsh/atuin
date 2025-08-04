@@ -762,6 +762,7 @@ impl State {
                         &results[self.results_state.selected()],
                         &stats.expect("Drawing inspector, but no stats"),
                         theme,
+                        settings.timezone,
                     );
                 }
 

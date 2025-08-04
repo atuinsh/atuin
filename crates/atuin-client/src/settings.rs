@@ -134,7 +134,7 @@ impl From<Dialect> for interim::Dialect {
 /// Note that the parsing of this struct needs to be done before starting any
 /// multithreaded runtime, otherwise it will fail on most Unix systems.
 ///
-/// See: https://github.com/atuinsh/atuin/pull/1517#discussion_r1447516426
+/// See: <https://github.com/atuinsh/atuin/pull/1517#discussion_r1447516426>
 #[derive(Clone, Copy, Debug, Eq, PartialEq, DeserializeFromStr, Serialize)]
 pub struct Timezone(pub UtcOffset);
 impl fmt::Display for Timezone {
