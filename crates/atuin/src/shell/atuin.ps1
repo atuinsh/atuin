@@ -90,12 +90,12 @@ New-Module -Name Atuin -ScriptBlock {
         try {
             [System.Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
-            $line = $null
-            [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$line, [ref]$null)
+            $query = $null
+            [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$query, [ref]$null)
 
             # Atuin is started through Start-Process to avoid interfering with the current shell.
             $env:ATUIN_SHELL_POWERSHELL = "true"
-            $env:ATUIN_QUERY = $line
+            $env:ATUIN_QUERY = $query
             $argString = "search -i --result-file ""$resultFile"" $ExtraArgs"
             Start-Process -Wait -NoNewWindow -FilePath atuin -ArgumentList $argString
             $suggestion = (Get-Content -Raw $resultFile -Encoding UTF8 | Out-String).Trim()
@@ -110,11 +110,15 @@ New-Module -Name Atuin -ScriptBlock {
             }
 
             $acceptPrefix = "__atuin_accept__:"
+            $chainCommandPrefix = "__atuin_chain_command__:"
 
             if ( $suggestion.StartsWith($acceptPrefix)) {
                 [Microsoft.PowerShell.PSConsoleReadLine]::RevertLine()
                 [Microsoft.PowerShell.PSConsoleReadLine]::Insert($suggestion.Substring($acceptPrefix.Length))
                 [Microsoft.PowerShell.PSConsoleReadLine]::AcceptLine()
+            } elseif ( $suggestion.StartsWith($chainCommandPrefix)) {
+                [Microsoft.PowerShell.PSConsoleReadLine]::RevertLine()
+                [Microsoft.PowerShell.PSConsoleReadLine]::Insert("$query $($suggestion.Substring($chainCommandPrefix.Length))")
             } else {
                 [Microsoft.PowerShell.PSConsoleReadLine]::RevertLine()
                 [Microsoft.PowerShell.PSConsoleReadLine]::Insert($suggestion)
