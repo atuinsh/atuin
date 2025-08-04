@@ -89,6 +89,7 @@ tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 sysinfo = "0.30.7"
 regex = "1.10.5"
+norm = { version = "0.1.1", features = ["fzf-v2"] }
 tempfile = { workspace = true }
 shlex = "1.3.0"
 
