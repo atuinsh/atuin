@@ -839,7 +839,7 @@ mod test {
     use super::*;
     use std::time::{Duration, Instant};
 
-    async fn assert_search_eq<'a>(
+    async fn assert_search_eq(
         db: &impl Database,
         mode: SearchMode,
         filter_mode: FilterMode,

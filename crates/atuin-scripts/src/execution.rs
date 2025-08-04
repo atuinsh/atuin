@@ -1,7 +1,6 @@
 use crate::store::script::Script;
 use eyre::Result;
 use std::collections::{HashMap, HashSet};
-use std::fs;
 use std::process::Stdio;
 use tempfile::NamedTempFile;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
@@ -98,9 +97,9 @@ pub async fn execute_script_interactive(
     {
         debug!("making script executable");
         use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&temp_path)?.permissions();
+        let mut perms = std::fs::metadata(&temp_path)?.permissions();
         perms.set_mode(0o755);
-        fs::set_permissions(&temp_path, perms)?;
+        std::fs::set_permissions(&temp_path, perms)?;
     }
 
     // Store the temp_file to prevent it from being dropped
