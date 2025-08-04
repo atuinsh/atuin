@@ -94,6 +94,13 @@ pub fn runtime_dir() -> PathBuf {
     std::env::var("XDG_RUNTIME_DIR").map_or_else(|_| data_dir(), PathBuf::from)
 }
 
+pub fn state_dir() -> PathBuf {
+    let state_dir = std::env::var("XDG_STATE_HOME")
+        .map_or_else(|_| home_dir().join(".local").join("state"), PathBuf::from);
+
+    state_dir.join("atuin")
+}
+
 pub fn dotfiles_cache_dir() -> PathBuf {
     // In most cases, this will be  ~/.local/share/atuin/dotfiles/cache
     let data_dir = std::env::var("XDG_DATA_HOME")
