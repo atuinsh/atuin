@@ -1,0 +1,12 @@
+[Unit]
+Description=Atuin Shell History Sync Daemon
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/atuin daemon
+Restart=on-failure
+WorkingDirectory=%h
+
+[Install]
+WantedBy=default.target
