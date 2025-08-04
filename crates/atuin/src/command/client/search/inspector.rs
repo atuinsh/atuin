@@ -3,7 +3,7 @@ use time::macros::format_description;
 
 use atuin_client::{
     history::{History, HistoryStats},
-    settings::Settings,
+    settings::{Settings, Timezone},
 };
 use ratatui::{
     Frame,
@@ -85,6 +85,7 @@ pub fn draw_stats_table(
     f: &mut Frame<'_>,
     parent: Rect,
     history: &History,
+    tz: Timezone,
     stats: &HistoryStats,
     theme: &Theme,
 ) {
@@ -95,7 +96,10 @@ pub fn draw_stats_table(
     let rows = [
         Row::new(vec!["Host".to_string(), host.to_string()]),
         Row::new(vec!["User".to_string(), user.to_string()]),
-        Row::new(vec!["Time".to_string(), history.timestamp.to_string()]),
+        Row::new(vec![
+            "Time".to_string(),
+            history.timestamp.to_offset(tz.0).to_string(),
+        ]),
         Row::new(vec!["Duration".to_string(), format_duration(duration)]),
         Row::new(vec![
             "Avg duration".to_string(),
@@ -255,6 +259,7 @@ pub fn draw(
     history: &History,
     stats: &HistoryStats,
     theme: &Theme,
+    tz: Timezone,
 ) {
     let vert_layout = Layout::default()
         .direction(Direction::Vertical)
@@ -267,7 +272,7 @@ pub fn draw(
         .split(vert_layout[1]);
 
     draw_commands(f, vert_layout[0], history, stats, theme);
-    draw_stats_table(f, stats_layout[0], history, stats, theme);
+    draw_stats_table(f, stats_layout[0], history, tz, stats, theme);
     draw_stats_charts(f, stats_layout[1], stats, theme);
 }
 

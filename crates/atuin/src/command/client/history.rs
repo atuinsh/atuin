@@ -117,6 +117,21 @@ pub enum Cmd {
         #[arg(short = 'n', long)]
         dry_run: bool,
     },
+
+    /// Delete duplicate history entries (that have the same command, cwd and hostname)
+    Dedup {
+        /// List matching history lines without performing the actual deletion.
+        #[arg(short = 'n', long)]
+        dry_run: bool,
+
+        /// Only delete results added before this date
+        #[arg(long, short)]
+        before: String,
+
+        /// How many recent duplicates to keep
+        #[arg(long)]
+        dupkeep: u32,
+    },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -182,12 +197,38 @@ pub fn print_list(
             tz: &tz,
         };
         let args = parsed_fmt.with_args(&fh);
-        let write = write!(w, "{args}{entry_terminator}");
+
+        // Check for formatting errors before attempting to write
         if let Err(err) = args.status() {
             eprintln!("ERROR: history output failed with: {err}");
             std::process::exit(1);
         }
-        check_for_write_errors(write);
+
+        let write_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            write!(w, "{args}{entry_terminator}")
+        }));
+
+        match write_result {
+            Ok(Ok(())) => {
+                // Write succeeded
+            }
+            Ok(Err(err)) => {
+                if err.kind() != io::ErrorKind::BrokenPipe {
+                    eprintln!("ERROR: Failed to write history output: {err}");
+                    std::process::exit(1);
+                }
+            }
+            Err(_) => {
+                eprintln!("ERROR: Format string caused a formatting error.");
+                eprintln!(
+                    "This may be due to an unsupported format string containing special characters."
+                );
+                eprintln!(
+                    "Please check your format string syntax and ensure literal braces are properly escaped."
+                );
+                std::process::exit(1);
+            }
+        }
         if flush_each_line {
             check_for_write_errors(w.flush());
         }
@@ -285,9 +326,17 @@ fn parse_fmt(format: &str) -> ParsedFmt {
         Ok(fmt) => fmt,
         Err(err) => {
             eprintln!("ERROR: History formatting failed with the following error: {err}");
-            println!(
-                "If your formatting string contains curly braces (eg: {{var}}) you need to escape them this way: {{{{var}}."
-            );
+
+            if format.contains('"') && (format.contains(":{") || format.contains(",{")) {
+                eprintln!("It looks like you're trying to create JSON output.");
+                eprintln!("For JSON, you need to escape literal braces by doubling them:");
+                eprintln!("Example: '{{\"command\":\"{{command}}\",\"time\":\"{{time}}\"}}'");
+            } else {
+                eprintln!(
+                    "If your formatting string contains literal curly braces, you need to escape them by doubling:"
+                );
+                eprintln!("Use {{{{ for literal {{ and }}}} for literal }}");
+            }
             std::process::exit(1)
         }
     }
@@ -544,6 +593,61 @@ impl Cmd {
         Ok(())
     }
 
+    async fn handle_dedup(
+        db: &impl Database,
+        settings: &Settings,
+        store: SqliteStore,
+        before: i64,
+        dupkeep: u32,
+        dry_run: bool,
+    ) -> Result<()> {
+        if dupkeep == 0 {
+            eprintln!(
+                "\"--dupkeep 0\" would keep 0 copies of duplicate commands and thus delete all of them! Use \"atuin search --delete ...\" if you really want that."
+            );
+            std::process::exit(1);
+        }
+
+        let matches: Vec<History> = db.get_dups(before, dupkeep).await?;
+
+        match matches.len() {
+            0 => {
+                println!("No duplicates to delete.");
+                return Ok(());
+            }
+            1 => println!("Found 1 duplicate to delete."),
+            n => println!("Found {n} duplicates to delete."),
+        }
+
+        if dry_run {
+            print_list(
+                &matches,
+                ListMode::Human,
+                Some(settings.history_format.as_str()),
+                false,
+                false,
+                settings.timezone,
+            );
+        } else {
+            let encryption_key: [u8; 32] = encryption::load_key(settings)
+                .context("could not load encryption key")?
+                .into();
+            let host_id = Settings::host_id().expect("failed to get host_id");
+            let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
+
+            for entry in matches {
+                eprintln!("deleting {}", entry.id);
+                if settings.sync.records {
+                    let (id, _) = history_store.delete(entry.id).await?;
+                    history_store.incremental_build(db, &[id]).await?;
+                } else {
+                    db.delete(entry).await?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub async fn run(self, settings: &Settings) -> Result<()> {
         let context = current_context();
 
@@ -606,7 +710,7 @@ impl Cmd {
                 format,
             } => {
                 let last = db.last().await?;
-                let last = last.as_ref().map(std::slice::from_ref).unwrap_or_default();
+                let last = last.as_slice();
                 let tz = timezone.unwrap_or(settings.timezone);
                 print_list(
                     last,
@@ -628,6 +732,43 @@ impl Cmd {
             Self::Prune { dry_run } => {
                 Self::handle_prune(&db, settings, store, context, dry_run).await
             }
+
+            Self::Dedup {
+                dry_run,
+                before,
+                dupkeep,
+            } => {
+                let before = i64::try_from(
+                    interim::parse_date_string(
+                        before.as_str(),
+                        OffsetDateTime::now_utc(),
+                        interim::Dialect::Uk,
+                    )?
+                    .unix_timestamp_nanos(),
+                )?;
+                Self::handle_dedup(&db, settings, store, before, dupkeep, dry_run).await
+            }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_string_no_panic() {
+        // Don't panic but provide helpful output (issue #2776)
+        let malformed_json = r#"{"command":"{command}","key":"value"}"#;
+
+        let result = std::panic::catch_unwind(|| parse_fmt(malformed_json));
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_valid_formats_still_work() {
+        assert!(std::panic::catch_unwind(|| parse_fmt("{command}")).is_ok());
+        assert!(std::panic::catch_unwind(|| parse_fmt("{time} - {command}")).is_ok());
     }
 }

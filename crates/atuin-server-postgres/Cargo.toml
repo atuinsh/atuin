@@ -10,8 +10,8 @@ homepage = { workspace = true }
 repository = { workspace = true }
 
 [dependencies]
-atuin-common = { path = "../atuin-common", version = "18.5.0-beta.1" }
-atuin-server-database = { path = "../atuin-server-database", version = "18.5.0-beta.1" }
+atuin-common = { path = "../atuin-common", version = "18.8.0" }
+atuin-server-database = { path = "../atuin-server-database", version = "18.8.0" }
 
 eyre = { workspace = true }
 tracing = { workspace = true }
@@ -22,4 +22,4 @@ async-trait = { workspace = true }
 uuid = { workspace = true }
 metrics = "0.21.1"
 futures-util = "0.3"
-url = "2.5.2"
+rand.workspace = true

@@ -2,33 +2,149 @@
 
 All notable changes to this project will be documented in this file.
 
-## [unreleased]
+## [18.8.0] - 2025-08-04
 
 ### Bug Fixes
 
+- *(build)* Enable sqlite feature for sqlite server ([#2848](https://github.com/atuinsh/atuin/issues/2848))
+- Make login exit 1 if already logged in ([#2832](https://github.com/atuinsh/atuin/issues/2832))
+- Use transaction for idx consistency checking ([#2840](https://github.com/atuinsh/atuin/issues/2840))
+- Ensure the idx cache is cleaned on deletion, only insert if records are inserted ([#2841](https://github.com/atuinsh/atuin/issues/2841))
+
+
+### Features
+
+- Command chaining ([#2834](https://github.com/atuinsh/atuin/issues/2834))
+- Add info for 'official' plugins ([#2835](https://github.com/atuinsh/atuin/issues/2835))
+- Support multi part commands ([#2836](https://github.com/atuinsh/atuin/issues/2836)) ([#2837](https://github.com/atuinsh/atuin/issues/2837))
+- Add inline_height_shell_up_key_binding option ([#2817](https://github.com/atuinsh/atuin/issues/2817))
+- Add IDX_CACHE_ROLLOUT ([#2850](https://github.com/atuinsh/atuin/issues/2850))
+
+
+### Miscellaneous Tasks
+
+- Update to rust 1.88 ([#2815](https://github.com/atuinsh/atuin/issues/2815))
+
+
+### Nushell
+
+- Fix `get -i` deprecation ([#2829](https://github.com/atuinsh/atuin/issues/2829))
+
+
+## [18.7.1] - 2025-07-16
+
+### Bug Fixes
+
+- Add check for postgresql prefix ([#2825](https://github.com/atuinsh/atuin/issues/2825))
+
+
+### Miscellaneous Tasks
+
+- Update changelog
+
+
+## [18.7.0] - 2025-07-16
+
+### Bug Fixes
+
+- *(api)* Allow trailing slashes in sync_address ([#2760](https://github.com/atuinsh/atuin/issues/2760))
+- *(doctor)* Mention the required ble.sh version ([#2774](https://github.com/atuinsh/atuin/issues/2774))
+- *(search)* Prevent panic on malformed format strings ([#2776](https://github.com/atuinsh/atuin/issues/2776)) ([#2777](https://github.com/atuinsh/atuin/issues/2777))
+- Clarify that HISTFILE, if used, must be exported ([#2758](https://github.com/atuinsh/atuin/issues/2758))
+- Don't print errors in `zsh_autosuggest` helper ([#2780](https://github.com/atuinsh/atuin/issues/2780))
+- `atuin.nu` enchancements ([#2778](https://github.com/atuinsh/atuin/issues/2778))
+- Refuse "--dupkeep 0" ([#2807](https://github.com/atuinsh/atuin/issues/2807))
+
+
+### Features
+
+- Add sqlite server support for self-hosting ([#2770](https://github.com/atuinsh/atuin/issues/2770))
+
+
+### Miscellaneous Tasks
+
+- *(ci)* Install toolchain that matches rust-toolchain.toml ([#2759](https://github.com/atuinsh/atuin/issues/2759))
+- Allow setting script DB path ([#2750](https://github.com/atuinsh/atuin/issues/2750))
+
+
+## [18.6.1] - 2025-05-08
+
+### Bug Fixes
+
+- Selection vs render issue ([#2706](https://github.com/atuinsh/atuin/issues/2706))
+
+
+### Features
+
+- *(stats)* Add jj to default common subcommands ([#2708](https://github.com/atuinsh/atuin/issues/2708))
+- Delete duplicate history ([#2697](https://github.com/atuinsh/atuin/issues/2697))
+- Sort `atuin store status` output ([#2719](https://github.com/atuinsh/atuin/issues/2719))
+- Implement KV as a write-through cache ([#2732](https://github.com/atuinsh/atuin/issues/2732))
+
+
+### Miscellaneous Tasks
+
+- Use native github arm64 runner ([#2690](https://github.com/atuinsh/atuin/issues/2690))
+- Fix typos ([#2668](https://github.com/atuinsh/atuin/issues/2668))
+
+
+## [18.5.0] - 2025-04-09
+
+### Bug Fixes
+
+- *(1289)* Clear terminal area if inline ([#2600](https://github.com/atuinsh/atuin/issues/2600))
 - *(bash)* Fix preexec of child Bash session started by enter_accept ([#2558](https://github.com/atuinsh/atuin/issues/2558))
+- *(build)* Change atuin-daemon build script .proto paths ([#2638](https://github.com/atuinsh/atuin/issues/2638))
+- *(kv)* Filter deleted keys from `kv list` ([#2665](https://github.com/atuinsh/atuin/issues/2665))
+- *(stats)* Ignore leading environment variables when calculating stats ([#2659](https://github.com/atuinsh/atuin/issues/2659))
 - *(wrapped)* Fix crash when history is empty ([#2508](https://github.com/atuinsh/atuin/issues/2508))
+- *(zsh)* Fix an error introduced earilier with support for bracketed paste mode ([#2651](https://github.com/atuinsh/atuin/issues/2651))
+- *(zsh)* Avoid calling user-defined widgets when searching for history position ([#2670](https://github.com/atuinsh/atuin/issues/2670))
 - Add .histfile as file to look for when doing atuin import zsh ([#2588](https://github.com/atuinsh/atuin/issues/2588))
 - Panic when invoking delete on empty tui ([#2584](https://github.com/atuinsh/atuin/issues/2584))
 - Sql files checksums ([#2601](https://github.com/atuinsh/atuin/issues/2601))
 - Up binding with fish 4.0 ([#2613](https://github.com/atuinsh/atuin/issues/2613)) ([#2616](https://github.com/atuinsh/atuin/issues/2616))
 - Don't save empty commands ([#2605](https://github.com/atuinsh/atuin/issues/2605))
 - Improve broken symlink error handling ([#2589](https://github.com/atuinsh/atuin/issues/2589))
+- Multiline command does not honour max_preview_height ([#2624](https://github.com/atuinsh/atuin/issues/2624))
+- Typeerror in client sync code ([#2647](https://github.com/atuinsh/atuin/issues/2647))
+- Add redundant clones to clippy and cleanup instances of it ([#2654](https://github.com/atuinsh/atuin/issues/2654))
+- Allow -ve values for timezone ([#2609](https://github.com/atuinsh/atuin/issues/2609))
+- Fish up binding bug ([#2677](https://github.com/atuinsh/atuin/issues/2677))
+- Switch to astral cargo-dist ([#2687](https://github.com/atuinsh/atuin/issues/2687))
+
+
+### Documentation
+
+- Update logo and badges in README for zh-CN ([#2392](https://github.com/atuinsh/atuin/issues/2392))
 
 
 ### Features
 
 - *(client)* Update AWS secrets env var handling checks ([#2501](https://github.com/atuinsh/atuin/issues/2501))
 - *(health)* Add health check endpoint at `/healthz` ([#2549](https://github.com/atuinsh/atuin/issues/2549))
+- *(kv)* Add support for 'atuin kv delete' ([#2660](https://github.com/atuinsh/atuin/issues/2660))
 - *(wrapped)* Add more pkg managers ([#2503](https://github.com/atuinsh/atuin/issues/2503))
+- *(zsh)* Try to go to the position in zsh's history ([#1469](https://github.com/atuinsh/atuin/issues/1469))
+- *(zsh)* Re-enable bracketed paste ([#2646](https://github.com/atuinsh/atuin/issues/2646))
 - Add the --print0 option to search ([#2562](https://github.com/atuinsh/atuin/issues/2562))
 - Make new arrow key behavior configurable ([#2606](https://github.com/atuinsh/atuin/issues/2606))
+- Use readline binding for ctrl-a when it is not the prefix ([#2626](https://github.com/atuinsh/atuin/issues/2626))
+- Option to include duplicate commands when printing history commands ([#2407](https://github.com/atuinsh/atuin/issues/2407))
+- Binaries as subcommands ([#2661](https://github.com/atuinsh/atuin/issues/2661))
+- Support storing, syncing and executing scripts ([#2644](https://github.com/atuinsh/atuin/issues/2644))
+- Add 'atuin scripts rm' and 'atuin scripts ls' aliases; allow reading from stdin ([#2680](https://github.com/atuinsh/atuin/issues/2680))
 
 
 ### Miscellaneous Tasks
 
 - Remove unneeded dependencies ([#2523](https://github.com/atuinsh/atuin/issues/2523))
 - Update rust toolchain to 1.85 ([#2618](https://github.com/atuinsh/atuin/issues/2618))
+- Align daemon and client sync freq ([#2628](https://github.com/atuinsh/atuin/issues/2628))
+- Migrate to rust 2024 ([#2635](https://github.com/atuinsh/atuin/issues/2635))
+- Show host and user in inspector ([#2634](https://github.com/atuinsh/atuin/issues/2634))
+- Update to rust 1.85.1 ([#2642](https://github.com/atuinsh/atuin/issues/2642))
+- Update to rust 1.86 ([#2666](https://github.com/atuinsh/atuin/issues/2666))
 
 
 ### Performance
@@ -39,6 +155,11 @@ All notable changes to this project will be documented in this file.
 ### Styling
 
 - Avoid calling `unwrap()` when we don't have to ([#2519](https://github.com/atuinsh/atuin/issues/2519))
+
+
+### Build
+
+- *(nix)* Bump `flake.lock` ([#2637](https://github.com/atuinsh/atuin/issues/2637))
 
 
 ### Flake.lock
@@ -567,7 +688,7 @@ All notable changes to this project will be documented in this file.
 - *(install)* Discord broken link
 - *(shell)* Respect ZSH's $ZDOTDIR environment variable ([#1441](https://github.com/atuinsh/atuin/issues/1441))
 - *(stats)* Don't require all fields under [stats] ([#1437](https://github.com/atuinsh/atuin/issues/1437))
-- *(stats)* Time now_local not working 
+- *(stats)* Time now_local not working
 - *(zsh)* Zsh_autosuggest_strategy for no-unset environment ([#1486](https://github.com/atuinsh/atuin/issues/1486))
 
 

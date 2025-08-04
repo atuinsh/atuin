@@ -30,6 +30,8 @@ pub const HOST_ID_FILENAME: &str = "host_id";
 static EXAMPLE_CONFIG: &str = include_str!("../config.toml");
 
 mod dotfiles;
+mod kv;
+mod scripts;
 
 #[derive(Clone, Debug, Deserialize, Copy, ValueEnum, PartialEq, Serialize)]
 pub enum SearchMode {
@@ -132,7 +134,7 @@ impl From<Dialect> for interim::Dialect {
 /// Note that the parsing of this struct needs to be done before starting any
 /// multithreaded runtime, otherwise it will fail on most Unix systems.
 ///
-/// See: https://github.com/atuinsh/atuin/pull/1517#discussion_r1447516426
+/// See: <https://github.com/atuinsh/atuin/pull/1517#discussion_r1447516426>
 #[derive(Clone, Copy, Debug, Eq, PartialEq, DeserializeFromStr, Serialize)]
 pub struct Timezone(pub UtcOffset);
 impl fmt::Display for Timezone {
@@ -292,6 +294,7 @@ impl Stats {
             "git",
             "go",
             "ip",
+            "jj",
             "kubectl",
             "nix",
             "nmcli",
@@ -459,6 +462,7 @@ pub struct Settings {
     pub search_mode_shell_up_key_binding: Option<SearchMode>,
     pub shell_up_key_binding: bool,
     pub inline_height: u16,
+    pub inline_height_shell_up_key_binding: Option<u16>,
     pub invert: bool,
     pub show_preview: bool,
     pub max_preview_height: u16,
@@ -491,6 +495,7 @@ pub struct Settings {
     pub local_timeout: f64,
     pub enter_accept: bool,
     pub smart_sort: bool,
+    pub command_chaining: bool,
 
     #[serde(default)]
     pub stats: Stats,
@@ -515,6 +520,12 @@ pub struct Settings {
 
     #[serde(default)]
     pub theme: Theme,
+
+    #[serde(default)]
+    pub scripts: scripts::Settings,
+
+    #[serde(default)]
+    pub kv: kv::Settings,
 }
 
 impl Settings {
@@ -731,6 +742,8 @@ impl Settings {
         let data_dir = atuin_common::utils::data_dir();
         let db_path = data_dir.join("history.db");
         let record_store_path = data_dir.join("records.db");
+        let kv_path = data_dir.join("kv.db");
+        let scripts_path = data_dir.join("scripts.db");
         let socket_path = atuin_common::utils::runtime_dir().join("atuin.sock");
 
         let key_path = data_dir.join("key");
@@ -788,12 +801,15 @@ impl Settings {
             .set_default("keymap_mode_shell", "auto")?
             .set_default("keymap_cursor", HashMap::<String, String>::new())?
             .set_default("smart_sort", false)?
+            .set_default("command_chaining", false)?
             .set_default("store_failed", true)?
             .set_default("daemon.sync_frequency", 300)?
             .set_default("daemon.enabled", false)?
             .set_default("daemon.socket_path", socket_path.to_str())?
             .set_default("daemon.systemd_socket", false)?
             .set_default("daemon.tcp_port", 8889)?
+            .set_default("kv.db_path", kv_path.to_str())?
+            .set_default("scripts.db_path", scripts_path.to_str())?
             .set_default(
                 "search.filters",
                 vec!["global", "host", "session", "workspace", "directory"],

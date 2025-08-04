@@ -25,6 +25,7 @@ mod import;
 mod info;
 mod init;
 mod kv;
+mod scripts;
 mod search;
 mod stats;
 mod store;
@@ -66,6 +67,10 @@ pub enum Cmd {
     /// Manage your dotfiles with Atuin
     #[command(subcommand)]
     Dotfiles(dotfiles::Cmd),
+
+    /// Manage your scripts with Atuin
+    #[command(subcommand)]
+    Scripts(scripts::Cmd),
 
     /// Print Atuin's shell init script
     #[command()]
@@ -158,6 +163,8 @@ impl Cmd {
             Self::Store(store) => store.run(&settings, &db, sqlite_store).await,
 
             Self::Dotfiles(dotfiles) => dotfiles.run(&settings, sqlite_store).await,
+
+            Self::Scripts(scripts) => scripts.run(&settings, sqlite_store, &db).await,
 
             Self::Info => {
                 info::run(&settings);

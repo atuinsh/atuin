@@ -105,10 +105,10 @@ async fn semver(request: Request, next: Next) -> Response {
 #[derive(Clone)]
 pub struct AppState<DB: Database> {
     pub database: DB,
-    pub settings: Settings<DB::Settings>,
+    pub settings: Settings,
 }
 
-pub fn router<DB: Database>(database: DB, settings: Settings<DB::Settings>) -> Router {
+pub fn router<DB: Database>(database: DB, settings: Settings) -> Router {
     let routes = Router::new()
         .route("/", get(handlers::index))
         .route("/healthz", get(handlers::health::health_check))

@@ -1,4 +1,5 @@
 use atuin_dotfiles::store::{AliasStore, var::VarStore};
+use atuin_scripts::store::ScriptStore;
 use clap::Args;
 use eyre::{Result, bail};
 
@@ -33,6 +34,10 @@ impl Rebuild {
                 self.rebuild_dotfiles(settings, store.clone()).await?;
             }
 
+            "scripts" => {
+                self.rebuild_scripts(settings, store.clone()).await?;
+            }
+
             tag => bail!("unknown tag: {tag}"),
         }
 
@@ -65,6 +70,18 @@ impl Rebuild {
 
         alias_store.build().await?;
         var_store.build().await?;
+
+        Ok(())
+    }
+
+    async fn rebuild_scripts(&self, settings: &Settings, store: SqliteStore) -> Result<()> {
+        let encryption_key: [u8; 32] = encryption::load_key(settings)?.into();
+        let host_id = Settings::host_id().expect("failed to get host_id");
+        let script_store = ScriptStore::new(store, host_id, encryption_key);
+        let database =
+            atuin_scripts::database::Database::new(settings.scripts.db_path.clone(), 1.0).await?;
+
+        script_store.build(database).await?;
 
         Ok(())
     }

@@ -198,7 +198,7 @@ fn from_string(name: &str) -> Result<Color, String> {
             // For full flexibility, we need to use serde_json, given
             // crossterm's approach.
             serde_json::from_str::<Color>(format!("\"{}\"", &name[1..]).as_str())
-                .map_err(|_| format!("Could not convert color name {} to Crossterm color", name))
+                .map_err(|_| format!("Could not convert color name {name} to Crossterm color"))
         }
         _ => {
             let srgb = named::from_str(name).ok_or("No such color in palette")?;
@@ -376,13 +376,18 @@ impl ThemeManager {
             PathBuf::from(p)
         } else {
             let config_dir = atuin_common::utils::config_dir();
-            let mut theme_file = PathBuf::new();
-            theme_file.push(config_dir);
+            let mut theme_file = if let Ok(p) = std::env::var("ATUIN_CONFIG_DIR") {
+                PathBuf::from(p)
+            } else {
+                let mut theme_file = PathBuf::new();
+                theme_file.push(config_dir);
+                theme_file
+            };
             theme_file.push("themes");
             theme_file
         };
 
-        let theme_toml = format!["{}.toml", name];
+        let theme_toml = format!["{name}.toml"];
         theme_file.push(theme_toml);
 
         let mut config_builder = Config::builder();
@@ -797,8 +802,7 @@ mod theme_tests {
                 assert_eq!(
                     from_string(inp),
                     Err(format!(
-                        "Could not convert color name {} to Crossterm color",
-                        inp
+                        "Could not convert color name {inp} to Crossterm color"
                     ))
                 );
             });

@@ -10,10 +10,11 @@ homepage = { workspace = true }
 repository = { workspace = true }
 
 [dependencies]
-atuin-common = { path = "../atuin-common", version = "18.5.0-beta.1" }
+atuin-common = { path = "../atuin-common", version = "18.8.0" }
 
 tracing = { workspace = true }
 time = { workspace = true }
 eyre = { workspace = true }
 serde = { workspace = true }
 async-trait = { workspace = true }
+url = "2.5.2"

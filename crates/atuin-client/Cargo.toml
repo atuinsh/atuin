@@ -19,7 +19,7 @@ daemon = []
 check-update = []
 
 [dependencies]
-atuin-common = { path = "../atuin-common", version = "18.5.0-beta.1" }
+atuin-common = { path = "../atuin-common", version = "18.8.0" }
 
 log = { workspace = true }
 base64 = { workspace = true }
@@ -39,11 +39,11 @@ itertools = { workspace = true }
 rand = { workspace = true }
 shellexpand = "3"
 sqlx = { workspace = true, features = ["sqlite", "regexp"] }
-minspan = "0.1.1"
+minspan = "0.1.5"
 regex = "1.10.5"
 serde_regex = "1.1.0"
 fs-err = { workspace = true }
-sql-builder = "3"
+sql-builder = { workspace = true }
 memchr = "2.7"
 rmp = { version = "0.8.14" }
 typed-builder = { workspace = true }
@@ -64,7 +64,7 @@ urlencoding = { version = "2.1.0", optional = true }
 reqwest = { workspace = true, optional = true }
 hex = { version = "0.4", optional = true }
 sha2 = { version = "0.10", optional = true }
-indicatif = "0.17.7"
+indicatif = "0.18.0"
 tiny-bip39 = "=1.0.0"
 
 # theme

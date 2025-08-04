@@ -1,15 +1,14 @@
 use std::collections::HashMap;
-use std::fmt::Debug;
 use std::ops::Range;
+
+use rand::Rng;
 
 use async_trait::async_trait;
 use atuin_common::record::{EncryptedData, HostId, Record, RecordIdx, RecordStatus};
 use atuin_common::utils::crypto_random_string;
 use atuin_server_database::models::{History, NewHistory, NewSession, NewUser, Session, User};
-use atuin_server_database::{Database, DbError, DbResult};
+use atuin_server_database::{Database, DbError, DbResult, DbSettings};
 use futures_util::TryStreamExt;
-use metrics::counter;
-use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use sqlx::postgres::PgPoolOptions;
 
@@ -27,26 +26,6 @@ pub struct Postgres {
     pool: sqlx::Pool<sqlx::postgres::Postgres>,
 }
 
-#[derive(Clone, Deserialize, Serialize)]
-pub struct PostgresSettings {
-    pub db_uri: String,
-}
-
-// Do our best to redact passwords so they're not logged in the event of an error.
-impl Debug for PostgresSettings {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let redacted_uri = url::Url::parse(&self.db_uri)
-            .map(|mut url| {
-                let _ = url.set_password(Some("****"));
-                url.to_string()
-            })
-            .unwrap_or(self.db_uri.clone());
-        f.debug_struct("PostgresSettings")
-            .field("db_uri", &redacted_uri)
-            .finish()
-    }
-}
-
 fn fix_error(error: sqlx::Error) -> DbError {
     match error {
         sqlx::Error::RowNotFound => DbError::NotFound,
@@ -56,8 +35,7 @@ fn fix_error(error: sqlx::Error) -> DbError {
 
 #[async_trait]
 impl Database for Postgres {
-    type Settings = PostgresSettings;
-    async fn new(settings: &PostgresSettings) -> DbResult<Self> {
+    async fn new(settings: &DbSettings) -> DbResult<Self> {
         let pool = PgPoolOptions::new()
             .max_connections(100)
             .connect(settings.db_uri.as_str())
@@ -78,8 +56,7 @@ impl Database for Postgres {
 
         if pg_major_version < MIN_PG_VERSION {
             return Err(DbError::Other(eyre::Report::msg(format!(
-                "unsupported PostgreSQL version {}, minimum required is {}",
-                pg_major_version, MIN_PG_VERSION
+                "unsupported PostgreSQL version {pg_major_version}, minimum required is {MIN_PG_VERSION}"
             ))));
         }
 
@@ -256,14 +233,27 @@ impl Database for Postgres {
     }
 
     async fn delete_store(&self, user: &User) -> DbResult<()> {
+        let mut tx = self.pool.begin().await.map_err(fix_error)?;
+
         sqlx::query(
             "delete from store
             where user_id = $1",
         )
         .bind(user.id)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(fix_error)?;
+
+        sqlx::query(
+            "delete from store_idx_cache
+            where user_id = $1",
+        )
+        .bind(user.id)
+        .execute(&mut *tx)
+        .await
+        .map_err(fix_error)?;
+
+        tx.commit().await.map_err(fix_error)?;
 
         Ok(())
     }
@@ -533,7 +523,7 @@ impl Database for Postgres {
         for i in records {
             let id = atuin_common::utils::uuid_v7();
 
-            sqlx::query(
+            let result = sqlx::query(
                 "insert into store
                     (id, client_id, host, idx, timestamp, version, tag, data, cek, user_id) 
                 values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
@@ -554,15 +544,17 @@ impl Database for Postgres {
             .await
             .map_err(fix_error)?;
 
-            // we're already iterating sooooo
-            heads
-                .entry((i.host.id, &i.tag))
-                .and_modify(|e| {
-                    if i.idx > *e {
-                        *e = i.idx
-                    }
-                })
-                .or_insert(i.idx);
+            // Only update heads if we actually inserted the record
+            if result.rows_affected() > 0 {
+                heads
+                    .entry((i.host.id, &i.tag))
+                    .and_modify(|e| {
+                        if i.idx > *e {
+                            *e = i.idx
+                        }
+                    })
+                    .or_insert(i.idx);
+            }
         }
 
         // we've built the map of heads for this push, so commit it to the database
@@ -644,38 +636,35 @@ impl Database for Postgres {
         const STATUS_SQL: &str =
             "select host, tag, max(idx) from store where user_id = $1 group by host, tag";
 
-        let mut res: Vec<(Uuid, String, i64)> = sqlx::query_as(STATUS_SQL)
-            .bind(user.id)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(fix_error)?;
-        res.sort();
+        // If IDX_CACHE_ROLLOUT is set, then we
+        // 1. Read the value of the var, use it as a % chance of using the cache
+        // 2. If we use the cache, just read from the cache table
+        // 3. If we don't use the cache, read from the store table
+        // IDX_CACHE_ROLLOUT should be between 0 and 100.
 
-        // We're temporarily increasing latency in order to improve confidence in the cache
-        // If it runs for a few days, and we confirm that cached values are equal to realtime, we
-        // can replace realtime with cached.
-        //
-        // But let's check so sync doesn't do Weird Things.
+        let idx_cache_rollout = std::env::var("IDX_CACHE_ROLLOUT").unwrap_or("0".to_string());
+        let idx_cache_rollout = idx_cache_rollout.parse::<f64>().unwrap_or(0.0);
+        let use_idx_cache = rand::thread_rng().gen_bool(idx_cache_rollout / 100.0);
 
-        let mut cached_res: Vec<(Uuid, String, i64)> =
+        let mut res: Vec<(Uuid, String, i64)> = if use_idx_cache {
+            tracing::debug!("using idx cache for user {}", user.id);
             sqlx::query_as("select host, tag, idx from store_idx_cache where user_id = $1")
                 .bind(user.id)
                 .fetch_all(&self.pool)
                 .await
-                .map_err(fix_error)?;
-        cached_res.sort();
+                .map_err(fix_error)?
+        } else {
+            tracing::debug!("using aggregate query for user {}", user.id);
+            sqlx::query_as(STATUS_SQL)
+                .bind(user.id)
+                .fetch_all(&self.pool)
+                .await
+                .map_err(fix_error)?
+        };
+
+        res.sort();
 
         let mut status = RecordStatus::new();
-
-        let equal = res == cached_res;
-
-        if equal {
-            counter!("atuin_store_idx_cache_consistent", 1);
-        } else {
-            // log the values if we have an inconsistent cache
-            tracing::debug!(user = user.username, cache_match = equal, res = ?res, cached = ?cached_res, "record store index request");
-            counter!("atuin_store_idx_cache_inconsistent", 1);
-        };
 
         for i in res.iter() {
             status.set_raw(HostId(i.0), i.1.clone(), i.2 as u64);

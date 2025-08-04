@@ -112,7 +112,11 @@ pub struct Cmd {
     /// - the special value "local" (or "l") which refers to the system time zone
     /// - an offset from UTC (e.g. "+9", "-2:30")
     #[arg(long, visible_alias = "tz")]
-    timezone: Option<Timezone>,
+    #[arg(allow_hyphen_values = true)]
+    // Clippy warns about `Option<Option<T>>`, but we suppress it because we need
+    // this distinction for proper argument handling.
+    #[allow(clippy::option_option)]
+    timezone: Option<Option<Timezone>>,
 
     /// Available variables: {command}, {directory}, {duration}, {user}, {host}, {time}, {exit} and
     /// {relativetime}.
@@ -260,7 +264,10 @@ impl Cmd {
                     None => Some(settings.history_format.as_str()),
                     _ => self.format.as_deref(),
                 };
-                let tz = self.timezone.unwrap_or(settings.timezone);
+                let tz = match self.timezone {
+                    Some(Some(tz)) => tz,                   // User provided a value
+                    Some(None) | None => settings.timezone, // No value was provided
+                };
 
                 super::history::print_list(
                     &entries,
@@ -271,7 +278,7 @@ impl Cmd {
                     tz,
                 );
             }
-        };
+        }
         Ok(())
     }
 }

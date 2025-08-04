@@ -49,7 +49,7 @@ impl HistoryClient {
     pub async fn new(port: u64) -> Result<Self> {
         let channel = Endpoint::try_from("http://atuin_local_daemon:0")?
             .connect_with_connector(service_fn(move |_: Uri| {
-                let url = format!("127.0.0.1:{}", port);
+                let url = format!("127.0.0.1:{port}");
 
                 async move {
                     Ok::<_, std::io::Error>(TokioIo::new(TcpStream::connect(url.clone()).await?))
@@ -58,8 +58,7 @@ impl HistoryClient {
             .await
             .wrap_err_with(|| {
                 format!(
-                    "failed to connect to local atuin daemon at 127.0.0.1:{}. Is it running?",
-                    port
+                    "failed to connect to local atuin daemon at 127.0.0.1:{port}. Is it running?"
                 )
             })?;
 
