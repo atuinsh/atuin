@@ -2,6 +2,47 @@
 
 All notable changes to this project will be documented in this file.
 
+## [18.8.0] - 2025-08-04
+
+### Bug Fixes
+
+- *(build)* Enable sqlite feature for sqlite server ([#2848](https://github.com/atuinsh/atuin/issues/2848))
+- Make login exit 1 if already logged in ([#2832](https://github.com/atuinsh/atuin/issues/2832))
+- Use transaction for idx consistency checking ([#2840](https://github.com/atuinsh/atuin/issues/2840))
+- Ensure the idx cache is cleaned on deletion, only insert if records are inserted ([#2841](https://github.com/atuinsh/atuin/issues/2841))
+
+
+### Features
+
+- Command chaining ([#2834](https://github.com/atuinsh/atuin/issues/2834))
+- Add info for 'official' plugins ([#2835](https://github.com/atuinsh/atuin/issues/2835))
+- Support multi part commands ([#2836](https://github.com/atuinsh/atuin/issues/2836)) ([#2837](https://github.com/atuinsh/atuin/issues/2837))
+- Add inline_height_shell_up_key_binding option ([#2817](https://github.com/atuinsh/atuin/issues/2817))
+- Add IDX_CACHE_ROLLOUT ([#2850](https://github.com/atuinsh/atuin/issues/2850))
+
+
+### Miscellaneous Tasks
+
+- Update to rust 1.88 ([#2815](https://github.com/atuinsh/atuin/issues/2815))
+
+
+### Nushell
+
+- Fix `get -i` deprecation ([#2829](https://github.com/atuinsh/atuin/issues/2829))
+
+
+## [18.7.1] - 2025-07-16
+
+### Bug Fixes
+
+- Add check for postgresql prefix ([#2825](https://github.com/atuinsh/atuin/issues/2825))
+
+
+### Miscellaneous Tasks
+
+- Update changelog
+
+
 ## [18.7.0] - 2025-07-16
 
 ### Bug Fixes
