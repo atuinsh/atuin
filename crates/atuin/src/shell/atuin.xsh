@@ -35,7 +35,7 @@ def _search(event, extra_args: list[str]):
     cmd = ["atuin", "search", "--interactive", *extra_args]
     # We need to explicitly pass in xonsh env, in case user has set XDG_HOME or something else that matters
     env = ${...}.detype()
-    env["ATUIN_SHELL_XONSH"] = "t"
+    env["ATUIN_SHELL"] = "xonsh"
     env["ATUIN_QUERY"] = buffer.text
 
     p = subprocess.run(cmd, stderr=subprocess.PIPE, encoding="utf-8", env=env)

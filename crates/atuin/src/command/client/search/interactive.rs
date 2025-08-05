@@ -3,7 +3,7 @@ use std::{
     time::Duration,
 };
 
-use atuin_common::utils::{self, Escapable as _};
+use atuin_common::{shell::Shell, utils::Escapable as _};
 use eyre::Result;
 use futures_util::FutureExt;
 use semver::Version;
@@ -1273,7 +1273,10 @@ pub async fn history(
             if is_command_chaining {
                 command = format!("{} {}", original_query.trim_end(), command);
             } else if accept
-                && (utils::is_zsh() || utils::is_fish() || utils::is_bash() || utils::is_xonsh())
+                && matches!(
+                    Shell::from_env(),
+                    Shell::Zsh | Shell::Fish | Shell::Bash | Shell::Xonsh
+                )
             {
                 command = String::from("__atuin_accept__:") + &command;
             }
