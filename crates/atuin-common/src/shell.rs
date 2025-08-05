@@ -62,6 +62,12 @@ impl Shell {
         Shell::from_string(shell.to_string())
     }
 
+    pub fn from_env() -> Shell {
+        std::env::var("ATUIN_SHELL").map_or(Shell::Unknown, |shell| {
+            Shell::from_string(shell.trim().to_lowercase())
+        })
+    }
+
     pub fn config_file(&self) -> Option<std::path::PathBuf> {
         let mut path = if let Some(base) = directories::BaseDirs::new() {
             base.home_dir().to_owned()

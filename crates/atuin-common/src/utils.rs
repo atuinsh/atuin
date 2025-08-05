@@ -118,26 +118,6 @@ pub fn broken_symlink<P: Into<PathBuf>>(path: P) -> bool {
     path.is_symlink() && !path.exists()
 }
 
-pub fn is_zsh() -> bool {
-    // only set on zsh
-    env::var("ATUIN_SHELL_ZSH").is_ok()
-}
-
-pub fn is_fish() -> bool {
-    // only set on fish
-    env::var("ATUIN_SHELL_FISH").is_ok()
-}
-
-pub fn is_bash() -> bool {
-    // only set on bash
-    env::var("ATUIN_SHELL_BASH").is_ok()
-}
-
-pub fn is_xonsh() -> bool {
-    // only set on xonsh
-    env::var("ATUIN_SHELL_XONSH").is_ok()
-}
-
 /// Extension trait for anything that can behave like a string to make it easy to escape control
 /// characters.
 ///
