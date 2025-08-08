@@ -744,6 +744,7 @@ impl State {
                     indicator.as_str(),
                     theme,
                     history_highlighter,
+                    settings.show_numeric_shortcuts,
                 );
                 f.render_stateful_widget(results_list, results_list_chunk, &mut self.results_state);
             }
@@ -880,6 +881,7 @@ impl State {
         .alignment(Alignment::Right)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn build_results_list<'a>(
         style: StyleState,
         results: &'a [History],
@@ -888,6 +890,7 @@ impl State {
         indicator: &'a str,
         theme: &'a Theme,
         history_highlighter: HistoryHighlighter<'a>,
+        show_numeric_shortcuts: bool,
     ) -> HistoryList<'a> {
         let results_list = HistoryList::new(
             results,
@@ -897,6 +900,7 @@ impl State {
             indicator,
             theme,
             history_highlighter,
+            show_numeric_shortcuts,
         );
 
         if style.compact {
