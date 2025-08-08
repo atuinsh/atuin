@@ -39,6 +39,7 @@ pub struct HistoryList<'a> {
     indicator: &'a str,
     theme: &'a Theme,
     history_highlighter: HistoryHighlighter<'a>,
+    show_numeric_shortcuts: bool,
 }
 
 #[derive(Default)]
@@ -93,6 +94,7 @@ impl StatefulWidget for HistoryList<'_> {
             indicator: self.indicator,
             theme: self.theme,
             history_highlighter: self.history_highlighter,
+            show_numeric_shortcuts: self.show_numeric_shortcuts,
         };
 
         for item in self.history.iter().skip(state.offset).take(end - start) {
@@ -109,6 +111,7 @@ impl StatefulWidget for HistoryList<'_> {
 }
 
 impl<'a> HistoryList<'a> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         history: &'a [History],
         inverted: bool,
@@ -117,6 +120,7 @@ impl<'a> HistoryList<'a> {
         indicator: &'a str,
         theme: &'a Theme,
         history_highlighter: HistoryHighlighter<'a>,
+        show_numeric_shortcuts: bool,
     ) -> Self {
         Self {
             history,
@@ -127,6 +131,7 @@ impl<'a> HistoryList<'a> {
             indicator,
             theme,
             history_highlighter,
+            show_numeric_shortcuts,
         }
     }
 
@@ -162,6 +167,7 @@ struct DrawState<'a> {
     indicator: &'a str,
     theme: &'a Theme,
     history_highlighter: HistoryHighlighter<'a>,
+    show_numeric_shortcuts: bool,
 }
 
 // longest line prefix I could come up with
@@ -170,11 +176,22 @@ pub const PREFIX_LENGTH: u16 = " > 123ms 59s ago".len() as u16;
 static SPACES: &str = "                ";
 static _ASSERT: () = assert!(SPACES.len() == PREFIX_LENGTH as usize);
 
+// these encode the slices of `" > "`, `" {n} "`, or `"   "` in a compact form.
+// Yes, this is a hack, but it makes me feel happy
+static SLICES: &str = " > 1 2 3 4 5 6 7 8 9   ";
+
 impl DrawState<'_> {
     fn index(&mut self) {
+        if !self.show_numeric_shortcuts {
+            let i = self.y as usize + self.state.offset;
+            let is_selected = i == self.state.selected();
+            let prompt: &str = if is_selected { self.indicator } else { "   " };
+            self.draw(prompt, Style::default());
+            return;
+        }
+
         // these encode the slices of `" > "`, `" {n} "`, or `"   "` in a compact form.
         // Yes, this is a hack, but it makes me feel happy
-        static SLICES: &str = " > 1 2 3 4 5 6 7 8 9   ";
 
         let i = self.y as usize + self.state.offset;
         let i = i.checked_sub(self.state.selected);
