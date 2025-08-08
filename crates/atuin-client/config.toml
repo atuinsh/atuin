@@ -100,6 +100,10 @@
 ## alt-0 .. alt-9
 # ctrl_n_shortcuts = false
 
+## Show numeric shortcuts (1..9) beside list items in the TUI
+## set to false to hide the moving numbers if you find them distracting
+# show_numeric_shortcuts = true
+
 ## default history list format - can also be specified with the --format arg
 # history_format = "{time}\t{command}\t{duration}"
 
