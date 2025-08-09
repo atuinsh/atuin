@@ -9,8 +9,9 @@ use atuin_client::{
     database::Database,
     history::History,
     import::{
-        Importer, Loader, bash::Bash, fish::Fish, nu::Nu, nu_histdb::NuHistDb, replxx::Replxx,
-        resh::Resh, xonsh::Xonsh, xonsh_sqlite::XonshSqlite, zsh::Zsh, zsh_histdb::ZshHistDb,
+        Importer, Loader, bash::Bash, fish::Fish, nu::Nu, nu_histdb::NuHistDb,
+        powershell::PowerShell, replxx::Replxx, resh::Resh, xonsh::Xonsh,
+        xonsh_sqlite::XonshSqlite, zsh::Zsh, zsh_histdb::ZshHistDb,
     },
 };
 
@@ -40,6 +41,8 @@ pub enum Cmd {
     Xonsh,
     /// Import history from xonsh sqlite db
     XonshSqlite,
+    /// Import history from the powershell history file
+    Powershell,
 }
 
 const BATCH_SIZE: usize = 100;
@@ -58,10 +61,15 @@ impl Cmd {
         match self {
             Self::Auto => {
                 if cfg!(windows) {
-                    println!(
-                        "This feature does not work on windows. Please run atuin import <SHELL>. To view a list of shells, run atuin import."
-                    );
-                    return Ok(());
+                    return if env::var("PSModulePath").is_ok() {
+                        println!("Detected PowerShell");
+                        import::<PowerShell, DB>(db).await
+                    } else {
+                        println!("Could not detect the current shell.");
+                        println!("Please run atuin import <SHELL>.");
+                        println!("To view a list of shells, run atuin import.");
+                        Ok(())
+                    };
                 }
 
                 // $XONSH_HISTORY_BACKEND isn't always set, but $XONSH_HISTORY_FILE is
@@ -103,6 +111,9 @@ impl Cmd {
                         println!("Detected Nushell");
                         import::<Nu, DB>(db).await
                     }
+                } else if shell.ends_with("/pwsh") {
+                    println!("Detected PowerShell");
+                    import::<PowerShell, DB>(db).await
                 } else {
                     println!("cannot import {shell} history");
                     Ok(())
@@ -119,6 +130,7 @@ impl Cmd {
             Self::NuHistDb => import::<NuHistDb, DB>(db).await,
             Self::Xonsh => import::<Xonsh, DB>(db).await,
             Self::XonshSqlite => import::<XonshSqlite, DB>(db).await,
+            Self::Powershell => import::<PowerShell, DB>(db).await,
         }
     }
 }
