@@ -133,7 +133,7 @@ pub struct Sqlite {
 impl Sqlite {
     pub async fn new(path: impl AsRef<Path>, timeout: f64) -> Result<Self> {
         let path = path.as_ref();
-        debug!("opening sqlite database at {:?}", path);
+        debug!("opening sqlite database at {path:?}");
 
         if utils::broken_symlink(path) {
             eprintln!(
