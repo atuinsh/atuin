@@ -118,7 +118,7 @@ fn parse_extended(line: &str, counter: i64) -> History {
     imported.build().into()
 }
 
-fn unmetafy(line: &[u8]) -> Option<Cow<str>> {
+fn unmetafy(line: &[u8]) -> Option<Cow<'_, str>> {
     if line.contains(&0x83) {
         let mut s = Vec::with_capacity(line.len());
         let mut is_meta = false;

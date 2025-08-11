@@ -169,12 +169,11 @@ impl State {
         }
         .or_else(|| self.current_cursor.map(|_| CursorStyle::DefaultUserShape));
 
-        if cursor_style != self.current_cursor {
-            if let Some(style) = cursor_style {
+        if cursor_style != self.current_cursor
+            && let Some(style) = cursor_style {
                 self.current_cursor = cursor_style;
                 let _ = execute!(stdout(), Self::cast_cursor_style(style));
             }
-        }
     }
 
     pub fn initialize_keymap_cursor(&mut self, settings: &Settings) {
@@ -820,7 +819,7 @@ impl State {
         }
     }
 
-    fn build_title(&self, theme: &Theme) -> Paragraph {
+    fn build_title(&self, theme: &Theme) -> Paragraph<'_> {
         let title = if self.update_needed.is_some() {
             let error_style: Style = theme.get_error().into();
             Paragraph::new(Text::from(Span::styled(
@@ -838,7 +837,7 @@ impl State {
     }
 
     #[allow(clippy::unused_self)]
-    fn build_help(&self, settings: &Settings, theme: &Theme) -> Paragraph {
+    fn build_help(&self, settings: &Settings, theme: &Theme) -> Paragraph<'_> {
         match self.tab_index {
             // search
             0 => Paragraph::new(Text::from(Line::from(vec![
@@ -876,7 +875,7 @@ impl State {
         .alignment(Alignment::Center)
     }
 
-    fn build_stats(&self, theme: &Theme) -> Paragraph {
+    fn build_stats(&self, theme: &Theme) -> Paragraph<'_> {
         Paragraph::new(Text::from(Span::raw(format!(
             "history count: {}",
             self.history_count,
@@ -922,7 +921,7 @@ impl State {
         }
     }
 
-    fn build_input(&self, style: StyleState) -> Paragraph {
+    fn build_input(&self, style: StyleState) -> Paragraph<'_> {
         /// Max width of the UI box showing current mode
         const MAX_WIDTH: usize = 14;
         let (pref, mode) = if self.switched_search_mode {
@@ -960,7 +959,7 @@ impl State {
         preview_width: u16,
         chunk_width: usize,
         theme: &Theme,
-    ) -> Paragraph {
+    ) -> Paragraph<'_> {
         let selected = self.results_state.selected();
         let command = if results.is_empty() {
             String::new()

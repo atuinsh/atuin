@@ -40,7 +40,7 @@ impl ScriptSession {
     }
 }
 
-fn setup_template(script: &Script) -> Result<minijinja::Environment> {
+fn setup_template(script: &Script) -> Result<minijinja::Environment<'_>> {
     let mut env = minijinja::Environment::new();
     env.set_trim_blocks(true);
     env.add_template("script", script.script.as_str())?;
