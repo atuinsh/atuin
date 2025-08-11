@@ -41,11 +41,10 @@ impl SqliteStore {
             std::process::exit(1);
         }
 
-        if !path.exists() {
-            if let Some(dir) = path.parent() {
+        if !path.exists()
+            && let Some(dir) = path.parent() {
                 fs::create_dir_all(dir)?;
             }
-        }
 
         let opts = SqliteConnectOptions::from_str(path.as_os_str().to_str().unwrap())?
             .journal_mode(SqliteJournalMode::Wal)
