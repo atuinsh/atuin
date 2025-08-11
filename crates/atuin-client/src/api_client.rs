@@ -346,12 +346,7 @@ impl<'a> Client<'a> {
         start: RecordIdx,
         count: u64,
     ) -> Result<Vec<Record<EncryptedData>>> {
-        debug!(
-            "fetching record/s from host {}/{}/{}",
-            host.0.to_string(),
-            tag,
-            start
-        );
+        debug!("fetching record/s from host {}/{}/{}", host.0, tag, start);
 
         let url = make_url(
             self.sync_addr,
@@ -384,7 +379,7 @@ impl<'a> Client<'a> {
 
         let index = resp.json().await?;
 
-        debug!("got remote index {:?}", index);
+        debug!("got remote index {index:?}");
 
         Ok(index)
     }
