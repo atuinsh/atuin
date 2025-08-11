@@ -31,9 +31,10 @@ impl Database {
         }
 
         if !path.exists()
-            && let Some(dir) = path.parent() {
-                fs::create_dir_all(dir).await?;
-            }
+            && let Some(dir) = path.parent()
+        {
+            fs::create_dir_all(dir).await?;
+        }
 
         let opts = SqliteConnectOptions::from_str(path.as_os_str().to_str().unwrap())?
             .journal_mode(SqliteJournalMode::Wal)
