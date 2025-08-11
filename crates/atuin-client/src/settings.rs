@@ -874,6 +874,7 @@ impl Settings {
         settings.record_store_path = Self::expand_path(settings.record_store_path)?;
         settings.key_path = Self::expand_path(settings.key_path)?;
         settings.session_path = Self::expand_path(settings.session_path)?;
+        settings.daemon.socket_path = Self::expand_path(settings.daemon.socket_path)?;
 
         Ok(settings)
     }
