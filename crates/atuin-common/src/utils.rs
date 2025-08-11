@@ -145,7 +145,7 @@ pub fn is_xonsh() -> bool {
 /// printing history as well as to ensure the commands that appear in the interactive search
 /// reflect the actual command run rather than just the printable characters.
 pub trait Escapable: AsRef<str> {
-    fn escape_control(&self) -> Cow<str> {
+    fn escape_control(&self) -> Cow<'_, str> {
         if !self.as_ref().contains(|c: char| c.is_ascii_control()) {
             self.as_ref().into()
         } else {
