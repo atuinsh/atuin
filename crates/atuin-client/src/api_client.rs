@@ -379,7 +379,7 @@ impl<'a> Client<'a> {
 
         let index = resp.json().await?;
 
-        debug!("got remote index {:?}", index);
+        debug!("got remote index {index:?}");
 
         Ok(index)
     }
