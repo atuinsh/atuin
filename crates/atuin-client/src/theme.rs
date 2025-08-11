@@ -133,12 +133,7 @@ impl Theme {
                     *name,
                     StyleFactory::from_fg_string(color).unwrap_or_else(|err| {
                         if debug {
-                            log::warn!(
-                                "Tried to load string as a color unsuccessfully: ({}={}) {}",
-                                name,
-                                color,
-                                err
-                            );
+                            log::warn!("Tried to load string as a color unsuccessfully: ({name}={color}) {err}");
                         }
                         ContentStyle::default()
                     }),
@@ -465,7 +460,7 @@ impl ThemeManager {
             None => match self.load_theme_from_file(name, max_depth.unwrap_or(DEFAULT_MAX_DEPTH)) {
                 Ok(theme) => theme,
                 Err(err) => {
-                    log::warn!("Could not load theme {}: {}", name, err);
+                    log::warn!("Could not load theme {name}: {err}");
                     built_ins.get("default").unwrap()
                 }
             },
