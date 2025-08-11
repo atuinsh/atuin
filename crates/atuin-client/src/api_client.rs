@@ -348,7 +348,7 @@ impl<'a> Client<'a> {
     ) -> Result<Vec<Record<EncryptedData>>> {
         debug!(
             "fetching record/s from host {}/{}/{}",
-            host.0.to_string(),
+            host.0,
             tag,
             start
         );
