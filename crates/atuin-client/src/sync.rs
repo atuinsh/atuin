@@ -142,7 +142,7 @@ async fn sync_upload(
 
     let local_count = db.history_count(true).await?;
 
-    debug!("remote has {}, we have {}", remote_count, local_count);
+    debug!("remote has {remote_count}, we have {local_count}");
 
     // first just try the most recent set
     let mut cursor = OffsetDateTime::now_utc();
@@ -174,7 +174,7 @@ async fn sync_upload(
         cursor = buffer.last().unwrap().timestamp;
         remote_count = client.count().await?;
 
-        debug!("upload cursor: {:?}", cursor);
+        debug!("upload cursor: {cursor:?}");
     }
 
     let deleted = db.deleted().await?;
