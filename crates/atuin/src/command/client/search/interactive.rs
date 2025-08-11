@@ -170,10 +170,11 @@ impl State {
         .or_else(|| self.current_cursor.map(|_| CursorStyle::DefaultUserShape));
 
         if cursor_style != self.current_cursor
-            && let Some(style) = cursor_style {
-                self.current_cursor = cursor_style;
-                let _ = execute!(stdout(), Self::cast_cursor_style(style));
-            }
+            && let Some(style) = cursor_style
+        {
+            self.current_cursor = cursor_style;
+            let _ = execute!(stdout(), Self::cast_cursor_style(style));
+        }
     }
 
     pub fn initialize_keymap_cursor(&mut self, settings: &Settings) {
