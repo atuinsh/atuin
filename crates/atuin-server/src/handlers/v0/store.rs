@@ -1,4 +1,5 @@
 use axum::{extract::Query, extract::State, http::StatusCode};
+#[cfg(feature = "metrics")]
 use metrics::counter;
 use serde::Deserialize;
 use tracing::{error, instrument};
@@ -24,6 +25,7 @@ pub async fn delete<DB: Database>(
     }) = state;
 
     if let Err(e) = database.delete_store(&user).await {
+        #[cfg(feature = "metrics")]
         counter!("atuin_store_delete_failed", 1);
         error!("failed to delete store {e:?}");
 
@@ -31,6 +33,7 @@ pub async fn delete<DB: Database>(
             .with_status(StatusCode::INTERNAL_SERVER_ERROR));
     }
 
+    #[cfg(feature = "metrics")]
     counter!("atuin_store_deleted", 1);
 
     Ok(())

@@ -33,7 +33,7 @@ buildflags = ["--release"]
 atuin = { path = "/usr/bin/atuin" }
 
 [features]
-default = ["client", "sync", "server", "clipboard", "check-update", "daemon"]
+default = ["client", "sync", "server", "server-metrics", "clipboard", "check-update", "daemon"]
 client = ["atuin-client"]
 sync = ["atuin-client/sync"]
 daemon = ["atuin-client/daemon", "atuin-daemon"]
@@ -43,6 +43,7 @@ server = [
   "atuin-server-postgres",
   "atuin-server-sqlite",
 ]
+server-metrics = ["atuin-server/metrics"]
 clipboard = ["arboard"]
 check-update = ["atuin-client/check-update"]
 

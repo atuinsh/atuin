@@ -10,9 +10,21 @@ use axum_server::tls_rustls::RustlsConfig;
 use eyre::{Context, Result, eyre};
 
 mod handlers;
+#[cfg(feature = "metrics")]
 mod metrics;
 mod router;
 mod utils;
+
+#[cfg(not(feature = "metrics"))]
+pub mod metrics {
+    // Pass through (nop) if the metrics feature is not enabled.
+    pub async fn track_metrics(
+        req: axum::extract::Request,
+        next: axum::middleware::Next,
+    ) -> impl axum::response::IntoResponse {
+        next.run(req).await
+    }
+}
 
 pub use settings::Settings;
 pub use settings::example_config;
@@ -113,6 +125,7 @@ async fn launch_with_tls<Db: Database>(
 
 // The separate listener means it's much easier to ensure metrics are not accidentally exposed to
 // the public.
+#[cfg(feature = "metrics")]
 pub async fn launch_metrics_server(host: String, port: u16) -> Result<()> {
     let listener = TcpListener::bind((host, port))
         .await
@@ -129,6 +142,11 @@ pub async fn launch_metrics_server(host: String, port: u16) -> Result<()> {
         .with_graceful_shutdown(shutdown_signal())
         .await?;
 
+    Ok(())
+}
+// Nop when metrics feature is disabled.
+#[cfg(not(feature = "metrics"))]
+pub async fn launch_metrics_server(_: String, _: u16) -> Result<()> {
     Ok(())
 }
 
