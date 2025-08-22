@@ -133,7 +133,7 @@ pub struct Sqlite {
 impl Sqlite {
     pub async fn new(path: impl AsRef<Path>, timeout: f64) -> Result<Self> {
         let path = path.as_ref();
-        debug!("opening sqlite database at {:?}", path);
+        debug!("opening sqlite database at {path:?}");
 
         if utils::broken_symlink(path) {
             eprintln!(
@@ -142,10 +142,10 @@ impl Sqlite {
             std::process::exit(1);
         }
 
-        if !path.exists() {
-            if let Some(dir) = path.parent() {
-                fs::create_dir_all(dir)?;
-            }
+        if !path.exists()
+            && let Some(dir) = path.parent()
+        {
+            fs::create_dir_all(dir)?;
         }
 
         let opts = SqliteConnectOptions::from_str(path.as_os_str().to_str().unwrap())?

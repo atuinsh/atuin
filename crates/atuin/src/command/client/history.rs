@@ -321,7 +321,7 @@ impl FormatKey for FmtHistory<'_> {
     }
 }
 
-fn parse_fmt(format: &str) -> ParsedFmt {
+fn parse_fmt(format: &str) -> ParsedFmt<'_> {
     match ParsedFmt::new(format) {
         Ok(fmt) => fmt,
         Err(err) => {
