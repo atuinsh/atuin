@@ -13,9 +13,9 @@ use tower::ServiceBuilder;
 use tower_http::trace::TraceLayer;
 
 use super::handlers;
+use crate::metrics;
 use crate::{
     handlers::{ErrorResponseStatus, RespExt},
-    metrics,
     settings::Settings,
 };
 use atuin_server_database::{Database, DbError, models::User};

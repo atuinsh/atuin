@@ -1,4 +1,5 @@
 use axum::{Json, extract::Query, extract::State, http::StatusCode};
+#[cfg(feature = "metrics")]
 use metrics::counter;
 use serde::Deserialize;
 use tracing::{error, instrument};
@@ -25,14 +26,16 @@ pub async fn post<DB: Database>(
         "request to add records"
     );
 
-    counter!("atuin_record_uploaded", records.len() as u64);
+    #[cfg(feature = "metrics")]
+    counter!("atuin_record_uploaded").increment(records.len() as u64);
 
     let keep = records
         .iter()
         .all(|r| r.data.data.len() <= settings.max_record_size || settings.max_record_size == 0);
 
     if !keep {
-        counter!("atuin_record_too_large", 1);
+        #[cfg(feature = "metrics")]
+        counter!("atuin_record_too_large").increment(1);
 
         return Err(
             ErrorResponse::reply("could not add records; record too large")
@@ -108,7 +111,8 @@ pub async fn next<DB: Database>(
         }
     };
 
-    counter!("atuin_record_downloaded", records.len() as u64);
+    #[cfg(feature = "metrics")]
+    counter!("atuin_record_downloaded").increment(records.len() as u64);
 
     Ok(Json(records))
 }
