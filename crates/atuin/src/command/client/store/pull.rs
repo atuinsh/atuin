@@ -19,6 +19,11 @@ pub struct Pull {
     /// This will first wipe the local store, and then download all records from the remote
     #[arg(long, default_value = "false")]
     pub force: bool,
+
+    /// Page Size
+    /// How many records to upload at once. Defaults to 100
+    #[arg(long, default_value = "100")]
+    pub page: u64,
 }
 
 impl Pull {
@@ -67,7 +72,7 @@ impl Pull {
             })
             .collect();
 
-        let (_, downloaded) = sync::sync_remote(operations, &store, settings).await?;
+        let (_, downloaded) = sync::sync_remote(operations, &store, settings, self.page).await?;
 
         println!("Downloaded {} records", downloaded.len());
 
