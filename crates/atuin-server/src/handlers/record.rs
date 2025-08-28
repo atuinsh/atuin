@@ -4,14 +4,11 @@ use tracing::instrument;
 
 use super::{ErrorResponse, ErrorResponseStatus, RespExt};
 use crate::router::UserAuth;
-use atuin_server_database::Database;
 
 use atuin_common::record::{EncryptedData, Record};
 
 #[instrument(skip_all, fields(user.id = user.id))]
-pub async fn post<DB: Database>(
-    UserAuth(user): UserAuth,
-) -> Result<(), ErrorResponseStatus<'static>> {
+pub async fn post(UserAuth(user): UserAuth) -> Result<(), ErrorResponseStatus<'static>> {
     // anyone who has actually used the old record store (a very small number) will see this error
     // upon trying to sync.
     // 1. The status endpoint will say that the server has nothing
@@ -27,7 +24,7 @@ pub async fn post<DB: Database>(
 }
 
 #[instrument(skip_all, fields(user.id = user.id))]
-pub async fn index<DB: Database>(UserAuth(user): UserAuth) -> axum::response::Response {
+pub async fn index(UserAuth(user): UserAuth) -> axum::response::Response {
     let ret = json!({
         "hosts": {}
     });

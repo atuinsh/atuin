@@ -66,10 +66,11 @@ fn load_sessions(hist_dir: &Path) -> Result<Vec<HistoryData>> {
     for entry in fs::read_dir(hist_dir)? {
         let p = entry?.path();
         let ext = p.extension().and_then(|e| e.to_str());
-        if p.is_file() && ext == Some("json") {
-            if let Some(data) = load_session(&p)? {
-                sessions.push(data);
-            }
+        if p.is_file()
+            && ext == Some("json")
+            && let Some(data) = load_session(&p)?
+        {
+            sessions.push(data);
         }
     }
     Ok(sessions)
