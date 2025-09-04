@@ -370,6 +370,11 @@ impl State {
                     self.keymap_mode = KeymapMode::VimInsert;
                     return InputAction::Continue;
                 }
+                KeyCode::Char(c @ '1'..='9') => {
+                    return c.to_digit(10).map_or(InputAction::Continue, |c| {
+                        InputAction::Accept(self.results_state.selected() + c as usize)
+                    });
+                }
                 KeyCode::Char(_) if !ctrl => {
                     return InputAction::Continue;
                 }
