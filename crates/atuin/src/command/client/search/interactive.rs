@@ -1081,6 +1081,16 @@ pub async fn history(
         settings.inline_height
     };
 
+    // Use fullscreen mode if the inline height doesn't fit in the terminal,
+    // this will preserve the scroll position upon exit
+    let inline_height = if let Ok(size) = terminal::size()
+        && inline_height >= size.1
+    {
+        0
+    } else {
+        inline_height
+    };
+
     let stdout = Stdout::new(inline_height > 0)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::with_options(
