@@ -25,7 +25,6 @@
       in
       {
         packages.atuin = pkgs.callPackage ./atuin.nix {
-          inherit (pkgs.darwin.apple_sdk.frameworks) Security SystemConfiguration AppKit;
           rustPlatform =
             let
               toolchain =
