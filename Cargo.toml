@@ -7,7 +7,7 @@ exclude = ["ui/backend"]
 [workspace.package]
 version = "18.8.0"
 authors = ["Ellie Huxtable <ellie@atuin.sh>"]
-rust-version = "1.88"
+rust-version = "1.89"
 license = "MIT"
 homepage = "https://atuin.sh"
 repository = "https://github.com/atuinsh/atuin"
