@@ -115,13 +115,66 @@ impl VarStore {
         }
     }
 
+    /// Escape a value for use in POSIX shells (bash, zsh)
+    /// This adds double quotes around the value and escapes any embedded double quotes
+    fn escape_posix_value(value: &str) -> String {
+        // If the value contains no special characters, we can use it unquoted
+        if value
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '/' || c == '.')
+        {
+            value.to_string()
+        } else {
+            // Otherwise, wrap in double quotes and escape any special characters
+            format!(
+                "\"{}\"",
+                value
+                    .replace('\\', "\\\\")
+                    .replace('"', "\\\"")
+                    .replace('$', "\\$")
+                    .replace('`', "\\`")
+            )
+        }
+    }
+
+    /// Escape a value for use in fish shell
+    /// Fish uses single quotes for literal strings, but we need to handle embedded single quotes
+    fn escape_fish_value(value: &str) -> String {
+        // If the value contains no special characters, we can use it unquoted
+        if value
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '/' || c == '.')
+        {
+            value.to_string()
+        } else {
+            // Use single quotes and escape any embedded single quotes
+            format!("'{}'", value.replace('\'', "\\'"))
+        }
+    }
+
+    /// Escape a value for use in xonsh
+    /// Xonsh uses Python-style string literals
+    fn escape_xonsh_value(value: &str) -> String {
+        // If the value contains no special characters, we can use it unquoted
+        if value
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '/' || c == '.')
+        {
+            value.to_string()
+        } else {
+            // Use double quotes and escape appropriately for Python strings
+            format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+        }
+    }
+
     pub async fn xonsh(&self) -> Result<String> {
         let env = self.vars().await?;
 
         let mut config = String::new();
 
         for env in env {
-            config.push_str(&format!("${}={}\n", env.name, env.value));
+            let escaped_value = Self::escape_xonsh_value(&env.value);
+            config.push_str(&format!("${}={}\n", env.name, escaped_value));
         }
 
         Ok(config)
@@ -133,7 +186,8 @@ impl VarStore {
         let mut config = String::new();
 
         for env in env {
-            config.push_str(&format!("set -gx {} {}\n", env.name, env.value));
+            let escaped_value = Self::escape_fish_value(&env.value);
+            config.push_str(&format!("set -gx {} {}\n", env.name, escaped_value));
         }
 
         Ok(config)
@@ -145,10 +199,11 @@ impl VarStore {
         let mut config = String::new();
 
         for env in env {
+            let escaped_value = Self::escape_posix_value(&env.value);
             if env.export {
-                config.push_str(&format!("export {}={}\n", env.name, env.value));
+                config.push_str(&format!("export {}={}\n", env.name, escaped_value));
             } else {
-                config.push_str(&format!("{}={}\n", env.name, env.value));
+                config.push_str(&format!("{}={}\n", env.name, escaped_value));
             }
         }
 
@@ -317,6 +372,80 @@ mod tests {
         assert_eq!(decoded, record);
     }
 
+    #[test]
+    fn test_escape_posix_value() {
+        // Simple values should not be quoted
+        assert_eq!(VarStore::escape_posix_value("simple"), "simple");
+        assert_eq!(VarStore::escape_posix_value("path/to/file"), "path/to/file");
+        assert_eq!(
+            VarStore::escape_posix_value("value_with_underscores"),
+            "value_with_underscores"
+        );
+
+        // Values with spaces should be quoted
+        assert_eq!(
+            VarStore::escape_posix_value("hello world"),
+            "\"hello world\""
+        );
+        assert_eq!(VarStore::escape_posix_value("bar baz"), "\"bar baz\"");
+
+        // Values with special characters should be quoted and escaped
+        assert_eq!(
+            VarStore::escape_posix_value("say \"hello\""),
+            "\"say \\\"hello\\\"\""
+        );
+        assert_eq!(
+            VarStore::escape_posix_value("path\\with\\backslashes"),
+            "\"path\\\\with\\\\backslashes\""
+        );
+        assert_eq!(
+            VarStore::escape_posix_value("say $hello"),
+            "\"say \\$hello\""
+        );
+        assert_eq!(
+            VarStore::escape_posix_value("see `example.md`"),
+            "\"see \\`example.md\\`\""
+        );
+    }
+
+    #[test]
+    fn test_escape_fish_value() {
+        // Simple values should not be quoted
+        assert_eq!(VarStore::escape_fish_value("simple"), "simple");
+        assert_eq!(VarStore::escape_fish_value("path/to/file"), "path/to/file");
+
+        // Values with spaces should be single-quoted
+        assert_eq!(VarStore::escape_fish_value("hello world"), "'hello world'");
+        assert_eq!(VarStore::escape_fish_value("bar baz"), "'bar baz'");
+
+        // Values with single quotes should be escaped
+        assert_eq!(VarStore::escape_fish_value("don't"), "'don\\'t'");
+    }
+
+    #[test]
+    fn test_escape_xonsh_value() {
+        // Simple values should not be quoted
+        assert_eq!(VarStore::escape_xonsh_value("simple"), "simple");
+        assert_eq!(VarStore::escape_xonsh_value("path/to/file"), "path/to/file");
+
+        // Values with spaces should be quoted
+        assert_eq!(
+            VarStore::escape_xonsh_value("hello world"),
+            "\"hello world\""
+        );
+        assert_eq!(VarStore::escape_xonsh_value("bar baz"), "\"bar baz\"");
+
+        // Values with special characters should be quoted and escaped
+        assert_eq!(
+            VarStore::escape_xonsh_value("say \"hello\""),
+            "\"say \\\"hello\\\"\""
+        );
+        assert_eq!(
+            VarStore::escape_xonsh_value("path\\with\\backslashes"),
+            "\"path\\\\with\\\\backslashes\""
+        );
+    }
+
     #[tokio::test]
     async fn build_vars() {
         let store = SqliteStore::new(":memory:", test_local_timeout())
@@ -353,5 +482,32 @@ mod tests {
                 export: true,
             }
         );
+    }
+
+    #[tokio::test]
+    async fn test_var_generation_with_spaces() {
+        let store = SqliteStore::new(":memory:", test_local_timeout())
+            .await
+            .unwrap();
+        let key: [u8; 32] = XSalsa20Poly1305::generate_key(&mut OsRng).into();
+        let host_id = atuin_common::record::HostId(atuin_common::utils::uuid_v7());
+
+        let env = VarStore::new(store, host_id, key);
+
+        // Test the exact scenario from the bug report
+        env.set("FOO", "bar baz", true).await.unwrap();
+
+        let posix_output = env.posix().await.unwrap();
+        let fish_output = env.fish().await.unwrap();
+        let xonsh_output = env.xonsh().await.unwrap();
+
+        // POSIX should quote the value
+        assert_eq!(posix_output, "export FOO=\"bar baz\"\n");
+
+        // Fish should quote the value
+        assert_eq!(fish_output, "set -gx FOO 'bar baz'\n");
+
+        // Xonsh should quote the value
+        assert_eq!(xonsh_output, "$FOO=\"bar baz\"\n");
     }
 }
