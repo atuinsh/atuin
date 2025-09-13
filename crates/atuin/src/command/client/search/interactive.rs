@@ -1270,7 +1270,11 @@ pub async fn history(
         InputAction::Accept(index) if index < results.len() => {
             let mut command = results.swap_remove(index).command;
             if accept
-                && (utils::is_zsh() || utils::is_fish() || utils::is_bash() || utils::is_xonsh())
+                && (utils::is_zsh()
+                    || utils::is_fish()
+                    || utils::is_bash()
+                    || utils::is_xonsh()
+                    || utils::is_powershell())
             {
                 if is_command_chaining {
                     command = String::from("__atuin_chain_command__:") + &command;
