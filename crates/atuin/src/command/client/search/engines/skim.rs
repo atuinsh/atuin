@@ -7,6 +7,7 @@ use fuzzy_matcher::{FuzzyMatcher, skim::SkimMatcherV2};
 use itertools::Itertools;
 use time::OffsetDateTime;
 use tokio::task::yield_now;
+use uuid;
 
 use super::{SearchEngine, SearchState};
 
@@ -83,6 +84,54 @@ async fn fuzzy_search(
                     .as_bytes()
                     .chunks(32)
                     .contains(&context.session.as_bytes()) => {}
+            // SessionPreload: include current session + global history from before session start
+            FilterMode::SessionPreload => {
+                let is_current_session = {
+                    history
+                        .session
+                        .as_bytes()
+                        .chunks(32)
+                        .any(|chunk| chunk == context.session.as_bytes())
+                };
+
+                if !is_current_session {
+                    let uuid = match uuid::Uuid::parse_str(&context.session) {
+                        Ok(uuid) => uuid,
+                        Err(_) => {
+                            log::warn!("failed to parse session id '{}'", context.session);
+                            continue;
+                        }
+                    };
+                    let timestamp = match uuid.get_timestamp() {
+                        Some(timestamp) => timestamp,
+                        None => {
+                            log::warn!(
+                                "failed to get timestamp from uuid '{}'",
+                                uuid.as_hyphenated()
+                            );
+                            continue;
+                        }
+                    };
+                    let (seconds, nanos) = timestamp.to_unix();
+                    let session_start = match time::OffsetDateTime::from_unix_timestamp_nanos(
+                        seconds as i128 * 1_000_000_000 + nanos as i128,
+                    ) {
+                        Ok(session_start) => session_start,
+                        Err(_) => {
+                            log::warn!(
+                                "failed to create OffsetDateTime from second: {}, nanosecond: {}",
+                                seconds,
+                                nanos
+                            );
+                            continue;
+                        }
+                    };
+
+                    if history.timestamp >= session_start {
+                        continue;
+                    }
+                }
+            }
             // we aggregate directory by ':' separating them
             FilterMode::Directory if history.cwd.split(':').contains(&context.cwd.as_str()) => {}
             FilterMode::Workspace if history.cwd.split(':').contains(&git_root) => {}
