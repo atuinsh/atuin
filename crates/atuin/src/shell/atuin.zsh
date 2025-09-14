@@ -15,8 +15,12 @@ zmodload zsh/datetime 2>/dev/null
 # you'd like to override this, then add your config after the $(atuin init zsh)
 # in your .zshrc
 _zsh_autosuggest_strategy_atuin() {
+    if [[ -o nosharehistory ]]; then
+        filter_mode='--filter-mode session'
+    fi
+    
     # silence errors, since we don't want to spam the terminal prompt while typing.
-    suggestion=$(ATUIN_QUERY="$1" atuin search --cmd-only --limit 1 --search-mode prefix 2>/dev/null)
+    suggestion=$(ATUIN_QUERY="$1" atuin search --cmd-only --limit 1 --search-mode prefix "$filter_mode" 2>/dev/null)
 }
 
 if [ -n "${ZSH_AUTOSUGGEST_STRATEGY:-}" ]; then
