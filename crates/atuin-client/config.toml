@@ -41,7 +41,7 @@
 # search_mode = "fuzzy"
 
 ## which filter mode to use by default
-## possible values: "global", "host", "session", "directory", "workspace"
+## possible values: "global", "host", "session", "session-preload", "directory", "workspace"
 ## consider using search.filters to customize the enablement and order of filter modes
 # filter_mode = "global"
 
@@ -281,4 +281,4 @@ records = true
 ## The list of enabled filter modes, in order of priority.
 ## The "workspace" mode is skipped when not in a workspace or workspaces = false.
 ## Default filter mode can be overridden with the filter_mode setting.
-# filters = [ "global", "host", "session", "workspace", "directory" ]
+# filters = [ "global", "host", "session", "session-preload", "workspace", "directory" ]
