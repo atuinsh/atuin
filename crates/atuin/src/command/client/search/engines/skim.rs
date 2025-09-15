@@ -48,6 +48,7 @@ impl SearchEngine for Search {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 async fn fuzzy_search(
     engine: &SkimMatcherV2,
     state: &SearchState,
@@ -95,36 +96,25 @@ async fn fuzzy_search(
                 };
 
                 if !is_current_session {
-                    let uuid = match uuid::Uuid::parse_str(&context.session) {
-                        Ok(uuid) => uuid,
-                        Err(_) => {
-                            log::warn!("failed to parse session id '{}'", context.session);
-                            continue;
-                        }
+                    let Ok(uuid) = uuid::Uuid::parse_str(&context.session) else {
+                        log::warn!("failed to parse session id '{}'", context.session);
+                        continue;
                     };
-                    let timestamp = match uuid.get_timestamp() {
-                        Some(timestamp) => timestamp,
-                        None => {
-                            log::warn!(
-                                "failed to get timestamp from uuid '{}'",
-                                uuid.as_hyphenated()
-                            );
-                            continue;
-                        }
+                    let Some(timestamp) = uuid.get_timestamp() else {
+                        log::warn!(
+                            "failed to get timestamp from uuid '{}'",
+                            uuid.as_hyphenated()
+                        );
+                        continue;
                     };
                     let (seconds, nanos) = timestamp.to_unix();
-                    let session_start = match time::OffsetDateTime::from_unix_timestamp_nanos(
-                        seconds as i128 * 1_000_000_000 + nanos as i128,
-                    ) {
-                        Ok(session_start) => session_start,
-                        Err(_) => {
-                            log::warn!(
-                                "failed to create OffsetDateTime from second: {}, nanosecond: {}",
-                                seconds,
-                                nanos
-                            );
-                            continue;
-                        }
+                    let Ok(session_start) = time::OffsetDateTime::from_unix_timestamp_nanos(
+                        i128::from(seconds) * 1_000_000_000 + i128::from(nanos),
+                    ) else {
+                        log::warn!(
+                            "failed to create OffsetDateTime from second: {seconds}, nanosecond: {nanos}"
+                        );
+                        continue;
                     };
 
                     if history.timestamp >= session_start {
