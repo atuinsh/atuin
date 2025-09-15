@@ -77,11 +77,11 @@ pub fn current_context() -> Context {
 }
 
 fn get_session_start_time(session_id: &str) -> Option<i64> {
-    if let Ok(uuid) = Uuid::parse_str(session_id) {
-        if let Some(timestamp) = uuid.get_timestamp() {
-            let (seconds, nanos) = timestamp.to_unix();
-            return Some(seconds as i64 * 1_000_000_000 + nanos as i64);
-        }
+    if let Ok(uuid) = Uuid::parse_str(session_id)
+        && let Some(timestamp) = uuid.get_timestamp()
+    {
+        let (seconds, nanos) = timestamp.to_unix();
+        return Some(seconds as i64 * 1_000_000_000 + nanos as i64);
     }
     None
 }
