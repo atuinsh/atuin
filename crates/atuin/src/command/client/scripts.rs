@@ -230,7 +230,7 @@ impl Cmd {
             let context = atuin_client::database::current_context();
 
             // Get the last N+1 commands, filtering by the default mode
-            let filters = [settings.default_filter_mode()];
+            let filters = [settings.default_filter_mode(context.git_root.is_some())];
 
             let mut history = history_db
                 .list(&filters, &context, Some(count), false, false)
