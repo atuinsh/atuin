@@ -1,5 +1,5 @@
 #! /bin/sh
-set -eu
+set -euo pipefail
 
 cat << EOF
  _______  _______  __   __  ___   __    _
