@@ -1084,7 +1084,7 @@ impl State {
                 .join("\n")
         };
 
-        let preview = match compactness {
+        match compactness {
             Compactness::Full => Paragraph::new(command).block(
                 Block::default()
                     .borders(Borders::BOTTOM | Borders::LEFT | Borders::RIGHT)
@@ -1092,8 +1092,7 @@ impl State {
                     .title(format!("{:─>width$}", "", width = chunk_width - 2)),
             ),
             _ => Paragraph::new(command).style(theme.as_style(Meaning::Annotation)),
-        };
-        preview
+        }
     }
 }
 
