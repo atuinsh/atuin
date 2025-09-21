@@ -297,7 +297,7 @@ pub fn draw(
     let compactness = to_compactness(f, settings);
 
     match compactness {
-        Compactness::Ultracompact => draw_ultracompact(f, chunk, history, stats, theme, tz),
+        Compactness::Ultracompact => draw_ultracompact(f, chunk, history, stats, theme),
         _ => draw_full(f, chunk, history, stats, theme, tz),
     }
 }
@@ -308,7 +308,6 @@ pub fn draw_ultracompact(
     history: &History,
     stats: &HistoryStats,
     theme: &Theme,
-    _: Timezone,
 ) {
     draw_commands(f, chunk, history, stats, true, theme);
 }
