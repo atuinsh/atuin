@@ -1417,10 +1417,10 @@ pub async fn history(
                 Some(result) => {
                     let mut command = result.command;
                     if accept
-                        && (utils::is_zsh()
-                            || utils::is_fish()
-                            || utils::is_bash()
-                            || utils::is_xonsh())
+                        && matches!(
+                            Shell::from_env(),
+                            Shell::Zsh | Shell::Fish | Shell::Bash | Shell::Xonsh
+                        )
                     {
                         command = String::from("__atuin_accept__:") + &command;
                     }
