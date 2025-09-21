@@ -1092,7 +1092,7 @@ impl State {
                     .title(format!("{:─>width$}", "", width = chunk_width - 2)),
             ),
             _ => Paragraph::new(command).style(theme.as_style(Meaning::Annotation)),
-        }
+        };
         preview
     }
 }
