@@ -53,8 +53,6 @@ pub struct ThemeDefinitionConfigBlock {
 
 use crossterm::style::{Attribute, Attributes, Color, ContentStyle};
 
-use crossterm::style::Stylize;
-
 // For now, a theme is loaded as a mapping of meanings to colors, but it may be desirable to
 // expand that in the future to general styles, so we populate a Meaning->ContentStyle hashmap.
 pub struct Theme {
@@ -456,7 +454,7 @@ impl ThemeManager {
                 }
                 Some(self.load_theme(parent_name.as_str(), Some(max_depth - 1)))
             }
-            None => Some(self.load_theme("default", Some(max_depth - 1)))
+            None => Some(self.load_theme("default", Some(max_depth - 1))),
         };
 
         if debug && name != theme_config.theme.name {
