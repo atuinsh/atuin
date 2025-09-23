@@ -52,7 +52,7 @@ pub fn draw_commands(
         stats
             .previous
             .clone()
-            .map_or("No previous command".to_string(), |prev| prev.command),
+            .map_or_else(|| "No previous command".to_string(), |prev| prev.command),
     )
     .block(
         Block::new()
@@ -66,7 +66,7 @@ pub fn draw_commands(
         stats
             .next
             .clone()
-            .map_or("No next command".to_string(), |next| next.command),
+            .map_or_else(|| "No next command".to_string(), |next| next.command),
     )
     .block(
         Block::new()
