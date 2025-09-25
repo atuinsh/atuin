@@ -295,6 +295,7 @@ impl Stats {
             "composer",
             "dnf",
             "docker",
+            "dotnet",
             "git",
             "go",
             "ip",

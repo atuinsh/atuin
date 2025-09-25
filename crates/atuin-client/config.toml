@@ -192,6 +192,7 @@ enter_accept = true
 #   "composer",
 #   "dnf",
 #   "docker",
+#   "dotnet",
 #   "git",
 #   "go",
 #   "ip",
