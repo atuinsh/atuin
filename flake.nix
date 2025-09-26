@@ -12,27 +12,27 @@
     };
   };
   outputs =
-    { self
-    , nixpkgs
-    , flake-utils
-    , fenix
-    , ...
+    {
+      self,
+      nixpkgs,
+      flake-utils,
+      fenix,
+      ...
     }:
-    flake-utils.lib.eachDefaultSystem
-      (system:
+    flake-utils.lib.eachDefaultSystem (
+      system:
       let
         pkgs = nixpkgs.outputs.legacyPackages.${system};
       in
       {
         packages.atuin = pkgs.callPackage ./atuin.nix {
+
           rustPlatform =
             let
-              toolchain =
-                fenix.packages.${system}.fromToolchainFile
-                  {
-                    file = ./rust-toolchain.toml;
-                    sha256 = "sha256-SJwZ8g0zF2WrKDVmHrVG3pD2RGoQeo24MEXnNx5FyuI=";
-                  };
+              toolchain = fenix.packages.${system}.fromToolchainFile {
+                file = ./rust-toolchain.toml;
+                sha256 = "sha256-SJwZ8g0zF2WrKDVmHrVG3pD2RGoQeo24MEXnNx5FyuI=";
+              };
             in
             pkgs.makeRustPlatform {
               cargo = toolchain;
@@ -42,7 +42,8 @@
         packages.default = self.outputs.packages.${system}.atuin;
 
         devShells.default = self.packages.${system}.default.overrideAttrs (super: {
-          nativeBuildInputs = with pkgs;
+          nativeBuildInputs =
+            with pkgs;
             super.nativeBuildInputs
             ++ [
               cargo-edit
@@ -65,7 +66,8 @@
             fi
           '';
         });
-      })
+      }
+    )
     // {
       overlays.default = final: prev: {
         inherit (self.packages.${final.system}) atuin;
