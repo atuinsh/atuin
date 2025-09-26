@@ -91,8 +91,7 @@
           {
             atuin = final.callPackage ./atuin.nix {
               inherit rustPlatform;
-              gitRev = self.shortRev;
-              inherit (final.darwin.apple_sdk.frameworks) Security SystemConfiguration AppKit;
+              gitRev = self.shortRev or "dirty";
             };
 
             default = self.overlays.atuin;

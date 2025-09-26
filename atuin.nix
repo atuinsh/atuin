@@ -10,7 +10,7 @@
   installShellFiles,
   rustPlatform,
   libiconv,
-  gitRev ? "dirty",
+  gitRev,
 }:
 let
   fs = lib.fileset;
@@ -28,7 +28,7 @@ let
 
 in
 rustPlatform.buildRustPackage {
-  name = "atuin";
+  pname = "atuin";
   version = "${packageVersion}-unstable-${gitRev}";
 
   src = fs.toSource {
