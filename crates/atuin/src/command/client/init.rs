@@ -7,6 +7,7 @@ use eyre::{Result, WrapErr};
 
 mod bash;
 mod fish;
+mod powershell;
 mod xonsh;
 mod zsh;
 
@@ -24,6 +25,8 @@ pub struct Cmd {
 }
 
 #[derive(Clone, Copy, ValueEnum, Debug)]
+#[value(rename_all = "lower")]
+#[allow(clippy::enum_variant_names, clippy::doc_markdown)]
 pub enum Shell {
     /// Zsh setup
     Zsh,
@@ -35,6 +38,8 @@ pub enum Shell {
     Nu,
     /// Xonsh setup
     Xonsh,
+    /// PowerShell setup
+    PowerShell,
 }
 
 impl Cmd {
@@ -100,6 +105,9 @@ $env.config = (
             Shell::Xonsh => {
                 xonsh::init_static(self.disable_up_arrow, self.disable_ctrl_r);
             }
+            Shell::PowerShell => {
+                powershell::init_static(self.disable_up_arrow, self.disable_ctrl_r);
+            }
         }
     }
 
@@ -146,6 +154,15 @@ $env.config = (
             Shell::Nu => self.init_nu(),
             Shell::Xonsh => {
                 xonsh::init(
+                    alias_store,
+                    var_store,
+                    self.disable_up_arrow,
+                    self.disable_ctrl_r,
+                )
+                .await?;
+            }
+            Shell::PowerShell => {
+                powershell::init(
                     alias_store,
                     var_store,
                     self.disable_up_arrow,
