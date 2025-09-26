@@ -33,6 +33,7 @@
           overlays = [ self.overlays.atuin ];
         }
       );
+
     in
     {
 
@@ -75,7 +76,6 @@
       formatter = lib.mapAttrs (_: pkgs: pkgs.nixfmt) pkgsFor;
 
       overlays = {
-
         atuin =
           final: _:
           let
@@ -91,6 +91,7 @@
           {
             atuin = final.callPackage ./atuin.nix {
               inherit rustPlatform;
+              gitRev = self.shortRev;
               inherit (final.darwin.apple_sdk.frameworks) Security SystemConfiguration AppKit;
             };
 
