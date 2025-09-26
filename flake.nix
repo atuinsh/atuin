@@ -72,6 +72,8 @@
         });
       }) pkgsFor;
 
+      formatter = lib.mapAttrs (_: pkgs: pkgs.nixfmt) pkgsFor;
+
       overlays = {
 
         atuin =
