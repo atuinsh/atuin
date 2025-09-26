@@ -251,7 +251,8 @@ impl SyncInfo {
             cloud: settings.sync_address == "https://api.atuin.sh",
             auto_sync: settings.auto_sync,
             records: settings.sync.records,
-            last_sync: Settings::last_sync().map_or("no last sync".to_string(), |v| v.to_string()),
+            last_sync: Settings::last_sync()
+                .map_or_else(|_| "no last sync".to_string(), |v| v.to_string()),
         }
     }
 }

@@ -45,7 +45,7 @@ macro_rules! new_uuid {
             fn encode_by_ref(
                 &self,
                 buf: &mut DB::ArgumentBuffer<'q>,
-            ) -> Result<sqlx::encode::IsNull, Box<(dyn std::error::Error + Send + Sync + 'static)>>
+            ) -> Result<sqlx::encode::IsNull, Box<dyn std::error::Error + Send + Sync + 'static>>
             {
                 self.0.encode_by_ref(buf)
             }
