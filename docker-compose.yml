@@ -1,4 +1,3 @@
-version: '3.5'
 services:
   atuin:
     restart: always
@@ -6,16 +5,16 @@ services:
     command: server start
     volumes:
       - "./config:/config"
-    links:
-      - postgresql:db
     ports:
       - 8888:8888
     environment:
       ATUIN_HOST: "0.0.0.0"
       ATUIN_OPEN_REGISTRATION: "true"
-      ATUIN_DB_URI: postgres://$ATUIN_DB_USERNAME:$ATUIN_DB_PASSWORD@db/$ATUIN_DB_NAME
+      ATUIN_DB_URI: postgres://{$ATUIN_DB_USERNAME}:${ATUIN_DB_PASSWORD}@db/${ATUIN_DB_NAME}
       RUST_LOG: info,atuin_server=debug
-  postgresql:
+    depends_on:
+      - db
+  db:
     image: postgres:14
     restart: unless-stopped
     volumes: # Don't remove permanent storage for index database files!
