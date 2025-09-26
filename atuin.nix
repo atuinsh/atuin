@@ -1,7 +1,7 @@
 # Atuin package definition
 #
 # This file will be similar to the package definition in nixpkgs:
-#     https://github.com/NixOS/nixpkgs/blob/master/pkgs/by-name/at/atuin/package.nix
+# https://github.com/NixOS/nixpkgs/blob/master/pkgs/by-name/at/atuin/package.nix
 #
 # Helpful documentation: https://github.com/NixOS/nixpkgs/blob/master/doc/languages-frameworks/rust.section.md
 {
@@ -10,11 +10,31 @@
   installShellFiles,
   rustPlatform,
   libiconv,
+  gitRev,
 }:
-rustPlatform.buildRustPackage {
-  name = "atuin";
+let
+  fs = lib.fileset;
+  src = fs.difference (fs.gitTracked ./.) (
+    fs.unions [
+      ./demo.gif
+      ./flake.lock
+      (fs.fileFilter (file: lib.strings.hasInfix ".git" file.name) ./.)
+      (fs.fileFilter (file: file.hasExt "svg") ./.)
+      (fs.fileFilter (file: file.hasExt "md") ./.)
+      (fs.fileFilter (file: file.hasExt "nix") ./.)
+    ]
+  );
+  packageVersion = (builtins.fromTOML (builtins.readFile ./Cargo.toml)).workspace.package.version;
 
-  src = lib.cleanSource ./.;
+in
+rustPlatform.buildRustPackage {
+  pname = "atuin";
+  version = "${packageVersion}-unstable-${gitRev}";
+
+  src = fs.toSource {
+    root = ./.;
+    fileset = src;
+  };
 
   cargoLock = {
     lockFile = ./Cargo.lock;
@@ -22,9 +42,11 @@ rustPlatform.buildRustPackage {
     allowBuiltinFetchGit = true;
   };
 
-  nativeBuildInputs = [installShellFiles];
+  nativeBuildInputs = [ installShellFiles ];
 
-  buildInputs = lib.optionals stdenv.isDarwin [libiconv];
+  buildInputs = lib.optionals stdenv.isDarwin [
+    libiconv
+  ];
 
   postInstall = ''
     installShellCompletion --cmd atuin \
@@ -35,10 +57,10 @@ rustPlatform.buildRustPackage {
 
   doCheck = false;
 
-  meta = with lib; {
+  meta = {
     description = "Replacement for a shell history which records additional commands context with optional encrypted synchronization between machines";
     homepage = "https://github.com/atuinsh/atuin";
-    license = licenses.mit;
+    license = lib.licenses.mit;
     mainProgram = "atuin";
   };
 }
