@@ -1,7 +1,6 @@
 {
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
-    flake-utils.url = "github:numtide/flake-utils";
     flake-compat = {
       url = "github:edolstra/flake-compat";
       flake = false;
@@ -15,33 +14,38 @@
     {
       self,
       nixpkgs,
-      flake-utils,
       fenix,
       ...
     }:
-    flake-utils.lib.eachDefaultSystem (
-      system:
-      let
-        pkgs = nixpkgs.outputs.legacyPackages.${system};
-      in
-      {
-        packages.atuin = pkgs.callPackage ./atuin.nix {
+    let
+      inherit (nixpkgs) lib;
+      systems = [
+        "x86_64-linux"
+        "aarch64-linux"
+        "x86_64-darwin"
+        "aarch64-darwin"
+      ];
+      eachSystem = lib.genAttrs systems;
+      pkgsFor = eachSystem (
+        system:
+        import nixpkgs {
+          localSystem.system = system;
+          overlays = [ self.overlays.atuin ];
+        }
+      );
+    in
+    {
 
-          rustPlatform =
-            let
-              toolchain = fenix.packages.${system}.fromToolchainFile {
-                file = ./rust-toolchain.toml;
-                sha256 = "sha256-SJwZ8g0zF2WrKDVmHrVG3pD2RGoQeo24MEXnNx5FyuI=";
-              };
-            in
-            pkgs.makeRustPlatform {
-              cargo = toolchain;
-              rustc = toolchain;
-            };
-        };
-        packages.default = self.outputs.packages.${system}.atuin;
+      
+        packages = eachSystem (system: {
+        inherit (pkgsFor.${system}) atuin;
 
-        devShells.default = self.packages.${system}.default.overrideAttrs (super: {
+        default = self.packages.${system}.atuin;
+      });
+
+      devShells = lib.mapAttrs (system: pkgs: {
+
+        default = self.packages.${system}.default.overrideAttrs (super: {
           nativeBuildInputs =
             with pkgs;
             super.nativeBuildInputs
@@ -66,11 +70,30 @@
             fi
           '';
         });
-      }
-    )
-    // {
-      overlays.default = final: prev: {
-        inherit (self.packages.${final.system}) atuin;
+      }) pkgsFor;
+
+      overlays = {
+
+        atuin =
+          final: _:
+          let
+            toolchain = fenix.packages.${final.system}.fromToolchainFile {
+              file = ./rust-toolchain.toml;
+              sha256 = "sha256-SJwZ8g0zF2WrKDVmHrVG3pD2RGoQeo24MEXnNx5FyuI=";
+            };
+            rustPlatform = final.makeRustPlatform {
+              cargo = toolchain;
+              rustc = toolchain;
+            };
+          in
+          {
+            atuin = final.callPackage ./atuin.nix {
+              inherit rustPlatform;
+              inherit (final.darwin.apple_sdk.frameworks) Security SystemConfiguration AppKit;
+            };
+
+            default = self.overlays.atuin;
+          };
       };
     };
 }
