@@ -14,6 +14,8 @@ mod sync;
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const SHA: &str = env!("GIT_HASH");
 
+const LONG_VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), " (", env!("GIT_HASH"), ")");
+
 static HELP_TEMPLATE: &str = "\
 {before-help}{name} {version}
 {author}
@@ -29,6 +31,7 @@ static HELP_TEMPLATE: &str = "\
 #[command(
     author = "Ellie Huxtable <ellie@atuin.sh>",
     version = VERSION,
+    long_version = LONG_VERSION,
     help_template(HELP_TEMPLATE),
 )]
 struct Atuin {
