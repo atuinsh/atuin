@@ -227,6 +227,10 @@ enter_accept = true
 # exit_past_line_start = true
 # Defaults to true. The right arrow key performs the same functionality as Tab and copies the selected line to the command line to be modified.
 # accept_past_line_end = true
+# Defaults to false. The left arrow key performs the same functionality as Tab and copies the selected line to the command line to be modified.
+# accept_past_line_start = false
+# Defaults to false. The backspace key performs the same functionality as Tab and copies the selected line to the command line to be modified when at the start of the line.
+# accept_with_backspace = false
 
 [sync]
 # Enable sync v2 by default
