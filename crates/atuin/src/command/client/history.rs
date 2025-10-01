@@ -366,6 +366,8 @@ impl Cmd {
             return Ok(());
         }
 
+        let h = h.redact_if_needed(settings);
+
         // print the ID
         // we use this as the key for calling end
         println!("{}", h.id);
@@ -392,6 +394,8 @@ impl Cmd {
         if !h.should_save(settings) {
             return Ok(());
         }
+
+        let h = h.redact_if_needed(settings);
 
         let resp = atuin_daemon::client::HistoryClient::new(
             #[cfg(not(unix))]

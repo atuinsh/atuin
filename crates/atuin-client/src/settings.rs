@@ -494,6 +494,7 @@ pub struct Settings {
     pub cwd_filter: RegexSet,
 
     pub secrets_filter: bool,
+    pub secrets_redact: bool,
     pub workspaces: bool,
     pub ctrl_n_shortcuts: bool,
 
@@ -791,6 +792,7 @@ impl Settings {
             .set_default("workspaces", false)?
             .set_default("ctrl_n_shortcuts", false)?
             .set_default("secrets_filter", true)?
+            .set_default("secrets_redact", false)?
             .set_default("network_connect_timeout", 5)?
             .set_default("network_timeout", 30)?
             .set_default("local_timeout", 2.0)?
