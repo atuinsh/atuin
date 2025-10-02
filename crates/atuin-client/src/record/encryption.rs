@@ -3,11 +3,9 @@ use atuin_common::record::{
 };
 use base64::{Engine, engine::general_purpose};
 use eyre::{Context, Result, ensure};
-use rusty_paserk::{Key, KeyId, Local, PieWrappedKey};
-use rusty_paseto::core::{
-    ImplicitAssertion, Key as DataKey, Local as LocalPurpose, Paseto, PasetoNonce, Payload, V4,
-};
-use serde::{Deserialize, Serialize};
+use paseto_core::{validation::NoValidation, version::Local};
+use paseto_v4::{EncryptedToken, KeyId, KeyText, LocalKey, PieWrappedLocalKey, UnencryptedToken};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 /// Use PASETO V4 Local encryption using the additional data as an implicit assertion.
 #[allow(non_camel_case_types)]
@@ -66,24 +64,20 @@ impl Encryption for PASETO_V4 {
     fn encrypt(data: DecryptedData, ad: AdditionalData, key: &[u8; 32]) -> EncryptedData {
         // generate a random key for this entry
         // aka content-encryption-key (CEK)
-        let random_key = Key::<V4, Local>::new_os_random();
+        let random_key = LocalKey::random().expect("could not source from random");
 
         // encode the implicit assertions
         let assertions = Assertions::from(ad).encode();
 
         // build the payload and encrypt the token
-        let payload = serde_json::to_string(&AtuinPayload {
+        let payload = AtuinPayload {
             data: general_purpose::URL_SAFE_NO_PAD.encode(data.0),
-        })
-        .expect("json encoding can't fail");
-        let nonce = DataKey::<32>::try_new_random().expect("could not source from random");
-        let nonce = PasetoNonce::<V4, LocalPurpose>::from(&nonce);
+        };
 
-        let token = Paseto::<V4, LocalPurpose>::builder()
-            .set_payload(Payload::from(payload.as_str()))
-            .set_implicit_assertion(ImplicitAssertion::from(assertions.as_str()))
-            .try_encrypt(&random_key.into(), &nonce)
-            .expect("error encrypting atuin data");
+        let token = UnencryptedToken::new(Json(payload))
+            .encrypt_with_aad(&random_key, assertions.as_bytes())
+            .expect("error encrypting atuin data")
+            .to_string();
 
         EncryptedData {
             data: token,
@@ -95,29 +89,30 @@ impl Encryption for PASETO_V4 {
         let token = data.data;
         let cek = Self::decrypt_cek(data.content_encryption_key, key)?;
 
+        // decode the payload
+        let token: EncryptedToken<Json<AtuinPayload>> =
+            token.parse().context("could not parse encrypted record")?;
+
         // encode the implicit assertions
         let assertions = Assertions::from(ad).encode();
 
-        // decrypt the payload with the footer and implicit assertions
-        let payload = Paseto::<V4, LocalPurpose>::try_decrypt(
-            &token,
-            &cek.into(),
-            None,
-            ImplicitAssertion::from(&*assertions),
-        )
-        .context("could not decrypt entry")?;
+        // decrypt the payload with the footer and implicit assertions.
+        // we don't need any extra validation of the payload.
+        let validation = NoValidation::dangerous_no_validation();
+        let token = token
+            .decrypt_with_aad(&cek, assertions.as_bytes(), &validation)
+            .context("could not decrypt entry")?;
 
-        let payload: AtuinPayload = serde_json::from_str(&payload)?;
-        let data = general_purpose::URL_SAFE_NO_PAD.decode(payload.data)?;
+        let data = general_purpose::URL_SAFE_NO_PAD.decode(token.claims.0.data)?;
         Ok(DecryptedData(data))
     }
 }
 
 impl PASETO_V4 {
-    fn decrypt_cek(wrapped_cek: String, key: &[u8; 32]) -> Result<Key<V4, Local>> {
-        let wrapping_key = Key::<V4, Local>::from_bytes(*key);
-
-        // let wrapping_key = PasetoSymmetricKey::from(Key::from(key));
+    fn decrypt_cek(wrapped_cek: String, key: &[u8; 32]) -> Result<LocalKey> {
+        let wrapping_key: LocalKey = KeyText::<Local>::from_raw_bytes(key)
+            .try_into()
+            .expect("all 32 byte keys are valid");
 
         let AtuinFooter { kid, wpk } = serde_json::from_str(&wrapped_cek)
             .context("wrapped cek did not contain the correct contents")?;
@@ -127,7 +122,7 @@ impl PASETO_V4 {
         // look up the key rather than only allow one key.
         // For now though we will only support the one key and key rotation will
         // have to be a hard reset
-        let current_kid = wrapping_key.to_id();
+        let current_kid = wrapping_key.id();
 
         ensure!(
             current_kid == kid,
@@ -135,17 +130,19 @@ impl PASETO_V4 {
         );
 
         // decrypt the random key
-        Ok(wpk.unwrap_key(&wrapping_key)?)
+        Ok(wpk.unwrap(&wrapping_key)?)
     }
 
-    fn encrypt_cek(cek: Key<V4, Local>, key: &[u8; 32]) -> String {
+    fn encrypt_cek(cek: LocalKey, key: &[u8; 32]) -> String {
         // aka key-encryption-key (KEK)
-        let wrapping_key = Key::<V4, Local>::from_bytes(*key);
+        let wrapping_key: LocalKey = KeyText::<Local>::from_raw_bytes(key)
+            .try_into()
+            .expect("all 32 byte keys are valid");
 
         // wrap the random key so we can decrypt it later
         let wrapped_cek = AtuinFooter {
-            wpk: cek.wrap_pie(&wrapping_key),
-            kid: wrapping_key.to_id(),
+            wpk: cek.wrap_pie(&wrapping_key).expect("could not encrypt key"),
+            kid: wrapping_key.id(),
         };
         serde_json::to_string(&wrapped_cek).expect("could not serialize wrapped cek")
     }
@@ -161,9 +158,9 @@ struct AtuinPayload {
 /// <https://github.com/paseto-standard/paseto-spec/blob/master/docs/02-Implementation-Guide/04-Claims.md#optional-footer-claims>
 struct AtuinFooter {
     /// Wrapped key
-    wpk: PieWrappedKey<V4, Local>,
+    wpk: PieWrappedLocalKey,
     /// ID of the key which was used to wrap
-    kid: KeyId<V4, Local>,
+    kid: KeyId<Local>,
 }
 
 /// Used in the implicit assertions. This is not encrypted and not stored in the data blob.
@@ -195,6 +192,39 @@ impl Assertions<'_> {
     }
 }
 
+#[derive(Default)]
+struct Json<T>(T);
+
+struct Writer<W: paseto_core::encodings::WriteBytes>(W);
+impl<W: paseto_core::encodings::WriteBytes> std::io::Write for Writer<W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.write(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<M: Serialize + DeserializeOwned> paseto_core::encodings::Payload for Json<M> {
+    /// JSON is the standard payload and requires no version suffix
+    const SUFFIX: &'static str = "";
+
+    fn encode(
+        self,
+        writer: impl paseto_core::encodings::WriteBytes,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        serde_json::to_writer(Writer(writer), &self.0).map_err(|err| Box::new(err) as _)
+    }
+
+    fn decode(payload: &[u8]) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        serde_json::from_slice(payload)
+            .map_err(From::from)
+            .map(Self)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use atuin_common::{
@@ -206,7 +236,8 @@ mod tests {
 
     #[test]
     fn round_trip() {
-        let key = Key::<V4, Local>::new_os_random();
+        let key = LocalKey::random().unwrap();
+        let key_bytes: [u8; 32] = key.expose_key().as_raw_bytes().try_into().unwrap();
 
         let ad = AdditionalData {
             id: &RecordId(uuid_v7()),
@@ -218,14 +249,15 @@ mod tests {
 
         let data = DecryptedData(vec![1, 2, 3, 4]);
 
-        let encrypted = PASETO_V4::encrypt(data.clone(), ad, &key.to_bytes());
-        let decrypted = PASETO_V4::decrypt(encrypted, ad, &key.to_bytes()).unwrap();
+        let encrypted = PASETO_V4::encrypt(data.clone(), ad, &key_bytes);
+        let decrypted = PASETO_V4::decrypt(encrypted, ad, &key_bytes).unwrap();
         assert_eq!(decrypted, data);
     }
 
     #[test]
     fn same_entry_different_output() {
-        let key = Key::<V4, Local>::new_os_random();
+        let key = LocalKey::random().unwrap();
+        let key_bytes: [u8; 32] = key.expose_key().as_raw_bytes().try_into().unwrap();
 
         let ad = AdditionalData {
             id: &RecordId(uuid_v7()),
@@ -237,8 +269,8 @@ mod tests {
 
         let data = DecryptedData(vec![1, 2, 3, 4]);
 
-        let encrypted = PASETO_V4::encrypt(data.clone(), ad, &key.to_bytes());
-        let encrypted2 = PASETO_V4::encrypt(data, ad, &key.to_bytes());
+        let encrypted = PASETO_V4::encrypt(data.clone(), ad, &key_bytes);
+        let encrypted2 = PASETO_V4::encrypt(data, ad, &key_bytes);
 
         assert_ne!(
             encrypted.data, encrypted2.data,
@@ -248,8 +280,11 @@ mod tests {
 
     #[test]
     fn cannot_decrypt_different_key() {
-        let key = Key::<V4, Local>::new_os_random();
-        let fake_key = Key::<V4, Local>::new_os_random();
+        let key = LocalKey::random().unwrap();
+        let key_bytes: [u8; 32] = key.expose_key().as_raw_bytes().try_into().unwrap();
+
+        let fake_key = LocalKey::random().unwrap();
+        let fake_key_bytes: [u8; 32] = fake_key.expose_key().as_raw_bytes().try_into().unwrap();
 
         let ad = AdditionalData {
             id: &RecordId(uuid_v7()),
@@ -261,13 +296,14 @@ mod tests {
 
         let data = DecryptedData(vec![1, 2, 3, 4]);
 
-        let encrypted = PASETO_V4::encrypt(data, ad, &key.to_bytes());
-        let _ = PASETO_V4::decrypt(encrypted, ad, &fake_key.to_bytes()).unwrap_err();
+        let encrypted = PASETO_V4::encrypt(data, ad, &key_bytes);
+        let _ = PASETO_V4::decrypt(encrypted, ad, &fake_key_bytes).unwrap_err();
     }
 
     #[test]
     fn cannot_decrypt_different_id() {
-        let key = Key::<V4, Local>::new_os_random();
+        let key = LocalKey::random().unwrap();
+        let key_bytes: [u8; 32] = key.expose_key().as_raw_bytes().try_into().unwrap();
 
         let ad = AdditionalData {
             id: &RecordId(uuid_v7()),
@@ -279,19 +315,21 @@ mod tests {
 
         let data = DecryptedData(vec![1, 2, 3, 4]);
 
-        let encrypted = PASETO_V4::encrypt(data, ad, &key.to_bytes());
+        let encrypted = PASETO_V4::encrypt(data, ad, &key_bytes);
 
         let ad = AdditionalData {
             id: &RecordId(uuid_v7()),
             ..ad
         };
-        let _ = PASETO_V4::decrypt(encrypted, ad, &key.to_bytes()).unwrap_err();
+        let _ = PASETO_V4::decrypt(encrypted, ad, &key_bytes).unwrap_err();
     }
 
     #[test]
     fn re_encrypt_round_trip() {
-        let key1 = Key::<V4, Local>::new_os_random();
-        let key2 = Key::<V4, Local>::new_os_random();
+        let key1 = LocalKey::random().unwrap();
+        let key2 = LocalKey::random().unwrap();
+        let key1_bytes: [u8; 32] = key1.expose_key().as_raw_bytes().try_into().unwrap();
+        let key2_bytes: [u8; 32] = key2.expose_key().as_raw_bytes().try_into().unwrap();
 
         let ad = AdditionalData {
             id: &RecordId(uuid_v7()),
@@ -303,10 +341,9 @@ mod tests {
 
         let data = DecryptedData(vec![1, 2, 3, 4]);
 
-        let encrypted1 = PASETO_V4::encrypt(data.clone(), ad, &key1.to_bytes());
+        let encrypted1 = PASETO_V4::encrypt(data.clone(), ad, &key1_bytes);
         let encrypted2 =
-            PASETO_V4::re_encrypt(encrypted1.clone(), ad, &key1.to_bytes(), &key2.to_bytes())
-                .unwrap();
+            PASETO_V4::re_encrypt(encrypted1.clone(), ad, &key1_bytes, &key2_bytes).unwrap();
 
         // we only re-encrypt the content keys
         assert_eq!(encrypted1.data, encrypted2.data);
@@ -315,7 +352,7 @@ mod tests {
             encrypted2.content_encryption_key
         );
 
-        let decrypted = PASETO_V4::decrypt(encrypted2, ad, &key2.to_bytes()).unwrap();
+        let decrypted = PASETO_V4::decrypt(encrypted2, ad, &key2_bytes).unwrap();
 
         assert_eq!(decrypted, data);
     }

@@ -56,8 +56,8 @@ generic-array = { version = "0.14", features = ["serde"] }
 serde_with = "3.8.1"
 
 # encryption
-rusty_paseto = { version = "0.7.0", default-features = false }
-rusty_paserk = { version = "0.4.0", default-features = false, features = ["v4", "serde"] }
+paseto-core = { version = "0.1.0-rc.6", features = ["serde"] }
+paseto-v4 = { version = "0.1.0-rc.6", default-features = false, features = ["encrypting", "pie-wrap", "id"] }
 
 # sync
 urlencoding = { version = "2.1.0", optional = true }
