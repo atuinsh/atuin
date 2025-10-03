@@ -231,8 +231,16 @@ impl State {
             KeyCode::Right if cursor_at_end_of_line && settings.keys.accept_past_line_end => {
                 Some(InputAction::Accept(self.results_state.selected()))
             }
+            KeyCode::Left if cursor_at_start_of_line && settings.keys.accept_past_line_start => {
+                Some(InputAction::Accept(self.results_state.selected()))
+            }
             KeyCode::Left if cursor_at_start_of_line && settings.keys.exit_past_line_start => {
                 Some(Self::handle_key_exit(settings))
+            }
+            KeyCode::Backspace
+                if cursor_at_start_of_line && settings.keys.accept_with_backspace =>
+            {
+                Some(InputAction::Accept(self.results_state.selected()))
             }
             KeyCode::Char('o') if ctrl => {
                 self.tab_index = (self.tab_index + 1) % TAB_TITLES.len();
@@ -1521,5 +1529,117 @@ mod tests {
 
         state.scroll_up(1);
         state.scroll_down(1);
+    }
+
+    #[test]
+    fn test_accept_keybindings() {
+        use atuin_client::settings::Keys;
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        let mut settings = Settings::utc();
+        settings.keys = Keys {
+            scroll_exits: true,
+            exit_past_line_start: false,
+            accept_past_line_end: true,
+            accept_past_line_start: false,
+            accept_with_backspace: false,
+            prefix: "a".to_string(),
+        };
+
+        let mut state = State {
+            history_count: 1,
+            update_needed: None,
+            results_state: ListState::default(),
+            switched_search_mode: false,
+            search_mode: SearchMode::Fuzzy,
+            results_len: 1,
+            accept: false,
+            keymap_mode: KeymapMode::Emacs,
+            prefix: false,
+            current_cursor: None,
+            tab_index: 0,
+            search: SearchState {
+                input: String::new().into(),
+                filter_mode: FilterMode::Global,
+                context: Context {
+                    session: String::new(),
+                    cwd: String::new(),
+                    hostname: String::new(),
+                    host_id: String::new(),
+                    git_root: None,
+                },
+            },
+            engine: engines::engine(SearchMode::Fuzzy),
+            now: Box::new(OffsetDateTime::now_utc),
+        };
+
+        let tab_event = KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE);
+        let result = state.handle_key_input(&settings, &tab_event);
+        assert!(
+            matches!(result, super::InputAction::Accept(_)),
+            "Tab should always accept"
+        );
+
+        // Test left arrow with accept_past_line_start disabled (should continue)
+        let left_event = KeyEvent::new(KeyCode::Left, KeyModifiers::NONE);
+        let result = state.handle_key_input(&settings, &left_event);
+        assert!(
+            matches!(result, super::InputAction::Continue),
+            "Left arrow should continue when disabled"
+        );
+
+        // Test left arrow with accept_past_line_start enabled (should accept at start of line)
+        settings.keys.accept_past_line_start = true;
+        let result = state.handle_key_input(&settings, &left_event);
+        assert!(
+            matches!(result, super::InputAction::Accept(_)),
+            "Left arrow should accept at start of line when enabled"
+        );
+        settings.keys.accept_past_line_start = false;
+
+        let backspace_event = KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE);
+        let result = state.handle_key_input(&settings, &backspace_event);
+        assert!(
+            matches!(result, super::InputAction::Continue),
+            "Backspace should continue when disabled"
+        );
+
+        settings.keys.accept_with_backspace = true;
+        let result = state.handle_key_input(&settings, &backspace_event);
+        assert!(
+            matches!(result, super::InputAction::Accept(_)),
+            "Backspace should accept at start of line when enabled"
+        );
+
+        state.search.input.insert('t');
+        state.search.input.insert('e');
+        state.search.input.insert('s');
+        state.search.input.insert('t');
+        state.search.input.end();
+
+        let right_event = KeyEvent::new(KeyCode::Right, KeyModifiers::NONE);
+        let result = state.handle_key_input(&settings, &right_event);
+        assert!(
+            matches!(result, super::InputAction::Accept(_)),
+            "Right arrow should accept at end of line when enabled"
+        );
+
+        settings.keys.accept_past_line_start = true;
+        let left_event = KeyEvent::new(KeyCode::Left, KeyModifiers::NONE);
+        let result = state.handle_key_input(&settings, &left_event);
+        assert!(
+            matches!(result, super::InputAction::Continue),
+            "Left arrow should continue and end of line, even when enabled"
+        );
+        settings.keys.accept_past_line_start = false;
+
+        settings.keys.accept_with_backspace = true;
+        let backspace_event = KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE);
+        let result = state.handle_key_input(&settings, &backspace_event);
+        assert!(
+            matches!(result, super::InputAction::Continue),
+            "Backspace should continue at end of line, even when enabled"
+        );
+        settings.keys.accept_with_backspace = false;
     }
 }

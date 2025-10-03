@@ -17,18 +17,29 @@ pub static SECRET_PATTERNS: &[(&str, &str, TestValue)] = &[
     ),
     (
         "AWS Secret Access Key env var",
-        "AWS_SECRET_ACCESS_KEY",
-        TestValue::Single("AWS_SECRET_ACCESS_KEY=KEYDATA"),
+        "(?:[^A-Za-z0-9/+=])?([A-Za-z0-9/+=]{40})(?:[^A-Za-z0-9/+=])?",
+        TestValue::Multiple(&[
+            "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", // https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_access-keys.html
+            "ABDRzve0QGx/U32PU9GrkNbmGiu+bz8jheThio/Y", // Found via github then tweaked
+            "lnKjhsGOXPK/MPFoW2tfi8BuD9AF5imhanhQ83EO", // Found via github then tweaked
+        ]),
     ),
     (
         "AWS Session Token env var",
-        "AWS_SESSION_TOKEN",
-        TestValue::Single("AWS_SESSION_TOKEN=KEYDATA"),
+        "[A-Za-z0-9/+=]{16,}\\.[A-Za-z0-9/+=]+\\.?[A-Za-z0-9/+=]*",
+        TestValue::Multiple(&[
+            "AAAAAAAAAAAAAAAA.BBBBBBBBBBBBBBB",
+            "AAAAAAAAAAAAAAAA.BBBBBBBBBBBBBBB.CCCCCCCCCCC",
+        ]),
     ),
     (
         "Microsoft Azure secret access key env var",
-        "AZURE_.*_KEY",
-        TestValue::Single("export AZURE_STORAGE_ACCOUNT_KEY=KEYDATA"),
+        "(?:sk-[A-Za-z0-9]{48,}|[A-Za-z0-9+/]{86}={2}|[A-Za-z0-9+/]{87}=|[A-Za-z0-9+/]{88})",
+        TestValue::Multiple(&[
+            "sk-123abc456def789ghi012jkl345mno678pqr901stu234vwx567yz890",
+            "fVdIqqLbQxOBxnfuNoV5DToz+tNLdcJ1jksmkv6Lc3wcCppaXBe25kZY/akpAPgd66zPvhA9Jey1SV6qiMY8bA==",
+            "Eby9vdM03xNOcqFlqUwJPLlmEtlCDXJ2OUzFT49uSRZ7IFsuFq1UVErCz5I5tq/K2SZFPTOtr/KBHBeksoGMGw==",
+        ]),
     ),
     (
         "Google cloud platform key env var",
@@ -128,6 +139,11 @@ pub static SECRET_PATTERNS: &[(&str, &str, TestValue)] = &[
         "Pulumi personal access token",
         "pul-[0-9a-f]{40}",
         TestValue::Single("pul-683c2770662c51d960d72ec27613be7653c5cb26"),
+    ),
+    (
+        "Private keys",
+        "-----BEGIN PRIVATE KEY-----[A-Za-z0-9\\s+/=\\n-]+-----END PRIVATE KEY-----",
+        TestValue::Single("-----BEGIN PRIVATE KEY-----AAA-----END PRIVATE KEY-----"),
     ),
 ];
 
