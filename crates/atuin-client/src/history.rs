@@ -9,7 +9,7 @@ use atuin_common::utils::uuid_v7;
 
 use eyre::{Result, bail, eyre};
 
-use crate::secrets::SECRET_PATTERNS_RE;
+use crate::secrets::{SECRET_PATTERNS_RE, redact_secrets};
 use crate::settings::Settings;
 use crate::utils::get_host_user;
 use time::OffsetDateTime;
@@ -374,11 +374,40 @@ impl History {
     }
 
     pub fn should_save(&self, settings: &Settings) -> bool {
-        !(self.command.starts_with(' ')
+        if self.command.starts_with(' ')
             || self.command.is_empty()
             || settings.history_filter.is_match(&self.command)
             || settings.cwd_filter.is_match(&self.cwd)
-            || (settings.secrets_filter && SECRET_PATTERNS_RE.is_match(&self.command)))
+        {
+            return false;
+        }
+
+        if settings.secrets_filter && !settings.secrets_redact {
+            !SECRET_PATTERNS_RE.is_match(&self.command)
+        } else {
+            debug_assert!(
+                !settings.secrets_filter || settings.secrets_redact,
+                "Only return true if secrets_filter is off or redactions are enabled!"
+            );
+            // secrets_redact is enabled, so `redact_if_needed` will remove the secret from the
+            // command, therefore it is save to save.
+            true
+        }
+    }
+
+    /// Redacts secrets from the command if needed based on settings.
+    /// Returns a new History with the redacted command, or self if no redaction needed.
+    pub fn redact_if_needed(&self, settings: &Settings) -> Self {
+        if settings.secrets_filter
+            && settings.secrets_redact
+            && SECRET_PATTERNS_RE.is_match(&self.command)
+        {
+            let mut redacted = self.clone();
+            redacted.command = redact_secrets(&self.command);
+            redacted
+        } else {
+            self.clone()
+        }
     }
 }
 
@@ -397,6 +426,8 @@ mod tests {
         let settings = Settings {
             cwd_filter: RegexSet::new(["^/supasecret"]).unwrap(),
             history_filter: RegexSet::new(["^psql"]).unwrap(),
+            secrets_filter: true,
+            secrets_redact: false,
             ..Settings::utc()
         };
 
@@ -465,6 +496,67 @@ mod tests {
             .into();
 
         assert!(stripe_key.should_save(&settings));
+    }
+
+    #[test]
+    fn redact_secrets() {
+        let settings = Settings {
+            secrets_filter: true,
+            secrets_redact: true,
+            ..Settings::utc()
+        };
+
+        let stripe_key: History = History::capture()
+            .timestamp(time::OffsetDateTime::now_utc())
+            .command("curl foo.com/bar?key=sk_test_1234567890abcdefghijklmn")
+            .cwd("/")
+            .build()
+            .into();
+
+        assert!(stripe_key.should_save(&settings));
+
+        let redacted = stripe_key.redact_if_needed(&settings);
+        assert_eq!(redacted.command, "curl foo.com/bar?key=[REDACTED]");
+    }
+
+    #[test]
+    fn filter_secrets() {
+        let settings = Settings {
+            secrets_filter: true,
+            secrets_redact: false,
+            ..Settings::utc()
+        };
+
+        let stripe_key: History = History::capture()
+            .timestamp(time::OffsetDateTime::now_utc())
+            .command("curl foo.com/bar?key=sk_test_1234567890abcdefghijklmn")
+            .cwd("/")
+            .build()
+            .into();
+
+        assert!(!stripe_key.should_save(&settings));
+    }
+
+    #[test]
+    fn redact_multiple_secrets() {
+        let settings = Settings {
+            secrets_filter: true,
+            secrets_redact: true,
+            ..Settings::utc()
+        };
+
+        let multi_secret: History = History::capture()
+            .timestamp(time::OffsetDateTime::now_utc())
+            .command("export AWS_SECRET_ACCESS_KEY=foo && curl -H 'Authorization: Bearer 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' api.github.com")
+            .cwd("/")
+            .build()
+            .into();
+
+        let redacted = multi_secret.redact_if_needed(&settings);
+        assert_eq!(
+            redacted.command,
+            "export AWS_SECRET_ACCESS_KEY=foo && curl -H 'Authorization: Bearer [REDACTED]' api.github.com"
+        );
     }
 
     #[test]
