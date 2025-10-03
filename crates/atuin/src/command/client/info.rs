@@ -1,6 +1,6 @@
 use atuin_client::settings::Settings;
 
-use crate::VERSION;
+use crate::{SHA, VERSION};
 
 pub fn run(settings: &Settings) {
     let config = atuin_common::utils::config_dir();
@@ -23,7 +23,7 @@ pub fn run(settings: &Settings) {
         std::env::var("ATUIN_CONFIG_DIR").unwrap_or_else(|_| "None".into())
     );
 
-    let general_info = format!("Version info:\nversion: {VERSION}");
+    let general_info = format!("Version info:\nversion: {VERSION}\ncommit:  {SHA}");
 
     let print_out = format!("{config_paths}\n\n{env_vars}\n\n{general_info}");
 
