@@ -1121,7 +1121,7 @@ pub async fn history(
     // Check if this is a command chaining scenario
     let is_command_chaining = if settings.command_chaining {
         let trimmed = original_query.trim_end();
-        trimmed.ends_with("&&") || trimmed.ends_with("||")
+        trimmed.ends_with("&&") || trimmed.ends_with('|')
     } else {
         false
     };
