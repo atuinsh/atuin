@@ -39,7 +39,7 @@ impl Cmd {
         let last_night = now.replace_time(Time::MIDNIGHT);
 
         let history = if words.as_str() == "all" {
-            db.list(&[], &context, None, false, false).await?
+            db.list(&[], &context, None, false, false, None).await?
         } else if words.trim() == "today" {
             let start = last_night;
             let end = start + Duration::days(1);

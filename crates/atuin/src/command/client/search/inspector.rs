@@ -93,6 +93,12 @@ pub fn draw_stats_table(
     let avg_duration = Duration::from_nanos(stats.average_duration);
     let (host, user) = history.hostname.split_once(':').unwrap_or(("", ""));
 
+    let tags_display = if history.tags.is_empty() {
+        "None".to_string()
+    } else {
+        history.tags.join(", ")
+    };
+
     let rows = [
         Row::new(vec!["Host".to_string(), host.to_string()]),
         Row::new(vec!["User".to_string(), user.to_string()]),
@@ -108,6 +114,7 @@ pub fn draw_stats_table(
         Row::new(vec!["Exit".to_string(), history.exit.to_string()]),
         Row::new(vec!["Directory".to_string(), history.cwd.to_string()]),
         Row::new(vec!["Session".to_string(), history.session.to_string()]),
+        Row::new(vec!["Tags".to_string(), tags_display]),
         Row::new(vec!["Total runs".to_string(), stats.total.to_string()]),
     ];
 
@@ -279,15 +286,33 @@ pub fn draw(
 // I'm going to break this out more, but just starting to move things around before changing
 // structure and making it nicer.
 pub fn input(
-    _state: &mut State,
-    _settings: &Settings,
+    state: &mut State,
+    settings: &Settings,
     selected: usize,
     input: &KeyEvent,
 ) -> InputAction {
     let ctrl = input.modifiers.contains(KeyModifiers::CONTROL);
 
+    // Handle tag prefix mode: ctrl+t <key>
+    // User has pressed ctrl+t and we're waiting for the tag key
+    if state.prefix_tag {
+        state.prefix_tag = false;
+        if let KeyCode::Char(c) = input.code {
+            let key = c.to_string();
+            if let Some(tag) = settings.tag_bindings.get(&key) {
+                return InputAction::ToggleTag(selected, tag.clone());
+            }
+        }
+        return InputAction::Continue;
+    }
+
     match input.code {
         KeyCode::Char('d') if ctrl => InputAction::Delete(selected),
+        KeyCode::Char('t') if ctrl => {
+            // Enter tag prefix mode - waiting for user to press a tag key
+            state.prefix_tag = true;
+            InputAction::Continue
+        }
         _ => InputAction::Continue,
     }
 }

@@ -20,6 +20,7 @@ pub mod record;
 pub mod register;
 pub mod secrets;
 pub mod settings;
+pub mod tag_store;
 pub mod theme;
 
 mod utils;

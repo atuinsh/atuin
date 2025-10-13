@@ -27,6 +27,7 @@ impl SearchEngine for Search {
                     limit: Some(200),
                     ..Default::default()
                 },
+                state.tag_filter.as_deref(),
             )
             .await
             // ignore errors as it may be caused by incomplete regex

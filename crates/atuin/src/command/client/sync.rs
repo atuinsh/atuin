@@ -7,6 +7,7 @@ use atuin_client::{
     history::store::HistoryStore,
     record::{sqlite_store::SqliteStore, store::Store, sync},
     settings::Settings,
+    tag_store::TagStore,
 };
 
 mod status;
@@ -87,10 +88,16 @@ async fn run(
 
         let host_id = Settings::host_id().expect("failed to get host_id");
         let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
+        let tag_store = TagStore::new(store.clone(), host_id, encryption_key);
 
         let (uploaded, downloaded) = sync::sync(settings, &store).await?;
 
         crate::sync::build(settings, &store, db, Some(&downloaded)).await?;
+
+        // Rebuild tag store after sync to apply remote tag changes
+        if let Some(pool) = db.sqlite_pool() {
+            tag_store.build(pool).await?;
+        }
 
         println!("{uploaded}/{} up/down to record store", downloaded.len());
 

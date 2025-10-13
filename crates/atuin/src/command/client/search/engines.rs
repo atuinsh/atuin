@@ -22,6 +22,9 @@ pub struct SearchState {
     pub input: Cursor,
     pub filter_mode: FilterMode,
     pub context: Context,
+    /// Optional tag filter to apply additively to the scope filter
+    /// e.g., "favorite" to show only favorites within the current scope
+    pub tag_filter: Option<String>,
 }
 
 impl SearchState {
@@ -61,7 +64,7 @@ pub trait SearchEngine: Send + Sync + 'static {
     async fn query(&mut self, state: &SearchState, db: &mut dyn Database) -> Result<Vec<History>> {
         if state.input.as_str().is_empty() {
             Ok(db
-                .list(&[state.filter_mode], &state.context, Some(200), true, false)
+                .list(&[state.filter_mode], &state.context, Some(200), true, false, state.tag_filter.as_deref())
                 .await?
                 .into_iter()
                 .collect::<Vec<_>>())

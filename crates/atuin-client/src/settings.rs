@@ -533,6 +533,18 @@ pub struct Settings {
 
     #[serde(default)]
     pub kv: kv::Settings,
+
+    /// Map of single-character keys to tag names
+    /// Example: { "f" = "favorite", "w" = "work", "p" = "personal" }
+    /// Used with ctrl+t <key> to tag items and ctrl+v <key> to filter by tag
+    #[serde(default = "default_tag_bindings")]
+    pub tag_bindings: HashMap<String, String>,
+}
+
+fn default_tag_bindings() -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    map.insert("f".to_string(), "favorite".to_string());
+    map
 }
 
 impl Settings {
@@ -831,6 +843,7 @@ impl Settings {
             )?
             .set_default("theme.name", "default")?
             .set_default("theme.debug", None::<bool>)?
+            .set_default("tag_bindings", default_tag_bindings())?
             .set_default(
                 "prefers_reduced_motion",
                 std::env::var("NO_MOTION")

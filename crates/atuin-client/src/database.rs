@@ -99,6 +99,7 @@ pub trait Database: Send + Sync + 'static {
         max: Option<usize>,
         unique: bool,
         include_deleted: bool,
+        tag_filter: Option<&str>,
     ) -> Result<Vec<History>>;
     async fn range(&self, from: OffsetDateTime, to: OffsetDateTime) -> Result<Vec<History>>;
 
@@ -123,6 +124,7 @@ pub trait Database: Send + Sync + 'static {
         context: &Context,
         query: &str,
         filter_options: OptFilters,
+        tag_filter: Option<&str>,
     ) -> Result<Vec<History>>;
 
     async fn query_history(&self, query: &str) -> Result<Vec<History>>;
@@ -132,6 +134,15 @@ pub trait Database: Send + Sync + 'static {
     async fn stats(&self, h: &History) -> Result<HistoryStats>;
 
     async fn get_dups(&self, before: i64, dupkeep: u32) -> Result<Vec<History>>;
+
+    // Tag management operations
+    async fn add_tag(&self, history_id: &HistoryId, tag: &str) -> Result<()>;
+    async fn remove_tag(&self, history_id: &HistoryId, tag: &str) -> Result<()>;
+    async fn get_tags(&self, history_id: &HistoryId) -> Result<Vec<String>>;
+    async fn toggle_tag(&self, history_id: &HistoryId, tag: &str) -> Result<bool>;
+
+    // Access to the underlying SQLite pool for tag store rebuild
+    fn sqlite_pool(&self) -> Option<&SqlitePool>;
 }
 
 // Intended for use on a developer machine and not a sync server.
@@ -312,6 +323,7 @@ impl Database for Sqlite {
         max: Option<usize>,
         unique: bool,
         include_deleted: bool,
+        tag_filter: Option<&str>,
     ) -> Result<Vec<History>> {
         debug!("listing history");
 
@@ -344,6 +356,13 @@ impl Database for Sqlite {
                 FilterMode::Directory => query.and_where_eq("cwd", quote(&context.cwd)),
                 FilterMode::Workspace => query.and_where_like_left("cwd", &git_root),
             };
+        }
+
+        if let Some(tag) = tag_filter {
+            query.and_where(format!(
+                "h.command IN (SELECT command FROM command_tags WHERE tag = {})",
+                quote(tag)
+            ));
         }
 
         if unique {
@@ -430,12 +449,15 @@ impl Database for Sqlite {
         context: &Context,
         query: &str,
         filter_options: OptFilters,
+        tag_filter: Option<&str>,
     ) -> Result<Vec<History>> {
-        let mut sql = SqlBuilder::select_from("history");
-
-        if !filter_options.include_duplicates {
-            sql.group_by("command").having("max(timestamp)");
-        }
+        let mut sql = if !filter_options.include_duplicates {
+            SqlBuilder::select_from(
+                "(SELECT * FROM history h1 WHERE timestamp = (SELECT MAX(timestamp) FROM history h2 WHERE h1.command = h2.command AND h2.deleted_at IS NULL) AND deleted_at IS NULL) as history"
+            )
+        } else {
+            SqlBuilder::select_from("history")
+        };
 
         if let Some(limit) = filter_options.limit {
             sql.limit(limit);
@@ -475,6 +497,13 @@ impl Database for Sqlite {
             FilterMode::Directory => sql.and_where_eq("cwd", quote(&context.cwd)),
             FilterMode::Workspace => sql.and_where_like_left("cwd", git_root),
         };
+
+        if let Some(tag) = tag_filter {
+            sql.and_where(format!(
+                "history.command IN (SELECT command FROM command_tags WHERE tag = {})",
+                quote(tag)
+            ));
+        }
 
         let orig_query = query;
 
@@ -819,6 +848,109 @@ impl Database for Sqlite {
 
         Ok(res)
     }
+
+    async fn add_tag(&self, history_id: &HistoryId, tag: &str) -> Result<()> {
+        let now = OffsetDateTime::now_utc().unix_timestamp_nanos() as i64;
+
+        let command: Option<(String,)> = sqlx::query_as(
+            "select command from history where id = ?1"
+        )
+        .bind(&history_id.0)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let Some((command,)) = command else {
+            return Ok(());
+        };
+
+        sqlx::query(
+            "insert or ignore into command_tags (command, tag, created_at) values (?1, ?2, ?3)"
+        )
+        .bind(&command)
+        .bind(tag)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    async fn remove_tag(&self, history_id: &HistoryId, tag: &str) -> Result<()> {
+
+        let command: Option<(String,)> = sqlx::query_as(
+            "select command from history where id = ?1"
+        )
+        .bind(&history_id.0)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let Some((command,)) = command else {
+            return Ok(());
+        };
+
+        sqlx::query("delete from command_tags where command = ?1 and tag = ?2")
+            .bind(&command)
+            .bind(tag)
+            .execute(&self.pool)
+            .await?;
+
+        Ok(())
+    }
+
+    async fn get_tags(&self, history_id: &HistoryId) -> Result<Vec<String>> {
+        let command: Option<(String,)> = sqlx::query_as(
+            "select command from history where id = ?1"
+        )
+        .bind(&history_id.0)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let Some((command,)) = command else {
+            return Ok(Vec::new());
+        };
+
+        let tags: Vec<(String,)> = sqlx::query_as(
+            "select tag from command_tags where command = ?1 order by tag"
+        )
+        .bind(&command)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(tags.into_iter().map(|(tag,)| tag).collect())
+    }
+
+    async fn toggle_tag(&self, history_id: &HistoryId, tag: &str) -> Result<bool> {
+        let command: Option<(String,)> = sqlx::query_as(
+            "select command from history where id = ?1"
+        )
+        .bind(&history_id.0)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let Some((command,)) = command else {
+            return Ok(false);
+        };
+
+        let exists: Option<(i64,)> = sqlx::query_as(
+            "select 1 from command_tags where command = ?1 and tag = ?2"
+        )
+        .bind(&command)
+        .bind(tag)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if exists.is_some() {
+            self.remove_tag(history_id, tag).await?;
+            Ok(false)
+        } else {
+            self.add_tag(history_id, tag).await?;
+            Ok(true)
+        }
+    }
+
+    fn sqlite_pool(&self) -> Option<&SqlitePool> {
+        Some(&self.pool)
+    }
 }
 
 trait SqlBuilderExt {
@@ -892,6 +1024,7 @@ mod test {
                 OptFilters {
                     ..Default::default()
                 },
+                None,
             )
             .await?;
 
@@ -1198,6 +1331,7 @@ mod test {
                 OptFilters {
                     ..Default::default()
                 },
+                None,
             )
             .await
             .unwrap();

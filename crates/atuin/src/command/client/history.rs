@@ -521,7 +521,7 @@ impl Cmd {
         };
 
         let history = db
-            .list(&filters, &context, None, false, include_deleted)
+            .list(&filters, &context, None, false, include_deleted, None)
             .await?;
 
         print_list(
@@ -549,7 +549,7 @@ impl Cmd {
         // Grab all executed commands and filter them using History::should_save.
         // We could iterate or paginate here if memory usage becomes an issue.
         let matches: Vec<History> = db
-            .list(&[Global], &context, None, false, false)
+            .list(&[Global], &context, None, false, false, None)
             .await?
             .into_iter()
             .filter(|h| !h.should_save(settings))

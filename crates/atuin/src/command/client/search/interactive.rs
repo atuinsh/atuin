@@ -21,6 +21,7 @@ use atuin_client::{
     settings::{
         CursorStyle, ExitMode, FilterMode, KeymapMode, PreviewStrategy, SearchMode, Settings,
     },
+    tag_store,
 };
 
 use crate::command::client::search::history_list::HistoryHighlighter;
@@ -56,6 +57,7 @@ pub enum InputAction {
     Accept(usize),
     Copy(usize),
     Delete(usize),
+    ToggleTag(usize, String),
     ReturnOriginal,
     ReturnQuery,
     Continue,
@@ -73,6 +75,8 @@ pub struct State {
     accept: bool,
     keymap_mode: KeymapMode,
     prefix: bool,
+    pub prefix_tag: bool,
+    prefix_view_tag: bool,
     current_cursor: Option<CursorStyle>,
     tab_index: usize,
 
@@ -94,7 +98,10 @@ impl State {
         db: &mut dyn Database,
         smart_sort: bool,
     ) -> Result<Vec<History>> {
-        let results = self.engine.query(&self.search, db).await?;
+        let mut results = self.engine.query(&self.search, db).await?;
+        for history in &mut results {
+            history.tags = db.get_tags(&history.id).await.unwrap_or_default();
+        }
 
         self.results_state.select(0);
         self.results_len = results.len();
@@ -305,6 +312,38 @@ impl State {
         // reset the state, will be set to true later if user really did change it
         self.switched_search_mode = false;
 
+        // Handle tag prefix mode: ctrl+t <key>
+        // User has pressed ctrl+t and we're waiting for the tag key
+        if self.prefix_tag {
+            self.prefix_tag = false;
+            if let KeyCode::Char(c) = input.code {
+                let key = c.to_string();
+                if let Some(tag) = settings.tag_bindings.get(&key) {
+                    return InputAction::ToggleTag(self.results_state.selected(), tag.clone());
+                }
+            }
+            return InputAction::Continue;
+        }
+
+        // Handle view tag prefix mode: ctrl+v <key>
+        // User has pressed ctrl+v and we're waiting for the tag key
+        if self.prefix_view_tag {
+            self.prefix_view_tag = false;
+            if let KeyCode::Char(c) = input.code {
+                let key = c.to_string();
+                if let Some(tag) = settings.tag_bindings.get(&key) {
+                    // Toggle the tag filter for this tag
+                    self.search.tag_filter = if self.search.tag_filter.as_deref() == Some(tag.as_str()) {
+                        None
+                    } else {
+                        Some(tag.clone())
+                    };
+                    return InputAction::Redraw;
+                }
+            }
+            return InputAction::Continue;
+        }
+
         // first up handle prefix mappings. these take precedence over all others
         // eg, if a user types ctrl-a d, delete the history
         if self.prefix {
@@ -477,6 +516,16 @@ impl State {
             }
             KeyCode::Char('u') if ctrl => self.search.input.clear(),
             KeyCode::Char('r') if ctrl => self.search.rotate_filter_mode(settings, 1),
+            KeyCode::Char('t') if ctrl => {
+                // Enter tag prefix mode - waiting for user to press a tag key
+                self.prefix_tag = true;
+                return InputAction::Continue;
+            }
+            KeyCode::Char('v') if ctrl => {
+                // Enter view tag prefix mode - waiting for user to press a tag key
+                self.prefix_view_tag = true;
+                return InputAction::Continue;
+            }
             KeyCode::Char('s') if ctrl => {
                 self.switched_search_mode = true;
                 self.search_mode = self.search_mode.next(settings);
@@ -822,16 +871,29 @@ impl State {
     }
 
     fn build_title(&self, theme: &Theme) -> Paragraph<'_> {
+        let version_text = if self.update_needed.is_some() {
+            format!("Atuin v{VERSION} - UPGRADE")
+        } else {
+            format!("Atuin v{VERSION}")
+        };
+
+        // Show tag filter status in the title if active
+        let title_text = if let Some(tag) = &self.search.tag_filter {
+            format!("{} [{}]", version_text, tag)
+        } else {
+            version_text
+        };
+
         let title = if self.update_needed.is_some() {
             let error_style: Style = theme.get_error().into();
             Paragraph::new(Text::from(Span::styled(
-                format!("Atuin v{VERSION} - UPGRADE"),
+                title_text,
                 error_style.add_modifier(Modifier::BOLD),
             )))
         } else {
             let style: Style = theme.as_style(Meaning::Base).into();
             Paragraph::new(Text::from(Span::styled(
-                format!("Atuin v{VERSION}"),
+                title_text,
                 style.add_modifier(Modifier::BOLD),
             )))
         };
@@ -840,6 +902,23 @@ impl State {
 
     #[allow(clippy::unused_self)]
     fn build_help(&self, settings: &Settings, theme: &Theme) -> Paragraph<'_> {
+        // Show special help when in tag/view modes
+        if self.prefix_tag {
+            let tag_keys: Vec<String> = settings.tag_bindings.keys().cloned().collect();
+            let help_text = format!("Press a key to toggle tag: [{}]", tag_keys.join(", "));
+            return Paragraph::new(Text::from(help_text))
+                .style(theme.as_style(Meaning::Annotation))
+                .alignment(Alignment::Center);
+        }
+
+        if self.prefix_view_tag {
+            let tag_keys: Vec<String> = settings.tag_bindings.keys().cloned().collect();
+            let help_text = format!("Press a key to filter by tag: [{}]", tag_keys.join(", "));
+            return Paragraph::new(Text::from(help_text))
+                .style(theme.as_style(Meaning::Annotation))
+                .alignment(Alignment::Center);
+        }
+
         match self.tab_index {
             // search
             0 => Paragraph::new(Text::from(Line::from(vec![
@@ -858,6 +937,12 @@ impl State {
                 Span::raw(", "),
                 Span::styled("<ctrl-o>", Style::default().add_modifier(Modifier::BOLD)),
                 Span::raw(": inspect"),
+                Span::raw(", "),
+                Span::styled("<ctrl-t>", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(": tag"),
+                Span::raw(", "),
+                Span::styled("<ctrl-v>", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(": filter"),
             ]))),
 
             1 => Paragraph::new(Text::from(Line::from(vec![
@@ -1075,6 +1160,7 @@ pub async fn history(
     settings: &Settings,
     mut db: impl Database,
     history_store: &HistoryStore,
+    tag_store: &tag_store::TagStore,
     theme: &Theme,
 ) -> Result<String> {
     let inline_height = if settings.shell_up_key_binding {
@@ -1159,6 +1245,7 @@ pub async fn history(
                 .filter(|&x| x != FilterMode::Workspace || context.git_root.is_some())
                 .unwrap_or(FilterMode::Global),
             context,
+            tag_filter: None,
         },
         engine: engines::engine(search_mode),
         results_len: 0,
@@ -1175,6 +1262,8 @@ pub async fn history(
             Box::new(OffsetDateTime::now_utc)
         },
         prefix: false,
+        prefix_tag: false,
+        prefix_view_tag: false,
     };
 
     app.initialize_keymap_cursor(settings);
@@ -1193,6 +1282,7 @@ pub async fn history(
         let initial_input = app.search.input.as_str().to_owned();
         let initial_filter_mode = app.search.filter_mode;
         let initial_search_mode = app.search_mode;
+        let initial_tag_filter = app.search.tag_filter.clone();
 
         let event_ready = tokio::task::spawn_blocking(|| event::poll(Duration::from_millis(250)));
 
@@ -1223,9 +1313,40 @@ pub async fn history(
 
                                 app.tab_index  = 0;
                             },
+                            InputAction::ToggleTag(index, tag) => {
+                                if results.is_empty() || index >= results.len() {
+                                    break;
+                                }
+
+                                let entry = &results[index];
+                                let added = db.toggle_tag(&entry.id, &tag).await?;
+
+                                if settings.sync.records {
+                                    if added {
+                                        tag_store.tag(entry.command.clone(), tag.clone()).await?;
+                                    } else {
+                                        tag_store.untag(entry.command.clone(), tag.clone()).await?;
+                                    }
+                                }
+
+                                if let Some(result_entry) = results.get_mut(index) {
+                                    if added {
+                                        if !result_entry.tags.contains(&tag) {
+                                            result_entry.tags.push(tag.clone());
+                                        }
+                                    } else {
+                                        result_entry.tags.retain(|t| t != &tag);
+                                    }
+                                }
+
+                                if !added && app.search.tag_filter.as_deref() == Some(&tag) {
+                                    results = app.query_results(&mut db, settings.smart_sort).await?;
+                                }
+                            },
                             InputAction::Redraw => {
                                 terminal.clear()?;
                                 terminal.draw(|f| app.draw(f, &results, stats.clone(), settings, theme))?;
+                                break;
                             },
                             r => {
                                 accept = app.accept;
@@ -1246,6 +1367,7 @@ pub async fn history(
         if initial_input != app.search.input.as_str()
             || initial_filter_mode != app.search.filter_mode
             || initial_search_mode != app.search_mode
+            || initial_tag_filter != app.search.tag_filter
         {
             results = app.query_results(&mut db, settings.smart_sort).await?;
         }
@@ -1296,7 +1418,7 @@ pub async fn history(
             // * out of bounds -> usually implies no selected entry so we return the input
             Ok(app.search.input.into_inner())
         }
-        InputAction::Continue | InputAction::Redraw | InputAction::Delete(_) => {
+        InputAction::Continue | InputAction::Redraw | InputAction::Delete(_) | InputAction::ToggleTag(_, _) => {
             unreachable!("should have been handled!")
         }
     }
@@ -1502,6 +1624,8 @@ mod tests {
             accept: false,
             keymap_mode: KeymapMode::Auto,
             prefix: false,
+            prefix_tag: false,
+            prefix_view_tag: false,
             current_cursor: None,
             tab_index: 0,
             search: SearchState {
@@ -1514,6 +1638,7 @@ mod tests {
                     host_id: String::new(),
                     git_root: None,
                 },
+                tag_filter: None,
             },
             engine: engines::engine(SearchMode::Fuzzy),
             now: Box::new(OffsetDateTime::now_utc),
