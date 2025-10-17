@@ -312,7 +312,7 @@ __atuin_initialize_blesh() {
     #
     function ble/complete/auto-complete/source:atuin-history {
         local suggestion
-        suggestion=$(ATUIN_QUERY="$_ble_edit_str" atuin search --cmd-only --limit 1 --search-mode prefix)
+        suggestion=$(ATUIN_QUERY="$_ble_edit_str" atuin search --cmd-only --limit 1 --search-mode prefix 2>/dev/null)
         [[ $suggestion == "$_ble_edit_str"?* ]] || return 1
         ble/complete/auto-complete/enter h 0 "${suggestion:${#_ble_edit_str}}" '' "$suggestion"
     }
