@@ -177,8 +177,9 @@ After installing, remember to restart your shell.
             While Atuin will ignore commands prefixed with whitespace, they may still end up in your bash history.
             Please check your configuration! All other shells do not have this issue.
 
-            To use Atuin in `bash < 4` with bash-preexec, the option `enter_accept` needs
-            to be turned on (which is so by default).
+            To use `atuin < 18.10.0` in `bash < 4` with bash-preexec, the option
+            `enter_accept` needs to be turned on (which is so by default).  There is no
+            restriction in the latest version of Atuin (>= 18.10.0).
 
             bash-preexec cannot properly invoke the `preexec` hook for subshell commands
             `(...)`, function definitions `func() { ...; }`, empty for-in-statements `for
