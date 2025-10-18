@@ -19,7 +19,7 @@ daemon = []
 check-update = []
 
 [dependencies]
-atuin-common = { path = "../atuin-common", version = "18.8.0" }
+atuin-common = { path = "../atuin-common", version = "18.9.0" }
 
 log = { workspace = true }
 base64 = { workspace = true }
