@@ -1718,6 +1718,11 @@ mod tests {
             prefix: false,
             current_cursor: None,
             tab_index: 0,
+            inspecting_state: InspectingState {
+                current: None,
+                next: None,
+                previous: None,
+            },
             search: SearchState {
                 input: String::new().into(),
                 filter_mode: FilterMode::Global,
