@@ -11,13 +11,14 @@ use ratatui::{
     layout::Rect,
     prelude::{Constraint, Direction, Layout},
     style::Style,
+    text::{Span, Text},
     widgets::{Bar, BarChart, BarGroup, Block, Borders, Padding, Paragraph, Row, Table},
 };
 
 use super::duration::format_duration;
 
 use super::super::theme::{Meaning, Theme};
-use super::interactive::{InputAction, State};
+use super::interactive::{Compactness, InputAction, State, to_compactness};
 
 #[allow(clippy::cast_sign_loss)]
 fn u64_or_zero(num: i64) -> u64 {
@@ -29,52 +30,83 @@ pub fn draw_commands(
     parent: Rect,
     history: &History,
     stats: &HistoryStats,
+    compact: bool,
     theme: &Theme,
 ) {
     let commands = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Ratio(1, 4),
-            Constraint::Ratio(1, 2),
-            Constraint::Ratio(1, 4),
-        ])
+        .direction(if compact {
+            Direction::Vertical
+        } else {
+            Direction::Horizontal
+        })
+        .constraints(if compact {
+            [
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Min(0),
+            ]
+        } else {
+            [
+                Constraint::Ratio(1, 4),
+                Constraint::Ratio(1, 2),
+                Constraint::Ratio(1, 4),
+            ]
+        })
         .split(parent);
 
-    let command = Paragraph::new(history.command.clone()).block(
+    let command = Paragraph::new(Text::from(Span::styled(
+        history.command.clone(),
+        theme.as_style(Meaning::Important),
+    )))
+    .block(if compact {
+        Block::new()
+            .borders(Borders::NONE)
+            .style(theme.as_style(Meaning::Base))
+    } else {
         Block::new()
             .borders(Borders::ALL)
-            .title("Command")
             .style(theme.as_style(Meaning::Base))
-            .padding(Padding::horizontal(1)),
-    );
+            .title("Command")
+            .padding(Padding::horizontal(1))
+    });
 
     let previous = Paragraph::new(
         stats
             .previous
             .clone()
-            .map_or_else(|| "No previous command".to_string(), |prev| prev.command),
+            .map_or_else(|| "[No previous command]".to_string(), |prev| prev.command),
     )
-    .block(
+    .block(if compact {
+        Block::new()
+            .borders(Borders::NONE)
+            .style(theme.as_style(Meaning::Annotation))
+    } else {
         Block::new()
             .borders(Borders::ALL)
-            .title("Previous command")
             .style(theme.as_style(Meaning::Annotation))
-            .padding(Padding::horizontal(1)),
-    );
+            .title("Previous command")
+            .padding(Padding::horizontal(1))
+    });
 
+    // Add [] around blank text, as when this is shown in a list
+    // compacted, it makes it more obviously control text.
     let next = Paragraph::new(
         stats
             .next
             .clone()
-            .map_or_else(|| "No next command".to_string(), |next| next.command),
+            .map_or_else(|| "[No next command]".to_string(), |next| next.command),
     )
-    .block(
+    .block(if compact {
+        Block::new()
+            .borders(Borders::NONE)
+            .style(theme.as_style(Meaning::Annotation))
+    } else {
         Block::new()
             .borders(Borders::ALL)
             .title("Next command")
+            .padding(Padding::horizontal(1))
             .style(theme.as_style(Meaning::Annotation))
-            .padding(Padding::horizontal(1)),
-    );
+    });
 
     f.render_widget(previous, commands[0]);
     f.render_widget(command, commands[1]);
@@ -258,6 +290,33 @@ pub fn draw(
     chunk: Rect,
     history: &History,
     stats: &HistoryStats,
+    settings: &Settings,
+    theme: &Theme,
+    tz: Timezone,
+) {
+    let compactness = to_compactness(f, settings);
+
+    match compactness {
+        Compactness::Ultracompact => draw_ultracompact(f, chunk, history, stats, theme),
+        _ => draw_full(f, chunk, history, stats, theme, tz),
+    }
+}
+
+pub fn draw_ultracompact(
+    f: &mut Frame<'_>,
+    chunk: Rect,
+    history: &History,
+    stats: &HistoryStats,
+    theme: &Theme,
+) {
+    draw_commands(f, chunk, history, stats, true, theme);
+}
+
+pub fn draw_full(
+    f: &mut Frame<'_>,
+    chunk: Rect,
+    history: &History,
+    stats: &HistoryStats,
     theme: &Theme,
     tz: Timezone,
 ) {
@@ -271,7 +330,7 @@ pub fn draw(
         .constraints([Constraint::Ratio(1, 3), Constraint::Ratio(2, 3)])
         .split(vert_layout[1]);
 
-    draw_commands(f, vert_layout[0], history, stats, theme);
+    draw_commands(f, vert_layout[0], history, stats, false, theme);
     draw_stats_table(f, stats_layout[0], history, tz, stats, theme);
     draw_stats_charts(f, stats_layout[1], stats, theme);
 }
@@ -279,7 +338,7 @@ pub fn draw(
 // I'm going to break this out more, but just starting to move things around before changing
 // structure and making it nicer.
 pub fn input(
-    _state: &mut State,
+    state: &mut State,
     _settings: &Settings,
     selected: usize,
     input: &KeyEvent,
@@ -288,6 +347,93 @@ pub fn input(
 
     match input.code {
         KeyCode::Char('d') if ctrl => InputAction::Delete(selected),
+        KeyCode::Up => {
+            state.inspecting_state.move_to_previous();
+            InputAction::Redraw
+        }
+        KeyCode::Down => {
+            state.inspecting_state.move_to_next();
+            InputAction::Redraw
+        }
         _ => InputAction::Continue,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::draw_ultracompact;
+    use atuin_client::{
+        history::{History, HistoryId, HistoryStats},
+        theme::ThemeManager,
+    };
+    use ratatui::{backend::TestBackend, prelude::*};
+    use time::OffsetDateTime;
+
+    fn mock_history_stats() -> (History, HistoryStats) {
+        let history = History {
+            id: HistoryId::from("test1".to_string()),
+            timestamp: OffsetDateTime::now_utc(),
+            duration: 3,
+            exit: 0,
+            command: "/bin/cmd".to_string(),
+            cwd: "/toot".to_string(),
+            session: "sesh1".to_string(),
+            hostname: "hostn".to_string(),
+            deleted_at: None,
+        };
+        let next = History {
+            id: HistoryId::from("test2".to_string()),
+            timestamp: OffsetDateTime::now_utc(),
+            duration: 2,
+            exit: 0,
+            command: "/bin/cmd -os".to_string(),
+            cwd: "/toot".to_string(),
+            session: "sesh1".to_string(),
+            hostname: "hostn".to_string(),
+            deleted_at: None,
+        };
+        let prev = History {
+            id: HistoryId::from("test3".to_string()),
+            timestamp: OffsetDateTime::now_utc(),
+            duration: 1,
+            exit: 0,
+            command: "/bin/cmd -a".to_string(),
+            cwd: "/toot".to_string(),
+            session: "sesh1".to_string(),
+            hostname: "hostn".to_string(),
+            deleted_at: None,
+        };
+        let stats = HistoryStats {
+            next: Some(next.clone()),
+            previous: Some(prev.clone()),
+            total: 2,
+            average_duration: 3,
+            exits: Vec::new(),
+            day_of_week: Vec::new(),
+            duration_over_time: Vec::new(),
+        };
+        (history, stats)
+    }
+
+    #[test]
+    fn test_output_looks_correct_for_ultracompact() {
+        let backend = TestBackend::new(22, 5);
+        let mut terminal = Terminal::new(backend).expect("Could not create terminal");
+        let chunk = Rect::new(0, 0, 22, 5);
+        let (history, stats) = mock_history_stats();
+        let prev = stats.previous.clone().unwrap();
+        let next = stats.next.clone().unwrap();
+
+        let mut manager = ThemeManager::new(Some(true), Some("".to_string()));
+        let theme = manager.load_theme("(none)", None);
+        let _ = terminal.draw(|f| draw_ultracompact(f, chunk, &history, &stats, &theme));
+        let mut lines = ["                      "; 5].map(|l| Line::from(l));
+        for (n, entry) in [prev, history, next].iter().enumerate() {
+            let mut l = lines[n].to_string();
+            l.replace_range(0..entry.command.len(), &entry.command);
+            lines[n] = Line::from(l);
+        }
+
+        terminal.backend().assert_buffer_lines(lines);
     }
 }
