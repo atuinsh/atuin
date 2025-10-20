@@ -2,6 +2,60 @@
 
 All notable changes to this project will be documented in this file.
 
+## [18.9.0] - 2025-10-20
+
+### Bug Fixes
+
+- *(dotfiles)* Properly escape spaces/quotes in vars
+- Clippy issues on Windows ([#2856](https://github.com/atuinsh/atuin/issues/2856))
+- Honor timezone in inspector stats ([#2853](https://github.com/atuinsh/atuin/issues/2853))
+- Make status exit 1 if not logged in ([#2843](https://github.com/atuinsh/atuin/issues/2843))
+- Match logic of theme directory with settings directory, so ATUIN_CONFIG_DIR is respected ([#2707](https://github.com/atuinsh/atuin/issues/2707))
+- Expand path for daemon.socket_path ([#2870](https://github.com/atuinsh/atuin/issues/2870))
+- Use fullscreen if `inline_height` is too large ([#2888](https://github.com/atuinsh/atuin/issues/2888))
+- Clean up new rustc and clippy warnings on Rust 1.89
+- `cargo update` and changes needed to accomodate it
+- Run `cargo fmt`
+- Clippy warnings I don't have on my version of clippy
+- Add forgotten `rust-toolchain.toml` to match changes (oops)
+- Update version in Cargo.toml + github workflows
+- Clippy warnings
+- Dissociate command_chaining from enter_accept
+- Remove __atuin_chain_command__ prefix
+- Docker compose link ([#2914](https://github.com/atuinsh/atuin/issues/2914))
+- Fish up binding ([#2902](https://github.com/atuinsh/atuin/issues/2902))
+
+
+### Features
+
+- *(stats)* Add dotnet to default common subcommands
+- *(tui)* Select entries using number in vim-normal mode. closes #2368 ([#2893](https://github.com/atuinsh/atuin/issues/2893))
+- *(tui)* Add show_numeric_shortcuts config to hide 1-9 shortcuts ([#2766](https://github.com/atuinsh/atuin/issues/2766))
+- Highlight matches in interactive search ([#2653](https://github.com/atuinsh/atuin/issues/2653))
+- Add session-preload filter mode to include global history from before session start
+- Add various acceptance keys ([#2928](https://github.com/atuinsh/atuin/issues/2928))
+- More accurately filter secret tokens ([#2932](https://github.com/atuinsh/atuin/issues/2932))
+- Add shell pipelines to command chaining ([#2938](https://github.com/atuinsh/atuin/issues/2938))
+
+
+### Miscellaneous Tasks
+
+- Update changelog
+- Remove legacy Apple SDK frameworks ([#2885](https://github.com/atuinsh/atuin/issues/2885))
+- Update dist workflows
+- Update to Rust 1.90 ([#2916](https://github.com/atuinsh/atuin/issues/2916))
+
+
+### Refactor
+
+- Shell environment variables
+
+
+### Build
+
+- Update flake.nix with new sha256
+
+
 ## [18.8.0] - 2025-08-04
 
 ### Bug Fixes
