@@ -40,9 +40,12 @@ __atuin_preexec() {
         # for a keybinding, the preexec hook for the user command will not
         # fire, so we instead set a fake ATUIN_HISTORY_ID here to notify
         # __atuin_precmd of this failure.
-        if [[ $BASH_COMMAND == '__atuin_history'* && $BASH_COMMAND != "$1" ]]; then
-            ATUIN_HISTORY_ID=__bash_preexec_failure__
-            return 0
+        if [[ $BASH_COMMAND != "$1" ]]; then
+            case $BASH_COMMAND in
+                '__atuin_history'* | '__atuin_widget_run'* | '__atuin_bash42_dispatch'*)
+                    ATUIN_HISTORY_ID=__bash_preexec_failure__
+                    return 0 ;;
+            esac
         fi
     fi
 
@@ -107,6 +110,12 @@ __atuin_precmd() {
 __atuin_set_ret_value() {
     return ${1:+"$1"}
 }
+
+#------------------------------------------------------------------------------
+# section: __atuin_accept_line
+#
+# The function "__atuin_accept_line" is kept for backward compatibility of the
+# direct use of __atuin_history in keybindings by users.
 
 # The shell function `__atuin_evaluate_prompt` evaluates prompt sequences in
 # $PS1.  We switch the implementation of the shell function
@@ -226,6 +235,8 @@ __atuin_accept_line() {
     __atuin_clear_prompt 0
 }
 
+#------------------------------------------------------------------------------
+
 __atuin_history() {
     # Default action of the up key: When this function is called with the first
     # argument `--shell-up-key-binding`, we perform Atuin's history search only
@@ -248,10 +259,10 @@ __atuin_history() {
     fi
 
     # READLINE_LINE and READLINE_POINT are only supported by bash >= 4.0 or
-    # ble.sh.  When it is not supported, we localize them to suppress strange
+    # ble.sh.  When it is not supported, we clear them to suppress strange
     # behaviors.
     [[ ${BLE_ATTACHED-} ]] || ((BASH_VERSINFO[0] >= 4)) ||
-        local READLINE_LINE="" READLINE_POINT=0
+        READLINE_LINE="" READLINE_POINT=0
 
     local __atuin_output
     __atuin_output=$(ATUIN_SHELL=bash ATUIN_LOG=error ATUIN_QUERY="$READLINE_LINE" atuin search "$@" -i 3>&1 1>&2 2>&3)
@@ -265,15 +276,22 @@ __atuin_history() {
         if [[ ${BLE_ATTACHED-} ]]; then
             ble-edit/content/reset-and-check-dirty "$__atuin_output"
             ble/widget/accept-line
+            READLINE_LINE=""
+        elif [[ ${__atuin_macro_chain_keymap-} ]]; then
+            READLINE_LINE=$__atuin_output
+            bind -m "$__atuin_macro_chain_keymap" '"'"$__atuin_macro_chain"'": '"$__atuin_macro_accept_line"
         else
             __atuin_accept_line "$__atuin_output"
+            READLINE_LINE=""
         fi
 
-        READLINE_LINE=""
         READLINE_POINT=${#READLINE_LINE}
     else
         READLINE_LINE=$__atuin_output
         READLINE_POINT=${#READLINE_LINE}
+        if [[ ! ${BLE_ATTACHED-} ]] && ((BASH_VERSINFO[0] < 4)) && [[ ${__atuin_macro_chain_keymap-} ]]; then
+            bind -m "$__atuin_macro_chain_keymap" '"'"$__atuin_macro_chain"'": '"$__atuin_macro_insert_line"
+        fi
     fi
 }
 
@@ -286,7 +304,7 @@ __atuin_initialize_blesh() {
     # Define and register an autosuggestion source for ble.sh's auto-complete.
     # If you'd like to overwrite this, define the same name of shell function
     # after the $(atuin init bash) line in your .bashrc.  If you do not need
-    # the auto-complete source by atuin, please add the following code to
+    # the auto-complete source by Atuin, please add the following code to
     # remove the entry after the $(atuin init bash) line in your .bashrc:
     #
     #   ble/util/import/eval-after-load core-complete '
@@ -311,43 +329,270 @@ BLE_ONLOAD+=(__atuin_initialize_blesh)
 precmd_functions+=(__atuin_precmd)
 preexec_functions+=(__atuin_preexec)
 
+#------------------------------------------------------------------------------
+# section: atuin-bind
+
+__atuin_widget=()
+
+__atuin_widget_save() {
+    local data=$1
+    for REPLY in "${!__atuin_widget[@]}"; do
+        if [[ ${__atuin_widget[REPLY]} == "$data" ]]; then
+            return 0
+        fi
+    done
+    # shellcheck disable=SC2154
+    REPLY=${#__atuin_widget[*]}
+    __atuin_widget[REPLY]=$data
+}
+
+__atuin_widget_run() {
+    local data=${__atuin_widget[$1]}
+    local keymap=${data%%:*} widget=${data#*:}
+    local __atuin_macro_chain_keymap=$keymap
+    bind -m "$keymap" '"'"$__atuin_macro_chain"'": ""'
+    builtin eval -- "$widget"
+}
+
+# To realize the enter_accept feature in a robust way, we need to call the
+# readline bindable function `accept-line'.  However, there is no way to call
+# `accept-line' from the shell script.  To call the bindable function
+# `accept-line', we may utilize string macros of readline.  When we bind KEYSEQ
+# to a WIDGET that wants to conditionally call `accept-line' at the end, we
+# perform two-step dispatching:
+#
+# 1. [KEYSEQ -> IKEYSEQ1 IKEYSEQ2]---We first translate KEYSEQ to two
+#   intermediate key sequences IKEYSEQ1 and IKEYSEQ2 using string macros.  For
+#   example, when we bind `__atuin_history` to \C-r, this step can be set up by
+#   `bind '"\C-r": "IKEYSEQ1IKEYSEQ2"'`.
+#
+# 2. [IKEYSEQ1 -> WIDGET]---Then, IKEYSEQ1 is bound to the WIDGET, and the
+#   binding of IKEYSEQ2 is dynamically determined by WIDGET.  For example, when
+#   we bind `__atuin_history` to \C-r, this step can be set up by `bind -x
+#   '"IKEYSEQ1": WIDGET'`.
+#
+# 3. [IKEYSEQ2 -> accept-line] or [IKEYSEQ2 -> ""]---To request the execution
+#   of `accept-line', WIDGET can change the binding of IKEYSEQ2 by running
+#   `bind '"IKEYSEQ2": accept-line''.  Otherwise, WIDGET can change the binding
+#   of IKEYSEQ2 to no-op by running `bind '"IKEYSEQ2": ""'`.
+#
+# For the choice of the intermediate key sequences, we want to choose key
+# sequences that are unlikely to conflict with others.  For this, we consider
+# the key sequences of the form \e[0;<m>A.  This is a variant of the key
+# sequences for the [up] key.  A single [up] keypress is usually transmitted as
+# \e[A in the input stream, but it switches to the form \e[<n>;<m>A in the
+# presence of modifier keys (such as Control or Shift), where <m> represents
+# the 1 + (modifier flags) and <n> represents the number of [up] keypresses.
+# The number <n> is fixed to be 1 in the input stream, so we may use <n> = 0
+# (which is unlikely be used) as our special key sequences.
+
+__atuin_macro_chain='\e[0;0A'
+for __atuin_keymap in emacs vi-insert vi-command; do
+    bind -m "$__atuin_keymap" "\"$__atuin_macro_chain\": \"\""
+done
+unset -v __atuin_keymap
+
+if ((BASH_VERSINFO[0] >= 5 || BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 3)); then
+    # In Bash >= 4.3
+    __atuin_macro_accept_line=accept-line
+
+    __atuin_bind_impl() {
+        local keymap=$1 keyseq=$2 command=$3
+
+        # Note: In Bash <= 5.0, the table for `bind -x` from the keyseq to the
+        # command is shared by all the keymaps (emacs, vi-insert, and
+        # vi-command), so one cannot safely bind different command strings to
+        # the same keyseq in different keymaps.  Therefore, the command string
+        # and the keyseq need to be globally in one-to-one correspondence in
+        # all the keymaps.
+        local REPLY
+        __atuin_widget_save "$keymap:$command"
+        local widget=$REPLY
+        local ikeyseq1='\e[0;'$((1 + widget))'A'
+        local ikeyseq2=$__atuin_macro_chain
+
+        bind -m "$keymap" "\"$keyseq\": \"$ikeyseq1$ikeyseq2\""
+        bind -m "$keymap" -x "\"$ikeyseq1\": __atuin_widget_run $widget"
+    }
+
+    __atuin_bind_blesh_onload() {
+        # In ble.sh, we need to enable unrecognized CSI sequences like \e[0;0A,
+        # which are discarded by ble.sh by default.  Note: In Bash <= 4.2, we
+        # do not need to unset "decode_error_cseq_discard" because \e[0;<m>A is
+        # used only for the macro chaining (which is unused by ble.sh) in Bash
+        # <= 4.2.
+        bleopt decode_error_cseq_discard=
+    }
+    if [[ ${BLE_VERSION-} ]]; then
+        __atuin_bind_blesh_onload
+    fi
+    BLE_ONLOAD+=(__atuin_bind_blesh_onload)
+else
+    # In Bash <= 4.2, "bind -x" cannot bind a shell command to a keyseq having
+    # more than two bytes, so we need to work with only two-byte sequences.
+    #
+    # However, the number of available combinations of two-byte sequences is
+    # limited.  To minimize the number of key sequences used by Atuin, instead
+    # of specifying a widget by its own intermediate sequence, we specify a
+    # widget by a fixed-length sequence of multiple two-byte sequences.  More
+    # specifically, instead of IKEYSEQ1, we use IKS1 IKS2 IKS3 [IKS4 IKS5]
+    # IKSX, where IKS1..IKS5 just stores its information to a global variable,
+    # and IKSX collects all the information and determine and call the actual
+    # widget based on the stored information. Each of IKn (n=1..5) is one of
+    # the two reserved sequences, $__atuin_bash42_code0 and
+    # $__atuin_bash42_code1.  IKSX is fixed to be $__atuin_bash42_code2.
+    #
+    # For the choices of the special key sequences, we consider \C-xQ, \C-xR,
+    # and \C-xS.  In the emacs editing mode of Bash, \C-x is used as a prefix
+    # key, i.e., it is used for the beginning key of the keybindings with
+    # multiple keys, so \C-x is unlikely to be used for a single-key binding by
+    # the user.  Also, \C-x is not used in the vi editing mode by default.  The
+    # combinations \C-xQ..\C-xS are also unlikely be used because we need to
+    # switch the modifier keys from Control to Shift to input these sequences,
+    # and these are not easy to input.
+    __atuin_bash42_code0='\C-xQ'
+    __atuin_bash42_code1='\C-xR'
+    __atuin_bash42_code2='\C-xS'
+
+    __atuin_bash42_encode() {
+        REPLY=
+        local n=$1 min_width=${2-}
+        while
+            if ((n % 2 == 0)); then
+                REPLY=$__atuin_bash42_code0$REPLY
+            else
+                REPLY=$__atuin_bash42_code1$REPLY
+            fi
+            (((n /= 2) || ${#REPLY} / ${#__atuin_bash42_code0} < min_width))
+        do :; done
+    }
+
+    __atuin_bash42_bind() {
+        local __atuin_keymap
+        for __atuin_keymap in emacs vi-insert vi-command; do
+            bind -m "$__atuin_keymap" -x '"'"$__atuin_bash42_code0"'": __atuin_bash42_dispatch_selector+=0'
+            bind -m "$__atuin_keymap" -x '"'"$__atuin_bash42_code1"'": __atuin_bash42_dispatch_selector+=1'
+            bind -m "$__atuin_keymap" -x '"'"$__atuin_bash42_code2"'": __atuin_bash42_dispatch'
+        done
+    }
+    __atuin_bash42_bind
+    # In Bash <= 4.2, there is no way to read users' "bind -x" settings, so we
+    # need to explicitly perform "bind -x" when ble.sh is loaded.
+    BLE_ONLOAD+=(__atuin_bash42_bind)
+
+    if ((BASH_VERSINFO[0] >= 4)); then
+        __atuin_macro_accept_line=accept-line
+    else
+        # Note: We rewrite the command line and invoke `accept-line'.  In
+        # bash <= 3.2, there is no way to rewrite the command line from the
+        # shell script, so we rewrite it using a macro and
+        # `shell-expand-line'.
+        #
+        # Note: Concerning the key sequences to invoke bindable functions
+        # such as "\e[0;1A", another option is to use
+        # "\exbegginning-of-line\r", etc. to make it consistent with bash
+        # >= 5.3.  However, an older Bash configuration can still conflict
+        # on [M-x].  The conflict is more likely than \e[0;1A.
+        for __atuin_keymap in emacs vi-insert vi-command; do
+            bind -m "$__atuin_keymap" '"\e[0;1A": beginning-of-line'
+            bind -m "$__atuin_keymap" '"\e[0;2A": kill-line'
+            bind -m "$__atuin_keymap" '"\e[0;3A": shell-expand-line'
+            bind -m "$__atuin_keymap" '"\e[0;4A": accept-line'
+        done
+        unset -v __atuin_keymap
+        # shellcheck disable=SC2016
+        __atuin_macro_accept_line='"\e[0;1A\e[0;2A$READLINE_LINE\e[0;3A\e[0;4A"'
+        # shellcheck disable=SC2016
+        __atuin_macro_insert_line='"\e[0;1A\e[0;2A$READLINE_LINE\e[0;3A"'
+    fi
+
+    __atuin_bash42_dispatch_selector=
+
+    __atuin_bash42_dispatch() {
+        local s=$__atuin_bash42_dispatch_selector
+        __atuin_bash42_dispatch_selector=
+        __atuin_widget_run "$((2#0$s))"
+    }
+
+    __atuin_bind_impl() {
+        local keymap=$1 keyseq=$2 command=$3
+
+        __atuin_widget_save "$keymap:$command"
+        __atuin_bash42_encode "$REPLY"
+        local macro=$REPLY$__atuin_bash42_code2$__atuin_macro_chain
+
+        bind -m "$keymap" "\"$keyseq\": \"$macro\""
+    }
+fi
+
+atuin-bind() {
+    local keymap=
+    local OPTIND=1 OPTARG="" OPTERR=0 flag
+    while getopts ':m:' flag "$@"; do
+        case $flag in
+            m) keymap=$OPTARG ;;
+            *)
+                printf '%s\n' "atuin-bind: unrecognized option '-$flag'" >&2
+                return 2
+                ;;
+        esac
+    done
+    shift "$((OPTIND - 1))"
+
+    if (($# != 2)); then
+        printf '%s\n' 'usage: atuin-bind [-m keymap] keyseq widget' >&2
+        return 2
+    fi
+
+    local keyseq=$1
+    [[ $keymap ]] || keymap=$(bind -v | awk '$2 == "keymap" { print $3 }')
+    case $keymap in
+        emacs-meta) keymap=emacs keyseq='\e'$keyseq ;;
+        emacs-ctlx) keymap=emacs keyseq='\C-x'$keyseq ;;
+        emacs*)     keymap=emacs ;;
+        vi-insert)  ;;
+        vi*)        keymap=vi-command ;;
+        *)
+            printf '%s\n' "atuin-bind: unknown keymap '$keymap'" >&2
+            return 2 ;;
+    esac
+
+    local command=$2 widget=${2%%[[:blank:]]*}
+    case $widget in
+        atuin-search)          command=${2/#"$widget"/__atuin_history} ;;
+        atuin-search-emacs)    command=${2/#"$widget"/__atuin_history --keymap-mode=emacs} ;;
+        atuin-search-viins)    command=${2/#"$widget"/__atuin_history --keymap-mode=vim-insert} ;;
+        atuin-search-vicmd)    command=${2/#"$widget"/__atuin_history --keymap-mode=vim-normal} ;;
+        atuin-up-search)       command=${2/#"$widget"/__atuin_history --shell-up-key-binding} ;;
+        atuin-up-search-emacs) command=${2/#"$widget"/__atuin_history --shell-up-key-binding --keymap-mode=emacs} ;;
+        atuin-up-search-viins) command=${2/#"$widget"/__atuin_history --shell-up-key-binding --keymap-mode=vim-insert} ;;
+        atuin-up-search-vicmd) command=${2/#"$widget"/__atuin_history --shell-up-key-binding --keymap-mode=vim-normal} ;;
+    esac
+
+    __atuin_bind_impl "$keymap" "$keyseq" "$command"
+}
+
+#------------------------------------------------------------------------------
+
 # shellcheck disable=SC2154
 if [[ $__atuin_bind_ctrl_r == true ]]; then
-    # Note: We do not overwrite [C-r] in the vi-command keymap for Bash because
-    # we do not want to overwrite "redo", which is already bound to [C-r] in
-    # the vi_nmap keymap in ble.sh.
-    bind -m emacs -x '"\C-r": __atuin_history --keymap-mode=emacs'
-    bind -m vi-insert -x '"\C-r": __atuin_history --keymap-mode=vim-insert'
-    bind -m vi-command -x '"/": __atuin_history --keymap-mode=emacs'
+    # Note: We do not overwrite [C-r] in the vi-command keymap because we do
+    # not want to overwrite "redo", which is already bound to [C-r] in the
+    # vi_nmap keymap in ble.sh.
+    atuin-bind -m emacs      '\C-r' atuin-search-emacs
+    atuin-bind -m vi-insert  '\C-r' atuin-search-viins
+    atuin-bind -m vi-command '/'    atuin-search-emacs
 fi
 
 # shellcheck disable=SC2154
 if [[ $__atuin_bind_up_arrow == true ]]; then
-    if ((BASH_VERSINFO[0] > 4 || BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 3)); then
-        bind -m emacs -x '"\e[A": __atuin_history --shell-up-key-binding --keymap-mode=emacs'
-        bind -m emacs -x '"\eOA": __atuin_history --shell-up-key-binding --keymap-mode=emacs'
-        bind -m vi-insert -x '"\e[A": __atuin_history --shell-up-key-binding --keymap-mode=vim-insert'
-        bind -m vi-insert -x '"\eOA": __atuin_history --shell-up-key-binding --keymap-mode=vim-insert'
-        bind -m vi-command -x '"\e[A": __atuin_history --shell-up-key-binding --keymap-mode=vim-normal'
-        bind -m vi-command -x '"\eOA": __atuin_history --shell-up-key-binding --keymap-mode=vim-normal'
-        bind -m vi-command -x '"k": __atuin_history --shell-up-key-binding --keymap-mode=vim-normal'
-    else
-        # In bash < 4.3, "bind -x" cannot bind a shell command to a keyseq
-        # having more than two bytes.  To work around this, we first translate
-        # the keyseqs to the two-byte sequence \C-x\C-p (which is not used by
-        # default) using string macros and run the shell command through the
-        # keybinding to \C-x\C-p.
-        bind -m emacs -x '"\C-x\C-p": __atuin_history --shell-up-key-binding --keymap-mode=emacs'
-        bind -m emacs '"\e[A": "\C-x\C-p"'
-        bind -m emacs '"\eOA": "\C-x\C-p"'
-        bind -m vi-insert -x '"\C-x\C-p": __atuin_history --shell-up-key-binding --keymap-mode=vim-insert'
-        bind -m vi-insert '"\e[A": "\C-x\C-p"'
-        bind -m vi-insert '"\eOA": "\C-x\C-p"'
-        bind -m vi-command -x '"\C-x\C-p": __atuin_history --shell-up-key-binding --keymap-mode=vim-normal'
-        bind -m vi-command '"\e[A": "\C-x\C-p"'
-        bind -m vi-command '"\eOA": "\C-x\C-p"'
-        bind -m vi-command '"k": "\C-x\C-p"'
-    fi
+    atuin-bind -m emacs      '\e[A' atuin-up-search-emacs
+    atuin-bind -m emacs      '\eOA' atuin-up-search-emacs
+    atuin-bind -m vi-insert  '\e[A' atuin-up-search-viins
+    atuin-bind -m vi-insert  '\eOA' atuin-up-search-viins
+    atuin-bind -m vi-command '\e[A' atuin-up-search-vicmd
+    atuin-bind -m vi-command '\eOA' atuin-up-search-vicmd
+    atuin-bind -m vi-command 'k'    atuin-up-search-vicmd
 fi
 
 #------------------------------------------------------------------------------
