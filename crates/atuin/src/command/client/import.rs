@@ -1,4 +1,5 @@
 use std::env;
+use std::path::PathBuf;
 
 use async_trait::async_trait;
 use clap::Parser;
@@ -9,8 +10,9 @@ use atuin_client::{
     database::Database,
     history::History,
     import::{
-        Importer, Loader, bash::Bash, fish::Fish, nu::Nu, nu_histdb::NuHistDb, replxx::Replxx,
-        resh::Resh, xonsh::Xonsh, xonsh_sqlite::XonshSqlite, zsh::Zsh, zsh_histdb::ZshHistDb,
+        Importer, Loader, bash::Bash, fish::Fish, mcfly::Mcfly, nu::Nu, nu_histdb::NuHistDb,
+        replxx::Replxx, resh::Resh, xonsh::Xonsh, xonsh_sqlite::XonshSqlite, zsh::Zsh,
+        zsh_histdb::ZshHistDb,
     },
 };
 
@@ -40,6 +42,12 @@ pub enum Cmd {
     Xonsh,
     /// Import history from xonsh sqlite db
     XonshSqlite,
+    /// Import history from mcfly
+    Mcfly {
+        /// Path to mcfly database file
+        #[arg(long, short)]
+        file: Option<PathBuf>,
+    },
 }
 
 const BATCH_SIZE: usize = 100;
@@ -119,6 +127,7 @@ impl Cmd {
             Self::NuHistDb => import::<NuHistDb, DB>(db).await,
             Self::Xonsh => import::<Xonsh, DB>(db).await,
             Self::XonshSqlite => import::<XonshSqlite, DB>(db).await,
+            Self::Mcfly { file } => import_mcfly::<DB>(db, file.as_deref()).await,
         }
     }
 }
@@ -165,6 +174,25 @@ async fn import<I: Importer + Send, DB: Database>(db: &DB) -> Result<()> {
 
     let mut importer = I::new().await?;
     let len = importer.entries().await.unwrap();
+    let mut loader = HistoryImporter::new(db, len);
+    importer.load(&mut loader).await?;
+    loader.flush().await?;
+
+    println!("Import complete!");
+    Ok(())
+}
+
+async fn import_mcfly<DB: Database>(db: &DB, file_path: Option<&std::path::Path>) -> Result<()> {
+    println!("Importing history from mcfly");
+
+    let mut importer = if let Some(path) = file_path {
+        println!("Using mcfly database: {}", path.display());
+        Mcfly::from_file(path).await?
+    } else {
+        Mcfly::new().await?
+    };
+
+    let len = importer.entries().await?;
     let mut loader = HistoryImporter::new(db, len);
     importer.load(&mut loader).await?;
     loader.flush().await?;
