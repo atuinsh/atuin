@@ -296,6 +296,7 @@ impl SettingPaths {
 #[derive(Debug, Serialize)]
 struct AtuinInfo {
     pub version: String,
+    pub commit: String,
 
     /// Whether the main Atuin sync server is in use
     /// I'm just calling it Atuin Cloud for lack of a better name atm
@@ -328,6 +329,7 @@ impl AtuinInfo {
 
         Self {
             version: crate::VERSION.to_string(),
+            commit: crate::SHA.to_string(),
             sync,
             sqlite_version,
             setting_paths: SettingPaths::new(settings),
