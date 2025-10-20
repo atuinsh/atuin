@@ -303,7 +303,7 @@ impl HistoryStore {
         pb.set_message("Fetching history from old database");
 
         let context = current_context();
-        let history = db.list(&[], &context, None, false, true).await?;
+        let history = db.list(&[], &context, None, false, true, None).await?;
 
         pb.set_message("Fetching history already in store");
         let store_ids = self.history_ids().await?;
@@ -350,14 +350,14 @@ mod tests {
     #[test]
     fn test_serialize_deserialize_create() {
         let bytes = [
-            204, 0, 196, 141, 205, 0, 0, 153, 217, 32, 48, 49, 56, 99, 100, 52, 102, 101, 56, 49,
+            204, 0, 196, 142, 205, 0, 0, 154, 217, 32, 48, 49, 56, 99, 100, 52, 102, 101, 56, 49,
             55, 53, 55, 99, 100, 50, 97, 101, 101, 54, 53, 99, 100, 55, 56, 54, 49, 102, 57, 99,
             56, 49, 207, 23, 166, 251, 212, 181, 82, 0, 0, 100, 0, 162, 108, 115, 217, 41, 47, 85,
             115, 101, 114, 115, 47, 101, 108, 108, 105, 101, 47, 115, 114, 99, 47, 103, 105, 116,
             104, 117, 98, 46, 99, 111, 109, 47, 97, 116, 117, 105, 110, 115, 104, 47, 97, 116, 117,
             105, 110, 217, 32, 48, 49, 56, 99, 100, 52, 102, 101, 97, 100, 56, 57, 55, 53, 57, 55,
             56, 53, 50, 53, 50, 55, 97, 51, 49, 99, 57, 57, 56, 48, 53, 57, 170, 98, 111, 111, 112,
-            58, 101, 108, 108, 105, 101, 192,
+            58, 101, 108, 108, 105, 101, 192, 144,
         ];
 
         let history = History {
@@ -370,6 +370,7 @@ mod tests {
             session: "018cd4fead897597852527a31c998059".to_owned(),
             hostname: "boop:ellie".to_owned(),
             deleted_at: None,
+            tags: Vec::new(),
         };
 
         let record = HistoryRecord::Create(history);

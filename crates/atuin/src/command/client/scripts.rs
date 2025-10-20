@@ -233,7 +233,7 @@ impl Cmd {
             let filters = [settings.default_filter_mode()];
 
             let mut history = history_db
-                .list(&filters, &context, Some(count), false, false)
+                .list(&filters, &context, Some(count), false, false, None)
                 .await?;
 
             // Reverse to get chronological order

@@ -256,6 +256,7 @@ fn decode(bytes: &[u8]) -> Result<History> {
         deleted_at: deleted_at
             .map(|t| OffsetDateTime::parse(t, &Rfc3339))
             .transpose()?,
+        tags: Vec::new(),
     })
 }
 
@@ -332,6 +333,7 @@ mod test {
             session: "b97d9a306f274473a203d2eba41f9457".to_owned(),
             hostname: "fvfg936c0kpf:conrad.ludgate".to_owned(),
             deleted_at: None,
+            tags: Vec::new(),
         };
 
         let h = decode(&bytes).unwrap();
@@ -353,6 +355,7 @@ mod test {
             session: "b97d9a306f274473a203d2eba41f9457".to_owned(),
             hostname: "fvfg936c0kpf:conrad.ludgate".to_owned(),
             deleted_at: Some(datetime!(2023-05-28 18:35:40.633872 +00:00)),
+            tags: Vec::new(),
         };
 
         let b = encode(&history).unwrap();
@@ -384,6 +387,7 @@ mod test {
             session: "b97d9a306f274473a203d2eba41f9457".to_owned(),
             hostname: "fvfg936c0kpf:conrad.ludgate".to_owned(),
             deleted_at: None,
+            tags: Vec::new(),
         };
 
         let h = decode(&bytes).unwrap();

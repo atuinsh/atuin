@@ -11,6 +11,7 @@ use atuin_client::{
     history::{History, store::HistoryStore},
     record::sqlite_store::SqliteStore,
     settings::{FilterMode, KeymapMode, SearchMode, Settings, Timezone},
+    tag_store,
     theme::Theme,
 };
 
@@ -210,9 +211,10 @@ impl Cmd {
 
         let host_id = Settings::host_id().expect("failed to get host_id");
         let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
+        let tag_store = tag_store::TagStore::new(store.clone(), host_id, encryption_key);
 
         if self.interactive {
-            let item = interactive::history(&query, settings, db, &history_store, theme).await?;
+            let item = interactive::history(&query, settings, db, &history_store, &tag_store, theme).await?;
             if stderr().is_terminal() {
                 eprintln!("{}", item.escape_control());
             } else {
@@ -314,6 +316,7 @@ async fn run_non_interactive(
             &context,
             query.join(" ").as_str(),
             opt_filter,
+            None,
         )
         .await?;
 

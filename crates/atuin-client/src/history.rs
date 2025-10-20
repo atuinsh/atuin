@@ -70,6 +70,10 @@ pub struct History {
     pub hostname: String,
     /// Timestamp, which is set when the entry is deleted, allowing a soft delete.
     pub deleted_at: Option<OffsetDateTime>,
+    /// Tags associated with this history entry (e.g., "work")
+    /// Note: This field is not stored in the main history table - it's loaded separately from history_tags
+    #[sqlx(default)]
+    pub tags: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
@@ -119,6 +123,7 @@ impl History {
             session,
             hostname,
             deleted_at,
+            tags: Vec::new(),
         }
     }
 
@@ -133,7 +138,7 @@ impl History {
         // write the version
         encode::write_u16(&mut output, 0)?;
         // INFO: ensure this is updated when adding new fields
-        encode::write_array_len(&mut output, 9)?;
+        encode::write_array_len(&mut output, 10)?;
 
         encode::write_str(&mut output, &self.id.0)?;
         encode::write_u64(&mut output, self.timestamp.unix_timestamp_nanos() as u64)?;
@@ -147,6 +152,11 @@ impl History {
         match self.deleted_at {
             Some(d) => encode::write_u64(&mut output, d.unix_timestamp_nanos() as u64)?,
             None => encode::write_nil(&mut output)?,
+        }
+
+        encode::write_array_len(&mut output, self.tags.len() as u32)?;
+        for tag in &self.tags {
+            encode::write_str(&mut output, tag)?;
         }
 
         Ok(DecryptedData(output))
@@ -169,8 +179,8 @@ impl History {
 
         let nfields = decode::read_array_len(&mut bytes).map_err(error_report)?;
 
-        if nfields != 9 {
-            bail!("cannot decrypt history from a different version of Atuin");
+        if nfields != 9 && nfields != 10 {
+            bail!("cannot decrypt history from a different version of Atuin (expected 9 or 10 fields, got {})", nfields);
         }
 
         let bytes = bytes.remaining_slice();
@@ -197,9 +207,31 @@ impl History {
             Err(err) => return Err(error_report(err)),
         };
 
-        if !bytes.is_empty() {
-            bail!("trailing bytes in encoded history. malformed")
-        }
+        // Read tags if present (nfields == 10)
+        let tags = if nfields == 10 {
+            let mut bytes = Bytes::new(bytes);
+            let tag_count = decode::read_array_len(&mut bytes).map_err(error_report)?;
+            let mut tags = Vec::with_capacity(tag_count as usize);
+
+            for _ in 0..tag_count {
+                let bytes_slice = bytes.remaining_slice();
+                let (tag, remaining) = decode::read_str_from_slice(bytes_slice).map_err(error_report)?;
+                tags.push(tag.to_owned());
+                bytes = Bytes::new(remaining);
+            }
+
+            let remaining = bytes.remaining_slice();
+            if !remaining.is_empty() {
+                bail!("trailing bytes in encoded history. malformed")
+            }
+
+            tags
+        } else {
+            if !bytes.is_empty() {
+                bail!("trailing bytes in encoded history. malformed")
+            }
+            Vec::new()
+        };
 
         Ok(History {
             id: id.to_owned().into(),
@@ -213,6 +245,7 @@ impl History {
             deleted_at: deleted_at
                 .map(|t| OffsetDateTime::from_unix_timestamp_nanos(t as i128))
                 .transpose()?,
+            tags,
         })
     }
 
@@ -470,7 +503,7 @@ mod tests {
     #[test]
     fn test_serialize_deserialize() {
         let bytes = [
-            205, 0, 0, 153, 217, 32, 54, 54, 100, 49, 54, 99, 98, 101, 101, 55, 99, 100, 52, 55,
+            205, 0, 0, 154, 217, 32, 54, 54, 100, 49, 54, 99, 98, 101, 101, 55, 99, 100, 52, 55,
             53, 51, 56, 101, 53, 99, 53, 98, 56, 98, 52, 52, 101, 57, 48, 48, 54, 101, 207, 23, 99,
             98, 117, 24, 210, 246, 128, 206, 2, 238, 210, 240, 0, 170, 103, 105, 116, 32, 115, 116,
             97, 116, 117, 115, 217, 42, 47, 85, 115, 101, 114, 115, 47, 99, 111, 110, 114, 97, 100,
@@ -478,7 +511,7 @@ mod tests {
             47, 99, 111, 100, 101, 47, 97, 116, 117, 105, 110, 217, 32, 98, 57, 55, 100, 57, 97,
             51, 48, 54, 102, 50, 55, 52, 52, 55, 51, 97, 50, 48, 51, 100, 50, 101, 98, 97, 52, 49,
             102, 57, 52, 53, 55, 187, 102, 118, 102, 103, 57, 51, 54, 99, 48, 107, 112, 102, 58,
-            99, 111, 110, 114, 97, 100, 46, 108, 117, 100, 103, 97, 116, 101, 192,
+            99, 111, 110, 114, 97, 100, 46, 108, 117, 100, 103, 97, 116, 101, 192, 144,
         ];
 
         let history = History {
@@ -491,6 +524,7 @@ mod tests {
             session: "b97d9a306f274473a203d2eba41f9457".to_owned(),
             hostname: "fvfg936c0kpf:conrad.ludgate".to_owned(),
             deleted_at: None,
+            tags: Vec::new(),
         };
 
         let serialized = history.serialize().expect("failed to serialize history");
@@ -518,6 +552,7 @@ mod tests {
             session: "b97d9a306f274473a203d2eba41f9457".to_owned(),
             hostname: "fvfg936c0kpf:conrad.ludgate".to_owned(),
             deleted_at: Some(datetime!(2023-11-19 20:18 +00:00)),
+            tags: Vec::new(),
         };
 
         let serialized = history.serialize().expect("failed to serialize history");
