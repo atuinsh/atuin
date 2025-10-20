@@ -3925,9 +3925,9 @@ checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
 
 [[package]]
 name = "rusty_paserk"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a1d3a81ecd341ee8abf4761350ecffe3518c284ed1626bbd58f5f4bd64c61d38"
+checksum = "b99c867582a6d5d0eb6dd394ce32b7d8e75e79a76cf532fba7b52c94b0ca4ae0"
 dependencies = [
  "argon2",
  "base64 0.22.1",
@@ -3948,9 +3948,9 @@ dependencies = [
 
 [[package]]
 name = "rusty_paseto"
-version = "0.7.2"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "05501841a4cac5c065cb6a501a62207c4c235e37d2882579a2505a2aa2837826"
+checksum = "a61ebc4c4e058565285d54a1134a4f9f5d951ef901194c79437f3ee4f2538e49"
 dependencies = [
  "base64 0.22.1",
  "blake2",
@@ -3959,9 +3959,10 @@ dependencies = [
  "ed25519-dalek",
  "hex",
  "iso8601",
- "rand_core 0.6.4",
+ "rand_core 0.9.3",
  "ring",
- "thiserror 1.0.69",
+ "subtle",
+ "thiserror 2.0.16",
  "time",
  "zeroize",
 ]
