@@ -47,17 +47,17 @@ clipboard = ["arboard"]
 check-update = ["atuin-client/check-update"]
 
 [dependencies]
-atuin-server-database = { path = "../atuin-server-database", version = "18.9.0", optional = true }
-atuin-server-postgres = { path = "../atuin-server-postgres", version = "18.9.0", optional = true }
-atuin-server-sqlite = { path = "../atuin-server-sqlite", version = "18.9.0", optional = true }
-atuin-server = { path = "../atuin-server", version = "18.9.0", optional = true }
-atuin-client = { path = "../atuin-client", version = "18.9.0", optional = true, default-features = false }
-atuin-common = { path = "../atuin-common", version = "18.9.0" }
-atuin-dotfiles = { path = "../atuin-dotfiles", version = "18.9.0" }
-atuin-history = { path = "../atuin-history", version = "18.9.0" }
-atuin-daemon = { path = "../atuin-daemon", version = "18.9.0", optional = true, default-features = false }
-atuin-scripts = { path = "../atuin-scripts", version = "18.9.0" }
-atuin-kv = { path = "../atuin-kv", version = "18.9.0" }
+atuin-server-database = { path = "../atuin-server-database", version = "18.10.0", optional = true }
+atuin-server-postgres = { path = "../atuin-server-postgres", version = "18.10.0", optional = true }
+atuin-server-sqlite = { path = "../atuin-server-sqlite", version = "18.10.0", optional = true }
+atuin-server = { path = "../atuin-server", version = "18.10.0", optional = true }
+atuin-client = { path = "../atuin-client", version = "18.10.0", optional = true, default-features = false }
+atuin-common = { path = "../atuin-common", version = "18.10.0" }
+atuin-dotfiles = { path = "../atuin-dotfiles", version = "18.10.0" }
+atuin-history = { path = "../atuin-history", version = "18.10.0" }
+atuin-daemon = { path = "../atuin-daemon", version = "18.10.0", optional = true, default-features = false }
+atuin-scripts = { path = "../atuin-scripts", version = "18.10.0" }
+atuin-kv = { path = "../atuin-kv", version = "18.10.0" }
 
 log = { workspace = true }
 time = { workspace = true }
