@@ -14,7 +14,7 @@ readme.workspace = true
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-atuin-client = { path = "../atuin-client", version = "18.9.0" }
+atuin-client = { path = "../atuin-client", version = "18.10.0" }
 
 time = { workspace = true }
 serde = { workspace = true }
