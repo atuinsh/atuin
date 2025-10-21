@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [18.10.0] - 2025-10-21
+
+### Bug Fixes
+
+- Stats ngram window size cli parsing ([#2946](https://github.com/atuinsh/atuin/issues/2946))
+
+
+### Features
+
+- *(bash)* Use Readline's accept-line for enter_accept ([#2953](https://github.com/atuinsh/atuin/issues/2953))
+- Add commit to displayed version info ([#2922](https://github.com/atuinsh/atuin/issues/2922))
+- Add import from PowerShell history ([#2864](https://github.com/atuinsh/atuin/issues/2864))
+- Interactive Inspector ([#2319](https://github.com/atuinsh/atuin/issues/2319))
+- Nu ≥ 0.106.0 support commandline accept ([#2957](https://github.com/atuinsh/atuin/issues/2957))
+
+
+### Miscellaneous Tasks
+
+- Update rusty_paseto and rusty_paserk ([#2942](https://github.com/atuinsh/atuin/issues/2942))
+- Update changelog
+
+
 ## [18.9.0] - 2025-10-20
 
 ### Bug Fixes
