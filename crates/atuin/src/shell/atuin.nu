@@ -46,17 +46,37 @@ let _atuin_pre_prompt = {||
 }
 
 def _atuin_search_cmd [...flags: string] {
-    [
-        $ATUIN_KEYBINDING_TOKEN,
-        ([
-            `with-env { ATUIN_LOG: error, ATUIN_QUERY: (commandline) } {`,
-                'commandline edit',
-                '(run-external atuin search',
-                    ($flags | append [--interactive] | each {|e| $'"($e)"'}),
-                ' e>| str trim)',
-            `}`,
-        ] | flatten | str join ' '),
-    ] | str join "\n"
+    if (version).minor >= 106 or (version).major > 0 {
+        [
+            $ATUIN_KEYBINDING_TOKEN,
+            ([
+                `with-env { ATUIN_LOG: error, ATUIN_QUERY: (commandline), ATUIN_SHELL: nu } {`,
+                    ([
+                        'let output = (run-external atuin search',
+                        ($flags | append [--interactive] | each {|e| $'"($e)"'}),
+                        'e>| str trim)',
+                    ] | flatten | str join ' '),
+                    'if ($output | str starts-with "__atuin_accept__:") {',
+                    'commandline edit --accept ($output | str replace "__atuin_accept__:" "")',
+                    '} else {',
+                    'commandline edit $output',
+                    '}',
+                `}`,
+            ] | flatten | str join "\n"),
+        ]
+    } else {
+        [
+            $ATUIN_KEYBINDING_TOKEN,
+            ([
+                `with-env { ATUIN_LOG: error, ATUIN_QUERY: (commandline) } {`,
+                    'commandline edit',
+                    '(run-external atuin search',
+                        ($flags | append [--interactive] | each {|e| $'"($e)"'}),
+                    ' e>| str trim)',
+                `}`,
+            ] | flatten | str join ' '),
+        ]
+    } | str join "\n"
 }
 
 $env.config = ($env | default {} config).config
