@@ -8,6 +8,7 @@ use crate::store::AliasStore;
 
 pub mod bash;
 pub mod fish;
+pub mod nu;
 pub mod xonsh;
 pub mod zsh;
 
