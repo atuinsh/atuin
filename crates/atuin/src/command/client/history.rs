@@ -34,6 +34,11 @@ use super::search::format_duration_into;
 pub enum Cmd {
     /// Begins a new command in the history
     Start {
+        /// Collects the command from the `ATUIN_COMMAND_LINE` environment variable,
+        /// which does not need escaping and is more compatible between OS and shells
+        #[arg(long = "command-from-env", hide = true)]
+        cmd_env: bool,
+
         command: Vec<String>,
     },
 
@@ -344,13 +349,7 @@ fn parse_fmt(format: &str) -> ParsedFmt<'_> {
 
 impl Cmd {
     #[allow(clippy::too_many_lines, clippy::cast_possible_truncation)]
-    async fn handle_start(
-        db: &impl Database,
-        settings: &Settings,
-        command: &[String],
-    ) -> Result<()> {
-        let command = command.join(" ");
-
+    async fn handle_start(db: &impl Database, settings: &Settings, command: &str) -> Result<()> {
         // It's better for atuin to silently fail here and attempt to
         // store whatever is ran, than to throw an error to the terminal
         let cwd = utils::get_current_dir();
@@ -375,9 +374,7 @@ impl Cmd {
     }
 
     #[cfg(feature = "daemon")]
-    async fn handle_daemon_start(settings: &Settings, command: &[String]) -> Result<()> {
-        let command = command.join(" ");
-
+    async fn handle_daemon_start(settings: &Settings, command: &str) -> Result<()> {
         // It's better for atuin to silently fail here and attempt to
         // store whatever is ran, than to throw an error to the terminal
         let cwd = utils::get_current_dir();
@@ -655,7 +652,8 @@ impl Cmd {
         // Skip initializing any databases for start/end, if the daemon is enabled
         if settings.daemon.enabled {
             match self {
-                Self::Start { command } => {
+                Self::Start { .. } => {
+                    let command = self.get_start_command().unwrap_or_default();
                     return Self::handle_daemon_start(settings, &command).await;
                 }
 
@@ -681,7 +679,10 @@ impl Cmd {
         let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
         match self {
-            Self::Start { command } => Self::handle_start(&db, settings, &command).await,
+            Self::Start { .. } => {
+                let command = self.get_start_command().unwrap_or_default();
+                Self::handle_start(&db, settings, &command).await
+            }
             Self::End { id, exit, duration } => {
                 Self::handle_end(&db, store, history_store, settings, &id, exit, duration).await
             }
@@ -748,6 +749,18 @@ impl Cmd {
                 )?;
                 Self::handle_dedup(&db, settings, store, before, dupkeep, dry_run).await
             }
+        }
+    }
+
+    /// Returns the command line to use for the `Start` variant.
+    /// Returns `None` for any other variant.
+    fn get_start_command(&self) -> Option<String> {
+        match self {
+            Self::Start { cmd_env: true, .. } => {
+                Some(std::env::var("ATUIN_COMMAND_LINE").unwrap_or_default())
+            }
+            Self::Start { command, .. } => Some(command.join(" ")),
+            _ => None,
         }
     }
 }

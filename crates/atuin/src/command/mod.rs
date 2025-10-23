@@ -18,6 +18,7 @@ mod external;
 
 #[derive(Subcommand)]
 #[command(infer_subcommands = true)]
+#[allow(clippy::large_enum_variant)]
 pub enum AtuinCmd {
     #[cfg(feature = "client")]
     #[command(flatten)]
