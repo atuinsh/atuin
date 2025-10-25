@@ -273,8 +273,9 @@ impl DrawState<'_> {
                     }
                     style.attributes.set(style::Attribute::Bold);
                 }
-                self.draw(&ch.to_string(), style.into());
-                pos += 1;
+                let s = ch.to_string();
+                self.draw(&s, style.into());
+                pos += s.len();
             }
             pos += 1;
         }
