@@ -1293,6 +1293,9 @@ pub async fn history(
     let mut stats: Option<HistoryStats> = None;
     let mut inspecting: Option<History> = None;
     let accept;
+
+    // to avoid overlapping with prompt
+    terminal.clear()?;
     let result = 'render: loop {
         terminal.draw(|f| {
             app.draw(
