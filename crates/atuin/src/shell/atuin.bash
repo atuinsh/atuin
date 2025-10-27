@@ -111,6 +111,19 @@ __atuin_set_ret_value() {
     return ${1:+"$1"}
 }
 
+__atuin_pre_bind_functions=()
+__atuin_run_pre_bind_functions() {
+    # This is used for "helper" binds to work around limitations.
+    # These will only be called if we actually bind anything for
+    # Atuin, to avoid calling "bind" if the user disabled all Atuin
+    # bindings.
+    [[ -v __atuin_pre_bind_done ]] && return
+    for __atuin_func in "${__atuin_pre_bind_functions[@]}"; do
+        $__atuin_func
+    done
+    __atuin_pre_bind_done=true
+}
+
 #------------------------------------------------------------------------------
 # section: __atuin_accept_line
 #
@@ -354,43 +367,45 @@ __atuin_widget_run() {
     builtin eval -- "$widget"
 }
 
-# To realize the enter_accept feature in a robust way, we need to call the
-# readline bindable function `accept-line'.  However, there is no way to call
-# `accept-line' from the shell script.  To call the bindable function
-# `accept-line', we may utilize string macros of readline.  When we bind KEYSEQ
-# to a WIDGET that wants to conditionally call `accept-line' at the end, we
-# perform two-step dispatching:
-#
-# 1. [KEYSEQ -> IKEYSEQ1 IKEYSEQ2]---We first translate KEYSEQ to two
-#   intermediate key sequences IKEYSEQ1 and IKEYSEQ2 using string macros.  For
-#   example, when we bind `__atuin_history` to \C-r, this step can be set up by
-#   `bind '"\C-r": "IKEYSEQ1IKEYSEQ2"'`.
-#
-# 2. [IKEYSEQ1 -> WIDGET]---Then, IKEYSEQ1 is bound to the WIDGET, and the
-#   binding of IKEYSEQ2 is dynamically determined by WIDGET.  For example, when
-#   we bind `__atuin_history` to \C-r, this step can be set up by `bind -x
-#   '"IKEYSEQ1": WIDGET'`.
-#
-# 3. [IKEYSEQ2 -> accept-line] or [IKEYSEQ2 -> ""]---To request the execution
-#   of `accept-line', WIDGET can change the binding of IKEYSEQ2 by running
-#   `bind '"IKEYSEQ2": accept-line''.  Otherwise, WIDGET can change the binding
-#   of IKEYSEQ2 to no-op by running `bind '"IKEYSEQ2": ""'`.
-#
-# For the choice of the intermediate key sequences, we want to choose key
-# sequences that are unlikely to conflict with others.  In addition, we want to
-# avoid a key sequence containing \e because keymap "vi-insert" stops
-# processing key sequences containing \e in older versions of Bash.  We have
-# used \e[0;<m>A (a variant of the [up] key with modifier <m>) in Atuin 3.10.0
-# for intermediate key sequences, but this contains \e and caused a problem.
-# Instead, we use \C-x\C-_A<n>\a, which starts with \C-x\C-_ (an unlikely
-# two-byte combination) and A (represents the initial letter of Atuin),
-# followed by the payload <n> and the terminator \a (BEL, \C-g).
-
-__atuin_macro_chain='\C-x\C-_A0\a'
-for __atuin_keymap in emacs vi-insert vi-command; do
-    bind -m "$__atuin_keymap" "\"$__atuin_macro_chain\": \"\""
-done
-unset -v __atuin_keymap
+__atuin_init_macro_chain() {
+    # To realize the enter_accept feature in a robust way, we need to call the
+    # readline bindable function `accept-line'.  However, there is no way to call
+    # `accept-line' from the shell script.  To call the bindable function
+    # `accept-line', we may utilize string macros of readline.  When we bind KEYSEQ
+    # to a WIDGET that wants to conditionally call `accept-line' at the end, we
+    # perform two-step dispatching:
+    #
+    # 1. [KEYSEQ -> IKEYSEQ1 IKEYSEQ2]---We first translate KEYSEQ to two
+    #   intermediate key sequences IKEYSEQ1 and IKEYSEQ2 using string macros.  For
+    #   example, when we bind `__atuin_history` to \C-r, this step can be set up by
+    #   `bind '"\C-r": "IKEYSEQ1IKEYSEQ2"'`.
+    #
+    # 2. [IKEYSEQ1 -> WIDGET]---Then, IKEYSEQ1 is bound to the WIDGET, and the
+    #   binding of IKEYSEQ2 is dynamically determined by WIDGET.  For example, when
+    #   we bind `__atuin_history` to \C-r, this step can be set up by `bind -x
+    #   '"IKEYSEQ1": WIDGET'`.
+    #
+    # 3. [IKEYSEQ2 -> accept-line] or [IKEYSEQ2 -> ""]---To request the execution
+    #   of `accept-line', WIDGET can change the binding of IKEYSEQ2 by running
+    #   `bind '"IKEYSEQ2": accept-line''.  Otherwise, WIDGET can change the binding
+    #   of IKEYSEQ2 to no-op by running `bind '"IKEYSEQ2": ""'`.
+    #
+    # For the choice of the intermediate key sequences, we want to choose key
+    # sequences that are unlikely to conflict with others.  In addition, we want to
+    # avoid a key sequence containing \e because keymap "vi-insert" stops
+    # processing key sequences containing \e in older versions of Bash.  We have
+    # used \e[0;<m>A (a variant of the [up] key with modifier <m>) in Atuin 3.10.0
+    # for intermediate key sequences, but this contains \e and caused a problem.
+    # Instead, we use \C-x\C-_A<n>\a, which starts with \C-x\C-_ (an unlikely
+    # two-byte combination) and A (represents the initial letter of Atuin),
+    # followed by the payload <n> and the terminator \a (BEL, \C-g).
+    __atuin_macro_chain='\C-x\C-_A0\a'
+    for __atuin_keymap in emacs vi-insert vi-command; do
+        bind -m "$__atuin_keymap" "\"$__atuin_macro_chain\": \"\""
+    done
+    unset -v __atuin_keymap
+}
+__atuin_pre_bind_functions+=(__atuin_init_macro_chain)
 
 if ((BASH_VERSINFO[0] >= 5 || BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 3)); then
     # In Bash >= 4.3
@@ -487,7 +502,7 @@ else
             bind -m "$__atuin_keymap" -x '"'"$__atuin_bash42_code2"'": __atuin_bash42_dispatch'
         done
     }
-    __atuin_bash42_bind
+    __atuin_pre_bind_functions+=(__atuin_bash42_bind)
     # In Bash <= 4.2, there is no way to read users' "bind -x" settings, so we
     # need to explicitly perform "bind -x" when ble.sh is loaded.
     BLE_ONLOAD+=(__atuin_bash42_bind)
@@ -495,36 +510,39 @@ else
     if ((BASH_VERSINFO[0] >= 4)); then
         __atuin_macro_accept_line=accept-line
     else
-        # Note: We rewrite the command line and invoke `accept-line'.  In
-        # bash <= 3.2, there is no way to rewrite the command line from the
-        # shell script, so we rewrite it using a macro and
-        # `shell-expand-line'.
-        #
-        # Note: Concerning the key sequences to invoke bindable functions
-        # such as "\C-x\C-_A1\a", another option is to use
-        # "\exbegginning-of-line\r", etc. to make it consistent with bash
-        # >= 5.3.  However, an older Bash configuration can still conflict
-        # on [M-x].  The conflict is more likely than \C-x\C-_A1\a.
-        for __atuin_keymap in emacs vi-insert vi-command; do
-            bind -m "$__atuin_keymap" '"\C-x\C-_A1\a": beginning-of-line'
-            bind -m "$__atuin_keymap" '"\C-x\C-_A2\a": kill-line'
-            # shellcheck disable=SC2016
-            bind -m "$__atuin_keymap" '"\C-x\C-_A3\a": "$READLINE_LINE"'
-            bind -m "$__atuin_keymap" '"\C-x\C-_A4\a": shell-expand-line'
-            bind -m "$__atuin_keymap" '"\C-x\C-_A5\a": accept-line'
-            bind -m "$__atuin_keymap" '"\C-x\C-_A6\a": end-of-line'
-        done
-        unset -v __atuin_keymap
+        __atuin_bash32_bind() {
+            # Note: We rewrite the command line and invoke `accept-line'.  In
+            # bash <= 3.2, there is no way to rewrite the command line from the
+            # shell script, so we rewrite it using a macro and
+            # `shell-expand-line'.
+            #
+            # Note: Concerning the key sequences to invoke bindable functions
+            # such as "\C-x\C-_A1\a", another option is to use
+            # "\exbegginning-of-line\r", etc. to make it consistent with bash
+            # >= 5.3.  However, an older Bash configuration can still conflict
+            # on [M-x].  The conflict is more likely than \C-x\C-_A1\a.
+            for __atuin_keymap in emacs vi-insert vi-command; do
+                bind -m "$__atuin_keymap" '"\C-x\C-_A1\a": beginning-of-line'
+                bind -m "$__atuin_keymap" '"\C-x\C-_A2\a": kill-line'
+                # shellcheck disable=SC2016
+                bind -m "$__atuin_keymap" '"\C-x\C-_A3\a": "$READLINE_LINE"'
+                bind -m "$__atuin_keymap" '"\C-x\C-_A4\a": shell-expand-line'
+                bind -m "$__atuin_keymap" '"\C-x\C-_A5\a": accept-line'
+                bind -m "$__atuin_keymap" '"\C-x\C-_A6\a": end-of-line'
+            done
+            unset -v __atuin_keymap
 
-        bind -m vi-command '"\C-x\C-_A7\a": vi-insertion-mode'
-        bind -m vi-insert  '"\C-x\C-_A7\a": vi-movement-mode'
+            bind -m vi-command '"\C-x\C-_A7\a": vi-insertion-mode'
+            bind -m vi-insert  '"\C-x\C-_A7\a": vi-movement-mode'
 
-        # "\C-x\C-_A10\a": Replace the command line with READLINE_LINE.  When we are
-        #   in the vi-command keymap, we go to vi-insert, input
-        #   "$READLINE_LINE", and come back to vi-command.
-        bind -m emacs      '"\C-x\C-_A10\a": "\C-x\C-_A1\a\C-x\C-_A2\a\C-x\C-_A3\a\C-x\C-_A4\a"'
-        bind -m vi-insert  '"\C-x\C-_A10\a": "\C-x\C-_A1\a\C-x\C-_A2\a\C-x\C-_A3\a\C-x\C-_A4\a"'
-        bind -m vi-command '"\C-x\C-_A10\a": "\C-x\C-_A1\a\C-x\C-_A2\a\C-x\C-_A7\a\C-x\C-_A3\a\C-x\C-_A7\a\C-x\C-_A4\a"'
+            # "\C-x\C-_A10\a": Replace the command line with READLINE_LINE.  When we are
+            #   in the vi-command keymap, we go to vi-insert, input
+            #   "$READLINE_LINE", and come back to vi-command.
+            bind -m emacs      '"\C-x\C-_A10\a": "\C-x\C-_A1\a\C-x\C-_A2\a\C-x\C-_A3\a\C-x\C-_A4\a"'
+            bind -m vi-insert  '"\C-x\C-_A10\a": "\C-x\C-_A1\a\C-x\C-_A2\a\C-x\C-_A3\a\C-x\C-_A4\a"'
+            bind -m vi-command '"\C-x\C-_A10\a": "\C-x\C-_A1\a\C-x\C-_A2\a\C-x\C-_A7\a\C-x\C-_A3\a\C-x\C-_A7\a\C-x\C-_A4\a"'
+        }
+        __atuin_pre_bind_functions+=(__atuin_bash32_bind)
 
         __atuin_macro_accept_line='"\C-x\C-_A10\a\C-x\C-_A5\a"'
         __atuin_macro_insert_line='"\C-x\C-_A10\a\C-x\C-_A6\a"'
@@ -593,6 +611,7 @@ atuin-bind() {
         atuin-up-search-vicmd) command=${2/#"$widget"/__atuin_history --shell-up-key-binding --keymap-mode=vim-normal} ;;
     esac
 
+    __atuin_run_pre_bind_functions
     __atuin_bind_impl "$keymap" "$keyseq" "$command"
 }
 
