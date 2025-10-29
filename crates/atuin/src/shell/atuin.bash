@@ -497,14 +497,26 @@ else
         for __atuin_keymap in emacs vi-insert vi-command; do
             bind -m "$__atuin_keymap" '"\C-x\C-_A1\a": beginning-of-line'
             bind -m "$__atuin_keymap" '"\C-x\C-_A2\a": kill-line'
-            bind -m "$__atuin_keymap" '"\C-x\C-_A3\a": shell-expand-line'
-            bind -m "$__atuin_keymap" '"\C-x\C-_A4\a": accept-line'
+            # shellcheck disable=SC2016
+            bind -m "$__atuin_keymap" '"\C-x\C-_A3\a": "$READLINE_LINE"'
+            bind -m "$__atuin_keymap" '"\C-x\C-_A4\a": shell-expand-line'
+            bind -m "$__atuin_keymap" '"\C-x\C-_A5\a": accept-line'
+            bind -m "$__atuin_keymap" '"\C-x\C-_A6\a": end-of-line'
         done
         unset -v __atuin_keymap
-        # shellcheck disable=SC2016
-        __atuin_macro_accept_line='"\C-x\C-_A1\a\C-x\C-_A2\a$READLINE_LINE\C-x\C-_A3\a\C-x\C-_A4\a"'
-        # shellcheck disable=SC2016
-        __atuin_macro_insert_line='"\C-x\C-_A1\a\C-x\C-_A2\a$READLINE_LINE\C-x\C-_A3\a"'
+
+        bind -m vi-command '"\C-x\C-_A7\a": vi-insertion-mode'
+        bind -m vi-insert  '"\C-x\C-_A7\a": vi-movement-mode'
+
+        # "\C-x\C-_A10\a": Replace the command line with READLINE_LINE.  When we are
+        #   in the vi-command keymap, we go to vi-insert, input
+        #   "$READLINE_LINE", and come back to vi-command.
+        bind -m emacs      '"\C-x\C-_A10\a": "\C-x\C-_A1\a\C-x\C-_A2\a\C-x\C-_A3\a\C-x\C-_A4\a"'
+        bind -m vi-insert  '"\C-x\C-_A10\a": "\C-x\C-_A1\a\C-x\C-_A2\a\C-x\C-_A3\a\C-x\C-_A4\a"'
+        bind -m vi-command '"\C-x\C-_A10\a": "\C-x\C-_A1\a\C-x\C-_A2\a\C-x\C-_A7\a\C-x\C-_A3\a\C-x\C-_A7\a\C-x\C-_A4\a"'
+
+        __atuin_macro_accept_line='"\C-x\C-_A10\a\C-x\C-_A5\a"'
+        __atuin_macro_insert_line='"\C-x\C-_A10\a\C-x\C-_A6\a"'
     fi
 
     __atuin_bash42_dispatch_selector=
