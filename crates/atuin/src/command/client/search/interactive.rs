@@ -920,7 +920,7 @@ impl State {
         let title = if self.update_needed.is_some() {
             let error_style: Style = theme.get_error().into();
             Paragraph::new(Text::from(Span::styled(
-                format!("Atuin v{VERSION} - UPGRADE"),
+                format!("Atuin v{VERSION} - UPDATE"),
                 error_style.add_modifier(Modifier::BOLD),
             )))
         } else {
