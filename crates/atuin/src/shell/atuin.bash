@@ -386,11 +386,14 @@ __atuin_widget_run() {
 # The number <n> is fixed to be 1 in the input stream, so we may use <n> = 0
 # (which is unlikely be used) as our special key sequences.
 
-__atuin_macro_chain='\e[0;0A'
-for __atuin_keymap in emacs vi-insert vi-command; do
-    bind -m "$__atuin_keymap" "\"$__atuin_macro_chain\": \"\""
-done
-unset -v __atuin_keymap
+# shellcheck disable=SC2154
+if [[ $__atuin_bind_ctrl_r == true || $__atuin_bind_up_arrow == true ]]; then
+    __atuin_macro_chain='\e[0;0A'
+    for __atuin_keymap in emacs vi-insert vi-command; do
+        bind -m "$__atuin_keymap" "\"$__atuin_macro_chain\": \"\""
+    done
+    unset -v __atuin_keymap
+fi
 
 if ((BASH_VERSINFO[0] >= 5 || BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 3)); then
     # In Bash >= 4.3
