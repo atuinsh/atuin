@@ -412,6 +412,17 @@ if ((BASH_VERSINFO[0] >= 5 || BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 3)); 
         local ikeyseq1='\C-x\C-_A'$((1 + widget))'\a'
         local ikeyseq2=$__atuin_macro_chain
 
+        if ((BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] == 1)); then
+            # Workaround for Bash 5.1: Bash 5.1 has a bug that overwriting an
+            # existing "bind -x" keybinding breaks other existing "bind -x"
+            # keybindings [1,2].  To work around the problem, we explicitly
+            # unbind an existing keybinding before overwriting it.
+            #
+            # [1] https://lists.gnu.org/archive/html/bug-bash/2021-04/msg00135.html
+            # [2] https://github.com/atuinsh/atuin/issues/962#issuecomment-3451132291
+            bind -m "$keymap" -r "$keyseq"
+        fi
+
         bind -m "$keymap" "\"$keyseq\": \"$ikeyseq1$ikeyseq2\""
         bind -m "$keymap" -x "\"$ikeyseq1\": __atuin_widget_run $widget"
     }
