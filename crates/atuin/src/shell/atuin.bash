@@ -377,16 +377,16 @@ __atuin_widget_run() {
 #   of IKEYSEQ2 to no-op by running `bind '"IKEYSEQ2": ""'`.
 #
 # For the choice of the intermediate key sequences, we want to choose key
-# sequences that are unlikely to conflict with others.  For this, we consider
-# the key sequences of the form \e[0;<m>A.  This is a variant of the key
-# sequences for the [up] key.  A single [up] keypress is usually transmitted as
-# \e[A in the input stream, but it switches to the form \e[<n>;<m>A in the
-# presence of modifier keys (such as Control or Shift), where <m> represents
-# the 1 + (modifier flags) and <n> represents the number of [up] keypresses.
-# The number <n> is fixed to be 1 in the input stream, so we may use <n> = 0
-# (which is unlikely be used) as our special key sequences.
+# sequences that are unlikely to conflict with others.  In addition, we want to
+# avoid a key sequence containing \e because keymap "vi-insert" stops
+# processing key sequences containing \e in older versions of Bash.  We have
+# used \e[0;<m>A (a variant of the [up] key with modifier <m>) in Atuin 3.10.0
+# for intermediate key sequences, but this contains \e and caused a problem.
+# Instead, we use \C-x\C-_A<n>\a, which starts with \C-x\C-_ (an unlikely
+# two-byte combination) and A (represents the initial letter of Atuin),
+# followed by the payload <n> and the terminator \a (BEL, \C-g).
 
-__atuin_macro_chain='\e[0;0A'
+__atuin_macro_chain='\C-x\C-_A0\a'
 for __atuin_keymap in emacs vi-insert vi-command; do
     bind -m "$__atuin_keymap" "\"$__atuin_macro_chain\": \"\""
 done
@@ -394,6 +394,7 @@ unset -v __atuin_keymap
 
 if ((BASH_VERSINFO[0] >= 5 || BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 3)); then
     # In Bash >= 4.3
+
     __atuin_macro_accept_line=accept-line
 
     __atuin_bind_impl() {
@@ -408,7 +409,7 @@ if ((BASH_VERSINFO[0] >= 5 || BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 3)); 
         local REPLY
         __atuin_widget_save "$keymap:$command"
         local widget=$REPLY
-        local ikeyseq1='\e[0;'$((1 + widget))'A'
+        local ikeyseq1='\C-x\C-_A'$((1 + widget))'\a'
         local ikeyseq2=$__atuin_macro_chain
 
         bind -m "$keymap" "\"$keyseq\": \"$ikeyseq1$ikeyseq2\""
@@ -489,21 +490,33 @@ else
         # `shell-expand-line'.
         #
         # Note: Concerning the key sequences to invoke bindable functions
-        # such as "\e[0;1A", another option is to use
+        # such as "\C-x\C-_A1\a", another option is to use
         # "\exbegginning-of-line\r", etc. to make it consistent with bash
         # >= 5.3.  However, an older Bash configuration can still conflict
-        # on [M-x].  The conflict is more likely than \e[0;1A.
+        # on [M-x].  The conflict is more likely than \C-x\C-_A1\a.
         for __atuin_keymap in emacs vi-insert vi-command; do
-            bind -m "$__atuin_keymap" '"\e[0;1A": beginning-of-line'
-            bind -m "$__atuin_keymap" '"\e[0;2A": kill-line'
-            bind -m "$__atuin_keymap" '"\e[0;3A": shell-expand-line'
-            bind -m "$__atuin_keymap" '"\e[0;4A": accept-line'
+            bind -m "$__atuin_keymap" '"\C-x\C-_A1\a": beginning-of-line'
+            bind -m "$__atuin_keymap" '"\C-x\C-_A2\a": kill-line'
+            # shellcheck disable=SC2016
+            bind -m "$__atuin_keymap" '"\C-x\C-_A3\a": "$READLINE_LINE"'
+            bind -m "$__atuin_keymap" '"\C-x\C-_A4\a": shell-expand-line'
+            bind -m "$__atuin_keymap" '"\C-x\C-_A5\a": accept-line'
+            bind -m "$__atuin_keymap" '"\C-x\C-_A6\a": end-of-line'
         done
         unset -v __atuin_keymap
-        # shellcheck disable=SC2016
-        __atuin_macro_accept_line='"\e[0;1A\e[0;2A$READLINE_LINE\e[0;3A\e[0;4A"'
-        # shellcheck disable=SC2016
-        __atuin_macro_insert_line='"\e[0;1A\e[0;2A$READLINE_LINE\e[0;3A"'
+
+        bind -m vi-command '"\C-x\C-_A7\a": vi-insertion-mode'
+        bind -m vi-insert  '"\C-x\C-_A7\a": vi-movement-mode'
+
+        # "\C-x\C-_A10\a": Replace the command line with READLINE_LINE.  When we are
+        #   in the vi-command keymap, we go to vi-insert, input
+        #   "$READLINE_LINE", and come back to vi-command.
+        bind -m emacs      '"\C-x\C-_A10\a": "\C-x\C-_A1\a\C-x\C-_A2\a\C-x\C-_A3\a\C-x\C-_A4\a"'
+        bind -m vi-insert  '"\C-x\C-_A10\a": "\C-x\C-_A1\a\C-x\C-_A2\a\C-x\C-_A3\a\C-x\C-_A4\a"'
+        bind -m vi-command '"\C-x\C-_A10\a": "\C-x\C-_A1\a\C-x\C-_A2\a\C-x\C-_A7\a\C-x\C-_A3\a\C-x\C-_A7\a\C-x\C-_A4\a"'
+
+        __atuin_macro_accept_line='"\C-x\C-_A10\a\C-x\C-_A5\a"'
+        __atuin_macro_insert_line='"\C-x\C-_A10\a\C-x\C-_A6\a"'
     fi
 
     __atuin_bash42_dispatch_selector=
