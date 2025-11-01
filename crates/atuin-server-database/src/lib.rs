@@ -142,6 +142,8 @@ pub trait Database: Sized + Clone + Send + Sync + 'static {
 
     async fn oldest_history(&self, user: &User) -> DbResult<History>;
 
+    async fn vacuum(&self) -> DbResult<()>;
+
     #[instrument(skip_all)]
     async fn calendar(
         &self,

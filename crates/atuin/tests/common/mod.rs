@@ -41,6 +41,7 @@ pub async fn start_server(path: &str) -> (String, oneshot::Sender<()>, JoinHandl
         tls: atuin_server::settings::Tls::default(),
         mail: atuin_server::settings::Mail::default(),
         fake_version: None,
+        vacuum: atuin_server::settings::Vacuum::default(),
     };
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
