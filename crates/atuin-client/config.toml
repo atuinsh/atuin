@@ -154,6 +154,10 @@
 ## 5. Stripe live/test keys
 # secrets_filter = true
 
+## Defaults to false. If secrets_filter is also enabled, then when a secret is detected, secrets will instead be redacted. The secret
+## itself will be replaced with the string "[REDACTED]" instead of filtering out the entire command.
+# secrets_redact = true
+
 ## Defaults to true. If enabled, upon hitting enter Atuin will immediately execute the command. Press tab to return to the shell and edit.
 # This applies for new installs. Old installs will keep the old behaviour unless configured otherwise.
 enter_accept = true

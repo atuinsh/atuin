@@ -1,6 +1,6 @@
 // This file will probably trigger a lot of scanners. Sorry.
 
-use regex::RegexSet;
+use regex::{Regex, RegexSet};
 use std::sync::LazyLock;
 
 pub enum TestValue<'a> {
@@ -136,6 +136,24 @@ pub static SECRET_PATTERNS_RE: LazyLock<RegexSet> = LazyLock::new(|| {
     let exprs = SECRET_PATTERNS.iter().map(|f| f.1);
     RegexSet::new(exprs).expect("Failed to build secrets regex")
 });
+
+static SECRET_PATTERNS_INDIVIDUAL: LazyLock<Vec<Regex>> = LazyLock::new(|| {
+    SECRET_PATTERNS
+        .iter()
+        .map(|f| Regex::new(f.1).expect("Failed to compile secret pattern"))
+        .collect()
+});
+
+pub fn redact_secrets(command: &str) -> String {
+    let mut result = command.to_string();
+    let matches = SECRET_PATTERNS_RE.matches(command);
+    for pattern_idx in matches.iter() {
+        if let Some(regex) = SECRET_PATTERNS_INDIVIDUAL.get(pattern_idx) {
+            result = regex.replace_all(&result, "[REDACTED]").to_string();
+        }
+    }
+    result
+}
 
 #[cfg(test)]
 mod tests {
