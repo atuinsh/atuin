@@ -51,6 +51,7 @@ def _atuin_search_cmd [...flags: string] {
             $ATUIN_KEYBINDING_TOKEN,
             ([
                 `with-env { ATUIN_LOG: error, ATUIN_QUERY: (commandline), ATUIN_SHELL: nu } {`,
+                    'print ""'
                     ([
                         'let output = (run-external atuin search',
                         ($flags | append [--interactive] | each {|e| $'"($e)"'}),
@@ -61,6 +62,7 @@ def _atuin_search_cmd [...flags: string] {
                     '} else {',
                     'commandline edit $output',
                     '}',
+                    '$"(ansi --escape "2A")"',
                 `}`,
             ] | flatten | str join "\n"),
         ]
