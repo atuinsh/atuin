@@ -138,8 +138,8 @@ pub fn draw_stats_table(
             format_duration(avg_duration),
         ]),
         Row::new(vec!["Exit".to_string(), history.exit.to_string()]),
-        Row::new(vec!["Directory".to_string(), history.cwd.to_string()]),
-        Row::new(vec!["Session".to_string(), history.session.to_string()]),
+        Row::new(vec!["Directory".to_string(), history.cwd.clone()]),
+        Row::new(vec!["Session".to_string(), history.session.clone()]),
         Row::new(vec!["Total runs".to_string(), stats.total.to_string()]),
     ];
 
