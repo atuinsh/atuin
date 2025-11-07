@@ -24,7 +24,7 @@ time = { version = "0.3.36", features = [
 ] }
 clap = { version = "4.5.7", features = ["derive"] }
 config = { version = "0.15.8", default-features = false, features = ["toml"] }
-directories = "5.0.1"
+directories = "6.0.0"
 eyre = "0.6"
 fs-err = "3.1"
 interim = { version = "0.2.0", features = ["time_0_3"] }
