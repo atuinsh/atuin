@@ -33,5 +33,5 @@ rustls = { version = "0.23", features = ["ring"], default-features = false }
 argon2 = "0.5"
 semver = { workspace = true }
 metrics-exporter-prometheus = "0.12.1"
-metrics = "0.21.1"
+metrics = "0.24.2"
 postmark = {version= "0.11", features=["reqwest", "reqwest-rustls-tls"]}
