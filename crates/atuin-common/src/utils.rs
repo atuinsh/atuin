@@ -84,10 +84,14 @@ pub fn config_dir() -> PathBuf {
 }
 
 pub fn data_dir() -> PathBuf {
-    let data_dir = std::env::var("XDG_DATA_HOME")
-        .map_or_else(|_| home_dir().join(".local").join("share"), PathBuf::from);
-
-    data_dir.join("atuin")
+    std::env::var("ATUIN_DATA_DIR").map_or_else(
+        |_| {
+            std::env::var("XDG_DATA_HOME")
+                .map_or_else(|_| home_dir().join(".local").join("share"), PathBuf::from)
+                .join("atuin")
+        },
+        PathBuf::from,
+    )
 }
 
 pub fn runtime_dir() -> PathBuf {
@@ -95,11 +99,8 @@ pub fn runtime_dir() -> PathBuf {
 }
 
 pub fn dotfiles_cache_dir() -> PathBuf {
-    // In most cases, this will be  ~/.local/share/atuin/dotfiles/cache
-    let data_dir = std::env::var("XDG_DATA_HOME")
-        .map_or_else(|_| home_dir().join(".local").join("share"), PathBuf::from);
-
-    data_dir.join("atuin").join("dotfiles").join("cache")
+    let data_dir = data_dir();
+    data_dir.join("dotfiles").join("cache")
 }
 
 pub fn get_current_dir() -> String {
@@ -191,6 +192,7 @@ mod tests {
         test_config_dir();
         test_data_dir_xdg();
         test_data_dir();
+        test_atuin_data_dir();
     }
 
     #[cfg(not(windows))]
@@ -240,6 +242,17 @@ mod tests {
         assert_eq!(data_dir(), PathBuf::from("/home/user/.local/share/atuin"));
         // TODO: Audit that the environment access only happens in single-threaded code.
         unsafe { env::remove_var("HOME") };
+    }
+
+    #[cfg(not(windows))]
+    fn test_atuin_data_dir() {
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::remove_var("HOME") };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::set_var("ATUIN_DATA_DIR", "/home/user/custom_data") };
+        assert_eq!(data_dir(), PathBuf::from("/home/user/custom_data"));
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::remove_var("ATUIN_DATA_DIR") };
     }
 
     #[test]
