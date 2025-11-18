@@ -24,14 +24,14 @@ pub async fn delete<DB: Database>(
     }) = state;
 
     if let Err(e) = database.delete_store(&user).await {
-        counter!("atuin_store_delete_failed", 1);
+        counter!("atuin_store_delete_failed").increment(1);
         error!("failed to delete store {e:?}");
 
         return Err(ErrorResponse::reply("failed to delete store")
             .with_status(StatusCode::INTERNAL_SERVER_ERROR));
     }
 
-    counter!("atuin_store_deleted", 1);
+    counter!("atuin_store_deleted").increment(1);
 
     Ok(())
 }
