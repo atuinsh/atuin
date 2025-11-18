@@ -203,7 +203,7 @@ fn path_dist(a: &Path, b: &Path) -> usize {
 
     let mut dist = 0;
 
-    // pop a until there's a common anscestor
+    // pop a until there's a common ancestor
     while !b.starts_with(&a) {
         dist += 1;
         a.pop();
