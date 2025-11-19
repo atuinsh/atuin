@@ -16,19 +16,19 @@ readme.workspace = true
 [dependencies]
 atuin-client = { path = "../atuin-client", version = "18.10.0" }
 atuin-common = { path = "../atuin-common", version = "18.10.0" }
-
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
-rmp = { version = "0.8.14" }
-uuid = { workspace = true }
 eyre = { workspace = true }
-tokio = { workspace = true }
-serde = { workspace = true }
-typed-builder = { workspace = true }
+minijinja = { workspace = true }
 pretty_assertions = { workspace = true }
+rmp = { version = "0.8.14" }
+serde = { workspace = true }
+serde_json = { workspace = true }
 sql-builder = { workspace = true }
 sqlx = { workspace = true }
 tempfile = { workspace = true }
-minijinja = { workspace = true }
-serde_json = { workspace = true }
+tokio = { workspace = true }
+
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+typed-builder = { workspace = true }
+uuid = { workspace = true }
 

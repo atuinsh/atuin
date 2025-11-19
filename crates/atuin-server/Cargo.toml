@@ -11,27 +11,27 @@ homepage = { workspace = true }
 repository = { workspace = true }
 
 [dependencies]
+argon2 = "0.5"
+async-trait = { workspace = true }
 atuin-common = { path = "../atuin-common", version = "18.10.0" }
 atuin-server-database = { path = "../atuin-server-database", version = "18.10.0" }
-
-tracing = { workspace = true }
-time = { workspace = true }
-eyre = { workspace = true }
-config = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-rand = { workspace = true }
-tokio = { workspace = true }
-async-trait = { workspace = true }
 axum = "0.7"
 axum-server = { version = "0.7", features = ["tls-rustls"] }
+config = { workspace = true }
+eyre = { workspace = true }
 fs-err = { workspace = true }
+metrics = "0.24"
+metrics-exporter-prometheus = "0.17"
+postmark = { version = "0.11", features = ["reqwest", "reqwest-rustls-tls"] }
+rand = { workspace = true }
+reqwest = { workspace = true }
+rustls = { version = "0.23" }
+semver = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+time = { workspace = true }
+tokio = { workspace = true }
 tower = { workspace = true }
 tower-http = { version = "0.6", features = ["trace"] }
-reqwest = { workspace = true }
-rustls = { version = "0.23"}
-argon2 = "0.5"
-semver = { workspace = true }
-metrics-exporter-prometheus = "0.17"
-metrics = "0.24"
-postmark = {version= "0.11", features=["reqwest", "reqwest-rustls-tls"]}
+
+tracing = { workspace = true }

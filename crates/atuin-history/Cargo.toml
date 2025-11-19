@@ -15,10 +15,10 @@ readme.workspace = true
 
 [dependencies]
 atuin-client = { path = "../atuin-client", version = "18.10.0" }
+crossterm = { version = "0.28.1", features = ["use-dev-tty"] }
+serde = { workspace = true }
 
 time = { workspace = true }
-serde = { workspace = true }
-crossterm = { version = "0.28.1", features = ["use-dev-tty"] }
 unicode-segmentation = "1.11.0"
 
 [dev-dependencies]
