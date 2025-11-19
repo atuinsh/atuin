@@ -19,62 +19,62 @@ daemon = []
 check-update = []
 
 [dependencies]
-atuin-common = { path = "../atuin-common", version = "18.10.0" }
-
-log = { workspace = true }
-base64 = { workspace = true }
-time = { workspace = true, features = ["macros", "formatting", "parsing"] }
-clap = { workspace = true }
-eyre = { workspace = true }
-directories = { workspace = true }
-uuid = { workspace = true }
-whoami = { workspace = true }
-interim = { workspace = true }
-config = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-humantime = "2.1.0"
 async-trait = { workspace = true }
-itertools = { workspace = true }
-rand = { workspace = true }
-shellexpand = "3"
-sqlx = { workspace = true, features = ["sqlite", "regexp"] }
-minspan = "0.1.5"
-regex = "1.10.5"
-serde_regex = "1.1.0"
-fs-err = { workspace = true }
-sql-builder = { workspace = true }
-memchr = "2.7"
-rmp = { version = "0.8.14" }
-typed-builder = { workspace = true }
-tokio = { workspace = true }
-semver = { workspace = true }
-thiserror = { workspace = true }
-futures = "0.3"
-crypto_secretbox = "0.1.1"
-generic-array = { version = "0.14", features = ["serde"] }
-serde_with = "3.8.1"
-
-# encryption
-rusty_paseto = { version = "0.8.0", default-features = false }
-rusty_paserk = { version = "0.5.0", default-features = false, features = ["v4", "serde"] }
-
-# sync
-urlencoding = { version = "2.1.0", optional = true }
-reqwest = { workspace = true, optional = true }
-hex = { version = "0.4", optional = true }
-sha2 = { version = "0.10", optional = true }
-indicatif = "0.18.0"
-tiny-bip39 = "=1.0.0"
+atuin-common = { path = "../atuin-common", version = "18.10.0" }
+base64 = { workspace = true }
+clap = { workspace = true }
+config = { workspace = true }
 
 # theme
 crossterm = { version = "0.28.1", features = ["serde"] }
-palette = { version = "0.7.5", features = ["serializing"] }
+crypto_secretbox = "0.1.1"
+directories = { workspace = true }
+eyre = { workspace = true }
+fs-err = { workspace = true }
+futures = "0.3"
+generic-array = { version = "0.14", features = ["serde"] }
+hex = { version = "0.4", optional = true }
+humantime = "2.1.0"
+indicatif = "0.18.0"
+interim = { workspace = true }
+itertools = { workspace = true }
 lazy_static = "1.4.0"
-strum_macros = "0.26.3"
+
+log = { workspace = true }
+memchr = "2.7"
+minspan = "0.1.5"
+palette = { version = "0.7.5", features = ["serializing"] }
+rand = { workspace = true }
+regex = "1.10.5"
+reqwest = { workspace = true, optional = true }
+rmp = { version = "0.8.14" }
+rusty_paserk = { version = "0.5.0", default-features = false, features = ["v4", "serde"] }
+
+# encryption
+rusty_paseto = { version = "0.8.0", default-features = false }
+semver = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_regex = "1.1.0"
+serde_with = "3.8.1"
+sha2 = { version = "0.10", optional = true }
+shellexpand = "3"
+sql-builder = { workspace = true }
+sqlx = { workspace = true, features = ["sqlite", "regexp"] }
 strum = { version = "0.26.2", features = ["strum_macros"] }
+strum_macros = "0.26.3"
+thiserror = { workspace = true }
+time = { workspace = true, features = ["macros", "formatting", "parsing"] }
+tiny-bip39 = "=1.0.0"
+tokio = { workspace = true }
+typed-builder = { workspace = true }
+
+# sync
+urlencoding = { version = "2.1.0", optional = true }
+uuid = { workspace = true }
+whoami = { workspace = true }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["full"] }
 pretty_assertions = { workspace = true }
 testing_logger = "0.1.1"
+tokio = { version = "1", features = ["full"] }

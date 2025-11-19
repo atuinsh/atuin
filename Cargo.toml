@@ -16,12 +16,6 @@ readme = "README.md"
 [workspace.dependencies]
 async-trait = "0.1.58"
 base64 = "0.22"
-log = "0.4"
-time = { version = "0.3.36", features = [
-  "serde-human-readable",
-  "macros",
-  "local-offset",
-] }
 clap = { version = "4.5.7", features = ["derive"] }
 config = { version = "0.15.8", default-features = false, features = ["toml"] }
 directories = "6.0.0"
@@ -29,35 +23,44 @@ eyre = "0.6"
 fs-err = "3.1"
 interim = { version = "0.2.0", features = ["time_0_3"] }
 itertools = "0.13.0"
+log = "0.4"
+minijinja = "2.9.0"
+pretty_assertions = "1.3.0"
 rand = { version = "0.8.5", features = ["std"] }
+reqwest = { version = "0.12", features = [
+  "json",
+  "rustls-tls-native-roots",
+], default-features = false }
+rustix = { version = "0.38.34", features = ["process", "fs"] }
 semver = "1.0.20"
 serde = { version = "1.0.202", features = ["derive"] }
 serde_json = "1.0.119"
-tokio = { version = "1", features = ["full"] }
-uuid = { version = "1.9", features = ["v4", "v7", "serde"] }
-whoami = "1.5.1"
-typed-builder = "0.18.2"
-pretty_assertions = "1.3.0"
+sql-builder = "3"
+sqlx = { version = "0.8", features = [
+  "runtime-tokio-rustls",
+  "time",
+  "postgres",
+  "uuid",
+] }
+tempfile = { version = "3.19" }
 thiserror = "1.0"
-rustix = { version = "0.38.34", features = ["process", "fs"] }
+time = { version = "0.3.36", features = [
+  "serde-human-readable",
+  "macros",
+  "local-offset",
+] }
+tokio = { version = "1", features = ["full"] }
 tower = "0.5"
 tracing = "0.1"
-sql-builder = "3"
-tempfile = { version = "3.19" }
-minijinja = "2.9.0"
-
-[workspace.dependencies.tracing-subscriber]
-version = "0.3"
-features = ["ansi", "fmt", "registry", "env-filter"]
-
-[workspace.dependencies.reqwest]
-version = "0.12"
-features = ["json", "rustls-tls-native-roots"]
-default-features = false
-
-[workspace.dependencies.sqlx]
-version = "0.8"
-features = ["runtime-tokio-rustls", "time", "postgres", "uuid"]
+tracing-subscriber = { version = "0.3", features = [
+  "ansi",
+  "fmt",
+  "registry",
+  "env-filter",
+] }
+typed-builder = "0.18.2"
+uuid = { version = "1.9", features = ["v4", "v7", "serde"] }
+whoami = "1.5.1"
 
 # The profile that 'cargo dist' will build with
 [profile.dist]

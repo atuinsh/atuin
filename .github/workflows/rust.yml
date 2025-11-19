@@ -228,3 +228,5 @@ jobs:
 
       - name: Format
         run: cargo fmt -- --check
+      - name: Sort dependencies
+        run: cargo install cargo-sort && cargo sort --workspace --check
