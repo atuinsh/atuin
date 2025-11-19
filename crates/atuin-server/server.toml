@@ -33,3 +33,8 @@
 # enable = false
 # cert_path = ""
 # pkey_path = ""
+
+# [vacuum]
+# Automatically vacuum the database after this many delete operations
+# Set to 0 to disable automatic vacuuming
+# auto_vacuum_threshold = 0
