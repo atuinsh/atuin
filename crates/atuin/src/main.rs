@@ -2,6 +2,8 @@
 #![allow(clippy::use_self, clippy::missing_const_for_fn)] // not 100% reliable
 
 use clap::Parser;
+use clap::builder::Styles;
+use clap::builder::styling::{AnsiColor, Effects};
 use eyre::Result;
 
 use command::AtuinCmd;
@@ -26,6 +28,12 @@ static HELP_TEMPLATE: &str = "\
 
 {all-args}{after-help}";
 
+const STYLES: Styles = Styles::styled()
+    .header(AnsiColor::Yellow.on_default().effects(Effects::BOLD))
+    .usage(AnsiColor::Green.on_default().effects(Effects::BOLD))
+    .literal(AnsiColor::Green.on_default().effects(Effects::BOLD))
+    .placeholder(AnsiColor::Green.on_default());
+
 /// Magical shell history
 #[derive(Parser)]
 #[command(
@@ -33,6 +41,7 @@ static HELP_TEMPLATE: &str = "\
     version = VERSION,
     long_version = LONG_VERSION,
     help_template(HELP_TEMPLATE),
+    styles = STYLES,
 )]
 struct Atuin {
     #[command(subcommand)]
