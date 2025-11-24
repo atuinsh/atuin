@@ -22,15 +22,33 @@ static DEFAULT_MAX_DEPTH: u8 = 10;
 )]
 #[strum(serialize_all = "camel_case")]
 pub enum Meaning {
+    /**
+     * Log-level style fallbacks. These should underlie most
+     * meanings, if not Base.
+     */
+    /* - General info, equivalent to an INFO log-level */
     AlertInfo,
+    /* - General warning, equivalent to a WARN log-level */
     AlertWarn,
+    /* - General error, equivalent to an ERROR log-level */
     AlertError,
+
+    /**
+     * Behavioural meanings. These should be used in preference
+     * to non-semantic names.
+     */
     Annotation,
     Base,
     Guidance,
     Important,
     Title,
     Muted,
+    Match,
+    Highlight,
+    Selection,
+    Failure,
+    Success,
+    Footnote,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -93,10 +111,43 @@ impl Theme {
         parent: Option<String>,
         styles: HashMap<Meaning, ContentStyle>,
     ) -> Theme {
-        Theme {
+        let mut theme = Theme {
             name,
             parent,
             styles,
+        };
+        theme.initialize_styles();
+        theme
+    }
+
+    fn initialize_styles(&mut self) {
+        let mut updates = Vec::new();
+        for (key, style) in self.styles.iter() {
+            if style.foreground_color.is_none() {
+                // In the event that we have an attribute-only style,
+                // this allows us to fallback to a meaning color that might be
+                // defined in the theme. Note that this is _not_ falling back
+                // to a parent, but to a different meaning.
+                // It might seem desirable to allow falling back to a parent
+                // theme - e.g. the child has the parent's AlertInfo, but bold
+                // but in reality, the theme writer can handle this (they know
+                // the parent theme), but falling back to another meaning, lets
+                // us derive new Meanings as bold/italic variations on well-known
+                // (and used) Meanings.
+                // TODO: how to properly provide debugging here?
+                if let Some(fallback) = MEANING_FALLBACKS.get(key) {
+                    if let Some(color) = self.as_style(*fallback).foreground_color {
+                        let new_style = StyleFactory::from_fg_color_and_attributes(
+                            color,
+                            style.attributes
+                        );
+                        updates.push((*key, new_style));
+                    }
+                }
+            }
+        }
+        for (key, style) in updates.into_iter() {
+            self.styles.insert(key, style);
         }
     }
 
@@ -236,6 +287,14 @@ impl StyleFactory {
             ..ContentStyle::default()
         }
     }
+
+    fn from_attributes_only(attributes: Attributes) -> ContentStyle {
+        ContentStyle {
+            foreground_color: None,
+            attributes,
+            ..ContentStyle::default()
+        }
+    }
 }
 
 // Built-in themes. Rather than having extra files added before any theming
@@ -254,6 +313,12 @@ lazy_static! {
             (Meaning::Guidance, Meaning::AlertInfo),
             (Meaning::Annotation, Meaning::AlertInfo),
             (Meaning::Title, Meaning::Important),
+            (Meaning::Selection, Meaning::AlertError),
+            (Meaning::Match, Meaning::Base),
+            (Meaning::Footnote, Meaning::Base),
+            (Meaning::Highlight, Meaning::AlertWarn),
+            (Meaning::Failure, Meaning::AlertError),
+            (Meaning::Success, Meaning::AlertInfo),
         ])
     };
     static ref DEFAULT_THEME: Theme = {
@@ -285,6 +350,18 @@ lazy_static! {
                     Meaning::Important,
                     StyleFactory::from_fg_color_and_attributes(
                         Color::White,
+                        Attributes::from(Attribute::Bold),
+                    ),
+                ),
+                (
+                    Meaning::Highlight,
+                    StyleFactory::from_attributes_only(
+                        Attributes::from(Attribute::Bold),
+                    ),
+                ),
+                (
+                    Meaning::Match,
+                    StyleFactory::from_attributes_only(
                         Attributes::from(Attribute::Bold),
                     ),
                 ),

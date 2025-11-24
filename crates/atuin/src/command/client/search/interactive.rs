@@ -761,9 +761,9 @@ impl State {
 
         if show_tabs {
             let tabs = Tabs::new(titles)
-                .block(Block::default().borders(Borders::NONE))
+                .block(Block::default().borders(Borders::NONE).style(theme.as_style(Meaning::Base)))
+                .style(theme.as_style(Meaning::Base))
                 .select(self.tab_index)
-                .style(Style::default())
                 .highlight_style(theme.as_style(Meaning::Important));
 
             f.render_widget(tabs, tabs_chunk);
@@ -837,6 +837,7 @@ impl State {
                                 .title(Title::from(" Info ".to_string()))
                                 .title_alignment(Alignment::Center)
                                 .borders(Borders::ALL)
+                                .style(theme.as_style(Meaning::Base))
                                 .padding(Padding::vertical(2)),
                         )
                         .alignment(Alignment::Center);
@@ -861,7 +862,7 @@ impl State {
                 // sub-widget for search + for inspector
                 let feedback = Paragraph::new(
                     "The inspector is new - please give feedback (good, or bad) at https://forum.atuin.sh",
-                );
+                ).style(theme.as_style(Meaning::Footnote));
                 f.render_widget(feedback, input_chunk);
 
                 return;
@@ -884,7 +885,7 @@ impl State {
                 preview_chunk.width.into(),
                 theme,
             );
-            self.draw_preview(f, style, input_chunk, compactness, preview_chunk, preview);
+            self.draw_preview(f, style, input_chunk, compactness, preview_chunk, preview, theme);
         }
     }
 
@@ -897,8 +898,9 @@ impl State {
         compactness: Compactness,
         preview_chunk: Rect,
         preview: Paragraph,
+        theme: &Theme
     ) {
-        let input = self.build_input(style);
+        let input = self.build_input(style, theme);
         f.render_widget(input, input_chunk);
 
         f.render_widget(preview, preview_chunk);
@@ -1009,6 +1011,7 @@ impl State {
                     results_list.block(
                         Block::default()
                             .borders(Borders::LEFT | Borders::RIGHT)
+                            .style(theme.as_style(Meaning::Base))
                             .border_type(BorderType::Rounded)
                             .title(format!("{:─>width$}", "", width = style.inner_width - 2)),
                     )
@@ -1016,6 +1019,7 @@ impl State {
                     results_list.block(
                         Block::default()
                             .borders(Borders::TOP | Borders::LEFT | Borders::RIGHT)
+                            .style(theme.as_style(Meaning::Base))
                             .border_type(BorderType::Rounded),
                     )
                 }
@@ -1024,7 +1028,7 @@ impl State {
         }
     }
 
-    fn build_input(&self, style: StyleState) -> Paragraph<'_> {
+    fn build_input(&self, style: StyleState, theme: &Theme) -> Paragraph<'_> {
         /// Max width of the UI box showing current mode
         const MAX_WIDTH: usize = 14;
         let (pref, mode) = if self.switched_search_mode {
@@ -1036,19 +1040,21 @@ impl State {
         // sanity check to ensure we don't exceed the layout limits
         debug_assert!(mode_width >= mode.len(), "mode name '{mode}' is too long!");
         let input = format!("[{pref}{mode:^mode_width$}] {}", self.search.input.as_str(),);
-        let input = Paragraph::new(input);
+        let input = Paragraph::new(input).style(theme.as_style(Meaning::Base));
         match style.compactness {
             Compactness::Full => {
                 if style.invert {
                     input.block(
                         Block::default()
                             .borders(Borders::LEFT | Borders::RIGHT | Borders::TOP)
+                            .style(theme.as_style(Meaning::Base))
                             .border_type(BorderType::Rounded),
                     )
                 } else {
                     input.block(
                         Block::default()
                             .borders(Borders::LEFT | Borders::RIGHT)
+                            .style(theme.as_style(Meaning::Base))
                             .border_type(BorderType::Rounded)
                             .title(format!("{:─>width$}", "", width = style.inner_width - 2)),
                     )
@@ -1088,6 +1094,7 @@ impl State {
             Compactness::Full => Paragraph::new(command).block(
                 Block::default()
                     .borders(Borders::BOTTOM | Borders::LEFT | Borders::RIGHT)
+                    .style(theme.as_style(Meaning::Base))
                     .border_type(BorderType::Rounded)
                     .title(format!("{:─>width$}", "", width = chunk_width - 2)),
             ),
