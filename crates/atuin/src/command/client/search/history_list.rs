@@ -12,7 +12,6 @@ use itertools::Itertools;
 use ratatui::{
     backend::FromCrossterm,
     buffer::Buffer,
-    crossterm::style,
     layout::Rect,
     style::{Modifier, Style},
     widgets::{Block, StatefulWidget, Widget},
@@ -232,7 +231,7 @@ impl DrawState<'_> {
             let i = self.y as usize + self.state.offset;
             let is_selected = i == self.state.selected();
             let prompt: &str = if is_selected { self.indicator } else { "   " };
-            self.draw(prompt, Style::default());
+            self.draw(prompt, self.theme.as_style(Meaning::Base).into());
             return;
         }
 
@@ -247,14 +246,14 @@ impl DrawState<'_> {
         } else {
             &SLICES[i..i + 3]
         };
-        self.draw(prompt, Style::default());
+        self.draw(prompt, self.theme.as_style(Meaning::Base).into());
     }
 
     fn duration(&mut self, h: &History, width: u16) {
-        let style = self.theme.as_style(if h.success() {
-            Meaning::AlertInfo
+        let status = self.theme.as_style(if h.success() {
+            Meaning::Success
         } else {
-            Meaning::AlertError
+            Meaning::Failure
         });
         let duration = Duration::from_nanos(u64::try_from(h.duration).unwrap_or(0));
         let formatted = format_duration(duration);
@@ -290,8 +289,7 @@ impl DrawState<'_> {
         {
             row_highlighted = true;
             // if not applying alternative highlighting to the whole row, color the command
-            style = self.theme.as_style(Meaning::AlertError);
-            style.attributes.set(style::Attribute::Bold);
+            style = self.theme.as_style(Meaning::Selection);
         }
 
         let highlight_indices = self.history_highlighter.get_highlight_indices(
@@ -318,9 +316,10 @@ impl DrawState<'_> {
                     if row_highlighted {
                         // if the row is highlighted bold is not enough as the whole row is bold
                         // change the color too
-                        style = self.theme.as_style(Meaning::AlertWarn);
+                        style = self.theme.as_style(Meaning::Highlight);
+                    } else {
+                        style = self.theme.as_style(Meaning::Match);
                     }
-                    style.attributes.set(style::Attribute::Bold);
                 }
                 let s = ch.to_string();
                 self.draw(&s, Style::from_crossterm(style));
