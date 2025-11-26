@@ -72,7 +72,7 @@ environment variables present when each session was initiated, but this data is
 discarded by Atuin. Xonsh optionally stores the output of each command; if present
 this data is also ignored by Atuin.
 
-## xonsh_sqlite
+## xonsh-sqlite
 
 The Xonsh SQLite importer will read from the Xonsh SQLite history file. The history
 file's location is determined by the same process as the regular Xonsh importer,
@@ -82,7 +82,7 @@ The Xonsh SQLite backend does not store environment variables, but like the JSON
 backend it can optionally store the output of each command. As with the JSON backend,
 if present this data will be ignored by Atuin.
 
-## zsh_histdb
+## zsh-hist-db
 
 This will read the Zsh histdb SQLite file from `$HISTDB_FILE` or
 `$HOME/.histdb/zsh-history.db`.
