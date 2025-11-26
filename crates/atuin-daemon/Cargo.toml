@@ -11,6 +11,9 @@ homepage.workspace = true
 repository.workspace = true
 readme.workspace = true
 
+[target.'cfg(target_os = "linux")'.dependencies]
+listenfd = "1.0.1"
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
@@ -18,26 +21,23 @@ atuin-client = { path = "../atuin-client", version = "18.10.0" }
 atuin-dotfiles = { path = "../atuin-dotfiles", version = "18.10.0" }
 atuin-history = { path = "../atuin-history", version = "18.10.0" }
 
-time = { workspace = true }
-uuid = { workspace = true }
-tokio = { workspace = true }
-tower = { workspace = true }
-eyre = { workspace = true }
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
-
 dashmap = "5.5.3"
-tonic-types = "0.12.0"
-tonic = "0.12"
+eyre = { workspace = true }
+hyper-util = "0.1"
 prost = "0.13"
 prost-types = "0.13"
-tokio-stream = {version="0.1.14", features=["net"]}
-hyper-util = "0.1"
 
 rand.workspace = true
 
-[target.'cfg(target_os = "linux")'.dependencies]
-listenfd = "1.0.1"
+time = { workspace = true }
+tokio = { workspace = true }
+tokio-stream = { version = "0.1.14", features = ["net"] }
+tonic = "0.12"
+tonic-types = "0.12.0"
+tower = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+uuid = { workspace = true }
 
 [build-dependencies]
 protox = "0.8.0"
