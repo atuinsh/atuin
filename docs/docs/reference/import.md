@@ -53,6 +53,21 @@ This importer reads from Nushell's text history format, which is stored in
 `$XDG_CONFIG_HOME/nushell/history.txt` or `$HOME/.config/nushell/history.txt`.
 There is no way to set the filename otherwise.
 
+## powershell
+
+This importer reads from
+[PowerShell's history file](https://learn.microsoft.com/en-us/powershell/module/psreadline/about/about_psreadline#command-history).
+On Windows, the file is located at
+`$APPDATA\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt`.
+On other systems, it is located at
+`$XDG_DATA_HOME/powershell/PSReadLine/ConsoleHost_history.txt`
+or `$HOME/.local/share/powershell/PSReadLine/ConsoleHost_history.txt`.
+
+## replxx
+
+The [replxx](https://github.com/AmokHuginnsson/replxx) importer will read from
+`$HISTFILE` or `$HOME/.histfile`.
+
 ## resh
 
 The [RESH](https://github.com/curusarn/resh) importer will read from `$HISTFILE` or `$HOME/.resh_history.json`.
