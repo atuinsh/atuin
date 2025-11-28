@@ -41,16 +41,16 @@ will be `{session}_history` in `$XDG_DATA_HOME/fish/` (or `$HOME/.local/share/fi
 Not all of the data in the fish history is preserved, some data about filenames used
 for each command are not used by Atuin, so it is discarded.
 
-## nu-hist-db
-
-This importer reads from Nushell's SQLite history database, which is stored in
-`$XDG_CONFIG_HOME/nushell/history.sqlite3` or `$HOME/.config/nushell/history.sqlite3`.
-There is no way to set the filename otherwise.
-
 ## nu
 
 This importer reads from Nushell's text history format, which is stored in
 `$XDG_CONFIG_HOME/nushell/history.txt` or `$HOME/.config/nushell/history.txt`.
+There is no way to set the filename otherwise.
+
+## nu-hist-db
+
+This importer reads from Nushell's SQLite history database, which is stored in
+`$XDG_CONFIG_HOME/nushell/history.sqlite3` or `$HOME/.config/nushell/history.sqlite3`.
 There is no way to set the filename otherwise.
 
 ## powershell
@@ -97,12 +97,12 @@ The Xonsh SQLite backend does not store environment variables, but like the JSON
 backend it can optionally store the output of each command. As with the JSON backend,
 if present this data will be ignored by Atuin.
 
-## zsh-hist-db
-
-This will read the Zsh histdb SQLite file from `$HISTDB_FILE` or
-`$HOME/.histdb/zsh-history.db`.
-
 ## zsh
 
 This will read the Zsh history from `$HISTFILE` or `$HOME/.zhistory`
 or `$HOME/.zsh_history` in either the simple or extended format.
+
+## zsh-hist-db
+
+This will read the Zsh histdb SQLite file from `$HISTDB_FILE` or
+`$HOME/.histdb/zsh-history.db`.
