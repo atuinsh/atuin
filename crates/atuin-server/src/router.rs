@@ -105,10 +105,10 @@ async fn semver(request: Request, next: Next) -> Response {
 #[derive(Clone)]
 pub struct AppState<DB: Database> {
     pub database: DB,
-    pub settings: Settings<DB::Settings>,
+    pub settings: Settings,
 }
 
-pub fn router<DB: Database>(database: DB, settings: Settings<DB::Settings>) -> Router {
+pub fn router<DB: Database>(database: DB, settings: Settings) -> Router {
     let routes = Router::new()
         .route("/", get(handlers::index))
         .route("/healthz", get(handlers::health::health_check))
@@ -123,8 +123,8 @@ pub fn router<DB: Database>(database: DB, settings: Settings<DB::Settings>) -> R
         .route("/account/password", patch(handlers::user::change_password))
         .route("/register", post(handlers::user::register))
         .route("/login", post(handlers::user::login))
-        .route("/record", post(handlers::record::post::<DB>))
-        .route("/record", get(handlers::record::index::<DB>))
+        .route("/record", post(handlers::record::post))
+        .route("/record", get(handlers::record::index))
         .route("/record/next", get(handlers::record::next))
         .route("/api/v0/me", get(handlers::v0::me::get))
         .route("/api/v0/account/verify", post(handlers::user::verify_user))

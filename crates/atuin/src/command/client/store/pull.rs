@@ -56,10 +56,10 @@ impl Pull {
                         return true;
                     }
 
-                    if let Some(t) = self.tag.clone() {
-                        if t != *tag {
-                            return false;
-                        }
+                    if let Some(t) = self.tag.clone()
+                        && t != *tag
+                    {
+                        return false;
                     }
 
                     true

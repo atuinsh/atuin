@@ -41,7 +41,7 @@
 # search_mode = "fuzzy"
 
 ## which filter mode to use by default
-## possible values: "global", "host", "session", "directory", "workspace"
+## possible values: "global", "host", "session", "session-preload", "directory", "workspace"
 ## consider using search.filters to customize the enablement and order of filter modes
 # filter_mode = "global"
 
@@ -49,7 +49,7 @@
 ## in any directory within a git repository tree (default: false).
 ##
 ## To use workspace mode by default when available, set this to true and
-## set filter_mode to "workspace" or leave it unspecified and 
+## set filter_mode to "workspace" or leave it unspecified and
 ## set search.filters to include "workspace" before other filter modes.
 # workspaces = false
 
@@ -70,6 +70,11 @@
 ## the maximum number of lines the interface should take up
 ## set it to 0 to always go full screen
 # inline_height = 0
+
+## the maximum number of lines the interface should take up
+## when atuin is invoked from a shell up-key binding
+## the accepted values are identical to those of "inline_height"
+# inline_height_shell_up_key_binding = 0
 
 ## Invert the UI - put the search bar at the top , Default to `false`
 # invert = false
@@ -94,6 +99,10 @@
 ## use ctrl instead of alt as the shortcut modifier key for numerical UI shortcuts
 ## alt-0 .. alt-9
 # ctrl_n_shortcuts = false
+
+## Show numeric shortcuts (1..9) beside list items in the TUI
+## set to false to hide the moving numbers if you find them distracting
+# show_numeric_shortcuts = true
 
 ## default history list format - can also be specified with the --format arg
 # history_format = "{time}\t{command}\t{duration}"
@@ -145,9 +154,14 @@
 ## 5. Stripe live/test keys
 # secrets_filter = true
 
-## Defaults to true. If enabled, upon hitting enter Atuin will immediately execute the command. Press tab to return to the shell and edit.
-# This applies for new installs. Old installs will keep the old behaviour unless configured otherwise.
+## Defaults to true. If enabled, upon hitting enter Atuin will immediately execute the command,
+## whereas tab will put the command in the prompt for editing.
+## If set to false, both enter and tab will place the command in the prompt for editing.
+## This applies for new installs. Old installs will keep the old behaviour unless configured otherwise.
 enter_accept = true
+
+## Defaults to false. If enabled, when triggered after &&, || or |, Atuin will complete commands to chain rather than replace the current line.
+# command_chaining = false
 
 ## Defaults to "emacs".  This specifies the keymap on the startup of `atuin
 ## search`.  If this is set to "auto", the startup keymap mode in the Atuin
@@ -180,6 +194,7 @@ enter_accept = true
 #   "composer",
 #   "dnf",
 #   "docker",
+#   "dotnet",
 #   "git",
 #   "go",
 #   "ip",
@@ -214,6 +229,10 @@ enter_accept = true
 # exit_past_line_start = true
 # Defaults to true. The right arrow key performs the same functionality as Tab and copies the selected line to the command line to be modified.
 # accept_past_line_end = true
+# Defaults to false. The left arrow key performs the same functionality as Tab and copies the selected line to the command line to be modified.
+# accept_past_line_start = false
+# Defaults to false. The backspace key performs the same functionality as Tab and copies the selected line to the command line to be modified when at the start of the line.
+# accept_with_backspace = false
 
 [sync]
 # Enable sync v2 by default
@@ -269,4 +288,4 @@ records = true
 ## The list of enabled filter modes, in order of priority.
 ## The "workspace" mode is skipped when not in a workspace or workspaces = false.
 ## Default filter mode can be overridden with the filter_mode setting.
-# filters = [ "global", "host", "session", "workspace", "directory" ]
+# filters = [ "global", "host", "session", "session-preload", "workspace", "directory" ]

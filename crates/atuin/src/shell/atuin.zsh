@@ -57,7 +57,7 @@ _atuin_search() {
     # TODO: not this
     local output
     # shellcheck disable=SC2048
-    output=$(ATUIN_SHELL_ZSH=t ATUIN_LOG=error ATUIN_QUERY=$BUFFER atuin search $* -i 3>&1 1>&2 2>&3)
+    output=$(ATUIN_SHELL=zsh ATUIN_LOG=error ATUIN_QUERY=$BUFFER atuin search $* -i 3>&1 1>&2 2>&3)
 
     zle reset-prompt
     # re-enable bracketed paste

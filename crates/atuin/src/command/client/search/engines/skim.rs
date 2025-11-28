@@ -7,6 +7,7 @@ use fuzzy_matcher::{FuzzyMatcher, skim::SkimMatcherV2};
 use itertools::Itertools;
 use time::OffsetDateTime;
 use tokio::task::yield_now;
+use uuid;
 
 use super::{SearchEngine, SearchState};
 
@@ -37,8 +38,17 @@ impl SearchEngine for Search {
 
         Ok(fuzzy_search(&self.engine, state, &self.all_history).await)
     }
+
+    fn get_highlight_indices(&self, command: &str, search_input: &str) -> Vec<usize> {
+        let (_, indices) = self
+            .engine
+            .fuzzy_indices(command, search_input)
+            .unwrap_or_default();
+        indices
+    }
 }
 
+#[allow(clippy::too_many_lines)]
 async fn fuzzy_search(
     engine: &SkimMatcherV2,
     state: &SearchState,
@@ -75,6 +85,43 @@ async fn fuzzy_search(
                     .as_bytes()
                     .chunks(32)
                     .contains(&context.session.as_bytes()) => {}
+            // SessionPreload: include current session + global history from before session start
+            FilterMode::SessionPreload => {
+                let is_current_session = {
+                    history
+                        .session
+                        .as_bytes()
+                        .chunks(32)
+                        .any(|chunk| chunk == context.session.as_bytes())
+                };
+
+                if !is_current_session {
+                    let Ok(uuid) = uuid::Uuid::parse_str(&context.session) else {
+                        log::warn!("failed to parse session id '{}'", context.session);
+                        continue;
+                    };
+                    let Some(timestamp) = uuid.get_timestamp() else {
+                        log::warn!(
+                            "failed to get timestamp from uuid '{}'",
+                            uuid.as_hyphenated()
+                        );
+                        continue;
+                    };
+                    let (seconds, nanos) = timestamp.to_unix();
+                    let Ok(session_start) = time::OffsetDateTime::from_unix_timestamp_nanos(
+                        i128::from(seconds) * 1_000_000_000 + i128::from(nanos),
+                    ) else {
+                        log::warn!(
+                            "failed to create OffsetDateTime from second: {seconds}, nanosecond: {nanos}"
+                        );
+                        continue;
+                    };
+
+                    if history.timestamp >= session_start {
+                        continue;
+                    }
+                }
+            }
             // we aggregate directory by ':' separating them
             FilterMode::Directory if history.cwd.split(':').contains(&context.cwd.as_str()) => {}
             FilterMode::Workspace if history.cwd.split(':').contains(&git_root) => {}
@@ -156,7 +203,7 @@ fn path_dist(a: &Path, b: &Path) -> usize {
 
     let mut dist = 0;
 
-    // pop a until there's a common anscestor
+    // pop a until there's a common ancestor
     while !b.starts_with(&a) {
         dist += 1;
         a.pop();

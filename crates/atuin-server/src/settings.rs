@@ -1,9 +1,10 @@
 use std::{io::prelude::*, path::PathBuf};
 
+use atuin_server_database::DbSettings;
 use config::{Config, Environment, File as ConfigFile, FileFormat};
 use eyre::{Result, eyre};
 use fs_err::{File, create_dir_all};
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::{Deserialize, Serialize};
 
 static EXAMPLE_CONFIG: &str = include_str!("../server.toml");
 
@@ -53,7 +54,7 @@ impl Default for Metrics {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct Settings<DbSettings> {
+pub struct Settings {
     pub host: String,
     pub port: u16,
     pub path: String,
@@ -78,7 +79,7 @@ pub struct Settings<DbSettings> {
     pub db_settings: DbSettings,
 }
 
-impl<DbSettings: DeserializeOwned> Settings<DbSettings> {
+impl Settings {
     pub fn new() -> Result<Self> {
         let mut config_file = if let Ok(p) = std::env::var("ATUIN_CONFIG_DIR") {
             PathBuf::from(p)

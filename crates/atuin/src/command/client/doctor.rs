@@ -251,7 +251,8 @@ impl SyncInfo {
             cloud: settings.sync_address == "https://api.atuin.sh",
             auto_sync: settings.auto_sync,
             records: settings.sync.records,
-            last_sync: Settings::last_sync().map_or("no last sync".to_string(), |v| v.to_string()),
+            last_sync: Settings::last_sync()
+                .map_or_else(|_| "no last sync".to_string(), |v| v.to_string()),
         }
     }
 }
@@ -295,6 +296,7 @@ impl SettingPaths {
 #[derive(Debug, Serialize)]
 struct AtuinInfo {
     pub version: String,
+    pub commit: String,
 
     /// Whether the main Atuin sync server is in use
     /// I'm just calling it Atuin Cloud for lack of a better name atm
@@ -327,6 +329,7 @@ impl AtuinInfo {
 
         Self {
             version: crate::VERSION.to_string(),
+            commit: crate::SHA.to_string(),
             sync,
             sqlite_version,
             setting_paths: SettingPaths::new(settings),

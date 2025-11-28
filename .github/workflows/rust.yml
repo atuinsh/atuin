@@ -17,16 +17,16 @@ jobs:
   build:
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-14]
+        os: [ubuntu-latest, macos-14, windows-latest]
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.86
+          toolchain: 1.91
 
       - uses: actions/cache@v4
         with:
@@ -57,7 +57,7 @@ jobs:
         target: [x86_64-unknown-illumos]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install cross
         uses: taiki-e/install-action@v2
@@ -88,16 +88,16 @@ jobs:
   unit-test:
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-14]
+        os: [ubuntu-latest, macos-14, windows-latest]
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.86
+          toolchain: 1.91
 
       - uses: taiki-e/install-action@v2
         name: Install nextest
@@ -118,16 +118,16 @@ jobs:
   check:
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-14]
+        os: [ubuntu-latest, macos-14, windows-latest]
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.86
+          toolchain: 1.91
 
       - uses: actions/cache@v4
         with:
@@ -166,12 +166,12 @@ jobs:
           - 5432:5432
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.86
+          toolchain: 1.91
 
       - uses: taiki-e/install-action@v2
         name: Install nextest
@@ -195,12 +195,12 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install latest rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.86
+          toolchain: 1.91
           components: clippy
 
       - uses: actions/cache@v4
@@ -218,12 +218,12 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install latest rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.86
+          toolchain: 1.91
           components: rustfmt
 
       - name: Format

@@ -2,7 +2,148 @@
 
 All notable changes to this project will be documented in this file.
 
-## [unreleased]
+## [18.10.0] - 2025-10-21
+
+### Bug Fixes
+
+- Stats ngram window size cli parsing ([#2946](https://github.com/atuinsh/atuin/issues/2946))
+
+
+### Features
+
+- *(bash)* Use Readline's accept-line for enter_accept ([#2953](https://github.com/atuinsh/atuin/issues/2953))
+- Add commit to displayed version info ([#2922](https://github.com/atuinsh/atuin/issues/2922))
+- Add import from PowerShell history ([#2864](https://github.com/atuinsh/atuin/issues/2864))
+- Interactive Inspector ([#2319](https://github.com/atuinsh/atuin/issues/2319))
+- Nu ≥ 0.106.0 support commandline accept ([#2957](https://github.com/atuinsh/atuin/issues/2957))
+
+
+### Miscellaneous Tasks
+
+- Update rusty_paseto and rusty_paserk ([#2942](https://github.com/atuinsh/atuin/issues/2942))
+- Update changelog
+
+
+## [18.9.0] - 2025-10-20
+
+### Bug Fixes
+
+- *(dotfiles)* Properly escape spaces/quotes in vars
+- Clippy issues on Windows ([#2856](https://github.com/atuinsh/atuin/issues/2856))
+- Honor timezone in inspector stats ([#2853](https://github.com/atuinsh/atuin/issues/2853))
+- Make status exit 1 if not logged in ([#2843](https://github.com/atuinsh/atuin/issues/2843))
+- Match logic of theme directory with settings directory, so ATUIN_CONFIG_DIR is respected ([#2707](https://github.com/atuinsh/atuin/issues/2707))
+- Expand path for daemon.socket_path ([#2870](https://github.com/atuinsh/atuin/issues/2870))
+- Use fullscreen if `inline_height` is too large ([#2888](https://github.com/atuinsh/atuin/issues/2888))
+- Clean up new rustc and clippy warnings on Rust 1.89
+- `cargo update` and changes needed to accomodate it
+- Run `cargo fmt`
+- Clippy warnings I don't have on my version of clippy
+- Add forgotten `rust-toolchain.toml` to match changes (oops)
+- Update version in Cargo.toml + github workflows
+- Clippy warnings
+- Dissociate command_chaining from enter_accept
+- Remove __atuin_chain_command__ prefix
+- Docker compose link ([#2914](https://github.com/atuinsh/atuin/issues/2914))
+- Fish up binding ([#2902](https://github.com/atuinsh/atuin/issues/2902))
+
+
+### Features
+
+- *(stats)* Add dotnet to default common subcommands
+- *(tui)* Select entries using number in vim-normal mode. closes #2368 ([#2893](https://github.com/atuinsh/atuin/issues/2893))
+- *(tui)* Add show_numeric_shortcuts config to hide 1-9 shortcuts ([#2766](https://github.com/atuinsh/atuin/issues/2766))
+- Highlight matches in interactive search ([#2653](https://github.com/atuinsh/atuin/issues/2653))
+- Add session-preload filter mode to include global history from before session start
+- Add various acceptance keys ([#2928](https://github.com/atuinsh/atuin/issues/2928))
+- More accurately filter secret tokens ([#2932](https://github.com/atuinsh/atuin/issues/2932))
+- Add shell pipelines to command chaining ([#2938](https://github.com/atuinsh/atuin/issues/2938))
+
+
+### Miscellaneous Tasks
+
+- Update changelog
+- Remove legacy Apple SDK frameworks ([#2885](https://github.com/atuinsh/atuin/issues/2885))
+- Update dist workflows
+- Update to Rust 1.90 ([#2916](https://github.com/atuinsh/atuin/issues/2916))
+
+
+### Refactor
+
+- Shell environment variables
+
+
+### Build
+
+- Update flake.nix with new sha256
+
+
+## [18.8.0] - 2025-08-04
+
+### Bug Fixes
+
+- *(build)* Enable sqlite feature for sqlite server ([#2848](https://github.com/atuinsh/atuin/issues/2848))
+- Make login exit 1 if already logged in ([#2832](https://github.com/atuinsh/atuin/issues/2832))
+- Use transaction for idx consistency checking ([#2840](https://github.com/atuinsh/atuin/issues/2840))
+- Ensure the idx cache is cleaned on deletion, only insert if records are inserted ([#2841](https://github.com/atuinsh/atuin/issues/2841))
+
+
+### Features
+
+- Command chaining ([#2834](https://github.com/atuinsh/atuin/issues/2834))
+- Add info for 'official' plugins ([#2835](https://github.com/atuinsh/atuin/issues/2835))
+- Support multi part commands ([#2836](https://github.com/atuinsh/atuin/issues/2836)) ([#2837](https://github.com/atuinsh/atuin/issues/2837))
+- Add inline_height_shell_up_key_binding option ([#2817](https://github.com/atuinsh/atuin/issues/2817))
+- Add IDX_CACHE_ROLLOUT ([#2850](https://github.com/atuinsh/atuin/issues/2850))
+
+
+### Miscellaneous Tasks
+
+- Update to rust 1.88 ([#2815](https://github.com/atuinsh/atuin/issues/2815))
+
+
+### Nushell
+
+- Fix `get -i` deprecation ([#2829](https://github.com/atuinsh/atuin/issues/2829))
+
+
+## [18.7.1] - 2025-07-16
+
+### Bug Fixes
+
+- Add check for postgresql prefix ([#2825](https://github.com/atuinsh/atuin/issues/2825))
+
+
+### Miscellaneous Tasks
+
+- Update changelog
+
+
+## [18.7.0] - 2025-07-16
+
+### Bug Fixes
+
+- *(api)* Allow trailing slashes in sync_address ([#2760](https://github.com/atuinsh/atuin/issues/2760))
+- *(doctor)* Mention the required ble.sh version ([#2774](https://github.com/atuinsh/atuin/issues/2774))
+- *(search)* Prevent panic on malformed format strings ([#2776](https://github.com/atuinsh/atuin/issues/2776)) ([#2777](https://github.com/atuinsh/atuin/issues/2777))
+- Clarify that HISTFILE, if used, must be exported ([#2758](https://github.com/atuinsh/atuin/issues/2758))
+- Don't print errors in `zsh_autosuggest` helper ([#2780](https://github.com/atuinsh/atuin/issues/2780))
+- `atuin.nu` enchancements ([#2778](https://github.com/atuinsh/atuin/issues/2778))
+- Refuse "--dupkeep 0" ([#2807](https://github.com/atuinsh/atuin/issues/2807))
+
+
+### Features
+
+- Add sqlite server support for self-hosting ([#2770](https://github.com/atuinsh/atuin/issues/2770))
+
+
+### Miscellaneous Tasks
+
+- *(ci)* Install toolchain that matches rust-toolchain.toml ([#2759](https://github.com/atuinsh/atuin/issues/2759))
+- Allow setting script DB path ([#2750](https://github.com/atuinsh/atuin/issues/2750))
+
+
+## [18.6.1] - 2025-05-08
 
 ### Bug Fixes
 

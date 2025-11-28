@@ -25,14 +25,13 @@
       in
       {
         packages.atuin = pkgs.callPackage ./atuin.nix {
-          inherit (pkgs.darwin.apple_sdk.frameworks) Security SystemConfiguration AppKit;
           rustPlatform =
             let
               toolchain =
                 fenix.packages.${system}.fromToolchainFile
                   {
                     file = ./rust-toolchain.toml;
-                    sha256 = "sha256-X/4ZBHO3iW0fOenQ3foEvscgAPJYl2abspaBThDOukI=";
+                    sha256 = "sha256-SDu4snEWjuZU475PERvu+iO50Mi39KVjqCeJeNvpguU=";
                   };
             in
             pkgs.makeRustPlatform {
