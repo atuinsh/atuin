@@ -70,7 +70,8 @@ The [replxx](https://github.com/AmokHuginnsson/replxx) importer will read from
 
 ## resh
 
-The [RESH](https://github.com/curusarn/resh) importer will read from `$HISTFILE` or `$HOME/.resh_history.json`.
+The [RESH](https://github.com/curusarn/resh) importer will read from `$HISTFILE`
+or `$HOME/.resh_history.json`.
 
 ## xonsh
 
