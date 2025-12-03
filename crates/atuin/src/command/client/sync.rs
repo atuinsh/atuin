@@ -54,7 +54,7 @@ impl Cmd {
             Self::Sync { force } => run(&settings, force, db, store).await,
             Self::Login(l) => l.run(&settings, &store).await,
             Self::Logout => account::logout::run(&settings),
-            Self::Register(r) => r.run(&settings).await,
+            Self::Register(r) => r.run(&settings, &store).await,
             Self::Status => status::run(&settings, db).await,
             Self::Key { base64 } => {
                 use atuin_client::encryption::{encode_key, load_key};

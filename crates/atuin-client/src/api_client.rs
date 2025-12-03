@@ -14,10 +14,10 @@ use atuin_common::{
 };
 use atuin_common::{
     api::{
-        AddHistoryRequest, ChangePasswordRequest, CountResponse, DeleteHistoryRequest,
-        ErrorResponse, LoginRequest, LoginResponse, MeResponse, RegisterResponse,
-        SendVerificationResponse, StatusResponse, SyncHistoryResponse, VerificationTokenRequest,
-        VerificationTokenResponse,
+        AddHistoryRequest, ChangePasswordRequest, CliCodeResponse, CliVerifyResponse,
+        CountResponse, DeleteHistoryRequest, ErrorResponse, LoginRequest, LoginResponse,
+        MeResponse, RegisterResponse, SendVerificationResponse, StatusResponse,
+        SyncHistoryResponse, VerificationTokenRequest, VerificationTokenResponse,
     },
     record::RecordStatus,
 };
@@ -109,6 +109,40 @@ pub async fn login(address: &str, req: LoginRequest) -> Result<LoginResponse> {
 
     let session = resp.json::<LoginResponse>().await?;
     Ok(session)
+}
+
+/// Request a CLI auth code from the Atuin Hub
+pub async fn hub_request_code(address: &str) -> Result<CliCodeResponse> {
+    let url = make_url(address, "/auth/cli/code")?;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(url)
+        .header(USER_AGENT, APP_USER_AGENT)
+        .header(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION)
+        .send()
+        .await?;
+    let resp = handle_resp_error(resp).await?;
+
+    let code_response = resp.json::<CliCodeResponse>().await?;
+    Ok(code_response)
+}
+
+/// Poll to verify the CLI auth code and get the session token
+pub async fn hub_verify_code(address: &str, code: &str) -> Result<CliVerifyResponse> {
+    let url = make_url(address, &format!("/auth/cli/verify?code={}", code))?;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .get(url)
+        .header(USER_AGENT, APP_USER_AGENT)
+        .header(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION)
+        .send()
+        .await?;
+    let resp = handle_resp_error(resp).await?;
+
+    let verify_response = resp.json::<CliVerifyResponse>().await?;
+    Ok(verify_response)
 }
 
 #[cfg(feature = "check-update")]

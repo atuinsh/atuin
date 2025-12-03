@@ -35,18 +35,26 @@ fn get_input() -> Result<String> {
 
 impl Cmd {
     pub async fn run(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
-        // TODO(ellie): Replace this with a call to atuin_client::login::login
-        // The reason I haven't done this yet is that this implementation allows for
-        // an empty key. This will use an existing key file.
-        //
-        // I'd quite like to ditch that behaviour, so have not brought it into the library
-        // function.
         if settings.logged_in() {
             bail!(
                 "You are already logged in! Please run 'atuin logout' if you wish to login again"
             );
         }
 
+        if settings.hub_sync {
+            run_hub(settings, store).await
+        } else {
+            self.run_classic(settings, store).await
+        }
+    }
+
+    async fn run_classic(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
+        // TODO(ellie): Replace this with a call to atuin_client::login::login
+        // The reason I haven't done this yet is that this implementation allows for
+        // an empty key. This will use an existing key file.
+        //
+        // I'd quite like to ditch that behaviour, so have not brought it into the library
+        // function.
         let username = or_user_input(self.username.clone(), "username");
         let password = self.password.clone().unwrap_or_else(read_user_password);
 
@@ -103,7 +111,7 @@ impl Cmd {
         // Annoyingly, it's also very important to get it correct
         if key.is_empty() {
             if key_path.exists() {
-                let bytes = fs_err::read_to_string(key_path)
+                let bytes = fs_err::read_to_string(&key_path)
                     .context("existing key file couldn't be read")?;
                 if decode_key(bytes).is_err() {
                     bail!("the key in existing key file was invalid");
@@ -118,7 +126,7 @@ impl Cmd {
                 bail!("the specified key was invalid");
             }
 
-            let mut file = File::create(key_path).await?;
+            let mut file = File::create(&key_path).await?;
             file.write_all(key.as_bytes()).await?;
         } else {
             // we now know that the user has logged in specifying a key, AND that the key path
@@ -139,7 +147,7 @@ impl Cmd {
                 store.re_encrypt(&current_key, &new_key).await?;
 
                 println!("Writing new key");
-                let mut file = File::create(key_path).await?;
+                let mut file = File::create(&key_path).await?;
                 file.write_all(encoded.as_bytes()).await?;
             }
         }
@@ -158,6 +166,10 @@ impl Cmd {
 
         Ok(())
     }
+}
+
+async fn run_hub(settings: &Settings, store: &SqliteStore) -> Result<()> {
+    super::hub::run(settings, store).await
 }
 
 pub(super) fn or_user_input(value: Option<String>, name: &'static str) -> String {
