@@ -19,8 +19,23 @@ fn default_histpath() -> Result<PathBuf> {
     let home_dir = user_dirs.home_dir();
 
     // There is no default histfile for replxx.
-    // For simplicity let's use the most common one.
-    Ok(home_dir.join(".histfile"))
+    // Here we try a couple of common names.
+    let mut candidates = ["replxx_history.txt", ".histfile"].iter();
+    loop {
+        match candidates.next() {
+            Some(candidate) => {
+                let histpath = home_dir.join(candidate);
+                if histpath.exists() {
+                    break Ok(histpath);
+                }
+            }
+            None => {
+                break Err(eyre!(
+                    "Could not find history file. Try setting and exporting $HISTFILE"
+                ));
+            }
+        }
+    }
 }
 
 #[async_trait]
