@@ -458,7 +458,19 @@ pub struct Settings {
     pub style: Style,
     pub auto_sync: bool,
     pub update_check: bool,
+
+    /// Enables using the Atuin Hub for syncing. This is an alternative sync server, providing
+    /// several auth methods, profile pages, password recovery, and more.
+    ///
+    /// The hub is not currently self-hostable, but will potentially be opened up in the future.
+    pub hub_sync: bool,
+
+    /// The address of the Atuin Hub. Only used when `hub_sync` is enabled.
+    pub hub_address: String,
+
+    /// The sync address for atuin. If `hub_sync` is set, this will be ignored.
     pub sync_address: String,
+
     pub sync_frequency: String,
     pub db_path: String,
     pub record_store_path: String,
@@ -768,6 +780,8 @@ impl Settings {
             .set_default("timezone", "local")?
             .set_default("auto_sync", true)?
             .set_default("update_check", cfg!(feature = "check-update"))?
+            .set_default("hub_sync", false)?
+            .set_default("hub_address", "https://hub.atuin.sh")?
             .set_default("sync_address", "https://api.atuin.sh")?
             .set_default("sync_frequency", "5m")?
             .set_default("search_mode", "fuzzy")?
