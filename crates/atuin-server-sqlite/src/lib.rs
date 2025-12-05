@@ -544,9 +544,40 @@ impl Database for Sqlite {
         .map_err(fix_error)
         .map(|DbHistory(h)| h)
     }
+
+    #[instrument(skip_all)]
+    async fn vacuum(&self) -> DbResult<()> {
+        sqlx::query("VACUUM")
+            .execute(&self.pool)
+            .await
+            .map_err(fix_error)?;
+
+        Ok(())
+    }
 }
 
 fn into_utc(x: OffsetDateTime) -> PrimitiveDateTime {
     let x = x.to_offset(UtcOffset::UTC);
     PrimitiveDateTime::new(x.date(), x.time())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[sqlx::test]
+    async fn test_vacuum() {
+        let db_uri = "sqlite::memory:";
+        let settings = DbSettings {
+            db_uri: db_uri.to_string(),
+        };
+
+        let db = Sqlite::new(&settings)
+            .await
+            .expect("failed to create database");
+
+        // VACUUM should succeed without errors
+        let result = db.vacuum().await;
+        assert!(result.is_ok(), "VACUUM should succeed");
+    }
 }
