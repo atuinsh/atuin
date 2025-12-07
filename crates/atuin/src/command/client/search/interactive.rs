@@ -761,7 +761,11 @@ impl State {
 
         if show_tabs {
             let tabs = Tabs::new(titles)
-                .block(Block::default().borders(Borders::NONE).style(theme.as_style(Meaning::Base)))
+                .block(
+                    Block::default()
+                        .borders(Borders::NONE)
+                        .style(theme.as_style(Meaning::Base)),
+                )
                 .style(theme.as_style(Meaning::Base))
                 .select(self.tab_index)
                 .highlight_style(theme.as_style(Meaning::Important));
@@ -885,7 +889,8 @@ impl State {
                 preview_chunk.width.into(),
                 theme,
             );
-            self.draw_preview(f, style, input_chunk, compactness, preview_chunk, preview, theme);
+            let input: Paragraph = self.build_input(style, theme);
+            self.draw_preview(f, input, input_chunk, preview, preview_chunk, compactness);
         }
     }
 
@@ -893,16 +898,13 @@ impl State {
     fn draw_preview(
         &self,
         f: &mut Frame,
-        style: StyleState,
+        input: Paragraph,
         input_chunk: Rect,
-        compactness: Compactness,
-        preview_chunk: Rect,
         preview: Paragraph,
-        theme: &Theme
+        preview_chunk: Rect,
+        compactness: Compactness,
     ) {
-        let input = self.build_input(style, theme);
         f.render_widget(input, input_chunk);
-
         f.render_widget(preview, preview_chunk);
 
         let extra_width = UnicodeWidthStr::width(self.search.input.substring());

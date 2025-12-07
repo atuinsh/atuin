@@ -6,9 +6,9 @@ use serde::{Deserialize, Serialize};
 use serde_json;
 use std::collections::HashMap;
 use std::error;
+use std::fmt;
 use std::io::{Error, ErrorKind};
 use std::path::PathBuf;
-use std::fmt;
 use strum_macros;
 
 static DEFAULT_MAX_DEPTH: u8 = 10;
@@ -57,12 +57,16 @@ pub struct StyleBlock {
     pub foreground_color: Option<String>,
     pub background_color: Option<String>,
     pub underline_color: Option<String>,
-    pub attributes: Option<Vec<String>>
+    pub attributes: Option<Vec<String>>,
 }
 
 impl fmt::Display for StyleBlock {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", serde_json::to_string(&self) .map_err(|_| std::fmt::Error)?)
+        write!(
+            f,
+            "{}",
+            serde_json::to_string(&self).map_err(|_| std::fmt::Error)?
+        )
     }
 }
 
@@ -70,7 +74,7 @@ impl fmt::Display for StyleBlock {
 #[serde(untagged)]
 pub enum StyleExpression {
     String(String),
-    StyleBlock(StyleBlock)
+    StyleBlock(StyleBlock),
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -158,14 +162,12 @@ impl Theme {
                 // us derive new Meanings as bold/italic variations on well-known
                 // (and used) Meanings.
                 // TODO: how to properly provide debugging here?
-                if let Some(fallback) = MEANING_FALLBACKS.get(key) {
-                    if let Some(color) = self.as_style(*fallback).foreground_color {
-                        let new_style = StyleFactory::from_fg_color_and_attributes(
-                            color,
-                            style.attributes
-                        );
-                        updates.push((*key, new_style));
-                    }
+                if let Some(fallback) = MEANING_FALLBACKS.get(key)
+                    && let Some(color) = self.as_style(*fallback).foreground_color
+                {
+                    let new_style =
+                        StyleFactory::from_fg_color_and_attributes(color, style.attributes);
+                    updates.push((*key, new_style));
                 }
             }
         }
@@ -257,23 +259,32 @@ impl StyleFactory {
         let content_style = ContentStyle {
             foreground_color: match block.foreground_color {
                 Some(fg) => Some(StyleFactory::from_color_string(fg.as_str())?),
-                _ => None
+                _ => None,
             },
             background_color: match block.background_color {
                 Some(bg) => Some(StyleFactory::from_color_string(bg.as_str())?),
-                _ => None
+                _ => None,
             },
             underline_color: match block.underline_color {
                 Some(ul) => Some(StyleFactory::from_color_string(ul.as_str())?),
-                _ => None
+                _ => None,
             },
             attributes: match block.attributes {
                 Some(avec) => {
-                    let attrs: Vec<Attribute> = avec.iter().map(|av| StyleFactory::from_attribute_string(av.as_str())).collect::<Result<Vec<Attribute>, String>>()?;
-                    attrs.iter().fold(Attributes::default(), |mut acc: Attributes, a: &Attribute| { acc.set(*a); acc })
-                },
-                _ => Attributes::default()
-            }
+                    let attrs: Vec<Attribute> = avec
+                        .iter()
+                        .map(|av| StyleFactory::from_attribute_string(av.as_str()))
+                        .collect::<Result<Vec<Attribute>, String>>()?;
+                    attrs.iter().fold(
+                        Attributes::default(),
+                        |mut acc: Attributes, a: &Attribute| {
+                            acc.set(*a);
+                            acc
+                        },
+                    )
+                }
+                _ => Attributes::default(),
+            },
         };
         Ok(content_style)
     }
@@ -415,15 +426,11 @@ lazy_static! {
                 ),
                 (
                     Meaning::Highlight,
-                    StyleFactory::from_attributes_only(
-                        Attributes::from(Attribute::Bold),
-                    ),
+                    StyleFactory::from_attributes_only(Attributes::from(Attribute::Bold)),
                 ),
                 (
                     Meaning::Match,
-                    StyleFactory::from_attributes_only(
-                        Attributes::from(Attribute::Bold),
-                    ),
+                    StyleFactory::from_attributes_only(Attributes::from(Attribute::Bold)),
                 ),
                 (Meaning::Muted, StyleFactory::from_fg_color(Color::Grey)),
                 (Meaning::Base, ContentStyle::default()),
@@ -877,11 +884,7 @@ mod theme_tests {
             nunsolarized_theme
                 .as_style(Meaning::Guidance)
                 .foreground_color,
-            Some(Color::Rgb {
-                r: 255,
-                g: 0,
-                b: 0
-            }) // The base AlertInfo color.
+            Some(Color::Rgb { r: 255, g: 0, b: 0 }) // The base AlertInfo color.
         );
 
         testing_logger::validate(|captured_logs| {
@@ -952,12 +955,18 @@ mod theme_tests {
             }
         );
 
-        assert_eq!(StyleFactory::from_color_string(""), Err("Empty string".into()));
+        assert_eq!(
+            StyleFactory::from_color_string(""),
+            Err("Empty string".into())
+        );
 
         ["manatee", "caput mortuum", "123456"]
             .iter()
             .for_each(|inp| {
-                assert_eq!(StyleFactory::from_color_string(inp), Err("No such color in palette".into()));
+                assert_eq!(
+                    StyleFactory::from_color_string(inp),
+                    Err("No such color in palette".into())
+                );
             });
 
         assert_eq!(
@@ -975,7 +984,10 @@ mod theme_tests {
             );
         });
 
-        assert_eq!(StyleFactory::from_color_string("@dark_grey").unwrap(), Color::DarkGrey);
+        assert_eq!(
+            StyleFactory::from_color_string("@dark_grey").unwrap(),
+            Color::DarkGrey
+        );
         assert_eq!(
             StyleFactory::from_color_string("@rgb_(255,255,255)").unwrap(),
             Color::Rgb {
@@ -984,7 +996,10 @@ mod theme_tests {
                 b: 255
             }
         );
-        assert_eq!(StyleFactory::from_color_string("@ansi_(255)").unwrap(), Color::AnsiValue(255));
+        assert_eq!(
+            StyleFactory::from_color_string("@ansi_(255)").unwrap(),
+            Color::AnsiValue(255)
+        );
         ["@", "@DarkGray", "@Dark 4ay", "@ansi(256)"]
             .iter()
             .for_each(|inp| {
@@ -1020,20 +1035,20 @@ mod theme_tests {
 
         let style = mytheme.as_style(Meaning::Guidance);
 
-        assert_eq!(style.foreground_color,
-            Some(
-                Color::Rgb {
-                    r: 255,
-                    g: 255,
-                    b: 255
-                }
-            )
+        assert_eq!(
+            style.foreground_color,
+            Some(Color::Rgb {
+                r: 255,
+                g: 255,
+                b: 255
+            })
         );
 
         assert_eq!(style.background_color, None);
         assert_eq!(style.underline_color, None);
 
-        assert_eq!(style.attributes,
+        assert_eq!(
+            style.attributes,
             Attributes::from([Attribute::Bold, Attribute::RapidBlink].as_ref())
         );
     }
