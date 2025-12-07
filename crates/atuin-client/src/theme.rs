@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::error;
 use std::io::{Error, ErrorKind};
 use std::path::PathBuf;
+use std::fmt;
 use strum_macros;
 
 static DEFAULT_MAX_DEPTH: u8 = 10;
@@ -52,12 +53,34 @@ pub enum Meaning {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct StyleBlock {
+    pub foreground_color: Option<String>,
+    pub background_color: Option<String>,
+    pub underline_color: Option<String>,
+    pub attributes: Option<Vec<String>>
+}
+
+impl fmt::Display for StyleBlock {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", serde_json::to_string(&self) .map_err(|_| std::fmt::Error)?)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum StyleExpression {
+    String(String),
+    StyleBlock(StyleBlock)
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ThemeConfig {
     // Definition of the theme
     pub theme: ThemeDefinitionConfigBlock,
 
-    // Colors
-    pub colors: HashMap<Meaning, String>,
+    // DEPRECATED: Colors
+    pub colors: Option<HashMap<Meaning, StyleExpression>>,
+    pub styles: Option<HashMap<Meaning, StyleExpression>>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -171,20 +194,31 @@ impl Theme {
     // but we do not have this on in general, as it could print unfiltered text to the terminal
     // from a theme TOML file. However, it will always return a theme, falling back to
     // defaults on error, so that a TOML file does not break loading
-    pub fn from_foreground_colors(
+    pub fn from_styles(
         name: String,
         parent: Option<&Theme>,
-        foreground_colors: HashMap<Meaning, String>,
+        foreground_colors: HashMap<Meaning, StyleExpression>,
         debug: bool,
     ) -> Theme {
         let styles: HashMap<Meaning, ContentStyle> = foreground_colors
             .iter()
-            .map(|(name, color)| {
+            .map(|(name, style)| {
+                let style_block = match style {
+                    StyleExpression::String(color_name) => {
+                        StyleBlock {
+                            foreground_color: Some(color_name.clone()),
+                            background_color: None,
+                            underline_color: None,
+                            attributes: None
+                        }
+                    },
+                    StyleExpression::StyleBlock(block) => block.clone()
+                };
                 (
                     *name,
-                    StyleFactory::from_fg_string(color).unwrap_or_else(|err| {
+                    StyleFactory::from_style_block(style_block.clone()).unwrap_or_else(|err| {
                         if debug {
-                            log::warn!("Tried to load string as a color unsuccessfully: ({name}={color}) {err}");
+                            log::warn!("Tried to load style as a style block unsuccessfully: ({name}={style_block}) {err}");
                         }
                         ContentStyle::default()
                     }),
@@ -215,62 +249,88 @@ impl Theme {
     }
 }
 
-// Use palette to get a color from a string name, if possible
-fn from_string(name: &str) -> Result<Color, String> {
-    if name.is_empty() {
-        return Err("Empty string".into());
-    }
-    let first_char = name.chars().next().unwrap();
-    match first_char {
-        '#' => {
-            let hexcode = &name[1..];
-            let vec: Vec<u8> = hexcode
-                .chars()
-                .collect::<Vec<char>>()
-                .chunks(2)
-                .map(|pair| u8::from_str_radix(pair.iter().collect::<String>().as_str(), 16))
-                .filter_map(|n| n.ok())
-                .collect();
-            if vec.len() != 3 {
-                return Err("Could not parse 3 hex values from string".into());
-            }
-            Ok(Color::Rgb {
-                r: vec[0],
-                g: vec[1],
-                b: vec[2],
-            })
-        }
-        '@' => {
-            // For full flexibility, we need to use serde_json, given
-            // crossterm's approach.
-            serde_json::from_str::<Color>(format!("\"{}\"", &name[1..]).as_str())
-                .map_err(|_| format!("Could not convert color name {name} to Crossterm color"))
-        }
-        _ => {
-            let srgb = named::from_str(name).ok_or("No such color in palette")?;
-            Ok(Color::Rgb {
-                r: srgb.red,
-                g: srgb.green,
-                b: srgb.blue,
-            })
-        }
-    }
-}
-
 pub struct StyleFactory {}
 
 impl StyleFactory {
-    fn from_fg_string(name: &str) -> Result<ContentStyle, String> {
-        match from_string(name) {
-            Ok(color) => Ok(Self::from_fg_color(color)),
-            Err(err) => Err(err),
+    // Use palette to get a color from a string name, if possible
+    fn from_style_block(block: StyleBlock) -> Result<ContentStyle, String> {
+        let content_style = ContentStyle {
+            foreground_color: match block.foreground_color {
+                Some(fg) => Some(StyleFactory::from_color_string(fg.as_str())?),
+                _ => None
+            },
+            background_color: match block.background_color {
+                Some(bg) => Some(StyleFactory::from_color_string(bg.as_str())?),
+                _ => None
+            },
+            underline_color: match block.underline_color {
+                Some(ul) => Some(StyleFactory::from_color_string(ul.as_str())?),
+                _ => None
+            },
+            attributes: match block.attributes {
+                Some(avec) => {
+                    let attrs: Vec<Attribute> = avec.iter().map(|av| StyleFactory::from_attribute_string(av.as_str())).collect::<Result<Vec<Attribute>, String>>()?;
+                    attrs.iter().fold(Attributes::default(), |mut acc: Attributes, a: &Attribute| { acc.set(*a); acc })
+                },
+                _ => Attributes::default()
+            }
+        };
+        Ok(content_style)
+    }
+
+    fn from_attribute_string(name: &str) -> Result<Attribute, String> {
+        if name.is_empty() {
+            return Err("Empty string".into());
+        }
+        serde_json::from_str::<Attribute>(format!("\"{}\"", name).as_str())
+            .map_err(|_| format!("Could not convert attribute name {name} to Crossterm attribute (use SGR names, not numbers)"))
+    }
+
+    fn from_color_string(name: &str) -> Result<Color, String> {
+        if name.is_empty() {
+            return Err("Empty string".into());
+        }
+        let first_char = name.chars().next().unwrap();
+        match first_char {
+            '#' => {
+                let hexcode = &name[1..];
+                let vec: Vec<u8> = hexcode
+                    .chars()
+                    .collect::<Vec<char>>()
+                    .chunks(2)
+                    .map(|pair| u8::from_str_radix(pair.iter().collect::<String>().as_str(), 16))
+                    .filter_map(|n| n.ok())
+                    .collect();
+                if vec.len() != 3 {
+                    return Err("Could not parse 3 hex values from string".into());
+                }
+                Ok(Color::Rgb {
+                    r: vec[0],
+                    g: vec[1],
+                    b: vec[2],
+                })
+            }
+            '@' => {
+                // For full flexibility, we need to use serde_json, given
+                // crossterm's approach.
+                serde_json::from_str::<Color>(format!("\"{}\"", &name[1..]).as_str())
+                    .map_err(|_| format!("Could not convert color name {name} to Crossterm color"))
+            }
+            _ => {
+                let srgb = named::from_str(name).ok_or("No such color in palette")?;
+                Ok(Color::Rgb {
+                    r: srgb.red,
+                    g: srgb.green,
+                    b: srgb.blue,
+                })
+            }
         }
     }
 
     // For succinctness, if we are confident that the name will be known,
     // this routine is available to keep the code readable
     fn known_fg_string(name: &str) -> ContentStyle {
-        Self::from_fg_string(name).unwrap()
+        StyleFactory::from_fg_color(StyleFactory::from_color_string(name).unwrap())
     }
 
     fn from_fg_color(color: Color) -> ContentStyle {
@@ -520,7 +580,25 @@ impl ThemeManager {
                 )));
             }
         };
-        let colors: HashMap<Meaning, String> = theme_config.colors;
+        let mut styles: Option<HashMap<Meaning, StyleExpression>> = None;
+        if let Some(colors) = theme_config.colors {
+            if debug {
+                log::warn!(
+                    "Your theme {} has the deprecated `colors` key, you should change this to `styles`.",
+                    theme_config.theme.name
+                );
+            }
+            styles = Some(colors);
+        }
+        if let Some(sty) = theme_config.styles {
+            if styles.is_some() {
+                return Err(Box::new(Error::new(
+                    ErrorKind::InvalidInput,
+                    "Only specify the `styles` block, not also `colors`.",
+                )));
+            }
+            styles = Some(sty);
+        }
         let parent: Option<&Theme> = match theme_config.theme.parent {
             Some(parent_name) => {
                 if max_depth == 0 {
@@ -542,11 +620,18 @@ impl ThemeManager {
             );
         }
 
-        let theme = Theme::from_foreground_colors(theme_config.theme.name, parent, colors, debug);
-        let name = name.to_string();
-        self.loaded_themes.insert(name.clone(), theme);
-        let theme = self.loaded_themes.get(&name).unwrap();
-        Ok(theme)
+        if let Some(styles) = styles {
+            let theme = Theme::from_styles(theme_config.theme.name, parent, styles, debug);
+            let name = name.to_string();
+            self.loaded_themes.insert(name.clone(), theme);
+            let theme = self.loaded_themes.get(&name).unwrap();
+            Ok(theme)
+        } else {
+            Err(Box::new(Error::new(
+                ErrorKind::InvalidInput,
+                "You forgot to supply a `styles` block for your theme.",
+            )))
+        }
     }
 
     // Check if the requested theme is loaded and, if not, then attempt to get it
@@ -579,7 +664,7 @@ mod theme_tests {
         let theme = manager.load_theme("autumn", None);
         assert_eq!(
             theme.as_style(Meaning::Guidance).foreground_color,
-            from_string("brown").ok()
+            StyleFactory::from_color_string("brown").ok()
         );
     }
 
@@ -598,7 +683,7 @@ mod theme_tests {
         let theme = manager.load_theme("mytheme", None);
         assert_eq!(
             theme.as_style(Meaning::AlertError).foreground_color,
-            from_string("yellowgreen").ok()
+            StyleFactory::from_color_string("yellowgreen").ok()
         );
     }
 
@@ -631,7 +716,7 @@ mod theme_tests {
         // Correctly picks overridden color.
         assert_eq!(
             theme.as_style(Meaning::Guidance).foreground_color,
-            from_string("white").ok()
+            StyleFactory::from_color_string("white").ok()
         );
 
         // Does not fall back to any color.
@@ -730,7 +815,7 @@ mod theme_tests {
             solarized_theme
                 .as_style(Meaning::AlertInfo)
                 .foreground_color,
-            from_string("pink").ok()
+            StyleFactory::from_color_string("pink").ok()
         );
 
         // Then we introduce a derived theme
@@ -757,7 +842,7 @@ mod theme_tests {
             unsolarized_theme
                 .as_style(Meaning::AlertInfo)
                 .foreground_color,
-            from_string("red").ok()
+            StyleFactory::from_color_string("red").ok()
         );
 
         // ...or fall back to the parent
@@ -765,13 +850,11 @@ mod theme_tests {
             unsolarized_theme
                 .as_style(Meaning::Guidance)
                 .foreground_color,
-            from_string("white").ok()
+            StyleFactory::from_color_string("white").ok()
         );
 
         testing_logger::validate(|captured_logs| assert_eq!(captured_logs.len(), 0));
 
-        // If the parent is not found, we end up with the no theme colors or styling
-        // as this is considered a (soft) error state.
         let nunsolarized = Config::builder()
             .add_source(ConfigFile::from_str(
                 "
@@ -794,7 +877,11 @@ mod theme_tests {
             nunsolarized_theme
                 .as_style(Meaning::Guidance)
                 .foreground_color,
-            None
+            Some(Color::Rgb {
+                r: 255,
+                g: 0,
+                b: 0
+            }) // The base AlertInfo color.
         );
 
         testing_logger::validate(|captured_logs| {
@@ -831,17 +918,22 @@ mod theme_tests {
                 .unwrap();
             testing_logger::validate(|captured_logs| {
                 if *debug {
-                    assert_eq!(captured_logs.len(), 2);
+                    assert_eq!(captured_logs.len(), 3);
                     assert_eq!(
                         captured_logs[0].body,
-                        "Your theme config name is not the name of your loaded theme config_theme != mytheme"
+                        "Your theme mytheme has the deprecated `colors` key, you should change this to `styles`."
                     );
                     assert_eq!(captured_logs[0].level, log::Level::Warn);
                     assert_eq!(
                         captured_logs[1].body,
-                        "Tried to load string as a color unsuccessfully: (AlertInfo=xinetic) No such color in palette"
+                        "Your theme config name is not the name of your loaded theme config_theme != mytheme"
                     );
-                    assert_eq!(captured_logs[1].level, log::Level::Warn)
+                    assert_eq!(captured_logs[1].level, log::Level::Warn);
+                    assert_eq!(
+                        captured_logs[2].body,
+                        "Tried to load style as a style block unsuccessfully: (AlertInfo={\"foreground_color\":\"xinetic\",\"background_color\":null,\"underline_color\":null,\"attributes\":null}) No such color in palette"
+                    );
+                    assert_eq!(captured_logs[2].level, log::Level::Warn)
                 } else {
                     assert_eq!(captured_logs.len(), 0)
                 }
@@ -852,7 +944,7 @@ mod theme_tests {
     #[test]
     fn test_can_parse_color_strings_correctly() {
         assert_eq!(
-            from_string("brown").unwrap(),
+            StyleFactory::from_color_string("brown").unwrap(),
             Color::Rgb {
                 r: 165,
                 g: 42,
@@ -860,16 +952,16 @@ mod theme_tests {
             }
         );
 
-        assert_eq!(from_string(""), Err("Empty string".into()));
+        assert_eq!(StyleFactory::from_color_string(""), Err("Empty string".into()));
 
         ["manatee", "caput mortuum", "123456"]
             .iter()
             .for_each(|inp| {
-                assert_eq!(from_string(inp), Err("No such color in palette".into()));
+                assert_eq!(StyleFactory::from_color_string(inp), Err("No such color in palette".into()));
             });
 
         assert_eq!(
-            from_string("#ff1122").unwrap(),
+            StyleFactory::from_color_string("#ff1122").unwrap(),
             Color::Rgb {
                 r: 255,
                 g: 17,
@@ -878,30 +970,120 @@ mod theme_tests {
         );
         ["#1122", "#ffaa112", "#brown"].iter().for_each(|inp| {
             assert_eq!(
-                from_string(inp),
+                StyleFactory::from_color_string(inp),
                 Err("Could not parse 3 hex values from string".into())
             );
         });
 
-        assert_eq!(from_string("@dark_grey").unwrap(), Color::DarkGrey);
+        assert_eq!(StyleFactory::from_color_string("@dark_grey").unwrap(), Color::DarkGrey);
         assert_eq!(
-            from_string("@rgb_(255,255,255)").unwrap(),
+            StyleFactory::from_color_string("@rgb_(255,255,255)").unwrap(),
             Color::Rgb {
                 r: 255,
                 g: 255,
                 b: 255
             }
         );
-        assert_eq!(from_string("@ansi_(255)").unwrap(), Color::AnsiValue(255));
+        assert_eq!(StyleFactory::from_color_string("@ansi_(255)").unwrap(), Color::AnsiValue(255));
         ["@", "@DarkGray", "@Dark 4ay", "@ansi(256)"]
             .iter()
             .for_each(|inp| {
                 assert_eq!(
-                    from_string(inp),
+                    StyleFactory::from_color_string(inp),
                     Err(format!(
                         "Could not convert color name {inp} to Crossterm color"
                     ))
                 );
             });
+    }
+
+    #[test]
+    fn test_can_parse_style_blocks_correctly() {
+        let mut manager = ThemeManager::new(Some(true), Some("".to_string()));
+        let config = Config::builder()
+            .add_source(ConfigFile::from_str(
+                "
+        [theme]
+        name = \"mytheme\"
+
+        [styles]
+        Guidance = { foreground_color = \"white\", attributes = [\"RapidBlink\", \"Bold\"] }
+        ",
+                FileFormat::Toml,
+            ))
+            .build()
+            .unwrap();
+
+        let mytheme = manager
+            .load_theme_from_config("mytheme", config, 1)
+            .unwrap();
+
+        let style = mytheme.as_style(Meaning::Guidance);
+
+        assert_eq!(style.foreground_color,
+            Some(
+                Color::Rgb {
+                    r: 255,
+                    g: 255,
+                    b: 255
+                }
+            )
+        );
+
+        assert_eq!(style.background_color, None);
+        assert_eq!(style.underline_color, None);
+
+        assert_eq!(style.attributes,
+            Attributes::from([Attribute::Bold, Attribute::RapidBlink].as_ref())
+        );
+    }
+
+    #[test]
+    fn test_can_fail_gracefully_if_style_blocks_incorrect() {
+        testing_logger::setup();
+        [true, false].iter().for_each(|debug| {
+            let mut manager = ThemeManager::new(Some(*debug), Some("".to_string()));
+            let config = Config::builder()
+                .add_source(ConfigFile::from_str(
+                    "
+            [theme]
+            name = \"mytheme\"
+
+            [styles]
+            Guidance = { foreground_color = \"white\", attributes = [\"RapidBlink\", \"VeryBold\"] }
+            ",
+                    FileFormat::Toml,
+                ))
+                .build()
+                .unwrap();
+
+            let mytheme = manager
+                .load_theme_from_config("mytheme", config, 1)
+                .unwrap();
+
+            let style = mytheme.as_style(Meaning::Guidance);
+
+            // This is dark green because the failing attribute fails the whole block.
+            assert_eq!(style.foreground_color, Some(Color::DarkGreen));
+
+            assert_eq!(style.background_color, None);
+            assert_eq!(style.underline_color, None);
+
+            assert_eq!(style.attributes, Attributes::none());
+
+            testing_logger::validate(|captured_logs| {
+                if *debug {
+                    assert_eq!(captured_logs.len(), 1);
+                    assert_eq!(
+                        captured_logs[0].body,
+                        "Tried to load style as a style block unsuccessfully: (Guidance={\"foreground_color\":\"white\",\"background_color\":null,\"underline_color\":null,\"attributes\":[\"RapidBlink\",\"VeryBold\"]}) Could not convert attribute name VeryBold to Crossterm attribute (use SGR names, not numbers)"
+
+                    );
+                    assert_eq!(captured_logs[0].level, log::Level::Warn);
+                } else {
+                    assert_eq!(captured_logs.len(), 0)
+                }
+            })
+        })
     }
 }

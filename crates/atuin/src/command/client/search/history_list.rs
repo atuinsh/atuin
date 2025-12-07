@@ -10,7 +10,6 @@ use atuin_common::utils::Escapable as _;
 use itertools::Itertools;
 use ratatui::{
     buffer::Buffer,
-    crossterm::style,
     layout::Rect,
     style::{Modifier, Style},
     widgets::{Block, StatefulWidget, Widget},
