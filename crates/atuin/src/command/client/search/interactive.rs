@@ -1355,7 +1355,9 @@ pub async fn history(
                 }
             }
             update_needed = &mut update_needed => {
-                app.update_needed = update_needed?;
+                // Don't fail interactive search if update check fails
+                // The update check is a nice-to-have feature, not critical
+                app.update_needed = update_needed.ok().flatten();
             }
         }
 
