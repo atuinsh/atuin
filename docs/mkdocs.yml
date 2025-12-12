@@ -34,7 +34,7 @@ plugins:
   - multirepo:
       imported_repo: true
       url: https://github.com/atuinsh/docs
-      section_name: Atuin CLI
+      section_name: CLI
       paths: ["mkdocs.yml", "docs/index.md", "docs/stylesheets/*"]
       yml_file: mkdocs.yml
       branch: mkt/docs-migration
