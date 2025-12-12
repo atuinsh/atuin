@@ -1,5 +1,6 @@
 site_name: Atuin CLI Docs
 site_url: https://docs.atuin.sh/atuin-cli/
+docs_dir: .
 
 repo_name: atuinsh/atuin
 repo_url: https://github.com/atuinsh/atuin
