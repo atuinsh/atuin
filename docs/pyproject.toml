@@ -1,0 +1,15 @@
+[project]
+name = "atuin-cli-docs"
+version = "1.0.0"
+description = "Atuin CLI documentation"
+requires-python = ">=3.11"
+dependencies = [
+  "mkdocs-material>=9.5",
+  "mkdocs-multirepo-plugin @ git+https://github.com/atuinsh/mkdocs-multirepo-plugin@mkt/imported_repo",
+  "mkdocs-git-revision-date-localized-plugin>=1.2",
+  "mkdocs-glightbox>=0.4",
+  "mkdocs-redirects>=1.2.2",
+]
+
+[dependency-groups]
+dev = []
