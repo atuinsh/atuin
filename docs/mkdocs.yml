@@ -69,15 +69,15 @@ nav:
       - Config: configuration/config.md
       - Key Binding: configuration/key-binding.md
   - Reference:
-      - history list: reference/list.md
-      - search: reference/search.md
-      - stats: reference/stats.md
       - doctor: reference/doctor.md
       - daemon: reference/daemon.md
+      - gen-completions: reference/gen-completions.md
       - import: reference/import.md
       - info: reference/info.md
-      - gen-completions: reference/gen-completions.md
+      - history list: reference/list.md
       - history prune: reference/prune.md
+      - search: reference/search.md
+      - stats: reference/stats.md
       - sync: reference/sync.md
   - Self Hosting:
       - Server Setup: self-hosting/server-setup.md
