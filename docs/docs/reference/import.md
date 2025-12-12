@@ -18,7 +18,7 @@ HISTFILE=/path/to/history/file atuin import zsh
 ```
 
 Note that for shells such as Xonsh that store history in many files rather than a
-single file, `$HISTFILE` should be set to the directory in whic those files reside.
+single file, `$HISTFILE` should be set to the directory in which those files reside.
 
 For formats that don't store timestamps, timestamps will be generated starting at
 the current time plus 1ms for each additional command in the history.

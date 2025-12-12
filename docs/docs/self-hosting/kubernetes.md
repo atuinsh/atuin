@@ -287,4 +287,4 @@ spec:
 Configure/update the example `yaml` with the following:
 - Set a more or less frequent schedule with the `schedule` property.
 - Replace `/somewhere/on/node/for/database-backups` with a path on your node or reconfigure to use a `PersistentVolume` instead of `hostPath`.
-- `--format=c` ouputs a format that can be restored with `pg_restore`. Use [`plain`](https://www.postgresql.org/docs/current/app-pgdump.html) if you want `.sql` files outputted instead.
+- `--format=c` outputs a format that can be restored with `pg_restore`. Use [`plain`](https://www.postgresql.org/docs/current/app-pgdump.html) if you want `.sql` files outputted instead.
