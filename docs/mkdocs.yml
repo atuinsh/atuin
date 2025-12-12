@@ -1,5 +1,4 @@
-edit_uri: /blob/main/docs/docs/
-docs_dir: docs
+edit_uri: /blob/main/docs/
 
 nav:
   - Home: index.md
