@@ -86,6 +86,9 @@ pub enum FilterMode {
 
     #[serde(rename = "workspace")]
     Workspace = 4,
+
+    #[serde(rename = "session-preload")]
+    SessionPreload = 5,
 }
 
 impl FilterMode {
@@ -96,6 +99,7 @@ impl FilterMode {
             FilterMode::Session => "SESSION",
             FilterMode::Directory => "DIRECTORY",
             FilterMode::Workspace => "WORKSPACE",
+            FilterMode::SessionPreload => "SESSION+",
         }
     }
 }
@@ -134,7 +138,7 @@ impl From<Dialect> for interim::Dialect {
 /// Note that the parsing of this struct needs to be done before starting any
 /// multithreaded runtime, otherwise it will fail on most Unix systems.
 ///
-/// See: https://github.com/atuinsh/atuin/pull/1517#discussion_r1447516426
+/// See: <https://github.com/atuinsh/atuin/pull/1517#discussion_r1447516426>
 #[derive(Clone, Copy, Debug, Eq, PartialEq, DeserializeFromStr, Serialize)]
 pub struct Timezone(pub UtcOffset);
 impl fmt::Display for Timezone {
@@ -291,6 +295,7 @@ impl Stats {
             "composer",
             "dnf",
             "docker",
+            "dotnet",
             "git",
             "go",
             "ip",
@@ -337,6 +342,8 @@ pub struct Keys {
     pub scroll_exits: bool,
     pub exit_past_line_start: bool,
     pub accept_past_line_end: bool,
+    pub accept_past_line_start: bool,
+    pub accept_with_backspace: bool,
     pub prefix: String,
 }
 
@@ -420,6 +427,7 @@ impl Default for Search {
                 FilterMode::Global,
                 FilterMode::Host,
                 FilterMode::Session,
+                FilterMode::SessionPreload,
                 FilterMode::Workspace,
                 FilterMode::Directory,
             ],
@@ -462,11 +470,13 @@ pub struct Settings {
     pub search_mode_shell_up_key_binding: Option<SearchMode>,
     pub shell_up_key_binding: bool,
     pub inline_height: u16,
+    pub inline_height_shell_up_key_binding: Option<u16>,
     pub invert: bool,
     pub show_preview: bool,
     pub max_preview_height: u16,
     pub show_help: bool,
     pub show_tabs: bool,
+    pub show_numeric_shortcuts: bool,
     pub auto_hide_height: u16,
     pub exit_mode: ExitMode,
     pub keymap_mode: KeymapMode,
@@ -494,6 +504,7 @@ pub struct Settings {
     pub local_timeout: f64,
     pub enter_accept: bool,
     pub smart_sort: bool,
+    pub command_chaining: bool,
 
     #[serde(default)]
     pub stats: Stats,
@@ -751,6 +762,7 @@ impl Settings {
         let db_path = data_dir.join("history.db");
         let record_store_path = data_dir.join("records.db");
         let kv_path = data_dir.join("kv.db");
+        let scripts_path = data_dir.join("scripts.db");
         let socket_path = atuin_common::utils::runtime_dir().join("atuin.sock");
 
         let key_path = data_dir.join("key");
@@ -777,6 +789,7 @@ impl Settings {
             .set_default("max_preview_height", 4)?
             .set_default("show_help", true)?
             .set_default("show_tabs", true)?
+            .set_default("show_numeric_shortcuts", true)?
             .set_default("auto_hide_height", 8)?
             .set_default("invert", false)?
             .set_default("exit_mode", "return-original")?
@@ -803,11 +816,14 @@ impl Settings {
             .set_default("keys.scroll_exits", true)?
             .set_default("keys.accept_past_line_end", true)?
             .set_default("keys.exit_past_line_start", true)?
+            .set_default("keys.accept_past_line_start", false)?
+            .set_default("keys.accept_with_backspace", false)?
             .set_default("keys.prefix", "a")?
             .set_default("keymap_mode", "emacs")?
             .set_default("keymap_mode_shell", "auto")?
             .set_default("keymap_cursor", HashMap::<String, String>::new())?
             .set_default("smart_sort", false)?
+            .set_default("command_chaining", false)?
             .set_default("store_failed", true)?
             .set_default("daemon.sync_frequency", 300)?
             .set_default("daemon.enabled", false)?
@@ -815,9 +831,17 @@ impl Settings {
             .set_default("daemon.systemd_socket", false)?
             .set_default("daemon.tcp_port", 8889)?
             .set_default("kv.db_path", kv_path.to_str())?
+            .set_default("scripts.db_path", scripts_path.to_str())?
             .set_default(
                 "search.filters",
-                vec!["global", "host", "session", "workspace", "directory"],
+                vec![
+                    "global",
+                    "host",
+                    "session",
+                    "workspace",
+                    "directory",
+                    "session-preload",
+                ],
             )?
             .set_default("theme.name", "default")?
             .set_default("theme.debug", None::<bool>)?
@@ -879,6 +903,7 @@ impl Settings {
         settings.record_store_path = Self::expand_path(settings.record_store_path)?;
         settings.key_path = Self::expand_path(settings.key_path)?;
         settings.session_path = Self::expand_path(settings.session_path)?;
+        settings.daemon.socket_path = Self::expand_path(settings.daemon.socket_path)?;
 
         Ok(settings)
     }

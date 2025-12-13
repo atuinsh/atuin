@@ -1,0 +1,92 @@
+site_name: Atuin CLI Docs
+site_url: https://docs.atuin.sh/cli/
+
+repo_name: atuinsh/atuin
+repo_url: https://github.com/atuinsh/atuin
+edit_uri: edit/main/docs/docs/
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: deep purple
+      accent: deep purple
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: deep purple
+      accent: deep purple
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.sections
+    - navigation.expand
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.action.edit
+    - content.action.view
+
+plugins:
+  - search
+  - multirepo:
+      imported_repo: true
+      url: https://github.com/atuinsh/docs
+      section_name: CLI
+      paths: ["mkdocs.yml", "docs/index.md", "docs/stylesheets/*"]
+      yml_file: mkdocs.yml
+      branch: mkt/docs-migration
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - admonition
+  - pymdownx.details
+  - attr_list
+  - md_in_html
+  - tables
+  - pymdownx.keys
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+nav:
+  - Home: index.md
+  - Guide:
+      - Getting Started: guide/getting-started.md
+      - Installation: guide/installation.md
+      - Setting up sync: guide/sync.md
+      - Import existing history: guide/import.md
+      - Basic usage: guide/basic-usage.md
+      - Syncing dotfiles: guide/dotfiles.md
+      - Theming: guide/theming.md
+  - Configuration:
+      - Config: configuration/config.md
+      - Key Binding: configuration/key-binding.md
+  - Reference:
+      - doctor: reference/doctor.md
+      - daemon: reference/daemon.md
+      - gen-completions: reference/gen-completions.md
+      - import: reference/import.md
+      - info: reference/info.md
+      - history list: reference/list.md
+      - history prune: reference/prune.md
+      - search: reference/search.md
+      - stats: reference/stats.md
+      - sync: reference/sync.md
+  - Self Hosting:
+      - Server Setup: self-hosting/server-setup.md
+      - Usage: self-hosting/usage.md
+      - Docker: self-hosting/docker.md
+      - Kubernetes: self-hosting/kubernetes.md
+      - Systemd: self-hosting/systemd.md
+  - Known Issues: known-issues.md
+  - Integrations: integrations.md
+  - FAQ: faq.md
+  - Uninstall: uninstall.md
+  - Sync v2: sync-v2.md

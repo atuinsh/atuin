@@ -91,5 +91,7 @@ If you love Atuin, please give us a star on GitHub! It really helps ⭐️ https
 
 Please run "atuin register" to get setup with sync, or "atuin login" if you already have an account
 
+Check out Atuin Desktop to build executable runbooks from your shell history - https://github.com/atuinsh/desktop
+
 EOF
 

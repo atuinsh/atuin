@@ -20,6 +20,7 @@ use sqlx::{
     },
 };
 use time::OffsetDateTime;
+use uuid::Uuid;
 
 use crate::{
     history::{HistoryId, HistoryStats},
@@ -73,6 +74,16 @@ pub fn current_context() -> Context {
         git_root,
         host_id: host_id.0.as_simple().to_string(),
     }
+}
+
+fn get_session_start_time(session_id: &str) -> Option<i64> {
+    if let Ok(uuid) = Uuid::parse_str(session_id)
+        && let Some(timestamp) = uuid.get_timestamp()
+    {
+        let (seconds, nanos) = timestamp.to_unix();
+        return Some(seconds as i64 * 1_000_000_000 + nanos as i64);
+    }
+    None
 }
 
 #[async_trait]
@@ -133,7 +144,7 @@ pub struct Sqlite {
 impl Sqlite {
     pub async fn new(path: impl AsRef<Path>, timeout: f64) -> Result<Self> {
         let path = path.as_ref();
-        debug!("opening sqlite database at {:?}", path);
+        debug!("opening sqlite database at {path:?}");
 
         if utils::broken_symlink(path) {
             eprintln!(
@@ -142,10 +153,10 @@ impl Sqlite {
             std::process::exit(1);
         }
 
-        if !path.exists() {
-            if let Some(dir) = path.parent() {
-                fs::create_dir_all(dir)?;
-            }
+        if !path.exists()
+            && let Some(dir) = path.parent()
+        {
+            fs::create_dir_all(dir)?;
         }
 
         let opts = SqliteConnectOptions::from_str(path.as_os_str().to_str().unwrap())?
@@ -316,11 +327,20 @@ impl Database for Sqlite {
             context.cwd.clone()
         };
 
+        let session_start = get_session_start_time(&context.session);
+
         for filter in filters {
             match filter {
                 FilterMode::Global => &mut query,
                 FilterMode::Host => query.and_where_eq("hostname", quote(&context.hostname)),
                 FilterMode::Session => query.and_where_eq("session", quote(&context.session)),
+                FilterMode::SessionPreload => {
+                    query.and_where_eq("session", quote(&context.session));
+                    if let Some(session_start) = session_start {
+                        query.or_where_lt("timestamp", session_start);
+                    }
+                    &mut query
+                }
                 FilterMode::Directory => query.and_where_eq("cwd", quote(&context.cwd)),
                 FilterMode::Workspace => query.and_where_like_left("cwd", &git_root),
             };
@@ -437,12 +457,21 @@ impl Database for Sqlite {
             context.cwd.clone()
         };
 
+        let session_start = get_session_start_time(&context.session);
+
         match filter {
             FilterMode::Global => &mut sql,
             FilterMode::Host => {
                 sql.and_where_eq("lower(hostname)", quote(context.hostname.to_lowercase()))
             }
             FilterMode::Session => sql.and_where_eq("session", quote(&context.session)),
+            FilterMode::SessionPreload => {
+                sql.and_where_eq("session", quote(&context.session));
+                if let Some(session_start) = session_start {
+                    sql.or_where_lt("timestamp", session_start);
+                }
+                &mut sql
+            }
             FilterMode::Directory => sql.and_where_eq("cwd", quote(&context.cwd)),
             FilterMode::Workspace => sql.and_where_like_left("cwd", git_root),
         };
@@ -839,7 +868,7 @@ mod test {
     use super::*;
     use std::time::{Duration, Instant};
 
-    async fn assert_search_eq<'a>(
+    async fn assert_search_eq(
         db: &impl Database,
         mode: SearchMode,
         filter_mode: FilterMode,

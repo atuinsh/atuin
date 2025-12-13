@@ -20,7 +20,7 @@ impl Rekey {
         let key = if let Some(key) = self.key.clone() {
             println!("Re-encrypting store with specified key");
 
-            let key = match bip39::Mnemonic::from_phrase(&key, bip39::Language::English) {
+            match bip39::Mnemonic::from_phrase(&key, bip39::Language::English) {
                 Ok(mnemonic) => encode_key(Key::from_slice(mnemonic.entropy()))?,
                 Err(err) => {
                     match err.downcast_ref::<bip39::ErrorKind>() {
@@ -44,9 +44,7 @@ impl Rekey {
                         }
                     }
                 }
-            };
-
-            key
+            }
         } else {
             println!("Re-encrypting store with freshly-generated key");
             let (_, encoded) = generate_encoded_key()?;

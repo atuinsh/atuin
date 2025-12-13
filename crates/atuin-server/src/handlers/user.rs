@@ -146,7 +146,7 @@ pub async fn register<DB: Database>(
         .await;
     }
 
-    counter!("atuin_users_registered", 1);
+    counter!("atuin_users_registered").increment(1);
 
     match db.add_session(&new_session).await {
         Ok(_) => Ok(Json(RegisterResponse { session: token })),
@@ -173,7 +173,7 @@ pub async fn delete<DB: Database>(
             .with_status(StatusCode::INTERNAL_SERVER_ERROR));
     };
 
-    counter!("atuin_users_deleted", 1);
+    counter!("atuin_users_deleted").increment(1);
 
     Ok(Json(DeleteUserResponse {}))
 }
@@ -229,8 +229,7 @@ pub async fn send_verification<DB: Database>(
         .subject(settings.mail.verification.subject)
         .to(user.email)
         .body(postmark::api::Body::text(format!(
-            "Please run the following command to finalize your Atuin account verification. It is valid for 15 minutes:\n\natuin account verify --token '{}'",
-            verification_token
+            "Please run the following command to finalize your Atuin account verification. It is valid for 15 minutes:\n\natuin account verify --token '{verification_token}'"
         )))
         .build();
 

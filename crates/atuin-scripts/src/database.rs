@@ -31,10 +31,10 @@ impl Database {
             std::process::exit(1);
         }
 
-        if !path.exists() {
-            if let Some(dir) = path.parent() {
-                fs::create_dir_all(dir).await?;
-            }
+        if !path.exists()
+            && let Some(dir) = path.parent()
+        {
+            fs::create_dir_all(dir).await?;
         }
 
         let opts = SqliteConnectOptions::from_str(path.as_os_str().to_str().unwrap())?

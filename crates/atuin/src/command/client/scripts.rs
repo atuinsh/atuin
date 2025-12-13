@@ -10,6 +10,7 @@ use atuin_scripts::{
     store::{ScriptStore, script::Script},
 };
 use clap::{Parser, Subcommand};
+use eyre::OptionExt;
 use eyre::{Result, bail};
 use tempfile::NamedTempFile;
 
@@ -131,8 +132,16 @@ impl Cmd {
         }
 
         // Open the file in the user's preferred editor
-        let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
-        let status = std::process::Command::new(editor).arg(&path).status()?;
+        let editor_str = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
+
+        // Use shlex to safely split the string into shell-like parts.
+        let parts = shlex::split(&editor_str).ok_or_eyre("Failed to parse editor command")?;
+        let (command, args) = parts.split_first().ok_or_eyre("No editor command found")?;
+
+        let status = std::process::Command::new(command)
+            .args(args)
+            .arg(&path)
+            .status()?;
         if !status.success() {
             bail!("failed to open editor");
         }
@@ -437,6 +446,7 @@ impl Cmd {
         }
     }
 
+    #[allow(clippy::cognitive_complexity)]
     async fn handle_edit(
         _settings: &Settings,
         edit: Edit,
@@ -561,8 +571,7 @@ impl Cmd {
 
         let script_store = ScriptStore::new(store, host_id, encryption_key);
         let script_db =
-            atuin_scripts::database::Database::new(settings.scripts.database_path.clone(), 1.0)
-                .await?;
+            atuin_scripts::database::Database::new(settings.scripts.db_path.clone(), 1.0).await?;
 
         match self {
             Self::New(new_script) => {

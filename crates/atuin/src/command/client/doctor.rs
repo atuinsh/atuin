@@ -251,7 +251,8 @@ impl SyncInfo {
             cloud: settings.sync_address == "https://api.atuin.sh",
             auto_sync: settings.auto_sync,
             records: settings.sync.records,
-            last_sync: Settings::last_sync().map_or("no last sync".to_string(), |v| v.to_string()),
+            last_sync: Settings::last_sync()
+                .map_or_else(|_| "no last sync".to_string(), |v| v.to_string()),
         }
     }
 }
@@ -295,6 +296,7 @@ impl SettingPaths {
 #[derive(Debug, Serialize)]
 struct AtuinInfo {
     pub version: String,
+    pub commit: String,
 
     /// Whether the main Atuin sync server is in use
     /// I'm just calling it Atuin Cloud for lack of a better name atm
@@ -327,6 +329,7 @@ impl AtuinInfo {
 
         Self {
             version: crate::VERSION.to_string(),
+            commit: crate::SHA.to_string(),
             sync,
             sqlite_version,
             setting_paths: SettingPaths::new(settings),
@@ -355,7 +358,7 @@ fn checks(info: &DoctorDump) {
     println!(); // spacing
     //
     let zfs_error = "[Filesystem] ZFS is known to have some issues with SQLite. Atuin uses SQLite heavily. If you are having poor performance, there are some workarounds here: https://github.com/atuinsh/atuin/issues/952".bold().red();
-    let bash_plugin_error = "[Shell] If you are using Bash, Atuin requires that either bash-preexec or ble.sh be installed. An older ble.sh may not be detected. so ignore this if you have it set up! Read more here: https://docs.atuin.sh/guide/installation/#bash".bold().red();
+    let bash_plugin_error = "[Shell] If you are using Bash, Atuin requires that either bash-preexec or ble.sh (>= 0.4) be installed. An older ble.sh may not be detected. so ignore this if you have ble.sh >= 0.4 set up! Read more here: https://docs.atuin.sh/guide/installation/#bash".bold().red();
     let blesh_integration_error = "[Shell] Atuin and ble.sh seem to be loaded in the session, but the integration does not seem to be working. Please check the setup in .bashrc.".bold().red();
 
     // ZFS: https://github.com/atuinsh/atuin/issues/952

@@ -76,10 +76,10 @@ impl Push {
                         return false;
                     }
 
-                    if let Some(t) = self.tag.clone() {
-                        if t != *tag {
-                            return false;
-                        }
+                    if let Some(t) = self.tag.clone()
+                        && t != *tag
+                    {
+                        return false;
                     }
 
                     true
