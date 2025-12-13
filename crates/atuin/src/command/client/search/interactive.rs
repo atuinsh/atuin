@@ -19,7 +19,7 @@ use atuin_client::{
     database::{Database, current_context},
     history::{History, HistoryId, HistoryStats, store::HistoryStore},
     settings::{
-        CursorStyle, ExitMode, FilterMode, KeymapMode, PreviewStrategy, SearchMode, Settings,
+        CursorStyle, ExitMode, KeymapMode, PreviewStrategy, SearchMode, Settings,
     },
 };
 
