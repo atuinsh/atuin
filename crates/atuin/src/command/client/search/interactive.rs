@@ -18,9 +18,7 @@ use super::{
 use atuin_client::{
     database::{Database, current_context},
     history::{History, HistoryId, HistoryStats, store::HistoryStore},
-    settings::{
-        CursorStyle, ExitMode, FilterMode, KeymapMode, PreviewStrategy, SearchMode, Settings,
-    },
+    settings::{CursorStyle, ExitMode, KeymapMode, PreviewStrategy, SearchMode, Settings},
 };
 
 use crate::command::client::search::history_list::HistoryHighlighter;
@@ -1260,9 +1258,7 @@ pub async fn history(
             filter_mode: settings
                 .filter_mode_shell_up_key_binding
                 .filter(|_| settings.shell_up_key_binding)
-                .or_else(|| Some(settings.default_filter_mode()))
-                .filter(|&x| x != FilterMode::Workspace || context.git_root.is_some())
-                .unwrap_or(FilterMode::Global),
+                .unwrap_or_else(|| settings.default_filter_mode(context.git_root.is_some())),
             context,
         },
         engine: engines::engine(search_mode),

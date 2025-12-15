@@ -735,10 +735,20 @@ impl Settings {
         None
     }
 
-    pub fn default_filter_mode(&self) -> FilterMode {
+    pub fn default_filter_mode(&self, git_root: bool) -> FilterMode {
         self.filter_mode
             .filter(|x| self.search.filters.contains(x))
-            .or(self.search.filters.first().copied())
+            .or_else(|| {
+                self.search
+                    .filters
+                    .iter()
+                    .find(|x| match (x, git_root, self.workspaces) {
+                        (FilterMode::Workspace, true, true) => true,
+                        (FilterMode::Workspace, _, _) => false,
+                        (_, _, _) => true,
+                    })
+                    .copied()
+            })
             .unwrap_or(FilterMode::Global)
     }
 
@@ -976,6 +986,60 @@ mod tests {
         // require a leading sign for clarity
         assert!(Timezone::from_str("5").is_err());
         assert!(Timezone::from_str("10:30").is_err());
+
+        Ok(())
+    }
+
+    #[test]
+    fn can_choose_workspace_filters_when_in_git_context() -> Result<()> {
+        let mut settings = super::Settings::default();
+        settings.search.filters = vec![
+            super::FilterMode::Workspace,
+            super::FilterMode::Host,
+            super::FilterMode::Directory,
+            super::FilterMode::Session,
+            super::FilterMode::Global,
+        ];
+        settings.workspaces = true;
+
+        assert_eq!(
+            settings.default_filter_mode(true),
+            super::FilterMode::Workspace,
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn wont_choose_workspace_filters_when_not_in_git_context() -> Result<()> {
+        let mut settings = super::Settings::default();
+        settings.search.filters = vec![
+            super::FilterMode::Workspace,
+            super::FilterMode::Host,
+            super::FilterMode::Directory,
+            super::FilterMode::Session,
+            super::FilterMode::Global,
+        ];
+        settings.workspaces = true;
+
+        assert_eq!(settings.default_filter_mode(false), super::FilterMode::Host,);
+
+        Ok(())
+    }
+
+    #[test]
+    fn wont_choose_workspace_filters_when_workspaces_disabled() -> Result<()> {
+        let mut settings = super::Settings::default();
+        settings.search.filters = vec![
+            super::FilterMode::Workspace,
+            super::FilterMode::Host,
+            super::FilterMode::Directory,
+            super::FilterMode::Session,
+            super::FilterMode::Global,
+        ];
+        settings.workspaces = false;
+
+        assert_eq!(settings.default_filter_mode(true), super::FilterMode::Host,);
 
         Ok(())
     }
