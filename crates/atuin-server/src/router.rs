@@ -1,3 +1,5 @@
+use std::sync::{Arc, atomic::AtomicU64};
+
 use async_trait::async_trait;
 use atuin_common::api::{ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ErrorResponse};
 use axum::{
@@ -106,6 +108,7 @@ async fn semver(request: Request, next: Next) -> Response {
 pub struct AppState<DB: Database> {
     pub database: DB,
     pub settings: Settings,
+    pub delete_count: Arc<AtomicU64>,
 }
 
 pub fn router<DB: Database>(database: DB, settings: Settings) -> Router {
@@ -118,6 +121,7 @@ pub fn router<DB: Database>(database: DB, settings: Settings) -> Router {
         .route("/sync/status", get(handlers::status::status))
         .route("/history", post(handlers::history::add))
         .route("/history", delete(handlers::history::delete))
+        .route("/history/vacuum", post(handlers::history::vacuum))
         .route("/user/:username", get(handlers::user::get))
         .route("/account", delete(handlers::user::delete))
         .route("/account/password", patch(handlers::user::change_password))
@@ -144,7 +148,11 @@ pub fn router<DB: Database>(database: DB, settings: Settings) -> Router {
         Router::new().nest(path, routes)
     }
     .fallback(teapot)
-    .with_state(AppState { database, settings })
+    .with_state(AppState {
+        database,
+        settings,
+        delete_count: Arc::new(AtomicU64::new(0)),
+    })
     .layer(
         ServiceBuilder::new()
             .layer(axum::middleware::from_fn(clacks_overhead))

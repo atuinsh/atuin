@@ -53,6 +53,14 @@ impl Default for Metrics {
     }
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, Default)]
+pub struct Vacuum {
+    /// Automatically vacuum after delete operations when the number of deleted
+    /// rows exceeds this threshold. Set to 0 to disable automatic vacuum on delete.
+    /// The manual vacuum endpoint is always available regardless of this setting.
+    pub auto_vacuum_threshold: u64,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Settings {
     pub host: String,
@@ -67,6 +75,7 @@ pub struct Settings {
     pub metrics: Metrics,
     pub tls: Tls,
     pub mail: Mail,
+    pub vacuum: Vacuum,
 
     /// Advertise a version that is not what we are _actually_ running
     /// Many clients compare their version with api.atuin.sh, and if they differ, notify the user
@@ -109,6 +118,7 @@ impl Settings {
             .set_default("tls.enable", false)?
             .set_default("tls.cert_path", "")?
             .set_default("tls.pkey_path", "")?
+            .set_default("vacuum.auto_vacuum_threshold", 0)?
             .add_source(
                 Environment::with_prefix("atuin")
                     .prefix_separator("_")

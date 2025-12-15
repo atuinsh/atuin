@@ -21,6 +21,7 @@ pub async fn delete<DB: Database>(
     let State(AppState {
         database,
         settings: _,
+        ..
     }) = state;
 
     if let Err(e) = database.delete_store(&user).await {

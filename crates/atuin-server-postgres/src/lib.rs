@@ -672,6 +672,16 @@ impl Database for Postgres {
 
         Ok(status)
     }
+
+    #[instrument(skip_all)]
+    async fn vacuum(&self) -> DbResult<()> {
+        sqlx::query("VACUUM")
+            .execute(&self.pool)
+            .await
+            .map_err(fix_error)?;
+
+        Ok(())
+    }
 }
 
 fn into_utc(x: OffsetDateTime) -> PrimitiveDateTime {

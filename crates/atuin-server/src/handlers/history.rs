@@ -106,15 +106,36 @@ pub async fn delete<DB: Database>(
     state: State<AppState<DB>>,
     Json(req): Json<DeleteHistoryRequest>,
 ) -> Result<Json<MessageResponse>, ErrorResponseStatus<'static>> {
-    let db = &state.0.database;
+    let State(AppState {
+        database,
+        settings,
+        delete_count,
+    }) = state;
 
     // user_id is the ID of the history, as set by the user (the server has its own ID)
-    let deleted = db.delete_history(&user, req.client_id).await;
+    let deleted = database.delete_history(&user, req.client_id).await;
 
     if let Err(e) = deleted {
         error!("failed to delete history: {}", e);
         return Err(ErrorResponse::reply("failed to delete history")
             .with_status(StatusCode::INTERNAL_SERVER_ERROR));
+    }
+
+    // Trigger vacuum if threshold is met
+    if settings.vacuum.auto_vacuum_threshold > 0 {
+        use std::sync::atomic::Ordering;
+        let count = delete_count.fetch_add(1, Ordering::Relaxed) + 1;
+
+        if count >= settings.vacuum.auto_vacuum_threshold {
+            debug!("triggering automatic vacuum after {} deletes", count);
+            tokio::spawn(async move {
+                if let Err(e) = database.vacuum().await {
+                    error!("failed to vacuum database: {}", e);
+                } else {
+                    delete_count.store(0, Ordering::Relaxed);
+                }
+            });
+        }
     }
 
     Ok(Json(MessageResponse {
@@ -128,7 +149,9 @@ pub async fn add<DB: Database>(
     state: State<AppState<DB>>,
     Json(req): Json<Vec<AddHistoryRequest>>,
 ) -> Result<(), ErrorResponseStatus<'static>> {
-    let State(AppState { database, settings }) = state;
+    let State(AppState {
+        database, settings, ..
+    }) = state;
 
     debug!("request to add {} history items", req.len());
     counter!("atuin_history_uploaded").increment(req.len() as u64);
@@ -234,4 +257,22 @@ pub async fn calendar<DB: Database>(
     })?;
 
     Ok(Json(focus))
+}
+
+#[instrument(skip_all, fields(user.id = user.id))]
+pub async fn vacuum<DB: Database>(
+    UserAuth(user): UserAuth,
+    state: State<AppState<DB>>,
+) -> Result<Json<MessageResponse>, ErrorResponseStatus<'static>> {
+    let db = &state.0.database;
+
+    if let Err(e) = db.vacuum().await {
+        error!("failed to vacuum database: {}", e);
+        return Err(ErrorResponse::reply("failed to vacuum database")
+            .with_status(StatusCode::INTERNAL_SERVER_ERROR));
+    }
+
+    Ok(Json(MessageResponse {
+        message: String::from("vacuum completed successfully"),
+    }))
 }
