@@ -11,6 +11,10 @@
 # db_uri="postgres://username:password@localhost/atuin"
 # db_uri="sqlite:///config/atuin-server.db"
 
+## Optional: URI for read replica database
+## If set, read-only queries will be routed to this database
+# read_db_uri="postgres://username:password@localhost-replica/atuin"
+
 ## Maximum size for one history entry
 # max_history_length = 8192
 
