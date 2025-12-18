@@ -2,13 +2,13 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use eyre::{Context, Result, bail};
+use eyre::{bail, Context, Result};
 use indicatif::{ProgressBar, ProgressStyle};
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 
 use atuin_client::api_client;
-use atuin_client::encryption::{Key, decode_key, encode_key, load_key};
+use atuin_client::encryption::{decode_key, encode_key, load_key, Key};
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::record::store::Store;
 use atuin_client::settings::Settings;
@@ -64,8 +64,8 @@ pub async fn run(settings: &Settings, store: &SqliteStore) -> Result<()> {
 
         match api_client::hub_verify_code(&settings.hub_address, code).await {
             Ok(verify_response) => {
-                if let Some(session) = verify_response.session {
-                    spinner.finish_with_message("Authorized!");
+                if let Some(session) = verify_response.token {
+                    spinner.finish_with_message("Authorized!\n");
                     break session;
                 }
                 // Still pending, continue polling

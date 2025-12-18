@@ -2,16 +2,12 @@ use std::collections::HashMap;
 use std::env;
 use std::time::Duration;
 
-use eyre::{Result, bail, eyre};
+use eyre::{bail, eyre, Result};
 use reqwest::{
+    header::{HeaderMap, AUTHORIZATION, USER_AGENT},
     Response, StatusCode, Url,
-    header::{AUTHORIZATION, HeaderMap, USER_AGENT},
 };
 
-use atuin_common::{
-    api::{ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ATUIN_VERSION},
-    record::{EncryptedData, HostId, Record, RecordIdx},
-};
 use atuin_common::{
     api::{
         AddHistoryRequest, ChangePasswordRequest, CliCodeResponse, CliVerifyResponse,
@@ -21,10 +17,14 @@ use atuin_common::{
     },
     record::RecordStatus,
 };
+use atuin_common::{
+    api::{ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ATUIN_VERSION},
+    record::{EncryptedData, HostId, Record, RecordIdx},
+};
 
 use semver::Version;
-use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
+use time::OffsetDateTime;
 
 use crate::{history::History, sync::hash_str, utils::get_host_user};
 
@@ -134,7 +134,7 @@ pub async fn hub_verify_code(address: &str, code: &str) -> Result<CliVerifyRespo
     let client = reqwest::Client::new();
 
     let resp = client
-        .get(url)
+        .post(url)
         .header(USER_AGENT, APP_USER_AGENT)
         .header(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION)
         .send()
