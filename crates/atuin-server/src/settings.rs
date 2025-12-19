@@ -68,6 +68,10 @@ pub struct Settings {
     pub tls: Tls,
     pub mail: Mail,
 
+    /// Enable legacy sync v1 routes (history-based sync)
+    /// Set to false to use only the newer record-based sync
+    pub sync_v1_enabled: bool,
+
     /// Advertise a version that is not what we are _actually_ running
     /// Many clients compare their version with api.atuin.sh, and if they differ, notify the user
     /// that an update is available.
@@ -109,6 +113,7 @@ impl Settings {
             .set_default("tls.enable", false)?
             .set_default("tls.cert_path", "")?
             .set_default("tls.pkey_path", "")?
+            .set_default("sync_v1_enabled", true)?
             .add_source(
                 Environment::with_prefix("atuin")
                     .prefix_separator("_")
