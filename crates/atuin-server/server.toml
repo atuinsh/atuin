@@ -37,3 +37,7 @@
 # enable = false
 # cert_path = ""
 # pkey_path = ""
+
+## Enable legacy sync v1 routes (history-based sync)
+## Set to false to disable and use only the newer record-based sync
+# sync_v1_enabled = true
