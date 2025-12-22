@@ -51,7 +51,24 @@ New-Module -Name Atuin -ScriptBlock {
             $duration = (Get-History -Count 1).Duration.Ticks * 100
             $durationArg = if ($duration) { "--duration=$duration" } else { $null }
 
-            atuin history end --exit=$exitCode $durationArg -- $script:atuinHistoryId | Out-Null
+            $arguments = @("history", "end", "--exit=$exitCode")
+            if ($durationArg) { $arguments += $durationArg }
+            $arguments += @("--", $script:atuinHistoryId)
+
+            # Run in the background to avoid blocking the prompt on slow sync.
+            # Use Get-Variable to safely check $IsWindows (undefined in PS 5.1 with StrictMode).
+            $isWin = (Get-Variable -Name IsWindows -ValueOnly -ErrorAction SilentlyContinue) -or ($env:OS -eq "Windows_NT")
+            $nullDevice = if ($isWin) { "NUL" } else { "/dev/null" }
+
+            # Use splatting for cross-platform compatibility (-NoNewWindow may not work on non-Windows).
+            $startParams = @{
+                FilePath = "atuin"
+                ArgumentList = $arguments
+                RedirectStandardOutput = $nullDevice
+                RedirectStandardError = $nullDevice
+            }
+            if ($isWin) { $startParams.NoNewWindow = $true }
+            Start-Process @startParams
 
             $global:LASTEXITCODE = $exitCode
             $script:atuinHistoryId = $null
