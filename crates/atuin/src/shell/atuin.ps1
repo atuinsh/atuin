@@ -127,15 +127,33 @@ New-Module -Name Atuin -ScriptBlock {
                 return
             }
 
+            function Set-AtuinCommandLine {
+                param([string]$Text)
+
+                # Replace the entire buffer so the original query does not linger.
+                # Use try/catch to detect Replace method availability (PSReadLine 2.x+).
+                # Note: Missing static methods throw RuntimeException, not MethodException.
+                $currentLine = $null
+                $cursorPos = 0
+                [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$currentLine, [ref]$cursorPos)
+                $length = if ($null -eq $currentLine) { 0 } else { $currentLine.Length }
+
+                try {
+                    [Microsoft.PowerShell.PSConsoleReadLine]::Replace(0, $length, $Text)
+                } catch {
+                    # Fallback for PSReadLine 1.x which lacks Replace method
+                    [Microsoft.PowerShell.PSConsoleReadLine]::RevertLine()
+                    [Microsoft.PowerShell.PSConsoleReadLine]::Insert($Text)
+                }
+            }
+
             $acceptPrefix = "__atuin_accept__:"
 
             if ( $suggestion.StartsWith($acceptPrefix)) {
-                [Microsoft.PowerShell.PSConsoleReadLine]::RevertLine()
-                [Microsoft.PowerShell.PSConsoleReadLine]::Insert($suggestion.Substring($acceptPrefix.Length))
+                Set-AtuinCommandLine $suggestion.Substring($acceptPrefix.Length)
                 [Microsoft.PowerShell.PSConsoleReadLine]::AcceptLine()
             } else {
-                [Microsoft.PowerShell.PSConsoleReadLine]::RevertLine()
-                [Microsoft.PowerShell.PSConsoleReadLine]::Insert($suggestion)
+                Set-AtuinCommandLine $suggestion
             }
         }
         finally {
