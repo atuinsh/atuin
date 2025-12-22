@@ -59,9 +59,11 @@ New-Module -Name Atuin -ScriptBlock {
             $process.StartInfo.CreateNoWindow = $true
             $process.StartInfo.RedirectStandardInput = $true
             $process.StartInfo.RedirectStandardOutput = $true
+            $process.StartInfo.RedirectStandardError = $true
             $process.Start() | Out-Null
             $process.StandardInput.Close()
             $process.BeginOutputReadLine()
+            $process.BeginErrorReadLine()
 
             $script:atuinHistoryId = $null
         }
