@@ -51,9 +51,20 @@ New-Module -Name Atuin -ScriptBlock {
             $duration = (Get-History -Count 1).Duration.Ticks * 100
             $durationArg = if ($duration) { "--duration=$duration" } else { $null }
 
-            atuin history end --exit=$exitCode $durationArg -- $script:atuinHistoryId | Out-Null
+            # Fire and forget the atuin history end command to avoid blocking the shell during a potential sync.
+            $process = New-Object System.Diagnostics.Process
+            $process.StartInfo.FileName = "atuin"
+            $process.StartInfo.Arguments = "history end --exit=$exitCode $durationArg -- $script:atuinHistoryId"
+            $process.StartInfo.UseShellExecute = $false
+            $process.StartInfo.CreateNoWindow = $true
+            $process.StartInfo.RedirectStandardInput = $true
+            $process.StartInfo.RedirectStandardOutput = $true
+            $process.StartInfo.RedirectStandardError = $true
+            $process.Start() | Out-Null
+            $process.StandardInput.Close()
+            $process.BeginOutputReadLine()
+            $process.BeginErrorReadLine()
 
-            $global:LASTEXITCODE = $exitCode
             $script:atuinHistoryId = $null
         }
 
