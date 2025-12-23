@@ -2,7 +2,7 @@ use clap::Parser;
 use eyre::{Result, bail};
 use tokio::{fs::File, io::AsyncWriteExt};
 
-use atuin_client::{api_client, settings::Settings};
+use atuin_client::{api_client, record::sqlite_store::SqliteStore, settings::Settings};
 
 #[derive(Parser, Debug)]
 pub struct Cmd {
@@ -17,12 +17,12 @@ pub struct Cmd {
 }
 
 impl Cmd {
-    pub async fn run(self, settings: &Settings) -> Result<()> {
-        run(settings, self.username, self.email, self.password).await
+    pub async fn run(self, settings: &Settings, store: &SqliteStore) -> Result<()> {
+        run(settings, store, self.username, self.email, self.password).await
     }
 }
 
-pub async fn run(
+async fn run_classic(
     settings: &Settings,
     username: Option<String>,
     email: Option<String>,
@@ -59,4 +59,22 @@ pub async fn run(
     );
 
     Ok(())
+}
+
+async fn run_hub(settings: &Settings, store: &SqliteStore) -> Result<()> {
+    super::hub::run(settings, store).await
+}
+
+pub async fn run(
+    settings: &Settings,
+    store: &SqliteStore,
+    username: Option<String>,
+    email: Option<String>,
+    password: Option<String>,
+) -> Result<()> {
+    if settings.hub_sync {
+        run_hub(settings, store).await
+    } else {
+        run_classic(settings, username, email, password).await
+    }
 }
