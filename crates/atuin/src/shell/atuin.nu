@@ -51,6 +51,8 @@ def _atuin_search_cmd [...flags: string] {
             $ATUIN_KEYBINDING_TOKEN,
             ([
                 `with-env { ATUIN_LOG: error, ATUIN_QUERY: (commandline), ATUIN_SHELL: nu } {`,
+                    # Add a newline so that the atuin TUI initializes on the line below the prompt
+                    'print ""'
                     ([
                         'let output = (run-external atuin search',
                         ($flags | append [--interactive] | each {|e| $'"($e)"'}),
@@ -61,6 +63,8 @@ def _atuin_search_cmd [...flags: string] {
                     '} else {',
                     'commandline edit $output',
                     '}',
+                    # Move the cursor back up two lines to put it on the original prompt after the tui has closed
+                    '$"(ansi --escape "2A")"',
                 `}`,
             ] | flatten | str join "\n"),
         ]
@@ -69,10 +73,14 @@ def _atuin_search_cmd [...flags: string] {
             $ATUIN_KEYBINDING_TOKEN,
             ([
                 `with-env { ATUIN_LOG: error, ATUIN_QUERY: (commandline) } {`,
+                    # Add a newline so that the atuin TUI initializes on the line below the prompt
+                    'print "";',
                     'commandline edit',
                     '(run-external atuin search',
                         ($flags | append [--interactive] | each {|e| $'"($e)"'}),
-                    ' e>| str trim)',
+                    ' e>| str trim);',
+                    # Move the cursor back up two lines to put it on the original prompt after the tui has closed
+                    '$"(ansi --escape "2A")"',
                 `}`,
             ] | flatten | str join ' '),
         ]
