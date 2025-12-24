@@ -504,6 +504,7 @@ pub struct Settings {
     pub local_timeout: f64,
     pub enter_accept: bool,
     pub smart_sort: bool,
+    pub scope_boost: bool,
     pub command_chaining: bool,
 
     #[serde(default)]
@@ -823,6 +824,7 @@ impl Settings {
             .set_default("keymap_mode_shell", "auto")?
             .set_default("keymap_cursor", HashMap::<String, String>::new())?
             .set_default("smart_sort", false)?
+            .set_default("scope_boost", false)?
             .set_default("command_chaining", false)?
             .set_default("store_failed", true)?
             .set_default("daemon.sync_frequency", 300)?
