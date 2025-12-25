@@ -4,17 +4,23 @@ on:
   schedule:
     - cron: '0 0 1 * *' # runs monthly on the first day of the month at 00:00
 
+permissions:
+  contents: write
+  pull-requests: write
+
 jobs:
   lockfile:
     runs-on: ubuntu-latest
     if: github.repository == 'atuinsh/atuin'
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
       - name: Install Nix
-        uses: DeterminateSystems/nix-installer-action@main
+        uses: DeterminateSystems/nix-installer-action@ab0a9732c6464e5bb81efb82a2103c7d98f0946f # main
       - name: Update flake.lock
-        uses: DeterminateSystems/update-flake-lock@main
+        uses: DeterminateSystems/update-flake-lock@2235257b90962ba68499d64da5b0d1eaa3b46c1e # main
         with:
           pr-title: "chore(deps): update flake.lock"
           pr-labels: |
