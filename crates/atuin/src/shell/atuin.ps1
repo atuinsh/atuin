@@ -47,16 +47,8 @@ New-Module -Name Atuin -ScriptBlock {
     function Set-CommandLine {
         param([string]$Text)
 
-        try {
-            # This needs to be done using Replace, since the ListView prediction style breaks RevertLine: https://github.com/PowerShell/PSReadLine/issues/5047
-            $commandLine = Get-CommandLine
-            [Microsoft.PowerShell.PSConsoleReadLine]::Replace(0, $commandLine.Length, $Text)
-        }
-        catch {
-            # Fallback, just in case.
-            [Microsoft.PowerShell.PSConsoleReadLine]::RevertLine()
-            [Microsoft.PowerShell.PSConsoleReadLine]::Insert($Text)
-        }
+        $commandLine = Get-CommandLine
+        [Microsoft.PowerShell.PSConsoleReadLine]::Replace(0, $commandLine.Length, $Text)
     }
 
     # This function name is called by PSReadLine to read the next command line to execute.
