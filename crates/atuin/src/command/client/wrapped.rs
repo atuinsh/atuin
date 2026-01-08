@@ -32,16 +32,16 @@ impl WrappedStats {
     ) -> Self {
         // Helper to expand alias to its first command word
         let expand_alias = |cmd: &str| -> String {
-            if let Some(expanded) = alias_map.get(cmd) {
-                // Get the first word of the alias value (the actual command)
-                expanded
-                    .split_whitespace()
-                    .next()
-                    .unwrap_or(cmd)
-                    .to_string()
-            } else {
-                cmd.to_string()
-            }
+            alias_map.get(cmd).map_or_else(
+                || cmd.to_string(),
+                |expanded| {
+                    expanded
+                        .split_whitespace()
+                        .next()
+                        .unwrap_or(cmd)
+                        .to_string()
+                },
+            )
         };
 
         let nav_commands = stats
