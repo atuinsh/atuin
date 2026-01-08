@@ -51,6 +51,8 @@ pub enum DbType {
 #[derive(Clone, Deserialize, Serialize)]
 pub struct DbSettings {
     pub db_uri: String,
+    /// Optional URI for read replicas. If set, read-only queries will use this connection.
+    pub read_db_uri: Option<String>,
 }
 
 impl DbSettings {
@@ -65,22 +67,29 @@ impl DbSettings {
     }
 }
 
+fn redact_db_uri(uri: &str) -> String {
+    url::Url::parse(uri)
+        .map(|mut url| {
+            let _ = url.set_password(Some("****"));
+            url.to_string()
+        })
+        .unwrap_or_else(|_| uri.to_string())
+}
+
 // Do our best to redact passwords so they're not logged in the event of an error.
 impl Debug for DbSettings {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if self.db_type() == DbType::Postgres {
-            let redacted_uri = url::Url::parse(&self.db_uri)
-                .map(|mut url| {
-                    let _ = url.set_password(Some("****"));
-                    url.to_string()
-                })
-                .unwrap_or(self.db_uri.clone());
+            let redacted_uri = redact_db_uri(&self.db_uri);
+            let redacted_read_uri = self.read_db_uri.as_ref().map(|uri| redact_db_uri(uri));
             f.debug_struct("DbSettings")
                 .field("db_uri", &redacted_uri)
+                .field("read_db_uri", &redacted_read_uri)
                 .finish()
         } else {
             f.debug_struct("DbSettings")
                 .field("db_uri", &self.db_uri)
+                .field("read_db_uri", &self.read_db_uri)
                 .finish()
         }
     }
