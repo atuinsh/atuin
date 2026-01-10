@@ -3,7 +3,11 @@ use eyre::Result;
 use std::collections::{HashMap, HashSet};
 use time::{Date, Duration, Month, OffsetDateTime, Time};
 
-use atuin_client::{database::Database, settings::Settings, theme::Theme};
+use atuin_client::{
+    database::Database, encryption, record::sqlite_store::SqliteStore, settings::Settings,
+    theme::Theme,
+};
+use atuin_dotfiles::store::AliasStore;
 
 use atuin_history::stats::{Stats, compute};
 
@@ -20,7 +24,26 @@ struct WrappedStats {
 
 impl WrappedStats {
     #[allow(clippy::too_many_lines, clippy::cast_precision_loss)]
-    fn new(settings: &Settings, stats: &Stats, history: &[atuin_client::history::History]) -> Self {
+    fn new(
+        settings: &Settings,
+        stats: &Stats,
+        history: &[atuin_client::history::History],
+        alias_map: &HashMap<String, String>,
+    ) -> Self {
+        // Helper to expand alias to its first command word
+        let expand_alias = |cmd: &str| -> String {
+            alias_map.get(cmd).map_or_else(
+                || cmd.to_string(),
+                |expanded| {
+                    expanded
+                        .split_whitespace()
+                        .next()
+                        .unwrap_or(cmd)
+                        .to_string()
+                },
+            )
+        };
+
         let nav_commands = stats
             .top
             .iter()
@@ -96,12 +119,13 @@ impl WrappedStats {
         let mut hours: HashMap<String, usize> = HashMap::new();
 
         for entry in history {
-            let cmd = entry
+            let raw_cmd = entry
                 .command
                 .split_whitespace()
                 .next()
                 .unwrap_or("")
                 .to_string();
+            let cmd = expand_alias(&raw_cmd);
             let (total, errors) = command_errors.entry(cmd.clone()).or_insert((0, 0));
             *total += 1;
             if entry.exit != 0 {
@@ -266,6 +290,7 @@ pub async fn run(
     year: Option<i32>,
     db: &impl Database,
     settings: &Settings,
+    store: SqliteStore,
     theme: &Theme,
 ) -> Result<()> {
     let now = OffsetDateTime::now_utc().to_offset(settings.timezone.0);
@@ -299,9 +324,30 @@ pub async fn run(
         return Ok(());
     }
 
+    // Load aliases for expansion
+    let alias_map: HashMap<String, String> = if settings.dotfiles.enabled {
+        if let Ok(encryption_key) = encryption::load_key(settings) {
+            let encryption_key: [u8; 32] = encryption_key.into();
+            let host_id = Settings::host_id().expect("failed to get host_id");
+            let alias_store = AliasStore::new(store, host_id, encryption_key);
+
+            alias_store
+                .aliases()
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .map(|a| (a.name, a.value))
+                .collect()
+        } else {
+            HashMap::new()
+        }
+    } else {
+        HashMap::new()
+    };
+
     // Compute overall stats using existing functionality
     let stats = compute(settings, &history, 10, 1).expect("Failed to compute stats");
-    let wrapped_stats = WrappedStats::new(settings, &stats, &history);
+    let wrapped_stats = WrappedStats::new(settings, &stats, &history, &alias_map);
 
     // Print wrapped format
     print_wrapped_header(year);
