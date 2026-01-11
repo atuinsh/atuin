@@ -22,10 +22,6 @@ Please file an issue or reach out on the forum if you encounter any problems!
 
 EOF
 
-__atuin_install_binary(){
-  curl --proto '=https' --tlsv1.2 -LsSf https://github.com/atuinsh/atuin/releases/latest/download/atuin-installer.sh | sh
-}
-
 if ! command -v curl > /dev/null; then
     echo "curl not installed. Please install curl."
     exit
@@ -34,8 +30,9 @@ elif ! command -v sed > /dev/null; then
     exit
 fi
 
+install_script=$(curl --proto '=https' --tlsv1.2 -LsSf https://github.com/atuinsh/atuin/releases/latest/download/atuin-installer.sh)
 
-__atuin_install_binary 
+echo "$install_script" | sh
 
 # TODO: Check which shell is in use
 # Use of single quotes around $() is intentional here
