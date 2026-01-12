@@ -85,7 +85,7 @@ pub enum Cmd {
         #[arg(long, visible_alias = "tz")]
         timezone: Option<Timezone>,
 
-        /// Available variables: {command}, {directory}, {duration}, {user}, {host}, {exit} and {time}.
+        /// Available variables: {command}, {directory}, {duration}, {user}, {host}, {exit}, {time}, {session}, and {uuid}
         /// Example: --format "{time} - [{duration}] - {directory}$\t{command}"
         #[arg(long, short)]
         format: Option<String>,
@@ -108,7 +108,7 @@ pub enum Cmd {
         #[arg(long, visible_alias = "tz")]
         timezone: Option<Timezone>,
 
-        /// Available variables: {command}, {directory}, {duration}, {user}, {host} and {time}.
+        /// Available variables: {command}, {directory}, {duration}, {user}, {host}, {time}, {session}, {uuid} and {relativetime}.
         /// Example: --format "{time} - [{duration}] - {directory}$\t{command}"
         #[arg(long, short)]
         format: Option<String>,
@@ -320,6 +320,8 @@ impl FormatKey for FmtHistory<'_> {
                     .split_once(':')
                     .map_or("", |(_, user)| user),
             )?,
+            "session" => f.write_str(&self.history.session)?,
+            "uuid" => f.write_str(&self.history.id.0)?,
             _ => return Err(FormatKeyError::UnknownKey),
         }
         Ok(())
