@@ -2,6 +2,55 @@
 
 All notable changes to this project will be documented in this file.
 
+## [18.11.0] - 2026-01-12
+
+### Bug Fixes
+
+- *(bash)* Fix issues with intermediate key sequences in the vi editing mode ([#2977](https://github.com/atuinsh/atuin/issues/2977))
+- *(bash)* Work around a keybinding bug of Bash 5.1 ([#2975](https://github.com/atuinsh/atuin/issues/2975))
+- *(bash/blesh)* Suppress error message for auto-complete source ([#2976](https://github.com/atuinsh/atuin/issues/2976))
+- *(powershell)* Run `atuin history end` in the background ([#3034](https://github.com/atuinsh/atuin/issues/3034))
+- *(powershell)* Add error safety and cleanup ([#3040](https://github.com/atuinsh/atuin/issues/3040))
+- Highlight the correct place when multibyte characters are involved ([#2965](https://github.com/atuinsh/atuin/issues/2965))
+- Prevent interactive search crash when update check fails ([#3016](https://github.com/atuinsh/atuin/issues/3016))
+- Move thorough search through search.filters w/ workspaces ([#2703](https://github.com/atuinsh/atuin/issues/2703))
+
+
+### Documentation
+
+- Migrate docs from separate repo to `docs` subfolder ([#3018](https://github.com/atuinsh/atuin/issues/3018))
+
+
+### Features
+
+- Support additional history filenames in replxx importer ([#3005](https://github.com/atuinsh/atuin/issues/3005))
+- Add colors to --help/-h ([#3000](https://github.com/atuinsh/atuin/issues/3000))
+- Add support for read replicas to postgres ([#3029](https://github.com/atuinsh/atuin/issues/3029))
+- Allow disabling sync v1 ([#3030](https://github.com/atuinsh/atuin/issues/3030))
+- Consider atuin dotfile aliases when calculating atuin wrapped ([#3048](https://github.com/atuinsh/atuin/issues/3048))
+- Add session and uuid column support to history list ([#3049](https://github.com/atuinsh/atuin/issues/3049))
+
+
+### Miscellaneous Tasks
+
+- *(nix)* Prevent deprecation warning on evaluation ([#3006](https://github.com/atuinsh/atuin/issues/3006))
+- Update changelog
+- Adjust update wording ([#2974](https://github.com/atuinsh/atuin/issues/2974))
+- Add Windows builds, second try ([#2966](https://github.com/atuinsh/atuin/issues/2966))
+- Update to rust 1.91 ([#2981](https://github.com/atuinsh/atuin/issues/2981))
+- Add Atuin Desktop information to install script
+- Remove trailing whitespace ([#2985](https://github.com/atuinsh/atuin/issues/2985))
+- Fix typo ([#2994](https://github.com/atuinsh/atuin/issues/2994))
+- Clarify docstring of the enter_accept config key ([#3003](https://github.com/atuinsh/atuin/issues/3003))
+- Fix github action syntax for variables ([#2998](https://github.com/atuinsh/atuin/issues/2998))
+- Add AGENTS.md
+
+
+### Build
+
+- *(nix)* Update rust toolchain hash ([#2990](https://github.com/atuinsh/atuin/issues/2990))
+
+
 ## [18.10.0] - 2025-10-21
 
 ### Bug Fixes
