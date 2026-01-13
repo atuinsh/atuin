@@ -25,6 +25,11 @@ pub struct Push {
     /// local store
     #[arg(long, default_value = "false")]
     pub force: bool,
+
+    /// Page Size
+    /// How many records to upload at once. Defaults to 100
+    #[arg(long, default_value = "100")]
+    pub page: u64,
 }
 
 impl Push {
@@ -87,7 +92,7 @@ impl Push {
             })
             .collect();
 
-        let (uploaded, _) = sync::sync_remote(operations, &store, settings).await?;
+        let (uploaded, _) = sync::sync_remote(operations, &store, settings, self.page).await?;
 
         println!("Uploaded {uploaded} records");
 
