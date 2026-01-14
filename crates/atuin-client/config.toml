@@ -303,5 +303,5 @@ records = true
 # width = "80%"
 
 ## Height of the tmux popup window
-## Can be a percentage, or integer (e.g. "100" means 100 characters wide)
+## Can be a percentage, or integer (e.g. "100" means 100 lines tall)
 # height = "60%"
