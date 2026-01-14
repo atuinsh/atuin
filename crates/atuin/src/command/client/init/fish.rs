@@ -5,9 +5,10 @@ use eyre::Result;
 fn print_tmux_config(tmux: &Tmux) {
     if !tmux.enabled {
         println!("set -gx ATUIN_TMUX_POPUP false");
+    } else {
+        println!("set -gx ATUIN_TMUX_POPUP_WIDTH '{}'", tmux.width);
+        println!("set -gx ATUIN_TMUX_POPUP_HEIGHT '{}'", tmux.height);
     }
-    println!("set -gx ATUIN_TMUX_POPUP_WIDTH '{}'", tmux.width);
-    println!("set -gx ATUIN_TMUX_POPUP_HEIGHT '{}'", tmux.height);
 }
 
 fn print_bindings(
