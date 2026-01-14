@@ -272,7 +272,7 @@ __atuin_search_cmd() {
         trap '__atuin_tmux_popup_cleanup' EXIT HUP INT TERM
 
         local escaped_query escaped_args
-        escaped_query=$(printf '%s' "$BUFFER" | sed "s/'/'\\\\''/g")
+        escaped_query=$(printf '%s' "$READLINE_LINE" | sed "s/'/'\\\\''/g")
         escaped_args=""
         for arg in "${search_args[@]}"; do
             escaped_args+=" '$(printf '%s' "$arg" | sed "s/'/'\\\\''/g")'"
@@ -284,7 +284,7 @@ __atuin_search_cmd() {
         popup_width="${ATUIN_TMUX_POPUP_WIDTH:-80%}" # Keep default value anyways
         popup_height="${ATUIN_TMUX_POPUP_HEIGHT:-60%}"
         tmux display-popup -d "$cdir" -w "$popup_width" -h "$popup_height" -E -E -- \
-            sh -c "ATUIN_SHELL=bash ATUIN_LOG=error ATUIN_QUERY='$escaped_query' atuin search$escaped_args -i 2>'$result_file'"
+            sh -c "ATUIN_SHELL=bash ATUIN_LOG=error ATUIN_QUERY='$escaped_query' atuin search $escaped_args -i 2>'$result_file'"
 
         if [[ -f "$result_file" ]]; then
             cat "$result_file"
@@ -293,7 +293,7 @@ __atuin_search_cmd() {
         __atuin_tmux_popup_cleanup
         trap - EXIT HUP INT TERM
     else
-        ATUIN_SHELL=bash ATUIN_LOG=error ATUIN_QUERY=$BUFFER atuin search "${search_args[@]}" -i 3>&1 1>&2 2>&3
+        ATUIN_SHELL=bash ATUIN_LOG=error ATUIN_QUERY=$READLINE_LINE atuin search "${search_args[@]}" -i 3>&1 1>&2 2>&3
     fi
 }
 
