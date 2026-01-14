@@ -91,7 +91,9 @@ __atuin_search_cmd() {
         done
 
         # In the popup, atuin goes to terminal, stderr goes to file
-        tmux display-popup -w 80% -h 60% -E -E -- \
+        local cdir
+        cdir=$(pwd)
+        tmux display-popup -d "$cdir" -w 80% -h 60% -E -E -- \
             sh -c "ATUIN_SHELL=zsh ATUIN_LOG=error ATUIN_QUERY='$escaped_query' atuin search$escaped_args -i 2>'$result_file'"
 
         if [[ -f "$result_file" ]]; then
