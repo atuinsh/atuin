@@ -49,6 +49,62 @@ _atuin_precmd() {
     export ATUIN_HISTORY_ID=""
 }
 
+# Check if tmux popup is available (tmux >= 3.2)
+__atuin_tmux_popup_check() {
+    [[ -n "${TMUX-}" ]] || return 1
+    [[ "${ATUIN_TMUX_POPUP:-true}" != "false" ]] || return 1
+
+    local tmux_version
+    tmux_version=$(tmux -V 2>/dev/null | sed 's/[^0-9.]//g') # Remove the letter at the end
+    [[ -z "$tmux_version" ]] && return 1
+
+    local m1 m2
+    m1=${tmux_version%%.*}
+    m2=${tmux_version#*.}
+    m2=${m2%%.*}
+    [[ "$m1" =~ ^[0-9]+$ ]] || return 1
+    [[ "$m2" =~ ^[0-9]+$ ]] || m2=0
+    (( m1 > 3 || (m1 == 3 && m2 >= 2) ))
+}
+
+# Use global variable to fix scope issues with traps
+__atuin_popup_tmpdir=""
+__atuin_tmux_popup_cleanup() {
+    [[ -n "$__atuin_popup_tmpdir" && -d "$__atuin_popup_tmpdir" ]] && rm -rf "$__atuin_popup_tmpdir"
+    __atuin_popup_tmpdir=""
+}
+
+__atuin_search_cmd() {
+    local -a search_args=("$@")
+
+    if __atuin_tmux_popup_check; then
+        __atuin_popup_tmpdir=$(mktemp -d) || return 1
+        local result_file="$__atuin_popup_tmpdir/result"
+
+        trap '__atuin_tmux_popup_cleanup' EXIT HUP INT TERM
+
+        local escaped_query escaped_args
+        escaped_query=$(printf '%s' "$BUFFER" | sed "s/'/'\\\\''/g")
+        escaped_args=""
+        for arg in "${search_args[@]}"; do
+            escaped_args+=" '$(printf '%s' "$arg" | sed "s/'/'\\\\''/g")'"
+        done
+
+        # In the popup, atuin goes to terminal, stderr goes to file
+        tmux display-popup -w 80% -h 60% -E -E -- \
+            sh -c "ATUIN_SHELL=zsh ATUIN_LOG=error ATUIN_QUERY='$escaped_query' atuin search$escaped_args -i 2>'$result_file'"
+
+        if [[ -f "$result_file" ]]; then
+            cat "$result_file"
+        fi
+
+        __atuin_tmux_popup_cleanup
+        trap - EXIT HUP INT TERM
+    else
+        ATUIN_SHELL=zsh ATUIN_LOG=error ATUIN_QUERY=$BUFFER atuin search "${search_args[@]}" -i 3>&1 1>&2 2>&3
+    fi
+}
+
 _atuin_search() {
     emulate -L zsh
     zle -I
@@ -57,7 +113,7 @@ _atuin_search() {
     # TODO: not this
     local output
     # shellcheck disable=SC2048
-    output=$(ATUIN_SHELL=zsh ATUIN_LOG=error ATUIN_QUERY=$BUFFER atuin search $* -i 3>&1 1>&2 2>&3)
+    output=$(__atuin_search_cmd $*)
 
     zle reset-prompt
     # re-enable bracketed paste
