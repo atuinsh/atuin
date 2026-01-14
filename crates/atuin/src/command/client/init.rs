@@ -1,6 +1,10 @@
 use std::path::PathBuf;
 
-use atuin_client::{encryption, record::sqlite_store::SqliteStore, settings::{Settings, Tmux}};
+use atuin_client::{
+    encryption,
+    record::sqlite_store::SqliteStore,
+    settings::{Settings, Tmux},
+};
 use atuin_dotfiles::store::{AliasStore, var::VarStore};
 use clap::{Parser, ValueEnum};
 use eyre::{Result, WrapErr};
@@ -45,7 +49,7 @@ pub enum Shell {
 impl Cmd {
     fn init_nu(&self, _tmux: &Tmux) {
         let full = include_str!("../../shell/atuin.nu");
-        
+
         // TODO: tmux popup for Nu
         println!("{full}");
 
