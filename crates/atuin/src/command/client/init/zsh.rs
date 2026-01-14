@@ -3,11 +3,11 @@ use atuin_dotfiles::store::{AliasStore, var::VarStore};
 use eyre::Result;
 
 fn print_tmux_config(tmux: &Tmux) {
-    if !tmux.enabled {
-        println!("export ATUIN_TMUX_POPUP=false");
-    } else {
+    if tmux.enabled {
         println!("export ATUIN_TMUX_POPUP_WIDTH='{}'", tmux.width);
         println!("export ATUIN_TMUX_POPUP_HEIGHT='{}'", tmux.height);
+    } else {
+        println!("export ATUIN_TMUX_POPUP=false");
     }
 }
 
