@@ -242,8 +242,9 @@ __atuin_tmux_popup_check() {
     [[ -n "${TMUX-}" ]] || return 1
     [[ "${ATUIN_TMUX_POPUP:-true}" != "false" ]] || return 1
 
+    # https://github.com/tmux/tmux/wiki/FAQ#how-often-is-tmux-released-what-is-the-version-number-scheme
     local tmux_version
-    tmux_version=$(tmux -V 2>/dev/null | sed 's/[^0-9.]//g') # Remove the letter at the end
+    tmux_version=$(tmux -V 2>/dev/null | sed -n 's/^[^0-9]*\([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p') # Could have used grep...
     [[ -z "$tmux_version" ]] && return 1
 
     local m1 m2

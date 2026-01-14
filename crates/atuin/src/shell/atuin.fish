@@ -30,7 +30,7 @@ function _atuin_tmux_popup_check
         return
     end
 
-    set -l tmux_version (tmux -V 2>/dev/null | string replace -ra '[^0-9.]' '')
+    set -l tmux_version (tmux -V 2>/dev/null | string match -r '\d+\.\d+')
     if not test -n "$tmux_version"
         echo 0
         return
