@@ -30,7 +30,7 @@ While searching in the TUI, you can adjust the "filter mode" by repeatedly press
 
 For a full set of config values, please see the [config reference page](../configuration/config.md)
 
-The default configuration file is location at `~/.config/atuin/config.toml`
+The default configuration file is located at `~/.config/atuin/config.toml`
 
 ### Keybindings
 
