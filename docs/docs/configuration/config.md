@@ -144,7 +144,7 @@ The default filter to use when searching
 | global (default) | Search history from all hosts, all sessions, all directories |
 | host             | Search history just from this host                           |
 | session          | Search history just from the current session                 |
-| directory        | Search history just from the current directory               |
+| directory        | Search history just from the current directory (global)      |
 | workspace        | Search history just from the current git repository (>17.0)  |
 
 Filter modes can still be toggled via ctrl-r
