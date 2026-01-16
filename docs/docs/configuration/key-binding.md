@@ -180,7 +180,7 @@ $env.config = (
 | ctrl + u                                  | Clear the current line                                                        |
 | ctrl + n / ctrl + j / ↑                  | Select the next item on the list                                              |
 | ctrl + p / ctrl + k / ↓                  | Select the previous item on the list                                          |
-| ctrl + o                                  | Open the inspector                                                            |
+| ctrl + o                                  | Open the [inspector](#inspector)                                              |
 | page down                                 | Scroll search results one page down                                           |
 | page up                                   | Scroll search results one page up                                             |
 | ↓ (with no entry selected)               | Return original or return query depending on [settings](config.md#exit_mode)                         |
@@ -199,10 +199,10 @@ If [vim is enabled in the config](config.md#keymap_mode), the following keybindi
 
 
 ### Inspector
-Open the inspector with ctrl-o
+Open the inspector with ctrl + o
 
-| Shortcut | Action                                        |
-| -------- | --------------------------------------------- |
-| Esc      | Close the inspector, returning to the shell   |
-| ctrl+o   | Close the inspector, returning to search view |
-| ctrl+d   | Delete the inspected item from the history    |
+| Shortcut   | Action                                        |
+| ---------- | --------------------------------------------- |
+| Esc        | Close the inspector, returning to the shell   |
+| ctrl + o   | Close the inspector, returning to search view |
+| ctrl + d   | Delete the inspected item from the history    |
