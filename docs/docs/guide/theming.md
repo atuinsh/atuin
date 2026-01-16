@@ -83,6 +83,17 @@ the following are valid color names:
 * `teal`
 * `powderblue`
 
+You can also express colors through Crossterm-supported strings, prefixed by `@`.
+For example,
+
+* `@ansi_(123)`
+* `@dark_yellow`
+
+While there is not currently an official reference, you can see examples in the
+[crossterm tests](https://docs.rs/crossterm/latest/src/crossterm/style/types/color.rs.html#376).
+As this is passed straight to Crossterm, using [ANSI codes](https://www.ditig.com/256-colors-cheat-sheet)
+can be helpful for ensuring your theme is compatible with 256-color terminals.
+
 A theme file, say `my-theme.toml` can then be built up, such as:
 
 ```toml
