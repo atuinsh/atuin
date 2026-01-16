@@ -37,3 +37,14 @@ may change soon, but in the meantime so long as you're still logged in on at
 least one account, it's safe to delete and re-create the account.
 
 We're aware this isn't optimal.
+
+## Alternative projects
+
+If you dont like atuin, perhaps one of these works better for you:
+
+- https://github.com/ddworken/hishtory
+  - written in go
+  - also provides sync'ed history
+- https://github.com/cantino/mcfly
+  - uses a small local neural network for search
+  - only local history
