@@ -610,6 +610,22 @@ Default: `a`
 
 Which key to use as the prefix
 
+### `exit_past_line_start`
+
+Atuin version: >= 18.5
+
+Default: `true`
+
+Exits the TUI when scrolling left while the cursor is at the start of the line.
+
+### `exit_past_line_end`
+
+Atuin version: >= 18.5
+
+Default: `true`
+
+Exits the TUI when scrolling right while the cursor is at the end of the line.
+
 ## preview
 
 This section of the client config is specifically for configuring preview-related settings.
