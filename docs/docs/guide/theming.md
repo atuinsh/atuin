@@ -27,7 +27,7 @@ will need to download themes or make your own.
 If you are writing your own themes, you can add the following line to get additional output:
 
 ```
-debug = "true"
+debug = true
 ```
 
 to the same config block. This will print out any color names that cannot be parsed from
