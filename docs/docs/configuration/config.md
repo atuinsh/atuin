@@ -509,6 +509,7 @@ common_subcommands = [
   "git",
   "go",
   "ip",
+  "jj",
   "kubectl",
   "nix",
   "nmcli",
