@@ -45,3 +45,14 @@ If you have a backup of `~/.local/share/atuin`, you can import it by:
 2. copying the backup to `~/.local/share/atuin`
 3. reenabling atuin
 4. setting up sync!
+
+## Alternative projects
+
+If you dont like atuin, perhaps one of these works better for you:
+
+- https://github.com/ddworken/hishtory
+  - written in go
+  - also provides sync'ed history
+- https://github.com/cantino/mcfly
+  - uses a small local neural network for search
+  - only local history
