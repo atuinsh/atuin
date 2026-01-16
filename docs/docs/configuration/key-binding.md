@@ -103,30 +103,57 @@ used in combination with the config
 
 ## bash
 
-Atuin provides a bindable shell function "`__atuin_history`" for keybindings in
-Bash.  The flag `--shell-up-key-binding` can be optionally specified to the
-first argument for keybindings to the ++up++ key or similar keys.
+Atuin (`>= 18.10.0`) provides a shell function `atuin-bind` to set up
+keybindings easily:
+
+```
+atuin-bind [-m KEYMAP] KEYSEQ COMMAND
+```
+
+`KEYMAP` is one of `emacs`, `vi-insert`, and `vi-command` and specifies the
+target keymap where the keybinding is defined.  `KEYSEQ` specifies a key
+sequence in the format used in `bind '"KEYSEQ": ...'`.  `COMMAND` specifies a
+shell command to run with the keybindings.  The following special commands can
+be used as well as an arbitrary shell command:
+
+| Command                 | Description                                                                         |
+| ----------------------- | ----------------------------------------------------------------------------------- |
+| `atuin-search`          | Standard search                                                                     |
+| `atuin-search-emacs`    | Standard search with the `emacs` keymap mode                                        |
+| `atuin-search-viins`    | Standard search with the `vim-insert` keymap mode                                   |
+| `atuin-search-vicmd`    | Standard search with the `vim-normal` keymap mode                                   |
+| `atuin-up-search`       | Search command for <kbd>up</kbd> or similar keys                                    |
+| `atuin-up-search-emacs` | Search command for <kbd>up</kbd> or similar keys, with the `emacs` keymap mode      |
+| `atuin-up-search-viins` | Search command for <kbd>up</kbd> or similar keys, with the `vim-insert` keymap mode |
+| `atuin-up-search-vicmd` | Search command for <kbd>up</kbd> or similar keys, with the `vim-nomarl` keymap mode |
+
+The keymap mode controls the initial keymap in the Atuin search and is
+determined in combination with the config
+["keymap\_mode"](config.md#keymap_mode)
+(`atuin >= 18.0`).
+
 
 ```
 export ATUIN_NOBIND="true"
 eval "$(atuin init bash)"
 
 # bind to ctrl-r, add any other bindings you want here too
-bind -x '"\C-r": __atuin_history'
+atuin-bind '\C-r' atuin-search
 # example of CTRL-upkey
-# bind -x '"\e\[1\;5A":__atuin_history'
+# atuin-bind '\e[1;5A' atuin-search
 
 # bind to the up key, which depends on terminal mode
-bind -x '"\e[A": __atuin_history --shell-up-key-binding'
-bind -x '"\eOA": __atuin_history --shell-up-key-binding'
+atuin-bind '\e[A' atuin-up-search
+atuin-bind '\eOA' atuin-up-search
 ```
 
-For the keybindings in the `vi` editing mode, the options
-`--keymap-mode=vim-insert` and `--keymap-mode=vim-normal` (`atuin >= 18.0`) can
-be additionally specified to the shell function `__atuin_history` in
-combination with the config
-["keymap\_mode"](config.md#keymap_mode)
-(`atuin >= 18.0`) to start the Atuin search in respective keymap modes.
+With older versions of Atuin, the user needs to bind a bindable shell function
+"`__atuin_history`" directly using Bash's `bind`.  The flag
+`--shell-up-key-binding` can be optionally specified to the first argument for
+keybindings to the <kbd>up</kbd> key or similar keys.  For the keybindings in
+the `vi` editing mode, the options `--keymap-mode=vim-insert` and the keymap
+mode `--keymap-mode=vim-normal` (`atuin >= 18.0`) can be additionally specified
+to the shell function `__atuin_history`.
 
 ## fish
 Edit key bindings in FISH shell by adding the following to ~/.config/fish/config.fish
