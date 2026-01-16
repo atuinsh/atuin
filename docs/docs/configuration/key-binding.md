@@ -60,6 +60,21 @@ macOS does not have an ++alt++ key, although terminal emulators can often be con
 ctrl_n_shortcuts = true
 ```
 
+Ghostty on Linux maps ++alt+1++ .. ++alt+9++ for switching between tabs by number. To disable this behavior either add the following to ~/.config/ghostty/config:
+```
+keybind=alt+one=unbind
+keybind=alt+two=unbind
+keybind=alt+three=unbind
+keybind=alt+four=unbind
+keybind=alt+five=unbind
+keybind=alt+six=unbind
+keybind=alt+seven=unbind
+keybind=alt+eight=unbind
+keybind=alt+nine=unbind
+```
+(this will disable tab switching by ++alt+n++)
+or use the `ctrl_n_shortcuts` as outlined above.
+
 ## zsh
 
 If you'd like to customize your bindings further, it's possible to do so with custom shell config:
