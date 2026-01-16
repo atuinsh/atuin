@@ -45,6 +45,14 @@ If you don't wish to use the installer, the manual installation steps are as fol
     sudo port install atuin
     ```
 
+=== "mise"
+
+    Atuin is also installable using [mise](https://github.com/jdx/mise)
+
+    ```shell
+    mise use -g atuin@latest
+    ```
+
 === "Nix"
 
     This repository is a flake, and can be installed using `nix profile`:
