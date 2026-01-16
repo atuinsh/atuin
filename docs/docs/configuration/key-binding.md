@@ -206,3 +206,6 @@ Open the inspector with ctrl-o
 | Esc      | Close the inspector, returning to the shell   |
 | ctrl+o   | Close the inspector, returning to search view |
 | ctrl+d   | Delete the inspected item from the history    |
+| ↑        | Inspect the previous item in the history      |
+| ↓        | Inspect the next item in the history          |
+| tab      | Select current item and edit                  |

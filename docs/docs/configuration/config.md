@@ -267,6 +267,16 @@ Default: `true`
 
 Configure whether or not to show tabs for search and inspect.
 
+### `auto_hide_height`
+
+Atuin version: >= 18.4
+
+Default: `8`
+
+Set Atuin to hide lines when a minimum number of rows is subceeded. This has no effect except
+when `compact` style is being used (see `style` above), and currently applies to only the
+interactive search and inspector. It can be turned off entirely by setting to `0`.
+
 ### `exit_mode`
 
 Default: `return-original`
