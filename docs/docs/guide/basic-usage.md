@@ -1,6 +1,6 @@
 # Basic Usage
 
-Now that you're all setup and running, here's a quick walkthrough of how you can use Atuin best.
+Now that you're all set up and running, here's a quick walkthrough of how you can use Atuin best.
 
 ## What does Atuin record?
 

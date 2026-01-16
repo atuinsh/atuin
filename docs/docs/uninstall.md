@@ -5,8 +5,9 @@ Sorry to see you go!
 If you used the Atuin installer, you can totally delete it by removing the following
 
 1. Delete the ~/.atuin directory
-2. Delete the ~/.local/share/atuin directory
-3. Remove the line referencing "atuin init" from your shell config
+2. Delete the ~/.config/atuin directory
+3. Delete the ~/.local/share/atuin directory
+4. Remove the line referencing "atuin init" from your shell config
 
 Otherwise, uninstalling Atuin depends on your system, and how you installed it.
 

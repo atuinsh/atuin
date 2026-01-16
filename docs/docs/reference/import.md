@@ -41,21 +41,37 @@ will be `{session}_history` in `$XDG_DATA_HOME/fish/` (or `$HOME/.local/share/fi
 Not all of the data in the fish history is preserved, some data about filenames used
 for each command are not used by Atuin, so it is discarded.
 
-## nu-hist-db
-
-This importer reads from Nushell's SQLite history database, which is stored in
-`$XDG_CONFIG_HOME/nushell/history.sqlite3` or `$HOME/.config/nushell/history.sqlite3`.
-There is no way to set the filename otherwise.
-
 ## nu
 
 This importer reads from Nushell's text history format, which is stored in
 `$XDG_CONFIG_HOME/nushell/history.txt` or `$HOME/.config/nushell/history.txt`.
 There is no way to set the filename otherwise.
 
+## nu-hist-db
+
+This importer reads from Nushell's SQLite history database, which is stored in
+`$XDG_CONFIG_HOME/nushell/history.sqlite3` or `$HOME/.config/nushell/history.sqlite3`.
+There is no way to set the filename otherwise.
+
+## powershell
+
+This importer reads from
+[PowerShell's history file](https://learn.microsoft.com/en-us/powershell/module/psreadline/about/about_psreadline#command-history).
+On Windows, the file is located at
+`$APPDATA\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt`.
+On other systems, it is located at
+`$XDG_DATA_HOME/powershell/PSReadLine/ConsoleHost_history.txt`
+or `$HOME/.local/share/powershell/PSReadLine/ConsoleHost_history.txt`.
+
+## replxx
+
+The [replxx](https://github.com/AmokHuginnsson/replxx) importer will read from
+`$HISTFILE` or `$HOME/.histfile`.
+
 ## resh
 
-The [RESH](https://github.com/curusarn/resh) importer will read from `$HISTFILE` or `$HOME/.resh_history.json`.
+The [RESH](https://github.com/curusarn/resh) importer will read from `$HISTFILE`
+or `$HOME/.resh_history.json`.
 
 ## xonsh
 
@@ -72,7 +88,7 @@ environment variables present when each session was initiated, but this data is
 discarded by Atuin. Xonsh optionally stores the output of each command; if present
 this data is also ignored by Atuin.
 
-## xonsh_sqlite
+## xonsh-sqlite
 
 The Xonsh SQLite importer will read from the Xonsh SQLite history file. The history
 file's location is determined by the same process as the regular Xonsh importer,
@@ -82,12 +98,12 @@ The Xonsh SQLite backend does not store environment variables, but like the JSON
 backend it can optionally store the output of each command. As with the JSON backend,
 if present this data will be ignored by Atuin.
 
-## zsh_histdb
-
-This will read the Zsh histdb SQLite file from `$HISTDB_FILE` or
-`$HOME/.histdb/zsh-history.db`.
-
 ## zsh
 
 This will read the Zsh history from `$HISTFILE` or `$HOME/.zhistory`
 or `$HOME/.zsh_history` in either the simple or extended format.
+
+## zsh-hist-db
+
+This will read the Zsh histdb SQLite file from `$HISTDB_FILE` or
+`$HOME/.histdb/zsh-history.db`.

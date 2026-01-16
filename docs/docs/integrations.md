@@ -4,7 +4,18 @@
 
 Atuin automatically adds itself as an [autosuggest strategy](https://github.com/zsh-users/zsh-autosuggestions#suggestion-strategy).
 
-If you'd like to override this, add your own config after "$(atuin init zsh)" in your zshrc.
+If you'd like to override this, add your own config after `"$(atuin init zsh)"` in your `.zshrc`.
+
+## zsh-vi-mode
+
+If you are using [Zsh Vi Mode](https://github.com/jeffreytse/zsh-vi-mode), you may want to add the following to your `.zshrc` to prevent overriding the default atuin binds:
+
+```shell
+# Append a command directly (after sourcing zvm)
+zvm_after_init_commands+=(
+  'eval "$(atuin init zsh)"'
+)
+```
 
 ## ble.sh auto-complete (Bash)
 

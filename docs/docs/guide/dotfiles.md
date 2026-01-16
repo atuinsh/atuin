@@ -19,7 +19,7 @@ no longer need to edit your config files manually.
 
 ## Required config
 
-Once Atuin is setup and installed, the following is required in your config file (`~/.config/atuin/config.toml`)
+Once Atuin is set up and installed, the following is required in your config file (`~/.config/atuin/config.toml`)
 
 ```
 [dotfiles]
@@ -28,7 +28,7 @@ enabled = true
 
 In a later release, this will be enabled by default.
 
-Note: If you have not yet setup sync v2, please also add
+Note: If you have not yet set up sync v2, please also add
 
 ```
 [sync]
@@ -131,10 +131,10 @@ atuin dotfiles var list
 ```
 
 ### Syncing and backing up dotfiles
-If you have [setup sync](sync.md), then running
+If you have [set up sync](sync.md), then running
 
 ```
 atuin sync
 ```
 
-will backup your config to the server and sync it across machines.
+will back up your config to the server and sync it across machines.
