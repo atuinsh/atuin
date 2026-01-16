@@ -140,6 +140,12 @@ After installing, remember to restart your shell.
         antigen bundle atuinsh/atuin@main
         ```
 
+    === "Antidote"
+
+        ```shell
+        antidote install atuinsh/atuin
+        ```
+
 === "bash"
 
     === "ble.sh"
