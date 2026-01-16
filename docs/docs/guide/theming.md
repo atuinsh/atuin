@@ -20,6 +20,7 @@ Where `THEMENAME` is a known theme. The following themes are available out-of-th
 * default theme (can be explicitly referenced with an empty name `""`)
 * `autumn` theme
 * `marine` theme
+* `(none)` theme (removes all styling)
 
 These are present to ensure users and developers can try out theming, but in general, you
 will need to download themes or make your own.
@@ -99,6 +100,10 @@ Guidance = "#888844"
 where not all of the *Meanings* need to be explicitly defined. If they are absent,
 then the color will be chosen from the parent theme, if one is defined, or if that
 key is missing in the `theme` block, from the default theme.
+
+If the entire named theme is missing, which is inherently an error, then the theme
+will drop to `(none)` and leave Atuin unstyled, rather than trying to fallback to
+the any default, or other, theme.
 
 This theme file should be moved to `~/.config/atuin/themes/my-theme.toml` and the
 following added to `~/.config/atuin/config.toml`:
