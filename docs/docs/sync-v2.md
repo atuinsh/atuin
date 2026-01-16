@@ -1,6 +1,6 @@
 # Sync v2
 
-Just installed Atuin? Don't worry about this page, everything should be setup
+Just installed Atuin? Don't worry about this page, everything should be set up
 for you.
 
 If you've been using Atuin for a while, you might not be using the best sync. A

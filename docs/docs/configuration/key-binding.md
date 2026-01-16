@@ -60,6 +60,21 @@ macOS does not have an ++alt++ key, although terminal emulators can often be con
 ctrl_n_shortcuts = true
 ```
 
+Ghostty on Linux maps ++alt+1++ .. ++alt+9++ for switching between tabs by number. To disable this behavior either add the following to ~/.config/ghostty/config:
+```
+keybind=alt+one=unbind
+keybind=alt+two=unbind
+keybind=alt+three=unbind
+keybind=alt+four=unbind
+keybind=alt+five=unbind
+keybind=alt+six=unbind
+keybind=alt+seven=unbind
+keybind=alt+eight=unbind
+keybind=alt+nine=unbind
+```
+(this will disable tab switching by ++alt+n++)
+or use the `ctrl_n_shortcuts` as outlined above.
+
 ## zsh
 
 If you'd like to customize your bindings further, it's possible to do so with custom shell config:
@@ -98,6 +113,8 @@ eval "$(atuin init bash)"
 
 # bind to ctrl-r, add any other bindings you want here too
 bind -x '"\C-r": __atuin_history'
+# example of CTRL-upkey
+# bind -x '"\e\[1\;5A":__atuin_history'
 
 # bind to the up key, which depends on terminal mode
 bind -x '"\e[A": __atuin_history --shell-up-key-binding'
@@ -201,8 +218,11 @@ If [vim is enabled in the config](config.md#keymap_mode), the following keybindi
 ### Inspector
 Open the inspector with ctrl + o
 
-| Shortcut   | Action                                        |
-| ---------- | --------------------------------------------- |
-| Esc        | Close the inspector, returning to the shell   |
-| ctrl + o   | Close the inspector, returning to search view |
-| ctrl + d   | Delete the inspected item from the history    |
+| Shortcut | Action                                        |
+| -------- | --------------------------------------------- |
+| Esc      | Close the inspector, returning to the shell   |
+| ctrl + o | Close the inspector, returning to search view |
+| ctrl = d | Delete the inspected item from the history    |
+| ↑        | Inspect the previous item in the history      |
+| ↓        | Inspect the next item in the history          |
+| tab      | Select current item and edit                  |

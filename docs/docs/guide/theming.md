@@ -17,9 +17,10 @@ name = "THEMENAME"
 
 Where `THEMENAME` is a known theme. The following themes are available out-of-the-box:
 
-* default theme (can be explicitly referenced with an empty name `""`)
+* `default` theme
 * `autumn` theme
 * `marine` theme
+* `(none)` theme (removes all styling)
 
 These are present to ensure users and developers can try out theming, but in general, you
 will need to download themes or make your own.
@@ -59,6 +60,7 @@ to (at present) colors. In future, this may be expanded to allow richer style su
 * `Guidance`: instructing the user as help or context
 * `Important`: drawing the user's attention to information
 * `Title`: titling a section or view
+* `Muted`: anodyne, usually grey, foreground for contrast with other colors. Normally equivalent to the base color, but allows themes to change the base color, with less risk of breaking intentional color contrasts (e.g. stacked bar charts)
 
 These may expand over time as they are added to Atuin's codebase, but Atuin
 should have fallbacks added for any new *Meanings* so that, whether themes limit to
@@ -73,15 +75,36 @@ PRs, extend the Meanings enum if needed (along with a fallback Meaning!).
 When a theme name is read but not yet loaded, Atuin will look for it in the folder
 `~/.config/atuin/themes/` unless overridden by the `ATUIN_THEME_DIR` environment
 variable. It will attempt to open a file of name `THEMENAME.toml` and read it as a
-map from *Meanings* to colors.
+map from *Meanings* to foreground colors.
+
+Note that, at present, it is not possible to specify the default terminal color explicitly
+in a theme file. However, the default theme Base color will always be unset and therefore
+will be the user's default terminal color. Hence, you should only override the Base color
+in your theme, or derive from a theme that does so, if your theme would not make sense
+otherwise (e.g. the `marine` theme is intended to make everything green/blue, so it does,
+but the `autumn` theme only seeks to make the custom colors warmer, so it does not).
 
 Colors may be specified either as names from the [palette](https://ogeon.github.io/docs/palette/master/palette/named/index.html)
-crate in lowercase, or as six-character hex codes, prefixed with `#`. For example,
-the following are valid color names:
+crate in lowercase, or as six-character hex codes, prefixed with `#`. To explicitly select ANSI colors by integer, or for greater flexibility in general, you can prefix with `@` and the rest of the string will be handled by crossterm's color parsing. For examples, see [crossterm's color deserialization tests](https://github.com/crossterm-rs/crossterm/blob/5d50d8da62c5e034ef8b2787a771a2c0f9b3b2f9/src/style/types/color.rs#L389), remembering the need to add a `@` prefix for atuin.
+
+For example, the following are valid color names:
 
 * `#ff0088`
 * `teal`
 * `powderblue`
+* `@ansi_(255)`
+* `@rgb_(255, 128, 0)`
+
+You can also express colors through Crossterm-supported strings, prefixed by `@`.
+For example,
+
+* `@ansi_(123)`
+* `@dark_yellow`
+
+While there is not currently an official reference, you can see examples in the
+[crossterm tests](https://docs.rs/crossterm/latest/src/crossterm/style/types/color.rs.html#376).
+As this is passed straight to Crossterm, using [ANSI codes](https://www.ditig.com/256-colors-cheat-sheet)
+can be helpful for ensuring your theme is compatible with 256-color terminals.
 
 A theme file, say `my-theme.toml` can then be built up, such as:
 
@@ -98,7 +121,11 @@ Guidance = "#888844"
 
 where not all of the *Meanings* need to be explicitly defined. If they are absent,
 then the color will be chosen from the parent theme, if one is defined, or if that
-key is missing in the `theme` block, from the default theme.
+key is missing in the `theme` block, from the `default` theme.
+
+If the entire named theme is missing, which is inherently an error, then the theme
+will drop to `(none)` and leave Atuin unstyled, rather than trying to fallback to
+the any default, or other, theme.
 
 This theme file should be moved to `~/.config/atuin/themes/my-theme.toml` and the
 following added to `~/.config/atuin/config.toml`:

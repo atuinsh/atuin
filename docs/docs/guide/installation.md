@@ -14,7 +14,7 @@ then the manual steps below offer much more flexibility.
 curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | sh
 ```
 
-[**Setup sync** - Move on to the next step, or read on to manually install Atuin instead.](sync.md)
+[**Set up sync** - Move on to the next step, or read on to manually install Atuin instead.](sync.md)
 
 ## Manual installation
 
@@ -24,7 +24,7 @@ If you don't wish to use the installer, the manual installation steps are as fol
 
 === "Cargo"
 
-    It's best to use [rustup](https://rustup.rs/) to get setup with a Rust
+    It's best to use [rustup](https://rustup.rs/) to set up a Rust
     toolchain, then you can run:
 
     ```shell
@@ -43,6 +43,14 @@ If you don't wish to use the installer, the manual installation steps are as fol
 
     ```shell
     sudo port install atuin
+    ```
+
+=== "mise"
+
+    Atuin is also installable using [mise](https://github.com/jdx/mise)
+
+    ```shell
+    mise use -g atuin@latest
     ```
 
 === "Nix"
@@ -140,6 +148,12 @@ After installing, remember to restart your shell.
         antigen bundle atuinsh/atuin@main
         ```
 
+    === "Antidote"
+
+        ```shell
+        antidote install atuinsh/atuin
+        ```
+
 === "bash"
 
     === "ble.sh"
@@ -178,7 +192,7 @@ After installing, remember to restart your shell.
         echo '[[ -f ~/.bash-preexec.sh ]] && source ~/.bash-preexec.sh' >> ~/.bashrc
         ```
 
-        Then setup Atuin
+        Then set up Atuin
 
         ```shell
         echo 'eval "$(atuin init bash)"' >> ~/.bashrc
