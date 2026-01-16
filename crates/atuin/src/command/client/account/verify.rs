@@ -36,7 +36,7 @@ pub async fn run(settings: &Settings, token: Option<String>) -> Result<()> {
 
         (false, false) => {
             println!(
-                "Your Atuin server does not have mail setup. This is not required, though your account cannot be verified. Speak to your admin."
+                "Your Atuin server does not have mail set up. This is not required, though your account cannot be verified. Speak to your admin."
             );
         }
 

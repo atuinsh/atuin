@@ -1,6 +1,6 @@
 # Basic Usage
 
-Now that you're all setup and running, here's a quick walkthrough of how you can use Atuin best
+Now that you're all set up and running, here's a quick walkthrough of how you can use Atuin best
 
 ## What does Atuin record?
 
@@ -30,7 +30,7 @@ While searching in the TUI, you can adjust the "filter mode" by repeatedly press
 
 For a full set of config values, please see the [config reference page](../configuration/config.md)
 
-The default configuration file is location at `~/.config/atuin/config.toml`
+The default configuration file is located at `~/.config/atuin/config.toml`
 
 ### Keybindings
 

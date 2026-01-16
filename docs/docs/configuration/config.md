@@ -144,7 +144,7 @@ The default filter to use when searching
 | global (default) | Search history from all hosts, all sessions, all directories |
 | host             | Search history just from this host                           |
 | session          | Search history just from the current session                 |
-| directory        | Search history just from the current directory               |
+| directory        | Search history just from the current directory (global)      |
 | workspace        | Search history just from the current git repository (>17.0)  |
 
 Filter modes can still be toggled via ctrl-r
@@ -266,6 +266,16 @@ Atuin version: >= 18.0
 Default: `true`
 
 Configure whether or not to show tabs for search and inspect.
+
+### `auto_hide_height`
+
+Atuin version: >= 18.4
+
+Default: `8`
+
+Set Atuin to hide lines when a minimum number of rows is subceeded. This has no effect except
+when `compact` style is being used (see `style` above), and currently applies to only the
+interactive search and inspector. It can be turned off entirely by setting to `0`.
 
 ### `exit_mode`
 
@@ -499,6 +509,7 @@ common_subcommands = [
   "git",
   "go",
   "ip",
+  "jj",
   "kubectl",
   "nix",
   "nmcli",
@@ -600,6 +611,22 @@ Default: `a`
 
 Which key to use as the prefix
 
+### `exit_past_line_start`
+
+Atuin version: >= 18.5
+
+Default: `true`
+
+Exits the TUI when scrolling left while the cursor is at the start of the line.
+
+### `exit_past_line_end`
+
+Atuin version: >= 18.5
+
+Default: `true`
+
+Exits the TUI when scrolling right while the cursor is at the end of the line.
+
 ## preview
 
 This section of the client config is specifically for configuring preview-related settings.
@@ -691,17 +718,17 @@ The theme to use for showing the terminal interface.
 
 ```toml
 [theme]
-name = ""
+name = "default"
 debug = false
 max_depth = 10
 ```
 
 ### `name`
 
-Default: `""`
+Default: `"default"`
 
-A theme name that must be present as a built-in (an empty string for the default,
-`autumn` or `marine`), or found in the themes directory, with the suffix `.toml`.
+A theme name that must be present as a built-in (unset or `default` for the default,
+else `autumn` or `marine`), or found in the themes directory, with the suffix `.toml`.
 By default this is `~/.config/atuin/themes/` but can be overridden with the
 `ATUIN_THEME_DIR` environment variable.
 

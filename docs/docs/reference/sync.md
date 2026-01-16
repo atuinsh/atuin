@@ -67,8 +67,8 @@ If you want to log in to a new machine, you will require your encryption key
 atuin login -u <USERNAME> -p <PASSWORD> -k <KEY>
 ```
 
-If you don't want to have your password be included in shell history, you can omit
-the password flag and you will be prompted to provide it through stdin.
+If you don't want to have your password or encryption key be included in shell history, you can omit
+the corresponding flag and you will be prompted to provide it through stdin.
 
 ## Logout
 
