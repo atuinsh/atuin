@@ -691,17 +691,17 @@ The theme to use for showing the terminal interface.
 
 ```toml
 [theme]
-name = ""
+name = "default"
 debug = false
 max_depth = 10
 ```
 
 ### `name`
 
-Default: `""`
+Default: `"default"`
 
-A theme name that must be present as a built-in (an empty string for the default,
-`autumn` or `marine`), or found in the themes directory, with the suffix `.toml`.
+A theme name that must be present as a built-in (unset or `default` for the default,
+else `autumn` or `marine`), or found in the themes directory, with the suffix `.toml`.
 By default this is `~/.config/atuin/themes/` but can be overridden with the
 `ATUIN_THEME_DIR` environment variable.
 
