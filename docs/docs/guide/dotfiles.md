@@ -13,6 +13,7 @@ The following shells are supported:
 - bash
 - fish
 - xonsh
+- powershell
 
 Note: Atuin handles your configuration internally, so once it is installed you
 no longer need to edit your config files manually.

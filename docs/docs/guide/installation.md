@@ -2,6 +2,8 @@
 
 ## Recommended installation approach
 
+### On Unix
+
 Let's get started! First up, you will want to install Atuin. The recommended
 approach is to use the installation script, which automatically handles the
 installation of Atuin including the requirements for your environment.
@@ -15,6 +17,21 @@ curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | sh
 ```
 
 [**Set up sync** - Move on to the next step, or read on to manually install Atuin instead.](sync.md)
+
+### On Windows
+
+The recommended approach on Windows is to use WinGet to install Atuin. Then, if you use PowerShell,
+add the initialization command to your PowerShell profile, and restart your shell.
+
+```shell
+winget install -e Atuinsh.Atuin
+if (-not (Test-Path -Path $PROFILE)) { New-Item -ItemType File -Path $PROFILE -Force | Out-Null }
+Write-Output 'atuin init powershell | Out-String | Invoke-Expression' >> $PROFILE
+```
+
+Note that the `$PROFILE` path may depend on your PowerShell version.
+
+[**Set up sync** - Move on to the next step.](sync.md)
 
 ## Manual installation
 
@@ -103,6 +120,14 @@ If you don't wish to use the installer, the manual installation steps are as fol
         atclone"./atuin init zsh > init.zsh; ./atuin gen-completions --shell zsh > _atuin" \
         atpull"%atclone" src"init.zsh"
     zinit light atuinsh/atuin
+    ```
+
+=== "WinGet"
+
+    Atuin is available on WinGet:
+
+    ```shell
+    winget install -e Atuinsh.Atuin
     ```
 
 === "Source"
@@ -231,6 +256,14 @@ After installing, remember to restart your shell.
     execx($(atuin init xonsh))
     ```
     to the end of your `~/.xonshrc`
+
+=== "PowerShell"
+
+    Add the following to the end of your `$PROFILE` file:
+
+    ```shell
+    atuin init powershell | Out-String | Invoke-Expression
+    ```
 
 ## Upgrade
 

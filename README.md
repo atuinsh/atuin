@@ -83,6 +83,7 @@ I wanted to. And I **really** don't want to.
 - fish
 - nushell
 - xonsh
+- powershell (tier 2 support)
 
 ## Community
 
