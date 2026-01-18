@@ -234,12 +234,28 @@ $env.config = (
 ### Vim mode
 If [vim is enabled in the config](config.md#keymap_mode), the following keybindings are enabled:
 
-| Shortcut | Mode   | Action                                |
-| -------- | ------ | ------------------------------------- |
-| k        | Normal | Selects the next item on the list     |
-| j        | Normal | Selects the previous item on the list |
-| i        | Normal | Enters insert mode                    |
-| Esc      | Insert | Enters normal mode                    |
+| Shortcut | Mode   | Action                                     |
+| -------- | ------ | ------------------------------------------ |
+| k        | Normal | Selects the next item on the list          |
+| j        | Normal | Selects the previous item on the list      |
+| h        | Normal | Move cursor left                           |
+| l        | Normal | Move cursor right                          |
+| i        | Normal | Enters insert mode                         |
+| I        | Normal | Move to start of line and enter insert     |
+| a        | Normal | Move right and enter insert mode           |
+| A        | Normal | Move to end of line and enter insert       |
+| Ctrl+u   | Normal | Half-page up (toward visual top)           |
+| Ctrl+d   | Normal | Half-page down (toward visual bottom)      |
+| Ctrl+b   | Normal | Full-page up (toward visual top)           |
+| Ctrl+f   | Normal | Full-page down (toward visual bottom)      |
+| G        | Normal | Jump to visual bottom of history           |
+| gg       | Normal | Jump to visual top of history              |
+| H        | Normal | Jump to top of visible screen              |
+| M        | Normal | Jump to middle of visible screen           |
+| L        | Normal | Jump to bottom of visible screen           |
+| ? or /   | Normal | Clear input and enter insert mode          |
+| 1-9      | Normal | Select item by number                      |
+| Esc      | Insert | Enters normal mode                         |
 
 
 ### Inspector
