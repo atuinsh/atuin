@@ -2,29 +2,29 @@ use std::collections::HashMap;
 use std::env;
 use std::time::Duration;
 
-use eyre::{Result, bail, eyre};
+use eyre::{bail, eyre, Result};
 use reqwest::{
+    header::{HeaderMap, AUTHORIZATION, USER_AGENT},
     Response, StatusCode, Url,
-    header::{AUTHORIZATION, HeaderMap, USER_AGENT},
 };
 
+use atuin_common::{
+    api::{
+        AddHistoryRequest, ChangePasswordRequest, CliCodeResponse, CliVerifyResponse,
+        CountResponse, DeleteHistoryRequest, ErrorResponse, LoginRequest, LoginResponse,
+        MeResponse, RegisterResponse, SendVerificationResponse, StatusResponse,
+        SyncHistoryResponse, VerificationTokenRequest, VerificationTokenResponse,
+    },
+    record::RecordStatus,
+};
 use atuin_common::{
     api::{ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ATUIN_VERSION},
     record::{EncryptedData, HostId, Record, RecordIdx},
 };
-use atuin_common::{
-    api::{
-        AddHistoryRequest, ChangePasswordRequest, CountResponse, DeleteHistoryRequest,
-        ErrorResponse, LoginRequest, LoginResponse, MeResponse, RegisterResponse,
-        SendVerificationResponse, StatusResponse, SyncHistoryResponse, VerificationTokenRequest,
-        VerificationTokenResponse,
-    },
-    record::RecordStatus,
-};
 
 use semver::Version;
-use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
+use time::OffsetDateTime;
 
 use crate::{history::History, sync::hash_str, utils::get_host_user};
 
@@ -109,6 +109,40 @@ pub async fn login(address: &str, req: LoginRequest) -> Result<LoginResponse> {
 
     let session = resp.json::<LoginResponse>().await?;
     Ok(session)
+}
+
+/// Request a CLI auth code from the Atuin Hub
+pub async fn hub_request_code(address: &str) -> Result<CliCodeResponse> {
+    let url = make_url(address, "/auth/cli/code")?;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(url)
+        .header(USER_AGENT, APP_USER_AGENT)
+        .header(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION)
+        .send()
+        .await?;
+    let resp = handle_resp_error(resp).await?;
+
+    let code_response = resp.json::<CliCodeResponse>().await?;
+    Ok(code_response)
+}
+
+/// Poll to verify the CLI auth code and get the session token
+pub async fn hub_verify_code(address: &str, code: &str) -> Result<CliVerifyResponse> {
+    let url = make_url(address, &format!("/auth/cli/verify?code={}", code))?;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(url)
+        .header(USER_AGENT, APP_USER_AGENT)
+        .header(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION)
+        .send()
+        .await?;
+    let resp = handle_resp_error(resp).await?;
+
+    let verify_response = resp.json::<CliVerifyResponse>().await?;
+    Ok(verify_response)
 }
 
 #[cfg(feature = "check-update")]
