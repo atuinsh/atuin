@@ -368,6 +368,7 @@ impl State {
     fn handle_search_input(&mut self, settings: &Settings, input: &KeyEvent) -> InputAction {
         let ctrl = input.modifiers.contains(KeyModifiers::CONTROL);
         let alt = input.modifiers.contains(KeyModifiers::ALT);
+        let shift = input.modifiers.contains(KeyModifiers::SHIFT);
 
         // Use Ctrl-n instead of Alt-n?
         let modfr = if settings.ctrl_n_shortcuts { ctrl } else { alt };
@@ -525,6 +526,9 @@ impl State {
                 .search
                 .input
                 .remove_next_word(&settings.word_chars, settings.word_jump_mode),
+            KeyCode::Delete if shift => {
+                return InputAction::Delete(self.results_state.selected());
+            }
             KeyCode::Delete => {
                 self.search.input.remove();
             }
