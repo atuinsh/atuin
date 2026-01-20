@@ -46,7 +46,8 @@ impl Importer for Nu {
         let now = OffsetDateTime::now_utc();
 
         let mut counter = 0;
-        for b in unix_byte_lines(&self.bytes) {
+        // Reverse order so that recency is preserved
+        for b in unix_byte_lines(&self.bytes).rev() {
             let s = match std::str::from_utf8(b) {
                 Ok(s) => s,
                 Err(_) => continue, // we can skip past things like invalid utf8
