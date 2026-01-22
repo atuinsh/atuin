@@ -299,15 +299,12 @@ impl State {
             KeyCode::Left if cursor_at_start_of_line && settings.keys.exit_past_line_start => {
                 Some(Self::handle_key_exit(settings))
             }
-            KeyCode::Left if self.search.input.as_str().is_empty() => {
-                Some(InputAction::Accept(self.results_state.selected()))
-            }
             KeyCode::Backspace
                 if cursor_at_start_of_line && settings.keys.accept_with_backspace =>
             {
                 Some(InputAction::Accept(self.results_state.selected()))
             }
-            KeyCode::Backspace if self.search.input.as_str().is_empty() => {
+            KeyCode::Left | KeyCode::Backspace if self.search.input.as_str().is_empty() => {
                 Some(InputAction::Accept(self.results_state.selected()))
             }
             KeyCode::Char('o') if ctrl => {
