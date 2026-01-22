@@ -4,6 +4,7 @@ use super::duration::format_duration;
 use super::engines::SearchEngine;
 use atuin_client::{
     history::History,
+    settings::{UiColumn, UiColumnType},
     theme::{Meaning, Theme},
 };
 use atuin_common::utils::Escapable as _;
@@ -40,6 +41,8 @@ pub struct HistoryList<'a> {
     theme: &'a Theme,
     history_highlighter: HistoryHighlighter<'a>,
     show_numeric_shortcuts: bool,
+    /// Columns to display (in order, after the indicator)
+    columns: &'a [UiColumn],
 }
 
 #[derive(Default)]
@@ -95,13 +98,11 @@ impl StatefulWidget for HistoryList<'_> {
             theme: self.theme,
             history_highlighter: self.history_highlighter,
             show_numeric_shortcuts: self.show_numeric_shortcuts,
+            columns: self.columns,
         };
 
         for item in self.history.iter().skip(state.offset).take(end - start) {
-            s.index();
-            s.duration(item);
-            s.time(item);
-            s.command(item);
+            s.render_row(item);
 
             // reset line
             s.y += 1;
@@ -121,6 +122,7 @@ impl<'a> HistoryList<'a> {
         theme: &'a Theme,
         history_highlighter: HistoryHighlighter<'a>,
         show_numeric_shortcuts: bool,
+        columns: &'a [UiColumn],
     ) -> Self {
         Self {
             history,
@@ -132,6 +134,7 @@ impl<'a> HistoryList<'a> {
             theme,
             history_highlighter,
             show_numeric_shortcuts,
+            columns,
         }
     }
 
@@ -168,19 +171,57 @@ struct DrawState<'a> {
     theme: &'a Theme,
     history_highlighter: HistoryHighlighter<'a>,
     show_numeric_shortcuts: bool,
+    columns: &'a [UiColumn],
 }
 
-// longest line prefix I could come up with
+// Default prefix length for backwards compatibility (used by interactive.rs)
 #[allow(clippy::cast_possible_truncation)] // we know that this is <65536 length
 pub const PREFIX_LENGTH: u16 = " > 123ms 59s ago".len() as u16;
-static SPACES: &str = "                ";
-static _ASSERT: () = assert!(SPACES.len() == PREFIX_LENGTH as usize);
 
 // these encode the slices of `" > "`, `" {n} "`, or `"   "` in a compact form.
 // Yes, this is a hack, but it makes me feel happy
 static SLICES: &str = " > 1 2 3 4 5 6 7 8 9   ";
 
 impl DrawState<'_> {
+    /// Render a complete row for a history item based on configured columns.
+    fn render_row(&mut self, h: &History) {
+        // Always render the indicator first (width 3)
+        self.index();
+
+        // Calculate the width for the expanding column
+        // Fixed columns use their configured width + 1 (trailing space)
+        let indicator_width: u16 = 3;
+        let fixed_width: u16 = self
+            .columns
+            .iter()
+            .filter(|c| !c.expand)
+            .map(|c| c.width + 1)
+            .sum();
+        let expand_width = self
+            .list_area
+            .width
+            .saturating_sub(indicator_width + fixed_width);
+
+        // Render each configured column
+        for column in self.columns {
+            let width = if column.expand {
+                expand_width
+            } else {
+                column.width
+            };
+            match column.column_type {
+                UiColumnType::Duration => self.duration(h, width),
+                UiColumnType::Time => self.time(h, width),
+                UiColumnType::Datetime => self.datetime(h, width),
+                UiColumnType::Directory => self.directory(h, width),
+                UiColumnType::Host => self.host(h, width),
+                UiColumnType::User => self.user(h, width),
+                UiColumnType::Exit => self.exit_code(h, width),
+                UiColumnType::Command => self.command(h),
+            }
+        }
+    }
+
     fn index(&mut self) {
         if !self.show_numeric_shortcuts {
             let i = self.y as usize + self.state.offset;
@@ -204,18 +245,21 @@ impl DrawState<'_> {
         self.draw(prompt, Style::default());
     }
 
-    fn duration(&mut self, h: &History) {
-        let status = self.theme.as_style(if h.success() {
+    fn duration(&mut self, h: &History, width: u16) {
+        let style = self.theme.as_style(if h.success() {
             Meaning::AlertInfo
         } else {
             Meaning::AlertError
         });
         let duration = Duration::from_nanos(u64::try_from(h.duration).unwrap_or(0));
-        self.draw(&format_duration(duration), status.into());
+        let formatted = format_duration(duration);
+        let w = width as usize;
+        // Right-align duration within its column width, plus trailing space
+        let display = format!("{:>w$} ", formatted);
+        self.draw(&display, style.into());
     }
 
-    #[allow(clippy::cast_possible_truncation)] // we know that time.len() will be <6
-    fn time(&mut self, h: &History) {
+    fn time(&mut self, h: &History, width: u16) {
         let style = self.theme.as_style(Meaning::Guidance);
 
         // Account for the chance that h.timestamp is "in the future"
@@ -226,14 +270,11 @@ impl DrawState<'_> {
         let since = (self.now)() - h.timestamp;
         let time = format_duration(since.try_into().unwrap_or_default());
 
-        // pad the time a little bit before we write. this aligns things nicely
-        // skip padding if for some reason it is already too long to align nicely
-        let padding =
-            usize::from(PREFIX_LENGTH).saturating_sub(usize::from(self.x) + 4 + time.len());
-        self.draw(&SPACES[..padding], Style::default());
-
-        self.draw(&time, style.into());
-        self.draw(" ago", style.into());
+        // Format as "Xs ago" right-aligned within column width, plus trailing space
+        let w = width as usize;
+        let time_str = format!("{} ago", time);
+        let display = format!("{:>w$} ", time_str);
+        self.draw(&display, style.into());
     }
 
     fn command(&mut self, h: &History) {
@@ -279,6 +320,76 @@ impl DrawState<'_> {
             }
             pos += 1;
         }
+    }
+
+    /// Render the absolute datetime column (e.g., "2025-01-22 14:35")
+    fn datetime(&mut self, h: &History, width: u16) {
+        let style = self.theme.as_style(Meaning::Annotation);
+        // Format: YYYY-MM-DD HH:MM
+        let formatted = h
+            .timestamp
+            .format(
+                &time::format_description::parse("[year]-[month]-[day] [hour]:[minute]")
+                    .expect("valid format"),
+            )
+            .unwrap_or_else(|_| "????-??-?? ??:??".to_string());
+        let w = width as usize;
+        let display = format!("{:w$} ", formatted);
+        self.draw(&display, style.into());
+    }
+
+    /// Render the directory column (working directory, truncated)
+    fn directory(&mut self, h: &History, width: u16) {
+        let style = self.theme.as_style(Meaning::Annotation);
+        let w = width as usize;
+        let cwd = &h.cwd;
+        // Truncate from the left with "..." if too long, plus trailing space
+        let display = if cwd.len() > w {
+            format!("...{} ", &cwd[cwd.len() - (w - 3)..])
+        } else {
+            format!("{:w$} ", cwd)
+        };
+        self.draw(&display, style.into());
+    }
+
+    /// Render the host column (just the hostname)
+    fn host(&mut self, h: &History, width: u16) {
+        let style = self.theme.as_style(Meaning::Annotation);
+        let w = width as usize;
+        // Database stores hostname as "hostname:username"
+        let host = h.hostname.split(':').next().unwrap_or(&h.hostname);
+        let display = if host.len() > w {
+            format!("{}... ", &host[..w.saturating_sub(4)])
+        } else {
+            format!("{:w$} ", host)
+        };
+        self.draw(&display, style.into());
+    }
+
+    /// Render the user column
+    fn user(&mut self, h: &History, width: u16) {
+        let style = self.theme.as_style(Meaning::Annotation);
+        let w = width as usize;
+        // Database stores hostname as "hostname:username"
+        let user = h.hostname.split(':').nth(1).unwrap_or("");
+        let display = if user.len() > w {
+            format!("{}... ", &user[..w.saturating_sub(4)])
+        } else {
+            format!("{:w$} ", user)
+        };
+        self.draw(&display, style.into());
+    }
+
+    /// Render the exit code column
+    fn exit_code(&mut self, h: &History, width: u16) {
+        let style = if h.success() {
+            self.theme.as_style(Meaning::AlertInfo)
+        } else {
+            self.theme.as_style(Meaning::AlertError)
+        };
+        let w = width as usize;
+        let display = format!("{:>w$} ", h.exit);
+        self.draw(&display, style.into());
     }
 
     fn draw(&mut self, s: &str, mut style: Style) {
