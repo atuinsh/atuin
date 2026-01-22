@@ -255,7 +255,7 @@ impl DrawState<'_> {
         let formatted = format_duration(duration);
         let w = width as usize;
         // Right-align duration within its column width, plus trailing space
-        let display = format!("{:>w$} ", formatted);
+        let display = format!("{formatted:>w$} ");
         self.draw(&display, style.into());
     }
 
@@ -272,8 +272,8 @@ impl DrawState<'_> {
 
         // Format as "Xs ago" right-aligned within column width, plus trailing space
         let w = width as usize;
-        let time_str = format!("{} ago", time);
-        let display = format!("{:>w$} ", time_str);
+        let time_str = format!("{time} ago");
+        let display = format!("{time_str:>w$} ");
         self.draw(&display, style.into());
     }
 
@@ -334,7 +334,7 @@ impl DrawState<'_> {
             )
             .unwrap_or_else(|_| "????-??-?? ??:??".to_string());
         let w = width as usize;
-        let display = format!("{:w$} ", formatted);
+        let display = format!("{formatted:w$} ");
         self.draw(&display, style.into());
     }
 
@@ -347,7 +347,7 @@ impl DrawState<'_> {
         let display = if cwd.len() > w {
             format!("...{} ", &cwd[cwd.len() - (w - 3)..])
         } else {
-            format!("{:w$} ", cwd)
+            format!("{cwd:w$} ")
         };
         self.draw(&display, style.into());
     }
@@ -361,7 +361,7 @@ impl DrawState<'_> {
         let display = if host.len() > w {
             format!("{}... ", &host[..w.saturating_sub(4)])
         } else {
-            format!("{:w$} ", host)
+            format!("{host:w$} ")
         };
         self.draw(&display, style.into());
     }
@@ -375,7 +375,7 @@ impl DrawState<'_> {
         let display = if user.len() > w {
             format!("{}... ", &user[..w.saturating_sub(4)])
         } else {
-            format!("{:w$} ", user)
+            format!("{user:w$} ")
         };
         self.draw(&display, style.into());
     }
