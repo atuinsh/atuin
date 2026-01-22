@@ -343,9 +343,12 @@ impl DrawState<'_> {
         let style = self.theme.as_style(Meaning::Annotation);
         let w = width as usize;
         let cwd = &h.cwd;
+        let char_count = cwd.chars().count();
         // Truncate from the left with "..." if too long, plus trailing space
-        let display = if cwd.len() > w {
-            format!("...{} ", &cwd[cwd.len() - (w - 3)..])
+        // Use character count for comparison and skip for UTF-8 safety
+        let display = if char_count > w && w >= 4 {
+            let truncated: String = cwd.chars().skip(char_count - (w - 3)).collect();
+            format!("...{truncated} ")
         } else {
             format!("{cwd:w$} ")
         };
@@ -358,8 +361,11 @@ impl DrawState<'_> {
         let w = width as usize;
         // Database stores hostname as "hostname:username"
         let host = h.hostname.split(':').next().unwrap_or(&h.hostname);
-        let display = if host.len() > w {
-            format!("{}... ", &host[..w.saturating_sub(4)])
+        let char_count = host.chars().count();
+        // Use character count for comparison and take for UTF-8 safety
+        let display = if char_count > w && w >= 4 {
+            let truncated: String = host.chars().take(w.saturating_sub(4)).collect();
+            format!("{truncated}... ")
         } else {
             format!("{host:w$} ")
         };
@@ -372,8 +378,11 @@ impl DrawState<'_> {
         let w = width as usize;
         // Database stores hostname as "hostname:username"
         let user = h.hostname.split(':').nth(1).unwrap_or("");
-        let display = if user.len() > w {
-            format!("{}... ", &user[..w.saturating_sub(4)])
+        let char_count = user.chars().count();
+        // Use character count for comparison and take for UTF-8 safety
+        let display = if char_count > w && w >= 4 {
+            let truncated: String = user.chars().take(w.saturating_sub(4)).collect();
+            format!("{truncated}... ")
         } else {
             format!("{user:w$} ")
         };
