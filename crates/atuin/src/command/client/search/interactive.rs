@@ -299,9 +299,15 @@ impl State {
             KeyCode::Left if cursor_at_start_of_line && settings.keys.exit_past_line_start => {
                 Some(Self::handle_key_exit(settings))
             }
+            KeyCode::Left if self.search.input.as_str().is_empty() => {
+                Some(InputAction::Accept(self.results_state.selected()))
+            }
             KeyCode::Backspace
                 if cursor_at_start_of_line && settings.keys.accept_with_backspace =>
             {
+                Some(InputAction::Accept(self.results_state.selected()))
+            }
+            KeyCode::Backspace if self.search.input.as_str().is_empty() => {
                 Some(InputAction::Accept(self.results_state.selected()))
             }
             KeyCode::Char('o') if ctrl => {
@@ -1742,42 +1748,62 @@ mod tests {
             "Tab should always accept"
         );
 
-        // Test left arrow with accept_past_line_start disabled (should continue)
+        // Test left arrow with empty search should accept (new default behavior)
+        let left_event = KeyEvent::new(KeyCode::Left, KeyModifiers::NONE);
+        let result = state.handle_key_input(&settings, &left_event);
+        assert!(
+            matches!(result, super::InputAction::Accept(_)),
+            "Left arrow should accept when search is empty"
+        );
+
+        // Test backspace with empty search should accept (new default behavior)
+        let backspace_event = KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE);
+        let result = state.handle_key_input(&settings, &backspace_event);
+        assert!(
+            matches!(result, super::InputAction::Accept(_)),
+            "Backspace should accept when search is empty"
+        );
+
+        // Test left/backspace with non-empty search at cursor start should NOT accept
+        state.search.input.insert('t');
+        state.search.input.insert('e');
+        state.search.input.insert('s');
+        state.search.input.insert('t');
+        state.search.input.start(); // Move cursor to start of non-empty search
+
         let left_event = KeyEvent::new(KeyCode::Left, KeyModifiers::NONE);
         let result = state.handle_key_input(&settings, &left_event);
         assert!(
             matches!(result, super::InputAction::Continue),
-            "Left arrow should continue when disabled"
+            "Left arrow should continue when search is not empty (even at cursor start)"
         );
-
-        // Test left arrow with accept_past_line_start enabled (should accept at start of line)
-        settings.keys.accept_past_line_start = true;
-        let result = state.handle_key_input(&settings, &left_event);
-        assert!(
-            matches!(result, super::InputAction::Accept(_)),
-            "Left arrow should accept at start of line when enabled"
-        );
-        settings.keys.accept_past_line_start = false;
 
         let backspace_event = KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE);
         let result = state.handle_key_input(&settings, &backspace_event);
         assert!(
             matches!(result, super::InputAction::Continue),
-            "Backspace should continue when disabled"
+            "Backspace should continue when search is not empty (even at cursor start)"
         );
 
+        // Test that accept_past_line_start flag still works with non-empty search at start
+        settings.keys.accept_past_line_start = true;
+        let result = state.handle_key_input(&settings, &left_event);
+        assert!(
+            matches!(result, super::InputAction::Accept(_)),
+            "Left arrow should accept at cursor start when flag enabled (even with non-empty search)"
+        );
+        settings.keys.accept_past_line_start = false;
+
+        // Test that accept_with_backspace flag still works with non-empty search at start
         settings.keys.accept_with_backspace = true;
         let result = state.handle_key_input(&settings, &backspace_event);
         assert!(
             matches!(result, super::InputAction::Accept(_)),
-            "Backspace should accept at start of line when enabled"
+            "Backspace should accept at cursor start when flag enabled (even with non-empty search)"
         );
+        settings.keys.accept_with_backspace = false;
 
-        state.search.input.insert('t');
-        state.search.input.insert('e');
-        state.search.input.insert('s');
-        state.search.input.insert('t');
-        state.search.input.end();
+        state.search.input.end(); // Move cursor back to end for remaining tests
 
         let right_event = KeyEvent::new(KeyCode::Right, KeyModifiers::NONE);
         let result = state.handle_key_input(&settings, &right_event);
