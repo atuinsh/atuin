@@ -18,7 +18,9 @@ use super::{
 use atuin_client::{
     database::{Database, current_context},
     history::{History, HistoryId, HistoryStats, store::HistoryStore},
-    settings::{CursorStyle, ExitMode, KeymapMode, PreviewStrategy, SearchMode, Settings, UiColumn},
+    settings::{
+        CursorStyle, ExitMode, KeymapMode, PreviewStrategy, SearchMode, Settings, UiColumn,
+    },
 };
 
 use crate::command::client::search::history_list::HistoryHighlighter;

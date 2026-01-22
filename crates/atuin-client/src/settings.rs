@@ -479,7 +479,7 @@ impl UiColumnType {
     pub fn default_width(&self) -> u16 {
         match self {
             UiColumnType::Duration => 5,
-            UiColumnType::Time => 8, // "59m ago" with padding
+            UiColumnType::Time => 8,      // "59m ago" with padding
             UiColumnType::Datetime => 16, // "2025-01-22 14:35"
             UiColumnType::Directory => 20,
             UiColumnType::Host => 15,
@@ -533,16 +533,17 @@ impl<'de> serde::Deserialize<'de> for UiColumn {
             type Value = UiColumn;
 
             fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-                formatter.write_str("a column type string or an object with 'type' and optional 'width'/'expand'")
+                formatter.write_str(
+                    "a column type string or an object with 'type' and optional 'width'/'expand'",
+                )
             }
 
             fn visit_str<E>(self, value: &str) -> Result<UiColumn, E>
             where
                 E: de::Error,
             {
-                let column_type: UiColumnType = serde::Deserialize::deserialize(
-                    serde::de::value::StrDeserializer::new(value),
-                )?;
+                let column_type: UiColumnType =
+                    serde::Deserialize::deserialize(serde::de::value::StrDeserializer::new(value))?;
                 Ok(UiColumn::new(column_type))
             }
 
@@ -574,7 +575,11 @@ impl<'de> serde::Deserialize<'de> for UiColumn {
                 let column_type = column_type.ok_or_else(|| de::Error::missing_field("type"))?;
                 let width = width.unwrap_or_else(|| column_type.default_width());
                 let expand = expand.unwrap_or(column_type == UiColumnType::Command);
-                Ok(UiColumn { column_type, width, expand })
+                Ok(UiColumn {
+                    column_type,
+                    width,
+                    expand,
+                })
             }
         }
 
