@@ -606,6 +606,19 @@ impl Ui {
             UiColumn::new(UiColumnType::Command),
         ]
     }
+
+    /// Validate the UI configuration.
+    /// Returns an error if more than one column has expand = true.
+    pub fn validate(&self) -> Result<()> {
+        let expand_count = self.columns.iter().filter(|c| c.expand).count();
+        if expand_count > 1 {
+            bail!(
+                "Only one column can have expand = true, but {} columns are set to expand",
+                expand_count
+            );
+        }
+        Ok(())
+    }
 }
 
 impl Default for Ui {
@@ -1072,6 +1085,9 @@ impl Settings {
         settings.key_path = Self::expand_path(settings.key_path)?;
         settings.session_path = Self::expand_path(settings.session_path)?;
         settings.daemon.socket_path = Self::expand_path(settings.daemon.socket_path)?;
+
+        // Validate UI settings
+        settings.ui.validate()?;
 
         Ok(settings)
     }
