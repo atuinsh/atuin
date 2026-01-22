@@ -5,9 +5,7 @@ use std::net::SocketAddr;
 
 use atuin_server_database::Database;
 use axum::{Router, serve};
-use axum_server::Handle;
-use axum_server::tls_rustls::RustlsConfig;
-use eyre::{Context, Result, eyre};
+use eyre::{Context, Result};
 
 mod handlers;
 mod metrics;
@@ -46,18 +44,14 @@ async fn shutdown_signal() {
 }
 
 pub async fn launch<Db: Database>(settings: Settings, addr: SocketAddr) -> Result<()> {
-    if settings.tls.enable {
-        launch_with_tls::<Db>(settings, addr, shutdown_signal()).await
-    } else {
-        launch_with_tcp_listener::<Db>(
-            settings,
-            TcpListener::bind(addr)
-                .await
-                .context("could not connect to socket")?,
-            shutdown_signal(),
-        )
-        .await
-    }
+    launch_with_tcp_listener::<Db>(
+        settings,
+        TcpListener::bind(addr)
+            .await
+            .context("could not connect to socket")?,
+        shutdown_signal(),
+    )
+    .await
 }
 
 pub async fn launch_with_tcp_listener<Db: Database>(
@@ -70,43 +64,6 @@ pub async fn launch_with_tcp_listener<Db: Database>(
     serve(listener, r.into_make_service())
         .with_graceful_shutdown(shutdown)
         .await?;
-
-    Ok(())
-}
-
-async fn launch_with_tls<Db: Database>(
-    settings: Settings,
-    addr: SocketAddr,
-    shutdown: impl Future<Output = ()>,
-) -> Result<()> {
-    let crypto_provider = rustls::crypto::ring::default_provider().install_default();
-    if crypto_provider.is_err() {
-        return Err(eyre!("Failed to install default crypto provider"));
-    }
-    let rustls_config = RustlsConfig::from_pem_file(
-        settings.tls.cert_path.clone(),
-        settings.tls.pkey_path.clone(),
-    )
-    .await;
-    if rustls_config.is_err() {
-        return Err(eyre!("Failed to load TLS key and/or certificate"));
-    }
-    let rustls_config = rustls_config.unwrap();
-
-    let r = make_router::<Db>(settings).await?;
-
-    let handle = Handle::new();
-
-    let server = axum_server::bind_rustls(addr, rustls_config)
-        .handle(handle.clone())
-        .serve(r.into_make_service());
-
-    tokio::select! {
-        _ = server => {}
-        _ = shutdown => {
-            handle.graceful_shutdown(None);
-        }
-    }
 
     Ok(())
 }
