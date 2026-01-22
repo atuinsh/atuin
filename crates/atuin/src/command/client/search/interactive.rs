@@ -18,7 +18,9 @@ use super::{
 use atuin_client::{
     database::{Database, current_context},
     history::{History, HistoryId, HistoryStats, store::HistoryStore},
-    settings::{CursorStyle, ExitMode, KeymapMode, PreviewStrategy, SearchMode, Settings},
+    settings::{
+        CursorStyle, ExitMode, KeymapMode, PreviewStrategy, SearchMode, Settings, UiColumn,
+    },
 };
 
 use crate::command::client::search::history_list::HistoryHighlighter;
@@ -823,6 +825,7 @@ impl State {
                     theme,
                     history_highlighter,
                     settings.show_numeric_shortcuts,
+                    &settings.ui.columns,
                 );
                 f.render_stateful_widget(results_list, results_list_chunk, &mut self.results_state);
             }
@@ -989,6 +992,7 @@ impl State {
         theme: &'a Theme,
         history_highlighter: HistoryHighlighter<'a>,
         show_numeric_shortcuts: bool,
+        columns: &'a [UiColumn],
     ) -> HistoryList<'a> {
         let results_list = HistoryList::new(
             results,
@@ -999,6 +1003,7 @@ impl State {
             theme,
             history_highlighter,
             show_numeric_shortcuts,
+            columns,
         );
 
         match style.compactness {

@@ -451,6 +451,184 @@ pub enum PreviewStrategy {
     Fixed,
 }
 
+/// Column types available for the interactive search UI.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UiColumnType {
+    /// Command execution duration (e.g., "123ms")
+    Duration,
+    /// Relative time since execution (e.g., "59s ago")
+    Time,
+    /// Absolute timestamp (e.g., "2025-01-22 14:35")
+    Datetime,
+    /// Working directory
+    Directory,
+    /// Hostname
+    Host,
+    /// Username
+    User,
+    /// Exit code
+    Exit,
+    /// The command itself (should be last, expands to fill)
+    Command,
+}
+
+impl UiColumnType {
+    /// Returns the default width for this column type (in characters).
+    /// The Command column returns 0 as it expands to fill remaining space.
+    pub fn default_width(&self) -> u16 {
+        match self {
+            UiColumnType::Duration => 5,
+            UiColumnType::Time => 8,      // "59m ago" with padding
+            UiColumnType::Datetime => 16, // "2025-01-22 14:35"
+            UiColumnType::Directory => 20,
+            UiColumnType::Host => 15,
+            UiColumnType::User => 10,
+            UiColumnType::Exit => 3,
+            UiColumnType::Command => 0, // Expands to fill
+        }
+    }
+}
+
+/// A column configuration with type and optional custom width.
+/// Can be specified as just a string (uses default width) or as an object with type and width.
+#[derive(Clone, Debug, Serialize)]
+pub struct UiColumn {
+    pub column_type: UiColumnType,
+    pub width: u16,
+    /// If true, this column expands to fill remaining space. Only one column should expand.
+    pub expand: bool,
+}
+
+impl UiColumn {
+    pub fn new(column_type: UiColumnType) -> Self {
+        Self {
+            width: column_type.default_width(),
+            expand: column_type == UiColumnType::Command,
+            column_type,
+        }
+    }
+
+    pub fn with_width(column_type: UiColumnType, width: u16) -> Self {
+        Self {
+            column_type,
+            width,
+            expand: column_type == UiColumnType::Command,
+        }
+    }
+}
+
+// Custom deserialize to handle both string and object formats:
+// "duration" or { type = "duration", width = 8, expand = true }
+impl<'de> serde::Deserialize<'de> for UiColumn {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::{self, MapAccess, Visitor};
+
+        struct UiColumnVisitor;
+
+        impl<'de> Visitor<'de> for UiColumnVisitor {
+            type Value = UiColumn;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str(
+                    "a column type string or an object with 'type' and optional 'width'/'expand'",
+                )
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<UiColumn, E>
+            where
+                E: de::Error,
+            {
+                let column_type: UiColumnType =
+                    serde::Deserialize::deserialize(serde::de::value::StrDeserializer::new(value))?;
+                Ok(UiColumn::new(column_type))
+            }
+
+            fn visit_map<M>(self, mut map: M) -> Result<UiColumn, M::Error>
+            where
+                M: MapAccess<'de>,
+            {
+                let mut column_type: Option<UiColumnType> = None;
+                let mut width: Option<u16> = None;
+                let mut expand: Option<bool> = None;
+
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "type" => {
+                            column_type = Some(map.next_value()?);
+                        }
+                        "width" => {
+                            width = Some(map.next_value()?);
+                        }
+                        "expand" => {
+                            expand = Some(map.next_value()?);
+                        }
+                        _ => {
+                            let _: serde::de::IgnoredAny = map.next_value()?;
+                        }
+                    }
+                }
+
+                let column_type = column_type.ok_or_else(|| de::Error::missing_field("type"))?;
+                let width = width.unwrap_or_else(|| column_type.default_width());
+                let expand = expand.unwrap_or(column_type == UiColumnType::Command);
+                Ok(UiColumn {
+                    column_type,
+                    width,
+                    expand,
+                })
+            }
+        }
+
+        deserializer.deserialize_any(UiColumnVisitor)
+    }
+}
+
+/// UI-specific settings for the interactive search.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Ui {
+    /// Columns to display in interactive search, from left to right.
+    /// The indicator column (" > ") is always shown first implicitly.
+    /// The "command" column should be last as it expands to fill remaining space.
+    /// Can be simple strings or objects with type and width.
+    #[serde(default = "Ui::default_columns")]
+    pub columns: Vec<UiColumn>,
+}
+
+impl Ui {
+    fn default_columns() -> Vec<UiColumn> {
+        vec![
+            UiColumn::new(UiColumnType::Duration),
+            UiColumn::new(UiColumnType::Time),
+            UiColumn::new(UiColumnType::Command),
+        ]
+    }
+
+    /// Validate the UI configuration.
+    /// Returns an error if more than one column has expand = true.
+    pub fn validate(&self) -> Result<()> {
+        let expand_count = self.columns.iter().filter(|c| c.expand).count();
+        if expand_count > 1 {
+            bail!(
+                "Only one column can have expand = true, but {} columns are set to expand",
+                expand_count
+            );
+        }
+        Ok(())
+    }
+}
+
+impl Default for Ui {
+    fn default() -> Self {
+        Self {
+            columns: Self::default_columns(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Settings {
     pub dialect: Dialect,
@@ -529,6 +707,9 @@ pub struct Settings {
 
     #[serde(default)]
     pub theme: Theme,
+
+    #[serde(default)]
+    pub ui: Ui,
 
     #[serde(default)]
     pub scripts: scripts::Settings,
@@ -904,6 +1085,9 @@ impl Settings {
         settings.key_path = Self::expand_path(settings.key_path)?;
         settings.session_path = Self::expand_path(settings.session_path)?;
         settings.daemon.socket_path = Self::expand_path(settings.daemon.socket_path)?;
+
+        // Validate UI settings
+        settings.ui.validate()?;
 
         Ok(settings)
     }
