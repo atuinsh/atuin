@@ -245,21 +245,6 @@ impl Database for Postgres {
     }
 
     #[instrument(skip_all)]
-    async fn total_history(&self) -> DbResult<i64> {
-        // The cache is new, and the user might not yet have a cache value.
-        // They will have one as soon as they post up some new history, but handle that
-        // edge case.
-
-        let res: (i64,) = sqlx::query_as("select sum(total) from total_history_count_user")
-            .fetch_optional(self.read_pool())
-            .await
-            .map_err(fix_error)?
-            .unwrap_or((0,));
-
-        Ok(res.0)
-    }
-
-    #[instrument(skip_all)]
     async fn count_history_cached(&self, user: &User) -> DbResult<i64> {
         let res: (i32,) = sqlx::query_as(
             "select total from total_history_count_user
