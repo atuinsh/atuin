@@ -232,17 +232,6 @@ impl Database for Sqlite {
     }
 
     #[instrument(skip_all)]
-    async fn total_history(&self) -> DbResult<i64> {
-        let res: (i64,) = sqlx::query_as("select count(1) from history")
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(fix_error)?
-            .unwrap_or((0,));
-
-        Ok(res.0)
-    }
-
-    #[instrument(skip_all)]
     async fn count_history(&self, user: &User) -> DbResult<i64> {
         // The cache is new, and the user might not yet have a cache value.
         // They will have one as soon as they post up some new history, but handle that
