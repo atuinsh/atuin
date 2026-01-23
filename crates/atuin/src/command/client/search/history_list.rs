@@ -61,6 +61,10 @@ impl ListState {
         self.max_entries
     }
 
+    pub fn offset(&self) -> usize {
+        self.offset
+    }
+
     pub fn select(&mut self, index: usize) {
         self.selected = index;
     }
