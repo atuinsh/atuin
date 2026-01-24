@@ -178,10 +178,6 @@ struct DrawState<'a> {
     columns: &'a [UiColumn],
 }
 
-// Default prefix length for backwards compatibility (used by interactive.rs)
-#[allow(clippy::cast_possible_truncation)] // we know that this is <65536 length
-pub const PREFIX_LENGTH: u16 = " > 123ms 59s ago".len() as u16;
-
 // these encode the slices of `" > "`, `" {n} "`, or `"   "` in a compact form.
 // Yes, this is a hack, but it makes me feel happy
 static SLICES: &str = " > 1 2 3 4 5 6 7 8 9   ";
@@ -364,7 +360,7 @@ impl DrawState<'_> {
     /// Render the host column (just the hostname)
     fn host(&mut self, h: &History, width: u16) {
         let style = self.theme.as_style(Meaning::Annotation);
-        let w = width as usize;
+        let w = width as usize - 1;
         // Database stores hostname as "hostname:username"
         let host = h.hostname.split(':').next().unwrap_or(&h.hostname);
         let char_count = host.chars().count();
