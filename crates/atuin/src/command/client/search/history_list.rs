@@ -302,7 +302,9 @@ impl DrawState<'_> {
 
         let mut pos = 0;
         for section in h.command.escape_control().split_ascii_whitespace() {
-            self.draw(" ", style.into());
+            if pos != 0 {
+                self.draw(" ", style.into());
+            }
             for ch in section.chars() {
                 if self.x > self.list_area.width {
                     // Avoid attempting to draw a command section beyond the width
