@@ -42,7 +42,6 @@ pub async fn start_server(path: &str) -> (String, oneshot::Sender<()>, JoinHandl
             read_db_uri: None,
         },
         metrics: atuin_server::settings::Metrics::default(),
-        tls: atuin_server::settings::Tls::default(),
         mail: atuin_server::settings::Mail::default(),
         fake_version: None,
     };

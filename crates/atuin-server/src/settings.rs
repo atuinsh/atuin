@@ -65,7 +65,6 @@ pub struct Settings {
     pub register_webhook_url: Option<String>,
     pub register_webhook_username: String,
     pub metrics: Metrics,
-    pub tls: Tls,
     pub mail: Mail,
 
     /// Enable legacy sync v1 routes (history-based sync)
@@ -110,9 +109,6 @@ impl Settings {
             .set_default("metrics.host", "127.0.0.1")?
             .set_default("metrics.port", 9001)?
             .set_default("mail.enable", false)?
-            .set_default("tls.enable", false)?
-            .set_default("tls.cert_path", "")?
-            .set_default("tls.pkey_path", "")?
             .set_default("sync_v1_enabled", true)?
             .add_source(
                 Environment::with_prefix("atuin")
@@ -143,13 +139,4 @@ impl Settings {
 
 pub fn example_config() -> &'static str {
     EXAMPLE_CONFIG
-}
-
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-pub struct Tls {
-    #[serde(alias = "enabled")]
-    pub enable: bool,
-
-    pub cert_path: PathBuf,
-    pub pkey_path: PathBuf,
 }

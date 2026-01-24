@@ -56,11 +56,6 @@ You will need to map some sort of persistent volume for the /config directory an
 
 ### TLS
 
-The server supports TLS through the `[tls]` section:
+For TLS/HTTPS support, we recommend using a reverse proxy such as nginx, caddy, or traefik in front of the Atuin server. This is the standard approach for containerized applications and provides better flexibility for certificate management.
 
-```toml
-[tls]
-enable = true
-cert_path = "/path/to/letsencrypt/live/fully.qualified.domain/fullchain.pem"
-pkey_path = "/path/to/letsencrypt/live/fully.qualified.domain/privkey.pem"
-```
+> **Note:** The built-in `[tls]` configuration option has been removed. If you were previously using it, please migrate to a reverse proxy setup. Any existing `[tls]` sections in your config will be ignored.

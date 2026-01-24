@@ -70,7 +70,7 @@ impl Importer for Zsh {
 
             if let Some(s) = s.strip_suffix('\\') {
                 line.push_str(s);
-                line.push_str("\\\n");
+                line.push('\n');
             } else {
                 line.push_str(&s);
                 let command = std::mem::take(&mut line);
@@ -188,7 +188,7 @@ mod test {
     #[tokio::test]
     async fn test_parse_file() {
         let bytes = r": 1613322469:0;cargo install atuin
-: 1613322469:10;cargo install atuin; \
+: 1613322469:10;cargo install atuin; \\
 cargo update
 : 1613322469:10;cargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷
 "

@@ -1,10 +1,10 @@
 # Basic Usage
 
-Now that you're all setup and running, here's a quick walkthrough of how you can use Atuin best
+Now that you're all set up and running, here's a quick walkthrough of how you can use Atuin best.
 
 ## What does Atuin record?
 
-While you work, Atuin records
+While you work, Atuin records:
 
 1. The command you run
 2. The directory you ran it in
@@ -15,11 +15,11 @@ While you work, Atuin records
 
 ## Opening and using the TUI
 
-At any time, you can open the TUI with the default keybindings of the up arrow, or control-R.
+At any time, you can open the TUI with the default keybindings of the up arrow, or ctrl-r.
 
 Once in the TUI, press enter to immediately execute a command, or press tab to insert it into your shell for editing.
 
-While searching in the TUI, you can adjust the "filter mode" by repeatedly pressing ctrl-r. Atuin can filter by
+While searching in the TUI, you can adjust the "filter mode" by repeatedly pressing ctrl-r. Atuin can filter by:
 
 1. All hosts
 2. Just your local machine
@@ -28,15 +28,14 @@ While searching in the TUI, you can adjust the "filter mode" by repeatedly press
 
 ## Common config adjustment
 
-For a full set of config values, please see the [config reference page](../configuration/config.md)
+For a full set of config values, please see the [config reference page](../configuration/config.md).
 
-The default configuration file is location at `~/.config/atuin/config.toml`
+The default configuration file is located at `~/.config/atuin/config.toml`.
 
 ### Keybindings
 
-We have a full page dedicated to keybinding adjustments, there are a whole bunch of options here! Including disabling the up arrow if you don't like it.
-
-Read more [here](../configuration/key-binding.md)
+We have a [full page dedicated to keybinding adjustments](../configuration/key-binding.md).
+There are a whole bunch of options there, including disabling the up arrow behavior if you don't like it.
 
 ### Enter to run
 
@@ -50,14 +49,14 @@ in your config file.
 
 ### Inline window
 
-If you find the full screen TUI overwhelming or too much, you can adjust it like so
+If you find the full screen TUI overwhelming or too large, you can adjust it like so:
 
 ```
 # height of the search window
 inline_height = 40
 ```
 
-You may also prefer the compact UI mode
+You may also prefer the compact UI mode:
 
 ```
 style = "compact"

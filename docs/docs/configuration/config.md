@@ -144,7 +144,7 @@ The default filter to use when searching
 | global (default) | Search history from all hosts, all sessions, all directories |
 | host             | Search history just from this host                           |
 | session          | Search history just from the current session                 |
-| directory        | Search history just from the current directory               |
+| directory        | Search history just from the current directory (global)      |
 | workspace        | Search history just from the current git repository (>17.0)  |
 
 Filter modes can still be toggled via ctrl-r
@@ -266,6 +266,16 @@ Atuin version: >= 18.0
 Default: `true`
 
 Configure whether or not to show tabs for search and inspect.
+
+### `auto_hide_height`
+
+Atuin version: >= 18.4
+
+Default: `8`
+
+Set Atuin to hide lines when a minimum number of rows is subceeded. This has no effect except
+when `compact` style is being used (see `style` above), and currently applies to only the
+interactive search and inspector. It can be turned off entirely by setting to `0`.
 
 ### `exit_mode`
 
@@ -499,6 +509,7 @@ common_subcommands = [
   "git",
   "go",
   "ip",
+  "jj",
   "kubectl",
   "nix",
   "nmcli",
@@ -600,6 +611,22 @@ Default: `a`
 
 Which key to use as the prefix
 
+### `exit_past_line_start`
+
+Atuin version: >= 18.5
+
+Default: `true`
+
+Exits the TUI when scrolling left while the cursor is at the start of the line.
+
+### `exit_past_line_end`
+
+Atuin version: >= 18.5
+
+Default: `true`
+
+Exits the TUI when scrolling right while the cursor is at the end of the line.
+
 ## preview
 
 This section of the client config is specifically for configuring preview-related settings.
@@ -691,17 +718,17 @@ The theme to use for showing the terminal interface.
 
 ```toml
 [theme]
-name = ""
+name = "default"
 debug = false
 max_depth = 10
 ```
 
 ### `name`
 
-Default: `""`
+Default: `"default"`
 
-A theme name that must be present as a built-in (an empty string for the default,
-`autumn` or `marine`), or found in the themes directory, with the suffix `.toml`.
+A theme name that must be present as a built-in (unset or `default` for the default,
+else `autumn` or `marine`), or found in the themes directory, with the suffix `.toml`.
 By default this is `~/.config/atuin/themes/` but can be overridden with the
 `ATUIN_THEME_DIR` environment variable.
 
@@ -730,4 +757,64 @@ need to be added in or changed in normal usage.
 
 ```toml
 max_depth = 10
+```
+
+## ui
+
+Atuin version: >= 18.5
+
+Configure the interactive search UI appearance.
+
+```toml
+[ui]
+columns = ["duration", "time", "command"]
+```
+
+### `columns`
+
+Default: `["duration", "time", "command"]`
+
+Columns to display in the interactive search, from left to right. The selection
+indicator (`" > "`) is always shown first implicitly.
+
+Each column can be specified as:
+- A simple string (uses default width): `"duration"`
+- An object with type and optional width/expand: `{ type = "directory", width = 30 }`
+
+#### Available column types
+
+| Column    | Default Width | Description                                     |
+| --------- | ------------- | ----------------------------------------------- |
+| duration  | 5             | Command execution duration (e.g., "123ms")      |
+| time      | 8             | Relative time since execution (e.g., "59m ago") |
+| datetime  | 16            | Absolute timestamp (e.g., "2025-01-22 14:35")   |
+| directory | 20            | Working directory (truncated if too long)       |
+| host      | 15            | Hostname where command was run                  |
+| user      | 10            | Username                                        |
+| exit      | 3             | Exit code (colored by success/failure)          |
+| command   | *             | The command itself (expands by default)         |
+
+#### Column options
+
+- **type**: The column type (required when using object format)
+- **width**: Custom width in characters (optional, uses default if not specified)
+- **expand**: If `true`, the column fills remaining space. Default is `true` for `command`, `false` for others. Only one column should have `expand = true`.
+
+#### Examples
+
+```toml
+# Minimal - more space for commands
+columns = ["duration", "command"]
+
+# With custom directory width
+columns = ["duration", { type = "directory", width = 30 }, "command"]
+
+# Show host for multi-machine sync users
+columns = ["duration", "time", "host", "command"]
+
+# Show exit codes prominently
+columns = ["exit", "duration", "command"]
+
+# Make directory expand instead of command
+columns = ["duration", "time", { type = "directory", expand = true }, { type = "command", expand = false }]
 ```

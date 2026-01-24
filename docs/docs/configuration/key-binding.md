@@ -60,6 +60,21 @@ macOS does not have an ++alt++ key, although terminal emulators can often be con
 ctrl_n_shortcuts = true
 ```
 
+Ghostty on Linux maps ++alt+1++ .. ++alt+9++ for switching between tabs by number. To disable this behavior either add the following to ~/.config/ghostty/config:
+```
+keybind=alt+one=unbind
+keybind=alt+two=unbind
+keybind=alt+three=unbind
+keybind=alt+four=unbind
+keybind=alt+five=unbind
+keybind=alt+six=unbind
+keybind=alt+seven=unbind
+keybind=alt+eight=unbind
+keybind=alt+nine=unbind
+```
+(this will disable tab switching by ++alt+n++)
+or use the `ctrl_n_shortcuts` as outlined above.
+
 ## zsh
 
 If you'd like to customize your bindings further, it's possible to do so with custom shell config:
@@ -88,28 +103,57 @@ used in combination with the config
 
 ## bash
 
-Atuin provides a bindable shell function "`__atuin_history`" for keybindings in
-Bash.  The flag `--shell-up-key-binding` can be optionally specified to the
-first argument for keybindings to the ++up++ key or similar keys.
+Atuin (`>= 18.10.0`) provides a shell function `atuin-bind` to set up
+keybindings easily:
+
+```
+atuin-bind [-m KEYMAP] KEYSEQ COMMAND
+```
+
+`KEYMAP` is one of `emacs`, `vi-insert`, and `vi-command` and specifies the
+target keymap where the keybinding is defined.  `KEYSEQ` specifies a key
+sequence in the format used in `bind '"KEYSEQ": ...'`.  `COMMAND` specifies a
+shell command to run with the keybindings.  The following special commands can
+be used as well as an arbitrary shell command:
+
+| Command                 | Description                                                                         |
+| ----------------------- | ----------------------------------------------------------------------------------- |
+| `atuin-search`          | Standard search                                                                     |
+| `atuin-search-emacs`    | Standard search with the `emacs` keymap mode                                        |
+| `atuin-search-viins`    | Standard search with the `vim-insert` keymap mode                                   |
+| `atuin-search-vicmd`    | Standard search with the `vim-normal` keymap mode                                   |
+| `atuin-up-search`       | Search command for <kbd>up</kbd> or similar keys                                    |
+| `atuin-up-search-emacs` | Search command for <kbd>up</kbd> or similar keys, with the `emacs` keymap mode      |
+| `atuin-up-search-viins` | Search command for <kbd>up</kbd> or similar keys, with the `vim-insert` keymap mode |
+| `atuin-up-search-vicmd` | Search command for <kbd>up</kbd> or similar keys, with the `vim-nomarl` keymap mode |
+
+The keymap mode controls the initial keymap in the Atuin search and is
+determined in combination with the config
+["keymap\_mode"](config.md#keymap_mode)
+(`atuin >= 18.0`).
+
 
 ```
 export ATUIN_NOBIND="true"
 eval "$(atuin init bash)"
 
 # bind to ctrl-r, add any other bindings you want here too
-bind -x '"\C-r": __atuin_history'
+atuin-bind '\C-r' atuin-search
+# example of CTRL-upkey
+# atuin-bind '\e[1;5A' atuin-search
 
 # bind to the up key, which depends on terminal mode
-bind -x '"\e[A": __atuin_history --shell-up-key-binding'
-bind -x '"\eOA": __atuin_history --shell-up-key-binding'
+atuin-bind '\e[A' atuin-up-search
+atuin-bind '\eOA' atuin-up-search
 ```
 
-For the keybindings in the `vi` editing mode, the options
-`--keymap-mode=vim-insert` and `--keymap-mode=vim-normal` (`atuin >= 18.0`) can
-be additionally specified to the shell function `__atuin_history` in
-combination with the config
-["keymap\_mode"](config.md#keymap_mode)
-(`atuin >= 18.0`) to start the Atuin search in respective keymap modes.
+With older versions of Atuin, the user needs to bind a bindable shell function
+"`__atuin_history`" directly using Bash's `bind`.  The flag
+`--shell-up-key-binding` can be optionally specified to the first argument for
+keybindings to the <kbd>up</kbd> key or similar keys.  For the keybindings in
+the `vi` editing mode, the options `--keymap-mode=vim-insert` and the keymap
+mode `--keymap-mode=vim-normal` (`atuin >= 18.0`) can be additionally specified
+to the shell function `__atuin_history`.
 
 ## fish
 Edit key bindings in FISH shell by adding the following to ~/.config/fish/config.fish
@@ -180,7 +224,7 @@ $env.config = (
 | ctrl + u                                  | Clear the current line                                                        |
 | ctrl + n / ctrl + j / ↑                  | Select the next item on the list                                              |
 | ctrl + p / ctrl + k / ↓                  | Select the previous item on the list                                          |
-| ctrl + o                                  | Open the inspector                                                            |
+| ctrl + o                                  | Open the [inspector](#inspector)                                              |
 | page down                                 | Scroll search results one page down                                           |
 | page up                                   | Scroll search results one page up                                             |
 | ↓ (with no entry selected)               | Return original or return query depending on [settings](config.md#exit_mode)                         |
@@ -190,19 +234,38 @@ $env.config = (
 ### Vim mode
 If [vim is enabled in the config](config.md#keymap_mode), the following keybindings are enabled:
 
-| Shortcut | Mode   | Action                                |
-| -------- | ------ | ------------------------------------- |
-| k        | Normal | Selects the next item on the list     |
-| j        | Normal | Selects the previous item on the list |
-| i        | Normal | Enters insert mode                    |
-| Esc      | Insert | Enters normal mode                    |
+| Shortcut | Mode   | Action                                     |
+| -------- | ------ | ------------------------------------------ |
+| k        | Normal | Selects the next item on the list          |
+| j        | Normal | Selects the previous item on the list      |
+| h        | Normal | Move cursor left                           |
+| l        | Normal | Move cursor right                          |
+| i        | Normal | Enters insert mode                         |
+| I        | Normal | Move to start of line and enter insert     |
+| a        | Normal | Move right and enter insert mode           |
+| A        | Normal | Move to end of line and enter insert       |
+| Ctrl+u   | Normal | Half-page up (toward visual top)           |
+| Ctrl+d   | Normal | Half-page down (toward visual bottom)      |
+| Ctrl+b   | Normal | Full-page up (toward visual top)           |
+| Ctrl+f   | Normal | Full-page down (toward visual bottom)      |
+| G        | Normal | Jump to visual bottom of history           |
+| gg       | Normal | Jump to visual top of history              |
+| H        | Normal | Jump to top of visible screen              |
+| M        | Normal | Jump to middle of visible screen           |
+| L        | Normal | Jump to bottom of visible screen           |
+| ? or /   | Normal | Clear input and enter insert mode          |
+| 1-9      | Normal | Select item by number                      |
+| Esc      | Insert | Enters normal mode                         |
 
 
 ### Inspector
-Open the inspector with ctrl-o
+Open the inspector with ctrl + o
 
 | Shortcut | Action                                        |
 | -------- | --------------------------------------------- |
 | Esc      | Close the inspector, returning to the shell   |
-| ctrl+o   | Close the inspector, returning to search view |
-| ctrl+d   | Delete the inspected item from the history    |
+| ctrl + o | Close the inspector, returning to search view |
+| ctrl + d | Delete the inspected item from the history    |
+| ↑        | Inspect the previous item in the history      |
+| ↓        | Inspect the next item in the history          |
+| tab      | Select current item and edit                  |

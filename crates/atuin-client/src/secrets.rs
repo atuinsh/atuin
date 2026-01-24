@@ -12,7 +12,7 @@ pub enum TestValue<'a> {
 pub static SECRET_PATTERNS: &[(&str, &str, TestValue)] = &[
     (
         "AWS Access Key ID",
-        "AKIA[0-9A-Z]{16}",
+        "A[KS]IA[0-9A-Z]{16}",
         TestValue::Single("AKIAIOSFODNN7EXAMPLE"),
     ),
     (
