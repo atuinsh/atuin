@@ -85,7 +85,7 @@ fn get_highlight_indices_fulltext(command: &str, search_input: &str) -> Vec<usiz
                     ranges.push((l - term.len())..l);
                 }
             }
-            QueryToken::Match(term) => {
+            QueryToken::Match(term) | QueryToken::MatchFull(term) => {
                 for (idx, m) in matchee.match_indices(term) {
                     ranges.push(idx..(idx + m.len()));
                 }

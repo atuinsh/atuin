@@ -509,6 +509,9 @@ impl Database for Sqlite {
                         QueryToken::MatchEnd(term) => {
                             format!("{glob}{term}")
                         }
+                        QueryToken::MatchFull(term) => {
+                            format!("{glob}{term}{glob}")
+                        }
                         QueryToken::Negation(term) => {
                             is_inverse = true;
                             format!("{glob}{term}{glob}")
@@ -1189,6 +1192,7 @@ pub enum QueryToken<'a> {
     Negation(&'a str),
     MatchStart(&'a str),
     MatchEnd(&'a str),
+    MatchFull(&'a str),
     Or,
     Regex(&'a str),
 }
@@ -1243,6 +1247,8 @@ impl<'a> Iterator for QueryTokenizer<'a> {
                 QueryToken::MatchEnd(s)
             } else if let Some(s) = part.strip_prefix('!') {
                 QueryToken::Negation(s)
+            } else if let Some(s) = part.strip_prefix('\'') {
+                QueryToken::MatchFull(s)
             } else if part == "|" {
                 QueryToken::Or
             } else {
