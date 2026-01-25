@@ -483,7 +483,6 @@ impl Database for Sqlite {
             _ => {
                 let mut is_or = false;
                 for token in QueryTokenizer::new(query) {
-                    let mut is_inverse = false;
                     // TODO smart case mode could be made configurable like in fzf
                     let (is_glob, glob) = if token.has_uppercase() {
                         (true, "*")
@@ -503,20 +502,16 @@ impl Database for Sqlite {
                                 format!("{glob}|{glob}")
                             }
                         }
-                        QueryToken::MatchStart(term) => {
+                        QueryToken::MatchStart(term, _) => {
                             format!("{term}{glob}")
                         }
-                        QueryToken::MatchEnd(term) => {
+                        QueryToken::MatchEnd(term, _) => {
                             format!("{glob}{term}")
                         }
-                        QueryToken::MatchFull(term) => {
+                        QueryToken::MatchFull(term, _) => {
                             format!("{glob}{term}{glob}")
                         }
-                        QueryToken::Negation(term) => {
-                            is_inverse = true;
-                            format!("{glob}{term}{glob}")
-                        }
-                        QueryToken::Match(term) => {
+                        QueryToken::Match(term, _) => {
                             if search_mode == SearchMode::FullText {
                                 format!("{glob}{term}{glob}")
                             } else {
@@ -525,7 +520,7 @@ impl Database for Sqlite {
                         }
                     };
 
-                    sql.fuzzy_condition("command", param, is_inverse, is_glob, is_or);
+                    sql.fuzzy_condition("command", param, token.is_inverse(), is_glob, is_or);
                     is_or = false;
                 }
 
@@ -1188,11 +1183,10 @@ pub struct QueryTokenizer<'a> {
 }
 
 pub enum QueryToken<'a> {
-    Match(&'a str),
-    Negation(&'a str),
-    MatchStart(&'a str),
-    MatchEnd(&'a str),
-    MatchFull(&'a str),
+    Match(&'a str, bool),
+    MatchStart(&'a str, bool),
+    MatchEnd(&'a str, bool),
+    MatchFull(&'a str, bool),
     Or,
     Regex(&'a str),
 }
@@ -1200,10 +1194,20 @@ pub enum QueryToken<'a> {
 impl<'a> QueryToken<'a> {
     pub fn has_uppercase(&self) -> bool {
         match self {
-            Self::Match(term)
-            | Self::MatchStart(term)
-            | Self::MatchEnd(term)
-            | Self::Negation(term) => term.contains(char::is_uppercase),
+            Self::Match(term, _)
+            | Self::MatchStart(term, _)
+            | Self::MatchEnd(term, _)
+            | Self::MatchFull(term, _) => term.contains(char::is_uppercase),
+            _ => false,
+        }
+    }
+
+    pub fn is_inverse(&self) -> bool {
+        match self {
+            Self::Match(_, inv)
+            | Self::MatchStart(_, inv)
+            | Self::MatchEnd(_, inv)
+            | Self::MatchFull(_, inv) => *inv,
             _ => false,
         }
     }
@@ -1234,25 +1238,30 @@ impl<'a> Iterator for QueryTokenizer<'a> {
             self.last_pos = next_pos;
             Some(QueryToken::Regex(regex))
         } else {
-            let (part, next_pos) = if let Some(sp) = remaining.find(' ') {
+            let (mut part, next_pos) = if let Some(sp) = remaining.find(' ') {
                 (&remaining[..sp], self.last_pos + sp + 1)
             } else {
                 (remaining, self.query.len())
             };
             self.last_pos = next_pos;
 
+            if part == "|" {
+                return Some(QueryToken::Or);
+            }
+
+            let mut is_inverse = false;
+            if let Some(s) = part.strip_prefix('!') {
+                part = s;
+                is_inverse = true;
+            }
             let token = if let Some(s) = part.strip_prefix('^') {
-                QueryToken::MatchStart(s)
+                QueryToken::MatchStart(s, is_inverse)
             } else if let Some(s) = part.strip_suffix('$') {
-                QueryToken::MatchEnd(s)
-            } else if let Some(s) = part.strip_prefix('!') {
-                QueryToken::Negation(s)
+                QueryToken::MatchEnd(s, is_inverse)
             } else if let Some(s) = part.strip_prefix('\'') {
-                QueryToken::MatchFull(s)
-            } else if part == "|" {
-                QueryToken::Or
+                QueryToken::MatchFull(s, is_inverse)
             } else {
-                QueryToken::Match(part)
+                QueryToken::Match(part, is_inverse)
             };
             Some(token)
         }

@@ -65,8 +65,12 @@ fn get_highlight_indices_fulltext(command: &str, search_input: &str) -> Vec<usiz
             &lower_command
         };
 
+        if token.is_inverse() {
+            continue;
+        }
+
         match token {
-            QueryToken::Or | QueryToken::Negation(..) => {}
+            QueryToken::Or => {}
             QueryToken::Regex(r) => {
                 if let Ok(re) = regex::Regex::new(r) {
                     for m in re.find_iter(command) {
@@ -74,18 +78,18 @@ fn get_highlight_indices_fulltext(command: &str, search_input: &str) -> Vec<usiz
                     }
                 }
             }
-            QueryToken::MatchStart(term) => {
+            QueryToken::MatchStart(term, _) => {
                 if matchee.starts_with(term) {
                     ranges.push(0..term.len());
                 }
             }
-            QueryToken::MatchEnd(term) => {
+            QueryToken::MatchEnd(term, _) => {
                 if matchee.ends_with(term) {
                     let l = matchee.len();
                     ranges.push((l - term.len())..l);
                 }
             }
-            QueryToken::Match(term) | QueryToken::MatchFull(term) => {
+            QueryToken::Match(term, _) | QueryToken::MatchFull(term, _) => {
                 for (idx, m) in matchee.match_indices(term) {
                     ranges.push(idx..(idx + m.len()));
                 }
