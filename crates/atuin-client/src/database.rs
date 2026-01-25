@@ -1,5 +1,4 @@
 use std::{
-    borrow::Cow,
     env,
     path::{Path, PathBuf},
     str::FromStr,
@@ -483,75 +482,48 @@ impl Database for Sqlite {
             SearchMode::Prefix => sql.and_where_like_left("command", query.replace('*', "%")),
             _ => {
                 let mut is_or = false;
-                let mut regex = None;
-                for part in query.split_inclusive(' ') {
-                    let query_part: Cow<str> = match (&mut regex, part.starts_with("r/")) {
-                        (None, false) => {
-                            if part.trim_end().is_empty() {
-                                continue;
-                            }
-                            Cow::Owned(part.trim_end().replace('*', "%")) // allow wildcard char
-                        }
-                        (None, true) => {
-                            if part[2..].trim_end().ends_with('/') {
-                                let end_pos = part.trim_end().len() - 1;
-                                regexes.push(String::from(&part[2..end_pos]));
-                            } else {
-                                regex = Some(String::from(&part[2..]));
-                            }
-                            continue;
-                        }
-                        (Some(r), _) => {
-                            if part.trim_end().ends_with('/') {
-                                let end_pos = part.trim_end().len() - 1;
-                                r.push_str(&part.trim_end()[..end_pos]);
-                                regexes.push(regex.take().unwrap());
-                            } else {
-                                r.push_str(part);
-                            }
-                            continue;
-                        }
-                    };
-
+                for token in QueryTokenizer::new(query) {
+                    let mut is_inverse = false;
                     // TODO smart case mode could be made configurable like in fzf
-                    let (is_glob, glob) = if query_part.contains(char::is_uppercase) {
+                    let (is_glob, glob) = if token.has_uppercase() {
                         (true, "*")
                     } else {
                         (false, "%")
                     };
-
-                    let (is_inverse, query_part) = match query_part.strip_prefix('!') {
-                        Some(stripped) => (true, Cow::Borrowed(stripped)),
-                        None => (false, query_part),
-                    };
-
-                    #[allow(clippy::if_same_then_else)]
-                    let param = if query_part == "|" {
-                        if !is_or {
-                            is_or = true;
+                    let param = match token {
+                        QueryToken::Regex(r) => {
+                            regexes.push(String::from(r));
                             continue;
-                        } else {
-                            format!("{glob}|{glob}")
                         }
-                    } else if let Some(term) = query_part.strip_prefix('^') {
-                        format!("{term}{glob}")
-                    } else if let Some(term) = query_part.strip_suffix('$') {
-                        format!("{glob}{term}")
-                    } else if let Some(term) = query_part.strip_prefix('\'') {
-                        format!("{glob}{term}{glob}")
-                    } else if is_inverse {
-                        format!("{glob}{query_part}{glob}")
-                    } else if search_mode == SearchMode::FullText {
-                        format!("{glob}{query_part}{glob}")
-                    } else {
-                        query_part.split("").join(glob)
+                        QueryToken::Or => {
+                            if !is_or {
+                                is_or = true;
+                                continue;
+                            } else {
+                                format!("{glob}|{glob}")
+                            }
+                        }
+                        QueryToken::MatchStart(term) => {
+                            format!("{term}{glob}")
+                        }
+                        QueryToken::MatchEnd(term) => {
+                            format!("{glob}{term}")
+                        }
+                        QueryToken::Negation(term) => {
+                            is_inverse = true;
+                            format!("{glob}{term}{glob}")
+                        }
+                        QueryToken::Match(term) => {
+                            if search_mode == SearchMode::FullText {
+                                format!("{glob}{term}{glob}")
+                            } else {
+                                term.split("").join(glob)
+                            }
+                        }
                     };
 
                     sql.fuzzy_condition("command", param, is_inverse, is_glob, is_or);
                     is_or = false;
-                }
-                if let Some(r) = regex {
-                    regexes.push(r);
                 }
 
                 &mut sql
@@ -1204,5 +1176,79 @@ mod test {
         let duration = start.elapsed();
 
         assert!(duration < Duration::from_secs(15));
+    }
+}
+
+pub struct QueryTokenizer<'a> {
+    query: &'a str,
+    last_pos: usize,
+}
+
+pub enum QueryToken<'a> {
+    Match(&'a str),
+    Negation(&'a str),
+    MatchStart(&'a str),
+    MatchEnd(&'a str),
+    Or,
+    Regex(&'a str),
+}
+
+impl<'a> QueryToken<'a> {
+    pub fn has_uppercase(&self) -> bool {
+        match self {
+            Self::Match(term)
+            | Self::MatchStart(term)
+            | Self::MatchEnd(term)
+            | Self::Negation(term) => term.contains(char::is_uppercase),
+            _ => false,
+        }
+    }
+}
+
+impl<'a> QueryTokenizer<'a> {
+    pub fn new(query: &'a str) -> Self {
+        Self { query, last_pos: 0 }
+    }
+}
+
+impl<'a> Iterator for QueryTokenizer<'a> {
+    type Item = QueryToken<'a>;
+    fn next(&mut self) -> Option<Self::Item> {
+        let remaining = &self.query[self.last_pos..];
+        if remaining.is_empty() {
+            return None;
+        }
+
+        if let Some(remaining) = remaining.strip_prefix("r/") {
+            let (regex, next_pos) = if let Some(end) = remaining.find("/ ") {
+                (&remaining[..end], self.last_pos + 2 + end + 2)
+            } else if let Some(remaining) = remaining.strip_suffix('/') {
+                (remaining, self.query.len())
+            } else {
+                (remaining, self.query.len())
+            };
+            self.last_pos = next_pos;
+            Some(QueryToken::Regex(regex))
+        } else {
+            let (part, next_pos) = if let Some(sp) = remaining.find(' ') {
+                (&remaining[..sp], self.last_pos + sp + 1)
+            } else {
+                (remaining, self.query.len())
+            };
+            self.last_pos = next_pos;
+
+            let token = if let Some(s) = part.strip_prefix('^') {
+                QueryToken::MatchStart(s)
+            } else if let Some(s) = part.strip_suffix('$') {
+                QueryToken::MatchEnd(s)
+            } else if let Some(s) = part.strip_prefix('!') {
+                QueryToken::Negation(s)
+            } else if part == "|" {
+                QueryToken::Or
+            } else {
+                QueryToken::Match(part)
+            };
+            Some(token)
+        }
     }
 }
