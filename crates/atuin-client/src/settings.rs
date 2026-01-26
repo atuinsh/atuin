@@ -479,7 +479,7 @@ impl UiColumnType {
     pub fn default_width(&self) -> u16 {
         match self {
             UiColumnType::Duration => 5,
-            UiColumnType::Time => 8,      // "59m ago" with padding
+            UiColumnType::Time => 9,      // "459ms ago" with padding
             UiColumnType::Datetime => 16, // "2025-01-22 14:35"
             UiColumnType::Directory => 20,
             UiColumnType::Host => 15,

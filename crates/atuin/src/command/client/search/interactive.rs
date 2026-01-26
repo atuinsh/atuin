@@ -13,7 +13,7 @@ use unicode_width::UnicodeWidthStr;
 use super::{
     cursor::Cursor,
     engines::{SearchEngine, SearchState},
-    history_list::{HistoryList, ListState, PREFIX_LENGTH},
+    history_list::{HistoryList, ListState},
 };
 use atuin_client::{
     database::{Database, current_context},
@@ -1004,11 +1004,27 @@ impl State {
                 preview_chunk.width.into(),
                 theme,
             );
-            self.draw_preview(f, style, input_chunk, compactness, preview_chunk, preview);
+            #[allow(clippy::cast_possible_truncation)]
+            let prefix_width = settings
+                .ui
+                .columns
+                .iter()
+                .filter_map(|col| if col.expand { None } else { Some(col.width) })
+                .sum::<u16>()
+                + "  > ".len() as u16;
+            self.draw_preview(
+                f,
+                style,
+                input_chunk,
+                compactness,
+                preview_chunk,
+                preview,
+                prefix_width,
+            );
         }
     }
 
-    #[allow(clippy::cast_possible_truncation)]
+    #[allow(clippy::cast_possible_truncation, clippy::too_many_arguments)]
     fn draw_preview(
         &self,
         f: &mut Frame,
@@ -1017,8 +1033,9 @@ impl State {
         compactness: Compactness,
         preview_chunk: Rect,
         preview: Paragraph,
+        prefix_width: u16,
     ) {
-        let input = self.build_input(style);
+        let input = self.build_input(style, prefix_width - 2);
         f.render_widget(input, input_chunk);
 
         f.render_widget(preview, preview_chunk);
@@ -1031,7 +1048,7 @@ impl State {
         };
         f.set_cursor_position((
             // Put cursor past the end of the input text
-            input_chunk.x + extra_width as u16 + PREFIX_LENGTH + 1 + cursor_offset,
+            input_chunk.x + extra_width as u16 + prefix_width + 1 + cursor_offset,
             input_chunk.y + cursor_offset,
         ));
     }
@@ -1146,15 +1163,13 @@ impl State {
         }
     }
 
-    fn build_input(&self, style: StyleState) -> Paragraph<'_> {
-        /// Max width of the UI box showing current mode
-        const MAX_WIDTH: usize = 14;
+    fn build_input(&self, style: StyleState, max_width: u16) -> Paragraph<'_> {
         let (pref, mode) = if self.switched_search_mode {
             (" SRCH:", self.search_mode.as_str())
         } else {
             ("", self.search.filter_mode.as_str())
         };
-        let mode_width = MAX_WIDTH - pref.len();
+        let mode_width = usize::from(max_width) - pref.len();
         // sanity check to ensure we don't exceed the layout limits
         debug_assert!(mode_width >= mode.len(), "mode name '{mode}' is too long!");
         let input = format!("[{pref}{mode:^mode_width$}] {}", self.search.input.as_str(),);
