@@ -150,20 +150,17 @@ impl Cmd {
         store: SqliteStore,
         theme: &Theme,
     ) -> Result<()> {
-        let query = self.query.map_or_else(
-            || {
-                std::env::var("ATUIN_QUERY").map_or_else(
-                    |_| vec![],
-                    |query| {
-                        query
-                            .split(' ')
-                            .map(std::string::ToString::to_string)
-                            .collect()
-                    },
-                )
-            },
-            |query| query,
-        );
+        let query = self.query.unwrap_or_else(|| {
+            std::env::var("ATUIN_QUERY").map_or_else(
+                |_| vec![],
+                |query| {
+                    query
+                        .split(' ')
+                        .map(std::string::ToString::to_string)
+                        .collect()
+                },
+            )
+        });
 
         if (self.delete_it_all || self.delete) && self.limit.is_some() {
             // Because of how deletion is implemented, it will always delete all matches
