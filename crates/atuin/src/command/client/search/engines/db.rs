@@ -1,7 +1,11 @@
 use super::{SearchEngine, SearchState};
 use async_trait::async_trait;
 use atuin_client::{
-    database::Database, database::OptFilters, history::History, settings::SearchMode,
+    database::Database,
+    database::OptFilters,
+    database::{QueryToken, QueryTokenizer},
+    history::History,
+    settings::SearchMode,
 };
 use eyre::Result;
 use norm::Metric;
@@ -36,6 +40,8 @@ impl SearchEngine for Search {
     fn get_highlight_indices(&self, command: &str, search_input: &str) -> Vec<usize> {
         if self.0 == SearchMode::Prefix {
             return vec![];
+        } else if self.0 == SearchMode::FullText {
+            return get_highlight_indices_fulltext(command, search_input);
         }
         let mut fzf = FzfV2::new();
         let mut parser = FzfParser::new();
@@ -46,4 +52,53 @@ impl SearchEngine for Search {
         // convert ranges to all indices
         ranges.into_iter().flatten().collect()
     }
+}
+
+fn get_highlight_indices_fulltext(command: &str, search_input: &str) -> Vec<usize> {
+    let mut ranges = vec![];
+    let lower_command = command.to_ascii_lowercase();
+
+    for token in QueryTokenizer::new(search_input) {
+        let matchee = if token.has_uppercase() {
+            command
+        } else {
+            &lower_command
+        };
+
+        if token.is_inverse() {
+            continue;
+        }
+
+        match token {
+            QueryToken::Or => {}
+            QueryToken::Regex(r) => {
+                if let Ok(re) = regex::Regex::new(r) {
+                    for m in re.find_iter(command) {
+                        ranges.push(m.range());
+                    }
+                }
+            }
+            QueryToken::MatchStart(term, _) => {
+                if matchee.starts_with(term) {
+                    ranges.push(0..term.len());
+                }
+            }
+            QueryToken::MatchEnd(term, _) => {
+                if matchee.ends_with(term) {
+                    let l = matchee.len();
+                    ranges.push((l - term.len())..l);
+                }
+            }
+            QueryToken::Match(term, _) | QueryToken::MatchFull(term, _) => {
+                for (idx, m) in matchee.match_indices(term) {
+                    ranges.push(idx..(idx + m.len()));
+                }
+            }
+        }
+    }
+
+    let mut ret: Vec<_> = ranges.into_iter().flatten().collect();
+    ret.sort_unstable();
+    ret.dedup();
+    ret
 }
