@@ -20,6 +20,7 @@ If you have any problems, please open an [issue](https://github.com/ellie/atuin/
 - fish
 - nushell
 - xonsh
+- powershell (tier 2 support)
 
 ## Quickstart
 

@@ -22,6 +22,7 @@ Alternatively, get in touch on our [Discord](https://discord.gg/Fq8bJSKPHh) or o
 - fish
 - nushell
 - xonsh
+- powershell (tier 2 support)
 
 ## Quickstart
 
