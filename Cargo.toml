@@ -18,9 +18,9 @@ async-trait = "0.1.58"
 base64 = "0.22"
 log = "0.4"
 time = { version = "0.3.36", features = [
-  "serde-human-readable",
-  "macros",
-  "local-offset",
+    "serde-human-readable",
+    "macros",
+    "local-offset",
 ] }
 clap = { version = "4.5.7", features = ["derive"] }
 config = { version = "0.15.8", default-features = false, features = ["toml"] }
@@ -45,6 +45,7 @@ tracing = "0.1"
 sql-builder = "3"
 tempfile = { version = "3.19" }
 minijinja = "2.9.0"
+tracing-appender = "0.2"
 
 [workspace.dependencies.tracing-subscriber]
 version = "0.3"
