@@ -83,6 +83,7 @@ tiny-bip39 = "1"
 futures-util = "0.3"
 fuzzy-matcher = "0.3.7"
 colored = "2.0.4"
+open = "5"
 ratatui = "0.29.0"
 tracing = "0.1"
 tracing-subscriber = { workspace = true }

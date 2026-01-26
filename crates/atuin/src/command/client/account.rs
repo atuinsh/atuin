@@ -6,6 +6,7 @@ use atuin_client::settings::Settings;
 
 pub mod change_password;
 pub mod delete;
+mod hub;
 pub mod login;
 pub mod logout;
 pub mod register;
@@ -42,7 +43,7 @@ impl Cmd {
     pub async fn run(self, settings: Settings, store: SqliteStore) -> Result<()> {
         match self.command {
             Commands::Login(l) => l.run(&settings, &store).await,
-            Commands::Register(r) => r.run(&settings).await,
+            Commands::Register(r) => r.run(&settings, &store).await,
             Commands::Logout => logout::run(&settings),
             Commands::Delete => delete::run(&settings).await,
             Commands::ChangePassword(c) => c.run(&settings).await,
