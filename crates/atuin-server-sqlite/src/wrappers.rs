@@ -15,7 +15,6 @@ impl<'a> FromRow<'a, SqliteRow> for DbUser {
             username: row.try_get("username")?,
             email: row.try_get("email")?,
             password: row.try_get("password")?,
-            verified: row.try_get("verified_at")?,
         }))
     }
 }

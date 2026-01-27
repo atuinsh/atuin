@@ -9,7 +9,6 @@ pub mod delete;
 pub mod login;
 pub mod logout;
 pub mod register;
-pub mod verify;
 
 #[derive(Args, Debug)]
 pub struct Cmd {
@@ -33,9 +32,6 @@ pub enum Commands {
 
     /// Change your password
     ChangePassword(change_password::Cmd),
-
-    /// Verify your account
-    Verify(verify::Cmd),
 }
 
 impl Cmd {
@@ -46,7 +42,6 @@ impl Cmd {
             Commands::Logout => logout::run(&settings),
             Commands::Delete => delete::run(&settings).await,
             Commands::ChangePassword(c) => c.run(&settings).await,
-            Commands::Verify(c) => c.run(&settings).await,
         }
     }
 }

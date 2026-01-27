@@ -32,7 +32,6 @@ pub struct User {
     pub username: String,
     pub email: String,
     pub password: String,
-    pub verified: Option<OffsetDateTime>,
 }
 
 pub struct Session {
