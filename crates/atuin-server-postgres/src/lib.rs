@@ -120,14 +120,12 @@ impl Database for Postgres {
 
     #[instrument(skip_all)]
     async fn get_user(&self, username: &str) -> DbResult<User> {
-        sqlx::query_as(
-            "select id, username, email, password from users where username = $1",
-        )
-        .bind(username)
-        .fetch_one(self.read_pool())
-        .await
-        .map_err(fix_error)
-        .map(|DbUser(user)| user)
+        sqlx::query_as("select id, username, email, password from users where username = $1")
+            .bind(username)
+            .fetch_one(self.read_pool())
+            .await
+            .map_err(fix_error)
+            .map(|DbUser(user)| user)
     }
 
     #[instrument(skip_all)]

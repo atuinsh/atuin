@@ -426,5 +426,4 @@ impl<'a> Client<'a> {
             bail!("Unknown error");
         }
     }
-
 }
