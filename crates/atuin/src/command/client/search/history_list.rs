@@ -10,6 +10,7 @@ use atuin_client::{
 use atuin_common::utils::Escapable as _;
 use itertools::Itertools;
 use ratatui::{
+    backend::FromCrossterm,
     buffer::Buffer,
     crossterm::style,
     layout::Rect,
@@ -256,7 +257,7 @@ impl DrawState<'_> {
         let w = width as usize;
         // Right-align duration within its column width, plus trailing space
         let display = format!("{formatted:>w$} ");
-        self.draw(&display, style.into());
+        self.draw(&display, Style::from_crossterm(style));
     }
 
     fn time(&mut self, h: &History, width: u16) {
@@ -274,7 +275,7 @@ impl DrawState<'_> {
         let w = width as usize;
         let time_str = format!("{time} ago");
         let display = format!("{time_str:>w$} ");
-        self.draw(&display, style.into());
+        self.draw(&display, Style::from_crossterm(style));
     }
 
     fn command(&mut self, h: &History) {
@@ -299,7 +300,7 @@ impl DrawState<'_> {
         let mut pos = 0;
         for section in h.command.escape_control().split_ascii_whitespace() {
             if pos != 0 {
-                self.draw(" ", style.into());
+                self.draw(" ", Style::from_crossterm(style));
             }
             for ch in section.chars() {
                 if self.x > self.list_area.width {
@@ -317,7 +318,7 @@ impl DrawState<'_> {
                     style.attributes.set(style::Attribute::Bold);
                 }
                 let s = ch.to_string();
-                self.draw(&s, style.into());
+                self.draw(&s, Style::from_crossterm(style));
                 pos += s.len();
             }
             pos += 1;
@@ -337,7 +338,7 @@ impl DrawState<'_> {
             .unwrap_or_else(|_| "????-??-?? ??:??".to_string());
         let w = width as usize;
         let display = format!("{formatted:w$} ");
-        self.draw(&display, style.into());
+        self.draw(&display, Style::from_crossterm(style));
     }
 
     /// Render the directory column (working directory, truncated)
@@ -354,7 +355,7 @@ impl DrawState<'_> {
         } else {
             format!("{cwd:w$} ")
         };
-        self.draw(&display, style.into());
+        self.draw(&display, Style::from_crossterm(style));
     }
 
     /// Render the host column (just the hostname)
@@ -371,7 +372,7 @@ impl DrawState<'_> {
         } else {
             format!("{host:w$} ")
         };
-        self.draw(&display, style.into());
+        self.draw(&display, Style::from_crossterm(style));
     }
 
     /// Render the user column
@@ -388,7 +389,7 @@ impl DrawState<'_> {
         } else {
             format!("{user:w$} ")
         };
-        self.draw(&display, style.into());
+        self.draw(&display, Style::from_crossterm(style));
     }
 
     /// Render the exit code column
@@ -400,7 +401,7 @@ impl DrawState<'_> {
         };
         let w = width as usize;
         let display = format!("{:>w$} ", h.exit);
-        self.draw(&display, style.into());
+        self.draw(&display, Style::from_crossterm(style));
     }
 
     fn draw(&mut self, s: &str, mut style: Style) {
