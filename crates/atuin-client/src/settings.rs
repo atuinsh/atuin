@@ -1296,12 +1296,18 @@ mod tests {
         let kv_db_path: String = config.get("kv.db_path")?;
         let scripts_db_path: String = config.get("scripts.db_path")?;
 
-        assert_eq!(db_path, "/custom/data/dir/history.db");
-        assert_eq!(key_path, "/custom/data/dir/key");
-        assert_eq!(session_path, "/custom/data/dir/session");
-        assert_eq!(record_store_path, "/custom/data/dir/records.db");
-        assert_eq!(kv_db_path, "/custom/data/dir/kv.db");
-        assert_eq!(scripts_db_path, "/custom/data/dir/scripts.db");
+        assert_eq!(db_path, custom_dir.join("history.db").to_str().unwrap());
+        assert_eq!(key_path, custom_dir.join("key").to_str().unwrap());
+        assert_eq!(session_path, custom_dir.join("session").to_str().unwrap());
+        assert_eq!(
+            record_store_path,
+            custom_dir.join("records.db").to_str().unwrap()
+        );
+        assert_eq!(kv_db_path, custom_dir.join("kv.db").to_str().unwrap());
+        assert_eq!(
+            scripts_db_path,
+            custom_dir.join("scripts.db").to_str().unwrap()
+        );
 
         Ok(())
     }
