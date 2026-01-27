@@ -12,9 +12,11 @@ else # (include guard) beginning of main content
 #------------------------------------------------------------------------------
 __atuin_initialized=true
 
-ATUIN_SESSION=$(atuin uuid)
+if [[ -z "${ATUIN_SESSION:-}" ]]; then
+    ATUIN_SESSION=$(atuin uuid)
+    export ATUIN_SESSION
+fi
 ATUIN_STTY=$(stty -g)
-export ATUIN_SESSION
 ATUIN_HISTORY_ID=""
 
 export ATUIN_PREEXEC_BACKEND=$SHLVL:none

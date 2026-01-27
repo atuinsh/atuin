@@ -1,4 +1,6 @@
-set -gx ATUIN_SESSION (atuin uuid)
+if not set -q ATUIN_SESSION
+    set -gx ATUIN_SESSION (atuin uuid)
+end
 set --erase ATUIN_HISTORY_ID
 
 function _atuin_preexec --on-event fish_preexec

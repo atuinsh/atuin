@@ -25,7 +25,9 @@ else
     ZSH_AUTOSUGGEST_STRATEGY=("atuin")
 fi
 
-export ATUIN_SESSION=$(atuin uuid)
+if [[ -z "${ATUIN_SESSION:-}" ]]; then
+    export ATUIN_SESSION=$(atuin uuid)
+fi
 ATUIN_HISTORY_ID=""
 
 _atuin_preexec() {

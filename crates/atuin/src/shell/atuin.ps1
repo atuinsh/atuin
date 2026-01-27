@@ -30,7 +30,9 @@ if (!(Get-Module PSReadLine -ErrorAction Ignore)) {
 }
 
 New-Module -Name Atuin -ScriptBlock {
-    $env:ATUIN_SESSION = atuin uuid
+    if (-not $env:ATUIN_SESSION) {
+        $env:ATUIN_SESSION = atuin uuid
+    }
 
     $script:atuinHistoryId = $null
     $script:previousPSConsoleHostReadLine = $Function:PSConsoleHostReadLine
