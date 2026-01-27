@@ -245,6 +245,7 @@ dependencies = [
  "rpassword",
  "runtime-format",
  "rustix 0.38.44",
+ "rustls",
  "semver",
  "serde",
  "serde_json",

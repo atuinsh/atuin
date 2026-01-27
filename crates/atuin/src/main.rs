@@ -55,5 +55,9 @@ impl Atuin {
 }
 
 fn main() -> Result<()> {
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("Failed to install default crypto provider");
+
     Atuin::parse().run()
 }
