@@ -289,7 +289,7 @@ dependencies = [
  "pretty_assertions",
  "rand 0.8.5",
  "regex",
- "reqwest 0.13.1",
+ "reqwest",
  "rmp",
  "rusty_paserk",
  "rusty_paseto",
@@ -309,7 +309,7 @@ dependencies = [
  "time",
  "tiny-bip39",
  "tokio",
- "typed-builder 0.18.2",
+ "typed-builder",
  "urlencoding",
  "uuid",
  "whoami",
@@ -330,7 +330,7 @@ dependencies = [
  "sysinfo",
  "thiserror 1.0.69",
  "time",
- "typed-builder 0.18.2",
+ "typed-builder",
  "uuid",
 ]
 
@@ -401,7 +401,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "typed-builder 0.18.2",
+ "typed-builder",
 ]
 
 [[package]]
@@ -422,7 +422,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "typed-builder 0.18.2",
+ "typed-builder",
  "uuid",
 ]
 
@@ -440,9 +440,8 @@ dependencies = [
  "fs-err",
  "metrics",
  "metrics-exporter-prometheus",
- "postmark",
  "rand 0.8.5",
- "reqwest 0.13.1",
+ "reqwest",
  "semver",
  "serde",
  "serde_json",
@@ -1987,7 +1986,6 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tower-service",
- "webpki-roots 1.0.5",
 ]
 
 [[package]]
@@ -3257,24 +3255,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f89776e4d69bb58bc6993e99ffa1d11f228b839984854c7daeb5d37f87cbe950"
 
 [[package]]
-name = "postmark"
-version = "0.11.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "846751b682939565add1f69358a595fa6f3f7d4f1eb15d920b16478e0f981fe2"
-dependencies = [
- "async-trait",
- "bytes",
- "http",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "time",
- "typed-builder 0.21.2",
- "url",
-]
-
-[[package]]
 name = "potential_utf"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3793,44 +3773,6 @@ name = "regex-syntax"
 version = "0.8.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a2d987857b319362043e95f5353c0535c1f58eec5336fdfcf626430af7def58"
-
-[[package]]
-name = "reqwest"
-version = "0.12.28"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eddd3ca559203180a307f12d114c268abf583f59b03cb906fd0b3ff8646c1147"
-dependencies = [
- "base64",
- "bytes",
- "futures-core",
- "http",
- "http-body",
- "http-body-util",
- "hyper",
- "hyper-rustls",
- "hyper-util",
- "js-sys",
- "log",
- "percent-encoding",
- "pin-project-lite",
- "quinn",
- "rustls",
- "rustls-pki-types",
- "serde",
- "serde_json",
- "serde_urlencoded",
- "sync_wrapper",
- "tokio",
- "tokio-rustls",
- "tower 0.5.3",
- "tower-http",
- "tower-service",
- "url",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
- "webpki-roots 1.0.5",
-]
 
 [[package]]
 name = "reqwest"
@@ -5351,16 +5293,7 @@ version = "0.18.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77739c880e00693faef3d65ea3aad725f196da38b22fdc7ea6ded6e1ce4d3add"
 dependencies = [
- "typed-builder-macro 0.18.2",
-]
-
-[[package]]
-name = "typed-builder"
-version = "0.21.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fef81aec2ca29576f9f6ae8755108640d0a86dd3161b2e8bca6cfa554e98f77d"
-dependencies = [
- "typed-builder-macro 0.21.2",
+ "typed-builder-macro",
 ]
 
 [[package]]
@@ -5368,17 +5301,6 @@ name = "typed-builder-macro"
 version = "0.18.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1f718dfaf347dcb5b983bfc87608144b0bad87970aebcbea5ce44d2a30c08e63"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.114",
-]
-
-[[package]]
-name = "typed-builder-macro"
-version = "0.21.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1ecb9ecf7799210407c14a8cfdfe0173365780968dc57973ed082211958e0b18"
 dependencies = [
  "proc-macro2",
  "quote",
