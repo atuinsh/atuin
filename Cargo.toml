@@ -52,7 +52,7 @@ features = ["ansi", "fmt", "registry", "env-filter"]
 
 [workspace.dependencies.reqwest]
 version = "0.13"
-features = ["json", "rustls"]
+features = ["json", "rustls-no-provider"]
 default-features = false
 
 [workspace.dependencies.sqlx]
