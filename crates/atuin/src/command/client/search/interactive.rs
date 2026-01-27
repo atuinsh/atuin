@@ -29,7 +29,7 @@ use crate::{VERSION, command::client::search::engines};
 
 use ratatui::{
     Frame, Terminal, TerminalOptions, Viewport,
-    backend::CrosstermBackend,
+    backend::{CrosstermBackend, FromCrossterm},
     crossterm::{
         cursor::SetCursorStyle,
         event::{
@@ -42,7 +42,7 @@ use ratatui::{
     prelude::*,
     style::{Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, BorderType, Borders, Padding, Paragraph, Tabs, block::Title},
+    widgets::{Block, BorderType, Borders, Padding, Paragraph, Tabs},
 };
 
 #[cfg(not(target_os = "windows"))]
@@ -883,7 +883,7 @@ impl State {
                 .block(Block::default().borders(Borders::NONE))
                 .select(self.tab_index)
                 .style(Style::default())
-                .highlight_style(theme.as_style(Meaning::Important));
+                .highlight_style(Style::from_crossterm(theme.as_style(Meaning::Important)));
 
             f.render_widget(tabs, tabs_chunk);
         }
@@ -954,7 +954,7 @@ impl State {
                     let message = Paragraph::new("Nothing to inspect")
                         .block(
                             Block::new()
-                                .title(Title::from(" Info ".to_string()))
+                                .title(Line::from(" Info ".to_string()))
                                 .title_alignment(Alignment::Center)
                                 .borders(Borders::ALL)
                                 .padding(Padding::vertical(2)),
@@ -1055,13 +1055,13 @@ impl State {
 
     fn build_title(&self, theme: &Theme) -> Paragraph<'_> {
         let title = if self.update_needed.is_some() {
-            let error_style: Style = theme.get_error().into();
+            let error_style: Style = Style::from_crossterm(theme.get_error());
             Paragraph::new(Text::from(Span::styled(
                 format!("Atuin v{VERSION} - UPDATE"),
                 error_style.add_modifier(Modifier::BOLD),
             )))
         } else {
-            let style: Style = theme.as_style(Meaning::Base).into();
+            let style: Style = Style::from_crossterm(theme.as_style(Meaning::Base));
             Paragraph::new(Text::from(Span::styled(
                 format!("Atuin v{VERSION}"),
                 style.add_modifier(Modifier::BOLD),
@@ -1105,7 +1105,7 @@ impl State {
 
             _ => unreachable!("invalid tab index"),
         }
-        .style(theme.as_style(Meaning::Annotation))
+        .style(Style::from_crossterm(theme.as_style(Meaning::Annotation)))
         .alignment(Alignment::Center)
     }
 
@@ -1114,7 +1114,7 @@ impl State {
             "history count: {}",
             self.history_count,
         ))))
-        .style(theme.as_style(Meaning::Annotation))
+        .style(Style::from_crossterm(theme.as_style(Meaning::Annotation)))
         .alignment(Alignment::Right)
     }
 
@@ -1228,7 +1228,8 @@ impl State {
                     .border_type(BorderType::Rounded)
                     .title(format!("{:─>width$}", "", width = chunk_width - 2)),
             ),
-            _ => Paragraph::new(command).style(theme.as_style(Meaning::Annotation)),
+            _ => Paragraph::new(command)
+                .style(Style::from_crossterm(theme.as_style(Meaning::Annotation))),
         }
     }
 }
