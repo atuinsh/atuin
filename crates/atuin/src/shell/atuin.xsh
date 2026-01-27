@@ -5,7 +5,8 @@ from prompt_toolkit.filters import Condition
 from prompt_toolkit.keys import Keys
 
 
-$ATUIN_SESSION=$(atuin uuid).rstrip('\n')
+if "ATUIN_SESSION" not in ${...}:
+    $ATUIN_SESSION=$(atuin uuid).rstrip('\n')
 
 @events.on_precommand
 def _atuin_precommand(cmd: str):
