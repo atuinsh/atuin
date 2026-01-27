@@ -19,7 +19,7 @@ pub async fn run(settings: &Settings, db: &impl Database) -> Result<()> {
         settings.network_timeout,
     )?;
 
-    let status = client.status().await?;
+    let me = client.me().await?;
     let last_sync = Settings::last_sync()?;
 
     println!("Atuin v{VERSION} - Build rev {SHA}\n");
@@ -42,7 +42,7 @@ pub async fn run(settings: &Settings, db: &impl Database) -> Result<()> {
     if settings.auto_sync {
         println!("{}", "[Remote]".green());
         println!("Address: {}", settings.sync_address);
-        println!("Username: {}", status.username);
+        println!("Username: {}", me.username);
     }
 
     Ok(())
