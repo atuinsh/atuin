@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap, convert::TryFrom, fmt, io::prelude::*, path::PathBuf, str::FromStr,
+    sync::OnceLock,
 };
 
 use atuin_common::record::HostId;
@@ -28,6 +29,8 @@ pub const LAST_VERSION_CHECK_FILENAME: &str = "last_version_check_time";
 pub const LATEST_VERSION_FILENAME: &str = "latest_version";
 pub const HOST_ID_FILENAME: &str = "host_id";
 static EXAMPLE_CONFIG: &str = include_str!("../config.toml");
+
+static DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
 
 mod dotfiles;
 mod kv;
@@ -631,6 +634,7 @@ impl Default for Ui {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Settings {
+    pub data_dir: Option<String>,
     pub dialect: Dialect,
     pub timezone: Timezone,
     pub style: Style,
@@ -730,8 +734,15 @@ impl Settings {
             .expect("Could not deserialize config")
     }
 
+    fn effective_data_dir() -> PathBuf {
+        DATA_DIR
+            .get()
+            .cloned()
+            .unwrap_or_else(atuin_common::utils::data_dir)
+    }
+
     fn save_to_data_dir(filename: &str, value: &str) -> Result<()> {
-        let data_dir = atuin_common::utils::data_dir();
+        let data_dir = Self::effective_data_dir();
         let data_dir = data_dir.as_path();
 
         let path = data_dir.join(filename);
@@ -742,7 +753,7 @@ impl Settings {
     }
 
     fn read_from_data_dir(filename: &str) -> Option<String> {
-        let data_dir = atuin_common::utils::data_dir();
+        let data_dir = Self::effective_data_dir();
         let data_dir = data_dir.as_path();
 
         let path = data_dir.join(filename);
@@ -939,7 +950,10 @@ impl Settings {
     }
 
     pub fn builder() -> Result<ConfigBuilder<DefaultState>> {
-        let data_dir = atuin_common::utils::data_dir();
+        Self::builder_with_data_dir(&atuin_common::utils::data_dir())
+    }
+
+    fn builder_with_data_dir(data_dir: &std::path::Path) -> Result<ConfigBuilder<DefaultState>> {
         let db_path = data_dir.join("history.db");
         let record_store_path = data_dir.join("records.db");
         let kv_path = data_dir.join("kv.db");
@@ -1042,12 +1056,9 @@ impl Settings {
 
     pub fn new() -> Result<Self> {
         let config_dir = atuin_common::utils::config_dir();
-        let data_dir = atuin_common::utils::data_dir();
 
         create_dir_all(&config_dir)
             .wrap_err_with(|| format!("could not create dir {config_dir:?}"))?;
-
-        create_dir_all(&data_dir).wrap_err_with(|| format!("could not create dir {data_dir:?}"))?;
 
         let mut config_file = if let Ok(p) = std::env::var("ATUIN_CONFIG_DIR") {
             PathBuf::from(p)
@@ -1059,13 +1070,55 @@ impl Settings {
 
         config_file.push("config.toml");
 
-        let mut config_builder = Self::builder()?;
+        // extract data_dir first so we can use it as the base for other path defaults
+        let effective_data_dir = if config_file.exists() {
+            #[derive(Deserialize, Default)]
+            struct DataDirOnly {
+                data_dir: Option<String>,
+            }
+
+            let config_file_str = config_file
+                .to_str()
+                .ok_or_else(|| eyre!("config file path is not valid UTF-8"))?;
+
+            let partial_config = Config::builder()
+                .add_source(ConfigFile::new(config_file_str, FileFormat::Toml))
+                .add_source(
+                    Environment::with_prefix("atuin")
+                        .prefix_separator("_")
+                        .separator("__"),
+                )
+                .build()
+                .ok();
+
+            let custom_data_dir = partial_config
+                .and_then(|c| c.try_deserialize::<DataDirOnly>().ok())
+                .and_then(|d| d.data_dir);
+
+            match custom_data_dir {
+                Some(dir) => {
+                    let expanded = shellexpand::full(&dir)
+                        .map_err(|e| eyre!("failed to expand data_dir path: {}", e))?;
+                    PathBuf::from(expanded.as_ref())
+                }
+                None => atuin_common::utils::data_dir(),
+            }
+        } else {
+            atuin_common::utils::data_dir()
+        };
+
+        DATA_DIR.set(effective_data_dir.clone()).ok();
+
+        create_dir_all(&effective_data_dir)
+            .wrap_err_with(|| format!("could not create dir {effective_data_dir:?}"))?;
+
+        let mut config_builder = Self::builder_with_data_dir(&effective_data_dir)?;
 
         config_builder = if config_file.exists() {
-            config_builder.add_source(ConfigFile::new(
-                config_file.to_str().unwrap(),
-                FileFormat::Toml,
-            ))
+            let config_file_str = config_file
+                .to_str()
+                .ok_or_else(|| eyre!("config file path is not valid UTF-8"))?;
+            config_builder.add_source(ConfigFile::new(config_file_str, FileFormat::Toml))
         } else {
             let mut file = File::create(config_file).wrap_err("could not create config file")?;
             file.write_all(EXAMPLE_CONFIG.as_bytes())
@@ -1226,5 +1279,39 @@ mod tests {
         assert_eq!(settings.default_filter_mode(true), super::FilterMode::Host,);
 
         Ok(())
+    }
+
+    #[test]
+    fn builder_with_data_dir_uses_custom_paths() -> Result<()> {
+        use std::path::PathBuf;
+
+        let custom_dir = PathBuf::from("/custom/data/dir");
+        let builder = super::Settings::builder_with_data_dir(&custom_dir)?;
+        let config = builder.build()?;
+
+        let db_path: String = config.get("db_path")?;
+        let key_path: String = config.get("key_path")?;
+        let session_path: String = config.get("session_path")?;
+        let record_store_path: String = config.get("record_store_path")?;
+        let kv_db_path: String = config.get("kv.db_path")?;
+        let scripts_db_path: String = config.get("scripts.db_path")?;
+
+        assert_eq!(db_path, "/custom/data/dir/history.db");
+        assert_eq!(key_path, "/custom/data/dir/key");
+        assert_eq!(session_path, "/custom/data/dir/session");
+        assert_eq!(record_store_path, "/custom/data/dir/records.db");
+        assert_eq!(kv_db_path, "/custom/data/dir/kv.db");
+        assert_eq!(scripts_db_path, "/custom/data/dir/scripts.db");
+
+        Ok(())
+    }
+
+    #[test]
+    fn effective_data_dir_returns_default_when_not_set() {
+        let effective = super::Settings::effective_data_dir();
+        let default = atuin_common::utils::data_dir();
+
+        assert!(effective.to_str().is_some());
+        assert!(effective.ends_with("atuin") || effective == default);
     }
 }
