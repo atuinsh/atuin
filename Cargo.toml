@@ -28,7 +28,7 @@ directories = "6.0.0"
 eyre = "0.6"
 fs-err = "3.1"
 interim = { version = "0.2.0", features = ["time_0_3"] }
-itertools = "0.13.0"
+itertools = "0.14.0"
 rand = { version = "0.8.5", features = ["std"] }
 semver = "1.0.20"
 serde = { version = "1.0.202", features = ["derive"] }

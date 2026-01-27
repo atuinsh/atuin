@@ -1,5 +1,4 @@
 use config::{Config, File as ConfigFile, FileFormat};
-use lazy_static::lazy_static;
 use log;
 use palette::named;
 use serde::{Deserialize, Serialize};
@@ -8,6 +7,7 @@ use std::collections::HashMap;
 use std::error;
 use std::io::{Error, ErrorKind};
 use std::path::PathBuf;
+use std::sync::LazyLock;
 use strum_macros;
 
 static DEFAULT_MAX_DEPTH: u8 = 10;
@@ -241,122 +241,123 @@ impl StyleFactory {
 // Built-in themes. Rather than having extra files added before any theming
 // is available, this gives a couple of basic options, demonstrating the use
 // of themes: autumn and marine
-lazy_static! {
-    static ref ALERT_TYPES: HashMap<log::Level, Meaning> = {
+static ALERT_TYPES: LazyLock<HashMap<log::Level, Meaning>> = LazyLock::new(|| {
+    HashMap::from([
+        (log::Level::Info, Meaning::AlertInfo),
+        (log::Level::Warn, Meaning::AlertWarn),
+        (log::Level::Error, Meaning::AlertError),
+    ])
+});
+
+static MEANING_FALLBACKS: LazyLock<HashMap<Meaning, Meaning>> = LazyLock::new(|| {
+    HashMap::from([
+        (Meaning::Guidance, Meaning::AlertInfo),
+        (Meaning::Annotation, Meaning::AlertInfo),
+        (Meaning::Title, Meaning::Important),
+    ])
+});
+
+static DEFAULT_THEME: LazyLock<Theme> = LazyLock::new(|| {
+    Theme::new(
+        "default".to_string(),
+        None,
         HashMap::from([
-            (log::Level::Info, Meaning::AlertInfo),
-            (log::Level::Warn, Meaning::AlertWarn),
-            (log::Level::Error, Meaning::AlertError),
-        ])
-    };
-    static ref MEANING_FALLBACKS: HashMap<Meaning, Meaning> = {
-        HashMap::from([
-            (Meaning::Guidance, Meaning::AlertInfo),
-            (Meaning::Annotation, Meaning::AlertInfo),
-            (Meaning::Title, Meaning::Important),
-        ])
-    };
-    static ref DEFAULT_THEME: Theme = {
-        Theme::new(
-            "default".to_string(),
-            None,
+            (
+                Meaning::AlertError,
+                StyleFactory::from_fg_color(Color::DarkRed),
+            ),
+            (
+                Meaning::AlertWarn,
+                StyleFactory::from_fg_color(Color::DarkYellow),
+            ),
+            (
+                Meaning::AlertInfo,
+                StyleFactory::from_fg_color(Color::DarkGreen),
+            ),
+            (
+                Meaning::Annotation,
+                StyleFactory::from_fg_color(Color::DarkGrey),
+            ),
+            (
+                Meaning::Guidance,
+                StyleFactory::from_fg_color(Color::DarkBlue),
+            ),
+            (
+                Meaning::Important,
+                StyleFactory::from_fg_color_and_attributes(
+                    Color::White,
+                    Attributes::from(Attribute::Bold),
+                ),
+            ),
+            (Meaning::Muted, StyleFactory::from_fg_color(Color::Grey)),
+            (Meaning::Base, ContentStyle::default()),
+        ]),
+    )
+});
+
+static BUILTIN_THEMES: LazyLock<HashMap<&'static str, Theme>> = LazyLock::new(|| {
+    HashMap::from([
+        ("default", HashMap::new()),
+        (
+            "(none)",
+            HashMap::from([
+                (Meaning::AlertError, ContentStyle::default()),
+                (Meaning::AlertWarn, ContentStyle::default()),
+                (Meaning::AlertInfo, ContentStyle::default()),
+                (Meaning::Annotation, ContentStyle::default()),
+                (Meaning::Guidance, ContentStyle::default()),
+                (Meaning::Important, ContentStyle::default()),
+                (Meaning::Muted, ContentStyle::default()),
+                (Meaning::Base, ContentStyle::default()),
+            ]),
+        ),
+        (
+            "autumn",
             HashMap::from([
                 (
                     Meaning::AlertError,
-                    StyleFactory::from_fg_color(Color::DarkRed),
+                    StyleFactory::known_fg_string("saddlebrown"),
                 ),
                 (
                     Meaning::AlertWarn,
-                    StyleFactory::from_fg_color(Color::DarkYellow),
+                    StyleFactory::known_fg_string("darkorange"),
                 ),
-                (
-                    Meaning::AlertInfo,
-                    StyleFactory::from_fg_color(Color::DarkGreen),
-                ),
+                (Meaning::AlertInfo, StyleFactory::known_fg_string("gold")),
                 (
                     Meaning::Annotation,
                     StyleFactory::from_fg_color(Color::DarkGrey),
                 ),
-                (
-                    Meaning::Guidance,
-                    StyleFactory::from_fg_color(Color::DarkBlue),
-                ),
-                (
-                    Meaning::Important,
-                    StyleFactory::from_fg_color_and_attributes(
-                        Color::White,
-                        Attributes::from(Attribute::Bold),
-                    ),
-                ),
-                (Meaning::Muted, StyleFactory::from_fg_color(Color::Grey)),
-                (Meaning::Base, ContentStyle::default()),
+                (Meaning::Guidance, StyleFactory::known_fg_string("brown")),
             ]),
-        )
-    };
-    static ref BUILTIN_THEMES: HashMap<&'static str, Theme> = {
-        HashMap::from([
-            ("default", HashMap::new()),
-            (
-                "(none)",
-                HashMap::from([
-                    (Meaning::AlertError, ContentStyle::default()),
-                    (Meaning::AlertWarn, ContentStyle::default()),
-                    (Meaning::AlertInfo, ContentStyle::default()),
-                    (Meaning::Annotation, ContentStyle::default()),
-                    (Meaning::Guidance, ContentStyle::default()),
-                    (Meaning::Important, ContentStyle::default()),
-                    (Meaning::Muted, ContentStyle::default()),
-                    (Meaning::Base, ContentStyle::default()),
-                ]),
-            ),
-            (
-                "autumn",
-                HashMap::from([
-                    (
-                        Meaning::AlertError,
-                        StyleFactory::known_fg_string("saddlebrown"),
-                    ),
-                    (
-                        Meaning::AlertWarn,
-                        StyleFactory::known_fg_string("darkorange"),
-                    ),
-                    (Meaning::AlertInfo, StyleFactory::known_fg_string("gold")),
-                    (
-                        Meaning::Annotation,
-                        StyleFactory::from_fg_color(Color::DarkGrey),
-                    ),
-                    (Meaning::Guidance, StyleFactory::known_fg_string("brown")),
-                ]),
-            ),
-            (
-                "marine",
-                HashMap::from([
-                    (
-                        Meaning::AlertError,
-                        StyleFactory::known_fg_string("yellowgreen"),
-                    ),
-                    (Meaning::AlertWarn, StyleFactory::known_fg_string("cyan")),
-                    (
-                        Meaning::AlertInfo,
-                        StyleFactory::known_fg_string("turquoise"),
-                    ),
-                    (
-                        Meaning::Annotation,
-                        StyleFactory::known_fg_string("steelblue"),
-                    ),
-                    (
-                        Meaning::Base,
-                        StyleFactory::known_fg_string("lightsteelblue"),
-                    ),
-                    (Meaning::Guidance, StyleFactory::known_fg_string("teal")),
-                ]),
-            ),
-        ])
-        .iter()
-        .map(|(name, theme)| (*name, Theme::from_map(name.to_string(), None, theme)))
-        .collect()
-    };
-}
+        ),
+        (
+            "marine",
+            HashMap::from([
+                (
+                    Meaning::AlertError,
+                    StyleFactory::known_fg_string("yellowgreen"),
+                ),
+                (Meaning::AlertWarn, StyleFactory::known_fg_string("cyan")),
+                (
+                    Meaning::AlertInfo,
+                    StyleFactory::known_fg_string("turquoise"),
+                ),
+                (
+                    Meaning::Annotation,
+                    StyleFactory::known_fg_string("steelblue"),
+                ),
+                (
+                    Meaning::Base,
+                    StyleFactory::known_fg_string("lightsteelblue"),
+                ),
+                (Meaning::Guidance, StyleFactory::known_fg_string("teal")),
+            ]),
+        ),
+    ])
+    .iter()
+    .map(|(name, theme)| (*name, Theme::from_map(name.to_string(), None, theme)))
+    .collect()
+});
 
 // To avoid themes being repeatedly loaded, we store them in a theme manager
 pub struct ThemeManager {

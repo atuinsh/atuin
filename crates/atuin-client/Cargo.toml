@@ -70,9 +70,8 @@ tiny-bip39 = "=1.0.0"
 # theme
 crossterm = { version = "0.29.0", features = ["serde"] }
 palette = { version = "0.7.5", features = ["serializing"] }
-lazy_static = "1.4.0"
-strum_macros = "0.26.3"
-strum = { version = "0.26.2", features = ["strum_macros"] }
+strum_macros = "0.27"
+strum = { version = "0.27", features = ["strum_macros"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
