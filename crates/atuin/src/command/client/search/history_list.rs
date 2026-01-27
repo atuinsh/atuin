@@ -203,8 +203,12 @@ impl DrawState<'_> {
             .width
             .saturating_sub(indicator_width + fixed_width);
 
+        let style = self.theme.as_style(Meaning::Base);
         // Render each configured column
-        for column in self.columns {
+        for (idx, column) in self.columns.iter().enumerate() {
+            if idx != 0 {
+                self.draw(" ", Style::from_crossterm(style));
+            }
             let width = if column.expand {
                 expand_width
             } else {
@@ -256,7 +260,7 @@ impl DrawState<'_> {
         let formatted = format_duration(duration);
         let w = width as usize;
         // Right-align duration within its column width, plus trailing space
-        let display = format!("{formatted:>w$} ");
+        let display = format!("{formatted:>w$}");
         self.draw(&display, Style::from_crossterm(style));
     }
 
@@ -271,10 +275,11 @@ impl DrawState<'_> {
         let since = (self.now)() - h.timestamp;
         let time = format_duration(since.try_into().unwrap_or_default());
 
-        // Format as "Xs ago" right-aligned within column width, plus trailing space
+        // Format as "Xs ago" right-aligned within column width
         let w = width as usize;
         let time_str = format!("{time} ago");
-        let display = format!("{time_str:>w$} ");
+
+        let display = format!("{time_str:>w$}");
         self.draw(&display, Style::from_crossterm(style));
     }
 
@@ -337,7 +342,7 @@ impl DrawState<'_> {
             )
             .unwrap_or_else(|_| "????-??-?? ??:??".to_string());
         let w = width as usize;
-        let display = format!("{formatted:w$} ");
+        let display = format!("{formatted:w$}");
         self.draw(&display, Style::from_crossterm(style));
     }
 
@@ -351,9 +356,9 @@ impl DrawState<'_> {
         // Use character count for comparison and skip for UTF-8 safety
         let display = if char_count > w && w >= 4 {
             let truncated: String = cwd.chars().skip(char_count - (w - 3)).collect();
-            format!("...{truncated} ")
+            format!("...{truncated}")
         } else {
-            format!("{cwd:w$} ")
+            format!("{cwd:w$}")
         };
         self.draw(&display, Style::from_crossterm(style));
     }
@@ -361,16 +366,16 @@ impl DrawState<'_> {
     /// Render the host column (just the hostname)
     fn host(&mut self, h: &History, width: u16) {
         let style = self.theme.as_style(Meaning::Annotation);
-        let w = width as usize - 1;
+        let w = width as usize;
         // Database stores hostname as "hostname:username"
         let host = h.hostname.split(':').next().unwrap_or(&h.hostname);
         let char_count = host.chars().count();
         // Use character count for comparison and take for UTF-8 safety
         let display = if char_count > w && w >= 4 {
             let truncated: String = host.chars().take(w.saturating_sub(4)).collect();
-            format!("{truncated}... ")
+            format!("{truncated}...")
         } else {
-            format!("{host:w$} ")
+            format!("{host:w$}")
         };
         self.draw(&display, Style::from_crossterm(style));
     }
@@ -385,9 +390,9 @@ impl DrawState<'_> {
         // Use character count for comparison and take for UTF-8 safety
         let display = if char_count > w && w >= 4 {
             let truncated: String = user.chars().take(w.saturating_sub(4)).collect();
-            format!("{truncated}... ")
+            format!("{truncated}...")
         } else {
-            format!("{user:w$} ")
+            format!("{user:w$}")
         };
         self.draw(&display, Style::from_crossterm(style));
     }
@@ -400,7 +405,7 @@ impl DrawState<'_> {
             self.theme.as_style(Meaning::AlertError)
         };
         let w = width as usize;
-        let display = format!("{:>w$} ", h.exit);
+        let display = format!("{:>w$}", h.exit);
         self.draw(&display, Style::from_crossterm(style));
     }
 

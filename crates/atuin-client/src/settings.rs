@@ -478,8 +478,8 @@ impl UiColumnType {
     /// The Command column returns 0 as it expands to fill remaining space.
     pub fn default_width(&self) -> u16 {
         match self {
-            UiColumnType::Duration => 5,
-            UiColumnType::Time => 9,      // "459ms ago" with padding
+            UiColumnType::Duration => 5,  // "814ms"
+            UiColumnType::Time => 9,      // "459ms ago"
             UiColumnType::Datetime => 16, // "2025-01-22 14:35"
             UiColumnType::Directory => 20,
             UiColumnType::Host => 15,
