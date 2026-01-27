@@ -1009,9 +1009,12 @@ impl State {
                 .ui
                 .columns
                 .iter()
-                .filter_map(|col| if col.expand { None } else { Some(col.width) })
+                .take_while(|col| !col.expand)
+                .map(|col| col.width + 1)
                 .sum::<u16>()
-                + "  > ".len() as u16;
+                + " > ".len() as u16;
+            #[allow(clippy::cast_possible_truncation)]
+            let min_prefix_width = "[ SRCH: FULLTXT ] ".len() as u16;
             self.draw_preview(
                 f,
                 style,
@@ -1019,7 +1022,7 @@ impl State {
                 compactness,
                 preview_chunk,
                 preview,
-                prefix_width,
+                std::cmp::max(prefix_width, min_prefix_width),
             );
         }
     }
@@ -1035,7 +1038,7 @@ impl State {
         preview: Paragraph,
         prefix_width: u16,
     ) {
-        let input = self.build_input(style, prefix_width - 2);
+        let input = self.build_input(style, prefix_width);
         f.render_widget(input, input_chunk);
 
         f.render_widget(preview, preview_chunk);
@@ -1048,7 +1051,7 @@ impl State {
         };
         f.set_cursor_position((
             // Put cursor past the end of the input text
-            input_chunk.x + extra_width as u16 + prefix_width + 1 + cursor_offset,
+            input_chunk.x + extra_width as u16 + prefix_width + cursor_offset,
             input_chunk.y + cursor_offset,
         ));
     }
@@ -1163,13 +1166,14 @@ impl State {
         }
     }
 
-    fn build_input(&self, style: StyleState, max_width: u16) -> Paragraph<'_> {
+    fn build_input(&self, style: StyleState, prefix_width: u16) -> Paragraph<'_> {
         let (pref, mode) = if self.switched_search_mode {
             (" SRCH:", self.search_mode.as_str())
         } else {
             ("", self.search.filter_mode.as_str())
         };
-        let mode_width = usize::from(max_width) - pref.len();
+        // 3: surrounding "[" "] "
+        let mode_width = usize::from(prefix_width) - pref.len() - 3;
         // sanity check to ensure we don't exceed the layout limits
         debug_assert!(mode_width >= mode.len(), "mode name '{mode}' is too long!");
         let input = format!("[{pref}{mode:^mode_width$}] {}", self.search.input.as_str(),);
