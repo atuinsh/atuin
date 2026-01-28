@@ -147,7 +147,7 @@ jobs:
         run: cargo check --no-default-features --features sync --workspace
 
       - name: Run cargo check (server)
-        run: cargo check --no-default-features --features server --workspace
+        run: cargo check -p atuin-server
 
       - name: Run cargo check (client only)
         run: cargo check --no-default-features --features client --workspace
