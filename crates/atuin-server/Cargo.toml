@@ -10,9 +10,19 @@ license = { workspace = true }
 homepage = { workspace = true }
 repository = { workspace = true }
 
+[lib]
+name = "atuin_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "atuin-server"
+path = "src/bin/main.rs"
+
 [dependencies]
 atuin-common = { path = "../atuin-common", version = "18.11.0" }
 atuin-server-database = { path = "../atuin-server-database", version = "18.11.0" }
+atuin-server-postgres = { path = "../atuin-server-postgres", version = "18.11.0" }
+atuin-server-sqlite = { path = "../atuin-server-sqlite", version = "18.11.0" }
 
 tracing = { workspace = true }
 time = { workspace = true }
@@ -32,3 +42,5 @@ argon2 = "0.5"
 semver = { workspace = true }
 metrics-exporter-prometheus = { version = "0.18", default-features = false }
 metrics = "0.24"
+clap = { workspace = true }
+tracing-subscriber = { workspace = true }
