@@ -1,6 +1,7 @@
+use atuin_client::settings::Tmux;
 use atuin_dotfiles::store::{AliasStore, var::VarStore};
 
-pub fn init_static(disable_up_arrow: bool, disable_ctrl_r: bool) {
+pub fn init_static(disable_up_arrow: bool, disable_ctrl_r: bool, _tmux: &Tmux) {
     let base = include_str!("../../../shell/atuin.ps1");
 
     let (bind_ctrl_r, bind_up_arrow) = if std::env::var("ATUIN_NOBIND").is_ok() {
@@ -9,6 +10,7 @@ pub fn init_static(disable_up_arrow: bool, disable_ctrl_r: bool) {
         (!disable_ctrl_r, !disable_up_arrow)
     };
 
+    // TODO: tmux popup for Powershell
     println!("{base}");
     println!(
         "Enable-AtuinSearchKeys -CtrlR {} -UpArrow {}",
@@ -22,8 +24,9 @@ pub async fn init(
     vars: VarStore,
     disable_up_arrow: bool,
     disable_ctrl_r: bool,
+    tmux: &Tmux,
 ) -> eyre::Result<()> {
-    init_static(disable_up_arrow, disable_ctrl_r);
+    init_static(disable_up_arrow, disable_ctrl_r, tmux);
 
     let aliases = atuin_dotfiles::shell::powershell::alias_config(&aliases).await;
     let vars = atuin_dotfiles::shell::powershell::var_config(&vars).await;

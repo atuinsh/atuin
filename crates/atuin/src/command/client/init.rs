@@ -1,6 +1,10 @@
 use std::path::PathBuf;
 
-use atuin_client::{encryption, record::sqlite_store::SqliteStore, settings::Settings};
+use atuin_client::{
+    encryption,
+    record::sqlite_store::SqliteStore,
+    settings::{Settings, Tmux},
+};
 use atuin_dotfiles::store::{AliasStore, var::VarStore};
 use clap::{Parser, ValueEnum};
 use eyre::{Result, WrapErr};
@@ -43,8 +47,10 @@ pub enum Shell {
 }
 
 impl Cmd {
-    fn init_nu(&self) {
+    fn init_nu(&self, _tmux: &Tmux) {
         let full = include_str!("../../shell/atuin.nu");
+
+        // TODO: tmux popup for Nu
         println!("{full}");
 
         if std::env::var("ATUIN_NOBIND").is_err() {
@@ -88,25 +94,25 @@ $env.config = (
         }
     }
 
-    fn static_init(&self) {
+    fn static_init(&self, tmux: &Tmux) {
         match self.shell {
             Shell::Zsh => {
-                zsh::init_static(self.disable_up_arrow, self.disable_ctrl_r);
+                zsh::init_static(self.disable_up_arrow, self.disable_ctrl_r, tmux);
             }
             Shell::Bash => {
-                bash::init_static(self.disable_up_arrow, self.disable_ctrl_r);
+                bash::init_static(self.disable_up_arrow, self.disable_ctrl_r, tmux);
             }
             Shell::Fish => {
-                fish::init_static(self.disable_up_arrow, self.disable_ctrl_r);
+                fish::init_static(self.disable_up_arrow, self.disable_ctrl_r, tmux);
             }
             Shell::Nu => {
-                self.init_nu();
+                self.init_nu(tmux);
             }
             Shell::Xonsh => {
-                xonsh::init_static(self.disable_up_arrow, self.disable_ctrl_r);
+                xonsh::init_static(self.disable_up_arrow, self.disable_ctrl_r, tmux);
             }
             Shell::PowerShell => {
-                powershell::init_static(self.disable_up_arrow, self.disable_ctrl_r);
+                powershell::init_static(self.disable_up_arrow, self.disable_ctrl_r, tmux);
             }
         }
     }
@@ -130,6 +136,7 @@ $env.config = (
                     var_store,
                     self.disable_up_arrow,
                     self.disable_ctrl_r,
+                    &settings.tmux,
                 )
                 .await?;
             }
@@ -139,6 +146,7 @@ $env.config = (
                     var_store,
                     self.disable_up_arrow,
                     self.disable_ctrl_r,
+                    &settings.tmux,
                 )
                 .await?;
             }
@@ -148,16 +156,18 @@ $env.config = (
                     var_store,
                     self.disable_up_arrow,
                     self.disable_ctrl_r,
+                    &settings.tmux,
                 )
                 .await?;
             }
-            Shell::Nu => self.init_nu(),
+            Shell::Nu => self.init_nu(&settings.tmux),
             Shell::Xonsh => {
                 xonsh::init(
                     alias_store,
                     var_store,
                     self.disable_up_arrow,
                     self.disable_ctrl_r,
+                    &settings.tmux,
                 )
                 .await?;
             }
@@ -167,6 +177,7 @@ $env.config = (
                     var_store,
                     self.disable_up_arrow,
                     self.disable_ctrl_r,
+                    &settings.tmux,
                 )
                 .await?;
             }
@@ -186,7 +197,7 @@ $env.config = (
         if settings.dotfiles.enabled {
             self.dotfiles_init(settings).await?;
         } else {
-            self.static_init();
+            self.static_init(&settings.tmux);
         }
 
         Ok(())
