@@ -1,5 +1,6 @@
-if not set -q ATUIN_SESSION
+if not set -q ATUIN_SESSION; or test "$ATUIN_SHLVL" != "$SHLVL"
     set -gx ATUIN_SESSION (atuin uuid)
+    set -gx ATUIN_SHLVL $SHLVL
 end
 set --erase ATUIN_HISTORY_ID
 

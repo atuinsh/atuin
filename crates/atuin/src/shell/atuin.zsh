@@ -25,8 +25,9 @@ else
     ZSH_AUTOSUGGEST_STRATEGY=("atuin")
 fi
 
-if [[ -z "${ATUIN_SESSION:-}" ]]; then
+if [[ -z "${ATUIN_SESSION:-}" || "${ATUIN_SHLVL:-}" != "$SHLVL" ]]; then
     export ATUIN_SESSION=$(atuin uuid)
+    export ATUIN_SHLVL=$SHLVL
 fi
 ATUIN_HISTORY_ID=""
 
