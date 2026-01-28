@@ -16,6 +16,8 @@ use metrics::counter;
 use rand::rngs::OsRng;
 use tracing::{debug, error, info, instrument};
 
+use atuin_common::tls::ensure_crypto_provider;
+
 use super::{ErrorResponse, ErrorResponseStatus, RespExt};
 use crate::router::{AppState, UserAuth};
 use atuin_server_database::{
@@ -38,6 +40,7 @@ pub fn verify_str(hash: &str, password: &str) -> bool {
 // Try to send a Discord webhook once - if it fails, we don't retry. "At most once", and best effort.
 // Don't return the status because if this fails, we don't really care.
 async fn send_register_hook(url: &str, username: String, registered: String) {
+    ensure_crypto_provider();
     let hook = HashMap::from([
         ("username", username),
         ("content", format!("{registered} has just signed up!")),

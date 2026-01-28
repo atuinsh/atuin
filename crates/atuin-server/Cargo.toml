@@ -30,5 +30,5 @@ tower-http = { version = "0.6", features = ["trace"] }
 reqwest = { workspace = true }
 argon2 = "0.5"
 semver = { workspace = true }
-metrics-exporter-prometheus = "0.18"
+metrics-exporter-prometheus = { version = "0.18", default-features = false }
 metrics = "0.24"
