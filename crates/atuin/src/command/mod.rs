@@ -7,9 +7,6 @@ use rustix::{fs::Mode, process::umask};
 #[cfg(feature = "client")]
 mod client;
 
-#[cfg(feature = "server")]
-mod server;
-
 mod contributors;
 
 mod gen_completions;
@@ -23,11 +20,6 @@ pub enum AtuinCmd {
     #[cfg(feature = "client")]
     #[command(flatten)]
     Client(client::Cmd),
-
-    /// Start an atuin server
-    #[cfg(feature = "server")]
-    #[command(subcommand)]
-    Server(server::Cmd),
 
     /// Generate a UUID
     Uuid,
@@ -55,8 +47,6 @@ impl AtuinCmd {
             #[cfg(feature = "client")]
             Self::Client(client) => client.run(),
 
-            #[cfg(feature = "server")]
-            Self::Server(server) => server.run(),
             Self::Contributors => {
                 contributors::run();
                 Ok(())

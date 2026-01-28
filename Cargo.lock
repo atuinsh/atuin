@@ -225,7 +225,6 @@ dependencies = [
  "atuin-server",
  "atuin-server-database",
  "atuin-server-postgres",
- "atuin-server-sqlite",
  "clap",
  "clap_complete",
  "clap_complete_nushell",
@@ -435,7 +434,10 @@ dependencies = [
  "async-trait",
  "atuin-common",
  "atuin-server-database",
+ "atuin-server-postgres",
+ "atuin-server-sqlite",
  "axum",
+ "clap",
  "config",
  "eyre",
  "fs-err",
@@ -451,6 +453,7 @@ dependencies = [
  "tower 0.5.3",
  "tower-http",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
