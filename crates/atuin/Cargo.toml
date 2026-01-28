@@ -59,7 +59,6 @@ atuin-daemon = { path = "../atuin-daemon", version = "18.11.0", optional = true,
 atuin-scripts = { path = "../atuin-scripts", version = "18.11.0" }
 atuin-kv = { path = "../atuin-kv", version = "18.11.0" }
 
-rustls = { workspace = true }
 log = { workspace = true }
 time = { workspace = true }
 eyre = { workspace = true }
