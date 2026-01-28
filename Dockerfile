@@ -14,7 +14,7 @@ COPY --from=planner /app/recipe.json recipe.json
 RUN cargo chef cook --release --recipe-path recipe.json
 
 COPY . .
-RUN cargo build --release --bin atuin
+RUN cargo build --release --bin atuin-server
 
 FROM debian:bookworm-20260112-slim AS runtime
 
@@ -26,8 +26,8 @@ WORKDIR app
 USER atuin
 
 ENV TZ=Etc/UTC
-ENV RUST_LOG=atuin::api=info
+ENV RUST_LOG=atuin_server=info
 ENV ATUIN_CONFIG_DIR=/config
 
-COPY --from=builder /app/target/release/atuin /usr/local/bin
-ENTRYPOINT ["/usr/local/bin/atuin"]
+COPY --from=builder /app/target/release/atuin-server /usr/local/bin
+ENTRYPOINT ["/usr/local/bin/atuin-server"]
