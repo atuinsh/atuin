@@ -2,6 +2,70 @@
 
 All notable changes to this project will be documented in this file.
 
+## [unreleased]
+
+### Bug Fixes
+
+- *(ui)* Don't draw a leading space for command
+- *(ui)* Time column can take up to 9 cells
+- *(ui)* Align cursor with the expand column (usually the command)
+- *(ui)* Align cursor when expand column is in the middle ([#3103](https://github.com/atuinsh/atuin/issues/3103))
+- Zsh import multiline issue ([#2799](https://github.com/atuinsh/atuin/issues/2799))
+- Do not hit sync v1 endpoints for status
+- Do not hit sync v1 endpoints for status ([#3102](https://github.com/atuinsh/atuin/issues/3102))
+- Do not set ATUIN_SESSION if it is already set ([#3107](https://github.com/atuinsh/atuin/issues/3107))
+- Custom data dir test on windows ([#3109](https://github.com/atuinsh/atuin/issues/3109))
+- New session on shlvl change ([#3111](https://github.com/atuinsh/atuin/issues/3111))
+
+
+### Documentation
+
+- *(config)* Clarify scope of directory filter_mode ([#3082](https://github.com/atuinsh/atuin/issues/3082))
+- *(configuration)* Describe new utility "atuin-bind" for Bash ([#3064](https://github.com/atuinsh/atuin/issues/3064))
+- *(installation)* Add mise alternative installation method ([#3066](https://github.com/atuinsh/atuin/issues/3066))
+- Various improvements to the `atuin import` docs ([#3062](https://github.com/atuinsh/atuin/issues/3062))
+- Disambiguate 'setup' (noun) vs. 'set up' (verb) ([#3061](https://github.com/atuinsh/atuin/issues/3061))
+- Fix punctuation and grammar in basic usage guide ([#3063](https://github.com/atuinsh/atuin/issues/3063))
+- Expand and clarify usage of the history prune command ([#3084](https://github.com/atuinsh/atuin/issues/3084))
+- Small edit to themes website file ([#3069](https://github.com/atuinsh/atuin/issues/3069))
+- Config/ with initial uid:gid
+- Add PowerShell install instructions
+- Add PowerShell and Windows install instructions ([#3096](https://github.com/atuinsh/atuin/issues/3096))
+
+
+### Features
+
+- *(theme)* Note new default theme name and syntax ([#3080](https://github.com/atuinsh/atuin/issues/3080))
+- *(ui)* Highlight fulltext search as fulltext search instead of fuzzy search
+- *(ui)* Highlight fulltext search as fulltext search instead of fuzzy search ([#3098](https://github.com/atuinsh/atuin/issues/3098))
+- *(ultracompact)* Adds setting for ultracompact mode ([#3079](https://github.com/atuinsh/atuin/issues/3079))
+- Add custom column support ([#3089](https://github.com/atuinsh/atuin/issues/3089))
+- Left arrow/backspace on empty to start edit ([#3090](https://github.com/atuinsh/atuin/issues/3090))
+- Add more vim movement bindings for navigation ([#3041](https://github.com/atuinsh/atuin/issues/3041))
+- Support setting a custom data dir in config ([#3105](https://github.com/atuinsh/atuin/issues/3105))
+- Remove user verification functionality ([#3108](https://github.com/atuinsh/atuin/issues/3108))
+- Add option to use tmux display-popup ([#3058](https://github.com/atuinsh/atuin/issues/3058))
+- Move atuin-server to its own binary ([#3112](https://github.com/atuinsh/atuin/issues/3112))
+
+
+### Miscellaneous Tasks
+
+- Remove total_history from api index response ([#3094](https://github.com/atuinsh/atuin/issues/3094))
+  - **BREAKING**: remove total_history from api index response ([#3094](https://github.com/atuinsh/atuin/issues/3094))
+- Update to rust 1.93
+- Update to rust 1.93 ([#3101](https://github.com/atuinsh/atuin/issues/3101))
+
+
+### Theming
+
+- Explain how to set ANSI codes directly ([#3065](https://github.com/atuinsh/atuin/issues/3065))
+
+
+### Faq
+
+- Add alternative projects ([#3076](https://github.com/atuinsh/atuin/issues/3076))
+
+
 ## [18.11.0] - 2026-01-12
 
 ### Bug Fixes
@@ -44,6 +108,8 @@ All notable changes to this project will be documented in this file.
 - Clarify docstring of the enter_accept config key ([#3003](https://github.com/atuinsh/atuin/issues/3003))
 - Fix github action syntax for variables ([#2998](https://github.com/atuinsh/atuin/issues/2998))
 - Add AGENTS.md
+- Update changelog
+- Remove x86_64 mac from build targets ([#3052](https://github.com/atuinsh/atuin/issues/3052))
 
 
 ### Build
