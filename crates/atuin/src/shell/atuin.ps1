@@ -63,7 +63,8 @@ New-Module -Name Atuin -ScriptBlock {
         $lastRunStatus = $?
 
         # Exit statuses are maintained separately for native and PowerShell commands, this needs to be taken into account.
-        $exitCode = if ($lastRunStatus) { 0 } elseif ($global:LASTEXITCODE) { $global:LASTEXITCODE } else { 1 }
+        $lastNativeExitCode = $global:LASTEXITCODE
+        $exitCode = if ($lastRunStatus) { 0 } elseif ($lastNativeExitCode) { $lastNativeExitCode } else { 1 }
 
         ## 2. Report the status of the previous command to Atuin (atuin history end).
 
@@ -125,6 +126,7 @@ New-Module -Name Atuin -ScriptBlock {
             $env:ATUIN_COMMAND_LINE = $null
         }
 
+        $global:LASTEXITCODE = $lastNativeExitCode
         return $line
     }
 
