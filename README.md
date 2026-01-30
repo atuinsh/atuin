@@ -21,17 +21,12 @@
   <a href="https://twitter.com/atuinsh"><img src="https://img.shields.io/twitter/follow/atuinsh?style=social" /></a>
 </p>
 
-
 [English] | [简体中文]
-
 
 Atuin replaces your existing shell history with a SQLite database, and records
 additional context for your commands. Additionally, it provides optional and
 _fully encrypted_ synchronisation of your history between machines, via an Atuin
 server.
-
-
-
 
 <p align="center">
   <img src="demo.gif" alt="animated" width="80%" />
@@ -40,10 +35,6 @@ server.
 <p align="center">
 <em>exit code, duration, time and command shown</em>
 </p>
-
-
-
-
 
 As well as the search UI, it can do things like this:
 
@@ -76,6 +67,7 @@ I wanted to. And I **really** don't want to.
 - [Setting up sync](https://docs.atuin.sh/guide/sync/)
 - [Import history](https://docs.atuin.sh/guide/import/)
 - [Basic usage](https://docs.atuin.sh/guide/basic-usage/)
+
 ## Supported Shells
 
 - zsh
@@ -89,7 +81,7 @@ I wanted to. And I **really** don't want to.
 
 ### Forum
 
-Atuin has a community forum, please ask here for help and support: https://forum.atuin.sh/
+Atuin has a community forum, please ask here for help and support: <https://forum.atuin.sh/>
 
 ### Discord
 
@@ -114,13 +106,13 @@ Then restart your shell!
 > [!NOTE]
 >
 > **For Bash users**: The above sets up `bash-preexec` for necessary hooks, but
-> `bash-preexec` has limitations.  For details, please see the
+> `bash-preexec` has limitations. For details, please see the
 > [Bash](https://docs.atuin.sh/guide/installation/#installing-the-shell-plugin)
 > section of the shell plugin documentation.
 
 # Security
 
-If you find any security issues, we'd appreciate it if you could alert ellie@atuin.sh
+If you find any security issues, we'd appreciate it if you could alert <ellie@atuin.sh>
 
 # Contributors
 
@@ -131,4 +123,4 @@ If you find any security issues, we'd appreciate it if you could alert ellie@atu
 Made with [contrib.rocks](https://contrib.rocks).
 
 [English]: ./README.md
-[简体中文]: ./docs/zh-CN/README.md
+[简体中文]: ./docs-i18n/zh-CN/README.md
