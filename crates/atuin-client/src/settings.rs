@@ -509,7 +509,13 @@ impl UiColumnType {
             UiColumnType::Directory => 20,
             UiColumnType::Host => 15,
             UiColumnType::User => 10,
-            UiColumnType::Exit => 3,
+            UiColumnType::Exit => {
+                if cfg!(windows) {
+                    11 // 32-bit integer on Windows: "-1978335212"
+                } else {
+                    3 // Usually a byte on Unix
+                }
+            }
             UiColumnType::Command => 0, // Expands to fill
         }
     }
