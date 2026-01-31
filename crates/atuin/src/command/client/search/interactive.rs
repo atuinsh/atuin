@@ -617,7 +617,7 @@ impl State {
             KeyCode::Char('a') if ctrl => self.search.input.start(),
             KeyCode::Char('e') if ctrl => self.search.input.end(),
             KeyCode::End => self.search.input.end(),
-            KeyCode::Backspace if ctrl => self
+            KeyCode::Backspace if ctrl | alt => self
                 .search
                 .input
                 .remove_prev_word(&settings.word_chars, settings.word_jump_mode),
@@ -646,6 +646,10 @@ impl State {
             KeyCode::Delete => {
                 self.search.input.remove();
             }
+            KeyCode::Char('d') if alt => self
+                .search
+                .input
+                .remove_next_word(&settings.word_chars, settings.word_jump_mode),
             KeyCode::Char('d') if ctrl => {
                 if self.search.input.as_str().is_empty() {
                     return InputAction::ReturnOriginal;
