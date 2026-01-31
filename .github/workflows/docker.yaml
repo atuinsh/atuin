@@ -14,7 +14,7 @@ jobs:
 
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           repository: atuinsh/atuin
           path: "./"
@@ -60,7 +60,7 @@ jobs:
 
     runs-on: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           repository: atuinsh/atuin
           path: "./"
@@ -101,7 +101,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [publish_x86, publish_aarch64]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           repository: atuinsh/atuin
           path: "./"

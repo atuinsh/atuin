@@ -21,7 +21,7 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Install rust
         uses: dtolnay/rust-toolchain@master
@@ -57,7 +57,7 @@ jobs:
         target: [x86_64-unknown-illumos]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Install cross
         uses: taiki-e/install-action@v2
@@ -92,7 +92,7 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Install rust
         uses: dtolnay/rust-toolchain@master
@@ -122,7 +122,7 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Install rust
         uses: dtolnay/rust-toolchain@master
@@ -166,7 +166,7 @@ jobs:
           - 5432:5432
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Install rust
         uses: dtolnay/rust-toolchain@master
@@ -195,7 +195,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Install latest rust
         uses: dtolnay/rust-toolchain@master
@@ -218,7 +218,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Install latest rust
         uses: dtolnay/rust-toolchain@master
