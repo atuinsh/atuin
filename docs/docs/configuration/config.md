@@ -619,13 +619,32 @@ Default: `true`
 
 Exits the TUI when scrolling left while the cursor is at the start of the line.
 
-### `exit_past_line_end`
+### `accept_past_line_end`
 
 Atuin version: >= 18.5
 
 Default: `true`
 
-Exits the TUI when scrolling right while the cursor is at the end of the line.
+The right arrow key performs the same functionality as Tab and copies the selected line to the command line to be
+modified.
+
+### `accept_past_line_start`
+
+Atuin version: >= 18.9
+
+Default: `false`
+
+The left arrow key performs the same functionality as Tab and copies the selected line to the command line to be
+modified.
+
+### `accept_with_backspace`
+
+Atuin version: >= 18.9
+
+Default: `false`
+
+The backspace key performs the same functionality as Tab and copies the selected line to the command line to be
+modified.
 
 ## preview
 

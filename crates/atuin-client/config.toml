@@ -231,12 +231,16 @@ enter_accept = true
 [keys]
 # Defaults to true. If disabled, using the up/down key won't exit the TUI when scrolled past the first/last entry.
 # scroll_exits = true
+
 # Defaults to true. The left arrow key will exit the TUI when scrolling before the first character
 # exit_past_line_start = true
+
 # Defaults to true. The right arrow key performs the same functionality as Tab and copies the selected line to the command line to be modified.
 # accept_past_line_end = true
+
 # Defaults to false. The left arrow key performs the same functionality as Tab and copies the selected line to the command line to be modified.
 # accept_past_line_start = false
+
 # Defaults to false. The backspace key performs the same functionality as Tab and copies the selected line to the command line to be modified when at the start of the line.
 # accept_with_backspace = false
 
