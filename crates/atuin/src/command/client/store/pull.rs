@@ -21,7 +21,7 @@ pub struct Pull {
     pub force: bool,
 
     /// Page Size
-    /// How many records to upload at once. Defaults to 100
+    /// How many records to download at once. Defaults to 100
     #[arg(long, default_value = "100")]
     pub page: u64,
 }
