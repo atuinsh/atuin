@@ -45,8 +45,12 @@ impl MetaStore {
             }
         }
 
+        // Use DELETE journal mode instead of WAL. This is a small, infrequently-
+        // written KV store — WAL's concurrency benefits aren't needed, and DELETE
+        // mode avoids creating auxiliary -wal/-shm files that complicate
+        // permission handling.
         let opts = SqliteConnectOptions::from_str(path_str)?
-            .journal_mode(SqliteJournalMode::Wal)
+            .journal_mode(SqliteJournalMode::Delete)
             .optimize_on_close(true, None)
             .create_if_missing(true);
 
