@@ -182,7 +182,6 @@ async fn sync_upload(
         tag
     );
 
-    // preload with the first entry if remote does not know of this store
     loop {
         let page = store
             .next(host, tag.as_str(), remote + progress, upload_page_size)
@@ -193,14 +192,18 @@ async fn sync_upload(
                 SyncError::LocalStoreError { msg: e.to_string() }
             })?;
 
+        if page.is_empty() {
+            break;
+        }
+
         client.post_records(&page).await.map_err(|e| {
             error!("failed to post records: {e:?}");
 
             SyncError::RemoteRequestError { msg: e.to_string() }
         })?;
 
-        pb.set_position(progress);
         progress += page.len() as u64;
+        pb.set_position(progress);
 
         if progress >= expected {
             break;
@@ -239,12 +242,15 @@ async fn sync_download(
         .with_key("eta", |state: &ProgressState, w: &mut dyn Write| write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap())
         .progress_chars("#>-"));
 
-    // preload with the first entry if remote does not know of this store
     loop {
         let page = client
             .next_records(host, tag.clone(), local + progress, download_page_size)
             .await
             .map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?;
+
+        if page.is_empty() {
+            break;
+        }
 
         store
             .push_batch(page.iter())
@@ -253,8 +259,8 @@ async fn sync_download(
 
         ret.extend(page.iter().map(|f| f.id));
 
-        pb.set_position(progress);
         progress += page.len() as u64;
+        pb.set_position(progress);
 
         if progress >= expected {
             break;
