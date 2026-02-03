@@ -1372,7 +1372,7 @@ pub async fn history(
     let update_needed = tokio::spawn(async move { settings2.needs_update().await }).fuse();
     tokio::pin!(update_needed);
 
-    let context = current_context();
+    let context = current_context().await?;
 
     let history_count = db.history_count(false).await?;
     let search_mode = if settings.shell_up_key_binding {

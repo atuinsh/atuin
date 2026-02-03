@@ -454,12 +454,12 @@ impl Cmd {
         db.update(&h).await?;
         history_store.push(h).await?;
 
-        if settings.should_sync()? {
+        if settings.should_sync().await? {
             #[cfg(feature = "sync")]
             {
                 if settings.sync.records {
                     let (_, downloaded) = record::sync::sync(settings, &store).await?;
-                    Settings::save_sync_time()?;
+                    Settings::save_sync_time().await?;
 
                     crate::sync::build(settings, &store, db, Some(&downloaded)).await?;
                 } else {
@@ -579,7 +579,7 @@ impl Cmd {
             let encryption_key: [u8; 32] = encryption::load_key(settings)
                 .context("could not load encryption key")?
                 .into();
-            let host_id = Settings::host_id().expect("failed to get host_id");
+            let host_id = Settings::host_id().await?;
             let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
             for entry in matches {
@@ -634,7 +634,7 @@ impl Cmd {
             let encryption_key: [u8; 32] = encryption::load_key(settings)
                 .context("could not load encryption key")?
                 .into();
-            let host_id = Settings::host_id().expect("failed to get host_id");
+            let host_id = Settings::host_id().await?;
             let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
             for entry in matches {
@@ -651,7 +651,7 @@ impl Cmd {
     }
 
     pub async fn run(self, settings: &Settings) -> Result<()> {
-        let context = current_context();
+        let context = current_context().await?;
 
         #[cfg(feature = "daemon")]
         // Skip initializing any databases for start/end, if the daemon is enabled
@@ -680,7 +680,7 @@ impl Cmd {
             .context("could not load encryption key")?
             .into();
 
-        let host_id = Settings::host_id().expect("failed to get host_id");
+        let host_id = Settings::host_id().await?;
         let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
         match self {

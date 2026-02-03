@@ -25,7 +25,7 @@ pub async fn build(
         .context("could not load encryption key")?
         .into();
 
-    let host_id = Settings::host_id().expect("failed to get host_id");
+    let host_id = Settings::host_id().await?;
 
     let downloaded = downloaded.unwrap_or(&[]);
 

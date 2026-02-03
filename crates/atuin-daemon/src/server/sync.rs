@@ -21,7 +21,7 @@ pub async fn worker(
     tracing::info!("booting sync worker");
 
     let encryption_key: [u8; 32] = encryption::load_key(&settings)?.into();
-    let host_id = Settings::host_id().expect("failed to get host_id");
+    let host_id = Settings::host_id().await?;
     let alias_store = AliasStore::new(store.clone(), host_id, encryption_key);
     let var_store = VarStore::new(store.clone(), host_id, encryption_key);
 
@@ -38,7 +38,15 @@ pub async fn worker(
         ticker.tick().await;
         tracing::info!("sync worker tick");
 
-        if !settings.logged_in() {
+        let logged_in = match settings.logged_in().await {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!("failed to check login status, skipping sync tick: {e}");
+                continue;
+            }
+        };
+
+        if !logged_in {
             tracing::debug!("not logged in, skipping sync tick");
             continue;
         }
@@ -82,7 +90,7 @@ pub async fn worker(
             }
 
             // store sync time
-            tokio::task::spawn_blocking(Settings::save_sync_time).await??;
+            Settings::save_sync_time().await?;
         }
     }
 }

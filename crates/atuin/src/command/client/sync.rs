@@ -53,7 +53,7 @@ impl Cmd {
         match self {
             Self::Sync { force } => run(&settings, force, db, store).await,
             Self::Login(l) => l.run(&settings, &store).await,
-            Self::Logout => account::logout::run(&settings),
+            Self::Logout => account::logout::run().await,
             Self::Register(r) => r.run(&settings).await,
             Self::Status => status::run(&settings, db).await,
             Self::Key { base64 } => {
@@ -85,7 +85,7 @@ async fn run(
             .context("could not load encryption key")?
             .into();
 
-        let host_id = Settings::host_id().expect("failed to get host_id");
+        let host_id = Settings::host_id().await?;
         let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
         let (uploaded, downloaded) = sync::sync(settings, &store).await?;

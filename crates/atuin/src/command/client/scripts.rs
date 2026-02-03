@@ -227,7 +227,7 @@ impl Cmd {
         let script_content = if let Some(count_opt) = new_script.last {
             // Get the last N commands from history, plus 1 to exclude the command that runs this script
             let count = count_opt.unwrap_or(1) + 1; // Add 1 to the count to exclude the current command
-            let context = atuin_client::database::current_context();
+            let context = atuin_client::database::current_context().await?;
 
             // Get the last N+1 commands, filtering by the default mode
             let filters = [settings.default_filter_mode(context.git_root.is_some())];
@@ -566,7 +566,7 @@ impl Cmd {
         store: SqliteStore,
         history_db: &impl Database,
     ) -> Result<()> {
-        let host_id = Settings::host_id().expect("failed to get host_id");
+        let host_id = Settings::host_id().await?;
         let encryption_key: [u8; 32] = atuin_client::encryption::load_key(settings)?.into();
 
         let script_store = ScriptStore::new(store, host_id, encryption_key);
