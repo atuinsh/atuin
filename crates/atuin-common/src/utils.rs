@@ -65,16 +65,10 @@ pub fn in_git_repo(path: &str) -> Option<PathBuf> {
 // I don't want to use ProjectDirs, it puts config in awkward places on
 // mac. Data too. Seems to be more intended for GUI apps.
 
-#[cfg(not(target_os = "windows"))]
 pub fn home_dir() -> PathBuf {
-    let home = std::env::var("HOME").expect("$HOME not found");
-    PathBuf::from(home)
-}
-
-#[cfg(target_os = "windows")]
-pub fn home_dir() -> PathBuf {
-    let home = std::env::var("USERPROFILE").expect("%userprofile% not found");
-    PathBuf::from(home)
+    directories::BaseDirs::new()
+        .map(|d| d.home_dir().to_path_buf())
+        .expect("could not determine home directory")
 }
 
 pub fn config_dir() -> PathBuf {
