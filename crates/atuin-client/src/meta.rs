@@ -39,10 +39,10 @@ impl MetaStore {
 
         let is_memory = path_str.contains(":memory:");
 
-        if !is_memory && !path.exists() {
-            if let Some(dir) = path.parent() {
-                fs_err::create_dir_all(dir)?;
-            }
+        if !is_memory && !path.exists()
+            && let Some(dir) = path.parent()
+        {
+            fs_err::create_dir_all(dir)?;
         }
 
         // Use DELETE journal mode instead of WAL. This is a small, infrequently-
@@ -201,72 +201,68 @@ impl MetaStore {
 
         // host_id — validate as UUID
         let host_id_path = data_dir.join(LEGACY_HOST_ID_FILENAME);
-        if host_id_path.exists() {
-            if let Ok(value) = fs_err::read_to_string(&host_id_path) {
-                let value = value.trim();
-                if !value.is_empty() {
-                    if Uuid::from_str(value).is_ok() {
-                        self.set(KEY_HOST_ID, value).await?;
-                    } else {
-                        warn!("skipping migration of host_id: invalid UUID {value:?}");
-                    }
+        if host_id_path.exists()
+            && let Ok(value) = fs_err::read_to_string(&host_id_path)
+        {
+            let value = value.trim();
+            if !value.is_empty() {
+                if Uuid::from_str(value).is_ok() {
+                    self.set(KEY_HOST_ID, value).await?;
+                } else {
+                    warn!("skipping migration of host_id: invalid UUID {value:?}");
                 }
             }
         }
 
         // last_sync_time — validate as RFC3339
         let sync_path = data_dir.join(LEGACY_LAST_SYNC_FILENAME);
-        if sync_path.exists() {
-            if let Ok(value) = fs_err::read_to_string(&sync_path) {
-                let value = value.trim();
-                if !value.is_empty() {
-                    if OffsetDateTime::parse(value, &Rfc3339).is_ok() {
-                        self.set(KEY_LAST_SYNC, value).await?;
-                    } else {
-                        warn!(
-                            "skipping migration of last_sync_time: invalid RFC3339 {value:?}"
-                        );
-                    }
+        if sync_path.exists()
+            && let Ok(value) = fs_err::read_to_string(&sync_path)
+        {
+            let value = value.trim();
+            if !value.is_empty() {
+                if OffsetDateTime::parse(value, &Rfc3339).is_ok() {
+                    self.set(KEY_LAST_SYNC, value).await?;
+                } else {
+                    warn!("skipping migration of last_sync_time: invalid RFC3339 {value:?}");
                 }
             }
         }
 
         // last_version_check_time — validate as RFC3339
         let version_check_path = data_dir.join(LEGACY_LAST_VERSION_CHECK_FILENAME);
-        if version_check_path.exists() {
-            if let Ok(value) = fs_err::read_to_string(&version_check_path) {
-                let value = value.trim();
-                if !value.is_empty() {
-                    if OffsetDateTime::parse(value, &Rfc3339).is_ok() {
-                        self.set(KEY_LAST_VERSION_CHECK, value).await?;
-                    } else {
-                        warn!(
-                            "skipping migration of last_version_check_time: invalid RFC3339 {value:?}"
-                        );
-                    }
+        if version_check_path.exists()
+            && let Ok(value) = fs_err::read_to_string(&version_check_path)
+        {
+            let value = value.trim();
+            if !value.is_empty() {
+                if OffsetDateTime::parse(value, &Rfc3339).is_ok() {
+                    self.set(KEY_LAST_VERSION_CHECK, value).await?;
+                } else {
+                    warn!("skipping migration of last_version_check_time: invalid RFC3339 {value:?}");
                 }
             }
         }
 
         // latest_version — no strict validation, just non-empty
         let latest_version_path = data_dir.join(LEGACY_LATEST_VERSION_FILENAME);
-        if latest_version_path.exists() {
-            if let Ok(value) = fs_err::read_to_string(&latest_version_path) {
-                let value = value.trim();
-                if !value.is_empty() {
-                    self.set(KEY_LATEST_VERSION, value).await?;
-                }
+        if latest_version_path.exists()
+            && let Ok(value) = fs_err::read_to_string(&latest_version_path)
+        {
+            let value = value.trim();
+            if !value.is_empty() {
+                self.set(KEY_LATEST_VERSION, value).await?;
             }
         }
 
         // session token — no strict validation, just non-empty
         let session_path = data_dir.join(LEGACY_SESSION_FILENAME);
-        if session_path.exists() {
-            if let Ok(value) = fs_err::read_to_string(&session_path) {
-                let value = value.trim();
-                if !value.is_empty() {
-                    self.set(KEY_SESSION, value).await?;
-                }
+        if session_path.exists()
+            && let Ok(value) = fs_err::read_to_string(&session_path)
+        {
+            let value = value.trim();
+            if !value.is_empty() {
+                self.set(KEY_SESSION, value).await?;
             }
         }
 
