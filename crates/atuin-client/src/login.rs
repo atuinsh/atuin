@@ -86,7 +86,10 @@ pub async fn login(
     )
     .await?;
 
-    Settings::meta_store().await?.save_session(&session.session).await?;
+    Settings::meta_store()
+        .await?
+        .save_session(&session.session)
+        .await?;
 
     Ok(session.session)
 }

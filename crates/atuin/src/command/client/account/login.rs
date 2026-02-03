@@ -148,7 +148,10 @@ impl Cmd {
         )
         .await?;
 
-        Settings::meta_store().await?.save_session(&session.session).await?;
+        Settings::meta_store()
+            .await?
+            .save_session(&session.session)
+            .await?;
 
         println!("Logged in!");
 

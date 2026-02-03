@@ -14,11 +14,7 @@ use regex::RegexSet;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use serde_with::DeserializeFromStr;
-use time::{
-    OffsetDateTime, UtcOffset,
-    format_description::FormatItem,
-    macros::format_description,
-};
+use time::{OffsetDateTime, UtcOffset, format_description::FormatItem, macros::format_description};
 
 pub const HISTORY_PAGE_SIZE: i64 = 100;
 static EXAMPLE_CONFIG: &str = include_str!("../config.toml");
@@ -27,9 +23,9 @@ static DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
 static META_CONFIG: OnceLock<(String, f64)> = OnceLock::new();
 static META_STORE: OnceCell<crate::meta::MetaStore> = OnceCell::const_new();
 
-pub(crate) mod meta;
 mod dotfiles;
 mod kv;
+pub(crate) mod meta;
 mod scripts;
 
 #[derive(Clone, Debug, Deserialize, Copy, ValueEnum, PartialEq, Serialize)]
@@ -1132,7 +1128,12 @@ impl Settings {
     }
 
     pub fn paths_ok(&self) -> bool {
-        let paths = [&self.db_path, &self.record_store_path, &self.key_path, &self.meta.db_path];
+        let paths = [
+            &self.db_path,
+            &self.record_store_path,
+            &self.key_path,
+            &self.meta.db_path,
+        ];
         paths.iter().all(|p| !utils::broken_symlink(p))
     }
 }
@@ -1278,10 +1279,7 @@ mod tests {
             scripts_db_path,
             custom_dir.join("scripts.db").to_str().unwrap()
         );
-        assert_eq!(
-            meta_db_path,
-            custom_dir.join("meta.db").to_str().unwrap()
-        );
+        assert_eq!(meta_db_path, custom_dir.join("meta.db").to_str().unwrap());
 
         Ok(())
     }

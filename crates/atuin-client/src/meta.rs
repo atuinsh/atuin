@@ -39,7 +39,8 @@ impl MetaStore {
 
         let is_memory = path_str.contains(":memory:");
 
-        if !is_memory && !path.exists()
+        if !is_memory
+            && !path.exists()
             && let Some(dir) = path.parent()
         {
             fs_err::create_dir_all(dir)?;
@@ -83,11 +84,10 @@ impl MetaStore {
     // Generic key-value operations
 
     pub async fn get(&self, key: &str) -> Result<Option<String>> {
-        let row: Option<(String,)> =
-            sqlx::query_as("SELECT value FROM meta WHERE key = ?1")
-                .bind(key)
-                .fetch_optional(&self.pool)
-                .await?;
+        let row: Option<(String,)> = sqlx::query_as("SELECT value FROM meta WHERE key = ?1")
+            .bind(key)
+            .fetch_optional(&self.pool)
+            .await?;
 
         Ok(row.map(|r| r.0))
     }
@@ -239,7 +239,9 @@ impl MetaStore {
                 if OffsetDateTime::parse(value, &Rfc3339).is_ok() {
                     self.set(KEY_LAST_VERSION_CHECK, value).await?;
                 } else {
-                    warn!("skipping migration of last_version_check_time: invalid RFC3339 {value:?}");
+                    warn!(
+                        "skipping migration of last_version_check_time: invalid RFC3339 {value:?}"
+                    );
                 }
             }
         }
