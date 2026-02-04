@@ -57,6 +57,7 @@ pub async fn diff(
         &settings.sync_address,
         settings
             .session_token()
+            .await
             .map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?
             .as_str(),
         settings.network_connect_timeout,
@@ -282,6 +283,7 @@ pub async fn sync_remote(
         &settings.sync_address,
         settings
             .session_token()
+            .await
             .map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?
             .as_str(),
         settings.network_connect_timeout,

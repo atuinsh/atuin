@@ -34,7 +34,7 @@ pub struct Push {
 
 impl Push {
     pub async fn run(&self, settings: &Settings, store: SqliteStore) -> Result<()> {
-        let host_id = Settings::host_id().expect("failed to get host_id");
+        let host_id = Settings::host_id().await?;
 
         if self.force {
             println!("Forcing remote store overwrite!");
@@ -42,7 +42,7 @@ impl Push {
 
             let client = Client::new(
                 &settings.sync_address,
-                settings.session_token()?.as_str(),
+                settings.session_token().await?.as_str(),
                 settings.network_connect_timeout,
                 settings.network_timeout * 10, // we may be deleting a lot of data... so up the
                                                // timeout

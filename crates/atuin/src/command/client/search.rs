@@ -211,7 +211,7 @@ impl Cmd {
 
         let encryption_key: [u8; 32] = encryption::load_key(settings)?.into();
 
-        let host_id = Settings::host_id().expect("failed to get host_id");
+        let host_id = Settings::host_id().await?;
         let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
         if self.interactive {
@@ -305,7 +305,7 @@ async fn run_non_interactive(
         filter_options.cwd
     };
 
-    let context = current_context();
+    let context = current_context().await?;
 
     let opt_filter = OptFilters {
         cwd: dir.clone(),

@@ -41,7 +41,7 @@ impl Cmd {
         //
         // I'd quite like to ditch that behaviour, so have not brought it into the library
         // function.
-        if settings.logged_in() {
+        if settings.logged_in().await? {
             bail!(
                 "You are already logged in! Please run 'atuin logout' if you wish to login again"
             );
@@ -99,11 +99,9 @@ impl Cmd {
             }
         };
 
-        // I've simplified this a little, but it could really do with a refactor
-        // Annoyingly, it's also very important to get it correct
         if key.is_empty() {
             if key_path.exists() {
-                let bytes = fs_err::read_to_string(key_path)
+                let bytes = fs_err::read_to_string(&key_path)
                     .context("existing key file couldn't be read")?;
                 if decode_key(bytes).is_err() {
                     bail!("the key in existing key file was invalid");
@@ -118,7 +116,7 @@ impl Cmd {
                 bail!("the specified key was invalid");
             }
 
-            let mut file = File::create(key_path).await?;
+            let mut file = File::create(&key_path).await?;
             file.write_all(key.as_bytes()).await?;
         } else {
             // we now know that the user has logged in specifying a key, AND that the key path
@@ -139,7 +137,7 @@ impl Cmd {
                 store.re_encrypt(&current_key, &new_key).await?;
 
                 println!("Writing new key");
-                let mut file = File::create(key_path).await?;
+                let mut file = File::create(&key_path).await?;
                 file.write_all(encoded.as_bytes()).await?;
             }
         }
@@ -150,9 +148,10 @@ impl Cmd {
         )
         .await?;
 
-        let session_path = settings.session_path.as_str();
-        let mut file = File::create(session_path).await?;
-        file.write_all(session.session.as_bytes()).await?;
+        Settings::meta_store()
+            .await?
+            .save_session(&session.session)
+            .await?;
 
         println!("Logged in!");
 

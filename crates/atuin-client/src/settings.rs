@@ -1,7 +1,5 @@
-use std::{
-    collections::HashMap, convert::TryFrom, fmt, io::prelude::*, path::PathBuf, str::FromStr,
-    sync::OnceLock,
-};
+use std::{collections::HashMap, fmt, io::prelude::*, path::PathBuf, str::FromStr, sync::OnceLock};
+use tokio::sync::OnceCell;
 
 use atuin_common::record::HostId;
 use atuin_common::utils;
@@ -16,24 +14,18 @@ use regex::RegexSet;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use serde_with::DeserializeFromStr;
-use time::{
-    OffsetDateTime, UtcOffset,
-    format_description::{FormatItem, well_known::Rfc3339},
-    macros::format_description,
-};
-use uuid::Uuid;
+use time::{OffsetDateTime, UtcOffset, format_description::FormatItem, macros::format_description};
 
 pub const HISTORY_PAGE_SIZE: i64 = 100;
-pub const LAST_SYNC_FILENAME: &str = "last_sync_time";
-pub const LAST_VERSION_CHECK_FILENAME: &str = "last_version_check_time";
-pub const LATEST_VERSION_FILENAME: &str = "latest_version";
-pub const HOST_ID_FILENAME: &str = "host_id";
 static EXAMPLE_CONFIG: &str = include_str!("../config.toml");
 
 static DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
+static META_CONFIG: OnceLock<(String, f64)> = OnceLock::new();
+static META_STORE: OnceCell<crate::meta::MetaStore> = OnceCell::const_new();
 
 mod dotfiles;
 mod kv;
+pub(crate) mod meta;
 mod scripts;
 
 #[derive(Clone, Debug, Deserialize, Copy, ValueEnum, PartialEq, Serialize)]
@@ -673,7 +665,6 @@ pub struct Settings {
     pub db_path: String,
     pub record_store_path: String,
     pub key_path: String,
-    pub session_path: String,
     pub search_mode: SearchMode,
     pub filter_mode: Option<FilterMode>,
     pub filter_mode_shell_up_key_binding: Option<FilterMode>,
@@ -751,6 +742,9 @@ pub struct Settings {
 
     #[serde(default)]
     pub tmux: Tmux,
+
+    #[serde(default)]
+    pub meta: meta::Settings,
 }
 
 impl Settings {
@@ -765,92 +759,48 @@ impl Settings {
             .expect("Could not deserialize config")
     }
 
-    fn effective_data_dir() -> PathBuf {
+    pub(crate) fn effective_data_dir() -> PathBuf {
         DATA_DIR
             .get()
             .cloned()
             .unwrap_or_else(atuin_common::utils::data_dir)
     }
 
-    fn save_to_data_dir(filename: &str, value: &str) -> Result<()> {
-        let data_dir = Self::effective_data_dir();
-        let data_dir = data_dir.as_path();
+    // -- Meta store: lazily initialized on first access --
 
-        let path = data_dir.join(filename);
-
-        fs_err::write(path, value)?;
-
-        Ok(())
+    pub async fn meta_store() -> Result<&'static crate::meta::MetaStore> {
+        META_STORE
+            .get_or_try_init(|| async {
+                let (db_path, timeout) = META_CONFIG.get().ok_or_else(|| {
+                    eyre!("meta store config not set — Settings::new() has not been called")
+                })?;
+                crate::meta::MetaStore::new(db_path, *timeout).await
+            })
+            .await
     }
 
-    fn read_from_data_dir(filename: &str) -> Option<String> {
-        let data_dir = Self::effective_data_dir();
-        let data_dir = data_dir.as_path();
-
-        let path = data_dir.join(filename);
-
-        if !path.exists() {
-            return None;
-        }
-
-        let value = fs_err::read_to_string(path);
-
-        value.ok()
+    pub async fn host_id() -> Result<HostId> {
+        Self::meta_store().await?.host_id().await
     }
 
-    fn save_current_time(filename: &str) -> Result<()> {
-        Settings::save_to_data_dir(
-            filename,
-            OffsetDateTime::now_utc().format(&Rfc3339)?.as_str(),
-        )?;
-
-        Ok(())
+    pub async fn last_sync() -> Result<OffsetDateTime> {
+        Self::meta_store().await?.last_sync().await
     }
 
-    fn load_time_from_file(filename: &str) -> Result<OffsetDateTime> {
-        let value = Settings::read_from_data_dir(filename);
-
-        match value {
-            Some(v) => Ok(OffsetDateTime::parse(v.as_str(), &Rfc3339)?),
-            None => Ok(OffsetDateTime::UNIX_EPOCH),
-        }
+    pub async fn save_sync_time() -> Result<()> {
+        Self::meta_store().await?.save_sync_time().await
     }
 
-    pub fn save_sync_time() -> Result<()> {
-        Settings::save_current_time(LAST_SYNC_FILENAME)
+    pub async fn last_version_check() -> Result<OffsetDateTime> {
+        Self::meta_store().await?.last_version_check().await
     }
 
-    pub fn save_version_check_time() -> Result<()> {
-        Settings::save_current_time(LAST_VERSION_CHECK_FILENAME)
+    pub async fn save_version_check_time() -> Result<()> {
+        Self::meta_store().await?.save_version_check_time().await
     }
 
-    pub fn last_sync() -> Result<OffsetDateTime> {
-        Settings::load_time_from_file(LAST_SYNC_FILENAME)
-    }
-
-    pub fn last_version_check() -> Result<OffsetDateTime> {
-        Settings::load_time_from_file(LAST_VERSION_CHECK_FILENAME)
-    }
-
-    pub fn host_id() -> Option<HostId> {
-        let id = Settings::read_from_data_dir(HOST_ID_FILENAME);
-
-        if let Some(id) = id {
-            let parsed =
-                Uuid::from_str(id.as_str()).expect("failed to parse host ID from local directory");
-            return Some(HostId(parsed));
-        }
-
-        let uuid = atuin_common::utils::uuid_v7();
-
-        Settings::save_to_data_dir(HOST_ID_FILENAME, uuid.as_simple().to_string().as_ref())
-            .expect("Could not write host ID to data dir");
-
-        Some(HostId(uuid))
-    }
-
-    pub fn should_sync(&self) -> Result<bool> {
-        if !self.auto_sync || !PathBuf::from(self.session_path.as_str()).exists() {
+    pub async fn should_sync(&self) -> Result<bool> {
+        if !self.auto_sync || !Self::meta_store().await?.logged_in().await? {
             return Ok(false);
         }
 
@@ -861,30 +811,26 @@ impl Settings {
         match parse_duration(self.sync_frequency.as_str()) {
             Ok(d) => {
                 let d = time::Duration::try_from(d)?;
-                Ok(OffsetDateTime::now_utc() - Settings::last_sync()? >= d)
+                Ok(OffsetDateTime::now_utc() - Settings::last_sync().await? >= d)
             }
             Err(e) => Err(eyre!("failed to check sync: {}", e)),
         }
     }
 
-    pub fn logged_in(&self) -> bool {
-        let session_path = self.session_path.as_str();
-
-        PathBuf::from(session_path).exists()
+    pub async fn logged_in(&self) -> Result<bool> {
+        Self::meta_store().await?.logged_in().await
     }
 
-    pub fn session_token(&self) -> Result<String> {
-        if !self.logged_in() {
-            return Err(eyre!("Tried to load session; not logged in"));
+    pub async fn session_token(&self) -> Result<String> {
+        match Self::meta_store().await?.session_token().await? {
+            Some(token) => Ok(token),
+            None => Err(eyre!("Tried to load session; not logged in")),
         }
-
-        let session_path = self.session_path.as_str();
-        Ok(fs_err::read_to_string(session_path)?)
     }
 
     #[cfg(feature = "check-update")]
-    fn needs_update_check(&self) -> Result<bool> {
-        let last_check = Settings::last_version_check()?;
+    async fn needs_update_check(&self) -> Result<bool> {
+        let last_check = Settings::last_version_check().await?;
         let diff = OffsetDateTime::now_utc() - last_check;
 
         // Check a max of once per hour
@@ -898,16 +844,9 @@ impl Settings {
         let current =
             Version::parse(env!("CARGO_PKG_VERSION")).unwrap_or(Version::new(100000, 0, 0));
 
-        if !self.needs_update_check()? {
-            // Worst case, we don't want Atuin to fail to start because something funky is going on with
-            // version checking.
-            let version = tokio::task::spawn_blocking(|| {
-                Settings::read_from_data_dir(LATEST_VERSION_FILENAME)
-            })
-            .await
-            .expect("file task panicked");
-
-            let version = match version {
+        if !self.needs_update_check().await? {
+            let meta = Self::meta_store().await?;
+            let version = match meta.latest_version().await? {
                 Some(v) => Version::parse(&v).unwrap_or(current),
                 None => current,
             };
@@ -921,14 +860,9 @@ impl Settings {
         #[cfg(not(feature = "sync"))]
         let latest = current;
 
-        let latest_encoded = latest.to_string();
-        tokio::task::spawn_blocking(move || {
-            Settings::save_version_check_time()?;
-            Settings::save_to_data_dir(LATEST_VERSION_FILENAME, &latest_encoded)?;
-            Ok::<(), eyre::Report>(())
-        })
-        .await
-        .expect("file task panicked")?;
+        let meta = Self::meta_store().await?;
+        Settings::save_version_check_time().await?;
+        meta.save_latest_version(&latest.to_string()).await?;
 
         Ok(latest)
     }
@@ -992,14 +926,13 @@ impl Settings {
         let socket_path = atuin_common::utils::runtime_dir().join("atuin.sock");
 
         let key_path = data_dir.join("key");
-        let session_path = data_dir.join("session");
+        let meta_path = data_dir.join("meta.db");
 
         Ok(Config::builder()
             .set_default("history_format", "{time}\t{command}\t{duration}")?
             .set_default("db_path", db_path.to_str())?
             .set_default("record_store_path", record_store_path.to_str())?
             .set_default("key_path", key_path.to_str())?
-            .set_default("session_path", session_path.to_str())?
             .set_default("dialect", "us")?
             .set_default("timezone", "local")?
             .set_default("auto_sync", true)?
@@ -1058,6 +991,7 @@ impl Settings {
             .set_default("daemon.tcp_port", 8889)?
             .set_default("kv.db_path", kv_path.to_str())?
             .set_default("scripts.db_path", scripts_path.to_str())?
+            .set_default("meta.db_path", meta_path.to_str())?
             .set_default(
                 "search.filters",
                 vec![
@@ -1170,11 +1104,15 @@ impl Settings {
         settings.db_path = Self::expand_path(settings.db_path)?;
         settings.record_store_path = Self::expand_path(settings.record_store_path)?;
         settings.key_path = Self::expand_path(settings.key_path)?;
-        settings.session_path = Self::expand_path(settings.session_path)?;
         settings.daemon.socket_path = Self::expand_path(settings.daemon.socket_path)?;
 
         // Validate UI settings
         settings.ui.validate()?;
+
+        // Register meta store config for lazy initialization on first access
+        META_CONFIG
+            .set((settings.meta.db_path.clone(), settings.local_timeout))
+            .ok();
 
         Ok(settings)
     }
@@ -1194,7 +1132,7 @@ impl Settings {
             &self.db_path,
             &self.record_store_path,
             &self.key_path,
-            &self.session_path,
+            &self.meta.db_path,
         ];
         paths.iter().all(|p| !utils::broken_symlink(p))
     }
@@ -1325,14 +1263,13 @@ mod tests {
 
         let db_path: String = config.get("db_path")?;
         let key_path: String = config.get("key_path")?;
-        let session_path: String = config.get("session_path")?;
         let record_store_path: String = config.get("record_store_path")?;
         let kv_db_path: String = config.get("kv.db_path")?;
         let scripts_db_path: String = config.get("scripts.db_path")?;
+        let meta_db_path: String = config.get("meta.db_path")?;
 
         assert_eq!(db_path, custom_dir.join("history.db").to_str().unwrap());
         assert_eq!(key_path, custom_dir.join("key").to_str().unwrap());
-        assert_eq!(session_path, custom_dir.join("session").to_str().unwrap());
         assert_eq!(
             record_store_path,
             custom_dir.join("records.db").to_str().unwrap()
@@ -1342,6 +1279,7 @@ mod tests {
             scripts_db_path,
             custom_dir.join("scripts.db").to_str().unwrap()
         );
+        assert_eq!(meta_db_path, custom_dir.join("meta.db").to_str().unwrap());
 
         Ok(())
     }

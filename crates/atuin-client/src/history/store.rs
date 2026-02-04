@@ -302,7 +302,7 @@ impl HistoryStore {
 
         pb.set_message("Fetching history from old database");
 
-        let context = current_context();
+        let context = current_context().await?;
         let history = db.list(&[], &context, None, false, true).await?;
 
         pb.set_message("Fetching history already in store");

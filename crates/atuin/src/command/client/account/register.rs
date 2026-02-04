@@ -1,6 +1,5 @@
 use clap::Parser;
 use eyre::{Result, bail};
-use tokio::{fs::File, io::AsyncWriteExt};
 
 use atuin_client::{api_client, settings::Settings};
 
@@ -45,9 +44,8 @@ pub async fn run(
     let session =
         api_client::register(settings.sync_address.as_str(), &username, &email, &password).await?;
 
-    let path = settings.session_path.as_str();
-    let mut file = File::create(path).await?;
-    file.write_all(session.session.as_bytes()).await?;
+    let meta = Settings::meta_store().await?;
+    meta.save_session(&session.session).await?;
 
     let _key = atuin_client::encryption::load_key(settings)?;
 
