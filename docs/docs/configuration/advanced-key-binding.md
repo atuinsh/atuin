@@ -4,6 +4,9 @@ Atuin includes a powerful keybinding system that can be used to fully customize 
 
 The `[keymap]` section in your config replaces the older `[keys]` section. If any `[keymap]` settings are present, the `[keys]` section is ignored entirely.
 
+!!! warning
+    Modifier keys and some special characters work best with a terminal that implements the kitty keyboard protocol. Notably, the default macOS Terminal app does _not_ include this feature. For more information and a list of terminals that are known to support this protocol, see https://sw.kovidgoyal.net/kitty/keyboard-protocol/
+
 ## Keymaps
 
 The Atuin TUI has multiple modes, each with its own keymap. You configure each one under a separate TOML table:
@@ -36,6 +39,9 @@ Lowercase letters, digits, and named keys:
 ```
 
 `return` is an alias for `enter`. `escape` is an alias for `esc`. `del` is an alias for `delete`.
+
+!!! warning "macOS delete key"
+    The key labeled "delete" on Mac keyboards sends `backspace` (it deletes the character *before* the cursor). The `delete` key in Atuin refers to forward-delete, which is `fn+delete` on a Mac keyboard.
 
 ### Modifiers
 
@@ -99,9 +105,8 @@ In this example, pressing left when the cursor is at position 0 exits the TUI. O
 
 A rule without a `when` field is unconditional and always matches. It is typically placed last as a fallback.
 
-### Override semantics
-
-When you specify a key in `[keymap]`, it **replaces** the entire default binding for that key. Other keys you don't mention keep their defaults.
+!!! warning "Override semantics"
+    When you specify a key in `[keymap]`, it **replaces** the **entire** default binding for that key. Other keys you don't mention keep their defaults.
 
 ## Actions
 
