@@ -54,7 +54,10 @@ Modifiers are prefixed with a dash separator. Multiple modifiers can be combined
 "ctrl-c", "alt-f", "ctrl-alt-x"
 ```
 
-Available modifiers: `ctrl`, `alt`, `shift`.
+Available modifiers: `ctrl`, `alt`, `shift`, `super` (also accepted as `cmd` or `win`).
+
+!!! warning
+    The `super` modifier (Cmd on macOS, Win on Windows) **requires** the kitty keyboard protocol. Only terminals that implement this protocol will report the Super modifier to applications. Even in supported terminals, some Super+key combinations may be intercepted by the terminal or OS (e.g. Cmd+C for copy, Cmd+V for paste, or Cmd+T for opening a new tab).
 
 ### Uppercase letters
 

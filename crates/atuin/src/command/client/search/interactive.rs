@@ -334,6 +334,7 @@ impl State {
                     ctrl: false,
                     alt: false,
                     shift: false,
+                    super_key: false,
                 };
                 let seq = KeyInput::Sequence(vec![pending_single, single.clone()]);
                 let action = keymap

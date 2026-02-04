@@ -5,11 +5,13 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// A single key press with modifiers (e.g. `ctrl-c`, `alt-f`, `enter`).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct SingleKey {
     pub code: KeyCodeValue,
     pub ctrl: bool,
     pub alt: bool,
     pub shift: bool,
+    pub super_key: bool,
 }
 
 /// The key code portion of a key press.
@@ -45,6 +47,7 @@ impl SingleKey {
         let ctrl = event.modifiers.contains(KeyModifiers::CONTROL);
         let alt = event.modifiers.contains(KeyModifiers::ALT);
         let shift = event.modifiers.contains(KeyModifiers::SHIFT);
+        let super_key = event.modifiers.contains(KeyModifiers::SUPER);
 
         let code = match event.code {
             KeyCode::Char(' ') => KeyCodeValue::Space,
@@ -52,12 +55,13 @@ impl SingleKey {
                 // If shift is the only modifier and it's an uppercase letter,
                 // we store the uppercase char directly and clear the shift flag
                 // since the case already encodes it.
-                if shift && !ctrl && !alt && c.is_ascii_uppercase() {
+                if shift && !ctrl && !alt && !super_key && c.is_ascii_uppercase() {
                     return SingleKey {
                         code: KeyCodeValue::Char(c),
                         ctrl: false,
                         alt: false,
                         shift: false,
+                        super_key: false,
                     };
                 }
                 KeyCodeValue::Char(c)
@@ -89,6 +93,7 @@ impl SingleKey {
             } else {
                 shift
             },
+            super_key,
         }
     }
 
@@ -100,6 +105,7 @@ impl SingleKey {
         let mut ctrl = false;
         let mut alt = false;
         let mut shift = false;
+        let mut super_key = false;
 
         // All parts except the last are modifiers
         for &part in &parts[..parts.len() - 1] {
@@ -107,6 +113,7 @@ impl SingleKey {
                 "ctrl" => ctrl = true,
                 "alt" => alt = true,
                 "shift" => shift = true,
+                "super" | "cmd" | "win" => super_key = true,
                 _ => return Err(format!("unknown modifier: {part}")),
             }
         }
@@ -136,12 +143,13 @@ impl SingleKey {
                 if chars.len() == 1 {
                     let c = chars[0];
                     // An uppercase letter implies shift (unless shift already specified)
-                    if c.is_ascii_uppercase() && !ctrl && !alt {
+                    if c.is_ascii_uppercase() && !ctrl && !alt && !super_key {
                         return Ok(SingleKey {
                             code: KeyCodeValue::Char(c),
                             ctrl: false,
                             alt: false,
                             shift: false,
+                            super_key: false,
                         });
                     }
                     KeyCodeValue::Char(c)
@@ -156,12 +164,16 @@ impl SingleKey {
             ctrl,
             alt,
             shift,
+            super_key,
         })
     }
 }
 
 impl fmt::Display for SingleKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.super_key {
+            write!(f, "super-")?;
+        }
         if self.ctrl {
             write!(f, "ctrl-")?;
         }
@@ -363,6 +375,72 @@ mod tests {
         let from_event = SingleKey::from_event(&event);
         let parsed = SingleKey::parse("G").unwrap();
         assert_eq!(from_event, parsed);
+    }
+
+    #[test]
+    fn parse_super_modifier() {
+        let k = SingleKey::parse("super-a").unwrap();
+        assert_eq!(k.code, KeyCodeValue::Char('a'));
+        assert!(k.super_key);
+        assert!(!k.ctrl && !k.alt && !k.shift);
+
+        // "cmd" is an alias for "super"
+        let k2 = SingleKey::parse("cmd-a").unwrap();
+        assert_eq!(k, k2);
+
+        // "win" is an alias for "super"
+        let k3 = SingleKey::parse("win-a").unwrap();
+        assert_eq!(k, k3);
+    }
+
+    #[test]
+    fn parse_super_with_other_modifiers() {
+        let k = SingleKey::parse("super-ctrl-c").unwrap();
+        assert_eq!(k.code, KeyCodeValue::Char('c'));
+        assert!(k.super_key && k.ctrl);
+        assert!(!k.alt && !k.shift);
+    }
+
+    #[test]
+    fn display_super_modifier() {
+        let k = SingleKey::parse("super-a").unwrap();
+        assert_eq!(k.to_string(), "super-a");
+
+        let k = SingleKey::parse("super-ctrl-x").unwrap();
+        assert_eq!(k.to_string(), "super-ctrl-x");
+    }
+
+    #[test]
+    fn display_round_trip_super() {
+        let k = KeyInput::parse("super-a").unwrap();
+        let display = k.to_string();
+        let k2 = KeyInput::parse(&display).unwrap();
+        assert_eq!(k, k2, "round-trip failed for super-a");
+    }
+
+    #[test]
+    fn from_event_super() {
+        let event = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::SUPER);
+        let k = SingleKey::from_event(&event);
+        assert_eq!(k.code, KeyCodeValue::Char('a'));
+        assert!(k.super_key);
+        assert!(!k.ctrl && !k.alt && !k.shift);
+    }
+
+    #[test]
+    fn from_event_super_matches_parsed() {
+        let event = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::SUPER);
+        let from_event = SingleKey::from_event(&event);
+        let parsed = SingleKey::parse("super-a").unwrap();
+        assert_eq!(from_event, parsed);
+    }
+
+    #[test]
+    fn super_uppercase_preserves_super() {
+        // super-G should keep the super flag (unlike bare "G" which clears shift)
+        let k = SingleKey::parse("super-G").unwrap();
+        assert_eq!(k.code, KeyCodeValue::Char('G'));
+        assert!(k.super_key);
     }
 
     #[test]
