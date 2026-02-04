@@ -62,9 +62,7 @@ impl ConditionAtom {
             ConditionAtom::ListAtEnd => {
                 ctx.results_len == 0 || ctx.selected_index >= ctx.results_len.saturating_sub(1)
             }
-            ConditionAtom::ListAtStart => {
-                ctx.results_len == 0 || ctx.selected_index == 0
-            }
+            ConditionAtom::ListAtStart => ctx.results_len == 0 || ctx.selected_index == 0,
             ConditionAtom::NoResults => ctx.results_len == 0,
             ConditionAtom::HasResults => ctx.results_len > 0,
         }
@@ -174,9 +172,7 @@ impl<'a> ExprParser<'a> {
     }
 
     fn skip_whitespace(&mut self) {
-        while self.pos < self.input.len()
-            && self.input.as_bytes()[self.pos].is_ascii_whitespace()
-        {
+        while self.pos < self.input.len() && self.input.as_bytes()[self.pos].is_ascii_whitespace() {
             self.pos += 1;
         }
     }
@@ -268,10 +264,7 @@ impl<'a> ExprParser<'a> {
             }
         }
         if self.pos == start {
-            return Err(format!(
-                "expected condition name at position {}",
-                self.pos
-            ));
+            return Err(format!("expected condition name at position {}", self.pos));
         }
         let name = &self.input[start..self.pos];
         let atom = ConditionAtom::from_str(name)?;
@@ -370,7 +363,13 @@ impl<'de> Deserialize<'de> for ConditionExpr {
 mod tests {
     use super::*;
 
-    fn ctx(cursor: usize, width: usize, byte_len: usize, selected: usize, len: usize) -> EvalContext {
+    fn ctx(
+        cursor: usize,
+        width: usize,
+        byte_len: usize,
+        selected: usize,
+        len: usize,
+    ) -> EvalContext {
         EvalContext {
             cursor_position: cursor,
             input_width: width,
@@ -467,9 +466,9 @@ mod tests {
         let expr = ConditionExpr::parse("!!no-results").unwrap();
         assert_eq!(
             expr,
-            ConditionExpr::Not(Box::new(ConditionExpr::Not(Box::new(
-                ConditionExpr::Atom(ConditionAtom::NoResults)
-            ))))
+            ConditionExpr::Not(Box::new(ConditionExpr::Not(Box::new(ConditionExpr::Atom(
+                ConditionAtom::NoResults
+            )))))
         );
     }
 
@@ -516,8 +515,7 @@ mod tests {
     #[test]
     fn parse_parens_override_precedence() {
         // "(a || b) && c"
-        let expr =
-            ConditionExpr::parse("(cursor-at-start || input-empty) && no-results").unwrap();
+        let expr = ConditionExpr::parse("(cursor-at-start || input-empty) && no-results").unwrap();
         assert_eq!(
             expr,
             ConditionExpr::And(
@@ -533,8 +531,7 @@ mod tests {
     #[test]
     fn parse_complex_nested() {
         // "(a && !b) || c"
-        let expr =
-            ConditionExpr::parse("(cursor-at-start && !input-empty) || no-results").unwrap();
+        let expr = ConditionExpr::parse("(cursor-at-start && !input-empty) || no-results").unwrap();
         assert_eq!(
             expr,
             ConditionExpr::Or(
@@ -614,8 +611,7 @@ mod tests {
     #[test]
     fn eval_complex_nested() {
         // (cursor-at-start && !input-empty) || no-results
-        let expr =
-            ConditionExpr::parse("(cursor-at-start && !input-empty) || no-results").unwrap();
+        let expr = ConditionExpr::parse("(cursor-at-start && !input-empty) || no-results").unwrap();
 
         // cursor at start, input not empty → true (left branch)
         assert!(expr.evaluate(&ctx(0, 5, 5, 0, 10)));

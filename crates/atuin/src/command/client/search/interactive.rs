@@ -33,10 +33,7 @@ use ratatui::{
     backend::{CrosstermBackend, FromCrossterm},
     crossterm::{
         cursor::SetCursorStyle,
-        event::{
-            self, DisableMouseCapture, EnableMouseCapture, Event, KeyEvent,
-            MouseEvent,
-        },
+        event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyEvent, MouseEvent},
         execute, terminal,
     },
     layout::{Alignment, Constraint, Direction, Layout},
@@ -285,9 +282,9 @@ impl State {
     }
 
     fn handle_key_input(&mut self, settings: &Settings, input: &KeyEvent) -> InputAction {
-        use super::keybindings::key::{KeyCodeValue, KeyInput, SingleKey};
         use super::keybindings::Action;
         use super::keybindings::EvalContext;
+        use super::keybindings::key::{KeyCodeValue, KeyInput, SingleKey};
 
         // Skip release events
         if input.kind == event::KeyEventKind::Release {
@@ -353,7 +350,10 @@ impl State {
                 };
                 (Some(Action::Noop), Some(c))
             } else {
-                (keymap.resolve(&KeyInput::Single(single.clone()), &ctx), None)
+                (
+                    keymap.resolve(&KeyInput::Single(single.clone()), &ctx),
+                    None,
+                )
             }
         };
 
@@ -2406,8 +2406,8 @@ mod tests {
 
     #[test]
     fn execute_exit_returns_based_on_exit_mode() {
-        use atuin_client::settings::ExitMode;
         use crate::command::client::search::keybindings::Action;
+        use atuin_client::settings::ExitMode;
 
         let mut state = make_executor_state(100, 0);
         let mut settings = Settings::utc();

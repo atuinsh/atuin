@@ -73,8 +73,7 @@ impl Keymap {
 
     /// Bind a key input to a conditional set of rules.
     pub fn bind_conditional(&mut self, key: KeyInput, rules: Vec<KeyRule>) {
-        self.bindings
-            .insert(key, KeyBinding::conditional(rules));
+        self.bindings.insert(key, KeyBinding::conditional(rules));
     }
 
     /// Resolve a key input to an action given the current evaluation context.
@@ -117,8 +116,8 @@ impl Default for Keymap {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::conditions::ConditionAtom;
+    use super::*;
 
     fn make_ctx(cursor: usize, width: usize, selected: usize, len: usize) -> EvalContext {
         EvalContext {
@@ -137,10 +136,7 @@ mod tests {
         keymap.bind(key.clone(), Action::ReturnOriginal);
 
         let ctx = make_ctx(0, 0, 0, 10);
-        assert_eq!(
-            keymap.resolve(&key, &ctx),
-            Some(Action::ReturnOriginal)
-        );
+        assert_eq!(keymap.resolve(&key, &ctx), Some(Action::ReturnOriginal));
     }
 
     #[test]

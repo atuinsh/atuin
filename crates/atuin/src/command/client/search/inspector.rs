@@ -335,7 +335,6 @@ pub fn draw_full(
     draw_stats_charts(f, stats_layout[1], stats, theme);
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::draw_ultracompact;

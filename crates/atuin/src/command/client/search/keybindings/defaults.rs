@@ -111,10 +111,7 @@ pub fn default_emacs_keymap(settings: &Settings) -> Keymap {
 
     // Prefix key: ctrl-<prefix_char> → enter prefix mode
     let prefix_char = settings.keys.prefix.chars().next().unwrap_or('a');
-    km.bind(
-        key(&format!("ctrl-{prefix_char}")),
-        Action::EnterPrefixMode,
-    );
+    km.bind(key(&format!("ctrl-{prefix_char}")), Action::EnterPrefixMode);
 
     // --- Accept / navigation edge behaviors (from [keys] settings) ---
 
@@ -263,10 +260,7 @@ pub fn default_vim_normal_keymap(settings: &Settings) -> Keymap {
 
     // Prefix key
     let prefix_char = settings.keys.prefix.chars().next().unwrap_or('a');
-    km.bind(
-        key(&format!("ctrl-{prefix_char}")),
-        Action::EnterPrefixMode,
-    );
+    km.bind(key(&format!("ctrl-{prefix_char}")), Action::EnterPrefixMode);
 
     // --- Vim navigation ---
     // j/k: scroll with optional exit at boundary.
@@ -420,9 +414,7 @@ fn apply_config_to_keymap(keymap: &mut Keymap, overrides: &HashMap<String, KeyBi
                 keymap.bindings.insert(key, binding);
             }
             Err(e) => {
-                eprintln!(
-                    "[atuin] warning: invalid binding for {key_str:?} in keymap config: {e}"
-                );
+                eprintln!("[atuin] warning: invalid binding for {key_str:?} in keymap config: {e}");
             }
         }
     }
@@ -510,7 +502,10 @@ mod tests {
     fn emacs_ctrl_c_returns_original() {
         let km = default_emacs_keymap(&default_settings());
         let ctx = make_ctx(0, 0, 0, 10);
-        assert_eq!(km.resolve(&key("ctrl-c"), &ctx), Some(Action::ReturnOriginal));
+        assert_eq!(
+            km.resolve(&key("ctrl-c"), &ctx),
+            Some(Action::ReturnOriginal)
+        );
     }
 
     #[test]
@@ -610,14 +605,20 @@ mod tests {
         let km = default_emacs_keymap(&default_settings());
         // input empty (byte_len = 0)
         let ctx = make_ctx(0, 0, 0, 10);
-        assert_eq!(km.resolve(&key("ctrl-d"), &ctx), Some(Action::ReturnOriginal));
+        assert_eq!(
+            km.resolve(&key("ctrl-d"), &ctx),
+            Some(Action::ReturnOriginal)
+        );
     }
 
     #[test]
     fn emacs_ctrl_d_nonempty_deletes() {
         let km = default_emacs_keymap(&default_settings());
         let ctx = make_ctx(2, 5, 0, 10);
-        assert_eq!(km.resolve(&key("ctrl-d"), &ctx), Some(Action::DeleteCharAfter));
+        assert_eq!(
+            km.resolve(&key("ctrl-d"), &ctx),
+            Some(Action::DeleteCharAfter)
+        );
     }
 
     #[test]
@@ -632,7 +633,10 @@ mod tests {
     fn emacs_prefix_key_enters_prefix() {
         let km = default_emacs_keymap(&default_settings());
         let ctx = make_ctx(0, 0, 0, 10);
-        assert_eq!(km.resolve(&key("ctrl-a"), &ctx), Some(Action::EnterPrefixMode));
+        assert_eq!(
+            km.resolve(&key("ctrl-a"), &ctx),
+            Some(Action::EnterPrefixMode)
+        );
     }
 
     #[test]
@@ -709,7 +713,10 @@ mod tests {
     fn vim_normal_ctrl_u_half_page_up() {
         let km = default_vim_normal_keymap(&default_settings());
         let ctx = make_ctx(0, 0, 50, 100);
-        assert_eq!(km.resolve(&key("ctrl-u"), &ctx), Some(Action::ScrollHalfPageUp));
+        assert_eq!(
+            km.resolve(&key("ctrl-u"), &ctx),
+            Some(Action::ScrollHalfPageUp)
+        );
     }
 
     #[test]
@@ -717,8 +724,14 @@ mod tests {
         let km = default_vim_normal_keymap(&default_settings());
         let ctx = make_ctx(0, 0, 50, 100);
         assert_eq!(km.resolve(&key("H"), &ctx), Some(Action::ScrollToScreenTop));
-        assert_eq!(km.resolve(&key("M"), &ctx), Some(Action::ScrollToScreenMiddle));
-        assert_eq!(km.resolve(&key("L"), &ctx), Some(Action::ScrollToScreenBottom));
+        assert_eq!(
+            km.resolve(&key("M"), &ctx),
+            Some(Action::ScrollToScreenMiddle)
+        );
+        assert_eq!(
+            km.resolve(&key("L"), &ctx),
+            Some(Action::ScrollToScreenBottom)
+        );
     }
 
     // -- Vim Insert keymap tests --
@@ -745,7 +758,10 @@ mod tests {
     fn vim_insert_ctrl_bracket_enters_normal() {
         let km = default_vim_insert_keymap(&default_settings());
         let ctx = make_ctx(0, 0, 0, 10);
-        assert_eq!(km.resolve(&key("ctrl-["), &ctx), Some(Action::VimEnterNormal));
+        assert_eq!(
+            km.resolve(&key("ctrl-["), &ctx),
+            Some(Action::VimEnterNormal)
+        );
     }
 
     #[test]
@@ -753,7 +769,10 @@ mod tests {
         let km = default_vim_insert_keymap(&default_settings());
         let ctx = make_ctx(0, 0, 0, 10);
         // input empty → return original
-        assert_eq!(km.resolve(&key("ctrl-d"), &ctx), Some(Action::ReturnOriginal));
+        assert_eq!(
+            km.resolve(&key("ctrl-d"), &ctx),
+            Some(Action::ReturnOriginal)
+        );
     }
 
     // -- Inspector keymap tests --
@@ -843,7 +862,10 @@ mod tests {
         let ctx = make_ctx(0, 0, 0, 10);
 
         // ctrl-x should be prefix mode
-        assert_eq!(km.resolve(&key("ctrl-x"), &ctx), Some(Action::EnterPrefixMode));
+        assert_eq!(
+            km.resolve(&key("ctrl-x"), &ctx),
+            Some(Action::EnterPrefixMode)
+        );
         // ctrl-a should now be CursorStart (not prefix)
         assert_eq!(km.resolve(&key("ctrl-a"), &ctx), Some(Action::CursorStart));
     }
@@ -951,10 +973,7 @@ mod tests {
         )]);
 
         let set = KeymapSet::from_settings(&settings);
-        assert_eq!(
-            set.emacs.resolve(&key("ctrl-c"), &ctx),
-            Some(Action::Exit)
-        );
+        assert_eq!(set.emacs.resolve(&key("ctrl-c"), &ctx), Some(Action::Exit));
     }
 
     #[test]
@@ -973,10 +992,7 @@ mod tests {
         let ctx = make_ctx(0, 0, 0, 10);
 
         // ctrl-c overridden
-        assert_eq!(
-            set.emacs.resolve(&key("ctrl-c"), &ctx),
-            Some(Action::Exit)
-        );
+        assert_eq!(set.emacs.resolve(&key("ctrl-c"), &ctx), Some(Action::Exit));
         // enter still has default (enter_accept=false → ReturnSelection)
         assert_eq!(
             set.emacs.resolve(&key("enter"), &ctx),
@@ -1027,7 +1043,9 @@ mod tests {
 
         // Verify a sample of keys produce the same results
         let ctx = make_ctx(0, 0, 0, 10);
-        let test_keys = ["ctrl-c", "enter", "esc", "tab", "up", "down", "left", "right"];
+        let test_keys = [
+            "ctrl-c", "enter", "esc", "tab", "up", "down", "left", "right",
+        ];
         for k in &test_keys {
             assert_eq!(
                 defaults.emacs.resolve(&key(k), &ctx),
