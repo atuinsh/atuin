@@ -63,6 +63,7 @@ nav:
       - Setting up sync: guide/sync.md
       - Import existing history: guide/import.md
       - Basic usage: guide/basic-usage.md
+      - Deleting history: guide/delete-history.md
       - Syncing dotfiles: guide/dotfiles.md
       - Theming: guide/theming.md
   - Configuration:
