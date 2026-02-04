@@ -24,7 +24,7 @@ Vim-insert mode inherits all emacs bindings by default, then overrides `esc` and
 You only need to specify the keys you want to change. Unmentioned keys keep their default bindings.
 
 !!! warning
-    If you specify a key in your keymap that would normally be changed by an option, like the `enter` key with the `enter_accept` setting, the setting will not take any affect. Those options modify the defualt keymap based on their setting, but if you override the key in the keymap, you're responsible for managing correct behavior.
+    If you specify a key in your keymap that would normally be changed by an option, like the `enter` key with the `enter_accept` setting, the setting will not take any affect. Those options modify the default keymap based on their setting, but if you override the key in the keymap, you're responsible for managing correct behavior.
 
 ## Key format
 
