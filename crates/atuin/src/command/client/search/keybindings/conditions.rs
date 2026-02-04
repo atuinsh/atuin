@@ -206,7 +206,7 @@ impl<'a> ExprParser<'a> {
         Ok(expr)
     }
 
-    /// or_expr = and_expr ("||" and_expr)*
+    /// `or_expr` = `and_expr` ("||" `and_expr`)*
     fn parse_or(&mut self) -> Result<ConditionExpr, String> {
         let mut left = self.parse_and()?;
         while self.starts_with("||") {
@@ -217,7 +217,7 @@ impl<'a> ExprParser<'a> {
         Ok(left)
     }
 
-    /// and_expr = unary ("&&" unary)*
+    /// `and_expr` = unary ("&&" unary)*
     fn parse_and(&mut self) -> Result<ConditionExpr, String> {
         let mut left = self.parse_unary()?;
         while self.starts_with("&&") {

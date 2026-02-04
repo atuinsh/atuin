@@ -72,19 +72,17 @@ impl Action {
     /// Convert from a kebab-case string.
     pub fn from_str(s: &str) -> Result<Self, String> {
         // Handle accept-N and return-selection-N patterns
-        if let Some(rest) = s.strip_prefix("accept-") {
-            if let Ok(n) = rest.parse::<u8>() {
-                if (1..=9).contains(&n) {
-                    return Ok(Action::AcceptNth(n));
-                }
-            }
+        if let Some(rest) = s.strip_prefix("accept-")
+            && let Ok(n) = rest.parse::<u8>()
+            && (1..=9).contains(&n)
+        {
+            return Ok(Action::AcceptNth(n));
         }
-        if let Some(rest) = s.strip_prefix("return-selection-") {
-            if let Ok(n) = rest.parse::<u8>() {
-                if (1..=9).contains(&n) {
-                    return Ok(Action::ReturnSelectionNth(n));
-                }
-            }
+        if let Some(rest) = s.strip_prefix("return-selection-")
+            && let Ok(n) = rest.parse::<u8>()
+            && (1..=9).contains(&n)
+        {
+            return Ok(Action::ReturnSelectionNth(n));
         }
 
         match s {

@@ -84,7 +84,7 @@ impl Keymap {
             match &rule.condition {
                 None => return Some(rule.action.clone()),
                 Some(cond) if cond.evaluate(ctx) => return Some(rule.action.clone()),
-                _ => continue,
+                Some(_) => {}
             }
         }
         None
@@ -95,7 +95,7 @@ impl Keymap {
     pub fn has_sequence_starting_with(&self, prefix: &SingleKey) -> bool {
         self.bindings.keys().any(|ki| match ki {
             KeyInput::Sequence(keys) => keys.first() == Some(prefix),
-            _ => false,
+            KeyInput::Single(_) => false,
         })
     }
 

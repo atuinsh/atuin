@@ -319,6 +319,8 @@ impl State {
             None
         };
 
+        // The if-let/else-if chain here is clearer than map_or_else with nested closures.
+        #[allow(clippy::option_if_let_else)]
         let (action, new_pending) = if prefix_action.is_some() {
             (prefix_action, None)
         } else {
@@ -344,9 +346,8 @@ impl State {
                 && !single.alt
             {
                 // This key starts a multi-key sequence; wait for next key
-                let c = match single.code {
-                    KeyCodeValue::Char(c) => c,
-                    _ => unreachable!(),
+                let KeyCodeValue::Char(c) = single.code else {
+                    unreachable!()
                 };
                 (Some(Action::Noop), Some(c))
             } else {
@@ -367,12 +368,12 @@ impl State {
             self.execute_action(&action, settings)
         } else {
             // No action matched. In insert-capable modes, insert the character.
-            if self.is_insert_mode() {
-                if let KeyCodeValue::Char(c) = single.code {
-                    if !single.ctrl && !single.alt {
-                        self.search.input.insert(c);
-                    }
-                }
+            if self.is_insert_mode()
+                && let KeyCodeValue::Char(c) = single.code
+                && !single.ctrl
+                && !single.alt
+            {
+                self.search.input.insert(c);
             }
             InputAction::Continue
         }
@@ -397,7 +398,7 @@ impl State {
     /// This is the "do it" half of the resolve+execute pipeline. The resolver
     /// decides *what* to do (which `Action`), and this function carries it out.
     ///
-    /// Invert handling: scroll actions (SelectNext, ScrollPageDown, etc.) account
+    /// Invert handling: scroll actions (`SelectNext`, `ScrollPageDown`, etc.) account
     /// for `settings.invert` so that keybindings are always in "visual" terms —
     /// users never need to think about invert in their keybinding config.
     #[allow(clippy::too_many_lines)]

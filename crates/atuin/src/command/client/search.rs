@@ -23,7 +23,7 @@ mod engines;
 mod history_list;
 mod inspector;
 mod interactive;
-pub(crate) mod keybindings;
+pub mod keybindings;
 
 pub use duration::format_duration_into;
 

@@ -61,7 +61,7 @@ pub struct KeymapSet {
 // ---------------------------------------------------------------------------
 
 /// Add the bindings that are common to all search-tab keymaps:
-/// ctrl-c, ctrl-g, ctrl-o, and tab (respecting enter_accept).
+/// ctrl-c, ctrl-g, ctrl-o, and tab (respecting `enter_accept`).
 ///
 /// Note: `esc`/`ctrl-[` are NOT included here because their behavior differs
 /// between emacs (exit), vim-normal (exit), and vim-insert (enter normal mode).
@@ -99,6 +99,8 @@ fn accept_action(settings: &Settings) -> Action {
 /// - `keys.accept_past_line_start` — left arrow at start accepts (overrides exit)
 /// - `keys.accept_with_backspace` — backspace at start of line accepts
 /// - `ctrl_n_shortcuts` — whether alt or ctrl is used for numeric shortcuts
+// Keymap builder that enumerates every default binding; not worth splitting.
+#[allow(clippy::too_many_lines)]
 pub fn default_emacs_keymap(settings: &Settings) -> Keymap {
     let mut km = Keymap::new();
     add_common_bindings(&mut km, settings);
