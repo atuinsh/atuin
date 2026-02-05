@@ -48,11 +48,11 @@ pub enum Cmd {
         value: Option<String>,
 
         /// Show only exported variables
-        #[arg(long)]
+        #[arg(long, conflicts_with = "shell_only")]
         exports_only: bool,
 
         /// Show only non-exported (shell) variables
-        #[arg(long)]
+        #[arg(long, conflicts_with = "exports_only")]
         shell_only: bool,
     },
 }
@@ -67,7 +67,7 @@ impl Cmd {
             println!("Setting '{show_export}{name}={value}'.");
         } else {
             println!(
-                "Overwriting alias '{show_export}{name}={}' with '{name}={value}'.",
+                "Overwriting var '{show_export}{name}={}' with '{name}={value}'.",
                 found[0].value
             );
         }
