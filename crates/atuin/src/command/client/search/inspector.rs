@@ -8,7 +8,6 @@ use atuin_client::{
 use ratatui::{
     Frame,
     backend::FromCrossterm,
-    crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
     layout::Rect,
     prelude::{Constraint, Direction, Layout},
     style::Style,
@@ -19,7 +18,7 @@ use ratatui::{
 use super::duration::format_duration;
 
 use super::super::theme::{Meaning, Theme};
-use super::interactive::{Compactness, InputAction, State, to_compactness};
+use super::interactive::{Compactness, to_compactness};
 
 #[allow(clippy::cast_sign_loss)]
 fn u64_or_zero(num: i64) -> u64 {
@@ -334,30 +333,6 @@ pub fn draw_full(
     draw_commands(f, vert_layout[0], history, stats, false, theme);
     draw_stats_table(f, stats_layout[0], history, tz, stats, theme);
     draw_stats_charts(f, stats_layout[1], stats, theme);
-}
-
-// I'm going to break this out more, but just starting to move things around before changing
-// structure and making it nicer.
-pub fn input(
-    state: &mut State,
-    _settings: &Settings,
-    selected: usize,
-    input: &KeyEvent,
-) -> InputAction {
-    let ctrl = input.modifiers.contains(KeyModifiers::CONTROL);
-
-    match input.code {
-        KeyCode::Char('d') if ctrl => InputAction::Delete(selected),
-        KeyCode::Up => {
-            state.inspecting_state.move_to_previous();
-            InputAction::Redraw
-        }
-        KeyCode::Down => {
-            state.inspecting_state.move_to_next();
-            InputAction::Redraw
-        }
-        _ => InputAction::Continue,
-    }
 }
 
 #[cfg(test)]

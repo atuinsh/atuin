@@ -342,6 +342,80 @@ pub struct Keys {
     pub prefix: String,
 }
 
+impl Keys {
+    /// The standard default values for all `[keys]` options.
+    /// These match the config defaults set in `builder_with_data_dir()`.
+    pub fn standard_defaults() -> Self {
+        Keys {
+            scroll_exits: true,
+            exit_past_line_start: true,
+            accept_past_line_end: true,
+            accept_past_line_start: false,
+            accept_with_backspace: false,
+            prefix: "a".to_string(),
+        }
+    }
+
+    /// Returns true if any value differs from the standard defaults.
+    pub fn has_non_default_values(&self) -> bool {
+        let d = Self::standard_defaults();
+        self.scroll_exits != d.scroll_exits
+            || self.exit_past_line_start != d.exit_past_line_start
+            || self.accept_past_line_end != d.accept_past_line_end
+            || self.accept_past_line_start != d.accept_past_line_start
+            || self.accept_with_backspace != d.accept_with_backspace
+            || self.prefix != d.prefix
+    }
+}
+
+/// A single rule within a conditional keybinding config.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct KeyRuleConfig {
+    /// Optional condition expression (e.g. "cursor-at-start", "input-empty && no-results").
+    /// If absent, the rule always matches.
+    #[serde(default)]
+    pub when: Option<String>,
+    /// The action to perform (e.g. "exit", "cursor-left", "accept").
+    pub action: String,
+}
+
+/// A keybinding config value: either a simple action string or an ordered list of conditional rules.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum KeyBindingConfig {
+    /// Simple unconditional binding: `"ctrl-c" = "return-original"`
+    Simple(String),
+    /// Conditional binding: `"left" = [{ when = "cursor-at-start", action = "exit" }, { action = "cursor-left" }]`
+    Rules(Vec<KeyRuleConfig>),
+}
+
+/// User-facing keymap configuration. Each mode maps key strings to bindings.
+/// Keys present here override the defaults for that key; unmentioned keys keep defaults.
+#[derive(Clone, Debug, Deserialize, Serialize, Default)]
+pub struct KeymapConfig {
+    #[serde(default)]
+    pub emacs: HashMap<String, KeyBindingConfig>,
+    #[serde(default, rename = "vim-normal")]
+    pub vim_normal: HashMap<String, KeyBindingConfig>,
+    #[serde(default, rename = "vim-insert")]
+    pub vim_insert: HashMap<String, KeyBindingConfig>,
+    #[serde(default)]
+    pub inspector: HashMap<String, KeyBindingConfig>,
+    #[serde(default)]
+    pub prefix: HashMap<String, KeyBindingConfig>,
+}
+
+impl KeymapConfig {
+    /// Returns true if no keybinding overrides are configured in any mode.
+    pub fn is_empty(&self) -> bool {
+        self.emacs.is_empty()
+            && self.vim_normal.is_empty()
+            && self.vim_insert.is_empty()
+            && self.inspector.is_empty()
+            && self.prefix.is_empty()
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Preview {
     pub strategy: PreviewStrategy,
@@ -715,6 +789,9 @@ pub struct Settings {
 
     #[serde(default)]
     pub keys: Keys,
+
+    #[serde(default)]
+    pub keymap: KeymapConfig,
 
     #[serde(default)]
     pub preview: Preview,
@@ -1291,5 +1368,69 @@ mod tests {
 
         assert!(effective.to_str().is_some());
         assert!(effective.ends_with("atuin") || effective == default);
+    }
+
+    #[test]
+    fn keymap_config_deserializes_simple_binding() {
+        let json = r#"{"emacs": {"ctrl-c": "exit"}}"#;
+        let config: super::KeymapConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.emacs.len(), 1);
+        match &config.emacs["ctrl-c"] {
+            super::KeyBindingConfig::Simple(s) => assert_eq!(s, "exit"),
+            _ => panic!("expected Simple variant"),
+        }
+    }
+
+    #[test]
+    fn keymap_config_deserializes_conditional_binding() {
+        let json = r#"{
+            "emacs": {
+                "left": [
+                    {"when": "cursor-at-start", "action": "exit"},
+                    {"action": "cursor-left"}
+                ]
+            }
+        }"#;
+        let config: super::KeymapConfig = serde_json::from_str(json).unwrap();
+        match &config.emacs["left"] {
+            super::KeyBindingConfig::Rules(rules) => {
+                assert_eq!(rules.len(), 2);
+                assert_eq!(rules[0].when.as_deref(), Some("cursor-at-start"));
+                assert_eq!(rules[0].action, "exit");
+                assert!(rules[1].when.is_none());
+                assert_eq!(rules[1].action, "cursor-left");
+            }
+            _ => panic!("expected Rules variant"),
+        }
+    }
+
+    #[test]
+    fn keymap_config_deserializes_vim_normal() {
+        let json = r#"{"vim-normal": {"j": "select-next", "k": "select-previous"}}"#;
+        let config: super::KeymapConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.vim_normal.len(), 2);
+        assert!(config.emacs.is_empty());
+    }
+
+    #[test]
+    fn keymap_config_is_empty_when_default() {
+        let config = super::KeymapConfig::default();
+        assert!(config.is_empty());
+    }
+
+    #[test]
+    fn keymap_config_mixed_modes() {
+        let json = r#"{
+            "emacs": {"ctrl-c": "exit"},
+            "vim-normal": {"q": "exit"},
+            "inspector": {"d": "delete"}
+        }"#;
+        let config: super::KeymapConfig = serde_json::from_str(json).unwrap();
+        assert!(!config.is_empty());
+        assert_eq!(config.emacs.len(), 1);
+        assert_eq!(config.vim_normal.len(), 1);
+        assert_eq!(config.inspector.len(), 1);
+        assert!(config.vim_insert.is_empty());
+        assert!(config.prefix.is_empty());
     }
 }

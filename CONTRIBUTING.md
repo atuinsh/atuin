@@ -25,7 +25,13 @@ It is also recommended to update your `$PATH` so that the pre-exec scripts would
 export PATH="./target/release:$PATH"
 ```
 
-These 5 variables can be added in a local `.envrc` file, read by [direnv](https://direnv.net/).
+If you'd like to load a different configuration file, set `ATUIN_CONFIG_DIR` to a folder that contains your `config.toml` file:
+
+```shell
+export ATUIN_CONFIG_DIR=/tmp/atuin-config/
+```
+
+These variable exports can be added in a local `.envrc` file, read by [direnv](https://direnv.net/).
 
 ## PRs
 
