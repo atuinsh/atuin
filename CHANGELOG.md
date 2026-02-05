@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Bug Fixes
 
+- *(powershell)* Preserve `$LASTEXITCODE` ([#3120](https://github.com/atuinsh/atuin/issues/3120))
+- *(search)* Allow hyphen-prefixed query args like `---` ([#3129](https://github.com/atuinsh/atuin/issues/3129))
 - *(ui)* Don't draw a leading space for command
 - *(ui)* Time column can take up to 9 cells
 - *(ui)* Align cursor with the expand column (usually the command)
@@ -16,10 +18,15 @@ All notable changes to this project will be documented in this file.
 - Do not set ATUIN_SESSION if it is already set ([#3107](https://github.com/atuinsh/atuin/issues/3107))
 - Custom data dir test on windows ([#3109](https://github.com/atuinsh/atuin/issues/3109))
 - New session on shlvl change ([#3111](https://github.com/atuinsh/atuin/issues/3111))
+- Larger exit column width on Windows ([#3119](https://github.com/atuinsh/atuin/issues/3119))
+- Halt sync loop if server returns an empty page ([#3122](https://github.com/atuinsh/atuin/issues/3122))
+- Use directories crate for home dir resolution ([#3125](https://github.com/atuinsh/atuin/issues/3125))
 
 
 ### Documentation
 
+- *(CONTRIBUTING)* Update links ([#3117](https://github.com/atuinsh/atuin/issues/3117))
+- *(README)* Update links ([#3116](https://github.com/atuinsh/atuin/issues/3116))
 - *(config)* Clarify scope of directory filter_mode ([#3082](https://github.com/atuinsh/atuin/issues/3082))
 - *(configuration)* Describe new utility "atuin-bind" for Bash ([#3064](https://github.com/atuinsh/atuin/issues/3064))
 - *(installation)* Add mise alternative installation method ([#3066](https://github.com/atuinsh/atuin/issues/3066))
@@ -31,10 +38,13 @@ All notable changes to this project will be documented in this file.
 - Config/ with initial uid:gid
 - Add PowerShell install instructions
 - Add PowerShell and Windows install instructions ([#3096](https://github.com/atuinsh/atuin/issues/3096))
+- Update the `[keys]` docs ([#3114](https://github.com/atuinsh/atuin/issues/3114))
+- Add history deletion guide ([#3130](https://github.com/atuinsh/atuin/issues/3130))
 
 
 ### Features
 
+- *(dotfiles)* Add sort and filter options to alias/var list ([#3131](https://github.com/atuinsh/atuin/issues/3131))
 - *(theme)* Note new default theme name and syntax ([#3080](https://github.com/atuinsh/atuin/issues/3080))
 - *(ui)* Highlight fulltext search as fulltext search instead of fuzzy search
 - *(ui)* Highlight fulltext search as fulltext search instead of fuzzy search ([#3098](https://github.com/atuinsh/atuin/issues/3098))
@@ -46,6 +56,9 @@ All notable changes to this project will be documented in this file.
 - Remove user verification functionality ([#3108](https://github.com/atuinsh/atuin/issues/3108))
 - Add option to use tmux display-popup ([#3058](https://github.com/atuinsh/atuin/issues/3058))
 - Move atuin-server to its own binary ([#3112](https://github.com/atuinsh/atuin/issues/3112))
+- Add a parameter to the sync to specify the download/upload page ([#2408](https://github.com/atuinsh/atuin/issues/2408))
+- Replace several files with a sqlite db ([#3128](https://github.com/atuinsh/atuin/issues/3128))
+- Add new custom keybinding system for search TUI ([#3127](https://github.com/atuinsh/atuin/issues/3127))
 
 
 ### Miscellaneous Tasks
@@ -54,6 +67,8 @@ All notable changes to this project will be documented in this file.
   - **BREAKING**: remove total_history from api index response ([#3094](https://github.com/atuinsh/atuin/issues/3094))
 - Update to rust 1.93
 - Update to rust 1.93 ([#3101](https://github.com/atuinsh/atuin/issues/3101))
+- Update changelog
+- Update agents.md ([#3126](https://github.com/atuinsh/atuin/issues/3126))
 
 
 ### Theming
