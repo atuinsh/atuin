@@ -69,6 +69,7 @@ nav:
   - Configuration:
       - Config: configuration/config.md
       - Key Binding: configuration/key-binding.md
+      - Advanced Key Binding: configuration/advanced-key-binding.md
   - Reference:
       - doctor: reference/doctor.md
       - daemon: reference/daemon.md
