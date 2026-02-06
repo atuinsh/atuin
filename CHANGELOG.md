@@ -21,6 +21,7 @@ All notable changes to this project will be documented in this file.
 - Larger exit column width on Windows ([#3119](https://github.com/atuinsh/atuin/issues/3119))
 - Halt sync loop if server returns an empty page ([#3122](https://github.com/atuinsh/atuin/issues/3122))
 - Use directories crate for home dir resolution ([#3125](https://github.com/atuinsh/atuin/issues/3125))
+- Tab behaving like enter, eprintln ([#3135](https://github.com/atuinsh/atuin/issues/3135))
 
 
 ### Documentation
@@ -69,6 +70,7 @@ All notable changes to this project will be documented in this file.
 - Update to rust 1.93 ([#3101](https://github.com/atuinsh/atuin/issues/3101))
 - Update changelog
 - Update agents.md ([#3126](https://github.com/atuinsh/atuin/issues/3126))
+- Update changelog
 
 
 ### Theming
