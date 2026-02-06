@@ -5,7 +5,7 @@ Atuin includes a powerful keybinding system that can be used to fully customize 
 The `[keymap]` section in your config replaces the older `[keys]` section. If any `[keymap]` settings are present, the `[keys]` section is ignored entirely.
 
 !!! warning
-    Modifier keys and some special characters work best with a terminal that implements the kitty keyboard protocol. Notably, the default macOS Terminal app does _not_ include this feature. For more information and a list of terminals that are known to support this protocol, see https://sw.kovidgoyal.net/kitty/keyboard-protocol/
+    Modifier keys, F1-F24 keys, and some special characters work best - or _only_ work - with a terminal that implements the kitty keyboard protocol. Notably, the default macOS Terminal app does _not_ include this feature. For more information and a list of terminals that are known to support this protocol, see [https://sw.kovidgoyal.net/kitty/keyboard-protocol/](https://sw.kovidgoyal.net/kitty/keyboard-protocol/).
 
 ## Keymaps
 
@@ -39,6 +39,7 @@ Lowercase letters, digits, and named keys:
 "enter", "esc", "tab", "space", "backspace", "delete"
 "up", "down", "left", "right"
 "home", "end", "pageup", "pagedown"
+"f1", "f2", ... "f12", ... "f24"
 ```
 
 `return` is an alias for `enter`. `escape` is an alias for `esc`. `del` is an alias for `delete`.
