@@ -482,6 +482,14 @@ impl State {
                 self.search.input.clear();
                 InputAction::Continue
             }
+            Action::ClearToStart => {
+                self.search.input.clear_to_start();
+                InputAction::Continue
+            }
+            Action::ClearToEnd => {
+                self.search.input.clear_to_end();
+                InputAction::Continue
+            }
 
             // -- List navigation (invert-aware) --
             Action::SelectNext => {

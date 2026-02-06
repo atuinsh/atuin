@@ -20,6 +20,8 @@ pub enum Action {
     DeleteWordAfter,
     DeleteToWordBoundary,
     ClearLine,
+    ClearToStart,
+    ClearToEnd,
 
     // List navigation
     SelectNext,
@@ -99,6 +101,8 @@ impl Action {
             "delete-word-after" => Ok(Action::DeleteWordAfter),
             "delete-to-word-boundary" => Ok(Action::DeleteToWordBoundary),
             "clear-line" => Ok(Action::ClearLine),
+            "clear-to-start" => Ok(Action::ClearToStart),
+            "clear-to-end" => Ok(Action::ClearToEnd),
 
             "select-next" => Ok(Action::SelectNext),
             "select-previous" => Ok(Action::SelectPrevious),
@@ -157,6 +161,8 @@ impl Action {
             Action::DeleteWordAfter => "delete-word-after".to_string(),
             Action::DeleteToWordBoundary => "delete-to-word-boundary".to_string(),
             Action::ClearLine => "clear-line".to_string(),
+            Action::ClearToStart => "clear-to-start".to_string(),
+            Action::ClearToEnd => "clear-to-end".to_string(),
 
             Action::SelectNext => "select-next".to_string(),
             Action::SelectPrevious => "select-previous".to_string(),
