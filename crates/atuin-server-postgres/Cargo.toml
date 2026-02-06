@@ -10,8 +10,8 @@ homepage = { workspace = true }
 repository = { workspace = true }
 
 [dependencies]
-atuin-common = { path = "../atuin-common", version = "18.12.0-beta.3" }
-atuin-server-database = { path = "../atuin-server-database", version = "18.12.0-beta.3" }
+atuin-common = { path = "../atuin-common", version = "18.12.0-beta.4" }
+atuin-server-database = { path = "../atuin-server-database", version = "18.12.0-beta.4" }
 
 eyre = { workspace = true }
 tracing = { workspace = true }
