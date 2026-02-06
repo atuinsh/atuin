@@ -369,12 +369,16 @@ impl State {
             self.execute_action(&action, settings)
         } else {
             // No action matched. In insert-capable modes, insert the character.
-            if self.is_insert_mode()
-                && let KeyCodeValue::Char(c) = single.code
-                && !single.ctrl
-                && !single.alt
-            {
-                self.search.input.insert(c);
+            if self.is_insert_mode() && !single.ctrl && !single.alt {
+                match single.code {
+                    KeyCodeValue::Char(c) => {
+                        self.search.input.insert(c);
+                    }
+                    KeyCodeValue::Space => {
+                        self.search.input.insert(' ');
+                    }
+                    _ => {}
+                }
             }
             InputAction::Continue
         }

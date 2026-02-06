@@ -32,6 +32,7 @@ pub enum KeyCodeValue {
     PageUp,
     PageDown,
     Space,
+    F(u8),
 }
 
 /// A key input that may be a single key or a multi-key sequence (e.g. `g g`).
@@ -79,6 +80,7 @@ impl SingleKey {
             KeyCode::End => KeyCodeValue::End,
             KeyCode::PageUp => KeyCodeValue::PageUp,
             KeyCode::PageDown => KeyCodeValue::PageDown,
+            KeyCode::F(n) => KeyCodeValue::F(n),
             // For keys we don't handle, store them as a null char
             _ => KeyCodeValue::Char('\0'),
         };
@@ -134,6 +136,18 @@ impl SingleKey {
             "pageup" => KeyCodeValue::PageUp,
             "pagedown" => KeyCodeValue::PageDown,
             "space" => KeyCodeValue::Space,
+            s if s.starts_with('f') && s.len() > 1 => {
+                // Parse function keys like "f1", "f12"
+                if let Ok(n) = s[1..].parse::<u8>() {
+                    if (1..=24).contains(&n) {
+                        KeyCodeValue::F(n)
+                    } else {
+                        return Err(format!("function key out of range: {key_part}"));
+                    }
+                } else {
+                    return Err(format!("unknown key: {key_part}"));
+                }
+            }
             "[" => KeyCodeValue::Char('['),
             "]" => KeyCodeValue::Char(']'),
             "?" => KeyCodeValue::Char('?'),
@@ -199,6 +213,7 @@ impl fmt::Display for SingleKey {
             KeyCodeValue::PageUp => write!(f, "pageup"),
             KeyCodeValue::PageDown => write!(f, "pagedown"),
             KeyCodeValue::Space => write!(f, "space"),
+            KeyCodeValue::F(n) => write!(f, "f{n}"),
         }
     }
 }
@@ -447,5 +462,67 @@ mod tests {
     fn parse_errors() {
         assert!(SingleKey::parse("ctrl-alt-shift-xxx").is_err());
         assert!(SingleKey::parse("foobar-a").is_err());
+    }
+
+    #[test]
+    fn parse_function_keys() {
+        let k = SingleKey::parse("f1").unwrap();
+        assert_eq!(k.code, KeyCodeValue::F(1));
+        assert!(!k.ctrl && !k.alt && !k.shift);
+
+        let k = SingleKey::parse("F12").unwrap();
+        assert_eq!(k.code, KeyCodeValue::F(12));
+
+        let k = SingleKey::parse("ctrl-f5").unwrap();
+        assert_eq!(k.code, KeyCodeValue::F(5));
+        assert!(k.ctrl);
+
+        // F24 is valid (some keyboards have extended function keys)
+        let k = SingleKey::parse("f24").unwrap();
+        assert_eq!(k.code, KeyCodeValue::F(24));
+
+        // F0 and F25+ are invalid
+        assert!(SingleKey::parse("f0").is_err());
+        assert!(SingleKey::parse("f25").is_err());
+    }
+
+    #[test]
+    fn from_event_function_keys() {
+        let event = KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE);
+        let k = SingleKey::from_event(&event);
+        assert_eq!(k.code, KeyCodeValue::F(1));
+
+        let event = KeyEvent::new(KeyCode::F(12), KeyModifiers::CONTROL);
+        let k = SingleKey::from_event(&event);
+        assert_eq!(k.code, KeyCodeValue::F(12));
+        assert!(k.ctrl);
+    }
+
+    #[test]
+    fn display_function_keys() {
+        let k = SingleKey::parse("f1").unwrap();
+        assert_eq!(k.to_string(), "f1");
+
+        let k = SingleKey::parse("ctrl-f12").unwrap();
+        assert_eq!(k.to_string(), "ctrl-f12");
+    }
+
+    #[test]
+    fn function_key_round_trip() {
+        let cases = ["f1", "f12", "ctrl-f5", "alt-f10"];
+        for s in cases {
+            let k = KeyInput::parse(s).unwrap();
+            let display = k.to_string();
+            let k2 = KeyInput::parse(&display).unwrap();
+            assert_eq!(k, k2, "round-trip failed for {s}");
+        }
+    }
+
+    #[test]
+    fn from_event_function_key_matches_parsed() {
+        let event = KeyEvent::new(KeyCode::F(12), KeyModifiers::NONE);
+        let from_event = SingleKey::from_event(&event);
+        let parsed = SingleKey::parse("f12").unwrap();
+        assert_eq!(from_event, parsed);
     }
 }
