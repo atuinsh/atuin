@@ -8,6 +8,7 @@ All notable changes to this project will be documented in this file.
 
 - *(powershell)* Preserve `$LASTEXITCODE` ([#3120](https://github.com/atuinsh/atuin/issues/3120))
 - *(search)* Allow hyphen-prefixed query args like `---` ([#3129](https://github.com/atuinsh/atuin/issues/3129))
+- *(tui)* Space and F1-F24 keys not handled properly by new keybind system ([#3138](https://github.com/atuinsh/atuin/issues/3138))
 - *(ui)* Don't draw a leading space for command
 - *(ui)* Time column can take up to 9 cells
 - *(ui)* Align cursor with the expand column (usually the command)
@@ -70,6 +71,7 @@ All notable changes to this project will be documented in this file.
 - Update to rust 1.93 ([#3101](https://github.com/atuinsh/atuin/issues/3101))
 - Update changelog
 - Update agents.md ([#3126](https://github.com/atuinsh/atuin/issues/3126))
+- Update changelog
 - Update changelog
 
 
