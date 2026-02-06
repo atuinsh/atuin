@@ -61,18 +61,17 @@ pub struct KeymapSet {
 // ---------------------------------------------------------------------------
 
 /// Add the bindings that are common to all search-tab keymaps:
-/// ctrl-c, ctrl-g, ctrl-o, and tab (respecting `enter_accept`).
+/// ctrl-c, ctrl-g, ctrl-o, and tab.
 ///
 /// Note: `esc`/`ctrl-[` are NOT included here because their behavior differs
 /// between emacs (exit), vim-normal (exit), and vim-insert (enter normal mode).
-fn add_common_bindings(km: &mut Keymap, settings: &Settings) {
+fn add_common_bindings(km: &mut Keymap) {
     km.bind(key("ctrl-c"), Action::ReturnOriginal);
     km.bind(key("ctrl-g"), Action::ReturnOriginal);
     km.bind(key("ctrl-o"), Action::ToggleTab);
 
-    // Tab: accept and execute (enter_accept) or return selection
-    let accept = accept_action(settings);
-    km.bind(key("tab"), accept);
+    // Tab: always returns selection without executing (unlike Enter which respects enter_accept)
+    km.bind(key("tab"), Action::ReturnSelection);
 }
 
 /// Returns `Accept` or `ReturnSelection` based on the `enter_accept` setting.
@@ -103,7 +102,7 @@ fn accept_action(settings: &Settings) -> Action {
 #[allow(clippy::too_many_lines)]
 pub fn default_emacs_keymap(settings: &Settings) -> Keymap {
     let mut km = Keymap::new();
-    add_common_bindings(&mut km, settings);
+    add_common_bindings(&mut km);
 
     let accept = accept_action(settings);
 
@@ -122,7 +121,7 @@ pub fn default_emacs_keymap(settings: &Settings) -> Keymap {
         km.bind_conditional(
             key("right"),
             vec![
-                KeyRule::when(ConditionAtom::CursorAtEnd, accept.clone()),
+                KeyRule::when(ConditionAtom::CursorAtEnd, Action::ReturnSelection),
                 KeyRule::always(Action::CursorRight),
             ],
         );
@@ -136,7 +135,7 @@ pub fn default_emacs_keymap(settings: &Settings) -> Keymap {
         km.bind_conditional(
             key("left"),
             vec![
-                KeyRule::when(ConditionAtom::CursorAtStart, accept.clone()),
+                KeyRule::when(ConditionAtom::CursorAtStart, Action::ReturnSelection),
                 KeyRule::always(Action::CursorLeft),
             ],
         );
@@ -165,7 +164,7 @@ pub fn default_emacs_keymap(settings: &Settings) -> Keymap {
         km.bind_conditional(
             key("backspace"),
             vec![
-                KeyRule::when(ConditionAtom::CursorAtStart, accept.clone()),
+                KeyRule::when(ConditionAtom::CursorAtStart, Action::ReturnSelection),
                 KeyRule::always(Action::DeleteCharBefore),
             ],
         );
@@ -254,7 +253,7 @@ pub fn default_emacs_keymap(settings: &Settings) -> Keymap {
 /// Build the default vim-normal keymap.
 pub fn default_vim_normal_keymap(settings: &Settings) -> Keymap {
     let mut km = Keymap::new();
-    add_common_bindings(&mut km, settings);
+    add_common_bindings(&mut km);
 
     // esc / ctrl-[ → exit (vim-normal exits, unlike vim-insert)
     km.bind(key("esc"), Action::Exit);
@@ -331,16 +330,15 @@ pub fn default_vim_insert_keymap(settings: &Settings) -> Keymap {
 // ---------------------------------------------------------------------------
 
 /// Build the default inspector keymap (tab index 1).
-pub fn default_inspector_keymap(settings: &Settings) -> Keymap {
+pub fn default_inspector_keymap(_settings: &Settings) -> Keymap {
     let mut km = Keymap::new();
-    let accept = accept_action(settings);
 
     // Common bindings
     km.bind(key("ctrl-c"), Action::ReturnOriginal);
     km.bind(key("ctrl-g"), Action::ReturnOriginal);
     km.bind(key("esc"), Action::Exit);
     km.bind(key("ctrl-["), Action::Exit);
-    km.bind(key("tab"), accept);
+    km.bind(key("tab"), Action::ReturnSelection);
     km.bind(key("ctrl-o"), Action::ToggleTab);
 
     // Inspector-specific
@@ -450,12 +448,6 @@ impl KeymapSet {
             Self::defaults(settings)
         } else {
             // [keymap] present → ignore [keys], use standard defaults as base
-            if settings.keys.has_non_default_values() {
-                eprintln!(
-                    "[atuin] warning: [keys] section is ignored when [keymap] is present. \
-                     Consider migrating your [keys] settings to [keymap]."
-                );
-            }
             let mut base_settings = settings.clone();
             base_settings.keys = Keys::standard_defaults();
             let mut set = Self::defaults(&base_settings);
@@ -543,7 +535,7 @@ mod tests {
         let km = default_emacs_keymap(&settings);
         let ctx = make_ctx(0, 0, 0, 10);
         assert_eq!(km.resolve(&key("enter"), &ctx), Some(Action::Accept));
-        assert_eq!(km.resolve(&key("tab"), &ctx), Some(Action::Accept));
+        assert_eq!(km.resolve(&key("tab"), &ctx), Some(Action::ReturnSelection));
     }
 
     #[test]
