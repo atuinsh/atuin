@@ -140,6 +140,8 @@ Actions are specified as kebab-case strings.
 | `delete-word-after` | Delete the word after the cursor |
 | `delete-to-word-boundary` | Delete to the next word boundary (like `ctrl-w`) |
 | `clear-line` | Clear the entire input line |
+| `clear-to-start` | Clear the start of input line |
+| `clear-to-end` | Clear the end of input line |
 
 ### List navigation
 

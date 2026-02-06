@@ -192,6 +192,16 @@ impl Cursor {
         self.index = 0;
     }
 
+    pub fn clear_to_start(&mut self) {
+        self.source.replace_range(..self.index, "");
+        self.index = 0;
+    }
+
+    pub fn clear_to_end(&mut self) {
+        self.source.replace_range(self.index.., "");
+        self.index = self.source.len();
+    }
+
     pub fn end(&mut self) {
         self.index = self.source.len();
     }
