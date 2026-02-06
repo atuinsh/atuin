@@ -5,7 +5,7 @@ resolver = "2"
 exclude = ["ui/backend"]
 
 [workspace.package]
-version = "18.12.0-beta.2"
+version = "18.12.0-beta.3"
 authors = ["Ellie Huxtable <ellie@atuin.sh>"]
 rust-version = "1.93"
 license = "MIT"
