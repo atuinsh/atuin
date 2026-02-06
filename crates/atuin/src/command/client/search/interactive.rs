@@ -304,7 +304,9 @@ impl State {
         };
 
         // Convert KeyEvent to SingleKey
-        let single = SingleKey::from_event(input);
+        let Some(single) = SingleKey::from_event(input) else {
+            return InputAction::Continue;
+        };
 
         // --- Phase 1: Resolve (take pending key first, then immutable borrows) ---
 

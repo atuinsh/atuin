@@ -44,7 +44,7 @@ pub enum KeyInput {
 
 impl SingleKey {
     /// Convert a crossterm `KeyEvent` into a `SingleKey`.
-    pub fn from_event(event: &KeyEvent) -> Self {
+    pub fn from_event(event: &KeyEvent) -> Option<Self> {
         let ctrl = event.modifiers.contains(KeyModifiers::CONTROL);
         let alt = event.modifiers.contains(KeyModifiers::ALT);
         let shift = event.modifiers.contains(KeyModifiers::SHIFT);
@@ -57,13 +57,13 @@ impl SingleKey {
                 // we store the uppercase char directly and clear the shift flag
                 // since the case already encodes it.
                 if shift && !ctrl && !alt && !super_key && c.is_ascii_uppercase() {
-                    return SingleKey {
+                    return Some(SingleKey {
                         code: KeyCodeValue::Char(c),
                         ctrl: false,
                         alt: false,
                         shift: false,
                         super_key: false,
-                    };
+                    });
                 }
                 KeyCodeValue::Char(c)
             }
@@ -81,22 +81,20 @@ impl SingleKey {
             KeyCode::PageUp => KeyCodeValue::PageUp,
             KeyCode::PageDown => KeyCodeValue::PageDown,
             KeyCode::F(n) => KeyCodeValue::F(n),
-            // For keys we don't handle, store them as a null char
-            _ => KeyCodeValue::Char('\0'),
+            _ => return None,
         };
 
-        SingleKey {
+        Some(SingleKey {
             code,
             ctrl,
             alt,
-            // Clear shift for plain chars since case encodes it
             shift: if matches!(code, KeyCodeValue::Char(_)) {
                 false
             } else {
                 shift
             },
             super_key,
-        }
+        })
     }
 
     /// Parse a key string like `"ctrl-c"`, `"alt-f"`, `"enter"`, `"G"`.
@@ -358,13 +356,13 @@ mod tests {
     #[test]
     fn from_event_basic() {
         let event = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
-        let k = SingleKey::from_event(&event);
+        let k = SingleKey::from_event(&event).unwrap();
         assert_eq!(k.code, KeyCodeValue::Char('c'));
         assert!(k.ctrl);
         assert!(!k.alt);
 
         let event = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
-        let k = SingleKey::from_event(&event);
+        let k = SingleKey::from_event(&event).unwrap();
         assert_eq!(k.code, KeyCodeValue::Enter);
     }
 
@@ -372,7 +370,7 @@ mod tests {
     fn from_event_uppercase() {
         // Crossterm sends uppercase chars with SHIFT modifier
         let event = KeyEvent::new(KeyCode::Char('G'), KeyModifiers::SHIFT);
-        let k = SingleKey::from_event(&event);
+        let k = SingleKey::from_event(&event).unwrap();
         assert_eq!(k.code, KeyCodeValue::Char('G'));
         // shift flag should be cleared since the case encodes it
         assert!(!k.shift);
@@ -382,12 +380,12 @@ mod tests {
     fn from_event_matches_parsed() {
         // Verify that from_event and parse produce the same SingleKey
         let event = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
-        let from_event = SingleKey::from_event(&event);
+        let from_event = SingleKey::from_event(&event).unwrap();
         let parsed = SingleKey::parse("ctrl-c").unwrap();
         assert_eq!(from_event, parsed);
 
         let event = KeyEvent::new(KeyCode::Char('G'), KeyModifiers::SHIFT);
-        let from_event = SingleKey::from_event(&event);
+        let from_event = SingleKey::from_event(&event).unwrap();
         let parsed = SingleKey::parse("G").unwrap();
         assert_eq!(from_event, parsed);
     }
@@ -436,7 +434,7 @@ mod tests {
     #[test]
     fn from_event_super() {
         let event = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::SUPER);
-        let k = SingleKey::from_event(&event);
+        let k = SingleKey::from_event(&event).unwrap();
         assert_eq!(k.code, KeyCodeValue::Char('a'));
         assert!(k.super_key);
         assert!(!k.ctrl && !k.alt && !k.shift);
@@ -445,7 +443,7 @@ mod tests {
     #[test]
     fn from_event_super_matches_parsed() {
         let event = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::SUPER);
-        let from_event = SingleKey::from_event(&event);
+        let from_event = SingleKey::from_event(&event).unwrap();
         let parsed = SingleKey::parse("super-a").unwrap();
         assert_eq!(from_event, parsed);
     }
@@ -489,11 +487,11 @@ mod tests {
     #[test]
     fn from_event_function_keys() {
         let event = KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE);
-        let k = SingleKey::from_event(&event);
+        let k = SingleKey::from_event(&event).unwrap();
         assert_eq!(k.code, KeyCodeValue::F(1));
 
         let event = KeyEvent::new(KeyCode::F(12), KeyModifiers::CONTROL);
-        let k = SingleKey::from_event(&event);
+        let k = SingleKey::from_event(&event).unwrap();
         assert_eq!(k.code, KeyCodeValue::F(12));
         assert!(k.ctrl);
     }
@@ -521,7 +519,7 @@ mod tests {
     #[test]
     fn from_event_function_key_matches_parsed() {
         let event = KeyEvent::new(KeyCode::F(12), KeyModifiers::NONE);
-        let from_event = SingleKey::from_event(&event);
+        let from_event = SingleKey::from_event(&event).unwrap();
         let parsed = SingleKey::parse("f12").unwrap();
         assert_eq!(from_event, parsed);
     }
