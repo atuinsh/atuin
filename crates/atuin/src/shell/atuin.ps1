@@ -135,6 +135,7 @@ New-Module -Name Atuin -ScriptBlock {
 
         $previousOutputEncoding = [System.Console]::OutputEncoding
         $resultFile = New-TemporaryFile
+        $errorFile = New-TemporaryFile
 
         try {
             [System.Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -143,8 +144,13 @@ New-Module -Name Atuin -ScriptBlock {
             $env:ATUIN_SHELL = "powershell"
             $env:ATUIN_QUERY = Get-CommandLine
             $argString = "search -i --result-file ""$resultFile"" $ExtraArgs"
-            Start-Process -PassThru -NoNewWindow -FilePath atuin -ArgumentList $argString | Wait-Process
+            Start-Process -PassThru -NoNewWindow -FilePath atuin -ArgumentList $argString -RedirectStandardError $errorFile | Wait-Process
             $suggestion = (Get-Content -Raw $resultFile -Encoding UTF8 | Out-String).Trim()
+            $errorOutput = (Get-Content -Raw $errorFile -Encoding UTF8 | Out-String).Trim()
+
+            if ($errorOutput) {
+                Write-Host -ForegroundColor Red -Message "Atuin error:`n$errorOutput`n"
+            }
 
             # If no shell prompt offset is set, initialize it from the current prompt line count.
             if ($null -eq $env:ATUIN_POWERSHELL_PROMPT_OFFSET) {
@@ -182,6 +188,7 @@ New-Module -Name Atuin -ScriptBlock {
             $env:ATUIN_SHELL = $null
             $env:ATUIN_QUERY = $null
             Remove-Item $resultFile
+            Remove-Item $errorFile
         }
     }
 
