@@ -147,13 +147,18 @@ New-Module -Name Atuin -ScriptBlock {
             $process.StartInfo.Arguments = "search -i --result-file ""$resultFile"" $ExtraArgs"
             $process.StartInfo.UseShellExecute = $false
             $process.StartInfo.RedirectStandardError = $true
+            $process.StartInfo.StandardErrorEncoding = [System.Text.Encoding]::UTF8
             $process.StartInfo.EnvironmentVariables["ATUIN_SHELL"] = "powershell"
             $process.StartInfo.EnvironmentVariables["ATUIN_QUERY"] = Get-CommandLine
 
             try {
                 $process.Start() | Out-Null
+
+                # A single stream is redirected, so we can read it synchronously, but we have to start reading it
+                # before waiting for the process to exit, otherwise the buffer could fill up and cause a deadlock.
                 $errorOutput = $process.StandardError.ReadToEnd().Trim()
                 $process.WaitForExit()
+
                 $suggestion = (Get-Content -Raw $resultFile -Encoding UTF8 | Out-String).Trim()
             }
             catch {
