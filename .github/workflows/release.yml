@@ -149,7 +149,7 @@ jobs:
           dist build ${{ needs.plan.outputs.tag-flag }} --print=linkage --output-format=json ${{ matrix.dist_args }} > dist-manifest.json
           echo "dist ran successfully"
       - name: Attest
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v3
         with:
           subject-path: "target/distrib/*${{ join(matrix.targets, ', ') }}*"
       - id: cargo-dist
