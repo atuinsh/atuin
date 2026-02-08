@@ -16,10 +16,11 @@ use super::{
     history_list::{HistoryList, ListState},
 };
 use atuin_client::{
-    database::{Database, current_context},
+    database::{Context, Database, current_context},
     history::{History, HistoryId, HistoryStats, store::HistoryStore},
     settings::{
-        CursorStyle, ExitMode, KeymapMode, PreviewStrategy, SearchMode, Settings, UiColumn,
+        CursorStyle, ExitMode, FilterMode, KeymapMode, PreviewStrategy, SearchMode, Settings,
+        UiColumn,
     },
 };
 
@@ -59,6 +60,7 @@ pub enum InputAction {
     ReturnQuery,
     Continue,
     Redraw,
+    SwitchContext(Option<usize>),
 }
 
 #[derive(Clone)]
@@ -304,6 +306,7 @@ impl State {
             selected_index: self.results_state.selected(),
             results_len: self.results_len,
             original_input_empty: self.original_input_empty,
+            has_context: self.search.custom_context.is_some(),
         };
 
         // Convert KeyEvent to SingleKey
@@ -657,6 +660,10 @@ impl State {
                 self.engine = engines::engine(self.search_mode);
                 InputAction::Continue
             }
+            Action::SwitchContext => {
+                InputAction::SwitchContext(Some(self.results_state.selected()))
+            }
+            Action::ClearContext => InputAction::SwitchContext(None),
             Action::ToggleTab => {
                 self.tab_index = (self.tab_index + 1) % TAB_TITLES.len();
                 InputAction::Continue
@@ -916,6 +923,11 @@ impl State {
             Compactness::Ultracompact => {
                 if self.switched_search_mode {
                     format!("S{}>", self.search_mode.as_str().chars().next().unwrap())
+                } else if self.search.custom_context.is_some() {
+                    format!(
+                        "C{}>",
+                        self.search.filter_mode.as_str().chars().next().unwrap()
+                    )
                 } else {
                     format!(
                         "{}> ",
@@ -1166,6 +1178,8 @@ impl State {
     fn build_input(&self, style: StyleState, prefix_width: u16) -> Paragraph<'_> {
         let (pref, mode) = if self.switched_search_mode {
             (" SRCH:", self.search_mode.as_str())
+        } else if self.search.custom_context.is_some() {
+            (" CTX:", self.search.filter_mode.as_str())
         } else {
             ("", self.search.filter_mode.as_str())
         };
@@ -1372,7 +1386,7 @@ pub async fn history(
     let update_needed = tokio::spawn(async move { settings2.needs_update().await }).fuse();
     tokio::pin!(update_needed);
 
-    let context = current_context().await?;
+    let initial_context = current_context().await?;
 
     let history_count = db.history_count(false).await?;
     let search_mode = if settings.shell_up_key_binding {
@@ -1382,6 +1396,10 @@ pub async fn history(
     } else {
         settings.search_mode
     };
+    let default_filter_mode = settings
+        .filter_mode_shell_up_key_binding
+        .filter(|_| settings.shell_up_key_binding)
+        .unwrap_or_else(|| settings.default_filter_mode(initial_context.git_root.is_some()));
     let mut app = State {
         history_count,
         results_state: ListState::default(),
@@ -1397,11 +1415,9 @@ pub async fn history(
         keymaps: KeymapSet::from_settings(settings),
         search: SearchState {
             input,
-            filter_mode: settings
-                .filter_mode_shell_up_key_binding
-                .filter(|_| settings.shell_up_key_binding)
-                .unwrap_or_else(|| settings.default_filter_mode(context.git_root.is_some())),
-            context,
+            filter_mode: default_filter_mode,
+            context: initial_context.clone(),
+            custom_context: None,
         },
         engine: engines::engine(search_mode),
         results_len: 0,
@@ -1448,6 +1464,7 @@ pub async fn history(
         let initial_input = app.search.input.as_str().to_owned();
         let initial_filter_mode = app.search.filter_mode;
         let initial_search_mode = app.search_mode;
+        let initial_custom_context = app.search.custom_context.clone();
 
         let event_ready = tokio::task::spawn_blocking(|| event::poll(Duration::from_millis(250)));
 
@@ -1479,6 +1496,18 @@ pub async fn history(
 
                                 app.tab_index  = 0;
                             },
+                            InputAction::SwitchContext(index) => {
+                                if let Some(index) = index && let Some(entry) = results.get(index) {
+                                    app.search.custom_context = Some(entry.id.clone());
+                                    app.search.context = Context::from_history(entry);
+                                    app.search.filter_mode = FilterMode::Session;
+                                    app.search.input = Cursor::from(String::new());
+                                } else {
+                                    app.search.custom_context = None;
+                                    app.search.context = initial_context.clone();
+                                    app.search.filter_mode = default_filter_mode;
+                                }
+                            },
                             InputAction::Redraw => {
                                 terminal.clear()?;
                                 terminal.draw(|f| app.draw(f, &results, stats.clone(), inspecting.as_ref(), settings, theme))?;
@@ -1504,8 +1533,21 @@ pub async fn history(
         if initial_input != app.search.input.as_str()
             || initial_filter_mode != app.search.filter_mode
             || initial_search_mode != app.search_mode
+            || initial_custom_context != app.search.custom_context
         {
             results = app.query_results(&mut db, settings.smart_sort).await?;
+        }
+
+        // In custom context mode, when no filter is applied, highlight the entry which was used
+        // to enter the context when changing modes. This helps to find your way around.
+        if app.search.custom_context.is_some()
+            && app.search.input.as_str().is_empty()
+            && (initial_custom_context != app.search.custom_context
+                || initial_filter_mode != app.search.filter_mode)
+            && let Some(history_id) = app.search.custom_context.clone()
+            && let Some(pos) = results.iter().position(|entry| entry.id == history_id)
+        {
+            app.results_state.select(pos);
         }
 
         let inspecting_id = app.inspecting_state.clone().current;
@@ -1600,7 +1642,10 @@ pub async fn history(
             // * out of bounds -> usually implies no selected entry so we return the input
             Ok(app.search.input.into_inner())
         }
-        InputAction::Continue | InputAction::Redraw | InputAction::Delete(_) => {
+        InputAction::Continue
+        | InputAction::Redraw
+        | InputAction::Delete(_)
+        | InputAction::SwitchContext(_) => {
             unreachable!("should have been handled!")
         }
     }
@@ -1827,6 +1872,7 @@ mod tests {
                     host_id: String::new(),
                     git_root: None,
                 },
+                custom_context: None,
             },
             engine: engines::engine(SearchMode::Fuzzy),
             now: Box::new(OffsetDateTime::now_utc),
@@ -1881,6 +1927,7 @@ mod tests {
                     host_id: String::new(),
                     git_root: None,
                 },
+                custom_context: None,
             },
             engine: engines::engine(SearchMode::Fuzzy),
             now: Box::new(OffsetDateTime::now_utc),
@@ -1999,6 +2046,7 @@ mod tests {
                     host_id: String::new(),
                     git_root: None,
                 },
+                custom_context: None,
             },
             engine: engines::engine(SearchMode::Fuzzy),
             now: Box::new(OffsetDateTime::now_utc),
@@ -2057,6 +2105,7 @@ mod tests {
                     host_id: String::new(),
                     git_root: None,
                 },
+                custom_context: None,
             },
             engine: engines::engine(SearchMode::Fuzzy),
             now: Box::new(OffsetDateTime::now_utc),
@@ -2111,6 +2160,7 @@ mod tests {
                     host_id: String::new(),
                     git_root: None,
                 },
+                custom_context: None,
             },
             engine: engines::engine(SearchMode::Fuzzy),
             now: Box::new(OffsetDateTime::now_utc),
@@ -2161,6 +2211,7 @@ mod tests {
                     host_id: String::new(),
                     git_root: None,
                 },
+                custom_context: None,
             },
             engine: engines::engine(SearchMode::Fuzzy),
             now: Box::new(OffsetDateTime::now_utc),
@@ -2220,6 +2271,7 @@ mod tests {
                     host_id: String::new(),
                     git_root: None,
                 },
+                custom_context: None,
             },
             engine: engines::engine(SearchMode::Fuzzy),
             now: Box::new(OffsetDateTime::now_utc),
@@ -2280,6 +2332,7 @@ mod tests {
                     host_id: String::new(),
                     git_root: None,
                 },
+                custom_context: None,
             },
             engine: engines::engine(SearchMode::Fuzzy),
             now: Box::new(OffsetDateTime::now_utc),
@@ -2490,6 +2543,26 @@ mod tests {
     }
 
     #[test]
+    fn execute_switch_context() {
+        use crate::command::client::search::keybindings::Action;
+
+        let mut state = make_executor_state(100, 7);
+        let settings = Settings::utc();
+        let result = state.execute_action(&Action::SwitchContext, &settings);
+        assert!(matches!(result, super::InputAction::SwitchContext(Some(7))));
+    }
+
+    #[test]
+    fn execute_clear_context() {
+        use crate::command::client::search::keybindings::Action;
+
+        let mut state = make_executor_state(100, 7);
+        let settings = Settings::utc();
+        let result = state.execute_action(&Action::ClearContext, &settings);
+        assert!(matches!(result, super::InputAction::SwitchContext(None)));
+    }
+
+    #[test]
     fn execute_noop() {
         use crate::command::client::search::keybindings::Action;
 
@@ -2638,6 +2711,7 @@ mod tests {
                     host_id: String::new(),
                     git_root: None,
                 },
+                custom_context: None,
             },
             engine: engines::engine(SearchMode::Fuzzy),
             now: Box::new(OffsetDateTime::now_utc),

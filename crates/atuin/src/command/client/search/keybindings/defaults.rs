@@ -530,6 +530,7 @@ mod tests {
             selected_index: selected,
             results_len: len,
             original_input_empty: false,
+            has_context: false,
         }
     }
 
@@ -1250,6 +1251,7 @@ mod tests {
             selected_index: 0,
             results_len: 10,
             original_input_empty: true,
+            has_context: false,
         };
         assert_eq!(
             set.emacs.resolve(&key("esc"), &ctx_original_empty),
@@ -1265,6 +1267,7 @@ mod tests {
             selected_index: 0,
             results_len: 10,
             original_input_empty: false,
+            has_context: false,
         };
         assert_eq!(
             set.emacs.resolve(&key("esc"), &ctx_original_not_empty),

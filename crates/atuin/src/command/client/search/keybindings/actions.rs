@@ -52,6 +52,8 @@ pub enum Action {
     Redraw,
     CycleFilterMode,
     CycleSearchMode,
+    SwitchContext,
+    ClearContext,
     ToggleTab,
 
     // Mode changes
@@ -129,6 +131,8 @@ impl Action {
             "redraw" => Ok(Action::Redraw),
             "cycle-filter-mode" => Ok(Action::CycleFilterMode),
             "cycle-search-mode" => Ok(Action::CycleSearchMode),
+            "switch-context" => Ok(Action::SwitchContext),
+            "clear-context" => Ok(Action::ClearContext),
             "toggle-tab" => Ok(Action::ToggleTab),
 
             "vim-enter-normal" => Ok(Action::VimEnterNormal),
@@ -193,6 +197,8 @@ impl Action {
             Action::Redraw => "redraw".to_string(),
             Action::CycleFilterMode => "cycle-filter-mode".to_string(),
             Action::CycleSearchMode => "cycle-search-mode".to_string(),
+            Action::SwitchContext => "switch-context".to_string(),
+            Action::ClearContext => "clear-context".to_string(),
             Action::ToggleTab => "toggle-tab".to_string(),
 
             Action::VimEnterNormal => "vim-enter-normal".to_string(),
