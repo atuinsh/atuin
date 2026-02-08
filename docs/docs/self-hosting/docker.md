@@ -13,7 +13,7 @@ There is a supplied docker image to make deploying a server as a container easie
 CONFIG="$HOME/.config/atuin"
 mkdir "$CONFIG"
 chown 1000:1000 "$CONFIG"
-docker run -d -v "$CONFIG:/config" ghcr.io/atuinsh/atuin:<LATEST TAGGED RELEASE> server start
+docker run -d -v "$CONFIG:/config" ghcr.io/atuinsh/atuin:<LATEST TAGGED RELEASE> start
 ```
 
 ## Docker Compose
