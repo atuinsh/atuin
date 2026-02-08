@@ -36,7 +36,7 @@ services:
   atuin:
     restart: always
     image: ghcr.io/atuinsh/atuin:<LATEST TAGGED RELEASE>
-    command: server start
+    command: start
     volumes:
       - "./config:/config"
     ports:
@@ -49,7 +49,7 @@ services:
     depends_on:
       - db
   db:
-    image: postgres:14
+    image: postgres:18
     restart: unless-stopped
     volumes: # Don't remove permanent storage for index database files!
       - "./database:/var/lib/postgresql/data/"
