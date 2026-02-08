@@ -13,7 +13,7 @@ There is a supplied docker image to make deploying a server as a container easie
 CONFIG="$HOME/.config/atuin"
 mkdir "$CONFIG"
 chown 1000:1000 "$CONFIG"
-docker run -d -v "$CONFIG:/config" ghcr.io/atuinsh/atuin:<LATEST TAGGED RELEASE> server start
+docker run -d -v "$CONFIG:/config" ghcr.io/atuinsh/atuin:<LATEST TAGGED RELEASE> start
 ```
 
 ## Docker Compose
@@ -36,7 +36,7 @@ services:
   atuin:
     restart: always
     image: ghcr.io/atuinsh/atuin:<LATEST TAGGED RELEASE>
-    command: server start
+    command: start
     volumes:
       - "./config:/config"
     ports:
@@ -49,7 +49,7 @@ services:
     depends_on:
       - db
   db:
-    image: postgres:14
+    image: postgres:18
     restart: unless-stopped
     volumes: # Don't remove permanent storage for index database files!
       - "./database:/var/lib/postgresql/data/"
