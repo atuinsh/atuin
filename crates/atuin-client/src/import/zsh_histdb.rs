@@ -84,7 +84,7 @@ async fn hist_from_db_conn(pool: Pool<sqlx::Sqlite>) -> Result<Vec<HistDbEntry>>
         FROM history
         LEFT JOIN commands ON history.command_id = commands.id
         LEFT JOIN places ON history.place_id = places.id
-        ORDER BY history.start_time
+        ORDER BY history.id
     "#;
     let histdb_vec: Vec<HistDbEntry> = sqlx::query_as::<_, HistDbEntry>(query)
         .fetch_all(&pool)
