@@ -83,6 +83,10 @@ I wanted to. And I **really** don't want to.
 
 Atuin has a community forum, please ask here for help and support: <https://forum.atuin.sh/>
 
+### IRC
+
+We're also available via #atuin on libera.chat
+
 ### Discord
 
 Atuin also has a community Discord, available [here](https://discord.gg/jR3tfchVvW)
