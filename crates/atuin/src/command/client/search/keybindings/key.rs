@@ -70,6 +70,16 @@ impl SingleKey {
             KeyCode::Enter => KeyCodeValue::Enter,
             KeyCode::Esc => KeyCodeValue::Esc,
             KeyCode::Tab => KeyCodeValue::Tab,
+            // BackTab is sent by many terminals for Shift+Tab
+            KeyCode::BackTab => {
+                return Some(SingleKey {
+                    code: KeyCodeValue::Tab,
+                    ctrl,
+                    alt,
+                    shift: true,
+                    super_key,
+                });
+            }
             KeyCode::Backspace => KeyCodeValue::Backspace,
             KeyCode::Delete => KeyCodeValue::Delete,
             KeyCode::Up => KeyCodeValue::Up,
@@ -522,5 +532,33 @@ mod tests {
         let from_event = SingleKey::from_event(&event).unwrap();
         let parsed = SingleKey::parse("f12").unwrap();
         assert_eq!(from_event, parsed);
+    }
+
+    #[test]
+    fn from_event_backtab_becomes_shift_tab() {
+        // Many terminals send BackTab for Shift+Tab
+        let event = KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE);
+        let k = SingleKey::from_event(&event).unwrap();
+        assert_eq!(k.code, KeyCodeValue::Tab);
+        assert!(k.shift);
+        assert!(!k.ctrl && !k.alt);
+    }
+
+    #[test]
+    fn from_event_backtab_matches_parsed_shift_tab() {
+        let event = KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE);
+        let from_event = SingleKey::from_event(&event).unwrap();
+        let parsed = SingleKey::parse("shift-tab").unwrap();
+        assert_eq!(from_event, parsed);
+    }
+
+    #[test]
+    fn from_event_backtab_with_ctrl() {
+        // BackTab with ctrl modifier
+        let event = KeyEvent::new(KeyCode::BackTab, KeyModifiers::CONTROL);
+        let k = SingleKey::from_event(&event).unwrap();
+        assert_eq!(k.code, KeyCodeValue::Tab);
+        assert!(k.shift);
+        assert!(k.ctrl);
     }
 }
