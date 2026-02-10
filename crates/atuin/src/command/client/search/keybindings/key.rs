@@ -1,6 +1,6 @@
 use std::fmt;
 
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MediaKeyCode};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// A single key press with modifiers (e.g. `ctrl-c`, `alt-f`, `enter`).
@@ -34,6 +34,7 @@ pub enum KeyCodeValue {
     PageDown,
     Space,
     F(u8),
+    Media(MediaKeyCode),
 }
 
 /// A key input that may be a single key or a multi-key sequence (e.g. `g g`).
@@ -93,6 +94,7 @@ impl SingleKey {
             KeyCode::PageUp => KeyCodeValue::PageUp,
             KeyCode::PageDown => KeyCodeValue::PageDown,
             KeyCode::F(n) => KeyCodeValue::F(n),
+            KeyCode::Media(m) => KeyCodeValue::Media(m),
             _ => return None,
         };
 
@@ -163,6 +165,22 @@ impl SingleKey {
             "]" => KeyCodeValue::Char(']'),
             "?" => KeyCodeValue::Char('?'),
             "/" => KeyCodeValue::Char('/'),
+            "$" => KeyCodeValue::Char('$'),
+            // Media keys
+            "play" | "media-play" => KeyCodeValue::Media(MediaKeyCode::Play),
+            "pause" | "media-pause" => KeyCodeValue::Media(MediaKeyCode::Pause),
+            "playpause" | "media-playpause" => KeyCodeValue::Media(MediaKeyCode::PlayPause),
+            "stop" | "media-stop" => KeyCodeValue::Media(MediaKeyCode::Stop),
+            "fastforward" | "media-fastforward" => KeyCodeValue::Media(MediaKeyCode::FastForward),
+            "rewind" | "media-rewind" => KeyCodeValue::Media(MediaKeyCode::Rewind),
+            "tracknext" | "media-next" => KeyCodeValue::Media(MediaKeyCode::TrackNext),
+            "trackprevious" | "media-previous" => {
+                KeyCodeValue::Media(MediaKeyCode::TrackPrevious)
+            }
+            "record" | "media-record" => KeyCodeValue::Media(MediaKeyCode::Record),
+            "lowervolume" | "volume-down" => KeyCodeValue::Media(MediaKeyCode::LowerVolume),
+            "raisevolume" | "volume-up" => KeyCodeValue::Media(MediaKeyCode::RaiseVolume),
+            "mutevolume" | "mute" => KeyCodeValue::Media(MediaKeyCode::MuteVolume),
             _ => {
                 let chars: Vec<char> = key_part.chars().collect();
                 if chars.len() == 1 {
@@ -226,6 +244,21 @@ impl fmt::Display for SingleKey {
             KeyCodeValue::PageDown => write!(f, "pagedown"),
             KeyCodeValue::Space => write!(f, "space"),
             KeyCodeValue::F(n) => write!(f, "f{n}"),
+            KeyCodeValue::Media(m) => match m {
+                MediaKeyCode::Play => write!(f, "play"),
+                MediaKeyCode::Pause => write!(f, "media-pause"),
+                MediaKeyCode::PlayPause => write!(f, "playpause"),
+                MediaKeyCode::Stop => write!(f, "stop"),
+                MediaKeyCode::FastForward => write!(f, "fastforward"),
+                MediaKeyCode::Rewind => write!(f, "rewind"),
+                MediaKeyCode::TrackNext => write!(f, "tracknext"),
+                MediaKeyCode::TrackPrevious => write!(f, "trackprevious"),
+                MediaKeyCode::Record => write!(f, "record"),
+                MediaKeyCode::LowerVolume => write!(f, "lowervolume"),
+                MediaKeyCode::RaiseVolume => write!(f, "raisevolume"),
+                MediaKeyCode::MuteVolume => write!(f, "mutevolume"),
+                MediaKeyCode::Reverse => write!(f, "reverse"),
+            },
         }
     }
 }

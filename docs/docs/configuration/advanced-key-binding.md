@@ -69,8 +69,37 @@ An uppercase letter represents itself without needing a `shift` modifier. For ex
 Some special characters are written out directly:
 
 ```
-"?", "/", "[", "]"
+"?", "/", "[", "]", "$"
 ```
+
+### Shifted and punctuation keys
+
+When you press a key like `Shift+1`, your terminal sends the resulting character (`!`) rather than "shift-1". To bind shifted punctuation keys, use the character directly:
+
+```toml
+[keymap.emacs]
+"!" = "some-action"    # Binds to Shift+1
+"@" = "some-action"    # Binds to Shift+2
+"#" = "some-action"    # Binds to Shift+3
+"$" = "cursor-end"     # Binds to Shift+4 (vim $ motion)
+```
+
+Any single character can be used as a key binding.
+
+!!! note
+    The `shift` modifier is still valid for non-character keys like `"shift-tab"` or `"shift-up"`.
+
+### Media keys
+
+Media keys are supported on terminals that implement the kitty keyboard protocol with `DISAMBIGUATE_ESCAPE_CODES` enabled:
+
+```
+"play", "media-pause", "playpause", "stop"
+"fastforward", "rewind", "tracknext", "trackprevious"
+"record", "lowervolume", "raisevolume", "mutevolume"
+```
+
+Alternative aliases are also accepted: `"media-play"`, `"media-stop"`, `"media-next"`, `"media-previous"`, `"volume-up"`, `"volume-down"`, `"mute"`.
 
 ### Multi-key sequences
 
@@ -127,6 +156,7 @@ Actions are specified as kebab-case strings.
 | `cursor-right` | Move cursor one character right |
 | `cursor-word-left` | Move cursor one word left |
 | `cursor-word-right` | Move cursor one word right |
+| `cursor-word-end` | Move cursor to end of current/next word (vim `e` motion) |
 | `cursor-start` | Move cursor to start of line |
 | `cursor-end` | Move cursor to end of line |
 
@@ -191,6 +221,7 @@ The difference between `accept` and `return-selection`: `accept` runs the comman
 | `vim-enter-insert-at-start` | Move to start of line and enter vim insert mode (like vim `I`) |
 | `vim-enter-insert-at-end` | Move to end of line and enter vim insert mode (like vim `A`) |
 | `vim-search-insert` | Clear the search input and enter vim insert mode (like vim `?` or `/`) |
+| `vim-change-to-end` | Delete to end of line and enter vim insert mode (like vim `C`) |
 | `enter-prefix-mode` | Enter prefix mode (waits for one more key, e.g. `d` for delete) |
 
 ### Inspector

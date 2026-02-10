@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use atuin_client::settings::{KeyBindingConfig, Settings};
+use tracing::warn;
 
 use super::actions::Action;
 use super::conditions::{ConditionAtom, ConditionExpr};
@@ -272,6 +273,19 @@ pub fn default_vim_normal_keymap(settings: &Settings) -> Keymap {
     km.bind(key("h"), Action::CursorLeft);
     km.bind(key("l"), Action::CursorRight);
 
+    // --- Vim cursor movement ---
+    km.bind(key("0"), Action::CursorStart);
+    km.bind(key("$"), Action::CursorEnd);
+    km.bind(key("w"), Action::CursorWordRight);
+    km.bind(key("b"), Action::CursorWordLeft);
+    km.bind(key("e"), Action::CursorWordEnd);
+
+    // --- Vim editing ---
+    km.bind(key("x"), Action::DeleteCharAfter);
+    km.bind(key("d d"), Action::ClearLine);
+    km.bind(key("D"), Action::ClearToEnd);
+    km.bind(key("C"), Action::VimChangeToEnd);
+
     // --- Mode switching ---
     km.bind(key("?"), Action::VimSearchInsert);
     km.bind(key("/"), Action::VimSearchInsert);
@@ -334,10 +348,17 @@ pub fn default_vim_insert_keymap(settings: &Settings) -> Keymap {
 // ---------------------------------------------------------------------------
 
 /// Build the default inspector keymap (tab index 1).
-pub fn default_inspector_keymap(_settings: &Settings) -> Keymap {
+///
+/// The inspector shows details about the selected history item and has no
+/// text input, so we build a minimal keymap with only inspector-relevant
+/// bindings. We respect the user's keymap_mode to provide vim-style j/k
+/// navigation for vim users.
+pub fn default_inspector_keymap(settings: &Settings) -> Keymap {
+    use atuin_client::settings::KeymapMode;
+
     let mut km = Keymap::new();
 
-    // Common bindings
+    // Common bindings (same as search tab)
     km.bind(key("ctrl-c"), Action::ReturnOriginal);
     km.bind(key("ctrl-g"), Action::ReturnOriginal);
     km.bind(key("esc"), Action::Exit);
@@ -345,10 +366,31 @@ pub fn default_inspector_keymap(_settings: &Settings) -> Keymap {
     km.bind(key("tab"), Action::ReturnSelection);
     km.bind(key("ctrl-o"), Action::ToggleTab);
 
-    // Inspector-specific
+    // Accept behavior respects enter_accept setting
+    let accept = if settings.enter_accept {
+        Action::Accept
+    } else {
+        Action::ReturnSelection
+    };
+    km.bind(key("enter"), accept);
+
+    // Inspector-specific: delete history entry
     km.bind(key("ctrl-d"), Action::Delete);
+
+    // Inspector navigation
     km.bind(key("up"), Action::InspectPrevious);
     km.bind(key("down"), Action::InspectNext);
+    km.bind(key("pageup"), Action::InspectPrevious);
+    km.bind(key("pagedown"), Action::InspectNext);
+
+    // For vim users, add j/k navigation
+    if matches!(
+        settings.keymap_mode,
+        KeymapMode::VimNormal | KeymapMode::VimInsert
+    ) {
+        km.bind(key("j"), Action::InspectNext);
+        km.bind(key("k"), Action::InspectPrevious);
+    }
 
     km
 }
@@ -409,7 +451,7 @@ fn apply_config_to_keymap(keymap: &mut Keymap, overrides: &HashMap<String, KeyBi
         let key = match KeyInput::parse(key_str) {
             Ok(k) => k,
             Err(e) => {
-                eprintln!("[atuin] warning: invalid key in keymap config: {key_str:?}: {e}");
+                warn!("invalid key in keymap config: {key_str:?}: {e}");
                 continue;
             }
         };
@@ -418,7 +460,7 @@ fn apply_config_to_keymap(keymap: &mut Keymap, overrides: &HashMap<String, KeyBi
                 keymap.bindings.insert(key, binding);
             }
             Err(e) => {
-                eprintln!("[atuin] warning: invalid binding for {key_str:?} in keymap config: {e}");
+                warn!("invalid binding for {key_str:?} in keymap config: {e}");
             }
         }
     }
