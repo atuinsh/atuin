@@ -16,3 +16,6 @@ jobs:
       uses: ludeeus/action-shellcheck@master
       env:
         SHELLCHECK_OPTS: "-e SC2148"
+      ignore:
+        # can't check zsh with shellcheck
+        - atuin.plugin.zsh
