@@ -94,12 +94,10 @@ Any single character can be used as a key binding.
 Media keys are supported on terminals that implement the kitty keyboard protocol with `DISAMBIGUATE_ESCAPE_CODES` enabled:
 
 ```
-"play", "media-pause", "playpause", "stop"
+"play", "pause", "playpause", "stop"
 "fastforward", "rewind", "tracknext", "trackprevious"
-"record", "lowervolume", "raisevolume", "mutevolume"
+"record", "lowervolume", "raisevolume", "mutevolume", "mute"
 ```
-
-Alternative aliases are also accepted: `"media-play"`, `"media-stop"`, `"media-next"`, `"media-previous"`, `"volume-up"`, `"volume-down"`, `"mute"`.
 
 ### Multi-key sequences
 

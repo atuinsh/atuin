@@ -166,20 +166,18 @@ impl SingleKey {
             "?" => KeyCodeValue::Char('?'),
             "/" => KeyCodeValue::Char('/'),
             "$" => KeyCodeValue::Char('$'),
-            // Media keys
-            "play" | "media-play" => KeyCodeValue::Media(MediaKeyCode::Play),
-            "pause" | "media-pause" => KeyCodeValue::Media(MediaKeyCode::Pause),
-            "playpause" | "media-playpause" => KeyCodeValue::Media(MediaKeyCode::PlayPause),
-            "stop" | "media-stop" => KeyCodeValue::Media(MediaKeyCode::Stop),
-            "fastforward" | "media-fastforward" => KeyCodeValue::Media(MediaKeyCode::FastForward),
-            "rewind" | "media-rewind" => KeyCodeValue::Media(MediaKeyCode::Rewind),
-            "tracknext" | "media-next" => KeyCodeValue::Media(MediaKeyCode::TrackNext),
-            "trackprevious" | "media-previous" => {
-                KeyCodeValue::Media(MediaKeyCode::TrackPrevious)
-            }
-            "record" | "media-record" => KeyCodeValue::Media(MediaKeyCode::Record),
-            "lowervolume" | "volume-down" => KeyCodeValue::Media(MediaKeyCode::LowerVolume),
-            "raisevolume" | "volume-up" => KeyCodeValue::Media(MediaKeyCode::RaiseVolume),
+            // Media keys (no dashes - the parser splits on dash for modifiers)
+            "play" => KeyCodeValue::Media(MediaKeyCode::Play),
+            "pause" => KeyCodeValue::Media(MediaKeyCode::Pause),
+            "playpause" => KeyCodeValue::Media(MediaKeyCode::PlayPause),
+            "stop" => KeyCodeValue::Media(MediaKeyCode::Stop),
+            "fastforward" => KeyCodeValue::Media(MediaKeyCode::FastForward),
+            "rewind" => KeyCodeValue::Media(MediaKeyCode::Rewind),
+            "tracknext" => KeyCodeValue::Media(MediaKeyCode::TrackNext),
+            "trackprevious" => KeyCodeValue::Media(MediaKeyCode::TrackPrevious),
+            "record" => KeyCodeValue::Media(MediaKeyCode::Record),
+            "lowervolume" => KeyCodeValue::Media(MediaKeyCode::LowerVolume),
+            "raisevolume" => KeyCodeValue::Media(MediaKeyCode::RaiseVolume),
             "mutevolume" | "mute" => KeyCodeValue::Media(MediaKeyCode::MuteVolume),
             _ => {
                 let chars: Vec<char> = key_part.chars().collect();
