@@ -23,6 +23,7 @@ pub enum KeyCodeValue {
     Tab,
     Backspace,
     Delete,
+    Insert,
     Up,
     Down,
     Left,
@@ -82,6 +83,7 @@ impl SingleKey {
             }
             KeyCode::Backspace => KeyCodeValue::Backspace,
             KeyCode::Delete => KeyCodeValue::Delete,
+            KeyCode::Insert => KeyCodeValue::Insert,
             KeyCode::Up => KeyCodeValue::Up,
             KeyCode::Down => KeyCodeValue::Down,
             KeyCode::Left => KeyCodeValue::Left,
@@ -135,6 +137,7 @@ impl SingleKey {
             "tab" => KeyCodeValue::Tab,
             "backspace" => KeyCodeValue::Backspace,
             "delete" | "del" => KeyCodeValue::Delete,
+            "insert" | "ins" => KeyCodeValue::Insert,
             "up" => KeyCodeValue::Up,
             "down" => KeyCodeValue::Down,
             "left" => KeyCodeValue::Left,
@@ -212,6 +215,7 @@ impl fmt::Display for SingleKey {
             KeyCodeValue::Tab => write!(f, "tab"),
             KeyCodeValue::Backspace => write!(f, "backspace"),
             KeyCodeValue::Delete => write!(f, "delete"),
+            KeyCodeValue::Insert => write!(f, "insert"),
             KeyCodeValue::Up => write!(f, "up"),
             KeyCodeValue::Down => write!(f, "down"),
             KeyCodeValue::Left => write!(f, "left"),
@@ -560,5 +564,35 @@ mod tests {
         assert_eq!(k.code, KeyCodeValue::Tab);
         assert!(k.shift);
         assert!(k.ctrl);
+    }
+
+    #[test]
+    fn parse_insert_key() {
+        let k = SingleKey::parse("insert").unwrap();
+        assert_eq!(k.code, KeyCodeValue::Insert);
+        assert!(!k.ctrl && !k.alt && !k.shift);
+
+        let k = SingleKey::parse("ins").unwrap();
+        assert_eq!(k.code, KeyCodeValue::Insert);
+
+        let k = SingleKey::parse("ctrl-insert").unwrap();
+        assert_eq!(k.code, KeyCodeValue::Insert);
+        assert!(k.ctrl);
+    }
+
+    #[test]
+    fn from_event_insert_key() {
+        let event = KeyEvent::new(KeyCode::Insert, KeyModifiers::NONE);
+        let k = SingleKey::from_event(&event).unwrap();
+        assert_eq!(k.code, KeyCodeValue::Insert);
+    }
+
+    #[test]
+    fn insert_key_round_trip() {
+        let k = KeyInput::parse("insert").unwrap();
+        let display = k.to_string();
+        assert_eq!(display, "insert");
+        let k2 = KeyInput::parse(&display).unwrap();
+        assert_eq!(k, k2);
     }
 }
