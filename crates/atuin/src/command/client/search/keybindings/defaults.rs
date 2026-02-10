@@ -405,6 +405,13 @@ pub fn default_prefix_keymap() -> Keymap {
 
     km.bind(key("d"), Action::Delete);
     km.bind(key("a"), Action::CursorStart);
+    km.bind_conditional(
+        key("c"),
+        vec![
+            KeyRule::when(ConditionAtom::HasContext, Action::ClearContext),
+            KeyRule::always(Action::SwitchContext),
+        ],
+    );
 
     km
 }
