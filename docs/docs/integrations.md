@@ -1,5 +1,7 @@
 # Integrations
 
+This page covers integrations with shell plugins and tools. For information about how Atuin's shell hooks work and troubleshooting embedded terminals (IDEs, AI coding assistants, etc.), see [Shell Integration and Interoperability](guide/shell-integration.md).
+
 ## zsh-autosuggestions
 
 Atuin automatically adds itself as an [autosuggest strategy](https://github.com/zsh-users/zsh-autosuggestions#suggestion-strategy).
@@ -31,3 +33,9 @@ If you would not like Atuin's auto-complete source, please add the following set
 ble/util/import/eval-after-load core-complete '
   ble/array#remove _ble_complete_auto_source atuin-history'
 ```
+
+## Embedded Terminals and IDEs
+
+Atuin may not work out of the box in embedded terminals found in IDEs (PyCharm, VS Code, etc.) or AI coding assistants (Claude Code, etc.). This is because these tools often start non-interactive shells that don't source your shell configuration.
+
+For solutions and workarounds, see [Shell Integration and Interoperability](guide/shell-integration.md).

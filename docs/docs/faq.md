@@ -1,5 +1,28 @@
 # FAQ
 
+## Why isn't Atuin recording commands in my IDE's terminal?
+
+IDEs like PyCharm, VS Code, and others often start non-interactive shells that don't source your shell configuration. This means Atuin's hooks never get installed.
+
+To fix this, configure your IDE to start an interactive shell (e.g., `/bin/bash -i` instead of `/bin/bash`).
+
+See [Shell Integration and Interoperability](guide/shell-integration.md) for detailed instructions.
+
+## How do I exclude certain commands from my history?
+
+Use the `history_filter` option in `~/.config/atuin/config.toml`:
+
+```toml
+history_filter = [
+    "^secret-cmd",
+    "^ls$",
+]
+```
+
+You can also exclude commands by directory with `cwd_filter`, or prefix individual commands with a space.
+
+See [Shell Integration and Interoperability](guide/shell-integration.md#excluding-commands-from-history) for more options.
+
 ## How do I remove the default up arrow binding?
 
 Open your shell config file, find the line containing `atuin init`.
