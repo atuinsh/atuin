@@ -1502,6 +1502,7 @@ pub async fn history(
                                     app.search.context = Context::from_history(entry);
                                     app.search.filter_mode = FilterMode::Session;
                                     app.search.input = Cursor::from(String::new());
+                                    app.results_state = ListState::default();
                                 } else {
                                     app.search.custom_context = None;
                                     app.search.context = initial_context.clone();
