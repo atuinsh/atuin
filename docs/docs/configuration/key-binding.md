@@ -238,6 +238,15 @@ If [vim is enabled in the config](config.md#keymap_mode), the following keybindi
 | j        | Normal | Selects the previous item on the list      |
 | h        | Normal | Move cursor left                           |
 | l        | Normal | Move cursor right                          |
+| 0        | Normal | Move cursor to start of line               |
+| $        | Normal | Move cursor to end of line                 |
+| w        | Normal | Move cursor to next word                   |
+| b        | Normal | Move cursor to previous word               |
+| e        | Normal | Move cursor to end of current/next word    |
+| x        | Normal | Delete character under cursor              |
+| dd       | Normal | Clear the entire line                      |
+| D        | Normal | Delete to end of line                      |
+| C        | Normal | Delete to end of line and enter insert     |
 | i        | Normal | Enters insert mode                         |
 | I        | Normal | Move to start of line and enter insert     |
 | a        | Normal | Move right and enter insert mode           |
@@ -253,17 +262,22 @@ If [vim is enabled in the config](config.md#keymap_mode), the following keybindi
 | L        | Normal | Jump to bottom of visible screen           |
 | ? or /   | Normal | Clear input and enter insert mode          |
 | 1-9      | Normal | Select item by number                      |
+| enter    | Normal | Execute selected item (respects enter_accept) |
 | Esc      | Insert | Enters normal mode                         |
 
 
 ### Inspector
 Open the inspector with ctrl + o
 
-| Shortcut | Action                                        |
-| -------- | --------------------------------------------- |
-| Esc      | Close the inspector, returning to the shell   |
-| ctrl + o | Close the inspector, returning to search view |
-| ctrl + d | Delete the inspected item from the history    |
-| ↑        | Inspect the previous item in the history      |
-| ↓        | Inspect the next item in the history          |
-| tab      | Select current item and edit                  |
+| Shortcut  | Action                                        |
+| --------- | --------------------------------------------- |
+| Esc       | Close the inspector, returning to the shell   |
+| ctrl + o  | Close the inspector, returning to search view |
+| ctrl + d  | Delete the inspected item from the history    |
+| ↑         | Inspect the previous item in the history      |
+| ↓         | Inspect the next item in the history          |
+| page up   | Inspect the previous item in the history      |
+| page down | Inspect the next item in the history          |
+| j / k     | Navigate items (when vim mode is enabled)     |
+| enter     | Execute selected item (respects enter_accept) |
+| tab       | Select current item and edit                  |
