@@ -105,7 +105,7 @@ function _atuin_search
                 set ATUIN_H (cat "$result_file" | string collect)
             end
 
-            rm -rf "$tmpdir"
+            command rm -rf "$tmpdir"
         end
     else
         # In fish 3.4 and above we can use `"$(some command)"` to keep multiple lines separate;

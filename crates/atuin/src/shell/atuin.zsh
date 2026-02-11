@@ -74,7 +74,7 @@ __atuin_tmux_popup_check() {
 # Use global variable to fix scope issues with traps
 __atuin_popup_tmpdir=""
 __atuin_tmux_popup_cleanup() {
-    [[ -n "$__atuin_popup_tmpdir" && -d "$__atuin_popup_tmpdir" ]] && rm -rf "$__atuin_popup_tmpdir"
+    [[ -n "$__atuin_popup_tmpdir" && -d "$__atuin_popup_tmpdir" ]] && command rm -rf "$__atuin_popup_tmpdir"
     __atuin_popup_tmpdir=""
 }
 
