@@ -172,13 +172,10 @@ impl Cursor {
         let current = chars[char_idx];
 
         // Check if we're at a word boundary (end of current word or on whitespace)
-        let at_word_boundary = current.is_whitespace()
-            || char_idx + 1 >= chars.len()
-            || {
-                let next = chars[char_idx + 1];
-                next.is_whitespace()
-                    || (word_chars.contains(current) != word_chars.contains(next))
-            };
+        let at_word_boundary = current.is_whitespace() || char_idx + 1 >= chars.len() || {
+            let next = chars[char_idx + 1];
+            next.is_whitespace() || (word_chars.contains(current) != word_chars.contains(next))
+        };
 
         // If at word boundary, advance past it and skip whitespace to find next word
         if at_word_boundary {
