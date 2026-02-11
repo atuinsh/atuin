@@ -351,7 +351,7 @@ pub fn default_vim_insert_keymap(settings: &Settings) -> Keymap {
 ///
 /// The inspector shows details about the selected history item and has no
 /// text input, so we build a minimal keymap with only inspector-relevant
-/// bindings. We respect the user's keymap_mode to provide vim-style j/k
+/// bindings. We respect the user's `keymap_mode` to provide vim-style j/k
 /// navigation for vim users.
 pub fn default_inspector_keymap(settings: &Settings) -> Keymap {
     use atuin_client::settings::KeymapMode;
