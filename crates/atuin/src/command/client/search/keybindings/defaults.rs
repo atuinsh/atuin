@@ -487,6 +487,7 @@ mod tests {
             input_byte_len: width,
             selected_index: selected,
             results_len: len,
+            original_input_empty: false,
         }
     }
 
@@ -1174,5 +1175,59 @@ mod tests {
         let mut modified = Keys::standard_defaults();
         modified.prefix = "x".to_string();
         assert!(modified.has_non_default_values());
+    }
+
+    #[test]
+    fn original_input_empty_condition_in_config() {
+        use atuin_client::settings::{KeyBindingConfig, KeyRuleConfig};
+        use std::collections::HashMap;
+
+        let mut settings = default_settings();
+        // Configure esc to: if original-input-empty -> return-query, else return-original
+        settings.keymap.emacs = HashMap::from([(
+            "esc".to_string(),
+            KeyBindingConfig::Rules(vec![
+                KeyRuleConfig {
+                    when: Some("original-input-empty".to_string()),
+                    action: "return-query".to_string(),
+                },
+                KeyRuleConfig {
+                    when: None,
+                    action: "return-original".to_string(),
+                },
+            ]),
+        )]);
+
+        let set = KeymapSet::from_settings(&settings);
+
+        // When original input was empty, should return-query
+        let ctx_original_empty = EvalContext {
+            cursor_position: 0,
+            input_width: 5,
+            input_byte_len: 5,
+            selected_index: 0,
+            results_len: 10,
+            original_input_empty: true,
+        };
+        assert_eq!(
+            set.emacs.resolve(&key("esc"), &ctx_original_empty),
+            Some(Action::ReturnQuery),
+            "esc with original_input_empty=true should return-query"
+        );
+
+        // When original input was not empty, should return-original
+        let ctx_original_not_empty = EvalContext {
+            cursor_position: 0,
+            input_width: 5,
+            input_byte_len: 5,
+            selected_index: 0,
+            results_len: 10,
+            original_input_empty: false,
+        };
+        assert_eq!(
+            set.emacs.resolve(&key("esc"), &ctx_original_not_empty),
+            Some(Action::ReturnOriginal),
+            "esc with original_input_empty=false should return-original"
+        );
     }
 }
