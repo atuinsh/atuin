@@ -306,6 +306,10 @@ pub fn default_vim_normal_keymap(settings: &Settings) -> Keymap {
     km.bind(key("pagedown"), Action::ScrollPageDown);
     km.bind(key("pageup"), Action::ScrollPageUp);
 
+    // --- Accept ---
+    let accept = accept_action(settings);
+    km.bind(key("enter"), accept);
+
     km
 }
 
@@ -726,6 +730,26 @@ mod tests {
             km.resolve(&key("L"), &ctx),
             Some(Action::ScrollToScreenBottom)
         );
+    }
+
+    #[test]
+    fn vim_normal_enter_returns_selection() {
+        // enter_accept=false in test defaults → ReturnSelection
+        let km = default_vim_normal_keymap(&default_settings());
+        let ctx = make_ctx(0, 0, 0, 10);
+        assert_eq!(
+            km.resolve(&key("enter"), &ctx),
+            Some(Action::ReturnSelection)
+        );
+    }
+
+    #[test]
+    fn vim_normal_enter_accept_true_uses_accept() {
+        let mut settings = default_settings();
+        settings.enter_accept = true;
+        let km = default_vim_normal_keymap(&settings);
+        let ctx = make_ctx(0, 0, 0, 10);
+        assert_eq!(km.resolve(&key("enter"), &ctx), Some(Action::Accept));
     }
 
     // -- Vim Insert keymap tests --
