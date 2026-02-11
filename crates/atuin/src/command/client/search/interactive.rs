@@ -105,6 +105,7 @@ pub fn to_compactness(f: &Frame, settings: &Settings) -> Compactness {
 }
 
 #[allow(clippy::struct_field_names)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct State {
     history_count: i64,
     update_needed: Option<Version>,
@@ -118,6 +119,7 @@ pub struct State {
     current_cursor: Option<CursorStyle>,
     tab_index: usize,
     pending_vim_key: Option<char>,
+    original_input_empty: bool,
 
     pub inspecting_state: InspectingState,
 
@@ -301,6 +303,7 @@ impl State {
             input_byte_len: self.search.input.as_str().len(),
             selected_index: self.results_state.selected(),
             results_len: self.results_len,
+            original_input_empty: self.original_input_empty,
         };
 
         // Convert KeyEvent to SingleKey
@@ -1416,6 +1419,7 @@ pub async fn history(
         },
         prefix: false,
         pending_vim_key: None,
+        original_input_empty: original_query.is_empty(),
     };
 
     app.initialize_keymap_cursor(settings);
@@ -1806,6 +1810,7 @@ mod tests {
             current_cursor: None,
             tab_index: 0,
             pending_vim_key: None,
+            original_input_empty: false,
             inspecting_state: InspectingState {
                 current: None,
                 next: None,
@@ -1859,6 +1864,7 @@ mod tests {
             current_cursor: None,
             tab_index: 0,
             pending_vim_key: None,
+            original_input_empty: false,
             inspecting_state: InspectingState {
                 current: None,
                 next: None,
@@ -1976,6 +1982,7 @@ mod tests {
             current_cursor: None,
             tab_index: 0,
             pending_vim_key: None,
+            original_input_empty: false,
             inspecting_state: InspectingState {
                 current: None,
                 next: None,
@@ -2033,6 +2040,7 @@ mod tests {
             current_cursor: None,
             tab_index: 0,
             pending_vim_key: None,
+            original_input_empty: false,
             inspecting_state: InspectingState {
                 current: None,
                 next: None,
@@ -2086,6 +2094,7 @@ mod tests {
             current_cursor: None,
             tab_index: 0,
             pending_vim_key: None,
+            original_input_empty: false,
             inspecting_state: InspectingState {
                 current: None,
                 next: None,
@@ -2135,6 +2144,7 @@ mod tests {
             current_cursor: None,
             tab_index: 0,
             pending_vim_key: None,
+            original_input_empty: false,
             inspecting_state: InspectingState {
                 current: None,
                 next: None,
@@ -2193,6 +2203,7 @@ mod tests {
             current_cursor: None,
             tab_index: 0,
             pending_vim_key: None,
+            original_input_empty: false,
             inspecting_state: InspectingState {
                 current: None,
                 next: None,
@@ -2252,6 +2263,7 @@ mod tests {
             current_cursor: None,
             tab_index: 0,
             pending_vim_key: None,
+            original_input_empty: false,
             inspecting_state: InspectingState {
                 current: None,
                 next: None,
@@ -2581,5 +2593,61 @@ mod tests {
         // ClearLine
         state.execute_action(&Action::ClearLine, &settings);
         assert_eq!(state.search.input.as_str(), "");
+    }
+
+    #[test]
+    fn keymap_config_return_query() {
+        use atuin_client::settings::KeyBindingConfig;
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        use std::collections::HashMap;
+
+        let mut settings = Settings::utc();
+        // Configure tab to return-query
+        settings.keymap.emacs = HashMap::from([(
+            "tab".to_string(),
+            KeyBindingConfig::Simple("return-query".to_string()),
+        )]);
+
+        let mut state = State {
+            history_count: 100,
+            update_needed: None,
+            results_state: ListState::default(),
+            switched_search_mode: false,
+            search_mode: SearchMode::Fuzzy,
+            results_len: 100,
+            accept: false,
+            keymap_mode: KeymapMode::Emacs,
+            prefix: false,
+            current_cursor: None,
+            tab_index: 0,
+            pending_vim_key: None,
+            original_input_empty: false,
+            inspecting_state: InspectingState {
+                current: None,
+                next: None,
+                previous: None,
+            },
+            keymaps: KeymapSet::from_settings(&settings),
+            search: SearchState {
+                input: "test query".to_string().into(),
+                filter_mode: FilterMode::Global,
+                context: Context {
+                    session: String::new(),
+                    cwd: String::new(),
+                    hostname: String::new(),
+                    host_id: String::new(),
+                    git_root: None,
+                },
+            },
+            engine: engines::engine(SearchMode::Fuzzy),
+            now: Box::new(OffsetDateTime::now_utc),
+        };
+
+        let tab_event = KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE);
+        let result = state.handle_key_input(&settings, &tab_event);
+        assert!(
+            matches!(result, super::InputAction::ReturnQuery),
+            "Tab configured as return-query should return InputAction::ReturnQuery"
+        );
     }
 }

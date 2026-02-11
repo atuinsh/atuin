@@ -246,6 +246,7 @@ Conditions let a single key do different things depending on the current state. 
 | `cursor-at-start` | The cursor is at position 0 |
 | `cursor-at-end` | The cursor is at the end of the input |
 | `input-empty` | The input line is empty (no text entered) |
+| `original-input-empty` | The original query passed to the TUI was empty |
 | `list-at-start` | The selection is at the first entry (index 0) |
 | `list-at-end` | The selection is at the last entry |
 | `no-results` | The search returned zero results |
