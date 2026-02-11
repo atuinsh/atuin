@@ -6,11 +6,10 @@ use atuin_client::settings::Settings;
 
 pub mod change_password;
 pub mod delete;
-mod hub;
+pub mod hub;
 pub mod login;
 pub mod logout;
 pub mod register;
-pub mod verify;
 
 #[derive(Args, Debug)]
 pub struct Cmd {
@@ -34,9 +33,6 @@ pub enum Commands {
 
     /// Change your password
     ChangePassword(change_password::Cmd),
-
-    /// Verify your account
-    Verify(verify::Cmd),
 }
 
 impl Cmd {
@@ -44,10 +40,9 @@ impl Cmd {
         match self.command {
             Commands::Login(l) => l.run(&settings, &store).await,
             Commands::Register(r) => r.run(&settings, &store).await,
-            Commands::Logout => logout::run(&settings),
+            Commands::Logout => logout::run().await,
             Commands::Delete => delete::run(&settings).await,
             Commands::ChangePassword(c) => c.run(&settings).await,
-            Commands::Verify(c) => c.run(&settings).await,
         }
     }
 }

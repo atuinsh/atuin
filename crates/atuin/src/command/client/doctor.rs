@@ -1,5 +1,5 @@
 use std::process::Command;
-use std::{env, path::PathBuf, str::FromStr};
+use std::{env, str::FromStr};
 
 use atuin_client::database::Sqlite;
 use atuin_client::settings::Settings;
@@ -246,12 +246,13 @@ struct SyncInfo {
 }
 
 impl SyncInfo {
-    pub fn new(settings: &Settings) -> Self {
+    pub async fn new(settings: &Settings) -> Self {
         Self {
             cloud: settings.sync_address == "https://api.atuin.sh",
             auto_sync: settings.auto_sync,
             records: settings.sync.records,
             last_sync: Settings::last_sync()
+                .await
                 .map_or_else(|_| "no last sync".to_string(), |v| v.to_string()),
         }
     }
@@ -262,7 +263,6 @@ struct SettingPaths {
     db: String,
     record_store: String,
     key: String,
-    session: String,
 }
 
 impl SettingPaths {
@@ -271,7 +271,6 @@ impl SettingPaths {
             db: settings.db_path.clone(),
             record_store: settings.record_store_path.clone(),
             key: settings.key_path.clone(),
-            session: settings.session_path.clone(),
         }
     }
 
@@ -280,7 +279,6 @@ impl SettingPaths {
             ("ATUIN_DB_PATH", &self.db),
             ("ATUIN_RECORD_STORE", &self.record_store),
             ("ATUIN_KEY", &self.key),
-            ("ATUIN_SESSION", &self.session),
         ];
 
         for (path_env_var, path) in paths {
@@ -310,11 +308,10 @@ struct AtuinInfo {
 
 impl AtuinInfo {
     pub async fn new(settings: &Settings) -> Self {
-        let session_path = settings.session_path.as_str();
-        let logged_in = PathBuf::from(session_path).exists();
+        let logged_in = settings.logged_in().await.unwrap_or(false);
 
         let sync = if logged_in {
-            Some(SyncInfo::new(settings))
+            Some(SyncInfo::new(settings).await)
         } else {
             None
         };

@@ -70,7 +70,7 @@ impl Cmd {
     }
 
     pub async fn status(&self, store: SqliteStore) -> Result<()> {
-        let host_id = Settings::host_id().expect("failed to get host_id");
+        let host_id = Settings::host_id().await?;
         let offset = UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC);
 
         let status = store.status().await?;

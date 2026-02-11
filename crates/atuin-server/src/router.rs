@@ -109,15 +109,22 @@ pub struct AppState<DB: Database> {
 }
 
 pub fn router<DB: Database>(database: DB, settings: Settings) -> Router {
-    let routes = Router::new()
+    let mut routes = Router::new()
         .route("/", get(handlers::index))
-        .route("/healthz", get(handlers::health::health_check))
-        .route("/sync/count", get(handlers::history::count))
-        .route("/sync/history", get(handlers::history::list))
-        .route("/sync/calendar/:focus", get(handlers::history::calendar))
-        .route("/sync/status", get(handlers::status::status))
-        .route("/history", post(handlers::history::add))
-        .route("/history", delete(handlers::history::delete))
+        .route("/healthz", get(handlers::health::health_check));
+
+    // Sync v1 routes - can be disabled in favor of record-based sync
+    if settings.sync_v1_enabled {
+        routes = routes
+            .route("/sync/count", get(handlers::history::count))
+            .route("/sync/history", get(handlers::history::list))
+            .route("/sync/calendar/:focus", get(handlers::history::calendar))
+            .route("/sync/status", get(handlers::status::status))
+            .route("/history", post(handlers::history::add))
+            .route("/history", delete(handlers::history::delete));
+    }
+
+    let routes = routes
         .route("/user/:username", get(handlers::user::get))
         .route("/account", delete(handlers::user::delete))
         .route("/account/password", patch(handlers::user::change_password))
@@ -127,11 +134,6 @@ pub fn router<DB: Database>(database: DB, settings: Settings) -> Router {
         .route("/record", get(handlers::record::index))
         .route("/record/next", get(handlers::record::next))
         .route("/api/v0/me", get(handlers::v0::me::get))
-        .route("/api/v0/account/verify", post(handlers::user::verify_user))
-        .route(
-            "/api/v0/account/send-verification",
-            post(handlers::user::send_verification),
-        )
         .route("/api/v0/record", post(handlers::v0::record::post))
         .route("/api/v0/record", get(handlers::v0::record::index))
         .route("/api/v0/record/next", get(handlers::v0::record::next))

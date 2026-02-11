@@ -35,7 +35,7 @@ elif ! command -v sed > /dev/null; then
 fi
 
 
-__atuin_install_binary 
+__atuin_install_binary
 
 # TODO: Check which shell is in use
 # Use of single quotes around $() is intentional here
@@ -73,7 +73,7 @@ cat << EOF
 
 
 
- _______  __   __  _______  __    _  ___   _    __   __  _______  __   __ 
+ _______  __   __  _______  __    _  ___   _    __   __  _______  __   __
 |       ||  | |  ||   _   ||  |  | ||   | | |  |  | |  ||       ||  | |  |
 |_     _||  |_|  ||  |_|  ||   |_| ||   |_| |  |  |_|  ||   _   ||  | |  |
   |   |  |       ||       ||       ||      _|  |       ||  | |  ||  |_|  |
@@ -89,7 +89,7 @@ If you have any issues, please open an issue on GitHub or visit our forum (https
 
 If you love Atuin, please give us a star on GitHub! It really helps ⭐️ https://github.com/atuinsh/atuin
 
-Please run "atuin register" to get setup with sync, or "atuin login" if you already have an account
+Please run "atuin register" to set up sync, or "atuin login" if you already have an account
 
 Check out Atuin Desktop to build executable runbooks from your shell history - https://github.com/atuinsh/desktop
 

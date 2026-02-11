@@ -176,7 +176,7 @@ impl Cmd {
                 Ok(())
             }
 
-            Self::Wrapped { year } => wrapped::run(year, &db, &settings, theme).await,
+            Self::Wrapped { year } => wrapped::run(year, &db, &settings, sqlite_store, theme).await,
 
             #[cfg(feature = "daemon")]
             Self::Daemon => daemon::run(settings, sqlite_store, db).await,

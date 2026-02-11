@@ -1,13 +1,12 @@
-use eyre::{Context, Result};
-use fs_err::remove_file;
+use eyre::Result;
 
 use crate::settings::Settings;
 
-pub fn logout(settings: &Settings) -> Result<()> {
-    let session_path = settings.session_path.as_str();
+pub async fn logout() -> Result<()> {
+    let meta = Settings::meta_store().await?;
 
-    if settings.logged_in() {
-        remove_file(session_path).context("Failed to remove session file")?;
+    if meta.logged_in().await? {
+        meta.delete_session().await?;
         println!("You have logged out!");
     } else {
         println!("You are not logged in");

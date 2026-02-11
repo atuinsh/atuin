@@ -65,7 +65,7 @@ impl Cmd {
             .context("could not load encryption key")?
             .into();
 
-        let host_id = Settings::host_id().expect("failed to get host_id");
+        let host_id = Settings::host_id().await?;
 
         let kv_db = atuin_kv::database::Database::new(settings.kv.db_path.clone(), 1.0).await?;
         let kv_store = KvStore::new(store.clone(), kv_db, host_id, encryption_key);

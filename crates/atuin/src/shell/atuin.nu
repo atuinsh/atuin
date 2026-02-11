@@ -8,7 +8,10 @@ use (if not (
     (version).minor >= 103
 ) { "compat" }) *
 
-$env.ATUIN_SESSION = (random uuid -v 7 | str replace -a "-" "")
+if 'ATUIN_SESSION' not-in $env or ('ATUIN_SHLVL' not-in $env) or ($env.ATUIN_SHLVL != ($env.SHLVL? | default "")) {
+    $env.ATUIN_SESSION = (random uuid -v 7 | str replace -a "-" "")
+    $env.ATUIN_SHLVL = ($env.SHLVL? | default "")
+}
 hide-env -i ATUIN_HISTORY_ID
 
 # Magic token to make sure we don't record commands run by keybindings

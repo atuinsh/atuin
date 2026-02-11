@@ -25,9 +25,15 @@ It is also recommended to update your `$PATH` so that the pre-exec scripts would
 export PATH="./target/release:$PATH"
 ```
 
-These 5 variables can be added in a local `.envrc` file, read by [direnv](https://direnv.net/).
+If you'd like to load a different configuration file, set `ATUIN_CONFIG_DIR` to a folder that contains your `config.toml` file:
 
-## PRs 
+```shell
+export ATUIN_CONFIG_DIR=/tmp/atuin-config/
+```
+
+These variable exports can be added in a local `.envrc` file, read by [direnv](https://direnv.net/).
+
+## PRs
 
 It can speed up the review cycle if you consent to maintainers pushing to your branch. This will only be in the case of small fixes or adjustments, and not anything large. If you feel OK with this, please check the box on the template!
 
@@ -35,7 +41,7 @@ It can speed up the review cycle if you consent to maintainers pushing to your b
 
 Any issues labeled "bug" or "help wanted" would be fantastic, just drop a comment and feel free to ask for help!
 
-If there's anything you want to work on that isn't already an issue, either open a feature request or get in touch on the [forum](https://forum.atuin.sh)/Discord. 
+If there's anything you want to work on that isn't already an issue, either open a feature request or get in touch on the [forum](https://forum.atuin.sh)/Discord.
 
 ## Setup
 
@@ -61,11 +67,10 @@ While iterating on the server, I find it helpful to run a new user on my system,
 
 Our test coverage is currently not the best, but we are working on it! Generally tests live in the file next to the functionality they are testing, and are executed just with `cargo test`.
 
-
 ## Migrations
 
 Be careful creating database migrations - once your database has migrated ahead of current stable, there is no going back
 
 ### Stickers
 
-We try to ship anyone contributing to Atuin a sticker! Only contributors get a shiny one. Fill out [this form](https://notionforms.io/forms/contributors-stickers) if you'd like one.
+We try to ship anyone contributing to Atuin a sticker! Only contributors get a shiny one. Fill out [this form](https://noteforms.com/forms/contributors-stickers) if you'd like one.

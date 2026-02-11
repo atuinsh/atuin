@@ -254,7 +254,7 @@ pub async fn listen(
         .context("could not load encryption key")?
         .into();
 
-    let host_id = Settings::host_id().expect("failed to get host_id");
+    let host_id = Settings::host_id().await?;
     let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
     let history = HistoryService::new(history_store.clone(), history_db.clone());

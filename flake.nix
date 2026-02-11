@@ -31,7 +31,7 @@
                 fenix.packages.${system}.fromToolchainFile
                   {
                     file = ./rust-toolchain.toml;
-                    sha256 = "sha256-SDu4snEWjuZU475PERvu+iO50Mi39KVjqCeJeNvpguU=";
+                    sha256 = "sha256-vra6TkHITpwRyA5oBKAHSX0Mi6CBDNQD+ryPSpxFsfg=";
                   };
             in
             pkgs.makeRustPlatform {

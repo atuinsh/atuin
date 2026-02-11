@@ -12,14 +12,14 @@ use atuin_common::{
     api::{
         AddHistoryRequest, ChangePasswordRequest, CliCodeResponse, CliVerifyResponse,
         CountResponse, DeleteHistoryRequest, ErrorResponse, LoginRequest, LoginResponse,
-        MeResponse, RegisterResponse, SendVerificationResponse, StatusResponse,
-        SyncHistoryResponse, VerificationTokenRequest, VerificationTokenResponse,
+        MeResponse, RegisterResponse, StatusResponse, SyncHistoryResponse,
     },
     record::RecordStatus,
 };
 use atuin_common::{
     api::{ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ATUIN_VERSION},
     record::{EncryptedData, HostId, Record, RecordIdx},
+    tls::ensure_crypto_provider,
 };
 
 use semver::Version;
@@ -60,6 +60,7 @@ pub async fn register(
     email: &str,
     password: &str,
 ) -> Result<RegisterResponse> {
+    ensure_crypto_provider();
     let mut map = HashMap::new();
     map.insert("username", username);
     map.insert("email", email);
@@ -92,6 +93,7 @@ pub async fn register(
 }
 
 pub async fn login(address: &str, req: LoginRequest) -> Result<LoginResponse> {
+    ensure_crypto_provider();
     let url = make_url(address, "/login")?;
     let client = reqwest::Client::new();
 
@@ -149,6 +151,7 @@ pub async fn hub_verify_code(address: &str, code: &str) -> Result<CliVerifyRespo
 pub async fn latest_version() -> Result<Version> {
     use atuin_common::api::IndexResponse;
 
+    ensure_crypto_provider();
     let url = "https://api.atuin.sh";
     let client = reqwest::Client::new();
 
@@ -232,6 +235,7 @@ impl<'a> Client<'a> {
         connect_timeout: u64,
         timeout: u64,
     ) -> Result<Self> {
+        ensure_crypto_provider();
         let mut headers = HeaderMap::new();
         headers.insert(AUTHORIZATION, format!("Token {session_token}").parse()?);
 
@@ -460,36 +464,5 @@ impl<'a> Client<'a> {
         } else {
             bail!("Unknown error");
         }
-    }
-
-    // Either request a verification email if token is null, or validate a token
-    pub async fn verify(&self, token: Option<String>) -> Result<(bool, bool)> {
-        // could dedupe this a bit, but it's simple at the moment
-        let (email_sent, verified) = if let Some(token) = token {
-            let url = make_url(self.sync_addr, "/api/v0/account/verify")?;
-            let url = Url::parse(url.as_str())?;
-
-            let resp = self
-                .client
-                .post(url)
-                .json(&VerificationTokenRequest { token })
-                .send()
-                .await?;
-            let resp = handle_resp_error(resp).await?;
-            let resp = resp.json::<VerificationTokenResponse>().await?;
-
-            (false, resp.verified)
-        } else {
-            let url = make_url(self.sync_addr, "/api/v0/account/send-verification")?;
-            let url = Url::parse(url.as_str())?;
-
-            let resp = self.client.post(url).send().await?;
-            let resp = handle_resp_error(resp).await?;
-            let resp = resp.json::<SendVerificationResponse>().await?;
-
-            (resp.email_sent, resp.verified)
-        };
-
-        Ok((email_sent, verified))
     }
 }

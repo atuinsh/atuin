@@ -14,6 +14,7 @@ pub mod history;
 pub mod import;
 pub mod login;
 pub mod logout;
+pub mod meta;
 pub mod ordering;
 pub mod plugin;
 pub mod record;

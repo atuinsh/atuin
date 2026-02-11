@@ -1,4 +1,4 @@
-FROM lukemathwalker/cargo-chef:latest-rust-1.91.1-slim-bookworm AS chef
+FROM lukemathwalker/cargo-chef:latest-rust-1.93.0-slim-bookworm AS chef
 WORKDIR app
 
 FROM chef AS planner
@@ -14,9 +14,9 @@ COPY --from=planner /app/recipe.json recipe.json
 RUN cargo chef cook --release --recipe-path recipe.json
 
 COPY . .
-RUN cargo build --release --bin atuin
+RUN cargo build --release --bin atuin-server
 
-FROM debian:bookworm-20251103-slim AS runtime
+FROM debian:bookworm-20260202-slim AS runtime
 
 RUN useradd -c 'atuin user' atuin && mkdir /config && chown atuin:atuin /config
 # Install ca-certificates for webhooks to work
@@ -26,8 +26,8 @@ WORKDIR app
 USER atuin
 
 ENV TZ=Etc/UTC
-ENV RUST_LOG=atuin::api=info
+ENV RUST_LOG=atuin_server=info
 ENV ATUIN_CONFIG_DIR=/config
 
-COPY --from=builder /app/target/release/atuin /usr/local/bin
-ENTRYPOINT ["/usr/local/bin/atuin"]
+COPY --from=builder /app/target/release/atuin-server /usr/local/bin
+ENTRYPOINT ["/usr/local/bin/atuin-server"]

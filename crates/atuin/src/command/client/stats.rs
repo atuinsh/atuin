@@ -40,7 +40,7 @@ pub struct Cmd {
 
 impl Cmd {
     pub async fn run(&self, db: &impl Database, settings: &Settings, theme: &Theme) -> Result<()> {
-        let context = current_context();
+        let context = current_context().await?;
         let words = if self.period.is_empty() {
             String::from("all")
         } else {

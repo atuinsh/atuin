@@ -25,11 +25,16 @@ pub struct Push {
     /// local store
     #[arg(long, default_value = "false")]
     pub force: bool,
+
+    /// Page Size
+    /// How many records to upload at once. Defaults to 100
+    #[arg(long, default_value = "100")]
+    pub page: u64,
 }
 
 impl Push {
     pub async fn run(&self, settings: &Settings, store: SqliteStore) -> Result<()> {
-        let host_id = Settings::host_id().expect("failed to get host_id");
+        let host_id = Settings::host_id().await?;
 
         if self.force {
             println!("Forcing remote store overwrite!");
@@ -37,7 +42,7 @@ impl Push {
 
             let client = Client::new(
                 &settings.sync_address,
-                settings.session_token()?.as_str(),
+                settings.session_token().await?.as_str(),
                 settings.network_connect_timeout,
                 settings.network_timeout * 10, // we may be deleting a lot of data... so up the
                                                // timeout
@@ -87,7 +92,7 @@ impl Push {
             })
             .collect();
 
-        let (uploaded, _) = sync::sync_remote(operations, &store, settings).await?;
+        let (uploaded, _) = sync::sync_remote(operations, &store, settings, self.page).await?;
 
         println!("Uploaded {uploaded} records");
 

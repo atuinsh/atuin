@@ -53,7 +53,7 @@ async fn sync_download(
     let mut last_sync = if force {
         OffsetDateTime::UNIX_EPOCH
     } else {
-        Settings::last_sync()?
+        Settings::last_sync().await?
     };
 
     let mut last_timestamp = OffsetDateTime::UNIX_EPOCH;
@@ -194,12 +194,12 @@ async fn sync_upload(
 pub async fn sync(settings: &Settings, force: bool, db: &impl Database) -> Result<()> {
     let client = api_client::Client::new(
         &settings.sync_address,
-        settings.session_token()?.as_str(),
+        settings.session_token().await?.as_str(),
         settings.network_connect_timeout,
         settings.network_timeout,
     )?;
 
-    Settings::save_sync_time()?;
+    Settings::save_sync_time().await?;
 
     let key = load_key(settings)?; // encryption key
 

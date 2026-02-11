@@ -85,7 +85,7 @@ pub enum Cmd {
         #[arg(long, visible_alias = "tz")]
         timezone: Option<Timezone>,
 
-        /// Available variables: {command}, {directory}, {duration}, {user}, {host}, {exit} and {time}.
+        /// Available variables: {command}, {directory}, {duration}, {user}, {host}, {exit}, {time}, {session}, and {uuid}
         /// Example: --format "{time} - [{duration}] - {directory}$\t{command}"
         #[arg(long, short)]
         format: Option<String>,
@@ -108,7 +108,7 @@ pub enum Cmd {
         #[arg(long, visible_alias = "tz")]
         timezone: Option<Timezone>,
 
-        /// Available variables: {command}, {directory}, {duration}, {user}, {host} and {time}.
+        /// Available variables: {command}, {directory}, {duration}, {user}, {host}, {time}, {session}, {uuid} and {relativetime}.
         /// Example: --format "{time} - [{duration}] - {directory}$\t{command}"
         #[arg(long, short)]
         format: Option<String>,
@@ -320,6 +320,8 @@ impl FormatKey for FmtHistory<'_> {
                     .split_once(':')
                     .map_or("", |(_, user)| user),
             )?,
+            "session" => f.write_str(&self.history.session)?,
+            "uuid" => f.write_str(&self.history.id.0)?,
             _ => return Err(FormatKeyError::UnknownKey),
         }
         Ok(())
@@ -452,12 +454,12 @@ impl Cmd {
         db.update(&h).await?;
         history_store.push(h).await?;
 
-        if settings.should_sync()? {
+        if settings.should_sync().await? {
             #[cfg(feature = "sync")]
             {
                 if settings.sync.records {
                     let (_, downloaded) = record::sync::sync(settings, &store).await?;
-                    Settings::save_sync_time()?;
+                    Settings::save_sync_time().await?;
 
                     crate::sync::build(settings, &store, db, Some(&downloaded)).await?;
                 } else {
@@ -514,7 +516,10 @@ impl Cmd {
             (true, true) => [Session, Directory],
             (true, false) => [Session, Global],
             (false, true) => [Global, Directory],
-            (false, false) => [settings.default_filter_mode(), Global],
+            (false, false) => [
+                settings.default_filter_mode(context.git_root.is_some()),
+                Global,
+            ],
         };
 
         let history = db
@@ -574,7 +579,7 @@ impl Cmd {
             let encryption_key: [u8; 32] = encryption::load_key(settings)
                 .context("could not load encryption key")?
                 .into();
-            let host_id = Settings::host_id().expect("failed to get host_id");
+            let host_id = Settings::host_id().await?;
             let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
             for entry in matches {
@@ -629,7 +634,7 @@ impl Cmd {
             let encryption_key: [u8; 32] = encryption::load_key(settings)
                 .context("could not load encryption key")?
                 .into();
-            let host_id = Settings::host_id().expect("failed to get host_id");
+            let host_id = Settings::host_id().await?;
             let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
             for entry in matches {
@@ -646,7 +651,7 @@ impl Cmd {
     }
 
     pub async fn run(self, settings: &Settings) -> Result<()> {
-        let context = current_context();
+        let context = current_context().await?;
 
         #[cfg(feature = "daemon")]
         // Skip initializing any databases for start/end, if the daemon is enabled
@@ -675,7 +680,7 @@ impl Cmd {
             .context("could not load encryption key")?
             .into();
 
-        let host_id = Settings::host_id().expect("failed to get host_id");
+        let host_id = Settings::host_id().await?;
         let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
         match self {

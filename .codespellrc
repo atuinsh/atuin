@@ -3,5 +3,5 @@
 skip = .git*,*.lock,.codespellrc,CODE_OF_CONDUCT.md,CONTRIBUTORS
 check-hidden = true
 # ignore-regex = 
-ignore-words-list = crate,ratatui,inbetween
+ignore-words-list = crate,ratatui,inbetween,iterm
 

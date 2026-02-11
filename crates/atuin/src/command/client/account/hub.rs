@@ -78,13 +78,11 @@ pub async fn run(settings: &Settings, store: &SqliteStore) -> Result<()> {
     };
 
     // 4. Save the session token
-    let session_path = settings.session_path.as_str();
-    let mut file = File::create(session_path)
+    Settings::meta_store()
+        .await?
+        .save_session(&session)
         .await
-        .context("Failed to create session file")?;
-    file.write_all(session.as_bytes())
-        .await
-        .context("Failed to write session file")?;
+        .context("Failed to save session")?;
 
     // 5. Handle encryption key - always prompt
     // Users will always have a key file by this point (created on first atuin usage)
@@ -152,24 +150,16 @@ fn read_key_input() -> Result<Option<String>> {
     let encoded = match bip39::Mnemonic::from_phrase(input, bip39::Language::English) {
         Ok(mnemonic) => encode_key(Key::from_slice(mnemonic.entropy()))?,
         Err(err) => {
-            match err.downcast_ref::<bip39::ErrorKind>() {
-                Some(bip_err) => {
-                    match bip_err {
-                        // Not a valid mnemonic word - assume they copied the base64 key
-                        bip39::ErrorKind::InvalidWord => input.to_string(),
-                        bip39::ErrorKind::InvalidChecksum => {
-                            bail!("Key mnemonic was not valid")
-                        }
-                        bip39::ErrorKind::InvalidKeysize(_)
-                        | bip39::ErrorKind::InvalidWordLength(_)
-                        | bip39::ErrorKind::InvalidEntropyLength(_, _) => {
-                            bail!("Key was not the correct length")
-                        }
-                    }
+            match err {
+                // Not a valid mnemonic word - assume they copied the base64 key
+                bip39::ErrorKind::InvalidWord(_) => input.to_string(),
+                bip39::ErrorKind::InvalidChecksum => {
+                    bail!("Key mnemonic was not valid")
                 }
-                _ => {
-                    // Unknown error - assume they copied the base64 key
-                    input.to_string()
+                bip39::ErrorKind::InvalidKeysize(_)
+                | bip39::ErrorKind::InvalidWordLength(_)
+                | bip39::ErrorKind::InvalidEntropyLength(_, _) => {
+                    bail!("Key was not the correct length")
                 }
             }
         }

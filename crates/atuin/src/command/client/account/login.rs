@@ -35,7 +35,7 @@ fn get_input() -> Result<String> {
 
 impl Cmd {
     pub async fn run(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
-        if settings.logged_in() {
+        if settings.logged_in().await? {
             bail!(
                 "You are already logged in! Please run 'atuin logout' if you wish to login again"
             );
@@ -83,32 +83,22 @@ impl Cmd {
             match bip39::Mnemonic::from_phrase(&key, bip39::Language::English) {
                 Ok(mnemonic) => encode_key(Key::from_slice(mnemonic.entropy()))?,
                 Err(err) => {
-                    match err.downcast_ref::<bip39::ErrorKind>() {
-                        Some(err) => {
-                            match err {
-                                // assume they copied in the base64 key
-                                bip39::ErrorKind::InvalidWord => key,
-                                bip39::ErrorKind::InvalidChecksum => {
-                                    bail!("key mnemonic was not valid")
-                                }
-                                bip39::ErrorKind::InvalidKeysize(_)
-                                | bip39::ErrorKind::InvalidWordLength(_)
-                                | bip39::ErrorKind::InvalidEntropyLength(_, _) => {
-                                    bail!("key was not the correct length")
-                                }
-                            }
+                    match err {
+                        // assume they copied in the base64 key
+                        bip39::ErrorKind::InvalidWord(_) => key,
+                        bip39::ErrorKind::InvalidChecksum => {
+                            bail!("key mnemonic was not valid")
                         }
-                        _ => {
-                            // unknown error. assume they copied the base64 key
-                            key
+                        bip39::ErrorKind::InvalidKeysize(_)
+                        | bip39::ErrorKind::InvalidWordLength(_)
+                        | bip39::ErrorKind::InvalidEntropyLength(_, _) => {
+                            bail!("key was not the correct length")
                         }
                     }
                 }
             }
         };
 
-        // I've simplified this a little, but it could really do with a refactor
-        // Annoyingly, it's also very important to get it correct
         if key.is_empty() {
             if key_path.exists() {
                 let bytes = fs_err::read_to_string(&key_path)
@@ -158,9 +148,10 @@ impl Cmd {
         )
         .await?;
 
-        let session_path = settings.session_path.as_str();
-        let mut file = File::create(session_path).await?;
-        file.write_all(session.session.as_bytes()).await?;
+        Settings::meta_store()
+            .await?
+            .save_session(&session.session)
+            .await?;
 
         println!("Logged in!");
 

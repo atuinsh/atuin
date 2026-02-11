@@ -1,9 +1,18 @@
-use clap::Subcommand;
+use clap::{Subcommand, ValueEnum};
 use eyre::{Context, Result};
 
 use atuin_client::{encryption, record::sqlite_store::SqliteStore, settings::Settings};
 
 use atuin_dotfiles::{shell::Var, store::var::VarStore};
+
+#[derive(Clone, Copy, Debug, Default, ValueEnum)]
+pub enum SortBy {
+    /// Sort by variable name
+    #[default]
+    Name,
+    /// Sort by variable value
+    Value,
+}
 
 #[derive(Subcommand, Debug)]
 #[command(infer_subcommands = true)]
@@ -21,7 +30,31 @@ pub enum Cmd {
     Delete { name: String },
 
     /// List all variables
-    List,
+    List {
+        /// Sort results by field
+        #[arg(long, value_enum, default_value_t = SortBy::Name)]
+        sort_by: SortBy,
+
+        /// Sort in reverse (descending) order
+        #[arg(long, short)]
+        reverse: bool,
+
+        /// Filter variables by name (substring match)
+        #[arg(long, short)]
+        name: Option<String>,
+
+        /// Filter variables by value (substring match)
+        #[arg(long, short)]
+        value: Option<String>,
+
+        /// Show only exported variables
+        #[arg(long, conflicts_with = "shell_only")]
+        exports_only: bool,
+
+        /// Show only non-exported (shell) variables
+        #[arg(long, conflicts_with = "exports_only")]
+        shell_only: bool,
+    },
 }
 
 impl Cmd {
@@ -34,7 +67,7 @@ impl Cmd {
             println!("Setting '{show_export}{name}={value}'.");
         } else {
             println!(
-                "Overwriting alias '{show_export}{name}={}' with '{name}={value}'.",
+                "Overwriting var '{show_export}{name}={}' with '{name}={value}'.",
                 found[0].value
             );
         }
@@ -44,15 +77,58 @@ impl Cmd {
         Ok(())
     }
 
-    async fn list(&self, store: VarStore) -> Result<()> {
-        let vars = store.vars().await?;
+    #[allow(clippy::too_many_arguments)]
+    async fn list(
+        &self,
+        store: VarStore,
+        sort_by: SortBy,
+        reverse: bool,
+        name_filter: Option<String>,
+        value_filter: Option<String>,
+        exports_only: bool,
+        shell_only: bool,
+    ) -> Result<()> {
+        let mut vars = store.vars().await?;
 
-        for i in vars.iter().filter(|v| !v.export) {
-            println!("{}={}", i.name, i.value);
+        // Apply export/shell filters
+        if exports_only {
+            vars.retain(|v| v.export);
+        }
+        if shell_only {
+            vars.retain(|v| !v.export);
         }
 
-        for i in vars.iter().filter(|v| v.export) {
-            println!("export {}={}", i.name, i.value);
+        // Apply name/value filters
+        if let Some(ref name_pattern) = name_filter {
+            let pattern = name_pattern.to_lowercase();
+            vars.retain(|v| v.name.to_lowercase().contains(&pattern));
+        }
+        if let Some(ref value_pattern) = value_filter {
+            let pattern = value_pattern.to_lowercase();
+            vars.retain(|v| v.value.to_lowercase().contains(&pattern));
+        }
+
+        // Apply sorting
+        match sort_by {
+            SortBy::Name => {
+                vars.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+            }
+            SortBy::Value => {
+                vars.sort_by(|a, b| a.value.to_lowercase().cmp(&b.value.to_lowercase()));
+            }
+        }
+
+        // Apply reverse if requested
+        if reverse {
+            vars.reverse();
+        }
+
+        for i in vars {
+            if i.export {
+                println!("export {}={}", i.name, i.value);
+            } else {
+                println!("{}={}", i.name, i.value);
+            }
         }
 
         Ok(())
@@ -83,7 +159,7 @@ impl Cmd {
         let encryption_key: [u8; 32] = encryption::load_key(settings)
             .context("could not load encryption key")?
             .into();
-        let host_id = Settings::host_id().expect("failed to get host_id");
+        let host_id = Settings::host_id().await?;
 
         let var_store = VarStore::new(store, host_id, encryption_key);
 
@@ -97,7 +173,25 @@ impl Cmd {
                     .await
             }
             Self::Delete { name } => self.delete(var_store, name.clone()).await,
-            Self::List => self.list(var_store).await,
+            Self::List {
+                sort_by,
+                reverse,
+                name,
+                value,
+                exports_only,
+                shell_only,
+            } => {
+                self.list(
+                    var_store,
+                    *sort_by,
+                    *reverse,
+                    name.clone(),
+                    value.clone(),
+                    *exports_only,
+                    *shell_only,
+                )
+                .await
+            }
         }
     }
 }
