@@ -112,7 +112,7 @@ After configuring, open a new terminal in your IDE and run:
 atuin doctor | grep preexec
 ```
 
-You should see `bash-preexec`, `blesh`, or similar—not `none`.
+You should see `built-in`, `bash-preexec`, `blesh`, or similar—not `none`.
 
 ## Excluding Commands from History
 
