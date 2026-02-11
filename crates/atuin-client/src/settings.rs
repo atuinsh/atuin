@@ -519,7 +519,7 @@ impl Default for Search {
 impl Default for Tmux {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             width: "80%".to_string(),
             height: "60%".to_string(),
         }
@@ -1082,7 +1082,7 @@ impl Settings {
             )?
             .set_default("theme.name", "default")?
             .set_default("theme.debug", None::<bool>)?
-            .set_default("tmux.enabled", true)?
+            .set_default("tmux.enabled", false)?
             .set_default("tmux.width", "80%")?
             .set_default("tmux.height", "60%")?
             .set_default(
