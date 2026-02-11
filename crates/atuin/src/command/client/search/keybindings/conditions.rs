@@ -421,11 +421,17 @@ mod tests {
     #[test]
     fn atom_original_input_empty() {
         // original_input_empty = true
-        assert!(ConditionAtom::OriginalInputEmpty.evaluate(&ctx_with_original(0, 0, 0, 0, 10, true)));
+        assert!(
+            ConditionAtom::OriginalInputEmpty.evaluate(&ctx_with_original(0, 0, 0, 0, 10, true))
+        );
         // original_input_empty = false
-        assert!(!ConditionAtom::OriginalInputEmpty.evaluate(&ctx_with_original(0, 0, 0, 0, 10, false)));
+        assert!(
+            !ConditionAtom::OriginalInputEmpty.evaluate(&ctx_with_original(0, 0, 0, 0, 10, false))
+        );
         // original_input_empty is independent of current input state
-        assert!(ConditionAtom::OriginalInputEmpty.evaluate(&ctx_with_original(0, 5, 5, 0, 10, true)));
+        assert!(
+            ConditionAtom::OriginalInputEmpty.evaluate(&ctx_with_original(0, 5, 5, 0, 10, true))
+        );
     }
 
     #[test]
