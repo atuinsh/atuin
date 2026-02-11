@@ -105,6 +105,7 @@ pub fn to_compactness(f: &Frame, settings: &Settings) -> Compactness {
 }
 
 #[allow(clippy::struct_field_names)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct State {
     history_count: i64,
     update_needed: Option<Version>,
