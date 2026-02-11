@@ -438,6 +438,10 @@ impl State {
                     .next_word(&settings.word_chars, settings.word_jump_mode);
                 InputAction::Continue
             }
+            Action::CursorWordEnd => {
+                self.search.input.word_end(&settings.word_chars);
+                InputAction::Continue
+            }
             Action::CursorStart => {
                 self.search.input.start();
                 InputAction::Continue
@@ -686,6 +690,12 @@ impl State {
             }
             Action::VimSearchInsert => {
                 self.search.input.clear();
+                self.set_keymap_cursor(settings, "vim_insert");
+                self.keymap_mode = KeymapMode::VimInsert;
+                InputAction::Continue
+            }
+            Action::VimChangeToEnd => {
+                self.search.input.clear_to_end();
                 self.set_keymap_cursor(settings, "vim_insert");
                 self.keymap_mode = KeymapMode::VimInsert;
                 InputAction::Continue

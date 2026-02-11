@@ -10,6 +10,7 @@ pub enum Action {
     CursorRight,
     CursorWordLeft,
     CursorWordRight,
+    CursorWordEnd,
     CursorStart,
     CursorEnd,
 
@@ -60,6 +61,7 @@ pub enum Action {
     VimEnterInsertAtStart,
     VimEnterInsertAtEnd,
     VimSearchInsert,
+    VimChangeToEnd,
     EnterPrefixMode,
 
     // Inspector
@@ -92,6 +94,7 @@ impl Action {
             "cursor-right" => Ok(Action::CursorRight),
             "cursor-word-left" => Ok(Action::CursorWordLeft),
             "cursor-word-right" => Ok(Action::CursorWordRight),
+            "cursor-word-end" => Ok(Action::CursorWordEnd),
             "cursor-start" => Ok(Action::CursorStart),
             "cursor-end" => Ok(Action::CursorEnd),
 
@@ -134,6 +137,7 @@ impl Action {
             "vim-enter-insert-at-start" => Ok(Action::VimEnterInsertAtStart),
             "vim-enter-insert-at-end" => Ok(Action::VimEnterInsertAtEnd),
             "vim-search-insert" => Ok(Action::VimSearchInsert),
+            "vim-change-to-end" => Ok(Action::VimChangeToEnd),
             "enter-prefix-mode" => Ok(Action::EnterPrefixMode),
 
             "inspect-previous" => Ok(Action::InspectPrevious),
@@ -152,6 +156,7 @@ impl Action {
             Action::CursorRight => "cursor-right".to_string(),
             Action::CursorWordLeft => "cursor-word-left".to_string(),
             Action::CursorWordRight => "cursor-word-right".to_string(),
+            Action::CursorWordEnd => "cursor-word-end".to_string(),
             Action::CursorStart => "cursor-start".to_string(),
             Action::CursorEnd => "cursor-end".to_string(),
 
@@ -196,6 +201,7 @@ impl Action {
             Action::VimEnterInsertAtStart => "vim-enter-insert-at-start".to_string(),
             Action::VimEnterInsertAtEnd => "vim-enter-insert-at-end".to_string(),
             Action::VimSearchInsert => "vim-search-insert".to_string(),
+            Action::VimChangeToEnd => "vim-change-to-end".to_string(),
             Action::EnterPrefixMode => "enter-prefix-mode".to_string(),
 
             Action::InspectPrevious => "inspect-previous".to_string(),
