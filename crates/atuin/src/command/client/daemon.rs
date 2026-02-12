@@ -131,7 +131,8 @@ async fn wait_for_lock(path: &Path, timeout: Duration) -> Result<File> {
 
 async fn wait_for_pidfile_available(path: &Path, timeout: Duration) -> Result<()> {
     let file = wait_for_lock(path, timeout).await?;
-    file.unlock().wrap_err_with(|| format!("failed to unlock {}", path.display()))?;
+    file.unlock()
+        .wrap_err_with(|| format!("failed to unlock {}", path.display()))?;
     Ok(())
 }
 
@@ -312,7 +313,14 @@ fn ensure_reply_compatible(settings: &Settings, version: &str, protocol: u32) ->
 }
 
 pub async fn start_history(settings: &Settings, history: History) -> Result<String> {
-    match async { connect_client(settings).await?.start_history(history.clone()).await }.await {
+    match async {
+        connect_client(settings)
+            .await?
+            .start_history(history.clone())
+            .await
+    }
+    .await
+    {
         Ok(resp) => {
             if daemon_matches_expected(&resp.version, resp.protocol) {
                 return Ok(resp.id);
@@ -339,7 +347,14 @@ pub async fn start_history(settings: &Settings, history: History) -> Result<Stri
 }
 
 pub async fn end_history(settings: &Settings, id: String, duration: u64, exit: i64) -> Result<()> {
-    match async { connect_client(settings).await?.end_history(id.clone(), duration, exit).await }.await {
+    match async {
+        connect_client(settings)
+            .await?
+            .end_history(id.clone(), duration, exit)
+            .await
+    }
+    .await
+    {
         Ok(resp) => {
             if daemon_matches_expected(&resp.version, resp.protocol) {
                 return Ok(());

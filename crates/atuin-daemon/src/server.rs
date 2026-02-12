@@ -203,8 +203,7 @@ async fn shutdown_signal(socket: Option<PathBuf>, mut shutdown_rx: watch::Receiv
 
 #[cfg(windows)]
 async fn shutdown_signal(mut shutdown_rx: watch::Receiver<bool>) {
-    let mut ctrl_c = tokio::signal::windows::ctrl_c()
-        .expect("failed to register signal handler");
+    let mut ctrl_c = tokio::signal::windows::ctrl_c().expect("failed to register signal handler");
     tokio::select! {
         _ = ctrl_c.recv() => {},
         _ = shutdown_rx.changed() => {},
