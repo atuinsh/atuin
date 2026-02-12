@@ -114,7 +114,7 @@ function _atuin_search
         set ATUIN_H (ATUIN_SHELL=fish ATUIN_LOG=error ATUIN_QUERY=(commandline -b) atuin search --keymap-mode=$keymap_mode $argv -i 3>&1 1>&2 2>&3 | string collect)
     end
 
-    set ATUIN_H (string trim -- $ATUIN_H) # trim whitespace
+    set ATUIN_H (string trim -- $ATUIN_H | string collect) # trim whitespace
 
     if test -n "$ATUIN_H"
         if string match --quiet '__atuin_accept__:*' "$ATUIN_H"
