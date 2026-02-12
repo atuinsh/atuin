@@ -1,0 +1,37 @@
+[package]
+name = "atuin-ai"
+edition = "2024"
+description = "ai library for atuin"
+
+rust-version = { workspace = true }
+version = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+atuin-client = { path = "../atuin-client", version = "18.12.0-beta.4" }
+atuin-common = { path = "../atuin-common", version = "18.12.1" }
+tokio = { workspace = true }
+eyre = { workspace = true }
+clap = { workspace = true, features = ["derive", "env"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = [
+  "ansi",
+  "fmt",
+  "registry",
+  "env-filter",
+] }
+directories = { workspace = true }
+tracing-appender = "0.2.4"
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+crossterm = { workspace = true }
+ratatui = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
