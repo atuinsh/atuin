@@ -1,4 +1,4 @@
-FROM lukemathwalker/cargo-chef:latest-rust-1.93.0-slim-bookworm AS chef
+FROM lukemathwalker/cargo-chef:latest-rust-1.93.1-slim-bookworm AS chef
 WORKDIR app
 
 FROM chef AS planner
