@@ -64,6 +64,7 @@ nav:
       - Import existing history: guide/import.md
       - Basic usage: guide/basic-usage.md
       - Advanced usage: guide/advanced-usage.md
+      - Shell Integration: guide/shell-integration.md
       - Deleting history: guide/delete-history.md
       - Syncing dotfiles: guide/dotfiles.md
       - Theming: guide/theming.md
