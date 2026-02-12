@@ -1,6 +1,6 @@
-pub mod client;
+pub mod commands;
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
-    client::run().await
+    commands::run().await
 }
