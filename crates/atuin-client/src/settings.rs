@@ -734,7 +734,13 @@ pub struct Settings {
     pub style: Style,
     pub auto_sync: bool,
     pub update_check: bool,
+
+    /// The address of the Atuin Hub. Used for Hub-specific features like AI.
+    pub hub_address: String,
+
+    /// The sync address for atuin.
     pub sync_address: String,
+
     pub sync_frequency: String,
     pub db_path: String,
     pub record_store_path: String,
@@ -1014,6 +1020,7 @@ impl Settings {
             .set_default("timezone", "local")?
             .set_default("auto_sync", true)?
             .set_default("update_check", cfg!(feature = "check-update"))?
+            .set_default("hub_address", "https://hub.atuin.sh")?
             .set_default("sync_address", "https://api.atuin.sh")?
             .set_default("sync_frequency", "5m")?
             .set_default("search_mode", "fuzzy")?

@@ -35,18 +35,22 @@ fn get_input() -> Result<String> {
 
 impl Cmd {
     pub async fn run(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
-        // TODO(ellie): Replace this with a call to atuin_client::login::login
-        // The reason I haven't done this yet is that this implementation allows for
-        // an empty key. This will use an existing key file.
-        //
-        // I'd quite like to ditch that behaviour, so have not brought it into the library
-        // function.
         if settings.logged_in().await? {
             bail!(
                 "You are already logged in! Please run 'atuin logout' if you wish to login again"
             );
         }
 
+        self.run_sync_login(settings, store).await
+    }
+
+    async fn run_sync_login(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
+        // TODO(ellie): Replace this with a call to atuin_client::login::login
+        // The reason I haven't done this yet is that this implementation allows for
+        // an empty key. This will use an existing key file.
+        //
+        // I'd quite like to ditch that behaviour, so have not brought it into the library
+        // function.
         let username = or_user_input(self.username.clone(), "username");
         let password = self.password.clone().unwrap_or_else(read_user_password);
 
