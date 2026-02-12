@@ -41,14 +41,10 @@ impl Cmd {
             );
         }
 
-        if settings.hub_sync {
-            run_hub(settings, store).await
-        } else {
-            self.run_classic(settings, store).await
-        }
+        self.run_sync_login(settings, store).await
     }
 
-    async fn run_classic(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
+    async fn run_sync_login(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
         // TODO(ellie): Replace this with a call to atuin_client::login::login
         // The reason I haven't done this yet is that this implementation allows for
         // an empty key. This will use an existing key file.
@@ -157,10 +153,6 @@ impl Cmd {
 
         Ok(())
     }
-}
-
-async fn run_hub(settings: &Settings, store: &SqliteStore) -> Result<()> {
-    super::hub::run(settings, store).await
 }
 
 pub(super) fn or_user_input(value: Option<String>, name: &'static str) -> String {

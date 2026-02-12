@@ -21,6 +21,7 @@ const KEY_LAST_SYNC: &str = "last_sync_time";
 const KEY_LAST_VERSION_CHECK: &str = "last_version_check_time";
 const KEY_LATEST_VERSION: &str = "latest_version";
 const KEY_SESSION: &str = "session";
+const KEY_HUB_SESSION: &str = "hub_session";
 const KEY_FILES_MIGRATED: &str = "files_migrated";
 
 pub struct MetaStore {
@@ -187,6 +188,24 @@ impl MetaStore {
 
     pub async fn logged_in(&self) -> Result<bool> {
         Ok(self.session_token().await?.is_some())
+    }
+
+    // Hub session methods (separate from sync session, used for Hub-specific features like AI)
+
+    pub async fn hub_session_token(&self) -> Result<Option<String>> {
+        self.get(KEY_HUB_SESSION).await
+    }
+
+    pub async fn save_hub_session(&self, token: &str) -> Result<()> {
+        self.set(KEY_HUB_SESSION, token).await
+    }
+
+    pub async fn delete_hub_session(&self) -> Result<()> {
+        self.delete(KEY_HUB_SESSION).await
+    }
+
+    pub async fn hub_logged_in(&self) -> Result<bool> {
+        Ok(self.hub_session_token().await?.is_some())
     }
 
     // File migration: on first open, migrate old plain-text files into the database.
