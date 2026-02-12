@@ -26,6 +26,8 @@ While searching in the TUI, you can adjust the "filter mode" by repeatedly press
 3. The current directory only
 4. The current shell session only
 
+See the [advanced usage](advanced-usage.md) page for more options.
+
 ## Common config adjustment
 
 For a full set of config values, please see the [config reference page](../configuration/config.md).

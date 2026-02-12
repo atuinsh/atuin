@@ -1,6 +1,6 @@
 use std::fmt;
 
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MediaKeyCode};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// A single key press with modifiers (e.g. `ctrl-c`, `alt-f`, `enter`).
@@ -23,6 +23,7 @@ pub enum KeyCodeValue {
     Tab,
     Backspace,
     Delete,
+    Insert,
     Up,
     Down,
     Left,
@@ -33,6 +34,7 @@ pub enum KeyCodeValue {
     PageDown,
     Space,
     F(u8),
+    Media(MediaKeyCode),
 }
 
 /// A key input that may be a single key or a multi-key sequence (e.g. `g g`).
@@ -70,8 +72,19 @@ impl SingleKey {
             KeyCode::Enter => KeyCodeValue::Enter,
             KeyCode::Esc => KeyCodeValue::Esc,
             KeyCode::Tab => KeyCodeValue::Tab,
+            // BackTab is sent by many terminals for Shift+Tab
+            KeyCode::BackTab => {
+                return Some(SingleKey {
+                    code: KeyCodeValue::Tab,
+                    ctrl,
+                    alt,
+                    shift: true,
+                    super_key,
+                });
+            }
             KeyCode::Backspace => KeyCodeValue::Backspace,
             KeyCode::Delete => KeyCodeValue::Delete,
+            KeyCode::Insert => KeyCodeValue::Insert,
             KeyCode::Up => KeyCodeValue::Up,
             KeyCode::Down => KeyCodeValue::Down,
             KeyCode::Left => KeyCodeValue::Left,
@@ -81,6 +94,7 @@ impl SingleKey {
             KeyCode::PageUp => KeyCodeValue::PageUp,
             KeyCode::PageDown => KeyCodeValue::PageDown,
             KeyCode::F(n) => KeyCodeValue::F(n),
+            KeyCode::Media(m) => KeyCodeValue::Media(m),
             _ => return None,
         };
 
@@ -125,6 +139,7 @@ impl SingleKey {
             "tab" => KeyCodeValue::Tab,
             "backspace" => KeyCodeValue::Backspace,
             "delete" | "del" => KeyCodeValue::Delete,
+            "insert" | "ins" => KeyCodeValue::Insert,
             "up" => KeyCodeValue::Up,
             "down" => KeyCodeValue::Down,
             "left" => KeyCodeValue::Left,
@@ -150,6 +165,20 @@ impl SingleKey {
             "]" => KeyCodeValue::Char(']'),
             "?" => KeyCodeValue::Char('?'),
             "/" => KeyCodeValue::Char('/'),
+            "$" => KeyCodeValue::Char('$'),
+            // Media keys (no dashes - the parser splits on dash for modifiers)
+            "play" => KeyCodeValue::Media(MediaKeyCode::Play),
+            "pause" => KeyCodeValue::Media(MediaKeyCode::Pause),
+            "playpause" => KeyCodeValue::Media(MediaKeyCode::PlayPause),
+            "stop" => KeyCodeValue::Media(MediaKeyCode::Stop),
+            "fastforward" => KeyCodeValue::Media(MediaKeyCode::FastForward),
+            "rewind" => KeyCodeValue::Media(MediaKeyCode::Rewind),
+            "tracknext" => KeyCodeValue::Media(MediaKeyCode::TrackNext),
+            "trackprevious" => KeyCodeValue::Media(MediaKeyCode::TrackPrevious),
+            "record" => KeyCodeValue::Media(MediaKeyCode::Record),
+            "lowervolume" => KeyCodeValue::Media(MediaKeyCode::LowerVolume),
+            "raisevolume" => KeyCodeValue::Media(MediaKeyCode::RaiseVolume),
+            "mutevolume" | "mute" => KeyCodeValue::Media(MediaKeyCode::MuteVolume),
             _ => {
                 let chars: Vec<char> = key_part.chars().collect();
                 if chars.len() == 1 {
@@ -202,6 +231,7 @@ impl fmt::Display for SingleKey {
             KeyCodeValue::Tab => write!(f, "tab"),
             KeyCodeValue::Backspace => write!(f, "backspace"),
             KeyCodeValue::Delete => write!(f, "delete"),
+            KeyCodeValue::Insert => write!(f, "insert"),
             KeyCodeValue::Up => write!(f, "up"),
             KeyCodeValue::Down => write!(f, "down"),
             KeyCodeValue::Left => write!(f, "left"),
@@ -212,6 +242,21 @@ impl fmt::Display for SingleKey {
             KeyCodeValue::PageDown => write!(f, "pagedown"),
             KeyCodeValue::Space => write!(f, "space"),
             KeyCodeValue::F(n) => write!(f, "f{n}"),
+            KeyCodeValue::Media(m) => match m {
+                MediaKeyCode::Play => write!(f, "play"),
+                MediaKeyCode::Pause => write!(f, "media-pause"),
+                MediaKeyCode::PlayPause => write!(f, "playpause"),
+                MediaKeyCode::Stop => write!(f, "stop"),
+                MediaKeyCode::FastForward => write!(f, "fastforward"),
+                MediaKeyCode::Rewind => write!(f, "rewind"),
+                MediaKeyCode::TrackNext => write!(f, "tracknext"),
+                MediaKeyCode::TrackPrevious => write!(f, "trackprevious"),
+                MediaKeyCode::Record => write!(f, "record"),
+                MediaKeyCode::LowerVolume => write!(f, "lowervolume"),
+                MediaKeyCode::RaiseVolume => write!(f, "raisevolume"),
+                MediaKeyCode::MuteVolume => write!(f, "mutevolume"),
+                MediaKeyCode::Reverse => write!(f, "reverse"),
+            },
         }
     }
 }
@@ -522,5 +567,63 @@ mod tests {
         let from_event = SingleKey::from_event(&event).unwrap();
         let parsed = SingleKey::parse("f12").unwrap();
         assert_eq!(from_event, parsed);
+    }
+
+    #[test]
+    fn from_event_backtab_becomes_shift_tab() {
+        // Many terminals send BackTab for Shift+Tab
+        let event = KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE);
+        let k = SingleKey::from_event(&event).unwrap();
+        assert_eq!(k.code, KeyCodeValue::Tab);
+        assert!(k.shift);
+        assert!(!k.ctrl && !k.alt);
+    }
+
+    #[test]
+    fn from_event_backtab_matches_parsed_shift_tab() {
+        let event = KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE);
+        let from_event = SingleKey::from_event(&event).unwrap();
+        let parsed = SingleKey::parse("shift-tab").unwrap();
+        assert_eq!(from_event, parsed);
+    }
+
+    #[test]
+    fn from_event_backtab_with_ctrl() {
+        // BackTab with ctrl modifier
+        let event = KeyEvent::new(KeyCode::BackTab, KeyModifiers::CONTROL);
+        let k = SingleKey::from_event(&event).unwrap();
+        assert_eq!(k.code, KeyCodeValue::Tab);
+        assert!(k.shift);
+        assert!(k.ctrl);
+    }
+
+    #[test]
+    fn parse_insert_key() {
+        let k = SingleKey::parse("insert").unwrap();
+        assert_eq!(k.code, KeyCodeValue::Insert);
+        assert!(!k.ctrl && !k.alt && !k.shift);
+
+        let k = SingleKey::parse("ins").unwrap();
+        assert_eq!(k.code, KeyCodeValue::Insert);
+
+        let k = SingleKey::parse("ctrl-insert").unwrap();
+        assert_eq!(k.code, KeyCodeValue::Insert);
+        assert!(k.ctrl);
+    }
+
+    #[test]
+    fn from_event_insert_key() {
+        let event = KeyEvent::new(KeyCode::Insert, KeyModifiers::NONE);
+        let k = SingleKey::from_event(&event).unwrap();
+        assert_eq!(k.code, KeyCodeValue::Insert);
+    }
+
+    #[test]
+    fn insert_key_round_trip() {
+        let k = KeyInput::parse("insert").unwrap();
+        let display = k.to_string();
+        assert_eq!(display, "insert");
+        let k2 = KeyInput::parse(&display).unwrap();
+        assert_eq!(k, k2);
     }
 }

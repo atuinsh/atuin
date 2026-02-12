@@ -69,7 +69,34 @@ An uppercase letter represents itself without needing a `shift` modifier. For ex
 Some special characters are written out directly:
 
 ```
-"?", "/", "[", "]"
+"?", "/", "[", "]", "$"
+```
+
+### Shifted and punctuation keys
+
+When you press a key like `Shift+1`, your terminal sends the resulting character (`!`) rather than "shift-1". To bind shifted punctuation keys, use the character directly:
+
+```toml
+[keymap.emacs]
+"!" = "some-action"    # Binds to Shift+1
+"@" = "some-action"    # Binds to Shift+2
+"#" = "some-action"    # Binds to Shift+3
+"$" = "cursor-end"     # Binds to Shift+4 (vim $ motion)
+```
+
+Any single character can be used as a key binding.
+
+!!! note
+    The `shift` modifier is still valid for non-character keys like `"shift-tab"` or `"shift-up"`.
+
+### Media keys
+
+Media keys are supported on terminals that implement the kitty keyboard protocol with `DISAMBIGUATE_ESCAPE_CODES` enabled:
+
+```
+"play", "pause", "playpause", "stop"
+"fastforward", "rewind", "tracknext", "trackprevious"
+"record", "lowervolume", "raisevolume", "mutevolume", "mute"
 ```
 
 ### Multi-key sequences
@@ -127,6 +154,7 @@ Actions are specified as kebab-case strings.
 | `cursor-right` | Move cursor one character right |
 | `cursor-word-left` | Move cursor one word left |
 | `cursor-word-right` | Move cursor one word right |
+| `cursor-word-end` | Move cursor to end of current/next word (vim `e` motion) |
 | `cursor-start` | Move cursor to start of line |
 | `cursor-end` | Move cursor to end of line |
 
@@ -178,6 +206,8 @@ Note: `select-next` and `select-previous` respect the `invert` setting. When `in
 | `cycle-filter-mode` | Cycle through filter modes (global, host, session, directory) |
 | `cycle-search-mode` | Cycle through search modes (fuzzy, prefix, fulltext, skim) |
 | `toggle-tab` | Toggle between the search tab and inspector tab |
+| `switch-context` | Switch to the [context](../guide/advanced-usage.md#context-switch) of the currently selected command |
+| `clear-context` | Return to the initial [context](../guide/advanced-usage.md#context-switch) |
 
 The difference between `accept` and `return-selection`: `accept` runs the command immediately when the TUI closes, while `return-selection` places it on your command line for further editing before you press enter. The `enter_accept` setting controls which of these the default `enter` key uses.
 
@@ -191,6 +221,7 @@ The difference between `accept` and `return-selection`: `accept` runs the comman
 | `vim-enter-insert-at-start` | Move to start of line and enter vim insert mode (like vim `I`) |
 | `vim-enter-insert-at-end` | Move to end of line and enter vim insert mode (like vim `A`) |
 | `vim-search-insert` | Clear the search input and enter vim insert mode (like vim `?` or `/`) |
+| `vim-change-to-end` | Delete to end of line and enter vim insert mode (like vim `C`) |
 | `enter-prefix-mode` | Enter prefix mode (waits for one more key, e.g. `d` for delete) |
 
 ### Inspector
@@ -217,10 +248,12 @@ Conditions let a single key do different things depending on the current state. 
 | `cursor-at-start` | The cursor is at position 0 |
 | `cursor-at-end` | The cursor is at the end of the input |
 | `input-empty` | The input line is empty (no text entered) |
+| `original-input-empty` | The original query passed to the TUI was empty |
 | `list-at-start` | The selection is at the first entry (index 0) |
 | `list-at-end` | The selection is at the last entry |
 | `no-results` | The search returned zero results |
 | `has-results` | The search returned at least one result |
+| `has-context` | The context comes from a previously selected command (`switch-context`) |
 
 ### Boolean expressions
 

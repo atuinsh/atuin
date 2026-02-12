@@ -305,8 +305,8 @@ records = true
 ## When enabled and running inside tmux, Atuin will use a popup window for interactive search.
 ## Set to false to disable the popup.
 ## This can also be controlled with the ATUIN_TMUX_POPUP environment variable.
-## Note: tmux popup is currently supported in zsh, bash, and fish shells.
-# enabled = true
+## Note: The tmux popup is currently supported in zsh, bash, and fish shells. This currently doesn't work with iTerm native tmux integration.
+# enabled = false
 
 ## Width of the tmux popup window
 ## Can be a percentage, or integer (e.g. "100" means 100 characters wide)

@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use atuin_client::{
     database::{Context, Database},
-    history::History,
+    history::{History, HistoryId},
     settings::{FilterMode, SearchMode, Settings},
 };
 use eyre::Result;
@@ -22,6 +22,7 @@ pub struct SearchState {
     pub input: Cursor,
     pub filter_mode: FilterMode,
     pub context: Context,
+    pub custom_context: Option<HistoryId>,
 }
 
 impl SearchState {
@@ -44,6 +45,7 @@ impl SearchState {
 
     fn filter_mode_available(&self, mode: FilterMode, settings: &Settings) -> bool {
         match mode {
+            FilterMode::Global | FilterMode::SessionPreload => self.custom_context.is_none(),
             FilterMode::Workspace => settings.workspaces && self.context.git_root.is_some(),
             _ => true,
         }

@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [18.12.1] - 2026-02-11
+
+### Bug Fixes
+
+- *(shell)* Fix ATUIN_SESSION errors in tmux popup ([#3170](https://github.com/atuinsh/atuin/issues/3170))
+- *(tui)* Enter in vim normal mode, shift-tab keybind ([#3158](https://github.com/atuinsh/atuin/issues/3158))
+- Server start commands for Docker. ([#3160](https://github.com/atuinsh/atuin/issues/3160))
+
+
+### Features
+
+- Expand keybinding system with vim motions, media keys, and inspector improvements ([#3161](https://github.com/atuinsh/atuin/issues/3161))
+- Add original-input-empty keybind condition ([#3171](https://github.com/atuinsh/atuin/issues/3171))
+
+
+### Miscellaneous Tasks
+
+- Update changelog
+
+
 ## [18.12.0] - 2026-02-09
 
 ### Bug Fixes

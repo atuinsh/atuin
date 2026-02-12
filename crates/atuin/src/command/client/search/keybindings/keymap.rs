@@ -126,6 +126,8 @@ mod tests {
             input_byte_len: width,
             selected_index: selected,
             results_len: len,
+            original_input_empty: false,
+            has_context: false,
         }
     }
 

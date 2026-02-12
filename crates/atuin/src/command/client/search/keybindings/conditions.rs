@@ -8,10 +8,12 @@ pub enum ConditionAtom {
     CursorAtStart,
     CursorAtEnd,
     InputEmpty,
+    OriginalInputEmpty,
     ListAtEnd,
     ListAtStart,
     NoResults,
     HasResults,
+    HasContext,
 }
 
 /// Boolean expression tree over condition atoms.
@@ -46,6 +48,10 @@ pub struct EvalContext {
     pub selected_index: usize,
     /// Total number of results.
     pub results_len: usize,
+    /// Whether the original input (query passed to the TUI) was empty.
+    pub original_input_empty: bool,
+    /// Whether we use a search context of a command from the history.
+    pub has_context: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -59,12 +65,14 @@ impl ConditionAtom {
             ConditionAtom::CursorAtStart => ctx.cursor_position == 0,
             ConditionAtom::CursorAtEnd => ctx.cursor_position == ctx.input_width,
             ConditionAtom::InputEmpty => ctx.input_byte_len == 0,
+            ConditionAtom::OriginalInputEmpty => ctx.original_input_empty,
             ConditionAtom::ListAtEnd => {
                 ctx.results_len == 0 || ctx.selected_index >= ctx.results_len.saturating_sub(1)
             }
             ConditionAtom::ListAtStart => ctx.results_len == 0 || ctx.selected_index == 0,
             ConditionAtom::NoResults => ctx.results_len == 0,
             ConditionAtom::HasResults => ctx.results_len > 0,
+            ConditionAtom::HasContext => ctx.has_context,
         }
     }
 
@@ -74,10 +82,12 @@ impl ConditionAtom {
             "cursor-at-start" => Ok(ConditionAtom::CursorAtStart),
             "cursor-at-end" => Ok(ConditionAtom::CursorAtEnd),
             "input-empty" => Ok(ConditionAtom::InputEmpty),
+            "original-input-empty" => Ok(ConditionAtom::OriginalInputEmpty),
             "list-at-end" => Ok(ConditionAtom::ListAtEnd),
             "list-at-start" => Ok(ConditionAtom::ListAtStart),
             "no-results" => Ok(ConditionAtom::NoResults),
             "has-results" => Ok(ConditionAtom::HasResults),
+            "has-context" => Ok(ConditionAtom::HasContext),
             _ => Err(format!("unknown condition: {s}")),
         }
     }
@@ -88,10 +98,12 @@ impl ConditionAtom {
             ConditionAtom::CursorAtStart => "cursor-at-start",
             ConditionAtom::CursorAtEnd => "cursor-at-end",
             ConditionAtom::InputEmpty => "input-empty",
+            ConditionAtom::OriginalInputEmpty => "original-input-empty",
             ConditionAtom::ListAtEnd => "list-at-end",
             ConditionAtom::ListAtStart => "list-at-start",
             ConditionAtom::NoResults => "no-results",
             ConditionAtom::HasResults => "has-results",
+            ConditionAtom::HasContext => "has-context",
         }
     }
 }
@@ -370,12 +382,25 @@ mod tests {
         selected: usize,
         len: usize,
     ) -> EvalContext {
+        ctx_with_original(cursor, width, byte_len, selected, len, false)
+    }
+
+    fn ctx_with_original(
+        cursor: usize,
+        width: usize,
+        byte_len: usize,
+        selected: usize,
+        len: usize,
+        original_input_empty: bool,
+    ) -> EvalContext {
         EvalContext {
             cursor_position: cursor,
             input_width: width,
             input_byte_len: byte_len,
             selected_index: selected,
             results_len: len,
+            original_input_empty,
+            has_context: false,
         }
     }
 
@@ -401,6 +426,22 @@ mod tests {
     }
 
     #[test]
+    fn atom_original_input_empty() {
+        // original_input_empty = true
+        assert!(
+            ConditionAtom::OriginalInputEmpty.evaluate(&ctx_with_original(0, 0, 0, 0, 10, true))
+        );
+        // original_input_empty = false
+        assert!(
+            !ConditionAtom::OriginalInputEmpty.evaluate(&ctx_with_original(0, 0, 0, 0, 10, false))
+        );
+        // original_input_empty is independent of current input state
+        assert!(
+            ConditionAtom::OriginalInputEmpty.evaluate(&ctx_with_original(0, 5, 5, 0, 10, true))
+        );
+    }
+
+    #[test]
     fn atom_list_at_end() {
         assert!(ConditionAtom::ListAtEnd.evaluate(&ctx(0, 0, 0, 99, 100)));
         assert!(!ConditionAtom::ListAtEnd.evaluate(&ctx(0, 0, 0, 50, 100)));
@@ -423,11 +464,20 @@ mod tests {
     }
 
     #[test]
+    fn atom_has_context() {
+        let mut context = ctx(0, 0, 0, 0, 0);
+        assert!(!ConditionAtom::HasContext.evaluate(&context));
+        context.has_context = true;
+        assert!(ConditionAtom::HasContext.evaluate(&context));
+    }
+
+    #[test]
     fn atom_parse_round_trip() {
         let conditions = [
             "cursor-at-start",
             "cursor-at-end",
             "input-empty",
+            "original-input-empty",
             "list-at-end",
             "list-at-start",
             "no-results",

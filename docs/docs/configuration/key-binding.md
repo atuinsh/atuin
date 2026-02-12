@@ -202,31 +202,32 @@ $env.config = (
 ## Atuin UI shortcuts
 
 | Shortcut                                  | Action                                                                        |
-| ----------------------------------------- | ----------------------------------------------------------------------------- |
-| enter                                     | Execute selected item                                                        |
+|-------------------------------------------|-------------------------------------------------------------------------------|
+| enter                                     | Execute selected item                                                         |
 | tab                                       | Select item and edit                                                          |
 | ctrl + r                                  | Cycle through filter modes                                                    |
 | ctrl + s                                  | Cycle through search modes                                                    |
 | alt + 1 to alt + 9                        | Select item by the number located near it                                     |
 | ctrl + c / ctrl + d / ctrl + g / esc      | Return original                                                               |
 | ctrl + y                                  | Copy selected item to clipboard                                               |
-| ctrl + ← / alt + b                       | Move the cursor to the previous word                                          |
-| ctrl + → / alt + f                       | Move the cursor to the next word                                              |
-| ctrl + b / ←                  | Move the cursor to the left                                                   |
-| ctrl + f / →                  | Move the cursor to the right                                                  |
+| ctrl + ← / alt + b                        | Move the cursor to the previous word                                          |
+| ctrl + → / alt + f                        | Move the cursor to the next word                                              |
+| ctrl + b / ←                              | Move the cursor to the left                                                   |
+| ctrl + f / →                              | Move the cursor to the right                                                  |
 | ctrl + a / home                           | Move the cursor to the start of the line                                      |
 | ctrl + e / end                            | Move the cursor to the end of the line                                        |
 | ctrl + backspace / ctrl + alt + backspace | Remove the previous word / remove the word just before the cursor             |
 | ctrl + delete / ctrl + alt + delete       | Remove the next word or the word just after the cursor                        |
 | ctrl + w                                  | Remove the word before the cursor even if it spans across the word boundaries |
 | ctrl + u                                  | Clear the current line                                                        |
-| ctrl + n / ctrl + j / ↑                  | Select the next item on the list                                              |
-| ctrl + p / ctrl + k / ↓                  | Select the previous item on the list                                          |
+| ctrl + n / ctrl + j / ↑                   | Select the next item on the list                                              |
+| ctrl + p / ctrl + k / ↓                   | Select the previous item on the list                                          |
 | ctrl + o                                  | Open the [inspector](#inspector)                                              |
 | page down                                 | Scroll search results one page down                                           |
 | page up                                   | Scroll search results one page up                                             |
-| ↓ (with no entry selected)               | Return original or return query depending on [settings](config.md#exit_mode)                         |
-| ↓                                        | Select the next item on the list                                              |
+| ↓ (with no entry selected)                | Return original or return query depending on [settings](config.md#exit_mode)  |
+| ↓                                         | Select the next item on the list                                              |
+| ctrl + a, c                               | Switch to the context of the currently selected command / return to default   |
 
 
 ### Vim mode
@@ -238,6 +239,15 @@ If [vim is enabled in the config](config.md#keymap_mode), the following keybindi
 | j        | Normal | Selects the previous item on the list      |
 | h        | Normal | Move cursor left                           |
 | l        | Normal | Move cursor right                          |
+| 0        | Normal | Move cursor to start of line               |
+| $        | Normal | Move cursor to end of line                 |
+| w        | Normal | Move cursor to next word                   |
+| b        | Normal | Move cursor to previous word               |
+| e        | Normal | Move cursor to end of current/next word    |
+| x        | Normal | Delete character under cursor              |
+| dd       | Normal | Clear the entire line                      |
+| D        | Normal | Delete to end of line                      |
+| C        | Normal | Delete to end of line and enter insert     |
 | i        | Normal | Enters insert mode                         |
 | I        | Normal | Move to start of line and enter insert     |
 | a        | Normal | Move right and enter insert mode           |
@@ -253,17 +263,22 @@ If [vim is enabled in the config](config.md#keymap_mode), the following keybindi
 | L        | Normal | Jump to bottom of visible screen           |
 | ? or /   | Normal | Clear input and enter insert mode          |
 | 1-9      | Normal | Select item by number                      |
+| enter    | Normal | Execute selected item (respects enter_accept) |
 | Esc      | Insert | Enters normal mode                         |
 
 
 ### Inspector
 Open the inspector with ctrl + o
 
-| Shortcut | Action                                        |
-| -------- | --------------------------------------------- |
-| Esc      | Close the inspector, returning to the shell   |
-| ctrl + o | Close the inspector, returning to search view |
-| ctrl + d | Delete the inspected item from the history    |
-| ↑        | Inspect the previous item in the history      |
-| ↓        | Inspect the next item in the history          |
-| tab      | Select current item and edit                  |
+| Shortcut  | Action                                        |
+| --------- | --------------------------------------------- |
+| Esc       | Close the inspector, returning to the shell   |
+| ctrl + o  | Close the inspector, returning to search view |
+| ctrl + d  | Delete the inspected item from the history    |
+| ↑         | Inspect the previous item in the history      |
+| ↓         | Inspect the next item in the history          |
+| page up   | Inspect the previous item in the history      |
+| page down | Inspect the next item in the history          |
+| j / k     | Navigate items (when vim mode is enabled)     |
+| enter     | Execute selected item (respects enter_accept) |
+| tab       | Select current item and edit                  |

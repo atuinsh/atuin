@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use atuin_client::settings::{KeyBindingConfig, Settings};
+use tracing::warn;
 
 use super::actions::Action;
 use super::conditions::{ConditionAtom, ConditionExpr};
@@ -272,6 +273,19 @@ pub fn default_vim_normal_keymap(settings: &Settings) -> Keymap {
     km.bind(key("h"), Action::CursorLeft);
     km.bind(key("l"), Action::CursorRight);
 
+    // --- Vim cursor movement ---
+    km.bind(key("0"), Action::CursorStart);
+    km.bind(key("$"), Action::CursorEnd);
+    km.bind(key("w"), Action::CursorWordRight);
+    km.bind(key("b"), Action::CursorWordLeft);
+    km.bind(key("e"), Action::CursorWordEnd);
+
+    // --- Vim editing ---
+    km.bind(key("x"), Action::DeleteCharAfter);
+    km.bind(key("d d"), Action::ClearLine);
+    km.bind(key("D"), Action::ClearToEnd);
+    km.bind(key("C"), Action::VimChangeToEnd);
+
     // --- Mode switching ---
     km.bind(key("?"), Action::VimSearchInsert);
     km.bind(key("/"), Action::VimSearchInsert);
@@ -306,6 +320,10 @@ pub fn default_vim_normal_keymap(settings: &Settings) -> Keymap {
     km.bind(key("pagedown"), Action::ScrollPageDown);
     km.bind(key("pageup"), Action::ScrollPageUp);
 
+    // --- Accept ---
+    let accept = accept_action(settings);
+    km.bind(key("enter"), accept);
+
     km
 }
 
@@ -330,10 +348,17 @@ pub fn default_vim_insert_keymap(settings: &Settings) -> Keymap {
 // ---------------------------------------------------------------------------
 
 /// Build the default inspector keymap (tab index 1).
-pub fn default_inspector_keymap(_settings: &Settings) -> Keymap {
+///
+/// The inspector shows details about the selected history item and has no
+/// text input, so we build a minimal keymap with only inspector-relevant
+/// bindings. We respect the user's `keymap_mode` to provide vim-style j/k
+/// navigation for vim users.
+pub fn default_inspector_keymap(settings: &Settings) -> Keymap {
+    use atuin_client::settings::KeymapMode;
+
     let mut km = Keymap::new();
 
-    // Common bindings
+    // Common bindings (same as search tab)
     km.bind(key("ctrl-c"), Action::ReturnOriginal);
     km.bind(key("ctrl-g"), Action::ReturnOriginal);
     km.bind(key("esc"), Action::Exit);
@@ -341,10 +366,31 @@ pub fn default_inspector_keymap(_settings: &Settings) -> Keymap {
     km.bind(key("tab"), Action::ReturnSelection);
     km.bind(key("ctrl-o"), Action::ToggleTab);
 
-    // Inspector-specific
+    // Accept behavior respects enter_accept setting
+    let accept = if settings.enter_accept {
+        Action::Accept
+    } else {
+        Action::ReturnSelection
+    };
+    km.bind(key("enter"), accept);
+
+    // Inspector-specific: delete history entry
     km.bind(key("ctrl-d"), Action::Delete);
+
+    // Inspector navigation
     km.bind(key("up"), Action::InspectPrevious);
     km.bind(key("down"), Action::InspectNext);
+    km.bind(key("pageup"), Action::InspectPrevious);
+    km.bind(key("pagedown"), Action::InspectNext);
+
+    // For vim users, add j/k navigation
+    if matches!(
+        settings.keymap_mode,
+        KeymapMode::VimNormal | KeymapMode::VimInsert
+    ) {
+        km.bind(key("j"), Action::InspectNext);
+        km.bind(key("k"), Action::InspectPrevious);
+    }
 
     km
 }
@@ -359,6 +405,13 @@ pub fn default_prefix_keymap() -> Keymap {
 
     km.bind(key("d"), Action::Delete);
     km.bind(key("a"), Action::CursorStart);
+    km.bind_conditional(
+        key("c"),
+        vec![
+            KeyRule::when(ConditionAtom::HasContext, Action::ClearContext),
+            KeyRule::always(Action::SwitchContext),
+        ],
+    );
 
     km
 }
@@ -405,7 +458,7 @@ fn apply_config_to_keymap(keymap: &mut Keymap, overrides: &HashMap<String, KeyBi
         let key = match KeyInput::parse(key_str) {
             Ok(k) => k,
             Err(e) => {
-                eprintln!("[atuin] warning: invalid key in keymap config: {key_str:?}: {e}");
+                warn!("invalid key in keymap config: {key_str:?}: {e}");
                 continue;
             }
         };
@@ -414,7 +467,7 @@ fn apply_config_to_keymap(keymap: &mut Keymap, overrides: &HashMap<String, KeyBi
                 keymap.bindings.insert(key, binding);
             }
             Err(e) => {
-                eprintln!("[atuin] warning: invalid binding for {key_str:?} in keymap config: {e}");
+                warn!("invalid binding for {key_str:?} in keymap config: {e}");
             }
         }
     }
@@ -483,6 +536,8 @@ mod tests {
             input_byte_len: width,
             selected_index: selected,
             results_len: len,
+            original_input_empty: false,
+            has_context: false,
         }
     }
 
@@ -726,6 +781,26 @@ mod tests {
             km.resolve(&key("L"), &ctx),
             Some(Action::ScrollToScreenBottom)
         );
+    }
+
+    #[test]
+    fn vim_normal_enter_returns_selection() {
+        // enter_accept=false in test defaults → ReturnSelection
+        let km = default_vim_normal_keymap(&default_settings());
+        let ctx = make_ctx(0, 0, 0, 10);
+        assert_eq!(
+            km.resolve(&key("enter"), &ctx),
+            Some(Action::ReturnSelection)
+        );
+    }
+
+    #[test]
+    fn vim_normal_enter_accept_true_uses_accept() {
+        let mut settings = default_settings();
+        settings.enter_accept = true;
+        let km = default_vim_normal_keymap(&settings);
+        let ctx = make_ctx(0, 0, 0, 10);
+        assert_eq!(km.resolve(&key("enter"), &ctx), Some(Action::Accept));
     }
 
     // -- Vim Insert keymap tests --
@@ -1150,5 +1225,61 @@ mod tests {
         let mut modified = Keys::standard_defaults();
         modified.prefix = "x".to_string();
         assert!(modified.has_non_default_values());
+    }
+
+    #[test]
+    fn original_input_empty_condition_in_config() {
+        use atuin_client::settings::{KeyBindingConfig, KeyRuleConfig};
+        use std::collections::HashMap;
+
+        let mut settings = default_settings();
+        // Configure esc to: if original-input-empty -> return-query, else return-original
+        settings.keymap.emacs = HashMap::from([(
+            "esc".to_string(),
+            KeyBindingConfig::Rules(vec![
+                KeyRuleConfig {
+                    when: Some("original-input-empty".to_string()),
+                    action: "return-query".to_string(),
+                },
+                KeyRuleConfig {
+                    when: None,
+                    action: "return-original".to_string(),
+                },
+            ]),
+        )]);
+
+        let set = KeymapSet::from_settings(&settings);
+
+        // When original input was empty, should return-query
+        let ctx_original_empty = EvalContext {
+            cursor_position: 0,
+            input_width: 5,
+            input_byte_len: 5,
+            selected_index: 0,
+            results_len: 10,
+            original_input_empty: true,
+            has_context: false,
+        };
+        assert_eq!(
+            set.emacs.resolve(&key("esc"), &ctx_original_empty),
+            Some(Action::ReturnQuery),
+            "esc with original_input_empty=true should return-query"
+        );
+
+        // When original input was not empty, should return-original
+        let ctx_original_not_empty = EvalContext {
+            cursor_position: 0,
+            input_width: 5,
+            input_byte_len: 5,
+            selected_index: 0,
+            results_len: 10,
+            original_input_empty: false,
+            has_context: false,
+        };
+        assert_eq!(
+            set.emacs.resolve(&key("esc"), &ctx_original_not_empty),
+            Some(Action::ReturnOriginal),
+            "esc with original_input_empty=false should return-original"
+        );
     }
 }
