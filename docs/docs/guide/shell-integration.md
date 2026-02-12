@@ -35,7 +35,6 @@ Many development tools include embedded terminals:
 
 - **IDEs**: PyCharm, IntelliJ, VS Code, Cursor, Zed
 - **AI coding assistants**: Claude Code, GitHub Copilot CLI, Aider
-- **Multiplexers and wrappers**: tmux, screen, custom terminal wrappers
 - **Container environments**: Docker, Podman, devcontainers
 
 These tools often spawn shells differently than your regular terminal, which can prevent Atuin from working.
