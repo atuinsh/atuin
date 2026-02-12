@@ -13,6 +13,7 @@ pub enum ConditionAtom {
     ListAtStart,
     NoResults,
     HasResults,
+    HasContext,
 }
 
 /// Boolean expression tree over condition atoms.
@@ -49,6 +50,8 @@ pub struct EvalContext {
     pub results_len: usize,
     /// Whether the original input (query passed to the TUI) was empty.
     pub original_input_empty: bool,
+    /// Whether we use a search context of a command from the history.
+    pub has_context: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -69,6 +72,7 @@ impl ConditionAtom {
             ConditionAtom::ListAtStart => ctx.results_len == 0 || ctx.selected_index == 0,
             ConditionAtom::NoResults => ctx.results_len == 0,
             ConditionAtom::HasResults => ctx.results_len > 0,
+            ConditionAtom::HasContext => ctx.has_context,
         }
     }
 
@@ -83,6 +87,7 @@ impl ConditionAtom {
             "list-at-start" => Ok(ConditionAtom::ListAtStart),
             "no-results" => Ok(ConditionAtom::NoResults),
             "has-results" => Ok(ConditionAtom::HasResults),
+            "has-context" => Ok(ConditionAtom::HasContext),
             _ => Err(format!("unknown condition: {s}")),
         }
     }
@@ -98,6 +103,7 @@ impl ConditionAtom {
             ConditionAtom::ListAtStart => "list-at-start",
             ConditionAtom::NoResults => "no-results",
             ConditionAtom::HasResults => "has-results",
+            ConditionAtom::HasContext => "has-context",
         }
     }
 }
@@ -394,6 +400,7 @@ mod tests {
             selected_index: selected,
             results_len: len,
             original_input_empty,
+            has_context: false,
         }
     }
 
@@ -454,6 +461,14 @@ mod tests {
         assert!(!ConditionAtom::NoResults.evaluate(&ctx(0, 0, 0, 0, 5)));
         assert!(ConditionAtom::HasResults.evaluate(&ctx(0, 0, 0, 0, 5)));
         assert!(!ConditionAtom::HasResults.evaluate(&ctx(0, 0, 0, 0, 0)));
+    }
+
+    #[test]
+    fn atom_has_context() {
+        let mut context = ctx(0, 0, 0, 0, 0);
+        assert!(!ConditionAtom::HasContext.evaluate(&context));
+        context.has_context = true;
+        assert!(ConditionAtom::HasContext.evaluate(&context));
     }
 
     #[test]

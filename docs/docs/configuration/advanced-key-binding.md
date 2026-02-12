@@ -206,6 +206,8 @@ Note: `select-next` and `select-previous` respect the `invert` setting. When `in
 | `cycle-filter-mode` | Cycle through filter modes (global, host, session, directory) |
 | `cycle-search-mode` | Cycle through search modes (fuzzy, prefix, fulltext, skim) |
 | `toggle-tab` | Toggle between the search tab and inspector tab |
+| `switch-context` | Switch to the [context](../guide/advanced-usage.md#context-switch) of the currently selected command |
+| `clear-context` | Return to the initial [context](../guide/advanced-usage.md#context-switch) |
 
 The difference between `accept` and `return-selection`: `accept` runs the command immediately when the TUI closes, while `return-selection` places it on your command line for further editing before you press enter. The `enter_accept` setting controls which of these the default `enter` key uses.
 
@@ -251,6 +253,7 @@ Conditions let a single key do different things depending on the current state. 
 | `list-at-end` | The selection is at the last entry |
 | `no-results` | The search returned zero results |
 | `has-results` | The search returned at least one result |
+| `has-context` | The context comes from a previously selected command (`switch-context`) |
 
 ### Boolean expressions
 

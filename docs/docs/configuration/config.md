@@ -139,13 +139,14 @@ Default: `global`
 
 The default filter to use when searching
 
-| Mode             | Description                                                  |
-| ---------------- | ------------------------------------------------------------ |
-| global (default) | Search history from all hosts, all sessions, all directories |
-| host             | Search history just from this host                           |
-| session          | Search history just from the current session                 |
-| directory        | Search history just from the current directory (global)      |
-| workspace        | Search history just from the current git repository (>17.0)  |
+| Mode             | Description                                                                          |
+|------------------|--------------------------------------------------------------------------------------|
+| global (default) | Search from the full history                                                         |
+| host             | Search history from this host                                                        |
+| session          | Search history from the current session                                              |
+| directory        | Search history from the current directory                                            |
+| workspace        | Search history from the current git repository                                       |
+| session-preload  | Search from the current session and the global history from before the session start |
 
 Filter modes can still be toggled via ctrl-r
 

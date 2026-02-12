@@ -32,6 +32,7 @@ use super::{
     settings::{FilterMode, SearchMode, Settings},
 };
 
+#[derive(Clone)]
 pub struct Context {
     pub session: String,
     pub cwd: String,
@@ -70,6 +71,18 @@ pub async fn current_context() -> eyre::Result<Context> {
         git_root,
         host_id: host_id.0.as_simple().to_string(),
     })
+}
+
+impl Context {
+    pub fn from_history(entry: &History) -> Self {
+        Context {
+            session: entry.session.to_string(),
+            cwd: entry.cwd.to_string(),
+            hostname: entry.hostname.to_string(),
+            host_id: String::new(),
+            git_root: utils::in_git_repo(entry.cwd.as_str()),
+        }
+    }
 }
 
 fn get_session_start_time(session_id: &str) -> Option<i64> {
