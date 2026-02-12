@@ -164,19 +164,7 @@ impl Cmd {
             )
         });
 
-        if (self.delete_it_all || self.delete) && self.limit.is_some() {
-            // Because of how deletion is implemented, it will always delete all matches
-            // and disregard the limit option. It is also not clear what deletion with a
-            // limit would even mean. Deleting the LIMIT most recent entries that match
-            // the search query would make sense, but that wouldn't match what's displayed
-            // when running the equivalent search, but deleting those entries that are
-            // displayed with the search would leave any duplicates of those lines which may
-            // or may not have been intended to be deleted.
-            eprintln!("\"--limit\" is not compatible with deletion.");
-            return Ok(());
-        }
-
-        if self.delete && query.is_empty() {
+        if self.delete && query.is_empty() && self.limit.is_none() {
             eprintln!(
                 "Please specify a query to match the items you wish to delete. If you wish to delete all history, pass --delete-it-all"
             );
@@ -227,7 +215,7 @@ impl Cmd {
                 eprintln!("{item}");
             }
         } else {
-            let opt_filter = OptFilters {
+            let mut opt_filter = OptFilters {
                 exit: self.exit,
                 exclude_exit: self.exclude_exit,
                 cwd: self.cwd,
@@ -249,23 +237,24 @@ impl Cmd {
 
             // if we aren't deleting, print it all
             if self.delete || self.delete_it_all {
-                // delete it
-                // it only took me _years_ to add this
-                // sorry
-                while !entries.is_empty() {
-                    for entry in &entries {
-                        eprintln!("deleting {}", entry.id);
+                // To preserve existing behaviour (deleting a command deletes all instances of that
+                // command), we must include duplicates here. However, if a limit is set, that could
+                // cause a different set of commands to be printed vs deleted: to avoid this, we
+                // explicitly require --include-duplicates if --limit is passed.
+                if self.limit.is_some() && !self.include_duplicates {
+                    eprintln!("Using \"--limit\" with \"--delete\" causes individual usages of commands to be deleted, so it requires \"--include-duplicates\".");
+                    return Ok(())
+                }
+                opt_filter.include_duplicates = true;
+                entries = run_non_interactive(settings, opt_filter.clone(), &query, &db).await?;
 
-                        if settings.sync.records {
-                            let (id, _) = history_store.delete(entry.id.clone()).await?;
-                            history_store.incremental_build(&db, &[id]).await?;
-                        } else {
-                            db.delete(entry.clone()).await?;
-                        }
+                for entry in &entries {
+                    if settings.sync.records {
+                        let (id, _) = history_store.delete(entry.id.clone()).await?;
+                        history_store.incremental_build(&db, &[id]).await?;
+                    } else {
+                        db.delete(entry.clone()).await?;
                     }
-
-                    entries =
-                        run_non_interactive(settings, opt_filter.clone(), &query, &db).await?;
                 }
             } else {
                 let format = match self.format {
