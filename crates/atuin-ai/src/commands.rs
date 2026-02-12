@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand};
 use tracing::Level;
+use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{EnvFilter, Layer, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 pub mod init;
@@ -71,8 +72,14 @@ fn init_tracing(verbose: bool) {
     let log_dir = dirs.home_dir().join(".atuin").join("logs");
     std::fs::create_dir_all(&log_dir).expect("Could not create log directory");
 
-    // Set up file appender with daily rotation
-    let file_appender = tracing_appender::rolling::daily(&log_dir, "ai.log");
+    // Set up file appender with daily rotation, capped retention
+    let file_appender = RollingFileAppender::builder()
+        .rotation(Rotation::DAILY)
+        .filename_prefix("ai")
+        .filename_suffix("log")
+        .max_log_files(4)
+        .build(&log_dir)
+        .expect("Could not create rolling AI log appender");
     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
 
     // Create env filter
