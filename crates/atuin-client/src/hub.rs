@@ -88,7 +88,7 @@ impl HubAuthSession {
             }
             Err(e) => {
                 // Transient errors shouldn't fail the whole flow
-                debug!("Verification poll failed: {}", e);
+                log::debug!("Verification poll failed: {}", e);
                 Ok(HubAuthStatus::Pending)
             }
         }
