@@ -154,10 +154,10 @@ async fn probe(settings: &Settings) -> Probe {
 
     match client.status().await {
         Ok(status) => {
-            if !daemon_matches_expected(&status.version, status.protocol) {
-                Probe::NeedsRestart(daemon_mismatch_message(&status.version, status.protocol))
-            } else {
+            if daemon_matches_expected(&status.version, status.protocol) {
                 Probe::Ready(client)
+            } else {
+                Probe::NeedsRestart(daemon_mismatch_message(&status.version, status.protocol))
             }
         }
         Err(err) => Probe::Unreachable(err),
