@@ -4,29 +4,32 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   publish_x86:
     concurrency:
       group: ${{ github.ref }}-x86
       cancel-in-progress: true
+    runs-on: ubuntu-latest
     permissions:
       packages: write
-
-    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           repository: atuinsh/atuin
           path: "./"
+          persist-credentials: false
 
       - name: Get Repo Owner
         id: get_repo_owner
         run: echo "REPO_OWNER=$(echo ${{ github.repository_owner }} | tr '[:upper:]' '[:lower:]')" > $GITHUB_ENV
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - name: Login to container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3
         with:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
@@ -38,7 +41,7 @@ jobs:
 
       - name: Release build
         id: release_build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6
         with:
           outputs: "type=registry,push=true"
           platforms: linux/amd64
@@ -55,24 +58,24 @@ jobs:
     concurrency:
       group: ${{ github.ref }}-aarch64
       cancel-in-progress: true
+    runs-on: ubuntu-24.04-arm
     permissions:
       packages: write
-
-    runs-on: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           repository: atuinsh/atuin
           path: "./"
+          persist-credentials: false
 
       - name: Get Repo Owner
         id: get_repo_owner
         run: echo "REPO_OWNER=$(echo ${{ github.repository_owner }} | tr '[:upper:]' '[:lower:]')" > $GITHUB_ENV
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - name: Login to container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3
         with:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
@@ -84,7 +87,7 @@ jobs:
 
       - name: Release build
         id: release_build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6
         with:
           outputs: "type=registry,push=true"
           platforms: linux/arm64
@@ -100,18 +103,21 @@ jobs:
   publish_manifest:
     runs-on: ubuntu-latest
     needs: [publish_x86, publish_aarch64]
+    permissions:
+      packages: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           repository: atuinsh/atuin
           path: "./"
+          persist-credentials: false
 
       - name: Get Repo Owner
         id: get_repo_owner
         run: echo "REPO_OWNER=$(echo ${{ github.repository_owner }} | tr '[:upper:]' '[:lower:]')" > $GITHUB_ENV
 
       - name: Login to container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3
         with:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
@@ -123,11 +129,13 @@ jobs:
 
       - name: Create manifest
         run: |
-          docker manifest create ghcr.io/${{ env.REPO_OWNER }}/atuin:${{ steps.shortsha.outputs.short_sha }} \
-            --amend ghcr.io/${{ env.REPO_OWNER }}/atuin:${{ steps.shortsha.outputs.short_sha }}-amd64 \
-            --amend ghcr.io/${{ env.REPO_OWNER }}/atuin:${{ steps.shortsha.outputs.short_sha }}-aarch64
-          docker manifest annotate --arch amd64 --os linux ghcr.io/${{ env.REPO_OWNER }}/atuin:${{ steps.shortsha.outputs.short_sha }} ghcr.io/${{ env.REPO_OWNER }}/atuin:${{ steps.shortsha.outputs.short_sha }}-amd64
-          docker manifest annotate --arch arm64 --os linux ghcr.io/${{ env.REPO_OWNER }}/atuin:${{ steps.shortsha.outputs.short_sha }} ghcr.io/${{ env.REPO_OWNER }}/atuin:${{ steps.shortsha.outputs.short_sha }}-aarch64
-          docker manifest inspect ghcr.io/${{ env.REPO_OWNER }}/atuin:${{ steps.shortsha.outputs.short_sha }}
+          docker manifest create ghcr.io/${REPO_OWNER}/atuin:${STEPS_SHORTSHA_OUTPUTS_SHORT_SHA} \
+            --amend ghcr.io/${REPO_OWNER}/atuin:${STEPS_SHORTSHA_OUTPUTS_SHORT_SHA}-amd64 \
+            --amend ghcr.io/${REPO_OWNER}/atuin:${STEPS_SHORTSHA_OUTPUTS_SHORT_SHA}-aarch64
+          docker manifest annotate --arch amd64 --os linux ghcr.io/${REPO_OWNER}/atuin:${STEPS_SHORTSHA_OUTPUTS_SHORT_SHA} ghcr.io/${REPO_OWNER}/atuin:${STEPS_SHORTSHA_OUTPUTS_SHORT_SHA}-amd64
+          docker manifest annotate --arch arm64 --os linux ghcr.io/${REPO_OWNER}/atuin:${STEPS_SHORTSHA_OUTPUTS_SHORT_SHA} ghcr.io/${REPO_OWNER}/atuin:${STEPS_SHORTSHA_OUTPUTS_SHORT_SHA}-aarch64
+          docker manifest inspect ghcr.io/${REPO_OWNER}/atuin:${STEPS_SHORTSHA_OUTPUTS_SHORT_SHA}
 
-          docker manifest push ghcr.io/${{ env.REPO_OWNER }}/atuin:${{ steps.shortsha.outputs.short_sha }}
+          docker manifest push ghcr.io/${REPO_OWNER}/atuin:${STEPS_SHORTSHA_OUTPUTS_SHORT_SHA}
+        env:
+          STEPS_SHORTSHA_OUTPUTS_SHORT_SHA: ${{ steps.shortsha.outputs.short_sha }}
