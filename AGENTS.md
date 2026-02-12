@@ -41,7 +41,7 @@ atuin-server-sqlite    SQLite implementation (sqlx)
 
 ## Conventions
 
-- Rust 2024 edition, toolchain 1.93.
+- Rust 2024 edition, toolchain 1.93.1.
 - Errors: `eyre::Result` in binaries, `thiserror` for typed errors in libraries.
 - Async: tokio. Client uses `current_thread`; server uses `multi_thread`.
 - `#![deny(unsafe_code)]` on client/common, `#![forbid(unsafe_code)]` on server.
