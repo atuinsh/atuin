@@ -10,11 +10,14 @@
 
 use std::time::Duration;
 
-use eyre::{bail, Context, Result};
-use reqwest::{header::USER_AGENT, StatusCode, Url};
+use eyre::{Context, Result, bail};
+use reqwest::{StatusCode, Url, header::USER_AGENT};
 
 use atuin_common::{
-    api::{CliCodeResponse, CliVerifyResponse, ErrorResponse, ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION},
+    api::{
+        ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, CliCodeResponse, CliVerifyResponse,
+        ErrorResponse,
+    },
     tls::ensure_crypto_provider,
 };
 

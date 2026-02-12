@@ -2,12 +2,17 @@ use std::collections::HashMap;
 use std::env;
 use std::time::Duration;
 
-use eyre::{bail, eyre, Result};
+use eyre::{Result, bail, eyre};
 use reqwest::{
-    header::{HeaderMap, AUTHORIZATION, USER_AGENT},
     Response, StatusCode, Url,
+    header::{AUTHORIZATION, HeaderMap, USER_AGENT},
 };
 
+use atuin_common::{
+    api::{ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ATUIN_VERSION},
+    record::{EncryptedData, HostId, Record, RecordIdx},
+    tls::ensure_crypto_provider,
+};
 use atuin_common::{
     api::{
         AddHistoryRequest, ChangePasswordRequest, CountResponse, DeleteHistoryRequest,
@@ -16,15 +21,10 @@ use atuin_common::{
     },
     record::RecordStatus,
 };
-use atuin_common::{
-    api::{ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ATUIN_VERSION},
-    record::{EncryptedData, HostId, Record, RecordIdx},
-    tls::ensure_crypto_provider,
-};
 
 use semver::Version;
-use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 use crate::{history::History, sync::hash_str, utils::get_host_user};
 
