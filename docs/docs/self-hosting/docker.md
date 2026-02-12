@@ -52,7 +52,7 @@ services:
     image: postgres:18
     restart: unless-stopped
     volumes: # Don't remove permanent storage for index database files!
-      - "./database:/var/lib/postgresql/data/"
+      - "./database:/var/lib/postgresql/"
     environment:
       POSTGRES_USER: ${ATUIN_DB_USERNAME}
       POSTGRES_PASSWORD: ${ATUIN_DB_PASSWORD}
