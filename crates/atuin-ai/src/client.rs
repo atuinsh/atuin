@@ -502,11 +502,12 @@ enum Screen<'a> {
 fn draw_screen(frame: &mut Frame, screen: Screen<'_>, anchor_col: u16) {
     let area = frame.area();
     let desired_width = 64u16.min(area.width.saturating_sub(2)).max(32);
-    let desired_height = match screen {
-        Screen::Review { .. } | Screen::Error { .. } => 12u16,
-        Screen::Prompt { .. } | Screen::Generating { .. } => 8u16,
-    }
-    .min(area.height.max(1));
+    let content_width = usize::from(desired_width.saturating_sub(2)).max(1);
+    let (content_preview, _, _) = build_screen_content(&screen, content_width);
+    let desired_height = (wrapped_line_count(&content_preview, content_width) as u16)
+        .saturating_add(2)
+        .min(area.height.max(1))
+        .max(3);
 
     let max_x = area.x + area.width.saturating_sub(desired_width);
     let preferred_x = area.x + anchor_col.saturating_sub(2);
@@ -532,9 +533,51 @@ fn draw_screen(frame: &mut Frame, screen: Screen<'_>, anchor_col: u16) {
     let content_area = block.inner(card);
     frame.render_widget(block, card);
 
-    let (content, show_cursor, prompt_len) = match &screen {
+    let (content, show_cursor, cursor_prompt) =
+        build_screen_content(&screen, usize::from(content_area.width).max(1));
+
+    let paragraph = Paragraph::new(content).wrap(Wrap { trim: false });
+    frame.render_widget(paragraph, content_area);
+
+    if show_cursor {
+        let width = usize::from(content_area.width).max(1);
+        let (cursor_row, cursor_col) =
+            prompt_cursor_position(cursor_prompt.as_deref().unwrap_or_default(), width);
+        let cursor_x = content_area.x.saturating_add(cursor_col);
+        let cursor_y = content_area.y.saturating_add(cursor_row);
+        frame.set_cursor_position((cursor_x, cursor_y));
+    }
+}
+
+fn format_prompt(prompt: &str) -> String {
+    if prompt.is_empty() {
+        return "> ".to_string();
+    }
+    format!("> {prompt}")
+}
+
+fn wrapped_line_count(text: &str, width: usize) -> usize {
+    if width == 0 {
+        return 1;
+    }
+
+    text.split('\n')
+        .map(|line| {
+            let len = line.chars().count();
+            len.max(1).div_ceil(width)
+        })
+        .sum::<usize>()
+        .max(1)
+}
+
+fn build_screen_content(
+    screen: &Screen<'_>,
+    content_width: usize,
+) -> (String, bool, Option<String>) {
+    match screen {
         Screen::Prompt { prompt, .. } => {
-            (format_prompt(prompt), true, prompt.chars().count() as u16)
+            let formatted = format_prompt(prompt);
+            (formatted, true, Some((*prompt).to_string()))
         }
         Screen::Generating {
             prompt,
@@ -547,46 +590,83 @@ fn draw_screen(frame: &mut Frame, screen: Screen<'_>, anchor_col: u16) {
                 SPINNER_FRAMES[*spinner_idx]
             ),
             false,
-            0,
+            None,
         ),
         Screen::Review {
             prompt, response, ..
         } => {
-            let separator = "─".repeat(usize::from(content_area.width).max(1));
+            let separator = "─".repeat(content_width.max(1));
             let mut text = format!(
-                "{}\n\n{}\n\n$ {}",
+                "{}\n\n{}\n\n$ {}\n",
                 format_prompt(prompt),
                 separator,
                 response.command
             );
             if let Some(explanation) = &response.explanation {
-                text.push_str("\n\n");
+                text.push('\n');
                 text.push_str(explanation);
             }
-            (text, false, 0)
+            (text, false, None)
         }
         Screen::Error { prompt, err, .. } => (
             format!("{}\n\nRequest failed:\n{}", format_prompt(prompt), err),
             false,
-            0,
+            None,
         ),
-    };
-
-    let paragraph = Paragraph::new(content).wrap(Wrap { trim: false });
-    frame.render_widget(paragraph, content_area);
-
-    if show_cursor {
-        let cursor_x = content_area.x.saturating_add(2 + prompt_len);
-        let cursor_y = content_area.y;
-        frame.set_cursor_position((cursor_x, cursor_y));
     }
 }
 
-fn format_prompt(prompt: &str) -> String {
-    if prompt.is_empty() {
-        return ">".to_string();
+fn prompt_cursor_position(prompt: &str, width: usize) -> (u16, u16) {
+    if width == 0 {
+        return (0, 0);
     }
-    format!("> {prompt}")
+
+    // The visible prompt line is always `> {prompt}`.
+    // We mimic word-wrapping so cursor tracking matches visual layout.
+    let mut row = 0usize;
+    let mut col = 2usize; // "> "
+
+    let mut saw_any_word = false;
+    for word in prompt.split_whitespace() {
+        let word_len = word.chars().count();
+        if !saw_any_word {
+            saw_any_word = true;
+            if col + word_len <= width {
+                col += word_len;
+            } else if word_len >= width {
+                let used = width.saturating_sub(col);
+                let remaining = word_len.saturating_sub(used);
+                row += 1 + (remaining / width);
+                col = remaining % width;
+            } else {
+                row += 1;
+                col = word_len;
+            }
+            continue;
+        }
+
+        if col + 1 + word_len <= width {
+            col += 1 + word_len;
+        } else if word_len >= width {
+            row += 1 + (word_len / width);
+            col = word_len % width;
+        } else {
+            row += 1;
+            col = word_len;
+        }
+    }
+
+    // Keep trailing spaces user typed.
+    let trailing_spaces = prompt.chars().rev().take_while(|c| *c == ' ').count();
+    for _ in 0..trailing_spaces {
+        if col >= width {
+            row += 1;
+            col = 0;
+        }
+        col += 1;
+    }
+
+    (row as u16, col as u16)
 }
 
 fn init_tracing(verbose: bool) {
