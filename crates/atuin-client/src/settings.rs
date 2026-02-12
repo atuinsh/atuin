@@ -436,15 +436,21 @@ pub struct Theme {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Daemon {
     /// Use the daemon to sync
-    /// If enabled, requires a running daemon with `atuin daemon`
+    /// If enabled, history hooks are routed through the daemon.
     #[serde(alias = "enable")]
     pub enabled: bool,
+
+    /// Automatically start and manage a local daemon when needed.
+    pub autostart: bool,
 
     /// The daemon will handle sync on an interval. How often to sync, in seconds.
     pub sync_frequency: u64,
 
     /// The path to the unix socket used by the daemon
     pub socket_path: String,
+
+    /// Path to the daemon pidfile used for process coordination.
+    pub pidfile_path: String,
 
     /// Use a socket passed via systemd's socket activation protocol, instead of the path
     pub systemd_socket: bool,
@@ -493,8 +499,10 @@ impl Default for Daemon {
     fn default() -> Self {
         Self {
             enabled: false,
+            autostart: false,
             sync_frequency: 300,
             socket_path: "".to_string(),
+            pidfile_path: "".to_string(),
             systemd_socket: false,
             tcp_port: 8889,
         }
@@ -1007,6 +1015,7 @@ impl Settings {
         let kv_path = data_dir.join("kv.db");
         let scripts_path = data_dir.join("scripts.db");
         let socket_path = atuin_common::utils::runtime_dir().join("atuin.sock");
+        let pidfile_path = data_dir.join("atuin-daemon.pid");
 
         let key_path = data_dir.join("key");
         let meta_path = data_dir.join("meta.db");
@@ -1070,7 +1079,9 @@ impl Settings {
             .set_default("store_failed", true)?
             .set_default("daemon.sync_frequency", 300)?
             .set_default("daemon.enabled", false)?
+            .set_default("daemon.autostart", false)?
             .set_default("daemon.socket_path", socket_path.to_str())?
+            .set_default("daemon.pidfile_path", pidfile_path.to_str())?
             .set_default("daemon.systemd_socket", false)?
             .set_default("daemon.tcp_port", 8889)?
             .set_default("kv.db_path", kv_path.to_str())?
@@ -1189,6 +1200,7 @@ impl Settings {
         settings.record_store_path = Self::expand_path(settings.record_store_path)?;
         settings.key_path = Self::expand_path(settings.key_path)?;
         settings.daemon.socket_path = Self::expand_path(settings.daemon.socket_path)?;
+        settings.daemon.pidfile_path = Self::expand_path(settings.daemon.pidfile_path)?;
 
         // Validate UI settings
         settings.ui.validate()?;
@@ -1351,6 +1363,9 @@ mod tests {
         let kv_db_path: String = config.get("kv.db_path")?;
         let scripts_db_path: String = config.get("scripts.db_path")?;
         let meta_db_path: String = config.get("meta.db_path")?;
+        let daemon_socket_path: String = config.get("daemon.socket_path")?;
+        let daemon_pidfile_path: String = config.get("daemon.pidfile_path")?;
+        let daemon_autostart: bool = config.get("daemon.autostart")?;
 
         assert_eq!(db_path, custom_dir.join("history.db").to_str().unwrap());
         assert_eq!(key_path, custom_dir.join("key").to_str().unwrap());
@@ -1364,6 +1379,18 @@ mod tests {
             custom_dir.join("scripts.db").to_str().unwrap()
         );
         assert_eq!(meta_db_path, custom_dir.join("meta.db").to_str().unwrap());
+        assert_eq!(
+            daemon_socket_path,
+            atuin_common::utils::runtime_dir()
+                .join("atuin.sock")
+                .to_str()
+                .unwrap()
+        );
+        assert_eq!(
+            daemon_pidfile_path,
+            custom_dir.join("atuin-daemon.pid").to_str().unwrap()
+        );
+        assert!(!daemon_autostart);
 
         Ok(())
     }

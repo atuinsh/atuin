@@ -259,8 +259,12 @@ records = true
 # strategy = "auto"
 
 [daemon]
-## Enables using the daemon to sync. Requires the daemon to be running in the background. Start it with `atuin daemon`
+## Enables using the daemon to sync.
 # enabled = false
+
+## Automatically start and manage the daemon when needed.
+## Not compatible with `systemd_socket = true`.
+# autostart = false
 
 ## How often the daemon should sync in seconds
 # sync_frequency = 300
@@ -269,6 +273,10 @@ records = true
 ## linux/mac: ~/.local/share/atuin/atuin.sock
 ## windows: Not Supported
 # socket_path = "~/.local/share/atuin/atuin.sock"
+
+## The daemon pidfile used for lifecycle management.
+## Defaults to the Atuin data directory.
+# pidfile_path = "~/.local/share/atuin/atuin-daemon.pid"
 
 ## Use systemd socket activation rather than opening the given path (the path must still be correct for the client)
 ## linux: false

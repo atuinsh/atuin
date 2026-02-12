@@ -688,6 +688,18 @@ Add the new section to the bottom of your config file
 enabled = true
 ```
 
+### autostart
+
+Default: `false`
+
+Automatically start and manage the daemon when needed.
+This is not compatible with `systemd_socket = true`.
+If a legacy experimental daemon is already running, restart it manually once before using autostart.
+
+```toml
+autostart = false
+```
+
 ### sync_frequency
 
 Default: `300`
@@ -709,6 +721,16 @@ socket_path = "~/.local/share/atuin/atuin.sock"
 Where to bind a unix socket for client -> daemon communication
 
 If XDG_RUNTIME_DIR is available, then we use this directory instead.
+
+### pidfile_path
+
+Default:
+
+```toml
+pidfile_path = "~/.local/share/atuin/atuin-daemon.pid"
+```
+
+Path to the daemon pidfile used for process coordination.
 
 ### systemd_socket
 
