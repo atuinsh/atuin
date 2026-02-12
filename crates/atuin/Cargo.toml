@@ -55,7 +55,7 @@ eyre = { workspace = true }
 indicatif = "0.18.0"
 serde = { workspace = true }
 serde_json = { workspace = true }
-crossterm = { version = "0.29.0", features = ["use-dev-tty"] }
+crossterm = { workspace = true, features = ["use-dev-tty"] }
 unicode-width = "0.2"
 itertools = { workspace = true }
 tokio = { workspace = true }
@@ -74,7 +74,7 @@ futures-util = "0.3"
 fuzzy-matcher = "0.3.7"
 colored = "2.0.4"
 open = "5"
-ratatui = "0.30.0"
+ratatui = { workspace = true }
 tracing = "0.1"
 tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
