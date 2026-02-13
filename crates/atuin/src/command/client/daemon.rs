@@ -13,11 +13,72 @@ use atuin_daemon::{
     client::{DaemonClientErrorKind, HistoryClient, classify_error},
     server::listen,
 };
+use clap::Subcommand;
 #[cfg(unix)]
 use daemonize::Daemonize;
 use eyre::{Result, WrapErr, bail, eyre};
 use fs4::fs_std::FileExt;
 use tokio::time::sleep;
+
+#[derive(clap::Args, Debug)]
+pub struct Cmd {
+    /// Internal flag for daemonization
+    #[arg(long, hide = true)]
+    daemonize: bool,
+
+    #[command(subcommand)]
+    subcmd: Option<SubCmd>,
+}
+
+#[derive(Subcommand, Debug)]
+#[command(infer_subcommands = true)]
+pub enum SubCmd {
+    /// Start the daemon server
+    Start {
+        #[arg(long, hide = true)]
+        daemonize: bool,
+    },
+
+    /// Show the daemon's current status
+    Status,
+
+    /// Stop the daemon gracefully
+    Stop,
+
+    /// Restart the daemon (stop, then start in background)
+    Restart,
+}
+
+impl Cmd {
+    /// Returns `true` when the process should daemonize before creating the
+    /// async runtime or opening any database connections.
+    #[cfg(unix)]
+    pub fn should_daemonize(&self) -> bool {
+        match &self.subcmd {
+            Some(SubCmd::Start { daemonize }) => *daemonize,
+            None => self.daemonize,
+            _ => false,
+        }
+    }
+
+    pub async fn run(
+        self,
+        settings: Settings,
+        store: SqliteStore,
+        history_db: Sqlite,
+    ) -> Result<()> {
+        match self.subcmd {
+            None => {
+                eprintln!("Warning: `atuin daemon` is deprecated, use `atuin daemon start`");
+                run(settings, store, history_db).await
+            }
+            Some(SubCmd::Start { .. }) => run(settings, store, history_db).await,
+            Some(SubCmd::Status) => status_cmd(&settings).await,
+            Some(SubCmd::Stop) => stop_cmd(&settings).await,
+            Some(SubCmd::Restart) => restart_cmd(&settings).await,
+        }
+    }
+}
 
 const DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
 const DAEMON_PROTOCOL_VERSION: u32 = 1;
@@ -175,6 +236,7 @@ fn spawn_daemon_process() -> Result<()> {
 
     let mut cmd = Command::new(exe);
     cmd.arg("daemon")
+        .arg("start")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -385,8 +447,98 @@ pub async fn end_history(settings: &Settings, id: String, duration: u64, exit: i
     Ok(())
 }
 
+async fn status_cmd(settings: &Settings) -> Result<()> {
+    match probe(settings).await {
+        Probe::Ready(mut client) => {
+            let status = client.status().await?;
+            println!("Daemon running");
+            println!("  PID:      {}", status.pid);
+            println!("  Version:  {}", status.version);
+            println!("  Protocol: {}", status.protocol);
+            println!("  Healthy:  {}", status.healthy);
+            #[cfg(unix)]
+            println!("  Socket:   {}", settings.daemon.socket_path);
+            #[cfg(not(unix))]
+            println!("  Port:     {}", settings.daemon.tcp_port);
+        }
+        Probe::NeedsRestart(reason) => {
+            println!("Daemon running (needs restart)");
+            println!("  Reason: {reason}");
+        }
+        Probe::Unreachable(_) => {
+            println!("Daemon is not running");
+        }
+    }
+
+    Ok(())
+}
+
+async fn stop_cmd(settings: &Settings) -> Result<()> {
+    let Ok(mut client) = connect_client(settings).await else {
+        println!("Daemon is not running");
+        return Ok(());
+    };
+
+    match client.shutdown().await {
+        Ok(true) => {
+            println!("Shutdown requested");
+
+            let pidfile_path = PathBuf::from(&settings.daemon.pidfile_path);
+            let timeout = Duration::from_secs(5);
+            match wait_for_pidfile_available(&pidfile_path, timeout).await {
+                Ok(()) => println!("Daemon stopped"),
+                Err(_) => println!("Daemon may still be shutting down"),
+            }
+
+            Ok(())
+        }
+        Ok(false) => bail!("Daemon rejected shutdown request"),
+        Err(err) => Err(err.wrap_err("Failed to send shutdown request")),
+    }
+}
+
+async fn restart_cmd(settings: &Settings) -> Result<()> {
+    // Stop if running
+    match probe(settings).await {
+        Probe::Ready(_) | Probe::NeedsRestart(_) => {
+            request_shutdown(settings).await;
+            println!("Stopping daemon...");
+
+            let pidfile_path = PathBuf::from(&settings.daemon.pidfile_path);
+            let timeout = Duration::from_secs(5);
+            wait_for_pidfile_available(&pidfile_path, timeout)
+                .await
+                .wrap_err("Timed out waiting for old daemon to stop")?;
+        }
+        Probe::Unreachable(_) => {
+            println!("No daemon running");
+        }
+    }
+
+    #[cfg(unix)]
+    remove_stale_socket_if_present(settings)?;
+
+    spawn_daemon_process()?;
+    println!("Starting daemon...");
+
+    let timeout = startup_timeout(settings);
+    let status = wait_until_ready(settings, timeout)
+        .await?
+        .status()
+        .await?;
+
+    println!("Daemon restarted");
+    println!("  PID:      {}", status.pid);
+    println!("  Version:  {}", status.version);
+
+    Ok(())
+}
+
+/// Daemonize the current process. Must be called before creating the tokio
+/// runtime or opening database connections, since `fork()` inside an async
+/// runtime corrupts its internal state.
 #[cfg(unix)]
-fn daemonize_current_process() -> Result<()> {
+pub fn daemonize_current_process() -> Result<()> {
     let cwd =
         std::env::current_dir().wrap_err("could not determine current directory for daemon")?;
 
@@ -398,19 +550,11 @@ fn daemonize_current_process() -> Result<()> {
     Ok(())
 }
 
-pub async fn run(
+async fn run(
     settings: Settings,
     store: SqliteStore,
     history_db: Sqlite,
-    daemonize: bool,
 ) -> Result<()> {
-    #[cfg(unix)]
-    if daemonize {
-        daemonize_current_process()?;
-    }
-    #[cfg(not(unix))]
-    let _ = daemonize;
-
     let pidfile_path = PathBuf::from(&settings.daemon.pidfile_path);
     let _pidfile_guard = PidfileGuard::acquire(&pidfile_path)?;
 
