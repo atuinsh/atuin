@@ -283,8 +283,8 @@ async fn run_inline_tui(
                     };
 
                     match key.code {
-                        KeyCode::Enter => return Ok((Action::Execute, response.command.clone())),
-                        KeyCode::Tab => return Ok((Action::Insert, response.command.clone())),
+                        KeyCode::Enter => return Ok((Action::Execute, response.command)),
+                        KeyCode::Tab => return Ok((Action::Insert, response.command)),
                         KeyCode::Esc => return Ok((Action::Cancel, String::new())),
                         KeyCode::Char('e') => break,
                         _ => {}
