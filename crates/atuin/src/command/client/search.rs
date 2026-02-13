@@ -242,8 +242,10 @@ impl Cmd {
                 // cause a different set of commands to be printed vs deleted: to avoid this, we
                 // explicitly require --include-duplicates if --limit is passed.
                 if self.limit.is_some() && !self.include_duplicates {
-                    eprintln!("Using \"--limit\" with \"--delete\" causes individual usages of commands to be deleted, so it requires \"--include-duplicates\".");
-                    return Ok(())
+                    eprintln!(
+                        "Using \"--limit\" with \"--delete\" causes individual usages of commands to be deleted, so it requires \"--include-duplicates\"."
+                    );
+                    return Ok(());
                 }
                 opt_filter.include_duplicates = true;
                 entries = run_non_interactive(settings, opt_filter.clone(), &query, &db).await?;
