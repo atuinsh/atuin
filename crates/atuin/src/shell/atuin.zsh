@@ -33,7 +33,7 @@ ATUIN_HISTORY_ID=""
 
 _atuin_preexec() {
     local id
-    id=$(atuin history start -- "$1")
+    id=$(atuin history start -- "$1" 2>/dev/null)
     export ATUIN_HISTORY_ID="$id"
     __atuin_preexec_time=${EPOCHREALTIME-}
 }

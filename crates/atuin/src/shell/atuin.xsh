@@ -12,7 +12,10 @@ if "ATUIN_SESSION" not in ${...} or ${...}.get("ATUIN_SHLVL", "") != ${...}.get(
 @events.on_precommand
 def _atuin_precommand(cmd: str):
     cmd = cmd.rstrip("\n")
-    $ATUIN_HISTORY_ID = $(atuin history start -- @(cmd)).rstrip("\n")
+    try:
+        $ATUIN_HISTORY_ID = $(atuin history start -- @(cmd) 2>/dev/null).rstrip("\n")
+    except:
+        $ATUIN_HISTORY_ID = ""
 
 
 @events.on_postcommand

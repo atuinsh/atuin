@@ -26,7 +26,7 @@ let _atuin_pre_execution = {||
         return
     }
     if not ($cmd | str starts-with $ATUIN_KEYBINDING_TOKEN) {
-        $env.ATUIN_HISTORY_ID = (atuin history start -- $cmd)
+        $env.ATUIN_HISTORY_ID = (atuin history start -- $cmd e>| complete | get stdout | str trim)
     }
 }
 
