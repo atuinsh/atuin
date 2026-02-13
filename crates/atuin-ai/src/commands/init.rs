@@ -12,40 +12,6 @@ _atuin_ai_cleanup() {
     true
 }
 
-# Tab completion - only on empty lines
-_atuin_ai_tab_complete() {
-    # Only trigger AI completion if buffer is empty
-    if [[ -z "$BUFFER" ]]; then
-        local output
-        output=$(atuin-ai inline "$BUFFER" 3>&1 1>&2 2>&3)
-
-        # Clean up the inline viewport
-        _atuin_ai_cleanup
-
-        if [[ $output == __atuin_ai_cancel__ ]]; then
-            zle reset-prompt
-        elif [[ $output == __atuin_ai_execute__:* ]]; then
-            RBUFFER=""
-            LBUFFER=${output#__atuin_ai_execute__:}
-            zle reset-prompt
-            zle accept-line
-        elif [[ $output == __atuin_ai_insert__:* ]]; then
-            RBUFFER=""
-            LBUFFER=${output#__atuin_ai_insert__:}
-            zle reset-prompt
-        elif [[ -n $output ]]; then
-            RBUFFER=""
-            LBUFFER=$output
-            zle reset-prompt
-        else
-            zle reset-prompt
-        fi
-    else
-        zle expand-or-complete
-    fi
-}
-
-
 # Ctrl-K completion - natural language mode
 _atuin_ai_natural_language() {
     local output
