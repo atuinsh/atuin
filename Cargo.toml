@@ -16,6 +16,7 @@ readme = "README.md"
 [workspace.dependencies]
 async-trait = "0.1.58"
 base64 = "0.22"
+crossterm = "0.29.0"
 log = "0.4"
 time = { version = "0.3.47", features = [
   "serde-human-readable",
@@ -42,6 +43,7 @@ thiserror = "1.0"
 rustix = { version = "0.38.34", features = ["process", "fs"] }
 tower = "0.5"
 tracing = "0.1"
+ratatui = "0.30.0"
 sql-builder = "3"
 tempfile = { version = "3.19" }
 minijinja = "2.9.0"
