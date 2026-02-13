@@ -65,6 +65,7 @@ clap = { workspace = true }
 clap_complete = "4.5.8"
 clap_complete_nushell = "4.5.4"
 fs-err = { workspace = true }
+fs4 = "0.13.1"
 rpassword = "7.0"
 semver = { workspace = true }
 rustix = { workspace = true }
@@ -91,6 +92,9 @@ arboard = { version = "3.4", optional = true }
 arboard = { version = "3.4", optional = true, features = [
   "wayland-data-control",
 ] }
+
+[target.'cfg(unix)'.dependencies]
+daemonize = "0.5.0"
 
 [dev-dependencies]
 tracing-tree = "0.4"

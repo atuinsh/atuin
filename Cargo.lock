@@ -230,8 +230,10 @@ dependencies = [
  "clap_complete_nushell",
  "colored",
  "crossterm",
+ "daemonize",
  "eyre",
  "fs-err",
+ "fs4",
  "futures-util",
  "fuzzy-matcher",
  "indicatif",
@@ -361,6 +363,7 @@ name = "atuin-daemon"
 version = "18.12.1"
 dependencies = [
  "atuin-client",
+ "atuin-common",
  "atuin-dotfiles",
  "atuin-history",
  "dashmap",
@@ -371,6 +374,7 @@ dependencies = [
  "prost-types",
  "protox",
  "rand 0.8.5",
+ "tempfile",
  "time",
  "tokio",
  "tokio-stream",
@@ -1115,6 +1119,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "daemonize"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab8bfdaacb3c887a54d41bdf48d3af8873b3f5566469f8ba21b92057509f116e"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "darling"
 version = "0.21.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1615,6 +1628,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "baf68cef89750956493a66a10f512b9e58d9db21f2a573c079c0bdf1207a54a7"
 dependencies = [
  "autocfg",
+]
+
+[[package]]
+name = "fs4"
+version = "0.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8640e34b88f7652208ce9e88b1a37a2ae95227d84abec377ccd3c5cfeb141ed4"
+dependencies = [
+ "rustix 1.1.3",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

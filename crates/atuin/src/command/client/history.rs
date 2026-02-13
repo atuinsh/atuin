@@ -27,6 +27,8 @@ use atuin_client::{record, sync};
 use log::{debug, warn};
 use time::{OffsetDateTime, macros::format_description};
 
+#[cfg(feature = "daemon")]
+use super::daemon;
 use super::search::format_duration_into;
 
 #[derive(Subcommand, Debug)]
@@ -392,15 +394,7 @@ impl Cmd {
             return Ok(());
         }
 
-        let resp = atuin_daemon::client::HistoryClient::new(
-            #[cfg(not(unix))]
-            settings.daemon.tcp_port,
-            #[cfg(unix)]
-            settings.daemon.socket_path.clone(),
-        )
-        .await?
-        .start_history(h)
-        .await?;
+        let resp = daemon::start_history(settings, h).await?;
 
         // print the ID
         // we use this as the key for calling end
@@ -477,22 +471,13 @@ impl Cmd {
     }
 
     #[cfg(feature = "daemon")]
-    #[allow(unused_variables)]
     async fn handle_daemon_end(
         settings: &Settings,
         id: &str,
         exit: i64,
         duration: Option<u64>,
     ) -> Result<()> {
-        let resp = atuin_daemon::client::HistoryClient::new(
-            #[cfg(not(unix))]
-            settings.daemon.tcp_port,
-            #[cfg(unix)]
-            settings.daemon.socket_path.clone(),
-        )
-        .await?
-        .end_history(id.to_string(), duration.unwrap_or(0), exit)
-        .await?;
+        daemon::end_history(settings, id.to_string(), duration.unwrap_or(0), exit).await?;
 
         Ok(())
     }

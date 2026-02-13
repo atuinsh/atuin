@@ -39,6 +39,10 @@ rand.workspace = true
 [target.'cfg(target_os = "linux")'.dependencies]
 listenfd = "1.0.1"
 
+[dev-dependencies]
+tempfile = { workspace = true }
+atuin-common = { path = "../atuin-common", version = "18.12.1" }
+
 [build-dependencies]
 protox = "0.8.0"
 tonic-build = "0.12"

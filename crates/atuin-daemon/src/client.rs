@@ -1,6 +1,7 @@
 use eyre::{Context, Result};
 #[cfg(windows)]
 use tokio::net::TcpStream;
+use tonic::Code;
 use tonic::transport::{Channel, Endpoint, Uri};
 use tower::service_fn;
 
@@ -12,11 +13,39 @@ use tokio::net::UnixStream;
 use atuin_client::history::History;
 
 use crate::history::{
-    EndHistoryRequest, StartHistoryRequest, history_client::HistoryClient as HistoryServiceClient,
+    EndHistoryReply, EndHistoryRequest, ShutdownRequest, StartHistoryReply, StartHistoryRequest,
+    StatusReply, StatusRequest, history_client::HistoryClient as HistoryServiceClient,
 };
 
 pub struct HistoryClient {
     client: HistoryServiceClient<Channel>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DaemonClientErrorKind {
+    Connect,
+    Unavailable,
+    Unimplemented,
+    Other,
+}
+
+#[must_use]
+pub fn classify_error(error: &eyre::Report) -> DaemonClientErrorKind {
+    for cause in error.chain() {
+        if cause.downcast_ref::<tonic::transport::Error>().is_some() {
+            return DaemonClientErrorKind::Connect;
+        }
+
+        if let Some(status) = cause.downcast_ref::<tonic::Status>() {
+            return match status.code() {
+                Code::Unavailable => DaemonClientErrorKind::Unavailable,
+                Code::Unimplemented => DaemonClientErrorKind::Unimplemented,
+                _ => DaemonClientErrorKind::Other,
+            };
+        }
+    }
+
+    DaemonClientErrorKind::Other
 }
 
 // Wrap the grpc client
@@ -67,7 +96,7 @@ impl HistoryClient {
         Ok(HistoryClient { client })
     }
 
-    pub async fn start_history(&mut self, h: History) -> Result<String> {
+    pub async fn start_history(&mut self, h: History) -> Result<StartHistoryReply> {
         let req = StartHistoryRequest {
             command: h.command,
             cwd: h.cwd,
@@ -76,9 +105,7 @@ impl HistoryClient {
             timestamp: h.timestamp.unix_timestamp_nanos() as u64,
         };
 
-        let resp = self.client.start_history(req).await?;
-
-        Ok(resp.into_inner().id)
+        Ok(self.client.start_history(req).await?.into_inner())
     }
 
     pub async fn end_history(
@@ -86,12 +113,18 @@ impl HistoryClient {
         id: String,
         duration: u64,
         exit: i64,
-    ) -> Result<(String, u64)> {
+    ) -> Result<EndHistoryReply> {
         let req = EndHistoryRequest { id, duration, exit };
 
-        let resp = self.client.end_history(req).await?;
-        let resp = resp.into_inner();
+        Ok(self.client.end_history(req).await?.into_inner())
+    }
 
-        Ok((resp.id, resp.idx))
+    pub async fn status(&mut self) -> Result<StatusReply> {
+        Ok(self.client.status(StatusRequest {}).await?.into_inner())
+    }
+
+    pub async fn shutdown(&mut self) -> Result<bool> {
+        let resp = self.client.shutdown(ShutdownRequest {}).await?.into_inner();
+        Ok(resp.accepted)
     }
 }

@@ -87,10 +87,10 @@ pub enum Cmd {
     #[command()]
     Wrapped { year: Option<i32> },
 
-    /// *Experimental* Start the background daemon
+    /// *Experimental* Manage the background daemon
     #[cfg(feature = "daemon")]
     #[command()]
-    Daemon,
+    Daemon(daemon::Cmd),
 
     /// Print the default atuin configuration (config.toml)
     #[command()]
@@ -99,6 +99,15 @@ pub enum Cmd {
 
 impl Cmd {
     pub fn run(self) -> Result<()> {
+        // Daemonize before creating the async runtime – fork() inside a live
+        // tokio runtime corrupts its internal state.
+        #[cfg(all(unix, feature = "daemon"))]
+        if let Self::Daemon(ref cmd) = self
+            && cmd.should_daemonize()
+        {
+            daemon::daemonize_current_process()?;
+        }
+
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -179,7 +188,7 @@ impl Cmd {
             Self::Wrapped { year } => wrapped::run(year, &db, &settings, sqlite_store, theme).await,
 
             #[cfg(feature = "daemon")]
-            Self::Daemon => daemon::run(settings, sqlite_store, db).await,
+            Self::Daemon(cmd) => cmd.run(settings, sqlite_store, db).await,
 
             Self::History(_) | Self::Init(_) | Self::Doctor => unreachable!(),
         }

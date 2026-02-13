@@ -18,14 +18,35 @@ message EndHistoryRequest {
 
 message StartHistoryReply {
   string id = 1;
+  string version = 2;
+  uint32 protocol = 3;
 }
 
 message EndHistoryReply {
   string id = 1;
   uint64 idx = 2;
+  string version = 3;
+  uint32 protocol = 4;
+}
+
+message StatusRequest {}
+
+message StatusReply {
+  bool healthy = 1;
+  string version = 2;
+  uint32 pid = 3;
+  uint32 protocol = 4;
+}
+
+message ShutdownRequest {}
+
+message ShutdownReply {
+  bool accepted = 1;
 }
 
 service History {
   rpc StartHistory(StartHistoryRequest) returns (StartHistoryReply);
   rpc EndHistory(EndHistoryRequest) returns (EndHistoryReply);
+  rpc Status(StatusRequest) returns (StatusReply);
+  rpc Shutdown(ShutdownRequest) returns (ShutdownReply);
 }
