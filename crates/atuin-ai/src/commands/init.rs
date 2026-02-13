@@ -12,34 +12,6 @@ _atuin_ai_cleanup() {
     true
 }
 
-# Ctrl-K completion - natural language mode
-_atuin_ai_natural_language() {
-    local output
-    output=$(atuin-ai inline --natural-language 3>&1 1>&2 2>&3)
-
-    # Clean up the inline viewport
-    _atuin_ai_cleanup
-
-    if [[ $output == __atuin_ai_cancel__ ]]; then
-        zle reset-prompt
-    elif [[ $output == __atuin_ai_execute__:* ]]; then
-        RBUFFER=""
-        LBUFFER=${output#__atuin_ai_execute__:}
-        zle reset-prompt
-        zle accept-line
-    elif [[ $output == __atuin_ai_insert__:* ]]; then
-        RBUFFER=""
-        LBUFFER=${output#__atuin_ai_insert__:}
-        zle reset-prompt
-    elif [[ -n $output ]]; then
-        RBUFFER=""
-        LBUFFER=$output
-        zle reset-prompt
-    else
-        zle reset-prompt
-    fi
-}
-
 # Question mark at start of line - natural language mode
 _atuin_ai_question_mark() {
     # If buffer is empty or just contains '?', trigger natural language mode
@@ -75,9 +47,7 @@ _atuin_ai_question_mark() {
 }
 
 # Set up keybindings
-zle -N _atuin_ai_natural_language
 zle -N _atuin_ai_question_mark
-bindkey '^K' _atuin_ai_natural_language # Ctrl-K
 bindkey '?' _atuin_ai_question_mark # Question mark
 "#
     .trim()
@@ -93,7 +63,6 @@ mod tests {
         assert!(result.contains("_atuin_ai_question_mark"));
         assert!(result.contains("bindkey"));
         assert!(result.contains("atuin-ai inline"));
-        assert!(result.contains("^K"));
         assert!(result.contains("__atuin_ai_cancel__"));
         assert!(result.contains("__atuin_ai_execute__"));
         assert!(result.contains("__atuin_ai_insert__"));

@@ -1,6 +1,5 @@
 use clap::{Parser, Subcommand};
 use tracing::Level;
-use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{EnvFilter, Layer, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 pub mod init;
