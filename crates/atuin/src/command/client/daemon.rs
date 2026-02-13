@@ -522,10 +522,7 @@ async fn restart_cmd(settings: &Settings) -> Result<()> {
     println!("Starting daemon...");
 
     let timeout = startup_timeout(settings);
-    let status = wait_until_ready(settings, timeout)
-        .await?
-        .status()
-        .await?;
+    let status = wait_until_ready(settings, timeout).await?.status().await?;
 
     println!("Daemon restarted");
     println!("  PID:      {}", status.pid);
@@ -550,15 +547,79 @@ pub fn daemonize_current_process() -> Result<()> {
     Ok(())
 }
 
-async fn run(
-    settings: Settings,
-    store: SqliteStore,
-    history_db: Sqlite,
-) -> Result<()> {
+async fn run(settings: Settings, store: SqliteStore, history_db: Sqlite) -> Result<()> {
     let pidfile_path = PathBuf::from(&settings.daemon.pidfile_path);
     let _pidfile_guard = PidfileGuard::acquire(&pidfile_path)?;
 
     listen(settings, store, history_db).await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_version_matches() {
+        assert!(daemon_matches_expected(
+            DAEMON_VERSION,
+            DAEMON_PROTOCOL_VERSION
+        ));
+    }
+
+    #[test]
+    fn test_version_mismatch() {
+        assert!(!daemon_matches_expected("0.0.0", DAEMON_PROTOCOL_VERSION));
+        assert!(!daemon_matches_expected(DAEMON_VERSION, 999));
+        assert!(!daemon_matches_expected("0.0.0", 999));
+    }
+
+    #[test]
+    fn test_mismatch_message_version() {
+        let msg = daemon_mismatch_message("0.0.0", DAEMON_PROTOCOL_VERSION);
+        assert!(msg.contains("out of date"), "got: {msg}");
+        assert!(msg.contains("0.0.0"));
+        assert!(msg.contains(DAEMON_VERSION));
+    }
+
+    #[test]
+    fn test_mismatch_message_protocol() {
+        let msg = daemon_mismatch_message(DAEMON_VERSION, 999);
+        assert!(msg.contains("protocol mismatch"), "got: {msg}");
+    }
+
+    #[test]
+    fn test_startup_lock_path() {
+        let pidfile = Path::new("/tmp/atuin-daemon.pid");
+        let lock = daemon_startup_lock_path(pidfile);
+        assert_eq!(lock, PathBuf::from("/tmp/atuin-daemon.pid.startup.lock"));
+    }
+
+    #[test]
+    fn test_pidfile_guard_acquire_and_drop() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pidfile = tmp.path().join("daemon.pid");
+
+        {
+            let _guard = PidfileGuard::acquire(&pidfile).unwrap();
+            let contents = std::fs::read_to_string(&pidfile).unwrap();
+            let lines: Vec<&str> = contents.lines().collect();
+            assert_eq!(lines.len(), 2);
+            assert_eq!(lines[0], std::process::id().to_string());
+            assert_eq!(lines[1], DAEMON_VERSION);
+        }
+        // After guard is dropped, lock should be released — acquiring again must succeed.
+        let _guard2 = PidfileGuard::acquire(&pidfile).unwrap();
+    }
+
+    #[test]
+    fn test_pidfile_guard_prevents_double_acquire() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pidfile = tmp.path().join("daemon.pid");
+
+        let _guard = PidfileGuard::acquire(&pidfile).unwrap();
+        let result = PidfileGuard::acquire(&pidfile);
+        assert!(result.is_err());
+    }
 }

@@ -342,6 +342,7 @@ name = "atuin-daemon"
 version = "18.12.1"
 dependencies = [
  "atuin-client",
+ "atuin-common",
  "atuin-dotfiles",
  "atuin-history",
  "dashmap",
@@ -352,6 +353,7 @@ dependencies = [
  "prost-types",
  "protox",
  "rand 0.8.5",
+ "tempfile",
  "time",
  "tokio",
  "tokio-stream",
