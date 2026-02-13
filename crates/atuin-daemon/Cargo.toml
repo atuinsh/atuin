@@ -14,9 +14,9 @@ readme.workspace = true
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-atuin-client = { path = "../atuin-client", version = "18.12.1" }
-atuin-dotfiles = { path = "../atuin-dotfiles", version = "18.12.1" }
-atuin-history = { path = "../atuin-history", version = "18.12.1" }
+atuin-client = { path = "../atuin-client", version = "18.12.2-beta.1" }
+atuin-dotfiles = { path = "../atuin-dotfiles", version = "18.12.2-beta.1" }
+atuin-history = { path = "../atuin-history", version = "18.12.2-beta.1" }
 
 time = { workspace = true }
 uuid = { workspace = true }
@@ -41,7 +41,7 @@ listenfd = "1.0.1"
 
 [dev-dependencies]
 tempfile = { workspace = true }
-atuin-common = { path = "../atuin-common", version = "18.12.1" }
+atuin-common = { path = "../atuin-common", version = "18.12.2-beta.1" }
 
 [build-dependencies]
 protox = "0.8.0"
