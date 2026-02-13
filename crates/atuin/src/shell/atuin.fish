@@ -6,7 +6,7 @@ set --erase ATUIN_HISTORY_ID
 
 function _atuin_preexec --on-event fish_preexec
     if not test -n "$fish_private_mode"
-        set -g ATUIN_HISTORY_ID (atuin history start -- "$argv[1]")
+        set -g ATUIN_HISTORY_ID (atuin history start -- "$argv[1]" 2>/dev/null)
     end
 end
 
@@ -28,7 +28,7 @@ function _atuin_tmux_popup_check
         return
     end
 
-    if test "$ATUIN_TMUX_POPUP" = "false"
+    if test "$ATUIN_TMUX_POPUP" = false
         echo 0
         return
     end
@@ -55,7 +55,9 @@ function _atuin_tmux_popup_check
         set m2 0
     end
 
-    if test "$m1" -gt 3 2>/dev/null; or begin; test "$m1" -eq 3 2>/dev/null; and test "$m2" -ge 2 2>/dev/null; end
+    if test "$m1" -gt 3 2>/dev/null; or begin
+            test "$m1" -eq 3 2>/dev/null; and test "$m2" -ge 2 2>/dev/null
+        end
         echo 1
     else
         echo 0
@@ -118,13 +120,13 @@ function _atuin_search
 
     if test -n "$ATUIN_H"
         if string match --quiet '__atuin_accept__:*' "$ATUIN_H"
-          set -l ATUIN_HIST (string replace "__atuin_accept__:" "" -- "$ATUIN_H" | string collect)
-          commandline -r "$ATUIN_HIST"
-          commandline -f repaint
-          commandline -f execute
-          return
+            set -l ATUIN_HIST (string replace "__atuin_accept__:" "" -- "$ATUIN_H" | string collect)
+            commandline -r "$ATUIN_HIST"
+            commandline -f repaint
+            commandline -f execute
+            return
         else
-          commandline -r "$ATUIN_H"
+            commandline -r "$ATUIN_H"
         end
     end
 
