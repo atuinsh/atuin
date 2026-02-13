@@ -30,7 +30,7 @@ tracing-appender = "0.2.4"
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-crossterm = { workspace = true }
+crossterm = { workspace = true, features = ["use-dev-tty"] }
 ratatui = { workspace = true }
 
 [dev-dependencies]
