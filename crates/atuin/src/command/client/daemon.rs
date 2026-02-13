@@ -603,12 +603,16 @@ mod tests {
 
         {
             let _guard = PidfileGuard::acquire(&pidfile).unwrap();
-            let contents = std::fs::read_to_string(&pidfile).unwrap();
-            let lines: Vec<&str> = contents.lines().collect();
-            assert_eq!(lines.len(), 2);
-            assert_eq!(lines[0], std::process::id().to_string());
-            assert_eq!(lines[1], DAEMON_VERSION);
+            // Guard holds an exclusive lock — on Windows other handles cannot
+            // read the file, so we verify contents after the guard is dropped.
         }
+
+        let contents = std::fs::read_to_string(&pidfile).unwrap();
+        let lines: Vec<&str> = contents.lines().collect();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0], std::process::id().to_string());
+        assert_eq!(lines[1], DAEMON_VERSION);
+
         // After guard is dropped, lock should be released — acquiring again must succeed.
         let _guard2 = PidfileGuard::acquire(&pidfile).unwrap();
     }
