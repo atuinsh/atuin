@@ -13,7 +13,7 @@ struct Cli {
     #[arg(short, long, global = true)]
     verbose: bool,
 
-    /// Custom API endpoint (e.g., https://openrouter.ai/api/v1)
+    /// Custom API endpoint
     #[arg(long, global = true, env = "ATUIN_AI_API_ENDPOINT")]
     api_endpoint: Option<String>,
 
@@ -67,37 +67,12 @@ pub async fn run() -> eyre::Result<()> {
 fn init_tracing(verbose: bool) {
     let level = if verbose { Level::DEBUG } else { Level::INFO };
 
-    // Create ~/.atuin/logs directory if it doesn't exist
-    let dirs = directories::UserDirs::new().expect("Could not find home directory");
-    let log_dir = dirs.home_dir().join(".atuin").join("logs");
-    std::fs::create_dir_all(&log_dir).expect("Could not create log directory");
-
-    // Set up file appender with daily rotation, capped retention
-    let file_appender = RollingFileAppender::builder()
-        .rotation(Rotation::DAILY)
-        .filename_prefix("ai")
-        .filename_suffix("log")
-        .max_log_files(4)
-        .build(&log_dir)
-        .expect("Could not create rolling AI log appender");
-    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
-
     // Create env filter
     let env_filter = EnvFilter::from_default_env().add_directive(
         format!("atuin_ai={}", level.as_str().to_lowercase())
             .parse()
             .unwrap(),
     );
-
-    // Create file layer (always logs INFO and above to file)
-    let file_layer = fmt::layer()
-        .with_writer(non_blocking)
-        .with_ansi(false)
-        .with_target(true)
-        .with_thread_ids(true)
-        .with_file(true)
-        .with_line_number(true)
-        .with_filter(EnvFilter::new("atuin_ai=info"));
 
     // Create console layer (only for verbose mode)
     let console_layer = if verbose {
@@ -112,15 +87,12 @@ fn init_tracing(verbose: bool) {
         None
     };
 
-    // Initialize subscriber with both layers
-    let subscriber = tracing_subscriber::registry().with(file_layer);
+    // Initialize subscriber
+    let subscriber = tracing_subscriber::registry();
 
     if let Some(console) = console_layer {
         subscriber.with(console).init();
     } else {
         subscriber.init();
     }
-
-    // Keep the guard alive for the duration of the program
-    std::mem::forget(_guard);
 }
