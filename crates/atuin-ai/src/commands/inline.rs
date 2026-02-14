@@ -8,7 +8,9 @@ use crossterm::{
     event::{self, Event, KeyCode},
     terminal::{disable_raw_mode, enable_raw_mode},
 };
+use eventsource_stream::Eventsource;
 use eyre::{Context as _, Result, bail};
+use futures::StreamExt;
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 
@@ -31,6 +33,20 @@ struct GenerateResponse {
     command: String,
     #[serde(default)]
     explanation: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Serialize)]
+struct RefineRequest {
+    messages: Vec<RefineMessage>,
+    context: GenerateContext,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Serialize)]
+struct RefineMessage {
+    role: String,
+    content: String,
 }
 
 pub async fn run(
@@ -152,6 +168,92 @@ async fn generate_command(
     bail!("Hub request failed ({status}): {body}");
 }
 
+#[allow(dead_code)]
+fn create_refine_stream(
+    hub_address: String,
+    token: String,
+    messages: Vec<RefineMessage>,
+) -> std::pin::Pin<Box<dyn futures::Stream<Item = Result<String>> + Send>> {
+    Box::pin(async_stream::stream! {
+        ensure_crypto_provider();
+        let endpoint = match hub_url(&hub_address, "/api/cli/refine") {
+            Ok(url) => url,
+            Err(e) => {
+                yield Err(e);
+                return;
+            }
+        };
+
+        let request = RefineRequest {
+            messages,
+            context: GenerateContext {
+                os: detect_os(),
+                shell: detect_shell(),
+                pwd: std::env::current_dir()
+                    .ok()
+                    .map(|path| path.to_string_lossy().into_owned()),
+            },
+        };
+
+        let client = reqwest::Client::new();
+        let response = match client
+            .post(endpoint.clone())
+            .bearer_auth(&token)
+            .json(&request)
+            .send()
+            .await
+        {
+            Ok(resp) => resp,
+            Err(e) => {
+                yield Err(eyre::eyre!("Failed to send SSE request: {}", e));
+                return;
+            }
+        };
+
+        let status = response.status();
+        if !status.is_success() {
+            yield Err(eyre::eyre!("SSE request failed: {}", status));
+            return;
+        }
+
+        let byte_stream = response.bytes_stream();
+        let mut stream = byte_stream.eventsource();
+
+        while let Some(event) = stream.next().await {
+            match event {
+                Ok(event) => {
+                    let data = event.data;
+                    // Check for done signal first
+                    if data == "[DONE]" {
+                        break;
+                    }
+
+                    // Parse SSE data - expect JSON with "delta" field or plain text
+                    // Try JSON first, fall back to raw data
+                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&data) {
+                        if let Some(delta) = json.get("delta").and_then(|v| v.as_str()) {
+                            yield Ok(delta.to_string());
+                        } else if let Some(text) = json.get("text").and_then(|v| v.as_str()) {
+                            yield Ok(text.to_string());
+                        }
+                        // Check for done signal
+                        if json.get("done").and_then(|v| v.as_bool()).unwrap_or(false) {
+                            break;
+                        }
+                    } else if !data.is_empty() {
+                        // Raw text chunk
+                        yield Ok(data);
+                    }
+                }
+                Err(e) => {
+                    yield Err(eyre::eyre!("SSE error: {}", e));
+                    break;
+                }
+            }
+        }
+    })
+}
+
 fn hub_url(base: &str, path: &str) -> Result<Url> {
     let base_with_slash = if base.ends_with('/') {
         base.to_string()
@@ -229,6 +331,11 @@ async fn run_inline_tui(
     let mut generation_task: Option<tokio::task::JoinHandle<Result<GenerateResponse>>> = None;
     let mut last_query = String::new();
 
+    // Track refine stream
+    let mut refine_stream: Option<
+        std::pin::Pin<Box<dyn futures::Stream<Item = Result<String>> + Send>>,
+    > = None;
+
     loop {
         // Render current state
         let anchor_col = guard.anchor_col();
@@ -247,6 +354,29 @@ async fn run_inline_tui(
             }
             AppEvent::Tick => {
                 app.tick();
+
+                // Poll refine stream if active
+                if app.mode == AppMode::Streaming
+                    && refine_stream.is_some()
+                    && let Some(stream) = &mut refine_stream
+                {
+                    // Try to get next chunk without blocking
+                    let mut cx = std::task::Context::from_waker(futures::task::noop_waker_ref());
+                    match stream.as_mut().poll_next(&mut cx) {
+                        std::task::Poll::Ready(Some(Ok(chunk))) => {
+                            app.append_to_streaming_block(&chunk);
+                        }
+                        std::task::Poll::Ready(Some(Err(e))) => {
+                            refine_stream = None;
+                            app.streaming_error(e.to_string());
+                        }
+                        std::task::Poll::Ready(None) => {
+                            refine_stream = None;
+                            app.finalize_streaming();
+                        }
+                        std::task::Poll::Pending => {}
+                    }
+                }
 
                 // Check if generation task finished
                 if let Some(task) = &generation_task
@@ -296,6 +426,11 @@ async fn run_inline_tui(
             && let Some(task) = generation_task.take()
         {
             task.abort();
+        }
+
+        // Handle streaming cancellation
+        if app.mode != AppMode::Streaming && refine_stream.is_some() {
+            refine_stream = None;
         }
 
         // Handle retry in Error mode
