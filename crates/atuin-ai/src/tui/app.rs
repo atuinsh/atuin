@@ -35,6 +35,8 @@ pub struct App {
     pub exit_action: Option<ExitAction>,
     /// Last error message (when in Error mode)
     pub error_message: Option<String>,
+    /// Whether we're in refine mode (vs initial generate)
+    pub is_refine_mode: bool,
 }
 
 impl App {
@@ -46,6 +48,7 @@ impl App {
             should_exit: false,
             exit_action: None,
             error_message: None,
+            is_refine_mode: false,
         }
     }
 
@@ -190,6 +193,47 @@ impl App {
         self.mode = AppMode::Error;
     }
 
+    /// Transition to edit mode for refining command
+    pub fn start_edit_mode(&mut self) {
+        // Make existing blocks static
+        self.make_all_static();
+        // Clear input for new message
+        self.input.clear();
+        // Set refine mode flag
+        self.is_refine_mode = true;
+        // Switch to input mode
+        self.mode = AppMode::Input;
+    }
+
+    /// Build conversation history for refine API
+    pub fn build_conversation_history(&self) -> Vec<(String, String)> {
+        // Returns (role, content) pairs
+        let mut history = Vec::new();
+        for block in &self.blocks {
+            match block.kind {
+                BlockKind::Input => {
+                    history.push(("user".to_string(), block.content.clone()));
+                }
+                BlockKind::Text => {
+                    // Assistant explanations
+                    history.push(("assistant".to_string(), block.content.clone()));
+                }
+                BlockKind::Command => {
+                    // Include command as part of assistant response
+                    // Format: "Command: {cmd}"
+                    history.push((
+                        "assistant".to_string(),
+                        format!("Command: {}", block.content),
+                    ));
+                }
+                _ => {
+                    // Skip spinner, error blocks
+                }
+            }
+        }
+        history
+    }
+
     /// Handle a key event. Returns true if render is needed.
     pub fn handle_key(&mut self, key: KeyEvent) -> bool {
         // Pass through Ctrl combinations per user decision
@@ -271,9 +315,7 @@ impl App {
                 true
             }
             KeyCode::Char('e') => {
-                // Edit/refine - reset to input mode (full implementation in Phase 4)
-                self.mode = AppMode::Input;
-                self.input.clear();
+                self.start_edit_mode();
                 true
             }
             _ => false,
