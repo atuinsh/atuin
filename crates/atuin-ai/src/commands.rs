@@ -16,6 +16,10 @@ struct Cli {
     #[arg(long, global = true, env = "ATUIN_AI_API_ENDPOINT")]
     api_endpoint: Option<String>,
 
+    /// Custom API token
+    #[arg(long, global = true, env = "ATUIN_AI_API_TOKEN")]
+    api_token: Option<String>,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -57,8 +61,10 @@ pub async fn run() -> eyre::Result<()> {
         Commands::Inline {
             command,
             natural_language,
-        } => inline::run(command, natural_language, cli.api_endpoint).await,
-        Commands::Complete { command } => inline::run(command, false, cli.api_endpoint).await,
+        } => inline::run(command, natural_language, cli.api_endpoint, cli.api_token).await,
+        Commands::Complete { command } => {
+            inline::run(command, false, cli.api_endpoint, cli.api_token).await
+        }
         Commands::Interactive => Err(eyre::eyre!("interactive mode not implemented yet")),
     }
 }

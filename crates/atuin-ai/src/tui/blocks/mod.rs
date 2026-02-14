@@ -40,4 +40,12 @@ impl Block {
             content: String::new(),
         }
     }
+
+    pub fn new_error(message: String) -> Self {
+        Self {
+            kind: BlockKind::Error,
+            state: BlockState::Static,
+            content: message,
+        }
+    }
 }
