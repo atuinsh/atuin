@@ -14,7 +14,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Core Event Loop Infrastructure** - Async event loop with keyboard input, panic handling, basic state management
 - [x] **Phase 2: Block Rendering System** - Block-based conversation UI with theme integration and word wrapping
-- [ ] **Phase 3: Command Generation** - Fast initial command suggestion via /api/cli/generate
+- [x] **Phase 3: Command Generation** - Fast initial command suggestion via /api/cli/generate
 - [ ] **Phase 4: SSE Streaming & Conversation** - Multi-turn conversation with streaming responses
 - [ ] **Phase 5: Safety & Polish** - Dangerous command warnings, markdown formatting, keyboard refinements
 
@@ -65,7 +65,7 @@ Plans:
 **Plans**: 1 plan
 
 Plans:
-- [ ] 03-01-PLAN.md — Error block rendering and exit mode configuration
+- [x] 03-01-PLAN.md — Error block rendering and exit mode configuration
 
 ### Phase 4: SSE Streaming & Conversation
 **Goal**: Multi-turn conversation with real-time streaming responses
@@ -77,10 +77,11 @@ Plans:
   3. Markdown formatting renders correctly (bold, italics as underline, inline code)
   4. Previous blocks become static as conversation progresses
   5. Conversation history is maintained across multiple turns
-**Plans**: TBD
+**Plans**: 2 plans in 2 waves
 
 Plans:
-- [ ] 04-01: TBD
+- [ ] 04-01-PLAN.md — SSE streaming infrastructure (dependencies, BlockState::Streaming, event loop integration)
+- [ ] 04-02-PLAN.md — Markdown rendering and edit mode conversation flow
 
 ### Phase 5: Safety & Polish
 **Goal**: Production-ready UI with safety warnings and refined interactions
@@ -104,8 +105,8 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Core Event Loop Infrastructure | 3/3 | ✓ Complete | 2026-02-14 |
-| 2. Block Rendering System | 1/1 | ✓ Complete | 2026-02-14 |
-| 3. Command Generation | 0/1 | Not started | - |
-| 4. SSE Streaming & Conversation | 0/0 | Not started | - |
+| 1. Core Event Loop Infrastructure | 3/3 | Complete | 2026-02-14 |
+| 2. Block Rendering System | 1/1 | Complete | 2026-02-14 |
+| 3. Command Generation | 1/1 | Complete | 2026-02-14 |
+| 4. SSE Streaming & Conversation | 0/2 | Planned | - |
 | 5. Safety & Polish | 0/0 | Not started | - |
