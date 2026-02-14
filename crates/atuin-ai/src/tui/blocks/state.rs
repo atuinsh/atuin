@@ -1,9 +1,7 @@
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BlockState {
     /// Currently being built (streaming content, shows spinner or streaming text)
-    Building {
-        spinner_idx: usize,
-    },
+    Building { spinner_idx: usize },
     /// Finished building, user can interact
     Active,
     /// Previous block, no longer interactive
@@ -31,7 +29,7 @@ impl BlockState {
     pub fn finish_building(self) -> Self {
         match self {
             BlockState::Building { .. } => BlockState::Active,
-            other => other,  // Already finished, no-op
+            other => other, // Already finished, no-op
         }
     }
 
@@ -46,7 +44,7 @@ impl BlockState {
     /// Advance spinner (only meaningful for Building state)
     pub fn tick(&mut self) {
         if let BlockState::Building { spinner_idx } = self {
-            *spinner_idx = (*spinner_idx + 1) % 4;  // 4 spinner frames
+            *spinner_idx = (*spinner_idx + 1) % 4; // 4 spinner frames
         }
     }
 }
