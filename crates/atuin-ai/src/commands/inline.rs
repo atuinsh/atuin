@@ -1,21 +1,16 @@
 use crate::tui::{
-    App, AppEvent, AppMode, EventLoop, ExitAction, TerminalGuard, install_panic_hook,
+    App, AppEvent, AppMode, EventLoop, ExitAction, RenderContext, TerminalGuard,
+    install_panic_hook, render_blocks,
 };
+use atuin_client::theme::ThemeManager;
 use atuin_common::tls::ensure_crypto_provider;
 use crossterm::{
     event::{self, Event, KeyCode},
     terminal::{disable_raw_mode, enable_raw_mode},
 };
 use eyre::{Context as _, Result, bail};
-use ratatui::{
-    backend::CrosstermBackend,
-    layout::{Alignment, Rect},
-    text::Line,
-    widgets::{Block, Borders, Paragraph, Wrap},
-};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
-use std::io::Stdout;
 
 #[derive(Debug, Serialize)]
 struct GenerateRequest {
@@ -214,6 +209,11 @@ async fn run_inline_tui(
         app.input = prompt;
     }
 
+    // Load theme
+    let settings = atuin_client::settings::Settings::new()?;
+    let mut theme_manager = ThemeManager::new(None, None);
+    let theme = theme_manager.load_theme(&settings.theme.name, None);
+
     // Initialize event loop
     let mut event_loop = EventLoop::new();
 
@@ -224,7 +224,10 @@ async fn run_inline_tui(
     loop {
         // Render current state
         let anchor_col = guard.anchor_col();
-        render_app(guard.terminal(), &app, anchor_col)?;
+        let ctx = RenderContext { theme, anchor_col };
+        guard.terminal().draw(|frame| {
+            render_blocks(frame, &app, &ctx);
+        })?;
 
         // Get next event
         let event = event_loop.run().await?;
@@ -339,229 +342,4 @@ fn wait_for_login_confirmation() -> Result<bool> {
             }
         }
     }
-}
-
-const SPINNER_FRAMES: [&str; 4] = ["/", "-", "\\", "|"];
-
-fn render_app(
-    terminal: &mut ratatui::Terminal<CrosstermBackend<Stdout>>,
-    app: &App,
-    anchor_col: u16,
-) -> Result<()> {
-    terminal
-        .draw(|f| {
-            let area = f.area();
-            let desired_width = 64u16.min(area.width.saturating_sub(2)).max(32);
-            let content_width = usize::from(desired_width.saturating_sub(2)).max(1);
-
-            // Build content based on app mode
-            let (content, show_cursor, footer) = match app.mode {
-                AppMode::Input => {
-                    let formatted = format_prompt(&app.input);
-                    (formatted, true, "[Enter]: Accept  [Esc]: Cancel")
-                }
-                AppMode::Generating => {
-                    // Get spinner index from active block
-                    let spinner_frame = if let Some(block) = app.active_block() {
-                        if let crate::tui::BlockState::Building { spinner_idx } = block.state {
-                            SPINNER_FRAMES[spinner_idx % SPINNER_FRAMES.len()]
-                        } else {
-                            SPINNER_FRAMES[0]
-                        }
-                    } else {
-                        SPINNER_FRAMES[0]
-                    };
-
-                    // Get input from input block
-                    let input_text = app
-                        .blocks
-                        .iter()
-                        .rev()
-                        .find(|b| b.kind == crate::tui::BlockKind::Input)
-                        .map(|b| b.content.as_str())
-                        .unwrap_or("");
-
-                    (
-                        format!(
-                            "{}\n\n{} Generating...",
-                            format_prompt(input_text),
-                            spinner_frame
-                        ),
-                        false,
-                        "[Esc]: Cancel",
-                    )
-                }
-                AppMode::Review => {
-                    // Get command and explanation from blocks
-                    let command = app
-                        .blocks
-                        .iter()
-                        .find(|b| b.kind == crate::tui::BlockKind::Command)
-                        .map(|b| b.content.as_str())
-                        .unwrap_or("");
-
-                    let explanation = app
-                        .blocks
-                        .iter()
-                        .find(|b| b.kind == crate::tui::BlockKind::Text)
-                        .map(|b| b.content.as_str());
-
-                    let input_text = app
-                        .blocks
-                        .iter()
-                        .rev()
-                        .find(|b| b.kind == crate::tui::BlockKind::Input)
-                        .map(|b| b.content.as_str())
-                        .unwrap_or("");
-
-                    let separator = "─".repeat(content_width.max(1));
-                    let mut text = format!(
-                        "{}\n\n{}\n\n$ {}\n",
-                        format_prompt(input_text),
-                        separator,
-                        command
-                    );
-                    if let Some(exp) = explanation {
-                        text.push('\n');
-                        text.push_str(exp);
-                    }
-
-                    (
-                        text,
-                        false,
-                        "[Enter]: Run  [Tab]: Insert  [e]: Edit  [Esc]: Cancel",
-                    )
-                }
-                AppMode::Error => {
-                    let input_text = app
-                        .blocks
-                        .iter()
-                        .rev()
-                        .find(|b| b.kind == crate::tui::BlockKind::Input)
-                        .map(|b| b.content.as_str())
-                        .unwrap_or("");
-
-                    let error_msg = app.error_message.as_deref().unwrap_or("Unknown error");
-
-                    (
-                        format!(
-                            "{}\n\nRequest failed:\n{}",
-                            format_prompt(input_text),
-                            error_msg
-                        ),
-                        false,
-                        "[Enter]/[r]: Retry  [Esc]: Cancel",
-                    )
-                }
-            };
-
-            let desired_height = (wrapped_line_count(&content, content_width) as u16)
-                .saturating_add(2)
-                .min(area.height.max(1))
-                .max(3);
-
-            let max_x = area.x + area.width.saturating_sub(desired_width);
-            let preferred_x = area.x + anchor_col.saturating_sub(2);
-            let card = Rect {
-                x: preferred_x.min(max_x),
-                y: area.y,
-                width: desired_width,
-                height: desired_height,
-            };
-
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .title("Describe the command you'd like to generate:")
-                .title_bottom(Line::from(footer).alignment(Alignment::Right));
-
-            let content_area = block.inner(card);
-            f.render_widget(block, card);
-
-            let paragraph = Paragraph::new(content.clone()).wrap(Wrap { trim: false });
-            f.render_widget(paragraph, content_area);
-
-            if show_cursor {
-                let width = usize::from(content_area.width).max(1);
-                let (cursor_row, cursor_col) = prompt_cursor_position(&app.input, width);
-                let cursor_x = content_area.x.saturating_add(cursor_col);
-                let cursor_y = content_area.y.saturating_add(cursor_row);
-                f.set_cursor_position((cursor_x, cursor_y));
-            }
-        })
-        .context("failed rendering app")?;
-    Ok(())
-}
-
-fn format_prompt(prompt: &str) -> String {
-    if prompt.is_empty() {
-        return "> ".to_string();
-    }
-    format!("> {prompt}")
-}
-
-fn wrapped_line_count(text: &str, width: usize) -> usize {
-    if width == 0 {
-        return 1;
-    }
-
-    text.split('\n')
-        .map(|line| {
-            let len = line.chars().count();
-            len.max(1).div_ceil(width)
-        })
-        .sum::<usize>()
-        .max(1)
-}
-
-fn prompt_cursor_position(prompt: &str, width: usize) -> (u16, u16) {
-    if width == 0 {
-        return (0, 0);
-    }
-
-    // The visible prompt line is always `> {prompt}`.
-    // We mimic word-wrapping so cursor tracking matches visual layout.
-    let mut row = 0usize;
-    let mut col = 2usize; // "> "
-
-    let mut saw_any_word = false;
-    for word in prompt.split_whitespace() {
-        let word_len = word.chars().count();
-        if !saw_any_word {
-            saw_any_word = true;
-            if col + word_len <= width {
-                col += word_len;
-            } else if word_len >= width {
-                let used = width.saturating_sub(col);
-                let remaining = word_len.saturating_sub(used);
-                row += 1 + (remaining / width);
-                col = remaining % width;
-            } else {
-                row += 1;
-                col = word_len;
-            }
-            continue;
-        }
-
-        if col + 1 + word_len <= width {
-            col += 1 + word_len;
-        } else if word_len >= width {
-            row += 1 + (word_len / width);
-            col = word_len % width;
-        } else {
-            row += 1;
-            col = word_len;
-        }
-    }
-
-    // Keep trailing spaces user typed.
-    let trailing_spaces = prompt.chars().rev().take_while(|c| *c == ' ').count();
-    for _ in 0..trailing_spaces {
-        if col >= width {
-            row += 1;
-            col = 0;
-        }
-        col += 1;
-    }
-
-    (row as u16, col as u16)
 }
