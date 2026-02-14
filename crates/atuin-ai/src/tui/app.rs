@@ -7,6 +7,8 @@ pub enum AppMode {
     Input,
     /// Waiting for generation (showing spinner)
     Generating,
+    /// Streaming SSE response
+    Streaming,
     /// Reviewing generated command
     Review,
     /// Error state, can retry
@@ -147,6 +149,47 @@ impl App {
         self.should_exit = true;
     }
 
+    /// Start streaming response (creates empty streaming text block)
+    pub fn start_streaming_response(&mut self) {
+        self.make_all_static();
+        self.blocks.push(Block::new_streaming_text());
+        self.mode = AppMode::Streaming;
+    }
+
+    /// Append text chunk to streaming block
+    pub fn append_to_streaming_block(&mut self, chunk: &str) {
+        if let Some(block) = self
+            .blocks
+            .iter_mut()
+            .rev()
+            .find(|b| b.state.is_streaming())
+        {
+            block.content.push_str(chunk);
+        }
+    }
+
+    /// Finalize streaming block (transition to Review mode)
+    pub fn finalize_streaming(&mut self) {
+        if let Some(block) = self
+            .blocks
+            .iter_mut()
+            .rev()
+            .find(|b| b.state.is_streaming())
+        {
+            block.state = BlockState::Static;
+        }
+        self.mode = AppMode::Review;
+    }
+
+    /// Handle streaming error
+    pub fn streaming_error(&mut self, error: String) {
+        // Remove streaming block if present
+        self.blocks.retain(|b| !b.state.is_streaming());
+        self.blocks.push(Block::new_error(error.clone()));
+        self.error_message = Some(error);
+        self.mode = AppMode::Error;
+    }
+
     /// Handle a key event. Returns true if render is needed.
     pub fn handle_key(&mut self, key: KeyEvent) -> bool {
         // Pass through Ctrl combinations per user decision
@@ -158,6 +201,7 @@ impl App {
         match self.mode {
             AppMode::Input => self.handle_input_key(key),
             AppMode::Generating => self.handle_generating_key(key),
+            AppMode::Streaming => self.handle_streaming_key(key),
             AppMode::Review => self.handle_review_key(key),
             AppMode::Error => self.handle_error_key(key),
         }
@@ -233,6 +277,18 @@ impl App {
                 true
             }
             _ => false,
+        }
+    }
+
+    fn handle_streaming_key(&mut self, key: KeyEvent) -> bool {
+        match key.code {
+            KeyCode::Esc => {
+                // Cancel streaming
+                self.blocks.retain(|b| !b.state.is_streaming());
+                self.mode = AppMode::Review;
+                true
+            }
+            _ => false, // Ignore other keys during streaming
         }
     }
 

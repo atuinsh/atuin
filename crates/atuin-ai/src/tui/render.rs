@@ -251,6 +251,7 @@ fn get_footer_text(mode: &AppMode) -> &'static str {
     match mode {
         AppMode::Input => "[Enter]: Accept  [Esc]: Cancel",
         AppMode::Generating => "[Esc]: Cancel",
+        AppMode::Streaming => "[Esc]: Cancel",
         AppMode::Review => "[Enter]: Run  [Tab]: Insert  [e]: Edit  [Esc]: Cancel",
         AppMode::Error => "[Enter]/[r]: Retry  [Esc]: Cancel",
     }

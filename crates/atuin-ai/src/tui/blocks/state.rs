@@ -4,6 +4,8 @@ pub enum BlockState {
     Building { spinner_idx: usize },
     /// Finished building, user can interact
     Active,
+    /// Accumulating SSE chunks
+    Streaming,
     /// Previous block, no longer interactive
     Static,
 }
@@ -25,6 +27,10 @@ impl BlockState {
         matches!(self, BlockState::Static)
     }
 
+    pub fn is_streaming(&self) -> bool {
+        matches!(self, BlockState::Streaming)
+    }
+
     /// Transition Building -> Active (called when server sends "done" or stream closes)
     pub fn finish_building(self) -> Self {
         match self {
@@ -36,7 +42,9 @@ impl BlockState {
     /// Transition Active -> Static (called when new block starts building)
     pub fn make_static(self) -> Self {
         match self {
-            BlockState::Building { .. } | BlockState::Active => BlockState::Static,
+            BlockState::Building { .. } | BlockState::Active | BlockState::Streaming => {
+                BlockState::Static
+            }
             BlockState::Static => BlockState::Static,
         }
     }

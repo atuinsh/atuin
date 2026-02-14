@@ -48,4 +48,12 @@ impl Block {
             content: message,
         }
     }
+
+    pub fn new_streaming_text() -> Self {
+        Self {
+            kind: BlockKind::Text,
+            state: BlockState::Streaming,
+            content: String::new(),
+        }
+    }
 }
