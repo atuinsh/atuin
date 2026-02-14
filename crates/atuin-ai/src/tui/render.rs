@@ -1,9 +1,10 @@
 use atuin_client::theme::{Meaning, Theme};
+use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 use ratatui::{
     Frame,
     backend::FromCrossterm,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::Style,
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block as RatatuiBlock, Borders, Padding, Paragraph, Wrap},
 };
@@ -215,12 +216,8 @@ fn render_spinner_block(frame: &mut Frame, block: &Block, area: Rect, ctx: &Rend
 }
 
 fn render_text_block(frame: &mut Frame, text: &str, area: Rect, ctx: &RenderContext) {
-    let text_style = Style::from_crossterm(ctx.theme.as_style(Meaning::Base));
-
-    let paragraph = Paragraph::new(text)
-        .style(text_style)
-        .wrap(Wrap { trim: false });
-
+    let lines = markdown_to_spans(text, ctx.theme);
+    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
     frame.render_widget(paragraph, area);
 }
 
@@ -255,6 +252,92 @@ fn get_footer_text(mode: &AppMode) -> &'static str {
         AppMode::Review => "[Enter]: Run  [Tab]: Insert  [e]: Edit  [Esc]: Cancel",
         AppMode::Error => "[Enter]/[r]: Retry  [Esc]: Cancel",
     }
+}
+
+/// Convert markdown text to styled ratatui Lines
+/// Supports: **bold**, *italics* (rendered as underline), `inline code`
+pub fn markdown_to_spans<'a>(text: &'a str, theme: &'a Theme) -> Vec<Line<'a>> {
+    let parser = Parser::new(text);
+    let mut lines: Vec<Vec<Span<'a>>> = vec![Vec::new()];
+    let mut current_line = 0;
+
+    // Style stack for nested formatting
+    let base_style = Style::from_crossterm(theme.as_style(Meaning::Base));
+    let code_style = Style::from_crossterm(theme.as_style(Meaning::Important));
+    let mut style_stack: Vec<Style> = vec![base_style];
+
+    for event in parser {
+        match event {
+            Event::Start(Tag::Strong) => {
+                // Bold
+                let bold_style = style_stack
+                    .last()
+                    .copied()
+                    .unwrap_or(base_style)
+                    .add_modifier(Modifier::BOLD);
+                style_stack.push(bold_style);
+            }
+            Event::End(TagEnd::Strong) => {
+                style_stack.pop();
+            }
+            Event::Start(Tag::Emphasis) => {
+                // Italics -> underline per CONV-06 requirement
+                let underline_style = style_stack
+                    .last()
+                    .copied()
+                    .unwrap_or(base_style)
+                    .add_modifier(Modifier::UNDERLINED);
+                style_stack.push(underline_style);
+            }
+            Event::End(TagEnd::Emphasis) => {
+                style_stack.pop();
+            }
+            Event::Code(code) => {
+                // Inline code with Important styling (includes backticks visually)
+                lines[current_line].push(Span::styled(format!("`{}`", code), code_style));
+            }
+            Event::Text(text) => {
+                let current_style = style_stack.last().copied().unwrap_or(base_style);
+                // Handle text that might contain newlines
+                let parts: Vec<&str> = text.split('\n').collect();
+                for (i, part) in parts.iter().enumerate() {
+                    if i > 0 {
+                        current_line += 1;
+                        lines.push(Vec::new());
+                    }
+                    if !part.is_empty() {
+                        lines[current_line].push(Span::styled(part.to_string(), current_style));
+                    }
+                }
+            }
+            Event::SoftBreak => {
+                // Soft break = space
+                let current_style = style_stack.last().copied().unwrap_or(base_style);
+                lines[current_line].push(Span::styled(" ", current_style));
+            }
+            Event::HardBreak => {
+                // Hard break = new line
+                current_line += 1;
+                lines.push(Vec::new());
+            }
+            Event::Start(Tag::Paragraph) => {
+                // Start new paragraph - add blank line if not at start
+                if current_line > 0 || !lines[0].is_empty() {
+                    current_line += 1;
+                    lines.push(Vec::new());
+                }
+            }
+            Event::End(TagEnd::Paragraph) => {
+                // End paragraph - will naturally flow to next
+            }
+            _ => {
+                // Ignore other events (headings, lists, etc.) - just render as plain text
+            }
+        }
+    }
+
+    // Convert to Lines, filtering empty trailing lines
+    lines.into_iter().map(Line::from).collect()
 }
 
 fn calculate_block_height(block: &Block, width: usize) -> u16 {
