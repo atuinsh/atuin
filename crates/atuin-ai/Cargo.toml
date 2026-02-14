@@ -33,6 +33,9 @@ serde_json = { workspace = true }
 crossterm = { workspace = true, features = ["use-dev-tty", "event-stream"] }
 ratatui = { workspace = true }
 futures = "0.3"
+reqwest-eventsource = "0.6.0"
+pulldown-cmark = "0.13.0"
+async-stream = "0.3"
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
