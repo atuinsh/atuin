@@ -59,4 +59,6 @@ pub enum BlockKind {
     Spinner,
     /// Explanatory text or error
     Text,
+    /// Error message with "!" symbol
+    Error,
 }

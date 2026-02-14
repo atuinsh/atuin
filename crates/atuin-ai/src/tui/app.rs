@@ -128,6 +128,8 @@ impl App {
         {
             self.blocks.remove(pos);
         }
+        // Add error block
+        self.blocks.push(Block::new_error(error.clone()));
         self.error_message = Some(error);
         self.mode = AppMode::Error;
     }

@@ -161,6 +161,9 @@ fn render_single_block(frame: &mut Frame, block: &Block, area: Rect, ctx: &Rende
         BlockKind::Text => {
             render_text_block(frame, &block.content, area, ctx);
         }
+        BlockKind::Error => {
+            render_error_block(frame, &block.content, area, ctx);
+        }
     }
 }
 
@@ -221,6 +224,20 @@ fn render_text_block(frame: &mut Frame, text: &str, area: Rect, ctx: &RenderCont
     frame.render_widget(paragraph, area);
 }
 
+fn render_error_block(frame: &mut Frame, message: &str, area: Rect, ctx: &RenderContext) {
+    let symbol_style = Style::from_crossterm(ctx.theme.as_style(Meaning::AlertError));
+    let text_style = Style::from_crossterm(ctx.theme.as_style(Meaning::Base));
+
+    let content = vec![
+        Span::styled("! ", symbol_style),
+        Span::styled(message, text_style),
+    ];
+
+    let paragraph = Paragraph::new(Line::from(content)).wrap(Wrap { trim: false });
+
+    frame.render_widget(paragraph, area);
+}
+
 fn render_separator(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
     let separator_style = Style::from_crossterm(ctx.theme.as_style(Meaning::Muted));
     let width = usize::from(area.width).max(1);
@@ -248,6 +265,10 @@ fn calculate_block_height(block: &Block, width: usize) -> u16 {
         }
         BlockKind::Spinner => 1, // Single line
         BlockKind::Text => wrapped_line_count(&block.content, width) as u16,
+        BlockKind::Error => {
+            let error_line = format!("! {}", block.content);
+            wrapped_line_count(&error_line, width) as u16
+        }
     }
 }
 

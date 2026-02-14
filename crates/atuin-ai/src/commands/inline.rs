@@ -37,6 +37,7 @@ pub async fn run(
     initial_command: Option<String>,
     natural_language: bool,
     api_endpoint: Option<String>,
+    api_token: Option<String>,
 ) -> Result<()> {
     // Install panic hook once at entry point to ensure terminal restoration
     install_panic_hook();
@@ -45,7 +46,11 @@ pub async fn run(
     let endpoint = api_endpoint
         .as_deref()
         .unwrap_or(settings.hub_address.as_str());
-    let token = ensure_hub_session(&settings, endpoint).await?;
+    let token = if let Some(token) = api_token {
+        token
+    } else {
+        ensure_hub_session(&settings, endpoint).await?
+    };
     let action = run_inline_tui(
         endpoint.to_string(),
         token,
