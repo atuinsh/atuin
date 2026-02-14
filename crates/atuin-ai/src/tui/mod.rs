@@ -1,5 +1,5 @@
-pub mod terminal;
 pub mod event;
+pub mod terminal;
 
-pub use terminal::{install_panic_hook, TerminalGuard};
 pub use event::{AppEvent, EventLoop};
+pub use terminal::{TerminalGuard, install_panic_hook};

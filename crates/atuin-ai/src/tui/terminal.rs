@@ -3,11 +3,8 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode},
 };
 use eyre::{Context, Result, bail};
-use ratatui::{
-    backend::CrosstermBackend,
-    Terminal, TerminalOptions, Viewport,
-};
-use std::io::{stdout, IsTerminal, Stdout};
+use ratatui::{Terminal, TerminalOptions, Viewport, backend::CrosstermBackend};
+use std::io::{IsTerminal, Stdout, stdout};
 
 /// Install a panic hook that ensures the terminal is restored to a usable state
 /// even if the application panics.
@@ -81,18 +78,17 @@ impl TerminalGuard {
     pub fn new() -> Result<Self> {
         // Non-TTY check: fail early if stdout is not a terminal
         if !stdout().is_terminal() {
-            bail!("atuin-ai requires a terminal (TTY) but stdout is not a terminal. \
-                   This typically happens when output is piped or redirected.");
+            bail!(
+                "atuin-ai requires a terminal (TTY) but stdout is not a terminal. \
+                   This typically happens when output is piped or redirected."
+            );
         }
 
         // Capture cursor position BEFORE raw mode for accurate anchor
-        let anchor_col = cursor::position()
-            .map(|(x, _)| x)
-            .unwrap_or(0);
+        let anchor_col = cursor::position().map(|(x, _)| x).unwrap_or(0);
 
         // Enable raw mode for keyboard input
-        enable_raw_mode()
-            .context("failed to enable raw mode")?;
+        enable_raw_mode().context("failed to enable raw mode")?;
 
         // Create terminal with inline viewport (matches existing inline.rs behavior)
         let backend = CrosstermBackend::new(stdout());

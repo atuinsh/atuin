@@ -1,5 +1,5 @@
 use crossterm::event::{Event, EventStream, KeyEvent, KeyEventKind};
-use eyre::{eyre, Result};
+use eyre::{Result, eyre};
 use futures::StreamExt;
 use std::time::Duration;
 use tokio::time;
@@ -103,8 +103,8 @@ impl EventLoop {
     ///
     /// # Keyboard Handling
     /// - Filters to KeyEventKind::Press on all platforms for safety
-    /// - Batches rapid keypresses within a frame (drains available keys)
-    /// - Currently returns first key; full batching will be used in Phase 2
+    /// - Batching of rapid keypresses will be implemented in Phase 2
+    /// - Currently returns individual key events
     ///
     /// # Graceful Shutdown
     /// - SIGINT (Ctrl+C) triggers shutdown and returns last event
@@ -136,22 +136,13 @@ impl EventLoop {
         // Create ticker for spinner animation
         let mut tick_interval = time::interval(self.tick_interval);
 
-        // Set up SIGINT handler for graceful shutdown
-        #[cfg(unix)]
-        let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
-            .map_err(|e| eyre!("failed to create SIGINT handler: {}", e))?;
-
-        #[cfg(windows)]
-        let mut ctrl_c = tokio::signal::windows::ctrl_c()
-            .map_err(|e| eyre!("failed to create Ctrl+C handler: {}", e))?;
-
         loop {
             if self.shutdown {
                 break;
             }
 
             // Biased select: prioritize stream > keyboard > tick
-            tokio::select! {
+            let event = tokio::select! {
                 biased;
 
                 // Priority 1: Stream data (placeholder for Phase 3)
@@ -164,26 +155,16 @@ impl EventLoop {
                         Some(Ok(Event::Key(key))) => {
                             // Filter to Press events only for cross-platform safety
                             if key.kind == KeyEventKind::Press {
-                                // Batch rapid keypresses (drain immediately available keys)
-                                let mut keys = vec![key];
-
-                                // Drain any keys that are immediately available
-                                loop {
-                                    match reader.try_next() {
-                                        Ok(Some(Ok(Event::Key(k)))) if k.kind == KeyEventKind::Press => {
-                                            keys.push(k);
-                                        }
-                                        _ => break,
-                                    }
-                                }
-
-                                // For now, return first key
-                                // Phase 2 will use full batching for state machine
-                                return Ok(AppEvent::Key(keys[0]));
+                                // Note: Rapid keypress batching will be implemented in Phase 2
+                                // when we integrate with the state machine.
+                                // For now, just return individual key events.
+                                Some(AppEvent::Key(key))
+                            } else {
+                                None
                             }
                         }
                         Some(Ok(Event::Resize(w, h))) => {
-                            return Ok(AppEvent::Resize(w, h));
+                            Some(AppEvent::Resize(w, h))
                         }
                         Some(Err(e)) => {
                             return Err(eyre!("terminal event error: {}", e));
@@ -191,32 +172,30 @@ impl EventLoop {
                         None => {
                             // EventStream closed (stdin EOF) - trigger shutdown
                             self.shutdown = true;
+                            None
                         }
                         _ => {
                             // Ignore other event types (mouse, focus, etc.)
+                            None
                         }
                     }
                 }
 
                 // Priority 3: Tick for spinner animation
                 _ = tick_interval.tick() => {
-                    return Ok(AppEvent::Tick);
+                    Some(AppEvent::Tick)
                 }
 
-                // SIGINT handling (Ctrl+C)
-                #[cfg(unix)]
-                _ = sigint.recv() => {
+                // SIGINT handling (Ctrl+C) - cross-platform
+                _ = tokio::signal::ctrl_c() => {
                     self.shutdown = true;
                     // Return one more event to allow graceful shutdown handling
-                    // State machine can check shutdown flag on next iteration
-                    return Ok(AppEvent::Tick);
+                    Some(AppEvent::Tick)
                 }
+            };
 
-                #[cfg(windows)]
-                _ = ctrl_c.recv() => {
-                    self.shutdown = true;
-                    return Ok(AppEvent::Tick);
-                }
+            if let Some(app_event) = event {
+                return Ok(app_event);
             }
         }
 
