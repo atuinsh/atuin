@@ -238,16 +238,16 @@ async fn run_inline_tui(
                 app.tick();
 
                 // Check if generation task finished
-                if let Some(task) = &generation_task {
-                    if task.is_finished() {
-                        let task = generation_task.take().unwrap();
-                        match task.await.context("generate task join failed")? {
-                            Ok(response) => {
-                                app.generation_complete(response.command, response.explanation);
-                            }
-                            Err(err) => {
-                                app.generation_error(err.to_string());
-                            }
+                if let Some(task) = &generation_task
+                    && task.is_finished()
+                {
+                    let task = generation_task.take().unwrap();
+                    match task.await.context("generate task join failed")? {
+                        Ok(response) => {
+                            app.generation_complete(response.command, response.explanation);
+                        }
+                        Err(err) => {
+                            app.generation_error(err.to_string());
                         }
                     }
                 }
@@ -280,10 +280,11 @@ async fn run_inline_tui(
         }
 
         // Handle cancellation during generation
-        if app.mode != AppMode::Generating && generation_task.is_some() {
-            if let Some(task) = generation_task.take() {
-                task.abort();
-            }
+        if app.mode != AppMode::Generating
+            && generation_task.is_some()
+            && let Some(task) = generation_task.take()
+        {
+            task.abort();
         }
 
         // Handle retry in Error mode
@@ -333,19 +334,6 @@ fn wait_for_login_confirmation() -> Result<bool> {
         if let Event::Key(key) = ev {
             match key.code {
                 KeyCode::Enter => return Ok(true),
-                KeyCode::Esc => return Ok(false),
-                _ => {}
-            }
-        }
-    }
-}
-
-fn wait_for_retry_or_cancel() -> Result<bool> {
-    loop {
-        let ev = event::read().context("failed to read retry/cancel key")?;
-        if let Event::Key(key) = ev {
-            match key.code {
-                KeyCode::Enter | KeyCode::Char('r') => return Ok(true),
                 KeyCode::Esc => return Ok(false),
                 _ => {}
             }
