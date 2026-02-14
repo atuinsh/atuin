@@ -1,3 +1,4 @@
+use crate::tui::App;
 use crossterm::event::{Event, EventStream, KeyEvent, KeyEventKind};
 use eyre::{Result, eyre};
 use futures::StreamExt;
@@ -216,6 +217,45 @@ impl EventLoop {
     /// The shutdown will take effect on the next iteration of `run()`.
     pub fn shutdown(&mut self) {
         self.shutdown = true;
+    }
+
+    /// Poll for next event and apply to app state.
+    ///
+    /// This is a convenience method that combines `run()` with `App` state updates.
+    /// Returns true if app should continue, false if should exit.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use atuin_ai::tui::{EventLoop, App};
+    /// # async fn example() -> eyre::Result<()> {
+    /// let mut event_loop = EventLoop::new();
+    /// let mut app = App::new();
+    ///
+    /// while event_loop.poll_and_apply(&mut app).await? {
+    ///     // Render app state...
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn poll_and_apply(&mut self, app: &mut App) -> Result<bool> {
+        let event = self.run().await?;
+
+        match event {
+            AppEvent::Key(key) => {
+                app.handle_key(key);
+            }
+            AppEvent::Tick => {
+                app.tick();
+            }
+            AppEvent::Resize(_, _) => {
+                // Render will be triggered anyway
+            }
+            AppEvent::StreamChunk(_) | AppEvent::StreamDone | AppEvent::StreamError(_) => {
+                // Placeholder for Phase 3
+            }
+        }
+
+        Ok(!app.should_exit)
     }
 }
 
