@@ -4,8 +4,12 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[cfg(feature = "plugin-auto-manage")]
 use axoupdater::{AxoUpdater, ReleaseSource, ReleaseSourceType, UpdateRequest, Version};
-use eyre::{Result, WrapErr, eyre};
+#[cfg(feature = "plugin-auto-manage")]
+use eyre::WrapErr;
+use eyre::{Result, eyre};
+#[cfg(feature = "plugin-auto-manage")]
 use fs_err::create_dir_all;
 
 #[derive(Debug, Clone)]
@@ -146,48 +150,59 @@ impl OfficialPluginRegistry {
     }
 
     pub fn install_plugin(&self, name: &str) -> Result<()> {
-        let plugin = self
-            .get_plugin(name)
-            .ok_or_else(|| eyre!("unknown official plugin '{name}'"))?;
-
-        let install_dir = Self::plugin_install_dir();
-        create_dir_all(&install_dir).wrap_err_with(|| {
-            format!(
-                "failed to create plugin install directory {}",
-                install_dir.display()
-            )
-        })?;
-
-        let mut updater = AxoUpdater::new_for(&plugin.bin_name);
-        updater.set_release_source(ReleaseSource {
-            release_type: ReleaseSourceType::GitHub,
-            owner: "atuinsh".to_string(),
-            name: "atuin".to_string(),
-            app_name: plugin.bin_name.clone(),
-        });
-        if let Some(token) = env::var("ATUIN_GITHUB_TOKEN")
-            .ok()
-            .or_else(|| env::var("GITHUB_TOKEN").ok())
-            .or_else(|| env::var("GH_TOKEN").ok())
-            .filter(|token| !token.trim().is_empty())
+        #[cfg(not(feature = "plugin-auto-manage"))]
         {
-            updater.set_github_token(&token);
+            let _ = name;
+            return Err(eyre!(
+                "companion plugin auto-management is disabled in this build"
+            ));
         }
 
-        updater.set_install_dir(install_dir.to_string_lossy().to_string());
-        updater.configure_version_specifier(UpdateRequest::SpecificVersion(
-            env!("CARGO_PKG_VERSION").to_string(),
-        ));
-        updater.set_current_version(Version::parse("0.0.0")?)?;
-        updater.always_update(true);
-        updater.run_sync().wrap_err_with(|| {
-            format!(
-                "failed to install/update companion binary '{}'",
-                plugin.bin_name
-            )
-        })?;
+        #[cfg(feature = "plugin-auto-manage")]
+        {
+            let plugin = self
+                .get_plugin(name)
+                .ok_or_else(|| eyre!("unknown official plugin '{name}'"))?;
 
-        Ok(())
+            let install_dir = Self::plugin_install_dir();
+            create_dir_all(&install_dir).wrap_err_with(|| {
+                format!(
+                    "failed to create plugin install directory {}",
+                    install_dir.display()
+                )
+            })?;
+
+            let mut updater = AxoUpdater::new_for(&plugin.bin_name);
+            updater.set_release_source(ReleaseSource {
+                release_type: ReleaseSourceType::GitHub,
+                owner: "atuinsh".to_string(),
+                name: "atuin".to_string(),
+                app_name: plugin.bin_name.clone(),
+            });
+            if let Some(token) = env::var("ATUIN_GITHUB_TOKEN")
+                .ok()
+                .or_else(|| env::var("GITHUB_TOKEN").ok())
+                .or_else(|| env::var("GH_TOKEN").ok())
+                .filter(|token| !token.trim().is_empty())
+            {
+                updater.set_github_token(&token);
+            }
+
+            updater.set_install_dir(install_dir.to_string_lossy().to_string());
+            updater.configure_version_specifier(UpdateRequest::SpecificVersion(
+                env!("CARGO_PKG_VERSION").to_string(),
+            ));
+            updater.set_current_version(Version::parse("0.0.0")?)?;
+            updater.always_update(true);
+            updater.run_sync().wrap_err_with(|| {
+                format!(
+                    "failed to install/update companion binary '{}'",
+                    plugin.bin_name
+                )
+            })?;
+
+            Ok(())
+        }
     }
 }
 

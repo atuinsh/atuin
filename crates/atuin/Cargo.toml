@@ -32,6 +32,9 @@ buildflags = ["--release"]
 [package.metadata.rpm.targets]
 atuin = { path = "/usr/bin/atuin" }
 
+[package.metadata.dist]
+features = ["plugin-auto-manage"]
+
 [features]
 default = ["client", "sync", "clipboard", "check-update", "daemon"]
 client = ["atuin-client"]
@@ -39,6 +42,7 @@ sync = ["atuin-client/sync"]
 daemon = ["atuin-client/daemon", "atuin-daemon"]
 clipboard = ["arboard"]
 check-update = ["atuin-client/check-update"]
+plugin-auto-manage = ["atuin-client/plugin-auto-manage"]
 
 [dependencies]
 atuin-client = { path = "../atuin-client", version = "18.13.0-beta.1", optional = true, default-features = false }

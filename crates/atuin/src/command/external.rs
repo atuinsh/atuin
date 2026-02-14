@@ -34,8 +34,15 @@ pub fn run(args: &[String], settings: Option<&Settings>) -> Result<()> {
     let is_excluded =
         settings.is_some_and(|cfg| cfg.plugins.exclude.iter().any(|name| name == subcommand));
     let plugin_automation_enabled = plugins_enabled && !is_excluded;
-    let can_manage_plugins = can_manage_companion_plugins();
-    let unmanaged_companion = plugin.is_some_and(|p| p.is_companion) && !can_manage_plugins;
+    let auto_manage_compiled = cfg!(feature = "plugin-auto-manage");
+    let can_manage_plugins = if auto_manage_compiled {
+        can_manage_companion_plugins()
+    } else {
+        false
+    };
+    let is_companion_plugin = plugin.is_some_and(|p| p.is_companion);
+    let unmanaged_companion = is_companion_plugin && auto_manage_compiled && !can_manage_plugins;
+    let auto_manage_disabled = is_companion_plugin && !auto_manage_compiled;
 
     let mut resolved_plugin_bin = plugin.and_then(|_| registry.find_plugin_binary(subcommand));
 
@@ -90,7 +97,9 @@ pub fn run(args: &[String], settings: Option<&Settings>) -> Result<()> {
         Ok(child) => Ok(child),
         Err(e) => match e.kind() {
             io::ErrorKind::NotFound => {
-                let output = if unmanaged_companion {
+                let output = if auto_manage_disabled {
+                    render_auto_manage_disabled_not_found(subcommand)
+                } else if unmanaged_companion {
                     render_unmanaged_companion_not_found(subcommand)
                 } else {
                     render_not_found(subcommand, &bin)
@@ -258,6 +267,32 @@ fn can_manage_companion_plugins() -> bool {
     let current_exe = fs_err::canonicalize(&current_exe).unwrap_or(current_exe);
 
     current_exe.starts_with(install_dir)
+}
+
+#[cfg(feature = "client")]
+fn render_auto_manage_disabled_not_found(subcommand: &str) -> StyledStr {
+    let mut output = StyledStr::new();
+    let styles = Styles::styled();
+    let error = styles.get_error();
+    let invalid = styles.get_invalid();
+
+    let _ = write!(output, "{error}error:{error:#} ");
+    let _ = write!(
+        output,
+        "'{invalid}{subcommand}{invalid:#}' is an official atuin plugin, but it's not installed",
+    );
+    let _ = write!(output, "\n\n");
+    let _ = write!(
+        output,
+        "This atuin build has companion plugin auto-install disabled.",
+    );
+    let _ = write!(output, "\n");
+    let _ = write!(
+        output,
+        "Install 'atuin-{subcommand}' with your package manager, or install atuin via script if you want auto-install support:\n  curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | sh",
+    );
+
+    output
 }
 
 #[cfg(feature = "client")]
