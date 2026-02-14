@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: atuin-data
+  annotations:
+    pv.kubernetes.io/provisioned-by: nfs.csi.k8s.io
+spec:
+  accessModes:
+    - ReadWriteMany
+  capacity:
+    storage: 10Mi
+  storageClassName: nfs-csi
+  claimRef:
+    namespace: atuin
+    name: atuin-data
+  csi:
+    driver: nfs.csi.k8s.io
+    # volumeHandle format: {nfs-server-address}#{sub-dir-name}#{share-name}
+    # make sure this value is unique for every share in the cluster
+    volumeHandle: some-nfs-server.domain.tld#atuin#/srv/nfs/k8s
+    volumeAttributes:
+      server: some-nfs-server.domain.tld
+      share: /srv/nfs/k8s
