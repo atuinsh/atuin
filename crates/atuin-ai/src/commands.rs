@@ -45,6 +45,10 @@ enum Commands {
         /// Start in natural language mode
         #[arg(long)]
         natural_language: bool,
+
+        /// Keep TUI output visible after exit (default: erase)
+        #[arg(long)]
+        keep: bool,
     },
 
     /// Interactive mode with TUI
@@ -61,9 +65,19 @@ pub async fn run() -> eyre::Result<()> {
         Commands::Inline {
             command,
             natural_language,
-        } => inline::run(command, natural_language, cli.api_endpoint, cli.api_token).await,
+            keep,
+        } => {
+            inline::run(
+                command,
+                natural_language,
+                cli.api_endpoint,
+                cli.api_token,
+                keep,
+            )
+            .await
+        }
         Commands::Complete { command } => {
-            inline::run(command, false, cli.api_endpoint, cli.api_token).await
+            inline::run(command, false, cli.api_endpoint, cli.api_token, false).await
         }
         Commands::Interactive => Err(eyre::eyre!("interactive mode not implemented yet")),
     }

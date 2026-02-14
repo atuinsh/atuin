@@ -38,6 +38,7 @@ pub async fn run(
     natural_language: bool,
     api_endpoint: Option<String>,
     api_token: Option<String>,
+    keep_output: bool,
 ) -> Result<()> {
     // Install panic hook once at entry point to ensure terminal restoration
     install_panic_hook();
@@ -59,6 +60,7 @@ pub async fn run(
         } else {
             initial_command
         },
+        keep_output,
     )
     .await?;
     emit_shell_result(action.0, &action.1);
@@ -206,9 +208,10 @@ async fn run_inline_tui(
     endpoint: String,
     token: String,
     initial_prompt: Option<String>,
+    keep_output: bool,
 ) -> Result<(Action, String)> {
     // Initialize terminal guard and app state
-    let mut guard = TerminalGuard::new()?;
+    let mut guard = TerminalGuard::new(keep_output)?;
     let mut app = App::new();
     if let Some(prompt) = initial_prompt {
         app.input = prompt;
