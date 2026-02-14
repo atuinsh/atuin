@@ -1,3 +1,4 @@
+use crate::tui::install_panic_hook;
 use atuin_common::tls::ensure_crypto_provider;
 use crossterm::{
     cursor,
@@ -42,6 +43,9 @@ pub async fn run(
     natural_language: bool,
     api_endpoint: Option<String>,
 ) -> Result<()> {
+    // Install panic hook once at entry point to ensure terminal restoration
+    install_panic_hook();
+
     let settings = atuin_client::settings::Settings::new()?;
     let endpoint = api_endpoint
         .as_deref()
