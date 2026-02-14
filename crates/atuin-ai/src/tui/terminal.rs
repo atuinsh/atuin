@@ -57,10 +57,14 @@ pub fn install_panic_hook() {
 pub struct TerminalGuard {
     terminal: Terminal<CrosstermBackend<Stdout>>,
     anchor_col: u16,
+    keep_output: bool,
 }
 
 impl TerminalGuard {
     /// Create a new TerminalGuard, initializing the terminal for inline TUI mode.
+    ///
+    /// # Arguments
+    /// * `keep_output` - If true, preserve TUI output on exit; if false, clear it
     ///
     /// # Process
     /// 1. Check if stdout is a terminal (non-TTY detection)
@@ -75,7 +79,7 @@ impl TerminalGuard {
     /// # Implementation Note
     /// Cursor position is captured BEFORE enabling raw mode because some terminals
     /// may report position differently after raw mode is enabled.
-    pub fn new() -> Result<Self> {
+    pub fn new(keep_output: bool) -> Result<Self> {
         // Non-TTY check: fail early if stdout is not a terminal
         if !stdout().is_terminal() {
             bail!(
@@ -103,6 +107,7 @@ impl TerminalGuard {
         Ok(Self {
             terminal,
             anchor_col,
+            keep_output,
         })
     }
 
@@ -127,7 +132,7 @@ impl TerminalGuard {
 /// This implements TUI-08: Terminal restores correctly after normal exit.
 ///
 /// # Cleanup Process
-/// 1. Clear terminal content
+/// 1. Conditionally clear terminal content (based on keep_output flag)
 /// 2. Disable raw mode (restore normal terminal behavior)
 ///
 /// # Error Handling
@@ -137,8 +142,10 @@ impl TerminalGuard {
 /// - The panic hook provides a second layer of safety for abnormal exits
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
-        // Clear terminal content - ignore errors (best-effort)
-        let _ = self.terminal.clear();
+        // Clear terminal content only if keep_output is false - ignore errors (best-effort)
+        if !self.keep_output {
+            let _ = self.terminal.clear();
+        }
 
         // Disable raw mode to restore normal terminal behavior - ignore errors
         let _ = disable_raw_mode();
