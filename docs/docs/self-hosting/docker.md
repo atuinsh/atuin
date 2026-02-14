@@ -57,6 +57,8 @@ services:
       POSTGRES_USER: ${ATUIN_DB_USERNAME}
       POSTGRES_PASSWORD: ${ATUIN_DB_PASSWORD}
       POSTGRES_DB: ${ATUIN_DB_NAME}
+      TZ: Europe/London
+      PGTZ: Europe/London
 ```
 
 Start the services using `docker compose`:
@@ -108,6 +110,7 @@ You can add another service to your `docker-compose.yml` file to have it run dai
 
 ```yaml
   backup:
+    restart: unless-stopped
     container_name: atuin_db_dumper
     image: prodrigestivill/postgres-backup-local
     env_file:
@@ -119,6 +122,8 @@ You can add another service to your `docker-compose.yml` file to have it run dai
       POSTGRES_PASSWORD: ${ATUIN_DB_PASSWORD}
       SCHEDULE: "@daily"
       BACKUP_DIR: /db_dumps
+      TZ: Europe/London
+      HEALTHCHECK_PORT: 5432
     volumes:
       - ./db_dumps:/db_dumps
     depends_on:
