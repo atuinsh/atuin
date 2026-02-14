@@ -35,14 +35,12 @@ struct GenerateResponse {
     explanation: Option<String>,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Serialize)]
 struct RefineRequest {
     messages: Vec<RefineMessage>,
     context: GenerateContext,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Serialize)]
 struct RefineMessage {
     role: String,
@@ -168,7 +166,6 @@ async fn generate_command(
     bail!("Hub request failed ({status}): {body}");
 }
 
-#[allow(dead_code)]
 fn create_refine_stream(
     hub_address: String,
     token: String,
@@ -401,16 +398,37 @@ async fn run_inline_tui(
             break;
         }
 
-        // Handle generation trigger (when mode changes to Generating)
-        if app.mode == AppMode::Generating && generation_task.is_none() {
-            // Get the query from the most recent input block
-            if let Some(input_block) = app
+        // Handle generation/refine trigger
+        if app.mode == AppMode::Generating
+            && generation_task.is_none()
+            && refine_stream.is_none()
+            && let Some(input_block) = app
                 .blocks
                 .iter()
                 .rev()
                 .find(|b| b.kind == crate::tui::BlockKind::Input)
-            {
-                last_query = input_block.content.clone();
+        {
+            last_query = input_block.content.clone();
+
+            if app.is_refine_mode {
+                // Build conversation history and start refine stream
+                let history = app.build_conversation_history();
+                let messages: Vec<RefineMessage> = history
+                    .into_iter()
+                    .map(|(role, content)| RefineMessage { role, content })
+                    .collect();
+
+                // Transition to streaming mode
+                app.start_streaming_response();
+
+                // Start the refine stream
+                refine_stream = Some(create_refine_stream(
+                    endpoint.clone(),
+                    token.clone(),
+                    messages,
+                ));
+            } else {
+                // Initial generation (existing logic)
                 let endpoint_clone = endpoint.clone();
                 let token_clone = token.clone();
                 let query_clone = last_query.clone();
@@ -433,9 +451,14 @@ async fn run_inline_tui(
             refine_stream = None;
         }
 
-        // Handle retry in Error mode
-        if app.mode == AppMode::Generating && generation_task.is_none() && !last_query.is_empty() {
-            // Retry with the same query
+        // Handle retry in Error mode (only for non-refine mode)
+        if app.mode == AppMode::Generating
+            && generation_task.is_none()
+            && refine_stream.is_none()
+            && !last_query.is_empty()
+            && !app.is_refine_mode
+        {
+            // Retry with the same query (only for initial generation)
             let endpoint_clone = endpoint.clone();
             let token_clone = token.clone();
             let query_clone = last_query.clone();
