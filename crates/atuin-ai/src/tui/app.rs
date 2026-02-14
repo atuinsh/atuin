@@ -1,4 +1,5 @@
 use crate::tui::blocks::{Block, BlockKind, BlockState};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AppMode {
@@ -142,6 +143,112 @@ impl App {
     pub fn exit(&mut self, action: ExitAction) {
         self.exit_action = Some(action);
         self.should_exit = true;
+    }
+
+    /// Handle a key event. Returns true if render is needed.
+    pub fn handle_key(&mut self, key: KeyEvent) -> bool {
+        // Pass through Ctrl combinations per user decision
+        if key.modifiers.contains(KeyModifiers::CONTROL) {
+            // Ctrl+C is handled by SIGINT, other Ctrl combos eaten
+            return true;
+        }
+
+        match self.mode {
+            AppMode::Input => self.handle_input_key(key),
+            AppMode::Generating => self.handle_generating_key(key),
+            AppMode::Review => self.handle_review_key(key),
+            AppMode::Error => self.handle_error_key(key),
+        }
+    }
+
+    fn handle_input_key(&mut self, key: KeyEvent) -> bool {
+        match key.code {
+            KeyCode::Esc => {
+                // Esc when idle exits TUI per user decision
+                self.exit(ExitAction::Cancel);
+                true
+            }
+            KeyCode::Enter => {
+                if self.input.trim().is_empty() {
+                    // Empty input = cancel
+                    self.exit(ExitAction::Cancel);
+                } else {
+                    // Start generation
+                    self.start_generating();
+                }
+                true
+            }
+            KeyCode::Backspace => {
+                self.input.pop();
+                true
+            }
+            KeyCode::Char(c) => {
+                self.input.push(c);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn handle_generating_key(&mut self, key: KeyEvent) -> bool {
+        match key.code {
+            KeyCode::Esc => {
+                // Esc during generation cancels and ignores response
+                self.cancel_generation();
+                true
+            }
+            _ => {
+                // Keystrokes during streaming are discarded per user decision
+                false
+            }
+        }
+    }
+
+    fn handle_review_key(&mut self, key: KeyEvent) -> bool {
+        match key.code {
+            KeyCode::Esc => {
+                self.exit(ExitAction::Cancel);
+                true
+            }
+            KeyCode::Enter => {
+                // Run command
+                if let Some(block) = self.blocks.iter().find(|b| b.kind == BlockKind::Command) {
+                    self.exit(ExitAction::Execute(block.content.clone()));
+                }
+                true
+            }
+            KeyCode::Tab => {
+                // Insert command without running
+                if let Some(block) = self.blocks.iter().find(|b| b.kind == BlockKind::Command) {
+                    self.exit(ExitAction::Insert(block.content.clone()));
+                }
+                true
+            }
+            KeyCode::Char('e') => {
+                // Edit/refine - reset to input mode (full implementation in Phase 4)
+                self.mode = AppMode::Input;
+                self.input.clear();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn handle_error_key(&mut self, key: KeyEvent) -> bool {
+        match key.code {
+            KeyCode::Esc => {
+                self.exit(ExitAction::Cancel);
+                true
+            }
+            KeyCode::Enter | KeyCode::Char('r') => {
+                // Retry - re-enter generating mode
+                self.error_message = None;
+                self.mode = AppMode::Generating;
+                self.blocks.push(Block::new_building_spinner());
+                true
+            }
+            _ => false,
+        }
     }
 }
 
