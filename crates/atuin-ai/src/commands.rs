@@ -1,9 +1,10 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use tracing::Level;
 use tracing_subscriber::{EnvFilter, Layer, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 pub mod init;
 pub mod inline;
+pub mod setup;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -23,7 +24,11 @@ struct Cli {
 #[derive(Subcommand, Debug)]
 enum Commands {
     /// Initialize shell integration
-    Init,
+    Init {
+        /// Shell integration to generate
+        #[arg(long, value_enum)]
+        shell: Option<Shell>,
+    },
 
     /// Complete current command line
     Complete {
@@ -45,6 +50,20 @@ enum Commands {
 
     /// Interactive mode with TUI
     Interactive,
+
+    /// Authenticate with Atuin Hub
+    Setup,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "lower")]
+pub enum Shell {
+    Zsh,
+    Bash,
+    Fish,
+    Nu,
+    Xonsh,
+    PowerShell,
 }
 
 pub async fn run() -> eyre::Result<()> {
@@ -53,13 +72,14 @@ pub async fn run() -> eyre::Result<()> {
     init_tracing(cli.verbose);
 
     match cli.command {
-        Commands::Init => init::run().await,
+        Commands::Init { shell } => init::run(shell.unwrap_or(Shell::Zsh)).await,
         Commands::Inline {
             command,
             natural_language,
         } => inline::run(command, natural_language, cli.api_endpoint).await,
         Commands::Complete { command } => inline::run(command, false, cli.api_endpoint).await,
         Commands::Interactive => Err(eyre::eyre!("interactive mode not implemented yet")),
+        Commands::Setup => setup::run(cli.api_endpoint).await,
     }
 }
 

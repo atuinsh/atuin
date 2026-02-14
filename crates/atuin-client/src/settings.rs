@@ -477,6 +477,14 @@ pub struct Tmux {
     pub height: String,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Plugins {
+    pub enabled: bool,
+    pub auto_install: bool,
+    pub auto_update: bool,
+    pub exclude: Vec<String>,
+}
+
 impl Default for Preview {
     fn default() -> Self {
         Self {
@@ -530,6 +538,17 @@ impl Default for Tmux {
             enabled: false,
             width: "80%".to_string(),
             height: "60%".to_string(),
+        }
+    }
+}
+
+impl Default for Plugins {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            auto_install: true,
+            auto_update: true,
+            exclude: vec![],
         }
     }
 }
@@ -835,6 +854,9 @@ pub struct Settings {
     pub tmux: Tmux,
 
     #[serde(default)]
+    pub plugins: Plugins,
+
+    #[serde(default)]
     pub meta: meta::Settings,
 }
 
@@ -1103,6 +1125,10 @@ impl Settings {
             .set_default("tmux.enabled", false)?
             .set_default("tmux.width", "80%")?
             .set_default("tmux.height", "60%")?
+            .set_default("plugins.enabled", true)?
+            .set_default("plugins.auto_install", true)?
+            .set_default("plugins.auto_update", true)?
+            .set_default("plugins.exclude", Vec::<String>::new())?
             .set_default(
                 "prefers_reduced_motion",
                 std::env::var("NO_MOTION")
@@ -1347,6 +1373,15 @@ mod tests {
         assert_eq!(settings.default_filter_mode(true), super::FilterMode::Host,);
 
         Ok(())
+    }
+
+    #[test]
+    fn plugins_defaults_enabled() {
+        let settings = super::Settings::default();
+        assert!(settings.plugins.enabled);
+        assert!(settings.plugins.auto_install);
+        assert!(settings.plugins.auto_update);
+        assert!(settings.plugins.exclude.is_empty());
     }
 
     #[test]

@@ -250,6 +250,19 @@ enter_accept = true
 # In a later release it will become the default across the board
 records = true
 
+[plugins]
+# Enable or disable companion plugin management.
+# enabled = true
+
+# Auto-install official companion plugins on first use.
+# auto_install = true
+
+# Auto-update companion plugins when their version mismatches atuin.
+# auto_update = true
+
+# Skip selected plugins from auto install/update/init behavior.
+# exclude = []
+
 [preview]
 ## which preview strategy to use to calculate the preview height (respects max_preview_height).
 ## possible values: auto, static

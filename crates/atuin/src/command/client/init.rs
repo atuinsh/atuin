@@ -1,7 +1,9 @@
 use std::path::PathBuf;
+use std::process::Command;
 
 use atuin_client::{
     encryption,
+    plugin::OfficialPluginRegistry,
     record::sqlite_store::SqliteStore,
     settings::{Settings, Tmux},
 };
@@ -47,6 +49,60 @@ pub enum Shell {
 }
 
 impl Cmd {
+    fn shell_name(&self) -> &'static str {
+        match self.shell {
+            Shell::Zsh => "zsh",
+            Shell::Bash => "bash",
+            Shell::Fish => "fish",
+            Shell::Nu => "nu",
+            Shell::Xonsh => "xonsh",
+            Shell::PowerShell => "powershell",
+        }
+    }
+
+    fn plugin_init(&self, settings: &Settings) {
+        if !settings.plugins.enabled {
+            return;
+        }
+
+        let shell = self.shell_name();
+        let registry = OfficialPluginRegistry::new();
+
+        for plugin in registry.plugins_with_init(shell) {
+            if settings
+                .plugins
+                .exclude
+                .iter()
+                .any(|excluded| excluded == &plugin.name)
+            {
+                continue;
+            }
+
+            let Some(binary_path) = registry.find_plugin_binary(&plugin.name) else {
+                continue;
+            };
+
+            let init_args = plugin
+                .init_args
+                .iter()
+                .map(|arg| {
+                    if arg == "{shell}" {
+                        shell.to_string()
+                    } else {
+                        arg.clone()
+                    }
+                })
+                .collect::<Vec<_>>();
+
+            let output = Command::new(binary_path).args(&init_args).output();
+            if let Ok(output) = output
+                && output.status.success()
+            {
+                print!("{}", String::from_utf8_lossy(&output.stdout));
+            }
+        }
+    }
+
     fn init_nu(&self, _tmux: &Tmux) {
         let full = include_str!("../../shell/atuin.nu");
 
@@ -199,6 +255,8 @@ $env.config = (
         } else {
             self.static_init(&settings.tmux);
         }
+
+        self.plugin_init(settings);
 
         Ok(())
     }
