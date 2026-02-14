@@ -1,13 +1,13 @@
-use crate::tui::install_panic_hook;
+use crate::tui::{
+    App, AppEvent, AppMode, EventLoop, ExitAction, TerminalGuard, install_panic_hook,
+};
 use atuin_common::tls::ensure_crypto_provider;
 use crossterm::{
-    cursor,
     event::{self, Event, KeyCode},
     terminal::{disable_raw_mode, enable_raw_mode},
 };
 use eyre::{Context as _, Result, bail};
 use ratatui::{
-    Frame, Terminal, TerminalOptions, Viewport,
     backend::CrosstermBackend,
     layout::{Alignment, Rect},
     text::Line,
@@ -15,7 +15,7 @@ use ratatui::{
 };
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
+use std::io::Stdout;
 
 #[derive(Debug, Serialize)]
 struct GenerateRequest {
@@ -207,100 +207,105 @@ async fn run_inline_tui(
     token: String,
     initial_prompt: Option<String>,
 ) -> Result<(Action, String)> {
-    let mut ui = InlineUi::new()?;
-    let mut prompt = initial_prompt.unwrap_or_default();
-    let mut spinner_idx = 0usize;
+    // Initialize terminal guard and app state
+    let mut guard = TerminalGuard::new()?;
+    let mut app = App::new();
+    if let Some(prompt) = initial_prompt {
+        app.input = prompt;
+    }
+
+    // Initialize event loop
+    let mut event_loop = EventLoop::new();
+
+    // Track generation task
+    let mut generation_task: Option<tokio::task::JoinHandle<Result<GenerateResponse>>> = None;
+    let mut last_query = String::new();
 
     loop {
-        ui.render_prompt(&prompt)?;
-        if !event::poll(Duration::from_millis(250)).context("failed to poll for input")? {
-            continue;
-        }
+        // Render current state
+        let anchor_col = guard.anchor_col();
+        render_app(guard.terminal(), &app, anchor_col)?;
 
-        let ev = event::read().context("failed to read terminal event")?;
-        let Event::Key(key) = ev else {
-            continue;
-        };
+        // Get next event
+        let event = event_loop.run().await?;
 
-        match key.code {
-            KeyCode::Esc => return Ok((Action::Cancel, String::new())),
-            KeyCode::Backspace => {
-                prompt.pop();
+        // Handle event based on app mode
+        match event {
+            AppEvent::Key(key) => {
+                app.handle_key(key);
             }
-            KeyCode::Enter => {
-                let query = prompt.trim().to_string();
-                if query.is_empty() {
-                    return Ok((Action::Cancel, String::new()));
-                }
+            AppEvent::Tick => {
+                app.tick();
 
-                let response = loop {
-                    let endpoint_clone = endpoint.clone();
-                    let token_clone = token.clone();
-                    let query_clone = query.clone();
-                    let task = tokio::spawn(async move {
-                        generate_command(&endpoint_clone, &token_clone, &query_clone).await
-                    });
-
-                    let generated = loop {
-                        if task.is_finished() {
-                            break task.await.context("generate task join failed")?;
-                        }
-
-                        ui.render_generating(&prompt, spinner_idx)?;
-                        spinner_idx = (spinner_idx + 1) % SPINNER_FRAMES.len();
-
-                        if event::poll(Duration::from_millis(100))
-                            .context("failed to poll while generating")?
-                        {
-                            let ev = event::read().context("failed reading generate event")?;
-                            if let Event::Key(key) = ev
-                                && key.code == KeyCode::Esc
-                            {
-                                task.abort();
-                                return Ok((Action::Cancel, String::new()));
+                // Check if generation task finished
+                if let Some(task) = &generation_task {
+                    if task.is_finished() {
+                        let task = generation_task.take().unwrap();
+                        match task.await.context("generate task join failed")? {
+                            Ok(response) => {
+                                app.generation_complete(response.command, response.explanation);
                             }
-                        }
-                    };
-
-                    match generated {
-                        Ok(value) => break value,
-                        Err(err) => {
-                            ui.render_error(&prompt, &err.to_string())?;
-                            if !wait_for_retry_or_cancel()? {
-                                return Ok((Action::Cancel, String::new()));
+                            Err(err) => {
+                                app.generation_error(err.to_string());
                             }
                         }
                     }
-                };
-
-                loop {
-                    ui.render_review(&prompt, &response)?;
-                    if !event::poll(Duration::from_millis(250))
-                        .context("failed to poll in review")?
-                    {
-                        continue;
-                    }
-
-                    let ev = event::read().context("failed to read review event")?;
-                    let Event::Key(key) = ev else {
-                        continue;
-                    };
-
-                    match key.code {
-                        KeyCode::Enter => return Ok((Action::Execute, response.command)),
-                        KeyCode::Tab => return Ok((Action::Insert, response.command)),
-                        KeyCode::Esc => return Ok((Action::Cancel, String::new())),
-                        KeyCode::Char('e') => break,
-                        _ => {}
-                    }
                 }
-            }
-            KeyCode::Char(c) => {
-                prompt.push(c);
             }
             _ => {}
         }
+
+        // Check exit condition
+        if app.should_exit {
+            break;
+        }
+
+        // Handle generation trigger (when mode changes to Generating)
+        if app.mode == AppMode::Generating && generation_task.is_none() {
+            // Get the query from the most recent input block
+            if let Some(input_block) = app
+                .blocks
+                .iter()
+                .rev()
+                .find(|b| b.kind == crate::tui::BlockKind::Input)
+            {
+                last_query = input_block.content.clone();
+                let endpoint_clone = endpoint.clone();
+                let token_clone = token.clone();
+                let query_clone = last_query.clone();
+                generation_task = Some(tokio::spawn(async move {
+                    generate_command(&endpoint_clone, &token_clone, &query_clone).await
+                }));
+            }
+        }
+
+        // Handle cancellation during generation
+        if app.mode != AppMode::Generating && generation_task.is_some() {
+            if let Some(task) = generation_task.take() {
+                task.abort();
+            }
+        }
+
+        // Handle retry in Error mode
+        if app.mode == AppMode::Generating && generation_task.is_none() && !last_query.is_empty() {
+            // Retry with the same query
+            let endpoint_clone = endpoint.clone();
+            let token_clone = token.clone();
+            let query_clone = last_query.clone();
+            generation_task = Some(tokio::spawn(async move {
+                generate_command(&endpoint_clone, &token_clone, &query_clone).await
+            }));
+        }
     }
+
+    // Map exit action to return value
+    let result = match app.exit_action {
+        Some(ExitAction::Execute(cmd)) => (Action::Execute, cmd),
+        Some(ExitAction::Insert(cmd)) => (Action::Insert, cmd),
+        _ => (Action::Cancel, String::new()),
+    };
+
+    Ok(result)
 }
 
 struct RawModeGuard;
@@ -350,145 +355,153 @@ fn wait_for_retry_or_cancel() -> Result<bool> {
 
 const SPINNER_FRAMES: [&str; 4] = ["/", "-", "\\", "|"];
 
-struct InlineUi {
-    terminal: Terminal<CrosstermBackend<std::io::Stdout>>,
+fn render_app(
+    terminal: &mut ratatui::Terminal<CrosstermBackend<Stdout>>,
+    app: &App,
     anchor_col: u16,
-}
+) -> Result<()> {
+    terminal
+        .draw(|f| {
+            let area = f.area();
+            let desired_width = 64u16.min(area.width.saturating_sub(2)).max(32);
+            let content_width = usize::from(desired_width.saturating_sub(2)).max(1);
 
-impl InlineUi {
-    fn new() -> Result<Self> {
-        let anchor_col = cursor::position().map(|(x, _)| x).unwrap_or(0);
-        enable_raw_mode().context("failed to enable raw mode for inline UI")?;
-        let backend = CrosstermBackend::new(std::io::stdout());
-        let terminal = Terminal::with_options(
-            backend,
-            TerminalOptions {
-                viewport: Viewport::Inline(16),
-            },
-        )
-        .context("failed to initialize inline UI")?;
-        Ok(Self {
-            terminal,
-            anchor_col,
+            // Build content based on app mode
+            let (content, show_cursor, footer) = match app.mode {
+                AppMode::Input => {
+                    let formatted = format_prompt(&app.input);
+                    (formatted, true, "[Enter]: Accept  [Esc]: Cancel")
+                }
+                AppMode::Generating => {
+                    // Get spinner index from active block
+                    let spinner_frame = if let Some(block) = app.active_block() {
+                        if let crate::tui::BlockState::Building { spinner_idx } = block.state {
+                            SPINNER_FRAMES[spinner_idx % SPINNER_FRAMES.len()]
+                        } else {
+                            SPINNER_FRAMES[0]
+                        }
+                    } else {
+                        SPINNER_FRAMES[0]
+                    };
+
+                    // Get input from input block
+                    let input_text = app
+                        .blocks
+                        .iter()
+                        .rev()
+                        .find(|b| b.kind == crate::tui::BlockKind::Input)
+                        .map(|b| b.content.as_str())
+                        .unwrap_or("");
+
+                    (
+                        format!(
+                            "{}\n\n{} Generating...",
+                            format_prompt(input_text),
+                            spinner_frame
+                        ),
+                        false,
+                        "[Esc]: Cancel",
+                    )
+                }
+                AppMode::Review => {
+                    // Get command and explanation from blocks
+                    let command = app
+                        .blocks
+                        .iter()
+                        .find(|b| b.kind == crate::tui::BlockKind::Command)
+                        .map(|b| b.content.as_str())
+                        .unwrap_or("");
+
+                    let explanation = app
+                        .blocks
+                        .iter()
+                        .find(|b| b.kind == crate::tui::BlockKind::Text)
+                        .map(|b| b.content.as_str());
+
+                    let input_text = app
+                        .blocks
+                        .iter()
+                        .rev()
+                        .find(|b| b.kind == crate::tui::BlockKind::Input)
+                        .map(|b| b.content.as_str())
+                        .unwrap_or("");
+
+                    let separator = "─".repeat(content_width.max(1));
+                    let mut text = format!(
+                        "{}\n\n{}\n\n$ {}\n",
+                        format_prompt(input_text),
+                        separator,
+                        command
+                    );
+                    if let Some(exp) = explanation {
+                        text.push('\n');
+                        text.push_str(exp);
+                    }
+
+                    (
+                        text,
+                        false,
+                        "[Enter]: Run  [Tab]: Insert  [e]: Edit  [Esc]: Cancel",
+                    )
+                }
+                AppMode::Error => {
+                    let input_text = app
+                        .blocks
+                        .iter()
+                        .rev()
+                        .find(|b| b.kind == crate::tui::BlockKind::Input)
+                        .map(|b| b.content.as_str())
+                        .unwrap_or("");
+
+                    let error_msg = app.error_message.as_deref().unwrap_or("Unknown error");
+
+                    (
+                        format!(
+                            "{}\n\nRequest failed:\n{}",
+                            format_prompt(input_text),
+                            error_msg
+                        ),
+                        false,
+                        "[Enter]/[r]: Retry  [Esc]: Cancel",
+                    )
+                }
+            };
+
+            let desired_height = (wrapped_line_count(&content, content_width) as u16)
+                .saturating_add(2)
+                .min(area.height.max(1))
+                .max(3);
+
+            let max_x = area.x + area.width.saturating_sub(desired_width);
+            let preferred_x = area.x + anchor_col.saturating_sub(2);
+            let card = Rect {
+                x: preferred_x.min(max_x),
+                y: area.y,
+                width: desired_width,
+                height: desired_height,
+            };
+
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .title("Describe the command you'd like to generate:")
+                .title_bottom(Line::from(footer).alignment(Alignment::Right));
+
+            let content_area = block.inner(card);
+            f.render_widget(block, card);
+
+            let paragraph = Paragraph::new(content.clone()).wrap(Wrap { trim: false });
+            f.render_widget(paragraph, content_area);
+
+            if show_cursor {
+                let width = usize::from(content_area.width).max(1);
+                let (cursor_row, cursor_col) = prompt_cursor_position(&app.input, width);
+                let cursor_x = content_area.x.saturating_add(cursor_col);
+                let cursor_y = content_area.y.saturating_add(cursor_row);
+                f.set_cursor_position((cursor_x, cursor_y));
+            }
         })
-    }
-
-    fn render_prompt(&mut self, prompt: &str) -> Result<()> {
-        self.render(Screen::Prompt {
-            prompt,
-            footer: "[Enter]: Accept  [Esc]: Cancel",
-        })
-    }
-
-    fn render_generating(&mut self, prompt: &str, spinner_idx: usize) -> Result<()> {
-        self.render(Screen::Generating {
-            prompt,
-            footer: "[Esc]: Cancel",
-            spinner_idx,
-        })
-    }
-
-    fn render_review(&mut self, prompt: &str, response: &GenerateResponse) -> Result<()> {
-        self.render(Screen::Review {
-            prompt,
-            response,
-            footer: "[Enter]: Run  [Tab]: Insert  [e]: Edit  [Esc]: Cancel",
-        })
-    }
-
-    fn render_error(&mut self, prompt: &str, err: &str) -> Result<()> {
-        self.render(Screen::Error {
-            prompt,
-            err,
-            footer: "[Enter]/[r]: Retry  [Esc]: Cancel",
-        })
-    }
-
-    fn render(&mut self, screen: Screen<'_>) -> Result<()> {
-        self.terminal
-            .draw(|f| draw_screen(f, screen, self.anchor_col))
-            .context("failed rendering inline UI")?;
-        Ok(())
-    }
-}
-
-impl Drop for InlineUi {
-    fn drop(&mut self) {
-        let _ = self.terminal.clear();
-        let _ = disable_raw_mode();
-    }
-}
-
-enum Screen<'a> {
-    Prompt {
-        prompt: &'a str,
-        footer: &'a str,
-    },
-    Generating {
-        prompt: &'a str,
-        footer: &'a str,
-        spinner_idx: usize,
-    },
-    Review {
-        prompt: &'a str,
-        response: &'a GenerateResponse,
-        footer: &'a str,
-    },
-    Error {
-        prompt: &'a str,
-        err: &'a str,
-        footer: &'a str,
-    },
-}
-
-fn draw_screen(frame: &mut Frame, screen: Screen<'_>, anchor_col: u16) {
-    let area = frame.area();
-    let desired_width = 64u16.min(area.width.saturating_sub(2)).max(32);
-    let content_width = usize::from(desired_width.saturating_sub(2)).max(1);
-    let (content_preview, _, _) = build_screen_content(&screen, content_width);
-    let desired_height = (wrapped_line_count(&content_preview, content_width) as u16)
-        .saturating_add(2)
-        .min(area.height.max(1))
-        .max(3);
-
-    let max_x = area.x + area.width.saturating_sub(desired_width);
-    let preferred_x = area.x + anchor_col.saturating_sub(2);
-    let card = Rect {
-        x: preferred_x.min(max_x),
-        y: area.y,
-        width: desired_width,
-        height: desired_height,
-    };
-
-    let footer = match &screen {
-        Screen::Prompt { footer, .. }
-        | Screen::Generating { footer, .. }
-        | Screen::Review { footer, .. }
-        | Screen::Error { footer, .. } => *footer,
-    };
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title("Describe the command you'd like to generate:")
-        .title_bottom(Line::from(footer).alignment(Alignment::Right));
-
-    let content_area = block.inner(card);
-    frame.render_widget(block, card);
-
-    let (content, show_cursor, cursor_prompt) =
-        build_screen_content(&screen, usize::from(content_area.width).max(1));
-
-    let paragraph = Paragraph::new(content).wrap(Wrap { trim: false });
-    frame.render_widget(paragraph, content_area);
-
-    if show_cursor {
-        let width = usize::from(content_area.width).max(1);
-        let (cursor_row, cursor_col) =
-            prompt_cursor_position(cursor_prompt.as_deref().unwrap_or_default(), width);
-        let cursor_x = content_area.x.saturating_add(cursor_col);
-        let cursor_y = content_area.y.saturating_add(cursor_row);
-        frame.set_cursor_position((cursor_x, cursor_y));
-    }
+        .context("failed rendering app")?;
+    Ok(())
 }
 
 fn format_prompt(prompt: &str) -> String {
@@ -510,52 +523,6 @@ fn wrapped_line_count(text: &str, width: usize) -> usize {
         })
         .sum::<usize>()
         .max(1)
-}
-
-fn build_screen_content(
-    screen: &Screen<'_>,
-    content_width: usize,
-) -> (String, bool, Option<String>) {
-    match screen {
-        Screen::Prompt { prompt, .. } => {
-            let formatted = format_prompt(prompt);
-            (formatted, true, Some((*prompt).to_string()))
-        }
-        Screen::Generating {
-            prompt,
-            spinner_idx,
-            ..
-        } => (
-            format!(
-                "{}\n\n{} Generating...",
-                format_prompt(prompt),
-                SPINNER_FRAMES[*spinner_idx]
-            ),
-            false,
-            None,
-        ),
-        Screen::Review {
-            prompt, response, ..
-        } => {
-            let separator = "─".repeat(content_width.max(1));
-            let mut text = format!(
-                "{}\n\n{}\n\n$ {}\n",
-                format_prompt(prompt),
-                separator,
-                response.command
-            );
-            if let Some(explanation) = &response.explanation {
-                text.push('\n');
-                text.push_str(explanation);
-            }
-            (text, false, None)
-        }
-        Screen::Error { prompt, err, .. } => (
-            format!("{}\n\nRequest failed:\n{}", format_prompt(prompt), err),
-            false,
-            None,
-        ),
-    }
 }
 
 fn prompt_cursor_position(prompt: &str, width: usize) -> (u16, u16) {
