@@ -14,9 +14,11 @@ pub enum Content {
         active: bool,
         cursor_pos: usize,
     },
-    Command {
-        text: String,
-        faded: bool, // Phase 5 feature, included now for structure
+    /// Assistant response with command and optional explanation in same block
+    AssistantResponse {
+        command: String,
+        explanation: Option<String>,
+        faded: bool, // Phase 5 feature
     },
     Text {
         markdown: String,
@@ -34,7 +36,7 @@ impl Content {
     pub fn prefix_symbol(&self) -> &'static str {
         match self {
             Content::Input { .. } => ">",
-            Content::Command { .. } => "$",
+            Content::AssistantResponse { .. } => "$",
             Content::Text { .. } => " ",
             Content::Error { .. } => "!",
             Content::Spinner { .. } => "/",
@@ -66,8 +68,15 @@ impl Blocks {
     pub fn from_state(state: &AppState) -> Self {
         let mut items = Vec::new();
 
+        // Track if we're streaming the last assistant message
+        let is_streaming = state.mode == AppMode::Streaming;
+        let msg_count = state.messages.len();
+
         // 1. Add historical messages
-        for msg in &state.messages {
+        for (idx, msg) in state.messages.iter().enumerate() {
+            let is_last = idx == msg_count.saturating_sub(1);
+            let is_streaming_this = is_streaming && is_last && msg.role == MessageRole::Assistant;
+
             // User messages -> Input content
             if msg.role == MessageRole::User {
                 items.push(Block {
@@ -81,22 +90,38 @@ impl Blocks {
                 });
             }
 
-            // Assistant messages -> Command (if present) + Text
+            // Assistant messages -> AssistantResponse (with command) or Text (without)
             if msg.role == MessageRole::Assistant {
                 if let Some(ref cmd) = msg.command {
+                    // Has command: use AssistantResponse which combines command + explanation
+                    let explanation = if msg.content.is_empty() {
+                        None
+                    } else {
+                        Some(msg.content.clone())
+                    };
                     items.push(Block {
-                        content: Content::Command {
-                            text: cmd.clone(),
+                        content: Content::AssistantResponse {
+                            command: cmd.clone(),
+                            explanation,
                             faded: false,
                         },
                         separator_above: false,
                         title: None,
                     });
-                }
-                if !msg.content.is_empty() {
+                } else if !msg.content.is_empty() {
+                    // No command, just text (e.g., streaming explanation)
                     items.push(Block {
                         content: Content::Text {
                             markdown: msg.content.clone(),
+                        },
+                        separator_above: false,
+                        title: None,
+                    });
+                } else if is_streaming_this {
+                    // Streaming but no content yet - show spinner
+                    items.push(Block {
+                        content: Content::Spinner {
+                            frame: state.spinner_frame,
                         },
                         separator_above: false,
                         title: None,
@@ -128,8 +153,8 @@ impl Blocks {
                 });
             }
             AppMode::Streaming => {
-                // During streaming, last message is being built
-                // Already handled in messages loop above
+                // Streaming indicator is handled in messages loop above
+                // when the assistant message has no content yet
             }
             AppMode::Review | AppMode::Error => {
                 // No additional UI elements

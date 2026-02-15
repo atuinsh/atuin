@@ -150,19 +150,35 @@ fn render_content(frame: &mut Frame, content: &Content, area: Rect, ctx: &Render
             frame.render_widget(paragraph, area);
         }
 
-        Content::Command { text, faded } => {
+        Content::AssistantResponse {
+            command,
+            explanation,
+            faded,
+        } => {
             let symbol_style = Style::from_crossterm(ctx.theme.as_style(Meaning::Important));
             let mut text_style = Style::from_crossterm(ctx.theme.as_style(Meaning::Base));
             if *faded {
                 text_style = text_style.add_modifier(Modifier::DIM);
             }
 
-            let spans = vec![
-                Span::styled("$ ", symbol_style),
-                Span::styled(text.as_str(), text_style),
-            ];
+            // Build lines: command first, then explanation if present
+            let mut lines: Vec<Line> = Vec::new();
 
-            let paragraph = Paragraph::new(Line::from(spans)).wrap(Wrap { trim: false });
+            // Command line with $ prefix
+            lines.push(Line::from(vec![
+                Span::styled("$ ", symbol_style),
+                Span::styled(command.as_str(), text_style),
+            ]));
+
+            // Explanation lines (markdown rendered) if present
+            if let Some(explanation) = explanation {
+                // Add blank line between command and explanation
+                lines.push(Line::from(""));
+                let md_lines = markdown_to_spans(explanation, ctx.theme);
+                lines.extend(md_lines);
+            }
+
+            let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
             frame.render_widget(paragraph, area);
         }
 
@@ -217,9 +233,20 @@ fn calculate_content_height(content: &Content, width: usize) -> u16 {
             };
             wrapped_line_count(&line, width) as u16
         }
-        Content::Command { text, .. } => {
-            let line = format!("$ {}", text);
-            wrapped_line_count(&line, width) as u16
+        Content::AssistantResponse {
+            command,
+            explanation,
+            ..
+        } => {
+            // Command line
+            let cmd_line = format!("$ {}", command);
+            let mut height = wrapped_line_count(&cmd_line, width);
+            // Blank line + explanation if present
+            if let Some(exp) = explanation {
+                height += 1; // blank line
+                height += wrapped_line_count(exp, width);
+            }
+            height as u16
         }
         Content::Text { markdown } => wrapped_line_count(markdown, width) as u16,
         Content::Error { message } => {
