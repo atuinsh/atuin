@@ -1,6 +1,6 @@
+use crate::tui::render::render;
 use crate::tui::{
-    App, AppEvent, AppMode, EventLoop, ExitAction, RenderContext, TerminalGuard,
-    install_panic_hook, render_blocks,
+    App, AppEvent, AppMode, EventLoop, ExitAction, RenderContext, TerminalGuard, install_panic_hook,
 };
 use atuin_client::theme::ThemeManager;
 use atuin_common::tls::ensure_crypto_provider;
@@ -419,7 +419,7 @@ async fn run_inline_tui(
         let anchor_col = guard.anchor_col();
         let ctx = RenderContext { theme, anchor_col };
         guard.terminal().draw(|frame| {
-            render_blocks(frame, &app, &ctx);
+            render(frame, &app.state, &ctx);
         })?;
 
         // Get next event
@@ -431,7 +431,7 @@ async fn run_inline_tui(
                 app.handle_key(key);
             }
             AppEvent::Tick => {
-                app.tick();
+                app.state.tick();
 
                 // Poll refine stream if active
                 if app.state.mode == AppMode::Streaming
@@ -444,11 +444,12 @@ async fn run_inline_tui(
                         std::task::Poll::Ready(Some(Ok(event))) => {
                             match event {
                                 RefineStreamEvent::TextChunk(text) => {
-                                    app.append_to_streaming_block(&text);
+                                    app.state.append_streaming_text(&text);
                                 }
                                 RefineStreamEvent::ToolCall { id, name, input } => {
                                     // Add to conversation events for echo
-                                    app.add_tool_call_event(id, name.clone(), input.clone());
+                                    app.state
+                                        .add_tool_call_event(id, name.clone(), input.clone());
                                     // Check for suggest_command to extract the new command
                                     if name == "suggest_command" {
                                         let command = input
@@ -470,34 +471,35 @@ async fn run_inline_tui(
                                     is_error,
                                 } => {
                                     // Add to conversation events for echo
-                                    app.add_tool_result_event(tool_use_id, content, is_error);
+                                    app.state
+                                        .add_tool_result_event(tool_use_id, content, is_error);
                                 }
                                 RefineStreamEvent::Done => {
                                     refine_stream = None;
                                     // Finalize with command if we got one
                                     if let Some(cmd) = pending_command.take() {
-                                        app.finalize_streaming_with_command(cmd);
+                                        app.state.finalize_streaming_with_command(cmd);
                                     } else {
-                                        app.finalize_streaming();
+                                        app.state.finalize_streaming();
                                     }
                                 }
                                 RefineStreamEvent::Error(msg) => {
                                     refine_stream = None;
-                                    app.streaming_error(msg);
+                                    app.state.streaming_error(msg);
                                 }
                             }
                         }
                         std::task::Poll::Ready(Some(Err(e))) => {
                             refine_stream = None;
-                            app.streaming_error(e.to_string());
+                            app.state.streaming_error(e.to_string());
                         }
                         std::task::Poll::Ready(None) => {
                             refine_stream = None;
                             // Stream ended without done event
                             if let Some(cmd) = pending_command.take() {
-                                app.finalize_streaming_with_command(cmd);
+                                app.state.finalize_streaming_with_command(cmd);
                             } else {
-                                app.finalize_streaming();
+                                app.state.finalize_streaming();
                             }
                         }
                         std::task::Poll::Pending => {}
@@ -511,7 +513,7 @@ async fn run_inline_tui(
                     let task = generation_task.take().unwrap();
                     match task.await.context("generate task join failed")? {
                         Ok(response) => {
-                            app.generation_complete(
+                            app.state.generation_complete(
                                 response.command,
                                 response.explanation,
                                 response.dangerous,
@@ -519,7 +521,7 @@ async fn run_inline_tui(
                             );
                         }
                         Err(err) => {
-                            app.generation_error(err.to_string());
+                            app.state.generation_error(err.to_string());
                         }
                     }
                 }
@@ -550,7 +552,7 @@ async fn run_inline_tui(
                 let events = app.state.conversation_events.clone();
 
                 // Transition to streaming mode
-                app.start_streaming_response();
+                app.state.start_streaming_response();
 
                 // Start the refine stream
                 refine_stream = Some(create_refine_stream(
