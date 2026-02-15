@@ -15,7 +15,8 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 1: Core Event Loop Infrastructure** - Async event loop with keyboard input, panic handling, basic state management
 - [x] **Phase 2: Block Rendering System** - Block-based conversation UI with theme integration and word wrapping
 - [x] **Phase 3: Command Generation** - Fast initial command suggestion via /api/cli/generate
-- [ ] **Phase 4: SSE Streaming & Conversation** - Multi-turn conversation with streaming responses
+- [x] **Phase 4: SSE Streaming & Conversation** - Multi-turn conversation with streaming responses
+- [ ] **Phase 04.1: Pure State Architecture Refactor** - Refactor to pure state -> derived view pattern (INSERTED)
 - [ ] **Phase 5: Safety & Polish** - Dangerous command warnings, markdown formatting, keyboard refinements
 
 ## Phase Details
@@ -80,12 +81,29 @@ Plans:
 **Plans**: 2 plans in 2 waves
 
 Plans:
-- [ ] 04-01-PLAN.md — SSE streaming infrastructure (dependencies, BlockState::Streaming, event loop integration)
-- [ ] 04-02-PLAN.md — Markdown rendering and edit mode conversation flow
+- [x] 04-01-PLAN.md — SSE streaming infrastructure (dependencies, BlockState::Streaming, event loop integration)
+- [x] 04-02-PLAN.md — Markdown rendering and edit mode conversation flow
+
+### Phase 04.1: Pure State Architecture Refactor (INSERTED)
+**Goal**: Eliminate rendering bugs by refactoring to pure state -> derived view pattern
+**Depends on**: Phase 4
+**Requirements**: None (internal refactor)
+**Success Criteria** (what must be TRUE):
+  1. View model is always a pure function of state (Blocks::from_state)
+  2. Renderer only reads view model, never queries AppState directly
+  3. State transitions happen through explicit methods on AppState
+  4. Messages mutated in place during streaming (not replaced)
+  5. Old blocks module removed, new state.rs + view_model.rs in place
+**Plans**: 3 plans in 3 waves
+
+Plans:
+- [ ] 04.1-01-PLAN.md — State and view model type definitions
+- [ ] 04.1-02-PLAN.md — State transition methods and keyboard handling
+- [ ] 04.1-03-PLAN.md — Render integration and blocks module removal
 
 ### Phase 5: Safety & Polish
 **Goal**: Production-ready UI with safety warnings and refined interactions
-**Depends on**: Phase 4
+**Depends on**: Phase 04.1
 **Requirements**: SAFE-01, SAFE-02, SAFE-03, SAFE-04, SAFE-05, SAFE-06
 **Success Criteria** (what must be TRUE):
   1. Dangerous commands display visual warning styling (alert colors from theme)
@@ -101,12 +119,13 @@ Plans:
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
+Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 04.1 -> 5
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Core Event Loop Infrastructure | 3/3 | Complete | 2026-02-14 |
 | 2. Block Rendering System | 1/1 | Complete | 2026-02-14 |
 | 3. Command Generation | 1/1 | Complete | 2026-02-14 |
-| 4. SSE Streaming & Conversation | 0/2 | Planned | - |
+| 4. SSE Streaming & Conversation | 2/2 | Complete | 2026-02-14 |
+| 04.1. Pure State Architecture Refactor | 0/3 | Ready | - |
 | 5. Safety & Polish | 0/0 | Not started | - |
