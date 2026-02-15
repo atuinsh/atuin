@@ -1,248 +1,28 @@
-use crate::tui::blocks::{Block, BlockKind, BlockState};
+use super::blocks::{Block, BlockState};
+use super::state::{AppMode, AppState, ExitAction, MessageRole};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AppMode {
-    /// User is typing input
-    Input,
-    /// Waiting for generation (showing spinner)
-    Generating,
-    /// Streaming SSE response
-    Streaming,
-    /// Reviewing generated command
-    Review,
-    /// Error state, can retry
-    Error,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ExitAction {
-    Execute(String), // Run the command
-    Insert(String),  // Insert command without running
-    Cancel,          // User canceled
-}
-
+/// Thin wrapper around AppState for compatibility
+/// All state lives in AppState, this just provides the handle_key interface
 pub struct App {
-    /// Current application mode
-    pub mode: AppMode,
-    /// All blocks in conversation (newest last)
-    pub blocks: Vec<Block>,
-    /// Current input text (when in Input mode)
-    pub input: String,
-    /// Whether app should exit
-    pub should_exit: bool,
-    /// Exit action (set when exiting)
-    pub exit_action: Option<ExitAction>,
-    /// Last error message (when in Error mode)
-    pub error_message: Option<String>,
-    /// Whether we're in refine mode (vs initial generate)
-    pub is_refine_mode: bool,
+    pub state: AppState,
 }
 
 impl App {
     pub fn new() -> Self {
         Self {
-            mode: AppMode::Input,
-            blocks: Vec::new(),
-            input: String::new(),
-            should_exit: false,
-            exit_action: None,
-            error_message: None,
-            is_refine_mode: false,
+            state: AppState::new(),
         }
-    }
-
-    /// Get the currently active (non-static) block, if any
-    pub fn active_block(&self) -> Option<&Block> {
-        self.blocks.iter().rev().find(|b| !b.state.is_static())
-    }
-
-    /// Get mutable reference to currently active block
-    pub fn active_block_mut(&mut self) -> Option<&mut Block> {
-        self.blocks.iter_mut().rev().find(|b| !b.state.is_static())
-    }
-
-    /// Make all blocks static (called before adding new block)
-    fn make_all_static(&mut self) {
-        for block in &mut self.blocks {
-            block.state = block.state.clone().make_static();
-        }
-    }
-
-    /// Start generating (Building state)
-    pub fn start_generating(&mut self) {
-        // Finalize input block as static
-        self.make_all_static();
-        // Add input block with current text
-        self.blocks.push(Block::new_input(self.input.clone()));
-        self.make_all_static();
-        // Add spinner block
-        self.blocks.push(Block::new_building_spinner());
-        self.mode = AppMode::Generating;
-    }
-
-    /// Handle generation complete (transition to Review)
-    pub fn generation_complete(&mut self, command: String, explanation: Option<String>) {
-        // Remove spinner, add command block
-        if let Some(pos) = self
-            .blocks
-            .iter()
-            .rposition(|b| b.kind == BlockKind::Spinner)
-        {
-            self.blocks.remove(pos);
-        }
-        self.make_all_static();
-        let mut cmd_block = Block::new_building_command();
-        cmd_block.content = command;
-        cmd_block.state = BlockState::Active;
-        self.blocks.push(cmd_block);
-
-        // Add explanation as text block if present
-        if let Some(exp) = explanation {
-            let mut text_block = Block::new_building_text();
-            text_block.content = exp;
-            text_block.state = BlockState::Active;
-            self.blocks.push(text_block);
-        }
-
-        self.mode = AppMode::Review;
-    }
-
-    /// Handle cancel during generation per user decision:
-    /// Remove partial block, revert previous block to Active
-    pub fn cancel_generation(&mut self) {
-        // Remove any Building blocks
-        self.blocks.retain(|b| !b.state.is_building());
-
-        // Revert the last block to Active (if any)
-        if let Some(last) = self.blocks.last_mut() {
-            last.state = BlockState::Active;
-        }
-
-        self.mode = AppMode::Input;
-        self.input.clear(); // Or keep previous input? Per discretion, clear.
-    }
-
-    /// Handle generation error
-    pub fn generation_error(&mut self, error: String) {
-        // Remove spinner
-        if let Some(pos) = self
-            .blocks
-            .iter()
-            .rposition(|b| b.kind == BlockKind::Spinner)
-        {
-            self.blocks.remove(pos);
-        }
-        // Add error block
-        self.blocks.push(Block::new_error(error.clone()));
-        self.error_message = Some(error);
-        self.mode = AppMode::Error;
-    }
-
-    /// Tick all building blocks (advance spinners)
-    pub fn tick(&mut self) {
-        for block in &mut self.blocks {
-            block.state.tick();
-        }
-    }
-
-    /// Exit with action
-    pub fn exit(&mut self, action: ExitAction) {
-        self.exit_action = Some(action);
-        self.should_exit = true;
-    }
-
-    /// Start streaming response (creates empty streaming text block)
-    pub fn start_streaming_response(&mut self) {
-        self.make_all_static();
-        self.blocks.push(Block::new_streaming_text());
-        self.mode = AppMode::Streaming;
-    }
-
-    /// Append text chunk to streaming block
-    pub fn append_to_streaming_block(&mut self, chunk: &str) {
-        if let Some(block) = self
-            .blocks
-            .iter_mut()
-            .rev()
-            .find(|b| b.state.is_streaming())
-        {
-            block.content.push_str(chunk);
-        }
-    }
-
-    /// Finalize streaming block (transition to Review mode)
-    pub fn finalize_streaming(&mut self) {
-        if let Some(block) = self
-            .blocks
-            .iter_mut()
-            .rev()
-            .find(|b| b.state.is_streaming())
-        {
-            block.state = BlockState::Static;
-        }
-        self.mode = AppMode::Review;
-    }
-
-    /// Handle streaming error
-    pub fn streaming_error(&mut self, error: String) {
-        // Remove streaming block if present
-        self.blocks.retain(|b| !b.state.is_streaming());
-        self.blocks.push(Block::new_error(error.clone()));
-        self.error_message = Some(error);
-        self.mode = AppMode::Error;
-    }
-
-    /// Transition to edit mode for refining command
-    pub fn start_edit_mode(&mut self) {
-        // Make existing blocks static
-        self.make_all_static();
-        // Clear input for new message
-        self.input.clear();
-        // Set refine mode flag
-        self.is_refine_mode = true;
-        // Switch to input mode
-        self.mode = AppMode::Input;
-    }
-
-    /// Build conversation history for refine API
-    pub fn build_conversation_history(&self) -> Vec<(String, String)> {
-        // Returns (role, content) pairs
-        let mut history = Vec::new();
-        for block in &self.blocks {
-            match block.kind {
-                BlockKind::Input => {
-                    history.push(("user".to_string(), block.content.clone()));
-                }
-                BlockKind::Text => {
-                    // Assistant explanations
-                    history.push(("assistant".to_string(), block.content.clone()));
-                }
-                BlockKind::Command => {
-                    // Include command as part of assistant response
-                    // Format: "Command: {cmd}"
-                    history.push((
-                        "assistant".to_string(),
-                        format!("Command: {}", block.content),
-                    ));
-                }
-                _ => {
-                    // Skip spinner, error blocks
-                }
-            }
-        }
-        history
     }
 
     /// Handle a key event. Returns true if render is needed.
     pub fn handle_key(&mut self, key: KeyEvent) -> bool {
-        // Pass through Ctrl combinations per user decision
+        // Ctrl combinations pass through (Ctrl+C handled by SIGINT)
         if key.modifiers.contains(KeyModifiers::CONTROL) {
-            // Ctrl+C is handled by SIGINT, other Ctrl combos eaten
             return true;
         }
 
-        match self.mode {
+        match self.state.mode {
             AppMode::Input => self.handle_input_key(key),
             AppMode::Generating => self.handle_generating_key(key),
             AppMode::Streaming => self.handle_streaming_key(key),
@@ -254,26 +34,31 @@ impl App {
     fn handle_input_key(&mut self, key: KeyEvent) -> bool {
         match key.code {
             KeyCode::Esc => {
-                // Esc when idle exits TUI per user decision
-                self.exit(ExitAction::Cancel);
+                self.state.exit(ExitAction::Cancel);
                 true
             }
             KeyCode::Enter => {
-                if self.input.trim().is_empty() {
-                    // Empty input = cancel
-                    self.exit(ExitAction::Cancel);
+                if self.state.input.trim().is_empty() {
+                    self.state.exit(ExitAction::Cancel);
                 } else {
-                    // Start generation
-                    self.start_generating();
+                    self.state.start_generating();
                 }
                 true
             }
             KeyCode::Backspace => {
-                self.input.pop();
+                self.state.delete_char();
+                true
+            }
+            KeyCode::Left => {
+                self.state.move_cursor_left();
+                true
+            }
+            KeyCode::Right => {
+                self.state.move_cursor_right();
                 true
             }
             KeyCode::Char(c) => {
-                self.input.push(c);
+                self.state.insert_char(c);
                 true
             }
             _ => false,
@@ -283,72 +68,184 @@ impl App {
     fn handle_generating_key(&mut self, key: KeyEvent) -> bool {
         match key.code {
             KeyCode::Esc => {
-                // Esc during generation cancels and ignores response
-                self.cancel_generation();
+                self.state.cancel_generation();
                 true
             }
-            _ => {
-                // Keystrokes during streaming are discarded per user decision
-                false
-            }
-        }
-    }
-
-    fn handle_review_key(&mut self, key: KeyEvent) -> bool {
-        match key.code {
-            KeyCode::Esc => {
-                self.exit(ExitAction::Cancel);
-                true
-            }
-            KeyCode::Enter => {
-                // Run command
-                if let Some(block) = self.blocks.iter().find(|b| b.kind == BlockKind::Command) {
-                    self.exit(ExitAction::Execute(block.content.clone()));
-                }
-                true
-            }
-            KeyCode::Tab => {
-                // Insert command without running
-                if let Some(block) = self.blocks.iter().find(|b| b.kind == BlockKind::Command) {
-                    self.exit(ExitAction::Insert(block.content.clone()));
-                }
-                true
-            }
-            KeyCode::Char('e') => {
-                self.start_edit_mode();
-                true
-            }
-            _ => false,
+            _ => false, // Discard other keys during generation
         }
     }
 
     fn handle_streaming_key(&mut self, key: KeyEvent) -> bool {
         match key.code {
             KeyCode::Esc => {
-                // Cancel streaming
-                self.blocks.retain(|b| !b.state.is_streaming());
-                self.mode = AppMode::Review;
+                // Cancel streaming, revert to Review
+                self.state.mode = AppMode::Review;
                 true
             }
             _ => false, // Ignore other keys during streaming
         }
     }
 
-    fn handle_error_key(&mut self, key: KeyEvent) -> bool {
+    fn handle_review_key(&mut self, key: KeyEvent) -> bool {
         match key.code {
             KeyCode::Esc => {
-                self.exit(ExitAction::Cancel);
+                self.state.exit(ExitAction::Cancel);
                 true
             }
-            KeyCode::Enter | KeyCode::Char('r') => {
-                // Retry - re-enter generating mode
-                self.error_message = None;
-                self.mode = AppMode::Generating;
-                self.blocks.push(Block::new_building_spinner());
+            KeyCode::Enter => {
+                if let Some(cmd) = self.state.current_command() {
+                    self.state.exit(ExitAction::Execute(cmd.to_string()));
+                }
+                true
+            }
+            KeyCode::Tab => {
+                if let Some(cmd) = self.state.current_command() {
+                    self.state.exit(ExitAction::Insert(cmd.to_string()));
+                }
+                true
+            }
+            KeyCode::Char('e') => {
+                self.state.start_edit_mode();
                 true
             }
             _ => false,
         }
+    }
+
+    fn handle_error_key(&mut self, key: KeyEvent) -> bool {
+        match key.code {
+            KeyCode::Esc => {
+                self.state.exit(ExitAction::Cancel);
+                true
+            }
+            KeyCode::Enter | KeyCode::Char('r') => {
+                self.state.retry();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    // ===== Delegation methods for API compatibility =====
+    // These forward to AppState for backward compatibility with inline.rs
+    // Will be removed in Plan 03 when inline.rs is updated
+
+    pub fn tick(&mut self) {
+        self.state.tick();
+    }
+
+    pub fn start_streaming_response(&mut self) {
+        self.state.start_streaming_response();
+    }
+
+    pub fn append_to_streaming_block(&mut self, chunk: &str) {
+        self.state.append_streaming_text(chunk);
+    }
+
+    pub fn add_tool_call_event(&mut self, id: String, name: String, input: serde_json::Value) {
+        self.state.add_tool_call_event(id, name, input);
+    }
+
+    pub fn add_tool_result_event(&mut self, tool_use_id: String, content: String, is_error: bool) {
+        self.state
+            .add_tool_result_event(tool_use_id, content, is_error);
+    }
+
+    pub fn finalize_streaming_with_command(&mut self, command: String) {
+        self.state.finalize_streaming_with_command(command);
+    }
+
+    pub fn finalize_streaming(&mut self) {
+        self.state.finalize_streaming();
+    }
+
+    pub fn streaming_error(&mut self, error: String) {
+        self.state.streaming_error(error);
+    }
+
+    pub fn generation_complete(
+        &mut self,
+        command: String,
+        explanation: Option<String>,
+        dangerous: bool,
+        warnings: Vec<String>,
+    ) {
+        self.state
+            .generation_complete(command, explanation, dangerous, warnings);
+    }
+
+    pub fn generation_error(&mut self, error: String) {
+        self.state.generation_error(error);
+    }
+
+    // ===== Legacy compatibility properties =====
+    // These convert new state to old block format for render.rs
+    // Will be removed in Plan 03 when render.rs is updated
+
+    /// Convert messages to legacy blocks for rendering
+    pub fn blocks(&self) -> Vec<Block> {
+        let mut blocks = Vec::new();
+
+        // Convert each message to appropriate blocks
+        for msg in &self.state.messages {
+            match msg.role {
+                MessageRole::User => {
+                    let mut block = Block::new_input(msg.content.clone());
+                    block.state = BlockState::Static;
+                    blocks.push(block);
+                }
+                MessageRole::Assistant => {
+                    // Add explanation text if present
+                    if !msg.content.is_empty() {
+                        let mut text_block = Block::new_building_text();
+                        text_block.content = msg.content.clone();
+                        text_block.state = BlockState::Static;
+                        blocks.push(text_block);
+                    }
+                    // Add command if present
+                    if let Some(ref cmd) = msg.command {
+                        let mut cmd_block = Block::new_building_command();
+                        cmd_block.content = cmd.clone();
+                        cmd_block.state = if self.state.mode == AppMode::Review {
+                            BlockState::Active
+                        } else {
+                            BlockState::Static
+                        };
+                        blocks.push(cmd_block);
+                    }
+                }
+            }
+        }
+
+        // Add mode-specific blocks
+        match self.state.mode {
+            AppMode::Generating => {
+                blocks.push(Block::new_building_spinner());
+            }
+            AppMode::Streaming => {
+                // Streaming message is already in messages as the last assistant message
+                if let Some(last) = blocks.last_mut() {
+                    last.state = BlockState::Streaming;
+                }
+            }
+            AppMode::Error => {
+                if let Some(ref error) = self.state.error {
+                    blocks.push(Block::new_error(error.clone()));
+                }
+            }
+            _ => {}
+        }
+
+        blocks
+    }
+
+    /// Legacy field access properties
+    pub fn mode(&self) -> &AppMode {
+        &self.state.mode
+    }
+
+    pub fn input(&self) -> &str {
+        &self.state.input
     }
 }
 

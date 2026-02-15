@@ -255,7 +255,7 @@ impl EventLoop {
             }
         }
 
-        Ok(!app.should_exit)
+        Ok(!app.state.should_exit)
     }
 }
 
