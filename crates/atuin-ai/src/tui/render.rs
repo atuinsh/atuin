@@ -336,11 +336,3 @@ pub fn markdown_to_spans<'a>(text: &'a str, theme: &'a Theme) -> Vec<Line<'a>> {
 
     lines.into_iter().map(Line::from).collect()
 }
-
-// Legacy export for transition (will be removed)
-pub use super::app::App;
-
-/// Legacy render function for compatibility during transition
-pub fn render_blocks(frame: &mut Frame, app: &App, ctx: &RenderContext) {
-    render(frame, &app.state, ctx);
-}
