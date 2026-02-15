@@ -46,7 +46,7 @@ fn render_view(frame: &mut Frame, view: &Blocks, ctx: &RenderContext) {
             total_height = total_height.saturating_add(1); // separator
         }
         total_height =
-            total_height.saturating_add(calculate_content_height(&block.content, content_width));
+            total_height.saturating_add(calculate_block_height(&block.content, content_width));
     }
 
     let desired_height = total_height
@@ -91,7 +91,7 @@ fn render_blocks_content(frame: &mut Frame, view: &Blocks, ctx: &RenderContext, 
         if idx > 0 {
             constraints.push(Constraint::Length(1)); // separator
         }
-        let height = calculate_content_height(&block.content, content_width);
+        let height = calculate_block_height(&block.content, content_width);
         constraints.push(Constraint::Length(height));
     }
 
@@ -111,27 +111,54 @@ fn render_blocks_content(frame: &mut Frame, view: &Blocks, ctx: &RenderContext, 
             chunk_idx += 1;
         }
 
-        render_content(frame, &block.content, chunks[chunk_idx], ctx);
+        render_block_content(frame, &block.content, chunks[chunk_idx], ctx);
 
-        // Set cursor if this is active input
-        if let Content::Input {
-            text,
-            active: true,
-            cursor_pos,
-        } = &block.content
-        {
-            let (cursor_row, cursor_col) =
-                calculate_cursor_position(text, *cursor_pos, content_width);
-            let cursor_x = chunks[chunk_idx].x.saturating_add(cursor_col);
-            let cursor_y = chunks[chunk_idx].y.saturating_add(cursor_row);
-            frame.set_cursor_position((cursor_x, cursor_y));
+        // Set cursor if any content item is active input
+        for content in &block.content {
+            if let Content::Input {
+                text,
+                active: true,
+                cursor_pos,
+            } = content
+            {
+                let (cursor_row, cursor_col) =
+                    calculate_cursor_position(text, *cursor_pos, content_width);
+                let cursor_x = chunks[chunk_idx].x.saturating_add(cursor_col);
+                let cursor_y = chunks[chunk_idx].y.saturating_add(cursor_row);
+                frame.set_cursor_position((cursor_x, cursor_y));
+            }
         }
 
         chunk_idx += 1;
     }
 }
 
-fn render_content(frame: &mut Frame, content: &Content, area: Rect, ctx: &RenderContext) {
+/// Render all content items in a block
+fn render_block_content(frame: &mut Frame, content: &[Content], area: Rect, ctx: &RenderContext) {
+    if content.is_empty() {
+        return;
+    }
+
+    let content_width = usize::from(area.width).max(1);
+
+    // Build layout constraints for each content item
+    let constraints: Vec<Constraint> = content
+        .iter()
+        .map(|c| Constraint::Length(calculate_single_content_height(c, content_width)))
+        .collect();
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(constraints)
+        .split(area);
+
+    for (idx, item) in content.iter().enumerate() {
+        render_single_content(frame, item, chunks[idx], ctx);
+    }
+}
+
+/// Render a single content item
+fn render_single_content(frame: &mut Frame, content: &Content, area: Rect, ctx: &RenderContext) {
     match content {
         Content::Input { text, .. } => {
             let symbol_style = Style::from_crossterm(ctx.theme.as_style(Meaning::Guidance));
@@ -223,7 +250,16 @@ fn render_separator(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
     frame.render_widget(paragraph, area);
 }
 
-fn calculate_content_height(content: &Content, width: usize) -> u16 {
+/// Calculate total height for all content items in a block
+fn calculate_block_height(content: &[Content], width: usize) -> u16 {
+    content
+        .iter()
+        .map(|c| calculate_single_content_height(c, width))
+        .sum()
+}
+
+/// Calculate height for a single content item
+fn calculate_single_content_height(content: &Content, width: usize) -> u16 {
     match content {
         Content::Input { text, .. } => {
             let line = if text.is_empty() {

@@ -47,7 +47,7 @@ impl Content {
 /// A visual block in the UI
 #[derive(Debug, Clone)]
 pub struct Block {
-    pub content: Content,
+    pub content: Vec<Content>,
     pub separator_above: bool,
     pub title: Option<String>,
 }
@@ -80,49 +80,47 @@ impl Blocks {
             // User messages -> Input content
             if msg.role == MessageRole::User {
                 items.push(Block {
-                    content: Content::Input {
+                    content: vec![Content::Input {
                         text: msg.content.clone(),
                         active: false,
                         cursor_pos: 0,
-                    },
+                    }],
                     separator_above: false,
                     title: None,
                 });
             }
 
-            // Assistant messages -> AssistantResponse (with command) or Text (without)
+            // Assistant messages -> may have command, text, or both
             if msg.role == MessageRole::Assistant {
+                let mut content_items = Vec::new();
+
+                // Add command if present
                 if let Some(ref cmd) = msg.command {
-                    // Has command: use AssistantResponse which combines command + explanation
-                    let explanation = if msg.content.is_empty() {
-                        None
-                    } else {
-                        Some(msg.content.clone())
-                    };
-                    items.push(Block {
-                        content: Content::AssistantResponse {
-                            command: cmd.clone(),
-                            explanation,
-                            faded: false,
-                        },
-                        separator_above: false,
-                        title: None,
+                    content_items.push(Content::AssistantResponse {
+                        command: cmd.clone(),
+                        explanation: None, // Text shown separately below
+                        faded: false,
                     });
-                } else if !msg.content.is_empty() {
-                    // No command, just text (e.g., streaming explanation)
-                    items.push(Block {
-                        content: Content::Text {
-                            markdown: msg.content.clone(),
-                        },
-                        separator_above: false,
-                        title: None,
+                }
+
+                // Add text content if present
+                if !msg.content.is_empty() {
+                    content_items.push(Content::Text {
+                        markdown: msg.content.clone(),
                     });
-                } else if is_streaming_this {
-                    // Streaming but no content yet - show spinner
+                }
+
+                // If streaming with no content yet, show spinner
+                if content_items.is_empty() && is_streaming_this {
+                    content_items.push(Content::Spinner {
+                        frame: state.spinner_frame,
+                    });
+                }
+
+                // Only create block if we have content
+                if !content_items.is_empty() {
                     items.push(Block {
-                        content: Content::Spinner {
-                            frame: state.spinner_frame,
-                        },
+                        content: content_items,
                         separator_above: false,
                         title: None,
                     });
@@ -134,20 +132,20 @@ impl Blocks {
         match state.mode {
             AppMode::Input => {
                 items.push(Block {
-                    content: Content::Input {
+                    content: vec![Content::Input {
                         text: state.input.clone(),
                         active: true,
                         cursor_pos: state.cursor_pos,
-                    },
+                    }],
                     separator_above: false,
                     title: None,
                 });
             }
             AppMode::Generating => {
                 items.push(Block {
-                    content: Content::Spinner {
+                    content: vec![Content::Spinner {
                         frame: state.spinner_frame,
-                    },
+                    }],
                     separator_above: false,
                     title: None,
                 });
@@ -164,9 +162,9 @@ impl Blocks {
         // 3. Error if present (renders at end)
         if let Some(ref err) = state.error {
             items.push(Block {
-                content: Content::Error {
+                content: vec![Content::Error {
                     message: err.clone(),
-                },
+                }],
                 separator_above: false,
                 title: None,
             });
