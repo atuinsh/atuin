@@ -33,18 +33,40 @@ struct GenerateResponse {
     command: String,
     #[serde(default)]
     explanation: Option<String>,
+    #[serde(default)]
+    dangerous: bool,
+    #[serde(default)]
+    warnings: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
 struct RefineRequest {
-    messages: Vec<RefineMessage>,
+    events: Vec<RefineEvent>,
+    #[serde(default)]
+    capabilities: Vec<String>,
     context: GenerateContext,
 }
 
-#[derive(Debug, Serialize)]
-struct RefineMessage {
-    role: String,
-    content: String,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum RefineEvent {
+    UserMessage {
+        content: String,
+    },
+    Text {
+        content: String,
+    },
+    ToolCall {
+        id: String,
+        name: String,
+        input: serde_json::Value,
+    },
+    ToolResult {
+        tool_use_id: String,
+        content: String,
+        #[serde(default)]
+        is_error: bool,
+    },
 }
 
 pub async fn run(
@@ -166,11 +188,34 @@ async fn generate_command(
     bail!("Hub request failed ({status}): {body}");
 }
 
+/// SSE event received from refine endpoint
+#[derive(Debug, Clone)]
+enum RefineStreamEvent {
+    /// Text chunk to display
+    TextChunk(String),
+    /// Tool call event (need to echo back, may contain suggest_command)
+    ToolCall {
+        id: String,
+        name: String,
+        input: serde_json::Value,
+    },
+    /// Tool result from server-side execution
+    ToolResult {
+        tool_use_id: String,
+        content: String,
+        is_error: bool,
+    },
+    /// Stream complete
+    Done,
+    /// Error from server
+    Error(String),
+}
+
 fn create_refine_stream(
     hub_address: String,
     token: String,
-    messages: Vec<RefineMessage>,
-) -> std::pin::Pin<Box<dyn futures::Stream<Item = Result<String>> + Send>> {
+    events: Vec<serde_json::Value>,
+) -> std::pin::Pin<Box<dyn futures::Stream<Item = Result<RefineStreamEvent>> + Send>> {
     Box::pin(async_stream::stream! {
         ensure_crypto_provider();
         let endpoint = match hub_url(&hub_address, "/api/cli/refine") {
@@ -182,7 +227,12 @@ fn create_refine_stream(
         };
 
         let request = RefineRequest {
-            messages,
+            events: events.into_iter().map(|v| {
+                serde_json::from_value(v).unwrap_or(RefineEvent::UserMessage {
+                    content: "".to_string()
+                })
+            }).collect(),
+            capabilities: vec![],
             context: GenerateContext {
                 os: detect_os(),
                 shell: detect_shell(),
@@ -195,6 +245,7 @@ fn create_refine_stream(
         let client = reqwest::Client::new();
         let response = match client
             .post(endpoint.clone())
+            .header("Accept", "text/event-stream")
             .bearer_auth(&token)
             .json(&request)
             .send()
@@ -209,7 +260,8 @@ fn create_refine_stream(
 
         let status = response.status();
         if !status.is_success() {
-            yield Err(eyre::eyre!("SSE request failed: {}", status));
+            let body = response.text().await.unwrap_or_default();
+            yield Err(eyre::eyre!("SSE request failed ({}): {}", status, body));
             return;
         }
 
@@ -218,28 +270,56 @@ fn create_refine_stream(
 
         while let Some(event) = stream.next().await {
             match event {
-                Ok(event) => {
-                    let data = event.data;
-                    // Check for done signal first
-                    if data == "[DONE]" {
-                        break;
-                    }
+                Ok(sse_event) => {
+                    let event_type = sse_event.event.as_str();
+                    let data = sse_event.data;
 
-                    // Parse SSE data - expect JSON with "delta" field or plain text
-                    // Try JSON first, fall back to raw data
-                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&data) {
-                        if let Some(delta) = json.get("delta").and_then(|v| v.as_str()) {
-                            yield Ok(delta.to_string());
-                        } else if let Some(text) = json.get("text").and_then(|v| v.as_str()) {
-                            yield Ok(text.to_string());
+                    match event_type {
+                        "text" => {
+                            // Text chunk: {"content": "..."}
+                            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&data)
+                                && let Some(content) = json.get("content").and_then(|v| v.as_str())
+                            {
+                                yield Ok(RefineStreamEvent::TextChunk(content.to_string()));
+                            }
                         }
-                        // Check for done signal
-                        if json.get("done").and_then(|v| v.as_bool()).unwrap_or(false) {
+                        "tool_call" => {
+                            // Tool call: {"id": "...", "name": "...", "input": {...}}
+                            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&data) {
+                                let id = json.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                let name = json.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                let input = json.get("input").cloned().unwrap_or(serde_json::json!({}));
+                                yield Ok(RefineStreamEvent::ToolCall { id, name, input });
+                            }
+                        }
+                        "tool_result" => {
+                            // Tool result: {"tool_use_id": "...", "content": "...", "is_error": bool}
+                            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&data) {
+                                let tool_use_id = json.get("tool_use_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                let content = json.get("content").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                let is_error = json.get("is_error").and_then(|v| v.as_bool()).unwrap_or(false);
+                                yield Ok(RefineStreamEvent::ToolResult { tool_use_id, content, is_error });
+                            }
+                        }
+                        "done" => {
+                            yield Ok(RefineStreamEvent::Done);
                             break;
                         }
-                    } else if !data.is_empty() {
-                        // Raw text chunk
-                        yield Ok(data);
+                        "error" => {
+                            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&data) {
+                                let message = json.get("message").and_then(|v| v.as_str()).unwrap_or("Unknown error").to_string();
+                                yield Ok(RefineStreamEvent::Error(message));
+                            } else {
+                                yield Ok(RefineStreamEvent::Error(data));
+                            }
+                            break;
+                        }
+                        "status" => {
+                            // Status events are informational, ignore for now
+                        }
+                        _ => {
+                            // Unknown event type, ignore
+                        }
                     }
                 }
                 Err(e) => {
@@ -313,7 +393,7 @@ async fn run_inline_tui(
     let mut guard = TerminalGuard::new(keep_output)?;
     let mut app = App::new();
     if let Some(prompt) = initial_prompt {
-        app.input = prompt;
+        app.state.input = prompt;
     }
 
     // Load theme
@@ -328,10 +408,11 @@ async fn run_inline_tui(
     let mut generation_task: Option<tokio::task::JoinHandle<Result<GenerateResponse>>> = None;
     let mut last_query = String::new();
 
-    // Track refine stream
+    // Track refine stream and pending command from suggest_command tool
     let mut refine_stream: Option<
-        std::pin::Pin<Box<dyn futures::Stream<Item = Result<String>> + Send>>,
+        std::pin::Pin<Box<dyn futures::Stream<Item = Result<RefineStreamEvent>> + Send>>,
     > = None;
+    let mut pending_command: Option<String> = None;
 
     loop {
         // Render current state
@@ -353,15 +434,58 @@ async fn run_inline_tui(
                 app.tick();
 
                 // Poll refine stream if active
-                if app.mode == AppMode::Streaming
+                if app.state.mode == AppMode::Streaming
                     && refine_stream.is_some()
                     && let Some(stream) = &mut refine_stream
                 {
-                    // Try to get next chunk without blocking
+                    // Try to get next event without blocking
                     let mut cx = std::task::Context::from_waker(futures::task::noop_waker_ref());
                     match stream.as_mut().poll_next(&mut cx) {
-                        std::task::Poll::Ready(Some(Ok(chunk))) => {
-                            app.append_to_streaming_block(&chunk);
+                        std::task::Poll::Ready(Some(Ok(event))) => {
+                            match event {
+                                RefineStreamEvent::TextChunk(text) => {
+                                    app.append_to_streaming_block(&text);
+                                }
+                                RefineStreamEvent::ToolCall { id, name, input } => {
+                                    // Add to conversation events for echo
+                                    app.add_tool_call_event(id, name.clone(), input.clone());
+                                    // Check for suggest_command to extract the new command
+                                    if name == "suggest_command" {
+                                        let command = input
+                                            .get("command")
+                                            .and_then(|v| v.as_str())
+                                            .map(|s| s.to_string());
+                                        let conversation_only = input
+                                            .get("conversation_only")
+                                            .and_then(|v| v.as_bool())
+                                            .unwrap_or(false);
+                                        if !conversation_only && let Some(cmd) = command {
+                                            pending_command = Some(cmd);
+                                        }
+                                    }
+                                }
+                                RefineStreamEvent::ToolResult {
+                                    tool_use_id,
+                                    content,
+                                    is_error,
+                                } => {
+                                    // Add to conversation events for echo
+                                    app.add_tool_result_event(tool_use_id, content, is_error);
+                                }
+                                RefineStreamEvent::Done => {
+                                    refine_stream = None;
+                                    // Finalize with command if we got one
+                                    if let Some(cmd) = pending_command.take() {
+                                        app.finalize_streaming_with_command(cmd);
+                                    } else {
+                                        app.finalize_streaming();
+                                    }
+                                }
+                                RefineStreamEvent::Error(msg) => {
+                                    refine_stream = None;
+                                    app.streaming_error(msg);
+                                }
+                            }
                         }
                         std::task::Poll::Ready(Some(Err(e))) => {
                             refine_stream = None;
@@ -369,7 +493,12 @@ async fn run_inline_tui(
                         }
                         std::task::Poll::Ready(None) => {
                             refine_stream = None;
-                            app.finalize_streaming();
+                            // Stream ended without done event
+                            if let Some(cmd) = pending_command.take() {
+                                app.finalize_streaming_with_command(cmd);
+                            } else {
+                                app.finalize_streaming();
+                            }
                         }
                         std::task::Poll::Pending => {}
                     }
@@ -382,7 +511,12 @@ async fn run_inline_tui(
                     let task = generation_task.take().unwrap();
                     match task.await.context("generate task join failed")? {
                         Ok(response) => {
-                            app.generation_complete(response.command, response.explanation);
+                            app.generation_complete(
+                                response.command,
+                                response.explanation,
+                                response.dangerous,
+                                response.warnings,
+                            );
                         }
                         Err(err) => {
                             app.generation_error(err.to_string());
@@ -394,29 +528,26 @@ async fn run_inline_tui(
         }
 
         // Check exit condition
-        if app.should_exit {
+        if app.state.should_exit {
             break;
         }
 
         // Handle generation/refine trigger
-        if app.mode == AppMode::Generating
+        if app.state.mode == AppMode::Generating
             && generation_task.is_none()
             && refine_stream.is_none()
-            && let Some(input_block) = app
-                .blocks
+            && let Some(last_msg) = app
+                .state
+                .messages
                 .iter()
                 .rev()
-                .find(|b| b.kind == crate::tui::BlockKind::Input)
+                .find(|m| matches!(m.role, crate::tui::MessageRole::User))
         {
-            last_query = input_block.content.clone();
+            last_query = last_msg.content.clone();
 
-            if app.is_refine_mode {
-                // Build conversation history and start refine stream
-                let history = app.build_conversation_history();
-                let messages: Vec<RefineMessage> = history
-                    .into_iter()
-                    .map(|(role, content)| RefineMessage { role, content })
-                    .collect();
+            if app.state.is_refine_mode {
+                // Conversation events already contain the user_message from start_generating()
+                let events = app.state.conversation_events.clone();
 
                 // Transition to streaming mode
                 app.start_streaming_response();
@@ -425,7 +556,7 @@ async fn run_inline_tui(
                 refine_stream = Some(create_refine_stream(
                     endpoint.clone(),
                     token.clone(),
-                    messages,
+                    events,
                 ));
             } else {
                 // Initial generation (existing logic)
@@ -439,7 +570,7 @@ async fn run_inline_tui(
         }
 
         // Handle cancellation during generation
-        if app.mode != AppMode::Generating
+        if app.state.mode != AppMode::Generating
             && generation_task.is_some()
             && let Some(task) = generation_task.take()
         {
@@ -447,16 +578,16 @@ async fn run_inline_tui(
         }
 
         // Handle streaming cancellation
-        if app.mode != AppMode::Streaming && refine_stream.is_some() {
+        if app.state.mode != AppMode::Streaming && refine_stream.is_some() {
             refine_stream = None;
         }
 
         // Handle retry in Error mode (only for non-refine mode)
-        if app.mode == AppMode::Generating
+        if app.state.mode == AppMode::Generating
             && generation_task.is_none()
             && refine_stream.is_none()
             && !last_query.is_empty()
-            && !app.is_refine_mode
+            && !app.state.is_refine_mode
         {
             // Retry with the same query (only for initial generation)
             let endpoint_clone = endpoint.clone();
@@ -469,7 +600,7 @@ async fn run_inline_tui(
     }
 
     // Map exit action to return value
-    let result = match app.exit_action {
+    let result = match app.state.exit_action {
         Some(ExitAction::Execute(cmd)) => (Action::Execute, cmd),
         Some(ExitAction::Insert(cmd)) => (Action::Insert, cmd),
         _ => (Action::Cancel, String::new()),

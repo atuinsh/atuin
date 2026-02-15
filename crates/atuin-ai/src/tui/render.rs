@@ -9,7 +9,7 @@ use ratatui::{
     widgets::{Block as RatatuiBlock, Borders, Padding, Paragraph, Wrap},
 };
 
-use crate::tui::{App, AppMode, Block, BlockKind, BlockState};
+use crate::tui::{App, AppMode, BlockKind, BlockState, LegacyBlock as Block};
 
 const SPINNER_FRAMES: [&str; 4] = ["/", "-", "\\", "|"];
 
@@ -33,19 +33,23 @@ pub fn render_blocks(frame: &mut Frame, app: &App, ctx: &RenderContext) {
     let mut total_height = 0u16;
 
     // Calculate heights for all blocks
-    for block in &app.blocks {
+    for block in &app.blocks() {
         let block_height = calculate_block_height(block, content_width);
         total_height = total_height.saturating_add(block_height);
     }
 
     // Add separator heights (between blocks)
-    if app.blocks.len() > 1 {
-        total_height = total_height.saturating_add((app.blocks.len() - 1) as u16);
+    if app.blocks().len() > 1 {
+        total_height = total_height.saturating_add((app.blocks().len() - 1) as u16);
     }
 
     // Account for current input in Input mode
-    if app.mode == AppMode::Input {
-        let input_height = calculate_input_height(&app.input, content_width);
+    if *app.mode() == AppMode::Input {
+        // Add separator before current input if there are blocks
+        if !app.blocks().is_empty() {
+            total_height = total_height.saturating_add(1);
+        }
+        let input_height = calculate_input_height(&app.input(), content_width);
         total_height = total_height.saturating_add(input_height);
     }
 
@@ -63,7 +67,7 @@ pub fn render_blocks(frame: &mut Frame, app: &App, ctx: &RenderContext) {
     };
 
     // Get keybinds footer based on mode
-    let footer = get_footer_text(&app.mode);
+    let footer = get_footer_text(&*app.mode());
 
     // Create the outer bordered frame
     let outer_block = RatatuiBlock::default()
@@ -86,7 +90,7 @@ fn render_block_content(frame: &mut Frame, app: &App, ctx: &RenderContext, area:
     let mut constraints = Vec::new();
     let mut block_count = 0;
 
-    for (idx, block) in app.blocks.iter().enumerate() {
+    for (idx, block) in app.blocks().iter().enumerate() {
         // Add separator constraint if not first block
         if idx > 0 {
             constraints.push(Constraint::Length(1));
@@ -98,11 +102,11 @@ fn render_block_content(frame: &mut Frame, app: &App, ctx: &RenderContext, area:
     }
 
     // Add current input in Input mode
-    if app.mode == AppMode::Input {
+    if *app.mode() == AppMode::Input {
         if block_count > 0 {
             constraints.push(Constraint::Length(1)); // Separator
         }
-        let input_height = calculate_input_height(&app.input, content_width);
+        let input_height = calculate_input_height(&app.input(), content_width);
         constraints.push(Constraint::Length(input_height));
     }
 
@@ -119,7 +123,7 @@ fn render_block_content(frame: &mut Frame, app: &App, ctx: &RenderContext, area:
 
     // Render each block
     let mut chunk_idx = 0;
-    for (idx, block) in app.blocks.iter().enumerate() {
+    for (idx, block) in app.blocks().iter().enumerate() {
         // Render separator if not first block
         if idx > 0 {
             render_separator(frame, chunks[chunk_idx], ctx);
@@ -132,16 +136,16 @@ fn render_block_content(frame: &mut Frame, app: &App, ctx: &RenderContext, area:
     }
 
     // Render current input in Input mode
-    if app.mode == AppMode::Input {
+    if *app.mode() == AppMode::Input {
         if block_count > 0 {
             render_separator(frame, chunks[chunk_idx], ctx);
             chunk_idx += 1;
         }
 
-        render_input_block(frame, &app.input, chunks[chunk_idx], ctx);
+        render_input_block(frame, &app.input(), chunks[chunk_idx], ctx);
 
         // Set cursor position
-        let (cursor_row, cursor_col) = calculate_cursor_position(&app.input, content_width);
+        let (cursor_row, cursor_col) = calculate_cursor_position(&app.input(), content_width);
         let cursor_x = chunks[chunk_idx].x.saturating_add(cursor_col);
         let cursor_y = chunks[chunk_idx].y.saturating_add(cursor_row);
         frame.set_cursor_position((cursor_x, cursor_y));
