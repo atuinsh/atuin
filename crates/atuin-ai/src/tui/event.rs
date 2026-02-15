@@ -245,7 +245,7 @@ impl EventLoop {
                 app.handle_key(key);
             }
             AppEvent::Tick => {
-                app.tick();
+                app.state.tick();
             }
             AppEvent::Resize(_, _) => {
                 // Render will be triggered anyway
