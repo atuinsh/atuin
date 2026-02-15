@@ -145,6 +145,222 @@ impl AppState {
         let max = self.input.chars().count();
         self.cursor_pos = (self.cursor_pos + 1).min(max);
     }
+
+    // ===== Generation lifecycle methods =====
+
+    /// Start generating from current input
+    pub fn start_generating(&mut self) {
+        // Add user message to conversation
+        self.conversation_events.push(serde_json::json!({
+            "type": "user_message",
+            "content": self.input.clone()
+        }));
+
+        // Add message to display history
+        self.messages.push(Message {
+            role: MessageRole::User,
+            content: self.input.clone(),
+            command: None,
+        });
+
+        // Clear input, switch mode
+        self.input.clear();
+        self.cursor_pos = 0;
+        self.mode = AppMode::Generating;
+    }
+
+    /// Generation complete with command
+    pub fn generation_complete(
+        &mut self,
+        command: String,
+        explanation: Option<String>,
+        dangerous: bool,
+        warnings: Vec<String>,
+    ) {
+        // Create assistant message with command
+        self.messages.push(Message {
+            role: MessageRole::Assistant,
+            content: explanation.clone().unwrap_or_default(),
+            command: Some(command.clone()),
+        });
+
+        // Add events for conversation history (for refine API)
+        if let Some(ref exp) = explanation {
+            self.conversation_events.push(serde_json::json!({
+                "type": "text",
+                "content": exp
+            }));
+        }
+
+        // Add tool_call event
+        let tool_id = format!("gen_{}", uuid::Uuid::new_v4().simple());
+        let mut tool_input = serde_json::json!({
+            "command": command,
+            "conversation_only": false,
+            "confidence": "high"
+        });
+        if let Some(ref exp) = explanation {
+            tool_input["message"] = serde_json::json!(exp);
+        }
+        if dangerous {
+            tool_input["dangerous"] = serde_json::json!(true);
+        }
+        if !warnings.is_empty() {
+            tool_input["warning"] = serde_json::json!(warnings.join("; "));
+        }
+        self.conversation_events.push(serde_json::json!({
+            "type": "tool_call",
+            "id": tool_id,
+            "name": "suggest_command",
+            "input": tool_input
+        }));
+
+        self.mode = AppMode::Review;
+    }
+
+    /// Generation error occurred
+    pub fn generation_error(&mut self, error: String) {
+        // Remove incomplete message if any was being built
+        // (Per user decision: remove incomplete message before displaying error)
+        if let Some(last) = self.messages.last() {
+            if last.role == MessageRole::Assistant
+                && last.content.is_empty()
+                && last.command.is_none()
+            {
+                self.messages.pop();
+            }
+        }
+
+        self.error = Some(error);
+        self.mode = AppMode::Error;
+    }
+
+    /// Cancel during generation
+    pub fn cancel_generation(&mut self) {
+        // Just revert mode, keep conversation history intact
+        self.mode = AppMode::Input;
+        self.input.clear();
+        self.cursor_pos = 0;
+    }
+
+    // ===== Streaming lifecycle methods =====
+
+    /// Start streaming response (creates empty assistant message)
+    pub fn start_streaming_response(&mut self) {
+        // Create empty assistant message that will be populated
+        self.messages.push(Message {
+            role: MessageRole::Assistant,
+            content: String::new(),
+            command: None,
+        });
+        self.mode = AppMode::Streaming;
+    }
+
+    /// Append text to streaming message (mutate in place per user decision)
+    pub fn append_streaming_text(&mut self, chunk: &str) {
+        if let Some(last) = self.messages.last_mut() {
+            if last.role == MessageRole::Assistant {
+                last.content.push_str(chunk);
+            }
+        }
+    }
+
+    /// Finalize streaming with command from suggest_command tool
+    pub fn finalize_streaming_with_command(&mut self, command: String) {
+        // Set command on last assistant message
+        if let Some(last) = self.messages.last_mut() {
+            if last.role == MessageRole::Assistant {
+                last.command = Some(command);
+            }
+        }
+
+        // Add text event to conversation (for refine)
+        if let Some(last) = self.messages.last() {
+            if !last.content.is_empty() {
+                self.conversation_events.push(serde_json::json!({
+                    "type": "text",
+                    "content": last.content
+                }));
+            }
+        }
+
+        self.mode = AppMode::Review;
+    }
+
+    /// Finalize streaming without command
+    pub fn finalize_streaming(&mut self) {
+        self.mode = AppMode::Review;
+    }
+
+    /// Streaming error
+    pub fn streaming_error(&mut self, error: String) {
+        // Remove incomplete assistant message per user decision
+        if let Some(last) = self.messages.last() {
+            if last.role == MessageRole::Assistant {
+                self.messages.pop();
+            }
+        }
+
+        self.error = Some(error);
+        self.mode = AppMode::Error;
+    }
+
+    /// Add tool_call event
+    pub fn add_tool_call_event(&mut self, id: String, name: String, input: serde_json::Value) {
+        self.conversation_events.push(serde_json::json!({
+            "type": "tool_call",
+            "id": id,
+            "name": name,
+            "input": input
+        }));
+    }
+
+    /// Add tool_result event
+    pub fn add_tool_result_event(&mut self, tool_use_id: String, content: String, is_error: bool) {
+        self.conversation_events.push(serde_json::json!({
+            "type": "tool_result",
+            "tool_use_id": tool_use_id,
+            "content": content,
+            "is_error": is_error
+        }));
+    }
+
+    // ===== Edit mode and exit methods =====
+
+    /// Start edit mode for refinement
+    pub fn start_edit_mode(&mut self) {
+        self.input.clear();
+        self.cursor_pos = 0;
+        self.is_refine_mode = true;
+        self.mode = AppMode::Input;
+    }
+
+    /// Exit with action
+    pub fn exit(&mut self, action: ExitAction) {
+        self.exit_action = Some(action);
+        self.should_exit = true;
+    }
+
+    /// Retry after error
+    pub fn retry(&mut self) {
+        self.error = None; // Clear error per user decision
+        self.mode = AppMode::Generating;
+    }
+
+    // ===== Utility methods =====
+
+    /// Advance spinner frame
+    pub fn tick(&mut self) {
+        self.spinner_frame = (self.spinner_frame + 1) % 4;
+    }
+
+    /// Get the most recent command (for execute/insert)
+    pub fn current_command(&self) -> Option<&str> {
+        self.messages
+            .iter()
+            .rev()
+            .find_map(|m| m.command.as_deref())
+    }
 }
 
 impl Default for AppState {
