@@ -150,6 +150,7 @@ impl State {
         &mut self,
         db: &mut dyn Database,
         smart_sort: bool,
+        scope_boost: bool,
     ) -> Result<Vec<History>> {
         let results = self.engine.query(&self.search, db).await?;
 
@@ -160,6 +161,13 @@ impl State {
         };
         self.results_state.select(0);
         self.results_len = results.len();
+
+        // Apply scope-based priority if enabled (session → directory → host → global)
+        let results = if scope_boost {
+            atuin_client::ordering::reorder_by_scope_priority(&self.search.context, results)
+        } else {
+            results
+        };
 
         if smart_sort {
             Ok(atuin_history::sort::sort(
@@ -1440,7 +1448,9 @@ pub async fn history(
 
     app.initialize_keymap_cursor(settings);
 
-    let mut results = app.query_results(&mut db, settings.smart_sort).await?;
+    let mut results = app
+        .query_results(&mut db, settings.smart_sort, settings.scope_boost)
+        .await?;
 
     if inline_height > 0 {
         terminal.clear()?;
@@ -1536,7 +1546,9 @@ pub async fn history(
             || initial_search_mode != app.search_mode
             || initial_custom_context != app.search.custom_context
         {
-            results = app.query_results(&mut db, settings.smart_sort).await?;
+            results = app
+                .query_results(&mut db, settings.smart_sort, settings.scope_boost)
+                .await?;
         }
 
         // In custom context mode, when no filter is applied, highlight the entry which was used
