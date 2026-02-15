@@ -1,6 +1,11 @@
-pub async fn run() -> eyre::Result<()> {
-    let zsh_function = generate_zsh_integration();
-    println!("{}", zsh_function);
+use crate::commands::Shell;
+
+pub async fn run(shell: Shell) -> eyre::Result<()> {
+    if shell == Shell::Zsh {
+        let zsh_function = generate_zsh_integration();
+        println!("{}", zsh_function);
+    }
+
     Ok(())
 }
 

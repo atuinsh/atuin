@@ -1,6 +1,9 @@
 use clap::Subcommand;
 use eyre::Result;
 
+#[cfg(feature = "client")]
+use atuin_client::settings::Settings;
+
 #[cfg(not(windows))]
 use rustix::{fs::Mode, process::umask};
 
@@ -56,7 +59,18 @@ impl AtuinCmd {
                 Ok(())
             }
             Self::GenCompletions(gen_completions) => gen_completions.run(),
-            Self::External(args) => external::run(&args),
+            Self::External(args) => {
+                #[cfg(feature = "client")]
+                {
+                    let settings = Settings::new().ok();
+                    external::run(&args, settings.as_ref())
+                }
+
+                #[cfg(not(feature = "client"))]
+                {
+                    external::run(&args)
+                }
+            }
         }
     }
 }

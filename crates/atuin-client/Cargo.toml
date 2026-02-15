@@ -18,6 +18,7 @@ sync = ["urlencoding", "reqwest", "sha2", "hex"]
 hub = ["reqwest"]
 daemon = []
 check-update = []
+plugin-auto-manage = ["dep:axoupdater"]
 
 [dependencies]
 atuin-common = { path = "../atuin-common", version = "18.13.0-beta.1" }
@@ -55,6 +56,7 @@ futures = "0.3"
 crypto_secretbox = "0.1.1"
 generic-array = { version = "0.14", features = ["serde"] }
 serde_with = "3.8.1"
+axoupdater = { version = "0.9.1", features = ["blocking"], optional = true }
 
 # encryption
 rusty_paseto = { version = "0.8.0", default-features = false }
