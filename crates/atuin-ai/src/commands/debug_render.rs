@@ -132,7 +132,9 @@ impl DebugInput {
             error: self.error.clone(),
             should_exit: false,
             exit_action: None,
-            is_refine_mode: self.is_refine_mode,
+            session_id: self.session_id.clone(),
+            streaming_status: self.streaming_status.clone(),
+            was_interrupted: self.was_interrupted,
             spinner_frame: self.spinner_frame,
         }
     }
