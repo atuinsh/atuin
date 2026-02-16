@@ -148,21 +148,31 @@ impl Blocks {
         // 2. Streaming text (if any) - shown during streaming mode
         if state.mode == AppMode::Streaming {
             if state.streaming_text.is_empty() {
-                // No content yet - show spinner with status
-                let status_text = state
-                    .streaming_status
-                    .as_ref()
-                    .map(|s| s.display_text().to_string())
-                    .unwrap_or_else(|| "Generating...".to_string());
+                // Check if enough time has passed to show spinner (200ms delay)
+                // Show spinner immediately if status event has arrived
+                let should_show_spinner = state.streaming_status.is_some()
+                    || state
+                        .streaming_started
+                        .map(|start| start.elapsed() >= std::time::Duration::from_millis(200))
+                        .unwrap_or(true);
 
-                items.push(Block {
-                    content: vec![Content::Spinner {
-                        frame: state.spinner_frame,
-                        status_text,
-                    }],
-                    separator_above: false,
-                    title: None,
-                });
+                if should_show_spinner {
+                    let status_text = state
+                        .streaming_status
+                        .as_ref()
+                        .map(|s| s.display_text().to_string())
+                        .unwrap_or_else(|| "Generating...".to_string());
+
+                    items.push(Block {
+                        content: vec![Content::Spinner {
+                            frame: state.spinner_frame,
+                            status_text,
+                        }],
+                        separator_above: false,
+                        title: None,
+                    });
+                }
+                // If not enough time passed, don't show anything (brief delay)
             } else {
                 // Show streaming text
                 items.push(Block {

@@ -3,6 +3,8 @@
 //! This module contains the core state types that represent the application's
 //! domain model. Conversation events match the API protocol format.
 
+use std::time::Instant;
+
 /// Streaming status indicators from server
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StreamingStatus {
@@ -149,6 +151,8 @@ pub struct AppState {
     pub was_interrupted: bool,
     /// Spinner animation state (0-3)
     pub spinner_frame: usize,
+    /// When streaming started (for spinner delay)
+    pub streaming_started: Option<Instant>,
 }
 
 impl AppState {
@@ -166,6 +170,7 @@ impl AppState {
             streaming_status: None,
             was_interrupted: false,
             spinner_frame: 0,
+            streaming_started: None,
         }
     }
 
@@ -356,6 +361,7 @@ impl AppState {
         self.streaming_text.clear();
         self.streaming_status = None;
         self.was_interrupted = false;
+        self.streaming_started = Some(Instant::now());
         self.mode = AppMode::Streaming;
     }
 
@@ -419,6 +425,7 @@ impl AppState {
             });
         }
         self.streaming_status = None;
+        self.streaming_started = None;
         self.mode = AppMode::Review;
     }
 
@@ -426,6 +433,7 @@ impl AppState {
     pub fn streaming_error(&mut self, error: String) {
         // Discard any partial streaming text
         self.streaming_text.clear();
+        self.streaming_started = None;
         self.error = Some(error);
         self.mode = AppMode::Error;
     }
