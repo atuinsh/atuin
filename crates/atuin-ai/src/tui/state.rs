@@ -291,7 +291,7 @@ impl AppState {
         self.mode = AppMode::Generating;
     }
 
-    /// Generation complete with command (from /api/cli/generate)
+    /// Generation complete with command (legacy method, kept for compatibility)
     pub fn generation_complete(
         &mut self,
         command: String,
