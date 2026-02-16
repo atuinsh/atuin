@@ -3,6 +3,35 @@
 //! This module contains the core state types that represent the application's
 //! domain model. Conversation events match the API protocol format.
 
+/// Streaming status indicators from server
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StreamingStatus {
+    Processing,
+    Searching,
+    Thinking,
+    WaitingForTools,
+}
+
+impl StreamingStatus {
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "processing" => Self::Processing,
+            "searching" => Self::Searching,
+            "waiting_for_tools" => Self::WaitingForTools,
+            _ => Self::Thinking, // Default to thinking for "thinking" and unknown
+        }
+    }
+
+    pub fn display_text(&self) -> &'static str {
+        match self {
+            Self::Processing => "Processing...",
+            Self::Searching => "Searching...",
+            Self::Thinking => "Thinking...",
+            Self::WaitingForTools => "Waiting for tools...",
+        }
+    }
+}
+
 /// Conversation event types matching the API protocol
 #[derive(Debug, Clone)]
 pub enum ConversationEvent {
@@ -60,13 +89,8 @@ impl ConversationEvent {
         if let ConversationEvent::ToolCall { name, input, .. } = self
             && name == "suggest_command"
         {
-            let conversation_only = input
-                .get("conversation_only")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            if !conversation_only {
-                return input.get("command").and_then(|v| v.as_str());
-            }
+            // command can be null for pure conversational turns
+            return input.get("command").and_then(|v| v.as_str());
         }
         None
     }
@@ -117,8 +141,12 @@ pub struct AppState {
     pub should_exit: bool,
     /// Exit action (set when exiting)
     pub exit_action: Option<ExitAction>,
-    /// Whether in refine mode vs initial generate
-    pub is_refine_mode: bool,
+    /// Session ID from server (store after first response, send on subsequent)
+    pub session_id: Option<String>,
+    /// Current streaming status (for spinner text)
+    pub streaming_status: Option<StreamingStatus>,
+    /// Whether current turn was interrupted by user
+    pub was_interrupted: bool,
     /// Spinner animation state (0-3)
     pub spinner_frame: usize,
 }
@@ -134,14 +162,77 @@ impl AppState {
             error: None,
             should_exit: false,
             exit_action: None,
-            is_refine_mode: false,
+            session_id: None,
+            streaming_status: None,
+            was_interrupted: false,
             spinner_frame: 0,
         }
     }
 
-    /// Get events as JSON for API calls
-    pub fn events_as_json(&self) -> Vec<serde_json::Value> {
-        self.events.iter().map(|e| e.to_json()).collect()
+    /// Convert conversation events to Claude API message format
+    /// Groups consecutive tool calls, handles role alternation
+    pub fn events_to_messages(&self) -> Vec<serde_json::Value> {
+        let mut messages = Vec::new();
+        let mut i = 0;
+        let events = &self.events;
+
+        while i < events.len() {
+            match &events[i] {
+                ConversationEvent::UserMessage { content } => {
+                    messages.push(serde_json::json!({
+                        "role": "user",
+                        "content": content
+                    }));
+                    i += 1;
+                }
+                ConversationEvent::Text { content } => {
+                    messages.push(serde_json::json!({
+                        "role": "assistant",
+                        "content": content
+                    }));
+                    i += 1;
+                }
+                ConversationEvent::ToolCall { .. } => {
+                    // Group consecutive tool calls into single assistant message
+                    let mut tool_uses = Vec::new();
+                    while i < events.len() {
+                        if let ConversationEvent::ToolCall { id, name, input } = &events[i] {
+                            tool_uses.push(serde_json::json!({
+                                "type": "tool_use",
+                                "id": id,
+                                "name": name,
+                                "input": input
+                            }));
+                            i += 1;
+                        } else {
+                            break;
+                        }
+                    }
+                    messages.push(serde_json::json!({
+                        "role": "assistant",
+                        "content": tool_uses
+                    }));
+                }
+                ConversationEvent::ToolResult {
+                    tool_use_id,
+                    content,
+                    is_error,
+                } => {
+                    messages.push(serde_json::json!({
+                        "role": "user",
+                        "content": [{
+                            "type": "tool_result",
+                            "tool_use_id": tool_use_id,
+                            "content": content,
+                            "is_error": is_error
+                        }]
+                    }));
+                    i += 1;
+                }
+            }
+        }
+
+        messages
     }
 
     /// Convert character position to byte index for string slicing
@@ -263,7 +354,40 @@ impl AppState {
     /// Start streaming response
     pub fn start_streaming(&mut self) {
         self.streaming_text.clear();
+        self.streaming_status = None;
+        self.was_interrupted = false;
         self.mode = AppMode::Streaming;
+    }
+
+    /// Store session ID from server response
+    pub fn store_session_id(&mut self, session_id: String) {
+        self.session_id = Some(session_id);
+    }
+
+    /// Update streaming status from SSE event
+    pub fn update_streaming_status(&mut self, status: &str) {
+        self.streaming_status = Some(StreamingStatus::from_str(status));
+    }
+
+    /// Cancel streaming with context preservation
+    pub fn cancel_streaming(&mut self) {
+        // Mark as interrupted
+        self.was_interrupted = true;
+
+        // Flush partial text with interruption marker if any
+        if !self.streaming_text.is_empty() {
+            let interrupted_text = format!(
+                "{}\n\n[User cancelled this generation]",
+                std::mem::take(&mut self.streaming_text)
+            );
+            self.events.push(ConversationEvent::Text {
+                content: interrupted_text,
+            });
+        }
+
+        // Clear status and return to input
+        self.streaming_status = None;
+        self.mode = AppMode::Input;
     }
 
     /// Append text chunk during streaming
@@ -294,6 +418,7 @@ impl AppState {
                 content: std::mem::take(&mut self.streaming_text),
             });
         }
+        self.streaming_status = None;
         self.mode = AppMode::Review;
     }
 
@@ -311,7 +436,6 @@ impl AppState {
     pub fn start_edit_mode(&mut self) {
         self.input.clear();
         self.cursor_pos = 0;
-        self.is_refine_mode = true;
         self.mode = AppMode::Input;
     }
 
