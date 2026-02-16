@@ -147,6 +147,7 @@ impl DebugInput {
             streaming_status,
             was_interrupted: self.was_interrupted,
             spinner_frame: self.spinner_frame,
+            streaming_started: None,
         }
     }
 }
