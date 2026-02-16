@@ -77,8 +77,7 @@ impl App {
     fn handle_streaming_key(&mut self, key: KeyEvent) -> bool {
         match key.code {
             KeyCode::Esc => {
-                // Cancel streaming, revert to Review
-                self.state.mode = AppMode::Review;
+                self.state.cancel_streaming();
                 true
             }
             _ => false, // Ignore other keys during streaming
