@@ -10,7 +10,7 @@ use std::io::{self, Read};
 
 use crate::tui::{
     render::{RenderContext, render},
-    state::{AppMode, AppState, ConversationEvent},
+    state::{AppMode, AppState, ConversationEvent, StreamingStatus},
     view_model::Blocks,
 };
 
@@ -37,9 +37,15 @@ pub struct DebugInput {
     /// Error message
     #[serde(default)]
     pub error: Option<String>,
-    /// Whether in refine mode
+    /// Session ID from server
     #[serde(default)]
-    pub is_refine_mode: bool,
+    pub session_id: Option<String>,
+    /// Streaming status
+    #[serde(default)]
+    pub streaming_status: Option<String>,
+    /// Whether current turn was interrupted
+    #[serde(default)]
+    pub was_interrupted: bool,
     /// Terminal width for rendering
     #[serde(default = "default_width")]
     pub width: u16,
@@ -123,6 +129,11 @@ impl DebugInput {
 
         let events: Vec<ConversationEvent> = self.events.iter().cloned().map(Into::into).collect();
 
+        let streaming_status = self
+            .streaming_status
+            .as_ref()
+            .map(|s| StreamingStatus::from_status_str(s));
+
         AppState {
             mode,
             events,
@@ -133,7 +144,7 @@ impl DebugInput {
             should_exit: false,
             exit_action: None,
             session_id: self.session_id.clone(),
-            streaming_status: self.streaming_status.clone(),
+            streaming_status,
             was_interrupted: self.was_interrupted,
             spinner_frame: self.spinner_frame,
         }
