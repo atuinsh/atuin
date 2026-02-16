@@ -214,10 +214,11 @@ fn render_single_content(frame: &mut Frame, content: &Content, area: Rect, ctx: 
 
         Content::Spinner {
             frame: spinner_frame,
+            status_text,
         } => {
             let style = Style::from_crossterm(ctx.theme.as_style(Meaning::Annotation));
             let symbol = SPINNER_FRAMES[*spinner_frame % SPINNER_FRAMES.len()];
-            let text = format!("{} Generating...", symbol);
+            let text = format!("{} {}", symbol, status_text);
 
             let paragraph = Paragraph::new(Span::styled(text, style));
             frame.render_widget(paragraph, area);

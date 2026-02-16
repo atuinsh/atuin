@@ -257,9 +257,10 @@ fn content_to_json(content: &crate::tui::view_model::Content) -> serde_json::Val
             "type": "Error",
             "message": message
         }),
-        Content::Spinner { frame } => serde_json::json!({
+        Content::Spinner { frame, status_text } => serde_json::json!({
             "type": "Spinner",
-            "frame": frame
+            "frame": frame,
+            "status_text": status_text
         }),
     }
 }

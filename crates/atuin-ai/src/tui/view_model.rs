@@ -26,7 +26,8 @@ pub enum Content {
         message: String,
     },
     Spinner {
-        frame: usize, // 0-3 for animation
+        frame: usize,        // 0-3 for animation
+        status_text: String, // Status-based text (Processing..., Thinking..., etc.)
     },
 }
 
@@ -56,6 +57,17 @@ pub struct Block {
 pub struct Blocks {
     pub items: Vec<Block>,
     pub footer: &'static str,
+}
+
+/// Check if any turn in the conversation has a command
+fn has_any_command(events: &[ConversationEvent]) -> bool {
+    events.iter().any(|e| {
+        if let ConversationEvent::ToolCall { name, input, .. } = e {
+            name == "suggest_command" && input.get("command").and_then(|v| v.as_str()).is_some()
+        } else {
+            false
+        }
+    })
 }
 
 impl Blocks {
@@ -92,39 +104,32 @@ impl Blocks {
                 ConversationEvent::ToolCall { name, input, .. } => {
                     // Only render suggest_command tool calls
                     if name == "suggest_command" {
-                        let conversation_only = input
-                            .get("conversation_only")
-                            .and_then(|v| v.as_bool())
-                            .unwrap_or(false);
+                        // Extract description/message for text display
+                        let description = input.get("description").and_then(|v| v.as_str());
 
-                        // Extract message for text display
-                        let message = input.get("message").and_then(|v| v.as_str());
+                        // Check if command is present and non-null
+                        let command = input.get("command").and_then(|v| v.as_str());
 
-                        if conversation_only {
-                            // Conversation-only: render message as text (no command)
-                            if let Some(msg) = message {
-                                items.push(Block {
-                                    content: vec![Content::Text {
-                                        markdown: msg.to_string(),
-                                    }],
-                                    separator_above: false,
-                                    title: None,
-                                });
-                            }
-                        } else if let Some(cmd) = input.get("command").and_then(|v| v.as_str()) {
-                            // Normal command: render message (if any) then command
-                            let mut block_content = Vec::new();
+                        // Build block content
+                        let mut block_content = Vec::new();
 
-                            if let Some(msg) = message {
-                                block_content.push(Content::Text {
-                                    markdown: msg.to_string(),
-                                });
-                            }
+                        // Add text from description if present
+                        if let Some(desc) = description {
+                            block_content.push(Content::Text {
+                                markdown: desc.to_string(),
+                            });
+                        }
+
+                        // Add command only if non-null
+                        if let Some(cmd) = command {
                             block_content.push(Content::Command {
                                 text: cmd.to_string(),
                                 faded: false,
                             });
+                        }
 
+                        // Only add block if there's content
+                        if !block_content.is_empty() {
                             items.push(Block {
                                 content: block_content,
                                 separator_above: false,
@@ -143,10 +148,17 @@ impl Blocks {
         // 2. Streaming text (if any) - shown during streaming mode
         if state.mode == AppMode::Streaming {
             if state.streaming_text.is_empty() {
-                // No content yet - show spinner
+                // No content yet - show spinner with status
+                let status_text = state
+                    .streaming_status
+                    .as_ref()
+                    .map(|s| s.display_text().to_string())
+                    .unwrap_or_else(|| "Generating...".to_string());
+
                 items.push(Block {
                     content: vec![Content::Spinner {
                         frame: state.spinner_frame,
+                        status_text,
                     }],
                     separator_above: false,
                     title: None,
@@ -177,9 +189,16 @@ impl Blocks {
                 });
             }
             AppMode::Generating => {
+                let status_text = state
+                    .streaming_status
+                    .as_ref()
+                    .map(|s| s.display_text().to_string())
+                    .unwrap_or_else(|| "Generating...".to_string());
+
                 items.push(Block {
                     content: vec![Content::Spinner {
                         frame: state.spinner_frame,
+                        status_text,
                     }],
                     separator_above: false,
                     title: None,
@@ -214,19 +233,25 @@ impl Blocks {
             first.title = Some("Describe the command you'd like to generate:".to_string());
         }
 
-        // 7. Derive footer from mode
-        let footer = Self::footer_for_mode(&state.mode);
+        // 7. Derive footer from mode and events
+        let footer = Self::footer_for_mode(&state.mode, &state.events);
 
         Self { items, footer }
     }
 
-    /// Derive footer text from current mode
-    fn footer_for_mode(mode: &AppMode) -> &'static str {
+    /// Derive footer text from current mode and conversation state
+    fn footer_for_mode(mode: &AppMode, events: &[ConversationEvent]) -> &'static str {
         match mode {
             AppMode::Input => "[Enter]: Accept  [Esc]: Cancel",
-            AppMode::Generating => "[Esc]: Cancel",
-            AppMode::Streaming => "[Esc]: Cancel",
-            AppMode::Review => "[Enter]: Run  [Tab]: Insert  [e]: Edit  [Esc]: Cancel",
+            AppMode::Generating | AppMode::Streaming => "[Esc]: Cancel",
+            AppMode::Review => {
+                // Check if any command exists in conversation history
+                if has_any_command(events) {
+                    "[Enter]: Run  [Tab]: Insert  [e]: Edit  [Esc]: Cancel"
+                } else {
+                    "[e]: Edit  [Esc]: Cancel"
+                }
+            }
             AppMode::Error => "[Enter]/[r]: Retry  [Esc]: Cancel",
         }
     }
