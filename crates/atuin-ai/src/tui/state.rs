@@ -13,7 +13,7 @@ pub enum StreamingStatus {
 }
 
 impl StreamingStatus {
-    pub fn from_str(s: &str) -> Self {
+    pub fn from_status_str(s: &str) -> Self {
         match s {
             "processing" => Self::Processing,
             "searching" => Self::Searching,
@@ -366,7 +366,7 @@ impl AppState {
 
     /// Update streaming status from SSE event
     pub fn update_streaming_status(&mut self, status: &str) {
-        self.streaming_status = Some(StreamingStatus::from_str(status));
+        self.streaming_status = Some(StreamingStatus::from_status_str(status));
     }
 
     /// Cancel streaming with context preservation
