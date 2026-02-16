@@ -272,7 +272,9 @@ fn create_refine_stream(
             match event {
                 Ok(sse_event) => {
                     let event_type = sse_event.event.as_str();
-                    let data = sse_event.data;
+                    let data = sse_event.data.clone();
+
+                    tracing::debug!(event_type = %event_type, data = %sse_event.data, "SSE event received");
 
                     match event_type {
                         "text" => {
@@ -280,7 +282,10 @@ fn create_refine_stream(
                             if let Ok(json) = serde_json::from_str::<serde_json::Value>(&data)
                                 && let Some(content) = json.get("content").and_then(|v| v.as_str())
                             {
+                                tracing::debug!(content = %content, "Yielding TextChunk");
                                 yield Ok(RefineStreamEvent::TextChunk(content.to_string()));
+                            } else {
+                                tracing::warn!(data = %data, "Failed to parse text event");
                             }
                         }
                         "tool_call" => {
@@ -289,7 +294,10 @@ fn create_refine_stream(
                                 let id = json.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
                                 let name = json.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
                                 let input = json.get("input").cloned().unwrap_or(serde_json::json!({}));
+                                tracing::debug!(id = %id, name = %name, input = ?input, "Yielding ToolCall");
                                 yield Ok(RefineStreamEvent::ToolCall { id, name, input });
+                            } else {
+                                tracing::warn!(data = %data, "Failed to parse tool_call event");
                             }
                         }
                         "tool_result" => {
@@ -408,11 +416,10 @@ async fn run_inline_tui(
     let mut generation_task: Option<tokio::task::JoinHandle<Result<GenerateResponse>>> = None;
     let mut last_query = String::new();
 
-    // Track refine stream and pending command from suggest_command tool
+    // Track refine stream
     let mut refine_stream: Option<
         std::pin::Pin<Box<dyn futures::Stream<Item = Result<RefineStreamEvent>> + Send>>,
     > = None;
-    let mut pending_command: Option<String> = None;
 
     loop {
         // Render current state
@@ -444,46 +451,34 @@ async fn run_inline_tui(
                         std::task::Poll::Ready(Some(Ok(event))) => {
                             match event {
                                 RefineStreamEvent::TextChunk(text) => {
+                                    tracing::debug!(text = %text, "Processing TextChunk, appending to streaming_text");
                                     app.state.append_streaming_text(&text);
+                                    tracing::debug!(streaming_text = %app.state.streaming_text, "streaming_text now");
                                 }
                                 RefineStreamEvent::ToolCall { id, name, input } => {
-                                    // Add to conversation events for echo
-                                    app.state
-                                        .add_tool_call_event(id, name.clone(), input.clone());
-                                    // Check for suggest_command to extract the new command
-                                    if name == "suggest_command" {
-                                        let command = input
-                                            .get("command")
-                                            .and_then(|v| v.as_str())
-                                            .map(|s| s.to_string());
-                                        let conversation_only = input
-                                            .get("conversation_only")
-                                            .and_then(|v| v.as_bool())
-                                            .unwrap_or(false);
-                                        if !conversation_only && let Some(cmd) = command {
-                                            pending_command = Some(cmd);
-                                        }
-                                    }
+                                    tracing::debug!(id = %id, name = %name, "Processing ToolCall, adding to events");
+                                    // Add to conversation events
+                                    app.state.add_tool_call(id, name, input);
+                                    tracing::debug!(event_count = %app.state.events.len(), "events count now");
                                 }
                                 RefineStreamEvent::ToolResult {
                                     tool_use_id,
                                     content,
                                     is_error,
                                 } => {
-                                    // Add to conversation events for echo
-                                    app.state
-                                        .add_tool_result_event(tool_use_id, content, is_error);
+                                    tracing::debug!(tool_use_id = %tool_use_id, "Processing ToolResult");
+                                    // Add to conversation events
+                                    app.state.add_tool_result(tool_use_id, content, is_error);
                                 }
                                 RefineStreamEvent::Done => {
+                                    tracing::debug!("Processing Done, finalizing streaming");
                                     refine_stream = None;
-                                    // Finalize with command if we got one
-                                    if let Some(cmd) = pending_command.take() {
-                                        app.state.finalize_streaming_with_command(cmd);
-                                    } else {
-                                        app.state.finalize_streaming();
-                                    }
+                                    // Finalize streaming - flushes text to event
+                                    app.state.finalize_streaming();
+                                    tracing::debug!(mode = ?app.state.mode, event_count = %app.state.events.len(), "After finalize");
                                 }
                                 RefineStreamEvent::Error(msg) => {
+                                    tracing::debug!(error = %msg, "Processing Error");
                                     refine_stream = None;
                                     app.state.streaming_error(msg);
                                 }
@@ -496,11 +491,7 @@ async fn run_inline_tui(
                         std::task::Poll::Ready(None) => {
                             refine_stream = None;
                             // Stream ended without done event
-                            if let Some(cmd) = pending_command.take() {
-                                app.state.finalize_streaming_with_command(cmd);
-                            } else {
-                                app.state.finalize_streaming();
-                            }
+                            app.state.finalize_streaming();
                         }
                         std::task::Poll::Pending => {}
                     }
@@ -538,36 +529,41 @@ async fn run_inline_tui(
         if app.state.mode == AppMode::Generating
             && generation_task.is_none()
             && refine_stream.is_none()
-            && let Some(last_msg) = app
-                .state
-                .messages
-                .iter()
-                .rev()
-                .find(|m| matches!(m.role, crate::tui::MessageRole::User))
         {
-            last_query = last_msg.content.clone();
+            // Get the last user message from events
+            let last_user_content = app.state.events.iter().rev().find_map(|e| {
+                if let crate::tui::ConversationEvent::UserMessage { content } = e {
+                    Some(content.clone())
+                } else {
+                    None
+                }
+            });
 
-            if app.state.is_refine_mode {
-                // Conversation events already contain the user_message from start_generating()
-                let events = app.state.conversation_events.clone();
+            if let Some(query) = last_user_content {
+                last_query = query.clone();
 
-                // Transition to streaming mode
-                app.state.start_streaming_response();
+                if app.state.is_refine_mode {
+                    // Get events as JSON for refine API
+                    let events = app.state.events_as_json();
 
-                // Start the refine stream
-                refine_stream = Some(create_refine_stream(
-                    endpoint.clone(),
-                    token.clone(),
-                    events,
-                ));
-            } else {
-                // Initial generation (existing logic)
-                let endpoint_clone = endpoint.clone();
-                let token_clone = token.clone();
-                let query_clone = last_query.clone();
-                generation_task = Some(tokio::spawn(async move {
-                    generate_command(&endpoint_clone, &token_clone, &query_clone).await
-                }));
+                    // Transition to streaming mode
+                    app.state.start_streaming();
+
+                    // Start the refine stream
+                    refine_stream = Some(create_refine_stream(
+                        endpoint.clone(),
+                        token.clone(),
+                        events,
+                    ));
+                } else {
+                    // Initial generation
+                    let endpoint_clone = endpoint.clone();
+                    let token_clone = token.clone();
+                    let query_clone = query;
+                    generation_task = Some(tokio::spawn(async move {
+                        generate_command(&endpoint_clone, &token_clone, &query_clone).await
+                    }));
+                }
             }
         }
 

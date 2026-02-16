@@ -1,8 +1,76 @@
 //! Domain state types for the TUI application
 //!
 //! This module contains the core state types that represent the application's
-//! domain model. These types are the "what the app knows" and are separate from
-//! the view model types in view_model.rs which represent "what the app shows".
+//! domain model. Conversation events match the API protocol format.
+
+/// Conversation event types matching the API protocol
+#[derive(Debug, Clone)]
+pub enum ConversationEvent {
+    /// User message (what the user typed)
+    UserMessage { content: String },
+    /// Text content from assistant (streamed or complete)
+    Text { content: String },
+    /// Tool call from assistant
+    ToolCall {
+        id: String,
+        name: String,
+        input: serde_json::Value,
+    },
+    /// Tool result (usually from server-side execution)
+    ToolResult {
+        tool_use_id: String,
+        content: String,
+        is_error: bool,
+    },
+}
+
+impl ConversationEvent {
+    /// Convert to JSON for API calls
+    pub fn to_json(&self) -> serde_json::Value {
+        match self {
+            ConversationEvent::UserMessage { content } => serde_json::json!({
+                "type": "user_message",
+                "content": content
+            }),
+            ConversationEvent::Text { content } => serde_json::json!({
+                "type": "text",
+                "content": content
+            }),
+            ConversationEvent::ToolCall { id, name, input } => serde_json::json!({
+                "type": "tool_call",
+                "id": id,
+                "name": name,
+                "input": input
+            }),
+            ConversationEvent::ToolResult {
+                tool_use_id,
+                content,
+                is_error,
+            } => serde_json::json!({
+                "type": "tool_result",
+                "tool_use_id": tool_use_id,
+                "content": content,
+                "is_error": is_error
+            }),
+        }
+    }
+
+    /// Extract command from a suggest_command tool call
+    pub fn as_command(&self) -> Option<&str> {
+        if let ConversationEvent::ToolCall { name, input, .. } = self
+            && name == "suggest_command"
+        {
+            let conversation_only = input
+                .get("conversation_only")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if !conversation_only {
+                return input.get("command").and_then(|v| v.as_str());
+            }
+        }
+        None
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AppMode {
@@ -28,49 +96,17 @@ pub enum ExitAction {
     Cancel,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MessageRole {
-    /// User input message
-    User,
-    /// AI response (may have command)
-    Assistant,
-}
-
-#[derive(Debug, Clone)]
-pub struct Message {
-    pub role: MessageRole,
-    pub content: String,
-    /// If this message includes a suggested command
-    pub command: Option<String>,
-}
-
-impl Message {
-    pub fn user(content: String) -> Self {
-        Self {
-            role: MessageRole::User,
-            content,
-            command: None,
-        }
-    }
-
-    pub fn assistant(content: String, command: Option<String>) -> Self {
-        Self {
-            role: MessageRole::Assistant,
-            content,
-            command,
-        }
-    }
-}
-
 /// Application state - the domain model
 ///
-/// This struct holds all the data the application knows about.
+/// Conversation is stored as a sequence of events matching the API protocol.
 /// The view model is derived from this state via `Blocks::from_state()`.
 pub struct AppState {
     /// Current application mode
     pub mode: AppMode,
-    /// Conversation history (primary data)
-    pub messages: Vec<Message>,
+    /// Conversation events (source of truth, matches API protocol)
+    pub events: Vec<ConversationEvent>,
+    /// Text being streamed (accumulated, flushed to Text event on completion)
+    pub streaming_text: String,
     /// Current typing buffer
     pub input: String,
     /// Cursor position (character index, not byte index)
@@ -83,8 +119,6 @@ pub struct AppState {
     pub exit_action: Option<ExitAction>,
     /// Whether in refine mode vs initial generate
     pub is_refine_mode: bool,
-    /// Conversation events for API protocol
-    pub conversation_events: Vec<serde_json::Value>,
     /// Spinner animation state (0-3)
     pub spinner_frame: usize,
 }
@@ -93,16 +127,21 @@ impl AppState {
     pub fn new() -> Self {
         Self {
             mode: AppMode::Input,
-            messages: Vec::new(),
+            events: Vec::new(),
+            streaming_text: String::new(),
             input: String::new(),
             cursor_pos: 0,
             error: None,
             should_exit: false,
             exit_action: None,
             is_refine_mode: false,
-            conversation_events: Vec::new(),
             spinner_frame: 0,
         }
+    }
+
+    /// Get events as JSON for API calls
+    pub fn events_as_json(&self) -> Vec<serde_json::Value> {
+        self.events.iter().map(|e| e.to_json()).collect()
     }
 
     /// Convert character position to byte index for string slicing
@@ -150,17 +189,9 @@ impl AppState {
 
     /// Start generating from current input
     pub fn start_generating(&mut self) {
-        // Add user message to conversation
-        self.conversation_events.push(serde_json::json!({
-            "type": "user_message",
-            "content": self.input.clone()
-        }));
-
-        // Add message to display history
-        self.messages.push(Message {
-            role: MessageRole::User,
+        // Add user message event
+        self.events.push(ConversationEvent::UserMessage {
             content: self.input.clone(),
-            command: None,
         });
 
         // Clear input, switch mode
@@ -169,7 +200,7 @@ impl AppState {
         self.mode = AppMode::Generating;
     }
 
-    /// Generation complete with command
+    /// Generation complete with command (from /api/cli/generate)
     pub fn generation_complete(
         &mut self,
         command: String,
@@ -177,22 +208,14 @@ impl AppState {
         dangerous: bool,
         warnings: Vec<String>,
     ) {
-        // Create assistant message with command
-        self.messages.push(Message {
-            role: MessageRole::Assistant,
-            content: explanation.clone().unwrap_or_default(),
-            command: Some(command.clone()),
-        });
-
-        // Add events for conversation history (for refine API)
+        // Add explanation as text event if present
         if let Some(ref exp) = explanation {
-            self.conversation_events.push(serde_json::json!({
-                "type": "text",
-                "content": exp
-            }));
+            self.events.push(ConversationEvent::Text {
+                content: exp.clone(),
+            });
         }
 
-        // Add tool_call event
+        // Add tool_call event for suggest_command
         let tool_id = format!("gen_{}", uuid::Uuid::new_v4().simple());
         let mut tool_input = serde_json::json!({
             "command": command,
@@ -208,36 +231,28 @@ impl AppState {
         if !warnings.is_empty() {
             tool_input["warning"] = serde_json::json!(warnings.join("; "));
         }
-        self.conversation_events.push(serde_json::json!({
-            "type": "tool_call",
-            "id": tool_id,
-            "name": "suggest_command",
-            "input": tool_input
-        }));
+
+        self.events.push(ConversationEvent::ToolCall {
+            id: tool_id,
+            name: "suggest_command".to_string(),
+            input: tool_input,
+        });
 
         self.mode = AppMode::Review;
     }
 
     /// Generation error occurred
     pub fn generation_error(&mut self, error: String) {
-        // Remove incomplete message if any was being built
-        // (Per user decision: remove incomplete message before displaying error)
-        if let Some(last) = self.messages.last() {
-            if last.role == MessageRole::Assistant
-                && last.content.is_empty()
-                && last.command.is_none()
-            {
-                self.messages.pop();
-            }
-        }
-
         self.error = Some(error);
         self.mode = AppMode::Error;
     }
 
     /// Cancel during generation
     pub fn cancel_generation(&mut self) {
-        // Just revert mode, keep conversation history intact
+        // Remove the last user message since generation was cancelled
+        if let Some(ConversationEvent::UserMessage { .. }) = self.events.last() {
+            self.events.pop();
+        }
         self.mode = AppMode::Input;
         self.input.clear();
         self.cursor_pos = 0;
@@ -245,84 +260,49 @@ impl AppState {
 
     // ===== Streaming lifecycle methods =====
 
-    /// Start streaming response (creates empty assistant message)
-    pub fn start_streaming_response(&mut self) {
-        // Create empty assistant message that will be populated
-        self.messages.push(Message {
-            role: MessageRole::Assistant,
-            content: String::new(),
-            command: None,
-        });
+    /// Start streaming response
+    pub fn start_streaming(&mut self) {
+        self.streaming_text.clear();
         self.mode = AppMode::Streaming;
     }
 
-    /// Append text to streaming message (mutate in place per user decision)
+    /// Append text chunk during streaming
     pub fn append_streaming_text(&mut self, chunk: &str) {
-        if let Some(last) = self.messages.last_mut() {
-            if last.role == MessageRole::Assistant {
-                last.content.push_str(chunk);
-            }
-        }
+        self.streaming_text.push_str(chunk);
     }
 
-    /// Finalize streaming with command from suggest_command tool
-    pub fn finalize_streaming_with_command(&mut self, command: String) {
-        // Set command on last assistant message
-        if let Some(last) = self.messages.last_mut() {
-            if last.role == MessageRole::Assistant {
-                last.command = Some(command);
-            }
-        }
-
-        // Add text event to conversation (for refine)
-        if let Some(last) = self.messages.last() {
-            if !last.content.is_empty() {
-                self.conversation_events.push(serde_json::json!({
-                    "type": "text",
-                    "content": last.content
-                }));
-            }
-        }
-
-        self.mode = AppMode::Review;
+    /// Add a tool call event during streaming
+    pub fn add_tool_call(&mut self, id: String, name: String, input: serde_json::Value) {
+        self.events
+            .push(ConversationEvent::ToolCall { id, name, input });
     }
 
-    /// Finalize streaming without command
+    /// Add a tool result event during streaming
+    pub fn add_tool_result(&mut self, tool_use_id: String, content: String, is_error: bool) {
+        self.events.push(ConversationEvent::ToolResult {
+            tool_use_id,
+            content,
+            is_error,
+        });
+    }
+
+    /// Finalize streaming - flush accumulated text to event
     pub fn finalize_streaming(&mut self) {
+        // Flush streaming text to a Text event if non-empty
+        if !self.streaming_text.is_empty() {
+            self.events.push(ConversationEvent::Text {
+                content: std::mem::take(&mut self.streaming_text),
+            });
+        }
         self.mode = AppMode::Review;
     }
 
     /// Streaming error
     pub fn streaming_error(&mut self, error: String) {
-        // Remove incomplete assistant message per user decision
-        if let Some(last) = self.messages.last() {
-            if last.role == MessageRole::Assistant {
-                self.messages.pop();
-            }
-        }
-
+        // Discard any partial streaming text
+        self.streaming_text.clear();
         self.error = Some(error);
         self.mode = AppMode::Error;
-    }
-
-    /// Add tool_call event
-    pub fn add_tool_call_event(&mut self, id: String, name: String, input: serde_json::Value) {
-        self.conversation_events.push(serde_json::json!({
-            "type": "tool_call",
-            "id": id,
-            "name": name,
-            "input": input
-        }));
-    }
-
-    /// Add tool_result event
-    pub fn add_tool_result_event(&mut self, tool_use_id: String, content: String, is_error: bool) {
-        self.conversation_events.push(serde_json::json!({
-            "type": "tool_result",
-            "tool_use_id": tool_use_id,
-            "content": content,
-            "is_error": is_error
-        }));
     }
 
     // ===== Edit mode and exit methods =====
@@ -343,7 +323,7 @@ impl AppState {
 
     /// Retry after error
     pub fn retry(&mut self) {
-        self.error = None; // Clear error per user decision
+        self.error = None;
         self.mode = AppMode::Generating;
     }
 
@@ -354,12 +334,9 @@ impl AppState {
         self.spinner_frame = (self.spinner_frame + 1) % 4;
     }
 
-    /// Get the most recent command (for execute/insert)
+    /// Get the most recent command from events
     pub fn current_command(&self) -> Option<&str> {
-        self.messages
-            .iter()
-            .rev()
-            .find_map(|m| m.command.as_deref())
+        self.events.iter().rev().find_map(|e| e.as_command())
     }
 }
 

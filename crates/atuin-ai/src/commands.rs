@@ -2,6 +2,7 @@ use clap::{Parser, Subcommand};
 use tracing::Level;
 use tracing_subscriber::{EnvFilter, Layer, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
+pub mod debug_render;
 pub mod init;
 pub mod inline;
 
@@ -53,6 +54,17 @@ enum Commands {
 
     /// Interactive mode with TUI
     Interactive,
+
+    /// Debug render: output a single frame from JSON state (dev tool)
+    DebugRender {
+        /// Input file (reads from stdin if not provided)
+        #[arg(short, long)]
+        input: Option<String>,
+
+        /// Output format: ansi (default), plain, json
+        #[arg(short, long, default_value = "ansi")]
+        format: String,
+    },
 }
 
 pub async fn run() -> eyre::Result<()> {
@@ -80,6 +92,14 @@ pub async fn run() -> eyre::Result<()> {
             inline::run(command, false, cli.api_endpoint, cli.api_token, false).await
         }
         Commands::Interactive => Err(eyre::eyre!("interactive mode not implemented yet")),
+        Commands::DebugRender { input, format } => {
+            let output_format = match format.as_str() {
+                "plain" => debug_render::OutputFormat::Plain,
+                "json" => debug_render::OutputFormat::Json,
+                _ => debug_render::OutputFormat::Ansi,
+            };
+            debug_render::run(input, output_format).await
+        }
     }
 }
 
