@@ -423,8 +423,6 @@ Atuin version: >= 17.0
 
 Default: `false`
 
-Not supported by NuShell presently
-
 When set to true, Atuin will default to immediately executing a command rather
 than the user having to press enter twice. Pressing tab will return to the
 shell and give the user a chance to edit.
