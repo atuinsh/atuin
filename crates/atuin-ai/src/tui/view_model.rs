@@ -6,6 +6,15 @@
 
 use super::state::{AppMode, AppState, ConversationEvent};
 
+/// Warning classification for command suggestions
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WarningKind {
+    /// Dangerous command (! indicator, AlertError color)
+    Danger,
+    /// Low confidence answer (? indicator, AlertWarn color)
+    LowConfidence,
+}
+
 /// Content variants for blocks - each variant is fully self-describing
 #[derive(Debug, Clone)]
 pub enum Content {
@@ -25,6 +34,12 @@ pub enum Content {
     Error {
         message: String,
     },
+    /// Warning for dangerous or low-confidence commands
+    Warning {
+        kind: WarningKind,
+        text: String,
+        pending_confirm: bool, // true when awaiting second Enter
+    },
     Spinner {
         frame: usize,        // 0-3 for animation
         status_text: String, // Status-based text (Processing..., Thinking..., etc.)
@@ -39,6 +54,10 @@ impl Content {
             Content::Command { .. } => "$",
             Content::Text { .. } => " ",
             Content::Error { .. } => "!",
+            Content::Warning { kind, .. } => match kind {
+                WarningKind::Danger => "!",
+                WarningKind::LowConfidence => "?",
+            },
             Content::Spinner { .. } => "/",
         }
     }

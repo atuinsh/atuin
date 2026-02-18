@@ -258,6 +258,16 @@ fn content_to_json(content: &crate::tui::view_model::Content) -> serde_json::Val
             "type": "Error",
             "message": message
         }),
+        Content::Warning {
+            kind,
+            text,
+            pending_confirm,
+        } => serde_json::json!({
+            "type": "Warning",
+            "kind": format!("{:?}", kind),
+            "text": text,
+            "pending_confirm": pending_confirm
+        }),
         Content::Spinner { frame, status_text } => serde_json::json!({
             "type": "Spinner",
             "frame": frame,
