@@ -153,6 +153,8 @@ pub struct AppState {
     pub spinner_frame: usize,
     /// When streaming started (for spinner delay)
     pub streaming_started: Option<Instant>,
+    /// True when user has pressed Enter once on a dangerous command
+    pub confirmation_pending: bool,
 }
 
 impl AppState {
@@ -171,6 +173,7 @@ impl AppState {
             was_interrupted: false,
             spinner_frame: 0,
             streaming_started: None,
+            confirmation_pending: false,
         }
     }
 
@@ -393,6 +396,7 @@ impl AppState {
 
         // Clear status and return to input
         self.streaming_status = None;
+        self.confirmation_pending = false;
         self.mode = AppMode::Input;
     }
 
@@ -442,6 +446,7 @@ impl AppState {
 
     /// Start edit mode for refinement
     pub fn start_edit_mode(&mut self) {
+        self.confirmation_pending = false;
         self.input.clear();
         self.cursor_pos = 0;
         self.mode = AppMode::Input;
@@ -469,6 +474,27 @@ impl AppState {
     /// Get the most recent command from events
     pub fn current_command(&self) -> Option<&str> {
         self.events.iter().rev().find_map(|e| e.as_command())
+    }
+
+    /// Check if the most recent command suggestion is marked dangerous
+    pub fn is_current_command_dangerous(&self) -> bool {
+        self.events
+            .iter()
+            .rev()
+            .find_map(|e| {
+                if let ConversationEvent::ToolCall { name, input, .. } = e {
+                    if name == "suggest_command" {
+                        return Some(
+                            input
+                                .get("dangerous")
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false),
+                        );
+                    }
+                }
+                None
+            })
+            .unwrap_or(false)
     }
 }
 
