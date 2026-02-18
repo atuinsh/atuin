@@ -482,15 +482,15 @@ impl AppState {
             .iter()
             .rev()
             .find_map(|e| {
-                if let ConversationEvent::ToolCall { name, input, .. } = e {
-                    if name == "suggest_command" {
-                        return Some(
-                            input
-                                .get("dangerous")
-                                .and_then(|v| v.as_bool())
-                                .unwrap_or(false),
-                        );
-                    }
+                if let ConversationEvent::ToolCall { name, input, .. } = e
+                    && name == "suggest_command"
+                {
+                    return Some(
+                        input
+                            .get("dangerous")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false),
+                    );
                 }
                 None
             })
