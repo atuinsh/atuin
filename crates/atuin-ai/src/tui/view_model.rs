@@ -218,14 +218,12 @@ impl Blocks {
                                     pending_confirm: state.confirmation_pending,
                                 });
                             }
-                        } else if confidence_low {
-                            if let Some(text) = warning_text {
-                                block_content.push(Content::Warning {
-                                    kind: WarningKind::LowConfidence,
-                                    text: text.to_string(),
-                                    pending_confirm: false, // low confidence never enters confirm mode
-                                });
-                            }
+                        } else if confidence_low && let Some(text) = warning_text {
+                            block_content.push(Content::Warning {
+                                kind: WarningKind::LowConfidence,
+                                text: text.to_string(),
+                                pending_confirm: false, // low confidence never enters confirm mode
+                            });
                         }
 
                         // Only add block if there's content
