@@ -274,6 +274,16 @@ fn content_to_json(content: &crate::tui::view_model::Content) -> serde_json::Val
             "frame": frame,
             "status_text": status_text
         }),
+        Content::ToolStatus {
+            completed_count,
+            current_label,
+            frame,
+        } => serde_json::json!({
+            "type": "ToolStatus",
+            "completed_count": completed_count,
+            "current_label": current_label,
+            "frame": frame
+        }),
     }
 }
 
