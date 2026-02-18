@@ -147,6 +147,37 @@ impl Blocks {
                             });
                         }
 
+                        // Extract warning data from tool call input
+                        let dangerous = input
+                            .get("dangerous")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
+                        let confidence_low = input
+                            .get("confidence")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s == "low")
+                            .unwrap_or(false);
+                        let warning_text = input.get("warning").and_then(|v| v.as_str());
+
+                        // Add warning content if applicable
+                        if dangerous {
+                            if let Some(text) = warning_text {
+                                block_content.push(Content::Warning {
+                                    kind: WarningKind::Danger,
+                                    text: text.to_string(),
+                                    pending_confirm: state.confirmation_pending,
+                                });
+                            }
+                        } else if confidence_low {
+                            if let Some(text) = warning_text {
+                                block_content.push(Content::Warning {
+                                    kind: WarningKind::LowConfidence,
+                                    text: text.to_string(),
+                                    pending_confirm: false, // low confidence never enters confirm mode
+                                });
+                            }
+                        }
+
                         // Only add block if there's content
                         if !block_content.is_empty() {
                             items.push(Block {
@@ -259,26 +290,31 @@ impl Blocks {
 
         // 6. Set title on first block only
         if let Some(first) = items.first_mut() {
-            first.title = Some("Describe the command you'd like to generate:".to_string());
+            first.title = Some("Ask questions or generate a command:".to_string());
         }
 
         // 7. Derive footer from mode and events
-        let footer = Self::footer_for_mode(&state.mode, &state.events);
+        let footer = Self::footer_for_mode(&state.mode, &state.events, state.confirmation_pending);
 
         Self { items, footer }
     }
 
     /// Derive footer text from current mode and conversation state
-    fn footer_for_mode(mode: &AppMode, events: &[ConversationEvent]) -> &'static str {
+    fn footer_for_mode(
+        mode: &AppMode,
+        events: &[ConversationEvent],
+        confirmation_pending: bool,
+    ) -> &'static str {
         match mode {
             AppMode::Input => "[Enter]: Accept  [Esc]: Cancel",
             AppMode::Generating | AppMode::Streaming => "[Esc]: Cancel",
             AppMode::Review => {
-                // Check if any command exists in conversation history
-                if has_any_command(events) {
-                    "[Enter]: Run  [Tab]: Insert  [e]: Edit  [Esc]: Cancel"
+                if confirmation_pending {
+                    "[Enter]: Confirm dangerous command  [Esc]: Cancel"
+                } else if has_any_command(events) {
+                    "[Enter]: Run  [Tab]: Insert  [f]: Follow-up  [Esc]: Cancel"
                 } else {
-                    "[e]: Edit  [Esc]: Cancel"
+                    "[f]: Follow-up  [Esc]: Cancel"
                 }
             }
             AppMode::Error => "[Enter]/[r]: Retry  [Esc]: Cancel",
