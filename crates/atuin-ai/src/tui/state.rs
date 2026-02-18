@@ -384,11 +384,11 @@ impl AppState {
         self.was_interrupted = true;
 
         // Flush partial text with interruption marker if any
-        if !self.streaming_text.is_empty() {
-            let interrupted_text = format!(
-                "{}\n\n[User cancelled this generation]",
-                std::mem::take(&mut self.streaming_text)
-            );
+        // Trim leading whitespace since LLM responses often start with \n\n
+        let content = std::mem::take(&mut self.streaming_text);
+        let trimmed = content.trim_start();
+        if !trimmed.is_empty() {
+            let interrupted_text = format!("{trimmed}\n\n[User cancelled this generation]");
             self.events.push(ConversationEvent::Text {
                 content: interrupted_text,
             });
@@ -423,9 +423,12 @@ impl AppState {
     /// Finalize streaming - flush accumulated text to event
     pub fn finalize_streaming(&mut self) {
         // Flush streaming text to a Text event if non-empty
-        if !self.streaming_text.is_empty() {
+        // Trim leading whitespace since LLM responses often start with \n\n
+        let content = std::mem::take(&mut self.streaming_text);
+        let trimmed = content.trim_start();
+        if !trimmed.is_empty() {
             self.events.push(ConversationEvent::Text {
-                content: std::mem::take(&mut self.streaming_text),
+                content: trimmed.to_string(),
             });
         }
         self.streaming_status = None;
