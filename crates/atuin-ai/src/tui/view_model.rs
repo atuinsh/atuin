@@ -44,6 +44,15 @@ pub enum Content {
         frame: usize,        // 0-3 for animation
         status_text: String, // Status-based text (Processing..., Thinking..., etc.)
     },
+    /// Tool call status display (in-flight or completed summary)
+    ToolStatus {
+        /// Number of non-suggest_command tools completed
+        completed_count: usize,
+        /// Current in-flight tool description (None if all done)
+        current_label: Option<String>,
+        /// Spinner frame for in-flight display
+        frame: usize,
+    },
 }
 
 impl Content {
@@ -59,6 +68,13 @@ impl Content {
                 WarningKind::LowConfidence => "?",
             },
             Content::Spinner { .. } => "/",
+            Content::ToolStatus { current_label, .. } => {
+                if current_label.is_some() {
+                    "/"
+                } else {
+                    "\u{2713}"
+                } // spinner or checkmark
+            }
         }
     }
 }
@@ -76,6 +92,40 @@ pub struct Block {
 pub struct Blocks {
     pub items: Vec<Block>,
     pub footer: &'static str,
+}
+
+/// Count non-suggest_command tool calls since the last user message
+fn count_tool_calls_since_last_user(events: &[ConversationEvent]) -> (usize, Option<String>) {
+    let last_user_idx = events
+        .iter()
+        .rposition(|e| matches!(e, ConversationEvent::UserMessage { .. }))
+        .unwrap_or(0);
+
+    let mut completed = 0;
+    let mut in_flight: Option<String> = None;
+
+    for event in &events[last_user_idx..] {
+        match event {
+            ConversationEvent::ToolCall { name, .. } if name != "suggest_command" => {
+                // New tool call starts as in-flight
+                if in_flight.is_some() {
+                    // Previous tool is now completed
+                    completed += 1;
+                }
+                in_flight = Some(name.clone());
+            }
+            ConversationEvent::ToolResult { .. } => {
+                // Tool completed
+                if in_flight.is_some() {
+                    completed += 1;
+                    in_flight = None;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    (completed, in_flight)
 }
 
 /// Check if any turn in the conversation has a command
@@ -191,6 +241,41 @@ impl Blocks {
                 }
                 ConversationEvent::ToolResult { .. } => {
                     // Tool results are not rendered (internal protocol)
+                }
+            }
+        }
+
+        // 1.5 Tool status (after events, before streaming UI)
+        // Show tool status during streaming when tools are in progress
+        if state.mode == AppMode::Streaming {
+            let (completed, in_flight) = count_tool_calls_since_last_user(&state.events);
+
+            // Only show if there are tools (completed or in-flight)
+            if completed > 0 || in_flight.is_some() {
+                // During streaming with text, collapse to summary
+                if !state.streaming_text.is_empty() && in_flight.is_none() {
+                    if completed > 0 {
+                        items.push(Block {
+                            content: vec![Content::ToolStatus {
+                                completed_count: completed,
+                                current_label: None,
+                                frame: 0,
+                            }],
+                            separator_above: false,
+                            title: None,
+                        });
+                    }
+                } else if in_flight.is_some() {
+                    // Show spinner for in-flight tool
+                    items.push(Block {
+                        content: vec![Content::ToolStatus {
+                            completed_count: completed,
+                            current_label: in_flight,
+                            frame: state.spinner_frame,
+                        }],
+                        separator_above: false,
+                        title: None,
+                    });
                 }
             }
         }

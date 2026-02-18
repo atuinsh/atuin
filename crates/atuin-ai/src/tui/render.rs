@@ -10,7 +10,7 @@ use ratatui::{
 };
 
 use super::state::AppState;
-use super::view_model::{Blocks, Content};
+use super::view_model::{Blocks, Content, WarningKind};
 
 const SPINNER_FRAMES: [&str; 4] = ["/", "-", "\\", "|"];
 
@@ -212,18 +212,27 @@ fn render_single_content(frame: &mut Frame, content: &Content, area: Rect, ctx: 
             frame.render_widget(paragraph, area);
         }
 
-        Content::Warning { kind, text, .. } => {
-            use crate::tui::view_model::WarningKind;
+        Content::Warning {
+            kind,
+            text,
+            pending_confirm,
+        } => {
             let (symbol, meaning) = match kind {
-                WarningKind::Danger => ("! ", Meaning::AlertError),
-                WarningKind::LowConfidence => ("? ", Meaning::AlertWarn),
+                WarningKind::Danger => ("!", Meaning::AlertError),
+                WarningKind::LowConfidence => ("?", Meaning::AlertWarn),
             };
             let symbol_style = Style::from_crossterm(ctx.theme.as_style(meaning));
             let text_style = Style::from_crossterm(ctx.theme.as_style(Meaning::Base));
 
+            let display_text = if *pending_confirm {
+                "Press Enter again to run this dangerous command"
+            } else {
+                text.as_str()
+            };
+
             let spans = vec![
-                Span::styled(symbol, symbol_style),
-                Span::styled(text.as_str(), text_style),
+                Span::styled(format!("{} ", symbol), symbol_style),
+                Span::styled(display_text, text_style),
             ];
 
             let paragraph = Paragraph::new(Line::from(spans)).wrap(Wrap { trim: false });
@@ -237,6 +246,40 @@ fn render_single_content(frame: &mut Frame, content: &Content, area: Rect, ctx: 
             let style = Style::from_crossterm(ctx.theme.as_style(Meaning::Annotation));
             let symbol = SPINNER_FRAMES[*spinner_frame % SPINNER_FRAMES.len()];
             let text = format!("{} {}", symbol, status_text);
+
+            let paragraph = Paragraph::new(Span::styled(text, style));
+            frame.render_widget(paragraph, area);
+        }
+
+        Content::ToolStatus {
+            completed_count,
+            current_label,
+            frame: spinner_frame,
+        } => {
+            let style = Style::from_crossterm(ctx.theme.as_style(Meaning::Annotation));
+
+            let text = if let Some(label) = current_label {
+                // In-flight: show spinner + current tool
+                let spinner = SPINNER_FRAMES[*spinner_frame % SPINNER_FRAMES.len()];
+                if *completed_count > 0 {
+                    format!(
+                        "{} {} (used {} tool{})",
+                        spinner,
+                        label,
+                        completed_count,
+                        if *completed_count == 1 { "" } else { "s" }
+                    )
+                } else {
+                    format!("{} {}", spinner, label)
+                }
+            } else {
+                // Completed: show checkmark + summary
+                format!(
+                    "\u{2713} Used {} tool{}",
+                    completed_count,
+                    if *completed_count == 1 { "" } else { "s" }
+                )
+            };
 
             let paragraph = Paragraph::new(Span::styled(text, style));
             frame.render_widget(paragraph, area);
@@ -281,11 +324,25 @@ fn calculate_single_content_height(content: &Content, width: usize) -> u16 {
             let line = format!("! {}", message);
             wrapped_line_count(&line, width) as u16
         }
-        Content::Warning { text, .. } => {
-            let line = format!("! {}", text);
+        Content::Warning {
+            kind,
+            text,
+            pending_confirm,
+        } => {
+            let display_text = if *pending_confirm {
+                "Press Enter again to run this dangerous command"
+            } else {
+                text.as_str()
+            };
+            let symbol = match kind {
+                WarningKind::Danger => "!",
+                WarningKind::LowConfidence => "?",
+            };
+            let line = format!("{} {}", symbol, display_text);
             wrapped_line_count(&line, width) as u16
         }
         Content::Spinner { .. } => 1,
+        Content::ToolStatus { .. } => 1, // Always single line
     }
 }
 
