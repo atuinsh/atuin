@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-02-13)
 ## Current Position
 
 Phase: 5 of 5 (Safety & Polish)
-Plan: 3 of 4 complete
-Status: In Progress
-Last activity: 2026-02-18 — Phase 05 Plan 03 complete
+Plan: 4 of 4 complete
+Status: Complete
+Last activity: 2026-02-18 — Phase 05 Plan 04 complete
 
-Progress: [█████████░] 90%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
@@ -47,6 +47,7 @@ Progress: [█████████░] 90%
 | Phase 05 P01 | 4 | 3 tasks | 4 files |
 | Phase 05 P02 | 3 | 3 tasks | 4 files |
 | Phase 05 P03 | 4 | 3 tasks | 3 files |
+| Phase 05 P04 | 2 | 3 tasks | 1 file |
 
 ## Accumulated Context
 
@@ -77,6 +78,9 @@ Recent decisions affecting current work:
 - [Phase 05-03]: ToolStatus shows ONE status line - in-flight spinner, completed collapses to "Used X tools" summary
 - [Phase 05-03]: suggest_command excluded from tool count (renders as Command block directly)
 - [Phase 05-03]: Code block content uses Important styling (pulldown-cmark strips fence characters before handler)
+- [Phase 05-04]: Separator rendered at x.saturating_sub(2) from inner area to overlap border — inner area is inside 1-char padding + 1-char border = 2 chars from card edge
+- [Phase 05-04]: card_width passed down from render_view through render_blocks_content to render_separator
+- [Phase 05-04]: calculate_block_height updated to add (n-1) spacing lines matching render_block_content layout
 
 ### Pending Todos
 
@@ -99,5 +103,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-18 (phase execution)
-Stopped at: Completed 05-03-PLAN.md
-Resume file: Ready to execute Phase 05 Plan 04
+Stopped at: Completed 05-04-PLAN.md
+Resume file: Phase 5 complete - all plans executed
