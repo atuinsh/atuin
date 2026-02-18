@@ -201,7 +201,18 @@ fn render_single_content(frame: &mut Frame, content: &Content, area: Rect, ctx: 
 
         Content::Text { markdown } => {
             let lines = markdown_to_spans(markdown, ctx.theme);
-            let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
+
+            // Add 2-char indent (indicator column) to each line
+            let indented_lines: Vec<Line> = lines
+                .into_iter()
+                .map(|line| {
+                    let mut spans = vec![Span::raw("  ")]; // 2-char indent
+                    spans.extend(line.spans);
+                    Line::from(spans)
+                })
+                .collect();
+
+            let paragraph = Paragraph::new(indented_lines).wrap(Wrap { trim: false });
             frame.render_widget(paragraph, area);
         }
 
@@ -339,7 +350,11 @@ fn calculate_single_content_height(content: &Content, width: usize) -> u16 {
             let line = format!("$ {}", text);
             wrapped_line_count(&line, width) as u16
         }
-        Content::Text { markdown } => wrapped_line_count(markdown, width) as u16,
+        Content::Text { markdown } => {
+            // Add 2 chars for indicator column indent
+            let line = format!("  {}", markdown);
+            wrapped_line_count(&line, width) as u16
+        }
         Content::Error { message } => {
             let line = format!("! {}", message);
             wrapped_line_count(&line, width) as u16
