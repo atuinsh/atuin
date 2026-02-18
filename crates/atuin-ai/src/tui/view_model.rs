@@ -173,21 +173,13 @@ impl Blocks {
                 ConversationEvent::ToolCall { name, input, .. } => {
                     // Only render suggest_command tool calls
                     if name == "suggest_command" {
-                        // Extract description/message for text display
-                        let description = input.get("description").and_then(|v| v.as_str());
+                        // Note: purposefully not rendering the description here.
 
                         // Check if command is present and non-null
                         let command = input.get("command").and_then(|v| v.as_str());
 
                         // Build block content
                         let mut block_content = Vec::new();
-
-                        // Add text from description if present
-                        if let Some(desc) = description {
-                            block_content.push(Content::Text {
-                                markdown: desc.to_string(),
-                            });
-                        }
 
                         // Add command only if non-null
                         if let Some(cmd) = command {
@@ -243,75 +235,57 @@ impl Blocks {
             }
         }
 
-        // 1.5 Tool status (after events, before streaming UI)
-        // Show tool status during streaming when tools are in progress
-        if state.mode == AppMode::Streaming {
+        // 2. AI response block (tool status + streaming text) - shown during Streaming and Review
+        // All AI response elements go in a single block (no separator between them)
+        if state.mode == AppMode::Streaming || state.mode == AppMode::Review {
             let (completed, in_flight) = count_tool_calls_since_last_user(&state.events);
+            let mut response_content = Vec::new();
 
-            // Only show if there are tools (completed or in-flight)
+            // Add tool status if there are any non-suggest_command tools
             if completed > 0 || in_flight.is_some() {
-                // During streaming with text, collapse to summary
-                if !state.streaming_text.is_empty() && in_flight.is_none() {
-                    if completed > 0 {
-                        items.push(Block {
-                            content: vec![Content::ToolStatus {
-                                completed_count: completed,
-                                current_label: None,
-                                frame: 0,
-                            }],
-                            separator_above: false,
-                            title: None,
+                response_content.push(Content::ToolStatus {
+                    completed_count: completed,
+                    current_label: in_flight.clone(),
+                    frame: state.spinner_frame,
+                });
+            }
+
+            // Add streaming text or spinner during streaming
+            if state.mode == AppMode::Streaming {
+                if state.streaming_text.is_empty() {
+                    // Check if enough time has passed to show spinner (200ms delay)
+                    // Show spinner immediately if status event has arrived
+                    let should_show_spinner = state.streaming_status.is_some()
+                        || state
+                            .streaming_started
+                            .map(|start| start.elapsed() >= std::time::Duration::from_millis(200))
+                            .unwrap_or(true);
+
+                    if should_show_spinner && in_flight.is_none() {
+                        // Only show generating spinner if no tool is in-flight
+                        let status_text = state
+                            .streaming_status
+                            .as_ref()
+                            .map(|s| s.display_text().to_string())
+                            .unwrap_or_else(|| "Generating...".to_string());
+
+                        response_content.push(Content::Spinner {
+                            frame: state.spinner_frame,
+                            status_text,
                         });
                     }
-                } else if in_flight.is_some() {
-                    // Show spinner for in-flight tool
-                    items.push(Block {
-                        content: vec![Content::ToolStatus {
-                            completed_count: completed,
-                            current_label: in_flight,
-                            frame: state.spinner_frame,
-                        }],
-                        separator_above: false,
-                        title: None,
+                } else {
+                    // Show streaming text
+                    response_content.push(Content::Text {
+                        markdown: state.streaming_text.clone(),
                     });
                 }
             }
-        }
 
-        // 2. Streaming text (if any) - shown during streaming mode
-        if state.mode == AppMode::Streaming {
-            if state.streaming_text.is_empty() {
-                // Check if enough time has passed to show spinner (200ms delay)
-                // Show spinner immediately if status event has arrived
-                let should_show_spinner = state.streaming_status.is_some()
-                    || state
-                        .streaming_started
-                        .map(|start| start.elapsed() >= std::time::Duration::from_millis(200))
-                        .unwrap_or(true);
-
-                if should_show_spinner {
-                    let status_text = state
-                        .streaming_status
-                        .as_ref()
-                        .map(|s| s.display_text().to_string())
-                        .unwrap_or_else(|| "Generating...".to_string());
-
-                    items.push(Block {
-                        content: vec![Content::Spinner {
-                            frame: state.spinner_frame,
-                            status_text,
-                        }],
-                        separator_above: false,
-                        title: None,
-                    });
-                }
-                // If not enough time passed, don't show anything (brief delay)
-            } else {
-                // Show streaming text
+            // Add the response block if there's any content
+            if !response_content.is_empty() {
                 items.push(Block {
-                    content: vec![Content::Text {
-                        markdown: state.streaming_text.clone(),
-                    }],
+                    content: response_content,
                     separator_above: false,
                     title: None,
                 });

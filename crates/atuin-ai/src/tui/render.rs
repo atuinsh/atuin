@@ -6,7 +6,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block as RatatuiBlock, Borders, Padding, Paragraph, Wrap},
+    widgets::{Block as RatatuiBlock, Borders, Padding, Paragraph},
 };
 
 use super::state::AppState;
@@ -176,21 +176,17 @@ fn render_block_content(frame: &mut Frame, content: &[Content], area: Rect, ctx:
 
 /// Render a single content item
 fn render_single_content(frame: &mut Frame, content: &Content, area: Rect, ctx: &RenderContext) {
+    let width = area.width as usize;
+
     match content {
         Content::Input { text, .. } => {
             let symbol_style = Style::from_crossterm(ctx.theme.as_style(Meaning::Guidance));
             let text_style = Style::from_crossterm(ctx.theme.as_style(Meaning::Base));
 
-            let spans = if text.is_empty() {
-                vec![Span::styled("> ", symbol_style)]
-            } else {
-                vec![
-                    Span::styled("> ", symbol_style),
-                    Span::styled(text.as_str(), text_style),
-                ]
-            };
+            let prefix = vec![Span::styled("> ", symbol_style)];
+            let lines = wrap_with_indent(prefix, text, text_style, width, "  ");
 
-            let paragraph = Paragraph::new(Line::from(spans)).wrap(Wrap { trim: false });
+            let paragraph = Paragraph::new(lines);
             frame.render_widget(paragraph, area);
         }
 
@@ -201,29 +197,21 @@ fn render_single_content(frame: &mut Frame, content: &Content, area: Rect, ctx: 
                 text_style = text_style.add_modifier(Modifier::DIM);
             }
 
-            let spans = vec![
-                Span::styled("$ ", symbol_style),
-                Span::styled(text.as_str(), text_style),
-            ];
+            let prefix = vec![Span::styled("$ ", symbol_style)];
+            let lines = wrap_with_indent(prefix, text, text_style, width, "  ");
 
-            let paragraph = Paragraph::new(Line::from(spans)).wrap(Wrap { trim: false });
+            let paragraph = Paragraph::new(lines);
             frame.render_widget(paragraph, area);
         }
 
         Content::Text { markdown } => {
-            let lines = markdown_to_spans(markdown, ctx.theme);
+            let text_style = Style::from_crossterm(ctx.theme.as_style(Meaning::Base));
 
-            // Add 2-char indent (indicator column) to each line
-            let indented_lines: Vec<Line> = lines
-                .into_iter()
-                .map(|line| {
-                    let mut spans = vec![Span::raw("  ")]; // 2-char indent
-                    spans.extend(line.spans);
-                    Line::from(spans)
-                })
-                .collect();
+            // For markdown text, use simple indent (no symbol)
+            let prefix = vec![Span::raw("  ")];
+            let lines = wrap_with_indent(prefix, markdown, text_style, width, "  ");
 
-            let paragraph = Paragraph::new(indented_lines).wrap(Wrap { trim: false });
+            let paragraph = Paragraph::new(lines);
             frame.render_widget(paragraph, area);
         }
 
@@ -231,12 +219,10 @@ fn render_single_content(frame: &mut Frame, content: &Content, area: Rect, ctx: 
             let symbol_style = Style::from_crossterm(ctx.theme.as_style(Meaning::AlertError));
             let text_style = Style::from_crossterm(ctx.theme.as_style(Meaning::Base));
 
-            let spans = vec![
-                Span::styled("! ", symbol_style),
-                Span::styled(message.as_str(), text_style),
-            ];
+            let prefix = vec![Span::styled("! ", symbol_style)];
+            let lines = wrap_with_indent(prefix, message, text_style, width, "  ");
 
-            let paragraph = Paragraph::new(Line::from(spans)).wrap(Wrap { trim: false });
+            let paragraph = Paragraph::new(lines);
             frame.render_widget(paragraph, area);
         }
 
@@ -258,12 +244,10 @@ fn render_single_content(frame: &mut Frame, content: &Content, area: Rect, ctx: 
                 text.as_str()
             };
 
-            let spans = vec![
-                Span::styled(format!("{} ", symbol), symbol_style),
-                Span::styled(display_text, text_style),
-            ];
+            let prefix = vec![Span::styled(format!("{} ", symbol), symbol_style)];
+            let lines = wrap_with_indent(prefix, display_text, text_style, width, "  ");
 
-            let paragraph = Paragraph::new(Line::from(spans)).wrap(Wrap { trim: false });
+            let paragraph = Paragraph::new(lines);
             frame.render_widget(paragraph, area);
         }
 
@@ -352,66 +336,190 @@ fn calculate_block_height(content: &[Content], width: usize) -> u16 {
         0
     };
 
-    content_height.saturating_add(spacing)
+    // Add 1 for trailing blank line (padding after content)
+    content_height.saturating_add(spacing).saturating_add(1)
 }
 
 /// Calculate height for a single content item
 fn calculate_single_content_height(content: &Content, width: usize) -> u16 {
+    // Use the same wrapping logic as render to ensure consistency
     match content {
         Content::Input { text, .. } => {
-            let line = if text.is_empty() {
-                "> ".to_string()
-            } else {
-                format!("> {}", text)
-            };
-            wrapped_line_count(&line, width) as u16
+            wrapped_line_count_with_indent(text, width, 2) as u16 // "> " prefix
         }
         Content::Command { text, .. } => {
-            let line = format!("$ {}", text);
-            wrapped_line_count(&line, width) as u16
+            wrapped_line_count_with_indent(text, width, 2) as u16 // "$ " prefix
         }
         Content::Text { markdown } => {
-            // Add 2 chars for indicator column indent
-            let line = format!("  {}", markdown);
-            wrapped_line_count(&line, width) as u16
+            wrapped_line_count_with_indent(markdown, width, 2) as u16 // "  " indent
         }
         Content::Error { message } => {
-            let line = format!("! {}", message);
-            wrapped_line_count(&line, width) as u16
+            wrapped_line_count_with_indent(message, width, 2) as u16 // "! " prefix
         }
         Content::Warning {
-            kind,
             text,
             pending_confirm,
+            ..
         } => {
             let display_text = if *pending_confirm {
                 "Press Enter again to run this dangerous command"
             } else {
                 text.as_str()
             };
-            let symbol = match kind {
-                WarningKind::Danger => "!",
-                WarningKind::LowConfidence => "?",
-            };
-            let line = format!("{} {}", symbol, display_text);
-            wrapped_line_count(&line, width) as u16
+            wrapped_line_count_with_indent(display_text, width, 2) as u16 // "! " or "? " prefix
         }
         Content::Spinner { .. } => 1,
         Content::ToolStatus { .. } => 1, // Always single line
     }
 }
 
-fn wrapped_line_count(text: &str, width: usize) -> usize {
+/// Count lines needed when wrapping with a prefix/indent
+fn wrapped_line_count_with_indent(text: &str, width: usize, indent_len: usize) -> usize {
     if width == 0 {
         return 1;
     }
-    text.split('\n')
-        .map(|line| {
-            let len = line.chars().count();
-            len.max(1).div_ceil(width)
-        })
-        .sum::<usize>()
-        .max(1)
+
+    let available_first = width.saturating_sub(indent_len);
+    let available_rest = width.saturating_sub(indent_len);
+
+    let mut total_lines = 0;
+
+    for paragraph in text.split('\n') {
+        if paragraph.is_empty() {
+            total_lines += 1;
+            continue;
+        }
+
+        let char_count = paragraph.chars().count();
+
+        // First line
+        let first_line_chars = char_count.min(available_first);
+        total_lines += 1;
+
+        // Remaining chars for continuation lines
+        let remaining = char_count.saturating_sub(first_line_chars);
+        if remaining > 0 && available_rest > 0 {
+            total_lines += remaining.div_ceil(available_rest);
+        }
+    }
+
+    total_lines.max(1)
+}
+
+/// Wrap text with a prefix on the first line and indent on continuation lines.
+/// Returns a Vec of Lines ready for rendering.
+fn wrap_with_indent<'a>(
+    prefix_spans: Vec<Span<'a>>,
+    text: &str,
+    text_style: Style,
+    width: usize,
+    indent: &'static str,
+) -> Vec<Line<'a>> {
+    if width == 0 {
+        let mut spans = prefix_spans;
+        spans.push(Span::styled(text.to_string(), text_style));
+        return vec![Line::from(spans)];
+    }
+
+    let prefix_len: usize = prefix_spans.iter().map(|s| s.content.chars().count()).sum();
+    let indent_len = indent.chars().count();
+
+    let mut lines = Vec::new();
+    let mut first_line = true;
+
+    for paragraph in text.split('\n') {
+        let mut remaining = paragraph;
+
+        while !remaining.is_empty() {
+            let available = if first_line {
+                width.saturating_sub(prefix_len)
+            } else {
+                width.saturating_sub(indent_len)
+            };
+
+            if available == 0 {
+                // Can't fit anything, just take one char
+                let (chunk, rest) =
+                    remaining.split_at(remaining.chars().next().map(|c| c.len_utf8()).unwrap_or(0));
+                if first_line {
+                    let mut spans = prefix_spans.clone();
+                    spans.push(Span::styled(chunk.to_string(), text_style));
+                    lines.push(Line::from(spans));
+                    first_line = false;
+                } else {
+                    lines.push(Line::from(vec![
+                        Span::raw(indent),
+                        Span::styled(chunk.to_string(), text_style),
+                    ]));
+                }
+                remaining = rest;
+                continue;
+            }
+
+            // Find break point (word boundary or max chars)
+            let char_indices: Vec<(usize, char)> = remaining.char_indices().collect();
+            let max_chars = available.min(char_indices.len());
+
+            // Try to break at word boundary
+            let break_at = if char_indices.len() <= available {
+                // Whole remaining string fits
+                remaining.len()
+            } else {
+                // Find last space before max_chars, otherwise break at max_chars
+                let max_byte = char_indices
+                    .get(max_chars)
+                    .map(|(i, _)| *i)
+                    .unwrap_or(remaining.len());
+                let mut break_byte = max_byte;
+                for i in (0..max_chars).rev() {
+                    if char_indices[i].1 == ' ' {
+                        break_byte = char_indices[i].0;
+                        break;
+                    }
+                }
+                break_byte
+            };
+
+            let (chunk, rest) = remaining.split_at(break_at);
+            let chunk = chunk.trim_end();
+            let rest = rest.trim_start();
+
+            if first_line {
+                let mut spans = prefix_spans.clone();
+                if !chunk.is_empty() {
+                    spans.push(Span::styled(chunk.to_string(), text_style));
+                }
+                lines.push(Line::from(spans));
+                first_line = false;
+            } else {
+                lines.push(Line::from(vec![
+                    Span::raw(indent),
+                    Span::styled(chunk.to_string(), text_style),
+                ]));
+            }
+
+            remaining = rest;
+            if remaining.is_empty() {
+                break;
+            }
+        }
+
+        // Handle empty paragraphs (newlines in source)
+        if paragraph.is_empty() {
+            if first_line {
+                lines.push(Line::from(prefix_spans.clone()));
+                first_line = false;
+            } else {
+                lines.push(Line::from(vec![Span::raw(indent)]));
+            }
+        }
+    }
+
+    if lines.is_empty() {
+        lines.push(Line::from(prefix_spans));
+    }
+
+    lines
 }
 
 /// Calculate cursor position accounting for prefix and wrapping
