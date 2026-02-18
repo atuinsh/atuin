@@ -390,6 +390,7 @@ pub fn markdown_to_spans<'a>(text: &'a str, theme: &'a Theme) -> Vec<Line<'a>> {
     let base_style = Style::from_crossterm(theme.as_style(Meaning::Base));
     let code_style = Style::from_crossterm(theme.as_style(Meaning::Important));
     let mut style_stack: Vec<Style> = vec![base_style];
+    let mut in_code_block = false;
 
     for event in parser {
         match event {
@@ -415,11 +416,32 @@ pub fn markdown_to_spans<'a>(text: &'a str, theme: &'a Theme) -> Vec<Line<'a>> {
             Event::End(TagEnd::Emphasis) => {
                 style_stack.pop();
             }
+            Event::Start(Tag::CodeBlock(_)) => {
+                in_code_block = true;
+                // Start new line for code block
+                if !lines[current_line].is_empty() {
+                    current_line += 1;
+                    lines.push(Vec::new());
+                }
+            }
+            Event::End(TagEnd::CodeBlock) => {
+                in_code_block = false;
+                // Ensure blank line after code block
+                if !lines[current_line].is_empty() {
+                    current_line += 1;
+                    lines.push(Vec::new());
+                }
+            }
             Event::Code(code) => {
                 lines[current_line].push(Span::styled(format!("`{}`", code), code_style));
             }
             Event::Text(text) => {
-                let current_style = style_stack.last().copied().unwrap_or(base_style);
+                let current_style = if in_code_block {
+                    // Use Important style for code block content
+                    code_style
+                } else {
+                    style_stack.last().copied().unwrap_or(base_style)
+                };
                 let parts: Vec<&str> = text.split('\n').collect();
                 for (i, part) in parts.iter().enumerate() {
                     if i > 0 {

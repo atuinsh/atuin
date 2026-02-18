@@ -87,22 +87,36 @@ impl App {
     fn handle_review_key(&mut self, key: KeyEvent) -> bool {
         match key.code {
             KeyCode::Esc => {
+                self.state.confirmation_pending = false; // Clear confirmation state
                 self.state.exit(ExitAction::Cancel);
                 true
             }
             KeyCode::Enter => {
-                if let Some(cmd) = self.state.current_command() {
-                    self.state.exit(ExitAction::Execute(cmd.to_string()));
+                let cmd = self.state.current_command().map(|c| c.to_string());
+                if let Some(cmd) = cmd {
+                    if self.state.is_current_command_dangerous() && !self.state.confirmation_pending
+                    {
+                        // First Enter on dangerous command: enter confirmation mode
+                        self.state.confirmation_pending = true;
+                    } else {
+                        // Second Enter (confirmation), or non-dangerous command: execute
+                        self.state.confirmation_pending = false;
+                        self.state.exit(ExitAction::Execute(cmd));
+                    }
                 }
                 true
             }
             KeyCode::Tab => {
-                if let Some(cmd) = self.state.current_command() {
-                    self.state.exit(ExitAction::Insert(cmd.to_string()));
+                let cmd = self.state.current_command().map(|c| c.to_string());
+                if let Some(cmd) = cmd {
+                    self.state.confirmation_pending = false; // Clear on Tab too
+                    self.state.exit(ExitAction::Insert(cmd));
                 }
                 true
             }
-            KeyCode::Char('e') => {
+            KeyCode::Char('f') => {
+                // Changed from 'e' to 'f' for follow-up mode
+                self.state.confirmation_pending = false; // Clear on follow-up
                 self.state.start_edit_mode();
                 true
             }
