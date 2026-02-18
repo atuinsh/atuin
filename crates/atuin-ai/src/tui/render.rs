@@ -50,7 +50,7 @@ fn render_view(frame: &mut Frame, view: &Blocks, ctx: &RenderContext) {
     }
 
     let desired_height = total_height
-        .saturating_add(4) // padding + borders
+        .saturating_add(3) // borders (2) + top padding (1), no bottom padding
         .min(area.height.max(1))
         .max(5);
 
@@ -69,11 +69,12 @@ fn render_view(frame: &mut Frame, view: &Blocks, ctx: &RenderContext) {
         .unwrap_or("Describe the command you'd like to generate:");
 
     // Create bordered frame
+    // Padding: left=1, right=1, top=1, bottom=0 (blocks have trailing blanks)
     let outer_block = RatatuiBlock::default()
         .borders(Borders::ALL)
         .title(title)
         .title_bottom(Line::from(view.footer).alignment(Alignment::Right))
-        .padding(Padding::uniform(1));
+        .padding(Padding::new(1, 1, 1, 0));
 
     let inner_area = outer_block.inner(card);
     frame.render_widget(outer_block, card);
