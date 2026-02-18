@@ -162,10 +162,24 @@ impl Blocks {
                     });
                 }
                 ConversationEvent::Text { content } => {
+                    // In Review mode with completed tool calls, prepend ToolStatus to this Text block
+                    let (completed, _) = count_tool_calls_since_last_user(&state.events);
+                    let mut block_content = Vec::new();
+
+                    if state.mode == AppMode::Review && completed > 0 {
+                        block_content.push(Content::ToolStatus {
+                            completed_count: completed,
+                            current_label: None,
+                            frame: 0,
+                        });
+                    }
+
+                    block_content.push(Content::Text {
+                        markdown: content.clone(),
+                    });
+
                     items.push(Block {
-                        content: vec![Content::Text {
-                            markdown: content.clone(),
-                        }],
+                        content: block_content,
                         separator_above: false,
                         title: None,
                     });
@@ -235,9 +249,9 @@ impl Blocks {
             }
         }
 
-        // 2. AI response block (tool status + streaming text) - shown during Streaming and Review
-        // All AI response elements go in a single block (no separator between them)
-        if state.mode == AppMode::Streaming || state.mode == AppMode::Review {
+        // 2. AI response block (tool status + streaming text) - shown during Streaming only
+        // In Review mode, ToolStatus is handled inline with ConversationEvent::Text above
+        if state.mode == AppMode::Streaming {
             let (completed, in_flight) = count_tool_calls_since_last_user(&state.events);
             let mut response_content = Vec::new();
 
@@ -250,36 +264,34 @@ impl Blocks {
                 });
             }
 
-            // Add streaming text or spinner during streaming
-            if state.mode == AppMode::Streaming {
-                if state.streaming_text.is_empty() {
-                    // Check if enough time has passed to show spinner (200ms delay)
-                    // Show spinner immediately if status event has arrived
-                    let should_show_spinner = state.streaming_status.is_some()
-                        || state
-                            .streaming_started
-                            .map(|start| start.elapsed() >= std::time::Duration::from_millis(200))
-                            .unwrap_or(true);
+            // Add streaming text or spinner
+            if state.streaming_text.is_empty() {
+                // Check if enough time has passed to show spinner (200ms delay)
+                // Show spinner immediately if status event has arrived
+                let should_show_spinner = state.streaming_status.is_some()
+                    || state
+                        .streaming_started
+                        .map(|start| start.elapsed() >= std::time::Duration::from_millis(200))
+                        .unwrap_or(true);
 
-                    if should_show_spinner && in_flight.is_none() {
-                        // Only show generating spinner if no tool is in-flight
-                        let status_text = state
-                            .streaming_status
-                            .as_ref()
-                            .map(|s| s.display_text().to_string())
-                            .unwrap_or_else(|| "Generating...".to_string());
+                if should_show_spinner && in_flight.is_none() {
+                    // Only show generating spinner if no tool is in-flight
+                    let status_text = state
+                        .streaming_status
+                        .as_ref()
+                        .map(|s| s.display_text().to_string())
+                        .unwrap_or_else(|| "Generating...".to_string());
 
-                        response_content.push(Content::Spinner {
-                            frame: state.spinner_frame,
-                            status_text,
-                        });
-                    }
-                } else {
-                    // Show streaming text
-                    response_content.push(Content::Text {
-                        markdown: state.streaming_text.clone(),
+                    response_content.push(Content::Spinner {
+                        frame: state.spinner_frame,
+                        status_text,
                     });
                 }
+            } else {
+                // Show streaming text
+                response_content.push(Content::Text {
+                    markdown: state.streaming_text.clone(),
+                });
             }
 
             // Add the response block if there's any content
