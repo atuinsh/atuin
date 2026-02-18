@@ -50,6 +50,10 @@ enum Commands {
         /// Keep TUI output visible after exit (default: erase)
         #[arg(long)]
         keep: bool,
+
+        /// Log state changes to file for debugging (dev tool)
+        #[arg(long, value_name = "FILE")]
+        debug_state: Option<String>,
     },
 
     /// Interactive mode with TUI
@@ -78,6 +82,7 @@ pub async fn run() -> eyre::Result<()> {
             command,
             natural_language,
             keep,
+            debug_state,
         } => {
             inline::run(
                 command,
@@ -85,11 +90,12 @@ pub async fn run() -> eyre::Result<()> {
                 cli.api_endpoint,
                 cli.api_token,
                 keep,
+                debug_state,
             )
             .await
         }
         Commands::Complete { command } => {
-            inline::run(command, false, cli.api_endpoint, cli.api_token, false).await
+            inline::run(command, false, cli.api_endpoint, cli.api_token, false, None).await
         }
         Commands::Interactive => Err(eyre::eyre!("interactive mode not implemented yet")),
         Commands::DebugRender { input, format } => {
