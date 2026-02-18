@@ -212,6 +212,24 @@ fn render_single_content(frame: &mut Frame, content: &Content, area: Rect, ctx: 
             frame.render_widget(paragraph, area);
         }
 
+        Content::Warning { kind, text, .. } => {
+            use crate::tui::view_model::WarningKind;
+            let (symbol, meaning) = match kind {
+                WarningKind::Danger => ("! ", Meaning::AlertError),
+                WarningKind::LowConfidence => ("? ", Meaning::AlertWarn),
+            };
+            let symbol_style = Style::from_crossterm(ctx.theme.as_style(meaning));
+            let text_style = Style::from_crossterm(ctx.theme.as_style(Meaning::Base));
+
+            let spans = vec![
+                Span::styled(symbol, symbol_style),
+                Span::styled(text.as_str(), text_style),
+            ];
+
+            let paragraph = Paragraph::new(Line::from(spans)).wrap(Wrap { trim: false });
+            frame.render_widget(paragraph, area);
+        }
+
         Content::Spinner {
             frame: spinner_frame,
             status_text,
@@ -261,6 +279,10 @@ fn calculate_single_content_height(content: &Content, width: usize) -> u16 {
         Content::Text { markdown } => wrapped_line_count(markdown, width) as u16,
         Content::Error { message } => {
             let line = format!("! {}", message);
+            wrapped_line_count(&line, width) as u16
+        }
+        Content::Warning { text, .. } => {
+            let line = format!("! {}", text);
             wrapped_line_count(&line, width) as u16
         }
         Content::Spinner { .. } => 1,
