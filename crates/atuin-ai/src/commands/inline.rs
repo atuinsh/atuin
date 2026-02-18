@@ -13,6 +13,7 @@ use eventsource_stream::Eventsource;
 use eyre::{Context as _, Result, bail};
 use futures::StreamExt;
 use reqwest::Url;
+use std::io::Write;
 
 pub async fn run(
     initial_command: Option<String>,
@@ -20,6 +21,7 @@ pub async fn run(
     api_endpoint: Option<String>,
     api_token: Option<String>,
     keep_output: bool,
+    debug_state_file: Option<String>,
 ) -> Result<()> {
     // Install panic hook once at entry point to ensure terminal restoration
     install_panic_hook();
@@ -42,6 +44,7 @@ pub async fn run(
             initial_command
         },
         keep_output,
+        debug_state_file,
     )
     .await?;
     emit_shell_result(action.0, &action.1);
@@ -298,11 +301,84 @@ enum Action {
     Cancel,
 }
 
+/// Serialize AppState to JSON for debug logging
+fn state_to_json(state: &crate::tui::AppState) -> serde_json::Value {
+    let events: Vec<serde_json::Value> = state.events.iter().map(|e| e.to_json()).collect();
+
+    let mode = match state.mode {
+        AppMode::Input => "Input",
+        AppMode::Generating => "Generating",
+        AppMode::Streaming => "Streaming",
+        AppMode::Review => "Review",
+        AppMode::Error => "Error",
+    };
+
+    let mut json = serde_json::json!({
+        "events": events,
+        "mode": mode,
+        "input": state.input,
+        "cursor_pos": state.cursor_pos,
+        "spinner_frame": state.spinner_frame,
+        "confirmation_pending": state.confirmation_pending,
+    });
+
+    // Add streaming fields if in streaming mode
+    if !state.streaming_text.is_empty() {
+        json["streaming_text"] = serde_json::json!(state.streaming_text);
+    }
+    if let Some(ref status) = state.streaming_status {
+        json["streaming_status"] = serde_json::json!(status.display_text());
+    }
+    if let Some(ref err) = state.error {
+        json["error"] = serde_json::json!(err);
+    }
+
+    json
+}
+
+/// Debug logger that writes state changes to a file
+struct DebugStateLogger {
+    file: std::fs::File,
+    entry_count: usize,
+}
+
+impl DebugStateLogger {
+    fn new(path: &str) -> Result<Self> {
+        let file = std::fs::File::create(path)
+            .with_context(|| format!("Failed to create debug state file: {}", path))?;
+        Ok(Self {
+            file,
+            entry_count: 0,
+        })
+    }
+
+    fn log(&mut self, label: &str, state: &crate::tui::AppState) {
+        self.entry_count += 1;
+        let timestamp_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let entry = serde_json::json!({
+            "entry": self.entry_count,
+            "label": label,
+            "timestamp_ms": timestamp_ms,
+            "state": state_to_json(state),
+        });
+
+        // Write as JSONL (one JSON object per line)
+        if let Err(e) = writeln!(self.file, "{}", entry) {
+            tracing::warn!("Failed to write debug state: {}", e);
+        }
+        let _ = self.file.flush();
+    }
+}
+
 async fn run_inline_tui(
     endpoint: String,
     token: String,
     initial_prompt: Option<String>,
     keep_output: bool,
+    debug_state_file: Option<String>,
 ) -> Result<(Action, String)> {
     // Initialize terminal guard and app state
     let mut guard = TerminalGuard::new(keep_output)?;
@@ -310,6 +386,23 @@ async fn run_inline_tui(
     if let Some(prompt) = initial_prompt {
         app.state.input = prompt;
     }
+
+    // Initialize debug state logger if requested
+    let mut debug_logger = debug_state_file
+        .map(|path| DebugStateLogger::new(&path))
+        .transpose()?;
+
+    // Helper macro to log state changes
+    macro_rules! log_state {
+        ($label:expr) => {
+            if let Some(ref mut logger) = debug_logger {
+                logger.log($label, &app.state);
+            }
+        };
+    }
+
+    // Log initial state
+    log_state!("init");
 
     // Load theme
     let settings = atuin_client::settings::Settings::new()?;
@@ -339,6 +432,7 @@ async fn run_inline_tui(
         match event {
             AppEvent::Key(key) => {
                 app.handle_key(key);
+                log_state!("key");
             }
             AppEvent::Tick => {
                 app.state.tick();
@@ -354,10 +448,12 @@ async fn run_inline_tui(
                             ChatStreamEvent::TextChunk(text) => {
                                 tracing::debug!(text = %text, "Processing TextChunk");
                                 app.state.append_streaming_text(&text);
+                                log_state!("text_chunk");
                             }
                             ChatStreamEvent::ToolCall { id, name, input } => {
                                 tracing::debug!(id = %id, name = %name, "Processing ToolCall");
                                 app.state.add_tool_call(id, name, input);
+                                log_state!("tool_call");
                             }
                             ChatStreamEvent::ToolResult {
                                 tool_use_id,
@@ -366,10 +462,12 @@ async fn run_inline_tui(
                             } => {
                                 tracing::debug!(tool_use_id = %tool_use_id, "Processing ToolResult");
                                 app.state.add_tool_result(tool_use_id, content, is_error);
+                                log_state!("tool_result");
                             }
                             ChatStreamEvent::Status(status) => {
                                 tracing::debug!(status = %status, "Processing Status");
                                 app.state.update_streaming_status(&status);
+                                log_state!("status");
                             }
                             ChatStreamEvent::Done { session_id } => {
                                 tracing::debug!(session_id = %session_id, "Processing Done");
@@ -378,20 +476,24 @@ async fn run_inline_tui(
                                     app.state.store_session_id(session_id);
                                 }
                                 app.state.finalize_streaming();
+                                log_state!("done");
                             }
                             ChatStreamEvent::Error(msg) => {
                                 tracing::debug!(error = %msg, "Processing Error");
                                 chat_stream = None;
                                 app.state.streaming_error(msg);
+                                log_state!("error");
                             }
                         },
                         std::task::Poll::Ready(Some(Err(e))) => {
                             chat_stream = None;
                             app.state.streaming_error(e.to_string());
+                            log_state!("stream_error");
                         }
                         std::task::Poll::Ready(None) => {
                             chat_stream = None;
                             app.state.finalize_streaming();
+                            log_state!("stream_end");
                         }
                         std::task::Poll::Pending => {}
                     }
@@ -422,6 +524,7 @@ async fn run_inline_tui(
 
                 // Transition to streaming mode
                 app.state.start_streaming();
+                log_state!("start_streaming");
 
                 // Start the chat stream
                 chat_stream = Some(create_chat_stream(
