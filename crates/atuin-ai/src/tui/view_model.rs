@@ -187,10 +187,9 @@ impl Blocks {
                 ConversationEvent::ToolCall { name, input, .. } => {
                     // Only render suggest_command tool calls
                     if name == "suggest_command" {
-                        // Note: purposefully not rendering the description here.
-
                         // Check if command is present and non-null
                         let command = input.get("command").and_then(|v| v.as_str());
+                        let description = input.get("description").and_then(|v| v.as_str());
 
                         // Build block content
                         let mut block_content = Vec::new();
@@ -200,6 +199,11 @@ impl Blocks {
                             block_content.push(Content::Command {
                                 text: cmd.to_string(),
                                 faded: false,
+                            });
+                        } else if let Some(desc) = description {
+                            // If no command but description provided, render description as text
+                            block_content.push(Content::Text {
+                                markdown: desc.to_string(),
                             });
                         }
 
