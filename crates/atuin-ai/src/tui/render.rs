@@ -147,19 +147,30 @@ fn render_block_content(frame: &mut Frame, content: &[Content], area: Rect, ctx:
 
     let content_width = usize::from(area.width).max(1);
 
-    // Build layout constraints for each content item
-    let constraints: Vec<Constraint> = content
-        .iter()
-        .map(|c| Constraint::Length(calculate_single_content_height(c, content_width)))
-        .collect();
+    // Build layout constraints for each content item WITH spacing between items
+    let mut constraints = Vec::new();
+    for (idx, c) in content.iter().enumerate() {
+        if idx > 0 {
+            constraints.push(Constraint::Length(1)); // blank line between items
+        }
+        constraints.push(Constraint::Length(calculate_single_content_height(
+            c,
+            content_width,
+        )));
+    }
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints(constraints)
         .split(area);
 
+    let mut chunk_idx = 0;
     for (idx, item) in content.iter().enumerate() {
-        render_single_content(frame, item, chunks[idx], ctx);
+        if idx > 0 {
+            chunk_idx += 1; // skip the blank line chunk
+        }
+        render_single_content(frame, item, chunks[chunk_idx], ctx);
+        chunk_idx += 1;
     }
 }
 
@@ -329,10 +340,19 @@ fn render_separator(frame: &mut Frame, area: Rect, ctx: &RenderContext, card_wid
 
 /// Calculate total height for all content items in a block
 fn calculate_block_height(content: &[Content], width: usize) -> u16 {
-    content
+    let content_height: u16 = content
         .iter()
         .map(|c| calculate_single_content_height(c, width))
-        .sum()
+        .sum();
+
+    // Add spacing between items (n-1 blank lines for n items)
+    let spacing = if content.len() > 1 {
+        (content.len() - 1) as u16
+    } else {
+        0
+    };
+
+    content_height.saturating_add(spacing)
 }
 
 /// Calculate height for a single content item
