@@ -6,7 +6,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block as RatatuiBlock, Borders, Padding, Paragraph},
+    widgets::{Block as RatatuiBlock, Borders, Padding, Paragraph, Wrap},
 };
 
 use super::state::AppState;
@@ -175,20 +175,30 @@ fn render_block_content(frame: &mut Frame, content: &[Content], area: Rect, ctx:
     }
 }
 
-/// Render a single content item
+/// Render a single content item using ratatui's native wrapping.
+/// Symbol is rendered at column 0, text wraps in columns 2+ (offset area).
 fn render_single_content(frame: &mut Frame, content: &Content, area: Rect, ctx: &RenderContext) {
-    let width = area.width as usize;
+    // Helper to create offset text area (2 chars for symbol column)
+    let text_area = Rect {
+        x: area.x.saturating_add(2),
+        y: area.y,
+        width: area.width.saturating_sub(2),
+        height: area.height,
+    };
 
     match content {
         Content::Input { text, .. } => {
             let symbol_style = Style::from_crossterm(ctx.theme.as_style(Meaning::Guidance));
             let text_style = Style::from_crossterm(ctx.theme.as_style(Meaning::Base));
 
-            let prefix = vec![Span::styled("> ", symbol_style)];
-            let lines = wrap_with_indent(prefix, text, text_style, width, "  ");
+            // Render ">" symbol at column 0
+            render_symbol(frame, ">", symbol_style, area);
 
-            let paragraph = Paragraph::new(lines);
-            frame.render_widget(paragraph, area);
+            // Render text in offset area with native wrapping
+            let paragraph = Paragraph::new(text.as_str())
+                .style(text_style)
+                .wrap(Wrap { trim: false });
+            frame.render_widget(paragraph, text_area);
         }
 
         Content::Command { text, faded } => {
@@ -198,33 +208,34 @@ fn render_single_content(frame: &mut Frame, content: &Content, area: Rect, ctx: 
                 text_style = text_style.add_modifier(Modifier::DIM);
             }
 
-            let prefix = vec![Span::styled("$ ", symbol_style)];
-            let lines = wrap_with_indent(prefix, text, text_style, width, "  ");
+            render_symbol(frame, "$", symbol_style, area);
 
-            let paragraph = Paragraph::new(lines);
-            frame.render_widget(paragraph, area);
+            let paragraph = Paragraph::new(text.as_str())
+                .style(text_style)
+                .wrap(Wrap { trim: false });
+            frame.render_widget(paragraph, text_area);
         }
 
         Content::Text { markdown } => {
+            // No symbol, just indent - render directly in offset area
             let text_style = Style::from_crossterm(ctx.theme.as_style(Meaning::Base));
 
-            // For markdown text, use simple indent (no symbol)
-            let prefix = vec![Span::raw("  ")];
-            let lines = wrap_with_indent(prefix, markdown, text_style, width, "  ");
-
-            let paragraph = Paragraph::new(lines);
-            frame.render_widget(paragraph, area);
+            let paragraph = Paragraph::new(markdown.as_str())
+                .style(text_style)
+                .wrap(Wrap { trim: false });
+            frame.render_widget(paragraph, text_area);
         }
 
         Content::Error { message } => {
             let symbol_style = Style::from_crossterm(ctx.theme.as_style(Meaning::AlertError));
             let text_style = Style::from_crossterm(ctx.theme.as_style(Meaning::Base));
 
-            let prefix = vec![Span::styled("! ", symbol_style)];
-            let lines = wrap_with_indent(prefix, message, text_style, width, "  ");
+            render_symbol(frame, "!", symbol_style, area);
 
-            let paragraph = Paragraph::new(lines);
-            frame.render_widget(paragraph, area);
+            let paragraph = Paragraph::new(message.as_str())
+                .style(text_style)
+                .wrap(Wrap { trim: false });
+            frame.render_widget(paragraph, text_area);
         }
 
         Content::Warning {
@@ -245,11 +256,12 @@ fn render_single_content(frame: &mut Frame, content: &Content, area: Rect, ctx: 
                 text.as_str()
             };
 
-            let prefix = vec![Span::styled(format!("{} ", symbol), symbol_style)];
-            let lines = wrap_with_indent(prefix, display_text, text_style, width, "  ");
+            render_symbol(frame, symbol, symbol_style, area);
 
-            let paragraph = Paragraph::new(lines);
-            frame.render_widget(paragraph, area);
+            let paragraph = Paragraph::new(display_text)
+                .style(text_style)
+                .wrap(Wrap { trim: false });
+            frame.render_widget(paragraph, text_area);
         }
 
         Content::Spinner {
@@ -258,10 +270,11 @@ fn render_single_content(frame: &mut Frame, content: &Content, area: Rect, ctx: 
         } => {
             let style = Style::from_crossterm(ctx.theme.as_style(Meaning::Annotation));
             let symbol = SPINNER_FRAMES[*spinner_frame % SPINNER_FRAMES.len()];
-            let text = format!("{} {}", symbol, status_text);
 
-            let paragraph = Paragraph::new(Span::styled(text, style));
-            frame.render_widget(paragraph, area);
+            render_symbol(frame, symbol, style, area);
+
+            let paragraph = Paragraph::new(status_text.as_str()).style(style);
+            frame.render_widget(paragraph, text_area);
         }
 
         Content::ToolStatus {
@@ -271,33 +284,47 @@ fn render_single_content(frame: &mut Frame, content: &Content, area: Rect, ctx: 
         } => {
             let style = Style::from_crossterm(ctx.theme.as_style(Meaning::Annotation));
 
-            let text = if let Some(label) = current_label {
-                // In-flight: show spinner + current tool
+            let (symbol, text) = if let Some(label) = current_label {
                 let spinner = SPINNER_FRAMES[*spinner_frame % SPINNER_FRAMES.len()];
-                if *completed_count > 0 {
+                let text = if *completed_count > 0 {
                     format!(
-                        "{} {} (used {} tool{})",
-                        spinner,
+                        "{} (used {} tool{})",
                         label,
                         completed_count,
                         if *completed_count == 1 { "" } else { "s" }
                     )
                 } else {
-                    format!("{} {}", spinner, label)
-                }
+                    label.clone()
+                };
+                (spinner, text)
             } else {
-                // Completed: show checkmark + summary
-                format!(
-                    "\u{2713} Used {} tool{}",
-                    completed_count,
-                    if *completed_count == 1 { "" } else { "s" }
+                (
+                    "\u{2713}",
+                    format!(
+                        "Used {} tool{}",
+                        completed_count,
+                        if *completed_count == 1 { "" } else { "s" }
+                    ),
                 )
             };
 
-            let paragraph = Paragraph::new(Span::styled(text, style));
-            frame.render_widget(paragraph, area);
+            render_symbol(frame, symbol, style, area);
+
+            let paragraph = Paragraph::new(text).style(style);
+            frame.render_widget(paragraph, text_area);
         }
     }
+}
+
+/// Render a single-character symbol at the start of an area
+fn render_symbol(frame: &mut Frame, symbol: &str, style: Style, area: Rect) {
+    let symbol_area = Rect {
+        x: area.x,
+        y: area.y,
+        width: 1,
+        height: 1,
+    };
+    frame.render_widget(Paragraph::new(symbol).style(style), symbol_area);
 }
 
 fn render_separator(frame: &mut Frame, area: Rect, ctx: &RenderContext, card_width: u16) {
@@ -341,22 +368,17 @@ fn calculate_block_height(content: &[Content], width: usize) -> u16 {
     content_height.saturating_add(spacing).saturating_add(1)
 }
 
-/// Calculate height for a single content item
+/// Calculate height for a single content item.
+/// Uses ratatui's Paragraph::line_count for consistency with rendering.
 fn calculate_single_content_height(content: &Content, width: usize) -> u16 {
-    // Use the same wrapping logic as render to ensure consistency
+    // Text area is offset by 2 for symbol column
+    let text_width = width.saturating_sub(2);
+
     match content {
-        Content::Input { text, .. } => {
-            wrapped_line_count_with_indent(text, width, 2) as u16 // "> " prefix
-        }
-        Content::Command { text, .. } => {
-            wrapped_line_count_with_indent(text, width, 2) as u16 // "$ " prefix
-        }
-        Content::Text { markdown } => {
-            wrapped_line_count_with_indent(markdown, width, 2) as u16 // "  " indent
-        }
-        Content::Error { message } => {
-            wrapped_line_count_with_indent(message, width, 2) as u16 // "! " prefix
-        }
+        Content::Input { text, .. } => line_count_wrapped(text, text_width),
+        Content::Command { text, .. } => line_count_wrapped(text, text_width),
+        Content::Text { markdown } => line_count_wrapped(markdown, text_width),
+        Content::Error { message } => line_count_wrapped(message, text_width),
         Content::Warning {
             text,
             pending_confirm,
@@ -367,160 +389,33 @@ fn calculate_single_content_height(content: &Content, width: usize) -> u16 {
             } else {
                 text.as_str()
             };
-            wrapped_line_count_with_indent(display_text, width, 2) as u16 // "! " or "? " prefix
+            line_count_wrapped(display_text, text_width)
         }
         Content::Spinner { .. } => 1,
-        Content::ToolStatus { .. } => 1, // Always single line
+        Content::ToolStatus { .. } => 1,
     }
 }
 
-/// Count lines needed when wrapping with a prefix/indent
-fn wrapped_line_count_with_indent(text: &str, width: usize, indent_len: usize) -> usize {
+/// Count lines when text is wrapped at given width.
+/// Simple character-based calculation that approximates ratatui's wrapping.
+fn line_count_wrapped(text: &str, width: usize) -> u16 {
     if width == 0 {
         return 1;
     }
 
-    let available_first = width.saturating_sub(indent_len);
-    let available_rest = width.saturating_sub(indent_len);
+    let mut total_lines = 0u16;
 
-    let mut total_lines = 0;
-
-    for paragraph in text.split('\n') {
-        if paragraph.is_empty() {
+    for line in text.split('\n') {
+        if line.is_empty() {
             total_lines += 1;
-            continue;
-        }
-
-        let char_count = paragraph.chars().count();
-
-        // First line
-        let first_line_chars = char_count.min(available_first);
-        total_lines += 1;
-
-        // Remaining chars for continuation lines
-        let remaining = char_count.saturating_sub(first_line_chars);
-        if remaining > 0 && available_rest > 0 {
-            total_lines += remaining.div_ceil(available_rest);
+        } else {
+            // Ceiling division: how many lines needed for this text at this width
+            let char_count = line.chars().count();
+            total_lines += char_count.div_ceil(width).max(1) as u16;
         }
     }
 
     total_lines.max(1)
-}
-
-/// Wrap text with a prefix on the first line and indent on continuation lines.
-/// Returns a Vec of Lines ready for rendering.
-fn wrap_with_indent<'a>(
-    prefix_spans: Vec<Span<'a>>,
-    text: &str,
-    text_style: Style,
-    width: usize,
-    indent: &'static str,
-) -> Vec<Line<'a>> {
-    if width == 0 {
-        let mut spans = prefix_spans;
-        spans.push(Span::styled(text.to_string(), text_style));
-        return vec![Line::from(spans)];
-    }
-
-    let prefix_len: usize = prefix_spans.iter().map(|s| s.content.chars().count()).sum();
-    let indent_len = indent.chars().count();
-
-    let mut lines = Vec::new();
-    let mut first_line = true;
-
-    for paragraph in text.split('\n') {
-        let mut remaining = paragraph;
-
-        while !remaining.is_empty() {
-            let available = if first_line {
-                width.saturating_sub(prefix_len)
-            } else {
-                width.saturating_sub(indent_len)
-            };
-
-            if available == 0 {
-                // Can't fit anything, just take one char
-                let (chunk, rest) =
-                    remaining.split_at(remaining.chars().next().map(|c| c.len_utf8()).unwrap_or(0));
-                if first_line {
-                    let mut spans = prefix_spans.clone();
-                    spans.push(Span::styled(chunk.to_string(), text_style));
-                    lines.push(Line::from(spans));
-                    first_line = false;
-                } else {
-                    lines.push(Line::from(vec![
-                        Span::raw(indent),
-                        Span::styled(chunk.to_string(), text_style),
-                    ]));
-                }
-                remaining = rest;
-                continue;
-            }
-
-            // Find break point (word boundary or max chars)
-            let char_indices: Vec<(usize, char)> = remaining.char_indices().collect();
-            let max_chars = available.min(char_indices.len());
-
-            // Try to break at word boundary
-            let break_at = if char_indices.len() <= available {
-                // Whole remaining string fits
-                remaining.len()
-            } else {
-                // Find last space before max_chars, otherwise break at max_chars
-                let max_byte = char_indices
-                    .get(max_chars)
-                    .map(|(i, _)| *i)
-                    .unwrap_or(remaining.len());
-                let mut break_byte = max_byte;
-                for i in (0..max_chars).rev() {
-                    if char_indices[i].1 == ' ' {
-                        break_byte = char_indices[i].0;
-                        break;
-                    }
-                }
-                break_byte
-            };
-
-            let (chunk, rest) = remaining.split_at(break_at);
-            let chunk = chunk.trim_end();
-            let rest = rest.trim_start();
-
-            if first_line {
-                let mut spans = prefix_spans.clone();
-                if !chunk.is_empty() {
-                    spans.push(Span::styled(chunk.to_string(), text_style));
-                }
-                lines.push(Line::from(spans));
-                first_line = false;
-            } else {
-                lines.push(Line::from(vec![
-                    Span::raw(indent),
-                    Span::styled(chunk.to_string(), text_style),
-                ]));
-            }
-
-            remaining = rest;
-            if remaining.is_empty() {
-                break;
-            }
-        }
-
-        // Handle empty paragraphs (newlines in source)
-        if paragraph.is_empty() {
-            if first_line {
-                lines.push(Line::from(prefix_spans.clone()));
-                first_line = false;
-            } else {
-                lines.push(Line::from(vec![Span::raw(indent)]));
-            }
-        }
-    }
-
-    if lines.is_empty() {
-        lines.push(Line::from(prefix_spans));
-    }
-
-    lines
 }
 
 /// Calculate cursor position accounting for prefix and wrapping
