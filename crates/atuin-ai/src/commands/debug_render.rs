@@ -148,6 +148,7 @@ impl DebugInput {
             was_interrupted: self.was_interrupted,
             spinner_frame: self.spinner_frame,
             streaming_started: None,
+            confirmation_pending: false,
         }
     }
 }
