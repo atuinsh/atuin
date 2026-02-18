@@ -1,0 +1,295 @@
+[
+  {
+    "name": "01_empty_input",
+    "description": "Initial state with empty input prompt",
+    "state": {
+      "events": [],
+      "mode": "Input",
+      "input": "",
+      "cursor_pos": 0
+    }
+  },
+  {
+    "name": "02_typing_input",
+    "description": "User typing in input field",
+    "state": {
+      "events": [],
+      "mode": "Input",
+      "input": "list all files",
+      "cursor_pos": 14
+    }
+  },
+  {
+    "name": "03_generating_spinner",
+    "description": "Waiting for API response (spinner)",
+    "state": {
+      "events": [
+        {"type": "user_message", "content": "list all files"}
+      ],
+      "mode": "Generating",
+      "spinner_frame": 0
+    }
+  },
+  {
+    "name": "04_streaming_text",
+    "description": "Text streaming in from API",
+    "state": {
+      "events": [
+        {"type": "user_message", "content": "what is rust?"}
+      ],
+      "mode": "Streaming",
+      "streaming_text": "Rust is a systems programming language focused on safety, speed, and",
+      "spinner_frame": 2
+    }
+  },
+  {
+    "name": "05_simple_command",
+    "description": "Simple command suggestion",
+    "state": {
+      "events": [
+        {"type": "user_message", "content": "list all files"},
+        {"type": "tool_call", "id": "1", "name": "suggest_command", "input": {"command": "ls -la"}}
+      ],
+      "mode": "Review"
+    }
+  },
+  {
+    "name": "06_command_with_long_text",
+    "description": "Command that wraps to multiple lines",
+    "state": {
+      "events": [
+        {"type": "user_message", "content": "find large files"},
+        {"type": "tool_call", "id": "1", "name": "suggest_command", "input": {"command": "find /home -type f -size +100M -exec ls -lh {} \\; 2>/dev/null | sort -k5 -h"}}
+      ],
+      "mode": "Review"
+    }
+  },
+  {
+    "name": "07_conversation_only_response",
+    "description": "Response without command (conversation mode)",
+    "state": {
+      "events": [
+        {"type": "user_message", "content": "what does the -la flag do?"},
+        {"type": "text", "content": "The `-la` flags combine two options:\n\n- `-l` shows long format with permissions, owner, size, and date\n- `-a` shows all files including hidden ones (starting with .)"}
+      ],
+      "mode": "Review"
+    }
+  },
+  {
+    "name": "08_multi_turn_conversation",
+    "description": "Multiple turns of conversation",
+    "state": {
+      "events": [
+        {"type": "user_message", "content": "list all files"},
+        {"type": "tool_call", "id": "1", "name": "suggest_command", "input": {"command": "ls -la"}},
+        {"type": "user_message", "content": "can you explain those flags?"},
+        {"type": "text", "content": "The -l flag shows long format with permissions, -a shows hidden files."}
+      ],
+      "mode": "Review"
+    }
+  },
+  {
+    "name": "09_tool_call_in_progress",
+    "description": "Tool being executed (spinner)",
+    "state": {
+      "events": [
+        {"type": "user_message", "content": "what is the latest version of node?"},
+        {"type": "tool_call", "id": "1", "name": "web_search", "input": {"query": "nodejs latest version"}}
+      ],
+      "mode": "Streaming",
+      "streaming_text": "",
+      "spinner_frame": 1
+    }
+  },
+  {
+    "name": "10_tool_calls_completed_with_text",
+    "description": "Tools finished, text streaming",
+    "state": {
+      "events": [
+        {"type": "user_message", "content": "what is the latest version of node?"},
+        {"type": "tool_call", "id": "1", "name": "web_search", "input": {"query": "nodejs latest version"}},
+        {"type": "tool_result", "tool_use_id": "1", "content": "Node.js v22.0.0"}
+      ],
+      "mode": "Streaming",
+      "streaming_text": "The latest version of Node.js is v22.0.0, released in April 2024.",
+      "spinner_frame": 0
+    }
+  },
+  {
+    "name": "11_tool_calls_in_review",
+    "description": "Completed tools shown in review mode",
+    "state": {
+      "events": [
+        {"type": "user_message", "content": "what is the latest version of node?"},
+        {"type": "tool_call", "id": "1", "name": "web_search", "input": {"query": "nodejs latest version"}},
+        {"type": "tool_result", "tool_use_id": "1", "content": "Node.js v22.0.0"},
+        {"type": "tool_call", "id": "2", "name": "web_fetch", "input": {"url": "https://nodejs.org"}},
+        {"type": "tool_result", "tool_use_id": "2", "content": "..."},
+        {"type": "text", "content": "The latest version of Node.js is **v22.0.0**, released in April 2024. Key features include:\n\n- Native WebSocket client\n- Improved ES modules support\n- Better performance"}
+      ],
+      "mode": "Review"
+    }
+  },
+  {
+    "name": "12_error_state",
+    "description": "Error message displayed",
+    "state": {
+      "events": [
+        {"type": "user_message", "content": "do something"}
+      ],
+      "mode": "Error",
+      "error": "Failed to connect to API: connection timeout"
+    }
+  },
+  {
+    "name": "13_dangerous_command",
+    "description": "Dangerous command with warning",
+    "state": {
+      "events": [
+        {"type": "user_message", "content": "delete all files in home"},
+        {"type": "tool_call", "id": "1", "name": "suggest_command", "input": {
+          "command": "rm -rf ~/*",
+          "dangerous": true,
+          "warning": "This will permanently delete all files in your home directory including documents, configurations, and SSH keys."
+        }}
+      ],
+      "mode": "Review",
+      "confirmation_pending": false
+    }
+  },
+  {
+    "name": "14_dangerous_command_confirming",
+    "description": "Dangerous command awaiting second Enter",
+    "state": {
+      "events": [
+        {"type": "user_message", "content": "delete all files in home"},
+        {"type": "tool_call", "id": "1", "name": "suggest_command", "input": {
+          "command": "rm -rf ~/*",
+          "dangerous": true,
+          "warning": "This will permanently delete all files in your home directory."
+        }}
+      ],
+      "mode": "Review",
+      "confirmation_pending": true
+    }
+  },
+  {
+    "name": "15_low_confidence",
+    "description": "Low confidence command with warning",
+    "state": {
+      "events": [
+        {"type": "user_message", "content": "do that thing with the files"},
+        {"type": "tool_call", "id": "1", "name": "suggest_command", "input": {
+          "command": "ls -la",
+          "confidence": "low",
+          "warning": "I'm not entirely sure what you mean by 'that thing'. This lists files - is that what you wanted?"
+        }}
+      ],
+      "mode": "Review"
+    }
+  },
+  {
+    "name": "16_long_user_input",
+    "description": "User input that wraps",
+    "state": {
+      "events": [
+        {"type": "user_message", "content": "I need a command that will find all JavaScript files in my project, excluding node_modules, and count the total lines of code"}
+      ],
+      "mode": "Generating",
+      "spinner_frame": 0
+    }
+  },
+  {
+    "name": "17_long_text_response",
+    "description": "Long text response that wraps multiple times",
+    "state": {
+      "events": [
+        {"type": "user_message", "content": "explain git"},
+        {"type": "text", "content": "Git is a distributed version control system created by Linus Torvalds in 2005. It tracks changes to files and enables collaboration between developers. Key concepts include:\n\n- **Repository**: A directory containing your project and its history\n- **Commit**: A snapshot of your changes with a message\n- **Branch**: An independent line of development\n- **Merge**: Combining changes from different branches\n- **Remote**: A version of your repository hosted elsewhere (like GitHub)"}
+      ],
+      "mode": "Review"
+    }
+  },
+  {
+    "name": "18_streaming_with_tool_in_progress",
+    "description": "Tool in progress while streaming",
+    "state": {
+      "events": [
+        {"type": "user_message", "content": "search for rust async patterns"},
+        {"type": "text", "content": "Let me search for that..."},
+        {"type": "tool_call", "id": "1", "name": "web_search", "input": {"query": "rust async patterns"}}
+      ],
+      "mode": "Streaming",
+      "streaming_text": "",
+      "spinner_frame": 2
+    }
+  },
+  {
+    "name": "19_multiple_commands_in_conversation",
+    "description": "Multiple command suggestions across turns",
+    "state": {
+      "events": [
+        {"type": "user_message", "content": "create a new directory called test"},
+        {"type": "tool_call", "id": "1", "name": "suggest_command", "input": {"command": "mkdir test"}},
+        {"type": "user_message", "content": "now cd into it"},
+        {"type": "tool_call", "id": "2", "name": "suggest_command", "input": {"command": "cd test"}},
+        {"type": "user_message", "content": "create a file"},
+        {"type": "tool_call", "id": "3", "name": "suggest_command", "input": {"command": "touch file.txt"}}
+      ],
+      "mode": "Review"
+    }
+  },
+  {
+    "name": "20_empty_command_with_description",
+    "description": "Tool call with null command (conversation only)",
+    "state": {
+      "events": [
+        {"type": "user_message", "content": "what's the weather like?"},
+        {"type": "tool_call", "id": "1", "name": "suggest_command", "input": {
+          "command": null,
+          "description": "I can't check the weather directly, but you could use: curl wttr.in"
+        }}
+      ],
+      "mode": "Review"
+    }
+  },
+  {
+    "name": "21_status_processing",
+    "description": "Streaming with Processing status",
+    "state": {
+      "events": [
+        {"type": "user_message", "content": "analyze this code"}
+      ],
+      "mode": "Streaming",
+      "streaming_text": "",
+      "streaming_status": "Processing",
+      "spinner_frame": 0
+    }
+  },
+  {
+    "name": "22_status_thinking",
+    "description": "Streaming with Thinking status",
+    "state": {
+      "events": [
+        {"type": "user_message", "content": "how do I optimize this query?"}
+      ],
+      "mode": "Streaming",
+      "streaming_text": "",
+      "streaming_status": "Thinking",
+      "spinner_frame": 1
+    }
+  },
+  {
+    "name": "23_follow_up_input",
+    "description": "Follow-up input after command",
+    "state": {
+      "events": [
+        {"type": "user_message", "content": "list files"},
+        {"type": "tool_call", "id": "1", "name": "suggest_command", "input": {"command": "ls -la"}}
+      ],
+      "mode": "Input",
+      "input": "but only show directories",
+      "cursor_pos": 24
+    }
+  }
+]
