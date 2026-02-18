@@ -79,10 +79,16 @@ fn render_view(frame: &mut Frame, view: &Blocks, ctx: &RenderContext) {
     frame.render_widget(outer_block, card);
 
     // Render blocks
-    render_blocks_content(frame, view, ctx, inner_area);
+    render_blocks_content(frame, view, ctx, inner_area, card.width);
 }
 
-fn render_blocks_content(frame: &mut Frame, view: &Blocks, ctx: &RenderContext, area: Rect) {
+fn render_blocks_content(
+    frame: &mut Frame,
+    view: &Blocks,
+    ctx: &RenderContext,
+    area: Rect,
+    card_width: u16,
+) {
     let content_width = usize::from(area.width).max(1);
 
     // Build layout constraints
@@ -107,7 +113,7 @@ fn render_blocks_content(frame: &mut Frame, view: &Blocks, ctx: &RenderContext, 
     let mut chunk_idx = 0;
     for (idx, block) in view.items.iter().enumerate() {
         if idx > 0 {
-            render_separator(frame, chunks[chunk_idx], ctx);
+            render_separator(frame, chunks[chunk_idx], ctx, card_width);
             chunk_idx += 1;
         }
 
@@ -287,13 +293,27 @@ fn render_single_content(frame: &mut Frame, content: &Content, area: Rect, ctx: 
     }
 }
 
-fn render_separator(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
+fn render_separator(frame: &mut Frame, area: Rect, ctx: &RenderContext, card_width: u16) {
     let style = Style::from_crossterm(ctx.theme.as_style(Meaning::Muted));
-    let width = usize::from(area.width).max(1);
-    let separator = "\u{2500}".repeat(width); // box drawing horizontal
+
+    // Build separator: ├ + ─ repeated + ┤ spanning the full card width
+    // -2 for the ├ and ┤ characters themselves
+    let inner_width = card_width.saturating_sub(2) as usize;
+    let separator = format!(
+        "\u{251c}{}\u{2524}",           // ├ ... ┤
+        "\u{2500}".repeat(inner_width)  // ─
+    );
 
     let paragraph = Paragraph::new(Span::styled(separator, style));
-    frame.render_widget(paragraph, area);
+
+    // Render at x offset to overlap the border (area is inside padding, border is 2 chars left)
+    let sep_area = Rect {
+        x: area.x.saturating_sub(2), // move left to overlap left border
+        y: area.y,
+        width: card_width,
+        height: 1,
+    };
+    frame.render_widget(paragraph, sep_area);
 }
 
 /// Calculate total height for all content items in a block
