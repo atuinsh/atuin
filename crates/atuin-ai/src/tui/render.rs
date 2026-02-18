@@ -44,6 +44,7 @@ fn render_view(frame: &mut Frame, view: &Blocks, ctx: &RenderContext) {
     for (idx, block) in view.items.iter().enumerate() {
         if idx > 0 {
             total_height = total_height.saturating_add(1); // separator
+            total_height = total_height.saturating_add(1); // leading blank after separator
         }
         total_height =
             total_height.saturating_add(calculate_block_height(&block.content, content_width));
@@ -97,6 +98,7 @@ fn render_blocks_content(
     for (idx, block) in view.items.iter().enumerate() {
         if idx > 0 {
             constraints.push(Constraint::Length(1)); // separator
+            constraints.push(Constraint::Length(1)); // leading blank after separator
         }
         let height = calculate_block_height(&block.content, content_width);
         constraints.push(Constraint::Length(height));
@@ -116,6 +118,7 @@ fn render_blocks_content(
         if idx > 0 {
             render_separator(frame, chunks[chunk_idx], ctx, card_width);
             chunk_idx += 1;
+            chunk_idx += 1; // skip leading blank (it's just empty space)
         }
 
         render_block_content(frame, &block.content, chunks[chunk_idx], ctx);
@@ -397,25 +400,14 @@ fn calculate_single_content_height(content: &Content, width: usize) -> u16 {
 }
 
 /// Count lines when text is wrapped at given width.
-/// Simple character-based calculation that approximates ratatui's wrapping.
+/// Uses ratatui's Paragraph::line_count for accurate wrapping calculation.
 fn line_count_wrapped(text: &str, width: usize) -> u16 {
     if width == 0 {
         return 1;
     }
 
-    let mut total_lines = 0u16;
-
-    for line in text.split('\n') {
-        if line.is_empty() {
-            total_lines += 1;
-        } else {
-            // Ceiling division: how many lines needed for this text at this width
-            let char_count = line.chars().count();
-            total_lines += char_count.div_ceil(width).max(1) as u16;
-        }
-    }
-
-    total_lines.max(1)
+    let paragraph = Paragraph::new(text).wrap(Wrap { trim: false });
+    paragraph.line_count(width as u16).max(1) as u16
 }
 
 /// Calculate cursor position accounting for prefix and wrapping

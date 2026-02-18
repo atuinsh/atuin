@@ -31,7 +31,7 @@ reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 crossterm = { workspace = true, features = ["use-dev-tty", "event-stream"] }
-ratatui = { workspace = true }
+ratatui = { workspace = true, features = ["unstable-rendered-line-info"] }
 futures = "0.3"
 eventsource-stream = "0.2"
 pulldown-cmark = "0.13.0"
