@@ -202,12 +202,14 @@ impl Blocks {
                         }
 
                         // Extract warning data from tool call input
-                        // danger: "high" | "medium" | "low" - high/medium trigger warning
+                        // danger: "high" | "medium" | "med" | "low" - high/medium/med trigger warning
                         let danger_level = input
                             .get("danger")
                             .and_then(|v| v.as_str())
                             .unwrap_or("low");
-                        let is_dangerous = danger_level == "high" || danger_level == "medium";
+                        let is_dangerous = danger_level == "high"
+                            || danger_level == "medium"
+                            || danger_level == "med";
                         let danger_notes = input.get("danger_notes").and_then(|v| v.as_str());
 
                         // confidence: "high" | "medium" | "low" - low triggers warning
