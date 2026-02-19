@@ -397,6 +397,7 @@ impl AppState {
 
     /// Add a tool call event during streaming
     /// Flushes any pending streaming text first to maintain correct event order
+    /// For suggest_command, also transitions to Review mode since that ends the LLM turn
     pub fn add_tool_call(&mut self, id: String, name: String, input: serde_json::Value) {
         // Flush streaming text before adding tool call to maintain correct order
         let content = std::mem::take(&mut self.streaming_text);
@@ -407,8 +408,17 @@ impl AppState {
             });
         }
 
+        // suggest_command marks the end of the LLM turn - transition to Review
+        let is_suggest_command = name == "suggest_command";
+
         self.events
             .push(ConversationEvent::ToolCall { id, name, input });
+
+        if is_suggest_command {
+            self.streaming_status = None;
+            self.streaming_started = None;
+            self.mode = AppMode::Review;
+        }
     }
 
     /// Add a tool result event during streaming
