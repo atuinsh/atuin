@@ -401,12 +401,32 @@ impl AppState {
     }
 
     /// Append text chunk during streaming
+    /// Trims leading whitespace from the first chunk(s) since LLM responses often start with \n\n
     pub fn append_streaming_text(&mut self, chunk: &str) {
-        self.streaming_text.push_str(chunk);
+        if self.streaming_text.is_empty() {
+            // First chunk(s): trim leading whitespace
+            let trimmed = chunk.trim_start();
+            if !trimmed.is_empty() {
+                self.streaming_text.push_str(trimmed);
+            }
+        } else {
+            // Subsequent chunks: append as-is
+            self.streaming_text.push_str(chunk);
+        }
     }
 
     /// Add a tool call event during streaming
+    /// Flushes any pending streaming text first to maintain correct event order
     pub fn add_tool_call(&mut self, id: String, name: String, input: serde_json::Value) {
+        // Flush streaming text before adding tool call to maintain correct order
+        let content = std::mem::take(&mut self.streaming_text);
+        let trimmed = content.trim_start();
+        if !trimmed.is_empty() {
+            self.events.push(ConversationEvent::Text {
+                content: trimmed.to_string(),
+            });
+        }
+
         self.events
             .push(ConversationEvent::ToolCall { id, name, input });
     }

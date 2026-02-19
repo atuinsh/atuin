@@ -14,9 +14,32 @@ use super::view_model::{Blocks, Content, WarningKind};
 
 const SPINNER_FRAMES: [&str; 4] = ["/", "-", "\\", "|"];
 
+/// Fixed card width for the TUI
+const CARD_WIDTH: u16 = 64;
+
 pub struct RenderContext<'a> {
     pub theme: &'a Theme,
     pub anchor_col: u16,
+}
+
+/// Calculate the height needed to render the current state.
+/// Used to dynamically resize the viewport before rendering.
+pub fn calculate_needed_height(state: &AppState) -> u16 {
+    let view = Blocks::from_state(state);
+    let content_width = usize::from(CARD_WIDTH.saturating_sub(4)).max(1);
+
+    let mut total_height = 0u16;
+    for (idx, block) in view.items.iter().enumerate() {
+        if idx > 0 {
+            total_height = total_height.saturating_add(1); // separator
+            total_height = total_height.saturating_add(1); // leading blank after separator
+        }
+        total_height =
+            total_height.saturating_add(calculate_block_height(&block.content, content_width));
+    }
+
+    // Add borders (2) + top padding (1), minimum 5
+    total_height.saturating_add(3).max(5)
 }
 
 /// Main render function: derives view model from state, then renders it
@@ -31,15 +54,15 @@ pub fn render(frame: &mut Frame, state: &AppState, ctx: &RenderContext) {
 fn render_view(frame: &mut Frame, view: &Blocks, ctx: &RenderContext) {
     let area = frame.area();
 
-    // Calculate frame dimensions (64 chars wide max, min 32)
-    let desired_width = 64u16.min(area.width.saturating_sub(2)).max(32);
+    // Calculate frame dimensions (fixed width, min 32 if terminal is narrow)
+    let desired_width = CARD_WIDTH.min(area.width.saturating_sub(2)).max(32);
     let content_width = usize::from(desired_width.saturating_sub(4)).max(1);
 
     // Position at anchor_col
     let max_x = area.x + area.width.saturating_sub(desired_width);
     let preferred_x = area.x + ctx.anchor_col.saturating_sub(2);
 
-    // Calculate height from view model
+    // Calculate height from view model (no clipping - viewport should be pre-sized)
     let mut total_height = 0u16;
     for (idx, block) in view.items.iter().enumerate() {
         if idx > 0 {
@@ -52,7 +75,6 @@ fn render_view(frame: &mut Frame, view: &Blocks, ctx: &RenderContext) {
 
     let desired_height = total_height
         .saturating_add(3) // borders (2) + top padding (1), no bottom padding
-        .min(area.height.max(1))
         .max(5);
 
     let card = Rect {
@@ -410,24 +432,42 @@ fn line_count_wrapped(text: &str, width: usize) -> u16 {
     paragraph.line_count(width as u16).max(1) as u16
 }
 
-/// Calculate cursor position accounting for prefix and wrapping
-fn calculate_cursor_position(_input: &str, cursor_pos: usize, width: usize) -> (u16, u16) {
-    if width == 0 {
-        return (0, 0);
+/// Calculate cursor position accounting for wrapping
+///
+/// The text is rendered in an offset area (starting at x+2), so we calculate
+/// cursor position within the text area only - no prefix included.
+fn calculate_cursor_position(input: &str, cursor_pos: usize, width: usize) -> (u16, u16) {
+    // Text area is offset by 2 for symbol column
+    let text_width = width.saturating_sub(2);
+    if text_width == 0 {
+        return (0, 2); // At least past the symbol
     }
 
-    // The visible prompt line is `> {input}`
-    // cursor_pos is character position in input
-    // Need to account for "> " prefix (2 chars)
+    // Build text up to cursor position
+    let chars: Vec<char> = input.chars().collect();
+    let cursor_pos = cursor_pos.min(chars.len());
 
-    let prefix_len = 2;
-    let total_pos = prefix_len + cursor_pos;
+    // Track which row we're on and where each row starts
+    let mut row = 0usize;
+    let mut row_start_idx = 0usize;
+    let mut prev_line_count = 1usize;
 
-    // Simple calculation: row = total_pos / width, col = total_pos % width
-    // This is approximate - for perfect word-wrap cursor tracking,
-    // we'd need to match ratatui's exact wrap algorithm
-    let row = total_pos / width;
-    let col = total_pos % width;
+    // Check line count after each character to detect line breaks
+    for i in 1..=cursor_pos {
+        let partial: String = chars[..i].iter().collect();
+        let p = Paragraph::new(partial.as_str()).wrap(Wrap { trim: false });
+        let line_count = p.line_count(text_width as u16);
+
+        if line_count > prev_line_count {
+            // A new line started - the current character (i-1) is on the new line
+            row = line_count - 1;
+            row_start_idx = i - 1;
+            prev_line_count = line_count;
+        }
+    }
+
+    // Column is offset from row start, plus 2 for symbol
+    let col = (cursor_pos - row_start_idx) + 2;
 
     (row as u16, col as u16)
 }

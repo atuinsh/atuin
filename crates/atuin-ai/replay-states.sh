@@ -5,7 +5,7 @@
 #   With entry number: renders just that frame
 
 set -e
-cd "$(dirname "$0")"
+# cd "$(dirname "$0")"
 
 STATE_FILE="${1:-}"
 ENTRY_FILTER="${2:-}"
