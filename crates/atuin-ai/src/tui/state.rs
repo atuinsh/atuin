@@ -500,6 +500,7 @@ impl AppState {
     }
 
     /// Check if the most recent command suggestion is marked dangerous
+    /// Checks the `danger` field for "high" or "medium" values
     pub fn is_current_command_dangerous(&self) -> bool {
         self.events
             .iter()
@@ -508,12 +509,11 @@ impl AppState {
                 if let ConversationEvent::ToolCall { name, input, .. } = e
                     && name == "suggest_command"
                 {
-                    return Some(
-                        input
-                            .get("dangerous")
-                            .and_then(|v| v.as_bool())
-                            .unwrap_or(false),
-                    );
+                    let danger_level = input
+                        .get("danger")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("low");
+                    return Some(danger_level == "high" || danger_level == "medium");
                 }
                 None
             })

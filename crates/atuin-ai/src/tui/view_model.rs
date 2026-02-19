@@ -202,32 +202,40 @@ impl Blocks {
                         }
 
                         // Extract warning data from tool call input
-                        let dangerous = input
-                            .get("dangerous")
-                            .and_then(|v| v.as_bool())
-                            .unwrap_or(false);
-                        let confidence_low = input
+                        // danger: "high" | "medium" | "low" - high/medium trigger warning
+                        let danger_level = input
+                            .get("danger")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("low");
+                        let is_dangerous = danger_level == "high" || danger_level == "medium";
+                        let danger_notes = input.get("danger_notes").and_then(|v| v.as_str());
+
+                        // confidence: "high" | "medium" | "low" - low triggers warning
+                        let confidence_level = input
                             .get("confidence")
                             .and_then(|v| v.as_str())
-                            .map(|s| s == "low")
-                            .unwrap_or(false);
-                        let warning_text = input.get("warning").and_then(|v| v.as_str());
+                            .unwrap_or("high");
+                        let is_low_confidence = confidence_level == "low";
+                        let confidence_notes =
+                            input.get("confidence_notes").and_then(|v| v.as_str());
 
-                        // Add warning content if applicable
-                        if dangerous {
-                            if let Some(text) = warning_text {
+                        // Add warning content if applicable (danger takes precedence)
+                        if is_dangerous {
+                            if let Some(notes) = danger_notes {
                                 block_content.push(Content::Warning {
                                     kind: WarningKind::Danger,
-                                    text: text.to_string(),
+                                    text: notes.to_string(),
                                     pending_confirm: state.confirmation_pending,
                                 });
                             }
-                        } else if confidence_low && let Some(text) = warning_text {
-                            block_content.push(Content::Warning {
-                                kind: WarningKind::LowConfidence,
-                                text: text.to_string(),
-                                pending_confirm: false, // low confidence never enters confirm mode
-                            });
+                        } else if is_low_confidence {
+                            if let Some(notes) = confidence_notes {
+                                block_content.push(Content::Warning {
+                                    kind: WarningKind::LowConfidence,
+                                    text: notes.to_string(),
+                                    pending_confirm: false, // low confidence doesn't require confirm
+                                });
+                            }
                         }
 
                         // Only add block if there's content
