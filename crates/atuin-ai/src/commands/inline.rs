@@ -435,9 +435,22 @@ async fn run_inline_tui(
             textarea: Some(&app.state.textarea),
             max_height: actual_height,
         };
-        guard.terminal().draw(|frame| {
+        // Handle draw errors gracefully - cursor position reads can fail during resize
+        if let Err(e) = guard.terminal().draw(|frame| {
             render(frame, &app.state, &ctx);
-        })?;
+        }) {
+            let err_msg = e.to_string();
+            if err_msg.contains("cursor position") {
+                // Cursor position read failed (common during terminal resize)
+                // Skip this frame and continue - next frame will likely succeed
+                tracing::debug!(
+                    "Skipping frame due to cursor position read error: {}",
+                    err_msg
+                );
+                continue;
+            }
+            return Err(e.into());
+        }
 
         // Get next event
         let event = event_loop.run().await?;
