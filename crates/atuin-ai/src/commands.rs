@@ -2,7 +2,9 @@ use clap::{Parser, Subcommand};
 use tracing::Level;
 use tracing_subscriber::{EnvFilter, Layer, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
+#[cfg(debug_assertions)]
 pub mod debug_render;
+
 pub mod init;
 pub mod inline;
 
@@ -28,13 +30,10 @@ struct Cli {
 #[derive(Subcommand, Debug)]
 enum Commands {
     /// Initialize shell integration
-    Init,
-
-    /// Complete current command line
-    Complete {
-        /// Current command line to complete
-        #[arg(value_name = "COMMAND")]
-        command: Option<String>,
+    Init {
+        /// Shell to generate integration for; defaults to "auto"
+        #[arg(value_name = "SHELL", default_value = "auto")]
+        shell: String,
     },
 
     /// Inline completion mode with small TUI overlay
@@ -56,10 +55,8 @@ enum Commands {
         debug_state: Option<String>,
     },
 
-    /// Interactive mode with TUI
-    Interactive,
-
     /// Debug render: output a single frame from JSON state (dev tool)
+    #[cfg(debug_assertions)]
     DebugRender {
         /// Input file (reads from stdin if not provided)
         #[arg(short, long)]
@@ -77,7 +74,7 @@ pub async fn run() -> eyre::Result<()> {
     init_tracing(cli.verbose);
 
     match cli.command {
-        Commands::Init => init::run().await,
+        Commands::Init { shell } => init::run(shell).await,
         Commands::Inline {
             command,
             natural_language,
@@ -94,10 +91,7 @@ pub async fn run() -> eyre::Result<()> {
             )
             .await
         }
-        Commands::Complete { command } => {
-            inline::run(command, false, cli.api_endpoint, cli.api_token, false, None).await
-        }
-        Commands::Interactive => Err(eyre::eyre!("interactive mode not implemented yet")),
+        #[cfg(debug_assertions)]
         Commands::DebugRender { input, format } => {
             let output_format = match format.as_str() {
                 "plain" => debug_render::OutputFormat::Plain,
@@ -139,5 +133,30 @@ fn init_tracing(verbose: bool) {
         subscriber.with(console).init();
     } else {
         subscriber.init();
+    }
+}
+
+pub fn detect_shell() -> Option<String> {
+    if let Ok(shell) = std::env::var("ATUIN_SHELL")
+        && !shell.trim().is_empty()
+    {
+        return Some(shell);
+    }
+
+    let shell = std::env::var("SHELL")
+        .ok()
+        .and_then(|value| {
+            std::path::Path::new(&value)
+                .file_name()
+                .map(std::ffi::OsStr::to_string_lossy)
+                .map(std::borrow::Cow::into_owned)
+        })
+        .filter(|value| !value.trim().is_empty());
+
+    match shell.as_deref() {
+        Some("zsh") => Some("zsh".to_string()),
+        Some("fish") => Some("fish".to_string()),
+        Some("bash") => Some("bash".to_string()),
+        _ => None,
     }
 }

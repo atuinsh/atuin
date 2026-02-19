@@ -1,7 +1,7 @@
 [package]
 name = "atuin-ai"
 edition = "2024"
-description = "ai library for atuin"
+description = "AI integration for Atuin CLI"
 
 rust-version = { workspace = true }
 version = { workspace = true }
