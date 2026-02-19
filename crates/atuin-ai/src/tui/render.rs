@@ -530,7 +530,7 @@ fn word_wrap_line_count_with_last_width(text: &str, width: usize) -> (u16, usize
                 if word_width > width {
                     // Word is longer than width, it will be split by character
                     // Count how many lines it takes
-                    line_count += ((word_width + width - 1) / width) as u16;
+                    line_count += word_width.div_ceil(width) as u16;
                     current_line_width = word_width % width;
                     if current_line_width == 0 {
                         current_line_width = 0;
@@ -550,7 +550,7 @@ fn word_wrap_line_count_with_last_width(text: &str, width: usize) -> (u16, usize
                     line_count += 1;
                     if word_width > width {
                         // Word itself is too long, will be split
-                        line_count += ((word_width + width - 1) / width) as u16;
+                        line_count += word_width.div_ceil(width) as u16;
                         current_line_width = word_width % width;
                         if current_line_width == 0 {
                             line_started = false;
