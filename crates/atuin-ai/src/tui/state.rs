@@ -311,7 +311,7 @@ impl AppState {
             tool_input["message"] = serde_json::json!(exp);
         }
         if dangerous {
-            tool_input["dangerous"] = serde_json::json!(true);
+            tool_input["danger"] = serde_json::json!("high");
         }
         if !warnings.is_empty() {
             tool_input["warning"] = serde_json::json!(warnings.join("; "));
