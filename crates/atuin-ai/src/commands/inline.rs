@@ -1,3 +1,4 @@
+use crate::commands::detect_shell;
 use crate::tui::render::render;
 use crate::tui::{
     App, AppEvent, AppMode, ConversationEvent, EventLoop, ExitAction, RenderContext, TerminalGuard,
@@ -265,32 +266,8 @@ fn detect_os() -> String {
     match std::env::consts::OS {
         "macos" => "macos".to_string(),
         "linux" => "linux".to_string(),
+        "windows" => "windows".to_string(),
         _ => "linux".to_string(),
-    }
-}
-
-fn detect_shell() -> String {
-    if let Ok(shell) = std::env::var("ATUIN_SHELL")
-        && !shell.trim().is_empty()
-    {
-        return shell;
-    }
-
-    let shell = std::env::var("SHELL")
-        .ok()
-        .and_then(|value| {
-            std::path::Path::new(&value)
-                .file_name()
-                .map(std::ffi::OsStr::to_string_lossy)
-                .map(std::borrow::Cow::into_owned)
-        })
-        .filter(|value| !value.trim().is_empty());
-
-    match shell.as_deref() {
-        Some("zsh") => "zsh".to_string(),
-        Some("fish") => "fish".to_string(),
-        Some("bash") => "bash".to_string(),
-        _ => "bash".to_string(),
     }
 }
 
