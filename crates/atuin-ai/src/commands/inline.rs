@@ -446,9 +446,9 @@ async fn run_inline_tui(
     > = None;
 
     loop {
-        // Ensure viewport is large enough for current content
+        // Ensure viewport is large enough for current content (capped at terminal height)
         let needed_height = calculate_needed_height(&app.state);
-        guard.ensure_height(needed_height)?;
+        let actual_height = guard.ensure_height(needed_height)?;
 
         // Render current state
         let anchor_col = guard.anchor_col();
@@ -456,6 +456,7 @@ async fn run_inline_tui(
             theme,
             anchor_col,
             textarea: Some(&app.state.textarea),
+            max_height: actual_height,
         };
         guard.terminal().draw(|frame| {
             render(frame, &app.state, &ctx);

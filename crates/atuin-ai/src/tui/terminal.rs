@@ -27,11 +27,11 @@ pub fn install_panic_hook() {
     }));
 }
 
-/// Initial viewport height - enough for a simple command generation
-const INITIAL_VIEWPORT_HEIGHT: u16 = 15;
+/// Minimum viewport height
+const MIN_VIEWPORT_HEIGHT: u16 = 10;
 
-/// Extra padding when growing the viewport
-const VIEWPORT_GROWTH_PADDING: u16 = 5;
+/// Margin to leave below viewport for shell prompt
+const VIEWPORT_BOTTOM_MARGIN: u16 = 2;
 
 /// Guards terminal lifecycle, ensuring proper setup and cleanup.
 ///
@@ -95,18 +95,24 @@ impl TerminalGuard {
             );
         }
 
+        // Get terminal size and calculate viewport height
+        let (_, term_height) = crossterm::terminal::size().unwrap_or((80, 24));
+        let viewport_height = term_height
+            .saturating_sub(VIEWPORT_BOTTOM_MARGIN)
+            .max(MIN_VIEWPORT_HEIGHT);
+
         // Capture cursor position BEFORE raw mode for accurate anchor
         let anchor_col = cursor::position().map(|(x, _)| x).unwrap_or(0);
 
         // Enable raw mode for keyboard input
         enable_raw_mode().context("failed to enable raw mode")?;
 
-        // Create terminal with initial inline viewport
+        // Create terminal with fixed viewport based on terminal size
         let backend = CrosstermBackend::new(stdout());
         let terminal = Terminal::with_options(
             backend,
             TerminalOptions {
-                viewport: Viewport::Inline(INITIAL_VIEWPORT_HEIGHT),
+                viewport: Viewport::Inline(viewport_height),
             },
         )
         .context("failed to create terminal with inline viewport")?;
@@ -115,39 +121,20 @@ impl TerminalGuard {
             terminal,
             anchor_col,
             keep_output,
-            viewport_height: INITIAL_VIEWPORT_HEIGHT,
+            viewport_height,
         })
     }
 
-    /// Ensure the viewport has at least the specified height.
+    /// Returns the current viewport height.
     ///
-    /// If the current viewport is smaller than needed, recreates the terminal
-    /// with a larger viewport (needed height + padding for room to grow).
+    /// The viewport is fixed at creation time based on terminal size.
+    /// Content that exceeds this height will be scrolled automatically.
     ///
-    /// Returns Ok(true) if viewport was resized, Ok(false) if no resize needed.
-    pub fn ensure_height(&mut self, needed: u16) -> Result<bool> {
-        if needed <= self.viewport_height {
-            return Ok(false);
-        }
-
-        // Grow with padding so we have room for more content
-        let new_height = needed + VIEWPORT_GROWTH_PADDING;
-
-        // Clear current terminal before recreating
-        let _ = self.terminal.clear();
-
-        // Recreate terminal with larger viewport
-        let backend = CrosstermBackend::new(stdout());
-        self.terminal = Terminal::with_options(
-            backend,
-            TerminalOptions {
-                viewport: Viewport::Inline(new_height),
-            },
-        )
-        .context("failed to resize terminal viewport")?;
-
-        self.viewport_height = new_height;
-        Ok(true)
+    /// The `_needed` parameter is kept for API compatibility but ignored -
+    /// we no longer attempt to resize the viewport dynamically since that
+    /// operation can fail unpredictably with inline viewports.
+    pub fn ensure_height(&mut self, _needed: u16) -> Result<u16> {
+        Ok(self.viewport_height)
     }
 
     /// Get the current viewport height.

@@ -216,6 +216,7 @@ pub async fn run(input_file: Option<String>, format: OutputFormat) -> Result<()>
                 theme,
                 anchor_col: 0,
                 textarea: Some(&state.textarea),
+                max_height: debug_input.height,
             };
 
             terminal.draw(|frame| {

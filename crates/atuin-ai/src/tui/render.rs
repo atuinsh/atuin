@@ -22,6 +22,8 @@ pub struct RenderContext<'a> {
     pub theme: &'a Theme,
     pub anchor_col: u16,
     pub textarea: Option<&'a TextArea<'static>>,
+    /// Maximum viewport height (for scroll calculations)
+    pub max_height: u16,
 }
 
 /// Calculate the height needed to render the current state.
@@ -64,7 +66,7 @@ fn render_view(frame: &mut Frame, view: &Blocks, ctx: &RenderContext) {
     let max_x = area.x + area.width.saturating_sub(desired_width);
     let preferred_x = area.x + ctx.anchor_col.saturating_sub(2);
 
-    // Calculate height from view model (no clipping - viewport should be pre-sized)
+    // Calculate height from view model
     let mut total_height = 0u16;
     for (idx, block) in view.items.iter().enumerate() {
         if idx > 0 {
@@ -79,11 +81,17 @@ fn render_view(frame: &mut Frame, view: &Blocks, ctx: &RenderContext) {
         .saturating_add(3) // borders (2) + top padding (1), no bottom padding
         .max(5);
 
+    // Cap card height at viewport height to prevent overflow
+    let actual_height = desired_height.min(area.height);
+
+    // Calculate scroll offset (scroll to show bottom content when overflowing)
+    let scroll_offset = desired_height.saturating_sub(actual_height);
+
     let card = Rect {
         x: preferred_x.min(max_x),
         y: area.y,
         width: desired_width,
-        height: desired_height,
+        height: actual_height,
     };
 
     // Get title from first block (if any)
@@ -104,8 +112,8 @@ fn render_view(frame: &mut Frame, view: &Blocks, ctx: &RenderContext) {
     let inner_area = outer_block.inner(card);
     frame.render_widget(outer_block, card);
 
-    // Render blocks
-    render_blocks_content(frame, view, ctx, inner_area, card.width);
+    // Render blocks (with scroll offset for overflowing content)
+    render_blocks_content(frame, view, ctx, inner_area, card.width, scroll_offset);
 }
 
 fn render_blocks_content(
@@ -114,24 +122,37 @@ fn render_blocks_content(
     ctx: &RenderContext,
     area: Rect,
     card_width: u16,
+    scroll_offset: u16,
 ) {
     let content_width = usize::from(area.width).max(1);
 
-    // Build layout constraints
+    // Build layout constraints for full content
     let mut constraints = Vec::new();
+    let mut block_heights = Vec::new();
     for (idx, block) in view.items.iter().enumerate() {
         if idx > 0 {
             constraints.push(Constraint::Length(1)); // separator
             constraints.push(Constraint::Length(1)); // leading blank after separator
+            block_heights.push(1);
+            block_heights.push(1);
         }
         let height = calculate_block_height(&block.content, content_width);
         constraints.push(Constraint::Length(height));
+        block_heights.push(height);
     }
 
     if constraints.is_empty() {
         return;
     }
 
+    // Calculate cumulative heights to find which blocks are visible after scrolling
+    let mut cumulative: Vec<u16> = Vec::with_capacity(block_heights.len() + 1);
+    cumulative.push(0);
+    for h in &block_heights {
+        cumulative.push(cumulative.last().unwrap() + h);
+    }
+
+    // Render each chunk, offsetting by scroll_offset and clipping to visible area
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints(constraints)
@@ -140,14 +161,38 @@ fn render_blocks_content(
     let mut chunk_idx = 0;
     for (idx, block) in view.items.iter().enumerate() {
         if idx > 0 {
-            render_separator(frame, chunks[chunk_idx], ctx, card_width);
+            // Check if separator is visible (its position minus scroll_offset)
+            let sep_start = cumulative[chunk_idx];
+            if sep_start >= scroll_offset && sep_start < scroll_offset + area.height {
+                let adjusted_chunk = Rect {
+                    y: area.y + sep_start - scroll_offset,
+                    ..chunks[chunk_idx]
+                };
+                render_separator(frame, adjusted_chunk, ctx, card_width);
+            }
             chunk_idx += 1;
-            chunk_idx += 1; // skip leading blank (it's just empty space)
+            chunk_idx += 1; // skip leading blank
         }
 
-        render_block_content(frame, &block.content, chunks[chunk_idx], ctx);
+        // Check if this block is at least partially visible
+        let block_start = cumulative[chunk_idx];
+        let block_end = cumulative[chunk_idx + 1];
 
-        // Cursor is handled by TextArea widget for active inputs
+        // Block is visible if it starts before viewport end and ends after viewport start
+        if block_start < scroll_offset + area.height && block_end > scroll_offset {
+            // Calculate visible portion
+            let visible_start = block_start.max(scroll_offset);
+            let visible_end = block_end.min(scroll_offset + area.height);
+
+            let adjusted_chunk = Rect {
+                x: area.x,
+                y: area.y + visible_start - scroll_offset,
+                width: area.width,
+                height: visible_end - visible_start,
+            };
+
+            render_block_content(frame, &block.content, adjusted_chunk, ctx);
+        }
 
         chunk_idx += 1;
     }
@@ -395,7 +440,23 @@ fn calculate_single_content_height(content: &Content, width: usize) -> u16 {
     let text_width = width.saturating_sub(2);
 
     match content {
-        Content::Input { text, .. } => line_count_wrapped(text, text_width),
+        // Input uses word wrapping (WrapMode::Word) in TextArea, which can produce
+        // more lines than character wrapping since it won't break words mid-word
+        Content::Input { text, active, .. } => {
+            if *active {
+                // For active input, use word-wrap line counting to match TextArea behavior
+                let (lines, last_line_width) =
+                    word_wrap_line_count_with_last_width(text, text_width);
+                // Only add extra line for cursor if the last line is full
+                if last_line_width >= text_width {
+                    lines.saturating_add(1)
+                } else {
+                    lines
+                }
+            } else {
+                line_count_wrapped(text, text_width)
+            }
+        }
         Content::Command { text, .. } => line_count_wrapped(text, text_width),
         Content::Text { markdown } => line_count_wrapped(markdown, text_width),
         Content::Error { message } => line_count_wrapped(message, text_width),
@@ -425,6 +486,83 @@ fn line_count_wrapped(text: &str, width: usize) -> u16 {
 
     let paragraph = Paragraph::new(text).wrap(Wrap { trim: false });
     paragraph.line_count(width as u16).max(1) as u16
+}
+
+/// Count lines using word-wrap algorithm (matches TextArea's WrapMode::Word).
+/// Words won't be broken mid-word, so this may produce more lines than character wrapping.
+/// Returns (line_count, last_line_width) so caller can determine if cursor needs extra space.
+fn word_wrap_line_count_with_last_width(text: &str, width: usize) -> (u16, usize) {
+    if width == 0 || text.is_empty() {
+        return (1, 0);
+    }
+
+    let mut line_count = 0u16;
+    let mut current_line_width = 0usize;
+
+    for line in text.lines() {
+        if line.is_empty() {
+            line_count += 1;
+            current_line_width = 0;
+            continue;
+        }
+
+        let mut line_started = false;
+
+        for word in line.split_whitespace() {
+            let word_width = unicode_width::UnicodeWidthStr::width(word);
+
+            if !line_started {
+                // First word on line
+                if word_width > width {
+                    // Word is longer than width, it will be split by character
+                    // Count how many lines it takes
+                    line_count += ((word_width + width - 1) / width) as u16;
+                    current_line_width = word_width % width;
+                    if current_line_width == 0 {
+                        current_line_width = 0;
+                        line_started = false;
+                    } else {
+                        line_started = true;
+                    }
+                } else {
+                    current_line_width = word_width;
+                    line_started = true;
+                }
+            } else {
+                // Subsequent word - need space before it
+                let needed = current_line_width + 1 + word_width;
+                if needed > width {
+                    // Word doesn't fit, start new line
+                    line_count += 1;
+                    if word_width > width {
+                        // Word itself is too long, will be split
+                        line_count += ((word_width + width - 1) / width) as u16;
+                        current_line_width = word_width % width;
+                        if current_line_width == 0 {
+                            line_started = false;
+                        }
+                    } else {
+                        current_line_width = word_width;
+                    }
+                } else {
+                    current_line_width = needed;
+                }
+            }
+        }
+
+        // Count the last line of this logical line
+        if line_started {
+            line_count += 1;
+        }
+    }
+
+    // Handle case where text has no lines() output (empty or just whitespace)
+    if line_count == 0 {
+        line_count = 1;
+        current_line_width = 0;
+    }
+
+    (line_count, current_line_width)
 }
 
 /// Convert markdown to styled spans (existing function, kept as-is)
