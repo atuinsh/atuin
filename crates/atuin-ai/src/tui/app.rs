@@ -1,5 +1,6 @@
 use super::state::{AppMode, AppState, ExitAction};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use tui_textarea::{Input, Key};
 
 /// Thin wrapper around AppState for compatibility
 /// All state lives in AppState, this just provides the handle_key interface
@@ -16,11 +17,6 @@ impl App {
 
     /// Handle a key event. Returns true if render is needed.
     pub fn handle_key(&mut self, key: KeyEvent) -> bool {
-        // Ctrl combinations pass through (Ctrl+C handled by SIGINT)
-        if key.modifiers.contains(KeyModifiers::CONTROL) {
-            return true;
-        }
-
         match self.state.mode {
             AppMode::Input => self.handle_input_key(key),
             AppMode::Generating => self.handle_generating_key(key),
@@ -31,37 +27,52 @@ impl App {
     }
 
     fn handle_input_key(&mut self, key: KeyEvent) -> bool {
+        // Handle special keys ourselves
         match key.code {
             KeyCode::Esc => {
                 self.state.exit(ExitAction::Cancel);
-                true
+                return true;
             }
             KeyCode::Enter => {
-                if self.state.input.trim().is_empty() {
+                if self.state.input_is_empty() {
                     self.state.exit(ExitAction::Cancel);
                 } else {
                     self.state.start_generating();
                 }
-                true
+                return true;
             }
-            KeyCode::Backspace => {
-                self.state.delete_char();
-                true
-            }
-            KeyCode::Left => {
-                self.state.move_cursor_left();
-                true
-            }
-            KeyCode::Right => {
-                self.state.move_cursor_right();
-                true
-            }
-            KeyCode::Char(c) => {
-                self.state.insert_char(c);
-                true
-            }
-            _ => false,
+            _ => {}
         }
+
+        // Delegate all other keys to textarea
+        // Manually convert crossterm KeyEvent to tui-textarea Input
+        // (needed due to crossterm version mismatch)
+        let tui_key = match key.code {
+            KeyCode::Char(c) => Key::Char(c),
+            KeyCode::Backspace => Key::Backspace,
+            KeyCode::Delete => Key::Delete,
+            KeyCode::Left => Key::Left,
+            KeyCode::Right => Key::Right,
+            KeyCode::Up => Key::Up,
+            KeyCode::Down => Key::Down,
+            KeyCode::Home => Key::Home,
+            KeyCode::End => Key::End,
+            KeyCode::PageUp => Key::PageUp,
+            KeyCode::PageDown => Key::PageDown,
+            KeyCode::Tab => Key::Tab,
+            _ => Key::Null,
+        };
+
+        if tui_key != Key::Null {
+            let input = Input {
+                key: tui_key,
+                ctrl: key.modifiers.contains(KeyModifiers::CONTROL),
+                alt: key.modifiers.contains(KeyModifiers::ALT),
+                shift: key.modifiers.contains(KeyModifiers::SHIFT),
+            };
+            self.state.textarea.input(input);
+        }
+        true
     }
 
     fn handle_generating_key(&mut self, key: KeyEvent) -> bool {

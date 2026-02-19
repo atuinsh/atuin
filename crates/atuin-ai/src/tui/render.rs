@@ -8,6 +8,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block as RatatuiBlock, Borders, Padding, Paragraph, Wrap},
 };
+use tui_textarea::TextArea;
 
 use super::state::AppState;
 use super::view_model::{Blocks, Content, WarningKind};
@@ -20,6 +21,7 @@ const CARD_WIDTH: u16 = 64;
 pub struct RenderContext<'a> {
     pub theme: &'a Theme,
     pub anchor_col: u16,
+    pub textarea: Option<&'a TextArea<'static>>,
 }
 
 /// Calculate the height needed to render the current state.
@@ -145,21 +147,7 @@ fn render_blocks_content(
 
         render_block_content(frame, &block.content, chunks[chunk_idx], ctx);
 
-        // Set cursor if any content item is active input
-        for content in &block.content {
-            if let Content::Input {
-                text,
-                active: true,
-                cursor_pos,
-            } = content
-            {
-                let (cursor_row, cursor_col) =
-                    calculate_cursor_position(text, *cursor_pos, content_width);
-                let cursor_x = chunks[chunk_idx].x.saturating_add(cursor_col);
-                let cursor_y = chunks[chunk_idx].y.saturating_add(cursor_row);
-                frame.set_cursor_position((cursor_x, cursor_y));
-            }
-        }
+        // Cursor is handled by TextArea widget for active inputs
 
         chunk_idx += 1;
     }
@@ -212,18 +200,25 @@ fn render_single_content(frame: &mut Frame, content: &Content, area: Rect, ctx: 
     };
 
     match content {
-        Content::Input { text, .. } => {
+        Content::Input { text, active, .. } => {
             let symbol_style = Style::from_crossterm(ctx.theme.as_style(Meaning::Guidance));
             let text_style = Style::from_crossterm(ctx.theme.as_style(Meaning::Base));
 
             // Render ">" symbol at column 0
             render_symbol(frame, ">", symbol_style, area);
 
-            // Render text in offset area with native wrapping
-            let paragraph = Paragraph::new(text.as_str())
-                .style(text_style)
-                .wrap(Wrap { trim: false });
-            frame.render_widget(paragraph, text_area);
+            if *active {
+                // Active input: render TextArea widget (handles cursor display)
+                if let Some(textarea) = ctx.textarea {
+                    frame.render_widget(textarea, text_area);
+                }
+            } else {
+                // Inactive input: render as plain paragraph
+                let paragraph = Paragraph::new(text.as_str())
+                    .style(text_style)
+                    .wrap(Wrap { trim: false });
+                frame.render_widget(paragraph, text_area);
+            }
         }
 
         Content::Command { text, faded } => {
@@ -430,46 +425,6 @@ fn line_count_wrapped(text: &str, width: usize) -> u16 {
 
     let paragraph = Paragraph::new(text).wrap(Wrap { trim: false });
     paragraph.line_count(width as u16).max(1) as u16
-}
-
-/// Calculate cursor position accounting for wrapping
-///
-/// The text is rendered in an offset area (starting at x+2), so we calculate
-/// cursor position within the text area only - no prefix included.
-fn calculate_cursor_position(input: &str, cursor_pos: usize, width: usize) -> (u16, u16) {
-    // Text area is offset by 2 for symbol column
-    let text_width = width.saturating_sub(2);
-    if text_width == 0 {
-        return (0, 2); // At least past the symbol
-    }
-
-    // Build text up to cursor position
-    let chars: Vec<char> = input.chars().collect();
-    let cursor_pos = cursor_pos.min(chars.len());
-
-    // Track which row we're on and where each row starts
-    let mut row = 0usize;
-    let mut row_start_idx = 0usize;
-    let mut prev_line_count = 1usize;
-
-    // Check line count after each character to detect line breaks
-    for i in 1..=cursor_pos {
-        let partial: String = chars[..i].iter().collect();
-        let p = Paragraph::new(partial.as_str()).wrap(Wrap { trim: false });
-        let line_count = p.line_count(text_width as u16);
-
-        if line_count > prev_line_count {
-            // A new line started - the current character (i-1) is on the new line
-            row = line_count - 1;
-            row_start_idx = i - 1;
-            prev_line_count = line_count;
-        }
-    }
-
-    // Column is offset from row start, plus 2 for symbol
-    let col = (cursor_pos - row_start_idx) + 2;
-
-    (row as u16, col as u16)
 }
 
 /// Convert markdown to styled spans (existing function, kept as-is)

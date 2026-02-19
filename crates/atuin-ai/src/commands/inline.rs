@@ -313,11 +313,16 @@ fn state_to_json(state: &crate::tui::AppState) -> serde_json::Value {
         AppMode::Error => "Error",
     };
 
+    // Get input and cursor from textarea
+    let input = state.input();
+    let cursor = state.textarea.cursor();
+
     let mut json = serde_json::json!({
         "events": events,
         "mode": mode,
-        "input": state.input,
-        "cursor_pos": state.cursor_pos,
+        "input": input,
+        "cursor_row": cursor.0,
+        "cursor_col": cursor.1,
         "spinner_frame": state.spinner_frame,
         "confirmation_pending": state.confirmation_pending,
     });
@@ -399,7 +404,15 @@ async fn run_inline_tui(
     let mut guard = TerminalGuard::new(keep_output)?;
     let mut app = App::new();
     if let Some(prompt) = initial_prompt {
-        app.state.input = prompt;
+        // Set initial text in textarea
+        let mut textarea = tui_textarea::TextArea::from(prompt.lines());
+        // Disable underline on cursor line
+        textarea.set_cursor_line_style(ratatui::style::Style::default());
+        // Enable word wrapping
+        textarea.set_wrap_mode(tui_textarea::WrapMode::Word);
+        // Move cursor to end
+        textarea.move_cursor(tui_textarea::CursorMove::End);
+        app.state.textarea = textarea;
     }
 
     // Initialize debug state logger if requested
@@ -439,7 +452,11 @@ async fn run_inline_tui(
 
         // Render current state
         let anchor_col = guard.anchor_col();
-        let ctx = RenderContext { theme, anchor_col };
+        let ctx = RenderContext {
+            theme,
+            anchor_col,
+            textarea: Some(&app.state.textarea),
+        };
         guard.terminal().draw(|frame| {
             render(frame, &app.state, &ctx);
         })?;

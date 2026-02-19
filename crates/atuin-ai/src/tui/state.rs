@@ -4,6 +4,7 @@
 //! domain model. Conversation events match the API protocol format.
 
 use std::time::Instant;
+use tui_textarea::TextArea;
 
 /// Streaming status indicators from server
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -133,10 +134,8 @@ pub struct AppState {
     pub events: Vec<ConversationEvent>,
     /// Text being streamed (accumulated, flushed to Text event on completion)
     pub streaming_text: String,
-    /// Current typing buffer
-    pub input: String,
-    /// Cursor position (character index, not byte index)
-    pub cursor_pos: usize,
+    /// Active text input (uses tui-textarea for proper cursor handling)
+    pub textarea: TextArea<'static>,
     /// Current error message (renders at end of blocks)
     pub error: Option<String>,
     /// Whether app should exit
@@ -157,14 +156,23 @@ pub struct AppState {
     pub confirmation_pending: bool,
 }
 
+/// Create a TextArea with our preferred configuration
+fn create_textarea() -> TextArea<'static> {
+    let mut textarea = TextArea::default();
+    // Disable underline on cursor line - it's distracting
+    textarea.set_cursor_line_style(ratatui::style::Style::default());
+    // Enable word wrapping
+    textarea.set_wrap_mode(tui_textarea::WrapMode::Word);
+    textarea
+}
+
 impl AppState {
     pub fn new() -> Self {
         Self {
             mode: AppMode::Input,
             events: Vec::new(),
             streaming_text: String::new(),
-            input: String::new(),
-            cursor_pos: 0,
+            textarea: create_textarea(),
             error: None,
             should_exit: false,
             exit_action: None,
@@ -175,6 +183,21 @@ impl AppState {
             streaming_started: None,
             confirmation_pending: false,
         }
+    }
+
+    /// Get the current input text
+    pub fn input(&self) -> String {
+        self.textarea.lines().join("\n")
+    }
+
+    /// Check if input is empty
+    pub fn input_is_empty(&self) -> bool {
+        self.textarea.is_empty()
+    }
+
+    /// Clear the input
+    pub fn clear_input(&mut self) {
+        self.textarea = create_textarea();
     }
 
     /// Convert conversation events to Claude API message format
@@ -243,59 +266,17 @@ impl AppState {
         messages
     }
 
-    /// Convert character position to byte index for string slicing
-    pub fn byte_index(&self) -> usize {
-        self.input
-            .char_indices()
-            .map(|(i, _)| i)
-            .nth(self.cursor_pos)
-            .unwrap_or(self.input.len())
-    }
-
-    /// Insert character at cursor position
-    pub fn insert_char(&mut self, c: char) {
-        let byte_idx = self.byte_index();
-        self.input.insert(byte_idx, c);
-        self.cursor_pos += 1;
-    }
-
-    /// Delete character before cursor
-    pub fn delete_char(&mut self) {
-        if self.cursor_pos > 0 {
-            let byte_idx = self.byte_index();
-            let prev_char_idx = self.input[..byte_idx]
-                .char_indices()
-                .last()
-                .map(|(i, _)| i)
-                .unwrap_or(0);
-            self.input.remove(prev_char_idx);
-            self.cursor_pos -= 1;
-        }
-    }
-
-    /// Move cursor left (saturating at 0)
-    pub fn move_cursor_left(&mut self) {
-        self.cursor_pos = self.cursor_pos.saturating_sub(1);
-    }
-
-    /// Move cursor right (clamped to string length)
-    pub fn move_cursor_right(&mut self) {
-        let max = self.input.chars().count();
-        self.cursor_pos = (self.cursor_pos + 1).min(max);
-    }
-
     // ===== Generation lifecycle methods =====
 
     /// Start generating from current input
     pub fn start_generating(&mut self) {
         // Add user message event
         self.events.push(ConversationEvent::UserMessage {
-            content: self.input.clone(),
+            content: self.input(),
         });
 
         // Clear input, switch mode
-        self.input.clear();
-        self.cursor_pos = 0;
+        self.clear_input();
         self.mode = AppMode::Generating;
     }
 
@@ -353,8 +334,7 @@ impl AppState {
             self.events.pop();
         }
         self.mode = AppMode::Input;
-        self.input.clear();
-        self.cursor_pos = 0;
+        self.clear_input();
     }
 
     // ===== Streaming lifecycle methods =====
@@ -470,8 +450,7 @@ impl AppState {
     /// Start edit mode for refinement
     pub fn start_edit_mode(&mut self) {
         self.confirmation_pending = false;
-        self.input.clear();
-        self.cursor_pos = 0;
+        self.clear_input();
         self.mode = AppMode::Input;
     }
 
