@@ -185,25 +185,19 @@ impl Blocks {
                     });
                 }
                 ConversationEvent::ToolCall { name, input, .. } => {
-                    // Only render suggest_command tool calls
+                    // Only render suggest_command tool calls with a command
                     if name == "suggest_command" {
-                        // Check if command is present and non-null
                         let command = input.get("command").and_then(|v| v.as_str());
-                        let description = input.get("description").and_then(|v| v.as_str());
 
-                        // Build block content
+                        // Build block content - only render if command is present
+                        // When command is null, this is a conversation-only turn and the
+                        // response text comes via a separate Text event
                         let mut block_content = Vec::new();
 
-                        // Add command only if non-null
                         if let Some(cmd) = command {
                             block_content.push(Content::Command {
                                 text: cmd.to_string(),
                                 faded: false,
-                            });
-                        } else if let Some(desc) = description {
-                            // If no command but description provided, render description as text
-                            block_content.push(Content::Text {
-                                markdown: desc.to_string(),
                             });
                         }
 

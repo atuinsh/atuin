@@ -63,7 +63,8 @@ fn default_width() -> u16 {
 }
 
 fn default_height() -> u16 {
-    24
+    // Default to a reasonable height; state files include calculated height
+    50
 }
 
 /// Event input matching the API protocol format

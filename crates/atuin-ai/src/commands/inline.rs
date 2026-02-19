@@ -1,7 +1,7 @@
 use crate::tui::render::render;
 use crate::tui::{
     App, AppEvent, AppMode, ConversationEvent, EventLoop, ExitAction, RenderContext, TerminalGuard,
-    install_panic_hook,
+    calculate_needed_height, install_panic_hook,
 };
 use atuin_client::theme::ThemeManager;
 use atuin_common::tls::ensure_crypto_provider;
@@ -340,29 +340,44 @@ fn state_to_json(state: &crate::tui::AppState) -> serde_json::Value {
 struct DebugStateLogger {
     file: std::fs::File,
     entry_count: usize,
+    width: u16,
 }
 
 impl DebugStateLogger {
     fn new(path: &str) -> Result<Self> {
         let file = std::fs::File::create(path)
             .with_context(|| format!("Failed to create debug state file: {}", path))?;
+        // Get terminal width, default to 80
+        let (width, _) = crossterm::terminal::size().unwrap_or((80, 24));
         Ok(Self {
             file,
             entry_count: 0,
+            width,
         })
     }
 
     fn log(&mut self, label: &str, state: &crate::tui::AppState) {
+        use crate::tui::calculate_needed_height;
+
         self.entry_count += 1;
         let timestamp_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis())
             .unwrap_or(0);
+
+        // Calculate the actual content height needed for this state
+        let content_height = calculate_needed_height(state);
+
+        let mut state_json = state_to_json(state);
+        // Add dimensions for accurate replay
+        state_json["width"] = serde_json::json!(self.width);
+        state_json["height"] = serde_json::json!(content_height);
+
         let entry = serde_json::json!({
             "entry": self.entry_count,
             "label": label,
             "timestamp_ms": timestamp_ms,
-            "state": state_to_json(state),
+            "state": state_json,
         });
 
         // Write as JSONL (one JSON object per line)
@@ -418,6 +433,10 @@ async fn run_inline_tui(
     > = None;
 
     loop {
+        // Ensure viewport is large enough for current content
+        let needed_height = calculate_needed_height(&app.state);
+        guard.ensure_height(needed_height)?;
+
         // Render current state
         let anchor_col = guard.anchor_col();
         let ctx = RenderContext { theme, anchor_col };
