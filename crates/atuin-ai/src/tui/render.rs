@@ -10,10 +10,9 @@ use ratatui::{
 };
 use tui_textarea::TextArea;
 
+use super::spinner::active_frame;
 use super::state::AppState;
 use super::view_model::{Blocks, Content, WarningKind};
-
-const SPINNER_FRAMES: [&str; 4] = ["/", "-", "\\", "|"];
 
 /// Fixed card width for the TUI
 const CARD_WIDTH: u16 = 64;
@@ -334,7 +333,7 @@ fn render_single_content(frame: &mut Frame, content: &Content, area: Rect, ctx: 
             status_text,
         } => {
             let style = Style::from_crossterm(ctx.theme.as_style(Meaning::Annotation));
-            let symbol = SPINNER_FRAMES[*spinner_frame % SPINNER_FRAMES.len()];
+            let symbol = active_frame(*spinner_frame);
 
             render_symbol(frame, symbol, style, area);
 
@@ -350,7 +349,7 @@ fn render_single_content(frame: &mut Frame, content: &Content, area: Rect, ctx: 
             let style = Style::from_crossterm(ctx.theme.as_style(Meaning::Annotation));
 
             let (symbol, text) = if let Some(label) = current_label {
-                let spinner = SPINNER_FRAMES[*spinner_frame % SPINNER_FRAMES.len()];
+                let spinner = active_frame(*spinner_frame);
                 let text = if *completed_count > 0 {
                     format!(
                         "{} (used {} tool{})",

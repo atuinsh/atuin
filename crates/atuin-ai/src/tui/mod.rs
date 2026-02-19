@@ -1,6 +1,7 @@
 pub mod app;
 pub mod event;
 pub mod render;
+pub mod spinner;
 pub mod state;
 pub mod terminal;
 pub mod view_model;

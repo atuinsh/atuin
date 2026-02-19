@@ -7,6 +7,7 @@ use eyre::{Context, Result};
 use ratatui::{Terminal, backend::TestBackend};
 use serde::Deserialize;
 use std::io::{self, Read};
+use std::time::Instant;
 
 use crate::tui::{
     render::{RenderContext, render},
@@ -159,6 +160,7 @@ impl DebugInput {
             streaming_status,
             was_interrupted: self.was_interrupted,
             spinner_frame: self.spinner_frame,
+            last_spinner_tick: Instant::now(),
             streaming_started: None,
             confirmation_pending: false,
         }

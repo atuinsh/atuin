@@ -5,16 +5,19 @@ use futures::StreamExt;
 use std::time::Duration;
 use tokio::time;
 
+/// Base tick interval for the event loop (fast for responsive streaming)
+const BASE_TICK_INTERVAL: Duration = Duration::from_millis(50);
+
 /// Application events that drive the TUI state machine.
 ///
 /// # Event Types
 /// - `Key`: Keyboard input (filtered to KeyEventKind::Press only)
-/// - `Tick`: Periodic event for spinner animation (150ms interval)
+/// - `Tick`: Periodic event for updates (50ms base interval)
 /// - `Resize`: Terminal window resize
 /// - `StreamChunk/StreamDone/StreamError`: Placeholders for Phase 3 streaming
 ///
 /// # Design Decisions
-/// - 150ms tick interval balances smooth spinner animation with CPU usage
+/// - Fast 50ms base tick for responsive streaming; spinner timing handled in AppState
 /// - Stream events are placeholders - will be wired to channels in Phase 3
 /// - Resize handling enables responsive layout adjustments
 #[derive(Debug, Clone)]
@@ -22,7 +25,7 @@ pub enum AppEvent {
     /// Keyboard input event (filtered to Press events only)
     Key(KeyEvent),
 
-    /// Periodic tick for spinner animation (150ms interval)
+    /// Periodic tick for updates (50ms base interval; spinner timing in AppState)
     Tick,
 
     /// Terminal resize event (width, height)
@@ -68,8 +71,8 @@ pub enum AppEvent {
 /// # }
 /// ```
 pub struct EventLoop {
-    /// Tick interval for spinner animation (150ms per user decision)
-    tick_interval: Duration,
+    /// Tick interval timer (created lazily on first run)
+    tick_timer: Option<time::Interval>,
 
     /// Flag indicating a render was requested (future use in Phase 2)
     #[allow(dead_code)]
@@ -83,12 +86,12 @@ impl EventLoop {
     /// Create a new EventLoop with default settings.
     ///
     /// # Defaults
-    /// - Tick interval: 150ms (balances smooth animation with CPU usage)
+    /// - Tick interval: 50ms base rate (spinner timing handled separately in AppState)
     /// - Render requested: false
     /// - Shutdown: false
     pub fn new() -> Self {
         Self {
-            tick_interval: Duration::from_millis(150),
+            tick_timer: None,
             render_requested: false,
             shutdown: false,
         }
@@ -134,8 +137,14 @@ impl EventLoop {
         // Create async event stream for keyboard/terminal events
         let mut reader = EventStream::new();
 
-        // Create ticker for spinner animation
-        let mut tick_interval = time::interval(self.tick_interval);
+        // Get or create the tick timer (reused across calls to maintain timing)
+        // Uses fast base tick for responsive streaming; spinner timing handled in AppState
+        let tick_timer = self.tick_timer.get_or_insert_with(|| {
+            let mut interval = time::interval(BASE_TICK_INTERVAL);
+            // Skip the first immediate tick
+            interval.reset();
+            interval
+        });
 
         loop {
             if self.shutdown {
@@ -183,7 +192,7 @@ impl EventLoop {
                 }
 
                 // Priority 3: Tick for spinner animation
-                _ = tick_interval.tick() => {
+                _ = tick_timer.tick() => {
                     Some(AppEvent::Tick)
                 }
 
@@ -272,7 +281,6 @@ mod tests {
     #[test]
     fn test_event_loop_creation() {
         let event_loop = EventLoop::new();
-        assert_eq!(event_loop.tick_interval, Duration::from_millis(150));
         assert!(!event_loop.shutdown);
     }
 

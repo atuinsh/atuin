@@ -6,6 +6,8 @@
 use std::time::Instant;
 use tui_textarea::TextArea;
 
+use super::spinner::{ACTIVE_SPINNER, active_tick_interval};
+
 /// Streaming status indicators from server
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StreamingStatus {
@@ -148,8 +150,10 @@ pub struct AppState {
     pub streaming_status: Option<StreamingStatus>,
     /// Whether current turn was interrupted by user
     pub was_interrupted: bool,
-    /// Spinner animation state (0-3)
+    /// Spinner animation state
     pub spinner_frame: usize,
+    /// When spinner frame last advanced (for timing control)
+    pub last_spinner_tick: Instant,
     /// When streaming started (for spinner delay)
     pub streaming_started: Option<Instant>,
     /// True when user has pressed Enter once on a dangerous command
@@ -180,6 +184,7 @@ impl AppState {
             streaming_status: None,
             was_interrupted: false,
             spinner_frame: 0,
+            last_spinner_tick: Instant::now(),
             streaming_started: None,
             confirmation_pending: false,
         }
@@ -478,9 +483,15 @@ impl AppState {
 
     // ===== Utility methods =====
 
-    /// Advance spinner frame
+    /// Advance spinner frame if enough time has passed
+    /// Called on every event loop tick (50ms), but only advances spinner
+    /// when the active spinner's interval has elapsed
     pub fn tick(&mut self) {
-        self.spinner_frame = (self.spinner_frame + 1) % 4;
+        let interval = active_tick_interval();
+        if self.last_spinner_tick.elapsed() >= interval {
+            self.spinner_frame = (self.spinner_frame + 1) % ACTIVE_SPINNER.frame_count();
+            self.last_spinner_tick = Instant::now();
+        }
     }
 
     /// Get the most recent command from events
