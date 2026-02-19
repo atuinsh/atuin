@@ -28,6 +28,8 @@ pub struct RenderContext<'a> {
 /// Calculate the height needed to render the current state.
 /// Used to dynamically resize the viewport before rendering.
 pub fn calculate_needed_height(state: &AppState) -> u16 {
+    use super::state::AppMode;
+
     let view = Blocks::from_state(state);
     let content_width = usize::from(CARD_WIDTH.saturating_sub(4)).max(1);
 
@@ -39,6 +41,19 @@ pub fn calculate_needed_height(state: &AppState) -> u16 {
         }
         total_height =
             total_height.saturating_add(calculate_block_height(&block.content, content_width));
+    }
+
+    // In Streaming/Generating mode, always reserve space for spinner block even during
+    // the 200ms delay when it's not yet shown. This prevents the UI from briefly
+    // shrinking and scrolling away the user message.
+    let has_spinner_block = view.items.iter().any(|b| {
+        b.content
+            .iter()
+            .any(|c| matches!(c, Content::Spinner { .. }))
+    });
+    if matches!(state.mode, AppMode::Streaming | AppMode::Generating) && !has_spinner_block {
+        // Reserve space for separator (2 lines) + spinner block (1 line)
+        total_height = total_height.saturating_add(3);
     }
 
     // Add borders (2) + top padding (1), minimum 5
