@@ -37,6 +37,7 @@ eventsource-stream = "0.2"
 pulldown-cmark = "0.13.0"
 async-stream = "0.3"
 uuid = { workspace = true }
+tui-textarea-2 = "0.9.1"
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

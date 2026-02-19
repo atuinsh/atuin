@@ -305,11 +305,13 @@ impl Blocks {
         // 3. Mode-dependent UI
         match state.mode {
             AppMode::Input => {
+                // Active input uses TextArea widget, rendered directly
+                // We add a placeholder block that will be replaced by textarea rendering
                 items.push(Block {
                     content: vec![Content::Input {
-                        text: state.input.clone(),
+                        text: state.input(),
                         active: true,
-                        cursor_pos: state.cursor_pos,
+                        cursor_pos: 0, // Not used for active input - textarea handles cursor
                     }],
                     separator_above: false,
                     title: None,

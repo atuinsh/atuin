@@ -135,12 +135,23 @@ impl DebugInput {
             .as_ref()
             .map(|s| StreamingStatus::from_status_str(s));
 
+        // Create textarea from input and set cursor position
+        let mut textarea = tui_textarea::TextArea::from(self.input.lines());
+        // Disable underline on cursor line
+        textarea.set_cursor_line_style(ratatui::style::Style::default());
+        // Enable word wrapping
+        textarea.set_wrap_mode(tui_textarea::WrapMode::Word);
+        // Note: cursor_pos from old format is character-based; new format has row/col
+        // For compatibility, just move to end if we have text
+        if !self.input.is_empty() {
+            textarea.move_cursor(tui_textarea::CursorMove::End);
+        }
+
         AppState {
             mode,
             events,
             streaming_text: self.streaming_text.clone(),
-            input: self.input.clone(),
-            cursor_pos: self.cursor_pos,
+            textarea,
             error: self.error.clone(),
             should_exit: false,
             exit_action: None,
@@ -204,6 +215,7 @@ pub async fn run(input_file: Option<String>, format: OutputFormat) -> Result<()>
             let ctx = RenderContext {
                 theme,
                 anchor_col: 0,
+                textarea: Some(&state.textarea),
             };
 
             terminal.draw(|frame| {
@@ -321,6 +333,20 @@ fn buffer_to_string(buffer: &ratatui::buffer::Buffer, strip_ansi: bool) -> Strin
                             output.push(';');
                         }
                         output.push('2');
+                        first = false;
+                    }
+                    if mods.contains(ratatui::style::Modifier::REVERSED) {
+                        if !first {
+                            output.push(';');
+                        }
+                        output.push('7');
+                        first = false;
+                    }
+                    if mods.contains(ratatui::style::Modifier::UNDERLINED) {
+                        if !first {
+                            output.push(';');
+                        }
+                        output.push('4');
                         first = false;
                     }
 
