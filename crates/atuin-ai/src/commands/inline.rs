@@ -27,15 +27,26 @@ pub async fn run(
     // Install panic hook once at entry point to ensure terminal restoration
     install_panic_hook();
 
+    // Token and endpoint priority:
+    // 1. Command line arguments/environment variables
+    // 2. Settings file
+    // 3. Default
     let settings = atuin_client::settings::Settings::new()?;
-    let endpoint = api_endpoint
-        .as_deref()
-        .unwrap_or(settings.hub_address.as_str());
-    let token = if let Some(token) = api_token {
-        token
+    let endpoint = api_endpoint.as_deref().unwrap_or(
+        settings
+            .ai
+            .ai_endpoint
+            .as_deref()
+            .unwrap_or("https://hub.atuin.sh"),
+    );
+    let api_token = api_token.as_deref().or(settings.ai.ai_api_token.as_deref());
+
+    let token = if let Some(token) = &api_token {
+        token.to_string()
     } else {
         ensure_hub_session(&settings, endpoint).await?
     };
+
     let action = run_inline_tui(
         endpoint.to_string(),
         token,
@@ -116,7 +127,10 @@ fn create_chat_stream(
     token: String,
     session_id: Option<String>,
     messages: Vec<serde_json::Value>,
+    settings: &atuin_client::settings::Settings,
 ) -> std::pin::Pin<Box<dyn futures::Stream<Item = Result<ChatStreamEvent>> + Send>> {
+    let send_cwd = settings.ai.send_cwd;
+
     Box::pin(async_stream::stream! {
         ensure_crypto_provider();
         let endpoint = match hub_url(&hub_address, "/api/cli/chat") {
@@ -133,9 +147,9 @@ fn create_chat_stream(
             "context": {
                 "os": detect_os(),
                 "shell": detect_shell(),
-                "pwd": std::env::current_dir()
+                "pwd": if send_cwd { std::env::current_dir()
                     .ok()
-                    .map(|path| path.to_string_lossy().into_owned()),
+                    .map(|path| path.to_string_lossy().into_owned()) } else { None },
             }
         });
 
@@ -565,10 +579,10 @@ async fn run_inline_tui(
                     token.clone(),
                     app.state.session_id.clone(),
                     messages,
+                    &settings,
                 ));
             }
         }
-
     }
 
     // Map exit action to return value

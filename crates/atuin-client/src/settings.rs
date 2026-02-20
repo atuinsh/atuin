@@ -477,6 +477,20 @@ pub struct Tmux {
     pub height: String,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Ai {
+    /// The address of the Atuin AI endpoint. Used for AI features like command generation.
+    /// Only necessary for custom AI endpoints.
+    pub ai_endpoint: Option<String>,
+
+    /// The API token for the Atuin AI endpoint. Used for AI features like command generation.
+    /// Only necessary for custom AI endpoints.
+    pub ai_api_token: Option<String>,
+
+    /// Whether or not to send the current working directory to the AI endpoint.
+    pub send_cwd: bool,
+}
+
 impl Default for Preview {
     fn default() -> Self {
         Self {
@@ -530,6 +544,16 @@ impl Default for Tmux {
             enabled: false,
             width: "80%".to_string(),
             height: "60%".to_string(),
+        }
+    }
+}
+
+impl Default for Ai {
+    fn default() -> Self {
+        Self {
+            ai_endpoint: None,
+            ai_api_token: None,
+            send_cwd: false,
         }
     }
 }
@@ -836,6 +860,9 @@ pub struct Settings {
 
     #[serde(default)]
     pub meta: meta::Settings,
+
+    #[serde(default)]
+    pub ai: Ai,
 }
 
 impl Settings {
