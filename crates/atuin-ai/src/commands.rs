@@ -1,3 +1,4 @@
+use atuin_common::shell::Shell;
 use clap::{Parser, Subcommand};
 use tracing::Level;
 use tracing_subscriber::{EnvFilter, Layer, fmt, layer::SubscriberExt, util::SubscriberInitExt};
@@ -137,26 +138,5 @@ fn init_tracing(verbose: bool) {
 }
 
 pub fn detect_shell() -> Option<String> {
-    if let Ok(shell) = std::env::var("ATUIN_SHELL")
-        && !shell.trim().is_empty()
-    {
-        return Some(shell);
-    }
-
-    let shell = std::env::var("SHELL")
-        .ok()
-        .and_then(|value| {
-            std::path::Path::new(&value)
-                .file_name()
-                .map(std::ffi::OsStr::to_string_lossy)
-                .map(std::borrow::Cow::into_owned)
-        })
-        .filter(|value| !value.trim().is_empty());
-
-    match shell.as_deref() {
-        Some("zsh") => Some("zsh".to_string()),
-        Some("fish") => Some("fish".to_string()),
-        Some("bash") => Some("bash".to_string()),
-        _ => None,
-    }
+    Some(Shell::current().to_string())
 }
