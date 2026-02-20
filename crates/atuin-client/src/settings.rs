@@ -477,7 +477,7 @@ pub struct Tmux {
     pub height: String,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Default, Clone, Debug, Deserialize, Serialize)]
 pub struct Ai {
     /// The address of the Atuin AI endpoint. Used for AI features like command generation.
     /// Only necessary for custom AI endpoints.
@@ -544,16 +544,6 @@ impl Default for Tmux {
             enabled: false,
             width: "80%".to_string(),
             height: "60%".to_string(),
-        }
-    }
-}
-
-impl Default for Ai {
-    fn default() -> Self {
-        Self {
-            ai_endpoint: None,
-            ai_api_token: None,
-            send_cwd: false,
         }
     }
 }
