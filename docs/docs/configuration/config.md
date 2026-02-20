@@ -873,3 +873,7 @@ columns = ["exit", "duration", "command"]
 # Make directory expand instead of command
 columns = ["duration", "time", { type = "directory", expand = true }, { type = "command", expand = false }]
 ```
+
+## ai
+
+The settings for Atuin AI are listed in [a separate section](../../ai/settings/).

@@ -89,6 +89,9 @@ nav:
       - Docker: self-hosting/docker.md
       - Kubernetes: self-hosting/kubernetes.md
       - Systemd: self-hosting/systemd.md
+  - AI:
+      - Introduction: ai/introduction.md
+      - Settings: ai/settings.md
   - Known Issues: known-issues.md
   - Integrations: integrations.md
   - FAQ: faq.md
