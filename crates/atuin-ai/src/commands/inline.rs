@@ -140,9 +140,10 @@ fn create_chat_stream(
         });
 
         // Include session_id only if present (not on first request)
-        if let Some(sid) = session_id {
+        if let Some(ref sid) = session_id {
             request_body["session_id"] = serde_json::json!(sid);
         }
+
 
         let client = reqwest::Client::new();
         let response = match client
@@ -464,11 +465,9 @@ async fn run_inline_tui(
             AppEvent::Tick => {
                 app.state.tick();
 
-                // Poll chat stream if active
-                if app.state.mode == AppMode::Streaming
-                    && chat_stream.is_some()
-                    && let Some(stream) = &mut chat_stream
-                {
+                // Poll chat stream if active - keep polling until done regardless of mode
+                // (mode may change to Review before we receive the done event with session_id)
+                if let Some(stream) = &mut chat_stream {
                     let mut cx = std::task::Context::from_waker(futures::task::noop_waker_ref());
                     match stream.as_mut().poll_next(&mut cx) {
                         std::task::Poll::Ready(Some(Ok(event))) => match event {
@@ -529,6 +528,13 @@ async fn run_inline_tui(
             _ => {}
         }
 
+        // Handle user cancellation (Esc during streaming) - drop the stream
+        if app.state.was_interrupted && chat_stream.is_some() {
+            tracing::debug!("User cancelled streaming, dropping chat stream");
+            chat_stream = None;
+            app.state.was_interrupted = false; // Reset the flag
+        }
+
         // Check exit condition
         if app.state.should_exit {
             break;
@@ -563,10 +569,6 @@ async fn run_inline_tui(
             }
         }
 
-        // Handle streaming cancellation
-        if app.state.mode != AppMode::Streaming && chat_stream.is_some() {
-            chat_stream = None;
-        }
     }
 
     // Map exit action to return value
