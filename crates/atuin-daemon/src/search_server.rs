@@ -10,19 +10,37 @@ use crate::{
 pub struct SearchService {
     store: HistoryStore,
     history_db: HistoryDatabase,
-    rx: broadcast::Receiver<DaemonEvent>,
+    tx: broadcast::Sender<DaemonEvent>,
 }
 
 impl SearchService {
     pub fn new(
         store: HistoryStore,
         history_db: HistoryDatabase,
-        rx: broadcast::Receiver<DaemonEvent>,
+        tx: broadcast::Sender<DaemonEvent>,
     ) -> Self {
+        let mut rx = tx.subscribe();
+        tokio::spawn(async move {
+            loop {
+                let event = rx.recv().await.unwrap();
+                match event {
+                    DaemonEvent::RecordsAdded(records) => {
+                        println!("records added: {:?}", records);
+                    }
+                    DaemonEvent::HistoryStarted(history) => {
+                        println!("history started: {:?}", history);
+                    }
+                    DaemonEvent::HistoryEnded(history) => {
+                        println!("history ended: {:?}", history);
+                    }
+                }
+            }
+        });
+
         Self {
             store,
             history_db,
-            rx,
+            tx,
         }
     }
 }

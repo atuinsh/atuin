@@ -85,6 +85,8 @@ pub async fn worker(
                 .incremental_build(&history_db, &downloaded)
                 .await?;
 
+            search_tx.send(DaemonEvent::RecordsAdded(downloaded))?;
+
             alias_store.build().await?;
             var_store.build().await?;
 

@@ -34,6 +34,7 @@ pub struct HistoryService {
     // A store for WIP history
     // This is history that has not yet been completed, aka a command that's current running.
     running: Arc<DashMap<HistoryId, History>>,
+    event_tx: broadcast::Sender<DaemonEvent>,
     store: HistoryStore,
     history_db: HistoryDatabase,
     shutdown_tx: watch::Sender<bool>,
@@ -43,12 +44,14 @@ impl HistoryService {
     pub fn new(
         store: HistoryStore,
         history_db: HistoryDatabase,
+        event_tx: broadcast::Sender<DaemonEvent>,
         shutdown_tx: watch::Sender<bool>,
     ) -> Self {
         Self {
             running: Arc::new(DashMap::new()),
             store,
             history_db,
+            event_tx,
             shutdown_tx,
         }
     }
@@ -79,6 +82,10 @@ impl HistorySvc for HistoryService {
             .hostname(req.hostname)
             .build()
             .into();
+
+        if let Err(err) = self.event_tx.send(DaemonEvent::HistoryStarted(h.clone())) {
+            tracing::error!("failed to send history started event: {err:?}");
+        }
 
         // The old behaviour had us inserting half-finished history records into the database
         // The new behaviour no longer allows that.
@@ -132,9 +139,13 @@ impl HistorySvc for HistoryService {
             );
 
             let (id, idx) =
-                self.store.push(history).await.map_err(|e| {
+                self.store.push(history.clone()).await.map_err(|e| {
                     Status::internal(format!("failed to push record to store: {e:?}"))
                 })?;
+
+            if let Err(err) = self.event_tx.send(DaemonEvent::HistoryEnded(history)) {
+                tracing::error!("failed to send history ended event: {err:?}");
+            }
 
             let reply = EndHistoryReply {
                 id: id.0.to_string(),
@@ -320,14 +331,19 @@ pub async fn listen(
         .context("could not load encryption key")?
         .into();
 
-    let (search_tx, search_rx) = broadcast::channel::<DaemonEvent>(64);
+    let (event_tx, _event_rx) = broadcast::channel::<DaemonEvent>(64);
 
     let host_id = Settings::host_id().await?;
     let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let history = HistoryService::new(history_store.clone(), history_db.clone(), shutdown_tx);
-    let search = SearchService::new(history_store.clone(), history_db.clone(), search_rx);
+    let history = HistoryService::new(
+        history_store.clone(),
+        history_db.clone(),
+        event_tx.clone(),
+        shutdown_tx,
+    );
+    let search = SearchService::new(history_store.clone(), history_db.clone(), event_tx.clone());
 
     // start services
     tokio::spawn(sync::worker(
@@ -335,7 +351,7 @@ pub async fn listen(
         store,
         history_store,
         history_db,
-        search_tx,
+        event_tx,
     ));
 
     start_server(settings, history, search, shutdown_rx).await

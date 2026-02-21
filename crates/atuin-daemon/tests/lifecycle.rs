@@ -13,11 +13,12 @@ mod unix {
     use atuin_common::record::HostId;
     use atuin_common::utils::uuid_v7;
     use atuin_daemon::client::HistoryClient;
+    use atuin_daemon::events::DaemonEvent;
     use atuin_daemon::history::history_server::HistoryServer;
     use atuin_daemon::server::HistoryService;
     use tempfile::TempDir;
     use tokio::net::UnixListener;
-    use tokio::sync::watch;
+    use tokio::sync::{broadcast, watch};
     use tokio_stream::wrappers::UnixListenerStream;
     use tonic::transport::Server;
 
@@ -25,6 +26,7 @@ mod unix {
     /// the shutdown sender, and the temp dir (must be held to keep paths alive).
     async fn start_test_daemon() -> (HistoryClient, watch::Sender<bool>, TempDir) {
         let tmp = tempfile::tempdir().unwrap();
+        let (event_tx, _event_rx) = broadcast::channel::<DaemonEvent>(64);
 
         let db_path = tmp.path().join("history.db");
         let record_path = tmp.path().join("records.db");
@@ -37,7 +39,12 @@ mod unix {
         let history_store = HistoryStore::new(store, host_id, encryption_key);
 
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
-        let service = HistoryService::new(history_store, history_db, shutdown_tx.clone());
+        let service = HistoryService::new(
+            history_store,
+            history_db,
+            event_tx.clone(),
+            shutdown_tx.clone(),
+        );
 
         let socket_path = tmp.path().join("test.sock");
         let uds = UnixListener::bind(&socket_path).unwrap();
