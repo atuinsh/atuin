@@ -9,7 +9,7 @@ use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::sync::Arc;
 use time::OffsetDateTime;
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 use tracing::{Level, instrument};
 
 use atuin_client::database::{Database, Sqlite as HistoryDatabase};
@@ -22,6 +22,7 @@ use crate::history::history_server::{History as HistorySvc, HistoryServer};
 
 use crate::history::{EndHistoryReply, EndHistoryRequest, StartHistoryReply, StartHistoryRequest};
 use crate::history::{ShutdownReply, ShutdownRequest, StatusReply, StatusRequest};
+use crate::search_server::SearchService;
 
 mod sync;
 
@@ -215,10 +216,13 @@ async fn shutdown_signal(mut shutdown_rx: watch::Receiver<bool>) {
 async fn start_server(
     settings: Settings,
     history: HistoryService,
+    search: SearchService,
     shutdown_rx: watch::Receiver<bool>,
 ) -> Result<()> {
     use tokio::net::UnixListener;
     use tokio_stream::wrappers::UnixListenerStream;
+
+    use crate::search::search_server::SearchServer;
 
     let socket_path = settings.daemon.socket_path;
 
@@ -267,6 +271,7 @@ async fn start_server(
 
     Server::builder()
         .add_service(HistoryServer::new(history))
+        .add_service(SearchServer::new(search))
         .serve_with_incoming_shutdown(
             uds_stream,
             shutdown_signal(cleanup.then_some(socket_path.into()), shutdown_rx),
@@ -280,6 +285,7 @@ async fn start_server(
 async fn start_server(
     settings: Settings,
     history: HistoryService,
+    search: SearchService,
     shutdown_rx: watch::Receiver<bool>,
 ) -> Result<()> {
     use tokio::net::TcpListener;
@@ -294,6 +300,7 @@ async fn start_server(
 
     Server::builder()
         .add_service(HistoryServer::new(history))
+        .add_service(SearchServer::new(search))
         .serve_with_incoming_shutdown(tcp_stream, shutdown_signal(shutdown_rx))
         .await?;
     Ok(())
@@ -312,11 +319,14 @@ pub async fn listen(
         .context("could not load encryption key")?
         .into();
 
+    let (search_tx, search_rx) = mpsc::channel(64);
+
     let host_id = Settings::host_id().await?;
     let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let history = HistoryService::new(history_store.clone(), history_db.clone(), shutdown_tx);
+    let search = SearchService::new(history_store.clone(), history_db.clone(), search_rx);
 
     // start services
     tokio::spawn(sync::worker(
@@ -324,7 +334,8 @@ pub async fn listen(
         store,
         history_store,
         history_db,
+        search_tx,
     ));
 
-    start_server(settings, history, shutdown_rx).await
+    start_server(settings, history, search, shutdown_rx).await
 }

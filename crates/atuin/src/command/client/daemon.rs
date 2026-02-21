@@ -9,10 +9,7 @@ use std::time::{Duration, Instant};
 use atuin_client::{
     database::Sqlite, history::History, record::sqlite_store::SqliteStore, settings::Settings,
 };
-use atuin_daemon::{
-    client::{DaemonClientErrorKind, HistoryClient, classify_error},
-    server::listen,
-};
+use atuin_daemon::client::{DaemonClientErrorKind, HistoryClient, classify_error};
 use clap::Subcommand;
 #[cfg(unix)]
 use daemonize::Daemonize;
@@ -551,7 +548,7 @@ async fn run(settings: Settings, store: SqliteStore, history_db: Sqlite) -> Resu
     let pidfile_path = PathBuf::from(&settings.daemon.pidfile_path);
     let _pidfile_guard = PidfileGuard::acquire(&pidfile_path)?;
 
-    listen(settings, store, history_db).await?;
+    atuin_daemon::boot(settings, store, history_db).await?;
 
     Ok(())
 }

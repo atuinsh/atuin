@@ -1,5 +1,6 @@
 use eyre::Result;
 use rand::Rng;
+use tokio::sync::mpsc;
 use tokio::time::{self, MissedTickBehavior};
 
 use atuin_client::database::Sqlite as HistoryDatabase;
@@ -12,11 +13,14 @@ use atuin_client::{
 
 use atuin_dotfiles::store::{AliasStore, var::VarStore};
 
+use crate::events::DaemonEvent;
+
 pub async fn worker(
     settings: Settings,
     store: SqliteStore,
     history_store: HistoryStore,
     history_db: HistoryDatabase,
+    search_tx: mpsc::Sender<DaemonEvent>,
 ) -> Result<()> {
     tracing::info!("booting sync worker");
 
