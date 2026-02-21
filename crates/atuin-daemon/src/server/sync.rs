@@ -1,6 +1,6 @@
 use eyre::Result;
 use rand::Rng;
-use tokio::sync::mpsc;
+use tokio::sync::broadcast;
 use tokio::time::{self, MissedTickBehavior};
 
 use atuin_client::database::Sqlite as HistoryDatabase;
@@ -20,7 +20,7 @@ pub async fn worker(
     store: SqliteStore,
     history_store: HistoryStore,
     history_db: HistoryDatabase,
-    search_tx: mpsc::Sender<DaemonEvent>,
+    search_tx: broadcast::Sender<DaemonEvent>,
 ) -> Result<()> {
     tracing::info!("booting sync worker");
 

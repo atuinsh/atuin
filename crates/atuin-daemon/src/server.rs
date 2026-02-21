@@ -9,7 +9,7 @@ use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::sync::Arc;
 use time::OffsetDateTime;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{broadcast, watch};
 use tracing::{Level, instrument};
 
 use atuin_client::database::{Database, Sqlite as HistoryDatabase};
@@ -18,6 +18,7 @@ use dashmap::DashMap;
 use eyre::Result;
 use tonic::{Request, Response, Status, transport::Server};
 
+use crate::events::DaemonEvent;
 use crate::history::history_server::{History as HistorySvc, HistoryServer};
 
 use crate::history::{EndHistoryReply, EndHistoryRequest, StartHistoryReply, StartHistoryRequest};
@@ -319,7 +320,7 @@ pub async fn listen(
         .context("could not load encryption key")?
         .into();
 
-    let (search_tx, search_rx) = mpsc::channel(64);
+    let (search_tx, search_rx) = broadcast::channel::<DaemonEvent>(64);
 
     let host_id = Settings::host_id().await?;
     let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);

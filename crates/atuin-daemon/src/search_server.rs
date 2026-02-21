@@ -1,6 +1,5 @@
 use atuin_client::{database::Sqlite as HistoryDatabase, history::store::HistoryStore};
-use atuin_common::record::RecordId;
-use tokio::sync::mpsc;
+use tokio::sync::broadcast;
 use tonic::{Request, Response, Status};
 
 use crate::{
@@ -11,14 +10,14 @@ use crate::{
 pub struct SearchService {
     store: HistoryStore,
     history_db: HistoryDatabase,
-    rx: mpsc::Receiver<DaemonEvent>,
+    rx: broadcast::Receiver<DaemonEvent>,
 }
 
 impl SearchService {
     pub fn new(
         store: HistoryStore,
         history_db: HistoryDatabase,
-        rx: mpsc::Receiver<DaemonEvent>,
+        rx: broadcast::Receiver<DaemonEvent>,
     ) -> Self {
         Self {
             store,
