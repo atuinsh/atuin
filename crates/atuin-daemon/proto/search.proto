@@ -3,12 +3,14 @@ package search;
 
 message SearchRequest {
   string query = 1;
+  uint64 query_id = 2;  // Incrementing ID to match responses to queries
 }
 
 message SearchResponse {
-  string result = 1;
+  repeated string ids = 1;  // History IDs as strings
+  uint64 query_id = 2;      // Echo back the query ID
 }
 
 service Search {
-  rpc Search(SearchRequest) returns (SearchResponse);
+  rpc Search(stream SearchRequest) returns (stream SearchResponse);
 }

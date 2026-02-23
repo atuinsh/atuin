@@ -42,6 +42,10 @@ pub enum SearchMode {
 
     #[serde(rename = "skim")]
     Skim,
+
+    #[serde(rename = "daemon-fuzzy")]
+    #[clap(aliases = &["daemon-fuzzy"])]
+    DaemonFuzzy,
 }
 
 impl SearchMode {
@@ -51,6 +55,7 @@ impl SearchMode {
             SearchMode::FullText => "FULLTXT",
             SearchMode::Fuzzy => "FUZZY",
             SearchMode::Skim => "SKIM",
+            SearchMode::DaemonFuzzy => "DAEMON",
         }
     }
     pub fn next(&self, settings: &Settings) -> Self {
@@ -58,9 +63,13 @@ impl SearchMode {
             SearchMode::Prefix => SearchMode::FullText,
             // if the user is using skim, we go to skim
             SearchMode::FullText if settings.search_mode == SearchMode::Skim => SearchMode::Skim,
+            // if the user is using daemon-fuzzy, we go to daemon-fuzzy
+            SearchMode::FullText if settings.search_mode == SearchMode::DaemonFuzzy => {
+                SearchMode::DaemonFuzzy
+            }
             // otherwise fuzzy.
             SearchMode::FullText => SearchMode::Fuzzy,
-            SearchMode::Fuzzy | SearchMode::Skim => SearchMode::Prefix,
+            SearchMode::Fuzzy | SearchMode::Skim | SearchMode::DaemonFuzzy => SearchMode::Prefix,
         }
     }
 }

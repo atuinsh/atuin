@@ -16,6 +16,9 @@ use crate::history::{
     EndHistoryReply, EndHistoryRequest, ShutdownRequest, StartHistoryReply, StartHistoryRequest,
     StatusReply, StatusRequest, history_client::HistoryClient as HistoryServiceClient,
 };
+use crate::search::{
+    SearchRequest, SearchResponse, search_client::SearchClient as SearchServiceClient,
+};
 
 pub struct HistoryClient {
     client: HistoryServiceClient<Channel>,
@@ -126,5 +129,69 @@ impl HistoryClient {
     pub async fn shutdown(&mut self) -> Result<bool> {
         let resp = self.client.shutdown(ShutdownRequest {}).await?.into_inner();
         Ok(resp.accepted)
+    }
+}
+
+pub struct SearchClient {
+    client: SearchServiceClient<Channel>,
+}
+
+impl SearchClient {
+    #[cfg(unix)]
+    pub async fn new(path: String) -> Result<Self> {
+        let log_path = path.clone();
+        let channel = Endpoint::try_from("http://atuin_local_daemon:0")?
+            .connect_with_connector(service_fn(move |_: Uri| {
+                let path = path.clone();
+
+                async move {
+                    Ok::<_, std::io::Error>(TokioIo::new(UnixStream::connect(path.clone()).await?))
+                }
+            }))
+            .await
+            .wrap_err_with(|| {
+                format!(
+                    "failed to connect to local atuin daemon at {}. Is it running?",
+                    &log_path
+                )
+            })?;
+
+        let client = SearchServiceClient::new(channel);
+
+        Ok(SearchClient { client })
+    }
+
+    #[cfg(not(unix))]
+    pub async fn new(port: u64) -> Result<Self> {
+        let channel = Endpoint::try_from("http://atuin_local_daemon:0")?
+            .connect_with_connector(service_fn(move |_: Uri| {
+                let url = format!("127.0.0.1:{port}");
+
+                async move {
+                    Ok::<_, std::io::Error>(TokioIo::new(TcpStream::connect(url.clone()).await?))
+                }
+            }))
+            .await
+            .wrap_err_with(|| {
+                format!(
+                    "failed to connect to local atuin daemon at 127.0.0.1:{port}. Is it running?"
+                )
+            })?;
+
+        let client = SearchServiceClient::new(channel);
+
+        Ok(SearchClient { client })
+    }
+
+    pub async fn search(
+        &mut self,
+        query: String,
+        query_id: u64,
+    ) -> Result<tonic::Streaming<SearchResponse>> {
+        let request = SearchRequest { query, query_id };
+        let request_stream = tokio_stream::once(request);
+        let response = self.client.search(request_stream).await?;
+
+        Ok(response.into_inner())
     }
 }
