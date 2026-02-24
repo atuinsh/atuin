@@ -1,4 +1,5 @@
-use std::path::PathBuf;
+use std::fs::{self, OpenOptions};
+use std::path::{Path, PathBuf};
 
 use clap::Subcommand;
 use eyre::{Result, WrapErr};
@@ -6,7 +7,39 @@ use eyre::{Result, WrapErr};
 use atuin_client::{
     database::Sqlite, record::sqlite_store::SqliteStore, settings::Settings, theme,
 };
-use tracing_subscriber::{filter::EnvFilter, fmt, prelude::*};
+use tracing_appender::rolling::{RollingFileAppender, Rotation};
+use tracing_subscriber::{
+    Layer, filter::EnvFilter, filter::LevelFilter, fmt, fmt::format::FmtSpan, prelude::*,
+};
+
+fn cleanup_old_logs(log_dir: &Path, prefix: &str, retention_days: u64) {
+    let cutoff = std::time::SystemTime::now()
+        - std::time::Duration::from_secs(retention_days * 24 * 60 * 60);
+
+    let Ok(entries) = fs::read_dir(log_dir) else {
+        return;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+
+        // Match files like "search.log.2024-02-23" or "daemon.log.2024-02-23"
+        if !name.starts_with(prefix) || name == prefix {
+            continue;
+        }
+
+        if let Ok(metadata) = entry.metadata() {
+            if let Ok(modified) = metadata.modified() {
+                if modified < cutoff {
+                    let _ = fs::remove_file(&path);
+                }
+            }
+        }
+    }
+}
 
 #[cfg(feature = "sync")]
 mod sync;
@@ -127,13 +160,150 @@ impl Cmd {
         mut settings: Settings,
         mut theme_manager: theme::ThemeManager,
     ) -> Result<()> {
-        let filter =
+        // ATUIN_LOG env var overrides config file level settings
+        let env_log_set = std::env::var("ATUIN_LOG").is_ok();
+
+        // Base filter from env var (or empty if not set)
+        let base_filter =
             EnvFilter::from_env("ATUIN_LOG").add_directive("sqlx_sqlite::regexp=off".parse()?);
 
-        tracing_subscriber::registry()
-            .with(fmt::layer())
-            .with(filter)
-            .init();
+        // Use file-based logging for interactive search (TUI mode)
+        let use_search_logging = matches!(&self, Self::Search(cmd) if cmd.is_interactive())
+            && settings.logs.search_enabled();
+
+        // Use file-based logging for daemon
+        let use_daemon_logging = matches!(&self, Self::Daemon(_)) && settings.logs.daemon_enabled();
+
+        // Check if daemon should also log to console
+        let daemon_show_logs = matches!(&self, Self::Daemon(cmd) if cmd.show_logs());
+
+        // Set up span timing JSON logs if ATUIN_SPAN is set
+        let span_path = std::env::var("ATUIN_SPAN").ok().and_then(|p| {
+            if p.is_empty() {
+                Some("atuin-spans.json".to_string())
+            } else {
+                Some(p)
+            }
+        });
+
+        // Helper to create span timing layer
+        macro_rules! make_span_layer {
+            ($path:expr) => {{
+                let span_file = OpenOptions::new()
+                    .create(true)
+                    .truncate(true)
+                    .write(true)
+                    .open($path)?;
+                Some(
+                    fmt::layer()
+                        .json()
+                        .with_writer(span_file)
+                        .with_span_events(FmtSpan::NEW | FmtSpan::CLOSE)
+                        .with_filter(LevelFilter::TRACE),
+                )
+            }};
+        }
+
+        // Build the subscriber with all configured layers
+        if use_search_logging {
+            let log_dir = PathBuf::from(&settings.logs.dir);
+            fs::create_dir_all(&log_dir)?;
+
+            // Clean up old log files
+            cleanup_old_logs(&log_dir, "search.log", settings.logs.search_retention());
+
+            let file_appender = RollingFileAppender::new(Rotation::DAILY, &log_dir, "search.log");
+
+            // Use config level unless ATUIN_LOG is set
+            let filter = if env_log_set {
+                base_filter
+            } else {
+                EnvFilter::default()
+                    .add_directive(settings.logs.search_level().as_directive().parse()?)
+                    .add_directive("sqlx_sqlite::regexp=off".parse()?)
+            };
+
+            let base = tracing_subscriber::registry().with(
+                fmt::layer()
+                    .with_writer(file_appender)
+                    .with_ansi(false)
+                    .with_filter(filter),
+            );
+
+            match &span_path {
+                Some(sp) => {
+                    base.with(make_span_layer!(sp)).init();
+                }
+                None => {
+                    base.init();
+                }
+            }
+        } else if use_daemon_logging {
+            let log_dir = PathBuf::from(&settings.logs.dir);
+            fs::create_dir_all(&log_dir)?;
+
+            // Clean up old log files
+            cleanup_old_logs(&log_dir, "daemon.log", settings.logs.daemon_retention());
+
+            let file_appender = RollingFileAppender::new(Rotation::DAILY, &log_dir, "daemon.log");
+
+            // Use config level unless ATUIN_LOG is set
+            let file_filter = if env_log_set {
+                base_filter
+            } else {
+                EnvFilter::default()
+                    .add_directive(settings.logs.daemon_level().as_directive().parse()?)
+                    .add_directive("sqlx_sqlite::regexp=off".parse()?)
+            };
+
+            let file_layer = fmt::layer()
+                .with_writer(file_appender)
+                .with_ansi(false)
+                .with_filter(file_filter);
+
+            // Optionally add console layer for --show-logs
+            if daemon_show_logs {
+                let console_filter = EnvFilter::from_env("ATUIN_LOG")
+                    .add_directive("sqlx_sqlite::regexp=off".parse()?);
+
+                let console_layer = fmt::layer().with_filter(console_filter);
+
+                let base = tracing_subscriber::registry()
+                    .with(file_layer)
+                    .with(console_layer);
+
+                match &span_path {
+                    Some(sp) => {
+                        base.with(make_span_layer!(sp)).init();
+                    }
+                    None => {
+                        base.init();
+                    }
+                }
+            } else {
+                let base = tracing_subscriber::registry().with(file_layer);
+
+                match &span_path {
+                    Some(sp) => {
+                        base.with(make_span_layer!(sp)).init();
+                    }
+                    None => {
+                        base.init();
+                    }
+                }
+            }
+        } else {
+            let base = tracing_subscriber::registry().with(fmt::layer().with_filter(base_filter));
+
+            match &span_path {
+                Some(sp) => {
+                    base.with(make_span_layer!(sp)).init();
+                }
+                None => {
+                    base.init();
+                }
+            }
+        }
 
         tracing::trace!(command = ?self, "client command");
 

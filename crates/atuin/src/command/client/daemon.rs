@@ -23,6 +23,10 @@ pub struct Cmd {
     #[arg(long, hide = true)]
     daemonize: bool,
 
+    /// Also write daemon logs to the console (useful for debugging)
+    #[arg(long)]
+    show_logs: bool,
+
     #[command(subcommand)]
     subcmd: Option<SubCmd>,
 }
@@ -34,6 +38,10 @@ pub enum SubCmd {
     Start {
         #[arg(long, hide = true)]
         daemonize: bool,
+
+        /// Also write daemon logs to the console (useful for debugging)
+        #[arg(long)]
+        show_logs: bool,
     },
 
     /// Show the daemon's current status
@@ -52,8 +60,17 @@ impl Cmd {
     #[cfg(unix)]
     pub fn should_daemonize(&self) -> bool {
         match &self.subcmd {
-            Some(SubCmd::Start { daemonize }) => *daemonize,
+            Some(SubCmd::Start { daemonize, .. }) => *daemonize,
             None => self.daemonize,
+            _ => false,
+        }
+    }
+
+    /// Returns `true` when logs should also be written to the console.
+    pub fn show_logs(&self) -> bool {
+        match &self.subcmd {
+            Some(SubCmd::Start { show_logs, .. }) => *show_logs,
+            None => self.show_logs,
             _ => false,
         }
     }

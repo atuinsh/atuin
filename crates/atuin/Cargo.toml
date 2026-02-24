@@ -78,6 +78,7 @@ open = "5"
 ratatui = { workspace = true }
 tracing = "0.1"
 tracing-subscriber = { workspace = true }
+tracing-appender = "0.2"
 uuid = { workspace = true }
 sysinfo = "0.30.7"
 regex = "1.10.5"

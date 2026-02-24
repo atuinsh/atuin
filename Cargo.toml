@@ -47,11 +47,15 @@ ratatui = "0.30.0"
 sql-builder = "3"
 tempfile = { version = "3.19" }
 minijinja = "2.9.0"
-rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls = { version = "0.23", default-features = false, features = [
+  "ring",
+  "std",
+  "tls12",
+] }
 
 [workspace.dependencies.tracing-subscriber]
 version = "0.3"
-features = ["ansi", "fmt", "registry", "env-filter"]
+features = ["ansi", "fmt", "registry", "env-filter", "json"]
 
 [workspace.dependencies.reqwest]
 version = "0.13"

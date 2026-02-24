@@ -9,7 +9,7 @@ use time::OffsetDateTime;
 use tokio::sync::{RwLock, broadcast};
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status, Streaming};
-use tracing::info;
+use tracing::{Level, debug, info, instrument, span};
 
 use crate::{
     events::DaemonEvent,
@@ -44,7 +44,7 @@ impl SearchService {
                 let event = rx.recv().await.unwrap();
                 match event {
                     DaemonEvent::RecordsAdded(records) => {
-                        println!("Added {} records", records.len());
+                        debug!(count = records.len(), "Processing added records");
                         let histories: Vec<History> = history_db_clone
                             .query_history(
                                 format!(
@@ -59,20 +59,26 @@ impl SearchService {
                             )
                             .await
                             .unwrap();
-                        for history in histories {
+                        span!(Level::TRACE, "inject_records", count = histories.len()).in_scope(
+                            || {
+                                for history in histories {
+                                    injector_clone.push(history, |history, columns| {
+                                        columns[0] = history.command.clone().into();
+                                        columns[1] = history.cwd.to_string().into();
+                                    });
+                                }
+                            },
+                        );
+                    }
+                    DaemonEvent::HistoryStarted(history) => {
+                        debug!(id = %history.id, command = %history.command, "History started");
+                    }
+                    DaemonEvent::HistoryEnded(history) => {
+                        span!(Level::TRACE, "inject_history_ended").in_scope(|| {
                             injector_clone.push(history, |history, columns| {
                                 columns[0] = history.command.clone().into();
                                 columns[1] = history.cwd.to_string().into();
                             });
-                        }
-                    }
-                    DaemonEvent::HistoryStarted(history) => {
-                        println!("history started: {:?}", history);
-                    }
-                    DaemonEvent::HistoryEnded(history) => {
-                        injector_clone.push(history, |history, columns| {
-                            columns[0] = history.command.clone().into();
-                            columns[1] = history.cwd.to_string().into();
                         });
                     }
                 }
@@ -123,6 +129,7 @@ impl SearchSvc for SearchService {
     ///
     /// The query ID allows the server to stream back new items as they're added to the index,
     /// but this is not implemented yet.
+    #[instrument(skip_all, level = Level::TRACE, name = "search_rpc")]
     async fn search(
         &self,
         request: Request<Streaming<SearchRequest>>,
@@ -140,26 +147,40 @@ impl SearchSvc for SearchService {
                     Ok(search_req) => {
                         let query = search_req.query;
                         let query_id = search_req.query_id;
+
+                        // Note: We can't use entered() spans across await points in spawned tasks
+                        // So we acquire the lock first, then do all sync work in a span scope
                         let mut nucleo = nucleo.write().await;
 
-                        // Update the search pattern
-                        nucleo.pattern.reparse(
-                            0,
-                            &query,
-                            nucleo::pattern::CaseMatching::Smart,
-                            nucleo::pattern::Normalization::Smart,
-                            false,
+                        // Update the search pattern and tick until complete (sync work)
+                        let ids = span!(Level::TRACE, "daemon_search_query", %query, query_id)
+                            .in_scope(|| {
+                                span!(Level::TRACE, "nucleo_match").in_scope(|| {
+                                    nucleo.pattern.reparse(
+                                        0,
+                                        &query,
+                                        nucleo::pattern::CaseMatching::Smart,
+                                        nucleo::pattern::Normalization::Smart,
+                                        false,
+                                    );
+
+                                    // Tick until processing is complete
+                                    while nucleo.tick(10).running {}
+
+                                    // Get the snapshot and collect IDs as strings
+                                    let snapshot = nucleo.snapshot();
+                                    snapshot
+                                        .matched_items(..snapshot.matched_item_count().min(200))
+                                        .map(|item| item.data.id.0.clone())
+                                        .collect::<Vec<String>>()
+                                })
+                            });
+
+                        debug!(
+                            query = %query,
+                            results = ids.len(),
+                            "[daemon-search]"
                         );
-
-                        // Tick until processing is complete
-                        while nucleo.tick(10).running {}
-
-                        // Get the snapshot and collect IDs as strings
-                        let snapshot = nucleo.snapshot();
-                        let ids: Vec<String> = snapshot
-                            .matched_items(..snapshot.matched_item_count().min(200))
-                            .map(|item| item.data.id.0.clone())
-                            .collect();
 
                         if tx.send(Ok(SearchResponse { ids, query_id })).await.is_err() {
                             break; // Client disconnected

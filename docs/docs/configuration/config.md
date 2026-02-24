@@ -765,6 +765,54 @@ The port to use for client -> daemon communication. Only used on non-unix system
 tcp_port = 8889
 ```
 
+## logs
+
+Atuin version: >= 18.13
+
+Behavior of log files.
+
+### enabled
+
+Default: `true`
+
+Whether or not to enable file-based logging.
+
+### dir
+
+Default: `"~/.atuin/logs"`
+
+The directory in which to store log files.
+
+### level
+
+Default: `"info"`
+
+The logging level to use. Valud values are `"trace"`, `"debug"`, `"info"`, `"warn"`, and `"error"`, in order of highest-to-lowest verbosity.
+
+### retention
+
+Default: `4`
+
+How many days of log files to keep (per file type). Files older than this will be removed.
+
+### daemon
+
+A sub-object with specific options for daemon logging:
+
+* `enabled` - whether to output daemon logs; defaults to `logs.enabled`
+* `file` - the filename to use for the daemon logs; defaults to `"daemon.log"`. Can be absolute, or relative to `logs.dir`.
+* `level` - override the log level for the daemon logs; defaults to `logs.level`
+* `retention` - how many days to store daemon logs; defaults to `logs.retention`
+
+### search
+
+A sub-object with specific options for search logging:
+
+* `enabled` - whether to output search logs; defaults to `logs.enabled`
+* `file` - the filename to use for the search logs; defaults to `"search.log"`. Can be absolute, or relative to `logs.dir`.
+* `level` - override the log level for the search logs; defaults to `logs.level`
+* `retention` - how many days to store search logs; defaults to `logs.retention`
+
 ## theme
 
 Atuin version: >= 18.4
