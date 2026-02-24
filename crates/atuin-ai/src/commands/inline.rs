@@ -1,5 +1,5 @@
 use crate::commands::detect_shell;
-use crate::tui::render::render;
+use crate::tui::render::{history_lines_from_events, render};
 use crate::tui::{
     App, AppEvent, AppMode, ConversationEvent, EventLoop, ExitAction, RenderContext, TerminalGuard,
     calculate_needed_height, install_panic_hook,
@@ -302,6 +302,7 @@ fn state_to_json(state: &crate::tui::AppState) -> serde_json::Value {
         "cursor_col": cursor.1,
         "spinner_frame": state.spinner_frame,
         "confirmation_pending": state.confirmation_pending,
+        "committed_event_count": state.committed_event_count,
     });
 
     // Add streaming fields if in streaming mode
@@ -423,6 +424,15 @@ async fn run_inline_tui(
     > = None;
 
     loop {
+        if app.state.mode == AppMode::Input && app.state.has_uncommitted_events() {
+            let lines = history_lines_from_events(app.state.uncommitted_events(), theme);
+            if !lines.is_empty() {
+                guard.insert_history_lines(lines);
+            }
+            app.state.mark_all_events_committed();
+            log_state!("commit_history");
+        }
+
         // Ensure viewport is large enough for current content (capped at terminal height)
         let needed_height = calculate_needed_height(&app.state);
         let actual_height = guard.ensure_height(needed_height)?;
@@ -436,7 +446,7 @@ async fn run_inline_tui(
             max_height: actual_height,
         };
         // Handle draw errors gracefully - cursor position reads can fail during resize
-        if let Err(e) = guard.terminal().draw(|frame| {
+        if let Err(e) = guard.draw(|frame| {
             render(frame, &app.state, &ctx);
         }) {
             let err_msg = e.to_string();
@@ -449,7 +459,7 @@ async fn run_inline_tui(
                 );
                 continue;
             }
-            return Err(e.into());
+            return Err(e);
         }
 
         // Get next event

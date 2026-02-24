@@ -158,6 +158,8 @@ pub struct AppState {
     pub streaming_started: Option<Instant>,
     /// True when user has pressed Enter once on a dangerous command
     pub confirmation_pending: bool,
+    /// Number of finalized events already committed to terminal scrollback
+    pub committed_event_count: usize,
 }
 
 /// Create a TextArea with our preferred configuration
@@ -187,6 +189,7 @@ impl AppState {
             last_spinner_tick: Instant::now(),
             streaming_started: None,
             confirmation_pending: false,
+            committed_event_count: 0,
         }
     }
 
@@ -269,6 +272,22 @@ impl AppState {
         }
 
         messages
+    }
+
+    /// Check whether there are finalized-but-uncommitted events.
+    pub fn has_uncommitted_events(&self) -> bool {
+        self.committed_event_count.min(self.events.len()) < self.events.len()
+    }
+
+    /// Borrow the finalized events that have not yet been inserted into scrollback.
+    pub fn uncommitted_events(&self) -> &[ConversationEvent] {
+        let start = self.committed_event_count.min(self.events.len());
+        &self.events[start..]
+    }
+
+    /// Mark all current events as committed to terminal scrollback.
+    pub fn mark_all_events_committed(&mut self) {
+        self.committed_event_count = self.events.len();
     }
 
     // ===== Generation lifecycle methods =====

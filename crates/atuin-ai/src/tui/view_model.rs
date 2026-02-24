@@ -16,7 +16,7 @@ pub enum WarningKind {
 }
 
 /// Content variants for blocks - each variant is fully self-describing
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Content {
     Input {
         text: String,
@@ -80,7 +80,7 @@ impl Content {
 }
 
 /// A visual block in the UI
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Block {
     pub content: Vec<Content>,
     pub separator_above: bool,
@@ -88,7 +88,7 @@ pub struct Block {
 }
 
 /// Complete view model - the rendering specification
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Blocks {
     pub items: Vec<Block>,
     pub footer: &'static str,
@@ -146,9 +146,10 @@ impl Blocks {
     /// Also handles streaming text and mode-dependent UI.
     pub fn from_state(state: &AppState) -> Self {
         let mut items = Vec::new();
+        let visible_events = state.uncommitted_events();
 
         // 1. Build blocks from conversation events
-        for event in &state.events {
+        for event in visible_events {
             match event {
                 ConversationEvent::UserMessage { content } => {
                     items.push(Block {
@@ -163,7 +164,7 @@ impl Blocks {
                 }
                 ConversationEvent::Text { content } => {
                     // In Review mode with completed tool calls, prepend ToolStatus to this Text block
-                    let (completed, _) = count_tool_calls_since_last_user(&state.events);
+                    let (completed, _) = count_tool_calls_since_last_user(visible_events);
                     let mut block_content = Vec::new();
 
                     if state.mode == AppMode::Review && completed > 0 {
@@ -258,7 +259,7 @@ impl Blocks {
         // 2. AI response block (tool status + streaming text) - shown during Streaming only
         // In Review mode, ToolStatus is handled inline with ConversationEvent::Text above
         if state.mode == AppMode::Streaming {
-            let (completed, in_flight) = count_tool_calls_since_last_user(&state.events);
+            let (completed, in_flight) = count_tool_calls_since_last_user(visible_events);
             let mut response_content = Vec::new();
 
             // Add tool status if there are any non-suggest_command tools
@@ -371,7 +372,7 @@ impl Blocks {
         }
 
         // 7. Derive footer from mode and events
-        let footer = Self::footer_for_mode(&state.mode, &state.events, state.confirmation_pending);
+        let footer = Self::footer_for_mode(&state.mode, visible_events, state.confirmation_pending);
 
         Self { items, footer }
     }
@@ -396,5 +397,47 @@ impl Blocks {
             }
             AppMode::Error => "[Enter]/[r]: Retry  [Esc]: Cancel",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn committed_events_are_not_rendered_again() {
+        let mut state = AppState::new();
+        state.events = vec![
+            ConversationEvent::UserMessage {
+                content: "list files".to_string(),
+            },
+            ConversationEvent::ToolCall {
+                id: "call_1".to_string(),
+                name: "suggest_command".to_string(),
+                input: serde_json::json!({
+                    "command": "ls -la",
+                    "confidence": "high",
+                }),
+            },
+        ];
+        state.committed_event_count = state.events.len();
+        state.mode = AppMode::Input;
+
+        let actual = Blocks::from_state(&state);
+        let expected = Blocks {
+            items: vec![Block {
+                content: vec![Content::Input {
+                    text: String::new(),
+                    active: true,
+                    cursor_pos: 0,
+                }],
+                separator_above: false,
+                title: Some("Ask questions or generate a command:".to_string()),
+            }],
+            footer: "[Enter]: Accept  [Esc]: Cancel",
+        };
+
+        assert_eq!(expected, actual);
     }
 }

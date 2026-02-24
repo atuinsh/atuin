@@ -1,7 +1,6 @@
 use atuin_client::theme::{Meaning, Theme};
 use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 use ratatui::{
-    Frame,
     backend::FromCrossterm,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
@@ -10,8 +9,9 @@ use ratatui::{
 };
 use tui_textarea::TextArea;
 
+use super::custom_terminal::Frame;
 use super::spinner::active_frame;
-use super::state::AppState;
+use super::state::{AppState, ConversationEvent};
 use super::view_model::{Blocks, Content, WarningKind};
 
 /// Fixed card width for the TUI
@@ -579,6 +579,255 @@ fn word_wrap_line_count_with_last_width(text: &str, width: usize) -> (u16, usize
     (line_count, current_line_width)
 }
 
+/// Convert finalized conversation events into display lines for terminal scrollback insertion.
+pub fn history_lines_from_events(
+    events: &[ConversationEvent],
+    theme: &Theme,
+) -> Vec<Line<'static>> {
+    let input_style = Style::from_crossterm(theme.as_style(Meaning::Guidance));
+    let command_style = Style::from_crossterm(theme.as_style(Meaning::Important));
+    let warning_style = Style::from_crossterm(theme.as_style(Meaning::AlertWarn));
+    let danger_style = Style::from_crossterm(theme.as_style(Meaning::AlertError));
+    let base_style = Style::from_crossterm(theme.as_style(Meaning::Base));
+
+    let mut blocks: Vec<Vec<Line<'static>>> = Vec::new();
+
+    for event in events {
+        let mut block_lines = Vec::new();
+
+        match event {
+            ConversationEvent::UserMessage { content } => {
+                push_prefixed_plain_lines(
+                    &mut block_lines,
+                    content,
+                    "> ",
+                    "  ",
+                    input_style,
+                    base_style,
+                );
+            }
+            ConversationEvent::Text { content } => {
+                let markdown_lines = markdown_to_spans(content, theme);
+                block_lines.extend(markdown_lines.into_iter().map(line_to_static));
+            }
+            ConversationEvent::ToolCall { name, input, .. } if name == "suggest_command" => {
+                if let Some(command) = input.get("command").and_then(|value| value.as_str()) {
+                    push_prefixed_plain_lines(
+                        &mut block_lines,
+                        command,
+                        "$ ",
+                        "  ",
+                        command_style,
+                        base_style,
+                    );
+                }
+
+                let danger_level = input
+                    .get("danger")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("low");
+                let is_dangerous =
+                    danger_level == "high" || danger_level == "medium" || danger_level == "med";
+                let danger_notes = input.get("danger_notes").and_then(|value| value.as_str());
+
+                let confidence_level = input
+                    .get("confidence")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("high");
+                let is_low_confidence = confidence_level == "low";
+                let confidence_notes = input
+                    .get("confidence_notes")
+                    .and_then(|value| value.as_str());
+
+                if is_dangerous {
+                    if let Some(notes) = danger_notes {
+                        push_prefixed_plain_lines(
+                            &mut block_lines,
+                            notes,
+                            "! ",
+                            "  ",
+                            danger_style,
+                            base_style,
+                        );
+                    }
+                } else if is_low_confidence && let Some(notes) = confidence_notes {
+                    push_prefixed_plain_lines(
+                        &mut block_lines,
+                        notes,
+                        "? ",
+                        "  ",
+                        warning_style,
+                        base_style,
+                    );
+                }
+            }
+            ConversationEvent::ToolCall { .. } | ConversationEvent::ToolResult { .. } => {}
+        }
+
+        if !block_lines.is_empty() {
+            blocks.push(block_lines);
+        }
+    }
+
+    if blocks.is_empty() {
+        return Vec::new();
+    }
+
+    let border_style = Style::from_crossterm(theme.as_style(Meaning::Base));
+    let title_style = Style::from_crossterm(theme.as_style(Meaning::Guidance));
+    let card_width = usize::from(CARD_WIDTH).max(32);
+    let inner_width = card_width.saturating_sub(2);
+    let content_width = card_width.saturating_sub(4);
+    let mut out = Vec::new();
+    out.push(history_top_border_line(
+        "Ask questions or generate a command:",
+        title_style,
+        border_style,
+        inner_width,
+    ));
+
+    for (index, block) in blocks.into_iter().enumerate() {
+        if index > 0 {
+            out.push(history_separator_line(border_style, inner_width));
+        }
+        for line in block {
+            for wrapped in history_wrap_line(&line, content_width) {
+                out.push(box_history_line(wrapped, border_style, content_width));
+            }
+        }
+    }
+
+    out.push(history_bottom_border_line(border_style, inner_width));
+    out
+}
+
+fn history_top_border_line(
+    title: &str,
+    title_style: Style,
+    border_style: Style,
+    inner_width: usize,
+) -> Line<'static> {
+    let title_width = unicode_width::UnicodeWidthStr::width(title);
+    let fill_width = inner_width.saturating_sub(title_width);
+    Line::from(vec![
+        Span::styled("┌".to_string(), border_style),
+        Span::styled(title.to_string(), title_style),
+        Span::styled("─".repeat(fill_width), border_style),
+        Span::styled("┐".to_string(), border_style),
+    ])
+}
+
+fn history_separator_line(border_style: Style, inner_width: usize) -> Line<'static> {
+    Line::from(vec![
+        Span::styled("├".to_string(), border_style),
+        Span::styled("─".repeat(inner_width), border_style),
+        Span::styled("┤".to_string(), border_style),
+    ])
+}
+
+fn history_bottom_border_line(border_style: Style, inner_width: usize) -> Line<'static> {
+    Line::from(vec![
+        Span::styled("└".to_string(), border_style),
+        Span::styled("─".repeat(inner_width), border_style),
+        Span::styled("┘".to_string(), border_style),
+    ])
+}
+
+fn history_wrap_line(line: &Line<'static>, content_width: usize) -> Vec<Line<'static>> {
+    if content_width == 0 {
+        return vec![line.clone()];
+    }
+
+    let flat = line
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
+    if unicode_width::UnicodeWidthStr::width(flat.as_str()) <= content_width {
+        return vec![line.clone()];
+    }
+    let wrapped = textwrap::wrap(&flat, content_width);
+    if wrapped.is_empty() {
+        return vec![Line::from(String::new())];
+    }
+
+    wrapped
+        .into_iter()
+        .map(|wrapped_line| {
+            let mut out = Line::from(Span::styled(wrapped_line.into_owned(), line.style));
+            out.style = line.style;
+            out.alignment = line.alignment;
+            out
+        })
+        .collect()
+}
+
+fn box_history_line(
+    line: Line<'static>,
+    border_style: Style,
+    content_width: usize,
+) -> Line<'static> {
+    let content_width_used: usize = line
+        .spans
+        .iter()
+        .map(|span| unicode_width::UnicodeWidthStr::width(span.content.as_ref()))
+        .sum();
+    let padding = content_width.saturating_sub(content_width_used);
+
+    let mut spans = Vec::with_capacity(line.spans.len() + 3);
+    spans.push(Span::styled("│ ".to_string(), border_style));
+    spans.extend(line.spans);
+    spans.push(Span::styled(" ".repeat(padding), line.style));
+    spans.push(Span::styled(" │".to_string(), border_style));
+
+    let mut boxed = Line::from(spans);
+    boxed.style = line.style;
+    boxed.alignment = line.alignment;
+    boxed
+}
+
+fn line_to_static(line: Line<'_>) -> Line<'static> {
+    let spans = line
+        .spans
+        .into_iter()
+        .map(|span| Span::styled(span.content.into_owned(), span.style))
+        .collect::<Vec<_>>();
+    let mut out = Line::from(spans);
+    out.style = line.style;
+    out.alignment = line.alignment;
+    out
+}
+
+fn push_prefixed_plain_lines(
+    lines: &mut Vec<Line<'static>>,
+    text: &str,
+    first_prefix: &str,
+    continuation_prefix: &str,
+    prefix_style: Style,
+    text_style: Style,
+) {
+    let mut iter = text.split('\n').peekable();
+    if iter.peek().is_none() {
+        lines.push(Line::from(vec![
+            Span::styled(first_prefix.to_string(), prefix_style),
+            Span::styled(String::new(), text_style),
+        ]));
+        return;
+    }
+
+    for (index, part) in iter.enumerate() {
+        let prefix = if index == 0 {
+            first_prefix
+        } else {
+            continuation_prefix
+        };
+        lines.push(Line::from(vec![
+            Span::styled(prefix.to_string(), prefix_style),
+            Span::styled(part.to_string(), text_style),
+        ]));
+    }
+}
+
 /// Convert markdown to styled spans (existing function, kept as-is)
 pub fn markdown_to_spans<'a>(text: &'a str, theme: &'a Theme) -> Vec<Line<'a>> {
     let parser = Parser::new(text);
@@ -671,4 +920,89 @@ pub fn markdown_to_spans<'a>(text: &'a str, theme: &'a Theme) -> Vec<Line<'a>> {
     }
 
     lines.into_iter().map(Line::from).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use atuin_client::theme::ThemeManager;
+    use pretty_assertions::assert_eq;
+
+    fn plain(line: &Line<'_>) -> String {
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>()
+    }
+
+    #[test]
+    fn history_lines_render_as_boxed_transcript() {
+        let mut manager = ThemeManager::new(Some(false), Some(String::new()));
+        let theme = manager.load_theme("default", None);
+        let events = vec![
+            ConversationEvent::UserMessage {
+                content: "show me a command".to_string(),
+            },
+            ConversationEvent::ToolCall {
+                id: "call_1".to_string(),
+                name: "suggest_command".to_string(),
+                input: serde_json::json!({
+                    "command": "ls -la",
+                    "confidence": "high",
+                }),
+            },
+            ConversationEvent::Text {
+                content: "Here you go!".to_string(),
+            },
+        ];
+
+        let lines = history_lines_from_events(&events, theme);
+        assert_eq!(
+            unicode_width::UnicodeWidthStr::width(plain(&lines[0]).as_str()),
+            usize::from(CARD_WIDTH)
+        );
+        assert!(plain(&lines[0]).starts_with("┌Ask questions or generate a command:"));
+        assert!(
+            lines
+                .iter()
+                .any(|line| plain(line).starts_with("│ > show me a command"))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| plain(line).starts_with("│ $ ls -la"))
+        );
+        assert!(lines.iter().any(|line| plain(line).starts_with("├")));
+        assert!(plain(lines.last().expect("history lines should not be empty")).starts_with("└"));
+    }
+
+    #[test]
+    fn history_lines_wrap_long_content_inside_box() {
+        let mut manager = ThemeManager::new(Some(false), Some(String::new()));
+        let theme = manager.load_theme("default", None);
+        let events = vec![ConversationEvent::Text {
+            content: "1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31".to_string(),
+        }];
+
+        let lines = history_lines_from_events(&events, theme);
+        assert!(
+            lines
+                .iter()
+                .filter(|line| plain(line).starts_with("│ "))
+                .count()
+                > 1
+        );
+        assert!(
+            lines.iter().all(
+                |line| unicode_width::UnicodeWidthStr::width(plain(line).as_str())
+                    <= usize::from(CARD_WIDTH)
+            )
+        );
+        assert!(
+            lines
+                .iter()
+                .filter(|line| plain(line).starts_with("│ "))
+                .all(|line| plain(line).ends_with(" │"))
+        );
+    }
 }

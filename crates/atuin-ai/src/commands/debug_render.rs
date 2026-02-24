@@ -4,9 +4,11 @@
 //! Useful for debugging view model derivation and rendering without running the full TUI.
 
 use eyre::{Context, Result};
-use ratatui::{Terminal, backend::TestBackend};
+use ratatui::backend::{Backend, ClearType, WindowSize};
+use ratatui::buffer::Cell;
+use ratatui::layout::{Position, Rect, Size};
 use serde::Deserialize;
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::time::Instant;
 
 use crate::tui::{
@@ -163,6 +165,7 @@ impl DebugInput {
             last_spinner_tick: Instant::now(),
             streaming_started: None,
             confirmation_pending: false,
+            committed_event_count: 0,
         }
     }
 }
@@ -177,6 +180,106 @@ pub enum OutputFormat {
     Plain,
     /// JSON with blocks structure
     Json,
+}
+
+struct DebugRenderBackend {
+    width: u16,
+    height: u16,
+    cursor: Position,
+    output: Vec<u8>,
+}
+
+impl DebugRenderBackend {
+    fn new(width: u16, height: u16) -> Self {
+        Self {
+            width,
+            height,
+            cursor: Position { x: 0, y: 0 },
+            output: Vec::new(),
+        }
+    }
+}
+
+impl Write for DebugRenderBackend {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.output.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Backend for DebugRenderBackend {
+    type Error = io::Error;
+
+    fn draw<'a, I>(&mut self, _content: I) -> Result<(), Self::Error>
+    where
+        I: Iterator<Item = (u16, u16, &'a Cell)>,
+    {
+        Ok(())
+    }
+
+    fn hide_cursor(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    fn show_cursor(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    fn get_cursor_position(&mut self) -> Result<Position, Self::Error> {
+        Ok(self.cursor)
+    }
+
+    fn set_cursor_position<P: Into<Position>>(&mut self, position: P) -> Result<(), Self::Error> {
+        self.cursor = position.into();
+        Ok(())
+    }
+
+    fn clear(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    fn clear_region(&mut self, _clear_type: ClearType) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    fn append_lines(&mut self, _n: u16) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    fn size(&self) -> Result<Size, Self::Error> {
+        Ok(Size::new(self.width, self.height))
+    }
+
+    fn window_size(&mut self) -> Result<WindowSize, Self::Error> {
+        Ok(WindowSize {
+            columns_rows: Size::new(self.width, self.height),
+            pixels: Size::new(0, 0),
+        })
+    }
+
+    fn flush(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    fn scroll_region_up(
+        &mut self,
+        _region: std::ops::Range<u16>,
+        _line_count: u16,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    fn scroll_region_down(
+        &mut self,
+        _region: std::ops::Range<u16>,
+        _line_count: u16,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
 }
 
 /// Run the debug render command
@@ -205,9 +308,10 @@ pub async fn run(input_file: Option<String>, format: OutputFormat) -> Result<()>
             );
         }
         OutputFormat::Plain | OutputFormat::Ansi => {
-            // Render to a test backend
-            let backend = TestBackend::new(debug_input.width, debug_input.height);
-            let mut terminal = Terminal::new(backend)?;
+            // Render with custom terminal backend to keep output consistent with inline runtime.
+            let backend = DebugRenderBackend::new(debug_input.width, debug_input.height);
+            let mut terminal = crate::tui::custom_terminal::Terminal::with_options(backend)?;
+            terminal.set_viewport_area(Rect::new(0, 0, debug_input.width, debug_input.height));
 
             // Load default theme
             let settings = atuin_client::settings::Settings::new()?;
@@ -225,9 +329,10 @@ pub async fn run(input_file: Option<String>, format: OutputFormat) -> Result<()>
                 render(frame, &state, &ctx);
             })?;
 
-            // Get buffer content
-            let buffer = terminal.backend().buffer();
-            let output = buffer_to_string(buffer, matches!(format, OutputFormat::Plain));
+            let output = buffer_to_string(
+                terminal.completed_buffer(),
+                matches!(format, OutputFormat::Plain),
+            );
             print!("{}", output);
         }
     }

@@ -1,5 +1,7 @@
 pub mod app;
+pub mod custom_terminal;
 pub mod event;
+pub mod insert_history;
 pub mod render;
 pub mod spinner;
 pub mod state;
