@@ -27,10 +27,11 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 dashmap = "5.5.3"
-tonic-types = "0.12.0"
-tonic = "0.12"
-prost = "0.13"
-prost-types = "0.13"
+tonic-types = "0.14"
+tonic = "0.14"
+tonic-prost = "0.14"
+prost = "0.14"
+prost-types = "0.14"
 tokio-stream = {version="0.1.14", features=["net"]}
 hyper-util = "0.1"
 
@@ -44,5 +45,6 @@ tempfile = { workspace = true }
 atuin-common = { path = "../atuin-common", version = "18.13.0-beta.1" }
 
 [build-dependencies]
-protox = "0.8.0"
-tonic-build = "0.12"
+protox = "0.9"
+tonic-build = "0.14"
+tonic-prost-build = "0.14"
