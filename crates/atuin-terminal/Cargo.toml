@@ -1,0 +1,23 @@
+[package]
+name = "atuin-terminal"
+edition = "2024"
+description = "a terminal emulator for atuin"
+
+version = { workspace = true }
+authors = { workspace = true }
+rust-version = { workspace = true }
+license = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+
+[[bin]]
+name = "atuin-terminal"
+path = "src/main.rs"
+
+[dependencies]
+crossterm = { workspace = true }
+eyre = { workspace = true }
+portable-pty = "0.8"
+
+[target.'cfg(unix)'.dependencies]
+signal-hook = "0.3"
