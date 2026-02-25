@@ -152,14 +152,18 @@ pub enum Cmd {
     },
 
     /// Internal command used by Claude Code hooks to capture Bash runs
-    #[command(name = "__capture-claude-hook", hide = true)]
+    #[command(
+        name = "capture-claude-hook",
+        alias = "__capture-claude-hook",
+        hide = true
+    )]
     CaptureClaudeHook,
 }
 
 const CLAUDE_HOOK_POST_TOOL_USE: &str = "PostToolUse";
 const CLAUDE_HOOK_POST_TOOL_USE_FAILURE: &str = "PostToolUseFailure";
 const CLAUDE_HOOK_MATCHER: &str = "Bash";
-const CLAUDE_CAPTURE_COMMAND: &str = "atuin history __capture-claude-hook";
+const CLAUDE_CAPTURE_COMMAND: &str = "atuin history capture-claude-hook";
 
 fn command_exists(command: &str) -> bool {
     let Some(paths) = std::env::var_os("PATH") else {
@@ -925,7 +929,7 @@ impl Cmd {
             return false;
         };
 
-        command.contains("__capture-claude-hook") || command.contains("atuin-capture.sh")
+        command.contains("capture-claude-hook") || command.contains("atuin-capture.sh")
     }
 
     fn ensure_claude_hook_in_event(hooks: &mut Map<String, Value>, event_name: &str) -> bool {
