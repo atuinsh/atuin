@@ -552,6 +552,10 @@ pub struct Logs {
     /// Daemon log settings
     #[serde(default)]
     pub daemon: LogConfig,
+
+    /// AI log settings
+    #[serde(default)]
+    pub ai: LogConfig,
 }
 
 #[derive(Default, Clone, Debug, Deserialize, Serialize)]
@@ -615,6 +619,10 @@ impl Default for Logs {
                 file: "daemon.log".to_string(),
                 ..Default::default()
             },
+            ai: LogConfig {
+                file: "ai.log".to_string(),
+                ..Default::default()
+            },
         }
     }
 }
@@ -640,6 +648,12 @@ impl Logs {
         self.daemon.enabled.unwrap_or(self.enabled)
     }
 
+    /// Returns whether AI logging is enabled.
+    /// Uses AI-specific setting if set, otherwise falls back to global.
+    pub fn ai_enabled(&self) -> bool {
+        self.ai.enabled.unwrap_or(self.enabled)
+    }
+
     /// Returns the log level for search logging.
     /// Uses search-specific setting if set, otherwise falls back to global.
     pub fn search_level(&self) -> LogLevel {
@@ -652,6 +666,12 @@ impl Logs {
         self.daemon.level.unwrap_or(self.level)
     }
 
+    /// Returns the log level for AI logging.
+    /// Uses AI-specific setting if set, otherwise falls back to global.
+    pub fn ai_level(&self) -> LogLevel {
+        self.ai.level.unwrap_or(self.level)
+    }
+
     /// Returns the retention days for search logging.
     /// Uses search-specific setting if set, otherwise falls back to global.
     pub fn search_retention(&self) -> u64 {
@@ -662,6 +682,12 @@ impl Logs {
     /// Uses daemon-specific setting if set, otherwise falls back to global.
     pub fn daemon_retention(&self) -> u64 {
         self.daemon.retention.unwrap_or(self.retention)
+    }
+
+    /// Returns the retention days for AI logging.
+    /// Uses AI-specific setting if set, otherwise falls back to global.
+    pub fn ai_retention(&self) -> u64 {
+        self.ai.retention.unwrap_or(self.retention)
     }
 
     /// Returns the full path for the search log file.
@@ -1276,6 +1302,7 @@ impl Settings {
             .set_default("logs.level", "info")?
             .set_default("logs.search.file", "search.log")?
             .set_default("logs.daemon.file", "daemon.log")?
+            .set_default("logs.ai.file", "ai.log")?
             .set_default("kv.db_path", kv_path.to_str())?
             .set_default("scripts.db_path", scripts_path.to_str())?
             .set_default("meta.db_path", meta_path.to_str())?

@@ -58,9 +58,13 @@ impl HubAuthSession {
     ///
     /// Returns a session containing the code and auth URL that the user should visit.
     pub async fn start(settings: &Settings) -> Result<Self> {
+        debug!("Starting Hub authentication process...");
+
         let code_response = request_code(&settings.hub_address)
             .await
             .context("Failed to request authentication code from Hub")?;
+
+        debug!("Received code from Hub");
 
         let code = code_response.code;
         let auth_url = format!("{}/auth/cli?code={}", settings.hub_address, code);
@@ -79,8 +83,10 @@ impl HubAuthSession {
         match verify_code(&self.hub_address, &self.code).await {
             Ok(response) => {
                 if let Some(token) = response.token {
+                    debug!("Authentication complete, received token");
                     Ok(HubAuthStatus::Complete(token))
                 } else if let Some(error) = response.error {
+                    error!("Authentication failed: {}", error);
                     Ok(HubAuthStatus::Failed(error))
                 } else {
                     Ok(HubAuthStatus::Pending)
@@ -105,8 +111,11 @@ impl HubAuthSession {
     ) -> Result<String> {
         let start = std::time::Instant::now();
 
+        debug!("Polling for Hub authentication completion...");
+
         loop {
             if start.elapsed() > timeout {
+                warn!("Authentication loop exited due to timeout");
                 bail!("Authentication timed out. Please try again.");
             }
 
@@ -181,17 +190,21 @@ async fn handle_resp_error(resp: reqwest::Response) -> Result<reqwest::Response>
     let status = resp.status();
 
     if status == StatusCode::SERVICE_UNAVAILABLE {
+        error!("Service unavailable: check https://status.atuin.sh");
         bail!("Service unavailable: check https://status.atuin.sh");
     }
 
     if status == StatusCode::TOO_MANY_REQUESTS {
+        error!("Rate limited; please wait before trying again");
         bail!("Rate limited; please wait before trying again");
     }
 
     if !status.is_success() {
         if let Ok(error) = resp.json::<ErrorResponse>().await {
+            error!("Hub error: {} - {}", status, error.reason);
             bail!("Hub error: {} - {}", status, error.reason);
         }
+        error!("Hub request failed with status: {}", status);
         bail!("Hub request failed with status: {}", status);
     }
 
@@ -203,6 +216,8 @@ async fn request_code(address: &str) -> Result<CliCodeResponse> {
     ensure_crypto_provider();
     let url = make_url(address, "/auth/cli/code")?;
     let client = reqwest::Client::new();
+
+    debug!("Requesting code from Hub at {url}");
 
     let resp = client
         .post(&url)
@@ -219,8 +234,11 @@ async fn request_code(address: &str) -> Result<CliCodeResponse> {
 /// Poll to verify the CLI auth code and get the session token
 async fn verify_code(address: &str, code: &str) -> Result<CliVerifyResponse> {
     ensure_crypto_provider();
-    let url = make_url(address, &format!("/auth/cli/verify?code={}", code))?;
+    let base = make_url(address, "/auth/cli/verify")?;
+    let url = format!("{base}?code={code}");
     let client = reqwest::Client::new();
+
+    debug!("Verifying code with Hub at {base}?code=******");
 
     let resp = client
         .post(&url)

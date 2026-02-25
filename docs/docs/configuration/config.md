@@ -795,6 +795,15 @@ Default: `4`
 
 How many days of log files to keep (per file type). Files older than this will be removed.
 
+### ai
+
+A sub-object with specific options for AI logging:
+
+* `enabled` - whether to output AI logs; defaults to `logs.enabled`
+* `file` - the filename to use for the AI logs; defaults to `"ai.log"`. Can be absolute, or relative to `logs.dir`.
+* `level` - override the log level for the AI logs; defaults to `logs.level`
+* `retention` - how many days to store AI logs; defaults to `logs.retention`
+
 ### daemon
 
 A sub-object with specific options for daemon logging:
