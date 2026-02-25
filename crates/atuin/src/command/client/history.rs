@@ -364,7 +364,7 @@ fn parse_fmt(format: &str) -> ParsedFmt<'_> {
 impl Cmd {
     fn apply_start_metadata(history: &mut History, author: Option<&str>, intent: Option<&str>) {
         if let Some(author) = author.map(str::trim).filter(|author| !author.is_empty()) {
-            history.author = author.to_owned();
+            author.clone_into(&mut history.author);
         }
 
         if let Some(intent) = intent.map(str::trim).filter(|intent| !intent.is_empty()) {
