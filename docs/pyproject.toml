@@ -11,5 +11,10 @@ dependencies = [
   "mkdocs-redirects>=1.2.2",
 ]
 
+[tool.uv]
+override-dependencies = [
+    "click==8.2.1",
+]
+
 [dependency-groups]
 dev = []

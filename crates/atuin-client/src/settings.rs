@@ -554,6 +554,20 @@ pub struct Logs {
     pub daemon: LogConfig,
 }
 
+#[derive(Default, Clone, Debug, Deserialize, Serialize)]
+pub struct Ai {
+    /// The address of the Atuin AI endpoint. Used for AI features like command generation.
+    /// Only necessary for custom AI endpoints.
+    pub ai_endpoint: Option<String>,
+
+    /// The API token for the Atuin AI endpoint. Used for AI features like command generation.
+    /// Only necessary for custom AI endpoints.
+    pub ai_api_token: Option<String>,
+
+    /// Whether or not to send the current working directory to the AI endpoint.
+    pub send_cwd: bool,
+}
+
 impl Default for Preview {
     fn default() -> Self {
         Self {
@@ -1005,6 +1019,9 @@ pub struct Settings {
 
     #[serde(default)]
     pub meta: meta::Settings,
+
+    #[serde(default)]
+    pub ai: Ai,
 }
 
 impl Settings {

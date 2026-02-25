@@ -1,7 +1,7 @@
 [package]
 name = "atuin-ai"
 edition = "2024"
-description = "ai library for atuin"
+description = "AI integration for Atuin CLI"
 
 rust-version = { workspace = true }
 version = { workspace = true }
@@ -30,8 +30,15 @@ tracing-appender = "0.2.4"
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-crossterm = { workspace = true, features = ["use-dev-tty"] }
-ratatui = { workspace = true }
+crossterm = { workspace = true, features = ["use-dev-tty", "event-stream"] }
+ratatui = { workspace = true, features = ["unstable-rendered-line-info"] }
+futures = "0.3"
+eventsource-stream = "0.2"
+pulldown-cmark = "0.13.0"
+async-stream = "0.3"
+uuid = { workspace = true }
+tui-textarea-2 = "0.9.1"
+unicode-width = "0.2"
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

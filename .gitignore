@@ -7,6 +7,7 @@
 result
 publish.sh
 .envrc
+.planning/
 
 ui/backend/target
 ui/backend/gen
