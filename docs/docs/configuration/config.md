@@ -787,7 +787,7 @@ The directory in which to store log files.
 
 Default: `"info"`
 
-The logging level to use. Valud values are `"trace"`, `"debug"`, `"info"`, `"warn"`, and `"error"`, in order of highest-to-lowest verbosity.
+The logging level to use. Valid values are `"trace"`, `"debug"`, `"info"`, `"warn"`, and `"error"`, in order of highest-to-lowest verbosity.
 
 ### retention
 
