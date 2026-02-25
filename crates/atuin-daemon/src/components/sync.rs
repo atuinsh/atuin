@@ -101,7 +101,8 @@ impl Component for SyncComponent {
 async fn sync_loop(handle: DaemonHandle, mut cmd_rx: mpsc::Receiver<SyncCommand>) {
     tracing::info!("sync loop starting");
 
-    let settings = handle.settings();
+    // Clone settings since we need them across await points
+    let settings = handle.settings().await.clone();
     let host_id = match Settings::host_id().await {
         Ok(id) => id,
         Err(e) => {
@@ -169,7 +170,8 @@ async fn do_sync_tick(
     ticker: &mut time::Interval,
     max_interval: f64,
 ) {
-    let settings = handle.settings();
+    // Clone settings since we need them across await points
+    let settings = handle.settings().await.clone();
 
     tracing::info!("sync tick");
 
@@ -188,7 +190,7 @@ async fn do_sync_tick(
     }
 
     // Perform the sync
-    let res = sync::sync(settings, handle.store()).await;
+    let res = sync::sync(&settings, handle.store()).await;
 
     match res {
         Err(e) => {

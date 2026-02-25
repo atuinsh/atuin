@@ -2,7 +2,8 @@
 //!
 //! This module provides the foundational types for building the atuin daemon:
 //!
-//! - [`DaemonHandle`]: A lightweight, cloneable handle for accessing daemon resources
+//! - [`DaemonState`]: Shared state owned by the daemon
+//! - [`DaemonHandle`]: A lightweight, cloneable handle for accessing daemon state
 //! - [`Component`]: A trait for implementing daemon components
 //! - [`Daemon`]: The main daemon orchestrator
 //! - [`DaemonBuilder`]: Builder for constructing and configuring the daemon
@@ -14,15 +15,38 @@ use atuin_client::{
     settings::Settings,
 };
 use eyre::{Context, Result};
-use tokio::sync::broadcast;
+use tokio::sync::{RwLock, broadcast};
 
 use crate::events::DaemonEvent;
+
+// ============================================================================
+// DaemonState
+// ============================================================================
+
+/// Shared state owned by the daemon.
+///
+/// This contains all the resources that components and services need access to.
+/// The state is wrapped in an `Arc` and accessed via [`DaemonHandle`].
+pub struct DaemonState {
+    // Event bus
+    event_tx: broadcast::Sender<DaemonEvent>,
+
+    // Configuration (mutable - can be reloaded)
+    settings: RwLock<Settings>,
+
+    // Encryption key (immutable - derived at startup)
+    encryption_key: [u8; 32],
+
+    // Database handles
+    history_db: HistoryDatabase,
+    store: SqliteStore,
+}
 
 // ============================================================================
 // DaemonHandle
 // ============================================================================
 
-/// A lightweight handle to the daemon.
+/// A lightweight handle to the daemon's shared state.
 ///
 /// This is the primary way for components, gRPC services, and spawned tasks to
 /// interact with the daemon. It provides access to:
@@ -41,27 +65,15 @@ use crate::events::DaemonEvent;
 /// handle.emit(DaemonEvent::HistoryPruned);
 ///
 /// // Access settings
-/// let sync_freq = handle.settings().daemon.sync_frequency;
+/// let settings = handle.settings().await;
+/// let sync_freq = settings.daemon.sync_frequency;
 ///
 /// // Access database
 /// let history = handle.history_db().load(id).await?;
 /// ```
 #[derive(Clone)]
 pub struct DaemonHandle {
-    inner: Arc<DaemonHandleInner>,
-}
-
-struct DaemonHandleInner {
-    // Event bus
-    event_tx: broadcast::Sender<DaemonEvent>,
-
-    // Configuration
-    settings: Settings,
-    encryption_key: [u8; 32],
-
-    // Database handles
-    history_db: HistoryDatabase,
-    store: SqliteStore,
+    state: Arc<DaemonState>,
 }
 
 impl DaemonHandle {
@@ -72,7 +84,7 @@ impl DaemonHandle {
     /// This is fire-and-forget - if no receivers are listening (which shouldn't
     /// happen in normal operation), the event is dropped silently.
     pub fn emit(&self, event: DaemonEvent) {
-        if let Err(e) = self.inner.event_tx.send(event) {
+        if let Err(e) = self.state.event_tx.send(event) {
             tracing::warn!("failed to emit event (no receivers?): {e}");
         }
     }
@@ -83,7 +95,7 @@ impl DaemonHandle {
     /// Useful for components that need to listen for events outside of the
     /// normal `handle_event` callback flow.
     pub fn subscribe(&self) -> broadcast::Receiver<DaemonEvent> {
-        self.inner.event_tx.subscribe()
+        self.state.event_tx.subscribe()
     }
 
     /// Request graceful shutdown of the daemon.
@@ -94,25 +106,40 @@ impl DaemonHandle {
     // ---- Configuration ----
 
     /// Get the current settings.
-    pub fn settings(&self) -> &Settings {
-        &self.inner.settings
+    ///
+    /// This acquires a read lock on the settings. For most use cases, clone
+    /// the settings if you need to hold onto them.
+    pub async fn settings(&self) -> tokio::sync::RwLockReadGuard<'_, Settings> {
+        self.state.settings.read().await
+    }
+
+    /// Reload settings from disk and emit a SettingsReloaded event.
+    ///
+    /// Components listening for `SettingsReloaded` can then re-read settings
+    /// via `handle.settings()` to pick up the changes.
+    pub async fn reload_settings(&self) -> Result<()> {
+        let new_settings = Settings::new()?;
+        *self.state.settings.write().await = new_settings;
+        self.emit(DaemonEvent::SettingsReloaded);
+        tracing::info!("settings reloaded");
+        Ok(())
     }
 
     /// Get the encryption key.
     pub fn encryption_key(&self) -> &[u8; 32] {
-        &self.inner.encryption_key
+        &self.state.encryption_key
     }
 
     // ---- Database ----
 
     /// Get a reference to the history database.
     pub fn history_db(&self) -> &HistoryDatabase {
-        &self.inner.history_db
+        &self.state.history_db
     }
 
     /// Get a reference to the record store.
     pub fn store(&self) -> &SqliteStore {
-        &self.inner.store
+        &self.state.store
     }
 }
 
@@ -388,7 +415,7 @@ impl DaemonBuilder {
 
     /// Build the daemon.
     ///
-    /// This loads the encryption key and creates the daemon handle.
+    /// This loads the encryption key and creates the daemon state.
     pub async fn build(self) -> Result<Daemon> {
         let store = self.store.ok_or_else(|| eyre::eyre!("store is required"))?;
         let history_db = self
@@ -403,16 +430,17 @@ impl DaemonBuilder {
         // Create the event bus
         let (event_tx, _) = broadcast::channel(64);
 
-        // Create the handle
-        let handle = DaemonHandle {
-            inner: Arc::new(DaemonHandleInner {
-                event_tx,
-                settings: self.settings,
-                encryption_key,
-                history_db,
-                store,
-            }),
-        };
+        // Create the shared state
+        let state = Arc::new(DaemonState {
+            event_tx,
+            settings: RwLock::new(self.settings),
+            encryption_key,
+            history_db,
+            store,
+        });
+
+        // Create the handle (just a reference to the state)
+        let handle = DaemonHandle { state };
 
         Ok(Daemon {
             components: self.components,
