@@ -34,6 +34,19 @@ ble/util/import/eval-after-load core-complete '
   ble/array#remove _ble_complete_auto_source atuin-history'
 ```
 
+## Claude Code
+
+When Atuin starts its daemon (or runs direct-db `history end` when daemon mode is off), and `claude` is available in your `PATH`, Atuin automatically ensures Claude Code hook configuration exists in `~/.claude/settings.json`.
+
+This adds `PostToolUse` and `PostToolUseFailure` hooks for the `Bash` tool, so commands run by Claude Code are captured in Atuin with their Claude working directory.
+
+To disable this auto-configuration, set:
+
+```toml
+[integrations]
+claude = false
+```
+
 ## Embedded Terminals and IDEs
 
 Atuin may not work out of the box in embedded terminals found in IDEs (PyCharm, VS Code, etc.) or AI coding assistants (Claude Code, etc.). This is because these tools often start non-interactive shells that don't source your shell configuration.
