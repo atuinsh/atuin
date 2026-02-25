@@ -206,13 +206,15 @@ impl Cmd {
 
         // Build the subscriber with all configured layers
         if use_search_logging {
+            let search_filename = settings.logs.search.file.clone();
             let log_dir = PathBuf::from(&settings.logs.dir);
             fs::create_dir_all(&log_dir)?;
 
             // Clean up old log files
-            cleanup_old_logs(&log_dir, "search.log", settings.logs.search_retention());
+            cleanup_old_logs(&log_dir, &search_filename, settings.logs.search_retention());
 
-            let file_appender = RollingFileAppender::new(Rotation::DAILY, &log_dir, "search.log");
+            let file_appender =
+                RollingFileAppender::new(Rotation::DAILY, &log_dir, &search_filename);
 
             // Use config level unless ATUIN_LOG is set
             let filter = if env_log_set {
@@ -239,13 +241,15 @@ impl Cmd {
                 }
             }
         } else if use_daemon_logging {
+            let daemon_filename = settings.logs.daemon.file.clone();
             let log_dir = PathBuf::from(&settings.logs.dir);
             fs::create_dir_all(&log_dir)?;
 
             // Clean up old log files
-            cleanup_old_logs(&log_dir, "daemon.log", settings.logs.daemon_retention());
+            cleanup_old_logs(&log_dir, &daemon_filename, settings.logs.daemon_retention());
 
-            let file_appender = RollingFileAppender::new(Rotation::DAILY, &log_dir, "daemon.log");
+            let file_appender =
+                RollingFileAppender::new(Rotation::DAILY, &log_dir, &daemon_filename);
 
             // Use config level unless ATUIN_LOG is set
             let file_filter = if env_log_set {
