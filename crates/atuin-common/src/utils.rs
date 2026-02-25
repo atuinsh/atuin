@@ -171,8 +171,6 @@ impl<T: AsRef<str>> Escapable for T {}
 #[allow(unsafe_code)]
 #[cfg(test)]
 mod tests {
-    use pretty_assertions::assert_ne;
-
     use super::*;
 
     use std::collections::HashSet;
@@ -284,14 +282,25 @@ mod tests {
 
     #[test]
     fn dumb_random_test() {
-        // Obviously not a test of randomness, but make sure we haven't made some
-        // catastrophic error
+        fn assert_valid_random_string<const N: usize>() {
+            let encoded = crypto_random_string::<N>();
+            assert!(
+                encoded
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+            );
 
-        assert_ne!(crypto_random_string::<1>(), crypto_random_string::<1>());
-        assert_ne!(crypto_random_string::<2>(), crypto_random_string::<2>());
-        assert_ne!(crypto_random_string::<4>(), crypto_random_string::<4>());
-        assert_ne!(crypto_random_string::<8>(), crypto_random_string::<8>());
-        assert_ne!(crypto_random_string::<16>(), crypto_random_string::<16>());
-        assert_ne!(crypto_random_string::<32>(), crypto_random_string::<32>());
+            let decoded = base64::Engine::decode(&BASE64_URL_SAFE_NO_PAD, encoded.as_bytes())
+                .expect("random string should be valid base64url");
+            assert_eq!(decoded.len(), N);
+        }
+
+        // Validate formatting and reversibility without relying on probabilistic uniqueness.
+        assert_valid_random_string::<1>();
+        assert_valid_random_string::<2>();
+        assert_valid_random_string::<4>();
+        assert_valid_random_string::<8>();
+        assert_valid_random_string::<16>();
+        assert_valid_random_string::<32>();
     }
 }

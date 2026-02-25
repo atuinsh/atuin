@@ -192,6 +192,11 @@ enter_accept = true
 ## Alternatively, set env NO_MOTION=true
 # prefers_reduced_motion = false
 
+[integrations]
+## Automatically configure Claude Code Bash hooks in ~/.claude/settings.json
+## when Atuin runs in daemon startup and direct history-end paths.
+# claude = true
+
 [stats]
 ## Set commands where we should consider the subcommand for statistics. Eg, kubectl get vs just kubectl
 # common_subcommands = [

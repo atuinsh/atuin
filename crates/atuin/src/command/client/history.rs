@@ -1,14 +1,17 @@
 use std::{
     fmt::{self, Display},
-    io::{self, IsTerminal, Write},
-    path::PathBuf,
+    io::{self, IsTerminal, Read, Write},
+    path::{Path, PathBuf},
     time::Duration,
 };
 
 use atuin_common::utils::{self, Escapable as _};
 use clap::Subcommand;
 use eyre::{Context, Result};
+use fs4::fs_std::FileExt;
 use runtime_format::{FormatKey, FormatKeyError, ParseSegment, ParsedFmt};
+use serde::Deserialize;
+use serde_json::{Map, Value, json};
 
 use atuin_client::{
     database::{Database, Sqlite, current_context},
@@ -139,6 +142,88 @@ pub enum Cmd {
         #[arg(long)]
         dupkeep: u32,
     },
+
+    /// Internal command used by Claude Code hooks to capture Bash runs
+    #[command(
+        name = "capture-claude-hook",
+        alias = "__capture-claude-hook",
+        hide = true
+    )]
+    CaptureClaudeHook,
+}
+
+const CLAUDE_HOOK_POST_TOOL_USE: &str = "PostToolUse";
+const CLAUDE_HOOK_POST_TOOL_USE_FAILURE: &str = "PostToolUseFailure";
+const CLAUDE_HOOK_MATCHER: &str = "Bash";
+const CLAUDE_CAPTURE_COMMAND: &str = "atuin history capture-claude-hook";
+
+fn command_exists(command: &str) -> bool {
+    let Some(paths) = std::env::var_os("PATH") else {
+        return false;
+    };
+
+    for path in std::env::split_paths(&paths) {
+        if path.join(command).is_file() {
+            return true;
+        }
+
+        #[cfg(windows)]
+        {
+            for extension in [".exe", ".cmd", ".bat"] {
+                if path.join(format!("{command}{extension}")).is_file() {
+                    return true;
+                }
+            }
+        }
+    }
+
+    false
+}
+
+pub(super) fn maybe_ensure_claude_hook(settings: &Settings) {
+    if !settings.integrations.claude || !command_exists("claude") {
+        return;
+    }
+
+    Cmd::handle_ensure_claude_hook();
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ClaudeToolInput {
+    #[serde(default)]
+    command: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ClaudeHookPayload {
+    #[serde(default)]
+    hook_event_name: String,
+    #[serde(default)]
+    tool_name: String,
+    #[serde(default)]
+    tool_input: ClaudeToolInput,
+    #[serde(default)]
+    cwd: String,
+    #[serde(default)]
+    tool_response: Value,
+}
+
+impl ClaudeHookPayload {
+    fn command(&self) -> &str {
+        self.tool_input.command.trim()
+    }
+
+    fn is_bash_tool(&self) -> bool {
+        self.tool_name == CLAUDE_HOOK_MATCHER
+    }
+
+    fn exit_code(&self) -> i64 {
+        self.tool_response
+            .get("exit_code")
+            .and_then(Value::as_i64)
+            .or_else(|| self.tool_response.get("exitCode").and_then(Value::as_i64))
+            .unwrap_or_else(|| i64::from(self.hook_event_name == CLAUDE_HOOK_POST_TOOL_USE_FAILURE))
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -354,6 +439,17 @@ fn parse_fmt(format: &str) -> ParsedFmt<'_> {
 impl Cmd {
     #[allow(clippy::too_many_lines, clippy::cast_possible_truncation)]
     async fn handle_start(db: &impl Database, settings: &Settings, command: &str) -> Result<()> {
+        let _ = Self::handle_start_internal(db, settings, command, true).await?;
+        Ok(())
+    }
+
+    #[allow(clippy::cast_possible_truncation)]
+    async fn handle_start_internal(
+        db: &impl Database,
+        settings: &Settings,
+        command: &str,
+        print_id: bool,
+    ) -> Result<Option<String>> {
         // It's better for atuin to silently fail here and attempt to
         // store whatever is ran, than to throw an error to the terminal
         let cwd = utils::get_current_dir();
@@ -366,12 +462,16 @@ impl Cmd {
             .into();
 
         if !h.should_save(settings) {
-            return Ok(());
+            return Ok(None);
         }
+
+        let id = h.id.0.clone();
 
         // print the ID
         // we use this as the key for calling end
-        println!("{}", h.id);
+        if print_id {
+            println!("{}", h.id);
+        }
 
         // Silently ignore database errors to avoid breaking the shell
         // This is important when disk is full or database is locked
@@ -379,7 +479,7 @@ impl Cmd {
             debug!("failed to save history: {e}");
         }
 
-        Ok(())
+        Ok(Some(id))
     }
 
     #[cfg(feature = "daemon")]
@@ -648,7 +748,369 @@ impl Cmd {
         Ok(())
     }
 
+    fn read_claude_hook_payload() -> Option<ClaudeHookPayload> {
+        let mut input = String::new();
+
+        if io::stdin().read_to_string(&mut input).is_err() {
+            return None;
+        }
+
+        if input.trim().is_empty() {
+            return None;
+        }
+
+        match serde_json::from_str::<ClaudeHookPayload>(&input) {
+            Ok(payload) => Some(payload),
+            Err(error) => {
+                debug!("failed to parse Claude hook payload: {error}");
+                None
+            }
+        }
+    }
+
+    fn history_end_lock_path(settings: &Settings) -> PathBuf {
+        let db_path = Path::new(&settings.db_path);
+        db_path
+            .parent()
+            .map_or_else(|| PathBuf::from("."), PathBuf::from)
+            .join("history-end.lock")
+    }
+
+    fn lock_history_end(settings: &Settings) -> Result<std::fs::File> {
+        let lock_path = Self::history_end_lock_path(settings);
+
+        if let Some(parent) = lock_path.parent() {
+            std::fs::create_dir_all(parent).wrap_err_with(|| {
+                format!(
+                    "failed to create history-end lock directory {}",
+                    parent.display()
+                )
+            })?;
+        }
+
+        let lock_file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&lock_path)
+            .wrap_err_with(|| {
+                format!(
+                    "failed to open history-end lock file {}",
+                    lock_path.display()
+                )
+            })?;
+
+        lock_file.lock_exclusive().wrap_err_with(|| {
+            format!(
+                "failed to lock history-end lock file {}",
+                lock_path.display()
+            )
+        })?;
+
+        Ok(lock_file)
+    }
+
+    fn claude_settings_path() -> PathBuf {
+        atuin_common::utils::home_dir()
+            .join(".claude")
+            .join("settings.json")
+    }
+
+    fn claude_settings_lock_path(settings_path: &Path) -> PathBuf {
+        let mut lock_path = settings_path.as_os_str().to_os_string();
+        lock_path.push(".lock");
+        PathBuf::from(lock_path)
+    }
+
+    fn lock_claude_settings(settings_path: &Path) -> Option<std::fs::File> {
+        let lock_path = Self::claude_settings_lock_path(settings_path);
+
+        if let Some(parent) = lock_path.parent()
+            && let Err(error) = std::fs::create_dir_all(parent)
+        {
+            debug!("failed to create Claude settings lock directory: {error}");
+            return None;
+        }
+
+        let lock_file = match std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&lock_path)
+        {
+            Ok(file) => file,
+            Err(error) => {
+                debug!("failed to open Claude settings lock file: {error}");
+                return None;
+            }
+        };
+
+        if let Err(error) = lock_file.lock_exclusive() {
+            debug!("failed to lock Claude settings lock file: {error}");
+            return None;
+        }
+
+        Some(lock_file)
+    }
+
+    fn is_existing_atuin_claude_hook(hook: &Value) -> bool {
+        if hook.get("type").and_then(Value::as_str) != Some("command") {
+            return false;
+        }
+
+        let Some(command) = hook.get("command").and_then(Value::as_str) else {
+            return false;
+        };
+
+        command.contains("capture-claude-hook") || command.contains("atuin-capture.sh")
+    }
+
+    fn ensure_claude_hook_in_event(hooks: &mut Map<String, Value>, event_name: &str) -> bool {
+        let mut changed = false;
+        let event_hooks = hooks
+            .entry(event_name.to_string())
+            .or_insert_with(|| Value::Array(Vec::new()));
+
+        if !event_hooks.is_array() {
+            *event_hooks = Value::Array(Vec::new());
+            changed = true;
+        }
+
+        let Some(matchers) = event_hooks.as_array_mut() else {
+            return changed;
+        };
+
+        for matcher in &mut *matchers {
+            let Some(matcher_obj) = matcher.as_object_mut() else {
+                continue;
+            };
+
+            if matcher_obj.get("matcher").and_then(Value::as_str) != Some(CLAUDE_HOOK_MATCHER) {
+                continue;
+            }
+
+            let hook_list = matcher_obj
+                .entry("hooks".to_string())
+                .or_insert_with(|| Value::Array(Vec::new()));
+
+            if !hook_list.is_array() {
+                *hook_list = Value::Array(Vec::new());
+                changed = true;
+            }
+
+            let Some(commands) = hook_list.as_array_mut() else {
+                continue;
+            };
+
+            if commands.iter().any(Self::is_existing_atuin_claude_hook) {
+                return changed;
+            }
+
+            commands.push(json!({
+                "type": "command",
+                "command": CLAUDE_CAPTURE_COMMAND,
+            }));
+            return true;
+        }
+
+        matchers.push(json!({
+            "matcher": CLAUDE_HOOK_MATCHER,
+            "hooks": [{
+                "type": "command",
+                "command": CLAUDE_CAPTURE_COMMAND,
+            }],
+        }));
+
+        true
+    }
+
+    fn ensure_claude_hooks(settings: &mut Value) -> bool {
+        let Some(root) = settings.as_object_mut() else {
+            return false;
+        };
+
+        let mut changed = false;
+        let hooks = root
+            .entry("hooks".to_string())
+            .or_insert_with(|| Value::Object(Map::new()));
+
+        if !hooks.is_object() {
+            *hooks = Value::Object(Map::new());
+            changed = true;
+        }
+
+        let Some(hooks_obj) = hooks.as_object_mut() else {
+            return changed;
+        };
+
+        changed |= Self::ensure_claude_hook_in_event(hooks_obj, CLAUDE_HOOK_POST_TOOL_USE);
+        changed |= Self::ensure_claude_hook_in_event(hooks_obj, CLAUDE_HOOK_POST_TOOL_USE_FAILURE);
+
+        changed
+    }
+
+    fn handle_ensure_claude_hook() {
+        let settings_path = Self::claude_settings_path();
+        let Some(_lock) = Self::lock_claude_settings(&settings_path) else {
+            return;
+        };
+
+        let mut settings = if settings_path.exists() {
+            let raw = match std::fs::read_to_string(&settings_path) {
+                Ok(raw) => raw,
+                Err(error) => {
+                    debug!("failed to read Claude settings file: {error}");
+                    return;
+                }
+            };
+
+            match serde_json::from_str::<Value>(&raw) {
+                Ok(parsed) => parsed,
+                Err(error) => {
+                    debug!("failed to parse Claude settings JSON: {error}");
+                    return;
+                }
+            }
+        } else {
+            Value::Object(Map::new())
+        };
+
+        if !Self::ensure_claude_hooks(&mut settings) {
+            return;
+        }
+
+        if let Some(parent) = settings_path.parent()
+            && let Err(error) = std::fs::create_dir_all(parent)
+        {
+            debug!("failed to create Claude settings directory: {error}");
+            return;
+        }
+
+        let rendered = match serde_json::to_string_pretty(&settings) {
+            Ok(rendered) => rendered,
+            Err(error) => {
+                debug!("failed to serialize Claude settings JSON: {error}");
+                return;
+            }
+        };
+
+        if let Err(error) = std::fs::write(settings_path, format!("{rendered}\n")) {
+            debug!("failed to write Claude settings file: {error}");
+        }
+    }
+
+    async fn handle_capture_claude_hook(settings: &Settings) -> Result<()> {
+        let Some(payload) = Self::read_claude_hook_payload() else {
+            return Ok(());
+        };
+
+        if !payload.is_bash_tool() {
+            return Ok(());
+        }
+
+        let command = payload.command();
+        if command.is_empty() {
+            return Ok(());
+        }
+
+        let previous_cwd = std::env::current_dir().ok();
+        if !payload.cwd.is_empty()
+            && let Err(error) = std::env::set_current_dir(&payload.cwd)
+        {
+            debug!("failed to set Claude hook cwd: {error}");
+            return Ok(());
+        }
+
+        let db_path = PathBuf::from(settings.db_path.as_str());
+        let record_store_path = PathBuf::from(settings.record_store_path.as_str());
+
+        let db = match Sqlite::new(db_path, settings.local_timeout).await {
+            Ok(db) => db,
+            Err(error) => {
+                debug!("failed to open history database for Claude hook capture: {error}");
+                if let Some(path) = previous_cwd {
+                    let _ = std::env::set_current_dir(path);
+                }
+                return Ok(());
+            }
+        };
+
+        let store = match SqliteStore::new(record_store_path, settings.local_timeout).await {
+            Ok(store) => store,
+            Err(error) => {
+                debug!("failed to open record store for Claude hook capture: {error}");
+                if let Some(path) = previous_cwd {
+                    let _ = std::env::set_current_dir(path);
+                }
+                return Ok(());
+            }
+        };
+
+        let encryption_key: [u8; 32] = match encryption::load_key(settings) {
+            Ok(key) => key.into(),
+            Err(error) => {
+                debug!("failed to load encryption key for Claude hook capture: {error}");
+                if let Some(path) = previous_cwd {
+                    let _ = std::env::set_current_dir(path);
+                }
+                return Ok(());
+            }
+        };
+
+        let host_id = match Settings::host_id().await {
+            Ok(host_id) => host_id,
+            Err(error) => {
+                debug!("failed to get host id for Claude hook capture: {error}");
+                if let Some(path) = previous_cwd {
+                    let _ = std::env::set_current_dir(path);
+                }
+                return Ok(());
+            }
+        };
+
+        let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
+
+        let start_id = match Self::handle_start_internal(&db, settings, command, false).await {
+            Ok(id) => id,
+            Err(error) => {
+                debug!("failed to start history entry for Claude hook capture: {error}");
+                if let Some(path) = previous_cwd {
+                    let _ = std::env::set_current_dir(path);
+                }
+                return Ok(());
+            }
+        };
+
+        if let Some(id) = start_id
+            && let Err(error) = Self::handle_end(
+                &db,
+                store,
+                history_store,
+                settings,
+                &id,
+                payload.exit_code(),
+                None,
+            )
+            .await
+        {
+            debug!("failed to end history entry for Claude hook capture: {error}");
+        }
+
+        if let Some(path) = previous_cwd {
+            let _ = std::env::set_current_dir(path);
+        }
+
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_lines)]
     pub async fn run(self, settings: &Settings) -> Result<()> {
+        if matches!(&self, Self::CaptureClaudeHook) {
+            return Self::handle_capture_claude_hook(settings).await;
+        }
+
         let context = current_context().await?;
 
         #[cfg(feature = "daemon")]
@@ -661,6 +1123,7 @@ impl Cmd {
                 }
 
                 Self::End { id, exit, duration } => {
+                    let _history_end_lock = Self::lock_history_end(settings)?;
                     return Self::handle_daemon_end(settings, &id, exit, duration).await;
                 }
 
@@ -687,6 +1150,8 @@ impl Cmd {
                 Self::handle_start(&db, settings, &command).await
             }
             Self::End { id, exit, duration } => {
+                let _history_end_lock = Self::lock_history_end(settings)?;
+                maybe_ensure_claude_hook(settings);
                 Self::handle_end(&db, store, history_store, settings, &id, exit, duration).await
             }
             Self::List {
@@ -752,6 +1217,8 @@ impl Cmd {
                 )?;
                 Self::handle_dedup(&db, settings, store, before, dupkeep, dry_run).await
             }
+
+            Self::CaptureClaudeHook => unreachable!(),
         }
     }
 
@@ -771,6 +1238,7 @@ impl Cmd {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn test_format_string_no_panic() {
@@ -786,5 +1254,99 @@ mod tests {
     fn test_valid_formats_still_work() {
         assert!(std::panic::catch_unwind(|| parse_fmt("{command}")).is_ok());
         assert!(std::panic::catch_unwind(|| parse_fmt("{time} - {command}")).is_ok());
+    }
+
+    #[test]
+    fn ensure_claude_hooks_creates_expected_structure() {
+        let mut settings = json!({});
+
+        assert!(Cmd::ensure_claude_hooks(&mut settings));
+
+        let post_tool_use = settings["hooks"][CLAUDE_HOOK_POST_TOOL_USE]
+            .as_array()
+            .unwrap();
+        let post_tool_use_failure = settings["hooks"][CLAUDE_HOOK_POST_TOOL_USE_FAILURE]
+            .as_array()
+            .unwrap();
+
+        assert_eq!(post_tool_use.len(), 1);
+        assert_eq!(post_tool_use_failure.len(), 1);
+        assert_eq!(post_tool_use[0]["matcher"], CLAUDE_HOOK_MATCHER);
+        assert_eq!(post_tool_use_failure[0]["matcher"], CLAUDE_HOOK_MATCHER);
+        assert_eq!(
+            post_tool_use[0]["hooks"][0]["command"],
+            CLAUDE_CAPTURE_COMMAND
+        );
+        assert_eq!(
+            post_tool_use_failure[0]["hooks"][0]["command"],
+            CLAUDE_CAPTURE_COMMAND
+        );
+    }
+
+    #[test]
+    fn ensure_claude_hooks_is_idempotent() {
+        let mut settings = json!({});
+
+        assert!(Cmd::ensure_claude_hooks(&mut settings));
+        assert!(!Cmd::ensure_claude_hooks(&mut settings));
+    }
+
+    #[test]
+    fn ensure_claude_hooks_accepts_existing_script_hook() {
+        let mut settings = json!({
+            "hooks": {
+                "PostToolUse": [{
+                    "matcher": "Bash",
+                    "hooks": [{
+                        "type": "command",
+                        "command": "bash ~/.claude/hooks/atuin-capture.sh",
+                    }],
+                }],
+                "PostToolUseFailure": [{
+                    "matcher": "Bash",
+                    "hooks": [{
+                        "type": "command",
+                        "command": "bash ~/.claude/hooks/atuin-capture.sh",
+                    }],
+                }],
+            },
+        });
+
+        assert!(!Cmd::ensure_claude_hooks(&mut settings));
+    }
+
+    #[test]
+    fn claude_hook_payload_exit_code_uses_event_default() {
+        let success_payload = ClaudeHookPayload {
+            hook_event_name: CLAUDE_HOOK_POST_TOOL_USE.to_string(),
+            tool_name: CLAUDE_HOOK_MATCHER.to_string(),
+            tool_input: ClaudeToolInput {
+                command: "ls".to_string(),
+            },
+            cwd: "/tmp".to_string(),
+            tool_response: Value::Null,
+        };
+
+        let failed_payload = ClaudeHookPayload {
+            hook_event_name: CLAUDE_HOOK_POST_TOOL_USE_FAILURE.to_string(),
+            ..success_payload
+        };
+
+        assert_eq!(failed_payload.exit_code(), 1);
+    }
+
+    #[test]
+    fn claude_hook_payload_exit_code_prefers_tool_response() {
+        let payload = ClaudeHookPayload {
+            hook_event_name: CLAUDE_HOOK_POST_TOOL_USE.to_string(),
+            tool_name: CLAUDE_HOOK_MATCHER.to_string(),
+            tool_input: ClaudeToolInput {
+                command: "ls".to_string(),
+            },
+            cwd: "/tmp".to_string(),
+            tool_response: json!({ "exit_code": 27 }),
+        };
+
+        assert_eq!(payload.exit_code(), 27);
     }
 }
