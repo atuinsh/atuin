@@ -6,7 +6,6 @@ use std::{
 use atuin_common::shell::Shell;
 use clap::{Parser, Subcommand};
 use eyre::Result;
-use tracing::Level;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{EnvFilter, Layer, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 #[cfg(debug_assertions)]
