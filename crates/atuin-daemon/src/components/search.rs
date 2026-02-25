@@ -1,87 +1,136 @@
+//! Search component.
+//!
+//! Provides fuzzy search over command history using the Nucleo search library.
+
 use std::{collections::HashSet, pin::Pin, sync::Arc};
 
-use atuin_client::{
-    database::{Database, Sqlite as HistoryDatabase},
-    history::{History, store::HistoryStore},
-};
+use atuin_client::{database::Database, history::History};
+use eyre::Result;
 use nucleo::{Injector, Nucleo};
-use tokio::sync::{RwLock, broadcast};
+use tokio::sync::RwLock;
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status, Streaming};
 use tracing::{Level, debug, info, instrument, span};
 use uuid::Uuid;
 
 use crate::{
+    daemon::{Component, DaemonHandle},
     events::DaemonEvent,
-    search::{FilterMode, SearchRequest, SearchResponse, search_server::Search as SearchSvc},
+    search::{
+        FilterMode, SearchRequest, SearchResponse,
+        search_server::{Search as SearchSvc, SearchServer},
+    },
 };
 
 const PAGE_SIZE: usize = 1000;
 const RESULTS_LIMIT: u32 = 200;
 
-pub struct SearchService {
-    nucleo: Arc<RwLock<Nucleo<History>>>,
+/// Search component - provides fuzzy search over command history.
+///
+/// This component:
+/// - Maintains an in-memory search index using Nucleo
+/// - Loads history from the database on startup
+/// - Updates the index when history events occur
+/// - Provides the Search gRPC service
+pub struct SearchComponent {
+    inner: Arc<SearchComponentInner>,
+    loader_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
-impl SearchService {
-    pub fn new(
-        _store: HistoryStore,
-        history_db: HistoryDatabase,
-        tx: broadcast::Sender<DaemonEvent>,
-    ) -> Self {
-        let mut rx = tx.subscribe();
+struct SearchComponentInner {
+    nucleo: RwLock<Nucleo<History>>,
+    injector: Injector<History>,
+    handle: RwLock<Option<DaemonHandle>>,
+}
+
+impl SearchComponent {
+    /// Create a new search component.
+    pub fn new() -> Self {
         let nucleo_config = nucleo::Config::DEFAULT.clone();
-
         let nucleo = Nucleo::<History>::new(nucleo_config, Arc::new(|| {}), None, 4);
-
         let injector = nucleo.injector();
-        let injector_clone = injector.clone();
-        let nucleo = Arc::new(RwLock::new(nucleo));
 
-        let history_db_clone = history_db.clone();
-        tokio::spawn(async move {
-            loop {
-                let event = rx.recv().await.unwrap();
-                match event {
-                    DaemonEvent::RecordsAdded(records) => {
-                        debug!(count = records.len(), "Processing added records");
-                        let histories: Vec<History> = history_db_clone
-                            .query_history(
-                                format!(
-                                    "select * from history where id in ({})",
-                                    records
-                                        .iter()
-                                        .map(|record| record.0.to_string())
-                                        .collect::<Vec<_>>()
-                                        .join(",")
-                                )
-                                .as_str(),
-                            )
-                            .await
-                            .unwrap();
-                        span!(Level::TRACE, "inject_records", count = histories.len()).in_scope(
-                            || {
-                                push_history(&histories, &injector_clone);
-                            },
-                        );
-                    }
-                    DaemonEvent::HistoryStarted(history) => {
-                        debug!(id = %history.id, command = %history.command, "History started");
-                    }
-                    DaemonEvent::HistoryEnded(history) => {
-                        span!(Level::TRACE, "inject_history_ended").in_scope(|| {
-                            push_history(&[history], &injector_clone);
-                        });
-                    }
+        Self {
+            inner: Arc::new(SearchComponentInner {
+                nucleo: RwLock::new(nucleo),
+                injector,
+                handle: RwLock::new(None),
+            }),
+            loader_handle: None,
+        }
+    }
+
+    /// Get the gRPC service for this component.
+    pub fn grpc_service(&self) -> SearchServer<SearchGrpcService> {
+        SearchServer::new(SearchGrpcService {
+            inner: self.inner.clone(),
+        })
+    }
+
+    /// Rebuild the entire search index from the database.
+    async fn rebuild_index(&self) -> Result<()> {
+        let handle_guard = self.inner.handle.read().await;
+        let handle = handle_guard
+            .as_ref()
+            .ok_or_else(|| eyre::eyre!("component not initialized"))?;
+
+        info!("Rebuilding search index from database");
+
+        // Clear the current index by creating a new Nucleo instance
+        let nucleo_config = nucleo::Config::DEFAULT.clone();
+        let new_nucleo = Nucleo::<History>::new(nucleo_config, Arc::new(|| {}), None, 4);
+
+        // Get the new injector before we replace nucleo
+        let injector = new_nucleo.injector();
+
+        // Replace the nucleo instance
+        *self.inner.nucleo.write().await = new_nucleo;
+
+        // Load all history into the new index
+        let db = handle.history_db().clone();
+        let mut pager = db.all_paged(PAGE_SIZE, false, true);
+        loop {
+            match pager.next().await {
+                Ok(Some(history)) => {
+                    info!(
+                        "Loading {} history entries into search index",
+                        history.len()
+                    );
+                    push_history(&history, &injector);
+                }
+                Ok(None) => break,
+                Err(e) => {
+                    tracing::error!("Failed to load history during rebuild: {}", e);
+                    break;
                 }
             }
-        });
+        }
 
-        // Load history from the database asynchronously
-        let db = history_db.clone();
-        tokio::spawn(async move {
-            // Load all history into the search index,
-            // deduplicated and without deleted entries.
+        info!("Search index rebuild complete");
+        Ok(())
+    }
+}
+
+impl Default for SearchComponent {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[tonic::async_trait]
+impl Component for SearchComponent {
+    fn name(&self) -> &'static str {
+        "search"
+    }
+
+    async fn start(&mut self, handle: DaemonHandle) -> Result<()> {
+        *self.inner.handle.write().await = Some(handle.clone());
+
+        // Spawn background task to load history into index
+        let injector = self.inner.injector.clone();
+        let db = handle.history_db().clone();
+
+        self.loader_handle = Some(tokio::spawn(async move {
             info!(
                 "Loading history into search index; page size = {}",
                 PAGE_SIZE
@@ -96,24 +145,99 @@ impl SearchService {
                         );
                         push_history(&history, &injector);
                     }
-                    Ok(None) => {
-                        break;
-                    }
+                    Ok(None) => break,
                     Err(e) => {
                         tracing::error!("Failed to load history: {}", e);
                         break;
                     }
                 }
             }
-        });
+            info!("Initial history load complete");
+        }));
 
-        Self { nucleo }
+        tracing::info!("search component started");
+        Ok(())
+    }
+
+    async fn handle_event(&mut self, event: &DaemonEvent) -> Result<()> {
+        match event {
+            DaemonEvent::RecordsAdded(records) => {
+                debug!(
+                    count = records.len(),
+                    "Processing added records for search index"
+                );
+
+                let handle_guard = self.inner.handle.read().await;
+                if let Some(handle) = handle_guard.as_ref() {
+                    let histories: Vec<History> = handle
+                        .history_db()
+                        .query_history(
+                            format!(
+                                "select * from history where id in ({})",
+                                records
+                                    .iter()
+                                    .map(|record| record.0.to_string())
+                                    .collect::<Vec<_>>()
+                                    .join(",")
+                            )
+                            .as_str(),
+                        )
+                        .await
+                        .unwrap_or_default();
+
+                    span!(Level::TRACE, "inject_records", count = histories.len()).in_scope(|| {
+                        push_history(&histories, &self.inner.injector);
+                    });
+                }
+            }
+            DaemonEvent::HistoryStarted(history) => {
+                debug!(id = %history.id, command = %history.command, "History started (no index action)");
+            }
+            DaemonEvent::HistoryEnded(history) => {
+                span!(Level::TRACE, "inject_history_ended").in_scope(|| {
+                    push_history(&[history.clone()], &self.inner.injector);
+                });
+            }
+            DaemonEvent::HistoryPruned => {
+                info!("History pruned, rebuilding search index");
+                if let Err(e) = self.rebuild_index().await {
+                    tracing::error!("Failed to rebuild search index: {}", e);
+                }
+            }
+            DaemonEvent::HistoryDeleted { ids } => {
+                info!(
+                    count = ids.len(),
+                    "History deleted, rebuilding search index"
+                );
+                // For now, just rebuild the entire index. A more efficient implementation
+                // would remove specific items from the Nucleo index.
+                if let Err(e) = self.rebuild_index().await {
+                    tracing::error!("Failed to rebuild search index: {}", e);
+                }
+            }
+            // Events we don't care about
+            DaemonEvent::SyncCompleted { .. }
+            | DaemonEvent::SyncFailed { .. }
+            | DaemonEvent::ForceSync
+            | DaemonEvent::SettingsReloaded
+            | DaemonEvent::ShutdownRequested => {}
+        }
+        Ok(())
+    }
+
+    async fn stop(&mut self) -> Result<()> {
+        if let Some(handle) = self.loader_handle.take() {
+            handle.abort();
+        }
+        tracing::info!("search component stopped");
+        Ok(())
     }
 }
 
+/// Push history items into the Nucleo search index.
 fn push_history(history: &[History], injector: &Injector<History>) {
-    for history in history {
-        injector.push(history.clone(), |history, columns| {
+    for h in history {
+        injector.push(h.clone(), |history, columns| {
             columns[0] = history.command.clone().into();
             columns[1] = with_trailing_slash(&history.cwd).into();
             columns[2] = history.hostname.clone().into();
@@ -122,25 +246,40 @@ fn push_history(history: &[History], injector: &Injector<History>) {
     }
 }
 
-#[tonic::async_trait()]
-impl SearchSvc for SearchService {
-    // Output stream type - what we send back to the client
+#[cfg(windows)]
+fn with_trailing_slash(s: &str) -> String {
+    if s.ends_with('\\') {
+        s.to_string()
+    } else {
+        format!("{}\\", s)
+    }
+}
+
+#[cfg(not(windows))]
+fn with_trailing_slash(s: &str) -> String {
+    if s.ends_with('/') {
+        s.to_string()
+    } else {
+        format!("{}/", s)
+    }
+}
+
+/// The gRPC service implementation.
+pub struct SearchGrpcService {
+    inner: Arc<SearchComponentInner>,
+}
+
+#[tonic::async_trait]
+impl SearchSvc for SearchGrpcService {
     type SearchStream = Pin<Box<dyn Stream<Item = Result<SearchResponse, Status>> + Send>>;
 
-    /// Search for a query and return a stream of search responses
-    ///
-    /// The client will send a search request with a query and a query ID.
-    /// The server will respond with a search response with a list of history IDs.
-    ///
-    /// The query ID allows the server to stream back new items as they're added to the index,
-    /// but this is not implemented yet.
     #[instrument(skip_all, level = Level::TRACE, name = "search_rpc")]
     async fn search(
         &self,
         request: Request<Streaming<SearchRequest>>,
     ) -> Result<Response<Self::SearchStream>, Status> {
         let mut in_stream = request.into_inner();
-        let nucleo = self.nucleo.clone();
+        let inner = self.inner.clone();
 
         // Create output channel
         let (tx, rx) = tokio::sync::mpsc::channel::<Result<SearchResponse, Status>>(128);
@@ -166,10 +305,10 @@ impl SearchSvc for SearchService {
                             context
                         );
 
-                        let mut nucleo = nucleo.write().await;
+                        let mut nucleo = inner.nucleo.write().await;
                         nucleo.pattern = nucleo::pattern::MultiPattern::new(6);
 
-                        // Update the search pattern and tick until complete (sync work)
+                        // Update the search pattern and tick until complete
                         let ids = span!(Level::TRACE, "daemon_search_query", %query, query_id)
                             .in_scope(async || {
                                 span!(Level::TRACE, "nucleo_match", %query, query_id)
@@ -183,7 +322,7 @@ impl SearchSvc for SearchService {
                                         );
 
                                         match (filter_mode, context) {
-                                            (FilterMode::Global, _) => { /* nothing to do */ }
+                                            (FilterMode::Global, _) => {}
                                             (FilterMode::Host, Some(context)) => {
                                                 nucleo.pattern.reparse(
                                                     2,
@@ -246,15 +385,12 @@ impl SearchSvc for SearchService {
                                         span!(Level::TRACE, "tick_until_complete", %query, query_id)
                                             .in_scope(|| while nucleo.tick(10).running {});
 
-                                        // Get the snapshot and collect IDs as strings
+                                        // Get the snapshot and collect IDs
                                         let snapshot = nucleo.snapshot();
                                         let matched_count =
                                             snapshot.matched_item_count().min(RESULTS_LIMIT);
 
                                         span!(Level::TRACE, "dedup_and_send_results", %query, query_id).in_scope(async || {
-                                            // History entries are deduplicated by command + cwd + hostname + session;
-                                            // this is so filter modes work correctly. To deduplicate the actual commands,
-                                            // we need to keep track of which ones we've already seen.
                                             let mut seen: HashSet<String> = HashSet::new();
                                             let mut ids: Vec<Vec<u8>> = Vec::with_capacity(matched_count as usize);
 
@@ -265,7 +401,7 @@ impl SearchSvc for SearchService {
 
                                                 seen.insert(item.data.command.clone());
                                                 let uuid = item.data.id.0.clone();
-                                                let uuid = Uuid::parse_str(&uuid).expect("invalid uuid"); // todo
+                                                let uuid = Uuid::parse_str(&uuid).expect("invalid uuid");
                                                 let bytes = uuid.as_bytes().to_vec();
                                                 ids.push(bytes);
                                             }
@@ -295,23 +431,5 @@ impl SearchSvc for SearchService {
         // Convert receiver to stream
         let out_stream = tokio_stream::wrappers::ReceiverStream::new(rx);
         Ok(Response::new(Box::pin(out_stream)))
-    }
-}
-
-#[cfg(windows)]
-fn with_trailing_slash(s: &str) -> String {
-    if s.ends_with('\\') {
-        s.to_string()
-    } else {
-        format!("{}\\", s)
-    }
-}
-
-#[cfg(not(windows))]
-fn with_trailing_slash(s: &str) -> String {
-    if s.ends_with('/') {
-        s.to_string()
-    } else {
-        format!("{}/", s)
     }
 }

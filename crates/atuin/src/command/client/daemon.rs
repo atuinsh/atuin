@@ -42,6 +42,10 @@ pub enum SubCmd {
         /// Also write daemon logs to the console (useful for debugging)
         #[arg(long)]
         show_logs: bool,
+
+        /// Force start: kill existing daemon process and reset the socket
+        #[arg(long)]
+        force: bool,
     },
 
     /// Show the daemon's current status
@@ -84,9 +88,9 @@ impl Cmd {
         match self.subcmd {
             None => {
                 eprintln!("Warning: `atuin daemon` is deprecated, use `atuin daemon start`");
-                run(settings, store, history_db).await
+                run(settings, store, history_db, false).await
             }
-            Some(SubCmd::Start { .. }) => run(settings, store, history_db).await,
+            Some(SubCmd::Start { force, .. }) => run(settings, store, history_db, force).await,
             Some(SubCmd::Status) => status_cmd(&settings).await,
             Some(SubCmd::Stop) => stop_cmd(&settings).await,
             Some(SubCmd::Restart) => restart_cmd(&settings).await,
@@ -561,13 +565,84 @@ pub fn daemonize_current_process() -> Result<()> {
     Ok(())
 }
 
-async fn run(settings: Settings, store: SqliteStore, history_db: Sqlite) -> Result<()> {
+async fn run(
+    settings: Settings,
+    store: SqliteStore,
+    history_db: Sqlite,
+    force: bool,
+) -> Result<()> {
+    if force {
+        force_cleanup(&settings)?;
+    }
+
     let pidfile_path = PathBuf::from(&settings.daemon.pidfile_path);
     let _pidfile_guard = PidfileGuard::acquire(&pidfile_path)?;
 
     atuin_daemon::boot(settings, store, history_db).await?;
 
     Ok(())
+}
+
+/// Force cleanup: kill existing daemon process and remove socket.
+fn force_cleanup(settings: &Settings) -> Result<()> {
+    let pidfile_path = Path::new(&settings.daemon.pidfile_path);
+
+    // Read and kill the existing process if pidfile exists
+    if pidfile_path.exists() {
+        if let Ok(contents) = fs::read_to_string(pidfile_path) {
+            if let Some(pid_str) = contents.lines().next() {
+                if let Ok(pid) = pid_str.parse::<u32>() {
+                    kill_process(pid);
+                    // Give it a moment to release resources
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+            }
+        }
+
+        // Remove the pidfile
+        if let Err(e) = fs::remove_file(pidfile_path) {
+            if e.kind() != ErrorKind::NotFound {
+                tracing::warn!("failed to remove pidfile: {e}");
+            }
+        }
+    }
+
+    // Remove the socket file
+    #[cfg(unix)]
+    {
+        let socket_path = Path::new(&settings.daemon.socket_path);
+        if socket_path.exists() {
+            if let Err(e) = fs::remove_file(socket_path) {
+                if e.kind() != ErrorKind::NotFound {
+                    tracing::warn!("failed to remove socket: {e}");
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Kill a process by PID.
+#[cfg(unix)]
+fn kill_process(pid: u32) {
+    // Use kill command to send SIGTERM for graceful shutdown
+    let _ = Command::new("kill")
+        .args(["-TERM", &pid.to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
+/// Kill a process by PID.
+#[cfg(not(unix))]
+fn kill_process(pid: u32) {
+    // On Windows, use taskkill
+    let _ = Command::new("taskkill")
+        .args(["/PID", &pid.to_string(), "/F"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
 }
 
 #[cfg(test)]
