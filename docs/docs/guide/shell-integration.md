@@ -50,6 +50,17 @@ Embedded terminals commonly:
 2. **Skip shell configuration**: Some tools explicitly avoid sourcing `.bashrc`/`.zshrc` for performance or isolation
 3. **Use different shell paths**: The embedded terminal might use a different shell than your default
 
+### Claude Code Note
+
+Atuin can auto-configure Claude Code hooks when the daemon starts (or on direct-db `history end` when daemon mode is off) and the `claude` command is available. This captures Claude Bash tool executions through Claude's `PostToolUse` hooks, even when Claude runs non-interactive shells.
+
+If you prefer to disable this behavior, set:
+
+```toml
+[integrations]
+claude = false
+```
+
 You can verify whether Atuin is active by running:
 
 ```shell

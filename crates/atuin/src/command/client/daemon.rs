@@ -20,6 +20,8 @@ use eyre::{Result, WrapErr, bail, eyre};
 use fs4::fs_std::FileExt;
 use tokio::time::sleep;
 
+use super::history::maybe_ensure_claude_hook;
+
 #[derive(clap::Args, Debug)]
 pub struct Cmd {
     /// Internal flag for daemonization
@@ -550,6 +552,8 @@ pub fn daemonize_current_process() -> Result<()> {
 async fn run(settings: Settings, store: SqliteStore, history_db: Sqlite) -> Result<()> {
     let pidfile_path = PathBuf::from(&settings.daemon.pidfile_path);
     let _pidfile_guard = PidfileGuard::acquire(&pidfile_path)?;
+
+    maybe_ensure_claude_hook(&settings);
 
     listen(settings, store, history_db).await?;
 

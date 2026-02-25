@@ -477,6 +477,12 @@ pub struct Tmux {
     pub height: String,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Integrations {
+    /// Automatically configure Claude Code hooks in ~/.claude/settings.json.
+    pub claude: bool,
+}
+
 #[derive(Default, Clone, Debug, Deserialize, Serialize)]
 pub struct Ai {
     /// The address of the Atuin AI endpoint. Used for AI features like command generation.
@@ -545,6 +551,12 @@ impl Default for Tmux {
             width: "80%".to_string(),
             height: "60%".to_string(),
         }
+    }
+}
+
+impl Default for Integrations {
+    fn default() -> Self {
+        Self { claude: true }
     }
 }
 
@@ -831,6 +843,9 @@ pub struct Settings {
     pub daemon: Daemon,
 
     #[serde(default)]
+    pub integrations: Integrations,
+
+    #[serde(default)]
     pub search: Search,
 
     #[serde(default)]
@@ -1094,6 +1109,7 @@ impl Settings {
             .set_default("smart_sort", false)?
             .set_default("command_chaining", false)?
             .set_default("store_failed", true)?
+            .set_default("integrations.claude", true)?
             .set_default("daemon.sync_frequency", 300)?
             .set_default("daemon.enabled", false)?
             .set_default("daemon.autostart", false)?
