@@ -1,38 +1,38 @@
-use std::{pin::Pin, sync::Arc};
+use std::{collections::HashSet, pin::Pin, sync::Arc};
 
 use atuin_client::{
     database::{Database, Sqlite as HistoryDatabase},
     history::{History, store::HistoryStore},
 };
-use nucleo::Nucleo;
-use time::OffsetDateTime;
+use nucleo::{Injector, Nucleo};
 use tokio::sync::{RwLock, broadcast};
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status, Streaming};
 use tracing::{Level, debug, info, instrument, span};
+use uuid::Uuid;
 
 use crate::{
     events::DaemonEvent,
-    search::{SearchRequest, SearchResponse, search_server::Search as SearchSvc},
+    search::{FilterMode, SearchRequest, SearchResponse, search_server::Search as SearchSvc},
 };
 
+const PAGE_SIZE: usize = 1000;
+const RESULTS_LIMIT: u32 = 200;
+
 pub struct SearchService {
-    store: HistoryStore,
-    history_db: HistoryDatabase,
-    tx: broadcast::Sender<DaemonEvent>,
     nucleo: Arc<RwLock<Nucleo<History>>>,
 }
 
 impl SearchService {
     pub fn new(
-        store: HistoryStore,
+        _store: HistoryStore,
         history_db: HistoryDatabase,
         tx: broadcast::Sender<DaemonEvent>,
     ) -> Self {
         let mut rx = tx.subscribe();
         let nucleo_config = nucleo::Config::DEFAULT.clone();
 
-        let nucleo = Nucleo::<History>::new(nucleo_config, Arc::new(|| {}), None, 2);
+        let nucleo = Nucleo::<History>::new(nucleo_config, Arc::new(|| {}), None, 4);
 
         let injector = nucleo.injector();
         let injector_clone = injector.clone();
@@ -61,12 +61,7 @@ impl SearchService {
                             .unwrap();
                         span!(Level::TRACE, "inject_records", count = histories.len()).in_scope(
                             || {
-                                for history in histories {
-                                    injector_clone.push(history, |history, columns| {
-                                        columns[0] = history.command.clone().into();
-                                        columns[1] = history.cwd.to_string().into();
-                                    });
-                                }
+                                push_history(&histories, &injector_clone);
                             },
                         );
                     }
@@ -75,10 +70,7 @@ impl SearchService {
                     }
                     DaemonEvent::HistoryEnded(history) => {
                         span!(Level::TRACE, "inject_history_ended").in_scope(|| {
-                            injector_clone.push(history, |history, columns| {
-                                columns[0] = history.command.clone().into();
-                                columns[1] = history.cwd.to_string().into();
-                            });
+                            push_history(&[history], &injector_clone);
                         });
                     }
                 }
@@ -88,32 +80,45 @@ impl SearchService {
         // Load history from the database asynchronously
         let db = history_db.clone();
         tokio::spawn(async move {
-            // Load recent history (last 10000 entries)
-            match db.before(OffsetDateTime::now_utc(), 10000).await {
-                Ok(history) => {
-                    info!(
-                        "Loading {} history entries into search index",
-                        history.len()
-                    );
-                    for h in history {
-                        injector.push(h, |history, columns| {
-                            columns[0] = history.command.clone().into();
-                            columns[1] = history.cwd.to_string().into();
-                        });
+            // Load all history into the search index,
+            // deduplicated and without deleted entries.
+            info!(
+                "Loading history into search index; page size = {}",
+                PAGE_SIZE
+            );
+            let mut pager = db.all_paged(PAGE_SIZE, false, true);
+            loop {
+                match pager.next().await {
+                    Ok(Some(history)) => {
+                        info!(
+                            "Loading {} history entries into search index",
+                            history.len()
+                        );
+                        push_history(&history, &injector);
                     }
-                }
-                Err(e) => {
-                    tracing::error!("Failed to load history: {}", e);
+                    Ok(None) => {
+                        break;
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to load history: {}", e);
+                        break;
+                    }
                 }
             }
         });
 
-        Self {
-            store,
-            history_db,
-            tx,
-            nucleo,
-        }
+        Self { nucleo }
+    }
+}
+
+fn push_history(history: &[History], injector: &Injector<History>) {
+    for history in history {
+        injector.push(history.clone(), |history, columns| {
+            columns[0] = history.command.clone().into();
+            columns[1] = with_trailing_slash(&history.cwd).into();
+            columns[2] = history.hostname.clone().into();
+            columns[3] = history.session.clone().into();
+        });
     }
 }
 
@@ -147,42 +152,135 @@ impl SearchSvc for SearchService {
                     Ok(search_req) => {
                         let query = search_req.query;
                         let query_id = search_req.query_id;
+                        let filter_mode: FilterMode = search_req
+                            .filter_mode
+                            .try_into()
+                            .unwrap_or(FilterMode::Global);
+                        let context = search_req.context;
 
-                        // Note: We can't use entered() spans across await points in spawned tasks
-                        // So we acquire the lock first, then do all sync work in a span scope
+                        debug!(
+                            "search request: query = {}, query_id = {}, filter_mode = {}, context = {:?}",
+                            query,
+                            query_id,
+                            filter_mode.as_str_name(),
+                            context
+                        );
+
                         let mut nucleo = nucleo.write().await;
+                        nucleo.pattern = nucleo::pattern::MultiPattern::new(6);
 
                         // Update the search pattern and tick until complete (sync work)
                         let ids = span!(Level::TRACE, "daemon_search_query", %query, query_id)
-                            .in_scope(|| {
-                                span!(Level::TRACE, "nucleo_match").in_scope(|| {
-                                    nucleo.pattern.reparse(
-                                        0,
-                                        &query,
-                                        nucleo::pattern::CaseMatching::Smart,
-                                        nucleo::pattern::Normalization::Smart,
-                                        false,
-                                    );
+                            .in_scope(async || {
+                                span!(Level::TRACE, "nucleo_match", %query, query_id)
+                                    .in_scope(async || {
+                                        nucleo.pattern.reparse(
+                                            0,
+                                            &query,
+                                            nucleo::pattern::CaseMatching::Smart,
+                                            nucleo::pattern::Normalization::Smart,
+                                            false,
+                                        );
 
-                                    // Tick until processing is complete
-                                    while nucleo.tick(10).running {}
+                                        match (filter_mode, context) {
+                                            (FilterMode::Global, _) => { /* nothing to do */ }
+                                            (FilterMode::Host, Some(context)) => {
+                                                nucleo.pattern.reparse(
+                                                    2,
+                                                    format!("^{}$", context.hostname).as_str(),
+                                                    nucleo::pattern::CaseMatching::Ignore,
+                                                    nucleo::pattern::Normalization::Never,
+                                                    false,
+                                                );
+                                            }
+                                            (FilterMode::Session, Some(context)) => {
+                                                nucleo.pattern.reparse(
+                                                    3,
+                                                    format!("^{}$", context.session_id).as_str(),
+                                                    nucleo::pattern::CaseMatching::Ignore,
+                                                    nucleo::pattern::Normalization::Never,
+                                                    false,
+                                                );
+                                            }
+                                            (FilterMode::Directory, Some(context)) => {
+                                                nucleo.pattern.reparse(
+                                                    1,
+                                                    format!(
+                                                        "^{}$",
+                                                        with_trailing_slash(&context.cwd)
+                                                    )
+                                                    .as_str(),
+                                                    nucleo::pattern::CaseMatching::Ignore,
+                                                    nucleo::pattern::Normalization::Never,
+                                                    false,
+                                                );
+                                            }
+                                            (FilterMode::Workspace, Some(context)) => {
+                                                if let Some(git_root) = &context.git_root {
+                                                    nucleo.pattern.reparse(
+                                                        1,
+                                                        format!(
+                                                            "^{}",
+                                                            with_trailing_slash(git_root)
+                                                        )
+                                                        .as_str(),
+                                                        nucleo::pattern::CaseMatching::Ignore,
+                                                        nucleo::pattern::Normalization::Never,
+                                                        false,
+                                                    );
+                                                }
+                                            }
+                                            (FilterMode::SessionPreload, Some(context)) => {
+                                                nucleo.pattern.reparse(
+                                                    3,
+                                                    format!("^{}", context.session_id).as_str(),
+                                                    nucleo::pattern::CaseMatching::Ignore,
+                                                    nucleo::pattern::Normalization::Never,
+                                                    false,
+                                                );
+                                            }
+                                            _ => {}
+                                        }
 
-                                    // Get the snapshot and collect IDs as strings
-                                    let snapshot = nucleo.snapshot();
-                                    snapshot
-                                        .matched_items(..snapshot.matched_item_count().min(200))
-                                        .map(|item| item.data.id.0.clone())
-                                        .collect::<Vec<String>>()
-                                })
-                            });
+                                        // Tick until processing is complete
+                                        span!(Level::TRACE, "tick_until_complete", %query, query_id)
+                                            .in_scope(|| while nucleo.tick(10).running {});
 
-                        debug!(
-                            query = %query,
-                            results = ids.len(),
-                            "[daemon-search]"
-                        );
+                                        // Get the snapshot and collect IDs as strings
+                                        let snapshot = nucleo.snapshot();
+                                        let matched_count =
+                                            snapshot.matched_item_count().min(RESULTS_LIMIT);
 
-                        if tx.send(Ok(SearchResponse { ids, query_id })).await.is_err() {
+                                        span!(Level::TRACE, "dedup_and_send_results", %query, query_id).in_scope(async || {
+                                            // History entries are deduplicated by command + cwd + hostname + session;
+                                            // this is so filter modes work correctly. To deduplicate the actual commands,
+                                            // we need to keep track of which ones we've already seen.
+                                            let mut seen: HashSet<String> = HashSet::new();
+                                            let mut ids: Vec<Vec<u8>> = Vec::with_capacity(matched_count as usize);
+
+                                            for item in snapshot.matched_items(..matched_count) {
+                                                if seen.contains(&item.data.command) {
+                                                    continue;
+                                                }
+
+                                                seen.insert(item.data.command.clone());
+                                                let uuid = item.data.id.0.clone();
+                                                let uuid = Uuid::parse_str(&uuid).expect("invalid uuid"); // todo
+                                                let bytes = uuid.as_bytes().to_vec();
+                                                ids.push(bytes);
+                                            }
+
+                                            ids
+                                        })
+                                        .await
+                                    })
+                                    .await
+                            })
+                            .await;
+
+                        drop(nucleo);
+
+                        if tx.send(Ok(SearchResponse { query_id, ids })).await.is_err() {
                             break; // Client disconnected
                         }
                     }
@@ -197,5 +295,23 @@ impl SearchSvc for SearchService {
         // Convert receiver to stream
         let out_stream = tokio_stream::wrappers::ReceiverStream::new(rx);
         Ok(Response::new(Box::pin(out_stream)))
+    }
+}
+
+#[cfg(windows)]
+fn with_trailing_slash(s: &str) -> String {
+    if s.ends_with('\\') {
+        s.to_string()
+    } else {
+        format!("{}\\", s)
+    }
+}
+
+#[cfg(not(windows))]
+fn with_trailing_slash(s: &str) -> String {
+    if s.ends_with('/') {
+        s.to_string()
+    } else {
+        format!("{}/", s)
     }
 }

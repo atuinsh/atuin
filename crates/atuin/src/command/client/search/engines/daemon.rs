@@ -1,12 +1,20 @@
+use std::sync::Arc;
+
 use async_trait::async_trait;
-use atuin_client::{database::Database, history::History, settings::Settings};
+use atuin_client::{
+    database::Database,
+    history::{History, HistoryId},
+    settings::Settings,
+};
 use atuin_daemon::client::SearchClient;
-use eyre::Result;
+use eyre::{Result, eyre};
 use nucleo_matcher::{
     Config, Matcher, Utf32Str,
     pattern::{CaseMatching, Normalization, Pattern},
 };
+use tokio::{sync::RwLock, task::JoinHandle};
 use tracing::{Level, debug, instrument, span};
+use uuid::Uuid;
 
 use super::{SearchEngine, SearchState};
 
@@ -73,19 +81,46 @@ impl SearchEngine for Search {
         let span =
             span!(Level::TRACE, "daemon_search.req_resp", query = %query, query_id = query_id);
 
-        let _span = span.enter();
         let client = self.get_client().await?;
 
-        let mut stream = client.search(query.clone(), query_id).await?;
+        let _span = span.enter();
+        let mut stream = client
+            .search(
+                query.clone(),
+                query_id,
+                state.filter_mode,
+                Some(state.context.clone()),
+            )
+            .await?;
 
-        // Get the first response (we expect only one response per query in this model)
-        let mut ids = Vec::new();
-        if let Some(response) = stream.message().await? {
-            // Only process if the query_id matches (prevents stale responses)
-            if response.query_id == query_id {
-                ids = response.ids;
-            }
-        }
+        let mut ids = Vec::with_capacity(200);
+        span!(Level::TRACE, "daemon_search.resp")
+            .in_scope(async || {
+                while let Ok(Some(response)) = stream.message().await {
+                    let span2 = span!(
+                        Level::TRACE,
+                        "daemon_search.resp.item",
+                        query_id = response.query_id
+                    );
+                    let _span2 = span2.enter();
+                    // Only process if the query_id matches (prevents stale responses)
+                    if response.query_id == query_id {
+                        let uuids = response
+                            .ids
+                            .iter()
+                            .map(|id| {
+                                let bytes: [u8; 16] =
+                                    id.as_slice().try_into().expect("id should be 16 bytes");
+                                Uuid::from_bytes(bytes).as_simple().to_string()
+                            })
+                            .collect::<Vec<_>>();
+                        ids.extend(uuids);
+                    }
+                    drop(_span2);
+                    drop(span2);
+                }
+            })
+            .await;
         drop(_span);
         drop(span);
 
@@ -94,10 +129,10 @@ impl SearchEngine for Search {
             return Ok(Vec::new());
         }
 
-        // Hydrate from local database
+        // // Hydrate from local database
         let results = self.hydrate_from_db(db, &ids).await?;
 
-        // Reorder results to match the order from the daemon (which is ranked by relevance)
+        // // Reorder results to match the order from the daemon (which is ranked by relevance)
         let ordered_results = span!(Level::TRACE, "reorder_results").in_scope(|| {
             let mut ordered_results = Vec::with_capacity(results.len());
             for id in &ids {
@@ -110,7 +145,7 @@ impl SearchEngine for Search {
 
         debug!(
             query = %query,
-            results = ordered_results.len(),
+            results = results.len(),
             "[daemon-client]"
         );
 
@@ -130,5 +165,42 @@ impl SearchEngine for Search {
 
         // Convert u32 indices to usize
         indices.into_iter().map(|i| i as usize).collect()
+    }
+}
+
+struct Hydrator {
+    tasks: Vec<JoinHandle<Result<Vec<History>>>>,
+    results: Arc<RwLock<Vec<History>>>,
+}
+
+impl Hydrator {
+    pub fn new() -> Self {
+        Hydrator {
+            tasks: Vec::new(),
+            results: Arc::new(RwLock::new(Vec::new())),
+        }
+    }
+
+    pub fn hydrate(&mut self, db: Box<dyn Database + 'static>, ids: &[String]) {
+        let placeholders: Vec<String> = ids.iter().map(|id| format!("'{}'", id)).collect();
+
+        let task = tokio::spawn(async move {
+            let sql_query = format!(
+                "SELECT * FROM history WHERE id IN ({}) ORDER BY timestamp DESC",
+                placeholders.join(",")
+            );
+            db.query_history(&sql_query).await.map_err(|e| eyre!(e))
+        });
+
+        self.tasks.push(task);
+    }
+
+    pub async fn results(&mut self) -> Vec<History> {
+        for task in self.tasks.drain(..) {
+            if let Ok(results) = task.await.expect("failed to join task") {
+                self.results.write().await.extend(results.into_iter());
+            }
+        }
+        self.results.read().await.clone()
     }
 }

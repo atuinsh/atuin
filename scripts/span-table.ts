@@ -33,6 +33,7 @@ interface SpanStats {
   calls: number;
   busyTimes: number[]; // in microseconds
   idleTimes: number[];
+  parentCounts: Map<string, number>; // parent span name -> count
 }
 
 // Parse duration strings like "1.23ms", "456µs", "789ns" to microseconds
@@ -169,7 +170,7 @@ function main() {
     }
 
     if (!spans.has(name)) {
-      spans.set(name, { name, calls: 0, busyTimes: [], idleTimes: [] });
+      spans.set(name, { name, calls: 0, busyTimes: [], idleTimes: [], parentCounts: new Map() });
     }
 
     const stats = spans.get(name)!;
@@ -178,6 +179,11 @@ function main() {
     if (event.fields["time.idle"]) {
       stats.idleTimes.push(parseDuration(event.fields["time.idle"]));
     }
+
+    // Track parent relationship (immediate parent is the last element in spans array)
+    const parents = event.spans || [];
+    const parentName = parents.length > 0 ? parents[parents.length - 1].name : "__root__";
+    stats.parentCounts.set(parentName, (stats.parentCounts.get(parentName) || 0) + 1);
   }
 
   if (spans.size === 0) {
@@ -272,10 +278,21 @@ function main() {
     return;
   }
 
-  // Calculate stats and sort
+  // Calculate stats
   const results = [...spans.values()].map((s) => {
     // Calculate wall times (busy + idle) for each call
     const wallTimes = s.busyTimes.map((busy, i) => busy + (s.idleTimes[i] || 0));
+
+    // Find most common parent
+    let mostCommonParent = "__root__";
+    let maxCount = 0;
+    for (const [parent, count] of s.parentCounts) {
+      if (count > maxCount) {
+        maxCount = count;
+        mostCommonParent = parent;
+      }
+    }
+
     return {
       name: s.name,
       calls: s.calls,
@@ -288,30 +305,84 @@ function main() {
       avgWall: wallTimes.reduce((a, b) => a + b, 0) / s.calls,
       p50Wall: percentile(wallTimes, 0.5),
       p99Wall: percentile(wallTimes, 0.99),
+      parent: mostCommonParent,
     };
   });
 
-  // Sort
-  results.sort((a, b) => {
-    switch (sortField) {
-      case "calls":
-        return b.calls - a.calls;
-      case "avg":
-        return b.avg - a.avg;
-      case "p99":
-        return b.p99 - a.p99;
-      case "total":
-      default:
-        return b.total - a.total;
+  // Build tree structure
+  const childrenOf = new Map<string, string[]>();
+  childrenOf.set("__root__", []);
+  for (const r of results) {
+    if (!childrenOf.has(r.name)) {
+      childrenOf.set(r.name, []);
     }
-  });
+    if (!childrenOf.has(r.parent)) {
+      childrenOf.set(r.parent, []);
+    }
+    childrenOf.get(r.parent)!.push(r.name);
+  }
 
-  // Display
-  const displayResults = results.slice(0, topN);
+  // Sort children by the specified field
+  const resultMap = new Map(results.map(r => [r.name, r]));
+  const sortChildren = (children: string[]) => {
+    children.sort((a, b) => {
+      const ra = resultMap.get(a);
+      const rb = resultMap.get(b);
+      if (!ra || !rb) return 0;
+      switch (sortField) {
+        case "calls":
+          return rb.calls - ra.calls;
+        case "avg":
+          return rb.avg - ra.avg;
+        case "p99":
+          return rb.p99 - ra.p99;
+        case "total":
+        default:
+          return rb.total - ra.total;
+      }
+    });
+  };
+
+  // Traverse tree to build ordered display list with depths
+  const displayResults: Array<{ result: typeof results[0]; depth: number }> = [];
+  const visited = new Set<string>();
+
+  function traverse(name: string, depth: number) {
+    if (visited.has(name)) return;
+    visited.add(name);
+
+    const result = resultMap.get(name);
+    if (result) {
+      displayResults.push({ result, depth });
+    }
+
+    const children = childrenOf.get(name) || [];
+    sortChildren(children);
+    for (const child of children) {
+      traverse(child, depth + 1);
+    }
+  }
+
+  // Start from roots
+  const roots = childrenOf.get("__root__") || [];
+  sortChildren(roots);
+  for (const root of roots) {
+    traverse(root, 0);
+  }
+
+  // Add any orphaned spans (whose parent wasn't in our span list)
+  for (const r of results) {
+    if (!visited.has(r.name)) {
+      displayResults.push({ result: r, depth: 0 });
+    }
+  }
+
+  // Apply topN limit
+  const limitedResults = displayResults.slice(0, topN);
 
   console.log("");
   console.log(
-    "Span Name".padEnd(30) +
+    "Span Name".padEnd(40) +
       "Calls".padStart(6) +
       "Avg(wall)".padStart(11) +
       "P50(wall)".padStart(11) +
@@ -320,13 +391,16 @@ function main() {
       "P50(busy)".padStart(11) +
       "P99(busy)".padStart(11)
   );
-  console.log("-".repeat(102));
+  console.log("-".repeat(112));
 
-  for (const r of displayResults) {
-    const displayName = r.name.length > 28 ? "..." + r.name.slice(-25) : r.name;
+  for (const { result: r, depth } of limitedResults) {
+    const indent = "  ".repeat(depth);
+    const maxNameLen = 38 - indent.length;
+    const truncatedName = r.name.length > maxNameLen ? "..." + r.name.slice(-(maxNameLen - 3)) : r.name;
+    const displayName = indent + truncatedName;
 
     console.log(
-      displayName.padEnd(30) +
+      displayName.padEnd(40) +
         r.calls.toString().padStart(6) +
         formatDuration(r.avgWall).padStart(11) +
         formatDuration(r.p50Wall).padStart(11) +
@@ -338,7 +412,7 @@ function main() {
   }
 
   console.log("");
-  console.log(`Showing ${displayResults.length} of ${results.length} spans (sorted by ${sortField})`);
+  console.log(`Showing ${limitedResults.length} of ${results.length} spans (sorted by ${sortField})`);
 }
 
 main();

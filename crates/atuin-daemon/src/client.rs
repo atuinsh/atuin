@@ -1,4 +1,6 @@
-use eyre::{Context, Result};
+use atuin_client::database::Context;
+use atuin_client::settings::FilterMode;
+use eyre::{Context as EyreContext, Result};
 #[cfg(windows)]
 use tokio::net::TcpStream;
 use tonic::Code;
@@ -11,13 +13,15 @@ use hyper_util::rt::TokioIo;
 use tokio::net::UnixStream;
 
 use atuin_client::history::History;
+use tracing::{Level, instrument, span};
 
 use crate::history::{
     EndHistoryReply, EndHistoryRequest, ShutdownRequest, StartHistoryReply, StartHistoryRequest,
     StatusReply, StatusRequest, history_client::HistoryClient as HistoryServiceClient,
 };
 use crate::search::{
-    SearchRequest, SearchResponse, search_client::SearchClient as SearchServiceClient,
+    FilterMode as RpcFilterMode, SearchContext as RpcSearchContext, SearchRequest, SearchResponse,
+    search_client::SearchClient as SearchServiceClient,
 };
 
 pub struct HistoryClient {
@@ -55,6 +59,8 @@ pub fn classify_error(error: &eyre::Report) -> DaemonClientErrorKind {
 impl HistoryClient {
     #[cfg(unix)]
     pub async fn new(path: String) -> Result<Self> {
+        use eyre::Context;
+
         let log_path = path.clone();
         let channel = Endpoint::try_from("http://atuin_local_daemon:0")?
             .connect_with_connector(service_fn(move |_: Uri| {
@@ -183,15 +189,52 @@ impl SearchClient {
         Ok(SearchClient { client })
     }
 
+    #[instrument(skip_all, level = Level::TRACE, name = "daemon_client_search", fields(query = %query, query_id = query_id))]
     pub async fn search(
         &mut self,
         query: String,
         query_id: u64,
+        filter_mode: FilterMode,
+        context: Option<Context>,
     ) -> Result<tonic::Streaming<SearchResponse>> {
-        let request = SearchRequest { query, query_id };
+        let request = SearchRequest {
+            query,
+            query_id,
+            filter_mode: RpcFilterMode::from(filter_mode).into(),
+            context: context.map(RpcSearchContext::from),
+        };
         let request_stream = tokio_stream::once(request);
-        let response = self.client.search(request_stream).await?;
+        let response = span!(Level::TRACE, "daemon_client_search.request")
+            .in_scope(async || self.client.search(request_stream).await)
+            .await?;
 
         Ok(response.into_inner())
+    }
+}
+
+impl From<FilterMode> for RpcFilterMode {
+    fn from(filter_mode: FilterMode) -> Self {
+        match filter_mode {
+            FilterMode::Global => RpcFilterMode::Global,
+            FilterMode::Host => RpcFilterMode::Host,
+            FilterMode::Session => RpcFilterMode::Session,
+            FilterMode::Directory => RpcFilterMode::Directory,
+            FilterMode::Workspace => RpcFilterMode::Workspace,
+            FilterMode::SessionPreload => RpcFilterMode::SessionPreload,
+        }
+    }
+}
+
+impl From<Context> for RpcSearchContext {
+    fn from(context: Context) -> Self {
+        RpcSearchContext {
+            session_id: context.session,
+            cwd: context.cwd,
+            hostname: context.hostname,
+            host_id: context.host_id,
+            git_root: context
+                .git_root
+                .map(|path| path.to_string_lossy().to_string()),
+        }
     }
 }
