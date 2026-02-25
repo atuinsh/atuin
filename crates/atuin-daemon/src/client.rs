@@ -103,6 +103,8 @@ impl HistoryClient {
             hostname: h.hostname,
             session: h.session,
             timestamp: h.timestamp.unix_timestamp_nanos() as u64,
+            author: h.author,
+            intent: h.intent.unwrap_or_default(),
         };
 
         Ok(self.client.start_history(req).await?.into_inner())

@@ -253,6 +253,8 @@ fn decode(bytes: &[u8]) -> Result<History> {
         cwd: cwd.to_owned(),
         session: session.to_owned(),
         hostname: hostname.to_owned(),
+        author: History::author_from_hostname(hostname),
+        intent: None,
         deleted_at: deleted_at
             .map(|t| OffsetDateTime::parse(t, &Rfc3339))
             .transpose()?,
@@ -287,6 +289,8 @@ mod test {
             .duration(1)
             .session("beep boop".into())
             .hostname("booop".into())
+            .author("booop".into())
+            .intent(None)
             .deleted_at(None)
             .build()
             .into();
@@ -331,6 +335,8 @@ mod test {
             cwd: "/Users/conrad.ludgate/Documents/code/atuin".to_owned(),
             session: "b97d9a306f274473a203d2eba41f9457".to_owned(),
             hostname: "fvfg936c0kpf:conrad.ludgate".to_owned(),
+            author: "conrad.ludgate".to_owned(),
+            intent: None,
             deleted_at: None,
         };
 
@@ -352,6 +358,8 @@ mod test {
             cwd: "/Users/conrad.ludgate/Documents/code/atuin".to_owned(),
             session: "b97d9a306f274473a203d2eba41f9457".to_owned(),
             hostname: "fvfg936c0kpf:conrad.ludgate".to_owned(),
+            author: "conrad.ludgate".to_owned(),
+            intent: None,
             deleted_at: Some(datetime!(2023-05-28 18:35:40.633872 +00:00)),
         };
 
@@ -383,6 +391,8 @@ mod test {
             cwd: "/Users/conrad.ludgate/Documents/code/atuin".to_owned(),
             session: "b97d9a306f274473a203d2eba41f9457".to_owned(),
             hostname: "fvfg936c0kpf:conrad.ludgate".to_owned(),
+            author: "conrad.ludgate".to_owned(),
+            intent: None,
             deleted_at: None,
         };
 

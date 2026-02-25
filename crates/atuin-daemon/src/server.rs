@@ -69,7 +69,7 @@ impl HistorySvc for HistoryService {
                 )
             })?;
 
-        let h: History = History::daemon()
+        let mut h: History = History::daemon()
             .timestamp(timestamp)
             .command(req.command)
             .cwd(req.cwd)
@@ -77,6 +77,12 @@ impl HistorySvc for HistoryService {
             .hostname(req.hostname)
             .build()
             .into();
+        if !req.author.trim().is_empty() {
+            h.author = req.author;
+        }
+        if !req.intent.trim().is_empty() {
+            h.intent = Some(req.intent);
+        }
 
         // The old behaviour had us inserting half-finished history records into the database
         // The new behaviour no longer allows that.

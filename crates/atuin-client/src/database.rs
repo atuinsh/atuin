@@ -200,8 +200,8 @@ impl Sqlite {
 
     async fn save_raw(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, h: &History) -> Result<()> {
         sqlx::query(
-            "insert or ignore into history(id, timestamp, duration, exit, command, cwd, session, hostname, deleted_at)
-                values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            "insert or ignore into history(id, timestamp, duration, exit, command, cwd, session, hostname, author, intent, deleted_at)
+                values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         )
         .bind(h.id.0.as_str())
         .bind(h.timestamp.unix_timestamp_nanos() as i64)
@@ -211,6 +211,8 @@ impl Sqlite {
         .bind(h.cwd.as_str())
         .bind(h.session.as_str())
         .bind(h.hostname.as_str())
+        .bind(h.author.as_str())
+        .bind(h.intent.as_deref())
         .bind(h.deleted_at.map(|t|t.unix_timestamp_nanos() as i64))
         .execute(&mut **tx)
         .await?;
@@ -232,6 +234,13 @@ impl Sqlite {
 
     fn query_history(row: SqliteRow) -> History {
         let deleted_at: Option<i64> = row.get("deleted_at");
+        let hostname: String = row.get("hostname");
+        let author: Option<String> = row.try_get("author").ok().flatten();
+        let author = author
+            .filter(|author| !author.trim().is_empty())
+            .unwrap_or_else(|| History::author_from_hostname(hostname.as_str()));
+        let intent: Option<String> = row.try_get("intent").ok().flatten();
+        let intent = intent.filter(|intent| !intent.trim().is_empty());
 
         History::from_db()
             .id(row.get("id"))
@@ -244,7 +253,9 @@ impl Sqlite {
             .command(row.get("command"))
             .cwd(row.get("cwd"))
             .session(row.get("session"))
-            .hostname(row.get("hostname"))
+            .hostname(hostname)
+            .author(author)
+            .intent(intent)
             .deleted_at(
                 deleted_at.and_then(|t| OffsetDateTime::from_unix_timestamp_nanos(t as i128).ok()),
             )
@@ -295,7 +306,7 @@ impl Database for Sqlite {
 
         sqlx::query(
             "update history
-                set timestamp = ?2, duration = ?3, exit = ?4, command = ?5, cwd = ?6, session = ?7, hostname = ?8, deleted_at = ?9
+                set timestamp = ?2, duration = ?3, exit = ?4, command = ?5, cwd = ?6, session = ?7, hostname = ?8, author = ?9, intent = ?10, deleted_at = ?11
                 where id = ?1",
         )
         .bind(h.id.0.as_str())
@@ -306,6 +317,8 @@ impl Database for Sqlite {
         .bind(h.cwd.as_str())
         .bind(h.session.as_str())
         .bind(h.hostname.as_str())
+        .bind(h.author.as_str())
+        .bind(h.intent.as_deref())
         .bind(h.deleted_at.map(|t|t.unix_timestamp_nanos() as i64))
         .execute(&self.pool)
         .await?;
@@ -612,6 +625,8 @@ impl Database for Sqlite {
                 "exit",
                 "command",
                 "deleted_at",
+                "null as author",
+                "null as intent",
                 "group_concat(cwd, ':') as cwd",
                 "group_concat(session) as session",
                 "group_concat(hostname, ',') as hostname",

@@ -8,6 +8,8 @@ message StartHistoryRequest {
   string cwd = 3;
   string session = 4;
   string hostname = 5;
+  string author = 6;
+  string intent = 7;
 }
 
 message EndHistoryRequest {
