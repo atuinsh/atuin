@@ -1,8 +1,10 @@
-use atuin_daemon::emit_event;
 use atuin_dotfiles::store::{AliasStore, var::VarStore};
 use atuin_scripts::store::ScriptStore;
 use clap::Args;
 use eyre::{Result, bail};
+
+#[cfg(feature = "daemon")]
+use atuin_daemon::emit_event;
 
 use atuin_client::{
     database::Database, encryption, history::store::HistoryStore,
