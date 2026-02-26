@@ -626,6 +626,7 @@ impl Cmd {
                 }
             }
 
+            #[cfg(feature = "daemon")]
             let _ = emit_event(atuin_daemon::DaemonEvent::HistoryPruned).await;
         }
         Ok(())
@@ -684,6 +685,7 @@ impl Cmd {
                 }
             }
 
+            #[cfg(feature = "daemon")]
             let _ = emit_event(atuin_daemon::DaemonEvent::HistoryDeleted { ids }).await;
         }
         Ok(())

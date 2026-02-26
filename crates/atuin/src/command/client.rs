@@ -172,10 +172,18 @@ impl Cmd {
         let use_search_logging = is_interactive_search && settings.logs.search_enabled();
 
         // Use file-based logging for daemon
+        #[cfg(feature = "daemon")]
         let use_daemon_logging = matches!(&self, Self::Daemon(_)) && settings.logs.daemon_enabled();
 
+        #[cfg(not(feature = "daemon"))]
+        let use_daemon_logging = false;
+
         // Check if daemon should also log to console
+        #[cfg(feature = "daemon")]
         let daemon_show_logs = matches!(&self, Self::Daemon(cmd) if cmd.show_logs());
+
+        #[cfg(not(feature = "daemon"))]
+        let daemon_show_logs = false;
 
         // Set up span timing JSON logs if ATUIN_SPAN is set
         let span_path = std::env::var("ATUIN_SPAN").ok().map(|p| {

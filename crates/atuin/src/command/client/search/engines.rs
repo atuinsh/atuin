@@ -13,6 +13,7 @@ pub mod daemon;
 pub mod db;
 pub mod skim;
 
+#[allow(unused)] // settings is only used if daemon feature is enabled
 pub fn engine(search_mode: SearchMode, settings: &Settings) -> Box<dyn SearchEngine> {
     match search_mode {
         SearchMode::Skim => Box::new(skim::Search::new()) as Box<_>,

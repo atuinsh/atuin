@@ -58,7 +58,8 @@ impl Rebuild {
 
         history_store.build(database).await?;
 
-        emit_event(atuin_daemon::DaemonEvent::HistoryRebuilt).await?;
+        #[cfg(feature = "daemon")]
+        let _ = emit_event(atuin_daemon::DaemonEvent::HistoryRebuilt).await;
 
         Ok(())
     }
