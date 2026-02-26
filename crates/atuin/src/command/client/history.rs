@@ -494,8 +494,7 @@ impl Cmd {
         author: Option<&str>,
         intent: Option<&str>,
     ) -> Result<()> {
-        let _ =
-            Self::handle_start_internal(db, settings, command, author, intent, true).await?;
+        let _ = Self::handle_start_internal(db, settings, command, author, intent, true).await?;
         Ok(())
     }
 
