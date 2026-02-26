@@ -453,16 +453,14 @@ mod tests {
 
     #[test]
     fn command_data_add_invocation() {
-        let history1 = make_history(
-            "git status",
-            "/home/user/project",
-            datetime!(2024-01-01 10:00 UTC),
-        );
-        let history2 = make_history(
-            "git status",
-            "/home/user/other",
-            datetime!(2024-01-01 12:00 UTC),
-        );
+        let (dir1, dir2) = if cfg!(windows) {
+            ("C:\\Users\\User\\project", "C:\\Users\\User\\other")
+        } else {
+            ("/home/user/project", "/home/user/other")
+        };
+
+        let history1 = make_history("git status", dir1, datetime!(2024-01-01 10:00 UTC));
+        let history2 = make_history("git status", dir2, datetime!(2024-01-01 12:00 UTC));
 
         let mut data = CommandData::new(&history1);
         assert_eq!(data.invocations.len(), 1);
@@ -473,33 +471,59 @@ mod tests {
         assert_eq!(data.global_frecency.count, 2);
 
         // Most recent should be first
-        assert_eq!(data.invocations[0].cwd, "/home/user/other");
-        assert_eq!(data.invocations[1].cwd, "/home/user/project");
+        assert_eq!(data.invocations[0].cwd, dir2);
+        assert_eq!(data.invocations[1].cwd, dir1);
     }
 
     #[test]
     fn command_data_filters() {
-        let h1 = make_history(
-            "git status",
-            "/home/user/project",
-            datetime!(2024-01-01 10:00 UTC),
-        );
-        let h2 = make_history(
-            "git status",
-            "/home/user/other",
-            datetime!(2024-01-01 12:00 UTC),
-        );
+        let (dir1, dir2) = if cfg!(windows) {
+            ("C:\\Users\\User\\project", "C:\\Users\\User\\other")
+        } else {
+            ("/home/user/project", "/home/user/other")
+        };
+
+        let h1 = make_history("git status", dir1, datetime!(2024-01-01 10:00 UTC));
+        let h2 = make_history("git status", dir2, datetime!(2024-01-01 12:00 UTC));
 
         let mut data = CommandData::new(&h1);
         data.add_invocation(&h2);
 
-        assert!(data.has_invocation_in_dir(&with_trailing_slash("/home/user/project")));
-        assert!(data.has_invocation_in_dir(&with_trailing_slash("/home/user/other")));
-        assert!(!data.has_invocation_in_dir(&with_trailing_slash("/home/user/missing")));
+        let (check1, check2, check3) = if cfg!(windows) {
+            (
+                with_trailing_slash("C:\\Users\\User\\project"),
+                with_trailing_slash("C:\\Users\\User\\other"),
+                with_trailing_slash("C:\\Users\\User\\missing"),
+            )
+        } else {
+            (
+                with_trailing_slash("/home/user/project"),
+                with_trailing_slash("/home/user/other"),
+                with_trailing_slash("/home/user/missing"),
+            )
+        };
 
-        assert!(data.has_invocation_in_workspace(&with_trailing_slash("/home/user")));
-        assert!(data.has_invocation_in_workspace(&with_trailing_slash("/home")));
-        assert!(!data.has_invocation_in_workspace(&with_trailing_slash("/var")));
+        assert!(data.has_invocation_in_dir(&check1));
+        assert!(data.has_invocation_in_dir(&check2));
+        assert!(!data.has_invocation_in_dir(&check3));
+
+        let (check1, check2, check3) = if cfg!(windows) {
+            (
+                with_trailing_slash("C:\\Users\\User"),
+                with_trailing_slash("C:\\Users"),
+                with_trailing_slash("C:\\Users\\User\\var"),
+            )
+        } else {
+            (
+                with_trailing_slash("/home/user"),
+                with_trailing_slash("/home"),
+                with_trailing_slash("/var"),
+            )
+        };
+
+        assert!(data.has_invocation_in_workspace(&check1));
+        assert!(data.has_invocation_in_workspace(&check2));
+        assert!(!data.has_invocation_in_workspace(&check3));
     }
 
     #[tokio::test]
