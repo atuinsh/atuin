@@ -376,7 +376,7 @@ fn convert_filter_mode(
 }
 
 #[cfg(windows)]
-fn with_trailing_slash(s: &str) -> String {
+pub fn with_trailing_slash(s: &str) -> String {
     if s.ends_with('\\') {
         s.to_string()
     } else {

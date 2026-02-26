@@ -1,15 +1,13 @@
 use eyre::Result;
 
-#[cfg(unix)]
-use atuin_client::settings::Settings;
-
 use crate::components::history::HistoryGrpcService;
 use crate::components::search::SearchGrpcService;
 use crate::control::{ControlService, control_server::ControlServer};
 use crate::daemon::DaemonHandle;
-#[cfg(unix)]
 use crate::history::history_server::HistoryServer;
 use crate::search::search_server::SearchServer;
+
+use atuin_client::settings::Settings;
 
 /// Run the gRPC server with the given services.
 ///
