@@ -24,6 +24,9 @@ message SendEventRequest {
 
     // Request graceful shutdown
     ShutdownEvent shutdown = 5;
+
+    // History was rebuilt - search index needs full rebuild
+    HistoryRebuiltEvent history_rebuilt = 6;
   }
 }
 
@@ -35,6 +38,10 @@ message SendEventResponse {
 
 message HistoryPrunedEvent {
   // No fields needed - just signals that pruning happened
+}
+
+message HistoryRebuiltEvent {
+  // No fields needed - just signals that rebuilding happened
 }
 
 message HistoryDeletedEvent {

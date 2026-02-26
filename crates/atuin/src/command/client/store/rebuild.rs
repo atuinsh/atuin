@@ -1,3 +1,4 @@
+use atuin_daemon::emit_event;
 use atuin_dotfiles::store::{AliasStore, var::VarStore};
 use atuin_scripts::store::ScriptStore;
 use clap::Args;
@@ -56,6 +57,8 @@ impl Rebuild {
         let history_store = HistoryStore::new(store, host_id, encryption_key);
 
         history_store.build(database).await?;
+
+        emit_event(atuin_daemon::DaemonEvent::HistoryRebuilt).await?;
 
         Ok(())
     }

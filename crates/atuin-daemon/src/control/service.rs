@@ -60,6 +60,7 @@ impl Control for ControlService {
 fn proto_event_to_daemon_event(event: Event) -> Result<DaemonEvent, Status> {
     match event {
         Event::HistoryPruned(_) => Ok(DaemonEvent::HistoryPruned),
+        Event::HistoryRebuilt(_) => Ok(DaemonEvent::HistoryRebuilt),
         Event::HistoryDeleted(e) => Ok(DaemonEvent::HistoryDeleted {
             ids: e.ids.into_iter().map(HistoryId).collect(),
         }),

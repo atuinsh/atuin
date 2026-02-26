@@ -215,8 +215,8 @@ impl Component for SearchComponent {
                     })
                     .await;
             }
-            DaemonEvent::HistoryPruned => {
-                info!("History pruned, rebuilding search index");
+            DaemonEvent::HistoryPruned | DaemonEvent::HistoryRebuilt => {
+                info!("History store pruned or rebuilt, rebuilding search index");
                 if let Err(e) = self.rebuild_index().await {
                     tracing::error!("Failed to rebuild search index: {}", e);
                 }

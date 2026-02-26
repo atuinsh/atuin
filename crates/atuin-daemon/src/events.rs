@@ -52,6 +52,11 @@ pub enum DaemonEvent {
     /// Emitted when the user runs `atuin history prune` or similar.
     HistoryPruned,
 
+    /// History was rebuilt - search index needs a full rebuild.
+    ///
+    /// Emitted when the user runs `atuin store rebuild history` or similar.
+    HistoryRebuilt,
+
     /// Specific history items were deleted.
     ///
     /// The search component should remove these from its index.

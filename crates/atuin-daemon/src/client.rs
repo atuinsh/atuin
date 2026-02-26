@@ -15,6 +15,7 @@ use tokio::net::UnixStream;
 use atuin_client::history::History;
 use tracing::{Level, instrument, span};
 
+use crate::control::HistoryRebuiltEvent;
 use crate::control::{
     ForceSyncEvent, HistoryDeletedEvent, HistoryPrunedEvent, SendEventRequest,
     SettingsReloadedEvent, ShutdownEvent, control_client::ControlClient as ControlServiceClient,
@@ -333,6 +334,7 @@ fn daemon_event_to_proto(event: DaemonEvent) -> crate::control::send_event_reque
 
     match event {
         DaemonEvent::HistoryPruned => Event::HistoryPruned(HistoryPrunedEvent {}),
+        DaemonEvent::HistoryRebuilt => Event::HistoryRebuilt(HistoryRebuiltEvent {}),
         DaemonEvent::HistoryDeleted { ids } => Event::HistoryDeleted(HistoryDeletedEvent {
             ids: ids.into_iter().map(|id| id.0).collect(),
         }),
