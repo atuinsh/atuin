@@ -121,7 +121,6 @@ impl Component for SearchComponent {
         let index = self.index.clone();
         let db = handle.history_db().clone();
 
-        let index_for_loader = index.clone();
         self.loader_handle = Some(tokio::spawn(async move {
             info!(
                 "Loading history into search index; page size = {}",
@@ -135,15 +134,15 @@ impl Component for SearchComponent {
                             "Loading {} history entries into search index",
                             histories.len()
                         );
-                        index_for_loader.read().await.add_histories(&histories);
+                        index.read().await.add_histories(&histories);
                     }
                     Ok(None) => {
                         info!(
                             "Initial history load complete; {} unique commands indexed",
-                            index_for_loader.read().await.command_count()
+                            index.read().await.command_count()
                         );
                         // Build initial frecency map
-                        index_for_loader.read().await.rebuild_frecency().await;
+                        index.read().await.rebuild_frecency().await;
                         info!("Initial frecency map built");
                         break;
                     }
