@@ -42,12 +42,12 @@ check-update = ["atuin-client/check-update"]
 
 [dependencies]
 atuin-client = { path = "../atuin-client", version = "18.13.0-beta.2", optional = true, default-features = false }
-atuin-common = { path = "../atuin-common", version = "18.13.0-beta.2" }
-atuin-dotfiles = { path = "../atuin-dotfiles", version = "18.13.0-beta.2" }
-atuin-history = { path = "../atuin-history", version = "18.13.0-beta.2" }
+atuin-common = { workspace = true }
+atuin-dotfiles = { workspace = true }
+atuin-history = { workspace = true }
 atuin-daemon = { path = "../atuin-daemon", version = "18.13.0-beta.2", optional = true, default-features = false }
-atuin-scripts = { path = "../atuin-scripts", version = "18.13.0-beta.2" }
-atuin-kv = { path = "../atuin-kv", version = "18.13.0-beta.2" }
+atuin-scripts = { workspace = true }
+atuin-kv = { workspace = true }
 
 log = { workspace = true }
 time = { workspace = true }
@@ -103,6 +103,6 @@ tracing-tree = "0.4"
 
 # Integration tests in tests/ spin up a test server to verify sync functionality.
 # TODO: Consider moving these tests to atuin-server crate instead (client would become a dev dep there)
-atuin-server = { path = "../atuin-server", version = "18.13.0-beta.2" }
-atuin-server-database = { path = "../atuin-server-database", version = "18.13.0-beta.2" }
-atuin-server-postgres = { path = "../atuin-server-postgres", version = "18.13.0-beta.2" }
+atuin-server = { workspace = true }
+atuin-server-database = { workspace = true }
+atuin-server-postgres = { workspace = true }
