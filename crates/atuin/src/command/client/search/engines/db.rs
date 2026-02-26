@@ -59,7 +59,7 @@ impl SearchEngine for Search {
 }
 
 #[instrument(skip_all, level = Level::TRACE, name = "db_highlight_fulltext")]
-fn get_highlight_indices_fulltext(command: &str, search_input: &str) -> Vec<usize> {
+pub fn get_highlight_indices_fulltext(command: &str, search_input: &str) -> Vec<usize> {
     let mut ranges = vec![];
     let lower_command = command.to_ascii_lowercase();
 

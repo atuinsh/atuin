@@ -1,5 +1,9 @@
 use async_trait::async_trait;
-use atuin_client::{database::Database, history::History, settings::Settings};
+use atuin_client::{
+    database::{Database, OptFilters},
+    history::History,
+    settings::{SearchMode, Settings},
+};
 use atuin_daemon::client::SearchClient;
 use eyre::Result;
 use nucleo_matcher::{
@@ -49,6 +53,34 @@ impl Search {
         self.query_id
     }
 
+    /// Check if query contains regex pattern (r/.../)
+    /// Nucleo doesn't support regex, so we fall back to database search
+    fn contains_regex_pattern(query: &str) -> bool {
+        query.starts_with("r/") || query.contains(" r/")
+    }
+
+    #[instrument(skip_all, level = Level::TRACE, name = "daemon_db_fallback")]
+    async fn fallback_to_db_search(
+        &self,
+        state: &SearchState,
+        db: &mut dyn Database,
+    ) -> Result<Vec<History>> {
+        let results = db
+            .search(
+                SearchMode::FullText,
+                state.filter_mode,
+                &state.context,
+                state.input.as_str(),
+                OptFilters {
+                    limit: Some(200),
+                    ..Default::default()
+                },
+            )
+            .await
+            .map_or(Vec::new(), |r| r.into_iter().collect());
+        Ok(results)
+    }
+
     #[instrument(skip_all, level = Level::TRACE, name = "hydrate_from_db", fields(count = ids.len()))]
     async fn hydrate_from_db(&self, db: &mut dyn Database, ids: &[String]) -> Result<Vec<History>> {
         let placeholders: Vec<String> = ids.iter().map(|id| format!("'{}'", id)).collect();
@@ -69,6 +101,13 @@ impl SearchEngine for Search {
         db: &mut dyn Database,
     ) -> Result<Vec<History>> {
         let query = state.input.as_str().to_string();
+
+        // Fall back to database for regex queries (Nucleo doesn't support regex)
+        if Self::contains_regex_pattern(&query) {
+            debug!(query = %query, "[daemon-client] regex detected, falling back to db");
+            return self.fallback_to_db_search(state, db).await;
+        }
+
         let query_id = self.next_query_id();
 
         let span =
@@ -147,6 +186,11 @@ impl SearchEngine for Search {
 
     #[instrument(skip_all, level = Level::TRACE, name = "daemon_highlight")]
     fn get_highlight_indices(&self, command: &str, search_input: &str) -> Vec<usize> {
+        // Use fulltext highlighting for regex queries
+        if Self::contains_regex_pattern(search_input) {
+            return super::db::get_highlight_indices_fulltext(command, search_input);
+        }
+
         let mut matcher = Matcher::new(Config::DEFAULT);
         let pattern = Pattern::parse(search_input, CaseMatching::Smart, Normalization::Smart);
 
