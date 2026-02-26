@@ -1469,6 +1469,20 @@ impl Default for Settings {
     }
 }
 
+/// Initialize the meta store configuration for testing.
+///
+/// This should only be used in tests. It allows tests to bypass the normal
+/// Settings::new() flow while still being able to use Settings::host_id()
+/// and other meta store dependent functions.
+///
+/// # Safety
+/// This function is not thread-safe with concurrent calls to Settings::new()
+/// or other meta store initialization. Only call from tests.
+#[doc(hidden)]
+pub fn init_meta_config_for_testing(meta_db_path: impl Into<String>, local_timeout: f64) {
+    META_CONFIG.set((meta_db_path.into(), local_timeout)).ok();
+}
+
 #[cfg(test)]
 pub(crate) fn test_local_timeout() -> f64 {
     std::env::var("ATUIN_TEST_LOCAL_TIMEOUT")
