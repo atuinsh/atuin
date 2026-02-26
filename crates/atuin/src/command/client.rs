@@ -167,9 +167,9 @@ impl Cmd {
         let base_filter =
             EnvFilter::from_env("ATUIN_LOG").add_directive("sqlx_sqlite::regexp=off".parse()?);
 
+        let is_interactive_search = matches!(&self, Self::Search(cmd) if cmd.is_interactive());
         // Use file-based logging for interactive search (TUI mode)
-        let use_search_logging = matches!(&self, Self::Search(cmd) if cmd.is_interactive())
-            && settings.logs.search_enabled();
+        let use_search_logging = is_interactive_search && settings.logs.search_enabled();
 
         // Use file-based logging for daemon
         let use_daemon_logging = matches!(&self, Self::Daemon(_)) && settings.logs.daemon_enabled();
@@ -294,17 +294,6 @@ impl Cmd {
                     None => {
                         base.init();
                     }
-                }
-            }
-        } else {
-            let base = tracing_subscriber::registry().with(fmt::layer().with_filter(base_filter));
-
-            match &span_path {
-                Some(sp) => {
-                    base.with(make_span_layer!(sp)).init();
-                }
-                None => {
-                    base.init();
                 }
             }
         }
