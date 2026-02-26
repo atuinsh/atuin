@@ -63,7 +63,7 @@ impl Search {
     async fn fallback_to_db_search(
         &self,
         state: &SearchState,
-        db: &mut dyn Database,
+        db: &dyn Database,
     ) -> Result<Vec<History>> {
         let results = db
             .search(
@@ -82,8 +82,8 @@ impl Search {
     }
 
     #[instrument(skip_all, level = Level::TRACE, name = "hydrate_from_db", fields(count = ids.len()))]
-    async fn hydrate_from_db(&self, db: &mut dyn Database, ids: &[String]) -> Result<Vec<History>> {
-        let placeholders: Vec<String> = ids.iter().map(|id| format!("'{}'", id)).collect();
+    async fn hydrate_from_db(&self, db: &dyn Database, ids: &[String]) -> Result<Vec<History>> {
+        let placeholders: Vec<String> = ids.iter().map(|id| format!("'{id}'")).collect();
         let sql_query = format!(
             "SELECT * FROM history WHERE id IN ({}) ORDER BY timestamp DESC",
             placeholders.join(",")

@@ -52,7 +52,7 @@ impl SearchEngine for Search {
 }
 
 #[instrument(skip_all, level = Level::TRACE, name = "load_all_history")]
-async fn load_all_history(db: &mut dyn Database) -> Vec<(History, i32)> {
+async fn load_all_history(db: &dyn Database) -> Vec<(History, i32)> {
     db.all_with_count().await.unwrap()
 }
 

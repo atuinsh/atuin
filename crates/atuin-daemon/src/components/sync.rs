@@ -69,14 +69,11 @@ impl Component for SyncComponent {
     }
 
     async fn handle_event(&mut self, event: &DaemonEvent) -> Result<()> {
-        match event {
-            DaemonEvent::ForceSync => {
-                tracing::info!("force sync requested");
-                if let Some(tx) = &self.command_tx {
-                    let _ = tx.send(SyncCommand::ForceSync).await;
-                }
+        if let DaemonEvent::ForceSync = event {
+            tracing::info!("force sync requested");
+            if let Some(tx) = &self.command_tx {
+                let _ = tx.send(SyncCommand::ForceSync).await;
             }
-            _ => {}
         }
         Ok(())
     }

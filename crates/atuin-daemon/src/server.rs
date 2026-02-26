@@ -1,5 +1,3 @@
-mod sync;
-
 use eyre::Result;
 
 #[cfg(unix)]
@@ -87,10 +85,10 @@ pub async fn run_grpc_server(
         }
         if cleanup {
             eprintln!("Removing socket...");
-            if let Err(e) = std::fs::remove_file(&socket_path) {
-                if e.kind() != std::io::ErrorKind::NotFound {
-                    eprintln!("failed to remove socket: {e}");
-                }
+            if let Err(e) = std::fs::remove_file(&socket_path)
+                && e.kind() != std::io::ErrorKind::NotFound
+            {
+                eprintln!("failed to remove socket: {e}");
             }
         }
         eprintln!("Shutting down gRPC server...");

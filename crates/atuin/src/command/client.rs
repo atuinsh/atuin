@@ -31,12 +31,11 @@ fn cleanup_old_logs(log_dir: &Path, prefix: &str, retention_days: u64) {
             continue;
         }
 
-        if let Ok(metadata) = entry.metadata() {
-            if let Ok(modified) = metadata.modified() {
-                if modified < cutoff {
-                    let _ = fs::remove_file(&path);
-                }
-            }
+        if let Ok(metadata) = entry.metadata()
+            && let Ok(modified) = metadata.modified()
+            && modified < cutoff
+        {
+            let _ = fs::remove_file(&path);
         }
     }
 }
@@ -155,6 +154,7 @@ impl Cmd {
         res
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn run_inner(
         self,
         mut settings: Settings,
@@ -178,11 +178,11 @@ impl Cmd {
         let daemon_show_logs = matches!(&self, Self::Daemon(cmd) if cmd.show_logs());
 
         // Set up span timing JSON logs if ATUIN_SPAN is set
-        let span_path = std::env::var("ATUIN_SPAN").ok().and_then(|p| {
+        let span_path = std::env::var("ATUIN_SPAN").ok().map(|p| {
             if p.is_empty() {
-                Some("atuin-spans.json".to_string())
+                "atuin-spans.json".to_string()
             } else {
-                Some(p)
+                p
             }
         });
 

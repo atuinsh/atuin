@@ -572,7 +572,7 @@ async fn run(
     force: bool,
 ) -> Result<()> {
     if force {
-        force_cleanup(&settings)?;
+        force_cleanup(&settings);
     }
 
     let pidfile_path = PathBuf::from(&settings.daemon.pidfile_path);
@@ -584,26 +584,25 @@ async fn run(
 }
 
 /// Force cleanup: kill existing daemon process and remove socket.
-fn force_cleanup(settings: &Settings) -> Result<()> {
+fn force_cleanup(settings: &Settings) {
     let pidfile_path = Path::new(&settings.daemon.pidfile_path);
 
     // Read and kill the existing process if pidfile exists
     if pidfile_path.exists() {
-        if let Ok(contents) = fs::read_to_string(pidfile_path) {
-            if let Some(pid_str) = contents.lines().next() {
-                if let Ok(pid) = pid_str.parse::<u32>() {
-                    kill_process(pid);
-                    // Give it a moment to release resources
-                    std::thread::sleep(Duration::from_millis(100));
-                }
-            }
+        if let Ok(contents) = fs::read_to_string(pidfile_path)
+            && let Some(pid_str) = contents.lines().next()
+            && let Ok(pid) = pid_str.parse::<u32>()
+        {
+            kill_process(pid);
+            // Give it a moment to release resources
+            std::thread::sleep(Duration::from_millis(100));
         }
 
         // Remove the pidfile
-        if let Err(e) = fs::remove_file(pidfile_path) {
-            if e.kind() != ErrorKind::NotFound {
-                tracing::warn!("failed to remove pidfile: {e}");
-            }
+        if let Err(e) = fs::remove_file(pidfile_path)
+            && e.kind() != ErrorKind::NotFound
+        {
+            tracing::warn!("failed to remove pidfile: {e}");
         }
     }
 
@@ -611,16 +610,13 @@ fn force_cleanup(settings: &Settings) -> Result<()> {
     #[cfg(unix)]
     {
         let socket_path = Path::new(&settings.daemon.socket_path);
-        if socket_path.exists() {
-            if let Err(e) = fs::remove_file(socket_path) {
-                if e.kind() != ErrorKind::NotFound {
-                    tracing::warn!("failed to remove socket: {e}");
-                }
-            }
+        if socket_path.exists()
+            && let Err(e) = fs::remove_file(socket_path)
+            && e.kind() != ErrorKind::NotFound
+        {
+            tracing::warn!("failed to remove socket: {e}");
         }
     }
-
-    Ok(())
 }
 
 /// Kill a process by PID.

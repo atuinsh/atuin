@@ -45,7 +45,7 @@ pub async fn run(
     let token = if let Some(token) = &api_token {
         token.to_string()
     } else {
-        ensure_hub_session(&settings, endpoint).await?
+        ensure_hub_session(settings, endpoint).await?
     };
 
     let action = run_inline_tui(
@@ -595,7 +595,7 @@ async fn run_inline_tui(
                     token.clone(),
                     app.state.session_id.clone(),
                     messages,
-                    &settings,
+                    settings,
                 ));
             }
         }

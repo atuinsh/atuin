@@ -24,10 +24,13 @@ pub struct Invocation {
     /// When the command was run.
     pub timestamp: i64,
     /// The working directory when the command was run.
+    #[allow(dead_code)]
     pub cwd: String,
     /// The hostname where the command was run.
+    #[allow(dead_code)]
     pub hostname: String,
     /// The session ID.
+    #[allow(dead_code)]
     pub session: String,
     /// The history entry ID (for returning in search results).
     pub history_id: String,

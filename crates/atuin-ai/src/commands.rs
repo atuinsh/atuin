@@ -193,12 +193,11 @@ fn cleanup_old_logs(log_dir: &Path, prefix: &str, retention_days: u64) {
             continue;
         }
 
-        if let Ok(metadata) = entry.metadata() {
-            if let Ok(modified) = metadata.modified() {
-                if modified < cutoff {
-                    let _ = fs::remove_file(&path);
-                }
-            }
+        if let Ok(metadata) = entry.metadata()
+            && let Ok(modified) = metadata.modified()
+            && modified < cutoff
+        {
+            let _ = fs::remove_file(&path);
         }
     }
 }

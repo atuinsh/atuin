@@ -626,7 +626,7 @@ impl Cmd {
                 }
             }
 
-            let _ = emit_event(atuin_daemon::DaemonEvent::HistoryPruned);
+            let _ = emit_event(atuin_daemon::DaemonEvent::HistoryPruned).await;
         }
         Ok(())
     }
@@ -684,7 +684,7 @@ impl Cmd {
                 }
             }
 
-            emit_event(atuin_daemon::DaemonEvent::HistoryDeleted { ids }).await?;
+            let _ = emit_event(atuin_daemon::DaemonEvent::HistoryDeleted { ids }).await;
         }
         Ok(())
     }
