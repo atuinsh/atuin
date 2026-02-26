@@ -1,12 +1,12 @@
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "illumos")))]
 use std::io::{Read, Write};
 
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "illumos")))]
 use crossterm::terminal;
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "illumos")))]
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "illumos")))]
 fn main() {
     if let Err(e) = run() {
         let _ = terminal::disable_raw_mode();
@@ -15,13 +15,13 @@ fn main() {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(not(all(unix, not(target_os = "illumos"))))]
 fn main() {
-    eprintln!("atuin-terminal currently only supports unix platforms");
+    eprintln!("atuin-terminal currently supports unix platforms excluding illumos");
     std::process::exit(1);
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "illumos")))]
 fn run() -> eyre::Result<()> {
     let (cols, rows) = terminal::size()?;
 
@@ -119,13 +119,13 @@ fn run() -> eyre::Result<()> {
     std::process::exit(process_exit_code(status.exit_code()));
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "illumos")))]
 fn process_exit_code(code: u32) -> i32 {
     i32::try_from(code).unwrap_or(1)
 }
 
 #[cfg(test)]
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "illumos")))]
 mod tests {
     use super::process_exit_code;
 
