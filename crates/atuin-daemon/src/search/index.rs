@@ -493,13 +493,13 @@ mod tests {
         let mut data = CommandData::new(&h1);
         data.add_invocation(&h2);
 
-        assert!(data.has_invocation_in_dir("/home/user/project"));
-        assert!(data.has_invocation_in_dir("/home/user/other"));
-        assert!(!data.has_invocation_in_dir("/home/user/missing"));
+        assert!(data.has_invocation_in_dir("/home/user/project/"));
+        assert!(data.has_invocation_in_dir("/home/user/other/"));
+        assert!(!data.has_invocation_in_dir("/home/user/missing/"));
 
-        assert!(data.has_invocation_in_workspace("/home/user"));
-        assert!(data.has_invocation_in_workspace("/home"));
-        assert!(!data.has_invocation_in_workspace("/var"));
+        assert!(data.has_invocation_in_workspace("/home/user/"));
+        assert!(data.has_invocation_in_workspace("/home/"));
+        assert!(!data.has_invocation_in_workspace("/var/"));
     }
 
     #[tokio::test]
@@ -538,7 +538,7 @@ mod tests {
         let results = index
             .search(
                 "",
-                IndexFilterMode::Directory("/home/user/project".into()),
+                IndexFilterMode::Directory("/home/user/project/".into()),
                 &QueryContext::default(),
                 10,
             )
