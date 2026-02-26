@@ -44,7 +44,7 @@ listenfd = "1.0.1"
 
 [dev-dependencies]
 tempfile = { workspace = true }
-atuin-common = { path = "../atuin-common", version = "18.13.0-beta.1" }
+atuin-common = { path = "../atuin-common", version = "18.13.0-beta.2" }
 
 [build-dependencies]
 protox = "0.9"

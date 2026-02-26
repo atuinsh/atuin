@@ -19,10 +19,10 @@ name = "atuin-server"
 path = "src/bin/main.rs"
 
 [dependencies]
-atuin-common = { path = "../atuin-common", version = "18.13.0-beta.1" }
-atuin-server-database = { path = "../atuin-server-database", version = "18.13.0-beta.1" }
-atuin-server-postgres = { path = "../atuin-server-postgres", version = "18.13.0-beta.1" }
-atuin-server-sqlite = { path = "../atuin-server-sqlite", version = "18.13.0-beta.1" }
+atuin-common = { path = "../atuin-common", version = "18.13.0-beta.2" }
+atuin-server-database = { path = "../atuin-server-database", version = "18.13.0-beta.2" }
+atuin-server-postgres = { path = "../atuin-server-postgres", version = "18.13.0-beta.2" }
+atuin-server-sqlite = { path = "../atuin-server-sqlite", version = "18.13.0-beta.2" }
 
 tracing = { workspace = true }
 time = { workspace = true }

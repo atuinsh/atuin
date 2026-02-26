@@ -13,8 +13,8 @@ repository = { workspace = true }
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-atuin-client = { path = "../atuin-client", version = "18.13.0-beta.1" }
-atuin-common = { path = "../atuin-common", version = "18.13.0-beta.1" }
+atuin-client = { path = "../atuin-client", version = "18.13.0-beta.2" }
+atuin-common = { path = "../atuin-common", version = "18.13.0-beta.2" }
 tokio = { workspace = true }
 eyre = { workspace = true }
 clap = { workspace = true, features = ["derive", "env"] }
