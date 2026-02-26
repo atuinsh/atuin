@@ -2,10 +2,10 @@
 //!
 //! This module provides fuzzy search over command history using Nucleo.
 
-mod service;
+mod index;
 
 // Include the generated proto code
 tonic::include_proto!("search");
 
-// Re-export the service
-pub use service::SearchService;
+// Re-export the service and index
+pub use index::{IndexFilterMode, QueryContext, SearchIndex};

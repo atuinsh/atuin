@@ -241,7 +241,7 @@ dependencies = [
  "itertools",
  "log",
  "norm",
- "nucleo-matcher",
+ "nucleo-matcher 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "open",
  "ratatui",
  "regex",
@@ -2871,10 +2871,9 @@ dependencies = [
 [[package]]
 name = "nucleo"
 version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5262af4c94921c2646c5ac6ff7900c2af9cbb08dc26a797e18130a7019c039d4"
+source = "git+https://github.com/atuinsh/nucleo-ext.git?branch=main#74bd786e98f7c88d68f967855d6f57b3ac2d09ef"
 dependencies = [
- "nucleo-matcher",
+ "nucleo-matcher 0.3.1 (git+https://github.com/atuinsh/nucleo-ext.git?branch=main)",
  "parking_lot",
  "rayon",
 ]
@@ -2884,6 +2883,15 @@ name = "nucleo-matcher"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bf33f538733d1a5a3494b836ba913207f14d9d4a1d3cd67030c5061bdd2cac85"
+dependencies = [
+ "memchr",
+ "unicode-segmentation",
+]
+
+[[package]]
+name = "nucleo-matcher"
+version = "0.3.1"
+source = "git+https://github.com/atuinsh/nucleo-ext.git?branch=main#74bd786e98f7c88d68f967855d6f57b3ac2d09ef"
 dependencies = [
  "memchr",
  "unicode-segmentation",

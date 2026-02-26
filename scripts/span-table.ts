@@ -133,7 +133,9 @@ function main() {
   const allEvents: SpanEvent[] = [];
   for (const file of files) {
     const content = readFileSync(file, "utf-8");
-    allEvents.push(...parseJsonLines(content));
+    for (const event of parseJsonLines(content)) {
+      allEvents.push(event);
+    }
   }
 
   // Filter to close events and aggregate by span name

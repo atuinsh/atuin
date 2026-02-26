@@ -15,7 +15,6 @@ mod unix {
     use atuin_daemon::client::HistoryClient;
     use atuin_daemon::events::DaemonEvent;
     use atuin_daemon::history::history_server::HistoryServer;
-    use atuin_daemon::server::HistoryService;
     use tempfile::TempDir;
     use tokio::net::UnixListener;
     use tokio::sync::{broadcast, watch};
@@ -39,12 +38,6 @@ mod unix {
         let history_store = HistoryStore::new(store, host_id, encryption_key);
 
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
-        let service = HistoryService::new(
-            history_store,
-            history_db,
-            event_tx.clone(),
-            shutdown_tx.clone(),
-        );
 
         let socket_path = tmp.path().join("test.sock");
         let uds = UnixListener::bind(&socket_path).unwrap();
