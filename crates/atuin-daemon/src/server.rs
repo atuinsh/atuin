@@ -31,19 +31,21 @@ pub async fn run_grpc_server(
     let (uds, cleanup) = if cfg!(target_os = "linux") && settings.daemon.systemd_socket {
         #[cfg(target_os = "linux")]
         {
-            use eyre::OptionExt;
+            use eyre::{OptionExt, WrapErr};
+            use std::os::unix::net::SocketAddr;
+            use std::path::PathBuf;
             tracing::info!("getting systemd socket");
             let listener = listenfd::ListenFd::from_env()
                 .take_unix_listener(0)?
                 .ok_or_eyre("missing systemd socket")?;
             listener.set_nonblocking(true)?;
-            let actual_path = listener
+            let actual_path: Result<PathBuf, eyre::Report> = listener
                 .local_addr()
                 .context("getting systemd socket's path")
-                .and_then(|addr| {
+                .and_then(|addr: SocketAddr| {
                     addr.as_pathname()
                         .ok_or_eyre("systemd socket missing path")
-                        .map(|path| path.to_owned())
+                        .map(|path: &std::path::Path| path.to_owned())
                 });
             match actual_path {
                 Ok(actual_path) => {
