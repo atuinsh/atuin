@@ -497,9 +497,9 @@ mod tests {
         assert!(data.has_invocation_in_dir(&with_trailing_slash("/home/user/other")));
         assert!(!data.has_invocation_in_dir(&with_trailing_slash("/home/user/missing")));
 
-        assert!(data.has_invocation_in_workspace(&with_trailing_slash("/home/user/")));
-        assert!(data.has_invocation_in_workspace(&with_trailing_slash("/home/")));
-        assert!(!data.has_invocation_in_workspace(&with_trailing_slash("/var/")));
+        assert!(data.has_invocation_in_workspace(&with_trailing_slash("/home/user")));
+        assert!(data.has_invocation_in_workspace(&with_trailing_slash("/home")));
+        assert!(!data.has_invocation_in_workspace(&with_trailing_slash("/var")));
     }
 
     #[tokio::test]
