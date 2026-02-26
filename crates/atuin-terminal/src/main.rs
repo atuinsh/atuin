@@ -79,7 +79,7 @@ fn run() -> eyre::Result<()> {
     terminal::enable_raw_mode()?;
 
     // PTY -> stdout
-    std::thread::spawn(move || {
+    let stdout_thread = std::thread::spawn(move || {
         let mut stdout = std::io::stdout();
         let mut buf = [0u8; 8192];
         loop {
@@ -112,6 +112,7 @@ fn run() -> eyre::Result<()> {
     });
 
     let status = child.wait()?;
+    let _ = stdout_thread.join();
 
     let _ = terminal::disable_raw_mode();
 
