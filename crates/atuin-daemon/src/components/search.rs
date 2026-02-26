@@ -22,7 +22,7 @@ use crate::{
     },
 };
 
-const PAGE_SIZE: usize = 1000;
+const PAGE_SIZE: usize = 5000;
 const RESULTS_LIMIT: u32 = 200;
 /// How often to rebuild the frecency map (in seconds).
 const FRECENCY_REFRESH_INTERVAL_SECS: u64 = 60;
