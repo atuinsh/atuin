@@ -396,7 +396,7 @@ impl SearchIndex {
         let map = frecency_map?;
         Some(Arc::new(move |cmd: &String, fuzzy_score: u32| {
             let frecency = map.get(cmd).copied().unwrap_or(0);
-            fuzzy_score + (frecency * 10)
+            fuzzy_score + frecency
         }))
     }
 }
