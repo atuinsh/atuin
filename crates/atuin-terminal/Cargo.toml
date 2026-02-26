@@ -14,10 +14,8 @@ repository = { workspace = true }
 name = "atuin-terminal"
 path = "src/main.rs"
 
-[dependencies]
+[target.'cfg(all(unix, not(target_os = "illumos")))'.dependencies]
 crossterm = { workspace = true }
 eyre = { workspace = true }
 portable-pty = "0.8"
-
-[target.'cfg(unix)'.dependencies]
 signal-hook = "0.3"
