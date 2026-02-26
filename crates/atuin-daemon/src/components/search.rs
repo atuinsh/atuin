@@ -301,8 +301,8 @@ impl SearchSvc for SearchGrpcService {
                         // Build QueryContext from proto context
                         let query_context = proto_context
                             .map(|ctx| QueryContext {
-                                cwd: Some(ctx.cwd),
-                                git_root: ctx.git_root,
+                                cwd: Some(with_trailing_slash(&ctx.cwd)),
+                                git_root: ctx.git_root.map(|s| with_trailing_slash(&s)),
                                 hostname: Some(ctx.hostname),
                                 session_id: Some(ctx.session_id),
                             })
@@ -386,7 +386,7 @@ fn with_trailing_slash(s: &str) -> String {
 }
 
 #[cfg(not(windows))]
-fn with_trailing_slash(s: &str) -> String {
+pub fn with_trailing_slash(s: &str) -> String {
     if s.ends_with('/') {
         s.to_string()
     } else {

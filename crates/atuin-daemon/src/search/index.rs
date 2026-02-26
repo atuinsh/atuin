@@ -16,6 +16,8 @@ use time::OffsetDateTime;
 use tokio::sync::RwLock;
 use tracing::{Level, instrument};
 
+use crate::components::search::with_trailing_slash;
+
 /// Data for a single invocation of a command.
 #[derive(Debug, Clone)]
 pub struct Invocation {
@@ -140,7 +142,7 @@ impl CommandData {
         self.global_frecency.record_use(timestamp);
 
         // Update pre-computed indexes for O(1) filter lookups
-        self.directories.insert(history.cwd.clone());
+        self.directories.insert(with_trailing_slash(&history.cwd));
         self.hosts.insert(history.hostname.clone());
         self.sessions.insert(history.session.clone());
 
