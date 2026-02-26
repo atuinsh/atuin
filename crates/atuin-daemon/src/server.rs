@@ -123,6 +123,7 @@ pub async fn run_grpc_server(
 ) -> Result<()> {
     use tokio::net::TcpListener;
     use tokio_stream::wrappers::TcpListenerStream;
+    use tonic::transport::Server;
 
     let port = settings.daemon.tcp_port;
     let url = format!("127.0.0.1:{port}");
@@ -133,6 +134,8 @@ pub async fn run_grpc_server(
 
     // Create shutdown signal from daemon handle
     let shutdown_signal = async move {
+        use crate::DaemonEvent;
+
         let mut rx = handle.subscribe();
         loop {
             match rx.recv().await {
