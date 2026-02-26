@@ -42,6 +42,10 @@ pub enum SearchMode {
 
     #[serde(rename = "skim")]
     Skim,
+
+    #[serde(rename = "daemon-fuzzy")]
+    #[clap(aliases = &["daemon-fuzzy"])]
+    DaemonFuzzy,
 }
 
 impl SearchMode {
@@ -51,6 +55,7 @@ impl SearchMode {
             SearchMode::FullText => "FULLTXT",
             SearchMode::Fuzzy => "FUZZY",
             SearchMode::Skim => "SKIM",
+            SearchMode::DaemonFuzzy => "DAEMON",
         }
     }
     pub fn next(&self, settings: &Settings) -> Self {
@@ -58,9 +63,13 @@ impl SearchMode {
             SearchMode::Prefix => SearchMode::FullText,
             // if the user is using skim, we go to skim
             SearchMode::FullText if settings.search_mode == SearchMode::Skim => SearchMode::Skim,
+            // if the user is using daemon-fuzzy, we go to daemon-fuzzy
+            SearchMode::FullText if settings.search_mode == SearchMode::DaemonFuzzy => {
+                SearchMode::DaemonFuzzy
+            }
             // otherwise fuzzy.
             SearchMode::FullText => SearchMode::Fuzzy,
-            SearchMode::Fuzzy | SearchMode::Skim => SearchMode::Prefix,
+            SearchMode::Fuzzy | SearchMode::Skim | SearchMode::DaemonFuzzy => SearchMode::Prefix,
         }
     }
 }
@@ -477,6 +486,78 @@ pub struct Tmux {
     pub height: String,
 }
 
+/// Log level for file logging. Maps to tracing's LevelFilter.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LogLevel {
+    Trace,
+    Debug,
+    #[default]
+    Info,
+    Warn,
+    Error,
+}
+
+impl LogLevel {
+    /// Convert to a tracing directive string for use with EnvFilter.
+    pub fn as_directive(&self) -> &'static str {
+        match self {
+            LogLevel::Trace => "trace",
+            LogLevel::Debug => "debug",
+            LogLevel::Info => "info",
+            LogLevel::Warn => "warn",
+            LogLevel::Error => "error",
+        }
+    }
+}
+
+/// Configuration for a specific log type (search or daemon).
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct LogConfig {
+    /// Log file name (relative to dir) or absolute path.
+    pub file: String,
+
+    /// Override global enabled setting for this log type.
+    pub enabled: Option<bool>,
+
+    /// Override global level setting for this log type.
+    pub level: Option<LogLevel>,
+
+    /// Override global retention days setting for this log type.
+    pub retention: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Logs {
+    /// Enable file logging globally. Defaults to true.
+    #[serde(default = "Logs::default_enabled")]
+    pub enabled: bool,
+
+    /// Directory for log files. Defaults to ~/.atuin/logs
+    pub dir: String,
+
+    /// Default log level for file logging. Defaults to "info".
+    /// Note: ATUIN_LOG environment variable overrides this.
+    #[serde(default)]
+    pub level: LogLevel,
+
+    /// Default retention days for log files. Defaults to 4.
+    #[serde(default = "Logs::default_retention")]
+    pub retention: u64,
+
+    /// Search log settings
+    #[serde(default)]
+    pub search: LogConfig,
+
+    /// Daemon log settings
+    #[serde(default)]
+    pub daemon: LogConfig,
+
+    /// AI log settings
+    #[serde(default)]
+    pub ai: LogConfig,
+}
+
 #[derive(Default, Clone, Debug, Deserialize, Serialize)]
 pub struct Ai {
     /// The address of the Atuin AI endpoint. Used for AI features like command generation.
@@ -519,6 +600,117 @@ impl Default for Daemon {
             pidfile_path: "".to_string(),
             systemd_socket: false,
             tcp_port: 8889,
+        }
+    }
+}
+
+impl Default for Logs {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            dir: "".to_string(),
+            level: LogLevel::default(),
+            retention: Self::default_retention(),
+            search: LogConfig {
+                file: "search.log".to_string(),
+                ..Default::default()
+            },
+            daemon: LogConfig {
+                file: "daemon.log".to_string(),
+                ..Default::default()
+            },
+            ai: LogConfig {
+                file: "ai.log".to_string(),
+                ..Default::default()
+            },
+        }
+    }
+}
+
+impl Logs {
+    fn default_enabled() -> bool {
+        true
+    }
+
+    fn default_retention() -> u64 {
+        4
+    }
+
+    /// Returns whether search logging is enabled.
+    /// Uses search-specific setting if set, otherwise falls back to global.
+    pub fn search_enabled(&self) -> bool {
+        self.search.enabled.unwrap_or(self.enabled)
+    }
+
+    /// Returns whether daemon logging is enabled.
+    /// Uses daemon-specific setting if set, otherwise falls back to global.
+    pub fn daemon_enabled(&self) -> bool {
+        self.daemon.enabled.unwrap_or(self.enabled)
+    }
+
+    /// Returns whether AI logging is enabled.
+    /// Uses AI-specific setting if set, otherwise falls back to global.
+    pub fn ai_enabled(&self) -> bool {
+        self.ai.enabled.unwrap_or(self.enabled)
+    }
+
+    /// Returns the log level for search logging.
+    /// Uses search-specific setting if set, otherwise falls back to global.
+    pub fn search_level(&self) -> LogLevel {
+        self.search.level.unwrap_or(self.level)
+    }
+
+    /// Returns the log level for daemon logging.
+    /// Uses daemon-specific setting if set, otherwise falls back to global.
+    pub fn daemon_level(&self) -> LogLevel {
+        self.daemon.level.unwrap_or(self.level)
+    }
+
+    /// Returns the log level for AI logging.
+    /// Uses AI-specific setting if set, otherwise falls back to global.
+    pub fn ai_level(&self) -> LogLevel {
+        self.ai.level.unwrap_or(self.level)
+    }
+
+    /// Returns the retention days for search logging.
+    /// Uses search-specific setting if set, otherwise falls back to global.
+    pub fn search_retention(&self) -> u64 {
+        self.search.retention.unwrap_or(self.retention)
+    }
+
+    /// Returns the retention days for daemon logging.
+    /// Uses daemon-specific setting if set, otherwise falls back to global.
+    pub fn daemon_retention(&self) -> u64 {
+        self.daemon.retention.unwrap_or(self.retention)
+    }
+
+    /// Returns the retention days for AI logging.
+    /// Uses AI-specific setting if set, otherwise falls back to global.
+    pub fn ai_retention(&self) -> u64 {
+        self.ai.retention.unwrap_or(self.retention)
+    }
+
+    /// Returns the full path for the search log file.
+    /// If `file` is an absolute path, returns it directly.
+    /// Otherwise, joins it with `dir`.
+    pub fn search_path(&self) -> PathBuf {
+        let path = PathBuf::from(&self.search.file);
+        if path.is_absolute() {
+            path
+        } else {
+            PathBuf::from(&self.dir).join(path)
+        }
+    }
+
+    /// Returns the full path for the daemon log file.
+    /// If `file` is an absolute path, returns it directly.
+    /// Otherwise, joins it with `dir`.
+    pub fn daemon_path(&self) -> PathBuf {
+        let path = PathBuf::from(&self.daemon.file);
+        if path.is_absolute() {
+            path
+        } else {
+            PathBuf::from(&self.dir).join(path)
         }
     }
 }
@@ -849,6 +1041,9 @@ pub struct Settings {
     pub tmux: Tmux,
 
     #[serde(default)]
+    pub logs: Logs,
+
+    #[serde(default)]
     pub meta: meta::Settings,
 
     #[serde(default)]
@@ -1033,6 +1228,7 @@ impl Settings {
         let scripts_path = data_dir.join("scripts.db");
         let socket_path = atuin_common::utils::runtime_dir().join("atuin.sock");
         let pidfile_path = data_dir.join("atuin-daemon.pid");
+        let logs_dir = atuin_common::utils::logs_dir();
 
         let key_path = data_dir.join("key");
         let meta_path = data_dir.join("meta.db");
@@ -1101,6 +1297,12 @@ impl Settings {
             .set_default("daemon.pidfile_path", pidfile_path.to_str())?
             .set_default("daemon.systemd_socket", false)?
             .set_default("daemon.tcp_port", 8889)?
+            .set_default("logs.enabled", true)?
+            .set_default("logs.dir", logs_dir.to_str())?
+            .set_default("logs.level", "info")?
+            .set_default("logs.search.file", "search.log")?
+            .set_default("logs.daemon.file", "daemon.log")?
+            .set_default("logs.ai.file", "ai.log")?
             .set_default("kv.db_path", kv_path.to_str())?
             .set_default("scripts.db_path", scripts_path.to_str())?
             .set_default("meta.db_path", meta_path.to_str())?
@@ -1218,6 +1420,9 @@ impl Settings {
         settings.key_path = Self::expand_path(settings.key_path)?;
         settings.daemon.socket_path = Self::expand_path(settings.daemon.socket_path)?;
         settings.daemon.pidfile_path = Self::expand_path(settings.daemon.pidfile_path)?;
+        settings.logs.dir = Self::expand_path(settings.logs.dir)?;
+        settings.logs.search.file = Self::expand_path(settings.logs.search.file)?;
+        settings.logs.daemon.file = Self::expand_path(settings.logs.daemon.file)?;
 
         // Validate UI settings
         settings.ui.validate()?;
@@ -1262,6 +1467,20 @@ impl Default for Settings {
             .try_deserialize()
             .expect("Could not deserialize config")
     }
+}
+
+/// Initialize the meta store configuration for testing.
+///
+/// This should only be used in tests. It allows tests to bypass the normal
+/// Settings::new() flow while still being able to use Settings::host_id()
+/// and other meta store dependent functions.
+///
+/// # Safety
+/// This function is not thread-safe with concurrent calls to Settings::new()
+/// or other meta store initialization. Only call from tests.
+#[doc(hidden)]
+pub fn init_meta_config_for_testing(meta_db_path: impl Into<String>, local_timeout: f64) {
+    META_CONFIG.set((meta_db_path.into(), local_timeout)).ok();
 }
 
 #[cfg(test)]

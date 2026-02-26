@@ -1,8 +1,13 @@
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
+
 use atuin_common::shell::Shell;
 use clap::{Parser, Subcommand};
-use tracing::Level;
+use eyre::Result;
+use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{EnvFilter, Layer, fmt, layer::SubscriberExt, util::SubscriberInitExt};
-
 #[cfg(debug_assertions)]
 pub mod debug_render;
 
@@ -72,7 +77,11 @@ enum Commands {
 pub async fn run() -> eyre::Result<()> {
     let cli = Cli::parse();
 
-    init_tracing(cli.verbose);
+    let settings = atuin_client::settings::Settings::new()?;
+
+    if settings.logs.ai_enabled() {
+        init_logging(&settings, cli.verbose)?;
+    }
 
     match cli.command {
         Commands::Init { shell } => init::run(shell).await,
@@ -89,6 +98,7 @@ pub async fn run() -> eyre::Result<()> {
                 cli.api_token,
                 keep,
                 debug_state,
+                &settings,
             )
             .await
         }
@@ -104,39 +114,90 @@ pub async fn run() -> eyre::Result<()> {
     }
 }
 
-fn init_tracing(verbose: bool) {
-    let level = if verbose { Level::DEBUG } else { Level::INFO };
+pub fn detect_shell() -> Option<String> {
+    Some(Shell::current().to_string())
+}
 
-    // Create env filter
-    let env_filter = EnvFilter::from_default_env().add_directive(
-        format!("atuin_ai={}", level.as_str().to_lowercase())
-            .parse()
-            .unwrap(),
-    );
+/// Initializes logging for the AI commands.
+fn init_logging(settings: &atuin_client::settings::Settings, verbose: bool) -> Result<()> {
+    // ATUIN_LOG env var overrides config file level settings
+    let env_log_set = std::env::var("ATUIN_LOG").is_ok();
 
-    // Create console layer (only for verbose mode)
+    // Base filter from env var (or empty if not set)
+    let base_filter =
+        EnvFilter::from_env("ATUIN_LOG").add_directive("sqlx_sqlite::regexp=off".parse()?);
+
+    // Use config level unless ATUIN_LOG is set
+    let filter = if env_log_set {
+        base_filter
+    } else {
+        EnvFilter::default()
+            .add_directive(settings.logs.ai_level().as_directive().parse()?)
+            .add_directive("sqlx_sqlite::regexp=off".parse()?)
+    };
+
+    let log_dir = PathBuf::from(&settings.logs.dir);
+    fs::create_dir_all(&log_dir)?;
+
+    let filename = settings.logs.ai.file.clone();
+
+    // Clean up old log files
+    cleanup_old_logs(&log_dir, &filename, settings.logs.ai_retention());
+
     let console_layer = if verbose {
         Some(
             fmt::layer()
                 .with_writer(std::io::stderr)
                 .with_ansi(true)
                 .with_target(false)
-                .with_filter(env_filter),
+                .with_filter(filter.clone()),
         )
     } else {
         None
     };
 
-    // Initialize subscriber
-    let subscriber = tracing_subscriber::registry();
+    let file_appender = RollingFileAppender::new(Rotation::DAILY, &log_dir, &filename);
 
-    if let Some(console) = console_layer {
-        subscriber.with(console).init();
+    let base = tracing_subscriber::registry().with(
+        fmt::layer()
+            .with_writer(file_appender)
+            .with_ansi(false)
+            .with_filter(filter),
+    );
+
+    if let Some(console_layer) = console_layer {
+        base.with(console_layer).init();
     } else {
-        subscriber.init();
-    }
+        base.init();
+    };
+
+    Ok(())
 }
 
-pub fn detect_shell() -> Option<String> {
-    Some(Shell::current().to_string())
+fn cleanup_old_logs(log_dir: &Path, prefix: &str, retention_days: u64) {
+    let cutoff = std::time::SystemTime::now()
+        - std::time::Duration::from_secs(retention_days * 24 * 60 * 60);
+
+    let Ok(entries) = fs::read_dir(log_dir) else {
+        return;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+
+        // Match files like "search.log.2024-02-23" or "daemon.log.2024-02-23"
+        if !name.starts_with(prefix) || name == prefix {
+            continue;
+        }
+
+        if let Ok(metadata) = entry.metadata()
+            && let Ok(modified) = metadata.modified()
+            && modified < cutoff
+        {
+            let _ = fs::remove_file(&path);
+        }
+    }
 }

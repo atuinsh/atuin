@@ -14,9 +14,10 @@ readme.workspace = true
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-atuin-client = { path = "../atuin-client", version = "18.13.0-beta.1" }
-atuin-dotfiles = { path = "../atuin-dotfiles", version = "18.13.0-beta.1" }
-atuin-history = { path = "../atuin-history", version = "18.13.0-beta.1" }
+atuin-client = { path = "../atuin-client" }
+atuin-common = { path = "../atuin-common" }
+atuin-dotfiles = { path = "../atuin-dotfiles" }
+atuin-history = { path = "../atuin-history" }
 
 time = { workspace = true }
 uuid = { workspace = true }
@@ -32,10 +33,11 @@ tonic = "0.14"
 tonic-prost = "0.14"
 prost = "0.14"
 prost-types = "0.14"
-tokio-stream = {version="0.1.14", features=["net"]}
+tokio-stream = { version = "0.1.14", features = ["net"] }
 hyper-util = "0.1"
 
 rand.workspace = true
+nucleo = { git = "https://github.com/atuinsh/nucleo-ext.git", branch = "main" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 listenfd = "1.0.1"

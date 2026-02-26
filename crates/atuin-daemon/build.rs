@@ -3,7 +3,11 @@ use std::{env, fs, path::PathBuf};
 use protox::prost::Message;
 
 fn main() -> std::io::Result<()> {
-    let proto_paths = ["proto/history.proto"];
+    let proto_paths = [
+        "proto/history.proto",
+        "proto/search.proto",
+        "proto/control.proto",
+    ];
     let proto_include_dirs = ["proto"];
 
     let file_descriptors = protox::compile(proto_paths, proto_include_dirs).unwrap();

@@ -1,0 +1,62 @@
+syntax = "proto3";
+package control;
+
+// The Control service allows external processes (CLI commands, etc.)
+// to inject events into the running daemon.
+service Control {
+  // Send an event to the daemon's event bus
+  rpc SendEvent(SendEventRequest) returns (SendEventResponse);
+}
+
+message SendEventRequest {
+  oneof event {
+    // History was pruned - search index needs full rebuild
+    HistoryPrunedEvent history_pruned = 1;
+
+    // Specific history items were deleted
+    HistoryDeletedEvent history_deleted = 2;
+
+    // Request immediate sync
+    ForceSyncEvent force_sync = 3;
+
+    // Settings have changed, reload if needed
+    SettingsReloadedEvent settings_reloaded = 4;
+
+    // Request graceful shutdown
+    ShutdownEvent shutdown = 5;
+
+    // History was rebuilt - search index needs full rebuild
+    HistoryRebuiltEvent history_rebuilt = 6;
+  }
+}
+
+message SendEventResponse {
+  // Empty on success; errors come through gRPC status
+}
+
+// Individual event message types
+
+message HistoryPrunedEvent {
+  // No fields needed - just signals that pruning happened
+}
+
+message HistoryRebuiltEvent {
+  // No fields needed - just signals that rebuilding happened
+}
+
+message HistoryDeletedEvent {
+  // IDs of deleted history items (UUIDs as strings)
+  repeated string ids = 1;
+}
+
+message ForceSyncEvent {
+  // No fields needed - just triggers sync
+}
+
+message SettingsReloadedEvent {
+  // No fields needed - components should re-read settings
+}
+
+message ShutdownEvent {
+  // No fields needed - triggers graceful shutdown
+}

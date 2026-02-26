@@ -15,6 +15,7 @@ use eyre::{Context as _, Result, bail};
 use futures::StreamExt;
 use reqwest::Url;
 use std::io::Write;
+use tracing::{debug, error, info, trace};
 
 pub async fn run(
     initial_command: Option<String>,
@@ -23,6 +24,7 @@ pub async fn run(
     api_token: Option<String>,
     keep_output: bool,
     debug_state_file: Option<String>,
+    settings: &atuin_client::settings::Settings,
 ) -> Result<()> {
     // Install panic hook once at entry point to ensure terminal restoration
     install_panic_hook();
@@ -31,7 +33,6 @@ pub async fn run(
     // 1. Command line arguments/environment variables
     // 2. Settings file
     // 3. Default
-    let settings = atuin_client::settings::Settings::new()?;
     let endpoint = api_endpoint.as_deref().unwrap_or(
         settings
             .ai
@@ -44,7 +45,7 @@ pub async fn run(
     let token = if let Some(token) = &api_token {
         token.to_string()
     } else {
-        ensure_hub_session(&settings, endpoint).await?
+        ensure_hub_session(settings, endpoint).await?
     };
 
     let action = run_inline_tui(
@@ -57,6 +58,7 @@ pub async fn run(
         },
         keep_output,
         debug_state_file,
+        settings,
     )
     .await?;
     emit_shell_result(action.0, &action.1);
@@ -69,8 +71,11 @@ async fn ensure_hub_session(
     hub_address: &str,
 ) -> Result<String> {
     if let Some(token) = atuin_client::hub::get_session_token().await? {
+        debug!("Found Hub session, using existing token");
         return Ok(token);
     }
+
+    info!("No Hub session found, prompting for authentication");
 
     println!("Atuin AI requires authenticating with Atuin Hub.");
     println!("This is separate from your sync setup.");
@@ -78,6 +83,8 @@ async fn ensure_hub_session(
     if !wait_for_login_confirmation()? {
         bail!("authentication canceled");
     }
+
+    debug!("Starting Atuin Hub authentication...");
 
     println!("Authenticating with Atuin Hub...");
     let mut auth_settings = settings.clone();
@@ -92,6 +99,8 @@ async fn ensure_hub_session(
             atuin_client::hub::DEFAULT_POLL_INTERVAL,
         )
         .await?;
+
+    info!("Authentication complete, saving session token");
 
     atuin_client::hub::save_session(&token).await?;
     Ok(token)
@@ -141,6 +150,8 @@ fn create_chat_stream(
             }
         };
 
+        debug!("Sending SSE request to {endpoint}");
+
         // Build request body
         let mut request_body = serde_json::json!({
             "messages": messages,
@@ -155,6 +166,7 @@ fn create_chat_stream(
 
         // Include session_id only if present (not on first request)
         if let Some(ref sid) = session_id {
+            trace!("Including session_id in request: {sid}");
             request_body["session_id"] = serde_json::json!(sid);
         }
 
@@ -178,12 +190,14 @@ fn create_chat_stream(
         let status = response.status();
         if status == reqwest::StatusCode::UNAUTHORIZED {
             // Clear saved session on auth error
+            error!("SSE request failed with status: {status}, clearing session");
             let _ = atuin_client::hub::delete_session().await;
             yield Err(eyre::eyre!("Hub session expired. Re-run to authenticate again."));
             return;
         }
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
+            error!("SSE request failed ({}): {}", status, body);
             yield Err(eyre::eyre!("SSE request failed ({}): {}", status, body));
             return;
         }
@@ -197,7 +211,7 @@ fn create_chat_stream(
                     let event_type = sse_event.event.as_str();
                     let data = sse_event.data.clone();
 
-                    tracing::debug!(event_type = %event_type, data = %data, "SSE event received");
+                    debug!(event_type = %event_type, "SSE event received");
 
                     match event_type {
                         "text" => {
@@ -245,8 +259,10 @@ fn create_chat_stream(
                         "error" => {
                             if let Ok(json) = serde_json::from_str::<serde_json::Value>(&data) {
                                 let message = json.get("message").and_then(|v| v.as_str()).unwrap_or("Unknown error").to_string();
+                                error!("SSE error: {}", message);
                                 yield Ok(ChatStreamEvent::Error(message));
                             } else {
+                                error!("SSE error: {}", data);
                                 yield Ok(ChatStreamEvent::Error(data));
                             }
                             break;
@@ -391,6 +407,7 @@ async fn run_inline_tui(
     initial_prompt: Option<String>,
     keep_output: bool,
     debug_state_file: Option<String>,
+    settings: &atuin_client::settings::Settings,
 ) -> Result<(Action, String)> {
     // Initialize terminal guard and app state
     let mut guard = TerminalGuard::new(keep_output)?;
@@ -425,7 +442,6 @@ async fn run_inline_tui(
     log_state!("init");
 
     // Load theme
-    let settings = atuin_client::settings::Settings::new()?;
     let mut theme_manager = ThemeManager::new(None, None);
     let theme = theme_manager.load_theme(&settings.theme.name, None);
 
@@ -486,12 +502,12 @@ async fn run_inline_tui(
                     match stream.as_mut().poll_next(&mut cx) {
                         std::task::Poll::Ready(Some(Ok(event))) => match event {
                             ChatStreamEvent::TextChunk(text) => {
-                                tracing::debug!(text = %text, "Processing TextChunk");
+                                trace!(text = %text, "Processing TextChunk");
                                 app.state.append_streaming_text(&text);
                                 log_state!("text_chunk");
                             }
                             ChatStreamEvent::ToolCall { id, name, input } => {
-                                tracing::debug!(id = %id, name = %name, "Processing ToolCall");
+                                trace!(id = %id, name = %name, "Processing ToolCall");
                                 app.state.add_tool_call(id, name, input);
                                 log_state!("tool_call");
                             }
@@ -500,17 +516,17 @@ async fn run_inline_tui(
                                 content,
                                 is_error,
                             } => {
-                                tracing::debug!(tool_use_id = %tool_use_id, "Processing ToolResult");
+                                trace!(tool_use_id = %tool_use_id, "Processing ToolResult");
                                 app.state.add_tool_result(tool_use_id, content, is_error);
                                 log_state!("tool_result");
                             }
                             ChatStreamEvent::Status(status) => {
-                                tracing::debug!(status = %status, "Processing Status");
+                                trace!(status = %status, "Processing Status");
                                 app.state.update_streaming_status(&status);
                                 log_state!("status");
                             }
                             ChatStreamEvent::Done { session_id } => {
-                                tracing::debug!(session_id = %session_id, "Processing Done");
+                                trace!(session_id = %session_id, "Processing Done");
                                 chat_stream = None;
                                 if !session_id.is_empty() {
                                     app.state.store_session_id(session_id);
@@ -519,7 +535,7 @@ async fn run_inline_tui(
                                 log_state!("done");
                             }
                             ChatStreamEvent::Error(msg) => {
-                                tracing::debug!(error = %msg, "Processing Error");
+                                trace!(error = %msg, "Processing Error");
                                 chat_stream = None;
                                 app.state.streaming_error(msg);
                                 log_state!("error");
@@ -544,7 +560,7 @@ async fn run_inline_tui(
 
         // Handle user cancellation (Esc during streaming) - drop the stream
         if app.state.was_interrupted && chat_stream.is_some() {
-            tracing::debug!("User cancelled streaming, dropping chat stream");
+            debug!("User cancelled streaming, dropping chat stream");
             chat_stream = None;
             app.state.was_interrupted = false; // Reset the flag
         }
@@ -579,7 +595,7 @@ async fn run_inline_tui(
                     token.clone(),
                     app.state.session_id.clone(),
                     messages,
-                    &settings,
+                    settings,
                 ));
             }
         }

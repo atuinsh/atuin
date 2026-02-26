@@ -141,6 +141,11 @@ pub struct Cmd {
 }
 
 impl Cmd {
+    /// Returns true if this search command will run in interactive (TUI) mode
+    pub fn is_interactive(&self) -> bool {
+        self.interactive
+    }
+
     // clippy: please write this instead
     // clippy: now it has too many lines
     // me: I'll do it later OKAY

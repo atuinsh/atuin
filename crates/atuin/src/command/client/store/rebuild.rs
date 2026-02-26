@@ -3,6 +3,9 @@ use atuin_scripts::store::ScriptStore;
 use clap::Args;
 use eyre::{Result, bail};
 
+#[cfg(feature = "daemon")]
+use atuin_daemon::emit_event;
+
 use atuin_client::{
     database::Database, encryption, history::store::HistoryStore,
     record::sqlite_store::SqliteStore, settings::Settings,
@@ -56,6 +59,9 @@ impl Rebuild {
         let history_store = HistoryStore::new(store, host_id, encryption_key);
 
         history_store.build(database).await?;
+
+        #[cfg(feature = "daemon")]
+        let _ = emit_event(atuin_daemon::DaemonEvent::HistoryRebuilt).await;
 
         Ok(())
     }

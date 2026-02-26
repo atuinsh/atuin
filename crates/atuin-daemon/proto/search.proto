@@ -1,0 +1,35 @@
+syntax = "proto3";
+package search;
+
+enum FilterMode {
+  GLOBAL = 0;
+  HOST = 1;
+  SESSION = 2;
+  DIRECTORY = 3;
+  WORKSPACE = 4;
+  SESSION_PRELOAD = 5;
+}
+
+message SearchContext {
+  string session_id = 1;
+  string cwd = 2;
+  string hostname = 3;
+  string host_id = 4;
+  optional string git_root = 5;
+}
+
+message SearchRequest {
+  string query = 1;
+  uint64 query_id = 2;  // Incrementing ID to match responses to queries
+  FilterMode filter_mode = 3;
+  SearchContext context = 4;
+}
+
+message SearchResponse {
+  uint64 query_id = 1; // Echo back the query ID
+  repeated bytes ids = 2;
+}
+
+service Search {
+  rpc Search(stream SearchRequest) returns (stream SearchResponse);
+}

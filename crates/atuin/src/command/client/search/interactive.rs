@@ -657,7 +657,7 @@ impl State {
             Action::CycleSearchMode => {
                 self.switched_search_mode = true;
                 self.search_mode = self.search_mode.next(settings);
-                self.engine = engines::engine(self.search_mode);
+                self.engine = engines::engine(self.search_mode, settings);
                 InputAction::Continue
             }
             Action::SwitchContext => {
@@ -1475,7 +1475,7 @@ pub async fn history(
             context: initial_context.clone(),
             custom_context: None,
         },
-        engine: engines::engine(search_mode),
+        engine: engines::engine(search_mode, settings),
         results_len: 0,
         accept: false,
         keymap_mode: match settings.keymap_mode {
@@ -1931,7 +1931,7 @@ mod tests {
                 },
                 custom_context: None,
             },
-            engine: engines::engine(SearchMode::Fuzzy),
+            engine: engines::engine(SearchMode::Fuzzy, &settings),
             now: Box::new(OffsetDateTime::now_utc),
         };
 
@@ -1986,7 +1986,7 @@ mod tests {
                 },
                 custom_context: None,
             },
-            engine: engines::engine(SearchMode::Fuzzy),
+            engine: engines::engine(SearchMode::Fuzzy, &settings),
             now: Box::new(OffsetDateTime::now_utc),
         };
 
@@ -2105,7 +2105,7 @@ mod tests {
                 },
                 custom_context: None,
             },
-            engine: engines::engine(SearchMode::Fuzzy),
+            engine: engines::engine(SearchMode::Fuzzy, &settings),
             now: Box::new(OffsetDateTime::now_utc),
         };
 
@@ -2164,7 +2164,7 @@ mod tests {
                 },
                 custom_context: None,
             },
-            engine: engines::engine(SearchMode::Fuzzy),
+            engine: engines::engine(SearchMode::Fuzzy, &settings),
             now: Box::new(OffsetDateTime::now_utc),
         };
 
@@ -2219,7 +2219,7 @@ mod tests {
                 },
                 custom_context: None,
             },
-            engine: engines::engine(SearchMode::Fuzzy),
+            engine: engines::engine(SearchMode::Fuzzy, &settings),
             now: Box::new(OffsetDateTime::now_utc),
         };
 
@@ -2270,7 +2270,7 @@ mod tests {
                 },
                 custom_context: None,
             },
-            engine: engines::engine(SearchMode::Fuzzy),
+            engine: engines::engine(SearchMode::Fuzzy, &settings),
             now: Box::new(OffsetDateTime::now_utc),
         };
 
@@ -2330,7 +2330,7 @@ mod tests {
                 },
                 custom_context: None,
             },
-            engine: engines::engine(SearchMode::Fuzzy),
+            engine: engines::engine(SearchMode::Fuzzy, &settings),
             now: Box::new(OffsetDateTime::now_utc),
         };
 
@@ -2391,7 +2391,7 @@ mod tests {
                 },
                 custom_context: None,
             },
-            engine: engines::engine(SearchMode::Fuzzy),
+            engine: engines::engine(SearchMode::Fuzzy, &settings),
             now: Box::new(OffsetDateTime::now_utc),
         };
         state.results_state.select(selected);
@@ -2770,7 +2770,7 @@ mod tests {
                 },
                 custom_context: None,
             },
-            engine: engines::engine(SearchMode::Fuzzy),
+            engine: engines::engine(SearchMode::Fuzzy, &settings),
             now: Box::new(OffsetDateTime::now_utc),
         };
 

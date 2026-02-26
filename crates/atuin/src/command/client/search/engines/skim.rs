@@ -7,6 +7,7 @@ use fuzzy_matcher::{FuzzyMatcher, skim::SkimMatcherV2};
 use itertools::Itertools;
 use time::OffsetDateTime;
 use tokio::task::yield_now;
+use tracing::{Level, instrument, warn};
 use uuid;
 
 use super::{SearchEngine, SearchState};
@@ -27,18 +28,20 @@ impl Search {
 
 #[async_trait]
 impl SearchEngine for Search {
+    #[instrument(skip_all, level = Level::TRACE, name = "skim_search", fields(query = %state.input.as_str()))]
     async fn full_query(
         &mut self,
         state: &SearchState,
         db: &mut dyn Database,
     ) -> Result<Vec<History>> {
         if self.all_history.is_empty() {
-            self.all_history = db.all_with_count().await.unwrap();
+            self.all_history = load_all_history(db).await;
         }
 
         Ok(fuzzy_search(&self.engine, state, &self.all_history).await)
     }
 
+    #[instrument(skip_all, level = Level::TRACE, name = "skim_highlight")]
     fn get_highlight_indices(&self, command: &str, search_input: &str) -> Vec<usize> {
         let (_, indices) = self
             .engine
@@ -48,7 +51,13 @@ impl SearchEngine for Search {
     }
 }
 
+#[instrument(skip_all, level = Level::TRACE, name = "load_all_history")]
+async fn load_all_history(db: &dyn Database) -> Vec<(History, i32)> {
+    db.all_with_count().await.unwrap()
+}
+
 #[allow(clippy::too_many_lines)]
+#[instrument(skip_all, level = Level::TRACE, name = "fuzzy_match", fields(history_count = all_history.len()))]
 async fn fuzzy_search(
     engine: &SkimMatcherV2,
     state: &SearchState,
@@ -97,11 +106,11 @@ async fn fuzzy_search(
 
                 if !is_current_session {
                     let Ok(uuid) = uuid::Uuid::parse_str(&context.session) else {
-                        log::warn!("failed to parse session id '{}'", context.session);
+                        warn!("failed to parse session id '{}'", context.session);
                         continue;
                     };
                     let Some(timestamp) = uuid.get_timestamp() else {
-                        log::warn!(
+                        warn!(
                             "failed to get timestamp from uuid '{}'",
                             uuid.as_hyphenated()
                         );
@@ -111,7 +120,7 @@ async fn fuzzy_search(
                     let Ok(session_start) = time::OffsetDateTime::from_unix_timestamp_nanos(
                         i128::from(seconds) * 1_000_000_000 + i128::from(nanos),
                     ) else {
-                        log::warn!(
+                        warn!(
                             "failed to create OffsetDateTime from second: {seconds}, nanosecond: {nanos}"
                         );
                         continue;

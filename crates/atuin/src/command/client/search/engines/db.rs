@@ -11,17 +11,19 @@ use eyre::Result;
 use norm::Metric;
 use norm::fzf::{FzfParser, FzfV2};
 use std::ops::Range;
+use tracing::{Level, instrument};
 
 pub struct Search(pub SearchMode);
 
 #[async_trait]
 impl SearchEngine for Search {
+    #[instrument(skip_all, level = Level::TRACE, name = "db_search", fields(mode = ?self.0, query = %state.input.as_str()))]
     async fn full_query(
         &mut self,
         state: &SearchState,
         db: &mut dyn Database,
     ) -> Result<Vec<History>> {
-        Ok(db
+        let results = db
             .search(
                 self.0,
                 state.filter_mode,
@@ -34,9 +36,11 @@ impl SearchEngine for Search {
             )
             .await
             // ignore errors as it may be caused by incomplete regex
-            .map_or(Vec::new(), |r| r.into_iter().collect()))
+            .map_or(Vec::new(), |r| r.into_iter().collect());
+        Ok(results)
     }
 
+    #[instrument(skip_all, level = Level::TRACE, name = "db_highlight")]
     fn get_highlight_indices(&self, command: &str, search_input: &str) -> Vec<usize> {
         if self.0 == SearchMode::Prefix {
             return vec![];
@@ -54,7 +58,8 @@ impl SearchEngine for Search {
     }
 }
 
-fn get_highlight_indices_fulltext(command: &str, search_input: &str) -> Vec<usize> {
+#[instrument(skip_all, level = Level::TRACE, name = "db_highlight_fulltext")]
+pub fn get_highlight_indices_fulltext(command: &str, search_input: &str) -> Vec<usize> {
     let mut ranges = vec![];
     let lower_command = command.to_ascii_lowercase();
 

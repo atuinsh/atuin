@@ -10,6 +10,9 @@ use clap::Subcommand;
 use eyre::{Context, Result};
 use runtime_format::{FormatKey, FormatKeyError, ParseSegment, ParsedFmt};
 
+#[cfg(feature = "daemon")]
+use atuin_daemon::emit_event;
+
 use atuin_client::{
     database::{Database, Sqlite, current_context},
     encryption,
@@ -624,6 +627,9 @@ impl Cmd {
                     db.delete(entry.clone()).await?;
                 }
             }
+
+            #[cfg(feature = "daemon")]
+            let _ = emit_event(atuin_daemon::DaemonEvent::HistoryPruned).await;
         }
         Ok(())
     }
@@ -670,6 +676,9 @@ impl Cmd {
             let host_id = Settings::host_id().await?;
             let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
+            #[cfg(feature = "daemon")]
+            let ids = matches.iter().map(|h| h.id.clone()).collect::<Vec<_>>();
+
             for entry in matches {
                 eprintln!("deleting {}", entry.id);
                 if settings.sync.records {
@@ -679,6 +688,9 @@ impl Cmd {
                     db.delete(entry).await?;
                 }
             }
+
+            #[cfg(feature = "daemon")]
+            let _ = emit_event(atuin_daemon::DaemonEvent::HistoryDeleted { ids }).await;
         }
         Ok(())
     }
