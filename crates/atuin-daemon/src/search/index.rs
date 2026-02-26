@@ -7,13 +7,7 @@
 //! - Frecency-based ranking (frequency + recency)
 //! - Dynamic filtering by directory, host, session, etc.
 
-use std::{
-    collections::HashMap,
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
-};
+use std::{collections::HashMap, sync::Arc};
 
 use atuin_client::history::History;
 use dashmap::{DashMap, DashSet};
@@ -121,14 +115,6 @@ pub struct CommandData {
     hosts: DashSet<String>,
     /// All sessions where this command has been run.
     sessions: DashSet<String>,
-
-    // Pre-computed per-context frecency for O(1) scoring
-    /// Frecency per directory.
-    dir_frecency: HashMap<String, FrecencyData>,
-    /// Frecency per hostname.
-    host_frecency: HashMap<String, FrecencyData>,
-    /// Frecency per session.
-    session_frecency: HashMap<String, FrecencyData>,
 }
 
 impl CommandData {
@@ -141,9 +127,6 @@ impl CommandData {
             directories: DashSet::new(),
             hosts: DashSet::new(),
             sessions: DashSet::new(),
-            dir_frecency: HashMap::new(),
-            host_frecency: HashMap::new(),
-            session_frecency: HashMap::new(),
         };
         data.add_invocation(history);
         data
@@ -160,20 +143,6 @@ impl CommandData {
         self.directories.insert(history.cwd.clone());
         self.hosts.insert(history.hostname.clone());
         self.sessions.insert(history.session.clone());
-
-        // Update per-context frecency for O(1) scoring
-        self.dir_frecency
-            .entry(history.cwd.clone())
-            .or_default()
-            .record_use(timestamp);
-        self.host_frecency
-            .entry(history.hostname.clone())
-            .or_default()
-            .record_use(timestamp);
-        self.session_frecency
-            .entry(history.session.clone())
-            .or_default()
-            .record_use(timestamp);
 
         let invocation = Invocation::from(history);
 
@@ -214,58 +183,6 @@ impl CommandData {
     pub fn has_invocation_in_session(&self, session: &str) -> bool {
         self.sessions.contains(session)
     }
-
-    /// Compute frecency for invocations matching a directory.
-    /// O(1) lookup using pre-computed per-directory frecency.
-    pub fn frecency_for_dir(&self, dir: &str, now: i64) -> u32 {
-        self.dir_frecency
-            .get(dir)
-            .map(|f| f.compute(now))
-            .unwrap_or(0)
-    }
-
-    /// Compute frecency for invocations matching a workspace prefix.
-    /// O(n) where n = number of unique directories for this command.
-    pub fn frecency_for_workspace(&self, prefix: &str, now: i64) -> u32 {
-        // Combine frecency from all directories matching the prefix
-        let mut total_count = 0u32;
-        let mut latest_used = 0i64;
-
-        for (dir, frecency) in &self.dir_frecency {
-            if dir.starts_with(prefix) {
-                total_count += frecency.count;
-                latest_used = latest_used.max(frecency.last_used);
-            }
-        }
-
-        if total_count == 0 {
-            return 0;
-        }
-
-        let combined = FrecencyData {
-            count: total_count,
-            last_used: latest_used,
-        };
-        combined.compute(now)
-    }
-
-    /// Compute frecency for invocations matching a hostname.
-    /// O(1) lookup using pre-computed per-host frecency.
-    pub fn frecency_for_host(&self, hostname: &str, now: i64) -> u32 {
-        self.host_frecency
-            .get(hostname)
-            .map(|f| f.compute(now))
-            .unwrap_or(0)
-    }
-
-    /// Compute frecency for invocations matching a session.
-    /// O(1) lookup using pre-computed per-session frecency.
-    pub fn frecency_for_session(&self, session: &str, now: i64) -> u32 {
-        self.session_frecency
-            .get(session)
-            .map(|f| f.compute(now))
-            .unwrap_or(0)
-    }
 }
 
 /// Filter mode for search queries.
@@ -292,26 +209,14 @@ pub struct QueryContext {
     pub session_id: Option<String>,
 }
 
-/// Granularity for timestamp bucketing in cache (in seconds).
-/// Frecency scores are cached within this time window.
-const TIMESTAMP_BUCKET_SECONDS: i64 = 60;
-
-/// Cached filter and scorer data.
-struct FilterScorerCache {
-    /// The filter mode this cache was built for.
-    filter_mode: IndexFilterMode,
-    /// The timestamp bucket this cache was built for.
-    timestamp_bucket: i64,
-    /// The generation counter when this cache was built.
-    generation: u64,
-    /// Pre-computed frecency map (command -> frecency score).
-    frecency_map: Arc<HashMap<String, u32>>,
-}
-
 /// A deduplicated search index with frecency-based ranking.
 ///
 /// Commands are stored by their text, with metadata about all invocations.
 /// Nucleo handles fuzzy matching, while frecency is computed via scorer callback.
+///
+/// Global frecency is precomputed by a background task and used for scoring.
+/// If frecency data is not available, search still works but without frecency ranking;
+/// although this should never happen due to precomputing the frecency map.
 pub struct SearchIndex {
     /// Map from command text to command data.
     /// Using DashMap for concurrent read/write access, wrapped in Arc for sharing with scorer.
@@ -320,10 +225,9 @@ pub struct SearchIndex {
     nucleo: RwLock<Nucleo<String>>,
     /// Injector for adding new commands to Nucleo.
     injector: Injector<String>,
-    /// Generation counter - incremented when commands are added.
-    generation: AtomicU64,
-    /// Cached filter/scorer data.
-    cache: RwLock<Option<FilterScorerCache>>,
+    /// Precomputed global frecency map (command -> frecency score).
+    /// Updated by background task. If None, search works without frecency.
+    frecency_map: RwLock<Option<Arc<HashMap<String, u32>>>>,
 }
 
 impl SearchIndex {
@@ -338,8 +242,7 @@ impl SearchIndex {
             commands: Arc::new(DashMap::new()),
             nucleo: RwLock::new(nucleo),
             injector,
-            generation: AtomicU64::new(0),
-            cache: RwLock::new(None),
+            frecency_map: RwLock::new(None),
         }
     }
 
@@ -361,9 +264,7 @@ impl SearchIndex {
                 cols[0] = cmd.clone().into();
             });
         }
-
-        // Invalidate cache - frecency scores may have changed
-        self.generation.fetch_add(1, Ordering::Relaxed);
+        // Note: frecency_map is rebuilt by background task, not invalidated here
     }
 
     /// Add multiple history entries to the index.
@@ -386,6 +287,7 @@ impl SearchIndex {
     /// Search for commands matching a query.
     ///
     /// Returns a list of history IDs (most recent invocation per command).
+    /// Uses precomputed global frecency for scoring if available.
     #[instrument(skip_all, level = tracing::Level::TRACE, name = "index_search", fields(query = %query))]
     pub async fn search(
         &self,
@@ -395,47 +297,16 @@ impl SearchIndex {
         limit: u32,
     ) -> Vec<String> {
         let mut nucleo = self.nucleo.write().await;
-        let now = OffsetDateTime::now_utc().unix_timestamp();
-        let timestamp_bucket = now / TIMESTAMP_BUCKET_SECONDS;
-        let current_generation = self.generation.load(Ordering::Relaxed);
 
-        // Check if we can use cached filter/scorer
-        let frecency_map = {
-            let cache_guard = self.cache.read().await;
-            if let Some(ref cache) = *cache_guard {
-                if cache.filter_mode == filter_mode
-                    && cache.timestamp_bucket == timestamp_bucket
-                    && cache.generation == current_generation
-                {
-                    // Cache hit - reuse frecency map
-                    Some(cache.frecency_map.clone())
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        };
+        // Get precomputed frecency map (may be None if not yet computed)
+        let frecency_map = self.frecency_map.read().await.clone();
 
-        let frecency_map = match frecency_map {
-            Some(map) => map,
-            None => {
-                // Cache miss - rebuild and cache
-                let map = self.build_frecency_map(&filter_mode, now);
-                let mut cache_guard = self.cache.write().await;
-                *cache_guard = Some(FilterScorerCache {
-                    filter_mode: filter_mode.clone(),
-                    timestamp_bucket,
-                    generation: current_generation,
-                    frecency_map: map.clone(),
-                });
-                map
-            }
-        };
-
-        // Build filter and scorer from the frecency map
-        let (filter, scorer) = Self::build_filter_and_scorer_from_map(&filter_mode, frecency_map);
+        // Build filter based on mode
+        let filter = self.build_filter(&filter_mode);
         nucleo.set_filter(filter);
+
+        // Build scorer from precomputed frecency (or None if not available)
+        let scorer = Self::build_scorer(frecency_map);
         nucleo.set_scorer(scorer);
 
         // Update pattern
@@ -469,81 +340,62 @@ impl SearchIndex {
         })
     }
 
-    /// Build frecency map for all commands matching the filter mode.
+    /// Rebuild the global frecency map.
     ///
-    /// For Global mode, includes all commands.
-    /// For filtered modes, only includes commands that pass the filter.
-    #[instrument(skip_all, level = tracing::Level::TRACE, name = "build_frecency_map")]
-    fn build_frecency_map(&self, mode: &IndexFilterMode, now: i64) -> Arc<HashMap<String, u32>> {
+    /// This should be called by a background task periodically.
+    /// The map is used for scoring search results.
+    #[instrument(skip_all, level = tracing::Level::DEBUG, name = "rebuild_frecency")]
+    pub async fn rebuild_frecency(&self) {
+        let now = OffsetDateTime::now_utc().unix_timestamp();
         let mut frecency_map: HashMap<String, u32> = HashMap::new();
 
         for entry in self.commands.iter() {
-            let frecency = match mode {
-                IndexFilterMode::Global => Some(entry.global_frecency.compute(now)),
-                IndexFilterMode::Directory(dir) => {
-                    if entry.has_invocation_in_dir(dir) {
-                        Some(entry.frecency_for_dir(dir, now))
-                    } else {
-                        None
-                    }
-                }
-                IndexFilterMode::Workspace(prefix) => {
-                    if entry.has_invocation_in_workspace(prefix) {
-                        Some(entry.frecency_for_workspace(prefix, now))
-                    } else {
-                        None
-                    }
-                }
-                IndexFilterMode::Host(hostname) => {
-                    if entry.has_invocation_on_host(hostname) {
-                        Some(entry.frecency_for_host(hostname, now))
-                    } else {
-                        None
-                    }
-                }
-                IndexFilterMode::Session(session) => {
-                    if entry.has_invocation_in_session(session) {
-                        Some(entry.frecency_for_session(session, now))
-                    } else {
-                        None
-                    }
-                }
-            };
-
-            if let Some(frecency) = frecency {
-                frecency_map.insert(entry.key().clone(), frecency);
-            }
+            let frecency = entry.global_frecency.compute(now);
+            frecency_map.insert(entry.key().clone(), frecency);
         }
 
-        Arc::new(frecency_map)
+        *self.frecency_map.write().await = Some(Arc::new(frecency_map));
     }
 
-    /// Build filter and scorer from a pre-computed frecency map.
-    ///
-    /// Both filter and scorer use the same map for O(1) lock-free lookups.
-    fn build_filter_and_scorer_from_map(
-        mode: &IndexFilterMode,
-        frecency_map: Arc<HashMap<String, u32>>,
-    ) -> (
-        Option<nucleo::Filter<String>>,
-        Option<nucleo::Scorer<String>>,
-    ) {
-        // Scorer: look up pre-computed frecency
-        let scorer_map = frecency_map.clone();
-        let scorer = Arc::new(move |cmd: &String, fuzzy_score: u32| {
-            let frecency = scorer_map.get(cmd).copied().unwrap_or(0);
-            fuzzy_score + (frecency * 10)
-        });
-
+    /// Build filter predicate for the given mode.
+    fn build_filter(&self, mode: &IndexFilterMode) -> Option<nucleo::Filter<String>> {
         // For Global mode, no filter needed
         if matches!(mode, IndexFilterMode::Global) {
-            return (None, Some(scorer));
+            return None;
         }
 
-        // Filter: check if command is in the frecency map (meaning it passed the filter)
-        let filter = Arc::new(move |cmd: &String| frecency_map.contains_key(cmd));
+        // Pre-compute which commands pass the filter
+        let passing_commands: Arc<std::collections::HashSet<String>> = {
+            let mut set = std::collections::HashSet::new();
+            for entry in self.commands.iter() {
+                let passes = match mode {
+                    IndexFilterMode::Global => unreachable!(),
+                    IndexFilterMode::Directory(dir) => entry.has_invocation_in_dir(dir),
+                    IndexFilterMode::Workspace(prefix) => entry.has_invocation_in_workspace(prefix),
+                    IndexFilterMode::Host(hostname) => entry.has_invocation_on_host(hostname),
+                    IndexFilterMode::Session(session) => entry.has_invocation_in_session(session),
+                };
+                if passes {
+                    set.insert(entry.key().clone());
+                }
+            }
+            Arc::new(set)
+        };
 
-        (Some(filter), Some(scorer))
+        Some(Arc::new(move |cmd: &String| passing_commands.contains(cmd)))
+    }
+
+    /// Build scorer from precomputed frecency map.
+    ///
+    /// Returns None if frecency map is not available (search still works, just without frecency ranking).
+    fn build_scorer(
+        frecency_map: Option<Arc<HashMap<String, u32>>>,
+    ) -> Option<nucleo::Scorer<String>> {
+        let map = frecency_map?;
+        Some(Arc::new(move |cmd: &String, fuzzy_score: u32| {
+            let frecency = map.get(cmd).copied().unwrap_or(0);
+            fuzzy_score + (frecency * 10)
+        }))
     }
 }
 

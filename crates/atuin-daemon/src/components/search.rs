@@ -9,7 +9,7 @@ use atuin_client::database::Database;
 use eyre::Result;
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status, Streaming};
-use tracing::{Level, debug, info, instrument, span};
+use tracing::{Level, debug, info, instrument, span, trace};
 use uuid::Uuid;
 
 use crate::{
@@ -23,6 +23,8 @@ use crate::{
 
 const PAGE_SIZE: usize = 1000;
 const RESULTS_LIMIT: u32 = 200;
+/// How often to rebuild the frecency map (in seconds).
+const FRECENCY_REFRESH_INTERVAL_SECS: u64 = 60;
 
 /// Search component - provides fuzzy search over command history.
 ///
@@ -35,6 +37,7 @@ pub struct SearchComponent {
     index: Arc<SearchIndex>,
     handle: tokio::sync::RwLock<Option<DaemonHandle>>,
     loader_handle: Option<tokio::task::JoinHandle<()>>,
+    frecency_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl SearchComponent {
@@ -44,6 +47,7 @@ impl SearchComponent {
             index: Arc::new(SearchIndex::new()),
             handle: tokio::sync::RwLock::new(None),
             loader_handle: None,
+            frecency_handle: None,
         }
     }
 
@@ -117,6 +121,7 @@ impl Component for SearchComponent {
         let index = self.index.clone();
         let db = handle.history_db().clone();
 
+        let index_for_loader = index.clone();
         self.loader_handle = Some(tokio::spawn(async move {
             info!(
                 "Loading history into search index; page size = {}",
@@ -130,13 +135,16 @@ impl Component for SearchComponent {
                             "Loading {} history entries into search index",
                             histories.len()
                         );
-                        index.add_histories(&histories);
+                        index_for_loader.add_histories(&histories);
                     }
                     Ok(None) => {
                         info!(
                             "Initial history load complete; {} unique commands indexed",
-                            index.command_count()
+                            index_for_loader.command_count()
                         );
+                        // Build initial frecency map
+                        index_for_loader.rebuild_frecency().await;
+                        info!("Initial frecency map built");
                         break;
                     }
                     Err(e) => {
@@ -144,6 +152,19 @@ impl Component for SearchComponent {
                         break;
                     }
                 }
+            }
+        }));
+
+        // Spawn background task to periodically refresh frecency
+        let index_for_frecency = self.index.clone();
+        self.frecency_handle = Some(tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(
+                FRECENCY_REFRESH_INTERVAL_SECS,
+            ));
+            loop {
+                interval.tick().await;
+                trace!("Refreshing frecency map");
+                index_for_frecency.rebuild_frecency().await;
             }
         }));
 
@@ -219,6 +240,9 @@ impl Component for SearchComponent {
 
     async fn stop(&mut self) -> Result<()> {
         if let Some(handle) = self.loader_handle.take() {
+            handle.abort();
+        }
+        if let Some(handle) = self.frecency_handle.take() {
             handle.abort();
         }
         tracing::info!("search component stopped");
