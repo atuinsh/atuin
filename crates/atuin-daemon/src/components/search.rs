@@ -7,6 +7,7 @@ use std::{pin::Pin, sync::Arc};
 
 use atuin_client::database::Database;
 use eyre::Result;
+use tokio::sync::RwLock;
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status, Streaming};
 use tracing::{Level, debug, info, instrument, span, trace};
@@ -34,7 +35,7 @@ const FRECENCY_REFRESH_INTERVAL_SECS: u64 = 60;
 /// - Updates the index when history events occur
 /// - Provides the Search gRPC service
 pub struct SearchComponent {
-    index: Arc<SearchIndex>,
+    index: Arc<RwLock<SearchIndex>>,
     handle: tokio::sync::RwLock<Option<DaemonHandle>>,
     loader_handle: Option<tokio::task::JoinHandle<()>>,
     frecency_handle: Option<tokio::task::JoinHandle<()>>,
@@ -44,7 +45,7 @@ impl SearchComponent {
     /// Create a new search component.
     pub fn new() -> Self {
         Self {
-            index: Arc::new(SearchIndex::new()),
+            index: Arc::new(RwLock::new(SearchIndex::new())),
             handle: tokio::sync::RwLock::new(None),
             loader_handle: None,
             frecency_handle: None,
@@ -90,14 +91,13 @@ impl SearchComponent {
             }
         }
 
-        // Replace the old index with the new one
-        // Note: This requires the index field to be mutable or use interior mutability
-        // For now, we'll just log that a rebuild was requested but can't swap atomically
-        // TODO: Consider using ArcSwap for atomic replacement
         info!(
             "Search index rebuild complete; {} unique commands",
             new_index.command_count()
         );
+
+        // Replace the old index with the new one
+        *self.index.write().await = new_index;
         Ok(())
     }
 }
@@ -135,15 +135,15 @@ impl Component for SearchComponent {
                             "Loading {} history entries into search index",
                             histories.len()
                         );
-                        index_for_loader.add_histories(&histories);
+                        index_for_loader.read().await.add_histories(&histories);
                     }
                     Ok(None) => {
                         info!(
                             "Initial history load complete; {} unique commands indexed",
-                            index_for_loader.command_count()
+                            index_for_loader.read().await.command_count()
                         );
                         // Build initial frecency map
-                        index_for_loader.rebuild_frecency().await;
+                        index_for_loader.read().await.rebuild_frecency().await;
                         info!("Initial frecency map built");
                         break;
                     }
@@ -164,7 +164,7 @@ impl Component for SearchComponent {
             loop {
                 interval.tick().await;
                 trace!("Refreshing frecency map");
-                index_for_frecency.rebuild_frecency().await;
+                index_for_frecency.read().await.rebuild_frecency().await;
             }
         }));
 
@@ -198,18 +198,22 @@ impl Component for SearchComponent {
                         .await
                         .unwrap_or_default();
 
-                    span!(Level::TRACE, "inject_records", count = histories.len()).in_scope(|| {
-                        self.index.add_histories(&histories);
-                    });
+                    span!(Level::TRACE, "inject_records", count = histories.len())
+                        .in_scope(async || {
+                            self.index.read().await.add_histories(&histories);
+                        })
+                        .await;
                 }
             }
             DaemonEvent::HistoryStarted(history) => {
                 debug!(id = %history.id, command = %history.command, "History started (no index action)");
             }
             DaemonEvent::HistoryEnded(history) => {
-                span!(Level::TRACE, "inject_history_ended").in_scope(|| {
-                    self.index.add_history(history);
-                });
+                span!(Level::TRACE, "inject_history_ended")
+                    .in_scope(async || {
+                        self.index.read().await.add_history(history);
+                    })
+                    .await;
             }
             DaemonEvent::HistoryPruned => {
                 info!("History pruned, rebuilding search index");
@@ -252,7 +256,7 @@ impl Component for SearchComponent {
 
 /// The gRPC service implementation.
 pub struct SearchGrpcService {
-    index: Arc<SearchIndex>,
+    index: Arc<RwLock<SearchIndex>>,
 }
 
 #[tonic::async_trait]
@@ -308,6 +312,7 @@ impl SearchSvc for SearchGrpcService {
                         let history_ids =
                             span!(Level::TRACE, "daemon_search_query", %query, query_id)
                                 .in_scope(|| async {
+                                    let index = index.read().await;
                                     index
                                         .search(&query, index_filter, &query_context, RESULTS_LIMIT)
                                         .await

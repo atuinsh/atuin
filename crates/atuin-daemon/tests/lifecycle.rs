@@ -21,6 +21,8 @@ mod unix {
     use tokio_stream::wrappers::UnixListenerStream;
     use tonic::transport::Server;
 
+    use crate::boot;
+
     /// Spins up a daemon server on a temp socket and returns a connected client,
     /// the shutdown sender, and the temp dir (must be held to keep paths alive).
     async fn start_test_daemon() -> (HistoryClient, watch::Sender<bool>, TempDir) {
@@ -45,13 +47,7 @@ mod unix {
 
         let mut rx = shutdown_rx.clone();
         tokio::spawn(async move {
-            Server::builder()
-                .add_service(HistoryServer::new(service))
-                .serve_with_incoming_shutdown(stream, async move {
-                    let _ = rx.changed().await;
-                })
-                .await
-                .unwrap();
+            crate::boot(settings, store, history_db).await.unwrap();
         });
 
         // Give the server a moment to bind.
