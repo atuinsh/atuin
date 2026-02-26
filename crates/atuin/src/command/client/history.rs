@@ -42,6 +42,14 @@ pub enum Cmd {
         #[arg(long = "command-from-env", hide = true)]
         cmd_env: bool,
 
+        /// Author of this command, eg `ellie`, `claude`, or `copilot`
+        #[arg(long)]
+        author: Option<String>,
+
+        /// Optional intent/rationale for running this command
+        #[arg(long)]
+        intent: Option<String>,
+
         command: Vec<String>,
     },
 
@@ -88,7 +96,7 @@ pub enum Cmd {
         #[arg(long, visible_alias = "tz")]
         timezone: Option<Timezone>,
 
-        /// Available variables: {command}, {directory}, {duration}, {user}, {host}, {exit}, {time}, {session}, and {uuid}
+        /// Available variables: {command}, {directory}, {duration}, {user}, {host}, {author}, {intent}, {exit}, {time}, {session}, and {uuid}
         /// Example: --format "{time} - [{duration}] - {directory}$\t{command}"
         #[arg(long, short)]
         format: Option<String>,
@@ -111,7 +119,7 @@ pub enum Cmd {
         #[arg(long, visible_alias = "tz")]
         timezone: Option<Timezone>,
 
-        /// Available variables: {command}, {directory}, {duration}, {user}, {host}, {time}, {session}, {uuid} and {relativetime}.
+        /// Available variables: {command}, {directory}, {duration}, {user}, {host}, {author}, {intent}, {time}, {session}, {uuid} and {relativetime}.
         /// Example: --format "{time} - [{duration}] - {directory}$\t{command}"
         #[arg(long, short)]
         format: Option<String>,
@@ -317,6 +325,8 @@ impl FormatKey for FmtHistory<'_> {
                     .split_once(':')
                     .map_or(&self.history.hostname, |(host, _)| host),
             )?,
+            "author" => f.write_str(&self.history.author)?,
+            "intent" => f.write_str(self.history.intent.as_deref().unwrap_or_default())?,
             "user" => f.write_str(
                 self.history
                     .hostname
@@ -353,18 +363,37 @@ fn parse_fmt(format: &str) -> ParsedFmt<'_> {
 }
 
 impl Cmd {
+    fn apply_start_metadata(history: &mut History, author: Option<&str>, intent: Option<&str>) {
+        if let Some(author) = author.map(str::trim).filter(|author| !author.is_empty()) {
+            author.clone_into(&mut history.author);
+        }
+
+        if let Some(intent) = intent.map(str::trim).filter(|intent| !intent.is_empty()) {
+            history.intent = Some(intent.to_owned());
+        } else if intent.is_some() {
+            history.intent = None;
+        }
+    }
+
     #[allow(clippy::too_many_lines, clippy::cast_possible_truncation)]
-    async fn handle_start(db: &impl Database, settings: &Settings, command: &str) -> Result<()> {
+    async fn handle_start(
+        db: &impl Database,
+        settings: &Settings,
+        command: &str,
+        author: Option<&str>,
+        intent: Option<&str>,
+    ) -> Result<()> {
         // It's better for atuin to silently fail here and attempt to
         // store whatever is ran, than to throw an error to the terminal
         let cwd = utils::get_current_dir();
 
-        let h: History = History::capture()
+        let mut h: History = History::capture()
             .timestamp(OffsetDateTime::now_utc())
             .command(command)
             .cwd(cwd)
             .build()
             .into();
+        Self::apply_start_metadata(&mut h, author, intent);
 
         if !h.should_save(settings) {
             return Ok(());
@@ -384,17 +413,23 @@ impl Cmd {
     }
 
     #[cfg(feature = "daemon")]
-    async fn handle_daemon_start(settings: &Settings, command: &str) -> Result<()> {
+    async fn handle_daemon_start(
+        settings: &Settings,
+        command: &str,
+        author: Option<&str>,
+        intent: Option<&str>,
+    ) -> Result<()> {
         // It's better for atuin to silently fail here and attempt to
         // store whatever is ran, than to throw an error to the terminal
         let cwd = utils::get_current_dir();
 
-        let h: History = History::capture()
+        let mut h: History = History::capture()
             .timestamp(OffsetDateTime::now_utc())
             .command(command)
             .cwd(cwd)
             .build()
             .into();
+        Self::apply_start_metadata(&mut h, author, intent);
 
         if !h.should_save(settings) {
             return Ok(());
@@ -663,7 +698,8 @@ impl Cmd {
             match self {
                 Self::Start { .. } => {
                     let command = self.get_start_command().unwrap_or_default();
-                    return Self::handle_daemon_start(settings, &command).await;
+                    let (author, intent) = self.get_start_metadata().unwrap_or_default();
+                    return Self::handle_daemon_start(settings, &command, author, intent).await;
                 }
 
                 Self::End { id, exit, duration } => {
@@ -690,7 +726,8 @@ impl Cmd {
         match self {
             Self::Start { .. } => {
                 let command = self.get_start_command().unwrap_or_default();
-                Self::handle_start(&db, settings, &command).await
+                let (author, intent) = self.get_start_metadata().unwrap_or_default();
+                Self::handle_start(&db, settings, &command, author, intent).await
             }
             Self::End { id, exit, duration } => {
                 Self::handle_end(&db, store, history_store, settings, &id, exit, duration).await
@@ -769,6 +806,15 @@ impl Cmd {
                 Some(std::env::var("ATUIN_COMMAND_LINE").unwrap_or_default())
             }
             Self::Start { command, .. } => Some(command.join(" ")),
+            _ => None,
+        }
+    }
+
+    /// Returns `(author, intent)` for the `Start` variant.
+    /// Returns `None` for any other variant.
+    fn get_start_metadata(&self) -> Option<(Option<&str>, Option<&str>)> {
+        match self {
+            Self::Start { author, intent, .. } => Some((author.as_deref(), intent.as_deref())),
             _ => None,
         }
     }

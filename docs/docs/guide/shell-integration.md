@@ -26,8 +26,11 @@ When Atuin initializes, it sets several environment variables:
 | `ATUIN_SESSION` | Unique identifier for this shell session |
 | `ATUIN_SHLVL` | Tracks shell nesting level |
 | `ATUIN_HISTORY_ID` | Temporary ID for the currently executing command |
+| `ATUIN_HISTORY_AUTHOR` | Optional command author identity (for example `ellie`, `claude`, `copilot`) |
+| `ATUIN_HISTORY_INTENT` | Optional command intent/rationale text |
 
 These variables are used internally to track command execution and associate commands with sessions.
+If `ATUIN_HISTORY_AUTHOR` is not set, Atuin defaults to the local shell username.
 
 ## Embedded Terminals and IDE Integrations
 
