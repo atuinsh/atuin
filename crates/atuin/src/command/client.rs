@@ -130,10 +130,12 @@ impl Cmd {
         let filter =
             EnvFilter::from_env("ATUIN_LOG").add_directive("sqlx_sqlite::regexp=off".parse()?);
 
-        tracing_subscriber::registry()
-            .with(fmt::layer())
-            .with(filter)
-            .init();
+        if !matches!(self, Self::Search(_)) {
+            tracing_subscriber::registry()
+                .with(fmt::layer())
+                .with(filter)
+                .init();
+        }
 
         tracing::trace!(command = ?self, "client command");
 

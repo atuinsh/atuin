@@ -1,5 +1,5 @@
 use std::{
-    io::{Write, stdout},
+    io::{IsTerminal, Write, stdout},
     time::Duration,
 };
 
@@ -1249,29 +1249,77 @@ impl State {
     }
 }
 
+/// The writer used for terminal output - either stdout or /dev/tty
+enum TerminalWriter {
+    Stdout(std::io::Stdout),
+    #[cfg(unix)]
+    Tty(std::fs::File),
+}
+
+impl Write for TerminalWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        match self {
+            TerminalWriter::Stdout(stdout) => stdout.write(buf),
+            #[cfg(unix)]
+            TerminalWriter::Tty(file) => file.write(buf),
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        match self {
+            TerminalWriter::Stdout(stdout) => stdout.flush(),
+            #[cfg(unix)]
+            TerminalWriter::Tty(file) => file.flush(),
+        }
+    }
+}
+
 struct Stdout {
-    stdout: std::io::Stdout,
+    writer: TerminalWriter,
     inline_mode: bool,
 }
 
 impl Stdout {
-    pub fn new(inline_mode: bool) -> std::io::Result<Self> {
+    pub fn new(inline_mode: bool, stdout_is_terminal: bool) -> std::io::Result<Self> {
         terminal::enable_raw_mode()?;
-        let mut stdout = stdout();
+
+        // If stdout is not a terminal (e.g., captured by command substitution),
+        // fall back to /dev/tty so the TUI can still render.
+        // This allows usage like: VAR=$(atuin search -i)
+        let mut writer = if stdout_is_terminal {
+            TerminalWriter::Stdout(stdout())
+        } else {
+            #[cfg(unix)]
+            {
+                TerminalWriter::Tty(
+                    std::fs::File::options()
+                        .read(true)
+                        .write(true)
+                        .open("/dev/tty")?,
+                )
+            }
+            #[cfg(not(unix))]
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Unsupported,
+                    "Interactive mode requires a terminal",
+                ));
+            }
+        };
 
         if !inline_mode {
-            execute!(stdout, terminal::EnterAlternateScreen)?;
+            execute!(writer, terminal::EnterAlternateScreen)?;
         }
 
         execute!(
-            stdout,
+            writer,
             event::EnableMouseCapture,
             event::EnableBracketedPaste,
         )?;
 
         #[cfg(not(target_os = "windows"))]
         execute!(
-            stdout,
+            writer,
             PushKeyboardEnhancementFlags(
                 KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
                     | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
@@ -1280,7 +1328,7 @@ impl Stdout {
         )?;
 
         Ok(Self {
-            stdout,
+            writer,
             inline_mode,
         })
     }
@@ -1289,13 +1337,13 @@ impl Stdout {
 impl Drop for Stdout {
     fn drop(&mut self) {
         #[cfg(not(target_os = "windows"))]
-        execute!(self.stdout, PopKeyboardEnhancementFlags).unwrap();
+        execute!(self.writer, PopKeyboardEnhancementFlags).unwrap();
 
         if !self.inline_mode {
-            execute!(self.stdout, terminal::LeaveAlternateScreen).unwrap();
+            execute!(self.writer, terminal::LeaveAlternateScreen).unwrap();
         }
         execute!(
-            self.stdout,
+            self.writer,
             event::DisableMouseCapture,
             event::DisableBracketedPaste,
         )
@@ -1307,11 +1355,11 @@ impl Drop for Stdout {
 
 impl Write for Stdout {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.stdout.write(buf)
+        self.writer.write(buf)
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
-        self.stdout.flush()
+        self.writer.flush()
     }
 }
 
@@ -1338,9 +1386,17 @@ pub async fn history(
         settings.inline_height
     };
 
+    // Check if stdout is a terminal - if not (e.g., command substitution like VAR=$(atuin search -i)),
+    // we need to use /dev/tty for the TUI and force fullscreen mode (inline mode requires
+    // cursor position queries that don't work when stdout is captured)
+    let stdout_is_terminal = stdout().is_terminal();
+
     // Use fullscreen mode if the inline height doesn't fit in the terminal,
-    // this will preserve the scroll position upon exit
-    let inline_height = if let Ok(size) = terminal::size()
+    // this will preserve the scroll position upon exit.
+    // Also force fullscreen when stdout isn't a terminal (inline mode won't work).
+    let inline_height = if !stdout_is_terminal {
+        0
+    } else if let Ok(size) = terminal::size()
         && inline_height >= size.1
     {
         0
@@ -1348,7 +1404,7 @@ pub async fn history(
         inline_height
     };
 
-    let stdout = Stdout::new(inline_height > 0)?;
+    let stdout = Stdout::new(inline_height > 0, stdout_is_terminal)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::with_options(
         backend,
