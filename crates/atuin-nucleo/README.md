@@ -1,4 +1,99 @@
-# Nucleo
+# nucleo-ext
+
+This is a fork of [helix-editor/nucleo](https://github.com/helix-editor/nucleo) that includes filtering and custom scoring built into the matching loop.
+
+## Fork Changes
+
+### Filter Callback
+
+Filter items before fuzzy matching. Useful for category/facet filtering (e.g., filter by directory, host, session).
+
+```rust
+use std::sync::Arc;
+
+// Filter to only include items where category == 1
+nucleo.set_filter(Some(Arc::new(|item: &MyItem| item.category == 1)));
+
+// Remove filter
+nucleo.set_filter(None);
+```
+
+Filters are applied:
+- During initial matching of new items
+- When rescoring existing matches after pattern changes
+- When resetting matches for empty patterns
+
+Setting a filter triggers a rescore on the next `tick()`.
+
+### Scorer Callback
+
+Compute custom scores after fuzzy matching. The scorer receives the item and the fuzzy score, and returns the final score used for sorting.
+
+```rust
+use std::sync::Arc;
+
+// Use item priority as the score (ignoring fuzzy score)
+nucleo.set_scorer(Some(Arc::new(|item: &MyItem, _fuzzy_score| {
+    item.priority
+})));
+
+// Combine fuzzy score with frecency
+nucleo.set_scorer(Some(Arc::new(|item: &MyItem, fuzzy_score| {
+    fuzzy_score + item.frecency_score
+})));
+
+// Remove scorer (use raw fuzzy score)
+nucleo.set_scorer(None);
+```
+
+The scorer output is stored in `Match::external_score` and used as the primary sort key.
+
+### Match Struct Changes
+
+The `Match` struct now has an additional field:
+
+```rust
+pub struct Match {
+    pub score: u32,           // Raw fuzzy match score
+    pub external_score: u32,  // Scorer output (used for sorting)
+    pub idx: u32,             // Item index
+}
+```
+
+Results are sorted by `external_score` (descending), with tie-breakers on item length and index.
+
+### Use Case: Frecency Ranking
+
+This fork was created to support frecency-based ranking in [Atuin](https://github.com/atuinsh/atuin). The typical pattern is:
+
+1. Store metadata (frecency scores, categories) in a separate data structure
+2. Use filter callback to exclude items that don't match the current context
+3. Use scorer callback to combine fuzzy score with frecency at query time
+
+```rust
+// External data store
+let metadata: Arc<DashMap<String, ItemMetadata>> = /* ... */;
+
+// Filter: only show items used in current directory
+let dir = current_dir.clone();
+let meta = metadata.clone();
+nucleo.set_filter(Some(Arc::new(move |cmd: &String| {
+    meta.get(cmd).map(|m| m.used_in_dir(&dir)).unwrap_or(false)
+})));
+
+// Scorer: combine fuzzy score with frecency
+let meta = metadata.clone();
+nucleo.set_scorer(Some(Arc::new(move |cmd: &String, fuzzy_score| {
+    let frecency = meta.get(cmd).map(|m| m.frecency()).unwrap_or(0);
+    fuzzy_score + (frecency * 10)
+})));
+```
+
+---
+
+The original Nucleo readme follows.
+
+---
 
 
 `nucleo` is a highly performant fuzzy matcher written in Rust. It aims to fill the same use case as `fzf` and `skim`. Compared to `fzf` `nucleo` has a significantly faster matching algorithm. This mainly makes a difference when matching patterns with low selectivity on many items. An (unscientific) comparison is shown in the benchmark section below.
