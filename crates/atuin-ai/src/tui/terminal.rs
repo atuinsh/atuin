@@ -54,7 +54,7 @@ const VIEWPORT_BOTTOM_MARGIN: u16 = 2;
 /// use atuin_ai::tui::{install_panic_hook, TerminalGuard};
 ///
 /// install_panic_hook(); // Once at program start
-/// let mut guard = TerminalGuard::new()?;
+/// let mut guard = TerminalGuard::new(true)?;
 /// let terminal = guard.terminal();
 /// // ... use terminal ...
 /// // Drop automatically cleans up

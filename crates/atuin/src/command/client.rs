@@ -127,6 +127,11 @@ pub enum Cmd {
     /// Print the default atuin configuration (config.toml)
     #[command()]
     DefaultConfig,
+
+    /// Run the AI assistant
+    #[cfg(feature = "ai")]
+    #[command(subcommand)]
+    Ai(atuin_ai::commands::Commands),
 }
 
 impl Cmd {
@@ -362,6 +367,9 @@ impl Cmd {
             Self::Daemon(cmd) => cmd.run(settings, sqlite_store, db).await,
 
             Self::History(_) | Self::Init(_) | Self::Doctor => unreachable!(),
+
+            #[cfg(feature = "ai")]
+            Self::Ai(cli) => atuin_ai::commands::run(cli, &settings).await,
         }
     }
 }

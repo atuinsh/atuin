@@ -562,11 +562,11 @@ pub struct Logs {
 pub struct Ai {
     /// The address of the Atuin AI endpoint. Used for AI features like command generation.
     /// Only necessary for custom AI endpoints.
-    pub ai_endpoint: Option<String>,
+    pub endpoint: Option<String>,
 
     /// The API token for the Atuin AI endpoint. Used for AI features like command generation.
     /// Only necessary for custom AI endpoints.
-    pub ai_api_token: Option<String>,
+    pub api_token: Option<String>,
 
     /// Whether or not to send the current working directory to the AI endpoint.
     pub send_cwd: bool,
@@ -691,27 +691,21 @@ impl Logs {
     }
 
     /// Returns the full path for the search log file.
-    /// If `file` is an absolute path, returns it directly.
-    /// Otherwise, joins it with `dir`.
     pub fn search_path(&self) -> PathBuf {
         let path = PathBuf::from(&self.search.file);
-        if path.is_absolute() {
-            path
-        } else {
-            PathBuf::from(&self.dir).join(path)
-        }
+        PathBuf::from(&self.dir).join(path)
     }
 
     /// Returns the full path for the daemon log file.
-    /// If `file` is an absolute path, returns it directly.
-    /// Otherwise, joins it with `dir`.
     pub fn daemon_path(&self) -> PathBuf {
         let path = PathBuf::from(&self.daemon.file);
-        if path.is_absolute() {
-            path
-        } else {
-            PathBuf::from(&self.dir).join(path)
-        }
+        PathBuf::from(&self.dir).join(path)
+    }
+
+    /// Returns the full path for the AI log file.
+    pub fn ai_path(&self) -> PathBuf {
+        let path = PathBuf::from(&self.ai.file);
+        PathBuf::from(&self.dir).join(path)
     }
 }
 
