@@ -34,45 +34,6 @@ fn format_uuid_bytes(bytes: &[u8; 16]) -> String {
     Uuid::from_bytes(*bytes).to_string()
 }
 
-/// Data for a single invocation of a command.
-#[derive(Debug, Clone, Copy)]
-pub struct Invocation {
-    /// When the command was run.
-    pub timestamp: i64,
-    /// The working directory when the command was run (interned, 4 bytes).
-    #[allow(dead_code)]
-    pub cwd: Spur,
-    /// The hostname where the command was run (interned, 4 bytes).
-    #[allow(dead_code)]
-    pub hostname: Spur,
-    /// The session ID (stored as 16 bytes instead of 36-byte string).
-    #[allow(dead_code)]
-    pub session: [u8; 16],
-    /// The history entry ID (stored as 16 bytes instead of 36-byte string).
-    pub history_id: [u8; 16],
-}
-
-impl Invocation {
-    /// Create an Invocation from a History entry.
-    /// Returns None if the session or history_id cannot be parsed as UUIDs.
-    pub fn from_history(history: &History, interner: &ThreadedRodeo) -> Option<Self> {
-        let session = parse_uuid_bytes(&history.session)?;
-        let history_id = parse_uuid_bytes(&history.id.0)?;
-        Some(Self {
-            timestamp: history.timestamp.unix_timestamp(),
-            cwd: interner.get_or_intern(&history.cwd),
-            hostname: interner.get_or_intern(&history.hostname),
-            session,
-            history_id,
-        })
-    }
-
-    /// Get the history ID as a UUID string.
-    pub fn history_id_string(&self) -> String {
-        format_uuid_bytes(&self.history_id)
-    }
-}
-
 /// Pre-computed frecency data for O(1) lookup.
 #[derive(Debug, Clone, Default)]
 pub struct FrecencyData {
@@ -128,10 +89,12 @@ impl FrecencyData {
     }
 }
 
-/// Data for a unique command, including all its invocations.
+/// Data for a unique command.
 pub struct CommandData {
-    /// All invocations of this command, sorted by timestamp (newest first).
-    pub invocations: Vec<Invocation>,
+    /// History ID of the most recent invocation (16-byte UUID).
+    most_recent_id: [u8; 16],
+    /// Timestamp of the most recent invocation.
+    most_recent_timestamp: i64,
     /// Pre-computed global frecency.
     pub global_frecency: FrecencyData,
 
@@ -147,22 +110,44 @@ pub struct CommandData {
 
 impl CommandData {
     /// Create a new CommandData from a history entry.
-    pub fn new(history: &History, interner: &ThreadedRodeo) -> Self {
-        let mut data = Self {
-            invocations: Vec::new(),
-            global_frecency: FrecencyData::default(),
-            directories: HashSet::new(),
-            hosts: HashSet::new(),
-            sessions: HashSet::new(),
-        };
-        data.add_invocation(history, interner);
-        data
+    /// Returns None if the history entry has invalid UUIDs.
+    pub fn new(history: &History, interner: &ThreadedRodeo) -> Option<Self> {
+        let history_id = parse_uuid_bytes(&history.id.0)?;
+        let session = parse_uuid_bytes(&history.session)?;
+        let timestamp = history.timestamp.unix_timestamp();
+
+        let dir_key = interner.get_or_intern(with_trailing_slash(&history.cwd));
+        let host_key = interner.get_or_intern(&history.hostname);
+
+        let mut directories = HashSet::new();
+        directories.insert(dir_key);
+
+        let mut hosts = HashSet::new();
+        hosts.insert(host_key);
+
+        let mut sessions = HashSet::new();
+        sessions.insert(session);
+
+        let mut global_frecency = FrecencyData::default();
+        global_frecency.record_use(timestamp);
+
+        Some(Self {
+            most_recent_id: history_id,
+            most_recent_timestamp: timestamp,
+            global_frecency,
+            directories,
+            hosts,
+            sessions,
+        })
     }
 
     /// Add an invocation from a history entry.
     /// Returns false if the history entry has invalid UUIDs.
     pub fn add_invocation(&mut self, history: &History, interner: &ThreadedRodeo) -> bool {
-        let Some(invocation) = Invocation::from_history(history, interner) else {
+        let Some(history_id) = parse_uuid_bytes(&history.id.0) else {
+            return false;
+        };
+        let Some(session) = parse_uuid_bytes(&history.session) else {
             return false;
         };
 
@@ -172,25 +157,23 @@ impl CommandData {
         self.global_frecency.record_use(timestamp);
 
         // Update pre-computed indexes for O(1) filter lookups
-        // Intern the directory path with trailing slash
         let dir_key = interner.get_or_intern(with_trailing_slash(&history.cwd));
         self.directories.insert(dir_key);
-        self.hosts.insert(invocation.hostname);
-        self.sessions.insert(invocation.session);
+        self.hosts.insert(interner.get_or_intern(&history.hostname));
+        self.sessions.insert(session);
 
-        // Insert sorted by timestamp (newest first)
-        let pos = self
-            .invocations
-            .iter()
-            .position(|inv| inv.timestamp < timestamp)
-            .unwrap_or(self.invocations.len());
-        self.invocations.insert(pos, invocation);
+        // Update most recent if this invocation is newer
+        if timestamp > self.most_recent_timestamp {
+            self.most_recent_id = history_id;
+            self.most_recent_timestamp = timestamp;
+        }
+
         true
     }
 
     /// Get the most recent history ID for this command.
-    pub fn most_recent_id(&self) -> Option<String> {
-        self.invocations.first().map(|inv| inv.history_id_string())
+    pub fn most_recent_id(&self) -> String {
+        format_uuid_bytes(&self.most_recent_id)
     }
 
     /// Check if any invocation matches a directory filter (exact match).
@@ -305,8 +288,10 @@ impl SearchIndex {
             entry.add_invocation(history, &self.interner);
         } else {
             // New command - create Arc<str> once and share it
+            let Some(data) = CommandData::new(history, &self.interner) else {
+                return; // Invalid UUIDs, skip this entry
+            };
             let command_arc: Arc<str> = command.into();
-            let data = CommandData::new(history, &self.interner);
             self.commands.insert(Arc::clone(&command_arc), data);
             // Nucleo still needs String (unavoidable copy for fuzzy matching)
             self.injector.push(command_arc.to_string(), |cmd, cols| {
@@ -384,7 +369,7 @@ impl SearchIndex {
                     // DashMap<Arc<str>, _>::get accepts &str via Borrow trait
                     self.commands
                         .get(cmd.as_str())
-                        .and_then(|data| data.most_recent_id())
+                        .map(|data| data.most_recent_id())
                 })
                 .collect()
         })
@@ -517,17 +502,16 @@ mod tests {
         let history1 = make_history("git status", dir1, datetime!(2024-01-01 10:00 UTC));
         let history2 = make_history("git status", dir2, datetime!(2024-01-01 12:00 UTC));
 
-        let mut data = CommandData::new(&history1, &interner);
-        assert_eq!(data.invocations.len(), 1);
+        let mut data = CommandData::new(&history1, &interner).unwrap();
         assert_eq!(data.global_frecency.count, 1);
+        let id1 = data.most_recent_id();
 
         data.add_invocation(&history2, &interner);
-        assert_eq!(data.invocations.len(), 2);
         assert_eq!(data.global_frecency.count, 2);
 
-        // Most recent should be first
-        assert_eq!(interner.resolve(&data.invocations[0].cwd), dir2);
-        assert_eq!(interner.resolve(&data.invocations[1].cwd), dir1);
+        // Most recent ID should update to history2 (newer timestamp)
+        let id2 = data.most_recent_id();
+        assert_ne!(id1, id2);
     }
 
     #[test]
@@ -543,7 +527,7 @@ mod tests {
         let h1 = make_history("git status", dir1, datetime!(2024-01-01 10:00 UTC));
         let h2 = make_history("git status", dir2, datetime!(2024-01-01 12:00 UTC));
 
-        let mut data = CommandData::new(&h1, &interner);
+        let mut data = CommandData::new(&h1, &interner).unwrap();
         data.add_invocation(&h2, &interner);
 
         let (check1, check2, check3) = if cfg!(windows) {
