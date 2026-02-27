@@ -288,7 +288,7 @@ __atuin_search_cmd() {
         popup_width="${ATUIN_TMUX_POPUP_WIDTH:-80%}" # Keep default value anyways
         popup_height="${ATUIN_TMUX_POPUP_HEIGHT:-60%}"
         tmux display-popup -d "$cdir" -w "$popup_width" -h "$popup_height" -E -E -- \
-            sh -c "ATUIN_SESSION='$ATUIN_SESSION' ATUIN_SHELL=bash ATUIN_LOG=error ATUIN_QUERY='$escaped_query' atuin search $escaped_args -i 2>'$result_file'"
+            sh -c "PATH='$PATH' ATUIN_SESSION='$ATUIN_SESSION' ATUIN_SHELL=bash ATUIN_LOG=error ATUIN_QUERY='$escaped_query' atuin search $escaped_args -i 2>'$result_file'"
 
         if [[ -f "$result_file" ]]; then
             cat "$result_file"

@@ -14,8 +14,8 @@ readme.workspace = true
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-atuin-common = { path = "../atuin-common", version = "18.13.0-beta.1" }
-atuin-client = { path = "../atuin-client", version = "18.13.0-beta.1" }
+atuin-common = { path = "../atuin-common", version = "18.13.0-beta.2" }
+atuin-client = { path = "../atuin-client", version = "18.13.0-beta.2" }
 
 eyre = { workspace = true }
 tokio = { workspace = true }

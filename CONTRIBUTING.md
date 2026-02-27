@@ -67,6 +67,51 @@ While iterating on the server, I find it helpful to run a new user on my system,
 
 Our test coverage is currently not the best, but we are working on it! Generally tests live in the file next to the functionality they are testing, and are executed just with `cargo test`.
 
+## Logging and Debugging
+
+### Log Files
+
+Atuin writes logs to `~/.atuin/logs` unless configured otherwise. Log files are rotated daily and retained for 4 days by default:
+
+- `search.log.*` - Interactive search session logs
+- `daemon.log.*` - Background daemon logs
+
+### Log Levels
+
+You can set the `ATUIN_LOG` environment variable to override log verbosity from the config file:
+
+```shell
+ATUIN_LOG=debug atuin search  # Enable debug logging
+ATUIN_LOG=trace atuin search  # Enable trace logging (very verbose)
+```
+
+### Span Timing (Performance Profiling)
+
+For performance analysis, you can capture detailed span timing data as JSON:
+
+```shell
+ATUIN_SPAN=spans.json atuin search
+```
+
+This creates a JSON file with timing information for each instrumented span, including:
+- `time.busy` - Time actively executing code
+- `time.idle` - Time awaiting async operations (I/O, child tasks)
+
+The `scripts/span-table.ts` script analyzes these logs:
+
+```shell
+# Summary view - shows all spans with timing stats
+bun scripts/span-table.ts spans.json
+
+# Detail view - shows individual calls for a specific span
+bun scripts/span-table.ts spans.json --detail daemon_search
+
+# Filter to specific spans
+bun scripts/span-table.ts spans.json --filter "search|hydrate"
+```
+
+This is useful for comparing performance between different search implementations or identifying bottlenecks.
+
 ## Migrations
 
 Be careful creating database migrations - once your database has migrated ahead of current stable, there is no going back

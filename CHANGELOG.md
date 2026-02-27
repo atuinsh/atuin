@@ -10,6 +10,14 @@ All notable changes to this project will be documented in this file.
 - *(docs)* Update Postgres volume path in Docker as required by pg18 ([#3174](https://github.com/atuinsh/atuin/issues/3174))
 - Systemd Exec for separate server binary ([#3176](https://github.com/atuinsh/atuin/issues/3176))
 - Multiline commands with fish ([#3179](https://github.com/atuinsh/atuin/issues/3179))
+- Silent DB failures e.g. when disk is full ([#3183](https://github.com/atuinsh/atuin/issues/3183))
+- Forward $PATH to tmux popup in zsh ([#3198](https://github.com/atuinsh/atuin/issues/3198))
+
+
+### Documentation
+
+- Update config.md to remove NuShell support note ([#3190](https://github.com/atuinsh/atuin/issues/3190))
+- Document `search.filters` ([#3195](https://github.com/atuinsh/atuin/issues/3195))
 
 
 ### Features
@@ -19,10 +27,14 @@ All notable changes to this project will be documented in this file.
 - Add Hub authentication for future sync + extra features ([#3010](https://github.com/atuinsh/atuin/issues/3010))
 - Add Atuin AI inline CLI MVP ([#3178](https://github.com/atuinsh/atuin/issues/3178))
 - Add autostart and pid management to daemon ([#3180](https://github.com/atuinsh/atuin/issues/3180))
+- Generate commands or ask questions with `atuin ai` ([#3199](https://github.com/atuinsh/atuin/issues/3199))
+- Add history author/intent metadata and v1 record version ([#3205](https://github.com/atuinsh/atuin/issues/3205))
+- In-memory search index with atuin daemon ([#3201](https://github.com/atuinsh/atuin/issues/3201))
 
 
 ### Miscellaneous Tasks
 
+- Update changelog
 - Update changelog
 
 

@@ -8,50 +8,95 @@ mod unix {
     use std::time::Duration;
 
     use atuin_client::database::Sqlite;
-    use atuin_client::history::store::HistoryStore;
     use atuin_client::record::sqlite_store::SqliteStore;
-    use atuin_common::record::HostId;
-    use atuin_common::utils::uuid_v7;
+    use atuin_client::settings::{Settings, init_meta_config_for_testing};
     use atuin_daemon::client::HistoryClient;
-    use atuin_daemon::history::history_server::HistoryServer;
-    use atuin_daemon::server::HistoryService;
+    use atuin_daemon::components::HistoryComponent;
+    use atuin_daemon::{Daemon, DaemonHandle};
     use tempfile::TempDir;
     use tokio::net::UnixListener;
-    use tokio::sync::watch;
     use tokio_stream::wrappers::UnixListenerStream;
     use tonic::transport::Server;
 
     /// Spins up a daemon server on a temp socket and returns a connected client,
-    /// the shutdown sender, and the temp dir (must be held to keep paths alive).
-    async fn start_test_daemon() -> (HistoryClient, watch::Sender<bool>, TempDir) {
+    /// the daemon handle (for shutdown), and the temp dir (must be held to keep paths alive).
+    async fn start_test_daemon() -> (HistoryClient, DaemonHandle, TempDir) {
         let tmp = tempfile::tempdir().unwrap();
 
         let db_path = tmp.path().join("history.db");
         let record_path = tmp.path().join("records.db");
+        let key_path = tmp.path().join("key");
+        let socket_path = tmp.path().join("test.sock");
+        let meta_path = tmp.path().join("meta.db");
 
+        // Initialize the meta store config for testing (required for Settings::host_id())
+        init_meta_config_for_testing(meta_path.to_str().unwrap(), 5.0);
+
+        // Build settings with test paths
+        let settings: Settings = Settings::builder()
+            .expect("could not build settings builder")
+            .set_override("db_path", db_path.to_str().unwrap())
+            .expect("failed to set db_path")
+            .set_override("record_store_path", record_path.to_str().unwrap())
+            .expect("failed to set record_store_path")
+            .set_override("key_path", key_path.to_str().unwrap())
+            .expect("failed to set key_path")
+            .set_override("daemon.socket_path", socket_path.to_str().unwrap())
+            .expect("failed to set socket_path")
+            .set_override("meta.db_path", meta_path.to_str().unwrap())
+            .expect("failed to set meta.db_path")
+            .build()
+            .expect("could not build settings")
+            .try_deserialize()
+            .expect("could not deserialize settings");
+
+        // Create databases
         let history_db = Sqlite::new(&db_path, 5.0).await.unwrap();
         let store = SqliteStore::new(&record_path, 5.0).await.unwrap();
 
-        let host_id = HostId(uuid_v7());
-        let encryption_key = [0u8; 32];
-        let history_store = HistoryStore::new(store, host_id, encryption_key);
+        // Create the history component and get its gRPC service
+        let history_component = HistoryComponent::new();
+        let history_service = history_component.grpc_service();
 
-        let (shutdown_tx, shutdown_rx) = watch::channel(false);
-        let service = HistoryService::new(history_store, history_db, shutdown_tx.clone());
+        // Build and start the daemon
+        let mut daemon = Daemon::builder(settings)
+            .store(store)
+            .history_db(history_db)
+            .component(history_component)
+            .build()
+            .await
+            .unwrap();
 
-        let socket_path = tmp.path().join("test.sock");
+        let handle = daemon.handle();
+
+        // Start components (this initializes the history component with the handle)
+        daemon.start_components().await.unwrap();
+
+        // Start the gRPC server
         let uds = UnixListener::bind(&socket_path).unwrap();
         let stream = UnixListenerStream::new(uds);
 
-        let mut rx = shutdown_rx.clone();
+        let server_handle = handle.clone();
         tokio::spawn(async move {
+            let mut rx = server_handle.subscribe();
             Server::builder()
-                .add_service(HistoryServer::new(service))
+                .add_service(history_service)
                 .serve_with_incoming_shutdown(stream, async move {
-                    let _ = rx.changed().await;
+                    loop {
+                        match rx.recv().await {
+                            Ok(atuin_daemon::DaemonEvent::ShutdownRequested) => break,
+                            Ok(_) => continue,
+                            Err(_) => break,
+                        }
+                    }
                 })
                 .await
                 .unwrap();
+        });
+
+        // Spawn the daemon event loop in the background
+        tokio::spawn(async move {
+            daemon.run_event_loop().await.unwrap();
         });
 
         // Give the server a moment to bind.
@@ -61,12 +106,12 @@ mod unix {
             .await
             .unwrap();
 
-        (client, shutdown_tx, tmp)
+        (client, handle, tmp)
     }
 
     #[tokio::test]
     async fn test_status() {
-        let (mut client, _shutdown, _tmp) = start_test_daemon().await;
+        let (mut client, _handle, _tmp) = start_test_daemon().await;
 
         let status = client.status().await.unwrap();
         assert!(status.healthy);
@@ -79,7 +124,7 @@ mod unix {
     async fn test_start_end_history() {
         use atuin_client::history::History;
 
-        let (mut client, _shutdown, _tmp) = start_test_daemon().await;
+        let (mut client, _handle, _tmp) = start_test_daemon().await;
 
         let history = History::daemon()
             .timestamp(time::OffsetDateTime::now_utc())
@@ -102,7 +147,7 @@ mod unix {
 
     #[tokio::test]
     async fn test_end_unknown_history_fails() {
-        let (mut client, _shutdown, _tmp) = start_test_daemon().await;
+        let (mut client, _handle, _tmp) = start_test_daemon().await;
 
         let result = client
             .end_history("nonexistent-id".to_string(), 1000, 0)
@@ -112,7 +157,7 @@ mod unix {
 
     #[tokio::test]
     async fn test_shutdown() {
-        let (mut client, _shutdown_tx, _tmp) = start_test_daemon().await;
+        let (mut client, _handle, _tmp) = start_test_daemon().await;
 
         let accepted = client.shutdown().await.unwrap();
         assert!(accepted);

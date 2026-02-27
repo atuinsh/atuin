@@ -14,9 +14,10 @@ readme.workspace = true
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-atuin-client = { path = "../atuin-client", version = "18.13.0-beta.1" }
-atuin-dotfiles = { path = "../atuin-dotfiles", version = "18.13.0-beta.1" }
-atuin-history = { path = "../atuin-history", version = "18.13.0-beta.1" }
+atuin-client = { path = "../atuin-client" }
+atuin-common = { path = "../atuin-common" }
+atuin-dotfiles = { path = "../atuin-dotfiles" }
+atuin-history = { path = "../atuin-history" }
 
 time = { workspace = true }
 uuid = { workspace = true }
@@ -27,22 +28,25 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 dashmap = "5.5.3"
-tonic-types = "0.12.0"
-tonic = "0.12"
-prost = "0.13"
-prost-types = "0.13"
-tokio-stream = {version="0.1.14", features=["net"]}
+tonic-types = "0.14"
+tonic = "0.14"
+tonic-prost = "0.14"
+prost = "0.14"
+prost-types = "0.14"
+tokio-stream = { version = "0.1.14", features = ["net"] }
 hyper-util = "0.1"
 
 rand.workspace = true
+nucleo = { git = "https://github.com/atuinsh/nucleo-ext.git", branch = "main" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 listenfd = "1.0.1"
 
 [dev-dependencies]
 tempfile = { workspace = true }
-atuin-common = { path = "../atuin-common", version = "18.13.0-beta.1" }
+atuin-common = { path = "../atuin-common", version = "18.13.0-beta.2" }
 
 [build-dependencies]
-protox = "0.8.0"
-tonic-build = "0.12"
+protox = "0.9"
+tonic-build = "0.14"
+tonic-prost-build = "0.14"

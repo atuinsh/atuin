@@ -355,6 +355,8 @@ mod tests {
             cwd: "/toot".to_string(),
             session: "sesh1".to_string(),
             hostname: "hostn".to_string(),
+            author: "hostn".to_string(),
+            intent: None,
             deleted_at: None,
         };
         let next = History {
@@ -366,6 +368,8 @@ mod tests {
             cwd: "/toot".to_string(),
             session: "sesh1".to_string(),
             hostname: "hostn".to_string(),
+            author: "hostn".to_string(),
+            intent: None,
             deleted_at: None,
         };
         let prev = History {
@@ -377,6 +381,8 @@ mod tests {
             cwd: "/toot".to_string(),
             session: "sesh1".to_string(),
             hostname: "hostn".to_string(),
+            author: "hostn".to_string(),
+            intent: None,
             deleted_at: None,
         };
         let stats = HistoryStats {

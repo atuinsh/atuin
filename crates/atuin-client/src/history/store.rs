@@ -10,7 +10,7 @@ use crate::{
 };
 use atuin_common::record::{DecryptedData, Host, HostId, Record, RecordId, RecordIdx};
 
-use super::{HISTORY_TAG, HISTORY_VERSION, History, HistoryId};
+use super::{HISTORY_TAG, HISTORY_VERSION, HISTORY_VERSION_V0, History, HistoryId};
 
 #[derive(Debug, Clone)]
 pub struct HistoryStore {
@@ -196,10 +196,11 @@ impl HistoryStore {
 
         for record in records.into_iter() {
             let hist = match record.version.as_str() {
-                HISTORY_VERSION => {
+                HISTORY_VERSION_V0 | HISTORY_VERSION => {
+                    let version = record.version.clone();
                     let decrypted = record.decrypt::<PASETO_V4>(&self.encryption_key)?;
 
-                    HistoryRecord::deserialize(&decrypted.data, HISTORY_VERSION)
+                    HistoryRecord::deserialize(&decrypted.data, version.as_str())
                 }
                 version => bail!("unknown history version {version:?}"),
             }?;
@@ -257,8 +258,14 @@ impl HistoryStore {
                 continue;
             }
 
+            let version = record.version.clone();
             let decrypted = record.decrypt::<PASETO_V4>(&self.encryption_key)?;
-            let record = HistoryRecord::deserialize(&decrypted.data, HISTORY_VERSION)?;
+            let record = match version.as_str() {
+                HISTORY_VERSION_V0 | HISTORY_VERSION => {
+                    HistoryRecord::deserialize(&decrypted.data, version.as_str())?
+                }
+                version => bail!("unknown history version {version:?}"),
+            };
 
             match record {
                 HistoryRecord::Create(h) => {
@@ -350,14 +357,14 @@ mod tests {
     #[test]
     fn test_serialize_deserialize_create() {
         let bytes = [
-            204, 0, 196, 141, 205, 0, 0, 153, 217, 32, 48, 49, 56, 99, 100, 52, 102, 101, 56, 49,
+            204, 0, 196, 147, 205, 0, 1, 154, 217, 32, 48, 49, 56, 99, 100, 52, 102, 101, 56, 49,
             55, 53, 55, 99, 100, 50, 97, 101, 101, 54, 53, 99, 100, 55, 56, 54, 49, 102, 57, 99,
             56, 49, 207, 23, 166, 251, 212, 181, 82, 0, 0, 100, 0, 162, 108, 115, 217, 41, 47, 85,
             115, 101, 114, 115, 47, 101, 108, 108, 105, 101, 47, 115, 114, 99, 47, 103, 105, 116,
             104, 117, 98, 46, 99, 111, 109, 47, 97, 116, 117, 105, 110, 115, 104, 47, 97, 116, 117,
             105, 110, 217, 32, 48, 49, 56, 99, 100, 52, 102, 101, 97, 100, 56, 57, 55, 53, 57, 55,
             56, 53, 50, 53, 50, 55, 97, 51, 49, 99, 57, 57, 56, 48, 53, 57, 170, 98, 111, 111, 112,
-            58, 101, 108, 108, 105, 101, 192,
+            58, 101, 108, 108, 105, 101, 192, 165, 101, 108, 108, 105, 101,
         ];
 
         let history = History {
@@ -369,6 +376,8 @@ mod tests {
             cwd: "/Users/ellie/src/github.com/atuinsh/atuin".to_owned(),
             session: "018cd4fead897597852527a31c998059".to_owned(),
             hostname: "boop:ellie".to_owned(),
+            author: "ellie".to_owned(),
+            intent: None,
             deleted_at: None,
         };
 

@@ -8,12 +8,22 @@ use eyre::Result;
 
 use super::cursor::Cursor;
 
+#[cfg(feature = "daemon")]
+pub mod daemon;
 pub mod db;
 pub mod skim;
 
-pub fn engine(search_mode: SearchMode) -> Box<dyn SearchEngine> {
+#[allow(unused)] // settings is only used if daemon feature is enabled
+pub fn engine(search_mode: SearchMode, settings: &Settings) -> Box<dyn SearchEngine> {
     match search_mode {
         SearchMode::Skim => Box::new(skim::Search::new()) as Box<_>,
+        #[cfg(feature = "daemon")]
+        SearchMode::DaemonFuzzy => Box::new(daemon::Search::new(settings)) as Box<_>,
+        #[cfg(not(feature = "daemon"))]
+        SearchMode::DaemonFuzzy => {
+            // Fall back to fuzzy mode if daemon feature is not enabled
+            Box::new(db::Search(SearchMode::Fuzzy)) as Box<_>
+        }
         mode => Box::new(db::Search(mode)) as Box<_>,
     }
 }
