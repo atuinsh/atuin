@@ -626,7 +626,7 @@ fn emit_shell_result(action: Action, command: &str, output_for_hook: bool) {
         match action {
             Action::Execute => eprintln!("{command}"),
             Action::Insert => eprintln!("{command}"),
-            Action::Cancel => eprintln!(""),
+            Action::Cancel => eprintln!(),
         }
     }
 }

@@ -88,7 +88,7 @@ pub async fn run(
             ..
         } => {
             if settings.logs.ai_enabled() {
-                init_logging(&settings, args.verbose)?;
+                init_logging(settings, args.verbose)?;
             }
 
             inline::run(
@@ -97,7 +97,7 @@ pub async fn run(
                 args.api_token,
                 keep,
                 debug_state,
-                &settings,
+                settings,
                 hook,
             )
             .await
