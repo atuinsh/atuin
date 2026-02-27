@@ -21,8 +21,8 @@ Default: `null`
 
 The address of the Atuin AI endpoint. Used for AI features like command generation. Only necessary for custom AI endpoints.
 
-### api_key
+### api_token
 
 Default: `null`
 
-The address of the Atuin AI endpoint. Used for AI features like command generation. Only necessary for custom AI endpoints.
+The API token for the Atuin AI endpoint. Used for AI features like command generation. Only necessary for custom AI endpoints.
