@@ -7,45 +7,31 @@
 //! - Frecency-based ranking (frequency + recency)
 //! - Dynamic filtering by directory, host, session, etc.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use atuin_client::history::History;
-use dashmap::{DashMap, DashSet};
+use dashmap::DashMap;
+use lasso::{Spur, ThreadedRodeo};
 use nucleo::{Injector, Nucleo, pattern};
 use time::OffsetDateTime;
 use tokio::sync::RwLock;
 use tracing::{Level, instrument};
+use uuid::Uuid;
 
 use crate::components::search::with_trailing_slash;
 
-/// Data for a single invocation of a command.
-#[derive(Debug, Clone)]
-pub struct Invocation {
-    /// When the command was run.
-    pub timestamp: i64,
-    /// The working directory when the command was run.
-    #[allow(dead_code)]
-    pub cwd: String,
-    /// The hostname where the command was run.
-    #[allow(dead_code)]
-    pub hostname: String,
-    /// The session ID.
-    #[allow(dead_code)]
-    pub session: String,
-    /// The history entry ID (for returning in search results).
-    pub history_id: String,
+/// Parse a UUID string into a 16-byte array.
+/// Returns None if the string is not a valid UUID.
+fn parse_uuid_bytes(s: &str) -> Option<[u8; 16]> {
+    Uuid::parse_str(s).ok().map(|u| *u.as_bytes())
 }
 
-impl From<&History> for Invocation {
-    fn from(history: &History) -> Self {
-        Self {
-            timestamp: history.timestamp.unix_timestamp(),
-            cwd: history.cwd.clone(),
-            hostname: history.hostname.clone(),
-            session: history.session.clone(),
-            history_id: history.id.0.clone(),
-        }
-    }
+/// Format a 16-byte array as a UUID string.
+fn format_uuid_bytes(bytes: &[u8; 16]) -> String {
+    Uuid::from_bytes(*bytes).to_string()
 }
 
 /// Pre-computed frecency data for O(1) lookup.
@@ -103,90 +89,121 @@ impl FrecencyData {
     }
 }
 
-/// Data for a unique command, including all its invocations.
+/// Data for a unique command.
 pub struct CommandData {
-    /// The command text (stored for debugging/logging purposes).
-    #[allow(dead_code)]
-    pub command: String,
-    /// All invocations of this command, sorted by timestamp (newest first).
-    pub invocations: Vec<Invocation>,
+    /// History ID of the most recent invocation (16-byte UUID).
+    most_recent_id: [u8; 16],
+    /// Timestamp of the most recent invocation.
+    most_recent_timestamp: i64,
     /// Pre-computed global frecency.
     pub global_frecency: FrecencyData,
 
     // Pre-computed indexes for O(1) filter lookups
-    /// All directories where this command has been run.
-    directories: DashSet<String>,
-    /// All hostnames where this command has been run.
-    hosts: DashSet<String>,
-    /// All sessions where this command has been run.
-    sessions: DashSet<String>,
+    // Using HashSet instead of DashSet since CommandData lives inside DashMap (already synchronized)
+    /// All directories where this command has been run (interned keys).
+    directories: HashSet<Spur>,
+    /// All hostnames where this command has been run (interned keys).
+    hosts: HashSet<Spur>,
+    /// All sessions where this command has been run (as 16-byte UUIDs).
+    sessions: HashSet<[u8; 16]>,
 }
 
 impl CommandData {
     /// Create a new CommandData from a history entry.
-    pub fn new(history: &History) -> Self {
-        let mut data = Self {
-            command: history.command.clone(),
-            invocations: Vec::new(),
-            global_frecency: FrecencyData::default(),
-            directories: DashSet::new(),
-            hosts: DashSet::new(),
-            sessions: DashSet::new(),
-        };
-        data.add_invocation(history);
-        data
+    /// Returns None if the history entry has invalid UUIDs.
+    pub fn new(history: &History, interner: &ThreadedRodeo) -> Option<Self> {
+        let history_id = parse_uuid_bytes(&history.id.0)?;
+        let session = parse_uuid_bytes(&history.session)?;
+        let timestamp = history.timestamp.unix_timestamp();
+
+        let dir_key = interner.get_or_intern(with_trailing_slash(&history.cwd));
+        let host_key = interner.get_or_intern(&history.hostname);
+
+        let mut directories = HashSet::new();
+        directories.insert(dir_key);
+
+        let mut hosts = HashSet::new();
+        hosts.insert(host_key);
+
+        let mut sessions = HashSet::new();
+        sessions.insert(session);
+
+        let mut global_frecency = FrecencyData::default();
+        global_frecency.record_use(timestamp);
+
+        Some(Self {
+            most_recent_id: history_id,
+            most_recent_timestamp: timestamp,
+            global_frecency,
+            directories,
+            hosts,
+            sessions,
+        })
     }
 
     /// Add an invocation from a history entry.
-    pub fn add_invocation(&mut self, history: &History) {
+    /// Returns false if the history entry has invalid UUIDs.
+    pub fn add_invocation(&mut self, history: &History, interner: &ThreadedRodeo) -> bool {
+        let Some(history_id) = parse_uuid_bytes(&history.id.0) else {
+            return false;
+        };
+        let Some(session) = parse_uuid_bytes(&history.session) else {
+            return false;
+        };
+
         let timestamp = history.timestamp.unix_timestamp();
 
         // Update global frecency
         self.global_frecency.record_use(timestamp);
 
         // Update pre-computed indexes for O(1) filter lookups
-        self.directories.insert(with_trailing_slash(&history.cwd));
-        self.hosts.insert(history.hostname.clone());
-        self.sessions.insert(history.session.clone());
+        let dir_key = interner.get_or_intern(with_trailing_slash(&history.cwd));
+        self.directories.insert(dir_key);
+        self.hosts.insert(interner.get_or_intern(&history.hostname));
+        self.sessions.insert(session);
 
-        let invocation = Invocation::from(history);
+        // Update most recent if this invocation is newer
+        if timestamp > self.most_recent_timestamp {
+            self.most_recent_id = history_id;
+            self.most_recent_timestamp = timestamp;
+        }
 
-        // Insert sorted by timestamp (newest first)
-        let pos = self
-            .invocations
-            .iter()
-            .position(|inv| inv.timestamp < timestamp)
-            .unwrap_or(self.invocations.len());
-        self.invocations.insert(pos, invocation);
+        true
     }
 
     /// Get the most recent history ID for this command.
-    pub fn most_recent_id(&self) -> Option<&str> {
-        self.invocations.first().map(|inv| inv.history_id.as_str())
+    pub fn most_recent_id(&self) -> String {
+        format_uuid_bytes(&self.most_recent_id)
     }
 
     /// Check if any invocation matches a directory filter (exact match).
     /// O(1) lookup using pre-computed index.
-    pub fn has_invocation_in_dir(&self, dir: &str) -> bool {
-        self.directories.contains(dir)
+    pub fn has_invocation_in_dir(&self, dir: &str, interner: &ThreadedRodeo) -> bool {
+        interner
+            .get(dir)
+            .is_some_and(|spur| self.directories.contains(&spur))
     }
 
     /// Check if any invocation matches a directory prefix (workspace/git root).
     /// O(n) where n = number of unique directories for this command.
-    pub fn has_invocation_in_workspace(&self, prefix: &str) -> bool {
-        self.directories.iter().any(|d| d.starts_with(prefix))
+    pub fn has_invocation_in_workspace(&self, prefix: &str, interner: &ThreadedRodeo) -> bool {
+        self.directories
+            .iter()
+            .any(|&spur| interner.resolve(&spur).starts_with(prefix))
     }
 
     /// Check if any invocation matches a hostname.
     /// O(1) lookup using pre-computed index.
-    pub fn has_invocation_on_host(&self, hostname: &str) -> bool {
-        self.hosts.contains(hostname)
+    pub fn has_invocation_on_host(&self, hostname: &str, interner: &ThreadedRodeo) -> bool {
+        interner
+            .get(hostname)
+            .is_some_and(|spur| self.hosts.contains(&spur))
     }
 
     /// Check if any invocation matches a session.
     /// O(1) lookup using pre-computed index.
     pub fn has_invocation_in_session(&self, session: &str) -> bool {
-        self.sessions.contains(session)
+        parse_uuid_bytes(session).is_some_and(|bytes| self.sessions.contains(&bytes))
     }
 }
 
@@ -214,6 +231,10 @@ pub struct QueryContext {
     pub session_id: Option<String>,
 }
 
+/// Shareable frecency map: command -> frecency score.
+/// Wrapped in Arc for zero-copy sharing with scorer callbacks.
+type FrecencyMap = Arc<HashMap<Arc<str>, u32>>;
+
 /// A deduplicated search index with frecency-based ranking.
 ///
 /// Commands are stored by their text, with metadata about all invocations.
@@ -225,14 +246,16 @@ pub struct QueryContext {
 pub struct SearchIndex {
     /// Map from command text to command data.
     /// Using DashMap for concurrent read/write access, wrapped in Arc for sharing with scorer.
-    commands: Arc<DashMap<String, CommandData>>,
+    /// Keys are Arc<str> to enable zero-copy sharing with frecency_map.
+    commands: Arc<DashMap<Arc<str>, CommandData>>,
     /// Nucleo fuzzy matcher - items are command strings.
     nucleo: RwLock<Nucleo<String>>,
     /// Injector for adding new commands to Nucleo.
     injector: Injector<String>,
-    /// Precomputed global frecency map (command -> frecency score).
-    /// Updated by background task. If None, search works without frecency.
-    frecency_map: RwLock<Option<Arc<HashMap<String, u32>>>>,
+    /// Precomputed global frecency map. Updated by background task.
+    frecency_map: RwLock<Option<FrecencyMap>>,
+    /// String interner for deduplicating cwd, hostname, and directory paths.
+    interner: Arc<ThreadedRodeo>,
 }
 
 impl SearchIndex {
@@ -248,6 +271,7 @@ impl SearchIndex {
             nucleo: RwLock::new(nucleo),
             injector,
             frecency_map: RwLock::new(None),
+            interner: Arc::new(ThreadedRodeo::new()),
         }
     }
 
@@ -256,16 +280,21 @@ impl SearchIndex {
     /// If the command already exists, updates its invocation data.
     /// If it's a new command, adds it to both the map and Nucleo.
     pub fn add_history(&self, history: &History) {
-        let command = &history.command;
+        let command = history.command.as_str();
 
+        // DashMap with Arc<str> keys can be looked up with &str via Borrow trait
         if let Some(mut entry) = self.commands.get_mut(command) {
             // Existing command - just update invocations
-            entry.add_invocation(history);
+            entry.add_invocation(history, &self.interner);
         } else {
-            // New command - add to both map and Nucleo
-            let data = CommandData::new(history);
-            self.commands.insert(command.clone(), data);
-            self.injector.push(command.clone(), |cmd, cols| {
+            // New command - create Arc<str> once and share it
+            let Some(data) = CommandData::new(history, &self.interner) else {
+                return; // Invalid UUIDs, skip this entry
+            };
+            let command_arc: Arc<str> = command.into();
+            self.commands.insert(Arc::clone(&command_arc), data);
+            // Nucleo still needs String (unavoidable copy for fuzzy matching)
+            self.injector.push(command_arc.to_string(), |cmd, cols| {
                 cols[0] = cmd.clone().into();
             });
         }
@@ -337,9 +366,10 @@ impl SearchIndex {
                 .matched_items(..matched_count)
                 .filter_map(|item| {
                     let cmd = item.data;
+                    // DashMap<Arc<str>, _>::get accepts &str via Borrow trait
                     self.commands
-                        .get(cmd)
-                        .and_then(|data| data.most_recent_id().map(|s| s.to_string()))
+                        .get(cmd.as_str())
+                        .map(|data| data.most_recent_id())
                 })
                 .collect()
         })
@@ -352,11 +382,12 @@ impl SearchIndex {
     #[instrument(skip_all, level = tracing::Level::DEBUG, name = "rebuild_frecency")]
     pub async fn rebuild_frecency(&self) {
         let now = OffsetDateTime::now_utc().unix_timestamp();
-        let mut frecency_map: HashMap<String, u32> = HashMap::new();
+        let mut frecency_map: HashMap<Arc<str>, u32> = HashMap::new();
 
         for entry in self.commands.iter() {
             let frecency = entry.global_frecency.compute(now);
-            frecency_map.insert(entry.key().clone(), frecency);
+            // Arc::clone is cheap - just increments reference count
+            frecency_map.insert(Arc::clone(entry.key()), frecency);
         }
 
         *self.frecency_map.write().await = Some(Arc::new(frecency_map));
@@ -370,18 +401,26 @@ impl SearchIndex {
         }
 
         // Pre-compute which commands pass the filter
-        let passing_commands: Arc<std::collections::HashSet<String>> = {
-            let mut set = std::collections::HashSet::new();
+        // Use HashSet<String> for the short-lived filter (simpler than Arc lookup)
+        let passing_commands: Arc<HashSet<String>> = {
+            let mut set = HashSet::new();
             for entry in self.commands.iter() {
                 let passes = match mode {
                     IndexFilterMode::Global => unreachable!(),
-                    IndexFilterMode::Directory(dir) => entry.has_invocation_in_dir(dir),
-                    IndexFilterMode::Workspace(prefix) => entry.has_invocation_in_workspace(prefix),
-                    IndexFilterMode::Host(hostname) => entry.has_invocation_on_host(hostname),
+                    IndexFilterMode::Directory(dir) => {
+                        entry.has_invocation_in_dir(dir, &self.interner)
+                    }
+                    IndexFilterMode::Workspace(prefix) => {
+                        entry.has_invocation_in_workspace(prefix, &self.interner)
+                    }
+                    IndexFilterMode::Host(hostname) => {
+                        entry.has_invocation_on_host(hostname, &self.interner)
+                    }
                     IndexFilterMode::Session(session) => entry.has_invocation_in_session(session),
                 };
                 if passes {
-                    set.insert(entry.key().clone());
+                    // Convert Arc<str> to String for filter lookup
+                    set.insert(entry.key().to_string());
                 }
             }
             Arc::new(set)
@@ -393,12 +432,11 @@ impl SearchIndex {
     /// Build scorer from precomputed frecency map.
     ///
     /// Returns None if frecency map is not available (search still works, just without frecency ranking).
-    fn build_scorer(
-        frecency_map: Option<Arc<HashMap<String, u32>>>,
-    ) -> Option<nucleo::Scorer<String>> {
+    fn build_scorer(frecency_map: Option<FrecencyMap>) -> Option<nucleo::Scorer<String>> {
         let map = frecency_map?;
         Some(Arc::new(move |cmd: &String, fuzzy_score: u32| {
-            let frecency = map.get(cmd).copied().unwrap_or(0);
+            // HashMap<Arc<str>, _>::get accepts &str via Borrow trait
+            let frecency = map.get(cmd.as_str()).copied().unwrap_or(0);
             fuzzy_score + frecency
         }))
     }
@@ -453,6 +491,8 @@ mod tests {
 
     #[test]
     fn command_data_add_invocation() {
+        let interner = ThreadedRodeo::new();
+
         let (dir1, dir2) = if cfg!(windows) {
             ("C:\\Users\\User\\project", "C:\\Users\\User\\other")
         } else {
@@ -462,21 +502,22 @@ mod tests {
         let history1 = make_history("git status", dir1, datetime!(2024-01-01 10:00 UTC));
         let history2 = make_history("git status", dir2, datetime!(2024-01-01 12:00 UTC));
 
-        let mut data = CommandData::new(&history1);
-        assert_eq!(data.invocations.len(), 1);
+        let mut data = CommandData::new(&history1, &interner).unwrap();
         assert_eq!(data.global_frecency.count, 1);
+        let id1 = data.most_recent_id();
 
-        data.add_invocation(&history2);
-        assert_eq!(data.invocations.len(), 2);
+        data.add_invocation(&history2, &interner);
         assert_eq!(data.global_frecency.count, 2);
 
-        // Most recent should be first
-        assert_eq!(data.invocations[0].cwd, dir2);
-        assert_eq!(data.invocations[1].cwd, dir1);
+        // Most recent ID should update to history2 (newer timestamp)
+        let id2 = data.most_recent_id();
+        assert_ne!(id1, id2);
     }
 
     #[test]
     fn command_data_filters() {
+        let interner = ThreadedRodeo::new();
+
         let (dir1, dir2) = if cfg!(windows) {
             ("C:\\Users\\User\\project", "C:\\Users\\User\\other")
         } else {
@@ -486,8 +527,8 @@ mod tests {
         let h1 = make_history("git status", dir1, datetime!(2024-01-01 10:00 UTC));
         let h2 = make_history("git status", dir2, datetime!(2024-01-01 12:00 UTC));
 
-        let mut data = CommandData::new(&h1);
-        data.add_invocation(&h2);
+        let mut data = CommandData::new(&h1, &interner).unwrap();
+        data.add_invocation(&h2, &interner);
 
         let (check1, check2, check3) = if cfg!(windows) {
             (
@@ -503,9 +544,9 @@ mod tests {
             )
         };
 
-        assert!(data.has_invocation_in_dir(&check1));
-        assert!(data.has_invocation_in_dir(&check2));
-        assert!(!data.has_invocation_in_dir(&check3));
+        assert!(data.has_invocation_in_dir(&check1, &interner));
+        assert!(data.has_invocation_in_dir(&check2, &interner));
+        assert!(!data.has_invocation_in_dir(&check3, &interner));
 
         let (check1, check2, check3) = if cfg!(windows) {
             (
@@ -521,9 +562,9 @@ mod tests {
             )
         };
 
-        assert!(data.has_invocation_in_workspace(&check1));
-        assert!(data.has_invocation_in_workspace(&check2));
-        assert!(!data.has_invocation_in_workspace(&check3));
+        assert!(data.has_invocation_in_workspace(&check1, &interner));
+        assert!(data.has_invocation_in_workspace(&check2, &interner));
+        assert!(!data.has_invocation_in_workspace(&check3, &interner));
     }
 
     #[tokio::test]

@@ -28,6 +28,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 dashmap = "5.5.3"
+lasso = { version = "0.7", features = ["multi-threaded"] }
 tonic-types = "0.14"
 tonic = "0.14"
 tonic-prost = "0.14"
