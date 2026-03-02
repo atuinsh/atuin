@@ -1,5 +1,5 @@
 [package]
-name = "atuin-terminal"
+name = "atuin-shell"
 edition = "2024"
 description = "a terminal emulator for atuin"
 
@@ -11,8 +11,11 @@ homepage = { workspace = true }
 repository = { workspace = true }
 
 [[bin]]
-name = "atuin-terminal"
+name = "atuin-shell"
 path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true }
 
 [target.'cfg(all(unix, not(target_os = "illumos")))'.dependencies]
 crossterm = { workspace = true }
