@@ -12,12 +12,15 @@ All notable changes to this project will be documented in this file.
 - Multiline commands with fish ([#3179](https://github.com/atuinsh/atuin/issues/3179))
 - Silent DB failures e.g. when disk is full ([#3183](https://github.com/atuinsh/atuin/issues/3183))
 - Forward $PATH to tmux popup in zsh ([#3198](https://github.com/atuinsh/atuin/issues/3198))
+- Dramatically decrease daemon memory usage ([#3211](https://github.com/atuinsh/atuin/issues/3211))
+- Regen cargo dist
 
 
 ### Documentation
 
 - Update config.md to remove NuShell support note ([#3190](https://github.com/atuinsh/atuin/issues/3190))
 - Document `search.filters` ([#3195](https://github.com/atuinsh/atuin/issues/3195))
+- Clean up doc references for sqlite-based self-hosting ([#3216](https://github.com/atuinsh/atuin/issues/3216))
 
 
 ### Features
@@ -36,6 +39,9 @@ All notable changes to this project will be documented in this file.
 
 - Update changelog
 - Update changelog
+- Update changelog
+- Use workspace versions ([#3210](https://github.com/atuinsh/atuin/issues/3210))
+- Move atuin ai subcommand into core binary ([#3212](https://github.com/atuinsh/atuin/issues/3212))
 
 
 ## [18.12.1] - 2026-02-11
