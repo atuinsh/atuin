@@ -44,15 +44,19 @@ ATUIN_DB_URI="postgres://user:password@hostname/database"
 | `db_uri`            | A valid PostgreSQL URI, for saving history (default: false)    |
 | `path`              | A path to prepend to all routes of the server (default: false) |
 
-For sqlite, substitute the following:
+For sqlite, use the following in your server.toml:
 
+```toml
 db_uri="sqlite:///config/atuin.db"
+```
 
+Alternatively, provide the Database URI via an environment variable
+
+```sh
 ATUIN_DB_URI="sqlite:///config/atuin.db"
+```
 
-These will create the database in the /config directory.
-
-You will need to map some sort of persistent volume for the /config directory and it should be writable by the atuin server.
+These will create the database in the `/config` directory. Be sure to map a persistent volume to the `/config` directory that is writable by the atuin server.
 
 ### TLS
 
