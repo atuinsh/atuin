@@ -42,12 +42,12 @@ clipboard = ["arboard"]
 check-update = ["atuin-client/check-update"]
 
 [dependencies]
-atuin-ai = { path = "../atuin-ai", version = "18.13.0-beta.2", optional = true, default-features = false }
-atuin-client = { path = "../atuin-client", version = "18.13.0-beta.2", optional = true, default-features = false }
+atuin-ai = { path = "../atuin-ai", version = "18.13.0-beta.3", optional = true, default-features = false }
+atuin-client = { path = "../atuin-client", version = "18.13.0-beta.3", optional = true, default-features = false }
 atuin-common = { workspace = true }
 atuin-dotfiles = { workspace = true }
 atuin-history = { workspace = true }
-atuin-daemon = { path = "../atuin-daemon", version = "18.13.0-beta.2", optional = true, default-features = false }
+atuin-daemon = { path = "../atuin-daemon", version = "18.13.0-beta.3", optional = true, default-features = false }
 atuin-scripts = { workspace = true }
 atuin-kv = { workspace = true }
 
