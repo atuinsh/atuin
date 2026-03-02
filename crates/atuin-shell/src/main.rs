@@ -1,3 +1,5 @@
+mod osc133;
+
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
 #[derive(Parser, Debug)]
@@ -238,14 +240,19 @@ mod app {
 
         terminal::enable_raw_mode()?;
 
-        // PTY -> stdout
+        // PTY -> stdout (with OSC 133 parsing)
         let stdout_thread = std::thread::spawn(move || {
             let mut stdout = std::io::stdout();
+            let mut parser = crate::osc133::Parser::new();
             let mut buf = [0u8; 8192];
             loop {
                 match pty_reader.read(&mut buf) {
                     Ok(0) | Err(_) => break,
                     Ok(n) => {
+                        parser.push(&buf[..n], |_event| {
+                            // Zone transitions are tracked inside the parser.
+                            // Callers can query parser.zone() after push.
+                        });
                         if stdout.write_all(&buf[..n]).is_err() {
                             break;
                         }
