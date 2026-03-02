@@ -543,9 +543,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "atuin-terminal"
+name = "atuin-shell"
 version = "18.13.0-beta.2"
 dependencies = [
+ "clap",
  "crossterm",
  "eyre",
  "portable-pty",
