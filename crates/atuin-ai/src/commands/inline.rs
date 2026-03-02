@@ -19,12 +19,12 @@ use tracing::{debug, error, info, trace};
 
 pub async fn run(
     initial_command: Option<String>,
-    natural_language: bool,
     api_endpoint: Option<String>,
     api_token: Option<String>,
     keep_output: bool,
     debug_state_file: Option<String>,
     settings: &atuin_client::settings::Settings,
+    output_for_hook: bool,
 ) -> Result<()> {
     // Install panic hook once at entry point to ensure terminal restoration
     install_panic_hook();
@@ -36,11 +36,11 @@ pub async fn run(
     let endpoint = api_endpoint.as_deref().unwrap_or(
         settings
             .ai
-            .ai_endpoint
+            .endpoint
             .as_deref()
             .unwrap_or("https://hub.atuin.sh"),
     );
-    let api_token = api_token.as_deref().or(settings.ai.ai_api_token.as_deref());
+    let api_token = api_token.as_deref().or(settings.ai.api_token.as_deref());
 
     let token = if let Some(token) = &api_token {
         token.to_string()
@@ -51,17 +51,13 @@ pub async fn run(
     let action = run_inline_tui(
         endpoint.to_string(),
         token,
-        if natural_language {
-            None
-        } else {
-            initial_command
-        },
+        initial_command,
         keep_output,
         debug_state_file,
         settings,
     )
     .await?;
-    emit_shell_result(action.0, &action.1);
+    emit_shell_result(action.0, &action.1, output_for_hook);
 
     Ok(())
 }
@@ -619,11 +615,19 @@ impl Drop for RawModeGuard {
     }
 }
 
-fn emit_shell_result(action: Action, command: &str) {
-    match action {
-        Action::Execute => eprintln!("__atuin_ai_execute__:{command}"),
-        Action::Insert => eprintln!("__atuin_ai_insert__:{command}"),
-        Action::Cancel => eprintln!("__atuin_ai_cancel__"),
+fn emit_shell_result(action: Action, command: &str, output_for_hook: bool) {
+    if output_for_hook {
+        match action {
+            Action::Execute => eprintln!("__atuin_ai_execute__:{command}"),
+            Action::Insert => eprintln!("__atuin_ai_insert__:{command}"),
+            Action::Cancel => eprintln!("__atuin_ai_cancel__"),
+        }
+    } else {
+        match action {
+            Action::Execute => eprintln!("{command}"),
+            Action::Insert => eprintln!("{command}"),
+            Action::Cancel => eprintln!(),
+        }
     }
 }
 

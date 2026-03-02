@@ -1,6 +1,6 @@
 # Atuin AI
 
-Atuin AI is a separate binary that enables command generation and other information lookup via an LLM directly from your terminal. It is completely opt-in, and will not change the behavior of Atuin at all if you choose not to use it.
+Atuin AI is a subcommand that enables shell command generation and other information lookup via an LLM directly from your terminal. It is completely opt-in, and will not change the behavior of Atuin at all if you choose not to use it.
 
 Atuin AI requires an account on [Atuin Hub](https://hub.atuin.sh/), and you'll be prompted to login upon first use of the binary.
 

@@ -4,7 +4,7 @@ use std::{
 };
 
 use atuin_common::shell::Shell;
-use clap::{Parser, Subcommand};
+use clap::{Args, Subcommand};
 use eyre::Result;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{EnvFilter, Layer, fmt, layer::SubscriberExt, util::SubscriberInitExt};
@@ -14,27 +14,23 @@ pub mod debug_render;
 pub mod init;
 pub mod inline;
 
-#[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
-struct Cli {
+#[derive(Args, Debug)]
+pub struct AiArgs {
     /// Enable verbose logging
     #[arg(short, long, global = true)]
     verbose: bool,
 
-    /// Custom API endpoint
-    #[arg(long, global = true, env = "ATUIN_AI_API_ENDPOINT")]
+    /// Custom API endpoint; defaults to reading from the `ai.endpoint` setting.
+    #[arg(long, global = true)]
     api_endpoint: Option<String>,
 
-    /// Custom API token
-    #[arg(long, global = true, env = "ATUIN_AI_API_TOKEN")]
+    /// Custom API token; defaults to reading from the `ai.api_token` setting.
+    #[arg(long, global = true)]
     api_token: Option<String>,
-
-    #[command(subcommand)]
-    command: Commands,
 }
 
 #[derive(Subcommand, Debug)]
-enum Commands {
+pub enum Commands {
     /// Initialize shell integration
     Init {
         /// Shell to generate integration for; defaults to "auto"
@@ -44,20 +40,23 @@ enum Commands {
 
     /// Inline completion mode with small TUI overlay
     Inline {
+        #[command(flatten)]
+        args: AiArgs,
+
         /// Current command line to complete
         #[arg(value_name = "COMMAND")]
         command: Option<String>,
-
-        /// Start in natural language mode
-        #[arg(long)]
-        natural_language: bool,
 
         /// Keep TUI output visible after exit (default: erase)
         #[arg(long)]
         keep: bool,
 
+        /// Use the hook mode
+        #[arg(long, hide = true)]
+        hook: bool,
+
         /// Log state changes to file for debugging (dev tool)
-        #[arg(long, value_name = "FILE")]
+        #[arg(long, value_name = "FILE", hide = true)]
         debug_state: Option<String>,
     },
 
@@ -74,31 +73,32 @@ enum Commands {
     },
 }
 
-pub async fn run() -> eyre::Result<()> {
-    let cli = Cli::parse();
-
-    let settings = atuin_client::settings::Settings::new()?;
-
-    if settings.logs.ai_enabled() {
-        init_logging(&settings, cli.verbose)?;
-    }
-
-    match cli.command {
+pub async fn run(
+    command: Commands,
+    settings: &atuin_client::settings::Settings,
+) -> eyre::Result<()> {
+    match command {
         Commands::Init { shell } => init::run(shell).await,
         Commands::Inline {
             command,
-            natural_language,
             keep,
             debug_state,
+            hook,
+            args,
+            ..
         } => {
+            if settings.logs.ai_enabled() {
+                init_logging(settings, args.verbose)?;
+            }
+
             inline::run(
                 command,
-                natural_language,
-                cli.api_endpoint,
-                cli.api_token,
+                args.api_endpoint,
+                args.api_token,
                 keep,
                 debug_state,
-                &settings,
+                settings,
+                hook,
             )
             .await
         }
@@ -137,12 +137,10 @@ fn init_logging(settings: &atuin_client::settings::Settings, verbose: bool) -> R
     };
 
     let log_dir = PathBuf::from(&settings.logs.dir);
-    fs::create_dir_all(&log_dir)?;
-
-    let filename = settings.logs.ai.file.clone();
+    let ai_log_filename = settings.logs.ai.file.clone();
 
     // Clean up old log files
-    cleanup_old_logs(&log_dir, &filename, settings.logs.ai_retention());
+    cleanup_old_logs(&log_dir, &ai_log_filename, settings.logs.ai_retention());
 
     let console_layer = if verbose {
         Some(
@@ -156,7 +154,7 @@ fn init_logging(settings: &atuin_client::settings::Settings, verbose: bool) -> R
         None
     };
 
-    let file_appender = RollingFileAppender::new(Rotation::DAILY, &log_dir, &filename);
+    let file_appender = RollingFileAppender::new(Rotation::DAILY, &log_dir, &ai_log_filename);
 
     let base = tracing_subscriber::registry().with(
         fmt::layer()

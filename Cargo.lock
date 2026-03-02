@@ -215,6 +215,7 @@ version = "18.13.0-beta.2"
 dependencies = [
  "arboard",
  "async-trait",
+ "atuin-ai",
  "atuin-client",
  "atuin-common",
  "atuin-daemon",

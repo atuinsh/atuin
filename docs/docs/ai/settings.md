@@ -14,3 +14,15 @@ Whether or not to include your current working directory in the context sent to 
 [ai]
 send_cwd = true
 ```
+
+### endpoint
+
+Default: `null`
+
+The address of the Atuin AI endpoint. Used for AI features like command generation. Only necessary for custom AI endpoints.
+
+### api_token
+
+Default: `null`
+
+The API token for the Atuin AI endpoint. Used for AI features like command generation. Only necessary for custom AI endpoints.

@@ -38,7 +38,7 @@ _atuin_ai_question_mark() {
     if [[ -z "$BUFFER" || "$BUFFER" == "?" ]]; then
         BUFFER=""
         local output
-        output=$(atuin-ai inline --natural-language 3>&1 1>&2 2>&3)
+        output=$(atuin ai inline --hook 3>&1 1>&2 2>&3)
 
         # Clean up the inline viewport
         _atuin_ai_cleanup
@@ -84,7 +84,7 @@ _atuin_ai_question_mark() {
         READLINE_POINT=0
 
         local output
-        output=$(atuin-ai inline --natural-language 3>&1 1>&2 2>&3)
+        output=$(atuin ai inline --hook 3>&1 1>&2 2>&3)
 
         if [[ $output == __atuin_ai_cancel__ ]]; then
             # User cancelled, do nothing
@@ -142,8 +142,8 @@ function _atuin_ai_question_mark
     if test -z "$buf" -o "$buf" = "?"
         commandline -r ""
 
-        # Run atuin-ai inline, swapping stdout and stderr
-        set -l output (atuin-ai inline --natural-language 3>&1 1>&2 2>&3 | string collect)
+        # Run atuin ai inline, swapping stdout and stderr
+        set -l output (atuin ai inline --hook 3>&1 1>&2 2>&3 | string collect)
 
         if test "$output" = "__atuin_ai_cancel__"
             # User cancelled, do nothing
@@ -187,7 +187,7 @@ mod tests {
         let result = generate_zsh_integration();
         assert!(result.contains("_atuin_ai_question_mark"));
         assert!(result.contains("bindkey"));
-        assert!(result.contains("atuin-ai inline"));
+        assert!(result.contains("atuin ai inline --hook"));
         assert!(result.contains("__atuin_ai_cancel__"));
         assert!(result.contains("__atuin_ai_execute__"));
         assert!(result.contains("__atuin_ai_insert__"));
@@ -199,7 +199,7 @@ mod tests {
         assert!(result.contains("_atuin_ai_question_mark"));
         assert!(result.contains("bind"));
         assert!(result.contains("READLINE_LINE"));
-        assert!(result.contains("atuin-ai inline"));
+        assert!(result.contains("atuin ai inline --hook"));
         assert!(result.contains("__atuin_ai_cancel__"));
         assert!(result.contains("__atuin_ai_execute__"));
         assert!(result.contains("__atuin_ai_insert__"));
@@ -211,7 +211,7 @@ mod tests {
         assert!(result.contains("_atuin_ai_question_mark"));
         assert!(result.contains("bind"));
         assert!(result.contains("commandline"));
-        assert!(result.contains("atuin-ai inline"));
+        assert!(result.contains("atuin ai inline --hook"));
         assert!(result.contains("__atuin_ai_cancel__"));
         assert!(result.contains("__atuin_ai_execute__"));
         assert!(result.contains("__atuin_ai_insert__"));

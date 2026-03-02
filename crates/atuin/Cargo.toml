@@ -33,14 +33,16 @@ buildflags = ["--release"]
 atuin = { path = "/usr/bin/atuin" }
 
 [features]
-default = ["client", "sync", "clipboard", "check-update", "daemon"]
+default = ["client", "sync", "clipboard", "check-update", "daemon", "ai"]
 client = ["atuin-client"]
 sync = ["atuin-client/sync"]
 daemon = ["atuin-client/daemon", "atuin-daemon"]
+ai = ["atuin-ai"]
 clipboard = ["arboard"]
 check-update = ["atuin-client/check-update"]
 
 [dependencies]
+atuin-ai = { path = "../atuin-ai", version = "18.13.0-beta.2", optional = true, default-features = false }
 atuin-client = { path = "../atuin-client", version = "18.13.0-beta.2", optional = true, default-features = false }
 atuin-common = { workspace = true }
 atuin-dotfiles = { workspace = true }
