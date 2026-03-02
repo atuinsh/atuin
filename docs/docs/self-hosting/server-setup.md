@@ -50,13 +50,13 @@ For sqlite, use the following in your server.toml:
 db_uri="sqlite:///config/atuin.db"
 ```
 
-Alernatively, provide the Database URI via an environment variable
+Alternatively, provide the Database URI via an environment variable
 
 ```sh
 ATUIN_DB_URI="sqlite:///config/atuin.db"
 ```
 
-These will create the database in the `/config` directory. Be sure to map a persistent volume to the `/config directory that is writable by the atuin server.
+These will create the database in the `/config` directory. Be sure to map a persistent volume to the `/config` directory that is writable by the atuin server.
 
 ### TLS
 
