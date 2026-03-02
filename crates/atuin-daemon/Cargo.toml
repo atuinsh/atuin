@@ -27,7 +27,7 @@ eyre = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
-dashmap = "5.5.3"
+dashmap = "6.1.0"
 lasso = { version = "0.7", features = ["multi-threaded"] }
 tonic-types = "0.14"
 tonic = "0.14"

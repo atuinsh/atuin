@@ -376,7 +376,7 @@ dependencies = [
  "atuin-common",
  "atuin-dotfiles",
  "atuin-history",
- "dashmap 5.5.3",
+ "dashmap",
  "eyre",
  "hyper-util",
  "lasso",
@@ -1252,19 +1252,6 @@ dependencies = [
  "darling_core 0.23.0",
  "quote",
  "syn 2.0.117",
-]
-
-[[package]]
-name = "dashmap"
-version = "5.5.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "978747c1d849a7d2ee5e8adc0159961c48fb7e5db2f06af6723b80123bb53856"
-dependencies = [
- "cfg-if",
- "hashbrown 0.14.5",
- "lock_api",
- "once_cell",
- "parking_lot_core",
 ]
 
 [[package]]
@@ -2495,7 +2482,7 @@ version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6e14eda50a3494b3bf7b9ce51c52434a761e383d7238ce1dd5dcec2fbc13e9fb"
 dependencies = [
- "dashmap 6.1.0",
+ "dashmap",
  "hashbrown 0.14.5",
 ]
 
