@@ -355,7 +355,7 @@ dependencies = [
  "base64",
  "directories",
  "eyre",
- "getrandom 0.2.17",
+ "getrandom 0.4.2",
  "pretty_assertions",
  "rustls",
  "semver",
