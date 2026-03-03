@@ -39,10 +39,11 @@ pub enum Event {
 }
 
 /// The current semantic zone as determined by the most recent OSC 133 marker.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
 pub enum Zone {
     /// No marker seen yet, or after a `D` marker (between commands).
+    #[default]
     Unknown,
     /// Between `A` and `B` — the shell is rendering its prompt.
     Prompt,
@@ -50,12 +51,6 @@ pub enum Zone {
     Input,
     /// Between `C` and `D` — command output is being produced.
     Output,
-}
-
-impl Default for Zone {
-    fn default() -> Self {
-        Self::Unknown
-    }
 }
 
 // ---------------------------------------------------------------------------
