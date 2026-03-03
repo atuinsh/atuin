@@ -16,6 +16,17 @@ then the manual steps below offer much more flexibility.
 curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | sh
 ```
 
+The install script will walk you through importing your shell history and setting
+up a sync account. To skip these interactive prompts (e.g. in CI or
+Dockerfiles), pass `--non-interactive`:
+
+```shell
+curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | sh -s -- --non-interactive
+```
+
+The script also automatically detects non-interactive environments (piped input,
+no TTY) and skips the prompts in those cases.
+
 [**Set up sync** - Move on to the next step, or read on to manually install Atuin instead.](sync.md)
 
 ### On Windows
