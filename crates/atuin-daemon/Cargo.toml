@@ -38,7 +38,8 @@ tokio-stream = { version = "0.1.14", features = ["net"] }
 hyper-util = "0.1"
 
 rand.workspace = true
-nucleo = { git = "https://github.com/atuinsh/nucleo-ext.git", branch = "main" }
+nucleo = { git = "https://github.com/atuinsh/nucleo-ext.git", rev="74bd786" }
+
 
 [target.'cfg(target_os = "linux")'.dependencies]
 listenfd = "1.0.1"

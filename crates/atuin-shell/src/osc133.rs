@@ -287,9 +287,7 @@ mod tests {
         let data = b"\x1b]133;D;0\x07";
         assert_eq!(
             parse_events(data),
-            vec![Event::CommandFinished {
-                exit_code: Some(0)
-            }]
+            vec![Event::CommandFinished { exit_code: Some(0) }]
         );
     }
 
@@ -366,9 +364,7 @@ mod tests {
                 Event::PromptStart,
                 Event::CommandStart,
                 Event::CommandExecuted,
-                Event::CommandFinished {
-                    exit_code: Some(0)
-                },
+                Event::CommandFinished { exit_code: Some(0) },
             ]
         );
     }
@@ -385,9 +381,7 @@ mod tests {
                 Event::PromptStart,
                 Event::CommandStart,
                 Event::CommandExecuted,
-                Event::CommandFinished {
-                    exit_code: Some(0)
-                },
+                Event::CommandFinished { exit_code: Some(0) },
             ]
         );
     }
@@ -595,9 +589,7 @@ mod tests {
                 Event::PromptStart,
                 Event::CommandStart,
                 Event::CommandExecuted,
-                Event::CommandFinished {
-                    exit_code: Some(1)
-                },
+                Event::CommandFinished { exit_code: Some(1) },
             ]
         );
     }
