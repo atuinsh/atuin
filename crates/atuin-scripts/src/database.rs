@@ -188,6 +188,19 @@ impl Database {
         Ok(res)
     }
 
+    pub async fn clear(&self) -> Result<()> {
+        debug!("clearing all scripts from sqlite");
+
+        sqlx::query("delete from script_tags")
+            .execute(&self.pool)
+            .await?;
+        sqlx::query("delete from scripts")
+            .execute(&self.pool)
+            .await?;
+
+        Ok(())
+    }
+
     pub async fn delete(&self, id: &str) -> Result<()> {
         debug!("deleting script {}", id);
 
