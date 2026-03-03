@@ -1,4 +1,7 @@
+mod filter;
 mod osc133;
+#[cfg(all(unix, not(target_os = "illumos")))]
+mod popup;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
@@ -172,9 +175,12 @@ mod app {
 #[cfg(all(unix, not(target_os = "illumos")))]
 mod app {
     use std::io::{Read, Write};
+    use std::sync::{Arc, Mutex};
 
     use crossterm::terminal;
     use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+
+    use crate::filter::{Filter, Request};
 
     pub(crate) fn main() {
         if let Err(e) = run() {
@@ -204,19 +210,19 @@ mod app {
             .spawn_command(cmd)
             .map_err(|e| eyre::eyre!("{e:#}"))?;
 
-        // Close slave side in parent process
+        // Close slave side in parent process.
         drop(pair.slave);
 
         let mut pty_reader = pair
             .master
             .try_clone_reader()
             .map_err(|e| eyre::eyre!("{e:#}"))?;
-        let mut pty_writer = pair
+        let pty_writer: Box<dyn Write + Send> = pair
             .master
             .take_writer()
             .map_err(|e| eyre::eyre!("{e:#}"))?;
 
-        // Handle terminal resize via SIGWINCH
+        // Handle terminal resize via SIGWINCH.
         {
             use signal_hook::consts::SIGWINCH;
             use signal_hook::iterator::Signals;
@@ -240,29 +246,13 @@ mod app {
 
         terminal::enable_raw_mode()?;
 
-        // PTY -> stdout (with OSC 133 parsing)
-        let stdout_thread = std::thread::spawn(move || {
-            let mut stdout = std::io::stdout();
-            let mut parser = crate::osc133::Parser::new();
-            let mut buf = [0u8; 8192];
-            loop {
-                match pty_reader.read(&mut buf) {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => {
-                        parser.push(&buf[..n], |_event| {
-                            // Zone transitions are tracked inside the parser.
-                            // Callers can query parser.zone() after push.
-                        });
-                        if stdout.write_all(&buf[..n]).is_err() {
-                            break;
-                        }
-                        let _ = stdout.flush();
-                    }
-                }
-            }
-        });
+        // Shared stdin writer — the stdin thread always writes here.
+        // During a popup the writer is temporarily swapped to the popup PTY.
+        let stdin_writer: Arc<Mutex<Box<dyn Write + Send>>> =
+            Arc::new(Mutex::new(pty_writer));
 
-        // stdin -> PTY
+        // stdin → current writer target
+        let writer_for_stdin = Arc::clone(&stdin_writer);
         std::thread::spawn(move || {
             let mut stdin = std::io::stdin();
             let mut buf = [0u8; 8192];
@@ -270,9 +260,30 @@ mod app {
                 match stdin.read(&mut buf) {
                     Ok(0) | Err(_) => break,
                     Ok(n) => {
-                        if pty_writer.write_all(&buf[..n]).is_err() {
+                        let mut w = writer_for_stdin.lock().unwrap();
+                        if w.write_all(&buf[..n]).is_err() {
                             break;
                         }
+                    }
+                }
+            }
+        });
+
+        // PTY → stdout (with filtering + popup handling)
+        let writer_for_popup = Arc::clone(&stdin_writer);
+        let stdout_thread = std::thread::spawn(move || {
+            let mut stdout = std::io::stdout();
+            let mut filter = Filter::new();
+            let mut buf = [0u8; 8192];
+            loop {
+                match pty_reader.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        if let Some(req) = filter.push(&buf[..n], &mut stdout) {
+                            let _ = stdout.flush();
+                            handle_request(req, &writer_for_popup);
+                        }
+                        let _ = stdout.flush();
                     }
                 }
             }
@@ -284,6 +295,31 @@ mod app {
         let _ = terminal::disable_raw_mode();
 
         std::process::exit(process_exit_code(status.exit_code()));
+    }
+
+    fn handle_request(
+        req: Request,
+        stdin_writer: &Mutex<Box<dyn Write + Send>>,
+    ) {
+        match req {
+            Request::Popup { command } => {
+                match crate::popup::run(&command, stdin_writer) {
+                    Ok(result) => {
+                        if let Some(ref output) = result.output {
+                            let response = crate::popup::encode_result(output);
+                            if let Ok(mut w) = stdin_writer.lock() {
+                                let _ = w.write_all(&response);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        // Best-effort: log to stderr.  The user's terminal
+                        // is back to normal after LeaveAlternateScreen.
+                        eprintln!("atuin-shell: popup failed: {e:#}");
+                    }
+                }
+            }
+        }
     }
 
     fn process_exit_code(code: u32) -> i32 {
