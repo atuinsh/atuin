@@ -129,7 +129,7 @@ EOF
   case "$sync_answer" in
     [yY]*)
       echo ""
-      if ! "$ATUIN_BIN" register; then
+      if ! "$ATUIN_BIN" register </dev/tty; then
         echo ""
         echo "Registration did not complete. You can run 'atuin register' any time to try again."
       fi
