@@ -1,3 +1,4 @@
+#[allow(dead_code)]
 mod osc133;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
@@ -5,6 +6,10 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 #[derive(Parser, Debug)]
 #[command(infer_subcommands = true)]
 struct Cli {
+    /// Colour terminal output by OSC 133 zone (prompt/input/output)
+    #[arg(long)]
+    debug: bool,
+
     #[command(subcommand)]
     command: Option<Cmd>,
 }
@@ -157,13 +162,13 @@ fn main() {
                 std::process::exit(1);
             }
         }
-        None => app::main(),
+        None => app::main(cli.debug),
     }
 }
 
 #[cfg(any(not(unix), target_os = "illumos"))]
 mod app {
-    pub(crate) fn main() {
+    pub(crate) fn main(_debug: bool) {
         eprintln!("atuin-shell currently supports unix platforms excluding illumos");
         std::process::exit(1);
     }
@@ -176,15 +181,15 @@ mod app {
     use crossterm::terminal;
     use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
-    pub(crate) fn main() {
-        if let Err(e) = run() {
+    pub(crate) fn main(debug: bool) {
+        if let Err(e) = run(debug) {
             let _ = terminal::disable_raw_mode();
             eprintln!("atuin-shell: {e:#}");
             std::process::exit(1);
         }
     }
 
-    fn run() -> eyre::Result<()> {
+    fn run(debug: bool) -> eyre::Result<()> {
         let (cols, rows) = terminal::size()?;
 
         let pty_system = native_pty_system();
@@ -204,7 +209,6 @@ mod app {
             .spawn_command(cmd)
             .map_err(|e| eyre::eyre!("{e:#}"))?;
 
-        // Close slave side in parent process
         drop(pair.slave);
 
         let mut pty_reader = pair
@@ -216,7 +220,6 @@ mod app {
             .take_writer()
             .map_err(|e| eyre::eyre!("{e:#}"))?;
 
-        // Handle terminal resize via SIGWINCH
         {
             use signal_hook::consts::SIGWINCH;
             use signal_hook::iterator::Signals;
@@ -240,29 +243,55 @@ mod app {
 
         terminal::enable_raw_mode()?;
 
-        // PTY -> stdout (with OSC 133 parsing)
         let stdout_thread = std::thread::spawn(move || {
             let mut stdout = std::io::stdout();
-            let mut parser = crate::osc133::Parser::new();
             let mut buf = [0u8; 8192];
-            loop {
-                match pty_reader.read(&mut buf) {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => {
-                        parser.push(&buf[..n], |_event| {
-                            // Zone transitions are tracked inside the parser.
-                            // Callers can query parser.zone() after push.
-                        });
-                        if stdout.write_all(&buf[..n]).is_err() {
-                            break;
+
+            if debug {
+                let mut parser = crate::osc133::Parser::new();
+                loop {
+                    match pty_reader.read(&mut buf) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => {
+                            let data = &buf[..n];
+                            let mut injections: Vec<(usize, &[u8])> = Vec::new();
+                            parser.push(data, |event, offset| {
+                                injections.push((offset, crate::osc133::debug_color(&event)));
+                            });
+
+                            if injections.is_empty() {
+                                let _ = stdout.write_all(data);
+                            } else {
+                                let mut from = 0;
+                                for &(offset, color) in &injections {
+                                    let end = offset + 1;
+                                    let _ = stdout.write_all(&data[from..end]);
+                                    let _ = stdout.write_all(color);
+                                    from = end;
+                                }
+                                if from < n {
+                                    let _ = stdout.write_all(&data[from..]);
+                                }
+                            }
+                            let _ = stdout.flush();
                         }
-                        let _ = stdout.flush();
+                    }
+                }
+            } else {
+                loop {
+                    match pty_reader.read(&mut buf) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => {
+                            if stdout.write_all(&buf[..n]).is_err() {
+                                break;
+                            }
+                            let _ = stdout.flush();
+                        }
                     }
                 }
             }
         });
 
-        // stdin -> PTY
         std::thread::spawn(move || {
             let mut stdin = std::io::stdin();
             let mut buf = [0u8; 8192];
