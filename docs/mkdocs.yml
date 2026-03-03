@@ -67,6 +67,7 @@ nav:
       - Shell Integration: guide/shell-integration.md
       - Deleting history: guide/delete-history.md
       - Syncing dotfiles: guide/dotfiles.md
+      - Scripts: guide/scripts.md
       - Theming: guide/theming.md
   - Configuration:
       - Config: configuration/config.md
@@ -82,6 +83,7 @@ nav:
       - history prune: reference/prune.md
       - search: reference/search.md
       - stats: reference/stats.md
+      - scripts: reference/scripts.md
       - sync: reference/sync.md
   - Self Hosting:
       - Server Setup: self-hosting/server-setup.md
