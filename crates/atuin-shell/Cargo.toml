@@ -1,0 +1,24 @@
+[package]
+name = "atuin-shell"
+edition = "2024"
+description = "a terminal emulator for atuin"
+
+version = { workspace = true }
+authors = { workspace = true }
+rust-version = { workspace = true }
+license = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+
+[[bin]]
+name = "atuin-shell"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true }
+
+[target.'cfg(all(unix, not(target_os = "illumos")))'.dependencies]
+crossterm = { workspace = true }
+eyre = { workspace = true }
+portable-pty = "0.8"
+signal-hook = "0.3"
