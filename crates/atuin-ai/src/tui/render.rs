@@ -15,7 +15,7 @@ use super::state::AppState;
 use super::view_model::{Blocks, Content, WarningKind};
 
 /// Fixed card width for the TUI
-const CARD_WIDTH: u16 = 64;
+pub(crate) const CARD_WIDTH: u16 = 64;
 
 pub struct RenderContext<'a> {
     pub theme: &'a Theme,
@@ -23,6 +23,13 @@ pub struct RenderContext<'a> {
     pub textarea: Option<&'a TextArea<'static>>,
     /// Maximum viewport height (for scroll calculations)
     pub max_height: u16,
+    /// When true, the viewport is a fixed rect already positioned for the card.
+    /// The card fills the entire viewport instead of positioning via anchor_col.
+    pub popup_mode: bool,
+    /// When true, blocks are rendered in reverse order so that the input field
+    /// appears at the bottom of the card (close to the prompt when the popup
+    /// is above the cursor).
+    pub render_above: bool,
 }
 
 /// Calculate the height needed to render the current state.
@@ -72,17 +79,33 @@ pub fn render(frame: &mut Frame, state: &AppState, ctx: &RenderContext) {
 fn render_view(frame: &mut Frame, view: &Blocks, ctx: &RenderContext) {
     let area = frame.area();
 
-    // Calculate frame dimensions (fixed width, min 32 if terminal is narrow)
-    let desired_width = CARD_WIDTH.min(area.width.saturating_sub(2)).max(32);
+    // In popup mode, the viewport is already positioned and sized for the card.
+    // Clear it to prevent background bleed-through, then fill the full area.
+    let (card_x, desired_width) = if ctx.popup_mode {
+        frame.render_widget(ratatui::widgets::Clear, area);
+        (area.x, area.width)
+    } else {
+        let dw = CARD_WIDTH.min(area.width.saturating_sub(2)).max(32);
+        let max_x = area.x + area.width.saturating_sub(dw);
+        let preferred_x = area.x + ctx.anchor_col.saturating_sub(2);
+        (preferred_x.min(max_x), dw)
+    };
     let content_width = usize::from(desired_width.saturating_sub(4)).max(1);
 
-    // Position at anchor_col
-    let max_x = area.x + area.width.saturating_sub(desired_width);
-    let preferred_x = area.x + ctx.anchor_col.saturating_sub(2);
+    // Build ordered items list — the active content (input/LLM response)
+    // should always be closest to the cursor/prompt:
+    //   - Popup below cursor (render_above=false): reverse so active is at top
+    //   - Popup above cursor (render_above=true): normal order, active is at bottom
+    //   - Inline mode: normal order (no reversal)
+    let items: Vec<&super::view_model::Block> = if ctx.popup_mode && !ctx.render_above {
+        view.items.iter().rev().collect()
+    } else {
+        view.items.iter().collect()
+    };
 
     // Calculate height from view model
     let mut total_height = 0u16;
-    for (idx, block) in view.items.iter().enumerate() {
+    for (idx, block) in items.iter().enumerate() {
         if idx > 0 {
             total_height = total_height.saturating_add(1); // separator
             total_height = total_height.saturating_add(1); // leading blank after separator
@@ -102,13 +125,13 @@ fn render_view(frame: &mut Frame, view: &Blocks, ctx: &RenderContext) {
     let scroll_offset = desired_height.saturating_sub(actual_height);
 
     let card = Rect {
-        x: preferred_x.min(max_x),
+        x: card_x,
         y: area.y,
         width: desired_width,
         height: actual_height,
     };
 
-    // Get title from first block (if any)
+    // Get title from first block in ORIGINAL order (always the input block)
     let title = view
         .items
         .first()
@@ -127,12 +150,12 @@ fn render_view(frame: &mut Frame, view: &Blocks, ctx: &RenderContext) {
     frame.render_widget(outer_block, card);
 
     // Render blocks (with scroll offset for overflowing content)
-    render_blocks_content(frame, view, ctx, inner_area, card.width, scroll_offset);
+    render_blocks_content(frame, &items, ctx, inner_area, card.width, scroll_offset);
 }
 
 fn render_blocks_content(
     frame: &mut Frame,
-    view: &Blocks,
+    items: &[&super::view_model::Block],
     ctx: &RenderContext,
     area: Rect,
     card_width: u16,
@@ -143,7 +166,7 @@ fn render_blocks_content(
     // Build layout constraints for full content
     let mut constraints = Vec::new();
     let mut block_heights = Vec::new();
-    for (idx, block) in view.items.iter().enumerate() {
+    for (idx, block) in items.iter().enumerate() {
         if idx > 0 {
             constraints.push(Constraint::Length(1)); // separator
             constraints.push(Constraint::Length(1)); // leading blank after separator
@@ -173,7 +196,7 @@ fn render_blocks_content(
         .split(area);
 
     let mut chunk_idx = 0;
-    for (idx, block) in view.items.iter().enumerate() {
+    for (idx, block) in items.iter().enumerate() {
         if idx > 0 {
             // Check if separator is visible (its position minus scroll_offset)
             let sep_start = cumulative[chunk_idx];

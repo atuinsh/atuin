@@ -405,7 +405,22 @@ async fn run_inline_tui(
     debug_state_file: Option<String>,
     settings: &atuin_client::settings::Settings,
 ) -> Result<(Action, String)> {
-    // Initialize terminal guard and app state
+    // Detect popup mode (only on Unix where atuin-shell socket is available)
+    #[cfg(unix)]
+    let mut popup_state = crate::tui::popup::try_setup_popup();
+    #[cfg(not(unix))]
+    let mut popup_state: Option<()> = None;
+
+    let popup_mode = popup_state.is_some();
+
+    // Initialize terminal guard: popup mode uses Fixed viewport, inline uses Inline
+    #[cfg(unix)]
+    let mut guard = if let Some(ref ps) = popup_state {
+        TerminalGuard::new_popup(ps.current_rect, ps.saved_screen.cursor_col)?
+    } else {
+        TerminalGuard::new(keep_output)?
+    };
+    #[cfg(not(unix))]
     let mut guard = TerminalGuard::new(keep_output)?;
     let mut app = App::new();
     if let Some(prompt) = initial_prompt {
@@ -452,15 +467,31 @@ async fn run_inline_tui(
     loop {
         // Ensure viewport is large enough for current content (capped at terminal height)
         let needed_height = calculate_needed_height(&app.state);
+
+        // Grow popup dynamically as content arrives
+        #[cfg(unix)]
+        if let Some(ref mut ps) = popup_state {
+            if let Some(new_rect) = ps.fit_to(needed_height) {
+                guard.resize_popup(new_rect)?;
+            }
+        }
+
         let actual_height = guard.ensure_height(needed_height)?;
 
         // Render current state
         let anchor_col = guard.anchor_col();
+        #[cfg(unix)]
+        let render_above = popup_state.as_ref().is_some_and(|ps| ps.render_above);
+        #[cfg(not(unix))]
+        let render_above = false;
+
         let ctx = RenderContext {
             theme,
             anchor_col,
             textarea: Some(&app.state.textarea),
             max_height: actual_height,
+            popup_mode,
+            render_above,
         };
         // Handle draw errors gracefully - cursor position reads can fail during resize
         if let Err(e) = guard.terminal().draw(|frame| {
@@ -595,6 +626,12 @@ async fn run_inline_tui(
                 ));
             }
         }
+    }
+
+    // Restore popup area before guard drops (guard skips cleanup in popup mode)
+    #[cfg(unix)]
+    if let Some(ref ps) = popup_state {
+        crate::tui::popup::restore(&ps);
     }
 
     // Map exit action to return value
