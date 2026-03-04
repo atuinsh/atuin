@@ -171,7 +171,6 @@ mod app {
 
 #[cfg(all(unix, not(target_os = "illumos")))]
 mod app {
-    use std::collections::VecDeque;
     use std::io::{Read, Write};
     use std::os::unix::net::UnixListener;
     use std::sync::mpsc;
@@ -179,8 +178,10 @@ mod app {
     use crossterm::terminal;
     use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
-    /// Default ring buffer capacity (2 MB).
-    const DEFAULT_RING_BUFFER_CAP: usize = 2 * 1024 * 1024;
+    enum ParserMsg {
+        Data(Vec<u8>),
+        Resize { rows: u16, cols: u16 },
+    }
 
     pub(crate) fn main() {
         if let Err(e) = run() {
@@ -188,13 +189,6 @@ mod app {
             eprintln!("atuin-shell: {e:#}");
             std::process::exit(1);
         }
-    }
-
-    fn ring_buffer_cap() -> usize {
-        std::env::var("ATUIN_SCREEN_BUFFER_SIZE")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(DEFAULT_RING_BUFFER_CAP)
     }
 
     fn socket_path() -> std::path::PathBuf {
@@ -264,54 +258,44 @@ mod app {
             .take_writer()
             .map_err(|e| eyre::eyre!("{e:#}"))?;
 
-        // Channel: stdout thread -> buffer thread (bounded, non-blocking send)
-        let (byte_tx, byte_rx) = mpsc::sync_channel::<Vec<u8>>(64);
+        // Channel: stdout/sigwinch threads -> parser thread (bounded, non-blocking send)
+        let (msg_tx, msg_rx) = mpsc::sync_channel::<ParserMsg>(64);
 
         // Channel: screen request (oneshot pattern)
-        // The requester sends a Sender<Vec<u8>> that the buffer thread uses to reply.
+        // The requester sends a Sender<Vec<u8>> that the parser thread uses to reply.
         let (screen_req_tx, screen_req_rx) = mpsc::channel::<mpsc::Sender<Vec<u8>>>();
 
-        // --- Buffer thread ---
-        // Maintains a ring buffer of raw PTY output bytes.
-        // On screen request: replays through vt100::Parser to produce screen state.
+        // --- Parser thread ---
+        // Maintains a persistent vt100::Parser fed bytes as they arrive.
+        // On screen request: reads current state directly (no replay).
         std::thread::spawn(move || {
-            let cap = ring_buffer_cap();
-            let mut ring: VecDeque<u8> = VecDeque::with_capacity(cap);
+            let mut parser = vt100::Parser::new(rows, cols, 0);
 
             loop {
-                // Check for screen requests first (non-blocking)
-                match screen_req_rx.try_recv() {
-                    Ok(reply_tx) => {
-                        // Replay ring buffer through a fresh vt100 parser
-                        let (cols, rows) =
-                            terminal::size().unwrap_or((80, 24));
-                        let mut parser = vt100::Parser::new(rows, cols, 0);
+                // Block until at least one message arrives
+                let first = match msg_rx.recv() {
+                    Ok(msg) => msg,
+                    Err(_) => break,
+                };
 
-                        // Feed the ring buffer contents in order
-                        let (front, back) = ring.as_slices();
-                        parser.process(front);
-                        parser.process(back);
-
-                        let encoded = encode_screen(&parser);
-                        let _ = reply_tx.send(encoded);
-                    }
-                    Err(mpsc::TryRecvError::Empty) => {}
-                    Err(mpsc::TryRecvError::Disconnected) => break,
+                match first {
+                    ParserMsg::Data(data) => parser.process(&data),
+                    ParserMsg::Resize { rows, cols } => parser.set_size(rows, cols),
                 }
 
-                // Wait for bytes from stdout thread (with timeout so we can
-                // also service screen requests promptly)
-                match byte_rx.recv_timeout(std::time::Duration::from_millis(50)) {
-                    Ok(data) => {
-                        // Append to ring buffer, evicting oldest bytes if over capacity
-                        if ring.len() + data.len() > cap {
-                            let to_drain = (ring.len() + data.len()).saturating_sub(cap);
-                            ring.drain(..to_drain);
-                        }
-                        ring.extend(&data);
+                // Drain all remaining pending messages so the parser stays
+                // caught up during high-throughput bursts (e.g. `cat bigfile`).
+                // The channel holds at most 64 items, so this is bounded.
+                while let Ok(msg) = msg_rx.try_recv() {
+                    match msg {
+                        ParserMsg::Data(data) => parser.process(&data),
+                        ParserMsg::Resize { rows, cols } => parser.set_size(rows, cols),
                     }
-                    Err(mpsc::RecvTimeoutError::Timeout) => {}
-                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                }
+
+                // Service any pending screen requests with fully up-to-date state
+                while let Ok(reply_tx) = screen_req_rx.try_recv() {
+                    let _ = reply_tx.send(encode_screen(&parser));
                 }
             }
         });
@@ -366,6 +350,7 @@ mod app {
             use signal_hook::iterator::Signals;
 
             let master = pair.master;
+            let resize_tx = msg_tx.clone();
             let mut signals = Signals::new([SIGWINCH])?;
 
             std::thread::spawn(move || {
@@ -377,6 +362,7 @@ mod app {
                             pixel_width: 0,
                             pixel_height: 0,
                         });
+                        let _ = resize_tx.try_send(ParserMsg::Resize { rows, cols });
                     }
                 }
             });
@@ -398,8 +384,8 @@ mod app {
                             // Callers can query parser.zone() after push.
                         });
 
-                        // Feed bytes to ring buffer (non-blocking, drops if full)
-                        let _ = byte_tx.try_send(buf[..n].to_vec());
+                        // Feed bytes to parser thread (non-blocking, drops if full)
+                        let _ = msg_tx.try_send(ParserMsg::Data(buf[..n].to_vec()));
 
                         if stdout.write_all(&buf[..n]).is_err() {
                             break;
