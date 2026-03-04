@@ -181,6 +181,7 @@ mod app {
     enum ParserMsg {
         Data(Vec<u8>),
         Resize { rows: u16, cols: u16 },
+        ScreenRequest(mpsc::Sender<Vec<u8>>),
     }
 
     pub(crate) fn main() {
@@ -258,12 +259,8 @@ mod app {
             .take_writer()
             .map_err(|e| eyre::eyre!("{e:#}"))?;
 
-        // Channel: stdout/sigwinch threads -> parser thread (bounded, non-blocking send)
+        // Channel: stdout/sigwinch/socket threads -> parser thread (bounded, non-blocking send)
         let (msg_tx, msg_rx) = mpsc::sync_channel::<ParserMsg>(64);
-
-        // Channel: screen request (oneshot pattern)
-        // The requester sends a Sender<Vec<u8>> that the parser thread uses to reply.
-        let (screen_req_tx, screen_req_rx) = mpsc::channel::<mpsc::Sender<Vec<u8>>>();
 
         // --- Parser thread ---
         // Maintains a persistent vt100::Parser fed bytes as they arrive.
@@ -278,9 +275,13 @@ mod app {
                     Err(_) => break,
                 };
 
+                // Process the first message
                 match first {
                     ParserMsg::Data(data) => parser.process(&data),
                     ParserMsg::Resize { rows, cols } => parser.set_size(rows, cols),
+                    ParserMsg::ScreenRequest(reply_tx) => {
+                        let _ = reply_tx.send(encode_screen(&parser));
+                    }
                 }
 
                 // Drain all remaining pending messages so the parser stays
@@ -290,21 +291,19 @@ mod app {
                     match msg {
                         ParserMsg::Data(data) => parser.process(&data),
                         ParserMsg::Resize { rows, cols } => parser.set_size(rows, cols),
+                        ParserMsg::ScreenRequest(reply_tx) => {
+                            let _ = reply_tx.send(encode_screen(&parser));
+                        }
                     }
-                }
-
-                // Service any pending screen requests with fully up-to-date state
-                while let Ok(reply_tx) = screen_req_rx.try_recv() {
-                    let _ = reply_tx.send(encode_screen(&parser));
                 }
             }
         });
 
         // --- Socket server thread ---
-        // Listens on Unix socket; on connection, requests screen state from buffer thread.
+        // Listens on Unix socket; on connection, requests screen state from parser thread.
         {
             let sock_path_clone = sock_path.clone();
-            let screen_req_tx = screen_req_tx;
+            let screen_tx = msg_tx.clone();
             std::thread::spawn(move || {
                 let listener = match UnixListener::bind(&sock_path_clone) {
                     Ok(l) => l,
@@ -322,10 +321,10 @@ mod app {
                     match listener.accept() {
                         Ok((mut stream, _)) => {
                             let _ = stream.set_nonblocking(false);
-                            // Request screen state from buffer thread
+                            // Request screen state from parser thread
                             let (reply_tx, reply_rx) = mpsc::channel();
-                            if screen_req_tx.send(reply_tx).is_err() {
-                                break; // buffer thread gone
+                            if screen_tx.send(ParserMsg::ScreenRequest(reply_tx)).is_err() {
+                                break; // parser thread gone
                             }
                             if let Ok(data) = reply_rx.recv() {
                                 let _ = stream.write_all(&data);
@@ -333,8 +332,6 @@ mod app {
                             }
                         }
                         Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                            // Check if request channel is still alive
-                            // (We can't send without a real request, so just sleep briefly)
                             std::thread::sleep(std::time::Duration::from_millis(50));
                             continue;
                         }

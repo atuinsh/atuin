@@ -38,7 +38,7 @@ use ratatui::{
     crossterm::{
         cursor::SetCursorStyle,
         event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyEvent, MouseEvent},
-        execute, terminal,
+        execute, queue, terminal,
     },
     layout::{Alignment, Constraint, Direction, Layout},
     prelude::*,
@@ -832,13 +832,7 @@ impl State {
     ) {
         let area = f.area();
         f.render_widget(Clear, area);
-        let border = Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .title(" Atuin ");
-        let inner = border.inner(area);
-        f.render_widget(border, area);
-        self.draw_inner(f, inner, results, stats, inspecting, settings, theme);
+        self.draw_inner(f, area, results, stats, inspecting, settings, theme);
     }
 
     fn draw_inner(
@@ -1599,14 +1593,16 @@ pub async fn history(
     if popup_mode {
         use ratatui::crossterm::cursor::MoveTo;
         let mut raw_stdout = std::io::stdout();
-        let _ = execute!(
+        // Queue all commands without flushing so the terminal receives them
+        // as a single write — no intermediate cursor positions are visible.
+        let _ = queue!(
             raw_stdout,
             ratatui::crossterm::style::SetAttribute(
                 ratatui::crossterm::style::Attribute::Reset
             )
         );
         for row in popup_rect.y..popup_rect.y.saturating_add(popup_rect.height) {
-            let _ = execute!(raw_stdout, MoveTo(popup_rect.x, row));
+            let _ = queue!(raw_stdout, MoveTo(popup_rect.x, row));
             let _ = write!(raw_stdout, "{:width$}", "", width = popup_rect.width as usize);
         }
         let _ = raw_stdout.flush();
