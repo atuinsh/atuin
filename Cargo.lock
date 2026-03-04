@@ -270,7 +270,6 @@ dependencies = [
  "tracing-tree",
  "unicode-width 0.2.2",
  "uuid",
- "vt100",
 ]
 
 [[package]]

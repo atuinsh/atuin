@@ -817,21 +817,12 @@ impl State {
         inspecting: Option<&History>,
         settings: &Settings,
         theme: &Theme,
-    ) {
-        self.draw_inner(f, f.area(), results, stats, inspecting, settings, theme);
-    }
-
-    fn draw_popup(
-        &mut self,
-        f: &mut Frame,
-        results: &[History],
-        stats: Option<HistoryStats>,
-        inspecting: Option<&History>,
-        settings: &Settings,
-        theme: &Theme,
+        popup_mode: bool,
     ) {
         let area = f.area();
-        f.render_widget(Clear, area);
+        if popup_mode {
+            f.render_widget(Clear, area);
+        }
         self.draw_inner(f, area, results, stats, inspecting, settings, theme);
     }
 
@@ -1307,15 +1298,25 @@ impl Write for TerminalWriter {
 /// Screen state captured from atuin-shell's screen server.
 #[cfg(unix)]
 struct SavedScreen {
+    #[allow(dead_code)]
     rows: u16,
+    #[allow(dead_code)]
     cols: u16,
     cursor_row: u16,
     cursor_col: u16,
-    /// Raw ANSI-formatted bytes representing the screen contents.
-    formatted_bytes: Vec<u8>,
+    /// Pre-formatted ANSI bytes for each screen row, ready to write to stdout.
+    rows_data: Vec<Vec<u8>>,
 }
 
 /// Connect to atuin-shell's Unix socket and fetch the current screen state.
+///
+/// The wire format is:
+/// ```text
+/// [rows: u16 BE][cols: u16 BE][cursor_row: u16 BE][cursor_col: u16 BE]
+/// [row_0_len: u32 BE][row_0_bytes...]
+/// [row_1_len: u32 BE][row_1_bytes...]
+/// ...
+/// ```
 #[cfg(unix)]
 fn fetch_screen_state(socket_path: &str) -> Option<SavedScreen> {
     use std::os::unix::net::UnixStream;
@@ -1336,52 +1337,63 @@ fn fetch_screen_state(socket_path: &str) -> Option<SavedScreen> {
     let cols = u16::from_be_bytes([data[2], data[3]]);
     let cursor_row = u16::from_be_bytes([data[4], data[5]]);
     let cursor_col = u16::from_be_bytes([data[6], data[7]]);
-    let formatted_bytes = data[8..].to_vec();
+
+    // Parse length-prefixed rows
+    let mut rows_data = Vec::with_capacity(rows as usize);
+    let mut offset = 8;
+    while offset + 4 <= data.len() {
+        let row_len =
+            u32::from_be_bytes([data[offset], data[offset + 1], data[offset + 2], data[offset + 3]])
+                as usize;
+        offset += 4;
+        if offset + row_len > data.len() {
+            break;
+        }
+        rows_data.push(data[offset..offset + row_len].to_vec());
+        offset += row_len;
+    }
 
     Some(SavedScreen {
         rows,
         cols,
         cursor_row,
         cursor_col,
-        formatted_bytes,
+        rows_data,
     })
 }
 
 /// Restore the screen area that was covered by the popup.
 ///
-/// Uses vt100's `rows_formatted` to emit each row as pre-built ANSI bytes,
-/// which correctly handles wide characters, colors, and all text attributes
-/// without manual per-cell width tracking.
+/// Writes the pre-formatted per-row ANSI bytes received from atuin-shell
+/// directly to stdout, which correctly handles wide characters, colors, and
+/// all text attributes without needing a client-side vt100 parser.
 #[cfg(unix)]
 fn restore_popup_area(saved: &SavedScreen, popup_rect: Rect, scroll_offset: u16) {
     use ratatui::crossterm::cursor::MoveTo;
 
-    let mut parser = vt100::Parser::new(saved.rows, saved.cols, 0);
-    parser.process(&saved.formatted_bytes);
-    let screen = parser.screen();
-
     let mut stdout = stdout();
-
-    let formatted_rows: Vec<Vec<u8>> =
-        screen.rows_formatted(popup_rect.x, popup_rect.width).collect();
 
     for dy in 0..popup_rect.height {
         let target_row = popup_rect.y + dy;
         let source_row = (target_row + scroll_offset) as usize;
 
+        // Clear only the popup region. The server-side rows_formatted() skips
+        // default cells (spaces with default attributes) using cursor jumps, so
+        // any popup content at those positions would remain if not cleared
+        // beforehand. We write `popup_rect.width` spaces instead of
+        // ClearType::CurrentLine so that only the popup area is cleared, not
+        // the entire terminal line.
         let _ = execute!(
             stdout,
             MoveTo(popup_rect.x, target_row),
             ratatui::crossterm::style::SetAttribute(
                 ratatui::crossterm::style::Attribute::Reset
             ),
-            ratatui::crossterm::terminal::Clear(
-                ratatui::crossterm::terminal::ClearType::CurrentLine
-            ),
-            MoveTo(popup_rect.x, target_row)
         );
+        let _ = write!(stdout, "{:width$}", "", width = popup_rect.width as usize);
+        let _ = execute!(stdout, MoveTo(popup_rect.x, target_row));
 
-        if let Some(row_bytes) = formatted_rows.get(source_row) {
+        if let Some(row_bytes) = saved.rows_data.get(source_row) {
             let _ = stdout.write_all(row_bytes);
         }
     }
@@ -1483,6 +1495,39 @@ impl Write for Stdout {
 }
 
 // this is a big blob of horrible! clean it up!
+/// Compute the popup position and any scroll offset needed to make room.
+///
+/// Given the cursor row, terminal dimensions, and desired popup height,
+/// returns `(popup_rect, scroll_offset)` where `scroll_offset` is the number
+/// of lines the caller should scroll the terminal up before rendering.
+///
+/// This function performs no I/O — it is a pure computation.
+fn compute_popup_placement(
+    cursor_row: u16,
+    term_rows: u16,
+    term_cols: u16,
+    inline_height: u16,
+) -> (Rect, u16) {
+    let popup_w = term_cols;
+    let popup_h = inline_height.min(term_rows);
+    let space_below = term_rows.saturating_sub(cursor_row);
+
+    let (popup_y, scroll) = if popup_h <= space_below {
+        // Fits below cursor
+        (cursor_row, 0u16)
+    } else if cursor_row >= term_rows / 2 {
+        // Bottom half — render above cursor (overlay on existing text)
+        (cursor_row.saturating_sub(popup_h), 0u16)
+    } else {
+        // Top half, not enough space — scroll terminal to make room
+        let scroll = popup_h.saturating_sub(space_below);
+        let popup_y = cursor_row.saturating_sub(scroll);
+        (popup_y, scroll)
+    };
+
+    (Rect::new(0, popup_y, popup_w, popup_h), scroll)
+}
+
 // for now, it works. But it'd be great if it were more easily readable, and
 // modular. I'd like to add some more stats and stuff at some point
 #[allow(
@@ -1534,23 +1579,8 @@ pub async fn history(
             let saved = fetch_screen_state(path);
             if let Some(ref s) = saved {
                 let (term_cols, term_rows) = terminal::size().unwrap_or((s.cols, s.rows));
-                let popup_w = term_cols;
-                let popup_h = inline_height.min(term_rows);
-                let cursor_row = s.cursor_row;
-                let space_below = term_rows.saturating_sub(cursor_row);
-
-                let (popup_y, scroll) = if popup_h <= space_below {
-                    // Fits below cursor
-                    (cursor_row, 0u16)
-                } else if cursor_row >= term_rows / 2 {
-                    // Bottom half — render above cursor (overlay on existing text)
-                    (cursor_row.saturating_sub(popup_h), 0u16)
-                } else {
-                    // Top half, not enough space — scroll terminal to make room
-                    let scroll = popup_h.saturating_sub(space_below);
-                    let popup_y = cursor_row.saturating_sub(scroll);
-                    (popup_y, scroll)
-                };
+                let (popup_rect, scroll) =
+                    compute_popup_placement(s.cursor_row, term_rows, term_cols, inline_height);
 
                 // Scroll terminal content up to make room if needed
                 if scroll > 0 {
@@ -1563,7 +1593,7 @@ pub async fn history(
                     let _ = stdout.flush();
                 }
 
-                (saved, Rect::new(0, popup_y, popup_w, popup_h), scroll)
+                (saved, popup_rect, scroll)
             } else {
                 (None, Rect::default(), 0u16)
             }
@@ -1573,13 +1603,8 @@ pub async fn history(
     };
 
     #[cfg(not(unix))]
-    let saved_screen: Option<()> = None;
-
-    #[cfg(not(unix))]
-    let popup_rect = Rect::default();
-
-    #[cfg(not(unix))]
-    let popup_scroll_offset: u16 = 0;
+    let (saved_screen, popup_rect, popup_scroll_offset): (Option<()>, Rect, u16) =
+        (None, Rect::default(), 0);
 
     let popup_mode = saved_screen.is_some();
 
@@ -1712,11 +1737,7 @@ pub async fn history(
     let accept;
     let result = 'render: loop {
         terminal.draw(|f| {
-            if popup_mode {
-                app.draw_popup(f, &results, stats.clone(), inspecting.as_ref(), settings, theme);
-            } else {
-                app.draw(f, &results, stats.clone(), inspecting.as_ref(), settings, theme);
-            }
+            app.draw(f, &results, stats.clone(), inspecting.as_ref(), settings, theme, popup_mode);
         })?;
 
         let initial_input = app.search.input.as_str().to_owned();
@@ -1772,11 +1793,7 @@ pub async fn history(
                                     terminal.clear()?;
                                 }
                                 terminal.draw(|f| {
-                                    if popup_mode {
-                                        app.draw_popup(f, &results, stats.clone(), inspecting.as_ref(), settings, theme);
-                                    } else {
-                                        app.draw(f, &results, stats.clone(), inspecting.as_ref(), settings, theme);
-                                    }
+                                    app.draw(f, &results, stats.clone(), inspecting.as_ref(), settings, theme, popup_mode);
                                 })?;
                             },
                             r => {

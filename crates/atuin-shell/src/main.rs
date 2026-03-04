@@ -198,11 +198,17 @@ mod app {
     }
 
     /// Wire format written to the Unix socket:
-    /// [rows: u16 BE][cols: u16 BE][cursor_row: u16 BE][cursor_col: u16 BE][cell_bytes...]
     ///
-    /// `cell_bytes` is the screen contents rendered as ANSI-styled text (one row
-    /// per line, separated by `\n`).  The client can replay it through its own
-    /// `vt100::Parser` to recover per-cell attributes.
+    /// ```text
+    /// [rows: u16 BE][cols: u16 BE][cursor_row: u16 BE][cursor_col: u16 BE]
+    /// [row_0_len: u32 BE][row_0_bytes...]
+    /// [row_1_len: u32 BE][row_1_bytes...]
+    /// ...
+    /// ```
+    ///
+    /// Each row's bytes come from `screen.rows_formatted(0, cols)` and contain
+    /// pre-built ANSI escape sequences.  The client can write them directly to
+    /// stdout without needing its own vt100 parser.
     fn encode_screen(parser: &vt100::Parser) -> Vec<u8> {
         let screen = parser.screen();
         let (rows, cols) = screen.size();
@@ -214,10 +220,23 @@ mod app {
         buf.extend_from_slice(&cursor_row.to_be_bytes());
         buf.extend_from_slice(&cursor_col.to_be_bytes());
 
-        // contents_formatted gives ANSI-escaped bytes representing the full screen
-        buf.extend_from_slice(&screen.contents_formatted());
+        for row_bytes in screen.rows_formatted(0, cols) {
+            let len = row_bytes.len() as u32;
+            buf.extend_from_slice(&len.to_be_bytes());
+            buf.extend_from_slice(&row_bytes);
+        }
 
         buf
+    }
+
+    fn handle_parser_msg(parser: &mut vt100::Parser, msg: ParserMsg) {
+        match msg {
+            ParserMsg::Data(data) => parser.process(&data),
+            ParserMsg::Resize { rows, cols } => parser.set_size(rows, cols),
+            ParserMsg::ScreenRequest(reply_tx) => {
+                let _ = reply_tx.send(encode_screen(parser));
+            }
+        }
     }
 
     fn run() -> eyre::Result<()> {
@@ -275,26 +294,13 @@ mod app {
                     Err(_) => break,
                 };
 
-                // Process the first message
-                match first {
-                    ParserMsg::Data(data) => parser.process(&data),
-                    ParserMsg::Resize { rows, cols } => parser.set_size(rows, cols),
-                    ParserMsg::ScreenRequest(reply_tx) => {
-                        let _ = reply_tx.send(encode_screen(&parser));
-                    }
-                }
+                handle_parser_msg(&mut parser, first);
 
                 // Drain all remaining pending messages so the parser stays
                 // caught up during high-throughput bursts (e.g. `cat bigfile`).
                 // The channel holds at most 64 items, so this is bounded.
                 while let Ok(msg) = msg_rx.try_recv() {
-                    match msg {
-                        ParserMsg::Data(data) => parser.process(&data),
-                        ParserMsg::Resize { rows, cols } => parser.set_size(rows, cols),
-                        ParserMsg::ScreenRequest(reply_tx) => {
-                            let _ = reply_tx.send(encode_screen(&parser));
-                        }
-                    }
+                    handle_parser_msg(&mut parser, msg);
                 }
             }
         });
@@ -313,29 +319,19 @@ mod app {
                     }
                 };
 
-                // Non-blocking so we can detect when the process is exiting
-                // (channel disconnect) without blocking forever.
-                let _ = listener.set_nonblocking(true);
-
-                loop {
-                    match listener.accept() {
-                        Ok((mut stream, _)) => {
-                            let _ = stream.set_nonblocking(false);
-                            // Request screen state from parser thread
-                            let (reply_tx, reply_rx) = mpsc::channel();
-                            if screen_tx.send(ParserMsg::ScreenRequest(reply_tx)).is_err() {
-                                break; // parser thread gone
-                            }
-                            if let Ok(data) = reply_rx.recv() {
-                                let _ = stream.write_all(&data);
-                                let _ = stream.flush();
-                            }
-                        }
-                        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                            std::thread::sleep(std::time::Duration::from_millis(50));
-                            continue;
-                        }
+                for stream in listener.incoming() {
+                    let mut stream = match stream {
+                        Ok(s) => s,
                         Err(_) => break,
+                    };
+
+                    let (reply_tx, reply_rx) = mpsc::channel();
+                    if screen_tx.send(ParserMsg::ScreenRequest(reply_tx)).is_err() {
+                        break;
+                    }
+                    if let Ok(data) = reply_rx.recv() {
+                        let _ = stream.write_all(&data);
+                        let _ = stream.flush();
                     }
                 }
             });
@@ -381,7 +377,9 @@ mod app {
                             // Callers can query parser.zone() after push.
                         });
 
-                        // Feed bytes to parser thread (non-blocking, drops if full)
+                        // Feed bytes to the shadow parser. Drops on backpressure —
+                        // the screen snapshot may be stale during bursts, but
+                        // self-corrects once output settles.
                         let _ = msg_tx.try_send(ParserMsg::Data(buf[..n].to_vec()));
 
                         if stdout.write_all(&buf[..n]).is_err() {
