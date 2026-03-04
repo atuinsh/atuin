@@ -171,10 +171,16 @@ mod app {
 
 #[cfg(all(unix, not(target_os = "illumos")))]
 mod app {
+    use std::collections::VecDeque;
     use std::io::{Read, Write};
+    use std::os::unix::net::UnixListener;
+    use std::sync::mpsc;
 
     use crossterm::terminal;
     use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+
+    /// Default ring buffer capacity (2 MB).
+    const DEFAULT_RING_BUFFER_CAP: usize = 2 * 1024 * 1024;
 
     pub(crate) fn main() {
         if let Err(e) = run() {
@@ -182,6 +188,41 @@ mod app {
             eprintln!("atuin-shell: {e:#}");
             std::process::exit(1);
         }
+    }
+
+    fn ring_buffer_cap() -> usize {
+        std::env::var("ATUIN_SCREEN_BUFFER_SIZE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(DEFAULT_RING_BUFFER_CAP)
+    }
+
+    fn socket_path() -> std::path::PathBuf {
+        let dir = std::env::temp_dir();
+        dir.join(format!("atuin-shell-{}.sock", std::process::id()))
+    }
+
+    /// Wire format written to the Unix socket:
+    /// [rows: u16 BE][cols: u16 BE][cursor_row: u16 BE][cursor_col: u16 BE][cell_bytes...]
+    ///
+    /// `cell_bytes` is the screen contents rendered as ANSI-styled text (one row
+    /// per line, separated by `\n`).  The client can replay it through its own
+    /// `vt100::Parser` to recover per-cell attributes.
+    fn encode_screen(parser: &vt100::Parser) -> Vec<u8> {
+        let screen = parser.screen();
+        let (rows, cols) = screen.size();
+        let (cursor_row, cursor_col) = screen.cursor_position();
+
+        let mut buf: Vec<u8> = Vec::with_capacity(256 + (rows as usize * cols as usize));
+        buf.extend_from_slice(&rows.to_be_bytes());
+        buf.extend_from_slice(&cols.to_be_bytes());
+        buf.extend_from_slice(&cursor_row.to_be_bytes());
+        buf.extend_from_slice(&cursor_col.to_be_bytes());
+
+        // contents_formatted gives ANSI-escaped bytes representing the full screen
+        buf.extend_from_slice(&screen.contents_formatted());
+
+        buf
     }
 
     fn run() -> eyre::Result<()> {
@@ -197,8 +238,15 @@ mod app {
             })
             .map_err(|e| eyre::eyre!("{e:#}"))?;
 
+        // Set up socket path and expose it to child processes
+        let sock_path = socket_path();
+        // Clean up any stale socket from a previous crash
+        let _ = std::fs::remove_file(&sock_path);
+
         let mut cmd = CommandBuilder::new_default_prog();
         cmd.cwd(std::env::current_dir()?);
+        cmd.env("ATUIN_SHELL_SOCKET", sock_path.as_os_str());
+
         let mut child = pair
             .slave
             .spawn_command(cmd)
@@ -215,6 +263,102 @@ mod app {
             .master
             .take_writer()
             .map_err(|e| eyre::eyre!("{e:#}"))?;
+
+        // Channel: stdout thread -> buffer thread (bounded, non-blocking send)
+        let (byte_tx, byte_rx) = mpsc::sync_channel::<Vec<u8>>(64);
+
+        // Channel: screen request (oneshot pattern)
+        // The requester sends a Sender<Vec<u8>> that the buffer thread uses to reply.
+        let (screen_req_tx, screen_req_rx) = mpsc::channel::<mpsc::Sender<Vec<u8>>>();
+
+        // --- Buffer thread ---
+        // Maintains a ring buffer of raw PTY output bytes.
+        // On screen request: replays through vt100::Parser to produce screen state.
+        std::thread::spawn(move || {
+            let cap = ring_buffer_cap();
+            let mut ring: VecDeque<u8> = VecDeque::with_capacity(cap);
+
+            loop {
+                // Check for screen requests first (non-blocking)
+                match screen_req_rx.try_recv() {
+                    Ok(reply_tx) => {
+                        // Replay ring buffer through a fresh vt100 parser
+                        let (cols, rows) =
+                            terminal::size().unwrap_or((80, 24));
+                        let mut parser = vt100::Parser::new(rows, cols, 0);
+
+                        // Feed the ring buffer contents in order
+                        let (front, back) = ring.as_slices();
+                        parser.process(front);
+                        parser.process(back);
+
+                        let encoded = encode_screen(&parser);
+                        let _ = reply_tx.send(encoded);
+                    }
+                    Err(mpsc::TryRecvError::Empty) => {}
+                    Err(mpsc::TryRecvError::Disconnected) => break,
+                }
+
+                // Wait for bytes from stdout thread (with timeout so we can
+                // also service screen requests promptly)
+                match byte_rx.recv_timeout(std::time::Duration::from_millis(50)) {
+                    Ok(data) => {
+                        // Append to ring buffer, evicting oldest bytes if over capacity
+                        if ring.len() + data.len() > cap {
+                            let to_drain = (ring.len() + data.len()).saturating_sub(cap);
+                            ring.drain(..to_drain);
+                        }
+                        ring.extend(&data);
+                    }
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                }
+            }
+        });
+
+        // --- Socket server thread ---
+        // Listens on Unix socket; on connection, requests screen state from buffer thread.
+        {
+            let sock_path_clone = sock_path.clone();
+            let screen_req_tx = screen_req_tx;
+            std::thread::spawn(move || {
+                let listener = match UnixListener::bind(&sock_path_clone) {
+                    Ok(l) => l,
+                    Err(e) => {
+                        eprintln!("atuin-shell: failed to bind socket: {e}");
+                        return;
+                    }
+                };
+
+                // Non-blocking so we can detect when the process is exiting
+                // (channel disconnect) without blocking forever.
+                let _ = listener.set_nonblocking(true);
+
+                loop {
+                    match listener.accept() {
+                        Ok((mut stream, _)) => {
+                            let _ = stream.set_nonblocking(false);
+                            // Request screen state from buffer thread
+                            let (reply_tx, reply_rx) = mpsc::channel();
+                            if screen_req_tx.send(reply_tx).is_err() {
+                                break; // buffer thread gone
+                            }
+                            if let Ok(data) = reply_rx.recv() {
+                                let _ = stream.write_all(&data);
+                                let _ = stream.flush();
+                            }
+                        }
+                        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                            // Check if request channel is still alive
+                            // (We can't send without a real request, so just sleep briefly)
+                            std::thread::sleep(std::time::Duration::from_millis(50));
+                            continue;
+                        }
+                        Err(_) => break,
+                    }
+                }
+            });
+        }
 
         // Handle terminal resize via SIGWINCH
         {
@@ -240,7 +384,7 @@ mod app {
 
         terminal::enable_raw_mode()?;
 
-        // PTY -> stdout (with OSC 133 parsing)
+        // PTY -> stdout (with OSC 133 parsing + buffer feed)
         let stdout_thread = std::thread::spawn(move || {
             let mut stdout = std::io::stdout();
             let mut parser = crate::osc133::Parser::new();
@@ -253,6 +397,10 @@ mod app {
                             // Zone transitions are tracked inside the parser.
                             // Callers can query parser.zone() after push.
                         });
+
+                        // Feed bytes to ring buffer (non-blocking, drops if full)
+                        let _ = byte_tx.try_send(buf[..n].to_vec());
+
                         if stdout.write_all(&buf[..n]).is_err() {
                             break;
                         }
@@ -282,6 +430,9 @@ mod app {
         let _ = stdout_thread.join();
 
         let _ = terminal::disable_raw_mode();
+
+        // Clean up socket file
+        let _ = std::fs::remove_file(&sock_path);
 
         std::process::exit(process_exit_code(status.exit_code()));
     }
