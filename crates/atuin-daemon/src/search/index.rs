@@ -397,9 +397,11 @@ impl SearchIndex {
         let now = OffsetDateTime::now_utc().unix_timestamp();
         let mut frecency_map: HashMap<Arc<str>, u32> = HashMap::new();
 
-        let recency_mul = search_settings.recency_score_multiplier;
-        let frequency_mul = search_settings.frequency_score_multiplier;
-        let frecency_mul = search_settings.frecency_score_multiplier;
+        // Clamp multipliers to non-negative values to prevent broken frecency ranking
+        // (negative values would produce unexpected results when cast to u32)
+        let recency_mul = search_settings.recency_score_multiplier.max(0.0);
+        let frequency_mul = search_settings.frequency_score_multiplier.max(0.0);
+        let frecency_mul = search_settings.frecency_score_multiplier.max(0.0);
 
         for entry in self.commands.iter() {
             let frecency = entry
