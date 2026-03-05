@@ -76,7 +76,7 @@ impl SettingsWatcher {
         let config_path = Self::config_path();
         info!("starting config file watcher: {:?}", config_path);
 
-        let watcher = Self::create_watcher(tx, config_path.clone())?;
+        let watcher = Self::create_watcher(tx, config_path)?;
 
         Ok(Self {
             rx,
