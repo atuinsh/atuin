@@ -1,5 +1,6 @@
 use atuin_client::database::Sqlite as HistoryDatabase;
-use atuin_client::{record::sqlite_store::SqliteStore, settings::Settings};
+use atuin_client::record::sqlite_store::SqliteStore;
+use atuin_client::settings::{Settings, watcher::global_settings_watcher};
 use eyre::Result;
 
 pub mod client;
@@ -58,6 +59,26 @@ pub async fn boot(
 
     // Start all components first (so gRPC services can work)
     daemon.start_components().await?;
+
+    // Spawn config file watcher to reload settings on changes
+    if let Ok(watcher) = global_settings_watcher() {
+        let mut settings_rx = watcher.subscribe();
+        let watcher_handle = handle.clone();
+        tokio::spawn(async move {
+            tracing::info!("config file watcher started");
+            while settings_rx.changed().await.is_ok() {
+                // Use the already-loaded settings from the watcher
+                // (avoids parsing the config file twice)
+                let new_settings = (*settings_rx.borrow()).clone();
+                watcher_handle.apply_settings((*new_settings).clone()).await;
+            }
+            tracing::debug!("config file watcher stopped");
+        });
+    } else {
+        tracing::warn!(
+            "failed to start config file watcher; settings changes will require daemon restart"
+        );
+    }
 
     // Spawn signal handler to emit ShutdownRequested on Ctrl+C/SIGTERM
     let signal_handle = handle.clone();

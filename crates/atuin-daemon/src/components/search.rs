@@ -120,6 +120,7 @@ impl Component for SearchComponent {
         // Spawn background task to load history into index
         let index = self.index.clone();
         let db = handle.history_db().clone();
+        let handle_for_loader = handle.clone();
 
         self.loader_handle = Some(tokio::spawn(async move {
             info!(
@@ -141,8 +142,9 @@ impl Component for SearchComponent {
                             "Initial history load complete; {} unique commands indexed",
                             index.read().await.command_count()
                         );
-                        // Build initial frecency map
-                        index.read().await.rebuild_frecency().await;
+                        // Build initial frecency map with current settings
+                        let settings = handle_for_loader.settings().await;
+                        index.read().await.rebuild_frecency(&settings.search).await;
                         info!("Initial frecency map built");
                         break;
                     }
@@ -156,6 +158,7 @@ impl Component for SearchComponent {
 
         // Spawn background task to periodically refresh frecency
         let index_for_frecency = self.index.clone();
+        let handle_for_frecency = handle.clone();
         self.frecency_handle = Some(tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(
                 FRECENCY_REFRESH_INTERVAL_SECS,
@@ -163,7 +166,12 @@ impl Component for SearchComponent {
             loop {
                 interval.tick().await;
                 trace!("Refreshing frecency map");
-                index_for_frecency.read().await.rebuild_frecency().await;
+                let settings = handle_for_frecency.settings().await;
+                index_for_frecency
+                    .read()
+                    .await
+                    .rebuild_frecency(&settings.search)
+                    .await;
             }
         }));
 
@@ -231,11 +239,22 @@ impl Component for SearchComponent {
                     tracing::error!("Failed to rebuild search index: {}", e);
                 }
             }
+            DaemonEvent::SettingsReloaded => {
+                info!("Settings reloaded, rebuilding frecency map with new multipliers");
+                let handle_guard = self.handle.read().await;
+                if let Some(handle) = handle_guard.as_ref() {
+                    let settings = handle.settings().await;
+                    self.index
+                        .read()
+                        .await
+                        .rebuild_frecency(&settings.search)
+                        .await;
+                }
+            }
             // Events we don't care about
             DaemonEvent::SyncCompleted { .. }
             | DaemonEvent::SyncFailed { .. }
             | DaemonEvent::ForceSync
-            | DaemonEvent::SettingsReloaded
             | DaemonEvent::ShutdownRequested => {}
         }
         Ok(())

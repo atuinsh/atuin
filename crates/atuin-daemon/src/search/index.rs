@@ -13,6 +13,7 @@ use std::{
 };
 
 use atuin_client::history::History;
+use atuin_client::settings::Search;
 use dashmap::DashMap;
 use lasso::{Spur, ThreadedRodeo};
 use nucleo::{Injector, Nucleo, pattern};
@@ -56,8 +57,15 @@ impl FrecencyData {
     ///
     /// Uses a decay function where more recent commands score higher.
     /// The formula balances frequency (how often) with recency (how recent).
+    ///
+    /// Multipliers allow tuning the relative weights:
+    /// - `recency_mul`: Multiplier for recency score (default: 1.0)
+    /// - `frequency_mul`: Multiplier for frequency score (default: 1.0)
+    ///
+    /// A multiplier of 0.0 disables that component, 1.0 is unchanged, 2.0 doubles weight.
+    /// Values like 0.5 reduce weight by half, 1.5 increases by 50%, etc.
     #[instrument(level = tracing::Level::TRACE, name = "index_frecency_compute")]
-    pub fn compute(&self, now: i64) -> u32 {
+    pub fn compute(&self, now: i64, recency_mul: f64, frequency_mul: f64) -> u32 {
         if self.count == 0 {
             return 0;
         }
@@ -71,21 +79,21 @@ impl FrecencyData {
         // - Last day: multiplier ~0.5
         // - Last week: multiplier ~0.1
         // - Older: multiplier approaches 0
-        let recency_score = match age_hours {
-            0 => 100,
-            1..=6 => 90,
-            7..=24 => 70,
-            25..=72 => 50,
-            73..=168 => 30,
-            169..=720 => 15,
-            _ => 5,
+        let recency_score: f64 = match age_hours {
+            0 => 100.0,
+            1..=6 => 90.0,
+            7..=24 => 70.0,
+            25..=72 => 50.0,
+            73..=168 => 30.0,
+            169..=720 => 15.0,
+            _ => 5.0,
         };
 
         // Frequency boost: more uses = higher score (with diminishing returns)
-        let frequency_score = ((self.count as f64).ln() * 20.0).min(100.0) as u32;
+        let frequency_score = ((self.count as f64).ln() * 20.0).min(100.0);
 
-        // Combined score
-        recency_score + frequency_score
+        // Apply multipliers and combine scores, then round to u32
+        ((recency_score * recency_mul) + (frequency_score * frequency_mul)).round() as u32
     }
 }
 
@@ -379,13 +387,28 @@ impl SearchIndex {
     ///
     /// This should be called by a background task periodically.
     /// The map is used for scoring search results.
+    ///
+    /// Uses multipliers from search settings:
+    /// - `recency_score_multiplier`: Weight for recency component
+    /// - `frequency_score_multiplier`: Weight for frequency component
+    /// - `frecency_score_multiplier`: Overall multiplier for final score
     #[instrument(skip_all, level = tracing::Level::DEBUG, name = "rebuild_frecency")]
-    pub async fn rebuild_frecency(&self) {
+    pub async fn rebuild_frecency(&self, search_settings: &Search) {
         let now = OffsetDateTime::now_utc().unix_timestamp();
         let mut frecency_map: HashMap<Arc<str>, u32> = HashMap::new();
 
+        // Clamp multipliers to non-negative values to prevent broken frecency ranking
+        // (negative values would produce unexpected results when cast to u32)
+        let recency_mul = search_settings.recency_score_multiplier.max(0.0);
+        let frequency_mul = search_settings.frequency_score_multiplier.max(0.0);
+        let frecency_mul = search_settings.frecency_score_multiplier.max(0.0);
+
         for entry in self.commands.iter() {
-            let frecency = entry.global_frecency.compute(now);
+            let frecency = entry
+                .global_frecency
+                .compute(now, recency_mul, frequency_mul);
+            // Apply overall frecency multiplier and round to u32
+            let frecency = (frecency as f64 * frecency_mul).round() as u32;
             // Arc::clone is cheap - just increments reference count
             frecency_map.insert(Arc::clone(entry.key()), frecency);
         }
@@ -466,19 +489,19 @@ mod tests {
     fn frecency_data_compute() {
         let now = 1000000i64;
 
-        // Recent command
+        // Recent command (with default multipliers of 1.0)
         let recent = FrecencyData {
             count: 5,
             last_used: now - 60, // 1 minute ago
         };
-        assert!(recent.compute(now) > 100); // High score
+        assert!(recent.compute(now, 1.0, 1.0) > 100); // High score
 
         // Old command
         let old = FrecencyData {
             count: 5,
             last_used: now - 86400 * 30, // 30 days ago
         };
-        assert!(old.compute(now) < recent.compute(now));
+        assert!(old.compute(now, 1.0, 1.0) < recent.compute(now, 1.0, 1.0));
 
         // Frequently used old command
         let frequent_old = FrecencyData {
@@ -486,7 +509,50 @@ mod tests {
             last_used: now - 86400 * 7, // 1 week ago
         };
         // Should still have decent score due to frequency
-        assert!(frequent_old.compute(now) > 50);
+        assert!(frequent_old.compute(now, 1.0, 1.0) > 50);
+    }
+
+    #[test]
+    fn frecency_data_compute_with_multipliers() {
+        let now = 1000000i64;
+
+        let data = FrecencyData {
+            count: 5,
+            last_used: now - 60, // 1 minute ago (recency_score = 100)
+        };
+
+        // Default multipliers (1.0, 1.0)
+        let default_score = data.compute(now, 1.0, 1.0);
+
+        // Double recency weight
+        let double_recency = data.compute(now, 2.0, 1.0);
+        assert!(double_recency > default_score);
+
+        // Double frequency weight
+        let double_frequency = data.compute(now, 1.0, 2.0);
+        assert!(double_frequency > default_score);
+
+        // Zero out recency (only frequency counts)
+        let no_recency = data.compute(now, 0.0, 1.0);
+        assert!(no_recency < default_score);
+
+        // Zero out frequency (only recency counts)
+        let no_frequency = data.compute(now, 1.0, 0.0);
+        assert!(no_frequency < default_score);
+
+        // Zero both (should be zero)
+        let no_score = data.compute(now, 0.0, 0.0);
+        assert_eq!(no_score, 0);
+
+        // Fractional multipliers
+        let half_recency = data.compute(now, 0.5, 1.0);
+        assert!(half_recency < default_score);
+        assert!(half_recency > no_recency);
+
+        // 1.5x multiplier
+        let boost_recency = data.compute(now, 1.5, 1.0);
+        assert!(boost_recency > default_score);
+        assert!(boost_recency < double_recency);
     }
 
     #[test]
