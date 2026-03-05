@@ -67,10 +67,10 @@ pub async fn boot(
         tokio::spawn(async move {
             tracing::info!("config file watcher started");
             while settings_rx.changed().await.is_ok() {
-                tracing::debug!("config file changed, triggering settings reload");
-                if let Err(e) = watcher_handle.reload_settings().await {
-                    tracing::error!("failed to reload settings: {}", e);
-                }
+                // Use the already-loaded settings from the watcher
+                // (avoids parsing the config file twice)
+                let new_settings = (*settings_rx.borrow()).clone();
+                watcher_handle.apply_settings((*new_settings).clone()).await;
             }
             tracing::debug!("config file watcher stopped");
         });

@@ -119,10 +119,18 @@ impl DaemonHandle {
     /// via `handle.settings()` to pick up the changes.
     pub async fn reload_settings(&self) -> Result<()> {
         let new_settings = Settings::new()?;
-        *self.state.settings.write().await = new_settings;
-        self.emit(DaemonEvent::SettingsReloaded);
-        tracing::info!("settings reloaded");
+        self.apply_settings(new_settings).await;
         Ok(())
+    }
+
+    /// Apply already-loaded settings and emit a SettingsReloaded event.
+    ///
+    /// Use this when settings have already been loaded (e.g., from a file watcher)
+    /// to avoid parsing the config file twice.
+    pub async fn apply_settings(&self, settings: Settings) {
+        *self.state.settings.write().await = settings;
+        self.emit(DaemonEvent::SettingsReloaded);
+        tracing::info!("settings applied");
     }
 
     /// Get the encryption key.
