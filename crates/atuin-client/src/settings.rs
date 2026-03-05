@@ -342,6 +342,27 @@ pub struct Sync {
     pub records: bool,
 }
 
+/// Sync protocol type for authentication.
+///
+/// This setting is primarily for development/testing. When not explicitly set,
+/// the protocol is inferred from the sync_address:
+/// - Default sync address (api.atuin.sh) → Hub protocol
+/// - Custom sync address → Legacy protocol
+///
+/// Set explicitly to "hub" to use Hub authentication with a custom sync_address
+/// (useful for local development against a Hub instance).
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum SyncProtocol {
+    /// Use Hub authentication (Bearer token from Hub OAuth flow)
+    Hub,
+    /// Use legacy CLI authentication (Token from CLI register/login)
+    Legacy,
+    /// Infer from sync_address (default behavior)
+    #[default]
+    Auto,
+}
+
 #[derive(Clone, Debug, Deserialize, Default, Serialize)]
 pub struct Keys {
     pub scroll_exits: bool,
@@ -966,6 +987,12 @@ pub struct Settings {
     /// The sync address for atuin.
     pub sync_address: String,
 
+    /// Sync protocol for authentication. When set to "auto" (default), the protocol
+    /// is inferred from sync_address. Set to "hub" to force Hub auth with a custom
+    /// sync_address (useful for local development).
+    #[serde(default)]
+    pub sync_protocol: SyncProtocol,
+
     pub sync_frequency: String,
     pub db_path: String,
     pub record_store_path: String,
@@ -1139,6 +1166,64 @@ impl Settings {
         match Self::meta_store().await?.session_token().await? {
             Some(token) => Ok(token),
             None => Err(eyre!("Tried to load session; not logged in")),
+        }
+    }
+
+    pub async fn hub_session_token(&self) -> Result<String> {
+        match Self::meta_store().await?.hub_session_token().await? {
+            Some(token) => Ok(token),
+            None => Err(eyre!("Tried to load hub session; not logged in")),
+        }
+    }
+
+    /// Default sync address for Atuin's hosted service
+    pub const DEFAULT_SYNC_ADDRESS: &'static str = "https://api.atuin.sh";
+
+    /// Returns whether this configuration uses Hub-style sync.
+    ///
+    /// Hub sync uses Bearer token authentication and is the default for
+    /// Atuin's hosted service. This returns true when:
+    /// - `sync_protocol` is explicitly set to `Hub`, OR
+    /// - `sync_protocol` is `Auto` and `sync_address` is the default
+    pub fn is_hub_sync(&self) -> bool {
+        match self.sync_protocol {
+            SyncProtocol::Hub => true,
+            SyncProtocol::Legacy => false,
+            SyncProtocol::Auto => self.sync_address == Self::DEFAULT_SYNC_ADDRESS,
+        }
+    }
+
+    /// Returns the best available auth token for sync operations.
+    ///
+    /// Token priority when using Hub sync:
+    /// 1. Hub token (Bearer) - enables unified Hub auth
+    /// 2. CLI session token (Token) - fallback if Hub token revoked
+    ///
+    /// For legacy/self-hosted sync, only CLI session token is used.
+    ///
+    /// Hub tokens are preferred when available because they provide unified
+    /// authentication across CLI and Hub features, and users can manage them
+    /// via the Hub web interface.
+    #[cfg(feature = "sync")]
+    pub async fn sync_auth_token(&self) -> Result<crate::api_client::AuthToken> {
+        use crate::api_client::AuthToken;
+
+        let meta = Self::meta_store().await?;
+
+        // Try Hub token first if we're using Hub sync
+        if self.is_hub_sync()
+            && let Some(hub_token) = meta.hub_session_token().await?
+        {
+            return Ok(AuthToken::Bearer(hub_token));
+        }
+
+        // Fall back to CLI session token
+        match meta.session_token().await? {
+            Some(token) => Ok(AuthToken::Token(token)),
+            None => Err(eyre!(
+                "Not logged in - no Hub session or CLI session found. \
+                 Run 'atuin login' or 'atuin register' to authenticate."
+            )),
         }
     }
 

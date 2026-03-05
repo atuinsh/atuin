@@ -167,6 +167,56 @@ pub async fn get_session_token() -> Result<Option<String>> {
     Settings::meta_store().await?.hub_session_token().await
 }
 
+/// Link an existing CLI sync account to the current Hub user.
+///
+/// This associates the CLI's sync records with the Hub account, enabling
+/// unified authentication. After linking:
+/// - The Hub token can be used for sync operations
+/// - Records are migrated to be accessible via Hub auth
+///
+/// Requires:
+/// - A valid Hub session (user must be logged in to Hub)
+/// - A valid CLI session token to link
+///
+/// Returns Ok(()) on success, or an error if:
+/// - Not logged in to Hub
+/// - CLI token is invalid
+/// - CLI account is already linked to a different Hub account
+pub async fn link_account(settings: &Settings, cli_token: &str) -> Result<()> {
+    let hub_token = get_session_token()
+        .await?
+        .ok_or_else(|| eyre::eyre!("Not logged in to Hub - cannot link account"))?;
+
+    let url = make_url(&settings.hub_address, "/api/v0/record/link")?;
+
+    debug!("Linking CLI account to Hub at {}", settings.hub_address);
+
+    ensure_crypto_provider();
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(&url)
+        .header(USER_AGENT, APP_USER_AGENT)
+        .header(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION)
+        .bearer_auth(&hub_token)
+        .json(&serde_json::json!({ "token": cli_token }))
+        .send()
+        .await?;
+
+    let status = resp.status();
+
+    if status == StatusCode::CONFLICT {
+        // 409 means CLI account is already linked to a (possibly different) Hub account
+        debug!("CLI account already linked to a Hub account");
+        return Ok(());
+    }
+
+    handle_resp_error(resp).await?;
+
+    info!("Successfully linked CLI account to Hub");
+    Ok(())
+}
+
 // --- Internal HTTP functions ---
 
 fn make_url(address: &str, path: &str) -> Result<String> {

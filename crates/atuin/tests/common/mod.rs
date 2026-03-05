@@ -81,7 +81,13 @@ pub async fn register_inner<'a>(
         .await
         .unwrap();
 
-    api_client::Client::new(address, &registration_response.session, 5, 30).unwrap()
+    api_client::Client::new(
+        address,
+        api_client::AuthToken::Token(registration_response.session),
+        5,
+        30,
+    )
+    .unwrap()
 }
 
 #[allow(dead_code)]
@@ -94,7 +100,13 @@ pub async fn login(address: &str, username: String, password: String) -> api_cli
     .await
     .unwrap();
 
-    api_client::Client::new(address, &login_response.session, 5, 30).unwrap()
+    api_client::Client::new(
+        address,
+        api_client::AuthToken::Token(login_response.session),
+        5,
+        30,
+    )
+    .unwrap()
 }
 
 #[allow(dead_code)]

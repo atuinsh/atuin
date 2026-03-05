@@ -99,6 +99,21 @@ async fn ensure_hub_session(
     info!("Authentication complete, saving session token");
 
     atuin_client::hub::save_session(&token).await?;
+
+    // Silently attempt to link CLI account to Hub if one exists
+    // This enables unified auth - users can use their Hub token for sync
+    if let Ok(meta) = atuin_client::settings::Settings::meta_store().await
+        && let Ok(Some(cli_token)) = meta.session_token().await
+    {
+        debug!("CLI session found, attempting to link accounts");
+        if let Err(e) = atuin_client::hub::link_account(&auth_settings, &cli_token).await {
+            // Don't fail AI flow if linking fails - it's not critical
+            debug!("Could not link CLI account to Hub: {}", e);
+        } else {
+            info!("Successfully linked CLI account to Hub");
+        }
+    }
+
     Ok(token)
 }
 
