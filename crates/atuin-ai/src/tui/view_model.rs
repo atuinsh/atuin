@@ -87,11 +87,22 @@ pub struct Block {
     pub title: Option<String>,
 }
 
+/// Status bar content shown on the bottom border during processing
+#[derive(Debug, Clone)]
+pub struct StatusBar {
+    /// Spinner animation frame
+    pub frame: usize,
+    /// Status text to display (e.g., "Thinking...", "run_bash (used 2 tools)")
+    pub text: String,
+}
+
 /// Complete view model - the rendering specification
 #[derive(Debug, Clone)]
 pub struct Blocks {
     pub items: Vec<Block>,
     pub footer: &'static str,
+    /// Transient status shown on bottom border during streaming/generating
+    pub status_bar: Option<StatusBar>,
 }
 
 /// Count non-suggest_command tool calls since the last user message
@@ -146,6 +157,7 @@ impl Blocks {
     /// Also handles streaming text and mode-dependent UI.
     pub fn from_state(state: &AppState) -> Self {
         let mut items = Vec::new();
+        let mut status_bar = None;
 
         // 1. Build blocks from conversation events
         for event in &state.events {
@@ -255,25 +267,32 @@ impl Blocks {
             }
         }
 
-        // 2. AI response block (tool status + streaming text) - shown during Streaming only
-        // In Review mode, ToolStatus is handled inline with ConversationEvent::Text above
+        // 2. AI response block (streaming text only) - shown during Streaming only
+        // Transient status (spinner, tool progress) goes to status_bar on the bottom border.
+        // In Review mode, ToolStatus is handled inline with ConversationEvent::Text above.
         if state.mode == AppMode::Streaming {
             let (completed, in_flight) = count_tool_calls_since_last_user(&state.events);
-            let mut response_content = Vec::new();
 
-            // Add tool status if there are any non-suggest_command tools
-            if completed > 0 || in_flight.is_some() {
-                response_content.push(Content::ToolStatus {
-                    completed_count: completed,
-                    current_label: in_flight.clone(),
+            // Tool status -> status bar
+            if let Some(ref label) = in_flight {
+                let text = if completed > 0 {
+                    format!(
+                        "{} (used {} tool{})",
+                        label,
+                        completed,
+                        if completed == 1 { "" } else { "s" }
+                    )
+                } else {
+                    label.clone()
+                };
+                status_bar = Some(StatusBar {
                     frame: state.spinner_frame,
+                    text,
                 });
             }
 
-            // Add streaming text or spinner
+            // Spinner -> status bar (only when no text yet and no tool in-flight)
             if state.streaming_text.is_empty() {
-                // Check if enough time has passed to show spinner (200ms delay)
-                // Show spinner immediately if status event has arrived
                 let should_show_spinner = state.streaming_status.is_some()
                     || state
                         .streaming_started
@@ -281,29 +300,23 @@ impl Blocks {
                         .unwrap_or(true);
 
                 if should_show_spinner && in_flight.is_none() {
-                    // Only show generating spinner if no tool is in-flight
                     let status_text = state
                         .streaming_status
                         .as_ref()
                         .map(|s| s.display_text().to_string())
                         .unwrap_or_else(|| "Generating...".to_string());
 
-                    response_content.push(Content::Spinner {
+                    status_bar = Some(StatusBar {
                         frame: state.spinner_frame,
-                        status_text,
+                        text: status_text,
                     });
                 }
             } else {
-                // Show streaming text
-                response_content.push(Content::Text {
-                    markdown: state.streaming_text.clone(),
-                });
-            }
-
-            // Add the response block if there's any content
-            if !response_content.is_empty() {
+                // Show streaming text as content
                 items.push(Block {
-                    content: response_content,
+                    content: vec![Content::Text {
+                        markdown: state.streaming_text.clone(),
+                    }],
                     separator_above: false,
                     title: None,
                 });
@@ -332,13 +345,9 @@ impl Blocks {
                     .map(|s| s.display_text().to_string())
                     .unwrap_or_else(|| "Generating...".to_string());
 
-                items.push(Block {
-                    content: vec![Content::Spinner {
-                        frame: state.spinner_frame,
-                        status_text,
-                    }],
-                    separator_above: false,
-                    title: None,
+                status_bar = Some(StatusBar {
+                    frame: state.spinner_frame,
+                    text: status_text,
                 });
             }
             AppMode::Streaming => {
@@ -373,7 +382,11 @@ impl Blocks {
         // 7. Derive footer from mode and events
         let footer = Self::footer_for_mode(&state.mode, &state.events, state.confirmation_pending);
 
-        Self { items, footer }
+        Self {
+            items,
+            footer,
+            status_bar,
+        }
     }
 
     /// Derive footer text from current mode and conversation state

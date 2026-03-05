@@ -247,7 +247,11 @@ fn blocks_to_json(blocks: &Blocks) -> serde_json::Value {
                 "title": block.title,
                 "content": block.content.iter().map(content_to_json).collect::<Vec<_>>()
             })
-        }).collect::<Vec<_>>()
+        }).collect::<Vec<_>>(),
+        "status_bar": blocks.status_bar.as_ref().map(|sb| serde_json::json!({
+            "frame": sb.frame,
+            "text": sb.text
+        }))
     })
 }
 
