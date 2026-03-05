@@ -34,9 +34,11 @@ pub struct RenderContext<'a> {
 
 /// Calculate the height needed to render the current state.
 /// Used to dynamically resize the viewport before rendering.
-pub fn calculate_needed_height(state: &AppState) -> u16 {
+/// `card_width` is the outer card width (including borders); pass 0 to use CARD_WIDTH default.
+pub fn calculate_needed_height(state: &AppState, card_width: u16) -> u16 {
     let view = Blocks::from_state(state);
-    let content_width = usize::from(CARD_WIDTH.saturating_sub(4)).max(1);
+    let w = if card_width > 0 { card_width } else { CARD_WIDTH };
+    let content_width = usize::from(w.saturating_sub(4)).max(1);
 
     let mut total_height = 0u16;
     for (idx, block) in view.items.iter().enumerate() {
@@ -62,18 +64,23 @@ pub fn render(frame: &mut Frame, state: &AppState, ctx: &RenderContext) {
 }
 
 fn render_view(frame: &mut Frame, view: &Blocks, ctx: &RenderContext) {
-    let area = frame.area();
+    let full_area = frame.area();
 
     // In popup mode, the viewport is already positioned and sized for the card.
-    // Clear it to prevent background bleed-through, then fill the full area.
-    let (card_x, desired_width) = if ctx.popup_mode {
-        frame.render_widget(ratatui::widgets::Clear, area);
-        (area.x, area.width)
+    // Clear it to prevent background bleed-through, then inset by margin for the card.
+    let (area, card_x, desired_width) = if ctx.popup_mode {
+        use super::popup::POPUP_MARGIN;
+        frame.render_widget(ratatui::widgets::Clear, full_area);
+        let inset = full_area.inner(ratatui::layout::Margin {
+            horizontal: POPUP_MARGIN,
+            vertical: POPUP_MARGIN,
+        });
+        (inset, inset.x, inset.width)
     } else {
-        let dw = CARD_WIDTH.min(area.width.saturating_sub(2)).max(32);
-        let max_x = area.x + area.width.saturating_sub(dw);
-        let preferred_x = area.x + ctx.anchor_col.saturating_sub(2);
-        (preferred_x.min(max_x), dw)
+        let dw = CARD_WIDTH.min(full_area.width.saturating_sub(2)).max(32);
+        let max_x = full_area.x + full_area.width.saturating_sub(dw);
+        let preferred_x = full_area.x + ctx.anchor_col.saturating_sub(2);
+        (full_area, preferred_x.min(max_x), dw)
     };
     let content_width = usize::from(desired_width.saturating_sub(4)).max(1);
 
@@ -106,8 +113,15 @@ fn render_view(frame: &mut Frame, view: &Blocks, ctx: &RenderContext) {
     // Cap card height at viewport height to prevent overflow
     let actual_height = desired_height.min(area.height);
 
-    // Calculate scroll offset (scroll to show bottom content when overflowing)
-    let scroll_offset = desired_height.saturating_sub(actual_height);
+    // Calculate scroll offset to keep the active content visible when overflowing.
+    // When render_above=false (popup below cursor), items are reversed so the active
+    // content (input/spinner) is at the top — scroll_offset stays 0 to show the top.
+    // Otherwise, scroll to show the bottom where the active content lives.
+    let scroll_offset = if ctx.popup_mode && !ctx.render_above {
+        0
+    } else {
+        desired_height.saturating_sub(actual_height)
+    };
 
     let card = Rect {
         x: card_x,

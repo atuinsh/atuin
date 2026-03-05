@@ -9,6 +9,9 @@ const MIN_POPUP_HEIGHT: u16 = 5;
 /// Initial popup height — just enough for input + a small response.
 const INITIAL_POPUP_HEIGHT: u16 = 5;
 
+/// Margin around the card in popup mode (blank space for visual separation).
+pub(crate) const POPUP_MARGIN: u16 = 1;
+
 /// Screen state captured from atuin-shell's screen server.
 pub struct SavedScreen {
     #[allow(dead_code)]
@@ -155,15 +158,14 @@ pub fn try_setup_popup() -> Option<PopupState> {
     let saved = fetch_screen_state(&socket_path)?;
 
     let (term_cols, term_rows) = crossterm::terminal::size().unwrap_or((saved.cols, saved.rows));
-    let card_width = super::render::CARD_WIDTH
-        .min(term_cols.saturating_sub(2))
-        .max(32);
+    // Full-width popup with margin for visual separation
+    let popup_width = term_cols;
     let (rect, scroll, render_above) = compute_popup_placement(
         saved.cursor_row,
         saved.cursor_col,
         term_rows,
         term_cols,
-        card_width,
+        popup_width,
     );
 
     // Scroll terminal up if needed to make room for the popup

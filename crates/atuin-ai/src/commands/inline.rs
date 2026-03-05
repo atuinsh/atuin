@@ -375,7 +375,7 @@ impl DebugStateLogger {
             .unwrap_or(0);
 
         // Calculate the actual content height needed for this state
-        let content_height = calculate_needed_height(state);
+        let content_height = calculate_needed_height(state, 0);
 
         let mut state_json = state_to_json(state);
         // Add dimensions for accurate replay
@@ -466,12 +466,33 @@ async fn run_inline_tui(
 
     loop {
         // Ensure viewport is large enough for current content (capped at terminal height)
-        let needed_height = calculate_needed_height(&app.state);
+        // In popup mode, use the actual popup width for accurate height calculation
+        let card_width = if popup_mode {
+            #[cfg(unix)]
+            {
+                popup_state
+                    .as_ref()
+                    .map(|ps| {
+                        ps.current_rect
+                            .width
+                            .saturating_sub(crate::tui::popup::POPUP_MARGIN * 2)
+                    })
+                    .unwrap_or(0)
+            }
+            #[cfg(not(unix))]
+            { 0 }
+        } else {
+            0
+        };
+        let needed_height = calculate_needed_height(&app.state, card_width);
 
         // Grow popup dynamically as content arrives
         #[cfg(unix)]
         if let Some(ref mut ps) = popup_state {
-            if let Some(new_rect) = ps.fit_to(needed_height) {
+            // Add vertical margin for visual separation from terminal content
+            let popup_height =
+                needed_height.saturating_add(crate::tui::popup::POPUP_MARGIN * 2);
+            if let Some(new_rect) = ps.fit_to(popup_height) {
                 guard.resize_popup(new_rect)?;
             }
         }
