@@ -7,6 +7,7 @@ pub async fn logout() -> Result<()> {
 
     if meta.logged_in().await? {
         meta.delete_session().await?;
+        meta.delete_hub_session().await?;
         println!("You have logged out!");
     } else {
         println!("You are not logged in");

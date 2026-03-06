@@ -24,6 +24,23 @@ pub async fn run(
     current_password: Option<String>,
     new_password: Option<String>,
 ) -> Result<()> {
+    if let Some(endpoint) = settings.active_hub_endpoint() {
+        match settings.hub_session_token().await {
+            Ok(_) => {
+                println!("You are authenticated with Atuin Hub.");
+                println!("Modify your password on Atuin Hub: {endpoint}/settings/account");
+                return Ok(());
+            }
+            Err(_) => {
+                println!("You are not currently logged in to Atuin Hub.");
+                println!(
+                    "Run 'atuin login' to log in to Atuin Hub, or visit {endpoint}/settings/account to change your password."
+                );
+                return Ok(());
+            }
+        }
+    }
+
     let client = api_client::Client::new(
         &settings.sync_address,
         settings.sync_auth_token().await?,

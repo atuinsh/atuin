@@ -41,7 +41,55 @@ impl Cmd {
             );
         }
 
+        if let Some(endpoint) = settings.active_hub_endpoint() {
+            match settings.hub_session_token().await {
+                Ok(_) => {
+                    println!("You are authenticated with Atuin Hub.");
+                    println!("Run 'atuin logout' to log out.");
+                    return Ok(());
+                }
+                Err(_) => {
+                    self.ensure_hub_session(settings, endpoint.as_str()).await?;
+                    println!("Successfully authenticated with Atuin Hub.");
+                    return Ok(());
+                }
+            }
+        }
+
         self.run_sync_login(settings, store).await
+    }
+
+    async fn ensure_hub_session(&self, settings: &Settings, hub_address: &str) -> Result<()> {
+        tracing::info!("Authenticating with Atuin Hub...");
+
+        let session = atuin_client::hub::HubAuthSession::start(hub_address).await?;
+        println!("Open this URL to continue authenticating with Atuin Hub:");
+        println!("{}", session.auth_url);
+
+        let token = session
+            .wait_for_completion(
+                atuin_client::hub::DEFAULT_AUTH_TIMEOUT,
+                atuin_client::hub::DEFAULT_POLL_INTERVAL,
+            )
+            .await?;
+
+        tracing::info!("Authentication complete, saving session token");
+
+        atuin_client::hub::save_session(&token).await?;
+
+        // Silently attempt to link CLI account to Hub if one exists
+        // This enables unified auth - users can use their Hub token for sync
+        if let Ok(cli_token) = settings.session_token().await {
+            tracing::debug!("CLI session found, attempting to link accounts");
+            if let Err(e) = atuin_client::hub::link_account(hub_address, &cli_token).await {
+                // Don't fail AI flow if linking fails - it's not critical
+                tracing::debug!("Could not link CLI account to Hub: {}", e);
+            } else {
+                tracing::info!("Successfully linked CLI account to Hub");
+            }
+        }
+
+        Ok(())
     }
 
     async fn run_sync_login(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {

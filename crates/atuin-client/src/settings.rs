@@ -1201,6 +1201,15 @@ impl Settings {
         }
     }
 
+    /// Returns the base URL for the Hub endpoint as configured in the settings.
+    pub fn active_hub_endpoint(&self) -> Option<String> {
+        if self.is_hub_sync() {
+            Some(self.sync_address.clone())
+        } else {
+            None
+        }
+    }
+
     /// Returns the best available auth token for sync operations.
     ///
     /// Token priority when using Hub sync:
