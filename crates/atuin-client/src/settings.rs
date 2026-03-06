@@ -1179,6 +1179,11 @@ impl Settings {
     /// Default sync address for Atuin's hosted service
     pub const DEFAULT_SYNC_ADDRESS: &'static str = "https://api.atuin.sh";
 
+    /// Normalize a URL for comparison by trimming trailing slashes
+    fn normalize_url(url: &str) -> &str {
+        url.trim_end_matches('/')
+    }
+
     /// Returns whether this configuration uses Hub-style sync.
     ///
     /// Hub sync uses Bearer token authentication and is the default for
@@ -1189,7 +1194,10 @@ impl Settings {
         match self.sync_protocol {
             SyncProtocol::Hub => true,
             SyncProtocol::Legacy => false,
-            SyncProtocol::Auto => self.sync_address == Self::DEFAULT_SYNC_ADDRESS,
+            SyncProtocol::Auto => {
+                Self::normalize_url(&self.sync_address)
+                    == Self::normalize_url(Self::DEFAULT_SYNC_ADDRESS)
+            }
         }
     }
 
