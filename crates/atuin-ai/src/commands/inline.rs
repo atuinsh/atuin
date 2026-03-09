@@ -480,7 +480,9 @@ async fn run_inline_tui(
                     .unwrap_or(0)
             }
             #[cfg(not(unix))]
-            { 0 }
+            {
+                0
+            }
         } else {
             0
         };
@@ -490,8 +492,7 @@ async fn run_inline_tui(
         #[cfg(unix)]
         if let Some(ref mut ps) = popup_state {
             // Add vertical margin for visual separation from terminal content
-            let popup_height =
-                needed_height.saturating_add(crate::tui::popup::POPUP_MARGIN * 2);
+            let popup_height = needed_height.saturating_add(crate::tui::popup::POPUP_MARGIN * 2);
             if let Some(new_rect) = ps.fit_to(popup_height) {
                 guard.resize_popup(new_rect)?;
             }

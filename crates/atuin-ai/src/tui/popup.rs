@@ -46,8 +46,7 @@ impl PopupState {
     /// Returns `Some(new_rect)` if the size changed (caller must resize terminal),
     /// or `None` if no change is needed.
     pub fn fit_to(&mut self, needed: u16) -> Option<Rect> {
-        let new_height = needed
-            .clamp(INITIAL_POPUP_HEIGHT, self.max_rect.height);
+        let new_height = needed.clamp(INITIAL_POPUP_HEIGHT, self.max_rect.height);
         if new_height == self.current_rect.height {
             return None;
         }
@@ -57,30 +56,26 @@ impl PopupState {
 
         if self.render_above {
             let new_y = self.max_rect.y + self.max_rect.height - new_height;
-            self.current_rect = Rect::new(
-                old_rect.x,
-                new_y,
-                old_rect.width,
-                new_height,
-            );
+            self.current_rect = Rect::new(old_rect.x, new_y, old_rect.width, new_height);
         } else {
-            self.current_rect = Rect::new(
-                old_rect.x,
-                old_rect.y,
-                old_rect.width,
-                new_height,
-            );
+            self.current_rect = Rect::new(old_rect.x, old_rect.y, old_rect.width, new_height);
         }
 
         if growing {
             // Clear the entire new rect so the new Terminal doesn't leave
             // ghost content from the old card.
-            self.clear_rows(self.current_rect.y, self.current_rect.y + self.current_rect.height);
+            self.clear_rows(
+                self.current_rect.y,
+                self.current_rect.y + self.current_rect.height,
+            );
         } else {
             // Shrinking: restore freed rows from saved screen data, then
             // clear the new (smaller) rect for the re-rendered card.
             self.restore_rows(&old_rect);
-            self.clear_rows(self.current_rect.y, self.current_rect.y + self.current_rect.height);
+            self.clear_rows(
+                self.current_rect.y,
+                self.current_rect.y + self.current_rect.height,
+            );
         }
 
         Some(self.current_rect)
@@ -100,7 +95,12 @@ impl PopupState {
                 MoveTo(self.current_rect.x, row),
                 SetAttribute(Attribute::Reset)
             );
-            let _ = write!(out, "{:width$}", "", width = self.current_rect.width as usize);
+            let _ = write!(
+                out,
+                "{:width$}",
+                "",
+                width = self.current_rect.width as usize
+            );
         }
         let _ = out.flush();
     }
@@ -121,18 +121,17 @@ impl PopupState {
             (old_rect.y, self.current_rect.y)
         } else {
             // Shrinking from below: freed rows are at the old bottom
-            (self.current_rect.y + self.current_rect.height, old_rect.y + old_rect.height)
+            (
+                self.current_rect.y + self.current_rect.height,
+                old_rect.y + old_rect.height,
+            )
         };
 
         for row in freed_start..freed_end {
             let source_row = (row + self.scroll_offset) as usize;
 
             // Clear the popup region
-            let _ = execute!(
-                out,
-                MoveTo(old_rect.x, row),
-                SetAttribute(Attribute::Reset),
-            );
+            let _ = execute!(out, MoveTo(old_rect.x, row), SetAttribute(Attribute::Reset),);
             let _ = write!(out, "{:width$}", "", width = old_rect.width as usize);
 
             // Write back saved row data from column 0
@@ -263,9 +262,7 @@ fn fetch_screen_state(socket_path: &str) -> Option<SavedScreen> {
     use std::time::Duration;
 
     let mut stream = UnixStream::connect(socket_path).ok()?;
-    stream
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .ok()?;
+    stream.set_read_timeout(Some(Duration::from_secs(2))).ok()?;
 
     let mut data = Vec::new();
     stream.read_to_end(&mut data).ok()?;

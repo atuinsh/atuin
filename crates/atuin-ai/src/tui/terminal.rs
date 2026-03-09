@@ -148,7 +148,11 @@ impl TerminalGuard {
 
             let mut out = stdout();
             for row in popup_rect.y..popup_rect.y.saturating_add(popup_rect.height) {
-                let _ = execute!(out, MoveTo(popup_rect.x, row), SetAttribute(Attribute::Reset));
+                let _ = execute!(
+                    out,
+                    MoveTo(popup_rect.x, row),
+                    SetAttribute(Attribute::Reset)
+                );
                 let _ = write!(out, "{:width$}", "", width = popup_rect.width as usize);
             }
             let _ = out.flush();

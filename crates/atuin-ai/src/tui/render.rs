@@ -37,7 +37,11 @@ pub struct RenderContext<'a> {
 /// `card_width` is the outer card width (including borders); pass 0 to use CARD_WIDTH default.
 pub fn calculate_needed_height(state: &AppState, card_width: u16) -> u16 {
     let view = Blocks::from_state(state);
-    let w = if card_width > 0 { card_width } else { CARD_WIDTH };
+    let w = if card_width > 0 {
+        card_width
+    } else {
+        CARD_WIDTH
+    };
     let content_width = usize::from(w.saturating_sub(4)).max(1);
 
     let mut total_height = 0u16;

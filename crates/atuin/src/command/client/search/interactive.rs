@@ -1322,9 +1322,7 @@ fn fetch_screen_state(socket_path: &str) -> Option<SavedScreen> {
     use std::os::unix::net::UnixStream;
 
     let mut stream = UnixStream::connect(socket_path).ok()?;
-    stream
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .ok()?;
+    stream.set_read_timeout(Some(Duration::from_secs(2))).ok()?;
 
     let mut data = Vec::new();
     stream.read_to_end(&mut data).ok()?;
@@ -1342,9 +1340,12 @@ fn fetch_screen_state(socket_path: &str) -> Option<SavedScreen> {
     let mut rows_data = Vec::with_capacity(rows as usize);
     let mut offset = 8;
     while offset + 4 <= data.len() {
-        let row_len =
-            u32::from_be_bytes([data[offset], data[offset + 1], data[offset + 2], data[offset + 3]])
-                as usize;
+        let row_len = u32::from_be_bytes([
+            data[offset],
+            data[offset + 1],
+            data[offset + 2],
+            data[offset + 3],
+        ]) as usize;
         offset += 4;
         if offset + row_len > data.len() {
             break;
@@ -1386,9 +1387,7 @@ fn restore_popup_area(saved: &SavedScreen, popup_rect: Rect, scroll_offset: u16)
         let _ = execute!(
             stdout,
             MoveTo(popup_rect.x, target_row),
-            ratatui::crossterm::style::SetAttribute(
-                ratatui::crossterm::style::Attribute::Reset
-            ),
+            ratatui::crossterm::style::SetAttribute(ratatui::crossterm::style::Attribute::Reset),
         );
         let _ = write!(stdout, "{:width$}", "", width = popup_rect.width as usize);
         let _ = execute!(stdout, MoveTo(popup_rect.x, target_row));
@@ -1400,7 +1399,10 @@ fn restore_popup_area(saved: &SavedScreen, popup_rect: Rect, scroll_offset: u16)
 
     let _ = execute!(
         stdout,
-        MoveTo(saved.cursor_col, saved.cursor_row.saturating_sub(scroll_offset))
+        MoveTo(
+            saved.cursor_col,
+            saved.cursor_row.saturating_sub(scroll_offset)
+        )
     );
     let _ = stdout.flush();
 }
@@ -1622,13 +1624,16 @@ pub async fn history(
         // as a single write — no intermediate cursor positions are visible.
         let _ = queue!(
             raw_stdout,
-            ratatui::crossterm::style::SetAttribute(
-                ratatui::crossterm::style::Attribute::Reset
-            )
+            ratatui::crossterm::style::SetAttribute(ratatui::crossterm::style::Attribute::Reset)
         );
         for row in popup_rect.y..popup_rect.y.saturating_add(popup_rect.height) {
             let _ = queue!(raw_stdout, MoveTo(popup_rect.x, row));
-            let _ = write!(raw_stdout, "{:width$}", "", width = popup_rect.width as usize);
+            let _ = write!(
+                raw_stdout,
+                "{:width$}",
+                "",
+                width = popup_rect.width as usize
+            );
         }
         let _ = raw_stdout.flush();
     }
@@ -1737,7 +1742,15 @@ pub async fn history(
     let accept;
     let result = 'render: loop {
         terminal.draw(|f| {
-            app.draw(f, &results, stats.clone(), inspecting.as_ref(), settings, theme, popup_mode);
+            app.draw(
+                f,
+                &results,
+                stats.clone(),
+                inspecting.as_ref(),
+                settings,
+                theme,
+                popup_mode,
+            );
         })?;
 
         let initial_input = app.search.input.as_str().to_owned();
