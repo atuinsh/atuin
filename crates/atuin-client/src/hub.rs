@@ -188,7 +188,7 @@ pub async fn link_account(hub_address: &str, cli_token: &str) -> Result<()> {
         .await?
         .ok_or_else(|| eyre::eyre!("Not logged in to Hub - cannot link account"))?;
 
-    let url = make_url(hub_address, "/api/v0/record/link")?;
+    let url = make_url(hub_address, "/api/v0/account/link")?;
 
     debug!("Linking CLI account to Hub at {}", hub_address);
 
