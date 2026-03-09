@@ -1,4 +1,3 @@
-use async_trait::async_trait;
 use atuin_common::api::{ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ErrorResponse};
 use axum::{
     Router,
@@ -22,7 +21,6 @@ use atuin_server_database::{Database, DbError, models::User};
 
 pub struct UserAuth(pub User);
 
-#[async_trait]
 impl<DB: Send + Sync> FromRequestParts<AppState<DB>> for UserAuth
 where
     DB: Database,
@@ -118,14 +116,14 @@ pub fn router<DB: Database>(database: DB, settings: Settings) -> Router {
         routes = routes
             .route("/sync/count", get(handlers::history::count))
             .route("/sync/history", get(handlers::history::list))
-            .route("/sync/calendar/:focus", get(handlers::history::calendar))
+            .route("/sync/calendar/{focus}", get(handlers::history::calendar))
             .route("/sync/status", get(handlers::status::status))
             .route("/history", post(handlers::history::add))
             .route("/history", delete(handlers::history::delete));
     }
 
     let routes = routes
-        .route("/user/:username", get(handlers::user::get))
+        .route("/user/{username}", get(handlers::user::get))
         .route("/account", delete(handlers::user::delete))
         .route("/account/password", patch(handlers::user::change_password))
         .route("/register", post(handlers::user::register))

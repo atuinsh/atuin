@@ -32,8 +32,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 rand = { workspace = true }
 tokio = { workspace = true }
-async-trait = { workspace = true }
-axum = "0.7"
+axum = "0.8"
 fs-err = { workspace = true }
 tower = { workspace = true }
 tower-http = { version = "0.6", features = ["trace"] }
