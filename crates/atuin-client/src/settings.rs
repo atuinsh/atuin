@@ -981,9 +981,6 @@ pub struct Settings {
     pub auto_sync: bool,
     pub update_check: bool,
 
-    /// The address of the Atuin Hub. Used for Hub-specific features like AI.
-    pub hub_address: String,
-
     /// The sync address for atuin.
     pub sync_address: String,
 
