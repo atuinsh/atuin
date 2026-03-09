@@ -45,7 +45,12 @@ pub async fn run(
     let token = if let Some(token) = &api_token {
         token.to_string()
     } else {
-        ensure_hub_session(settings, endpoint).await?
+        // If no token is provided, assume we're using Hub as the endpoint if we're using Hub sync
+        if settings.is_hub_sync() {
+            ensure_hub_session(settings).await?
+        } else {
+            bail!("No API token provided in ai.api_token settings or command line argument.")
+        }
     };
 
     let action = run_inline_tui(
@@ -62,14 +67,13 @@ pub async fn run(
     Ok(())
 }
 
-async fn ensure_hub_session(
-    settings: &atuin_client::settings::Settings,
-    hub_address: &str,
-) -> Result<String> {
+async fn ensure_hub_session(settings: &atuin_client::settings::Settings) -> Result<String> {
     if let Some(token) = atuin_client::hub::get_session_token().await? {
         debug!("Found Hub session, using existing token");
         return Ok(token);
     }
+
+    let hub_address = settings.active_hub_endpoint()?;
 
     info!("No Hub session found, prompting for authentication");
 
@@ -104,7 +108,7 @@ async fn ensure_hub_session(
         && let Ok(Some(cli_token)) = meta.session_token().await
     {
         debug!("CLI session found, attempting to link accounts");
-        if let Err(e) = atuin_client::hub::link_account(hub_address, &cli_token).await {
+        if let Err(e) = atuin_client::hub::link_account(&hub_address, &cli_token).await {
             // Don't fail AI flow if linking fails - it's not critical
             debug!("Could not link CLI account to Hub: {}", e);
         } else {
