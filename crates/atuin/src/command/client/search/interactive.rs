@@ -809,6 +809,7 @@ impl State {
 
     #[allow(clippy::bool_to_int_with_if)]
     #[allow(clippy::too_many_lines)]
+    #[allow(clippy::too_many_arguments)]
     fn draw(
         &mut self,
         f: &mut Frame,
@@ -826,6 +827,9 @@ impl State {
         self.draw_inner(f, area, results, stats, inspecting, settings, theme);
     }
 
+    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::bool_to_int_with_if)]
     fn draw_inner(
         &mut self,
         f: &mut Frame,
@@ -1590,7 +1594,7 @@ pub async fn history(
                     let mut stdout = stdout();
                     let _ = execute!(stdout, MoveTo(0, term_rows - 1));
                     for _ in 0..scroll {
-                        let _ = write!(stdout, "\n");
+                        let _ = writeln!(stdout);
                     }
                     let _ = stdout.flush();
                 }
