@@ -80,7 +80,6 @@ impl Cmd {
         if let Ok(cli_token) = settings.session_token().await {
             tracing::debug!("CLI session found, attempting to link accounts");
             if let Err(e) = atuin_client::hub::link_account(hub_address, &cli_token).await {
-                // Don't fail AI flow if linking fails - it's not critical
                 tracing::debug!("Could not link CLI account to Hub: {}", e);
             } else {
                 tracing::info!("Successfully linked CLI account to Hub");

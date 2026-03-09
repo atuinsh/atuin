@@ -29,12 +29,6 @@ pub async fn run(
     email: Option<String>,
     password: Option<String>,
 ) -> Result<()> {
-    if settings.hub_session_token().await.is_ok() {
-        bail!(
-            "You are already logged in. Please run 'atuin logout' if you wish to register a new account."
-        );
-    }
-
     if let Some(_endpoint) = settings.active_hub_endpoint() {
         if settings.hub_session_token().await.is_ok() {
             println!("You are already authenticated with Atuin Hub.");
