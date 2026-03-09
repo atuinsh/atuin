@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{IsTerminal as _, Write, stderr};
+use std::io::{IsTerminal as _, Write, stderr, stdout};
 
 use atuin_common::utils::{self, Escapable as _};
 use clap::Parser;
@@ -226,6 +226,10 @@ impl Cmd {
             if let Some(result_file) = self.result_file {
                 let mut file = File::create(result_file)?;
                 write!(file, "{item}")?;
+            } else if !stdout().is_terminal() {
+                // stdout is not a terminal - likely command substitution like VAR=$(atuin search -i)
+                // Write to stdout so it gets captured
+                println!("{item}");
             } else if stderr().is_terminal() {
                 eprintln!("{}", item.escape_control());
             } else {
