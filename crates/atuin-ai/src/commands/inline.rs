@@ -87,7 +87,7 @@ async fn ensure_hub_session(settings: &atuin_client::settings::Settings) -> Resu
     debug!("Starting Atuin Hub authentication...");
 
     println!("Authenticating with Atuin Hub...");
-    let session = atuin_client::hub::HubAuthSession::start(&settings.hub_address).await?;
+    let session = atuin_client::hub::HubAuthSession::start(&hub_address).await?;
     println!("Open this URL to continue:");
     println!("{}", session.auth_url);
 
