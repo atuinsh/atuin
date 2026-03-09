@@ -9,8 +9,8 @@ const MIN_POPUP_HEIGHT: u16 = 5;
 /// Initial popup height — just enough for input + a small response.
 const INITIAL_POPUP_HEIGHT: u16 = 5;
 
-/// Margin around the card in popup mode (blank space for visual separation).
-pub(crate) const POPUP_MARGIN: u16 = 1;
+/// Margin around the card in popup mode.
+pub(crate) const POPUP_MARGIN: u16 = 0;
 
 /// Screen state captured from atuin-shell's screen server.
 pub struct SavedScreen {
