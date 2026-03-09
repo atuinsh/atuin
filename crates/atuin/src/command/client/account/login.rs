@@ -35,12 +35,6 @@ fn get_input() -> Result<String> {
 
 impl Cmd {
     pub async fn run(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
-        if settings.logged_in().await? {
-            bail!(
-                "You are already logged in! Please run 'atuin logout' if you wish to login again"
-            );
-        }
-
         if let Some(endpoint) = settings.active_hub_endpoint() {
             match settings.hub_session_token().await {
                 Ok(_) => {
@@ -49,11 +43,18 @@ impl Cmd {
                     return Ok(());
                 }
                 Err(_) => {
+                    self.prompt_and_store_key(settings, store).await?;
                     self.ensure_hub_session(settings, endpoint.as_str()).await?;
                     println!("Successfully authenticated with Atuin Hub.");
                     return Ok(());
                 }
             }
+        }
+
+        if settings.logged_in().await? {
+            println!("You are already logged in.");
+            println!("Run 'atuin logout' to log out.");
+            return Ok(());
         }
 
         self.run_sync_login(settings, store).await
@@ -102,6 +103,25 @@ impl Cmd {
         let username = or_user_input(self.username.clone(), "username");
         let password = self.password.clone().unwrap_or_else(read_user_password);
 
+        self.prompt_and_store_key(settings, store).await?;
+
+        let session = api_client::login(
+            settings.sync_address.as_str(),
+            LoginRequest { username, password },
+        )
+        .await?;
+
+        Settings::meta_store()
+            .await?
+            .save_session(&session.session)
+            .await?;
+
+        println!("Logged in!");
+
+        Ok(())
+    }
+
+    async fn prompt_and_store_key(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
         let key_path = settings.key_path.as_str();
         let key_path = PathBuf::from(key_path);
 
@@ -109,8 +129,8 @@ impl Cmd {
         println!(
             "If you are already logged in on another machine, you must ensure that the key you use here is the same as the key you used there."
         );
-        println!("You can find your key by running 'atuin key' on the other machine");
-        println!("Do not share this key with anyone");
+        println!("You can find your key by running 'atuin key' on the other machine.");
+        println!("Do not share this key with anyone.");
         println!("\nRead more here: https://docs.atuin.sh/guide/sync/#login \n");
 
         let key = or_user_input(
@@ -131,12 +151,12 @@ impl Cmd {
                         // assume they copied in the base64 key
                         bip39::ErrorKind::InvalidWord(_) => key,
                         bip39::ErrorKind::InvalidChecksum => {
-                            bail!("key mnemonic was not valid")
+                            bail!("Key mnemonic is not valid")
                         }
                         bip39::ErrorKind::InvalidKeysize(_)
                         | bip39::ErrorKind::InvalidWordLength(_)
                         | bip39::ErrorKind::InvalidEntropyLength(_, _) => {
-                            bail!("key was not the correct length")
+                            bail!("Key is not the correct length")
                         }
                     }
                 }
@@ -145,19 +165,24 @@ impl Cmd {
 
         if key.is_empty() {
             if key_path.exists() {
-                let bytes = fs_err::read_to_string(&key_path)
-                    .context("existing key file couldn't be read")?;
+                let bytes = fs_err::read_to_string(&key_path).context(format!(
+                    "Existing key file at '{}' could not be read",
+                    key_path.to_string_lossy()
+                ))?;
                 if decode_key(bytes).is_err() {
-                    bail!("the key in existing key file was invalid");
+                    bail!(format!(
+                        "The key in existing key file at '{}' is invalid",
+                        key_path.to_string_lossy()
+                    ));
                 }
             } else {
                 panic!(
-                    "No key provided. Please use 'atuin key' on your other machine, or recover your key from a backup."
+                    "No key provided and no existing key file found. Please use 'atuin key' on your other machine, or recover your key from a backup"
                 )
             }
         } else if !key_path.exists() {
             if decode_key(key.clone()).is_err() {
-                bail!("the specified key was invalid");
+                bail!("The specified key is invalid");
             }
 
             let mut file = File::create(&key_path).await?;
@@ -172,7 +197,7 @@ impl Cmd {
 
             let encoded = key.clone(); // gonna want to save it in a bit
             let new_key: [u8; 32] = decode_key(key)
-                .context("could not decode provided key - is not valid base64")?
+                .context("Could not decode provided key; is not valid base64-encoded key")?
                 .into();
 
             if new_key != current_key {
@@ -185,19 +210,6 @@ impl Cmd {
                 file.write_all(encoded.as_bytes()).await?;
             }
         }
-
-        let session = api_client::login(
-            settings.sync_address.as_str(),
-            LoginRequest { username, password },
-        )
-        .await?;
-
-        Settings::meta_store()
-            .await?
-            .save_session(&session.session)
-            .await?;
-
-        println!("Logged in!");
 
         Ok(())
     }
