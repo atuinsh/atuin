@@ -10,10 +10,6 @@ license = { workspace = true }
 homepage = { workspace = true }
 repository = { workspace = true }
 
-[[bin]]
-name = "atuin-hex"
-path = "src/main.rs"
-
 [dependencies]
 clap = { workspace = true }
 

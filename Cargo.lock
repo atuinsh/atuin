@@ -226,6 +226,7 @@ dependencies = [
  "atuin-common",
  "atuin-daemon",
  "atuin-dotfiles",
+ "atuin-hex",
  "atuin-history",
  "atuin-kv",
  "atuin-scripts",

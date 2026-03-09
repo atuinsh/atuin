@@ -1,22 +1,15 @@
-mod osc133;
+pub mod osc133;
 
-use clap::{Args, Parser, Subcommand, ValueEnum};
-
-#[derive(Parser, Debug)]
-#[command(infer_subcommands = true)]
-struct Cli {
-    #[command(subcommand)]
-    command: Option<Cmd>,
-}
+use clap::{Args, Subcommand, ValueEnum};
 
 #[derive(Subcommand, Debug)]
-enum Cmd {
+pub enum Cmd {
     /// Print shell code to initialize atuin-hex on shell startup
     Init(Init),
 }
 
 #[derive(Args, Debug)]
-struct Init {
+pub struct Init {
     /// Shell to generate init for. If omitted, attempt auto-detection
     #[arg(value_enum)]
     shell: Option<Shell>,
@@ -50,6 +43,18 @@ impl Init {
         let script = render_init(shell);
         print!("{script}");
         Ok(())
+    }
+}
+
+pub fn run(cmd: Option<Cmd>) {
+    match cmd {
+        Some(Cmd::Init(init)) => {
+            if let Err(err) = init.run() {
+                eprintln!("atuin hex: {err}");
+                std::process::exit(1);
+            }
+        }
+        None => app::main(),
     }
 }
 
@@ -109,7 +114,7 @@ fn render_init(shell: Shell) -> String {
   if [[ -z "${{ATUIN_HEX_ACTIVE:-}}" ]] || [[ "$_atuin_hex_tmux_current" != "$_atuin_hex_tmux_previous" ]]; then
     export ATUIN_HEX_ACTIVE=1
     export ATUIN_HEX_TMUX="$_atuin_hex_tmux_current"
-    exec atuin-hex
+    exec atuin hex
   fi
 
   unset _atuin_hex_tmux_current _atuin_hex_tmux_previous
@@ -133,11 +138,11 @@ eval "$({init_command})"
     if not set -q ATUIN_HEX_ACTIVE
         set -gx ATUIN_HEX_ACTIVE 1
         set -gx ATUIN_HEX_TMUX "$_atuin_hex_tmux_current"
-        exec atuin-hex
+        exec atuin hex
     else if test "$_atuin_hex_tmux_current" != "$_atuin_hex_tmux_previous"
         set -gx ATUIN_HEX_ACTIVE 1
         set -gx ATUIN_HEX_TMUX "$_atuin_hex_tmux_current"
-        exec atuin-hex
+        exec atuin hex
     end
 end
 
@@ -147,24 +152,10 @@ end
     }
 }
 
-fn main() {
-    let cli = Cli::parse();
-
-    match cli.command {
-        Some(Cmd::Init(init)) => {
-            if let Err(err) = init.run() {
-                eprintln!("atuin-hex: {err}");
-                std::process::exit(1);
-            }
-        }
-        None => app::main(),
-    }
-}
-
 #[cfg(any(not(unix), target_os = "illumos"))]
 mod app {
     pub(crate) fn main() {
-        eprintln!("atuin-hex currently supports unix platforms excluding illumos");
+        eprintln!("atuin hex currently supports unix platforms excluding illumos");
         std::process::exit(1);
     }
 }
@@ -187,7 +178,7 @@ mod app {
     pub(crate) fn main() {
         if let Err(e) = run() {
             let _ = terminal::disable_raw_mode();
-            eprintln!("atuin-hex: {e:#}");
+            eprintln!("atuin hex: {e:#}");
             std::process::exit(1);
         }
     }
@@ -314,7 +305,7 @@ mod app {
                 let listener = match UnixListener::bind(&sock_path_clone) {
                     Ok(l) => l,
                     Err(e) => {
-                        eprintln!("atuin-hex: failed to bind socket: {e}");
+                        eprintln!("atuin hex: failed to bind socket: {e}");
                         return;
                     }
                 };
@@ -460,7 +451,7 @@ mod tests {
     #[test]
     fn posix_init_uses_exec_and_tmux_guard() {
         let script = render_init(Shell::Bash);
-        assert!(script.contains("exec atuin-hex"));
+        assert!(script.contains("exec atuin hex"));
         assert!(script.contains("ATUIN_HEX_TMUX"));
         assert!(script.contains("eval \"$(atuin init bash)\""));
     }
@@ -468,7 +459,7 @@ mod tests {
     #[test]
     fn fish_init_uses_source() {
         let script = render_init(Shell::Fish);
-        assert!(script.contains("exec atuin-hex"));
+        assert!(script.contains("exec atuin hex"));
         assert!(script.contains("atuin init fish | source"));
     }
 }
