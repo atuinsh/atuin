@@ -130,7 +130,7 @@ impl TerminalGuard {
     /// Create a new TerminalGuard for popup overlay mode.
     ///
     /// In popup mode:
-    /// - Raw mode is not managed (atuin-shell owns it)
+    /// - Raw mode is not managed (atuin-hex owns it)
     /// - The viewport is a fixed rect positioned over existing terminal content
     /// - The popup area is pre-cleared to prevent background bleed-through
     /// - Drop does not clear the viewport or disable raw mode
@@ -240,7 +240,7 @@ impl Drop for TerminalGuard {
     fn drop(&mut self) {
         if self.popup_mode {
             // Popup mode: screen restoration handled by caller before drop.
-            // Raw mode is owned by atuin-shell, don't touch it.
+            // Raw mode is owned by atuin-hex, don't touch it.
             return;
         }
 

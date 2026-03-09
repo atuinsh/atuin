@@ -1295,7 +1295,7 @@ impl Write for TerminalWriter {
     }
 }
 
-/// Screen state captured from atuin-shell's screen server.
+/// Screen state captured from atuin-hex's screen server.
 #[cfg(unix)]
 struct SavedScreen {
     #[allow(dead_code)]
@@ -1308,7 +1308,7 @@ struct SavedScreen {
     rows_data: Vec<Vec<u8>>,
 }
 
-/// Connect to atuin-shell's Unix socket and fetch the current screen state.
+/// Connect to atuin-hex's Unix socket and fetch the current screen state.
 ///
 /// The wire format is:
 /// ```text
@@ -1364,7 +1364,7 @@ fn fetch_screen_state(socket_path: &str) -> Option<SavedScreen> {
 
 /// Restore the screen area that was covered by the popup.
 ///
-/// Writes the pre-formatted per-row ANSI bytes received from atuin-shell
+/// Writes the pre-formatted per-row ANSI bytes received from atuin-hex
 /// directly to stdout, which correctly handles wide characters, colors, and
 /// all text attributes without needing a client-side vt100 parser.
 #[cfg(unix)]
@@ -1568,11 +1568,11 @@ pub async fn history(
         inline_height
     };
 
-    // Popup mode: if running under atuin-shell and inline mode is requested,
+    // Popup mode: if running under atuin-hex and inline mode is requested,
     // fetch the screen state and render as a centered overlay.
     #[cfg(unix)]
     let (saved_screen, popup_rect, popup_scroll_offset) = {
-        let socket_path = std::env::var("ATUIN_SHELL_SOCKET").ok();
+        let socket_path = std::env::var("ATUIN_HEX_SOCKET").ok();
         if let Some(ref path) = socket_path
             && inline_height > 0
         {

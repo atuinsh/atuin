@@ -405,7 +405,7 @@ async fn run_inline_tui(
     debug_state_file: Option<String>,
     settings: &atuin_client::settings::Settings,
 ) -> Result<(Action, String)> {
-    // Detect popup mode (only on Unix where atuin-shell socket is available)
+    // Detect popup mode (only on Unix where atuin-hex socket is available)
     #[cfg(unix)]
     let mut popup_state = crate::tui::popup::try_setup_popup();
     #[cfg(not(unix))]

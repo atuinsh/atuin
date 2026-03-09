@@ -12,7 +12,7 @@ const INITIAL_POPUP_HEIGHT: u16 = 5;
 /// Margin around the card in popup mode.
 pub(crate) const POPUP_MARGIN: u16 = 0;
 
-/// Screen state captured from atuin-shell's screen server.
+/// Screen state captured from atuin-hex's screen server.
 pub struct SavedScreen {
     #[allow(dead_code)]
     pub rows: u16,
@@ -147,14 +147,14 @@ impl PopupState {
 
 /// Try to set up popup overlay mode.
 ///
-/// Checks for `ATUIN_SHELL_SOCKET`, fetches screen state, computes placement,
+/// Checks for `ATUIN_HEX_SOCKET`, fetches screen state, computes placement,
 /// and scrolls the terminal if needed. Returns `None` if popup mode is not
 /// available (no socket, fetch failed, etc.), in which case the caller should
 /// fall back to inline mode.
 pub fn try_setup_popup() -> Option<PopupState> {
     use std::io::Write;
 
-    let socket_path = std::env::var("ATUIN_SHELL_SOCKET").ok()?;
+    let socket_path = std::env::var("ATUIN_HEX_SOCKET").ok()?;
     let saved = fetch_screen_state(&socket_path)?;
 
     let (term_cols, term_rows) = crossterm::terminal::size().unwrap_or((saved.cols, saved.rows));
@@ -248,7 +248,7 @@ pub fn restore(state: &PopupState) {
     let _ = stdout.flush();
 }
 
-/// Connect to atuin-shell's Unix socket and fetch the current screen state.
+/// Connect to atuin-hex's Unix socket and fetch the current screen state.
 ///
 /// The wire format is:
 /// ```text

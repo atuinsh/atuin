@@ -1,5 +1,5 @@
 [package]
-name = "atuin-shell"
+name = "atuin-hex"
 edition = "2024"
 description = "a terminal emulator for atuin"
 
@@ -11,7 +11,7 @@ homepage = { workspace = true }
 repository = { workspace = true }
 
 [[bin]]
-name = "atuin-shell"
+name = "atuin-hex"
 path = "src/main.rs"
 
 [dependencies]
