@@ -81,3 +81,4 @@ features = ["runtime-tokio-rustls", "time", "postgres", "uuid"]
 [profile.dist]
 inherits = "release"
 lto = "thin"
+strip = "symbols"
