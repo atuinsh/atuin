@@ -73,7 +73,10 @@ fn render_view(frame: &mut Frame, view: &Blocks, ctx: &RenderContext) {
     // In popup mode, the viewport is already positioned and sized for the card.
     // Clear it to prevent background bleed-through, then inset by margin for the card.
     let (area, card_x, desired_width) = if ctx.popup_mode {
+        #[cfg(unix)]
         use super::popup::POPUP_MARGIN;
+        #[cfg(not(unix))]
+        const POPUP_MARGIN: u16 = 0;
         frame.render_widget(ratatui::widgets::Clear, full_area);
         let inset = full_area.inner(ratatui::layout::Margin {
             horizontal: POPUP_MARGIN,

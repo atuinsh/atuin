@@ -172,7 +172,7 @@ pub fn try_setup_popup() -> Option<PopupState> {
         let mut stdout = std::io::stdout();
         let _ = crossterm::execute!(stdout, crossterm::cursor::MoveTo(0, term_rows - 1));
         for _ in 0..scroll {
-            let _ = write!(stdout, "\n");
+            let _ = writeln!(stdout);
         }
         let _ = stdout.flush();
     }

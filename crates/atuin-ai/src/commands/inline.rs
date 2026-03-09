@@ -653,7 +653,7 @@ async fn run_inline_tui(
     // Restore popup area before guard drops (guard skips cleanup in popup mode)
     #[cfg(unix)]
     if let Some(ref ps) = popup_state {
-        crate::tui::popup::restore(&ps);
+        crate::tui::popup::restore(ps);
     }
 
     // Map exit action to return value
