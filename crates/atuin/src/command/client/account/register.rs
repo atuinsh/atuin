@@ -29,7 +29,7 @@ pub async fn run(
     email: Option<String>,
     password: Option<String>,
 ) -> Result<()> {
-    if settings.logged_in().await? {
+    if settings.hub_session_token().await.is_ok() {
         bail!(
             "You are already logged in. Please run 'atuin logout' if you wish to register a new account."
         );
@@ -51,6 +51,12 @@ pub async fn run(
         }
         .run(settings, store)
         .await?;
+        return Ok(());
+    }
+
+    if settings.session_token().await.is_ok() {
+        println!("You are already logged in.");
+        println!("Run 'atuin logout' to log out.");
         return Ok(());
     }
 
