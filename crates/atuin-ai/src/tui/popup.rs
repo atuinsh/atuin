@@ -339,7 +339,8 @@ fn compute_popup_placement(
         let popup_y = cursor_row.saturating_sub(max_h);
         (Rect::new(popup_x, popup_y, popup_w, max_h), 0, true)
     } else {
-        // Neither side fits fully — use whichever side has more space
+        // Neither side fits fully — use whichever side has more space,
+        // scrolling the terminal if needed to reach MIN_POPUP_HEIGHT.
         let render_above = space_above > space_below;
         let available = if render_above {
             space_above
@@ -347,11 +348,16 @@ fn compute_popup_placement(
             space_below
         };
         let h = available.max(MIN_POPUP_HEIGHT).min(max_h);
+        let scroll = h.saturating_sub(available);
         let popup_y = if render_above {
-            cursor_row.saturating_sub(h)
+            cursor_row.saturating_sub(h + scroll)
         } else {
-            cursor_row
+            cursor_row.saturating_sub(scroll)
         };
-        (Rect::new(popup_x, popup_y, popup_w, h), 0, render_above)
+        (
+            Rect::new(popup_x, popup_y, popup_w, h),
+            scroll,
+            render_above,
+        )
     }
 }

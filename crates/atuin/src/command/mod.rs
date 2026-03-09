@@ -21,6 +21,13 @@ pub enum AtuinCmd {
     #[command(flatten)]
     Client(client::Cmd),
 
+    /// Terminal emulator for atuin
+    #[cfg(feature = "hex")]
+    Hex {
+        #[command(subcommand)]
+        cmd: Option<atuin_hex::Cmd>,
+    },
+
     /// Generate a UUID
     Uuid,
 
@@ -46,6 +53,12 @@ impl AtuinCmd {
         match self {
             #[cfg(feature = "client")]
             Self::Client(client) => client.run(),
+
+            #[cfg(feature = "hex")]
+            Self::Hex { cmd } => {
+                atuin_hex::run(cmd);
+                Ok(())
+            }
 
             Self::Contributors => {
                 contributors::run();
