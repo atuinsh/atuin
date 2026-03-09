@@ -1,6 +1,7 @@
 use clap::Parser;
 use eyre::{Result, bail};
 
+use super::login::or_user_input;
 use atuin_client::{api_client, record::sqlite_store::SqliteStore, settings::Settings};
 
 #[derive(Parser, Debug)]
@@ -35,28 +36,24 @@ pub async fn run(
     }
 
     if let Some(_endpoint) = settings.active_hub_endpoint() {
-        match settings.hub_session_token().await {
-            Ok(_) => {
-                println!("You are already authenticated with Atuin Hub.");
-                println!("Run 'atuin logout' to log out.");
-                return Ok(());
-            }
-            Err(_) => {
-                // Login can also handle registration, as the registration piece for Hub auth lives on the server
-                // (e.g. create a new Hub account, then log in as normal)
-                super::login::Cmd {
-                    username: None,
-                    password: None,
-                    key: None,
-                }
-                .run(settings, store)
-                .await?;
-                return Ok(());
-            }
+        if settings.hub_session_token().await.is_ok() {
+            println!("You are already authenticated with Atuin Hub.");
+            println!("Run 'atuin logout' to log out.");
+            return Ok(());
         }
+
+        // Login can also handle registration, as the registration piece for Hub auth lives on the server
+        // (e.g. create a new Hub account, then log in as normal)
+        super::login::Cmd {
+            username: None,
+            password: None,
+            key: None,
+        }
+        .run(settings, store)
+        .await?;
+        return Ok(());
     }
 
-    use super::login::or_user_input;
     println!("Registering for an Atuin Sync account");
 
     let username = or_user_input(username, "username");

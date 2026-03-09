@@ -3,20 +3,17 @@ use eyre::{Result, bail};
 
 pub async fn run(settings: &Settings) -> Result<()> {
     if let Some(endpoint) = settings.active_hub_endpoint() {
-        match settings.hub_session_token().await {
-            Ok(_) => {
-                println!("You are authenticated with Atuin Hub.");
-                println!("Delete your account on Atuin Hub: {endpoint}/settings/account");
-                return Ok(());
-            }
-            Err(_) => {
-                println!("You are not currently logged in to Atuin Hub.");
-                println!(
-                    "Run 'atuin login' to log in to Atuin Hub, or visit {endpoint}/settings/account to delete your account."
-                );
-                return Ok(());
-            }
+        if settings.hub_session_token().await.is_ok() {
+            println!("You are authenticated with Atuin Hub.");
+            println!("Delete your account on Atuin Hub: {endpoint}/settings/account");
+            return Ok(());
         }
+
+        println!("You are not currently logged in to Atuin Hub.");
+        println!(
+            "Run 'atuin login' to log in to Atuin Hub, or visit {endpoint}/settings/account to delete your account."
+        );
+        return Ok(());
     }
 
     if !settings.logged_in().await? {

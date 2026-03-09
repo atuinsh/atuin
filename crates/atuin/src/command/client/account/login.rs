@@ -36,19 +36,16 @@ fn get_input() -> Result<String> {
 impl Cmd {
     pub async fn run(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
         if let Some(endpoint) = settings.active_hub_endpoint() {
-            match settings.hub_session_token().await {
-                Ok(_) => {
-                    println!("You are authenticated with Atuin Hub.");
-                    println!("Run 'atuin logout' to log out.");
-                    return Ok(());
-                }
-                Err(_) => {
-                    self.prompt_and_store_key(settings, store).await?;
-                    self.ensure_hub_session(settings, endpoint.as_str()).await?;
-                    println!("Successfully authenticated with Atuin Hub.");
-                    return Ok(());
-                }
+            if settings.hub_session_token().await.is_ok() {
+                println!("You are authenticated with Atuin Hub.");
+                println!("Run 'atuin logout' to log out.");
+                return Ok(());
             }
+
+            self.prompt_and_store_key(settings, store).await?;
+            self.ensure_hub_session(settings, endpoint.as_str()).await?;
+            println!("Successfully authenticated with Atuin Hub.");
+            return Ok(());
         }
 
         if settings.logged_in().await? {
