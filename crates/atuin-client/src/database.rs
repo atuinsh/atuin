@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     env,
     path::{Path, PathBuf},
     str::FromStr,
@@ -459,9 +460,7 @@ impl Database for Sqlite {
     ) -> Result<Vec<History>> {
         let mut sql = SqlBuilder::select_from("history");
 
-        if !filter_options.include_duplicates {
-            sql.group_by("command").having("max(timestamp)");
-        }
+        let include_duplicates = filter_options.include_duplicates;
 
         if let Some(limit) = filter_options.limit {
             sql.limit(limit);
@@ -604,7 +603,19 @@ impl Database for Sqlite {
             .fetch_all(&self.pool)
             .await?;
 
-        Ok(ordering::reorder_fuzzy(search_mode, orig_query, res))
+        let ordered = ordering::reorder_fuzzy(search_mode, orig_query, res);
+
+        if include_duplicates {
+            return Ok(ordered);
+        }
+
+        let mut seen_commands = HashSet::new();
+        let deduped = ordered
+            .into_iter()
+            .filter(|entry| seen_commands.insert(entry.command.clone()))
+            .collect();
+
+        Ok(deduped)
     }
 
     async fn query_history(&self, query: &str) -> Result<Vec<History>> {
@@ -987,6 +998,10 @@ mod test {
     }
 
     async fn new_history_item(db: &mut impl Database, cmd: &str) -> Result<()> {
+        new_history_item_with_exit(db, cmd, 0).await
+    }
+
+    async fn new_history_item_with_exit(db: &mut impl Database, cmd: &str, exit: i64) -> Result<()> {
         let mut captured: History = History::capture()
             .timestamp(OffsetDateTime::now_utc())
             .command(cmd)
@@ -994,7 +1009,7 @@ mod test {
             .build()
             .into();
 
-        captured.exit = 0;
+        captured.exit = exit;
         captured.duration = 1;
         captured.session = "beep boop".to_string();
         captured.hostname = "booop".to_string();
@@ -1355,6 +1370,50 @@ mod test {
         let mut paged_deleted = db.all_paged(10, true, false);
         let page_deleted = paged_deleted.next().await.unwrap().unwrap();
         assert_eq!(page_deleted.len(), 3);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_search_exclude_exit_with_duplicate_commands_uses_latest_match() {
+        let context = Context {
+            hostname: "test:host".to_string(),
+            session: "beepboopiamasession".to_string(),
+            cwd: "/home/ellie".to_string(),
+            host_id: "test-host".to_string(),
+            git_root: None,
+        };
+
+        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())
+            .await
+            .unwrap();
+
+        // First run fails (exit 1), later run succeeds (exit 0)
+        new_history_item_with_exit(&mut db, "atuin search --exclude-exit=0", 1)
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        new_history_item_with_exit(&mut db, "atuin search --exclude-exit=0", 0)
+            .await
+            .unwrap();
+
+        let results = db
+            .search(
+                SearchMode::Fuzzy,
+                FilterMode::Global,
+                &context,
+                "atuin",
+                OptFilters {
+                    exclude_exit: Some(0),
+                    include_duplicates: false,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            results.is_empty(),
+            "expected latest duplicate with exit=0 to be excluded"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
