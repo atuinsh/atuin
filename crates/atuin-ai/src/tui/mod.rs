@@ -1,5 +1,7 @@
 pub mod app;
 pub mod event;
+#[cfg(unix)]
+pub mod popup;
 pub mod render;
 pub mod spinner;
 pub mod state;

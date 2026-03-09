@@ -3,7 +3,7 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode},
 };
 use eyre::{Context, Result, bail};
-use ratatui::{Terminal, TerminalOptions, Viewport, backend::CrosstermBackend};
+use ratatui::{Terminal, TerminalOptions, Viewport, backend::CrosstermBackend, layout::Rect};
 use std::io::{IsTerminal, Stdout, stdout};
 
 /// Install a panic hook that ensures the terminal is restored to a usable state
@@ -65,6 +65,7 @@ pub struct TerminalGuard {
     anchor_col: u16,
     keep_output: bool,
     viewport_height: u16,
+    popup_mode: bool,
 }
 
 impl TerminalGuard {
@@ -122,6 +123,56 @@ impl TerminalGuard {
             anchor_col,
             keep_output,
             viewport_height,
+            popup_mode: false,
+        })
+    }
+
+    /// Create a new TerminalGuard for popup overlay mode.
+    ///
+    /// In popup mode:
+    /// - Raw mode is not managed (atuin-hex owns it)
+    /// - The viewport is a fixed rect positioned over existing terminal content
+    /// - The popup area is pre-cleared to prevent background bleed-through
+    /// - Drop does not clear the viewport or disable raw mode
+    pub fn new_popup(popup_rect: Rect, anchor_col: u16) -> Result<Self> {
+        // Pre-clear the popup area before creating the ratatui terminal.
+        // Ratatui's diff-based rendering won't write "default" (space) cells on
+        // the first frame because its previous buffer is also all-default. By
+        // writing spaces to the terminal now, we ensure those positions are
+        // visually blank even if ratatui skips them.
+        {
+            use crossterm::cursor::MoveTo;
+            use crossterm::execute;
+            use crossterm::style::{Attribute, SetAttribute};
+            use std::io::Write;
+
+            let mut out = stdout();
+            for row in popup_rect.y..popup_rect.y.saturating_add(popup_rect.height) {
+                let _ = execute!(
+                    out,
+                    MoveTo(popup_rect.x, row),
+                    SetAttribute(Attribute::Reset)
+                );
+                let _ = write!(out, "{:width$}", "", width = popup_rect.width as usize);
+            }
+            let _ = out.flush();
+        }
+
+        let backend = CrosstermBackend::new(stdout());
+        let terminal = Terminal::with_options(
+            backend,
+            TerminalOptions {
+                viewport: Viewport::Fixed(popup_rect),
+            },
+        )
+        .context("failed to create terminal with fixed viewport")?;
+
+        Ok(Self {
+            terminal,
+            anchor_col,
+            keep_output: false,
+            viewport_height: popup_rect.height,
+            popup_mode: true,
         })
     }
 
@@ -149,6 +200,24 @@ impl TerminalGuard {
         &mut self.terminal
     }
 
+    /// Resize the popup viewport to a new rect.
+    ///
+    /// Creates a fresh terminal with the updated Fixed viewport. The caller
+    /// is responsible for pre-clearing any newly exposed rows before calling
+    /// this (see `PopupState::grow_to`).
+    pub fn resize_popup(&mut self, new_rect: Rect) -> Result<()> {
+        self.viewport_height = new_rect.height;
+        let backend = CrosstermBackend::new(stdout());
+        self.terminal = Terminal::with_options(
+            backend,
+            TerminalOptions {
+                viewport: Viewport::Fixed(new_rect),
+            },
+        )
+        .context("failed to resize popup terminal")?;
+        Ok(())
+    }
+
     /// Get the anchor column where the inline UI should be positioned.
     ///
     /// This is the column position where the cursor was located when
@@ -173,6 +242,12 @@ impl TerminalGuard {
 /// - The panic hook provides a second layer of safety for abnormal exits
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
+        if self.popup_mode {
+            // Popup mode: screen restoration handled by caller before drop.
+            // Raw mode is owned by atuin-hex, don't touch it.
+            return;
+        }
+
         // Clear terminal content only if keep_output is false - ignore errors (best-effort)
         if !self.keep_output {
             let _ = self.terminal.clear();

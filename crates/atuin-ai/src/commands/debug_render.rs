@@ -219,6 +219,8 @@ pub async fn run(input_file: Option<String>, format: OutputFormat) -> Result<()>
                 anchor_col: 0,
                 textarea: Some(&state.textarea),
                 max_height: debug_input.height,
+                popup_mode: false,
+                render_above: false,
             };
 
             terminal.draw(|frame| {
@@ -245,7 +247,11 @@ fn blocks_to_json(blocks: &Blocks) -> serde_json::Value {
                 "title": block.title,
                 "content": block.content.iter().map(content_to_json).collect::<Vec<_>>()
             })
-        }).collect::<Vec<_>>()
+        }).collect::<Vec<_>>(),
+        "status_bar": blocks.status_bar.as_ref().map(|sb| serde_json::json!({
+            "frame": sb.frame,
+            "text": sb.text
+        }))
     })
 }
 

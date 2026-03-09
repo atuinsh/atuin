@@ -1,5 +1,5 @@
 [package]
-name = "atuin-shell"
+name = "atuin-hex"
 edition = "2024"
 description = "a terminal emulator for atuin"
 
@@ -10,10 +10,6 @@ license = { workspace = true }
 homepage = { workspace = true }
 repository = { workspace = true }
 
-[[bin]]
-name = "atuin-shell"
-path = "src/main.rs"
-
 [dependencies]
 clap = { workspace = true }
 
@@ -22,3 +18,4 @@ crossterm = { workspace = true }
 eyre = { workspace = true }
 portable-pty = "0.8"
 signal-hook = "0.3"
+vt100 = "0.15"

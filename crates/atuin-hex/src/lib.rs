@@ -1,22 +1,15 @@
-mod osc133;
+pub mod osc133;
 
-use clap::{Args, Parser, Subcommand, ValueEnum};
-
-#[derive(Parser, Debug)]
-#[command(infer_subcommands = true)]
-struct Cli {
-    #[command(subcommand)]
-    command: Option<Cmd>,
-}
+use clap::{Args, Subcommand, ValueEnum};
 
 #[derive(Subcommand, Debug)]
-enum Cmd {
-    /// Print shell code to initialize atuin-shell on shell startup
+pub enum Cmd {
+    /// Print shell code to initialize atuin-hex on shell startup
     Init(Init),
 }
 
 #[derive(Args, Debug)]
-struct Init {
+pub struct Init {
     /// Shell to generate init for. If omitted, attempt auto-detection
     #[arg(value_enum)]
     shell: Option<Shell>,
@@ -50,6 +43,18 @@ impl Init {
         let script = render_init(shell);
         print!("{script}");
         Ok(())
+    }
+}
+
+pub fn run(cmd: Option<Cmd>) {
+    match cmd {
+        Some(Cmd::Init(init)) => {
+            if let Err(err) = init.run() {
+                eprintln!("atuin hex: {err}");
+                std::process::exit(1);
+            }
+        }
+        None => app::main(),
     }
 }
 
@@ -103,16 +108,16 @@ fn render_init(shell: Shell) -> String {
     match shell {
         Shell::Bash | Shell::Zsh => format!(
             r#"if [[ "$-" == *i* ]] && [[ -t 0 ]] && [[ -t 1 ]]; then
-  _atuin_shell_tmux_current="${{TMUX:-}}"
-  _atuin_shell_tmux_previous="${{ATUIN_SHELL_TMUX:-}}"
+  _atuin_hex_tmux_current="${{TMUX:-}}"
+  _atuin_hex_tmux_previous="${{ATUIN_HEX_TMUX:-}}"
 
-  if [[ -z "${{ATUIN_SHELL_ACTIVE:-}}" ]] || [[ "$_atuin_shell_tmux_current" != "$_atuin_shell_tmux_previous" ]]; then
-    export ATUIN_SHELL_ACTIVE=1
-    export ATUIN_SHELL_TMUX="$_atuin_shell_tmux_current"
-    exec atuin-shell
+  if [[ -z "${{ATUIN_HEX_ACTIVE:-}}" ]] || [[ "$_atuin_hex_tmux_current" != "$_atuin_hex_tmux_previous" ]]; then
+    export ATUIN_HEX_ACTIVE=1
+    export ATUIN_HEX_TMUX="$_atuin_hex_tmux_current"
+    exec atuin hex
   fi
 
-  unset _atuin_shell_tmux_current _atuin_shell_tmux_previous
+  unset _atuin_hex_tmux_current _atuin_hex_tmux_previous
 fi
 
 eval "$({init_command})"
@@ -120,24 +125,24 @@ eval "$({init_command})"
         ),
         Shell::Fish => format!(
             r#"if status is-interactive; and test -t 0; and test -t 1
-    set -l _atuin_shell_tmux_current ""
+    set -l _atuin_hex_tmux_current ""
     if set -q TMUX
-        set _atuin_shell_tmux_current "$TMUX"
+        set _atuin_hex_tmux_current "$TMUX"
     end
 
-    set -l _atuin_shell_tmux_previous ""
-    if set -q ATUIN_SHELL_TMUX
-        set _atuin_shell_tmux_previous "$ATUIN_SHELL_TMUX"
+    set -l _atuin_hex_tmux_previous ""
+    if set -q ATUIN_HEX_TMUX
+        set _atuin_hex_tmux_previous "$ATUIN_HEX_TMUX"
     end
 
-    if not set -q ATUIN_SHELL_ACTIVE
-        set -gx ATUIN_SHELL_ACTIVE 1
-        set -gx ATUIN_SHELL_TMUX "$_atuin_shell_tmux_current"
-        exec atuin-shell
-    else if test "$_atuin_shell_tmux_current" != "$_atuin_shell_tmux_previous"
-        set -gx ATUIN_SHELL_ACTIVE 1
-        set -gx ATUIN_SHELL_TMUX "$_atuin_shell_tmux_current"
-        exec atuin-shell
+    if not set -q ATUIN_HEX_ACTIVE
+        set -gx ATUIN_HEX_ACTIVE 1
+        set -gx ATUIN_HEX_TMUX "$_atuin_hex_tmux_current"
+        exec atuin hex
+    else if test "$_atuin_hex_tmux_current" != "$_atuin_hex_tmux_previous"
+        set -gx ATUIN_HEX_ACTIVE 1
+        set -gx ATUIN_HEX_TMUX "$_atuin_hex_tmux_current"
+        exec atuin hex
     end
 end
 
@@ -147,24 +152,10 @@ end
     }
 }
 
-fn main() {
-    let cli = Cli::parse();
-
-    match cli.command {
-        Some(Cmd::Init(init)) => {
-            if let Err(err) = init.run() {
-                eprintln!("atuin-shell: {err}");
-                std::process::exit(1);
-            }
-        }
-        None => app::main(),
-    }
-}
-
 #[cfg(any(not(unix), target_os = "illumos"))]
 mod app {
     pub(crate) fn main() {
-        eprintln!("atuin-shell currently supports unix platforms excluding illumos");
+        eprintln!("atuin hex currently supports unix platforms excluding illumos");
         std::process::exit(1);
     }
 }
@@ -172,15 +163,70 @@ mod app {
 #[cfg(all(unix, not(target_os = "illumos")))]
 mod app {
     use std::io::{Read, Write};
+    use std::os::unix::net::UnixListener;
+    use std::sync::mpsc;
 
     use crossterm::terminal;
     use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
+    enum ParserMsg {
+        Data(Vec<u8>),
+        Resize { rows: u16, cols: u16 },
+        ScreenRequest(mpsc::Sender<Vec<u8>>),
+    }
+
     pub(crate) fn main() {
         if let Err(e) = run() {
             let _ = terminal::disable_raw_mode();
-            eprintln!("atuin-shell: {e:#}");
+            eprintln!("atuin hex: {e:#}");
             std::process::exit(1);
+        }
+    }
+
+    fn socket_path() -> std::path::PathBuf {
+        let dir = std::env::temp_dir();
+        dir.join(format!("atuin-hex-{}.sock", std::process::id()))
+    }
+
+    /// Wire format written to the Unix socket:
+    ///
+    /// ```text
+    /// [rows: u16 BE][cols: u16 BE][cursor_row: u16 BE][cursor_col: u16 BE]
+    /// [row_0_len: u32 BE][row_0_bytes...]
+    /// [row_1_len: u32 BE][row_1_bytes...]
+    /// ...
+    /// ```
+    ///
+    /// Each row's bytes come from `screen.rows_formatted(0, cols)` and contain
+    /// pre-built ANSI escape sequences.  The client can write them directly to
+    /// stdout without needing its own vt100 parser.
+    fn encode_screen(parser: &vt100::Parser) -> Vec<u8> {
+        let screen = parser.screen();
+        let (rows, cols) = screen.size();
+        let (cursor_row, cursor_col) = screen.cursor_position();
+
+        let mut buf: Vec<u8> = Vec::with_capacity(256 + (rows as usize * cols as usize));
+        buf.extend_from_slice(&rows.to_be_bytes());
+        buf.extend_from_slice(&cols.to_be_bytes());
+        buf.extend_from_slice(&cursor_row.to_be_bytes());
+        buf.extend_from_slice(&cursor_col.to_be_bytes());
+
+        for row_bytes in screen.rows_formatted(0, cols) {
+            let len = row_bytes.len() as u32;
+            buf.extend_from_slice(&len.to_be_bytes());
+            buf.extend_from_slice(&row_bytes);
+        }
+
+        buf
+    }
+
+    fn handle_parser_msg(parser: &mut vt100::Parser, msg: ParserMsg) {
+        match msg {
+            ParserMsg::Data(data) => parser.process(&data),
+            ParserMsg::Resize { rows, cols } => parser.set_size(rows, cols),
+            ParserMsg::ScreenRequest(reply_tx) => {
+                let _ = reply_tx.send(encode_screen(parser));
+            }
         }
     }
 
@@ -197,8 +243,15 @@ mod app {
             })
             .map_err(|e| eyre::eyre!("{e:#}"))?;
 
+        // Set up socket path and expose it to child processes
+        let sock_path = socket_path();
+        // Clean up any stale socket from a previous crash
+        let _ = std::fs::remove_file(&sock_path);
+
         let mut cmd = CommandBuilder::new_default_prog();
         cmd.cwd(std::env::current_dir()?);
+        cmd.env("ATUIN_HEX_SOCKET", sock_path.as_os_str());
+
         let mut child = pair
             .slave
             .spawn_command(cmd)
@@ -216,12 +269,72 @@ mod app {
             .take_writer()
             .map_err(|e| eyre::eyre!("{e:#}"))?;
 
+        // Channel: stdout/sigwinch/socket threads -> parser thread (bounded, non-blocking send)
+        let (msg_tx, msg_rx) = mpsc::sync_channel::<ParserMsg>(64);
+
+        // --- Parser thread ---
+        // Maintains a persistent vt100::Parser fed bytes as they arrive.
+        // On screen request: reads current state directly (no replay).
+        std::thread::spawn(move || {
+            let mut parser = vt100::Parser::new(rows, cols, 0);
+
+            loop {
+                // Block until at least one message arrives
+                let first = match msg_rx.recv() {
+                    Ok(msg) => msg,
+                    Err(_) => break,
+                };
+
+                handle_parser_msg(&mut parser, first);
+
+                // Drain all remaining pending messages so the parser stays
+                // caught up during high-throughput bursts (e.g. `cat bigfile`).
+                // The channel holds at most 64 items, so this is bounded.
+                while let Ok(msg) = msg_rx.try_recv() {
+                    handle_parser_msg(&mut parser, msg);
+                }
+            }
+        });
+
+        // --- Socket server thread ---
+        // Listens on Unix socket; on connection, requests screen state from parser thread.
+        {
+            let sock_path_clone = sock_path.clone();
+            let screen_tx = msg_tx.clone();
+            std::thread::spawn(move || {
+                let listener = match UnixListener::bind(&sock_path_clone) {
+                    Ok(l) => l,
+                    Err(e) => {
+                        eprintln!("atuin hex: failed to bind socket: {e}");
+                        return;
+                    }
+                };
+
+                for stream in listener.incoming() {
+                    let mut stream = match stream {
+                        Ok(s) => s,
+                        Err(_) => break,
+                    };
+
+                    let (reply_tx, reply_rx) = mpsc::channel();
+                    if screen_tx.send(ParserMsg::ScreenRequest(reply_tx)).is_err() {
+                        break;
+                    }
+                    if let Ok(data) = reply_rx.recv() {
+                        let _ = stream.write_all(&data);
+                        let _ = stream.flush();
+                    }
+                }
+            });
+        }
+
         // Handle terminal resize via SIGWINCH
         {
             use signal_hook::consts::SIGWINCH;
             use signal_hook::iterator::Signals;
 
             let master = pair.master;
+            let resize_tx = msg_tx.clone();
             let mut signals = Signals::new([SIGWINCH])?;
 
             std::thread::spawn(move || {
@@ -233,6 +346,7 @@ mod app {
                             pixel_width: 0,
                             pixel_height: 0,
                         });
+                        let _ = resize_tx.try_send(ParserMsg::Resize { rows, cols });
                     }
                 }
             });
@@ -240,7 +354,7 @@ mod app {
 
         terminal::enable_raw_mode()?;
 
-        // PTY -> stdout (with OSC 133 parsing)
+        // PTY -> stdout (with OSC 133 parsing + buffer feed)
         let stdout_thread = std::thread::spawn(move || {
             let mut stdout = std::io::stdout();
             let mut parser = crate::osc133::Parser::new();
@@ -253,6 +367,12 @@ mod app {
                             // Zone transitions are tracked inside the parser.
                             // Callers can query parser.zone() after push.
                         });
+
+                        // Feed bytes to the shadow parser. Drops on backpressure —
+                        // the screen snapshot may be stale during bursts, but
+                        // self-corrects once output settles.
+                        let _ = msg_tx.try_send(ParserMsg::Data(buf[..n].to_vec()));
+
                         if stdout.write_all(&buf[..n]).is_err() {
                             break;
                         }
@@ -282,6 +402,9 @@ mod app {
         let _ = stdout_thread.join();
 
         let _ = terminal::disable_raw_mode();
+
+        // Clean up socket file
+        let _ = std::fs::remove_file(&sock_path);
 
         std::process::exit(process_exit_code(status.exit_code()));
     }
@@ -328,15 +451,15 @@ mod tests {
     #[test]
     fn posix_init_uses_exec_and_tmux_guard() {
         let script = render_init(Shell::Bash);
-        assert!(script.contains("exec atuin-shell"));
-        assert!(script.contains("ATUIN_SHELL_TMUX"));
+        assert!(script.contains("exec atuin hex"));
+        assert!(script.contains("ATUIN_HEX_TMUX"));
         assert!(script.contains("eval \"$(atuin init bash)\""));
     }
 
     #[test]
     fn fish_init_uses_source() {
         let script = render_init(Shell::Fish);
-        assert!(script.contains("exec atuin-shell"));
+        assert!(script.contains("exec atuin hex"));
         assert!(script.contains("atuin init fish | source"));
     }
 }
