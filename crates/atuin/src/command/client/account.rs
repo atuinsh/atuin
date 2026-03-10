@@ -6,6 +6,7 @@ use atuin_client::settings::Settings;
 
 pub mod change_password;
 pub mod delete;
+pub mod link;
 pub mod login;
 pub mod logout;
 pub mod register;
@@ -34,6 +35,9 @@ pub enum Commands {
 
     /// Change your password
     ChangePassword(change_password::Cmd),
+
+    /// Link your CLI sync account to your Hub account
+    Link,
 }
 
 impl Cmd {
@@ -44,6 +48,7 @@ impl Cmd {
             Commands::Logout => logout::run().await,
             Commands::Delete => delete::run(&settings).await,
             Commands::ChangePassword(c) => c.run(&settings).await,
+            Commands::Link => link::run(&settings).await,
         }
     }
 }
