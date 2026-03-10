@@ -271,6 +271,7 @@ dependencies = [
  "tracing-tree",
  "unicode-width 0.2.2",
  "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
