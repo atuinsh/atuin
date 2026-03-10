@@ -1277,7 +1277,6 @@ impl State {
 /// The writer used for terminal output - either stdout or /dev/tty
 enum TerminalWriter {
     Stdout(std::io::Stdout),
-    #[cfg(unix)]
     Tty(std::fs::File),
 }
 
@@ -1285,7 +1284,6 @@ impl Write for TerminalWriter {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         match self {
             TerminalWriter::Stdout(stdout) => stdout.write(buf),
-            #[cfg(unix)]
             TerminalWriter::Tty(file) => file.write(buf),
         }
     }
@@ -1293,7 +1291,6 @@ impl Write for TerminalWriter {
     fn flush(&mut self) -> std::io::Result<()> {
         match self {
             TerminalWriter::Stdout(stdout) => stdout.flush(),
-            #[cfg(unix)]
             TerminalWriter::Tty(file) => file.flush(),
         }
     }
@@ -1425,23 +1422,25 @@ impl Stdout {
         // This allows usage like: VAR=$(atuin search -i)
         let mut writer = if stdout_is_terminal {
             TerminalWriter::Stdout(stdout())
+        } else if cfg!(unix) {
+            TerminalWriter::Tty(
+                std::fs::File::options()
+                    .read(true)
+                    .write(true)
+                    .open("/dev/tty")?,
+            )
+        } else if cfg!(windows) {
+            TerminalWriter::Tty(
+                std::fs::File::options()
+                    .read(true)
+                    .write(true)
+                    .open("CONOUT$")?,
+            )
         } else {
-            #[cfg(unix)]
-            {
-                TerminalWriter::Tty(
-                    std::fs::File::options()
-                        .read(true)
-                        .write(true)
-                        .open("/dev/tty")?,
-                )
-            }
-            #[cfg(not(unix))]
-            {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::Unsupported,
-                    "Interactive mode requires a terminal",
-                ));
-            }
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "Interactive mode requires a terminal",
+            ));
         };
 
         if !inline_mode {
