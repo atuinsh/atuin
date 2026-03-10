@@ -10,9 +10,8 @@ pub async fn run(settings: &Settings) -> Result<()> {
     let cli_token = meta.session_token().await?;
     let hub_token = meta.hub_session_token().await?;
 
-    let cli_token = match cli_token {
-        Some(token) => token,
-        None => bail!("No CLI session found. Please log in first with 'atuin login'."),
+    let Some(cli_token) = cli_token else {
+        bail!("No CLI session found. Please log in first with 'atuin login'.");
     };
 
     let hub_address = settings
