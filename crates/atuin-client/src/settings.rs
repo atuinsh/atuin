@@ -1176,9 +1176,19 @@ impl Settings {
     /// Default sync address for Atuin's hosted service
     pub const DEFAULT_SYNC_ADDRESS: &'static str = "https://api.atuin.sh";
 
+    /// Default Hub web/API endpoint for Atuin's hosted service
+    pub const DEFAULT_HUB_ENDPOINT: &'static str = "https://hub.atuin.sh";
+
     /// Normalize a URL for comparison by trimming trailing slashes
     fn normalize_url(url: &str) -> &str {
         url.trim_end_matches('/')
+    }
+
+    /// Check if a URL matches one of Atuin's official hosted addresses
+    fn is_official_address(url: &str) -> bool {
+        let normalized = Self::normalize_url(url);
+        normalized == Self::normalize_url(Self::DEFAULT_SYNC_ADDRESS)
+            || normalized == Self::normalize_url(Self::DEFAULT_HUB_ENDPOINT)
     }
 
     /// Returns whether this configuration uses Hub-style sync.
@@ -1186,22 +1196,27 @@ impl Settings {
     /// Hub sync uses Bearer token authentication and is the default for
     /// Atuin's hosted service. This returns true when:
     /// - `sync_protocol` is explicitly set to `Hub`, OR
-    /// - `sync_protocol` is `Auto` and `sync_address` is the default
+    /// - `sync_protocol` is `Auto` and `sync_address` is an official Atuin address
     pub fn is_hub_sync(&self) -> bool {
         match self.sync_protocol {
             SyncProtocol::Hub => true,
             SyncProtocol::Legacy => false,
-            SyncProtocol::Auto => {
-                Self::normalize_url(&self.sync_address)
-                    == Self::normalize_url(Self::DEFAULT_SYNC_ADDRESS)
-            }
+            SyncProtocol::Auto => Self::is_official_address(&self.sync_address),
         }
     }
 
-    /// Returns the base URL for the Hub endpoint as configured in the settings.
+    /// Returns the base URL for the Hub endpoint.
+    ///
+    /// For Atuin's official hosted service, this always returns `https://hub.atuin.sh`
+    /// regardless of whether `sync_address` is `api.atuin.sh` or `hub.atuin.sh`.
+    /// For self-hosted instances, returns the configured `sync_address`.
     pub fn active_hub_endpoint(&self) -> Option<String> {
         if self.is_hub_sync() {
-            Some(self.sync_address.clone())
+            if Self::is_official_address(&self.sync_address) {
+                Some(Self::DEFAULT_HUB_ENDPOINT.to_string())
+            } else {
+                Some(self.sync_address.clone())
+            }
         } else {
             None
         }
