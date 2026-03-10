@@ -1507,6 +1507,7 @@ impl Write for Stdout {
 /// of lines the caller should scroll the terminal up before rendering.
 ///
 /// This function performs no I/O — it is a pure computation.
+#[cfg(unix)]
 fn compute_popup_placement(
     cursor_row: u16,
     term_rows: u16,
@@ -1608,7 +1609,7 @@ pub async fn history(
     };
 
     #[cfg(not(unix))]
-    let (saved_screen, popup_rect, popup_scroll_offset): (Option<()>, Rect, u16) =
+    let (saved_screen, popup_rect, _popup_scroll_offset): (Option<()>, Rect, u16) =
         (None, Rect::default(), 0);
 
     let popup_mode = saved_screen.is_some();

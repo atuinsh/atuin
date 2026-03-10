@@ -18,6 +18,7 @@ use super::{SearchEngine, SearchState};
 pub struct Search {
     client: Option<SearchClient>,
     query_id: u64,
+    #[cfg(unix)]
     socket_path: String,
     #[cfg(not(unix))]
     tcp_port: u64,
@@ -28,6 +29,7 @@ impl Search {
         Search {
             client: None,
             query_id: 0,
+            #[cfg(unix)]
             socket_path: settings.daemon.socket_path.clone(),
             #[cfg(not(unix))]
             tcp_port: settings.daemon.tcp_port,
