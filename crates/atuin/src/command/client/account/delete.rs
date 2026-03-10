@@ -11,7 +11,7 @@ pub async fn run(settings: &Settings) -> Result<()> {
     if using_hub_sync && has_hub_session {
         let endpoint = settings
             .active_hub_endpoint()
-            .unwrap_or(DEFAULT_HUB_ENDPOINT.to_string());
+            .unwrap_or_else(|| DEFAULT_HUB_ENDPOINT.to_string());
         println!("You are authenticated with Atuin Hub.");
         println!("Manage your account on the site: {endpoint}/settings/account");
         return Ok(());
