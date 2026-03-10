@@ -75,7 +75,7 @@ async fn ensure_hub_session(settings: &atuin_client::settings::Settings) -> Resu
 
     let hub_address = settings
         .active_hub_endpoint()
-        .unwrap_or("http://hub.atuin.sh".to_string());
+        .unwrap_or("https://hub.atuin.sh".to_string());
 
     info!("No Hub session found, prompting for authentication");
 
