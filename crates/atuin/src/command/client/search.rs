@@ -228,7 +228,8 @@ impl Cmd {
                 write!(file, "{item}")?;
             } else if !stdout().is_terminal() {
                 // stdout is not a terminal - likely command substitution like VAR=$(atuin search -i)
-                // Write to stdout so it gets captured
+                // Write to stdout so it gets captured. This requires some care on Windows, as the current
+                // console code page or `[Console]::OutputEncoding` on PowerShell may be different from UTF-8.
                 println!("{item}");
             } else if stderr().is_terminal() {
                 eprintln!("{}", item.escape_control());
