@@ -42,6 +42,7 @@ pub async fn run(
             username: None,
             password: None,
             key: None,
+            from_registration: true,
         }
         .run(settings, store)
         .await?;

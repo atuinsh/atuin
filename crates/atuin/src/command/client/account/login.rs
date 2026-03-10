@@ -25,6 +25,9 @@ pub struct Cmd {
     /// The encryption key for your account
     #[clap(long, short)]
     pub key: Option<String>,
+
+    #[clap(long, hide = true)]
+    pub from_registration: bool,
 }
 
 fn get_input() -> Result<String> {
@@ -42,7 +45,13 @@ impl Cmd {
                 return Ok(());
             }
 
-            self.prompt_and_store_key(settings, store).await?;
+            // The only difference between login and registration is that registration doesn't prompt for a key
+            if self.from_registration {
+                load_key(settings)?;
+            } else {
+                self.prompt_and_store_key(settings, store).await?;
+            }
+
             self.ensure_hub_session(settings, endpoint.as_str()).await?;
             println!("Successfully authenticated with Atuin Hub.");
             return Ok(());

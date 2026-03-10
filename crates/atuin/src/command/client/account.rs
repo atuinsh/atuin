@@ -10,6 +10,8 @@ pub mod login;
 pub mod logout;
 pub mod register;
 
+const DEFAULT_HUB_ENDPOINT: &str = "https://hub.atuin.sh";
+
 #[derive(Args, Debug)]
 pub struct Cmd {
     #[command(subcommand)]
