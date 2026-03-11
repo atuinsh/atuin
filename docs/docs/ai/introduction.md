@@ -1,18 +1,16 @@
 # Atuin AI
 
-Atuin AI is a subcommand that enables shell command generation and other information lookup via an LLM directly from your terminal. It is completely opt-in, and will not change the behavior of Atuin at all if you choose not to use it.
+Atuin AI is a subcommand that enables shell command generation and other information lookup via an LLM directly from your terminal.
 
 Atuin AI requires an account on [Atuin Hub](https://hub.atuin.sh/), and you'll be prompted to login upon first use of the binary.
 
 ## Getting Started
 
-Atuin AI currently supports zsh, bash, and fish shells. To get started, add the following to your shell's initialization file:
+Atuin AI currently supports zsh, bash, and fish shells. Your shell's usual `atuin init` call will automatically bind the question mark key to the Atuin AI UI (only when the prompt is empty).
 
-```bash
-eval "$(atuin ai init)"
-```
+!!! note "Disabling Atuin AI"
 
-Once you've set it up and restarted your shell, you can invoke Atuin AI by pressing question mark (`?`) on an empty terminal line.
+    You can disable the default question mark key binding by passing `--disable-ai` to your shell's `atuin init` call.
 
 ## Settings
 
