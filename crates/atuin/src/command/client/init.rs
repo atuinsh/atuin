@@ -26,6 +26,10 @@ pub struct Cmd {
     /// Disable the binding of the Up Arrow key to atuin
     #[clap(long)]
     disable_up_arrow: bool,
+
+    /// Disable the binding of ? to Atuin AI
+    #[clap(long)]
+    disable_ai: bool,
 }
 
 #[derive(Clone, Copy, ValueEnum, Debug)]
@@ -97,13 +101,28 @@ $env.config = (
     fn static_init(&self, tmux: &Tmux) {
         match self.shell {
             Shell::Zsh => {
-                zsh::init_static(self.disable_up_arrow, self.disable_ctrl_r, tmux);
+                zsh::init_static(
+                    self.disable_up_arrow,
+                    self.disable_ctrl_r,
+                    self.disable_ai,
+                    tmux,
+                );
             }
             Shell::Bash => {
-                bash::init_static(self.disable_up_arrow, self.disable_ctrl_r, tmux);
+                bash::init_static(
+                    self.disable_up_arrow,
+                    self.disable_ctrl_r,
+                    self.disable_ai,
+                    tmux,
+                );
             }
             Shell::Fish => {
-                fish::init_static(self.disable_up_arrow, self.disable_ctrl_r, tmux);
+                fish::init_static(
+                    self.disable_up_arrow,
+                    self.disable_ctrl_r,
+                    self.disable_ai,
+                    tmux,
+                );
             }
             Shell::Nu => {
                 self.init_nu(tmux);
@@ -136,6 +155,7 @@ $env.config = (
                     var_store,
                     self.disable_up_arrow,
                     self.disable_ctrl_r,
+                    self.disable_ai,
                     &settings.tmux,
                 )
                 .await?;
@@ -146,6 +166,7 @@ $env.config = (
                     var_store,
                     self.disable_up_arrow,
                     self.disable_ctrl_r,
+                    self.disable_ai,
                     &settings.tmux,
                 )
                 .await?;
@@ -156,6 +177,7 @@ $env.config = (
                     var_store,
                     self.disable_up_arrow,
                     self.disable_ctrl_r,
+                    self.disable_ai,
                     &settings.tmux,
                 )
                 .await?;

@@ -11,7 +11,7 @@ fn print_tmux_config(tmux: &Tmux) {
     }
 }
 
-pub fn init_static(disable_up_arrow: bool, disable_ctrl_r: bool, tmux: &Tmux) {
+pub fn init_static(disable_up_arrow: bool, disable_ctrl_r: bool, disable_ai: bool, tmux: &Tmux) {
     let base = include_str!("../../../shell/atuin.bash");
 
     let (bind_ctrl_r, bind_up_arrow) = if std::env::var("ATUIN_NOBIND").is_ok() {
@@ -24,6 +24,12 @@ pub fn init_static(disable_up_arrow: bool, disable_ctrl_r: bool, tmux: &Tmux) {
     println!("__atuin_bind_ctrl_r={bind_ctrl_r}");
     println!("__atuin_bind_up_arrow={bind_up_arrow}");
     println!("{base}");
+
+    #[cfg(feature = "ai")]
+    if !disable_ai {
+        let bind_ai = atuin_ai::commands::init::generate_bash_integration();
+        println!("{bind_ai}");
+    }
 }
 
 pub async fn init(
@@ -31,9 +37,10 @@ pub async fn init(
     vars: VarStore,
     disable_up_arrow: bool,
     disable_ctrl_r: bool,
+    disable_ai: bool,
     tmux: &Tmux,
 ) -> Result<()> {
-    init_static(disable_up_arrow, disable_ctrl_r, tmux);
+    init_static(disable_up_arrow, disable_ctrl_r, disable_ai, tmux);
 
     let aliases = atuin_dotfiles::shell::bash::alias_config(&aliases).await;
     let vars = atuin_dotfiles::shell::bash::var_config(&vars).await;
