@@ -117,12 +117,7 @@ async fn sync_loop(handle: DaemonHandle, mut cmd_rx: mpsc::Receiver<SyncCommand>
     // Don't backoff by more than 30 mins (with a random jitter of up to 1 min)
     let max_interval: f64 = 60.0 * 30.0 + rand::thread_rng().gen_range(0.0..60.0);
 
-    let mut ticker = if settings.auto_sync {
-        time::interval(time::Duration::from_secs(settings.daemon.sync_frequency))
-    } else {
-        // Return a future that never resolves, so ticker.tick() never yields
-        tokio::time::interval(time::Duration::from_secs(u64::MAX))
-    };
+    let mut ticker = time::interval(time::Duration::from_secs(settings.daemon.sync_frequency));
 
     // IMPORTANT: without this, if we miss ticks because a sync takes ages or is otherwise delayed,
     // we may end up running a lot of syncs in a hot loop.
