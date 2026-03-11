@@ -526,7 +526,7 @@ For the [`"daemon-fuzzy"` search mode](#search_mode), you can control the scorin
 * Recency — how recently this exact match was last run
 * Frecency — a combination of frequency and recency
 
-The frecency calculation is `Recency Score * Recency Multiplier + Frequency Score * Frequency Muiltplier`. By changing the options below, you can customize the relative importance of each part of the score calculation.
+The frecency calculation is `Recency Score * Recency Multiplier + Frequency Score * Frequency Multiplier`. By changing the options below, you can customize the relative importance of each part of the score calculation.
 
 For each setting, a value of `1.0` (the default) means the score is used as-is. Values less than `1.0` decrease that score's influence, and values greater than `1.0` increase that score's influence.
 
