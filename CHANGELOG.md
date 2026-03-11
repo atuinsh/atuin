@@ -14,6 +14,8 @@ All notable changes to this project will be documented in this file.
 - Forward $PATH to tmux popup in zsh ([#3198](https://github.com/atuinsh/atuin/issues/3198))
 - Dramatically decrease daemon memory usage ([#3211](https://github.com/atuinsh/atuin/issues/3211))
 - Regen cargo dist
+- Clear script database before rebuild to prevent unique constraint violation ([#3232](https://github.com/atuinsh/atuin/issues/3232))
+- Support Nushell 0.111 ([#3249](https://github.com/atuinsh/atuin/issues/3249))
 
 
 ### Documentation
@@ -33,6 +35,11 @@ All notable changes to this project will be documented in this file.
 - Generate commands or ask questions with `atuin ai` ([#3199](https://github.com/atuinsh/atuin/issues/3199))
 - Add history author/intent metadata and v1 record version ([#3205](https://github.com/atuinsh/atuin/issues/3205))
 - In-memory search index with atuin daemon ([#3201](https://github.com/atuinsh/atuin/issues/3201))
+- Update script for smoother setup ([#3230](https://github.com/atuinsh/atuin/issues/3230))
+- Initial draft of atuin-shell ([#3206](https://github.com/atuinsh/atuin/issues/3206))
+- Allow setting multipliers for frequency, recency, and frecency scores ([#3235](https://github.com/atuinsh/atuin/issues/3235))
+- Allow running `atuin search -i` as subcommand ([#3208](https://github.com/atuinsh/atuin/issues/3208))
+- Use pty proxy for rendering tui popups without clearing the terminal ([#3234](https://github.com/atuinsh/atuin/issues/3234))
 
 
 ### Miscellaneous Tasks
@@ -42,6 +49,11 @@ All notable changes to this project will be documented in this file.
 - Update changelog
 - Use workspace versions ([#3210](https://github.com/atuinsh/atuin/issues/3210))
 - Move atuin ai subcommand into core binary ([#3212](https://github.com/atuinsh/atuin/issues/3212))
+- Update changelog
+- Update to Rust 1.94 ([#3247](https://github.com/atuinsh/atuin/issues/3247))
+- Strip symbols in dist profile to reduce binary size
+- Upgrade thiserror 1.x to 2.x to deduplicate dependency
+- Upgrade axum 0.7 to 0.8 to deduplicate with tonic's axum
 
 
 ## [18.12.1] - 2026-02-11
