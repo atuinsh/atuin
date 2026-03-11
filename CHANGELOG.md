@@ -40,6 +40,7 @@ All notable changes to this project will be documented in this file.
 - Allow setting multipliers for frequency, recency, and frecency scores ([#3235](https://github.com/atuinsh/atuin/issues/3235))
 - Allow running `atuin search -i` as subcommand ([#3208](https://github.com/atuinsh/atuin/issues/3208))
 - Use pty proxy for rendering tui popups without clearing the terminal ([#3234](https://github.com/atuinsh/atuin/issues/3234))
+- Allow authenticating with Atuin Hub ([#3237](https://github.com/atuinsh/atuin/issues/3237))
 
 
 ### Miscellaneous Tasks
@@ -54,6 +55,7 @@ All notable changes to this project will be documented in this file.
 - Strip symbols in dist profile to reduce binary size
 - Upgrade thiserror 1.x to 2.x to deduplicate dependency
 - Upgrade axum 0.7 to 0.8 to deduplicate with tonic's axum
+- Update changelog
 
 
 ## [18.12.1] - 2026-02-11
