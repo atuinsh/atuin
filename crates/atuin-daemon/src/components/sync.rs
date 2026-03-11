@@ -2,6 +2,8 @@
 //!
 //! Handles periodic synchronization with the Atuin cloud server.
 
+use std::time::Duration;
+
 use eyre::Result;
 use rand::Rng;
 use tokio::sync::mpsc;
@@ -170,6 +172,11 @@ async fn do_sync_tick(
     // Clone settings since we need them across await points
     let settings = handle.settings().await.clone();
 
+    if !settings.auto_sync {
+        tracing::debug!("auto_sync disabled, skipping sync tick");
+        return;
+    }
+
     tracing::info!("sync tick");
 
     // Check if logged in
@@ -206,7 +213,10 @@ async fn do_sync_tick(
                 new_interval = max_interval;
             }
 
-            *ticker = time::interval(time::Duration::from_secs(new_interval as u64));
+            *ticker = time::interval_at(
+                tokio::time::Instant::now() + Duration::from_secs(new_interval as u64),
+                time::Duration::from_secs(new_interval as u64),
+            );
             ticker.reset_after(time::Duration::from_secs(new_interval as u64));
 
             tracing::error!("backing off, next sync tick in {new_interval}");
