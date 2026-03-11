@@ -248,7 +248,7 @@ struct SyncInfo {
 impl SyncInfo {
     pub async fn new(settings: &Settings) -> Self {
         Self {
-            cloud: settings.sync_address == "https://api.atuin.sh",
+            cloud: settings.is_hub_sync(),
             auto_sync: settings.auto_sync,
             records: settings.sync.records,
             last_sync: Settings::last_sync()

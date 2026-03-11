@@ -56,10 +56,9 @@ pub async fn diff(
     let client = Client::new(
         &settings.sync_address,
         settings
-            .session_token()
+            .sync_auth_token()
             .await
-            .map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?
-            .as_str(),
+            .map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?,
         settings.network_connect_timeout,
         settings.network_timeout,
     )
@@ -282,10 +281,9 @@ pub async fn sync_remote(
     let client = Client::new(
         &settings.sync_address,
         settings
-            .session_token()
+            .sync_auth_token()
             .await
-            .map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?
-            .as_str(),
+            .map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?,
         settings.network_connect_timeout,
         settings.network_timeout,
     )

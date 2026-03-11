@@ -42,7 +42,7 @@ impl Push {
 
             let client = Client::new(
                 &settings.sync_address,
-                settings.session_token().await?.as_str(),
+                settings.sync_auth_token().await?,
                 settings.network_connect_timeout,
                 settings.network_timeout * 10, // we may be deleting a lot of data... so up the
                                                // timeout

@@ -187,7 +187,7 @@ impl MetaStore {
     }
 
     pub async fn logged_in(&self) -> Result<bool> {
-        Ok(self.session_token().await?.is_some())
+        Ok(self.session_token().await?.is_some() || self.hub_session_token().await?.is_some())
     }
 
     // Hub session methods (separate from sync session, used for Hub-specific features like AI)

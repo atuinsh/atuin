@@ -30,6 +30,32 @@ use crate::{history::History, sync::hash_str, utils::get_host_user};
 
 static APP_USER_AGENT: &str = concat!("atuin/", env!("CARGO_PKG_VERSION"),);
 
+/// Authentication token for sync API requests.
+///
+/// The sync API supports two authentication methods:
+/// - `Bearer`: Hub API tokens (for users authenticated via Atuin Hub)
+/// - `Token`: Legacy CLI session tokens (for users registered via CLI or self-hosted)
+///
+/// When both are available, Hub tokens are preferred as they provide unified
+/// authentication across CLI and Hub features.
+#[derive(Debug, Clone)]
+pub enum AuthToken {
+    /// Hub API token, used with "Bearer {token}" header
+    Bearer(String),
+    /// Legacy CLI session token, used with "Token {token}" header
+    Token(String),
+}
+
+impl AuthToken {
+    /// Format the token as an Authorization header value
+    fn to_header_value(&self) -> String {
+        match self {
+            AuthToken::Bearer(token) => format!("Bearer {token}"),
+            AuthToken::Token(token) => format!("Token {token}"),
+        }
+    }
+}
+
 pub struct Client<'a> {
     sync_addr: &'a str,
     client: reqwest::Client,
@@ -162,6 +188,7 @@ pub fn ensure_version(response: &Response) -> Result<bool> {
 
 async fn handle_resp_error(resp: Response) -> Result<Response> {
     let status = resp.status();
+    let url = resp.url().to_string();
 
     if status == StatusCode::SERVICE_UNAVAILABLE {
         bail!(
@@ -178,16 +205,16 @@ async fn handle_resp_error(resp: Response) -> Result<Response> {
             let reason = error.reason;
 
             if status.is_client_error() {
-                bail!("Invalid request to the service: {status} - {reason}.")
+                bail!("Invalid request to the service at {url}, {status} - {reason}.")
             }
 
             bail!(
-                "There was an error with the atuin sync service, server error {status}: {reason}.\nIf the problem persists, contact the host"
+                "There was an error with the atuin sync service at {url}, server error {status}: {reason}.\nIf the problem persists, contact the host"
             )
         }
 
         bail!(
-            "There was an error with the atuin sync service: Status {status:?}.\nIf the problem persists, contact the host"
+            "There was an error with the atuin sync service at {url}, Status {status:?}.\nIf the problem persists, contact the host"
         )
     }
 
@@ -197,13 +224,13 @@ async fn handle_resp_error(resp: Response) -> Result<Response> {
 impl<'a> Client<'a> {
     pub fn new(
         sync_addr: &'a str,
-        session_token: &str,
+        auth: AuthToken,
         connect_timeout: u64,
         timeout: u64,
     ) -> Result<Self> {
         ensure_crypto_provider();
         let mut headers = HeaderMap::new();
-        headers.insert(AUTHORIZATION, format!("Token {session_token}").parse()?);
+        headers.insert(AUTHORIZATION, auth.to_header_value().parse()?);
 
         // used for semver server check
         headers.insert(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION.parse()?);

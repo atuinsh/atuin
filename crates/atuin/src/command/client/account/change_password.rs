@@ -4,6 +4,8 @@ use eyre::{Result, bail};
 use atuin_client::{api_client, settings::Settings};
 use rpassword::prompt_password;
 
+use crate::command::client::account::DEFAULT_HUB_ENDPOINT;
+
 #[derive(Parser, Debug)]
 pub struct Cmd {
     #[clap(long, short)]
@@ -24,9 +26,27 @@ pub async fn run(
     current_password: Option<String>,
     new_password: Option<String>,
 ) -> Result<()> {
+    let using_hub_sync = settings.is_hub_sync();
+    let has_sync_session = settings.session_token().await.is_ok();
+    let has_hub_session = settings.hub_session_token().await.is_ok();
+
+    if using_hub_sync && has_hub_session {
+        let endpoint = settings
+            .active_hub_endpoint()
+            .unwrap_or_else(|| DEFAULT_HUB_ENDPOINT.to_string());
+
+        println!("You are authenticated with Atuin Hub.");
+        println!("Manage your account on the site: {endpoint}/settings/account");
+        return Ok(());
+    }
+
+    if !has_sync_session {
+        bail!("You are not logged in");
+    }
+
     let client = api_client::Client::new(
         &settings.sync_address,
-        settings.session_token().await?.as_str(),
+        settings.sync_auth_token().await?,
         settings.network_connect_timeout,
         settings.network_timeout,
     )?;
