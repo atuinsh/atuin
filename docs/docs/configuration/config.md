@@ -539,7 +539,7 @@ So, for example, if you cared a lot about how frequently you run a command but n
 
 Default: `1.0`
 
-The multiplier to apply to the frequency score in the frecency calculation. Setting this to `0.` disables the frequency portion of the frecency scoring altogether.
+The multiplier to apply to the frequency score in the frecency calculation. Setting this to `0` disables the frequency portion of the frecency scoring altogether.
 
 #### `recency_score_multiplier`
 
