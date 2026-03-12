@@ -1437,6 +1437,7 @@ impl Settings {
             .set_default("search.frecency_score_multiplier", 1.0)?
             .set_default("meta.db_path", meta_path.to_str())?
             .set_default("ai.enabled", false)?
+            .set_default("ai.send_cwd", false)?
             .set_default(
                 "search.filters",
                 vec![
