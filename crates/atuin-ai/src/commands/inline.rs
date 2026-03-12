@@ -633,8 +633,8 @@ async fn run_inline_tui(
             app.state.was_interrupted = false; // Reset the flag
         }
 
-        // Check exit condition
-        if app.state.should_exit {
+        // Check exit condition (includes Ctrl+C / SIGINT from event loop)
+        if app.state.should_exit || event_loop.is_shutdown() {
             break;
         }
 
