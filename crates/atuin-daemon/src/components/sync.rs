@@ -2,6 +2,8 @@
 //!
 //! Handles periodic synchronization with the Atuin cloud server.
 
+use std::time::Duration;
+
 use eyre::Result;
 use rand::Rng;
 use tokio::sync::mpsc;
@@ -21,6 +23,16 @@ enum SyncCommand {
     ForceSync,
     /// Stop the sync loop.
     Stop,
+}
+
+/// Sync state - tracks whether we're in normal operation or retrying after failure.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SyncState {
+    /// Normal operation. Periodic syncs only run if auto_sync is enabled.
+    Idle,
+    /// Retrying after a sync failure. Retries continue regardless of auto_sync
+    /// until the sync succeeds.
+    Retrying,
 }
 
 /// Sync component - handles periodic cloud synchronization.
@@ -123,29 +135,43 @@ async fn sync_loop(handle: DaemonHandle, mut cmd_rx: mpsc::Receiver<SyncCommand>
     // we may end up running a lot of syncs in a hot loop.
     ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
+    let mut sync_state = SyncState::Idle;
+
     loop {
         tokio::select! {
             _ = ticker.tick() => {
-                do_sync_tick(
+                let settings = handle.settings().await;
+
+                // Skip periodic ticks if auto_sync is disabled AND we're not retrying
+                // a previous failure. Retries must continue regardless of auto_sync.
+                if !settings.auto_sync && sync_state == SyncState::Idle {
+                    tracing::debug!("auto_sync disabled, skipping periodic sync tick");
+                    continue;
+                }
+
+                sync_state = do_sync_tick(
                     &handle,
                     &history_store,
                     &alias_store,
                     &var_store,
                     &mut ticker,
                     max_interval,
+                    &settings,
                 ).await;
             }
             cmd = cmd_rx.recv() => {
                 match cmd {
                     Some(SyncCommand::ForceSync) => {
                         tracing::info!("executing force sync");
-                        do_sync_tick(
+                        let settings = handle.settings().await;
+                        sync_state = do_sync_tick(
                             &handle,
                             &history_store,
                             &alias_store,
                             &var_store,
                             &mut ticker,
                             max_interval,
+                            &settings,
                         ).await;
                     }
                     Some(SyncCommand::Stop) | None => {
@@ -159,6 +185,8 @@ async fn sync_loop(handle: DaemonHandle, mut cmd_rx: mpsc::Receiver<SyncCommand>
 }
 
 /// Execute a single sync tick.
+///
+/// Returns the new sync state: `Idle` on success, `Retrying` on failure.
 async fn do_sync_tick(
     handle: &DaemonHandle,
     history_store: &HistoryStore,
@@ -166,10 +194,8 @@ async fn do_sync_tick(
     var_store: &VarStore,
     ticker: &mut time::Interval,
     max_interval: f64,
-) {
-    // Clone settings since we need them across await points
-    let settings = handle.settings().await.clone();
-
+    settings: &Settings,
+) -> SyncState {
     tracing::info!("sync tick");
 
     // Check if logged in
@@ -177,17 +203,17 @@ async fn do_sync_tick(
         Ok(v) => v,
         Err(e) => {
             tracing::warn!("failed to check login status, skipping sync tick: {e}");
-            return;
+            return SyncState::Idle;
         }
     };
 
     if !logged_in {
         tracing::debug!("not logged in, skipping sync tick");
-        return;
+        return SyncState::Idle;
     }
 
     // Perform the sync
-    let res = sync::sync(&settings, handle.store()).await;
+    let res = sync::sync(settings, handle.store()).await;
 
     match res {
         Err(e) => {
@@ -206,10 +232,16 @@ async fn do_sync_tick(
                 new_interval = max_interval;
             }
 
-            *ticker = time::interval(time::Duration::from_secs(new_interval as u64));
+            *ticker = time::interval_at(
+                tokio::time::Instant::now() + Duration::from_secs(new_interval as u64),
+                time::Duration::from_secs(new_interval as u64),
+            );
             ticker.reset_after(time::Duration::from_secs(new_interval as u64));
+            ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
             tracing::error!("backing off, next sync tick in {new_interval}");
+
+            SyncState::Retrying
         }
         Ok((uploaded_count, downloaded_records)) => {
             tracing::info!(
@@ -245,13 +277,20 @@ async fn do_sync_tick(
 
             // Reset backoff on success
             if ticker.period().as_secs() != settings.daemon.sync_frequency {
-                *ticker = time::interval(time::Duration::from_secs(settings.daemon.sync_frequency));
+                *ticker = time::interval_at(
+                    tokio::time::Instant::now()
+                        + Duration::from_secs(settings.daemon.sync_frequency),
+                    time::Duration::from_secs(settings.daemon.sync_frequency),
+                );
+                ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
             }
 
             // Store sync time
             if let Err(e) = Settings::save_sync_time().await {
                 tracing::error!("failed to save sync time: {e}");
             }
+
+            SyncState::Idle
         }
     }
 }

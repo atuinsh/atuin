@@ -77,10 +77,19 @@ async fn ensure_hub_session(settings: &atuin_client::settings::Settings) -> Resu
         .active_hub_endpoint()
         .unwrap_or("https://hub.atuin.sh".to_string());
 
+    let will_sync = settings.is_hub_sync();
+
     info!("No Hub session found, prompting for authentication");
 
     println!("Atuin AI requires authenticating with Atuin Hub.");
-    println!("This is separate from your sync setup.");
+    if will_sync {
+        println!(
+            "Once logged in, your shell history will be synchronized via Atuin Hub if auto_sync is enabled or when manually syncing."
+        )
+    }
+    println!(
+        "If you have an existing Atuin sync account, you can log in with your existing credentials."
+    );
     println!("Press enter to begin (or esc to cancel).");
     if !wait_for_login_confirmation()? {
         bail!("authentication canceled");

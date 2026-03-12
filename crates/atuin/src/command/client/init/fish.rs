@@ -37,7 +37,7 @@ fn print_bindings(
     println!("{indent}end");
 }
 
-pub fn init_static(disable_up_arrow: bool, disable_ctrl_r: bool, tmux: &Tmux) {
+pub fn init_static(disable_up_arrow: bool, disable_ctrl_r: bool, disable_ai: bool, tmux: &Tmux) {
     let indent = " ".repeat(4);
 
     let base = include_str!("../../../shell/atuin.fish");
@@ -84,6 +84,12 @@ pub fn init_static(disable_up_arrow: bool, disable_ctrl_r: bool, tmux: &Tmux) {
         );
 
         println!("end");
+
+        #[cfg(feature = "ai")]
+        if !disable_ai {
+            let bind_ai = atuin_ai::commands::init::generate_fish_integration();
+            println!("{bind_ai}");
+        }
     }
 }
 
@@ -92,9 +98,10 @@ pub async fn init(
     vars: VarStore,
     disable_up_arrow: bool,
     disable_ctrl_r: bool,
+    disable_ai: bool,
     tmux: &Tmux,
 ) -> Result<()> {
-    init_static(disable_up_arrow, disable_ctrl_r, tmux);
+    init_static(disable_up_arrow, disable_ctrl_r, disable_ai, tmux);
 
     let aliases = atuin_dotfiles::shell::fish::alias_config(&aliases).await;
     let vars = atuin_dotfiles::shell::fish::var_config(&vars).await;
