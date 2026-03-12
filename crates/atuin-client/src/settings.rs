@@ -594,6 +594,9 @@ pub struct Logs {
 
 #[derive(Default, Clone, Debug, Deserialize, Serialize)]
 pub struct Ai {
+    /// Whether or not the AI features are enabled.
+    pub enabled: bool,
+
     /// The address of the Atuin AI endpoint. Used for AI features like command generation.
     /// Only necessary for custom AI endpoints.
     pub endpoint: Option<String>,
@@ -1433,6 +1436,8 @@ impl Settings {
             .set_default("search.frequency_score_multiplier", 1.0)?
             .set_default("search.frecency_score_multiplier", 1.0)?
             .set_default("meta.db_path", meta_path.to_str())?
+            .set_default("ai.enabled", false)?
+            .set_default("ai.send_cwd", false)?
             .set_default(
                 "search.filters",
                 vec![
@@ -1463,7 +1468,7 @@ impl Settings {
             ))
     }
 
-    pub fn new() -> Result<Self> {
+    pub fn get_config_path() -> Result<PathBuf> {
         let config_dir = atuin_common::utils::config_dir();
 
         create_dir_all(&config_dir)
@@ -1478,6 +1483,12 @@ impl Settings {
         };
 
         config_file.push("config.toml");
+
+        Ok(config_file)
+    }
+
+    pub fn new() -> Result<Self> {
+        let config_file = Self::get_config_path()?;
 
         // extract data_dir first so we can use it as the base for other path defaults
         let effective_data_dir = if config_file.exists() {

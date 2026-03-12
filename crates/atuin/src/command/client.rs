@@ -59,6 +59,7 @@ mod init;
 mod kv;
 mod scripts;
 mod search;
+mod setup;
 mod stats;
 mod store;
 mod wrapped;
@@ -66,6 +67,10 @@ mod wrapped;
 #[derive(Subcommand, Debug)]
 #[command(infer_subcommands = true)]
 pub enum Cmd {
+    /// Setup Atuin features
+    #[command()]
+    Setup,
+
     /// Manipulate shell history
     #[command(subcommand)]
     History(history::Cmd),
@@ -333,6 +338,7 @@ impl Cmd {
         let theme = theme_manager.load_theme(theme_name.as_str(), settings.theme.max_depth);
 
         match self {
+            Self::Setup => setup::run(&settings).await,
             Self::Import(import) => import.run(&db).await,
             Self::Stats(stats) => stats.run(&db, &settings, theme).await,
             Self::Search(search) => search.run(db, &mut settings, sqlite_store, theme).await,
