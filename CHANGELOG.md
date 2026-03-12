@@ -44,6 +44,7 @@ All notable changes to this project will be documented in this file.
 - Use pty proxy for rendering tui popups without clearing the terminal ([#3234](https://github.com/atuinsh/atuin/issues/3234))
 - Allow authenticating with Atuin Hub ([#3237](https://github.com/atuinsh/atuin/issues/3237))
 - Initialize Atuin AI by default with `atuin init` ([#3255](https://github.com/atuinsh/atuin/issues/3255))
+- Add `atuin setup` ([#3257](https://github.com/atuinsh/atuin/issues/3257))
 
 
 ### Miscellaneous Tasks
@@ -58,6 +59,7 @@ All notable changes to this project will be documented in this file.
 - Strip symbols in dist profile to reduce binary size
 - Upgrade thiserror 1.x to 2.x to deduplicate dependency
 - Upgrade axum 0.7 to 0.8 to deduplicate with tonic's axum
+- Update changelog
 - Update changelog
 - Update changelog
 
