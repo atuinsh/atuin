@@ -23,11 +23,17 @@ pub async fn run(_settings: &Settings) -> Result<()> {
     let mut changed = false;
     if enable_ai {
         changed = true;
+        if !doc.contains_key("ai") {
+            doc["ai"] = toml_edit::table();
+        }
         doc["ai"]["enabled"] = value(true);
     }
 
     if enable_daemon {
         changed = true;
+        if !doc.contains_key("daemon") {
+            doc["daemon"] = toml_edit::table();
+        }
         doc["daemon"]["enabled"] = value(true);
         doc["daemon"]["autostart"] = value(true);
         doc["search_mode"] = value("daemon-fuzzy");
