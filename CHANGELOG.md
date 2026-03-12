@@ -16,6 +16,7 @@ All notable changes to this project will be documented in this file.
 - Regen cargo dist
 - Clear script database before rebuild to prevent unique constraint violation ([#3232](https://github.com/atuinsh/atuin/issues/3232))
 - Support Nushell 0.111 ([#3249](https://github.com/atuinsh/atuin/issues/3249))
+- Ctrl-c not exiting ai ([#3256](https://github.com/atuinsh/atuin/issues/3256))
 
 
 ### Documentation
@@ -23,6 +24,7 @@ All notable changes to this project will be documented in this file.
 - Update config.md to remove NuShell support note ([#3190](https://github.com/atuinsh/atuin/issues/3190))
 - Document `search.filters` ([#3195](https://github.com/atuinsh/atuin/issues/3195))
 - Clean up doc references for sqlite-based self-hosting ([#3216](https://github.com/atuinsh/atuin/issues/3216))
+- Document daemon-fuzzy search mode ([#3254](https://github.com/atuinsh/atuin/issues/3254))
 
 
 ### Features
@@ -41,6 +43,7 @@ All notable changes to this project will be documented in this file.
 - Allow running `atuin search -i` as subcommand ([#3208](https://github.com/atuinsh/atuin/issues/3208))
 - Use pty proxy for rendering tui popups without clearing the terminal ([#3234](https://github.com/atuinsh/atuin/issues/3234))
 - Allow authenticating with Atuin Hub ([#3237](https://github.com/atuinsh/atuin/issues/3237))
+- Initialize Atuin AI by default with `atuin init` ([#3255](https://github.com/atuinsh/atuin/issues/3255))
 
 
 ### Miscellaneous Tasks
@@ -55,6 +58,7 @@ All notable changes to this project will be documented in this file.
 - Strip symbols in dist profile to reduce binary size
 - Upgrade thiserror 1.x to 2.x to deduplicate dependency
 - Upgrade axum 0.7 to 0.8 to deduplicate with tonic's axum
+- Update changelog
 - Update changelog
 
 
