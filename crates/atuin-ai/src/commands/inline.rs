@@ -29,6 +29,13 @@ pub async fn run(
     // Install panic hook once at entry point to ensure terminal restoration
     install_panic_hook();
 
+    if !settings.ai.enabled {
+        println!(
+            "Atuin AI is not enabled. Please enable it in your settings or run `atuin setup`."
+        );
+        return Ok(());
+    }
+
     // Token and endpoint priority:
     // 1. Command line arguments/environment variables
     // 2. Settings file
