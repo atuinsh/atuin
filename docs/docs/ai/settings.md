@@ -2,6 +2,12 @@
 
 All the settings that control the behavior of [Atuin AI](./introduction.md) are specified in an `[ai]` section in your `config.toml`. See [the configuration documentation](../../configuration/config/) for more detailed information about Atuin's configuration system.
 
+### enabled
+
+Default: `false`
+
+Whether or not the AI feature are enabled. When set to `false`, the question mark keybinding will output a message with instructions to run `atuin setup` to enable the feature.
+
 ### send_cwd
 
 Default: `false`
@@ -19,10 +25,10 @@ send_cwd = true
 
 Default: `null`
 
-The address of the Atuin AI endpoint. Used for AI features like command generation. Only necessary for custom AI endpoints.
+The address of the Atuin AI endpoint. Used for AI features like command generation. Most users will not need this setting; it is only necessary for custom AI endpoints.
 
 ### api_token
 
 Default: `null`
 
-The API token for the Atuin AI endpoint. Used for AI features like command generation. Only necessary for custom AI endpoints.
+The API token for the Atuin AI endpoint. Used for AI features like command generation. Most users will not need this setting; it is only necessary for custom AI endpoints.
