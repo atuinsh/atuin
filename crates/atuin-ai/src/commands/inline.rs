@@ -26,15 +26,19 @@ pub async fn run(
     settings: &atuin_client::settings::Settings,
     output_for_hook: bool,
 ) -> Result<()> {
-    // Install panic hook once at entry point to ensure terminal restoration
-    install_panic_hook();
-
     if !settings.ai.enabled {
-        println!(
-            "Atuin AI is not enabled. Please enable it in your settings or run `atuin setup`."
+        emit_shell_result(
+            Action::Print(
+                "Atuin AI is not enabled. Please enable it in your settings or run `atuin setup`."
+                    .to_string(),
+            ),
+            output_for_hook,
         );
         return Ok(());
     }
+
+    // Install panic hook once at entry point to ensure terminal restoration
+    install_panic_hook();
 
     // Token and endpoint priority:
     // 1. Command line arguments/environment variables
@@ -69,7 +73,7 @@ pub async fn run(
         settings,
     )
     .await?;
-    emit_shell_result(action.0, &action.1, output_for_hook);
+    emit_shell_result(action, output_for_hook);
 
     Ok(())
 }
@@ -333,10 +337,11 @@ fn detect_os() -> String {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum Action {
-    Execute,
-    Insert,
+    Execute(String),
+    Insert(String),
+    Print(String),
     Cancel,
 }
 
@@ -439,7 +444,7 @@ async fn run_inline_tui(
     keep_output: bool,
     debug_state_file: Option<String>,
     settings: &atuin_client::settings::Settings,
-) -> Result<(Action, String)> {
+) -> Result<Action> {
     // Detect popup mode (only on Unix where atuin-hex socket is available)
     #[cfg(unix)]
     let mut popup_state = crate::tui::popup::try_setup_popup();
@@ -693,9 +698,9 @@ async fn run_inline_tui(
 
     // Map exit action to return value
     let result = match app.state.exit_action {
-        Some(ExitAction::Execute(cmd)) => (Action::Execute, cmd),
-        Some(ExitAction::Insert(cmd)) => (Action::Insert, cmd),
-        _ => (Action::Cancel, String::new()),
+        Some(ExitAction::Execute(cmd)) => Action::Execute(cmd),
+        Some(ExitAction::Insert(cmd)) => Action::Insert(cmd),
+        _ => Action::Cancel,
     };
 
     Ok(result)
@@ -709,17 +714,19 @@ impl Drop for RawModeGuard {
     }
 }
 
-fn emit_shell_result(action: Action, command: &str, output_for_hook: bool) {
+fn emit_shell_result(action: Action, output_for_hook: bool) {
     if output_for_hook {
         match action {
-            Action::Execute => eprintln!("__atuin_ai_execute__:{command}"),
-            Action::Insert => eprintln!("__atuin_ai_insert__:{command}"),
+            Action::Execute(output) => eprintln!("__atuin_ai_execute__:{output}"),
+            Action::Insert(output) => eprintln!("__atuin_ai_insert__:{output}"),
+            Action::Print(output) => eprintln!("__atuin_ai_print__:{output}"),
             Action::Cancel => eprintln!("__atuin_ai_cancel__"),
         }
     } else {
         match action {
-            Action::Execute => eprintln!("{command}"),
-            Action::Insert => eprintln!("{command}"),
+            Action::Execute(output) => eprintln!("{output}"),
+            Action::Insert(output) => eprintln!("{output}"),
+            Action::Print(output) => eprintln!("{output}"),
             Action::Cancel => eprintln!(),
         }
     }
