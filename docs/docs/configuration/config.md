@@ -103,16 +103,32 @@ sync_frequency = "1h"
 
 Default: `fuzzy`
 
-Which search mode to use. Atuin supports "prefix", "fulltext", "fuzzy", and
+Which search mode to use. Atuin supports "prefix", "fulltext", "fuzzy", "daemon-fuzzy", and
 "skim" search modes.
 
 Prefix mode searches for "query\*"; fulltext mode searches for "\*query\*";
 "fuzzy" applies the [fuzzy search syntax](#fuzzy-search-syntax);
 "skim" applies the [skim search syntax](https://github.com/lotabout/skim#search-syntax).
 
+!!! note "daemon-fuzzy search mode"
+
+    The "daemon-fuzzy" mode is new as of Atuin 18.13. This search mode uses an in-memory index, stored in the daemon, to perform fast and customizable searches.
+
+    To use the new `"daemon-fuzzy"` mode, enable the daemon, set autostart to true (unless you manage its lifecycle yourself), and set the search mode:
+
+    ```toml
+    search_mode = "daemon-fuzzy"
+
+    [daemon]
+    enabled = true
+    autostart = true
+    ```
+
+    You can customize the priority given to frequency, recency, and frecency scores in this mode. See [the score multipliers section](#score-multipliers) for more information.
+
 #### `fuzzy` search syntax
 
-The "fuzzy" search syntax is based on the
+The "fuzzy" and "daemon-fuzzy" search syntax is based on the
 [fzf search syntax](https://github.com/junegunn/fzf#search-syntax).
 
 | Token     | Match type                 | Description                          |
@@ -132,6 +148,9 @@ or `py`.
 ```
 ^core go$ | rb$ | py$
 ```
+
+!!! warning "Bar not supported in daemon-fuzzy"
+    The "daemon-fuzzy" search mode does not currently support the bar character operator.
 
 ### `filter_mode`
 
@@ -499,6 +518,56 @@ The `filter_mode` setting selects the initial mode from this list. If `filter_mo
 filters = ["global", "host", "session", "directory"]
 ```
 
+### Score multipliers
+
+For the [`"daemon-fuzzy"` search mode](#search_mode), you can control the scoring of matched items. The system scores matches based on three numbers: frequency, recency, and frecency:
+
+* Frequency — how often this exact match has been run, with diminishing returns
+* Recency — how recently this exact match was last run
+* Frecency — a combination of frequency and recency
+
+The frecency calculation is `Recency Score * Recency Multiplier + Frequency Score * Frequency Multiplier`. By changing the options below, you can customize the relative importance of each part of the score calculation.
+
+For each setting, a value of `1.0` (the default) means the score is used as-is. Values less than `1.0` decrease that score's influence, and values greater than `1.0` increase that score's influence.
+
+So, for example, if you cared a lot about how frequently you run a command but not as much how recently, you could set `frequency_score_multiplier` to `10.0` and `recency_score_multiplier` to `0.1`.
+
+!!! warning "daemon-fuzzy mode only"
+    The score multiplier settings shown here only work with the `"daemon-fuzzy"` search mode.
+
+#### `frequency_score_multiplier`
+
+Default: `1.0`
+
+The multiplier to apply to the frequency score in the frecency calculation. Setting this to `0` disables the frequency portion of the frecency scoring altogether.
+
+#### `recency_score_multiplier`
+
+Default: `1.0`
+
+The multiplier to apply to the recency score in the frecency calculation. Setting this to `0` disables the recency portion of the frecency scoring altogether.
+
+#### `frecency_score_multiplier`
+
+Default: `1.0`
+
+The multiplier used for the final frecency score. Setting this to `0` disables frecency scoring altogether, relying solely on the fuzzy matcher's score.
+
+Example:
+
+```toml
+search_mode = "daemon-fuzzy"
+
+[daemon]
+enabled = true
+autostart = true
+
+[search]
+recency_score_multiplier = 10.0
+frequency_score_multiplier = 0.8
+frecency_score_multiplier = 2.0
+```
+
 ## Stats
 
 This section of client config is specifically for configuring Atuin stats calculations
@@ -689,6 +758,8 @@ By using `auto` a preview is shown, if the command is longer than the width of t
 ## Daemon
 
 Atuin version: >= 18.3
+
+### enabled
 
 Default: `false`
 

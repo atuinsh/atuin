@@ -29,6 +29,11 @@ theme:
     - content.action.edit
     - content.action.view
 
+# NOTE: to enable ToC and heading anchor links in local (non-multirepo) development,
+# comment out the `multirepo` plugin and all its settings.
+# Note that this changes the top-level directory when developing locally
+# from `/cli/CLI/` to `/cli/.
+
 plugins:
   - search
   - multirepo:
