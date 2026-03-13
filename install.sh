@@ -150,6 +150,8 @@ else
   echo "  atuin login             Log in to an existing sync account"
 fi
 
+"$ATUIN_BIN" setup
+
 cat << EOF
 
  _______  __   __  _______  __    _  ___   _    __   __  _______  __   __
