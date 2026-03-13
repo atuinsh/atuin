@@ -99,11 +99,14 @@ arboard = { version = "3.4", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 arboard = { version = "3.4", optional = true, features = [
-  "wayland-data-control",
+    "wayland-data-control",
 ] }
 
 [target.'cfg(unix)'.dependencies]
 daemonize = "0.5.0"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_System_Console"] }
 
 [dev-dependencies]
 tracing-tree = "0.4"

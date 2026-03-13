@@ -449,7 +449,7 @@ async fn run_inline_tui(
     #[cfg(unix)]
     let mut popup_state = crate::tui::popup::try_setup_popup();
     #[cfg(not(unix))]
-    let mut popup_state: Option<()> = None;
+    let popup_state: Option<()> = None;
 
     let popup_mode = popup_state.is_some();
 

@@ -52,6 +52,9 @@ use ratatui::crossterm::event::{
     KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 
+#[cfg(windows)]
+use windows_sys::Win32::System::Console::{GetConsoleOutputCP, SetConsoleOutputCP};
+
 const TAB_TITLES: [&str; 2] = ["Search", "Inspect"];
 
 pub enum InputAction {
@@ -1279,6 +1282,57 @@ enum TerminalWriter {
     Stdout(std::io::Stdout),
     #[cfg(unix)]
     Tty(std::fs::File),
+    #[cfg(windows)]
+    ConOut(std::io::LineWriter<std::fs::File>, u32),
+}
+
+impl TerminalWriter {
+    fn new() -> std::io::Result<Self> {
+        let stdout = stdout();
+        if stdout.is_terminal() {
+            return Ok(TerminalWriter::Stdout(stdout));
+        }
+
+        // If stdout is not a terminal (e.g., captured by command substitution),
+        // fall back to /dev/tty so the TUI can still render.
+        // This allows usage like: VAR=$(atuin search -i)
+        #[cfg(unix)]
+        {
+            Ok(TerminalWriter::Tty(
+                std::fs::File::options()
+                    .read(true)
+                    .write(true)
+                    .open("/dev/tty")?,
+            ))
+        }
+
+        // On Windows, use CONOUT$ which is the equivalent of /dev/tty, but this
+        // requires setting the current console output code page to UTF-8 for the
+        // TUI to render properly. We'll set it back to its previous value upon exit.
+        #[cfg(windows)]
+        {
+            let file = std::fs::File::options()
+                .read(true)
+                .write(true)
+                .open("CONOUT$")?;
+
+            let initial_console_output_cp = unsafe { GetConsoleOutputCP() };
+            unsafe {
+                SetConsoleOutputCP(65001); // CP_UTF8
+            }
+
+            Ok(TerminalWriter::ConOut(
+                std::io::LineWriter::new(file),
+                initial_console_output_cp,
+            ))
+        }
+
+        #[cfg(not(any(unix, windows)))]
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "Interactive mode requires a terminal",
+        ))
+    }
 }
 
 impl Write for TerminalWriter {
@@ -1287,6 +1341,8 @@ impl Write for TerminalWriter {
             TerminalWriter::Stdout(stdout) => stdout.write(buf),
             #[cfg(unix)]
             TerminalWriter::Tty(file) => file.write(buf),
+            #[cfg(windows)]
+            TerminalWriter::ConOut(writer, _) => writer.write(buf),
         }
     }
 
@@ -1295,6 +1351,19 @@ impl Write for TerminalWriter {
             TerminalWriter::Stdout(stdout) => stdout.flush(),
             #[cfg(unix)]
             TerminalWriter::Tty(file) => file.flush(),
+            #[cfg(windows)]
+            TerminalWriter::ConOut(writer, _) => writer.flush(),
+        }
+    }
+}
+
+impl Drop for TerminalWriter {
+    fn drop(&mut self) {
+        #[cfg(windows)]
+        if let TerminalWriter::ConOut(_, initial_console_output_cp) = self {
+            unsafe {
+                SetConsoleOutputCP(*initial_console_output_cp);
+            }
         }
     }
 }
@@ -1417,32 +1486,10 @@ struct Stdout {
 }
 
 impl Stdout {
-    pub fn new(inline_mode: bool, stdout_is_terminal: bool) -> std::io::Result<Self> {
+    pub fn new(inline_mode: bool) -> std::io::Result<Self> {
         terminal::enable_raw_mode()?;
 
-        // If stdout is not a terminal (e.g., captured by command substitution),
-        // fall back to /dev/tty so the TUI can still render.
-        // This allows usage like: VAR=$(atuin search -i)
-        let mut writer = if stdout_is_terminal {
-            TerminalWriter::Stdout(stdout())
-        } else {
-            #[cfg(unix)]
-            {
-                TerminalWriter::Tty(
-                    std::fs::File::options()
-                        .read(true)
-                        .write(true)
-                        .open("/dev/tty")?,
-                )
-            }
-            #[cfg(not(unix))]
-            {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::Unsupported,
-                    "Interactive mode requires a terminal",
-                ));
-            }
-        };
+        let mut writer = TerminalWriter::new()?;
 
         if !inline_mode {
             execute!(writer, terminal::EnterAlternateScreen)?;
@@ -1508,6 +1555,7 @@ impl Write for Stdout {
 /// of lines the caller should scroll the terminal up before rendering.
 ///
 /// This function performs no I/O — it is a pure computation.
+#[cfg(unix)]
 fn compute_popup_placement(
     cursor_row: u16,
     term_rows: u16,
@@ -1556,15 +1604,13 @@ pub async fn history(
         settings.inline_height
     };
 
-    // Check if stdout is a terminal - if not (e.g., command substitution like VAR=$(atuin search -i)),
-    // we need to use /dev/tty for the TUI and force fullscreen mode (inline mode requires
-    // cursor position queries that don't work when stdout is captured)
-    let stdout_is_terminal = stdout().is_terminal();
-
     // Use fullscreen mode if the inline height doesn't fit in the terminal,
     // this will preserve the scroll position upon exit.
-    // Also force fullscreen when stdout isn't a terminal (inline mode won't work).
-    let inline_height = if !stdout_is_terminal {
+    // Also force fullscreen when stdout isn't a terminal (e.g., command substitution
+    // like VAR=$(atuin search -i)). In that case, we need to use /dev/tty for the TUI and force
+    // fullscreen mode (inline mode won't work as it requires cursor position queries
+    // that don't work when stdout is captured).
+    let inline_height = if !stdout().is_terminal() {
         0
     } else if let Ok(size) = terminal::size()
         && inline_height >= size.1
@@ -1609,12 +1655,12 @@ pub async fn history(
     };
 
     #[cfg(not(unix))]
-    let (saved_screen, popup_rect, popup_scroll_offset): (Option<()>, Rect, u16) =
+    let (saved_screen, popup_rect, _popup_scroll_offset): (Option<()>, Rect, u16) =
         (None, Rect::default(), 0);
 
     let popup_mode = saved_screen.is_some();
 
-    let stdout = Stdout::new(inline_height > 0, stdout_is_terminal)?;
+    let stdout = Stdout::new(inline_height > 0)?;
 
     // In popup mode, clear the popup region on the physical terminal before
     // ratatui takes over. Ratatui's diff-based rendering compares against an
