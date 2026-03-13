@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [unreleased]
+## [18.13.0] - 2026-03-13
 
 ### Bug Fixes
 
@@ -59,6 +59,7 @@ All notable changes to this project will be documented in this file.
 - Strip symbols in dist profile to reduce binary size
 - Upgrade thiserror 1.x to 2.x to deduplicate dependency
 - Upgrade axum 0.7 to 0.8 to deduplicate with tonic's axum
+- Update changelog
 - Update changelog
 - Update changelog
 - Update changelog
