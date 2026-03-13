@@ -150,6 +150,10 @@ else
   echo "  atuin login             Log in to an existing sync account"
 fi
 
+if [ "$ATUIN_NON_INTERACTIVE" != "yes" ]; then
+  "$ATUIN_BIN" setup
+fi
+
 cat << EOF
 
  _______  __   __  _______  __    _  ___   _    __   __  _______  __   __
