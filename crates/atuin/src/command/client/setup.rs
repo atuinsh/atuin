@@ -1,7 +1,10 @@
 use std::io::{self, Write};
 use std::path::PathBuf;
 
-use atuin_client::{database::{Database, Sqlite}, settings::Settings};
+use atuin_client::{
+    database::{Database, Sqlite},
+    settings::Settings,
+};
 use colored::Colorize;
 use eyre::Result;
 use toml_edit::{DocumentMut, value};
@@ -38,20 +41,14 @@ pub async fn run(settings: &Settings) -> Result<()> {
     let logged_in = atuin_client::hub::is_logged_in().await.unwrap_or(false);
     if !logged_in {
         println!();
-        println!(
-            "  {title}",
-            title = "Atuin Hub".bold().bright_blue()
-        );
+        println!("  {title}", title = "Atuin Hub".bold().bright_blue());
         println!("  Sync your history across all your machines:");
         println!("    - End-to-end encrypted — only you can read your data");
         println!("    - Access your history from any device");
         println!("    - Never lose your history, even if you wipe a machine");
         println!();
 
-        let do_signup = prompt(
-            "Sign up for Atuin Hub",
-            "Create a free sync account?",
-        )?;
+        let do_signup = prompt("Sign up for Atuin Hub", "Create a free sync account?")?;
 
         if do_signup {
             let hub_address = settings
@@ -133,10 +130,7 @@ async fn hub_signup(hub_address: &str) -> Result<()> {
 
     println!();
     println!("  Open this URL to sign up:");
-    println!(
-        "  {url}",
-        url = session.auth_url.bold().underline()
-    );
+    println!("  {url}", url = session.auth_url.bold().underline());
     println!();
     println!("  Waiting for authentication...");
 

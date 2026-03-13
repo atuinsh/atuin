@@ -339,7 +339,6 @@ impl Cmd {
         let theme = theme_manager.load_theme(theme_name.as_str(), settings.theme.max_depth);
 
         match self {
-
             Self::Import(import) => import.run(&db).await,
             Self::Stats(stats) => stats.run(&db, &settings, theme).await,
             Self::Search(search) => search.run(db, &mut settings, sqlite_store, theme).await,
