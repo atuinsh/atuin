@@ -1311,18 +1311,18 @@ impl TerminalWriter {
         // TUI to render properly. We'll set it back to its previous value upon exit.
         #[cfg(windows)]
         {
+            let file = std::fs::File::options()
+                .read(true)
+                .write(true)
+                .open("CONOUT$")?;
+
             let initial_console_output_cp = unsafe { GetConsoleOutputCP() };
             unsafe {
                 SetConsoleOutputCP(65001); // CP_UTF8
             }
 
             Ok(TerminalWriter::ConOut(
-                std::io::LineWriter::new(
-                    std::fs::File::options()
-                        .read(true)
-                        .write(true)
-                        .open("CONOUT$")?,
-                ),
+                std::io::LineWriter::new(file),
                 initial_console_output_cp,
             ))
         }
