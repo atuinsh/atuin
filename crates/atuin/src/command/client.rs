@@ -325,6 +325,7 @@ impl Cmd {
             Self::History(history) => return history.run(&settings).await,
             Self::Init(init) => return init.run(&settings).await,
             Self::Doctor => return doctor::run(&settings).await,
+            Self::Setup => return setup::run(&settings).await,
             _ => {}
         }
 
@@ -338,7 +339,7 @@ impl Cmd {
         let theme = theme_manager.load_theme(theme_name.as_str(), settings.theme.max_depth);
 
         match self {
-            Self::Setup => setup::run(&settings).await,
+
             Self::Import(import) => import.run(&db).await,
             Self::Stats(stats) => stats.run(&db, &settings, theme).await,
             Self::Search(search) => search.run(db, &mut settings, sqlite_store, theme).await,
@@ -372,7 +373,7 @@ impl Cmd {
             #[cfg(feature = "daemon")]
             Self::Daemon(cmd) => cmd.run(settings, sqlite_store, db).await,
 
-            Self::History(_) | Self::Init(_) | Self::Doctor => unreachable!(),
+            Self::History(_) | Self::Init(_) | Self::Doctor | Self::Setup => unreachable!(),
 
             #[cfg(feature = "ai")]
             Self::Ai(cli) => atuin_ai::commands::run(cli, &settings).await,
