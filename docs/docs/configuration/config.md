@@ -203,6 +203,14 @@ filter_mode_shell_up_key_binding = "session"
 
 Defaults to the value specified for `filter_mode`.
 
+### `inline_height_shell_up_key_binding`
+
+The maximum number of lines the interface should take up when atuin is invoked from a shell up-key binding.
+
+The accepted values are identical to those of `inline_height`.
+
+When unset, the value from `inline_height` is used.
+
 ### `workspaces`
 
 Atuin version: >= 17.0
