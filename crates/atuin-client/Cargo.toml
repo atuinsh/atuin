@@ -76,7 +76,7 @@ tiny-bip39 = "2.0.0"
 crossterm = { workspace = true, features = ["serde"] }
 palette = { version = "0.7.5", features = ["serializing"] }
 strum_macros = "0.27"
-strum = { version = "0.27", features = ["strum_macros"] }
+strum = { version = "0.28", features = ["strum_macros"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
