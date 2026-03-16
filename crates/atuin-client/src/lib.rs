@@ -5,6 +5,8 @@ extern crate log;
 
 #[cfg(feature = "sync")]
 pub mod api_client;
+#[cfg(feature = "sync")]
+pub mod auth;
 #[cfg(feature = "hub")]
 pub mod hub;
 #[cfg(feature = "sync")]
