@@ -1,0 +1,1 @@
+exclude = ["matcher/src/tests.rs", "matcher/src/debug.rs", "matcher/src/chars/normalize.rs"]

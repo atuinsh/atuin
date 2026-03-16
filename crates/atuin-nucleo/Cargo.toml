@@ -1,0 +1,17 @@
+[package]
+name = "atuin-nucleo"
+description = "A fork of helix-editor/nucleo with filtering and custom scoring for Atuin"
+authors = ["Pascal Kuthe <pascalkuthe@pm.me>", "Michelle Tilley <michelle@atuin.sh>"]
+version = "0.6.0"
+edition = "2021"
+license = "MPL-2.0"
+repository = "https://github.com/atuinsh/atuin"
+readme = "README.md"
+exclude = ["/typos.toml", "/tarpaulin.toml"]
+
+[lib]
+
+[dependencies]
+atuin-nucleo-matcher = { version = "0.3.1", path = "matcher" }
+parking_lot = { version = "0.12.1", features = ["send_guard", "arc_lock"] }
+rayon = "1.7.0"

@@ -5,11 +5,11 @@ use atuin_client::{
     settings::{SearchMode, Settings},
 };
 use atuin_daemon::client::SearchClient;
-use eyre::Result;
-use nucleo_matcher::{
+use atuin_nucleo_matcher::{
     Config, Matcher, Utf32Str,
     pattern::{CaseMatching, Normalization, Pattern},
 };
+use eyre::Result;
 use tracing::{Level, debug, instrument, span};
 use uuid::Uuid;
 

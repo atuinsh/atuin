@@ -1,8 +1,8 @@
 [workspace]
-members = ["crates/*"]
+members = ["crates/*", "crates/atuin-nucleo/matcher", "crates/atuin-nucleo/bench"]
 
 resolver = "2"
-exclude = ["ui/backend"]
+exclude = ["ui/backend", "crates/atuin-nucleo/matcher/fuzz"]
 
 [workspace.package]
 version = "18.13.2"
@@ -26,6 +26,8 @@ atuin-server = { path = "crates/atuin-server", version = "18.13.2" }
 atuin-server-database = { path = "crates/atuin-server-database", version = "18.13.2" }
 atuin-server-postgres = { path = "crates/atuin-server-postgres", version = "18.13.2" }
 atuin-server-sqlite = { path = "crates/atuin-server-sqlite", version = "18.13.2" }
+atuin-nucleo = { path = "crates/atuin-nucleo", version = "0.6.0" }
+atuin-nucleo-matcher = { path = "crates/atuin-nucleo/matcher", version = "0.3.1" }
 base64 = "0.22"
 crossterm = "0.29.0"
 log = "0.4"
