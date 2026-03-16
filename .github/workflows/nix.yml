@@ -14,7 +14,7 @@ on:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
 
     steps:
       - uses: actions/checkout@v6
@@ -24,7 +24,7 @@ jobs:
         run: nix flake check --print-build-logs
 
   build-test:
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
 
     steps:
       - uses: actions/checkout@v6

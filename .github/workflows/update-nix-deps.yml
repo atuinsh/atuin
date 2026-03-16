@@ -6,7 +6,7 @@ on:
 
 jobs:
   lockfile:
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     if: github.repository == 'atuinsh/atuin'
     steps:
       - name: Checkout repository

@@ -13,14 +13,14 @@ jobs:
   install:
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-14]
+        os: [depot-ubuntu-24.04, macos-14]
     runs-on: ${{ matrix.os }}
 
     steps:
       - uses: actions/checkout@v6
 
       - name: Install zsh for ubuntu
-        if: matrix.os == 'ubuntu-latest' 
+        if: matrix.os == 'depot-ubuntu-24.04' 
         run: | 
           sudo apt install zsh
 
