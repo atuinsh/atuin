@@ -5,13 +5,12 @@ use eyre::{Context, Result, bail};
 use tokio::{fs::File, io::AsyncWriteExt};
 
 use atuin_client::{
-    api_client,
+    auth::{self, AuthResponse},
     encryption::{Key, decode_key, encode_key, load_key},
     record::sqlite_store::SqliteStore,
     record::store::Store,
     settings::Settings,
 };
-use atuin_common::api::LoginRequest;
 use rpassword::prompt_password;
 
 #[derive(Parser, Debug)]
@@ -26,6 +25,10 @@ pub struct Cmd {
     #[clap(long, short)]
     pub key: Option<String>,
 
+    /// The two-factor authentication code for your account, if any
+    #[clap(long, short)]
+    pub totp_code: Option<String>,
+
     #[clap(long, hide = true)]
     pub from_registration: bool,
 }
@@ -38,35 +41,102 @@ fn get_input() -> Result<String> {
 
 impl Cmd {
     pub async fn run(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
-        if let Some(endpoint) = settings.active_hub_endpoint() {
-            if settings.hub_session_token().await.is_ok() {
-                println!("You are authenticated with Atuin Hub.");
-                println!("Run 'atuin logout' to log out.");
-                return Ok(());
-            }
-
-            // The only difference between login and registration is that registration doesn't prompt for a key
-            if self.from_registration {
-                load_key(settings)?;
-            } else {
-                self.prompt_and_store_key(settings, store).await?;
-            }
-
-            self.ensure_hub_session(settings, endpoint.as_str()).await?;
-            println!("Successfully authenticated with Atuin Hub.");
-            return Ok(());
-        }
-
         if settings.logged_in().await? {
-            println!("You are already logged in.");
+            if settings.is_hub_sync() {
+                println!("You are authenticated with Atuin Hub.");
+            } else {
+                println!("You are already logged in.");
+            }
             println!("Run 'atuin logout' to log out.");
             return Ok(());
         }
 
-        self.run_sync_login(settings, store).await
+        if settings.is_hub_sync() {
+            self.run_hub_login(settings, store).await
+        } else {
+            self.run_legacy_login(settings, store).await
+        }
     }
 
-    async fn ensure_hub_session(&self, settings: &Settings, hub_address: &str) -> Result<()> {
+    /// Hub login: use the browser OAuth flow unless all three flags
+    /// (username, password, key) were provided for headless/CI use.
+    async fn run_hub_login(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
+        let endpoint = settings.active_hub_endpoint().unwrap_or_default();
+
+        if let Some(username) = &self.username {
+            // Headless login via v0 API (for CI / scripting).
+            let client = auth::auth_client(settings).await;
+
+            self.prompt_and_store_key(settings, store).await?;
+
+            let password = self.password.clone().unwrap_or_else(read_user_password);
+            let mut totp_code = self.totp_code.clone();
+
+            let session = loop {
+                let response = client
+                    .login(username, &password, totp_code.as_deref())
+                    .await?;
+
+                match response {
+                    AuthResponse::Success { session } => break session,
+                    AuthResponse::TwoFactorRequired => {
+                        totp_code = Some(or_user_input(None, "two-factor code"));
+                    }
+                }
+            };
+
+            Settings::meta_store()
+                .await?
+                .save_hub_session(&session)
+                .await?;
+        } else {
+            // Interactive login via browser OAuth flow.
+            if !self.from_registration {
+                self.prompt_and_store_key(settings, store).await?;
+            } else {
+                load_key(settings)?;
+            }
+
+            self.ensure_hub_session(settings, endpoint.as_ref()).await?;
+        }
+
+        // Silently attempt to link CLI account to Hub if one exists
+        if let Ok(cli_token) = settings.session_token().await {
+            if let Err(e) = atuin_client::hub::link_account(endpoint.as_ref(), &cli_token).await {
+                tracing::debug!("Could not link CLI account to Hub: {}", e);
+            }
+        }
+
+        println!("Successfully authenticated with Atuin Hub.");
+        Ok(())
+    }
+
+    /// Legacy login: always prompt for username/password interactively
+    /// (or accept them via flags).
+    async fn run_legacy_login(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
+        let username = or_user_input(self.username.clone(), "username");
+        let password = self.password.clone().unwrap_or_else(read_user_password);
+
+        self.prompt_and_store_key(settings, store).await?;
+
+        let client = auth::auth_client(settings).await;
+        let response = client.login(&username, &password, None).await?;
+
+        match response {
+            AuthResponse::Success { session } => {
+                Settings::meta_store().await?.save_session(&session).await?;
+            }
+            AuthResponse::TwoFactorRequired => {
+                // Legacy server doesn't support 2FA, so this shouldn't happen.
+                bail!("unexpected two-factor requirement from legacy server");
+            }
+        }
+
+        println!("Logged in!");
+        Ok(())
+    }
+
+    async fn ensure_hub_session(&self, _settings: &Settings, hub_address: &str) -> Result<()> {
         tracing::info!("Authenticating with Atuin Hub...");
 
         let session = atuin_client::hub::HubAuthSession::start(hub_address).await?;
@@ -83,45 +153,6 @@ impl Cmd {
         tracing::info!("Authentication complete, saving session token");
 
         atuin_client::hub::save_session(&token).await?;
-
-        // Silently attempt to link CLI account to Hub if one exists
-        // This enables unified auth - users can use their Hub token for sync
-        if let Ok(cli_token) = settings.session_token().await {
-            tracing::debug!("CLI session found, attempting to link accounts");
-            if let Err(e) = atuin_client::hub::link_account(hub_address, &cli_token).await {
-                tracing::debug!("Could not link CLI account to Hub: {}", e);
-            } else {
-                tracing::info!("Successfully linked CLI account to Hub");
-            }
-        }
-
-        Ok(())
-    }
-
-    async fn run_sync_login(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
-        // TODO(ellie): Replace this with a call to atuin_client::login::login
-        // The reason I haven't done this yet is that this implementation allows for
-        // an empty key. This will use an existing key file.
-        //
-        // I'd quite like to ditch that behaviour, so have not brought it into the library
-        // function.
-        let username = or_user_input(self.username.clone(), "username");
-        let password = self.password.clone().unwrap_or_else(read_user_password);
-
-        self.prompt_and_store_key(settings, store).await?;
-
-        let session = api_client::login(
-            settings.sync_address.as_str(),
-            LoginRequest { username, password },
-        )
-        .await?;
-
-        Settings::meta_store()
-            .await?
-            .save_session(&session.session)
-            .await?;
-
-        println!("Logged in!");
 
         Ok(())
     }

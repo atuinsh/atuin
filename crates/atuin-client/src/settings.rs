@@ -29,6 +29,26 @@ pub(crate) mod meta;
 mod scripts;
 pub mod watcher;
 
+pub struct HubEndpoint(String);
+
+/// Default sync address for Atuin's hosted service
+pub const DEFAULT_SYNC_ADDRESS: &'static str = "https://api.atuin.sh";
+
+/// Default Hub web/API endpoint for Atuin's hosted service
+pub const DEFAULT_HUB_ENDPOINT: &'static str = "https://hub.atuin.sh";
+
+impl Default for HubEndpoint {
+    fn default() -> Self {
+        HubEndpoint(DEFAULT_HUB_ENDPOINT.to_string())
+    }
+}
+
+impl AsRef<str> for HubEndpoint {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Copy, ValueEnum, PartialEq, Serialize)]
 pub enum SearchMode {
     #[serde(rename = "prefix")]
@@ -1176,12 +1196,6 @@ impl Settings {
         }
     }
 
-    /// Default sync address for Atuin's hosted service
-    pub const DEFAULT_SYNC_ADDRESS: &'static str = "https://api.atuin.sh";
-
-    /// Default Hub web/API endpoint for Atuin's hosted service
-    pub const DEFAULT_HUB_ENDPOINT: &'static str = "https://hub.atuin.sh";
-
     /// Normalize a URL for comparison by trimming trailing slashes
     fn normalize_url(url: &str) -> &str {
         url.trim_end_matches('/')
@@ -1190,8 +1204,8 @@ impl Settings {
     /// Check if a URL matches one of Atuin's official hosted addresses
     fn is_official_address(url: &str) -> bool {
         let normalized = Self::normalize_url(url);
-        normalized == Self::normalize_url(Self::DEFAULT_SYNC_ADDRESS)
-            || normalized == Self::normalize_url(Self::DEFAULT_HUB_ENDPOINT)
+        normalized == Self::normalize_url(DEFAULT_SYNC_ADDRESS)
+            || normalized == Self::normalize_url(DEFAULT_HUB_ENDPOINT)
     }
 
     /// Returns whether this configuration uses Hub-style sync.
@@ -1213,12 +1227,12 @@ impl Settings {
     /// For Atuin's official hosted service, this always returns `https://hub.atuin.sh`
     /// regardless of whether `sync_address` is `api.atuin.sh` or `hub.atuin.sh`.
     /// For self-hosted instances, returns the configured `sync_address`.
-    pub fn active_hub_endpoint(&self) -> Option<String> {
+    pub fn active_hub_endpoint(&self) -> Option<HubEndpoint> {
         if self.is_hub_sync() {
             if Self::is_official_address(&self.sync_address) {
-                Some(Self::DEFAULT_HUB_ENDPOINT.to_string())
+                Some(HubEndpoint::default())
             } else {
-                Some(self.sync_address.clone())
+                Some(HubEndpoint(self.sync_address.clone()))
             }
         } else {
             None

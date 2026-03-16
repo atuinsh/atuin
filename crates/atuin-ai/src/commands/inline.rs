@@ -84,9 +84,7 @@ async fn ensure_hub_session(settings: &atuin_client::settings::Settings) -> Resu
         return Ok(token);
     }
 
-    let hub_address = settings
-        .active_hub_endpoint()
-        .unwrap_or("https://hub.atuin.sh".to_string());
+    let hub_address = settings.active_hub_endpoint().unwrap_or_default();
 
     let will_sync = settings.is_hub_sync();
 
@@ -109,7 +107,7 @@ async fn ensure_hub_session(settings: &atuin_client::settings::Settings) -> Resu
     debug!("Starting Atuin Hub authentication...");
 
     println!("Authenticating with Atuin Hub...");
-    let session = atuin_client::hub::HubAuthSession::start(&hub_address).await?;
+    let session = atuin_client::hub::HubAuthSession::start(hub_address.as_ref()).await?;
     println!("Open this URL to continue:");
     println!("{}", session.auth_url);
 
@@ -130,7 +128,7 @@ async fn ensure_hub_session(settings: &atuin_client::settings::Settings) -> Resu
         && let Ok(Some(cli_token)) = meta.session_token().await
     {
         debug!("CLI session found, attempting to link accounts");
-        if let Err(e) = atuin_client::hub::link_account(&hub_address, &cli_token).await {
+        if let Err(e) = atuin_client::hub::link_account(hub_address.as_ref(), &cli_token).await {
             // Don't fail AI flow if linking fails - it's not critical
             debug!("Could not link CLI account to Hub: {}", e);
         } else {

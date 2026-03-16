@@ -11,8 +11,6 @@ pub mod login;
 pub mod logout;
 pub mod register;
 
-const DEFAULT_HUB_ENDPOINT: &str = "https://hub.atuin.sh";
-
 #[derive(Args, Debug)]
 pub struct Cmd {
     #[command(subcommand)]
@@ -31,7 +29,7 @@ pub enum Commands {
     Logout,
 
     /// Delete your account, and all synced data
-    Delete,
+    Delete(delete::Cmd),
 
     /// Change your password
     ChangePassword(change_password::Cmd),
@@ -46,7 +44,7 @@ impl Cmd {
             Commands::Login(l) => l.run(&settings, &store).await,
             Commands::Register(r) => r.run(&settings, &store).await,
             Commands::Logout => logout::run().await,
-            Commands::Delete => delete::run(&settings).await,
+            Commands::Delete(d) => d.run(&settings).await,
             Commands::ChangePassword(c) => c.run(&settings).await,
             Commands::Link => link::run(&settings).await,
         }

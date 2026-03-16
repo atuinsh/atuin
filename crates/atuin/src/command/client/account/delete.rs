@@ -1,40 +1,58 @@
-use atuin_client::{api_client, settings::Settings};
+use atuin_client::{
+    auth::{self, MutateResponse},
+    settings::Settings,
+};
+use clap::Parser;
 use eyre::{Result, bail};
 
-use crate::command::client::account::DEFAULT_HUB_ENDPOINT;
+use super::login::{or_user_input, read_user_password};
 
-pub async fn run(settings: &Settings) -> Result<()> {
-    let using_hub_sync = settings.is_hub_sync();
-    let has_sync_session = settings.session_token().await.is_ok();
-    let has_hub_session = settings.hub_session_token().await.is_ok();
+#[derive(Parser, Debug)]
+pub struct Cmd {
+    #[clap(long, short)]
+    pub password: Option<String>,
 
-    if using_hub_sync && has_hub_session {
-        let endpoint = settings
-            .active_hub_endpoint()
-            .unwrap_or_else(|| DEFAULT_HUB_ENDPOINT.to_string());
-        println!("You are authenticated with Atuin Hub.");
-        println!("Manage your account on the site: {endpoint}/settings/account");
-        return Ok(());
+    /// The two-factor authentication code for your account, if any
+    #[clap(long, short)]
+    pub totp_code: Option<String>,
+}
+
+impl Cmd {
+    pub async fn run(&self, settings: &Settings) -> Result<()> {
+        if !settings.logged_in().await? {
+            bail!("You are not logged in");
+        }
+
+        let client = auth::auth_client(settings).await;
+
+        let password = self.password.clone().unwrap_or_else(read_user_password);
+
+        if password.is_empty() {
+            bail!("please provide your password");
+        }
+
+        let mut totp_code = self.totp_code.clone();
+
+        loop {
+            let response = client
+                .delete_account(&password, totp_code.as_deref())
+                .await?;
+
+            match response {
+                MutateResponse::Success => break,
+                MutateResponse::TwoFactorRequired => {
+                    totp_code = Some(or_user_input(None, "two-factor code"));
+                }
+            }
+        }
+
+        // Clean up sessions from meta store
+        let meta = Settings::meta_store().await?;
+        meta.delete_session().await?;
+        meta.delete_hub_session().await?;
+
+        println!("Your account is deleted");
+
+        Ok(())
     }
-
-    if !has_sync_session {
-        bail!("You are not logged in");
-    }
-
-    let client = api_client::Client::new(
-        &settings.sync_address,
-        settings.sync_auth_token().await?,
-        settings.network_connect_timeout,
-        settings.network_timeout,
-    )?;
-
-    client.delete().await?;
-
-    // Clean up session from meta store
-    Settings::meta_store().await?.delete_session().await?;
-    Settings::meta_store().await?.delete_hub_session().await?;
-
-    println!("Your account is deleted");
-
-    Ok(())
 }
