@@ -91,20 +91,20 @@ impl Cmd {
                 .await?;
         } else {
             // Interactive login via browser OAuth flow.
-            if !self.from_registration {
-                self.prompt_and_store_key(settings, store).await?;
-            } else {
+            if self.from_registration {
                 load_key(settings)?;
+            } else {
+                self.prompt_and_store_key(settings, store).await?;
             }
 
             self.ensure_hub_session(settings, endpoint.as_ref()).await?;
         }
 
         // Silently attempt to link CLI account to Hub if one exists
-        if let Ok(cli_token) = settings.session_token().await {
-            if let Err(e) = atuin_client::hub::link_account(endpoint.as_ref(), &cli_token).await {
-                tracing::debug!("Could not link CLI account to Hub: {}", e);
-            }
+        if let Ok(cli_token) = settings.session_token().await
+            && let Err(e) = atuin_client::hub::link_account(endpoint.as_ref(), &cli_token).await
+        {
+            tracing::debug!("Could not link CLI account to Hub: {}", e);
         }
 
         println!("Successfully authenticated with Atuin Hub.");

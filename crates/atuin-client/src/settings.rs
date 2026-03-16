@@ -32,10 +32,10 @@ pub mod watcher;
 pub struct HubEndpoint(String);
 
 /// Default sync address for Atuin's hosted service
-pub const DEFAULT_SYNC_ADDRESS: &'static str = "https://api.atuin.sh";
+pub const DEFAULT_SYNC_ADDRESS: &str = "https://api.atuin.sh";
 
 /// Default Hub web/API endpoint for Atuin's hosted service
-pub const DEFAULT_HUB_ENDPOINT: &'static str = "https://hub.atuin.sh";
+pub const DEFAULT_HUB_ENDPOINT: &str = "https://hub.atuin.sh";
 
 impl Default for HubEndpoint {
     fn default() -> Self {

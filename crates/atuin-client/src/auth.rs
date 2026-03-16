@@ -276,13 +276,13 @@ impl AuthClient for HubAuthClient {
             });
         }
 
-        if status == StatusCode::FORBIDDEN {
-            if let Ok(err) = resp.json::<HubErrorResponse>().await {
-                if err.code.as_deref() == Some("2fa_required") {
-                    return Ok(AuthResponse::TwoFactorRequired);
-                }
-                bail!("{}", err.reason);
+        if status == StatusCode::FORBIDDEN
+            && let Ok(err) = resp.json::<HubErrorResponse>().await
+        {
+            if err.code.as_deref() == Some("2fa_required") {
+                return Ok(AuthResponse::TwoFactorRequired);
             }
+            bail!("{}", err.reason);
         }
 
         if status == StatusCode::UNAUTHORIZED {
