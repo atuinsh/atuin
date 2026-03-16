@@ -11,6 +11,8 @@ jobs:
       cancel-in-progress: true
     permissions:
       packages: write
+      contents: read
+      id-token: write
 
     runs-on: depot-ubuntu-24.04
     steps:
