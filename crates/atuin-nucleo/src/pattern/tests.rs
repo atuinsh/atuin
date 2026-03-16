@@ -1,4 +1,4 @@
-use nucleo_matcher::pattern::{CaseMatching, Normalization};
+use atuin_nucleo_matcher::pattern::{CaseMatching, Normalization};
 
 use crate::pattern::{MultiPattern, Status};
 

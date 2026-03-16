@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use nucleo_matcher::Config;
+use atuin_nucleo_matcher::Config;
 
 use crate::{pattern, Nucleo};
 

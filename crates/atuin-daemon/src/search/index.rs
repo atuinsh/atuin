@@ -14,9 +14,9 @@ use std::{
 
 use atuin_client::history::History;
 use atuin_client::settings::Search;
+use atuin_nucleo::{Injector, Nucleo, pattern};
 use dashmap::DashMap;
 use lasso::{Spur, ThreadedRodeo};
-use nucleo::{Injector, Nucleo, pattern};
 use time::OffsetDateTime;
 use tokio::sync::RwLock;
 use tracing::{Level, instrument};
@@ -269,7 +269,7 @@ pub struct SearchIndex {
 impl SearchIndex {
     /// Create a new empty search index.
     pub fn new() -> Self {
-        let nucleo_config = nucleo::Config::DEFAULT;
+        let nucleo_config = atuin_nucleo::Config::DEFAULT;
         // Single column for command text
         let nucleo = Nucleo::<String>::new(nucleo_config, Arc::new(|| {}), None, 1);
         let injector = nucleo.injector();
@@ -417,7 +417,7 @@ impl SearchIndex {
     }
 
     /// Build filter predicate for the given mode.
-    fn build_filter(&self, mode: &IndexFilterMode) -> Option<nucleo::Filter<String>> {
+    fn build_filter(&self, mode: &IndexFilterMode) -> Option<atuin_nucleo::Filter<String>> {
         // For Global mode, no filter needed
         if matches!(mode, IndexFilterMode::Global) {
             return None;
@@ -455,7 +455,7 @@ impl SearchIndex {
     /// Build scorer from precomputed frecency map.
     ///
     /// Returns None if frecency map is not available (search still works, just without frecency ranking).
-    fn build_scorer(frecency_map: Option<FrecencyMap>) -> Option<nucleo::Scorer<String>> {
+    fn build_scorer(frecency_map: Option<FrecencyMap>) -> Option<atuin_nucleo::Scorer<String>> {
         let map = frecency_map?;
         Some(Arc::new(move |cmd: &String, fuzzy_score: u32| {
             // HashMap<Arc<str>, _>::get accepts &str via Borrow trait

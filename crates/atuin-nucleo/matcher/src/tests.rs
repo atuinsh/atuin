@@ -631,7 +631,7 @@ fn test_optimal() {
                     + BONUS_NON_WORD,
             ),
             // this case is a cool example of why our algorithm is more than fzf
-            // we handle this corretly detect that it's better to match
+            // we handle this correctly detect that it's better to match
             // the second f instead of the third yielding a higher score
             // (despite using the same scoring function!)
             (

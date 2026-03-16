@@ -16,7 +16,7 @@ The [`Nucleo`] struct serves as the main API entrypoint for this crate.
 
 Nucleo is used in the helix-editor and therefore has a large user base with lots
 or real world testing. The core matcher implementation is considered complete
-and is unlikely to see major changes. The `nucleo-matcher` crate is finished and
+and is unlikely to see major changes. The `atuin-nucleo-matcher` crate is finished and
 ready for widespread use, breaking changes should be very rare (a 1.0 release
 should not be far away).
 
@@ -45,7 +45,7 @@ use rayon::ThreadPool;
 
 use crate::pattern::MultiPattern;
 use crate::worker::Worker;
-pub use nucleo_matcher::{chars, Config, Matcher, Utf32Str, Utf32String};
+pub use atuin_nucleo_matcher::{chars, Config, Matcher, Utf32Str, Utf32String};
 
 mod boxcar;
 mod par_sort;
@@ -67,7 +67,7 @@ pub struct Item<'a, T> {
 /// and sent across threads.
 pub struct Injector<T> {
     items: Arc<boxcar::Vec<T>>,
-    notify: Arc<(dyn Fn() + Sync + Send)>,
+    notify: Arc<dyn Fn() + Sync + Send>,
 }
 
 impl<T> Clone for Injector<T> {
@@ -93,10 +93,10 @@ impl<T> Injector<T> {
     ///
     /// You should favor this function over `push` if at least one of the following is true:
     /// - the number of items you're adding can be computed beforehand and is typically larger
-    ///     than 1k
+    ///   than 1k
     /// - you're able to batch incoming items
     /// - you're adding items from multiple threads concurrently (this function results in less
-    ///     contention)
+    ///   contention)
     pub fn extend<I>(&self, values: I, fill_columns: impl Fn(&T, &mut [Utf32String]))
     where
         I: IntoIterator<Item = T> + ExactSizeIterator,
@@ -298,7 +298,7 @@ pub struct Nucleo<T: Sync + Send + 'static> {
     pool: ThreadPool,
     state: State,
     items: Arc<boxcar::Vec<T>>,
-    notify: Arc<(dyn Fn() + Sync + Send)>,
+    notify: Arc<dyn Fn() + Sync + Send>,
     snapshot: Snapshot<T>,
     /// The pattern matched by this matcher. To update the match pattern
     /// [`MultiPattern::reparse`](`pattern::MultiPattern::reparse`) should be used.
@@ -316,7 +316,7 @@ pub struct Nucleo<T: Sync + Send + 'static> {
 impl<T: Sync + Send + 'static> Nucleo<T> {
     /// Constructs a new `nucleo` worker threadpool with the provided `config`.
     ///
-    /// `notify` is called everytime new information is available and
+    /// `notify` is called every time new information is available and
     /// [`tick`](Nucleo::tick) should be called. Note that `notify` is not
     /// debounced, that should be handled by the downstream crate (for example
     /// debouncing to only redraw at most every 1/60 seconds).
@@ -329,7 +329,7 @@ impl<T: Sync + Send + 'static> Nucleo<T> {
     /// number of columns cannot be changed after construction.
     pub fn new(
         config: Config,
-        notify: Arc<(dyn Fn() + Sync + Send)>,
+        notify: Arc<dyn Fn() + Sync + Send>,
         num_threads: Option<usize>,
         columns: u32,
     ) -> Self {

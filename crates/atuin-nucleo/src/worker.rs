@@ -3,7 +3,7 @@ use std::mem::take;
 use std::sync::atomic::{self, AtomicBool, AtomicU32};
 use std::sync::Arc;
 
-use nucleo_matcher::Config;
+use atuin_nucleo_matcher::Config;
 use parking_lot::Mutex;
 use rayon::{prelude::*, ThreadPool};
 
@@ -11,12 +11,12 @@ use crate::par_sort::par_quicksort;
 use crate::pattern::{self, MultiPattern};
 use crate::{boxcar, Filter, Match, Scorer};
 
-struct Matchers(Box<[UnsafeCell<nucleo_matcher::Matcher>]>);
+struct Matchers(Box<[UnsafeCell<atuin_nucleo_matcher::Matcher>]>);
 
 impl Matchers {
     // this is not a true mut from ref, we use a cell here
     #[allow(clippy::mut_from_ref)]
-    unsafe fn get(&self) -> &mut nucleo_matcher::Matcher {
+    unsafe fn get(&self) -> &mut atuin_nucleo_matcher::Matcher {
         &mut *self.0[rayon::current_thread_index().unwrap()].get()
     }
 }
@@ -35,7 +35,7 @@ pub(crate) struct Worker<T: Sync + Send + 'static> {
     pub(crate) should_notify: Arc<AtomicBool>,
     pub(crate) was_canceled: bool,
     pub(crate) last_snapshot: u32,
-    notify: Arc<(dyn Fn() + Sync + Send)>,
+    notify: Arc<dyn Fn() + Sync + Send>,
     pub(crate) items: Arc<boxcar::Vec<T>>,
     in_flight: Vec<u32>,
     pub(crate) filter: Option<Filter<T>>,
@@ -69,7 +69,7 @@ impl<T: Sync + Send + 'static> Worker<T> {
     pub(crate) fn new(
         worker_threads: Option<usize>,
         config: Config,
-        notify: Arc<(dyn Fn() + Sync + Send)>,
+        notify: Arc<dyn Fn() + Sync + Send>,
         cols: u32,
     ) -> (ThreadPool, Self) {
         let worker_threads = worker_threads
@@ -80,7 +80,7 @@ impl<T: Sync + Send + 'static> Worker<T> {
             .build()
             .expect("creating threadpool failed");
         let matchers = (0..worker_threads)
-            .map(|_| UnsafeCell::new(nucleo_matcher::Matcher::new(config.clone())))
+            .map(|_| UnsafeCell::new(atuin_nucleo_matcher::Matcher::new(config.clone())))
             .collect();
         let worker = Worker {
             running: false,

@@ -1,5 +1,5 @@
-pub use nucleo_matcher::pattern::{Atom, AtomKind, CaseMatching, Normalization, Pattern};
-use nucleo_matcher::{Matcher, Utf32String};
+pub use atuin_nucleo_matcher::pattern::{Atom, AtomKind, CaseMatching, Normalization, Pattern};
+use atuin_nucleo_matcher::{Matcher, Utf32String};
 
 #[cfg(test)]
 mod tests;
@@ -56,7 +56,7 @@ impl MultiPattern {
                 .0
                 .atoms
                 .last()
-                .map_or(true, |last| !last.negative)
+                .is_none_or(|last| !last.negative)
         {
             self.cols[column].1 = Status::Update;
         } else {
@@ -86,7 +86,7 @@ impl MultiPattern {
     }
 
     pub fn score(&self, haystack: &[Utf32String], matcher: &mut Matcher) -> Option<u32> {
-        // TODO: wheight columns?
+        // TODO: weight columns?
         let mut score = 0;
         for ((pattern, _), haystack) in self.cols.iter().zip(haystack) {
             score += pattern.score(haystack.slice(..), matcher)?

@@ -51,7 +51,7 @@ pub(crate) struct Vec<T> {
 impl<T> Vec<T> {
     /// Constructs a new, empty `Vec<T>` with the specified capacity and matcher columns.
     pub fn with_capacity(capacity: u32, columns: u32) -> Vec<T> {
-        assert_ne!(columns, 0, "there must be atleast one matcher column");
+        assert_ne!(columns, 0, "there must be at least one matcher column");
         let init = match capacity {
             0 => 0,
             // initialize enough buckets for `capacity` elements

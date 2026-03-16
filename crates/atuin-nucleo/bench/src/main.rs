@@ -2,9 +2,9 @@ use std::hint::black_box;
 use std::path::PathBuf;
 use std::process::Command;
 
+use atuin_nucleo::{Utf32Str, Utf32String};
 use brunch::{Bench, Benches};
 use fuzzy_matcher::FuzzyMatcher;
-use nucleo::{Utf32Str, Utf32String};
 
 fn bench_dir() -> PathBuf {
     std::env::var_os("BENCHMARK_DIR")
@@ -43,7 +43,7 @@ fn main() {
             Some((path.as_str().into(), path))
         })
         .unzip();
-    let mut nucleo = nucleo::Matcher::new(nucleo::Config::DEFAULT.match_paths());
+    let mut nucleo = atuin_nucleo::Matcher::new(atuin_nucleo::Config::DEFAULT.match_paths());
     let skim = fuzzy_matcher::skim::SkimMatcherV2::default();
 
     // TODO: unicode?

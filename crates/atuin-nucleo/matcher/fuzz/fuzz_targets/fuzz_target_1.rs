@@ -64,7 +64,7 @@ fuzz_target!(|data: Input<'_>| {
         (Some(greedy), Some(optimal)) => {
             assert!(
                 greedy <= optimal,
-                "optimal score must be atleast the same as greedy score {greedy} {optimal}"
+                "optimal score must be at least the same as greedy score {greedy} {optimal}"
             );
             if indices_greedy == indices_optimal {
                 assert_eq!(

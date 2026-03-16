@@ -2,7 +2,7 @@ use crate::chars::Char;
 use crate::Matcher;
 
 impl Matcher {
-    /// greedy fallback algorithm, much faster (linear time) but reported scores/indicies
+    /// greedy fallback algorithm, much faster (linear time) but reported scores/indices
     /// might not be the best match
     pub(crate) fn fuzzy_match_greedy_<const INDICES: bool, H: Char + PartialEq<N>, N: Char>(
         &mut self,

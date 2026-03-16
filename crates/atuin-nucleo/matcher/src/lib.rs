@@ -1,5 +1,7 @@
+#![allow(clippy::needless_return, mismatched_lifetime_syntaxes)]
+
 /*!
-`nucleo_matcher` is a low level crate that contains the matcher implementation
+`atuin_nucleo_matcher` is a low level crate that contains the matcher implementation
 used by the high level `nucleo` crate.
 
 **NOTE**: If you are building an fzf-like interactive fuzzy finder that is
@@ -20,8 +22,8 @@ can contain special characters to control what kind of match is performed (see
 [`AtomKind`](crate::pattern::AtomKind)).
 
 ```
-# use nucleo_matcher::{Matcher, Config};
-# use nucleo_matcher::pattern::{Pattern, Normalization, CaseMatching};
+# use atuin_nucleo_matcher::{Matcher, Config};
+# use atuin_nucleo_matcher::pattern::{Pattern, Normalization, CaseMatching};
 let paths = ["foo/bar", "bar/foo", "foobar"];
 let mut matcher = Matcher::new(Config::DEFAULT.match_paths());
 let matches = Pattern::parse("foo bar", CaseMatching::Ignore, Normalization::Smart).match_list(paths, &mut matcher);
@@ -34,8 +36,8 @@ If the pattern should be matched literally (without this special parsing)
 [`Pattern::new`](pattern::Pattern::new) can be used instead.
 
 ```
-# use nucleo_matcher::{Matcher, Config};
-# use nucleo_matcher::pattern::{Pattern, CaseMatching, AtomKind, Normalization};
+# use atuin_nucleo_matcher::{Matcher, Config};
+# use atuin_nucleo_matcher::pattern::{Pattern, CaseMatching, AtomKind, Normalization};
 let paths = ["foo/bar", "bar/foo", "foobar"];
 let mut matcher = Matcher::new(Config::DEFAULT.match_paths());
 let matches = Pattern::new("foo bar", CaseMatching::Ignore, Normalization::Smart, AtomKind::Fuzzy).match_list(paths, &mut matcher);
@@ -49,7 +51,7 @@ Word segmentation is performed automatically on any unescaped character for whic
 This is relevant, for instance, with non-english keyboard input.
 
 ```
-# use nucleo_matcher::pattern::{Atom, Pattern, Normalization, CaseMatching};
+# use atuin_nucleo_matcher::pattern::{Atom, Pattern, Normalization, CaseMatching};
 assert_eq!(
     // double-width 'Ideographic Space', i.e. `'\u{3000}'`
     Pattern::parse("ほげ　ふが", CaseMatching::Smart, Normalization::Smart).atoms,
@@ -63,8 +65,8 @@ assert_eq!(
 If word segmentation is also not desired, a single `Atom` can be constructed directly.
 
 ```
-# use nucleo_matcher::{Matcher, Config};
-# use nucleo_matcher::pattern::{Pattern, Atom, CaseMatching, Normalization, AtomKind};
+# use atuin_nucleo_matcher::{Matcher, Config};
+# use atuin_nucleo_matcher::pattern::{Pattern, Atom, CaseMatching, Normalization, AtomKind};
 let paths = ["foobar", "foo bar"];
 let mut matcher = Matcher::new(Config::DEFAULT);
 let matches = Atom::new("foo bar", CaseMatching::Ignore, Normalization::Smart, AtomKind::Fuzzy, false).match_list(paths, &mut matcher);

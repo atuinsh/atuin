@@ -49,7 +49,7 @@ impl Matcher {
             .iter()
             .enumerate()
             .max_by_key(|(_, cell)| cell.score)
-            .expect("there must be atleast one match");
+            .expect("there must be at least one match");
         if INDICES {
             matrix.reconstruct_optimal_path(match_end as u16, indices, matrix_len, start as u32);
         }
@@ -60,7 +60,7 @@ impl Matcher {
 const UNMATCHED: ScoreCell = ScoreCell {
     score: 0,
     // if matched is true then the consecutive bonus
-    // is always atleast BONUS_CONSECUTIVE so
+    // is always at least BONUS_CONSECUTIVE so
     // this constant can never occur naturally
     consecutive_bonus: 0,
     matched: true,
@@ -145,7 +145,7 @@ impl<H: Char> MatcherDataView<'_, H> {
                     (needle_char, row_start) = next;
                 } else if !matched {
                     *row_start = i;
-                    // we have atleast one match
+                    // we have at least one match
                     matched = true;
                 }
             }
