@@ -1,12 +1,13 @@
 //! Leaf components for each content type and factory functions for building
 //! the component tree from the view model.
 
-use atuin_client::theme::Meaning;
+use atuin_client::theme::{Meaning, Theme};
 use ratatui::{
     Frame,
     backend::FromCrossterm,
     layout::Rect,
     style::{Modifier, Style},
+    text::{Line, Span},
     widgets::{Paragraph, Wrap},
 };
 
@@ -98,6 +99,97 @@ pub(crate) fn word_wrap_line_count_with_last_width(text: &str, width: usize) -> 
 }
 
 // ---------------------------------------------------------------------------
+// Inline markdown formatting
+// ---------------------------------------------------------------------------
+
+/// Parse inline markdown formatting (**bold** and `code`) into styled spans.
+/// Preserves all other text — list prefixes, indentation, and line structure
+/// are left exactly as-is.
+fn style_inline_markdown(text: &str, theme: &Theme) -> Vec<Line<'static>> {
+    let base_style = Style::from_crossterm(theme.as_style(Meaning::Base));
+    let code_style = Style::from_crossterm(theme.as_style(Meaning::Guidance));
+    let bold_style = base_style.add_modifier(Modifier::BOLD);
+
+    text.lines()
+        .map(|line| {
+            Line::from(parse_inline_formatting(
+                line, base_style, bold_style, code_style,
+            ))
+        })
+        .collect()
+}
+
+/// Parse a single line for `code` and **bold** markers, returning styled spans.
+fn parse_inline_formatting(
+    line: &str,
+    base: Style,
+    bold: Style,
+    code: Style,
+) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    let mut current = String::new();
+    let mut chars = line.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '`' {
+            // Flush accumulated plain text
+            if !current.is_empty() {
+                spans.push(Span::styled(std::mem::take(&mut current), base));
+            }
+            // Collect until closing backtick
+            let mut code_text = String::new();
+            let mut closed = false;
+            for next in chars.by_ref() {
+                if next == '`' {
+                    closed = true;
+                    break;
+                }
+                code_text.push(next);
+            }
+            if closed {
+                spans.push(Span::styled(code_text, code));
+            } else {
+                // Unclosed backtick — render as-is
+                current.push('`');
+                current.push_str(&code_text);
+            }
+        } else if ch == '*' && chars.peek() == Some(&'*') {
+            chars.next(); // consume second *
+            // Flush accumulated plain text
+            if !current.is_empty() {
+                spans.push(Span::styled(std::mem::take(&mut current), base));
+            }
+            // Collect until closing **
+            let mut bold_text = String::new();
+            let mut closed = false;
+            while let Some(next) = chars.next() {
+                if next == '*' && chars.peek() == Some(&'*') {
+                    chars.next();
+                    closed = true;
+                    break;
+                }
+                bold_text.push(next);
+            }
+            if closed {
+                spans.push(Span::styled(bold_text, bold));
+            } else {
+                // Unclosed ** — render as-is
+                current.push_str("**");
+                current.push_str(&bold_text);
+            }
+        } else {
+            current.push(ch);
+        }
+    }
+
+    if !current.is_empty() {
+        spans.push(Span::styled(current, base));
+    }
+
+    spans
+}
+
+// ---------------------------------------------------------------------------
 // Leaf components
 // ---------------------------------------------------------------------------
 
@@ -171,17 +263,16 @@ pub struct TextContent {
 
 impl Component for TextContent {
     fn height(&self, width: u16) -> u16 {
+        // Height uses raw text — slightly overestimates since markdown syntax
+        // characters (**, `) are stripped in rendering, but this is harmless
+        // (allocates equal or more space than needed, never less).
         line_count_wrapped(&self.markdown, width as usize)
     }
 
     fn render(&self, frame: &mut Frame, area: Rect, ctx: &RenderContext) {
-        let style = Style::from_crossterm(ctx.theme.as_style(Meaning::Base));
-        frame.render_widget(
-            Paragraph::new(self.markdown.as_str())
-                .style(style)
-                .wrap(Wrap { trim: false }),
-            area,
-        );
+        let lines = style_inline_markdown(&self.markdown, ctx.theme);
+        let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
+        frame.render_widget(paragraph, area);
     }
 }
 
