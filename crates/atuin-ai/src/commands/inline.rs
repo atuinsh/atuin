@@ -4,6 +4,7 @@ use crate::tui::{
     App, AppEvent, AppMode, ConversationEvent, EventLoop, ExitAction, RenderContext, TerminalGuard,
     calculate_needed_height, install_panic_hook,
 };
+use atuin_client::distro::detect_linux_distribution;
 use atuin_client::theme::ThemeManager;
 use atuin_common::tls::ensure_crypto_provider;
 use crossterm::{
@@ -185,16 +186,25 @@ fn create_chat_stream(
 
         debug!("Sending SSE request to {endpoint}");
 
+        let os = detect_os();
+        let shell = detect_shell();
+
+        let mut context = serde_json::json!({
+            "os": os,
+            "shell": shell,
+            "pwd": if send_cwd { std::env::current_dir()
+                .ok()
+                .map(|path| path.to_string_lossy().into_owned()) } else { None },
+        });
+
+        if os == "linux" {
+            context["distribution"] = serde_json::json!(detect_linux_distribution());
+        }
+
         // Build request body
         let mut request_body = serde_json::json!({
             "messages": messages,
-            "context": {
-                "os": detect_os(),
-                "shell": detect_shell(),
-                "pwd": if send_cwd { std::env::current_dir()
-                    .ok()
-                    .map(|path| path.to_string_lossy().into_owned()) } else { None },
-            }
+            "context": context,
         });
 
         // Include session_id only if present (not on first request)
