@@ -341,7 +341,7 @@ fn detect_os() -> String {
         "macos" => "macos".to_string(),
         "linux" => "linux".to_string(),
         "windows" => "windows".to_string(),
-        _ => "linux".to_string(),
+        other => format!("Other: {other}"),
     }
 }
 
