@@ -1,4 +1,6 @@
 pub mod app;
+pub mod component;
+pub mod components;
 pub mod event;
 #[cfg(unix)]
 pub mod popup;
