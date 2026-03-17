@@ -198,7 +198,7 @@ fn create_chat_stream(
         });
 
         if os == "linux" {
-            context["distribution"] = serde_json::json!(detect_linux_distribution());
+            context["distro"] = serde_json::json!(detect_linux_distribution());
         }
 
         // Build request body
