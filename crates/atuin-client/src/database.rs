@@ -718,7 +718,7 @@ impl Database for Sqlite {
         let mut day_of_week = SqlBuilder::select_from("history");
         day_of_week
             .fields(&[
-                "strftime('%w', ROUND(timestamp / 1000000000), 'unixepoch') AS day_of_week",
+                "strftime('%w', ROUND(timestamp / 1000000000), 'unixepoch', 'localtime') AS day_of_week",
                 "count(1) as count",
             ])
             .and_where("command = ?1")
@@ -731,7 +731,7 @@ impl Database for Sqlite {
         let mut duration_over_time = SqlBuilder::select_from("history");
         duration_over_time
             .fields(&[
-                "strftime('01-%m-%Y', ROUND(timestamp / 1000000000), 'unixepoch') AS month_year",
+                "strftime('01-%m-%Y', ROUND(timestamp / 1000000000), 'unixepoch', 'localtime') AS month_year",
                 "avg(duration) as duration",
             ])
             .and_where("command = ?1")
