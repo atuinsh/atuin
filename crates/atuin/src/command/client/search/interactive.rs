@@ -1873,7 +1873,7 @@ pub async fn history(
                 Some(insp) => insp,
                 None => results[app.results_state.selected()].clone(),
             };
-            let stats = db.stats(&selected).await?;
+            let stats = db.stats(&selected, settings.timezone.0).await?;
             app.inspecting_state.current = Some(selected.id);
             app.inspecting_state.previous = match stats.previous.clone() {
                 Some(p) => Some(p.id),

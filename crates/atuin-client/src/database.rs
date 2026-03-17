@@ -18,7 +18,7 @@ use sqlx::{
         SqliteSynchronous,
     },
 };
-use time::OffsetDateTime;
+use time::{OffsetDateTime, UtcOffset};
 use uuid::Uuid;
 
 use crate::{
@@ -140,7 +140,7 @@ pub trait Database: Send + Sync + 'static {
 
     fn all_paged(&self, page_size: usize, include_deleted: bool, unique: bool) -> Paged;
 
-    async fn stats(&self, h: &History) -> Result<HistoryStats>;
+    async fn stats(&self, h: &History, tz: UtcOffset) -> Result<HistoryStats>;
 
     async fn get_dups(&self, before: i64, dupkeep: u32) -> Result<Vec<History>>;
 
@@ -686,7 +686,7 @@ impl Database for Sqlite {
         Ok(())
     }
 
-    async fn stats(&self, h: &History) -> Result<HistoryStats> {
+    async fn stats(&self, h: &History, tz: UtcOffset) -> Result<HistoryStats> {
         // We select the previous in the session by time
         let mut prev = SqlBuilder::select_from("history");
         prev.field("*")
@@ -714,16 +714,6 @@ impl Database for Sqlite {
             .and_where("command = ?1")
             .group_by("exit");
 
-        // rewrite the following with sqlbuilder
-        let mut day_of_week = SqlBuilder::select_from("history");
-        day_of_week
-            .fields(&[
-                "strftime('%w', ROUND(timestamp / 1000000000), 'unixepoch') AS day_of_week",
-                "count(1) as count",
-            ])
-            .and_where("command = ?1")
-            .group_by("day_of_week");
-
         // Intentionally format the string with 01 hardcoded. We want the average runtime for the
         // _entire month_, but will later parse it as a datetime for sorting
         // Sqlite has no datetime so we cannot do it there, and otherwise sorting will just be a
@@ -743,7 +733,6 @@ impl Database for Sqlite {
         let total = total.sql().expect("issue in stats average query");
         let average = average.sql().expect("issue in stats previous query");
         let exits = exits.sql().expect("issue in stats exits query");
-        let day_of_week = day_of_week.sql().expect("issue in stats day of week query");
         let duration_over_time = duration_over_time
             .sql()
             .expect("issue in stats duration over time query");
@@ -777,10 +766,27 @@ impl Database for Sqlite {
             .fetch_all(&self.pool)
             .await?;
 
-        let day_of_week: Vec<(String, i64)> = sqlx::query_as(&day_of_week)
-            .bind(&h.command)
-            .fetch_all(&self.pool)
-            .await?;
+        // Fetch raw timestamps and compute day of week in Rust with proper timezone handling
+        // SQLite's strftime('%w') returns UTC day, so we do the conversion here
+        let day_of_week: Vec<(i64, i64)> = sqlx::query_as(
+            "SELECT timestamp, count(1) as count FROM history WHERE command = ?1 GROUP BY timestamp"
+        )
+        .bind(&h.command)
+        .fetch_all(&self.pool)
+        .await?;
+
+        // Aggregate by day of week in local timezone
+        let mut day_counts: std::collections::HashMap<u8, i64> = std::collections::HashMap::new();
+        for (timestamp_ns, count) in day_of_week {
+            let timestamp = OffsetDateTime::from_unix_timestamp_nanos(timestamp_ns as i128)
+                .unwrap_or(OffsetDateTime::UNIX_EPOCH);
+            let local_day = timestamp.to_offset(tz).weekday() as u8;
+            *day_counts.entry(local_day).or_insert(0) += count;
+        }
+        let day_of_week: Vec<(String, i64)> = day_counts
+            .into_iter()
+            .map(|(day, count)| (day.to_string(), count))
+            .collect();
 
         let duration_over_time: Vec<(String, f64)> = sqlx::query_as(&duration_over_time)
             .bind(&h.command)
