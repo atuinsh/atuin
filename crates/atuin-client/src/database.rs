@@ -768,20 +768,23 @@ impl Database for Sqlite {
 
         // Fetch raw timestamps and compute day of week in Rust with proper timezone handling
         // SQLite's strftime('%w') returns UTC day, so we do the conversion here
-        let day_of_week: Vec<(i64, i64)> = sqlx::query_as(
-            "SELECT timestamp, count(1) as count FROM history WHERE command = ?1 GROUP BY timestamp"
+        let timestamps: Vec<(i64,)> = sqlx::query_as(
+            "SELECT timestamp FROM history WHERE command = ?1"
         )
         .bind(&h.command)
         .fetch_all(&self.pool)
         .await?;
 
         // Aggregate by day of week in local timezone
+        // Note: time::Weekday is Monday-based (0=Mon), but num_to_day() expects Sunday-based (0=Sun)
+        // Conversion: (rust_weekday + 1) % 7 = expected
         let mut day_counts: std::collections::HashMap<u8, i64> = std::collections::HashMap::new();
-        for (timestamp_ns, count) in day_of_week {
+        for (timestamp_ns,) in timestamps {
             let timestamp = OffsetDateTime::from_unix_timestamp_nanos(timestamp_ns as i128)
                 .unwrap_or(OffsetDateTime::UNIX_EPOCH);
-            let local_day = timestamp.to_offset(tz).weekday() as u8;
-            *day_counts.entry(local_day).or_insert(0) += count;
+            let rust_weekday = timestamp.to_offset(tz).weekday() as u8; // Monday-based: 0=Mon, 6=Sun
+            let day_label = (rust_weekday + 1) % 7; // Convert to Sunday-based: 0=Sun, 1=Mon, ..., 6=Sat
+            *day_counts.entry(day_label).or_insert(0) += 1;
         }
         let day_of_week: Vec<(String, i64)> = day_counts
             .into_iter()
