@@ -22,7 +22,7 @@ fn detect_from_os_release() -> Option<String> {
     content
         .lines()
         .find(|l| l.starts_with("PRETTY_NAME="))
-        .and_then(|l| l.splitn(2, '=').nth(1))
+        .and_then(|l| l.split_once('=').map(|s| s.1))
         .map(|s| s.trim_matches('"').to_string())
 }
 
@@ -84,13 +84,13 @@ fn linux_distro_from_lsb_release(output: &str) -> Option<String> {
     let distributor = output
         .lines()
         .find(|line| line.starts_with("Distributor ID:"))
-        .and_then(|line| line.splitn(2, ":").nth(1))
+        .and_then(|line| line.split_once(':').map(|s| s.1))
         .map(|s| s.trim().to_string())?;
 
     let distribution = output
         .lines()
         .find(|line| line.starts_with("Description:"))
-        .and_then(|line| line.splitn(2, ":").nth(1))
+        .and_then(|line| line.split_once(':').map(|s| s.1))
         .map(|s| s.trim().to_string())?;
 
     Some(format!("{distributor} / {distribution}"))
