@@ -4,14 +4,27 @@ All notable changes to this project will be documented in this file.
 
 ## [unreleased]
 
+### Bug Fixes
+
+- Nushell 0.111; future Nushell 0.112 support ([#3266](https://github.com/atuinsh/atuin/issues/3266))
+
+
 ### Features
 
 - Call atuin setup from install script ([#3265](https://github.com/atuinsh/atuin/issues/3265))
+- Allow headless account ops against Hub server ([#3280](https://github.com/atuinsh/atuin/issues/3280))
+- Add custom filtering and scoring mechanisms
 
 
 ### Miscellaneous Tasks
 
+- *(ci)* Migrate to depot runners ([#3279](https://github.com/atuinsh/atuin/issues/3279))
+- *(ci)* Use depot to build docker images too ([#3281](https://github.com/atuinsh/atuin/issues/3281))
 - Update changelog
+- Update permissions in Docker workflow ([#3283](https://github.com/atuinsh/atuin/issues/3283))
+- Change CHANGELOG format to be easier to parse
+- Symlink changelog so dist can pick it up
+- Vendor nucleo-ext + fork, so we can depend on our changes properly ([#3284](https://github.com/atuinsh/atuin/issues/3284))
 
 
 ## 18.13.2
