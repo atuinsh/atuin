@@ -167,7 +167,7 @@ impl Component for Separator {
     }
 
     fn render(&self, frame: &mut Frame, area: Rect, ctx: &RenderContext) {
-        let style = Style::from_crossterm(ctx.theme.as_style(Meaning::Muted));
+        let style = Style::from_crossterm(ctx.theme.as_style(Meaning::Base));
         let inner_width = self.card_width.saturating_sub(2) as usize;
         let separator = format!(
             "\u{251c}{}\u{2524}",           // ├ ... ┤
