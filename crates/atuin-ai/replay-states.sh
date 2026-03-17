@@ -25,7 +25,7 @@ if [[ ! -f "$STATE_FILE" ]]; then
 fi
 
 # Build once
-cargo build -p atuin-ai --quiet
+cargo build -p atuin --quiet
 
 # Count entries
 TOTAL=$(wc -l < "$STATE_FILE" | tr -d ' ')
@@ -45,7 +45,7 @@ if [[ -n "$ENTRY_FILTER" ]]; then
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "[$ENTRY/$TOTAL] $LABEL"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "$STATE" | cargo run -p atuin-ai --quiet -- debug-render -f plain
+    echo "$STATE" | cargo run -p atuin --quiet -- ai debug-render -f ansi
 else
     # Interactive replay
     echo "Replaying $TOTAL frames from $STATE_FILE"
@@ -63,7 +63,7 @@ else
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         echo "[$CURRENT/$TOTAL] $LABEL"
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo "$STATE" | cargo run -p atuin-ai --quiet -- debug-render -f plain
+        echo "$STATE" | cargo run -p atuin --quiet -- ai debug-render -f ansi
         echo ""
         echo "[Enter: next] [p: prev] [number: jump] [s: show state JSON] [q: quit]"
 
