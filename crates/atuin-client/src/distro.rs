@@ -81,17 +81,9 @@ fn detect_from_lsb_release() -> Option<String> {
 }
 
 fn linux_distro_from_lsb_release(output: &str) -> Option<String> {
-    let distributor = output
-        .lines()
-        .find(|line| line.starts_with("Distributor ID:"))
-        .and_then(|line| line.split_once(':').map(|s| s.1))
-        .map(|s| s.trim().to_string())?;
-
-    let distribution = output
+    output
         .lines()
         .find(|line| line.starts_with("Description:"))
         .and_then(|line| line.split_once(':').map(|s| s.1))
-        .map(|s| s.trim().to_string())?;
-
-    Some(format!("{distributor} / {distribution}"))
+        .map(|s| s.trim().to_string())
 }
