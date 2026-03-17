@@ -332,7 +332,6 @@ impl Component for WarningContent {
 
 /// Animated spinner with status text.
 pub struct SpinnerContent {
-    pub frame: usize,
     pub status_text: String,
 }
 
@@ -448,7 +447,6 @@ fn content_to_component(content: &Content) -> Box<dyn Component> {
             symbol: active_frame(*frame).to_string(),
             symbol_meaning: Meaning::Annotation,
             inner: Box::new(SpinnerContent {
-                frame: *frame,
                 status_text: status_text.clone(),
             }),
         }),
