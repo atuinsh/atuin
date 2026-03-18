@@ -1,17 +1,15 @@
 # daemon
 
 ## `atuin daemon`
-_This is experimental!_
 
 The Atuin daemon is a background daemon designed to
 
 1. Speed up database writes
 2. Allow machines to sync when not in use, so they're ready to go right away
-3. Perform background maintenance
+3. Provides a hot in-memory fuzzy searcher
+4. Perform background maintenance
 
 It may also work around issues with ZFS/SQLite performance.
-
-It's currently experimental, but is safe to use with a little bit of setup
 
 ## To enable
 
