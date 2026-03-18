@@ -80,7 +80,7 @@ If you have a backup of `~/.local/share/atuin`, you can import it by:
 
 ## Alternative projects
 
-If you dont like atuin, perhaps one of these works better for you:
+If you don't like atuin, perhaps one of these works better for you:
 
 - https://github.com/ddworken/hishtory
   - written in go
