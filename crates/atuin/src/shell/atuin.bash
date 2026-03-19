@@ -132,7 +132,7 @@ if ((BASH_VERSINFO[0] >= 5 || BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4)); 
         # Note: Strip the control characters ^A (\001) and ^B (\002), which
         # Bash internally uses to enclose the escape sequences.  They are
         # produced by '\[' and '\]', respectively, in $PS1 and used to tell
-        # Bash that the strings inbetween do not contribute to the prompt
+        # Bash that the strings in between do not contribute to the prompt
         # width.  After the prompt width calculation, Bash strips those control
         # characters before outputting it to the terminal.  We here strip these
         # characters following Bash's behavior.
