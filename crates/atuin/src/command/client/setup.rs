@@ -9,11 +9,15 @@ pub async fn run(_settings: &Settings) -> Result<()> {
     let enable_ai = prompt(
         "Atuin AI",
         "This will enable command generation and other AI features via the question mark key",
+        Some(
+            "By default, Atuin AI only has access to the name and version of your operating system and shell - your shell history is not sent to the AI.",
+        ),
     )?;
 
     let enable_daemon = prompt(
         "Atuin Daemon",
         "This will enable improved search and history sync using a persistent background process",
+        None,
     )?;
 
     let config_file = Settings::get_config_path()?;
@@ -56,12 +60,18 @@ pub async fn run(_settings: &Settings) -> Result<()> {
     Ok(())
 }
 
-pub fn prompt(feature: &str, description: &str) -> Result<bool> {
+pub fn prompt(feature: &str, description: &str, note: Option<&str>) -> Result<bool> {
     println!(
         "> Enable {feature}?",
         feature = feature.bold().bright_blue()
     );
-    print!("  {description} {q} ", q = "[Y/n]".bold());
+    if let Some(note) = note {
+        println!("  {description}");
+        print!("  {note} {q} ", q = "[Y/n]".bold());
+    } else {
+        print!("  {description} {q} ", q = "[Y/n]".bold());
+    }
+
     io::stdout().flush().ok();
 
     let mut input = String::new();
