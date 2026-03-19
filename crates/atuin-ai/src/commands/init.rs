@@ -32,8 +32,10 @@ _atuin_ai_cleanup() {
     true
 }
 
-# Question mark at start of line - natural language mode
-_atuin_ai_question_mark() {
+# Question mark at start of line - natural language mode.
+# Named with 'self-' prefix so bracketed-paste-magic activates it during
+# paste, allowing url-quote-magic to escape ? in pasted URLs via self-insert.
+self-atuin-ai-question-mark() {
     # If buffer is empty or just contains '?', trigger natural language mode
     if [[ -z "$BUFFER" || "$BUFFER" == "?" ]]; then
         BUFFER=""
@@ -65,13 +67,13 @@ _atuin_ai_question_mark() {
             zle reset-prompt
         fi
     else
-        LBUFFER="${LBUFFER}?"
+        zle self-insert
     fi
 }
 
 # Set up keybindings
-zle -N _atuin_ai_question_mark
-bindkey '?' _atuin_ai_question_mark # Question mark
+zle -N self-atuin-ai-question-mark
+bindkey '?' self-atuin-ai-question-mark # Question mark
 "#
     .trim()
 }
@@ -193,13 +195,14 @@ mod tests {
     #[test]
     fn test_generate_zsh_integration() {
         let result = generate_zsh_integration();
-        assert!(result.contains("_atuin_ai_question_mark"));
+        assert!(result.contains("self-atuin-ai-question-mark"));
         assert!(result.contains("bindkey"));
         assert!(result.contains("atuin ai inline --hook"));
         assert!(result.contains("__atuin_ai_print__"));
         assert!(result.contains("__atuin_ai_cancel__"));
         assert!(result.contains("__atuin_ai_execute__"));
         assert!(result.contains("__atuin_ai_insert__"));
+        assert!(result.contains("zle self-insert"));
     }
 
     #[test]
