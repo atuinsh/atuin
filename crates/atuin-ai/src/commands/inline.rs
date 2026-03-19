@@ -57,12 +57,12 @@ pub async fn run(
     let token = if let Some(token) = &api_token {
         token.to_string()
     } else {
-        // If no token is provided, assume we're using Hub as the endpoint if we're using Hub sync
-        if settings.is_hub_sync() {
-            ensure_hub_session(settings).await?
-        } else {
-            bail!("No API token provided in ai.api_token settings or command line argument.")
-        }
+        // ensure_hub_session will authenticate against settings.active_hub_endpoint().unwrap_or_default(),
+        // which is the default Hub endpoint if no endpoint is provided
+        //
+        // TODO[mkt]: Atuin AI and the Hub sync endpoint are too tightly coupled;
+        // current setup means that Hub endpoint controls auth while AI endpoint controls AI conversations
+        ensure_hub_session(settings).await?
     };
 
     let action = run_inline_tui(
