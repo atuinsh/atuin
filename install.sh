@@ -151,7 +151,7 @@ else
 fi
 
 if [ "$ATUIN_NON_INTERACTIVE" != "yes" ]; then
-  "$ATUIN_BIN" setup
+  "$ATUIN_BIN" setup </dev/tty
 fi
 
 cat << EOF
