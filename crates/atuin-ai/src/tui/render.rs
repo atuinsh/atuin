@@ -119,6 +119,7 @@ fn render_view(frame: &mut Frame, view: &Blocks, ctx: &RenderContext) {
     let mut outer_block = RatatuiBlock::default()
         .borders(Borders::ALL)
         .title(title)
+        .title_top(Line::from("atuin").alignment(Alignment::Right))
         .title_bottom(Line::from(view.footer).alignment(Alignment::Right))
         .padding(Padding::new(1, 1, 1, 0));
 
