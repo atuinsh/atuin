@@ -1,3 +1,5 @@
+use std::io::{self, Read};
+
 use clap::Subcommand;
 use eyre::{Context, Result, eyre};
 
@@ -13,8 +15,8 @@ pub enum Cmd {
         #[arg(long, short)]
         key: String,
 
-        /// Value to store
-        value: String,
+        /// Value to store (reads from stdin if not provided)
+        value: Option<String>,
 
         /// Namespace for the key-value pair
         #[arg(long, short, default_value = "default")]
@@ -80,7 +82,17 @@ impl Cmd {
                     return Err(eyre!("namespace cannot be empty"));
                 }
 
-                kv_store.set(namespace, key, value).await
+                let value = if let Some(v) = value {
+                    v.clone()
+                } else {
+                    let mut buf = String::new();
+                    io::stdin()
+                        .read_to_string(&mut buf)
+                        .context("failed to read value from stdin")?;
+                    buf
+                };
+
+                kv_store.set(namespace, key, &value).await
             }
 
             Self::Delete { keys, namespace } => kv_store.delete(namespace, keys).await,
