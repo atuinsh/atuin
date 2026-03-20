@@ -245,15 +245,33 @@ struct SyncInfo {
 
 impl SyncInfo {
     pub async fn new(settings: &Settings) -> Self {
-        use atuin_client::settings::SyncAuth;
+        // Build auth state description from raw token state without calling
+        // resolve_sync_auth(), which has side effects (token migration cleanup)
+        // that a diagnostic command should not trigger.
+        let meta = Settings::meta_store().await.ok();
+        let has_hub_token = match &meta {
+            Some(m) => m
+                .hub_session_token()
+                .await
+                .ok()
+                .flatten()
+                .filter(|t| t.starts_with("atapi_"))
+                .is_some(),
+            None => false,
+        };
+        let has_cli_token = match &meta {
+            Some(m) => m.session_token().await.ok().flatten().is_some(),
+            None => false,
+        };
 
-        let auth_state = match settings.resolve_sync_auth().await {
-            SyncAuth::Hub { .. } => "Hub (authenticated)".into(),
-            SyncAuth::Legacy { .. } => "Self-hosted (authenticated)".into(),
-            SyncAuth::HubViaCli { .. } => {
-                "Hub (legacy token \u{2014} run 'atuin login' to upgrade)".into()
-            }
-            SyncAuth::NotLoggedIn { reason } => format!("Not authenticated: {reason}"),
+        let auth_state = if has_hub_token {
+            "Hub (authenticated)".into()
+        } else if settings.is_hub_sync() && has_cli_token {
+            "Hub (legacy token \u{2014} run 'atuin login' to upgrade)".into()
+        } else if !settings.is_hub_sync() && has_cli_token {
+            "Self-hosted (authenticated)".into()
+        } else {
+            "Not authenticated".into()
         };
 
         Self {
