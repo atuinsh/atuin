@@ -1,4 +1,4 @@
-use std::io::{self, Read};
+use std::io::{self, IsTerminal, Read};
 
 use clap::Subcommand;
 use eyre::{Context, Result, eyre};
@@ -84,12 +84,16 @@ impl Cmd {
 
                 let value = if let Some(v) = value {
                     v.clone()
-                } else {
+                } else if !io::stdin().is_terminal() {
                     let mut buf = String::new();
                     io::stdin()
                         .read_to_string(&mut buf)
                         .context("failed to read value from stdin")?;
                     buf
+                } else {
+                    return Err(eyre!(
+                        "no value provided. Pass as an argument or pipe via stdin"
+                    ));
                 };
 
                 kv_store.set(namespace, key, &value).await
