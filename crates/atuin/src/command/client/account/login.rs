@@ -125,7 +125,7 @@ impl Cmd {
             tracing::debug!("Could not link CLI account to Hub: {}", e);
         }
 
-        println!("Successfully authenticated with Atuin Hub.");
+        println!("Successfully authenticated.");
         Ok(())
     }
 
