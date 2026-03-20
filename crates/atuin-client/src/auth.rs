@@ -342,10 +342,12 @@ impl AuthClient for HubAuthClient {
         new_password: &str,
         totp_code: Option<&str>,
     ) -> Result<MutateResponse> {
-        let hub_token = self
-            .hub_token
-            .as_deref()
-            .ok_or_else(|| eyre::eyre!("Not logged in to Hub"))?;
+        let hub_token = self.hub_token.as_deref().ok_or_else(|| {
+            eyre::eyre!(
+                "Not logged in to Atuin Hub. \
+                     Please run 'atuin login' to authenticate."
+            )
+        })?;
 
         if !hub_token.starts_with("atapi_") {
             bail!(
@@ -402,10 +404,12 @@ impl AuthClient for HubAuthClient {
         password: &str,
         totp_code: Option<&str>,
     ) -> Result<MutateResponse> {
-        let hub_token = self
-            .hub_token
-            .as_deref()
-            .ok_or_else(|| eyre::eyre!("Not logged in to Hub"))?;
+        let hub_token = self.hub_token.as_deref().ok_or_else(|| {
+            eyre::eyre!(
+                "Not logged in to Atuin Hub. \
+                     Please run 'atuin login' to authenticate."
+            )
+        })?;
 
         if !hub_token.starts_with("atapi_") {
             bail!(

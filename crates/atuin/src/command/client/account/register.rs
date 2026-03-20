@@ -82,6 +82,13 @@ impl Cmd {
                             meta.save_hub_session(&session).await?;
                         } else {
                             meta.save_session(&session).await?;
+                            println!(
+                                "\nNote: Your account has not been fully migrated to Atuin Hub."
+                            );
+                            println!(
+                                "Sync will continue to work, but you can visit hub.atuin.sh \
+                                to create a new Hub account and link it to your existing CLI account."
+                            );
                         }
                     }
                     AuthResponse::TwoFactorRequired => {

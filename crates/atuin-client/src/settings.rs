@@ -1278,12 +1278,6 @@ impl Settings {
         }
     }
 
-    /// Returns the best available auth token for sync operations.
-    ///
-    /// Token priority when using Hub sync:
-    /// 1. Hub token (Bearer) - enables unified Hub auth
-    /// Resolve the current authentication state for sync operations.
-    ///
     /// Examines the configured sync target and available tokens to determine
     /// the correct auth strategy. Also performs cleanup of mis-stored tokens
     /// (e.g. a CLI token incorrectly saved in the Hub session slot).
