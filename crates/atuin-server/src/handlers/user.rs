@@ -150,7 +150,10 @@ pub async fn register<DB: Database>(
     counter!("atuin_users_registered").increment(1);
 
     match db.add_session(&new_session).await {
-        Ok(_) => Ok(Json(RegisterResponse { session: token })),
+        Ok(_) => Ok(Json(RegisterResponse {
+            session: token,
+            auth: Some("cli".into()),
+        })),
         Err(e) => {
             error!("failed to add session: {}", e);
             Err(ErrorResponse::reply("failed to register user")
@@ -254,6 +257,7 @@ pub async fn login<DB: Database>(
 
     Ok(Json(LoginResponse {
         session: session.token,
+        auth: Some("cli".into()),
     }))
 }
 

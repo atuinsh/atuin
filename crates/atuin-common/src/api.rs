@@ -26,6 +26,10 @@ pub struct RegisterRequest {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RegisterResponse {
     pub session: String,
+    /// Auth type: "hub" for Hub API tokens, "cli" for legacy CLI session tokens.
+    /// Old servers that don't return this field will deserialize as None.
+    #[serde(default)]
+    pub auth: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -49,6 +53,10 @@ pub struct LoginRequest {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LoginResponse {
     pub session: String,
+    /// Auth type: "hub" for Hub API tokens, "cli" for legacy CLI session tokens.
+    /// Old servers that don't return this field will deserialize as None.
+    #[serde(default)]
+    pub auth: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

@@ -236,9 +236,7 @@ impl SystemInfo {
 
 #[derive(Debug, Serialize)]
 struct SyncInfo {
-    /// Whether the main Atuin sync server is in use
-    /// I'm just calling it Atuin Cloud for lack of a better name atm
-    pub cloud: bool,
+    pub auth_state: String,
     pub records: bool,
     pub auto_sync: bool,
 
@@ -247,8 +245,19 @@ struct SyncInfo {
 
 impl SyncInfo {
     pub async fn new(settings: &Settings) -> Self {
+        use atuin_client::settings::SyncAuth;
+
+        let auth_state = match settings.resolve_sync_auth().await {
+            SyncAuth::Hub { .. } => "Hub (authenticated)".into(),
+            SyncAuth::Legacy { .. } => "Self-hosted (authenticated)".into(),
+            SyncAuth::HubViaCli { .. } => {
+                "Hub (legacy token \u{2014} run 'atuin login' to upgrade)".into()
+            }
+            SyncAuth::NotLoggedIn { reason } => format!("Not authenticated: {reason}"),
+        };
+
         Self {
-            cloud: settings.is_hub_sync(),
+            auth_state,
             auto_sync: settings.auto_sync,
             records: settings.sync.records,
             last_sync: Settings::last_sync()
