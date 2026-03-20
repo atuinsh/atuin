@@ -11,7 +11,7 @@ for arg in "$@"; do
 done
 
 if [ "$ATUIN_NON_INTERACTIVE" != "yes" ]; then
-  if [ -t 0 ] || [ -c /dev/tty ]; then
+  if [ -t 0 ] || { true </dev/tty; } 2>/dev/null; then
     ATUIN_NON_INTERACTIVE="no"
   else
     ATUIN_NON_INTERACTIVE="yes"
