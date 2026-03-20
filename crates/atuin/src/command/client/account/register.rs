@@ -21,6 +21,7 @@ pub struct Cmd {
 }
 
 impl Cmd {
+    #[allow(clippy::too_many_lines)]
     pub async fn run(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
         match settings.resolve_sync_auth().await {
             SyncAuth::Hub { .. } => {
