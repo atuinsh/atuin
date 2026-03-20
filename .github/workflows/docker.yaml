@@ -3,6 +3,8 @@ name: build-docker
 on:
   push:
     branches: [main]
+    tags:
+      - 'v*'
 
 jobs:
   publish:
@@ -31,9 +33,18 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
           registry: ghcr.io
 
-      - name: Get short sha
-        id: shortsha
-        run: echo "short_sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ env.REPO_OWNER }}/atuin
+          flavor: |
+            latest=false
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix=
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
 
       - name: Build and push
         uses: depot/build-push-action@v1
@@ -44,7 +55,7 @@ jobs:
           context: .
           provenance: false
           build-args: |
-            Version=dev
-            GitCommit=${{ steps.shortsha.outputs.short_sha }}
-          tags: |
-            ghcr.io/${{ env.REPO_OWNER }}/atuin:${{ steps.shortsha.outputs.short_sha }}
+            Version=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.version'] || 'dev' }}
+            GitCommit=${{ github.sha }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
