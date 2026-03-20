@@ -1312,11 +1312,16 @@ impl Settings {
 
             // A non-atapi_ token in the hub_session slot is a mis-stored CLI
             // token (from the migration-fallback bug). Move it to the CLI
-            // session slot if that slot is empty, then clear hub_session.
+            // session slot if that slot is empty, then clear hub_session
+            // only if the move succeeded.
             if let Ok(None) = meta.session_token().await {
-                let _ = meta.save_session(&hub_token).await;
+                if meta.save_session(&hub_token).await.is_ok() {
+                    let _ = meta.delete_hub_session().await;
+                }
+            } else {
+                // CLI slot already has a token; just clear the bad hub_session
+                let _ = meta.delete_hub_session().await;
             }
-            let _ = meta.delete_hub_session().await;
             // Fall through to check CLI token below
         }
 
