@@ -122,6 +122,11 @@ impl Component for SearchComponent {
     async fn start(&mut self, handle: DaemonHandle) -> Result<()> {
         *self.handle.write().await = Some(handle.clone());
 
+        // Apply user's smart_case setting immediately so searches before
+        // the history loader finishes use the correct case mode.
+        let settings = handle.settings().await;
+        *self.smart_case.write().await = settings.search.smart_case;
+
         // Spawn background task to load history into index
         let index = self.index.clone();
         let db = handle.history_db().clone();
