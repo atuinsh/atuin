@@ -13,7 +13,7 @@ use norm::fzf::{FzfParser, FzfV2};
 use std::ops::Range;
 use tracing::{Level, instrument};
 
-pub struct Search(pub SearchMode);
+pub struct Search(pub SearchMode, pub bool);
 
 #[async_trait]
 impl SearchEngine for Search {
@@ -33,6 +33,7 @@ impl SearchEngine for Search {
                     limit: Some(200),
                     ..Default::default()
                 },
+                self.1,
             )
             .await
             // ignore errors as it may be caused by incomplete regex

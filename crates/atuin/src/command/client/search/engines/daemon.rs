@@ -18,6 +18,7 @@ use super::{SearchEngine, SearchState};
 pub struct Search {
     client: Option<SearchClient>,
     query_id: u64,
+    smart_case: bool,
     #[cfg(unix)]
     socket_path: String,
     #[cfg(not(unix))]
@@ -29,6 +30,7 @@ impl Search {
         Search {
             client: None,
             query_id: 0,
+            smart_case: settings.search.smart_case,
             #[cfg(unix)]
             socket_path: settings.daemon.socket_path.clone(),
             #[cfg(not(unix))]
@@ -77,6 +79,7 @@ impl Search {
                     limit: Some(200),
                     ..Default::default()
                 },
+                self.smart_case,
             )
             .await
             .map_or(Vec::new(), |r| r.into_iter().collect());

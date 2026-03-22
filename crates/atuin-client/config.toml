@@ -308,6 +308,12 @@ records = true
 ## Default filter mode can be overridden with the filter_mode setting.
 # filters = [ "global", "host", "session", "session-preload", "workspace", "directory" ]
 
+## Use smart-case matching for search queries.
+## When true (default), all-lowercase queries match case-insensitively, while queries
+## containing uppercase characters match case-sensitively. Similar to fzf's --smart-case.
+## Set to false to always match case-insensitively, regardless of query casing.
+# smart_case = true
+
 [tmux]
 ## Enable using atuin with tmux popup (requires tmux >= 3.2)
 ## When enabled and running inside tmux, Atuin will use a popup window for interactive search.

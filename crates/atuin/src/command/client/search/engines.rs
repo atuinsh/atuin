@@ -22,9 +22,9 @@ pub fn engine(search_mode: SearchMode, settings: &Settings) -> Box<dyn SearchEng
         #[cfg(not(feature = "daemon"))]
         SearchMode::DaemonFuzzy => {
             // Fall back to fuzzy mode if daemon feature is not enabled
-            Box::new(db::Search(SearchMode::Fuzzy)) as Box<_>
+            Box::new(db::Search(SearchMode::Fuzzy, settings.search.smart_case)) as Box<_>
         }
-        mode => Box::new(db::Search(mode)) as Box<_>,
+        mode => Box::new(db::Search(mode, settings.search.smart_case)) as Box<_>,
     }
 }
 
