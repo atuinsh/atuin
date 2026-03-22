@@ -667,7 +667,13 @@ mod tests {
 
         // Search for "git" - should match 2 commands
         let results = index
-            .search("git", IndexFilterMode::Global, &QueryContext::default(), 10, true)
+            .search(
+                "git",
+                IndexFilterMode::Global,
+                &QueryContext::default(),
+                10,
+                true,
+            )
             .await;
         assert_eq!(results.len(), 2);
 
@@ -711,23 +717,47 @@ mod tests {
         // smart_case=true: uppercase query "Git" should be case-sensitive,
         // matching only "Git status" (not "git commit" or "GIT PUSH")
         let results = index
-            .search("Git", IndexFilterMode::Global, &QueryContext::default(), 10, true)
+            .search(
+                "Git",
+                IndexFilterMode::Global,
+                &QueryContext::default(),
+                10,
+                true,
+            )
             .await;
         assert_eq!(results.len(), 1);
 
         // smart_case=false: same uppercase query "Git" should match
         // case-insensitively, finding all three commands
         let results = index
-            .search("Git", IndexFilterMode::Global, &QueryContext::default(), 10, false)
+            .search(
+                "Git",
+                IndexFilterMode::Global,
+                &QueryContext::default(),
+                10,
+                false,
+            )
             .await;
         assert_eq!(results.len(), 3);
 
         // lowercase query matches all regardless of smart_case setting
         let results_smart = index
-            .search("git", IndexFilterMode::Global, &QueryContext::default(), 10, true)
+            .search(
+                "git",
+                IndexFilterMode::Global,
+                &QueryContext::default(),
+                10,
+                true,
+            )
             .await;
         let results_ignore = index
-            .search("git", IndexFilterMode::Global, &QueryContext::default(), 10, false)
+            .search(
+                "git",
+                IndexFilterMode::Global,
+                &QueryContext::default(),
+                10,
+                false,
+            )
             .await;
         assert_eq!(results_smart.len(), 3);
         assert_eq!(results_ignore.len(), 3);
