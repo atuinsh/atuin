@@ -615,7 +615,7 @@ pub struct Logs {
 #[derive(Default, Clone, Debug, Deserialize, Serialize)]
 pub struct Ai {
     /// Whether or not the AI features are enabled.
-    pub enabled: bool,
+    pub enabled: Option<bool>,
 
     /// The address of the Atuin AI endpoint. Used for AI features like command generation.
     /// Only necessary for custom AI endpoints.
@@ -1450,7 +1450,6 @@ impl Settings {
             .set_default("search.frequency_score_multiplier", 1.0)?
             .set_default("search.frecency_score_multiplier", 1.0)?
             .set_default("meta.db_path", meta_path.to_str())?
-            .set_default("ai.enabled", false)?
             .set_default("ai.send_cwd", false)?
             .set_default(
                 "search.filters",
