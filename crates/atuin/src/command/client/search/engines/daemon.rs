@@ -193,7 +193,11 @@ impl SearchEngine for Search {
     fn get_highlight_indices(&self, command: &str, search_input: &str) -> Vec<usize> {
         // Use fulltext highlighting for regex queries
         if Self::contains_regex_pattern(search_input) {
-            return super::db::get_highlight_indices_fulltext(command, search_input);
+            return super::db::get_highlight_indices_fulltext(
+                command,
+                search_input,
+                self.smart_case,
+            );
         }
 
         let mut matcher = Matcher::new(Config::DEFAULT);
