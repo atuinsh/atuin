@@ -337,6 +337,7 @@ impl SearchIndex {
         filter_mode: IndexFilterMode,
         _context: &QueryContext,
         limit: u32,
+        smart_case: bool,
     ) -> Vec<String> {
         let mut nucleo = self.nucleo.write().await;
 
@@ -352,10 +353,15 @@ impl SearchIndex {
         nucleo.set_scorer(scorer);
 
         // Update pattern
+        let case_matching = if smart_case {
+            pattern::CaseMatching::Smart
+        } else {
+            pattern::CaseMatching::Ignore
+        };
         nucleo.pattern.reparse(
             0,
             query,
-            pattern::CaseMatching::Smart,
+            case_matching,
             pattern::Normalization::Smart,
             false,
         );
@@ -661,7 +667,7 @@ mod tests {
 
         // Search for "git" - should match 2 commands
         let results = index
-            .search("git", IndexFilterMode::Global, &QueryContext::default(), 10)
+            .search("git", IndexFilterMode::Global, &QueryContext::default(), 10, true)
             .await;
         assert_eq!(results.len(), 2);
 
@@ -672,6 +678,7 @@ mod tests {
                 IndexFilterMode::Directory(with_trailing_slash("/home/user/project")),
                 &QueryContext::default(),
                 10,
+                true,
             )
             .await;
         assert_eq!(results.len(), 2); // git status and git commit

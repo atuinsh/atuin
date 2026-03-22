@@ -201,7 +201,12 @@ impl SearchEngine for Search {
         }
 
         let mut matcher = Matcher::new(Config::DEFAULT);
-        let pattern = Pattern::parse(search_input, CaseMatching::Smart, Normalization::Smart);
+        let case_matching = if self.smart_case {
+            CaseMatching::Smart
+        } else {
+            CaseMatching::Ignore
+        };
+        let pattern = Pattern::parse(search_input, case_matching, Normalization::Smart);
 
         let mut indices: Vec<u32> = Vec::new();
         let mut haystack_buf = Vec::new();

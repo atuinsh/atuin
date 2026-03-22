@@ -39,6 +39,8 @@ pub struct SearchComponent {
     handle: tokio::sync::RwLock<Option<DaemonHandle>>,
     loader_handle: Option<tokio::task::JoinHandle<()>>,
     frecency_handle: Option<tokio::task::JoinHandle<()>>,
+    /// Shared smart_case setting — updated on SettingsReloaded, read by the gRPC service.
+    smart_case: Arc<tokio::sync::RwLock<bool>>,
 }
 
 impl SearchComponent {
@@ -49,6 +51,8 @@ impl SearchComponent {
             handle: tokio::sync::RwLock::new(None),
             loader_handle: None,
             frecency_handle: None,
+            // Default true (smart-case on) — overwritten when settings load.
+            smart_case: Arc::new(tokio::sync::RwLock::new(true)),
         }
     }
 
@@ -56,6 +60,7 @@ impl SearchComponent {
     pub fn grpc_service(&self) -> SearchServer<SearchGrpcService> {
         SearchServer::new(SearchGrpcService {
             index: self.index.clone(),
+            smart_case: self.smart_case.clone(),
         })
     }
 
@@ -121,6 +126,7 @@ impl Component for SearchComponent {
         let index = self.index.clone();
         let db = handle.history_db().clone();
         let handle_for_loader = handle.clone();
+        let smart_case_for_loader = self.smart_case.clone();
 
         self.loader_handle = Some(tokio::spawn(async move {
             info!(
@@ -144,6 +150,7 @@ impl Component for SearchComponent {
                         );
                         // Build initial frecency map with current settings
                         let settings = handle_for_loader.settings().await;
+                        *smart_case_for_loader.write().await = settings.search.smart_case;
                         index.read().await.rebuild_frecency(&settings.search).await;
                         info!("Initial frecency map built");
                         break;
@@ -244,6 +251,7 @@ impl Component for SearchComponent {
                 let handle_guard = self.handle.read().await;
                 if let Some(handle) = handle_guard.as_ref() {
                     let settings = handle.settings().await;
+                    *self.smart_case.write().await = settings.search.smart_case;
                     self.index
                         .read()
                         .await
@@ -275,6 +283,7 @@ impl Component for SearchComponent {
 /// The gRPC service implementation.
 pub struct SearchGrpcService {
     index: Arc<RwLock<SearchIndex>>,
+    smart_case: Arc<tokio::sync::RwLock<bool>>,
 }
 
 #[tonic::async_trait]
@@ -288,6 +297,7 @@ impl SearchSvc for SearchGrpcService {
     ) -> Result<Response<Self::SearchStream>, Status> {
         let mut in_stream = request.into_inner();
         let index = self.index.clone();
+        let smart_case = self.smart_case.clone();
 
         // Create output channel
         let (tx, rx) = tokio::sync::mpsc::channel::<Result<SearchResponse, Status>>(128);
@@ -332,7 +342,7 @@ impl SearchSvc for SearchGrpcService {
                                 .in_scope(|| async {
                                     let index = index.read().await;
                                     index
-                                        .search(&query, index_filter, &query_context, RESULTS_LIMIT)
+                                        .search(&query, index_filter, &query_context, RESULTS_LIMIT, *smart_case.read().await)
                                         .await
                                 })
                                 .await;
