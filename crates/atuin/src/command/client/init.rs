@@ -210,7 +210,7 @@ $env.config = (
         if settings.dotfiles.enabled {
             self.dotfiles_init(settings).await?;
         } else {
-            self.static_init(&settings);
+            self.static_init(settings);
         }
 
         Ok(())
