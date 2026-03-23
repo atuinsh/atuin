@@ -12,8 +12,6 @@ With Hex, we can have our cake AND eat it too. The Atuin popup renders over the 
 
 Atuin Hex needs to be initialized separately from your existing Atuin config. Place the init line shown below in your shell's init script, as high in the document as possible, *before* your normal `atuin init` call.
 
-**bash**
-
 === "zsh"
 
     ```shell
