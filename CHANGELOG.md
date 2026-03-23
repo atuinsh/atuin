@@ -4,6 +4,46 @@ All notable changes to this project will be documented in this file.
 
 ## [unreleased]
 
+## 18.13.4
+
+### Bug Fixes
+
+- *(ai)* Restore url-quote-magic for ? in zsh ([#3304](https://github.com/atuinsh/atuin/issues/3304))
+- Redirect tty0 when running setup ([#3302](https://github.com/atuinsh/atuin/issues/3302))
+- Call ensure_hub_session even if primary sync endpoint is self-hosted ([#3301](https://github.com/atuinsh/atuin/issues/3301))
+- Remove per-event mouse capture toggling that leaked ANSI to stdout ([#3299](https://github.com/atuinsh/atuin/issues/3299))
+- Clarify what data is sent when using Atuin AI during setup (only OS and shell) ([#3290](https://github.com/atuinsh/atuin/issues/3290))
+- Better tty check ([#3313](https://github.com/atuinsh/atuin/issues/3313))
+- Disable features in init when that feature is explicitly disabled ([#3328](https://github.com/atuinsh/atuin/issues/3328))
+- Don't run 'atuin init' in 'atuin hex init' — each must be initialized separately ([#3334](https://github.com/atuinsh/atuin/issues/3334))
+
+
+### Documentation
+
+- Fix typo in FAQ alternatives section ([#3292](https://github.com/atuinsh/atuin/issues/3292))
+- Remove 'experimental' status from Atuin Daemon ([#3295](https://github.com/atuinsh/atuin/issues/3295))
+- Add inline_height_shell_up_key_binding ([#3270](https://github.com/atuinsh/atuin/issues/3270))
+
+
+### Features
+
+- Report distro name with OS for distro-specific commands ([#3289](https://github.com/atuinsh/atuin/issues/3289))
+- Allow setting kv values from stdin
+- Error if value not provided and no stdin
+- Add a small atuin label to the ai box ([#3309](https://github.com/atuinsh/atuin/issues/3309))
+- Allow running `atuin search -i` as subcommand on Windows ([#3250](https://github.com/atuinsh/atuin/issues/3250))
+- Hex init nu ([#3330](https://github.com/atuinsh/atuin/issues/3330))
+
+
+### Miscellaneous Tasks
+
+- *(ci)* Tag docker images with semantic versions on tag creation ([#3316](https://github.com/atuinsh/atuin/issues/3316))
+- Replace atuin-ai rendering with component-oriented system ([#3288](https://github.com/atuinsh/atuin/issues/3288))
+- Refactor CLI auth flows and token storage ([#3317](https://github.com/atuinsh/atuin/issues/3317))
+
+
+## 18.13.3
+
 ### Bug Fixes
 
 - Nushell 0.111; future Nushell 0.112 support ([#3266](https://github.com/atuinsh/atuin/issues/3266))
@@ -20,11 +60,13 @@ All notable changes to this project will be documented in this file.
 
 - *(ci)* Migrate to depot runners ([#3279](https://github.com/atuinsh/atuin/issues/3279))
 - *(ci)* Use depot to build docker images too ([#3281](https://github.com/atuinsh/atuin/issues/3281))
+- *(ci)* Use github for macos
 - Update changelog
 - Update permissions in Docker workflow ([#3283](https://github.com/atuinsh/atuin/issues/3283))
 - Change CHANGELOG format to be easier to parse
 - Symlink changelog so dist can pick it up
 - Vendor nucleo-ext + fork, so we can depend on our changes properly ([#3284](https://github.com/atuinsh/atuin/issues/3284))
+- Update changelog
 
 
 ## 18.13.2
