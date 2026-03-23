@@ -27,7 +27,7 @@ pub async fn run(
     settings: &atuin_client::settings::Settings,
     output_for_hook: bool,
 ) -> Result<()> {
-    if !settings.ai.enabled {
+    if !settings.ai.enabled.unwrap_or(false) {
         emit_shell_result(
             Action::Print(
                 "Atuin AI is not enabled. Please enable it in your settings or run `atuin setup`."
