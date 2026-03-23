@@ -9,7 +9,7 @@ use atuin_client::{
     encryption::{Key, decode_key, encode_key, load_key},
     record::sqlite_store::SqliteStore,
     record::store::Store,
-    settings::Settings,
+    settings::{Settings, SyncAuth},
 };
 use rpassword::prompt_password;
 
@@ -41,14 +41,24 @@ fn get_input() -> Result<String> {
 
 impl Cmd {
     pub async fn run(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
-        if settings.logged_in().await? {
-            if settings.is_hub_sync() {
+        match settings.resolve_sync_auth().await {
+            SyncAuth::Hub { .. } => {
                 println!("You are authenticated with Atuin Hub.");
-            } else {
-                println!("You are already logged in.");
+                println!("Run 'atuin logout' to log out.");
+                return Ok(());
             }
-            println!("Run 'atuin logout' to log out.");
-            return Ok(());
+            SyncAuth::Legacy { .. } => {
+                println!("You are logged in to your sync server.");
+                println!("Run 'atuin logout' to log out.");
+                return Ok(());
+            }
+            SyncAuth::HubViaCli { .. } => {
+                println!(
+                    "You have a legacy sync session. \
+                     Continuing login to upgrade to full Hub authentication."
+                );
+            }
+            SyncAuth::NotLoggedIn { .. } => {}
         }
 
         if settings.is_hub_sync() {
@@ -58,8 +68,7 @@ impl Cmd {
         }
     }
 
-    /// Hub login: use the browser OAuth flow unless all three flags
-    /// (username, password, key) were provided for headless/CI use.
+    /// Hub login: use the browser flow unless the username was provided for headless use.
     async fn run_hub_login(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
         let endpoint = settings.active_hub_endpoint().unwrap_or_default();
 
@@ -72,23 +81,32 @@ impl Cmd {
             let password = self.password.clone().unwrap_or_else(read_user_password);
             let mut totp_code = self.totp_code.clone();
 
-            let session = loop {
+            let (session, auth_type) = loop {
                 let response = client
                     .login(username, &password, totp_code.as_deref())
                     .await?;
 
                 match response {
-                    AuthResponse::Success { session } => break session,
+                    AuthResponse::Success { session, auth_type } => break (session, auth_type),
                     AuthResponse::TwoFactorRequired => {
                         totp_code = Some(or_user_input(None, "two-factor code"));
                     }
                 }
             };
 
-            Settings::meta_store()
-                .await?
-                .save_hub_session(&session)
-                .await?;
+            let meta = Settings::meta_store().await?;
+            let is_hub_token = auth_type.as_deref() == Some("hub") || session.starts_with("atapi_");
+
+            if is_hub_token {
+                meta.save_hub_session(&session).await?;
+            } else {
+                meta.save_session(&session).await?;
+                println!("\nNote: Your account has not been fully migrated to Atuin Hub.");
+                println!(
+                    "Sync will continue to work, but you can visit hub.atuin.sh \
+                     to create an account and link it to your existing CLI account."
+                );
+            }
         } else {
             // Interactive login via browser OAuth flow.
             if self.from_registration {
@@ -107,7 +125,7 @@ impl Cmd {
             tracing::debug!("Could not link CLI account to Hub: {}", e);
         }
 
-        println!("Successfully authenticated with Atuin Hub.");
+        println!("Successfully authenticated.");
         Ok(())
     }
 
@@ -123,7 +141,7 @@ impl Cmd {
         let response = client.login(&username, &password, None).await?;
 
         match response {
-            AuthResponse::Success { session } => {
+            AuthResponse::Success { session, .. } => {
                 Settings::meta_store().await?.save_session(&session).await?;
             }
             AuthResponse::TwoFactorRequired => {
