@@ -25,6 +25,8 @@ enum Shell {
     Bash,
     /// Fish setup
     Fish,
+    /// Nu setup
+    Nu,
 }
 
 impl Shell {
@@ -33,6 +35,7 @@ impl Shell {
             Self::Bash => "bash",
             Self::Zsh => "zsh",
             Self::Fish => "fish",
+            Self::Nu => "nu",
         }
     }
 }
@@ -76,7 +79,7 @@ fn detect_shell(cli_shell: Option<Shell>) -> Result<Shell, String> {
     }
 
     Err(
-        "could not detect a supported shell. Please specify one explicitly: bash, zsh, or fish"
+        "could not detect a supported shell. Please specify one explicitly: bash, zsh, fish, or nu"
             .to_string(),
     )
 }
@@ -94,6 +97,7 @@ fn shell_from_name(name: &str) -> Option<Shell> {
         "bash" => Some(Shell::Bash),
         "zsh" => Some(Shell::Zsh),
         "fish" => Some(Shell::Fish),
+        "nu" => Some(Shell::Nu),
         _ => None,
     }
 }
@@ -149,6 +153,21 @@ end
 {init_command} | source
 "#
         ),
+        // Nushell cannot dynamically source the output of `atuin init nu`,
+        // so we only output the hex preamble here. Users must also set up
+        // `atuin init nu` separately.
+        Shell::Nu => r#"if (is-terminal --stdin) and (is-terminal --stdout) {
+    let tmux_current = ($env.TMUX? | default "")
+    let tmux_previous = ($env.ATUIN_HEX_TMUX? | default "")
+
+    if ($env.ATUIN_HEX_ACTIVE? | default "" | is-empty) or ($tmux_current != $tmux_previous) {
+        $env.ATUIN_HEX_ACTIVE = "1"
+        $env.ATUIN_HEX_TMUX = $tmux_current
+        exec atuin hex
+    }
+}
+"#
+        .to_string(),
     }
 }
 
@@ -440,6 +459,7 @@ mod tests {
         assert_eq!(shell_from_name("/bin/zsh"), Some(Shell::Zsh));
         assert_eq!(shell_from_name("/usr/local/bin/bash"), Some(Shell::Bash));
         assert_eq!(shell_from_name("fish"), Some(Shell::Fish));
+        assert_eq!(shell_from_name("nu"), Some(Shell::Nu));
     }
 
     #[test]
@@ -461,5 +481,15 @@ mod tests {
         let script = render_init(Shell::Fish);
         assert!(script.contains("exec atuin hex"));
         assert!(script.contains("atuin init fish | source"));
+    }
+
+    #[test]
+    fn nu_init_uses_exec_and_tty_guard() {
+        let script = render_init(Shell::Nu);
+        assert!(script.contains("exec atuin hex"));
+        assert!(script.contains("ATUIN_HEX_TMUX"));
+        assert!(script.contains("is-terminal --stdin"));
+        assert!(script.contains("is-terminal --stdout"));
+        assert!(script.contains("ATUIN_HEX_ACTIVE"));
     }
 }
