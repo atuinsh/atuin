@@ -91,9 +91,9 @@ fn shell_from_name(name: &str) -> Option<Shell> {
     }
 }
 
-fn render_init(shell: Shell) -> String {
+fn render_init(shell: Shell) -> &'static str {
     match shell {
-        Shell::Bash | Shell::Zsh => format!(
+        Shell::Bash | Shell::Zsh => {
             r#"if [[ "$-" == *i* ]] && [[ -t 0 ]] && [[ -t 1 ]]; then
   _atuin_hex_tmux_current="${{TMUX:-}}"
   _atuin_hex_tmux_previous="${{ATUIN_HEX_TMUX:-}}"
@@ -107,8 +107,8 @@ fn render_init(shell: Shell) -> String {
   unset _atuin_hex_tmux_current _atuin_hex_tmux_previous
 fi
 "#
-        ),
-        Shell::Fish => format!(
+        }
+        Shell::Fish => {
             r#"if status is-interactive; and test -t 0; and test -t 1
     set -l _atuin_hex_tmux_current ""
     if set -q TMUX
@@ -131,11 +131,12 @@ fi
     end
 end
 "#
-        ),
+        }
         // Nushell cannot dynamically source the output of `atuin init nu`,
         // so we only output the hex preamble here. Users must also set up
         // `atuin init nu` separately.
-        Shell::Nu => r#"if (is-terminal --stdin) and (is-terminal --stdout) {
+        Shell::Nu => {
+            r#"if (is-terminal --stdin) and (is-terminal --stdout) {
     let tmux_current = ($env.TMUX? | default "")
     let tmux_previous = ($env.ATUIN_HEX_TMUX? | default "")
 
@@ -146,7 +147,7 @@ end
     }
 }
 "#
-        .to_string(),
+        }
     }
 }
 
