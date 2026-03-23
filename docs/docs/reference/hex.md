@@ -1,6 +1,6 @@
 # hex
 
-Atuin Hex is an experimental lightweight PTY proxy, providing new features without needing to replace your existing shell. Atuin Hex currently supports bash, zsh, fish, and nu.
+Atuin Hex is an experimental lightweight PTY proxy, providing new features without needing to replace your existing terminal or shell. Atuin Hex currently supports bash, zsh, fish, and nu.
 
 ## TUI Rendering
 
