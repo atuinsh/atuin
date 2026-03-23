@@ -29,17 +29,6 @@ enum Shell {
     Nu,
 }
 
-impl Shell {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Bash => "bash",
-            Self::Zsh => "zsh",
-            Self::Fish => "fish",
-            Self::Nu => "nu",
-        }
-    }
-}
-
 impl Init {
     fn run(self) -> Result<(), String> {
         let shell = detect_shell(self.shell)?;
@@ -102,15 +91,9 @@ fn shell_from_name(name: &str) -> Option<Shell> {
     }
 }
 
-fn init_command(shell: Shell) -> String {
-    format!("atuin init {}", shell.as_str())
-}
-
-fn render_init(shell: Shell) -> String {
-    let init_command = init_command(shell);
-
+fn render_init(shell: Shell) -> &'static str {
     match shell {
-        Shell::Bash | Shell::Zsh => format!(
+        Shell::Bash | Shell::Zsh => {
             r#"if [[ "$-" == *i* ]] && [[ -t 0 ]] && [[ -t 1 ]]; then
   _atuin_hex_tmux_current="${{TMUX:-}}"
   _atuin_hex_tmux_previous="${{ATUIN_HEX_TMUX:-}}"
@@ -123,11 +106,9 @@ fn render_init(shell: Shell) -> String {
 
   unset _atuin_hex_tmux_current _atuin_hex_tmux_previous
 fi
-
-eval "$({init_command})"
 "#
-        ),
-        Shell::Fish => format!(
+        }
+        Shell::Fish => {
             r#"if status is-interactive; and test -t 0; and test -t 1
     set -l _atuin_hex_tmux_current ""
     if set -q TMUX
@@ -149,14 +130,13 @@ eval "$({init_command})"
         exec atuin hex
     end
 end
-
-{init_command} | source
 "#
-        ),
+        }
         // Nushell cannot dynamically source the output of `atuin init nu`,
         // so we only output the hex preamble here. Users must also set up
         // `atuin init nu` separately.
-        Shell::Nu => r#"if (is-terminal --stdin) and (is-terminal --stdout) {
+        Shell::Nu => {
+            r#"if (is-terminal --stdin) and (is-terminal --stdout) {
     let tmux_current = ($env.TMUX? | default "")
     let tmux_previous = ($env.ATUIN_HEX_TMUX? | default "")
 
@@ -167,7 +147,7 @@ end
     }
 }
 "#
-        .to_string(),
+        }
     }
 }
 
@@ -452,7 +432,7 @@ mod app {
 
 #[cfg(test)]
 mod tests {
-    use super::{Shell, init_command, render_init, shell_from_name};
+    use super::{Shell, render_init, shell_from_name};
 
     #[test]
     fn shell_from_name_handles_paths() {
@@ -463,24 +443,18 @@ mod tests {
     }
 
     #[test]
-    fn init_command_is_bootstrap_only() {
-        let command = init_command(Shell::Zsh);
-        assert_eq!(command, "atuin init zsh");
-    }
-
-    #[test]
     fn posix_init_uses_exec_and_tmux_guard() {
         let script = render_init(Shell::Bash);
         assert!(script.contains("exec atuin hex"));
         assert!(script.contains("ATUIN_HEX_TMUX"));
-        assert!(script.contains("eval \"$(atuin init bash)\""));
+        assert!(!script.contains("eval \"$(atuin init bash)\""));
     }
 
     #[test]
     fn fish_init_uses_source() {
         let script = render_init(Shell::Fish);
         assert!(script.contains("exec atuin hex"));
-        assert!(script.contains("atuin init fish | source"));
+        assert!(!script.contains("atuin init fish | source"));
     }
 
     #[test]
