@@ -95,10 +95,10 @@ fn render_init(shell: Shell) -> &'static str {
     match shell {
         Shell::Bash | Shell::Zsh => {
             r#"if [[ "$-" == *i* ]] && [[ -t 0 ]] && [[ -t 1 ]]; then
-  _atuin_hex_tmux_current="${{TMUX:-}}"
-  _atuin_hex_tmux_previous="${{ATUIN_HEX_TMUX:-}}"
+  _atuin_hex_tmux_current="${TMUX:-}"
+  _atuin_hex_tmux_previous="${ATUIN_HEX_TMUX:-}"
 
-  if [[ -z "${{ATUIN_HEX_ACTIVE:-}}" ]] || [[ "$_atuin_hex_tmux_current" != "$_atuin_hex_tmux_previous" ]]; then
+  if [[ -z "${ATUIN_HEX_ACTIVE:-}" ]] || [[ "$_atuin_hex_tmux_current" != "$_atuin_hex_tmux_previous" ]]; then
     export ATUIN_HEX_ACTIVE=1
     export ATUIN_HEX_TMUX="$_atuin_hex_tmux_current"
     exec atuin hex
@@ -448,6 +448,12 @@ mod tests {
         assert!(script.contains("exec atuin hex"));
         assert!(script.contains("ATUIN_HEX_TMUX"));
         assert!(!script.contains("eval \"$(atuin init bash)\""));
+    }
+
+    #[test]
+    fn posix_init_has_no_double_braces() {
+        let script = render_init(Shell::Bash);
+        assert!(!script.contains("${{"), "double braces in bash init script");
     }
 
     #[test]
