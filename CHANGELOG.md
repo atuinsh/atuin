@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 ## [unreleased]
 
+## 18.13.5
+
+### Bug Fixes
+
+- Atuin Hex fails to init on bash and zsh ([#3341](https://github.com/atuinsh/atuin/issues/3341))
+
+
+### Documentation
+
+- Fix duplicated word in Kubernetes guide ([#3338](https://github.com/atuinsh/atuin/issues/3338))
+
+
 ## 18.13.4
 
 ### Bug Fixes
