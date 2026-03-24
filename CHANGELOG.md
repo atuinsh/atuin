@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [unreleased]
 
+## 18.13.5
+
 ### Bug Fixes
 
 - Atuin Hex fails to init on bash and zsh ([#3341](https://github.com/atuinsh/atuin/issues/3341))
@@ -19,9 +21,7 @@ All notable changes to this project will be documented in this file.
 ### Bug Fixes
 
 - *(ai)* Restore url-quote-magic for ? in zsh ([#3304](https://github.com/atuinsh/atuin/issues/3304))
-- Redirect tty0 when running setup
 - Redirect tty0 when running setup ([#3302](https://github.com/atuinsh/atuin/issues/3302))
-- Call ensure_hub_session even if primary sync endpoint is self-hosted
 - Call ensure_hub_session even if primary sync endpoint is self-hosted ([#3301](https://github.com/atuinsh/atuin/issues/3301))
 - Remove per-event mouse capture toggling that leaked ANSI to stdout ([#3299](https://github.com/atuinsh/atuin/issues/3299))
 - Clarify what data is sent when using Atuin AI during setup (only OS and shell) ([#3290](https://github.com/atuinsh/atuin/issues/3290))
@@ -33,7 +33,6 @@ All notable changes to this project will be documented in this file.
 ### Documentation
 
 - Fix typo in FAQ alternatives section ([#3292](https://github.com/atuinsh/atuin/issues/3292))
-- Remove 'experimental' status from Atuin Daemon
 - Remove 'experimental' status from Atuin Daemon ([#3295](https://github.com/atuinsh/atuin/issues/3295))
 - Add inline_height_shell_up_key_binding ([#3270](https://github.com/atuinsh/atuin/issues/3270))
 
