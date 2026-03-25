@@ -46,9 +46,6 @@ __atuin_install_binary(){
 if ! command -v curl > /dev/null; then
     echo "curl not installed. Please install curl."
     exit
-elif ! command -v sed > /dev/null; then
-    echo "sed not installed. Please install sed."
-    exit
 fi
 
 
@@ -71,19 +68,9 @@ if ! grep -q "atuin init bash" ~/.bashrc; then
 fi
 
 if [ -f "$HOME/.config/fish/config.fish" ]; then
-  # Check if the line already exists to prevent duplicates
   if ! grep -q "atuin init fish" "$HOME/.config/fish/config.fish"; then
-        # Detect BSD or GNU sed
-        if sed --version >/dev/null 2>&1; then
-          # GNU
-          sed -i '/if status is-interactive/,/end/ s/end$/    atuin init fish | source\
-end/' "$HOME/.config/fish/config.fish"
-        else
-          # BSD (macOS)
-          sed -i '' '/if status is-interactive/,/end/ s/end$/    atuin init fish | source\
-end/' "$HOME/.config/fish/config.fish"
-        fi
-    fi
+    printf '\nif status is-interactive\n    atuin init fish | source\nend\n' >> "$HOME/.config/fish/config.fish"
+  fi
 fi
 
 ATUIN_BIN="$HOME/.atuin/bin/atuin"
