@@ -229,10 +229,12 @@ mod app {
         }
     }
 
+    fn kitty_zdotdir_from(val: Option<&str>) -> Option<String> {
+        val.filter(|v| !v.is_empty()).map(str::to_string)
+    }
+
     fn kitty_zdotdir() -> Option<String> {
-        std::env::var("KITTY_ZSH_ZDOTDIR")
-            .ok()
-            .filter(|v| !v.is_empty())
+        kitty_zdotdir_from(std::env::var("KITTY_ZSH_ZDOTDIR").ok().as_deref())
     }
 
     fn run() -> eyre::Result<()> {
@@ -427,7 +429,7 @@ mod app {
 
     #[cfg(test)]
     mod tests {
-        use super::{kitty_zdotdir, process_exit_code};
+        use super::{kitty_zdotdir_from, process_exit_code};
 
         #[test]
         fn process_exit_code_preserves_valid_values() {
@@ -443,24 +445,20 @@ mod app {
 
         #[test]
         fn kitty_zdotdir_returns_some_when_set() {
-            // SAFETY: single-threaded test binary, no concurrent env access
-            unsafe { std::env::set_var("KITTY_ZSH_ZDOTDIR", "/tmp/kitty-zdotdir") };
-            assert_eq!(kitty_zdotdir(), Some("/tmp/kitty-zdotdir".to_string()));
-            unsafe { std::env::remove_var("KITTY_ZSH_ZDOTDIR") };
+            assert_eq!(
+                kitty_zdotdir_from(Some("/tmp/kitty-zdotdir")),
+                Some("/tmp/kitty-zdotdir".to_string())
+            );
         }
 
         #[test]
         fn kitty_zdotdir_returns_none_when_unset() {
-            unsafe { std::env::remove_var("KITTY_ZSH_ZDOTDIR") };
-            assert_eq!(kitty_zdotdir(), None);
+            assert_eq!(kitty_zdotdir_from(None), None);
         }
 
         #[test]
         fn kitty_zdotdir_returns_none_when_empty() {
-            // SAFETY: single-threaded test binary, no concurrent env access
-            unsafe { std::env::set_var("KITTY_ZSH_ZDOTDIR", "") };
-            assert_eq!(kitty_zdotdir(), None);
-            unsafe { std::env::remove_var("KITTY_ZSH_ZDOTDIR") };
+            assert_eq!(kitty_zdotdir_from(Some("")), None);
         }
     }
 }
