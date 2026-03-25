@@ -5,7 +5,7 @@ use super::login::or_user_input;
 use atuin_client::{
     auth::{self, AuthResponse},
     record::sqlite_store::SqliteStore,
-    settings::Settings,
+    settings::{Settings, SyncAuth},
 };
 
 #[derive(Parser, Debug)]
@@ -21,15 +21,28 @@ pub struct Cmd {
 }
 
 impl Cmd {
+    #[allow(clippy::too_many_lines)]
     pub async fn run(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
-        if settings.logged_in().await? {
-            if settings.is_hub_sync() {
+        match settings.resolve_sync_auth().await {
+            SyncAuth::Hub { .. } => {
                 println!("You are already authenticated with Atuin Hub.");
-            } else {
-                println!("You are already logged in.");
+                println!("Run 'atuin logout' to log out.");
+                return Ok(());
             }
-            println!("Run 'atuin logout' to log out.");
-            return Ok(());
+            SyncAuth::Legacy { .. } => {
+                println!("You are already logged in.");
+                println!("Run 'atuin logout' to log out.");
+                return Ok(());
+            }
+            SyncAuth::HubViaCli { .. } => {
+                println!(
+                    "You already have a sync session. \
+                     Run 'atuin login' to upgrade to full Hub authentication."
+                );
+                println!("Run 'atuin logout' first if you want to register a new account.");
+                return Ok(());
+            }
+            SyncAuth::NotLoggedIn { .. } => {}
         }
 
         if settings.is_hub_sync() {
@@ -61,11 +74,23 @@ impl Cmd {
                 let response = client.register(username, email, password).await?;
 
                 match response {
-                    AuthResponse::Success { session } => {
-                        Settings::meta_store()
-                            .await?
-                            .save_hub_session(&session)
-                            .await?;
+                    AuthResponse::Success { session, auth_type } => {
+                        let meta = Settings::meta_store().await?;
+                        let is_hub_token =
+                            auth_type.as_deref() == Some("hub") || session.starts_with("atapi_");
+
+                        if is_hub_token {
+                            meta.save_hub_session(&session).await?;
+                        } else {
+                            meta.save_session(&session).await?;
+                            println!(
+                                "\nNote: Your account has not been fully migrated to Atuin Hub."
+                            );
+                            println!(
+                                "Sync will continue to work, but you can visit hub.atuin.sh \
+                                to create a new Hub account and link it to your existing CLI account."
+                            );
+                        }
                     }
                     AuthResponse::TwoFactorRequired => {
                         bail!("unexpected two-factor requirement during registration");

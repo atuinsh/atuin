@@ -25,16 +25,8 @@ enum Shell {
     Bash,
     /// Fish setup
     Fish,
-}
-
-impl Shell {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Bash => "bash",
-            Self::Zsh => "zsh",
-            Self::Fish => "fish",
-        }
-    }
+    /// Nu setup
+    Nu,
 }
 
 impl Init {
@@ -76,7 +68,7 @@ fn detect_shell(cli_shell: Option<Shell>) -> Result<Shell, String> {
     }
 
     Err(
-        "could not detect a supported shell. Please specify one explicitly: bash, zsh, or fish"
+        "could not detect a supported shell. Please specify one explicitly: bash, zsh, fish, or nu"
             .to_string(),
     )
 }
@@ -94,24 +86,19 @@ fn shell_from_name(name: &str) -> Option<Shell> {
         "bash" => Some(Shell::Bash),
         "zsh" => Some(Shell::Zsh),
         "fish" => Some(Shell::Fish),
+        "nu" => Some(Shell::Nu),
         _ => None,
     }
 }
 
-fn init_command(shell: Shell) -> String {
-    format!("atuin init {}", shell.as_str())
-}
-
-fn render_init(shell: Shell) -> String {
-    let init_command = init_command(shell);
-
+fn render_init(shell: Shell) -> &'static str {
     match shell {
-        Shell::Bash | Shell::Zsh => format!(
+        Shell::Bash | Shell::Zsh => {
             r#"if [[ "$-" == *i* ]] && [[ -t 0 ]] && [[ -t 1 ]]; then
-  _atuin_hex_tmux_current="${{TMUX:-}}"
-  _atuin_hex_tmux_previous="${{ATUIN_HEX_TMUX:-}}"
+  _atuin_hex_tmux_current="${TMUX:-}"
+  _atuin_hex_tmux_previous="${ATUIN_HEX_TMUX:-}"
 
-  if [[ -z "${{ATUIN_HEX_ACTIVE:-}}" ]] || [[ "$_atuin_hex_tmux_current" != "$_atuin_hex_tmux_previous" ]]; then
+  if [[ -z "${ATUIN_HEX_ACTIVE:-}" ]] || [[ "$_atuin_hex_tmux_current" != "$_atuin_hex_tmux_previous" ]]; then
     export ATUIN_HEX_ACTIVE=1
     export ATUIN_HEX_TMUX="$_atuin_hex_tmux_current"
     exec atuin hex
@@ -119,11 +106,9 @@ fn render_init(shell: Shell) -> String {
 
   unset _atuin_hex_tmux_current _atuin_hex_tmux_previous
 fi
-
-eval "$({init_command})"
 "#
-        ),
-        Shell::Fish => format!(
+        }
+        Shell::Fish => {
             r#"if status is-interactive; and test -t 0; and test -t 1
     set -l _atuin_hex_tmux_current ""
     if set -q TMUX
@@ -145,10 +130,24 @@ eval "$({init_command})"
         exec atuin hex
     end
 end
-
-{init_command} | source
 "#
-        ),
+        }
+        // Nushell cannot dynamically source the output of `atuin init nu`,
+        // so we only output the hex preamble here. Users must also set up
+        // `atuin init nu` separately.
+        Shell::Nu => {
+            r#"if (is-terminal --stdin) and (is-terminal --stdout) {
+    let tmux_current = ($env.TMUX? | default "")
+    let tmux_previous = ($env.ATUIN_HEX_TMUX? | default "")
+
+    if ($env.ATUIN_HEX_ACTIVE? | default "" | is-empty) or ($tmux_current != $tmux_previous) {
+        $env.ATUIN_HEX_ACTIVE = "1"
+        $env.ATUIN_HEX_TMUX = $tmux_current
+        exec atuin hex
+    }
+}
+"#
+        }
     }
 }
 
@@ -433,19 +432,14 @@ mod app {
 
 #[cfg(test)]
 mod tests {
-    use super::{Shell, init_command, render_init, shell_from_name};
+    use super::{Shell, render_init, shell_from_name};
 
     #[test]
     fn shell_from_name_handles_paths() {
         assert_eq!(shell_from_name("/bin/zsh"), Some(Shell::Zsh));
         assert_eq!(shell_from_name("/usr/local/bin/bash"), Some(Shell::Bash));
         assert_eq!(shell_from_name("fish"), Some(Shell::Fish));
-    }
-
-    #[test]
-    fn init_command_is_bootstrap_only() {
-        let command = init_command(Shell::Zsh);
-        assert_eq!(command, "atuin init zsh");
+        assert_eq!(shell_from_name("nu"), Some(Shell::Nu));
     }
 
     #[test]
@@ -453,13 +447,29 @@ mod tests {
         let script = render_init(Shell::Bash);
         assert!(script.contains("exec atuin hex"));
         assert!(script.contains("ATUIN_HEX_TMUX"));
-        assert!(script.contains("eval \"$(atuin init bash)\""));
+        assert!(!script.contains("eval \"$(atuin init bash)\""));
+    }
+
+    #[test]
+    fn posix_init_has_no_double_braces() {
+        let script = render_init(Shell::Bash);
+        assert!(!script.contains("${{"), "double braces in bash init script");
     }
 
     #[test]
     fn fish_init_uses_source() {
         let script = render_init(Shell::Fish);
         assert!(script.contains("exec atuin hex"));
-        assert!(script.contains("atuin init fish | source"));
+        assert!(!script.contains("atuin init fish | source"));
+    }
+
+    #[test]
+    fn nu_init_uses_exec_and_tty_guard() {
+        let script = render_init(Shell::Nu);
+        assert!(script.contains("exec atuin hex"));
+        assert!(script.contains("ATUIN_HEX_TMUX"));
+        assert!(script.contains("is-terminal --stdin"));
+        assert!(script.contains("is-terminal --stdout"));
+        assert!(script.contains("ATUIN_HEX_ACTIVE"));
     }
 }

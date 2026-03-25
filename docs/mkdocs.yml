@@ -81,6 +81,7 @@ nav:
       - doctor: reference/doctor.md
       - daemon: reference/daemon.md
       - gen-completions: reference/gen-completions.md
+      - hex: reference/hex.md
       - import: reference/import.md
       - info: reference/info.md
       - history list: reference/list.md

@@ -260,6 +260,27 @@ After installing, remember to restart your shell.
     source ~/.local/share/atuin/init.nu
     ```
 
+    ??? tip "Optional: Atuin Hex"
+        Hex is a lightweight pty proxy that renders the Atuin popup over
+        your previous output, restoring it when closed — no clearing, no
+        fullscreen. To use Hex with Nushell, generate the init script:
+
+        ```shell
+        mkdir ~/.local/share/atuin/
+        atuin hex init nu | save -f ~/.local/share/atuin/hex-init.nu
+        ```
+
+        Then source it as early as possible in your `config.nu`, *before*
+        the regular atuin init:
+
+        ```shell
+        source ~/.local/share/atuin/hex-init.nu
+        source ~/.local/share/atuin/init.nu
+        ```
+
+        Nushell's `source` command requires a static file path, so you must
+        pre-generate both files.
+
 === "xonsh"
 
     Add

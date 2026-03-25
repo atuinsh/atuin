@@ -18,7 +18,13 @@ static APP_USER_AGENT: &str = concat!("atuin/", env!("CARGO_PKG_VERSION"));
 /// Result of an auth operation that may require 2FA.
 pub enum AuthResponse {
     /// Operation succeeded; for login/register, contains the session token.
-    Success { session: String },
+    /// `auth_type` indicates the kind of token: `Some("hub")` for Hub API
+    /// tokens (prefixed `atapi_`), `Some("cli")` for legacy CLI session
+    /// tokens. `None` when the server didn't include the field (old servers).
+    Success {
+        session: String,
+        auth_type: Option<String>,
+    },
     /// Two-factor authentication is required; the caller should prompt for a
     /// TOTP code and retry with it.
     TwoFactorRequired,
@@ -153,6 +159,7 @@ impl AuthClient for LegacyAuthClient {
 
         Ok(AuthResponse::Success {
             session: resp.session,
+            auth_type: resp.auth.or(Some("cli".into())),
         })
     }
 
@@ -160,6 +167,7 @@ impl AuthClient for LegacyAuthClient {
         let resp = crate::api_client::register(&self.address, username, email, password).await?;
         Ok(AuthResponse::Success {
             session: resp.session,
+            auth_type: resp.auth.or(Some("cli".into())),
         })
     }
 
@@ -273,6 +281,7 @@ impl AuthClient for HubAuthClient {
             let login: LoginResponse = resp.json().await?;
             return Ok(AuthResponse::Success {
                 session: login.session,
+                auth_type: login.auth,
             });
         }
 
@@ -316,6 +325,7 @@ impl AuthClient for HubAuthClient {
             let reg: RegisterResponse = resp.json().await?;
             return Ok(AuthResponse::Success {
                 session: reg.session,
+                auth_type: reg.auth,
             });
         }
 
@@ -332,10 +342,19 @@ impl AuthClient for HubAuthClient {
         new_password: &str,
         totp_code: Option<&str>,
     ) -> Result<MutateResponse> {
-        let hub_token = self
-            .hub_token
-            .as_deref()
-            .ok_or_else(|| eyre::eyre!("Not logged in to Hub"))?;
+        let hub_token = self.hub_token.as_deref().ok_or_else(|| {
+            eyre::eyre!(
+                "Not logged in to Atuin Hub. \
+                     Please run 'atuin login' to authenticate."
+            )
+        })?;
+
+        if !hub_token.starts_with("atapi_") {
+            bail!(
+                "Your Hub session token is invalid. \
+                 Please run 'atuin login' to re-authenticate with Atuin Hub."
+            );
+        }
 
         ensure_crypto_provider();
         let url = make_url(&self.address, "/api/v0/account/password")?;
@@ -385,10 +404,19 @@ impl AuthClient for HubAuthClient {
         password: &str,
         totp_code: Option<&str>,
     ) -> Result<MutateResponse> {
-        let hub_token = self
-            .hub_token
-            .as_deref()
-            .ok_or_else(|| eyre::eyre!("Not logged in to Hub"))?;
+        let hub_token = self.hub_token.as_deref().ok_or_else(|| {
+            eyre::eyre!(
+                "Not logged in to Atuin Hub. \
+                     Please run 'atuin login' to authenticate."
+            )
+        })?;
+
+        if !hub_token.starts_with("atapi_") {
+            bail!(
+                "Your Hub session token is invalid. \
+                 Please run 'atuin login' to re-authenticate with Atuin Hub."
+            );
+        }
 
         ensure_crypto_provider();
         let url = make_url(&self.address, "/api/v0/account")?;

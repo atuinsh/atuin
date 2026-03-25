@@ -236,9 +236,7 @@ impl SystemInfo {
 
 #[derive(Debug, Serialize)]
 struct SyncInfo {
-    /// Whether the main Atuin sync server is in use
-    /// I'm just calling it Atuin Cloud for lack of a better name atm
-    pub cloud: bool,
+    pub auth_state: String,
     pub records: bool,
     pub auto_sync: bool,
 
@@ -247,8 +245,37 @@ struct SyncInfo {
 
 impl SyncInfo {
     pub async fn new(settings: &Settings) -> Self {
+        // Build auth state description from raw token state without calling
+        // resolve_sync_auth(), which has side effects (token migration cleanup)
+        // that a diagnostic command should not trigger.
+        let meta = Settings::meta_store().await.ok();
+        let has_hub_token = match &meta {
+            Some(m) => m
+                .hub_session_token()
+                .await
+                .ok()
+                .flatten()
+                .filter(|t| t.starts_with("atapi_"))
+                .is_some(),
+            None => false,
+        };
+        let has_cli_token = match &meta {
+            Some(m) => m.session_token().await.ok().flatten().is_some(),
+            None => false,
+        };
+
+        let auth_state = if has_hub_token {
+            "Hub (authenticated)".into()
+        } else if settings.is_hub_sync() && has_cli_token {
+            "Hub (legacy token \u{2014} run 'atuin login' to upgrade)".into()
+        } else if !settings.is_hub_sync() && has_cli_token {
+            "Self-hosted (authenticated)".into()
+        } else {
+            "Not authenticated".into()
+        };
+
         Self {
-            cloud: settings.is_hub_sync(),
+            auth_state,
             auto_sync: settings.auto_sync,
             records: settings.sync.records,
             last_sync: Settings::last_sync()

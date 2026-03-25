@@ -98,31 +98,20 @@ $env.config = (
         }
     }
 
-    fn static_init(&self, tmux: &Tmux) {
+    fn static_init(&self, settings: &Settings) {
+        let tmux = &settings.tmux;
+
+        let disable_ai = self.disable_ai || matches!(settings.ai.enabled, Some(false));
+
         match self.shell {
             Shell::Zsh => {
-                zsh::init_static(
-                    self.disable_up_arrow,
-                    self.disable_ctrl_r,
-                    self.disable_ai,
-                    tmux,
-                );
+                zsh::init_static(self.disable_up_arrow, self.disable_ctrl_r, disable_ai, tmux);
             }
             Shell::Bash => {
-                bash::init_static(
-                    self.disable_up_arrow,
-                    self.disable_ctrl_r,
-                    self.disable_ai,
-                    tmux,
-                );
+                bash::init_static(self.disable_up_arrow, self.disable_ctrl_r, disable_ai, tmux);
             }
             Shell::Fish => {
-                fish::init_static(
-                    self.disable_up_arrow,
-                    self.disable_ctrl_r,
-                    self.disable_ai,
-                    tmux,
-                );
+                fish::init_static(self.disable_up_arrow, self.disable_ctrl_r, disable_ai, tmux);
             }
             Shell::Nu => {
                 self.init_nu(tmux);
@@ -148,6 +137,8 @@ $env.config = (
         let alias_store = AliasStore::new(sqlite_store.clone(), host_id, encryption_key);
         let var_store = VarStore::new(sqlite_store.clone(), host_id, encryption_key);
 
+        let disable_ai = self.disable_ai || matches!(settings.ai.enabled, Some(false));
+
         match self.shell {
             Shell::Zsh => {
                 zsh::init(
@@ -155,7 +146,7 @@ $env.config = (
                     var_store,
                     self.disable_up_arrow,
                     self.disable_ctrl_r,
-                    self.disable_ai,
+                    disable_ai,
                     &settings.tmux,
                 )
                 .await?;
@@ -166,7 +157,7 @@ $env.config = (
                     var_store,
                     self.disable_up_arrow,
                     self.disable_ctrl_r,
-                    self.disable_ai,
+                    disable_ai,
                     &settings.tmux,
                 )
                 .await?;
@@ -177,7 +168,7 @@ $env.config = (
                     var_store,
                     self.disable_up_arrow,
                     self.disable_ctrl_r,
-                    self.disable_ai,
+                    disable_ai,
                     &settings.tmux,
                 )
                 .await?;
@@ -219,7 +210,7 @@ $env.config = (
         if settings.dotfiles.enabled {
             self.dotfiles_init(settings).await?;
         } else {
-            self.static_init(&settings.tmux);
+            self.static_init(settings);
         }
 
         Ok(())
