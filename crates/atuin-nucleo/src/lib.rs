@@ -375,7 +375,7 @@ impl<T: Sync + Send + 'static> Nucleo<T> {
         }
     }
 
-    /// Restart the the item stream. Removes all items and disconnects all
+    /// Restart the item stream. Removes all items and disconnects all
     /// previously created injectors from this instance. If `clear_snapshot`
     /// is `true` then all items and matched are removed from the [`Snapshot`]
     /// immediately. Otherwise the snapshot will keep the current matches until
