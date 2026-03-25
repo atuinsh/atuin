@@ -229,6 +229,12 @@ mod app {
         }
     }
 
+    fn kitty_zdotdir() -> Option<String> {
+        std::env::var("KITTY_ZSH_ZDOTDIR")
+            .ok()
+            .filter(|v| !v.is_empty())
+    }
+
     fn run() -> eyre::Result<()> {
         let (cols, rows) = terminal::size()?;
 
@@ -250,6 +256,13 @@ mod app {
         let mut cmd = CommandBuilder::new_default_prog();
         cmd.cwd(std::env::current_dir()?);
         cmd.env("ATUIN_HEX_SOCKET", sock_path.as_os_str());
+        // Preserve Kitty's shell integration when launching inside a Kitty terminal.
+        // Kitty sets KITTY_ZSH_ZDOTDIR so that nested zsh processes re-source its
+        // integration scripts via ZDOTDIR.  Without this, the PTY child shell never
+        // loads _ksi_preexec and other Kitty hooks, breaking shell integration.
+        if let Some(zdotdir) = kitty_zdotdir() {
+            cmd.env("ZDOTDIR", zdotdir);
+        }
 
         let mut child = pair
             .slave
@@ -414,7 +427,7 @@ mod app {
 
     #[cfg(test)]
     mod tests {
-        use super::process_exit_code;
+        use super::{kitty_zdotdir, process_exit_code};
 
         #[test]
         fn process_exit_code_preserves_valid_values() {
@@ -426,6 +439,28 @@ mod app {
         #[test]
         fn process_exit_code_defaults_when_out_of_range() {
             assert_eq!(process_exit_code(i32::MAX as u32 + 1), 1);
+        }
+
+        #[test]
+        fn kitty_zdotdir_returns_some_when_set() {
+            // SAFETY: single-threaded test binary, no concurrent env access
+            unsafe { std::env::set_var("KITTY_ZSH_ZDOTDIR", "/tmp/kitty-zdotdir") };
+            assert_eq!(kitty_zdotdir(), Some("/tmp/kitty-zdotdir".to_string()));
+            unsafe { std::env::remove_var("KITTY_ZSH_ZDOTDIR") };
+        }
+
+        #[test]
+        fn kitty_zdotdir_returns_none_when_unset() {
+            unsafe { std::env::remove_var("KITTY_ZSH_ZDOTDIR") };
+            assert_eq!(kitty_zdotdir(), None);
+        }
+
+        #[test]
+        fn kitty_zdotdir_returns_none_when_empty() {
+            // SAFETY: single-threaded test binary, no concurrent env access
+            unsafe { std::env::set_var("KITTY_ZSH_ZDOTDIR", "") };
+            assert_eq!(kitty_zdotdir(), None);
+            unsafe { std::env::remove_var("KITTY_ZSH_ZDOTDIR") };
         }
     }
 }
