@@ -31,14 +31,17 @@ reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 crossterm = { workspace = true, features = ["use-dev-tty", "event-stream"] }
-ratatui = { workspace = true, features = ["unstable-rendered-line-info"] }
+ratatui = { workspace = true }
 futures = "0.3"
 eventsource-stream = "0.2"
 pulldown-cmark = "0.13.0"
 async-stream = "0.3"
 uuid = { workspace = true }
-tui-textarea-2 = "0.9.1"
+tui-textarea-2 = "0.10.2"
 unicode-width = "0.2"
+eye_declare = "0.1"
+ratatui-core = "0.1"
+ratatui-widgets = "0.3"
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

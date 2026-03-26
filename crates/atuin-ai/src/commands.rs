@@ -8,9 +8,6 @@ use clap::{Args, Subcommand};
 use eyre::Result;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{EnvFilter, Layer, fmt, layer::SubscriberExt, util::SubscriberInitExt};
-#[cfg(debug_assertions)]
-pub mod debug_render;
-
 pub mod init;
 pub mod inline;
 
@@ -59,18 +56,6 @@ pub enum Commands {
         #[arg(long, value_name = "FILE", hide = true)]
         debug_state: Option<String>,
     },
-
-    /// Debug render: output a single frame from JSON state (dev tool)
-    #[cfg(debug_assertions)]
-    DebugRender {
-        /// Input file (reads from stdin if not provided)
-        #[arg(short, long)]
-        input: Option<String>,
-
-        /// Output format: ansi (default), plain, json
-        #[arg(short, long, default_value = "ansi")]
-        format: String,
-    },
 }
 
 pub async fn run(
@@ -101,15 +86,6 @@ pub async fn run(
                 hook,
             )
             .await
-        }
-        #[cfg(debug_assertions)]
-        Commands::DebugRender { input, format } => {
-            let output_format = match format.as_str() {
-                "plain" => debug_render::OutputFormat::Plain,
-                "json" => debug_render::OutputFormat::Json,
-                _ => debug_render::OutputFormat::Ansi,
-            };
-            debug_render::run(input, output_format).await
         }
     }
 }
