@@ -150,6 +150,8 @@ New-Module -Name Atuin -ScriptBlock {
             $process.StartInfo.StandardErrorEncoding = [System.Text.Encoding]::UTF8
             $process.StartInfo.EnvironmentVariables["ATUIN_SHELL"] = "powershell"
             $process.StartInfo.EnvironmentVariables["ATUIN_QUERY"] = Get-CommandLine
+            # PowerShell's Set-Location (cd) doesn't update the process-level working directory, set it explicitly
+            $process.StartInfo.WorkingDirectory = (Get-Location -PSProvider FileSystem).ProviderPath
 
             try {
                 $process.Start() | Out-Null
