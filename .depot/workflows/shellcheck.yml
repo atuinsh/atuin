@@ -1,0 +1,20 @@
+# Depot CI Migration
+# Source: .github/workflows/shellcheck.yml
+#
+# No changes were necessary.
+
+name: Shellcheck
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+jobs:
+  shellcheck:
+    runs-on: depot-ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - name: Run shellcheck
+        uses: ludeeus/action-shellcheck@master
+        env:
+          SHELLCHECK_OPTS: "-e SC2148"
