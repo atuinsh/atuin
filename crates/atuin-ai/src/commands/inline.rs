@@ -17,8 +17,6 @@ pub async fn run(
     initial_command: Option<String>,
     api_endpoint: Option<String>,
     api_token: Option<String>,
-    _keep_output: bool,
-    _debug_state_file: Option<String>,
     settings: &atuin_client::settings::Settings,
     output_for_hook: bool,
 ) -> Result<()> {

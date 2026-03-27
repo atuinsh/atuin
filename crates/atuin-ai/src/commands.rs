@@ -44,17 +44,9 @@ pub enum Commands {
         #[arg(value_name = "COMMAND")]
         command: Option<String>,
 
-        /// Keep TUI output visible after exit (default: erase)
-        #[arg(long)]
-        keep: bool,
-
         /// Use the hook mode
         #[arg(long, hide = true)]
         hook: bool,
-
-        /// Log state changes to file for debugging (dev tool)
-        #[arg(long, value_name = "FILE", hide = true)]
-        debug_state: Option<String>,
     },
 }
 
@@ -66,8 +58,6 @@ pub async fn run(
         Commands::Init { shell } => init::run(shell).await,
         Commands::Inline {
             command,
-            keep,
-            debug_state,
             hook,
             args,
             ..
@@ -76,16 +66,7 @@ pub async fn run(
                 init_logging(settings, args.verbose)?;
             }
 
-            inline::run(
-                command,
-                args.api_endpoint,
-                args.api_token,
-                keep,
-                debug_state,
-                settings,
-                hook,
-            )
-            .await
+            inline::run(command, args.api_endpoint, args.api_token, settings, hook).await
         }
     }
 }
