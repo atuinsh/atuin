@@ -5,6 +5,7 @@ pub(crate) enum DangerLevel {
     Low(Option<String>),
     Medium(Option<String>),
     High(Option<String>),
+    Unknown(Option<String>),
 }
 
 impl DangerLevel {
@@ -13,14 +14,13 @@ impl DangerLevel {
             DangerLevel::Low(notes) => notes.as_ref(),
             DangerLevel::Medium(notes) => notes.as_ref(),
             DangerLevel::High(notes) => notes.as_ref(),
+            DangerLevel::Unknown(notes) => notes.as_ref(),
         }
     }
 }
 
-impl TryFrom<(&String, &String)> for DangerLevel {
-    type Error = String;
-
-    fn try_from((danger_level, danger_notes): (&String, &String)) -> Result<Self, Self::Error> {
+impl From<(&String, &String)> for DangerLevel {
+    fn from((danger_level, danger_notes): (&String, &String)) -> Self {
         let notes = if danger_notes.is_empty() {
             None
         } else {
@@ -28,11 +28,11 @@ impl TryFrom<(&String, &String)> for DangerLevel {
         };
 
         match danger_level.as_str() {
-            "low" => Ok(DangerLevel::Low(notes)),
-            "medium" => Ok(DangerLevel::Medium(notes)),
-            "med" => Ok(DangerLevel::Medium(notes)),
-            "high" => Ok(DangerLevel::High(notes)),
-            _ => Err(format!("Invalid danger level: {}", danger_level)),
+            "low" => DangerLevel::Low(notes),
+            "medium" => DangerLevel::Medium(notes),
+            "med" => DangerLevel::Medium(notes),
+            "high" => DangerLevel::High(notes),
+            _ => DangerLevel::Unknown(notes),
         }
     }
 }
@@ -42,6 +42,7 @@ pub(crate) enum ConfidenceLevel {
     Low(Option<String>),
     Medium(Option<String>),
     High(Option<String>),
+    Unknown(Option<String>),
 }
 
 impl ConfidenceLevel {
@@ -50,16 +51,13 @@ impl ConfidenceLevel {
             ConfidenceLevel::Low(notes) => notes.as_ref(),
             ConfidenceLevel::Medium(notes) => notes.as_ref(),
             ConfidenceLevel::High(notes) => notes.as_ref(),
+            ConfidenceLevel::Unknown(notes) => notes.as_ref(),
         }
     }
 }
 
-impl TryFrom<(&String, &String)> for ConfidenceLevel {
-    type Error = String;
-
-    fn try_from(
-        (confidence_level, confidence_notes): (&String, &String),
-    ) -> Result<Self, Self::Error> {
+impl From<(&String, &String)> for ConfidenceLevel {
+    fn from((confidence_level, confidence_notes): (&String, &String)) -> Self {
         let notes = if confidence_notes.is_empty() {
             None
         } else {
@@ -67,11 +65,11 @@ impl TryFrom<(&String, &String)> for ConfidenceLevel {
         };
 
         match confidence_level.as_str() {
-            "low" => Ok(ConfidenceLevel::Low(notes)),
-            "medium" => Ok(ConfidenceLevel::Medium(notes)),
-            "med" => Ok(ConfidenceLevel::Medium(notes)),
-            "high" => Ok(ConfidenceLevel::High(notes)),
-            _ => Err(format!("Invalid confidence level: {}", confidence_level)),
+            "low" => ConfidenceLevel::Low(notes),
+            "medium" => ConfidenceLevel::Medium(notes),
+            "med" => ConfidenceLevel::Medium(notes),
+            "high" => ConfidenceLevel::High(notes),
+            _ => ConfidenceLevel::Unknown(notes),
         }
     }
 }
@@ -289,10 +287,8 @@ impl TurnBuilder {
                 .unwrap_or("")
                 .to_string();
 
-            let danger = DangerLevel::try_from((&danger_level, &danger_notes))
-                .expect("Invalid danger level");
-            let confidence = ConfidenceLevel::try_from((&confidence_level, &confidence_notes))
-                .expect("Invalid confidence level");
+            let danger = DangerLevel::from((&danger_level, &danger_notes));
+            let confidence = ConfidenceLevel::from((&confidence_level, &confidence_notes));
 
             let first_event_in_turn = events.is_empty();
 

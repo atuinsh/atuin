@@ -239,11 +239,13 @@ fn suggested_command_view(details: &turn::SuggestedCommandDetails) -> Elements {
         turn::DangerLevel::High(_) => Style::default().fg(Color::Red),
         turn::DangerLevel::Medium(_) => Style::default().fg(Color::Yellow),
         turn::DangerLevel::Low(_) => Style::default().fg(Color::Green),
+        turn::DangerLevel::Unknown(_) => Style::default().fg(Color::Green),
     };
     let danger_text = match details.danger_level {
         turn::DangerLevel::High(_) => "High",
         turn::DangerLevel::Medium(_) => "Medium",
         turn::DangerLevel::Low(_) => "Low",
+        turn::DangerLevel::Unknown(_) => "Unknown",
     };
 
     let low_confidence = matches!(
@@ -255,6 +257,7 @@ fn suggested_command_view(details: &turn::SuggestedCommandDetails) -> Elements {
         turn::ConfidenceLevel::Low(_) => "Low",
         turn::ConfidenceLevel::Medium(_) => "Medium",
         turn::ConfidenceLevel::High(_) => "High",
+        turn::ConfidenceLevel::Unknown(_) => "Unknown",
     };
 
     let confidence_notes = details.confidence_level.notes();
