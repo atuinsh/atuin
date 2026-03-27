@@ -164,7 +164,7 @@ impl Cmd {
         res
     }
 
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::too_many_lines, clippy::future_not_send)]
     async fn run_inner(
         self,
         mut settings: Settings,

@@ -1,29 +1,22 @@
+use std::sync::mpsc;
+
 use crate::commands::detect_shell;
-use crate::tui::render::render;
-use crate::tui::{
-    App, AppEvent, AppMode, ConversationEvent, EventLoop, ExitAction, RenderContext, TerminalGuard,
-    calculate_needed_height, install_panic_hook,
-};
+use crate::tui::events::AiTuiEvent;
+use crate::tui::state::{AppState, ExitAction};
+use crate::tui::view::ai_view;
 use atuin_client::distro::detect_linux_distribution;
-use atuin_client::theme::ThemeManager;
 use atuin_common::tls::ensure_crypto_provider;
-use crossterm::{
-    event::{self, Event, KeyCode},
-    terminal::{disable_raw_mode, enable_raw_mode},
-};
 use eventsource_stream::Eventsource;
+use eye_declare::{Application, CtrlCBehavior, Handle};
 use eyre::{Context as _, Result, bail};
 use futures::StreamExt;
 use reqwest::Url;
-use std::io::Write;
 use tracing::{debug, error, info, trace};
 
 pub async fn run(
     initial_command: Option<String>,
     api_endpoint: Option<String>,
     api_token: Option<String>,
-    keep_output: bool,
-    debug_state_file: Option<String>,
     settings: &atuin_client::settings::Settings,
     output_for_hook: bool,
 ) -> Result<()> {
@@ -38,13 +31,6 @@ pub async fn run(
         return Ok(());
     }
 
-    // Install panic hook once at entry point to ensure terminal restoration
-    install_panic_hook();
-
-    // Token and endpoint priority:
-    // 1. Command line arguments/environment variables
-    // 2. Settings file
-    // 3. Default
     let endpoint = api_endpoint.as_deref().unwrap_or(
         settings
             .ai
@@ -57,23 +43,10 @@ pub async fn run(
     let token = if let Some(token) = &api_token {
         token.to_string()
     } else {
-        // ensure_hub_session will authenticate against settings.active_hub_endpoint().unwrap_or_default(),
-        // which is the default Hub endpoint if no endpoint is provided
-        //
-        // TODO[mkt]: Atuin AI and the Hub sync endpoint are too tightly coupled;
-        // current setup means that Hub endpoint controls auth while AI endpoint controls AI conversations
         ensure_hub_session(settings).await?
     };
 
-    let action = run_inline_tui(
-        endpoint.to_string(),
-        token,
-        initial_command,
-        keep_output,
-        debug_state_file,
-        settings,
-    )
-    .await?;
+    let action = run_inline_tui(endpoint.to_string(), token, initial_command, settings).await?;
     emit_shell_result(action, output_for_hook);
 
     Ok(())
@@ -86,7 +59,6 @@ async fn ensure_hub_session(settings: &atuin_client::settings::Settings) -> Resu
     }
 
     let hub_address = settings.active_hub_endpoint().unwrap_or_default();
-
     let will_sync = settings.is_hub_sync();
 
     info!("No Hub session found, prompting for authentication");
@@ -106,8 +78,8 @@ async fn ensure_hub_session(settings: &atuin_client::settings::Settings) -> Resu
     }
 
     debug!("Starting Atuin Hub authentication...");
-
     println!("Authenticating with Atuin Hub...");
+
     let session = atuin_client::hub::HubAuthSession::start(hub_address.as_ref()).await?;
     println!("Open this URL to continue:");
     println!("{}", session.auth_url);
@@ -120,17 +92,13 @@ async fn ensure_hub_session(settings: &atuin_client::settings::Settings) -> Resu
         .await?;
 
     info!("Authentication complete, saving session token");
-
     atuin_client::hub::save_session(&token).await?;
 
-    // Silently attempt to link CLI account to Hub if one exists
-    // This enables unified auth - users can use their Hub token for sync
     if let Ok(meta) = atuin_client::settings::Settings::meta_store().await
         && let Ok(Some(cli_token)) = meta.session_token().await
     {
         debug!("CLI session found, attempting to link accounts");
         if let Err(e) = atuin_client::hub::link_account(hub_address.as_ref(), &cli_token).await {
-            // Don't fail AI flow if linking fails - it's not critical
             debug!("Could not link CLI account to Hub: {}", e);
         } else {
             info!("Successfully linked CLI account to Hub");
@@ -140,28 +108,27 @@ async fn ensure_hub_session(settings: &atuin_client::settings::Settings) -> Resu
     Ok(token)
 }
 
-/// SSE event received from chat endpoint
+// ───────────────────────────────────────────────────────────────────
+// SSE streaming
+// ───────────────────────────────────────────────────────────────────
+
 #[derive(Debug, Clone)]
 enum ChatStreamEvent {
-    /// Text chunk to display
     TextChunk(String),
-    /// Tool call event (need to echo back, may contain suggest_command)
     ToolCall {
         id: String,
         name: String,
         input: serde_json::Value,
     },
-    /// Tool result from server-side execution
     ToolResult {
         tool_use_id: String,
         content: String,
         is_error: bool,
     },
-    /// Status update from server
     Status(String),
-    /// Stream complete
-    Done { session_id: String },
-    /// Error from server
+    Done {
+        session_id: String,
+    },
     Error(String),
 }
 
@@ -170,10 +137,8 @@ fn create_chat_stream(
     token: String,
     session_id: Option<String>,
     messages: Vec<serde_json::Value>,
-    settings: &atuin_client::settings::Settings,
+    send_cwd: bool,
 ) -> std::pin::Pin<Box<dyn futures::Stream<Item = Result<ChatStreamEvent>> + Send>> {
-    let send_cwd = settings.ai.send_cwd;
-
     Box::pin(async_stream::stream! {
         ensure_crypto_provider();
         let endpoint = match hub_url(&hub_address, "/api/cli/chat") {
@@ -201,18 +166,15 @@ fn create_chat_stream(
             context["distro"] = serde_json::json!(detect_linux_distribution());
         }
 
-        // Build request body
         let mut request_body = serde_json::json!({
             "messages": messages,
             "context": context,
         });
 
-        // Include session_id only if present (not on first request)
         if let Some(ref sid) = session_id {
             trace!("Including session_id in request: {sid}");
             request_body["session_id"] = serde_json::json!(sid);
         }
-
 
         let client = reqwest::Client::new();
         let response = match client
@@ -232,7 +194,6 @@ fn create_chat_stream(
 
         let status = response.status();
         if status == reqwest::StatusCode::UNAUTHORIZED {
-            // Clear saved session on auth error
             error!("SSE request failed with status: {status}, clearing session");
             let _ = atuin_client::hub::delete_session().await;
             yield Err(eyre::eyre!("Hub session expired. Re-run to authenticate again."));
@@ -310,9 +271,7 @@ fn create_chat_stream(
                             }
                             break;
                         }
-                        _ => {
-                            // Unknown event type, ignore
-                        }
+                        _ => {}
                     }
                 }
                 Err(e) => {
@@ -323,6 +282,267 @@ fn create_chat_stream(
         }
     })
 }
+
+// ───────────────────────────────────────────────────────────────────
+// Async streaming task — pushes updates to app state via Handle
+// ───────────────────────────────────────────────────────────────────
+
+async fn run_chat_stream(
+    handle: Handle<AppState>,
+    endpoint: String,
+    token: String,
+    session_id: Option<String>,
+    messages: Vec<serde_json::Value>,
+    send_cwd: bool,
+) {
+    let stream = create_chat_stream(endpoint, token, session_id, messages, send_cwd);
+    futures::pin_mut!(stream);
+
+    while let Some(event) = stream.next().await {
+        match event {
+            Ok(ChatStreamEvent::TextChunk(text)) => {
+                trace!(text = %text, "Processing TextChunk");
+                handle.update(move |state| {
+                    state.append_streaming_text(&text);
+                });
+            }
+            Ok(ChatStreamEvent::ToolCall { id, name, input }) => {
+                trace!(id = %id, name = %name, "Processing ToolCall");
+                handle.update(move |state| {
+                    state.add_tool_call(id, name, input);
+                });
+            }
+            Ok(ChatStreamEvent::ToolResult {
+                tool_use_id,
+                content,
+                is_error,
+            }) => {
+                trace!(tool_use_id = %tool_use_id, "Processing ToolResult");
+                handle.update(move |state| {
+                    state.add_tool_result(tool_use_id, content, is_error);
+                });
+            }
+            Ok(ChatStreamEvent::Status(status)) => {
+                trace!(status = %status, "Processing Status");
+                handle.update(move |state| {
+                    state.update_streaming_status(&status);
+                });
+            }
+            Ok(ChatStreamEvent::Done { session_id }) => {
+                trace!(session_id = %session_id, "Processing Done");
+                handle.update(move |state| {
+                    if !session_id.is_empty() {
+                        state.store_session_id(session_id);
+                    }
+                    state.finalize_streaming();
+                });
+                break;
+            }
+            Ok(ChatStreamEvent::Error(msg)) => {
+                trace!(error = %msg, "Processing Error");
+                handle.update(move |state| {
+                    state.streaming_error(msg);
+                });
+                break;
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                handle.update(move |state| {
+                    state.streaming_error(msg);
+                });
+                break;
+            }
+        }
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────
+// Main TUI entry point
+// ───────────────────────────────────────────────────────────────────
+
+async fn run_inline_tui(
+    endpoint: String,
+    token: String,
+    initial_prompt: Option<String>,
+    settings: &atuin_client::settings::Settings,
+) -> Result<Action> {
+    let initial_state = AppState::new();
+
+    println!();
+
+    let (tx, rx) = mpsc::channel::<AiTuiEvent>();
+
+    // If there's an initial prompt, send it as a SubmitInput event
+    // so it flows through the same path as user-typed input.
+    if let Some(prompt) = initial_prompt {
+        let _ = tx.send(AiTuiEvent::SubmitInput(prompt));
+    }
+
+    let (mut app, handle) = Application::builder()
+        .state(initial_state)
+        .view(ai_view)
+        .ctrl_c(CtrlCBehavior::Deliver)
+        .keyboard_protocol(eye_declare::KeyboardProtocol::Enhanced)
+        .bracketed_paste(true)
+        .with_context(tx)
+        .extra_newlines_at_exit(1)
+        .build()?;
+
+    let send_cwd = settings.ai.send_cwd;
+
+    // Event loop: receives AiTuiEvent from components, mutates state via Handle.
+    let h = handle.clone();
+    let ep = endpoint.clone();
+    let tk = token.clone();
+    tokio::task::spawn_blocking(move || {
+        while let Ok(event) = rx.recv() {
+            match event {
+                AiTuiEvent::InputUpdated(input) => {
+                    let input_blank = input.trim().is_empty();
+
+                    h.update(move |state| {
+                        state.is_input_blank = input_blank;
+                    });
+                }
+                AiTuiEvent::SubmitInput(input) => {
+                    let input = input.trim().to_string();
+                    if input.is_empty() {
+                        let h2 = h.clone();
+                        h.update(move |state| {
+                            if state.has_any_command() {
+                                state.exit_action = Some(ExitAction::Execute(
+                                    state.current_command().unwrap().to_string(),
+                                ));
+                            } else {
+                                state.exit_action = Some(ExitAction::Cancel);
+                            }
+                            h2.exit();
+                        });
+                        continue;
+                    }
+
+                    if input.starts_with('/') {
+                        let input_clone = input.clone();
+                        h.update(move |state| {
+                            state.handle_slash_command(&input_clone);
+                        });
+                        continue;
+                    }
+
+                    // Start generation and spawn streaming task
+                    let ep = ep.clone();
+                    let tk = tk.clone();
+                    let h2 = h.clone();
+                    h.update(move |state| {
+                        state.start_generating(input);
+                        state.start_streaming();
+                        state.is_input_blank = true;
+                        let messages = state.events_to_messages();
+                        let sid = state.session_id.clone();
+                        let task = tokio::spawn(async move {
+                            run_chat_stream(h2, ep, tk, sid, messages, send_cwd).await;
+                        });
+                        state.stream_abort = Some(task.abort_handle());
+                    });
+                }
+
+                AiTuiEvent::SlashCommand(command) => {
+                    h.update(move |state| {
+                        state.handle_slash_command(&command);
+                    });
+                }
+
+                AiTuiEvent::CancelGeneration => {
+                    h.update(|state| match state.mode {
+                        crate::tui::state::AppMode::Generating => {
+                            state.cancel_generation();
+                        }
+                        crate::tui::state::AppMode::Streaming => {
+                            state.cancel_streaming();
+                        }
+                        _ => {}
+                    });
+                }
+
+                AiTuiEvent::ExecuteCommand => {
+                    let h2 = h.clone();
+                    h.update(move |state| {
+                        let cmd = state.current_command().map(|c| c.to_string());
+                        if let Some(cmd) = cmd {
+                            if state.is_current_command_dangerous() && !state.confirmation_pending {
+                                state.confirmation_pending = true;
+                            } else {
+                                state.confirmation_pending = false;
+                                state.exit_action = Some(ExitAction::Execute(cmd));
+                                h2.exit();
+                            }
+                        }
+                    });
+                }
+
+                AiTuiEvent::CancelConfirmation => {
+                    h.update(move |state| {
+                        state.confirmation_pending = false;
+                    });
+                }
+
+                AiTuiEvent::InsertCommand => {
+                    let h2 = h.clone();
+                    h.update(move |state| {
+                        let cmd = state.current_command().map(|c| c.to_string());
+                        if let Some(cmd) = cmd {
+                            state.confirmation_pending = false;
+                            state.exit_action = Some(ExitAction::Insert(cmd));
+                            h2.exit();
+                        }
+                    });
+                }
+
+                AiTuiEvent::Retry => {
+                    let ep = ep.clone();
+                    let tk = tk.clone();
+                    let h2 = h.clone();
+                    h.update(move |state| {
+                        state.retry();
+                        state.start_streaming();
+                        let messages = state.events_to_messages();
+                        let sid = state.session_id.clone();
+                        let task = tokio::spawn(async move {
+                            run_chat_stream(h2, ep, tk, sid, messages, send_cwd).await;
+                        });
+                        state.stream_abort = Some(task.abort_handle());
+                    });
+                }
+
+                AiTuiEvent::Exit => {
+                    let h2 = h.clone();
+                    h.update(move |state| {
+                        if let Some(abort) = state.stream_abort.take() {
+                            abort.abort();
+                        }
+                        state.exit_action = Some(ExitAction::Cancel);
+                        h2.exit();
+                    });
+                }
+            }
+        }
+    });
+
+    app.run_loop().await?;
+
+    // Map exit action to return value
+    let result = match app.state().exit_action {
+        Some(ExitAction::Execute(ref cmd)) => Action::Execute(cmd.clone()),
+        Some(ExitAction::Insert(ref cmd)) => Action::Insert(cmd.clone()),
+        _ => Action::Cancel,
+    };
+
+    Ok(result)
+}
+
+// ───────────────────────────────────────────────────────────────────
+// Helpers
+// ───────────────────────────────────────────────────────────────────
 
 fn hub_url(base: &str, path: &str) -> Result<Url> {
     let base_with_slash = if base.ends_with('/') {
@@ -353,375 +573,6 @@ enum Action {
     Cancel,
 }
 
-/// Serialize AppState to JSON for debug logging
-fn state_to_json(state: &crate::tui::AppState) -> serde_json::Value {
-    let events: Vec<serde_json::Value> = state.events.iter().map(|e| e.to_json()).collect();
-
-    let mode = match state.mode {
-        AppMode::Input => "Input",
-        AppMode::Generating => "Generating",
-        AppMode::Streaming => "Streaming",
-        AppMode::Review => "Review",
-        AppMode::Error => "Error",
-    };
-
-    // Get input and cursor from textarea
-    let input = state.input();
-    let cursor = state.textarea.cursor();
-
-    let mut json = serde_json::json!({
-        "events": events,
-        "mode": mode,
-        "input": input,
-        "cursor_row": cursor.0,
-        "cursor_col": cursor.1,
-        "spinner_frame": state.spinner_frame,
-        "confirmation_pending": state.confirmation_pending,
-    });
-
-    // Add streaming fields if in streaming mode
-    if !state.streaming_text.is_empty() {
-        json["streaming_text"] = serde_json::json!(state.streaming_text);
-    }
-    if let Some(ref status) = state.streaming_status {
-        json["streaming_status"] = serde_json::json!(status.display_text());
-    }
-    if let Some(ref err) = state.error {
-        json["error"] = serde_json::json!(err);
-    }
-
-    json
-}
-
-/// Debug logger that writes state changes to a file
-struct DebugStateLogger {
-    file: std::fs::File,
-    entry_count: usize,
-    width: u16,
-}
-
-impl DebugStateLogger {
-    fn new(path: &str) -> Result<Self> {
-        let file = std::fs::File::create(path)
-            .with_context(|| format!("Failed to create debug state file: {}", path))?;
-        // Get terminal width, default to 80
-        let (width, _) = crossterm::terminal::size().unwrap_or((80, 24));
-        Ok(Self {
-            file,
-            entry_count: 0,
-            width,
-        })
-    }
-
-    fn log(&mut self, label: &str, state: &crate::tui::AppState) {
-        use crate::tui::calculate_needed_height;
-
-        self.entry_count += 1;
-        let timestamp_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis())
-            .unwrap_or(0);
-
-        // Calculate the actual content height needed for this state
-        let content_height = calculate_needed_height(state, 0);
-
-        let mut state_json = state_to_json(state);
-        // Add dimensions for accurate replay
-        state_json["width"] = serde_json::json!(self.width);
-        state_json["height"] = serde_json::json!(content_height);
-
-        let entry = serde_json::json!({
-            "entry": self.entry_count,
-            "label": label,
-            "timestamp_ms": timestamp_ms,
-            "state": state_json,
-        });
-
-        // Write as JSONL (one JSON object per line)
-        if let Err(e) = writeln!(self.file, "{}", entry) {
-            tracing::warn!("Failed to write debug state: {}", e);
-        }
-        let _ = self.file.flush();
-    }
-}
-
-async fn run_inline_tui(
-    endpoint: String,
-    token: String,
-    initial_prompt: Option<String>,
-    keep_output: bool,
-    debug_state_file: Option<String>,
-    settings: &atuin_client::settings::Settings,
-) -> Result<Action> {
-    // Detect popup mode (only on Unix where atuin-hex socket is available)
-    #[cfg(unix)]
-    let mut popup_state = crate::tui::popup::try_setup_popup();
-    #[cfg(not(unix))]
-    let popup_state: Option<()> = None;
-
-    let popup_mode = popup_state.is_some();
-
-    // Initialize terminal guard: popup mode uses Fixed viewport, inline uses Inline
-    #[cfg(unix)]
-    let mut guard = if let Some(ref ps) = popup_state {
-        TerminalGuard::new_popup(ps.current_rect, ps.saved_screen.cursor_col)?
-    } else {
-        TerminalGuard::new(keep_output)?
-    };
-    #[cfg(not(unix))]
-    let mut guard = TerminalGuard::new(keep_output)?;
-    let mut app = App::new();
-    if let Some(prompt) = initial_prompt {
-        // Set initial text in textarea
-        let mut textarea = tui_textarea::TextArea::from(prompt.lines());
-        // Disable underline on cursor line
-        textarea.set_cursor_line_style(ratatui::style::Style::default());
-        // Enable word wrapping
-        textarea.set_wrap_mode(tui_textarea::WrapMode::Word);
-        // Move cursor to end
-        textarea.move_cursor(tui_textarea::CursorMove::End);
-        app.state.textarea = textarea;
-    }
-
-    // Initialize debug state logger if requested
-    let mut debug_logger = debug_state_file
-        .map(|path| DebugStateLogger::new(&path))
-        .transpose()?;
-
-    // Helper macro to log state changes
-    macro_rules! log_state {
-        ($label:expr) => {
-            if let Some(ref mut logger) = debug_logger {
-                logger.log($label, &app.state);
-            }
-        };
-    }
-
-    // Log initial state
-    log_state!("init");
-
-    // Load theme
-    let mut theme_manager = ThemeManager::new(None, None);
-    let theme = theme_manager.load_theme(&settings.theme.name, None);
-
-    // Initialize event loop
-    let mut event_loop = EventLoop::new();
-
-    // Track chat stream
-    let mut chat_stream: Option<
-        std::pin::Pin<Box<dyn futures::Stream<Item = Result<ChatStreamEvent>> + Send>>,
-    > = None;
-
-    loop {
-        // Ensure viewport is large enough for current content (capped at terminal height)
-        // In popup mode, use the actual popup width for accurate height calculation
-        let card_width = if popup_mode {
-            #[cfg(unix)]
-            {
-                popup_state
-                    .as_ref()
-                    .map(|ps| {
-                        ps.current_rect
-                            .width
-                            .saturating_sub(crate::tui::popup::POPUP_MARGIN * 2)
-                    })
-                    .unwrap_or(0)
-            }
-            #[cfg(not(unix))]
-            {
-                0
-            }
-        } else {
-            0
-        };
-        let needed_height = calculate_needed_height(&app.state, card_width);
-
-        // Grow popup dynamically as content arrives
-        #[cfg(unix)]
-        if let Some(ref mut ps) = popup_state {
-            // Add vertical margin for visual separation from terminal content
-            let popup_height = needed_height.saturating_add(crate::tui::popup::POPUP_MARGIN * 2);
-            if let Some(new_rect) = ps.fit_to(popup_height) {
-                guard.resize_popup(new_rect)?;
-            }
-        }
-
-        let actual_height = guard.ensure_height(needed_height)?;
-
-        // Render current state
-        let anchor_col = guard.anchor_col();
-        #[cfg(unix)]
-        let render_above = popup_state.as_ref().is_some_and(|ps| ps.render_above);
-        #[cfg(not(unix))]
-        let render_above = false;
-
-        let ctx = RenderContext {
-            theme,
-            anchor_col,
-            textarea: Some(&app.state.textarea),
-            max_height: actual_height,
-            popup_mode,
-            render_above,
-        };
-        // Handle draw errors gracefully - cursor position reads can fail during resize
-        if let Err(e) = guard.terminal().draw(|frame| {
-            render(frame, &app.state, &ctx);
-        }) {
-            let err_msg = e.to_string();
-            if err_msg.contains("cursor position") {
-                // Cursor position read failed (common during terminal resize)
-                // Skip this frame and continue - next frame will likely succeed
-                tracing::debug!(
-                    "Skipping frame due to cursor position read error: {}",
-                    err_msg
-                );
-                continue;
-            }
-            return Err(e.into());
-        }
-
-        // Get next event
-        let event = event_loop.run().await?;
-
-        // Handle event based on app mode
-        match event {
-            AppEvent::Key(key) => {
-                app.handle_key(key);
-                log_state!("key");
-            }
-            AppEvent::Tick => {
-                app.state.tick();
-
-                // Poll chat stream if active - keep polling until done regardless of mode
-                // (mode may change to Review before we receive the done event with session_id)
-                if let Some(stream) = &mut chat_stream {
-                    let mut cx = std::task::Context::from_waker(futures::task::noop_waker_ref());
-                    match stream.as_mut().poll_next(&mut cx) {
-                        std::task::Poll::Ready(Some(Ok(event))) => match event {
-                            ChatStreamEvent::TextChunk(text) => {
-                                trace!(text = %text, "Processing TextChunk");
-                                app.state.append_streaming_text(&text);
-                                log_state!("text_chunk");
-                            }
-                            ChatStreamEvent::ToolCall { id, name, input } => {
-                                trace!(id = %id, name = %name, "Processing ToolCall");
-                                app.state.add_tool_call(id, name, input);
-                                log_state!("tool_call");
-                            }
-                            ChatStreamEvent::ToolResult {
-                                tool_use_id,
-                                content,
-                                is_error,
-                            } => {
-                                trace!(tool_use_id = %tool_use_id, "Processing ToolResult");
-                                app.state.add_tool_result(tool_use_id, content, is_error);
-                                log_state!("tool_result");
-                            }
-                            ChatStreamEvent::Status(status) => {
-                                trace!(status = %status, "Processing Status");
-                                app.state.update_streaming_status(&status);
-                                log_state!("status");
-                            }
-                            ChatStreamEvent::Done { session_id } => {
-                                trace!(session_id = %session_id, "Processing Done");
-                                chat_stream = None;
-                                if !session_id.is_empty() {
-                                    app.state.store_session_id(session_id);
-                                }
-                                app.state.finalize_streaming();
-                                log_state!("done");
-                            }
-                            ChatStreamEvent::Error(msg) => {
-                                trace!(error = %msg, "Processing Error");
-                                chat_stream = None;
-                                app.state.streaming_error(msg);
-                                log_state!("error");
-                            }
-                        },
-                        std::task::Poll::Ready(Some(Err(e))) => {
-                            chat_stream = None;
-                            app.state.streaming_error(e.to_string());
-                            log_state!("stream_error");
-                        }
-                        std::task::Poll::Ready(None) => {
-                            chat_stream = None;
-                            app.state.finalize_streaming();
-                            log_state!("stream_end");
-                        }
-                        std::task::Poll::Pending => {}
-                    }
-                }
-            }
-            _ => {}
-        }
-
-        // Handle user cancellation (Esc during streaming) - drop the stream
-        if app.state.was_interrupted && chat_stream.is_some() {
-            debug!("User cancelled streaming, dropping chat stream");
-            chat_stream = None;
-            app.state.was_interrupted = false; // Reset the flag
-        }
-
-        // Check exit condition (includes Ctrl+C / SIGINT from event loop)
-        if app.state.should_exit || event_loop.is_shutdown() {
-            break;
-        }
-
-        // Handle generation trigger - unified path for all turns
-        if app.state.mode == AppMode::Generating && chat_stream.is_none() {
-            // Get the last user message from events
-            let last_user_content = app.state.events.iter().rev().find_map(|e| {
-                if let ConversationEvent::UserMessage { content } = e {
-                    Some(content.clone())
-                } else {
-                    None
-                }
-            });
-
-            if last_user_content.is_some() {
-                // Build messages in Claude API format
-                let messages = app.state.events_to_messages();
-
-                // Transition to streaming mode
-                app.state.start_streaming();
-                log_state!("start_streaming");
-
-                // Start the chat stream
-                chat_stream = Some(create_chat_stream(
-                    endpoint.clone(),
-                    token.clone(),
-                    app.state.session_id.clone(),
-                    messages,
-                    settings,
-                ));
-            }
-        }
-    }
-
-    // Restore popup area before guard drops (guard skips cleanup in popup mode)
-    #[cfg(unix)]
-    if let Some(ref ps) = popup_state {
-        crate::tui::popup::restore(ps);
-    }
-
-    // Map exit action to return value
-    let result = match app.state.exit_action {
-        Some(ExitAction::Execute(cmd)) => Action::Execute(cmd),
-        Some(ExitAction::Insert(cmd)) => Action::Insert(cmd),
-        _ => Action::Cancel,
-    };
-
-    Ok(result)
-}
-
-struct RawModeGuard;
-
-impl Drop for RawModeGuard {
-    fn drop(&mut self) {
-        let _ = disable_raw_mode();
-    }
-}
-
 fn emit_shell_result(action: Action, output_for_hook: bool) {
     if output_for_hook {
         match action {
@@ -741,8 +592,19 @@ fn emit_shell_result(action: Action, output_for_hook: bool) {
 }
 
 fn wait_for_login_confirmation() -> Result<bool> {
+    use crossterm::{
+        event::{self, Event, KeyCode},
+        terminal::{disable_raw_mode, enable_raw_mode},
+    };
+
     enable_raw_mode().context("failed enabling raw mode for login prompt")?;
-    let _guard = RawModeGuard;
+    struct Guard;
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            let _ = disable_raw_mode();
+        }
+    }
+    let _guard = Guard;
 
     loop {
         let ev = event::read().context("failed to read login confirmation key")?;
