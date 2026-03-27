@@ -498,12 +498,6 @@ async fn run_inline_tui(
                     });
                 }
 
-                AiTuiEvent::FollowUp => {
-                    h.update(|state| {
-                        state.start_edit_mode();
-                    });
-                }
-
                 AiTuiEvent::Retry => {
                     let ep = ep.clone();
                     let tk = tk.clone();

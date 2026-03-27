@@ -14,16 +14,14 @@ pub enum AiTuiEvent {
     SlashCommand(String),
     /// Cancel active generation or streaming (Esc during Generating/Streaming)
     CancelGeneration,
-    /// Execute the suggested command (Enter in Review mode)
+    /// Execute the suggested command
     ExecuteCommand,
-    /// Insert command without executing (Tab in Review mode)
+    /// Insert command without executing
     InsertCommand,
-    /// Cancel confirmation of dangerous command (Esc in Input mode)
+    /// Cancel confirmation of dangerous command
     CancelConfirmation,
-    /// Enter follow-up mode ('f' in Review mode)
-    FollowUp,
-    /// Retry after error (Enter/r in Error mode)
+    /// Retry after error
     Retry,
-    /// Exit the application (Esc in Input/Review/Error, or Ctrl+C)
+    /// Exit the application
     Exit,
 }
