@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 ## [unreleased]
 
+### Bug Fixes
+
+- *(powershell)* Handle non-FileSystem drives ([#3353](https://github.com/atuinsh/atuin/issues/3353))
+- Remove unnecessary arboard/image-data default feature ([#3345](https://github.com/atuinsh/atuin/issues/3345))
+- Use printf to append fish shell init block ([#3346](https://github.com/atuinsh/atuin/issues/3346))
+- Set WorkingDirectory in PowerShell Invoke-AtuinSearch ([#3351](https://github.com/atuinsh/atuin/issues/3351))
+
+
+### Features
+
+- Use eye-declare for more performant and flexible AI TUI ([#3343](https://github.com/atuinsh/atuin/issues/3343))
+
+
+### Miscellaneous Tasks
+
+- *(ci)* Switch most workflows to depot ci ([#3352](https://github.com/atuinsh/atuin/issues/3352))
+
+
 ## 18.13.5
 
 ### Bug Fixes
@@ -16,12 +34,19 @@ All notable changes to this project will be documented in this file.
 - Fix duplicated word in Kubernetes guide ([#3338](https://github.com/atuinsh/atuin/issues/3338))
 
 
+### Miscellaneous Tasks
+
+- Prepare 18.13.5 ([#3342](https://github.com/atuinsh/atuin/issues/3342))
+
+
 ## 18.13.4
 
 ### Bug Fixes
 
 - *(ai)* Restore url-quote-magic for ? in zsh ([#3304](https://github.com/atuinsh/atuin/issues/3304))
+- Redirect tty0 when running setup
 - Redirect tty0 when running setup ([#3302](https://github.com/atuinsh/atuin/issues/3302))
+- Call ensure_hub_session even if primary sync endpoint is self-hosted
 - Call ensure_hub_session even if primary sync endpoint is self-hosted ([#3301](https://github.com/atuinsh/atuin/issues/3301))
 - Remove per-event mouse capture toggling that leaked ANSI to stdout ([#3299](https://github.com/atuinsh/atuin/issues/3299))
 - Clarify what data is sent when using Atuin AI during setup (only OS and shell) ([#3290](https://github.com/atuinsh/atuin/issues/3290))
@@ -33,6 +58,7 @@ All notable changes to this project will be documented in this file.
 ### Documentation
 
 - Fix typo in FAQ alternatives section ([#3292](https://github.com/atuinsh/atuin/issues/3292))
+- Remove 'experimental' status from Atuin Daemon
 - Remove 'experimental' status from Atuin Daemon ([#3295](https://github.com/atuinsh/atuin/issues/3295))
 - Add inline_height_shell_up_key_binding ([#3270](https://github.com/atuinsh/atuin/issues/3270))
 
