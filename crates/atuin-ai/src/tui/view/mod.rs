@@ -153,7 +153,6 @@ fn agent_turn_view(events: &[turn::UiEvent], busy: bool) -> Elements {
         VStack {
             Spinner(
                 label: "Atuin AI",
-                done: false,
                 label_style: label_style,
                 done_label_style: label_style,
                 hide_checkmark: true,
@@ -219,14 +218,6 @@ fn tool_summary_view(summary: &turn::ToolSummary) -> Elements {
     element! {
         Spinner(label: summary.summary(), done: !summary.any_pending())
     }
-    // LeftPadded {
-    //     TextBlock {
-    //         Line {
-    //             Span(text: icon, style: icon_style)
-    //             Span(text: summary.summary(), style: style)
-    //         }
-    //     }
-    // }
 }
 
 fn suggested_command_view(details: &turn::SuggestedCommandDetails) -> Elements {
