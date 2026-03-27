@@ -388,12 +388,6 @@ async fn run_inline_tui(
         .bracketed_paste(true)
         .with_context(tx)
         .extra_newlines_at_exit(1)
-        .on_commit(|_, state: &mut AppState| {
-            // Evict the oldest message when content scrolls into terminal scrollback
-            if !state.events.is_empty() {
-                state.events.remove(0);
-            }
-        })
         .build()?;
 
     let send_cwd = settings.ai.send_cwd;
