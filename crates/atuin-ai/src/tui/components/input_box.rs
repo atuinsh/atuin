@@ -9,7 +9,7 @@
 use std::sync::{Mutex, mpsc};
 
 use crossterm::event::KeyModifiers;
-use eye_declare::{Component, EventResult, Hooks};
+use eye_declare::{Component, EventResult, Hooks, Tracked};
 use ratatui::widgets::{Block, Borders, Padding};
 use ratatui_core::{
     buffer::Buffer,
@@ -153,8 +153,10 @@ impl Component for InputBox {
     fn handle_event(
         &self,
         event: &crossterm::event::Event,
-        state: &mut Self::State,
+        state: &mut Tracked<Self::State>,
     ) -> EventResult {
+        let state = state.read();
+
         if !self.active {
             return EventResult::Ignored;
         }
@@ -167,13 +169,6 @@ impl Component for InputBox {
 
         if let crossterm::event::Event::Key(key) = event {
             if key.kind != crossterm::event::KeyEventKind::Press {
-                return EventResult::Ignored;
-            }
-
-            // Let Ctrl+C bubble up to AtuinAi for exit handling
-            if key.modifiers.contains(KeyModifiers::CONTROL)
-                && key.code == crossterm::event::KeyCode::Char('c')
-            {
                 return EventResult::Ignored;
             }
 
@@ -192,24 +187,17 @@ impl Component for InputBox {
                         return EventResult::Consumed;
                     } else {
                         let text = textarea.lines().join("\n");
-                        textarea.clear();
-
                         if text.trim().is_empty() {
                             return EventResult::Ignored;
                         }
+
+                        textarea.clear();
 
                         if let Some(ref tx) = state.tx {
                             let _ = tx.send(AiTuiEvent::SubmitInput(text));
                         }
                         return EventResult::Consumed;
                     }
-                }
-                crossterm::event::KeyCode::Tab => {
-                    return EventResult::Ignored;
-                }
-                // Esc: bubble up to app
-                crossterm::event::KeyCode::Esc => {
-                    return EventResult::Ignored;
                 }
                 _ => {}
             }
