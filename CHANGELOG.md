@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [unreleased]
 
+## 18.13.6
+
 ### Bug Fixes
 
 - *(powershell)* Handle non-FileSystem drives ([#3353](https://github.com/atuinsh/atuin/issues/3353))
