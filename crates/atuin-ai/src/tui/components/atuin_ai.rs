@@ -7,7 +7,7 @@
 use std::sync::mpsc;
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use eye_declare::{Component, EventResult, Hooks, impl_slot_children};
+use eye_declare::{Component, EventResult, Hooks, Tracked, impl_slot_children};
 
 use crate::tui::events::AiTuiEvent;
 use crate::tui::state::AppMode;
@@ -67,7 +67,9 @@ impl Component for AtuinAi {
         0
     }
 
-    fn handle_event(&self, event: &Event, state: &mut Self::State) -> EventResult {
+    fn handle_event_capture(&self, event: &Event, state: &mut Tracked<Self::State>) -> EventResult {
+        let state = state.read();
+
         let Event::Key(KeyEvent {
             code,
             kind: KeyEventKind::Press,
