@@ -1250,7 +1250,7 @@ impl State {
                     if width + w > preview_width.into() {
                         lines.push(line[start..idx].to_owned());
                         start = idx;
-                        width = 0;
+                        width = w;
                     } else {
                         width += w;
                     }
