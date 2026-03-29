@@ -11,7 +11,7 @@ use eyre::Result;
 use futures_util::FutureExt;
 use semver::Version;
 use time::OffsetDateTime;
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::{
     cursor::Cursor,
@@ -1239,18 +1239,27 @@ impl State {
         let command = if results.is_empty() {
             String::new()
         } else {
-            use itertools::Itertools as _;
             let s = &results[selected].command;
-            s.split('\n')
-                .flat_map(|line| {
-                    line.char_indices()
-                        .step_by(preview_width.into())
-                        .map(|(i, _)| i)
-                        .chain(Some(line.len()))
-                        .tuple_windows()
-                        .map(|(a, b)| (&line[a..b]).escape_control().to_string())
-                })
-                .join("\n")
+            let mut lines = Vec::new();
+            for line in s.split('\n') {
+                let line = line.escape_control();
+                let mut width = 0;
+                let mut start = 0;
+                for (idx, ch) in line.char_indices() {
+                    let w = ch.width().unwrap_or(0); // None for control chars which should not happen
+                    if width + w > preview_width.into() {
+                        lines.push(line[start..idx].to_owned());
+                        start = idx;
+                        width = 0;
+                    } else {
+                        width += w;
+                    }
+                }
+                if width != 0 {
+                    lines.push(line[start..].to_owned());
+                }
+            }
+            lines.join("\n")
         };
 
         match compactness {
