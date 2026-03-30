@@ -21,6 +21,19 @@ Whether or not to include your current working directory in the context sent to 
 send_cwd = true
 ```
 
+### read_history
+
+Default: `false`
+
+Whether or not to allow the AI to read your shell history. When enabled, your previous command is sent as context in the initial request, allowing the AI to provide more relevant suggestions.
+
+**Example config**
+
+```toml
+[ai]
+read_history = true
+```
+
 ### endpoint
 
 Default: `null`

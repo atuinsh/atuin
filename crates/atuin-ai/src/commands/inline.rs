@@ -1,9 +1,11 @@
+use std::path::PathBuf;
 use std::sync::mpsc;
 
 use crate::commands::detect_shell;
 use crate::tui::events::AiTuiEvent;
 use crate::tui::state::{AppState, ExitAction};
 use crate::tui::view::ai_view;
+use atuin_client::database::{Database, Sqlite};
 use atuin_client::distro::detect_linux_distribution;
 use atuin_common::tls::ensure_crypto_provider;
 use eventsource_stream::Eventsource;
@@ -138,6 +140,7 @@ fn create_chat_stream(
     session_id: Option<String>,
     messages: Vec<serde_json::Value>,
     send_cwd: bool,
+    last_command: Option<String>,
 ) -> std::pin::Pin<Box<dyn futures::Stream<Item = Result<ChatStreamEvent>> + Send>> {
     Box::pin(async_stream::stream! {
         ensure_crypto_provider();
@@ -160,6 +163,7 @@ fn create_chat_stream(
             "pwd": if send_cwd { std::env::current_dir()
                 .ok()
                 .map(|path| path.to_string_lossy().into_owned()) } else { None },
+            "last_command": last_command,
         });
 
         if os == "linux" {
@@ -294,8 +298,9 @@ async fn run_chat_stream(
     session_id: Option<String>,
     messages: Vec<serde_json::Value>,
     send_cwd: bool,
+    last_command: Option<String>,
 ) {
-    let stream = create_chat_stream(endpoint, token, session_id, messages, send_cwd);
+    let stream = create_chat_stream(endpoint, token, session_id, messages, send_cwd, last_command);
     futures::pin_mut!(stream);
 
     while let Some(event) = stream.next().await {
@@ -390,6 +395,19 @@ async fn run_inline_tui(
 
     let send_cwd = settings.ai.send_cwd;
 
+    let last_command = if settings.ai.read_history.unwrap_or(false) {
+        let db_path = PathBuf::from(settings.db_path.as_str());
+        match Sqlite::new(db_path, settings.local_timeout).await {
+            Ok(db) => db.last().await.ok().flatten().map(|h| h.command),
+            Err(e) => {
+                debug!("Failed to open history database for read_history: {e}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     // Event loop: receives AiTuiEvent from components, mutates state via Handle.
     let h = handle.clone();
     let ep = endpoint.clone();
@@ -433,6 +451,7 @@ async fn run_inline_tui(
                     let ep = ep.clone();
                     let tk = tk.clone();
                     let h2 = h.clone();
+                    let lc = last_command.clone();
                     h.update(move |state| {
                         state.start_generating(input);
                         state.start_streaming();
@@ -440,7 +459,7 @@ async fn run_inline_tui(
                         let messages = state.events_to_messages();
                         let sid = state.session_id.clone();
                         let task = tokio::spawn(async move {
-                            run_chat_stream(h2, ep, tk, sid, messages, send_cwd).await;
+                            run_chat_stream(h2, ep, tk, sid, messages, send_cwd, lc).await;
                         });
                         state.stream_abort = Some(task.abort_handle());
                     });
@@ -502,13 +521,14 @@ async fn run_inline_tui(
                     let ep = ep.clone();
                     let tk = tk.clone();
                     let h2 = h.clone();
+                    let lc = last_command.clone();
                     h.update(move |state| {
                         state.retry();
                         state.start_streaming();
                         let messages = state.events_to_messages();
                         let sid = state.session_id.clone();
                         let task = tokio::spawn(async move {
-                            run_chat_stream(h2, ep, tk, sid, messages, send_cwd).await;
+                            run_chat_stream(h2, ep, tk, sid, messages, send_cwd, lc).await;
                         });
                         state.stream_abort = Some(task.abort_handle());
                     });

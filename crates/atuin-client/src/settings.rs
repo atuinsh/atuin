@@ -666,6 +666,10 @@ pub struct Ai {
 
     /// Whether or not to send the current working directory to the AI endpoint.
     pub send_cwd: bool,
+
+    /// Whether or not to allow the AI to read shell history.
+    /// When enabled, the previous command is sent as context in the initial request.
+    pub read_history: Option<bool>,
 }
 
 impl Default for Preview {
