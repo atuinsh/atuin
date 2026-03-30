@@ -346,7 +346,7 @@ dependencies = [
  "time",
  "tiny-bip39",
  "tokio",
- "typed-builder 0.18.2",
+ "typed-builder",
  "urlencoding",
  "uuid",
  "whoami 2.1.1",
@@ -368,7 +368,7 @@ dependencies = [
  "sysinfo",
  "thiserror 2.0.18",
  "time",
- "typed-builder 0.18.2",
+ "typed-builder",
  "uuid",
 ]
 
@@ -457,7 +457,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "typed-builder 0.18.2",
+ "typed-builder",
 ]
 
 [[package]]
@@ -505,7 +505,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "typed-builder 0.18.2",
+ "typed-builder",
  "uuid",
 ]
 
@@ -1508,7 +1508,7 @@ dependencies = [
  "ratatui-core",
  "ratatui-widgets",
  "tokio",
- "typed-builder 0.23.2",
+ "typed-builder",
  "unicode-width 0.2.2",
 ]
 
@@ -5506,31 +5506,11 @@ dependencies = [
 
 [[package]]
 name = "typed-builder"
-version = "0.18.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "77739c880e00693faef3d65ea3aad725f196da38b22fdc7ea6ded6e1ce4d3add"
-dependencies = [
- "typed-builder-macro 0.18.2",
-]
-
-[[package]]
-name = "typed-builder"
 version = "0.23.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "31aa81521b70f94402501d848ccc0ecaa8f93c8eb6999eb9747e72287757ffda"
 dependencies = [
- "typed-builder-macro 0.23.2",
-]
-
-[[package]]
-name = "typed-builder-macro"
-version = "0.18.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f718dfaf347dcb5b983bfc87608144b0bad87970aebcbea5ce44d2a30c08e63"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.117",
+ "typed-builder-macro",
 ]
 
 [[package]]
