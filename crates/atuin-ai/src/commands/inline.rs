@@ -300,7 +300,14 @@ async fn run_chat_stream(
     send_cwd: bool,
     last_command: Option<String>,
 ) {
-    let stream = create_chat_stream(endpoint, token, session_id, messages, send_cwd, last_command);
+    let stream = create_chat_stream(
+        endpoint,
+        token,
+        session_id,
+        messages,
+        send_cwd,
+        last_command,
+    );
     futures::pin_mut!(stream);
 
     while let Some(event) = stream.next().await {
