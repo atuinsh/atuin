@@ -1,7 +1,7 @@
 use atuin_client::settings::Settings;
 use clap::{Args, Subcommand, ValueEnum};
 use eyre::Result;
-use toml_edit::{Document, DocumentMut, Item, Table, Value};
+use toml_edit::{Document, DocumentMut, Item, Table, TableLike, Value};
 
 #[derive(Subcommand, Debug)]
 #[command(infer_subcommands = true)]
@@ -52,8 +52,8 @@ pub struct GetCmd {
 impl GetCmd {
     pub async fn run(&self, _settings: &Settings) -> Result<()> {
         let key = self.key.trim();
-        if key.contains(char::is_whitespace) {
-            eyre::bail!("Config key must not contain whitespace");
+        if key.is_empty() || key.contains(char::is_whitespace) {
+            eyre::bail!("Config key must be non-empty and must not contain whitespace");
         }
 
         if self.verbose {
@@ -81,8 +81,10 @@ impl GetCmd {
         let current = get_deep_key(&doc, key);
 
         match current {
-            Some(item) if item.is_table() => {
-                let table = item.as_table().unwrap();
+            Some(item) if item.is_table() || item.is_inline_table() => {
+                let table = item
+                    .as_table_like()
+                    .expect("is_table()/is_inline_table() but no table");
                 println!("{prefix}[{key}]");
                 dump_table(table, prefix, &mut Vec::new())?;
             }
@@ -143,8 +145,8 @@ pub enum ValueType {
 impl SetCmd {
     pub async fn run(self, _settings: &Settings) -> Result<()> {
         let key = self.key.trim();
-        if key.contains(char::is_whitespace) {
-            eyre::bail!("Config key must not contain whitespace");
+        if key.is_empty() || key.contains(char::is_whitespace) {
+            eyre::bail!("Config key must be non-empty and must not contain whitespace");
         }
 
         let config_file = Settings::get_config_path()?;
@@ -226,12 +228,12 @@ impl PrintCmd {
             let current = get_deep_key(&doc, key);
 
             if let Some(current) = current {
-                if current.is_table() {
+                if current.is_table() || current.is_inline_table() {
                     println!("[{key}]");
                     dump_table(
                         current
-                            .as_table()
-                            .expect("is_table() returned true but no table"),
+                            .as_table_like()
+                            .expect("is_table()/is_inline_table() but no table"),
                         "",
                         &mut Vec::new(),
                     )?;
@@ -249,20 +251,16 @@ impl PrintCmd {
     }
 }
 
-fn dump_table(table: &Table, prefix: &str, stack: &mut Vec<String>) -> Result<()> {
-    for (key, value) in table {
-        if value.is_table() {
+fn dump_table(table: &dyn TableLike, prefix: &str, stack: &mut Vec<String>) -> Result<()> {
+    for (key, value) in table.iter() {
+        if value.is_table() || value.is_inline_table() {
             stack.push(key.to_string());
 
             let table = value
-                .as_table()
-                .expect("is_table() returned true but no table");
+                .as_table_like()
+                .expect("is_table()/is_inline_table() but no table");
 
-            let num_value_keys = table.iter().filter(|(_, v)| !v.is_table()).count();
-
-            if num_value_keys != 0 {
-                println!("\n{}[{}]", prefix, stack.join("."));
-            }
+            println!("\n{}[{}]", prefix, stack.join("."));
 
             dump_table(table, prefix, stack)?;
 
@@ -281,7 +279,7 @@ fn get_deep_key<'doc>(doc: &'doc Document<String>, key: &str) -> Option<&'doc It
 
     for part in parts {
         current = current
-            .and_then(|item| item.as_table())
+            .and_then(|item| item.as_table_like())
             .and_then(|table| table.get(part));
     }
 
@@ -292,10 +290,10 @@ fn get_deep_key<'doc>(doc: &'doc Document<String>, key: &str) -> Option<&'doc It
 /// type detection preserves the original type rather than guessing from the value string.
 fn detect_existing_type(doc: &DocumentMut, key: &str) -> Option<ValueType> {
     let parts: Vec<&str> = key.split('.').collect();
-    let mut current: &Table = doc.as_table();
+    let mut current: &dyn TableLike = doc.as_table();
 
     for &part in &parts[..parts.len().saturating_sub(1)] {
-        current = current.get(part)?.as_table()?;
+        current = current.get(part)?.as_table_like()?;
     }
 
     let last = parts.last()?;
@@ -321,7 +319,7 @@ fn set_deep_key(doc: &mut DocumentMut, key: &str, value: Value) -> Result<()> {
         eyre::bail!("empty config key");
     }
 
-    let mut current = doc.as_table_mut();
+    let mut current: &mut dyn TableLike = doc.as_table_mut();
 
     // Navigate/create intermediate tables
     for &part in &parts[..parts.len() - 1] {
@@ -331,7 +329,7 @@ fn set_deep_key(doc: &mut DocumentMut, key: &str, value: Value) -> Result<()> {
         current = current
             .get_mut(part)
             .expect("just inserted or already exists")
-            .as_table_mut()
+            .as_table_like_mut()
             .ok_or_else(|| eyre::eyre!("'{}' exists but is not a table", part))?;
     }
 
@@ -339,7 +337,7 @@ fn set_deep_key(doc: &mut DocumentMut, key: &str, value: Value) -> Result<()> {
 
     // Don't silently overwrite a table with a scalar value
     if let Some(existing) = current.get(last)
-        && existing.is_table()
+        && (existing.is_table() || existing.is_inline_table())
     {
         eyre::bail!(
             "'{}' is a table; use a dotted key like '{}.key' to set a value within it",

@@ -1566,7 +1566,13 @@ impl Settings {
         ]
         .iter()
         .map(|key| (key, built.get_string(key).unwrap_or_default()))
-        .filter_map(|(key, value)| Self::expand_path(value).ok().map(|value| (key, value)))
+        .filter_map(|(key, value)| match Self::expand_path(value) {
+            Ok(expanded) => Some((key, expanded)),
+            Err(e) => {
+                log::warn!("failed to expand path for {key}: {e}");
+                None
+            }
+        })
         .fold(config_builder, |builder, (key, value)| {
             builder
                 .set_override(key, value)
