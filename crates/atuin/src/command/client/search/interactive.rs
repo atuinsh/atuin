@@ -37,7 +37,7 @@ use ratatui::{
     backend::{CrosstermBackend, FromCrossterm},
     crossterm::{
         cursor::SetCursorStyle,
-        event::{self, Event, KeyEvent, MouseEvent},
+        event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyEvent, MouseEvent},
         execute, queue, terminal,
     },
     layout::{Alignment, Constraint, Direction, Layout},
@@ -1491,11 +1491,7 @@ impl Stdout {
             execute!(writer, terminal::EnterAlternateScreen)?;
         }
 
-        execute!(
-            writer,
-            event::EnableMouseCapture,
-            event::EnableBracketedPaste,
-        )?;
+        execute!(writer, event::EnableBracketedPaste)?;
 
         #[cfg(not(target_os = "windows"))]
         execute!(
@@ -1809,6 +1805,7 @@ pub async fn history(
         tokio::select! {
             event_ready = event_ready => {
                 if event_ready?? {
+                    execute!(terminal.backend_mut(), EnableMouseCapture)?;
                     loop {
                         match app.handle_input(settings, &event::read()?) {
                             InputAction::Continue => {},
@@ -1857,6 +1854,7 @@ pub async fn history(
                             },
                             r => {
                                 accept = app.accept;
+                                execute!(terminal.backend_mut(), DisableMouseCapture)?;
                                 break 'render r;
                             },
                         }
@@ -1864,6 +1862,7 @@ pub async fn history(
                             break;
                         }
                     }
+                    execute!(terminal.backend_mut(), DisableMouseCapture)?;
                 }
             }
             update_needed = &mut update_needed => {
