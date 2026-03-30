@@ -1,8 +1,7 @@
 //! View function that builds the eye-declare element tree from app state.
 
 use eye_declare::{
-    Column, Component, Elements, HStack, Line, Span, Spinner, TextBlock, VStack, WidthConstraint,
-    element, impl_slot_children,
+    Cells, Column, Elements, HStack, Span, Spinner, Text, View, WidthConstraint, element,
 };
 use ratatui_core::style::{Color, Modifier, Style};
 
@@ -12,40 +11,6 @@ use super::components::markdown::Markdown;
 use super::state::{AppMode, AppState};
 
 mod turn;
-
-#[derive(Default)]
-struct Padding {
-    top: u16,
-    left: u16,
-    right: u16,
-    bottom: u16,
-}
-
-impl Component for Padding {
-    type State = ();
-
-    fn content_inset(&self, _state: &Self::State) -> eye_declare::Insets {
-        eye_declare::Insets::ZERO
-            .left(self.left)
-            .right(self.right)
-            .top(self.top)
-            .bottom(self.bottom)
-    }
-
-    fn desired_height(&self, _width: u16, _state: &Self::State) -> u16 {
-        0
-    }
-
-    fn render(
-        &self,
-        _area: ratatui::layout::Rect,
-        _buf: &mut ratatui::buffer::Buffer,
-        _state: &(),
-    ) {
-    }
-}
-
-impl_slot_children!(Padding);
 
 /// Build the element tree from current state.
 ///
@@ -68,7 +33,7 @@ pub fn ai_view(state: &AppState) -> Elements {
 
     element! {
         AtuinAi(
-            mode: state.mode.clone(),
+            mode: state.mode,
             has_command: state.has_any_command(),
             is_input_blank: state.is_input_blank,
             pending_confirmation: state.confirmation_pending,
@@ -88,22 +53,24 @@ pub fn ai_view(state: &AppState) -> Elements {
             })
 
             #(if !state.is_exiting() {
-                TextBlock { Line { Span(text: "") } }
-                InputBox(
-                    key: "input",
-                    title: "Generate a command or ask a question",
-                    title_right: "Atuin AI",
-                    footer: state.footer_text(),
-                    active: state.mode == AppMode::Input && !state.confirmation_pending,
-                )
+                View(key: "input-box", padding_top: Cells::from(1)) {
+                    InputBox(
+                        key: "input",
+                        title: "Generate a command or ask a question",
+                        title_right: "Atuin AI",
+                        footer: state.footer_text(),
+                        active: state.mode == AppMode::Input && !state.confirmation_pending,
+                    )
 
-                #(if state.is_input_blank && state.has_any_command() && state.mode == AppMode::Input {
-                    #(if state.confirmation_pending {
-                        TextBlock { Line { Span(text: "[Enter] Confirm dangerous command  [Esc] Cancel", style: Style::default().fg(Color::Gray)) } }
-                    } else {
-                        TextBlock { Line { Span(text: "[Enter] Execute suggested command  [Tab] Insert Command", style: Style::default().fg(Color::Gray)) } }
+                    #(if state.is_input_blank && state.has_any_command() && state.mode == AppMode::Input {
+                        #(if state.confirmation_pending {
+                            Text { Span(text: "[Enter] Confirm dangerous command  [Esc] Cancel", style: Style::default().fg(Color::Gray)) }
+                        } else {
+                            Text { Span(text: "[Enter] Execute suggested command  [Tab] Insert Command", style: Style::default().fg(Color::Gray)) }
+                        })
                     })
-                })
+
+                }
             })
         }
     }
@@ -114,25 +81,20 @@ fn user_turn_view(events: &[turn::UiEvent], first_turn: bool) -> Elements {
         .fg(Color::Cyan)
         .add_modifier(Modifier::BOLD);
 
+    let padding = if first_turn { 0 } else { 1 };
+
     element! {
-        VStack {
-            TextBlock {
-                #(if !first_turn {
-                    Line { Span() }
-                })
-                Line {
-                    Span(text: "You", style: label_style)
-                }
+        View(padding_top: Cells::from(padding)) {
+            Text {
+                Span(text: "You", style: label_style)
             }
             #(for event in events {
                 #(match event {
                     turn::UiEvent::Text { content } => {
                         element! {
-                            Padding(left: 2u16) {
-                                TextBlock {
-                                    Line {
-                                        Span(text: content, style: Style::default())
-                                    }
+                            View(padding_left: Cells::from(2)) {
+                                Text {
+                                    Span(text: content, style: Style::default())
                                 }
                             }
                         }
@@ -150,7 +112,7 @@ fn agent_turn_view(events: &[turn::UiEvent], busy: bool) -> Elements {
         .add_modifier(Modifier::BOLD);
 
     element! {
-        VStack {
+        View {
             Spinner(
                 label: "Atuin AI",
                 label_style: label_style,
@@ -163,7 +125,7 @@ fn agent_turn_view(events: &[turn::UiEvent], busy: bool) -> Elements {
                 #(match event {
                     turn::UiEvent::Text { content } => {
                         element! {
-                            Padding(left: 2u16) {
+                            View(padding_left: Cells::from(2)) {
                                 Markdown(source: content)
                             }
                         }
@@ -183,9 +145,9 @@ fn agent_turn_view(events: &[turn::UiEvent], busy: bool) -> Elements {
 
 fn out_of_band_turn_view(events: &[turn::UiEvent]) -> Elements {
     element! {
-        VStack {
-            TextBlock {
-                Line { Span(text: "System", style: Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD)) }
+        View {
+            Text {
+                Span(text: "System", style: Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD))
             }
             #(for event in events {
                 #(match event {
@@ -201,12 +163,10 @@ fn out_of_band_turn_view(events: &[turn::UiEvent]) -> Elements {
 
 fn out_of_band_output_view(details: &turn::OutOfBandOutputDetails) -> Elements {
     element! {
-        Padding(left: 2u16) {
+        View(padding_left: Cells::from(2)) {
             #(if details.command.is_some() {
-                TextBlock {
-                    Line {
-                        Span(text: details.command.as_ref().unwrap(), style: Style::default().fg(Color::Blue))
-                    }
+                Text {
+                    Span(text: details.command.as_ref().unwrap(), style: Style::default().fg(Color::Blue))
                 }
             })
             Markdown(source: details.content.clone())
@@ -254,82 +214,68 @@ fn suggested_command_view(details: &turn::SuggestedCommandDetails) -> Elements {
     let confidence_notes = details.confidence_level.notes();
 
     element! {
-        VStack {
-            TextBlock {
-                #(if !details.first_event_in_turn {
-                    Line { Span() }
-                })
-                Line {
-                    Span(text: "  Suggested command:", style: Style::default().fg(Color::Cyan))
-                }
+        View {
+            #(if !details.first_event_in_turn {
+                Text { Span(text: "") }
+            })
+            Text {
+                Span(text: "  Suggested command:", style: Style::default().fg(Color::Cyan))
             }
             HStack {
-                Column(width: WidthConstraint::Fixed(2)) {
-                    TextBlock {
-                        Line {
-                            #(if is_dangerous || low_confidence {
-                                Span(text: "! ", style: Style::default().fg(Color::Yellow))
-                            } else {
-                                Span(text: "$ ", style: Style::default().fg(Color::Blue))
-                            })
-                        }
+                View(width: WidthConstraint::Fixed(2)) {
+                    Text {
+                        #(if is_dangerous || low_confidence {
+                            Span(text: "! ", style: Style::default().fg(Color::Yellow))
+                        } else {
+                            Span(text: "$ ", style: Style::default().fg(Color::Blue))
+                        })
                     }
                 }
                 Column {
-                    TextBlock {
-                        Line {
-                            Span(text: &details.command, style: Style::default().fg(Color::Green))
-                        }
+                    Text {
+                        Span(text: &details.command, style: Style::default().fg(Color::Green))
                     }
                 }
             }
             #(if is_dangerous {
-                Padding(left: 2u16) {
-                    TextBlock {
-                        Line {
-                            Span(text: "Danger: ", style: danger_style)
-                            Span(text: danger_text, style: danger_style.add_modifier(Modifier::BOLD))
-                        }
+                View(padding_left: Cells::from(2)) {
+                    Text {
+                        Span(text: "Danger: ", style: danger_style)
+                        Span(text: danger_text, style: danger_style.add_modifier(Modifier::BOLD))
                     }
                 }
             })
             #(if is_dangerous && danger_notes.is_some() {
-                Padding(left: 2u16) {
+                View(padding_left: Cells::from(2)) {
                     HStack {
-                        Column(width: WidthConstraint::Fixed(2)) {
-                            TextBlock {
-                                Line {
-                                    Span(text: "└")
-                                }
+                        View(width: WidthConstraint::Fixed(2)) {
+                            Text {
+                                Span(text: "└")
                             }
                         }
-                        Column(width: WidthConstraint::Fill) {
+                        View(width: WidthConstraint::Fill) {
                             Markdown(source: danger_notes.unwrap())
                         }
                     }
                 }
             })
             #(if low_confidence {
-                Padding(left: 2u16) {
-                    TextBlock {
-                        Line {
-                            Span(text: "Confidence: ", style: Style::default().fg(Color::Blue))
-                            Span(text: confidence_level, style: Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD))
-                        }
+                View(padding_left: Cells::from(2)) {
+                    Text {
+                        Span(text: "Confidence: ", style: Style::default().fg(Color::Blue))
+                        Span(text: confidence_level, style: Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD))
                     }
                 }
             })
             #(if low_confidence && confidence_notes.is_some() {
-                Padding(left: 2u16) {
+                View(padding_left: Cells::from(2)) {
                     HStack {
-                        Column(width: WidthConstraint::Fixed(2)) {
-                            TextBlock {
-                                Line {
-                                    Span(text: "└")
-                                }
+                        View(width: WidthConstraint::Fixed(2)) {
+                            Text {
+                                Span(text: "└")
                             }
                         }
-                        Column(width: WidthConstraint::Fill) {
+                        View(width: WidthConstraint::Fill) {
                             Markdown(source: confidence_notes.unwrap())
                         }
                     }

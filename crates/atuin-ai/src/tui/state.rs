@@ -113,7 +113,7 @@ impl ConversationEvent {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Copy)]
 pub enum AppMode {
     /// User is typing input
     Input,

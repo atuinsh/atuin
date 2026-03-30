@@ -3,7 +3,7 @@
 //! More robust than eye-declare's built-in Markdown component:
 //! uses a proper CommonMark parser rather than line-by-line regex.
 
-use eye_declare::Component;
+use eye_declare::{Component, props};
 use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 use ratatui_core::{
     buffer::Buffer,
@@ -15,7 +15,7 @@ use ratatui_core::{
 use ratatui_widgets::paragraph::{Paragraph, Wrap};
 
 /// A markdown rendering component backed by pulldown-cmark.
-#[derive(Default)]
+#[props]
 pub struct Markdown {
     pub source: String,
 }
@@ -73,14 +73,16 @@ impl Component for Markdown {
             .render(area, buf);
     }
 
-    fn desired_height(&self, width: u16, state: &Self::State) -> u16 {
+    fn desired_height(&self, width: u16, state: &Self::State) -> Option<u16> {
         if self.source.is_empty() || width == 0 {
-            return 0;
+            return Some(0);
         }
         let text = parse_markdown(&self.source, state);
-        Paragraph::new(text)
-            .wrap(Wrap { trim: false })
-            .line_count(width) as u16
+        Some(
+            Paragraph::new(text)
+                .wrap(Wrap { trim: false })
+                .line_count(width) as u16,
+        )
     }
 
     fn initial_state(&self) -> Option<MarkdownStyles> {
