@@ -86,7 +86,7 @@ impl GetCmd {
                     .as_table_like()
                     .expect("is_table()/is_inline_table() but no table");
                 println!("{prefix}[{key}]");
-                dump_table(table, prefix, &mut Vec::new())?;
+                dump_table(table, prefix, &mut vec![key.to_string()])?;
             }
             Some(item) => {
                 let val = item.to_string();
@@ -235,7 +235,7 @@ impl PrintCmd {
                             .as_table_like()
                             .expect("is_table()/is_inline_table() but no table"),
                         "",
-                        &mut Vec::new(),
+                        &mut vec![key.to_string()],
                     )?;
                 } else {
                     println!("{}", current.to_string().trim().trim_matches('"'));
