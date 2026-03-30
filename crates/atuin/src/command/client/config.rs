@@ -235,7 +235,7 @@ impl PrintCmd {
                             .as_table_like()
                             .expect("is_table()/is_inline_table() but no table"),
                         "",
-                        &mut vec![key.to_string()],
+                        &mut vec![key.clone()],
                     )?;
                 } else {
                     println!("{}", current.to_string().trim().trim_matches('"'));
