@@ -346,7 +346,7 @@ dependencies = [
  "time",
  "tiny-bip39",
  "tokio",
- "typed-builder",
+ "typed-builder 0.18.2",
  "urlencoding",
  "uuid",
  "whoami 2.1.1",
@@ -368,7 +368,7 @@ dependencies = [
  "sysinfo",
  "thiserror 2.0.18",
  "time",
- "typed-builder",
+ "typed-builder 0.18.2",
  "uuid",
 ]
 
@@ -457,7 +457,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "typed-builder",
+ "typed-builder 0.18.2",
 ]
 
 [[package]]
@@ -505,7 +505,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "typed-builder",
+ "typed-builder 0.18.2",
  "uuid",
 ]
 
@@ -1498,9 +1498,9 @@ dependencies = [
 
 [[package]]
 name = "eye_declare"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4d025f4c5954a5797f81cdde3871f301a3e5bca02e3110848de0f2c348a05573"
+checksum = "cac5c1a3b194e6674e9e44dbfb035f31c4df7a1ff6c8765181c50e8482bb393a"
 dependencies = [
  "crossterm",
  "eye_declare_macros",
@@ -1508,14 +1508,15 @@ dependencies = [
  "ratatui-core",
  "ratatui-widgets",
  "tokio",
+ "typed-builder 0.23.2",
  "unicode-width 0.2.2",
 ]
 
 [[package]]
 name = "eye_declare_macros"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7ad7509865efe5f9cd4b05db4e50605e06c6425b7ef1a579526bebb3bd4bfa1a"
+checksum = "98595776b5e10c6ea519c09940fb7995b64da1e9a70cc94aa6c08b3bd404925a"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5509,7 +5510,16 @@ version = "0.18.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77739c880e00693faef3d65ea3aad725f196da38b22fdc7ea6ded6e1ce4d3add"
 dependencies = [
- "typed-builder-macro",
+ "typed-builder-macro 0.18.2",
+]
+
+[[package]]
+name = "typed-builder"
+version = "0.23.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "31aa81521b70f94402501d848ccc0ecaa8f93c8eb6999eb9747e72287757ffda"
+dependencies = [
+ "typed-builder-macro 0.23.2",
 ]
 
 [[package]]
@@ -5517,6 +5527,17 @@ name = "typed-builder-macro"
 version = "0.18.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1f718dfaf347dcb5b983bfc87608144b0bad87970aebcbea5ce44d2a30c08e63"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
+name = "typed-builder-macro"
+version = "0.23.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "076a02dc54dd46795c2e9c8282ed40bcfb1e22747e955de9389a1de28190fb26"
 dependencies = [
  "proc-macro2",
  "quote",

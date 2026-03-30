@@ -6,13 +6,12 @@
 //!
 //! On Enter, sends `AiTuiEvent::SubmitInput` via the context-provided channel.
 
-use std::sync::{Mutex, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 
 use crossterm::event::KeyModifiers;
-use eye_declare::{Component, EventResult, Hooks, Tracked};
+use eye_declare::{Canvas, Elements, EventResult, Hooks, component, element, props};
 use ratatui::widgets::{Block, Borders, Padding};
 use ratatui_core::{
-    buffer::Buffer,
     layout::Rect,
     style::{Color, Modifier, Style},
     text::Line,
@@ -26,8 +25,8 @@ use crate::tui::events::AiTuiEvent;
 ///
 /// Props configure the chrome (title, footer). The TextArea itself lives
 /// in the component's State so it owns cursor, wrapping, and rendering.
-#[derive(Default)]
-pub struct InputBox {
+#[props]
+pub(crate) struct InputBox {
     /// Title shown in top-left border
     pub title: String,
     /// Right-side label in top border
@@ -38,8 +37,8 @@ pub struct InputBox {
     pub active: bool,
 }
 
-pub struct InputBoxState {
-    textarea: Mutex<TextArea<'static>>,
+pub(crate) struct InputBoxState {
+    textarea: Arc<Mutex<TextArea<'static>>>,
     tx: Option<mpsc::Sender<AiTuiEvent>>,
 }
 
@@ -55,109 +54,58 @@ impl Default for InputBoxState {
                 .add_modifier(ratatui::style::Modifier::ITALIC),
         );
         Self {
-            textarea: Mutex::new(textarea),
+            textarea: Arc::new(Mutex::new(textarea)),
             tx: None,
         }
     }
 }
 
-impl InputBox {
-    /// Build the ratatui Block with current titles/footer.
-    fn make_block(&self) -> Block<'_> {
-        let border_style = Style::default().fg(Color::DarkGray);
-        let title_style = Style::default()
-            .fg(Color::Gray)
-            .add_modifier(Modifier::BOLD);
+fn make_block(props: &InputBox) -> Block<'static> {
+    let border_style = Style::default().fg(Color::DarkGray);
+    let title_style = Style::default()
+        .fg(Color::Gray)
+        .add_modifier(Modifier::BOLD);
 
-        let mut block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(border_style)
-            .padding(Padding::horizontal(1));
+    let mut block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(border_style)
+        .padding(Padding::horizontal(1));
 
-        if !self.title.is_empty() {
-            block = block
-                .title_top(Line::styled(format!(" {} ", self.title), title_style).left_aligned());
-        }
-        if !self.title_right.is_empty() {
-            block = block.title_top(
-                Line::styled(format!(" {} ", self.title_right), border_style).right_aligned(),
-            );
-        }
-        if !self.footer.is_empty() {
-            block = block.title_bottom(
-                Line::styled(format!(" {} ", self.footer), border_style).right_aligned(),
-            );
-        }
-
-        block
+    if !props.title.is_empty() {
+        block =
+            block.title_top(Line::styled(format!(" {} ", props.title), title_style).left_aligned());
     }
+    if !props.title_right.is_empty() {
+        block = block.title_top(
+            Line::styled(format!(" {} ", props.title_right), border_style).right_aligned(),
+        );
+    }
+    if !props.footer.is_empty() {
+        block = block.title_bottom(
+            Line::styled(format!(" {} ", props.footer), border_style).right_aligned(),
+        );
+    }
+
+    block
 }
 
-impl Component for InputBox {
-    type State = InputBoxState;
+#[component(props = InputBox, state = InputBoxState)]
+fn input_box(
+    props: &InputBox,
+    state: &InputBoxState,
+    hooks: &mut Hooks<InputBox, InputBoxState>,
+) -> Elements {
+    hooks.use_focusable(props.active);
+    hooks.use_autofocus();
 
-    fn initial_state(&self) -> Option<InputBoxState> {
-        Some(InputBoxState::default())
-    }
+    hooks.use_context::<mpsc::Sender<AiTuiEvent>>(|tx, _, state| {
+        state.tx = tx.cloned();
+    });
 
-    fn lifecycle(&self, hooks: &mut Hooks<Self::State>, _state: &Self::State) {
-        if self.active {
-            hooks.use_autofocus();
-        }
-        hooks.use_context::<mpsc::Sender<AiTuiEvent>>(|tx, state| {
-            state.tx = tx.cloned();
-        });
-    }
-
-    fn render(&self, area: Rect, buf: &mut Buffer, state: &Self::State) {
-        if area.height < 3 || area.width < 4 {
-            return;
-        }
-        // Configure the block on each render so titles/footer stay current.
-        // Note: set_block takes ownership, but the block is cheap to rebuild.
-        // We can't call set_block here since we only have &self/&state,
-        // so we render block + textarea separately.
-        let block = self.make_block();
-        let inner = block.inner(area);
-        block.render(area, buf);
-
-        let mut textarea = state.textarea.lock().unwrap();
-        if self.active {
-            textarea.set_cursor_style(Style::default().add_modifier(Modifier::REVERSED));
-            textarea.set_placeholder_text("Type a message...");
-        } else {
-            textarea.set_cursor_style(Style::default());
-            textarea.set_placeholder_text("");
-        }
-
-        // Render textarea into the inner area
-        textarea.render(inner, buf);
-    }
-
-    fn desired_height(&self, width: u16, state: &Self::State) -> u16 {
-        if width < 4 {
-            return 3;
-        }
-        // TextArea handles scrolling internally if content overflows.
-        let block = self.make_block();
-        let inner = block.inner(Rect::new(0, 0, width, u16::MAX));
-        let chrome = (u16::MAX).saturating_sub(inner.height);
-        let content = state.textarea.lock().unwrap().measure(width - 4);
-        chrome + content.preferred_rows
-    }
-
-    fn is_focusable(&self, _state: &Self::State) -> bool {
-        self.active
-    }
-
-    fn handle_event(
-        &self,
-        event: &crossterm::event::Event,
-        state: &mut Tracked<Self::State>,
-    ) -> EventResult {
+    hooks.use_event(move |event, props, state| {
         let state = state.read();
 
-        if !self.active {
+        if !props.active {
             return EventResult::Ignored;
         }
 
@@ -213,5 +161,112 @@ impl Component for InputBox {
         }
 
         EventResult::Ignored
-    }
+    });
+
+    let textarea = state.textarea.clone();
+    let block = make_block(props);
+    let active = props.active;
+    element!(
+        Canvas(render_fn: move |area, buf| {
+            let mut area = area;
+
+            if area.height < 3 || area.width < 4 {
+                return;
+            }
+
+            let height = {
+                if area.width < 4 {
+                    3
+                } else {
+
+                    // TextArea handles scrolling internally if content overflows.
+                    let inner = block.inner(Rect::new(0, 0, area.width, u16::MAX));
+                    let chrome = (u16::MAX).saturating_sub(inner.height);
+                    let content = textarea.lock().unwrap().measure(area.width - 4);
+                    chrome + content.preferred_rows
+                }
+            };
+
+            area.height = height.min(7);
+            let inner = block.clone().inner(area);
+            block.clone().render(area, buf);
+
+            let mut textarea = textarea.lock().unwrap();
+            if active {
+                textarea.set_cursor_style(Style::default().add_modifier(Modifier::REVERSED));
+                textarea.set_placeholder_text("Type a message...");
+            } else {
+                textarea.set_cursor_style(Style::default());
+                textarea.set_placeholder_text("");
+            }
+
+            // Render textarea into the inner area
+            textarea.render(inner, buf);
+        })
+    )
 }
+
+// impl Component for InputBox {
+//     type State = InputBoxState;
+
+//     fn initial_state(&self) -> Option<InputBoxState> {
+//         Some(InputBoxState::default())
+//     }
+
+//     fn lifecycle(&self, hooks: &mut Hooks<Self::State>, _state: &Self::State) {
+//         if self.active {
+//             hooks.use_autofocus();
+//         }
+//         hooks.use_context::<mpsc::Sender<AiTuiEvent>>(|tx, state| {
+//             state.tx = tx.cloned();
+//         });
+//     }
+
+//     fn render(&self, area: Rect, buf: &mut Buffer, state: &Self::State) {
+//         if area.height < 3 || area.width < 4 {
+//             return;
+//         }
+//         // Configure the block on each render so titles/footer stay current.
+//         // Note: set_block takes ownership, but the block is cheap to rebuild.
+//         // We can't call set_block here since we only have &self/&state,
+//         // so we render block + textarea separately.
+//         let block = self.make_block();
+//         let inner = block.inner(area);
+//         block.render(area, buf);
+
+//         let mut textarea = state.textarea.lock().unwrap();
+//         if self.active {
+//             textarea.set_cursor_style(Style::default().add_modifier(Modifier::REVERSED));
+//             textarea.set_placeholder_text("Type a message...");
+//         } else {
+//             textarea.set_cursor_style(Style::default());
+//             textarea.set_placeholder_text("");
+//         }
+
+//         // Render textarea into the inner area
+//         textarea.render(inner, buf);
+//     }
+
+//     fn desired_height(&self, width: u16, state: &Self::State) -> u16 {
+//         if width < 4 {
+//             return 3;
+//         }
+//         // TextArea handles scrolling internally if content overflows.
+//         let block = self.make_block();
+//         let inner = block.inner(Rect::new(0, 0, width, u16::MAX));
+//         let chrome = (u16::MAX).saturating_sub(inner.height);
+//         let content = state.textarea.lock().unwrap().measure(width - 4);
+//         chrome + content.preferred_rows
+//     }
+
+//     fn is_focusable(&self, _state: &Self::State) -> bool {
+//         self.active
+//     }
+
+//     fn handle_event(
+//         &self,
+//         event: &crossterm::event::Event,
+//         state: &mut Tracked<Self::State>,
+//     ) -> EventResult {
+//     }
+// }
