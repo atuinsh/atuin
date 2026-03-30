@@ -175,16 +175,11 @@ fn input_box(
             }
 
             let height = {
-                if area.width < 4 {
-                    3
-                } else {
-
-                    // TextArea handles scrolling internally if content overflows.
-                    let inner = block.inner(Rect::new(0, 0, area.width, u16::MAX));
-                    let chrome = (u16::MAX).saturating_sub(inner.height);
-                    let content = textarea.lock().unwrap().measure(area.width - 4);
-                    chrome + content.preferred_rows
-                }
+                // TextArea handles scrolling internally if content overflows.
+                let inner = block.inner(Rect::new(0, 0, area.width, u16::MAX));
+                let chrome = (u16::MAX).saturating_sub(inner.height);
+                let content = textarea.lock().unwrap().measure(area.width - 4);
+                chrome + content.preferred_rows
             };
 
             area.height = height.min(7);
