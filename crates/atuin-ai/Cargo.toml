@@ -42,6 +42,9 @@ unicode-width = "0.2"
 eye_declare = "0.3"
 ratatui-core = "0.1"
 ratatui-widgets = "0.3"
+thiserror = { workspace = true }
+regex = { workspace = true }
+toml = "1.1"
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
