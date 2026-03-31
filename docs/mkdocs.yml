@@ -78,8 +78,9 @@ nav:
       - Key Binding: configuration/key-binding.md
       - Advanced Key Binding: configuration/advanced-key-binding.md
   - Reference:
-      - doctor: reference/doctor.md
+      - config: reference/config.md
       - daemon: reference/daemon.md
+      - doctor: reference/doctor.md
       - gen-completions: reference/gen-completions.md
       - hex: reference/hex.md
       - import: reference/import.md
