@@ -664,8 +664,22 @@ pub struct Ai {
     /// Only necessary for custom AI endpoints.
     pub api_token: Option<String>,
 
+    /// Deprecated: use opening.send_cwd instead. Kept for backwards compatibility.
+    #[serde(default)]
+    pub send_cwd: Option<bool>,
+
+    /// Configuration for what context is sent in the opening AI request.
+    #[serde(default)]
+    pub opening: AiOpening,
+}
+
+#[derive(Default, Clone, Debug, Deserialize, Serialize)]
+pub struct AiOpening {
     /// Whether or not to send the current working directory to the AI endpoint.
-    pub send_cwd: bool,
+    pub send_cwd: Option<bool>,
+
+    /// Whether or not to send the last command as context in the opening AI request.
+    pub send_last_command: Option<bool>,
 }
 
 impl Default for Preview {
@@ -1524,6 +1538,8 @@ impl Settings {
             .set_default("search.frecency_score_multiplier", 1.0)?
             .set_default("meta.db_path", meta_path.to_str())?
             .set_default("ai.send_cwd", false)?
+            .set_default("ai.opening.send_cwd", false)?
+            .set_default("ai.opening.send_last_command", false)?
             .set_default(
                 "search.filters",
                 vec![
