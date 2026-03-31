@@ -676,10 +676,10 @@ pub struct Ai {
 #[derive(Default, Clone, Debug, Deserialize, Serialize)]
 pub struct AiOpening {
     /// Whether or not to send the current working directory to the AI endpoint.
-    pub send_cwd: bool,
+    pub send_cwd: Option<bool>,
 
     /// Whether or not to send the last command as context in the opening AI request.
-    pub send_last_command: bool,
+    pub send_last_command: Option<bool>,
 }
 
 impl Default for Preview {
