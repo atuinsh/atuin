@@ -400,9 +400,10 @@ async fn run_inline_tui(
         .extra_newlines_at_exit(1)
         .build()?;
 
-    let send_cwd = settings.ai.send_cwd;
+    // Support both legacy [ai] send_cwd and new [ai.opening] send_cwd
+    let send_cwd = settings.ai.opening.send_cwd || settings.ai.send_cwd.unwrap_or(false);
 
-    let last_command = if settings.ai.read_history.unwrap_or(false) {
+    let last_command = if settings.ai.opening.send_last_command {
         let db_path = PathBuf::from(settings.db_path.as_str());
         match Sqlite::new(db_path, settings.local_timeout).await {
             Ok(db) => db.last().await.ok().flatten().map(|h| h.command),
