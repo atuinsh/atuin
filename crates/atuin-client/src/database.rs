@@ -618,10 +618,10 @@ impl Database for Sqlite {
             .map(|before| before.unix_timestamp_nanos() as i64)
         });
         if filter_options.include_duplicates || filter_options.limit.is_none() {
-            return self.search_inner(
-                search_mode, filter, context, query, filter_options,
-                before,
-            ).await;
+            let result = self
+                .search_inner(search_mode, filter, context, query, filter_options, before)
+                .await?;
+            return Ok(ordering::reorder_fuzzy(search_mode, query, result));
         }
 
         let mut result = vec![];
@@ -631,10 +631,16 @@ impl Database for Sqlite {
         filter_options.limit = Some(page_size as i64);
         filter_options.include_duplicates = true;
         while result.len() < limit {
-            let res = self.search_inner(
-                search_mode, filter, context, query, filter_options.clone(),
-                before,
-            ).await?;
+            let res = self
+                .search_inner(
+                    search_mode,
+                    filter,
+                    context,
+                    query,
+                    filter_options.clone(),
+                    before,
+                )
+                .await?;
             let over = res.len() < page_size;
             if let Some(last) = res.iter().last() {
                 before = Some(last.timestamp.unix_timestamp_nanos() as i64);
