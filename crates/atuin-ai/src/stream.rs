@@ -1,0 +1,291 @@
+// ───────────────────────────────────────────────────────────────────
+// SSE streaming
+// ───────────────────────────────────────────────────────────────────
+
+use atuin_client::distro::detect_linux_distribution;
+use atuin_common::tls::ensure_crypto_provider;
+
+use eventsource_stream::Eventsource;
+use eye_declare::Handle;
+use eyre::{Context, Result};
+use futures::StreamExt;
+use reqwest::Url;
+
+use crate::{commands::detect_shell, tools::ToolCall, tui::AppState};
+
+#[derive(Debug, Clone)]
+enum ChatStreamEvent {
+    TextChunk(String),
+    ToolCall {
+        id: String,
+        name: String,
+        input: serde_json::Value,
+    },
+    ToolResult {
+        tool_use_id: String,
+        content: String,
+        is_error: bool,
+    },
+    Status(String),
+    Done {
+        session_id: String,
+    },
+    Error(String),
+}
+
+fn create_chat_stream(
+    hub_address: String,
+    token: String,
+    session_id: Option<String>,
+    messages: Vec<serde_json::Value>,
+    send_cwd: bool,
+) -> std::pin::Pin<Box<dyn futures::Stream<Item = Result<ChatStreamEvent>> + Send>> {
+    Box::pin(async_stream::stream! {
+        ensure_crypto_provider();
+        let endpoint = match hub_url(&hub_address, "/api/cli/chat") {
+            Ok(url) => url,
+            Err(e) => {
+                yield Err(e);
+                return;
+            }
+        };
+
+        tracing::debug!("Sending SSE request to {endpoint}");
+
+        let os = detect_os();
+        let shell = detect_shell();
+
+        let mut context = serde_json::json!({
+            "os": os,
+            "shell": shell,
+            "pwd": if send_cwd { std::env::current_dir()
+                .ok()
+                .map(|path| path.to_string_lossy().into_owned()) } else { None },
+        });
+
+        if os == "linux" {
+            context["distro"] = serde_json::json!(detect_linux_distribution());
+        }
+
+        let mut request_body = serde_json::json!({
+            "messages": messages,
+            "context": context,
+            "capabilities": [
+                "client_tools_v1"
+            ]
+        });
+
+        if let Some(ref sid) = session_id {
+            tracing::trace!("Including session_id in request: {sid}");
+            request_body["session_id"] = serde_json::json!(sid);
+        }
+
+        let client = reqwest::Client::new();
+        let response = match client
+            .post(endpoint.clone())
+            .header("Accept", "text/event-stream")
+            .bearer_auth(&token)
+            .json(&request_body)
+            .send()
+            .await
+        {
+            Ok(resp) => resp,
+            Err(e) => {
+                yield Err(eyre::eyre!("Failed to send SSE request: {}", e));
+                return;
+            }
+        };
+
+        let status = response.status();
+        if status == reqwest::StatusCode::UNAUTHORIZED {
+            tracing::error!("SSE request failed with status: {status}, clearing session");
+            let _ = atuin_client::hub::delete_session().await;
+            yield Err(eyre::eyre!("Hub session expired. Re-run to authenticate again."));
+            return;
+        }
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            tracing::error!("SSE request failed ({}): {}", status, body);
+            yield Err(eyre::eyre!("SSE request failed ({}): {}", status, body));
+            return;
+        }
+
+        let byte_stream = response.bytes_stream();
+        let mut stream = byte_stream.eventsource();
+
+        while let Some(event) = stream.next().await {
+            match event {
+                Ok(sse_event) => {
+                    let event_type = sse_event.event.as_str();
+                    let data = sse_event.data.clone();
+
+                    tracing::debug!(event_type = %event_type, "SSE event received");
+
+                    match event_type {
+                        "text" => {
+                            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&data)
+                                && let Some(content) = json.get("content").and_then(|v| v.as_str())
+                            {
+                                yield Ok(ChatStreamEvent::TextChunk(content.to_string()));
+                            }
+                        }
+                        "tool_call" => {
+                            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&data) {
+                                let id = json.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                let name = json.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                let input = json.get("input").cloned().unwrap_or(serde_json::json!({}));
+                                yield Ok(ChatStreamEvent::ToolCall { id, name, input });
+                            }
+                        }
+                        "tool_result" => {
+                            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&data) {
+                                let tool_use_id = json.get("tool_use_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                let content = json.get("content").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                let is_error = json.get("is_error").and_then(|v| v.as_bool()).unwrap_or(false);
+                                yield Ok(ChatStreamEvent::ToolResult { tool_use_id, content, is_error });
+                            }
+                        }
+                        "status" => {
+                            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&data)
+                                && let Some(state) = json.get("state").and_then(|v| v.as_str())
+                            {
+                                yield Ok(ChatStreamEvent::Status(state.to_string()));
+                            }
+                        }
+                        "done" => {
+                            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&data) {
+                                let session_id = json.get("session_id")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string();
+                                yield Ok(ChatStreamEvent::Done { session_id });
+                            } else {
+                                yield Ok(ChatStreamEvent::Done { session_id: String::new() });
+                            }
+                            break;
+                        }
+                        "error" => {
+                            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&data) {
+                                let message = json.get("message").and_then(|v| v.as_str()).unwrap_or("Unknown error").to_string();
+                                tracing::error!("SSE error: {}", message);
+                                yield Ok(ChatStreamEvent::Error(message));
+                            } else {
+                                tracing::error!("SSE error: {}", data);
+                                yield Ok(ChatStreamEvent::Error(data));
+                            }
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+                Err(e) => {
+                    yield Err(eyre::eyre!("SSE error: {}", e));
+                    break;
+                }
+            }
+        }
+    })
+}
+
+// ───────────────────────────────────────────────────────────────────
+// Async streaming task — pushes updates to app state via Handle
+// ───────────────────────────────────────────────────────────────────
+
+pub(crate) async fn run_chat_stream(
+    handle: Handle<AppState>,
+    endpoint: String,
+    token: String,
+    session_id: Option<String>,
+    messages: Vec<serde_json::Value>,
+    send_cwd: bool,
+) {
+    let stream = create_chat_stream(endpoint, token, session_id, messages, send_cwd);
+    futures::pin_mut!(stream);
+
+    while let Some(event) = stream.next().await {
+        match event {
+            Ok(ChatStreamEvent::TextChunk(text)) => {
+                tracing::trace!(text = %text, "Processing TextChunk");
+                handle.update(move |state| {
+                    state.append_streaming_text(&text);
+                });
+            }
+            Ok(ChatStreamEvent::ToolCall { id, name, input }) => {
+                tracing::trace!(id = %id, name = %name, "Processing ToolCall");
+
+                if let Ok(tool) = ToolCall::try_from((name.as_str(), &input)) {
+                    // Recognized as a client-side tool call.
+                    handle.update(move |state| {
+                        state.handle_client_tool_call(tool);
+                    });
+                    continue;
+                }
+
+                handle.update(move |state| {
+                    state.add_tool_call(id, name, input);
+                });
+            }
+            Ok(ChatStreamEvent::ToolResult {
+                tool_use_id,
+                content,
+                is_error,
+            }) => {
+                tracing::trace!(tool_use_id = %tool_use_id, "Processing ToolResult");
+                handle.update(move |state| {
+                    state.add_tool_result(tool_use_id, content, is_error);
+                });
+            }
+            Ok(ChatStreamEvent::Status(status)) => {
+                tracing::trace!(status = %status, "Processing Status");
+                handle.update(move |state| {
+                    state.update_streaming_status(&status);
+                });
+            }
+            Ok(ChatStreamEvent::Done { session_id }) => {
+                tracing::trace!(session_id = %session_id, "Processing Done");
+                handle.update(move |state| {
+                    if !session_id.is_empty() {
+                        state.store_session_id(session_id);
+                    }
+                    state.finalize_streaming();
+                });
+                break;
+            }
+            Ok(ChatStreamEvent::Error(msg)) => {
+                tracing::trace!(error = %msg, "Processing Error");
+                handle.update(move |state| {
+                    state.streaming_error(msg);
+                });
+                break;
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                handle.update(move |state| {
+                    state.streaming_error(msg);
+                });
+                break;
+            }
+        }
+    }
+}
+
+fn hub_url(base: &str, path: &str) -> Result<Url> {
+    let base_with_slash = if base.ends_with('/') {
+        base.to_string()
+    } else {
+        format!("{base}/")
+    };
+    let stripped = path.strip_prefix('/').unwrap_or(path);
+    Url::parse(&base_with_slash)?
+        .join(stripped)
+        .context("failed to build hub URL")
+}
+
+fn detect_os() -> String {
+    match std::env::consts::OS {
+        "macos" => "macos".to_string(),
+        "linux" => "linux".to_string(),
+        "windows" => "windows".to_string(),
+        other => format!("Other: {other}"),
+    }
+}

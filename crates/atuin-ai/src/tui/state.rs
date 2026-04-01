@@ -5,6 +5,8 @@
 
 use tokio::task::AbortHandle;
 
+use crate::tools::ToolCall;
+
 /// Streaming status indicators from server
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StreamingStatus {
@@ -352,6 +354,10 @@ impl AppState {
                 content.push_str(chunk);
             }
         }
+    }
+
+    pub fn handle_client_tool_call(&mut self, tool: ToolCall) {
+        todo!("check permissions, handle tool call, send result - async")
     }
 
     /// Add a tool call event during streaming.
