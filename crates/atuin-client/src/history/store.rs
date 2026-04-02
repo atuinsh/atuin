@@ -180,6 +180,24 @@ impl HistoryStore {
         self.push_record(record).await
     }
 
+    /// Delete a batch of history entries via the record store, with a single
+    /// incremental build at the end.
+    pub async fn delete_entries(
+        &self,
+        db: &dyn Database,
+        entries: impl IntoIterator<Item = History>,
+    ) -> Result<()> {
+        let mut record_ids = Vec::new();
+        for entry in entries {
+            let (id, _) = self.delete(entry.id).await?;
+            record_ids.push(id);
+        }
+        if !record_ids.is_empty() {
+            self.incremental_build(db, &record_ids).await?;
+        }
+        Ok(())
+    }
+
     pub async fn push(&self, history: History) -> Result<(RecordId, RecordIdx)> {
         // TODO(ellie): move the history store to its own file
         // it's tiny rn so fine as is
