@@ -20,15 +20,6 @@ docker run -d -v "$CONFIG:/config" ghcr.io/atuinsh/atuin:<LATEST TAGGED RELEASE>
 
 Using the already build docker image hosting your own Atuin can be done using the supplied docker-compose file.
 
-Create a `.env` file next to [`docker-compose.yml`](https://github.com/atuinsh/atuin/raw/main/docker-compose.yml) with contents like this:
-
-```ini
-ATUIN_DB_NAME=atuin
-ATUIN_DB_USERNAME=atuin
-# Choose your own secure password. Stick to [A-Za-z0-9.~_-]
-ATUIN_DB_PASSWORD=really-insecure
-```
-
 Create a `docker-compose.yml`:
 
 ```yaml
@@ -58,6 +49,16 @@ services:
       POSTGRES_PASSWORD: ${ATUIN_DB_PASSWORD}
       POSTGRES_DB: ${ATUIN_DB_NAME}
 ```
+
+Create a `.env` file next to `docker-compose.yml` with contents like this:
+
+```ini
+ATUIN_DB_NAME=atuin
+ATUIN_DB_USERNAME=atuin
+# Choose your own secure password. Stick to [A-Za-z0-9.~_-]
+ATUIN_DB_PASSWORD=really-insecure
+```
+
 
 Start the services using `docker compose`:
 
