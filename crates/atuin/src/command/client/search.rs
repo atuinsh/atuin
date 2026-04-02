@@ -267,9 +267,10 @@ impl Cmd {
                         eprintln!("deleting {}", entry.id);
                     }
 
-                    history_store
-                        .delete_entries(&db, entries)
+                    let ids = history_store
+                        .delete_entries(entries)
                         .await?;
+                    history_store.incremental_build(&db, &ids).await?;
 
                     entries =
                         run_non_interactive(settings, opt_filter.clone(), &query, &db).await?;
