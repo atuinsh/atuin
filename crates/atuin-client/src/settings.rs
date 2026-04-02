@@ -1094,6 +1094,7 @@ pub struct Settings {
     pub history_format: String,
     pub prefers_reduced_motion: bool,
     pub store_failed: bool,
+    pub no_mouse: bool,
 
     #[serde(with = "serde_regex", default = "RegexSet::empty", skip_serializing)]
     pub history_filter: RegexSet,
@@ -1563,6 +1564,7 @@ impl Settings {
                     .map(|_| config::Value::new(None, config::ValueKind::Boolean(true)))
                     .unwrap_or_else(|| config::Value::new(None, config::ValueKind::Boolean(false))),
             )?
+            .set_default("no_mouse", false)?
             .add_source(
                 Environment::with_prefix("atuin")
                     .prefix_separator("_")

@@ -1488,10 +1488,11 @@ fn restore_popup_area(saved: &SavedScreen, popup_rect: Rect, scroll_offset: u16)
 struct Stdout {
     writer: TerminalWriter,
     inline_mode: bool,
+    no_mouse: bool,
 }
 
 impl Stdout {
-    pub fn new(inline_mode: bool) -> std::io::Result<Self> {
+    pub fn new(inline_mode: bool, no_mouse: bool) -> std::io::Result<Self> {
         terminal::enable_raw_mode()?;
 
         let mut writer = TerminalWriter::new()?;
@@ -1500,11 +1501,11 @@ impl Stdout {
             execute!(writer, terminal::EnterAlternateScreen)?;
         }
 
-        execute!(
-            writer,
-            event::EnableMouseCapture,
-            event::EnableBracketedPaste,
-        )?;
+        if !no_mouse {
+            execute!(writer, event::EnableMouseCapture)?;
+        }
+
+        execute!(writer, event::EnableBracketedPaste)?;
 
         #[cfg(not(target_os = "windows"))]
         execute!(
@@ -1519,6 +1520,7 @@ impl Stdout {
         Ok(Self {
             writer,
             inline_mode,
+            no_mouse,
         })
     }
 }
@@ -1531,12 +1533,10 @@ impl Drop for Stdout {
         if !self.inline_mode {
             execute!(self.writer, terminal::LeaveAlternateScreen).unwrap();
         }
-        execute!(
-            self.writer,
-            event::DisableMouseCapture,
-            event::DisableBracketedPaste,
-        )
-        .unwrap();
+        if !self.no_mouse {
+            execute!(self.writer, event::DisableMouseCapture).unwrap();
+        }
+        execute!(self.writer, event::DisableBracketedPaste).unwrap();
 
         terminal::disable_raw_mode().unwrap();
     }
@@ -1665,7 +1665,7 @@ pub async fn history(
 
     let popup_mode = saved_screen.is_some();
 
-    let stdout = Stdout::new(inline_height > 0)?;
+    let stdout = Stdout::new(inline_height > 0, settings.no_mouse)?;
 
     // In popup mode, clear the popup region on the physical terminal before
     // ratatui takes over. Ratatui's diff-based rendering compares against an
