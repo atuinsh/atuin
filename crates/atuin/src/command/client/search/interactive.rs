@@ -180,18 +180,20 @@ impl State {
     fn handle_input(&mut self, settings: &Settings, input: &Event) -> InputAction {
         match input {
             Event::Key(k) => self.handle_key_input(settings, k),
-            Event::Mouse(m) => self.handle_mouse_input(*m),
+            Event::Mouse(m) => self.handle_mouse_input(*m, settings.invert),
             Event::Paste(d) => self.handle_paste_input(d),
             _ => InputAction::Continue,
         }
     }
 
-    fn handle_mouse_input(&mut self, input: MouseEvent) -> InputAction {
-        match input.kind {
-            event::MouseEventKind::ScrollDown => {
+    fn handle_mouse_input(&mut self, input: MouseEvent, inverted: bool) -> InputAction {
+        match (input.kind, inverted) {
+            (event::MouseEventKind::ScrollDown, false)
+            | (event::MouseEventKind::ScrollUp, true) => {
                 self.scroll_down(1);
             }
-            event::MouseEventKind::ScrollUp => {
+            (event::MouseEventKind::ScrollDown, true)
+            | (event::MouseEventKind::ScrollUp, false) => {
                 self.scroll_up(1);
             }
             _ => {}
