@@ -267,9 +267,7 @@ impl Cmd {
                         eprintln!("deleting {}", entry.id);
                     }
 
-                    let ids = history_store
-                        .delete_entries(entries)
-                        .await?;
+                    let ids = history_store.delete_entries(entries).await?;
                     history_store.incremental_build(&db, &ids).await?;
 
                     entries =
