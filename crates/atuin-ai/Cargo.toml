@@ -45,6 +45,7 @@ ratatui-widgets = "0.3"
 thiserror = { workspace = true }
 regex = { workspace = true }
 toml = "1.1"
+typed-builder = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

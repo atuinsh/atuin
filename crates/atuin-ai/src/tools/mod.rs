@@ -4,25 +4,74 @@ use eyre::Result;
 
 use crate::permissions::rule::Rule;
 
-pub(crate) enum ToolCall {
+#[derive(Debug, Clone)]
+pub(crate) struct PendingToolCall {
+    pub id: String,
+    pub state: ToolCallState,
+    pub tool: ClientToolCall,
+}
+
+impl PendingToolCall {
+    pub(crate) fn target_dir(&self) -> Option<&Path> {
+        self.tool.target_dir()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ToolCallState {
+    CheckingPermissions,
+    AskingForPermission,
+    Denied(String),
+    Executing,
+}
+
+pub(crate) enum ClientToolCallType {
+    Read,
+    Write,
+    Shell,
+    AtuinHistory,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum ClientToolCall {
     Read(ReadToolCall),
     Write(WriteToolCall),
     Shell(ShellToolCall),
     AtuinHistory(AtuinHistoryToolCall),
 }
 
-impl TryFrom<(&str, &serde_json::Value)> for ToolCall {
+impl TryFrom<(&str, &serde_json::Value)> for ClientToolCall {
     type Error = eyre::Error;
 
     fn try_from((name, input): (&str, &serde_json::Value)) -> Result<Self, Self::Error> {
         match name {
-            "read" => Ok(ToolCall::Read(ReadToolCall::try_from(input)?)),
-            "write" => Ok(ToolCall::Write(WriteToolCall::try_from(input)?)),
-            "shell" => Ok(ToolCall::Shell(ShellToolCall::try_from(input)?)),
-            "atuin_history" => Ok(ToolCall::AtuinHistory(AtuinHistoryToolCall::try_from(
-                input,
-            )?)),
+            "read" => Ok(ClientToolCall::Read(ReadToolCall::try_from(input)?)),
+            "write" => Ok(ClientToolCall::Write(WriteToolCall::try_from(input)?)),
+            "shell" => Ok(ClientToolCall::Shell(ShellToolCall::try_from(input)?)),
+            "atuin_history" => Ok(ClientToolCall::AtuinHistory(
+                AtuinHistoryToolCall::try_from(input)?,
+            )),
             _ => Err(eyre::eyre!("Unknown tool call: {name}")),
+        }
+    }
+}
+
+impl ClientToolCall {
+    pub(crate) fn matches_rule(&self, rule: &Rule) -> bool {
+        match self {
+            ClientToolCall::Read(tool) => tool.matches_rule(rule),
+            ClientToolCall::Write(tool) => tool.matches_rule(rule),
+            ClientToolCall::Shell(tool) => tool.matches_rule(rule),
+            ClientToolCall::AtuinHistory(tool) => tool.matches_rule(rule),
+        }
+    }
+
+    pub(crate) fn target_dir(&self) -> Option<&Path> {
+        match self {
+            ClientToolCall::Read(tool) => tool.target_dir(),
+            ClientToolCall::Write(tool) => tool.target_dir(),
+            ClientToolCall::Shell(tool) => tool.target_dir(),
+            ClientToolCall::AtuinHistory(tool) => tool.target_dir(),
         }
     }
 }
@@ -34,8 +83,19 @@ pub(crate) trait PermissableToolCall {
     }
 }
 
+impl PermissableToolCall for ClientToolCall {
+    fn matches_rule(&self, rule: &Rule) -> bool {
+        self.matches_rule(rule)
+    }
+
+    fn target_dir(&self) -> Option<&Path> {
+        self.target_dir()
+    }
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct ReadToolCall {
-    path: PathBuf,
+    pub path: PathBuf,
 }
 
 impl TryFrom<&serde_json::Value> for ReadToolCall {
@@ -75,9 +135,10 @@ impl PermissableToolCall for ReadToolCall {
     }
 }
 
+#[derive(Debug, Clone)]
 pub(crate) struct WriteToolCall {
-    path: PathBuf,
-    content: String,
+    pub path: PathBuf,
+    pub content: String,
 }
 
 impl TryFrom<&serde_json::Value> for WriteToolCall {
@@ -123,9 +184,10 @@ impl PermissableToolCall for WriteToolCall {
     }
 }
 
+#[derive(Debug, Clone)]
 pub(crate) struct ShellToolCall {
-    dir: Option<PathBuf>,
-    command: String,
+    pub dir: Option<PathBuf>,
+    pub command: String,
 }
 
 impl TryFrom<&serde_json::Value> for ShellToolCall {
@@ -168,11 +230,13 @@ impl PermissableToolCall for ShellToolCall {
     }
 }
 
+#[derive(Debug, Clone)]
 pub(crate) struct AtuinHistoryToolCall {
-    filter_modes: Vec<HistorySearchFilterMode>,
-    query: String,
+    pub filter_modes: Vec<HistorySearchFilterMode>,
+    pub query: String,
 }
 
+#[derive(Debug, Clone)]
 pub(crate) enum HistorySearchFilterMode {
     Global,
     Host,

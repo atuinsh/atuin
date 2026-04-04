@@ -3,9 +3,15 @@
 //! This module contains the core state types that represent the application's
 //! domain model. Conversation events match the API protocol format.
 
+use std::{collections::VecDeque, path::PathBuf, sync::mpsc};
+
 use tokio::task::AbortHandle;
 
-use crate::tools::ToolCall;
+use crate::{
+    permissions::walker::PermissionWalker,
+    tools::{ClientToolCall, PendingToolCall, ToolCallState},
+    tui::events::AiTuiEvent,
+};
 
 /// Streaming status indicators from server
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -143,6 +149,8 @@ pub enum ExitAction {
 /// The view function derives the UI from this state.
 #[derive(Debug)]
 pub struct AppState {
+    /// Channel to send events to the main event loop
+    pub tx: mpsc::Sender<AiTuiEvent>,
     /// Current application mode
     pub mode: AppMode,
     /// Conversation events (source of truth, matches API protocol)
@@ -163,11 +171,14 @@ pub struct AppState {
     pub confirmation_pending: bool,
     /// Abort handle for the active streaming task, if any
     pub stream_abort: Option<AbortHandle>,
+    /// Tool calls that are pending permission checking + execution
+    pub pending_tool_calls: VecDeque<PendingToolCall>,
 }
 
 impl AppState {
-    pub fn new() -> Self {
+    pub fn new(tx: mpsc::Sender<AiTuiEvent>) -> Self {
         Self {
+            tx,
             mode: AppMode::Input,
             events: Vec::new(),
             error: None,
@@ -178,6 +189,7 @@ impl AppState {
             was_interrupted: false,
             confirmation_pending: false,
             stream_abort: None,
+            pending_tool_calls: VecDeque::new(),
         }
     }
 
@@ -356,8 +368,30 @@ impl AppState {
         }
     }
 
-    pub fn handle_client_tool_call(&mut self, tool: ToolCall) {
-        todo!("check permissions, handle tool call, send result - async")
+    pub(crate) fn handle_client_tool_call(&mut self, id: String, tool: ClientToolCall) {
+        self.pending_tool_calls.push_back(PendingToolCall {
+            id,
+            state: ToolCallState::CheckingPermissions,
+            tool,
+        });
+    }
+
+    pub(crate) fn handle_select_permission(&mut self, permission: String) {
+        match permission.as_str() {
+            "allow" => {
+                self.pending_tool_calls.pop_front();
+            }
+            "always-allow-in-dir" => {
+                self.pending_tool_calls.pop_front();
+            }
+            "always-allow" => {
+                self.pending_tool_calls.pop_front();
+            }
+            "deny" => {
+                self.pending_tool_calls.pop_front();
+            }
+            _ => {}
+        }
     }
 
     /// Add a tool call event during streaming.
@@ -454,6 +488,18 @@ impl AppState {
 
     // ===== Query methods =====
 
+    /// Get a pending tool call by ID
+    pub(crate) fn get_pending_tool_call(&self, id: &str) -> Option<&PendingToolCall> {
+        self.pending_tool_calls.iter().find(|call| call.id == id)
+    }
+
+    /// Get a mutable pending tool call by ID
+    pub(crate) fn get_pending_tool_call_mut(&mut self, id: &str) -> Option<&mut PendingToolCall> {
+        self.pending_tool_calls
+            .iter_mut()
+            .find(|call| call.id == id)
+    }
+
     /// Get the most recent command from events
     pub fn current_command(&self) -> Option<&str> {
         self.events.iter().rev().find_map(|e| e.as_command())
@@ -546,11 +592,5 @@ impl AppState {
     /// Check if the application is exiting
     pub fn is_exiting(&self) -> bool {
         self.exit_action.is_some()
-    }
-}
-
-impl Default for AppState {
-    fn default() -> Self {
-        Self::new()
     }
 }

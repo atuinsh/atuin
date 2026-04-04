@@ -4,9 +4,18 @@ use eyre::Result;
 
 use crate::{permissions::file::RuleFile, tools::PermissableToolCall};
 
-pub(crate) struct PermissionRequest {
+pub(crate) struct PermissionRequest<'t> {
     working_dir: PathBuf,
-    call: Box<dyn PermissableToolCall>,
+    call: Box<&'t (dyn PermissableToolCall + Send + Sync)>,
+}
+
+impl<'t> PermissionRequest<'t> {
+    pub fn new(
+        working_dir: PathBuf,
+        call: Box<&'t (dyn PermissableToolCall + Send + Sync)>,
+    ) -> Self {
+        Self { working_dir, call }
+    }
 }
 
 pub(crate) enum PermissionResponse {
@@ -24,25 +33,43 @@ impl PermissionChecker {
         Self { files }
     }
 
-    pub async fn check(&self, request: &PermissionRequest) -> Result<PermissionResponse> {
+    pub async fn check<'t>(
+        &self,
+        request: &'t PermissionRequest<'t>,
+    ) -> Result<PermissionResponse> {
         // Files are in order from deepest to shallowest, so we can stop at the first match.
         // Within a file, deny rules take precedence over ask and allow rules.
         // Ask rules take precedence over allow rules.
         for file in &self.files {
             for rule in &file.content.permissions.deny {
                 if request.call.matches_rule(rule) {
+                    tracing::debug!(
+                        "Permission 'DENY' by rule: {} in file: {}",
+                        rule,
+                        file.path.display()
+                    );
                     return Ok(PermissionResponse::Denied);
                 }
             }
 
             for rule in &file.content.permissions.ask {
                 if request.call.matches_rule(rule) {
+                    tracing::debug!(
+                        "Permission 'ASK' by rule: {} in file: {}",
+                        rule,
+                        file.path.display()
+                    );
                     return Ok(PermissionResponse::Ask);
                 }
             }
 
             for rule in &file.content.permissions.allow {
                 if request.call.matches_rule(rule) {
+                    tracing::debug!(
+                        "Permission 'ALLOW' by rule: {} in file: {}",
+                        rule,
+                        file.path.display()
+                    );
                     return Ok(PermissionResponse::Allowed);
                 }
             }

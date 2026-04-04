@@ -11,7 +11,11 @@ use eyre::{Context, Result};
 use futures::StreamExt;
 use reqwest::Url;
 
-use crate::{commands::detect_shell, tools::ToolCall, tui::AppState};
+use crate::{
+    commands::detect_shell,
+    tools::ClientToolCall,
+    tui::{AppState, events::AiTuiEvent},
+};
 
 #[derive(Debug, Clone)]
 enum ChatStreamEvent {
@@ -213,10 +217,11 @@ pub(crate) async fn run_chat_stream(
             Ok(ChatStreamEvent::ToolCall { id, name, input }) => {
                 tracing::trace!(id = %id, name = %name, "Processing ToolCall");
 
-                if let Ok(tool) = ToolCall::try_from((name.as_str(), &input)) {
+                if let Ok(tool) = ClientToolCall::try_from((name.as_str(), &input)) {
                     // Recognized as a client-side tool call.
                     handle.update(move |state| {
-                        state.handle_client_tool_call(tool);
+                        state.handle_client_tool_call(id.clone(), tool);
+                        let _ = state.tx.send(AiTuiEvent::CheckToolCallPermission(id));
                     });
                     continue;
                 }

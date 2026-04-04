@@ -1,13 +1,20 @@
 //! View function that builds the eye-declare element tree from app state.
 
+use std::sync::mpsc;
+
 use eye_declare::{
     Cells, Column, Elements, HStack, Span, Spinner, Text, View, WidthConstraint, element,
 };
 use ratatui_core::style::{Color, Modifier, Style};
 
+use crate::tools::{ClientToolCall, PendingToolCall, ToolCallState};
+use crate::tui::components::select::SelectOption;
+use crate::tui::events::{AiTuiEvent, PermissionResult};
+
 use super::components::atuin_ai::AtuinAi;
 use super::components::input_box::InputBox;
 use super::components::markdown::Markdown;
+use super::components::select::Select;
 use super::state::{AppMode, AppState};
 
 mod turn;
@@ -53,25 +60,89 @@ pub fn ai_view(state: &AppState) -> Elements {
             })
 
             #(if !state.is_exiting() {
-                View(key: "input-box", padding_top: Cells::from(1)) {
-                    InputBox(
-                        key: "input",
-                        title: "Generate a command or ask a question",
-                        title_right: "Atuin AI",
-                        footer: state.footer_text(),
-                        active: state.mode == AppMode::Input && !state.confirmation_pending,
-                    )
-
-                    #(if state.is_input_blank && state.has_any_command() && state.mode == AppMode::Input {
-                        #(if state.confirmation_pending {
-                            Text { Span(text: "[Enter] Confirm dangerous command  [Esc] Cancel", style: Style::default().fg(Color::Gray)) }
-                        } else {
-                            Text { Span(text: "[Enter] Execute suggested command  [Tab] Insert Command", style: Style::default().fg(Color::Gray)) }
-                        })
-                    })
-
-                }
+                #(input_view(state))
             })
+        }
+    }
+}
+
+fn input_view(state: &AppState) -> Elements {
+    let first_pending_tool_call = state
+        .pending_tool_calls
+        .iter()
+        .find(|call| call.state == ToolCallState::AskingForPermission);
+
+    element! {
+        #(if first_pending_tool_call.is_some() {
+            #(tool_call_view(first_pending_tool_call.unwrap(), state.tx.clone()))
+        })
+
+        #(if first_pending_tool_call.is_none() {
+            View(key: "input-box", padding_top: Cells::from(1)) {
+                InputBox(
+                    key: "input",
+                    title: "Generate a command or ask a question",
+                    title_right: "Atuin AI",
+                    footer: state.footer_text(),
+                    active: state.mode == AppMode::Input && !state.confirmation_pending,
+                )
+
+                #(if state.is_input_blank && state.has_any_command() && state.mode == AppMode::Input {
+                    #(if state.confirmation_pending {
+                        Text { Span(text: "[Enter] Confirm dangerous command  [Esc] Cancel", style: Style::default().fg(Color::Gray)) }
+                    } else {
+                        Text { Span(text: "[Enter] Execute suggested command  [Tab] Insert Command", style: Style::default().fg(Color::Gray)) }
+                    })
+                })
+            }
+        })
+    }
+}
+
+fn tool_call_view(tool_call: &PendingToolCall, tx: mpsc::Sender<AiTuiEvent>) -> Elements {
+    let (verb, tool_desc) = match &tool_call.tool {
+        ClientToolCall::Read(tool) => ("read", tool.path.display().to_string()),
+        ClientToolCall::Write(tool) => ("write to", tool.path.display().to_string()),
+        ClientToolCall::Shell(tool) => ("run", tool.command.clone()),
+        ClientToolCall::AtuinHistory(tool) => ("search your Atuin history for", tool.query.clone()),
+    };
+
+    element! {
+        View(key: format!("tool-call-{}", tool_call.id), padding_left: Cells::from(2), padding_top: Cells::from(1)) {
+            Text {
+                Span(text: format!("Atuin AI would like to {}: ", verb), style: Style::default())
+                Span(text: &tool_desc, style: Style::default().fg(Color::Yellow))
+            }
+            View(padding_left: Cells::from(2)) {
+                Select(options: [
+                    SelectOption::builder()
+                        .label("Allow")
+                        .value("allow")
+                        .build(),
+                    SelectOption::builder()
+                        .label("Always allow in this directory")
+                        .value("always-allow-in-dir")
+                        .build(),
+                    SelectOption::builder()
+                        .label("Always allow")
+                        .value("always-allow")
+                        .build(),
+                    SelectOption::builder()
+                        .label("Deny")
+                        .value("deny")
+                        .build(),
+                ], on_select: Box::new(move |option: &SelectOption| {
+                    let value = match option.value.as_str() {
+                        "allow" => PermissionResult::Allow,
+                        "always-allow-in-dir" => PermissionResult::AlwaysAllowInDir,
+                        "always-allow" => PermissionResult::AlwaysAllow,
+                        "deny" => PermissionResult::Deny,
+                        _ => unreachable!(),
+                    };
+
+                    let _ = tx.send(AiTuiEvent::SelectPermission(value));
+                }) as Box<dyn Fn(&SelectOption) + Send + Sync>)
+            }
         }
     }
 }

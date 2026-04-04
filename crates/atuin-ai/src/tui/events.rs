@@ -12,6 +12,10 @@ pub enum AiTuiEvent {
     SubmitInput(String),
     /// User entered a slash command (e.g. "/help")
     SlashCommand(String),
+    /// Check the permission for a tool call
+    CheckToolCallPermission(String),
+    /// User selected a permission
+    SelectPermission(PermissionResult),
     /// Cancel active generation or streaming (Esc during Generating/Streaming)
     CancelGeneration,
     /// Execute the suggested command
@@ -24,4 +28,12 @@ pub enum AiTuiEvent {
     Retry,
     /// Exit the application
     Exit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PermissionResult {
+    Allow,
+    AlwaysAllowInDir,
+    AlwaysAllow,
+    Deny,
 }

@@ -11,7 +11,7 @@ pub(crate) enum RuleError {
     InvalidRule(String),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Rule {
     pub tool: String,
     pub scope: Option<String>,
@@ -26,6 +26,24 @@ impl std::fmt::Display for Rule {
     }
 }
 
+impl Serialize for Rule {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for Rule {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Self::try_from(s.as_str()).map_err(serde::de::Error::custom)
+    }
+}
 impl TryFrom<&str> for Rule {
     type Error = RuleError;
 

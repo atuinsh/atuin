@@ -5,24 +5,29 @@ use tokio::task::JoinSet;
 
 use crate::permissions::file::{RuleFile, RuleFileContent};
 
+#[derive(Debug)]
 struct FoundRuleFile {
     depth: usize,
     file: RuleFile,
 }
 
-pub(crate) struct PermissionsWalker {
+pub(crate) struct PermissionWalker {
     start: PathBuf,
     global_permissions_file: Option<PathBuf>,
     rules: Vec<RuleFile>,
 }
 
-impl PermissionsWalker {
+impl PermissionWalker {
     pub fn new(start: PathBuf, global_permissions_file: Option<PathBuf>) -> Self {
         Self {
             start,
             global_permissions_file,
             rules: Vec::new(),
         }
+    }
+
+    pub fn rules(&self) -> &[RuleFile] {
+        &self.rules
     }
 
     /// Walks the filesystem starting from the start path and collecting permission files along the way.
@@ -33,14 +38,18 @@ impl PermissionsWalker {
             .ancestors()
             .map(PathBuf::from)
             .collect::<Vec<_>>();
+
         if let Some(global_path) = self.global_permissions_file.as_ref() {
             to_check.push(global_path.clone());
         }
+
+        eprintln!("to_check: {:?}", to_check);
 
         let size = to_check.len();
         let mut set: JoinSet<Result<Option<FoundRuleFile>>> = JoinSet::new();
 
         for (index, path) in to_check.into_iter().enumerate() {
+            eprintln!("Checking: {:?}", path);
             set.spawn(async move {
                 match check_for_permissions(&path).await {
                     Ok(Some(rule_file)) => Ok(Some(FoundRuleFile {
@@ -57,6 +66,7 @@ impl PermissionsWalker {
         while let Some(result) = set.join_next().await {
             let result = result?; // JoinErrors result in failure to walk the filesystem
 
+            eprintln!("result: {:?}", result);
             match result {
                 Ok(Some(FoundRuleFile { depth, file })) => {
                     found.push((depth, file));
@@ -76,6 +86,8 @@ impl PermissionsWalker {
         // join_next() returns in order of completion, not order of spawn
         found.sort_by_key(|(depth, _)| *depth);
         self.rules = found.into_iter().map(|(_, file)| file).collect();
+
+        eprintln!("rules: {:?}", self.rules);
 
         Ok(())
     }

@@ -1,7 +1,12 @@
+use std::path::PathBuf;
 use std::sync::mpsc;
 
+use crate::permissions::check::{PermissionChecker, PermissionRequest, PermissionResponse};
+use crate::permissions::walker::PermissionWalker;
 use crate::stream::run_chat_stream;
-use crate::tui::events::AiTuiEvent;
+use crate::tools::ToolCallState;
+use crate::tui::ConversationEvent;
+use crate::tui::events::{AiTuiEvent, PermissionResult};
 use crate::tui::state::{AppState, ExitAction};
 use crate::tui::view::ai_view;
 use eye_declare::{Application, CtrlCBehavior};
@@ -113,11 +118,33 @@ async fn run_inline_tui(
     initial_prompt: Option<String>,
     settings: &atuin_client::settings::Settings,
 ) -> Result<Action> {
-    let initial_state = AppState::new();
+    let (tx, rx) = mpsc::channel::<AiTuiEvent>();
+
+    let mut initial_state = AppState::new(tx.clone());
+    initial_state
+        .pending_tool_calls
+        .push_back(crate::tools::PendingToolCall {
+            id: "1".to_string(),
+            state: crate::tools::ToolCallState::CheckingPermissions,
+            tool: crate::tools::ClientToolCall::Read(crate::tools::ReadToolCall {
+                path: std::path::PathBuf::from("test.txt"),
+            }),
+        });
+    initial_state
+        .pending_tool_calls
+        .push_back(crate::tools::PendingToolCall {
+            id: "2".to_string(),
+            state: crate::tools::ToolCallState::CheckingPermissions,
+            tool: crate::tools::ClientToolCall::Shell(crate::tools::ShellToolCall {
+                dir: None,
+                command: "ls -lah".to_string(),
+            }),
+        });
+
+    let _ = tx.send(AiTuiEvent::CheckToolCallPermission("1".to_string()));
+    let _ = tx.send(AiTuiEvent::CheckToolCallPermission("2".to_string()));
 
     println!();
-
-    let (tx, rx) = mpsc::channel::<AiTuiEvent>();
 
     // If there's an initial prompt, send it as a SubmitInput event
     // so it flows through the same path as user-typed input.
@@ -151,6 +178,7 @@ async fn run_inline_tui(
                         state.is_input_blank = input_blank;
                     });
                 }
+
                 AiTuiEvent::SubmitInput(input) => {
                     let input = input.trim().to_string();
                     if input.is_empty() {
@@ -196,6 +224,147 @@ async fn run_inline_tui(
                 AiTuiEvent::SlashCommand(command) => {
                     h.update(move |state| {
                         state.handle_slash_command(&command);
+                    });
+                }
+
+                AiTuiEvent::CheckToolCallPermission(id) => {
+                    eprintln!("Checking tool call permission: {:?}", &id);
+                    let h2 = h.clone();
+
+                    let id_clone = id.clone();
+                    tokio::spawn(async move {
+                        let Ok(Some(tool_call)) = h2
+                            .fetch(move |state| state.get_pending_tool_call(&id).cloned())
+                            .await
+                        else {
+                            // todo: raise error
+                            eprintln!("Error getting pending tool call: {:?}", &id_clone);
+                            return;
+                        };
+
+                        let Some(working_dir) = tool_call
+                            .target_dir()
+                            .map(PathBuf::from)
+                            .or_else(|| std::env::current_dir().ok())
+                        else {
+                            // todo: raise error
+                            eprintln!(
+                                "Error getting working directory for tool call: {:?}",
+                                &tool_call
+                            );
+                            return;
+                        };
+
+                        let mut walker = PermissionWalker::new(working_dir.clone(), None); // todo: get global dir
+
+                        let Ok(_) = walker.walk().await else {
+                            eprintln!("Error walking filesystem for permissions check");
+                            // todo: raise error
+                            return;
+                        };
+
+                        let checker = PermissionChecker::new(walker.rules().to_owned());
+                        let request =
+                            PermissionRequest::new(working_dir, Box::new(&tool_call.tool));
+
+                        let Ok(response) = checker.check(&request).await else {
+                            // todo: raise error
+                            eprintln!("Error checking tool call permission");
+                            return;
+                        };
+
+                        match response {
+                            PermissionResponse::Allowed => {
+                                eprintln!("Executing tool call: {:?}", tool_call);
+                                h2.update(move |state| {
+                                    state.events.push(ConversationEvent::OutOfBandOutput {
+                                        name: "System".to_string(),
+                                        content: format!(
+                                            "Permission granted for tool call {:?}",
+                                            &tool_call
+                                        ),
+                                        command: None,
+                                    });
+                                });
+                            }
+                            PermissionResponse::Denied => {
+                                eprintln!("Permission denied for tool call: {:?}", &tool_call);
+                                h2.update(move |state| {
+                                    state.events.push(ConversationEvent::OutOfBandOutput {
+                                        name: "System".to_string(),
+                                        content: format!(
+                                            "Permission denied for tool call {:?}",
+                                            &tool_call
+                                        ),
+                                        command: None,
+                                    });
+                                });
+                            }
+                            PermissionResponse::Ask => {
+                                eprintln!("Asking for permission for tool call: {:?}", &tool_call);
+                                h2.update(move |state| {
+                                    let mut tool_call = state.get_pending_tool_call_mut(&id_clone);
+
+                                    let Some(tool_call) = tool_call.as_mut() else {
+                                        eprintln!(
+                                            "Error getting pending tool call: {:?}",
+                                            &id_clone
+                                        );
+                                        return;
+                                    };
+
+                                    eprintln!(
+                                        "Setting tool call state to AskingForPermission: {:?}",
+                                        &tool_call
+                                    );
+                                    tool_call.state = ToolCallState::AskingForPermission;
+                                    eprintln!(
+                                        "Tool call state set to AskingForPermission: {:?}",
+                                        &tool_call
+                                    );
+                                });
+                            }
+                        }
+                    });
+                }
+
+                AiTuiEvent::SelectPermission(permission) => {
+                    // Okay, we have permssion information.
+                    // If accepted, we can start executing.
+                    // If denied, we can show an error message.
+                    h.update(move |state| {
+                        let tool_call = state
+                            .pending_tool_calls
+                            .iter()
+                            .enumerate()
+                            .find(|(_, call)| call.state == ToolCallState::AskingForPermission);
+
+                        let Some((index, _)) = tool_call else {
+                            return;
+                        };
+
+                        match permission {
+                            PermissionResult::Allow => {
+                                state.pending_tool_calls.remove(index);
+                            }
+                            PermissionResult::AlwaysAllowInDir => {
+                                //
+                            }
+                            PermissionResult::AlwaysAllow => {
+                                //
+                            }
+                            PermissionResult::Deny => {
+                                let Some(call) = state.pending_tool_calls.remove(index) else {
+                                    return;
+                                };
+
+                                state.add_tool_result(
+                                    call.id,
+                                    "Permission denied on the user's system".to_string(),
+                                    true,
+                                );
+                            }
+                        }
                     });
                 }
 

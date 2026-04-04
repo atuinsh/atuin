@@ -296,6 +296,7 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "tui-textarea-2",
+ "typed-builder 0.18.2",
  "unicode-width 0.2.2",
  "uuid",
 ]
