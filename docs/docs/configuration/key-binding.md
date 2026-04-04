@@ -227,6 +227,8 @@ $env.config = (
 | page up                                   | Scroll search results one page up                                             |
 | ↓ (with no entry selected)                | Return original or return query depending on [settings](config.md#exit_mode)  |
 | ↓                                         | Select the next item on the list                                              |
+| ctrl + a, d                               | Delete the selected history entry                                            |
+| ctrl + a, D                               | Delete **all** history entries matching the selected command                  |
 | ctrl + a, c                               | Switch to the context of the currently selected command / return to default   |
 
 

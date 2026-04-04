@@ -62,6 +62,7 @@ pub enum InputAction {
     AcceptInspecting,
     Copy(usize),
     Delete(usize),
+    DeleteAllMatching(usize),
     ReturnOriginal,
     ReturnQuery,
     Continue,
@@ -643,6 +644,7 @@ impl State {
             }
             Action::Copy => InputAction::Copy(self.results_state.selected()),
             Action::Delete => InputAction::Delete(self.results_state.selected()),
+            Action::DeleteAll => InputAction::DeleteAllMatching(self.results_state.selected()),
             Action::ReturnOriginal => InputAction::ReturnOriginal,
             Action::ReturnQuery => InputAction::ReturnQuery,
             Action::Exit => Self::handle_key_exit(settings),
@@ -1836,14 +1838,36 @@ pub async fn history(
 
                                 let entry = results.remove(index);
 
-                                if settings.sync.records {
-                                    let (id, _) = history_store.delete(entry.id).await?;
-                                    history_store.incremental_build(&db, &[id]).await?;
-                                } else {
-                                    db.delete(entry.clone()).await?;
-                                }
+                                let ids = history_store.delete_entries([entry]).await?;
+                                history_store.incremental_build(&db, &ids).await?;
 
                                 app.tab_index  = 0;
+                            },
+                            InputAction::DeleteAllMatching(index) => {
+                                if results.is_empty() {
+                                    break;
+                                }
+
+                                let command = results[index].command.clone();
+
+                                // Remove matching entries from the visible results
+                                results.retain(|e| e.command != command);
+
+                                // Query the DB for ALL entries with this command and delete them
+                                let all_matching = db.query_history(
+                                    &format!(
+                                        "select * from history where command = '{}' and deleted_at is null",
+                                        command.replace('\'', "''")
+                                    )
+                                ).await?;
+
+                                let ids = history_store.delete_entries(all_matching).await?;
+                                history_store.incremental_build(&db, &ids).await?;
+
+                                app.results_len = results.len();
+                                app.results_state = ListState::default();
+                                app.inspecting_state.reset();
+                                app.tab_index = 0;
                             },
                             InputAction::SwitchContext(index) => {
                                 if let Some(index) = index && let Some(entry) = results.get(index) {
@@ -2006,6 +2030,7 @@ pub async fn history(
         InputAction::Continue
         | InputAction::Redraw
         | InputAction::Delete(_)
+        | InputAction::DeleteAllMatching(_)
         | InputAction::SwitchContext(_) => {
             unreachable!("should have been handled!")
         }
