@@ -8,6 +8,7 @@ use clap::{Args, Subcommand};
 use eyre::Result;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{EnvFilter, Layer, fmt, layer::SubscriberExt, util::SubscriberInitExt};
+pub mod hooks;
 pub mod init;
 pub mod inline;
 
@@ -35,6 +36,21 @@ pub enum Commands {
         shell: String,
     },
 
+    /// Process a hook event from an AI agent and record the command in history
+    #[command(hide = true)]
+    Hook {
+        /// Which agent's hook format to parse (e.g., "claude-code")
+        #[arg(value_name = "AGENT")]
+        agent: String,
+    },
+
+    /// Install hooks for an AI agent to capture commands in atuin history
+    InstallHooks {
+        /// Agent to install hooks for (e.g., "claude-code")
+        #[arg(value_name = "AGENT")]
+        agent: String,
+    },
+
     /// Inline completion mode with small TUI overlay
     Inline {
         #[command(flatten)]
@@ -56,6 +72,8 @@ pub async fn run(
 ) -> eyre::Result<()> {
     match command {
         Commands::Init { shell } => init::run(shell).await,
+        Commands::Hook { agent } => hooks::handle(&agent, settings).await,
+        Commands::InstallHooks { agent } => hooks::install(&agent).await,
         Commands::Inline {
             command,
             hook,

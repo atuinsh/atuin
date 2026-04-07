@@ -136,6 +136,8 @@ impl HistorySvc for HistoryGrpcService {
             .cwd(req.cwd)
             .session(req.session)
             .hostname(req.hostname)
+            .author(req.author)
+            .intent(req.intent)
             .build()
             .into();
 
