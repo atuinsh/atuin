@@ -9,7 +9,8 @@ use std::time::{Duration, Instant};
 use atuin_client::{
     database::Sqlite, history::History, record::sqlite_store::SqliteStore, settings::Settings,
 };
-use atuin_daemon::client::{DaemonClientErrorKind, HistoryClient, classify_error};
+use atuin_daemon::DaemonEvent;
+use atuin_daemon::client::{ControlClient, DaemonClientErrorKind, HistoryClient, classify_error};
 use clap::Subcommand;
 #[cfg(unix)]
 use daemonize::Daemonize;
@@ -343,7 +344,14 @@ fn ensure_autostart_supported(settings: &Settings) -> Result<()> {
     Ok(())
 }
 
-async fn restart_daemon(settings: &Settings) -> Result<HistoryClient> {
+/// Ensure the daemon is running, starting it if necessary.
+///
+/// If the daemon is already running and up-to-date, this is a no-op.
+/// If it is not running or needs a restart, this will spawn a new daemon
+/// process and wait for it to become ready.
+///
+/// Returns an error if the daemon could not be started.
+pub async fn ensure_daemon_running(settings: &Settings) -> Result<()> {
     ensure_autostart_supported(settings)?;
 
     let timeout = startup_timeout(settings);
@@ -352,9 +360,9 @@ async fn restart_daemon(settings: &Settings) -> Result<HistoryClient> {
     let startup_lock = wait_for_lock(&startup_lock_path, timeout).await?;
 
     match probe(settings).await {
-        Probe::Ready(client) => {
+        Probe::Ready(_) => {
             drop(startup_lock);
-            return Ok(client);
+            return Ok(());
         }
         Probe::NeedsRestart(_) => {
             request_shutdown(settings).await;
@@ -373,10 +381,15 @@ async fn restart_daemon(settings: &Settings) -> Result<HistoryClient> {
     remove_stale_socket_if_present(settings)?;
 
     spawn_daemon_process()?;
-    let client = wait_until_ready(settings, timeout).await?;
+    let _ = wait_until_ready(settings, timeout).await?;
 
     drop(startup_lock);
-    Ok(client)
+    Ok(())
+}
+
+async fn restart_daemon(settings: &Settings) -> Result<HistoryClient> {
+    ensure_daemon_running(settings).await?;
+    connect_client(settings).await
 }
 
 fn ensure_reply_compatible(settings: &Settings, version: &str, protocol: u32) -> Result<()> {
@@ -463,6 +476,45 @@ pub async fn end_history(settings: &Settings, id: String, duration: u64, exit: i
         .await?;
     ensure_reply_compatible(settings, &resp.version, resp.protocol)?;
     Ok(())
+}
+
+/// Emit a daemon event, auto-starting the daemon if it is not running.
+///
+/// If the daemon is not reachable and `daemon.autostart` is enabled, this
+/// will start the daemon and retry the event. If the daemon cannot be
+/// started or the retry fails, a warning is printed to stderr.
+pub async fn emit_event(settings: &Settings, event: DaemonEvent) {
+    // Try to connect and send
+    match ControlClient::from_settings(settings).await {
+        Ok(mut client) => {
+            if let Err(e) = client.send_event(event).await {
+                tracing::debug!(?e, "failed to send event to daemon");
+            }
+            return;
+        }
+        Err(e) if !settings.daemon.autostart || !should_retry_after_error(&e) => {
+            tracing::debug!(?e, "daemon not available, skipping event emission");
+            return;
+        }
+        Err(_) => {}
+    }
+
+    // Auto-start the daemon and retry
+    if let Err(e) = ensure_daemon_running(settings).await {
+        eprintln!("Could not start daemon: {e}");
+        return;
+    }
+
+    match ControlClient::from_settings(settings).await {
+        Ok(mut client) => {
+            if let Err(e) = client.send_event(event).await {
+                eprintln!("Daemon started but failed to send event: {e}");
+            }
+        }
+        Err(e) => {
+            eprintln!("Daemon started but failed to connect: {e}");
+        }
+    }
 }
 
 async fn status_cmd(settings: &Settings) -> Result<()> {

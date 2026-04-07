@@ -11,7 +11,7 @@ use eyre::{Context, Result};
 use runtime_format::{FormatKey, FormatKeyError, ParseSegment, ParsedFmt};
 
 #[cfg(feature = "daemon")]
-use atuin_daemon::emit_event;
+use super::daemon as daemon_cmd;
 
 use atuin_client::{
     database::{Database, Sqlite, current_context},
@@ -629,7 +629,7 @@ impl Cmd {
             }
 
             #[cfg(feature = "daemon")]
-            let _ = emit_event(atuin_daemon::DaemonEvent::HistoryPruned).await;
+            daemon_cmd::emit_event(settings, atuin_daemon::DaemonEvent::HistoryPruned).await;
         }
         Ok(())
     }
@@ -690,7 +690,7 @@ impl Cmd {
             }
 
             #[cfg(feature = "daemon")]
-            let _ = emit_event(atuin_daemon::DaemonEvent::HistoryDeleted { ids }).await;
+            daemon_cmd::emit_event(settings, atuin_daemon::DaemonEvent::HistoryDeleted { ids }).await;
         }
         Ok(())
     }
