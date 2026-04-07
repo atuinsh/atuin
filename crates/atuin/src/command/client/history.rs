@@ -690,7 +690,8 @@ impl Cmd {
             }
 
             #[cfg(feature = "daemon")]
-            daemon_cmd::emit_event(settings, atuin_daemon::DaemonEvent::HistoryDeleted { ids }).await;
+            daemon_cmd::emit_event(settings, atuin_daemon::DaemonEvent::HistoryDeleted { ids })
+                .await;
         }
         Ok(())
     }
