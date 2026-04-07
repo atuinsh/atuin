@@ -1,5 +1,5 @@
 pub mod commands;
-pub mod permissions;
-pub mod stream;
-pub mod tools;
-pub mod tui;
+pub(crate) mod permissions;
+pub(crate) mod stream;
+pub(crate) mod tools;
+pub(crate) mod tui;

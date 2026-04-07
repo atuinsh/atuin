@@ -27,7 +27,7 @@ mod turn;
 /// - Error display (if in error state)
 /// - Spacer
 /// - Input box (bordered, with contextual keybindings)
-pub fn ai_view(state: &AppState) -> Elements {
+pub(crate) fn ai_view(state: &AppState) -> Elements {
     let mut turn_builder = turn::TurnBuilder::new();
 
     for event in &state.events {

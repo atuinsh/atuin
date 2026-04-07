@@ -16,7 +16,7 @@ use ratatui_widgets::paragraph::{Paragraph, Wrap};
 
 /// A markdown rendering component backed by pulldown-cmark.
 #[props]
-pub struct Markdown {
+pub(crate) struct Markdown {
     pub source: String,
 }
 
@@ -29,7 +29,7 @@ impl Markdown {
 }
 
 /// Style configuration for markdown rendering.
-pub struct MarkdownStyles {
+pub(crate) struct MarkdownStyles {
     pub base: Style,
     pub code_inline: Style,
     pub code_block: Style,

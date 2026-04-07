@@ -5,7 +5,7 @@
 /// eye-declare's context system. The main event loop in `inline.rs`
 /// receives them and mutates `AppState` accordingly.
 #[derive(Debug)]
-pub enum AiTuiEvent {
+pub(crate) enum AiTuiEvent {
     /// User updated the input text
     InputUpdated(String),
     /// User submitted text input (Enter in Input mode)
@@ -31,7 +31,7 @@ pub enum AiTuiEvent {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PermissionResult {
+pub(crate) enum PermissionResult {
     Allow,
     AlwaysAllowInDir,
     AlwaysAllow,

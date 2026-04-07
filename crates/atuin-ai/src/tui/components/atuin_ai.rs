@@ -25,7 +25,7 @@ pub(crate) struct AtuinAi {
 }
 
 #[derive(Default)]
-pub struct AtuinAiState {
+pub(crate) struct AtuinAiState {
     tx: Option<mpsc::Sender<AiTuiEvent>>,
 }
 

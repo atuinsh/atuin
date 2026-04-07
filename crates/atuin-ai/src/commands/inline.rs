@@ -13,7 +13,7 @@ use eye_declare::{Application, CtrlCBehavior};
 use eyre::{Context as _, Result, bail};
 use tracing::{debug, info};
 
-pub async fn run(
+pub(crate) async fn run(
     initial_command: Option<String>,
     api_endpoint: Option<String>,
     api_token: Option<String>,

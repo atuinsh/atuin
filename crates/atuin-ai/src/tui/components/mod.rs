@@ -1,4 +1,4 @@
-pub mod atuin_ai;
-pub mod input_box;
-pub mod markdown;
-pub mod select;
+pub(crate) mod atuin_ai;
+pub(crate) mod input_box;
+pub(crate) mod markdown;
+pub(crate) mod select;

@@ -15,7 +15,7 @@ use crate::{
 
 /// Streaming status indicators from server
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum StreamingStatus {
+pub(crate) enum StreamingStatus {
     Processing,
     Searching,
     Thinking,
@@ -23,7 +23,7 @@ pub enum StreamingStatus {
 }
 
 impl StreamingStatus {
-    pub fn from_status_str(s: &str) -> Self {
+    pub(crate) fn from_status_str(s: &str) -> Self {
         match s {
             "processing" => Self::Processing,
             "searching" => Self::Searching,
@@ -32,7 +32,7 @@ impl StreamingStatus {
         }
     }
 
-    pub fn display_text(&self) -> &'static str {
+    pub(crate) fn display_text(&self) -> &'static str {
         match self {
             Self::Processing => "Processing...",
             Self::Searching => "Searching...",
@@ -44,7 +44,7 @@ impl StreamingStatus {
 
 /// Conversation event types matching the API protocol
 #[derive(Debug, Clone)]
-pub enum ConversationEvent {
+pub(crate) enum ConversationEvent {
     /// User message (what the user typed)
     UserMessage { content: String },
     /// Text content from assistant (streamed or complete)
@@ -71,7 +71,7 @@ pub enum ConversationEvent {
 
 impl ConversationEvent {
     /// Convert to JSON for API calls
-    pub fn to_json(&self) -> serde_json::Value {
+    pub(crate) fn to_json(&self) -> serde_json::Value {
         match self {
             ConversationEvent::UserMessage { content } => serde_json::json!({
                 "type": "user_message",
@@ -111,7 +111,7 @@ impl ConversationEvent {
     }
 
     /// Extract command from a suggest_command tool call
-    pub fn as_command(&self) -> Option<&str> {
+    pub(crate) fn as_command(&self) -> Option<&str> {
         if let ConversationEvent::ToolCall { name, input, .. } = self
             && name == "suggest_command"
         {
@@ -122,7 +122,7 @@ impl ConversationEvent {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Copy)]
-pub enum AppMode {
+pub(crate) enum AppMode {
     /// User is typing input
     Input,
     /// Waiting for generation (showing spinner)
@@ -134,7 +134,7 @@ pub enum AppMode {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ExitAction {
+pub(crate) enum ExitAction {
     /// Run the command
     Execute(String),
     /// Insert command without running
@@ -148,7 +148,7 @@ pub enum ExitAction {
 /// Conversation is stored as a sequence of events matching the API protocol.
 /// The view function derives the UI from this state.
 #[derive(Debug)]
-pub struct AppState {
+pub(crate) struct AppState {
     /// Channel to send events to the main event loop
     pub tx: mpsc::Sender<AiTuiEvent>,
     /// Current application mode
