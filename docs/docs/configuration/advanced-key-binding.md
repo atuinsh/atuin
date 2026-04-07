@@ -389,6 +389,43 @@ This is equivalent to setting `enter_accept = false`, but expressed directly as 
 "delete" = "delete"
 ```
 
+### Custom prefix bindings
+
+Prefix mode is a two-step shortcut: press the prefix key (++ctrl+a++ by default), then a second key. This is useful for actions you don't need on a single key. The default prefix bindings are:
+
+| Key | Action |
+|-----|--------|
+| `d` | Delete the selected entry |
+| `D` | Delete all entries matching the selected command |
+| `a` | Move cursor to start of line |
+| `c` | Clear context (if in a switched context), otherwise switch context |
+
+You can customize these with `[keymap.prefix]`:
+
+```toml
+[keymap.prefix]
+# Add a binding to copy the selected entry
+"y" = "copy"
+
+# Make 'x' delete instead of 'd'
+"x" = "delete"
+"d" = "noop"
+```
+
+To change which key enters prefix mode, set `prefix` under `[keys]`:
+
+```toml
+[keys]
+prefix = "x"  # ctrl-x instead of ctrl-a
+```
+
+Or bind `enter-prefix-mode` directly in your keymap:
+
+```toml
+[keymap.emacs]
+"ctrl-x" = "enter-prefix-mode"
+```
+
 ## Relationship with `[keys]`
 
 The `[keymap]` section is a more powerful replacement for the `[keys]` section. The two are **mutually exclusive**:
