@@ -207,6 +207,15 @@ fn agent_turn_view(events: &[turn::UiEvent], busy: bool) -> Elements {
                     turn::UiEvent::SuggestedCommand(details) => {
                         suggested_command_view(details)
                     },
+                    turn::UiEvent::ToolCall(details) => {
+                        element! {
+                            View(padding_left: Cells::from(2)) {
+                                Text {
+                                    Span(text: format!("Running tool: {}", details.name), style: Style::default().fg(Color::Blue))
+                                }
+                            }
+                        }
+                    }
                     _ => element!{}
                 })
             })

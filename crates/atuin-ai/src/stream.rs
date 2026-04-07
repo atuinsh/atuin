@@ -221,7 +221,6 @@ pub(crate) async fn run_chat_stream(
                     // Recognized as a client-side tool call.
                     handle.update(move |state| {
                         state.handle_client_tool_call(id.clone(), tool);
-                        let _ = state.tx.send(AiTuiEvent::CheckToolCallPermission(id));
                     });
                     continue;
                 }

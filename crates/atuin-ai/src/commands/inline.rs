@@ -11,6 +11,7 @@ use crate::tui::state::{AppState, ExitAction};
 use crate::tui::view::ai_view;
 use eye_declare::{Application, CtrlCBehavior};
 use eyre::{Context as _, Result, bail};
+use serde_json::json;
 use tracing::{debug, info};
 
 pub(crate) async fn run(
@@ -121,28 +122,28 @@ async fn run_inline_tui(
     let (tx, rx) = mpsc::channel::<AiTuiEvent>();
 
     let mut initial_state = AppState::new(tx.clone());
-    initial_state
-        .pending_tool_calls
-        .push_back(crate::tools::PendingToolCall {
-            id: "1".to_string(),
-            state: crate::tools::ToolCallState::CheckingPermissions,
-            tool: crate::tools::ClientToolCall::Read(crate::tools::ReadToolCall {
-                path: std::path::PathBuf::from("test.txt"),
-            }),
-        });
-    initial_state
-        .pending_tool_calls
-        .push_back(crate::tools::PendingToolCall {
-            id: "2".to_string(),
-            state: crate::tools::ToolCallState::CheckingPermissions,
-            tool: crate::tools::ClientToolCall::Shell(crate::tools::ShellToolCall {
-                dir: None,
-                command: "ls -lah".to_string(),
-            }),
-        });
+    // initial_state
+    //     .pending_tool_calls
+    //     .push_back(crate::tools::PendingToolCall {
+    //         id: "1".to_string(),
+    //         state: crate::tools::ToolCallState::CheckingPermissions,
+    //         tool: crate::tools::ClientToolCall::Read(crate::tools::ReadToolCall {
+    //             path: std::path::PathBuf::from("test.txt"),
+    //         }),
+    //     });
+    // initial_state
+    //     .pending_tool_calls
+    //     .push_back(crate::tools::PendingToolCall {
+    //         id: "2".to_string(),
+    //         state: crate::tools::ToolCallState::CheckingPermissions,
+    //         tool: crate::tools::ClientToolCall::Shell(crate::tools::ShellToolCall {
+    //             dir: None,
+    //             command: "ls -lah".to_string(),
+    //         }),
+    //     });
 
-    let _ = tx.send(AiTuiEvent::CheckToolCallPermission("1".to_string()));
-    let _ = tx.send(AiTuiEvent::CheckToolCallPermission("2".to_string()));
+    // let _ = tx.send(AiTuiEvent::CheckToolCallPermission("1".to_string()));
+    // let _ = tx.send(AiTuiEvent::CheckToolCallPermission("2".to_string()));
 
     println!();
 
@@ -171,6 +172,21 @@ async fn run_inline_tui(
     tokio::task::spawn_blocking(move || {
         while let Ok(event) = rx.recv() {
             match event {
+                AiTuiEvent::ContinueAfterTools => {
+                    let ep = ep.clone();
+                    let tk = tk.clone();
+                    let h2 = h.clone();
+                    h.update(move |state| {
+                        state.start_streaming();
+                        let messages = state.events_to_messages();
+                        let sid = state.session_id.clone();
+                        let task = tokio::spawn(async move {
+                            run_chat_stream(h2, ep, tk, sid, messages, send_cwd).await;
+                        });
+                        state.stream_abort = Some(task.abort_handle());
+                    });
+                }
+
                 AiTuiEvent::InputUpdated(input) => {
                     let input_blank = input.trim().is_empty();
 
@@ -276,16 +292,121 @@ async fn run_inline_tui(
                         match response {
                             PermissionResponse::Allowed => {
                                 eprintln!("Executing tool call: {:?}", tool_call);
+
+                                let id_clone2 = id_clone.clone();
                                 h2.update(move |state| {
-                                    state.events.push(ConversationEvent::OutOfBandOutput {
-                                        name: "System".to_string(),
-                                        content: format!(
-                                            "Permission granted for tool call {:?}",
-                                            &tool_call
-                                        ),
-                                        command: None,
-                                    });
+                                    state.add_tool_call(
+                                        id_clone2.clone(),
+                                        "read".to_string(),
+                                        json!({}),
+                                    );
+
+                                    let mut tool_call = state.get_pending_tool_call_mut(&id_clone2);
+
+                                    let Some(tool_call) = tool_call.as_mut() else {
+                                        eprintln!(
+                                            "Error getting pending tool call: {:?}",
+                                            &id_clone2
+                                        );
+                                        return;
+                                    };
+
+                                    tool_call.state = ToolCallState::Executing;
+
+                                    //
+
+                                    // state.events.push(ConversationEvent::OutOfBandOutput {
+                                    //     name: "System".to_string(),
+                                    //     content: format!(
+                                    //         "Permission granted for tool call {:?}",
+                                    //         &tool_call
+                                    //     ),
+                                    //     command: None,
+                                    // });
                                 });
+
+                                match tool_call.tool {
+                                    crate::tools::ClientToolCall::Read(read) => {
+                                        let mut path = read.path.clone();
+
+                                        if path.is_relative() {
+                                            if let Ok(current_dir) = std::env::current_dir() {
+                                                path = current_dir.join(path);
+                                            }
+                                        }
+
+                                        if !path.exists() {
+                                            let id = id_clone.clone();
+                                            h2.update(move |state| {
+                                                state.add_tool_result(
+                                                    id.clone(),
+                                                    format!(
+                                                        "Error: file does not exist: {}",
+                                                        path.display()
+                                                    ),
+                                                    true,
+                                                );
+                                                state.pending_tool_calls.retain(|c| c.id != id);
+                                            });
+                                            return;
+                                        }
+
+                                        if path.is_dir() {
+                                            let Some(files) = std::fs::read_dir(&path)
+                                                .map_err(|e| {
+                                                    eprintln!("Error reading directory: {}", e);
+                                                    e
+                                                })
+                                                .ok()
+                                                .and_then(|entries| {
+                                                    entries
+                                                        .filter_map(|entry| entry.ok())
+                                                        .map(|entry| {
+                                                            entry
+                                                                .file_name()
+                                                                .to_string_lossy()
+                                                                .to_string()
+                                                        })
+                                                        .collect::<Vec<_>>()
+                                                        .into()
+                                                })
+                                            else {
+                                                h2.update(move |state| {
+                                                    state.add_tool_result(
+                                                        id_clone.clone(),
+                                                        format!(
+                                                            "Error: could not read directory: {}",
+                                                            path.display()
+                                                        ),
+                                                        true,
+                                                    );
+                                                    state
+                                                        .pending_tool_calls
+                                                        .retain(|c| c.id != id_clone);
+                                                });
+                                                return;
+                                            };
+
+                                            h2.update(move |state| {
+                                                state.add_tool_result(
+                                                    id_clone.clone(),
+                                                    format!(
+                                                        "Directory contents:\n{}",
+                                                        files.join("\n")
+                                                    ),
+                                                    false,
+                                                );
+                                                state
+                                                    .pending_tool_calls
+                                                    .retain(|c| c.id != id_clone);
+
+                                                let _ =
+                                                    state.tx.send(AiTuiEvent::ContinueAfterTools);
+                                            });
+                                        }
+                                    }
+                                    _ => {}
+                                }
                             }
                             PermissionResponse::Denied => {
                                 eprintln!("Permission denied for tool call: {:?}", &tool_call);

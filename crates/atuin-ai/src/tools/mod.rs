@@ -4,6 +4,7 @@ use eyre::Result;
 
 use crate::permissions::rule::Rule;
 
+/// A pending tool call from the server, awaiting permissions or execution.
 #[derive(Debug, Clone)]
 pub(crate) struct PendingToolCall {
     pub id: String,
@@ -17,6 +18,7 @@ impl PendingToolCall {
     }
 }
 
+/// State of a pending tool call
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ToolCallState {
     CheckingPermissions,
@@ -25,13 +27,7 @@ pub(crate) enum ToolCallState {
     Executing,
 }
 
-pub(crate) enum ClientToolCallType {
-    Read,
-    Write,
-    Shell,
-    AtuinHistory,
-}
-
+/// A tool call from the server, with parsed input parameters.
 #[derive(Debug, Clone)]
 pub(crate) enum ClientToolCall {
     Read(ReadToolCall),
@@ -45,8 +41,11 @@ impl TryFrom<(&str, &serde_json::Value)> for ClientToolCall {
 
     fn try_from((name, input): (&str, &serde_json::Value)) -> Result<Self, Self::Error> {
         match name {
-            "read" => Ok(ClientToolCall::Read(ReadToolCall::try_from(input)?)),
-            "write" => Ok(ClientToolCall::Write(WriteToolCall::try_from(input)?)),
+            "read_file" => Ok(ClientToolCall::Read(ReadToolCall::try_from(input)?)),
+            // TODO: split these into separate tool calls, but rely on Write permissions for all
+            "str_replace" => Ok(ClientToolCall::Write(WriteToolCall::try_from(input)?)),
+            "file_create" => Ok(ClientToolCall::Write(WriteToolCall::try_from(input)?)),
+            "file_insert" => Ok(ClientToolCall::Write(WriteToolCall::try_from(input)?)),
             "shell" => Ok(ClientToolCall::Shell(ShellToolCall::try_from(input)?)),
             "atuin_history" => Ok(ClientToolCall::AtuinHistory(
                 AtuinHistoryToolCall::try_from(input)?,
@@ -76,8 +75,11 @@ impl ClientToolCall {
     }
 }
 
+/// A trait for tool calls that can be checked against permission rules.
 pub(crate) trait PermissableToolCall {
+    /// Checks if this tool call matches the given permission rule.
     fn matches_rule(&self, rule: &Rule) -> bool;
+    /// Returns the target directory of this tool call, if applicable, for checking against directory-based rules.
     fn target_dir(&self) -> Option<&Path> {
         None
     }
@@ -96,6 +98,7 @@ impl PermissableToolCall for ClientToolCall {
 #[derive(Debug, Clone)]
 pub(crate) struct ReadToolCall {
     pub path: PathBuf,
+    pub view_range: Option<(u64, u64)>,
 }
 
 impl TryFrom<&serde_json::Value> for ReadToolCall {
@@ -103,12 +106,32 @@ impl TryFrom<&serde_json::Value> for ReadToolCall {
 
     fn try_from(value: &serde_json::Value) -> Result<Self, Self::Error> {
         let path = value
-            .get("path")
+            .get("file_path")
             .and_then(|v| v.as_str())
             .ok_or(eyre::eyre!("Missing path"))?;
 
+        let view_range = value.get("view_range").and_then(|v| v.as_array());
+
+        let is_proper_size = view_range
+            .map(|arr| arr.len() == 2 && arr.iter().all(|v| v.is_u64()))
+            .unwrap_or(true);
+
+        if !is_proper_size {
+            return Err(eyre::eyre!(
+                "Invalid view_range: must be an array of two integers"
+            ));
+        }
+
+        let view_range = view_range.map(|arr| {
+            // SAFETY: already checked that the array has two elements and they are both u64
+            let start = arr[0].as_u64().unwrap();
+            let end = arr[1].as_u64().unwrap();
+            (start, end)
+        });
+
         Ok(ReadToolCall {
             path: PathBuf::from(path),
+            view_range,
         })
     }
 }

@@ -3,12 +3,11 @@
 //! This module contains the core state types that represent the application's
 //! domain model. Conversation events match the API protocol format.
 
-use std::{collections::VecDeque, path::PathBuf, sync::mpsc};
+use std::{collections::VecDeque, sync::mpsc};
 
 use tokio::task::AbortHandle;
 
 use crate::{
-    permissions::walker::PermissionWalker,
     tools::{ClientToolCall, PendingToolCall, ToolCallState},
     tui::events::AiTuiEvent,
 };
@@ -370,10 +369,16 @@ impl AppState {
 
     pub(crate) fn handle_client_tool_call(&mut self, id: String, tool: ClientToolCall) {
         self.pending_tool_calls.push_back(PendingToolCall {
-            id,
+            id: id.clone(),
             state: ToolCallState::CheckingPermissions,
             tool,
         });
+
+        // Client tool calls can only happen at the last part of a turn
+        self.streaming_status = None;
+        self.mode = AppMode::Input;
+
+        let _ = self.tx.send(AiTuiEvent::CheckToolCallPermission(id));
     }
 
     pub(crate) fn handle_select_permission(&mut self, permission: String) {

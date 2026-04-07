@@ -16,6 +16,8 @@ pub(crate) enum AiTuiEvent {
     CheckToolCallPermission(String),
     /// User selected a permission
     SelectPermission(PermissionResult),
+    /// Continue after client tools have completed
+    ContinueAfterTools,
     /// Cancel active generation or streaming (Esc during Generating/Streaming)
     CancelGeneration,
     /// Execute the suggested command

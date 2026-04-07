@@ -1,5 +1,6 @@
 use crate::tui::ConversationEvent;
 
+/// Server-sent danger level for a suggested command
 #[derive(Debug)]
 pub(crate) enum DangerLevel {
     Low(Option<String>),
@@ -37,6 +38,7 @@ impl From<(&String, &String)> for DangerLevel {
     }
 }
 
+/// Server-sent confidence level for a suggested command
 #[derive(Debug)]
 pub(crate) enum ConfidenceLevel {
     Low(Option<String>),
@@ -85,9 +87,10 @@ pub(crate) enum UiEvent {
 
 #[derive(Debug)]
 pub(crate) struct ToolCallDetails {
-    tool_use_id: String,
-    name: String,
-    status: ToolResultStatus,
+    pub(crate) tool_use_id: String,
+    pub(crate) name: String,
+    pub(crate) status: ToolResultStatus,
+    pub(crate) is_client: bool,
 }
 
 #[derive(Debug)]
@@ -123,6 +126,7 @@ pub(crate) struct TurnBuilder {
     current_turn: Option<UiTurn>,
 }
 
+/// A struct to iteratively build [UiTurn] events from [ConversationEvent]s.
 impl TurnBuilder {
     pub(crate) fn new() -> Self {
         Self {
@@ -174,7 +178,7 @@ impl TurnBuilder {
 
                 for event in events.drain(..) {
                     match event {
-                        UiEvent::ToolCall(details) => {
+                        UiEvent::ToolCall(details) if !details.is_client => {
                             pending_tools.push(details);
                         }
                         other => {
@@ -308,10 +312,13 @@ impl TurnBuilder {
     fn add_tool_call(&mut self, id: &str, name: &str, _input: &serde_json::Value) {
         self.start_agent_turn();
         if let UiTurn::Agent { events } = self.turn_mut_unsafe() {
+            let is_client = matches!(name, "file_read");
+
             events.push(UiEvent::ToolCall(ToolCallDetails {
                 tool_use_id: id.to_string(),
                 name: name.to_string(),
                 status: ToolResultStatus::Pending,
+                is_client,
             }));
         }
     }
