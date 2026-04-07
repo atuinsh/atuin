@@ -33,6 +33,7 @@ pub struct SearchState {
     pub filter_mode: FilterMode,
     pub context: Context,
     pub custom_context: Option<HistoryId>,
+    pub authors: Vec<String>,
 }
 
 impl SearchState {

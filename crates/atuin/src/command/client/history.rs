@@ -440,10 +440,10 @@ impl Cmd {
             .timestamp(OffsetDateTime::now_utc())
             .command(command)
             .cwd(cwd)
+            .author(actor)
             .build()
             .into();
 
-        h.author = actor.to_owned();
         if let Some(intent) = intent {
             h.intent = Some(intent.to_owned());
         }

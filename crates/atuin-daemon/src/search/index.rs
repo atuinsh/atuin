@@ -12,7 +12,9 @@ use std::{
     sync::Arc,
 };
 
-use atuin_client::history::History;
+use atuin_client::history::{
+    AUTHOR_FILTER_ALL_AGENT, AUTHOR_FILTER_ALL_USER, History, KNOWN_AGENTS,
+};
 use atuin_client::settings::Search;
 use atuin_nucleo::{Injector, Nucleo, pattern};
 use dashmap::DashMap;
@@ -114,6 +116,8 @@ pub struct CommandData {
     hosts: HashSet<Spur>,
     /// All sessions where this command has been run (as 16-byte UUIDs).
     sessions: HashSet<[u8; 16]>,
+    /// All authors who have run this command (interned keys).
+    authors: HashSet<Spur>,
 }
 
 impl CommandData {
@@ -136,6 +140,9 @@ impl CommandData {
         let mut sessions = HashSet::new();
         sessions.insert(session);
 
+        let mut authors = HashSet::new();
+        authors.insert(interner.get_or_intern(&history.author));
+
         let mut global_frecency = FrecencyData::default();
         global_frecency.record_use(timestamp);
 
@@ -146,6 +153,7 @@ impl CommandData {
             directories,
             hosts,
             sessions,
+            authors,
         })
     }
 
@@ -169,6 +177,7 @@ impl CommandData {
         self.directories.insert(dir_key);
         self.hosts.insert(interner.get_or_intern(&history.hostname));
         self.sessions.insert(session);
+        self.authors.insert(interner.get_or_intern(&history.author));
 
         // Update most recent if this invocation is newer
         if timestamp > self.most_recent_timestamp {
@@ -212,6 +221,23 @@ impl CommandData {
     /// O(1) lookup using pre-computed index.
     pub fn has_invocation_in_session(&self, session: &str) -> bool {
         parse_uuid_bytes(session).is_some_and(|bytes| self.sessions.contains(&bytes))
+    }
+
+    /// Check if any invocation has the given author.
+    pub fn has_author(&self, author: &str, interner: &ThreadedRodeo) -> bool {
+        interner
+            .get(author)
+            .is_some_and(|spur| self.authors.contains(&spur))
+    }
+
+    /// Check if any invocation has an author NOT in the given set.
+    pub fn has_non_agent_author(&self, agent_spurs: &HashSet<Spur>) -> bool {
+        self.authors.iter().any(|a| !agent_spurs.contains(a))
+    }
+
+    /// Check if any invocation has an author IN the given set.
+    pub fn has_agent_author(&self, agent_spurs: &HashSet<Spur>) -> bool {
+        self.authors.iter().any(|a| agent_spurs.contains(a))
     }
 }
 
@@ -336,6 +362,7 @@ impl SearchIndex {
         query: &str,
         filter_mode: IndexFilterMode,
         _context: &QueryContext,
+        authors: &[String],
         limit: u32,
     ) -> Vec<String> {
         let mut nucleo = self.nucleo.write().await;
@@ -343,8 +370,15 @@ impl SearchIndex {
         // Get precomputed frecency map (may be None if not yet computed)
         let frecency_map = self.frecency_map.read().await.clone();
 
-        // Build filter based on mode
-        let filter = self.build_filter(&filter_mode);
+        // Build filter based on mode + authors
+        let mode_filter = self.build_filter(&filter_mode);
+        let author_filter = self.build_author_filter(authors);
+        let filter = match (mode_filter, author_filter) {
+            (Some(mf), Some(af)) => Some(Arc::new(move |cmd: &String| mf(cmd) && af(cmd))
+                as atuin_nucleo::Filter<String>),
+            (Some(f), None) | (None, Some(f)) => Some(f),
+            (None, None) => None,
+        };
         nucleo.set_filter(filter);
 
         // Build scorer from precomputed frecency (or None if not available)
@@ -443,6 +477,38 @@ impl SearchIndex {
                 };
                 if passes {
                     // Convert Arc<str> to String for filter lookup
+                    set.insert(entry.key().to_string());
+                }
+            }
+            Arc::new(set)
+        };
+
+        Some(Arc::new(move |cmd: &String| passing_commands.contains(cmd)))
+    }
+
+    /// Build author filter predicate.
+    /// Same pre-computation approach as `build_filter`: find all commands with
+    /// a matching author, collect into a HashSet, wrap as a Nucleo Filter closure.
+    fn build_author_filter(&self, authors: &[String]) -> Option<atuin_nucleo::Filter<String>> {
+        if authors.is_empty() {
+            return None;
+        }
+
+        // Pre-intern known agents for O(1) lookups
+        let agent_spurs: HashSet<Spur> = KNOWN_AGENTS
+            .iter()
+            .filter_map(|a| self.interner.get(a))
+            .collect();
+
+        let passing_commands: Arc<HashSet<String>> = {
+            let mut set = HashSet::new();
+            for entry in self.commands.iter() {
+                let passes = authors.iter().any(|filter| match filter.as_str() {
+                    AUTHOR_FILTER_ALL_USER => entry.has_non_agent_author(&agent_spurs),
+                    AUTHOR_FILTER_ALL_AGENT => entry.has_agent_author(&agent_spurs),
+                    literal => entry.has_author(literal, &self.interner),
+                });
+                if passes {
                     set.insert(entry.key().to_string());
                 }
             }
@@ -661,7 +727,7 @@ mod tests {
 
         // Search for "git" - should match 2 commands
         let results = index
-            .search("git", IndexFilterMode::Global, &QueryContext::default(), 10)
+            .search("git", IndexFilterMode::Global, &QueryContext::default(), &[], 10)
             .await;
         assert_eq!(results.len(), 2);
 
@@ -671,6 +737,7 @@ mod tests {
                 "",
                 IndexFilterMode::Directory(with_trailing_slash("/home/user/project")),
                 &QueryContext::default(),
+                &[],
                 10,
             )
             .await;

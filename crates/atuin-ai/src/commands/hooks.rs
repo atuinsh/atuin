@@ -1,46 +1,43 @@
 use std::io::Read;
 use std::path::PathBuf;
 
+use atuin_common::utils::home_dir;
 use eyre::{bail, Result};
 use serde_json::Value;
 
 enum Agent {
     ClaudeCode,
+    Codex,
 }
 
 impl Agent {
     fn from_name(name: &str) -> Result<Self> {
         match name {
             "claude-code" | "claude" => Ok(Self::ClaudeCode),
-            _ => bail!("unknown agent: {name}. Supported agents: claude-code"),
+            "codex" => Ok(Self::Codex),
+            _ => bail!("unknown agent: {name}. Supported agents: claude-code, codex"),
         }
     }
 
     fn actor_name(&self) -> &'static str {
         match self {
             Self::ClaudeCode => "claude-code",
+            Self::Codex => "codex",
         }
     }
 
-    fn parse_stdin(&self, input: &str) -> Result<HookEvent> {
+    fn config_path(&self) -> PathBuf {
+        let home = home_dir();
         match self {
-            Self::ClaudeCode => parse_claude_code(input),
-        }
-    }
-
-    fn config_path(&self) -> Result<PathBuf> {
-        match self {
-            Self::ClaudeCode => {
-                let home = directories::BaseDirs::new()
-                    .ok_or_else(|| eyre::eyre!("could not determine home directory"))?;
-                Ok(home.home_dir().join(".claude").join("settings.json"))
-            }
+            Self::ClaudeCode => home.join(".claude").join("settings.json"),
+            Self::Codex => home.join(".codex").join("hooks.json"),
         }
     }
 
     fn hook_command(&self) -> &'static str {
         match self {
             Self::ClaudeCode => "atuin ai hook claude-code",
+            Self::Codex => "atuin ai hook codex",
         }
     }
 }
@@ -59,7 +56,7 @@ enum HookEvent {
     Skip,
 }
 
-fn parse_claude_code(input: &str) -> Result<HookEvent> {
+fn parse_hook_stdin(input: &str) -> Result<HookEvent> {
     let v: Value = serde_json::from_str(input)?;
 
     if v.get("tool_name").and_then(|t| t.as_str()) != Some("Bash") {
@@ -127,7 +124,7 @@ pub async fn handle(
         return Ok(());
     }
 
-    let event = agent.parse_stdin(&input)?;
+    let event = parse_hook_stdin(&input)?;
     let atuin_bin = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("atuin"));
 
     match event {
@@ -139,10 +136,8 @@ pub async fn handle(
             let actor = agent.actor_name();
             let mut args = vec!["history", "start", "--author", actor];
 
-            let intent_val;
             if let Some(ref i) = intent {
-                intent_val = i.clone();
-                args.extend(["--intent", &intent_val]);
+                args.extend(["--intent", i.as_str()]);
             }
 
             args.extend(["--", &command]);
@@ -180,35 +175,46 @@ pub async fn handle(
 
 pub async fn install(agent_name: &str) -> Result<()> {
     let agent = Agent::from_name(agent_name)?;
-
-    match agent {
-        Agent::ClaudeCode => install_claude_code(&agent)?,
-    }
-
-    Ok(())
-}
-
-fn install_claude_code(agent: &Agent) -> Result<()> {
-    let config_path = agent.config_path()?;
+    let config_path = agent.config_path();
 
     if let Some(parent) = config_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
 
-    let mut settings: Value = if config_path.exists() {
+    let mut root: Value = if config_path.exists() {
         let content = std::fs::read_to_string(&config_path)?;
         serde_json::from_str(&content)?
     } else {
         Value::Object(serde_json::Map::new())
     };
 
-    let hooks = settings
+    let hooks = root
         .as_object_mut()
-        .ok_or_else(|| eyre::eyre!("settings.json is not a JSON object"))?
+        .ok_or_else(|| eyre::eyre!("config is not a JSON object"))?
         .entry("hooks")
         .or_insert_with(|| Value::Object(serde_json::Map::new()));
 
+    add_hook_entries(hooks, &agent)?;
+
+    let content = serde_json::to_string_pretty(&root)?;
+    std::fs::write(&config_path, content)?;
+
+    eprintln!(
+        "\nAtuin hooks installed for {}. Config: {}",
+        agent.actor_name(),
+        config_path.display()
+    );
+
+    Ok(())
+}
+
+/// Shared logic: add PreToolUse + PostToolUse entries to a hooks object.
+fn add_hook_entries(hooks: &mut Value, agent: &Agent) -> Result<()> {
     let hook_command = agent.hook_command();
+    let matcher_str = match agent {
+        Agent::ClaudeCode => "Bash",
+        Agent::Codex => "^Bash$", // Codex uses regex matchers
+    };
 
     for event_type in &["PreToolUse", "PostToolUse"] {
         let event_hooks = hooks
@@ -233,20 +239,11 @@ fn install_claude_code(agent: &Agent) -> Result<()> {
         }
 
         arr.push(serde_json::json!({
-            "matcher": "Bash",
+            "matcher": matcher_str,
             "hooks": [{"type": "command", "command": hook_command}]
         }));
         eprintln!("hooks.{event_type}: installed atuin hook");
     }
-
-    let content = serde_json::to_string_pretty(&settings)?;
-    std::fs::write(&config_path, content)?;
-
-    eprintln!(
-        "\nAtuin hooks installed for {}. Config: {}",
-        agent.actor_name(),
-        config_path.display()
-    );
 
     Ok(())
 }
@@ -266,7 +263,7 @@ mod tests {
             "cwd": "/tmp"
         }"#;
 
-        match parse_claude_code(input).unwrap() {
+        match parse_hook_stdin(input).unwrap() {
             HookEvent::Start {
                 command,
                 intent,
@@ -290,7 +287,7 @@ mod tests {
             "tool_use_id": "toolu_abc123"
         }"#;
 
-        match parse_claude_code(input).unwrap() {
+        match parse_hook_stdin(input).unwrap() {
             HookEvent::End { tool_use_id, exit } => {
                 assert_eq!(tool_use_id, "toolu_abc123");
                 assert_eq!(exit, 0);
@@ -308,7 +305,7 @@ mod tests {
             "tool_use_id": "toolu_abc123"
         }"#;
 
-        assert!(matches!(parse_claude_code(input).unwrap(), HookEvent::Skip));
+        assert!(matches!(parse_hook_stdin(input).unwrap(), HookEvent::Skip));
     }
 
     #[test]
@@ -320,10 +317,9 @@ mod tests {
             "tool_use_id": "toolu_abc123"
         }"#;
 
-        match parse_claude_code(input).unwrap() {
+        match parse_hook_stdin(input).unwrap() {
             HookEvent::End { exit, .. } => assert_eq!(exit, 1),
             _ => panic!("expected End event"),
         }
     }
-
 }

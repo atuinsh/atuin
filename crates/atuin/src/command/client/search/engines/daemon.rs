@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use async_trait::async_trait;
 use atuin_client::{
     database::{Database, OptFilters},
@@ -75,6 +77,7 @@ impl Search {
                 state.input.as_str(),
                 OptFilters {
                     limit: Some(200),
+                    authors: state.authors.clone(),
                     ..Default::default()
                 },
             )
@@ -124,6 +127,7 @@ impl SearchEngine for Search {
                 query_id,
                 state.filter_mode,
                 Some(state.context.clone()),
+                state.authors.clone(),
             )
             .await?;
 
@@ -166,12 +170,14 @@ impl SearchEngine for Search {
         // // Hydrate from local database
         let results = self.hydrate_from_db(db, &ids).await?;
 
-        // // Reorder results to match the order from the daemon (which is ranked by relevance)
+        // Reorder results to match the order from the daemon (which is ranked by relevance)
         let ordered_results = span!(Level::TRACE, "reorder_results").in_scope(|| {
+            let results_by_id: HashMap<&str, &History> =
+                results.iter().map(|h| (h.id.0.as_str(), h)).collect();
             let mut ordered_results = Vec::with_capacity(results.len());
             for id in &ids {
-                if let Some(history) = results.iter().find(|h| h.id.0 == *id) {
-                    ordered_results.push(history.clone());
+                if let Some(history) = results_by_id.get(id.as_str()) {
+                    ordered_results.push((*history).clone());
                 }
             }
             ordered_results

@@ -31,6 +31,7 @@ impl SearchEngine for Search {
                 state.input.as_str(),
                 OptFilters {
                     limit: Some(200),
+                    authors: state.authors.clone(),
                     ..Default::default()
                 },
             )

@@ -131,6 +131,11 @@ pub struct Cmd {
     #[arg(long = "inline-height")]
     inline_height: Option<u16>,
 
+    /// Filter by author. Supports $all-user (non-agents), $all-agent, or literal names.
+    /// Can be specified multiple times.
+    #[arg(long)]
+    author: Option<Vec<String>>,
+
     /// Include duplicate commands in the output (non-interactive only)
     #[arg(long)]
     include_duplicates: bool,
@@ -237,6 +242,10 @@ impl Cmd {
                 eprintln!("{item}");
             }
         } else {
+            let authors = self
+                .author
+                .unwrap_or_else(|| settings.search.authors.clone());
+
             let opt_filter = OptFilters {
                 exit: self.exit,
                 exclude_exit: self.exclude_exit,
@@ -248,6 +257,7 @@ impl Cmd {
                 offset: self.offset,
                 reverse: self.reverse,
                 include_duplicates: self.include_duplicates,
+                authors,
             };
 
             let mut entries =

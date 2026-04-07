@@ -18,6 +18,11 @@ use time::OffsetDateTime;
 mod builder;
 pub mod store;
 
+/// Known AI agent author values. Used to expand `$all-agent` and `$all-user` filters.
+pub const KNOWN_AGENTS: &[&str] = &["claude-code", "codex", "copilot"];
+pub const AUTHOR_FILTER_ALL_USER: &str = "$all-user";
+pub const AUTHOR_FILTER_ALL_AGENT: &str = "$all-agent";
+
 pub(crate) const HISTORY_VERSION_V0: &str = "v0";
 pub(crate) const HISTORY_VERSION_V1: &str = "v1";
 const HISTORY_RECORD_VERSION_V0: u16 = 0;
