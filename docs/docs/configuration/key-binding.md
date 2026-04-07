@@ -229,8 +229,14 @@ $env.config = (
 | ↓                                         | Select the next item on the list                                              |
 | ctrl + a, d                               | Delete the selected history entry                                            |
 | ctrl + a, D                               | Delete **all** history entries matching the selected command                  |
+| ctrl + a, a                               | Move cursor to the start of the line                                         |
 | ctrl + a, c                               | Switch to the context of the currently selected command / return to default   |
 
+### Prefix mode
+
+The shortcuts above that start with ++ctrl+a++ use **prefix mode** — a two-step key combination. Pressing the prefix key (++ctrl+a++ by default) enters prefix mode, then the next key you press triggers the action. Prefix mode exits automatically after the action runs.
+
+This is useful for less-frequent actions that don't need a dedicated shortcut. The prefix key can be changed with the [`prefix`](config.md#prefix) setting, and the bindings themselves can be customized with [`[keymap.prefix]`](advanced-key-binding.md#custom-prefix-bindings).
 
 ### Vim mode
 If [vim is enabled in the config](config.md#keymap_mode), the following keybindings are enabled:
