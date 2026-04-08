@@ -155,7 +155,7 @@ fn on_check_tool_permission(handle: &Handle<Session>, tx: &mpsc::Sender<AiTuiEve
             .fetch(move |state| state.pending_tool_call(&id).cloned())
             .await
         else {
-            eprintln!("Pending tool call not found: {:?}", &id_clone);
+            // eprintln!("Pending tool call not found: {:?}", &id_clone);
             return;
         };
 
@@ -165,21 +165,21 @@ fn on_check_tool_permission(handle: &Handle<Session>, tx: &mpsc::Sender<AiTuiEve
             .map(PathBuf::from)
             .or_else(|| std::env::current_dir().ok())
         else {
-            eprintln!(
-                "Cannot resolve working directory for tool call: {:?}",
-                &id_clone
-            );
+            // eprintln!(
+            //     "Cannot resolve working directory for tool call: {:?}",
+            //     &id_clone
+            // );
             return;
         };
 
         // 3. Create permission resolver and check
         let Ok(resolver) = PermissionResolver::new(working_dir, None).await else {
-            eprintln!("Failed to create permission resolver");
+            // eprintln!("Failed to create permission resolver");
             return;
         };
 
         let Ok(response) = resolver.check(&tool_call.tool).await else {
-            eprintln!("Permission check failed for tool call: {:?}", &id_clone);
+            // eprintln!("Permission check failed for tool call: {:?}", &id_clone);
             return;
         };
 

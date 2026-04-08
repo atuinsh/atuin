@@ -43,13 +43,10 @@ impl PermissionWalker {
             to_check.push(global_path.clone());
         }
 
-        eprintln!("to_check: {:?}", to_check);
-
         let size = to_check.len();
         let mut set: JoinSet<Result<Option<FoundRuleFile>>> = JoinSet::new();
 
         for (index, path) in to_check.into_iter().enumerate() {
-            eprintln!("Checking: {:?}", path);
             set.spawn(async move {
                 match check_for_permissions(&path).await {
                     Ok(Some(rule_file)) => Ok(Some(FoundRuleFile {
@@ -66,7 +63,6 @@ impl PermissionWalker {
         while let Some(result) = set.join_next().await {
             let result = result?; // JoinErrors result in failure to walk the filesystem
 
-            eprintln!("result: {:?}", result);
             match result {
                 Ok(Some(FoundRuleFile { depth, file })) => {
                     found.push((depth, file));
@@ -86,8 +82,6 @@ impl PermissionWalker {
         // join_next() returns in order of completion, not order of spawn
         found.sort_by_key(|(depth, _)| *depth);
         self.rules = found.into_iter().map(|(_, file)| file).collect();
-
-        eprintln!("rules: {:?}", self.rules);
 
         Ok(())
     }
