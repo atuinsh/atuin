@@ -337,6 +337,7 @@ impl SearchIndex {
         filter_mode: IndexFilterMode,
         _context: &QueryContext,
         limit: u32,
+        smart_case: bool,
     ) -> Vec<String> {
         let mut nucleo = self.nucleo.write().await;
 
@@ -352,10 +353,15 @@ impl SearchIndex {
         nucleo.set_scorer(scorer);
 
         // Update pattern
+        let case_matching = if smart_case {
+            pattern::CaseMatching::Smart
+        } else {
+            pattern::CaseMatching::Ignore
+        };
         nucleo.pattern.reparse(
             0,
             query,
-            pattern::CaseMatching::Smart,
+            case_matching,
             pattern::Normalization::Smart,
             false,
         );
@@ -661,7 +667,13 @@ mod tests {
 
         // Search for "git" - should match 2 commands
         let results = index
-            .search("git", IndexFilterMode::Global, &QueryContext::default(), 10)
+            .search(
+                "git",
+                IndexFilterMode::Global,
+                &QueryContext::default(),
+                10,
+                true,
+            )
             .await;
         assert_eq!(results.len(), 2);
 
@@ -672,8 +684,82 @@ mod tests {
                 IndexFilterMode::Directory(with_trailing_slash("/home/user/project")),
                 &QueryContext::default(),
                 10,
+                true,
             )
             .await;
         assert_eq!(results.len(), 2); // git status and git commit
+    }
+
+    #[tokio::test]
+    async fn search_index_smart_case() {
+        let index = SearchIndex::new();
+
+        let h1 = make_history(
+            "Git status",
+            "/home/user/project",
+            datetime!(2024-01-01 10:00 UTC),
+        );
+        let h2 = make_history(
+            "git commit -m 'test'",
+            "/home/user/project",
+            datetime!(2024-01-01 10:05 UTC),
+        );
+        let h3 = make_history(
+            "GIT PUSH",
+            "/home/user/project",
+            datetime!(2024-01-01 10:10 UTC),
+        );
+
+        index.add_history(&h1);
+        index.add_history(&h2);
+        index.add_history(&h3);
+
+        // smart_case=true: uppercase query "Git" should be case-sensitive,
+        // matching only "Git status" (not "git commit" or "GIT PUSH")
+        let results = index
+            .search(
+                "Git",
+                IndexFilterMode::Global,
+                &QueryContext::default(),
+                10,
+                true,
+            )
+            .await;
+        assert_eq!(results.len(), 1);
+
+        // smart_case=false: same uppercase query "Git" should match
+        // case-insensitively, finding all three commands
+        let results = index
+            .search(
+                "Git",
+                IndexFilterMode::Global,
+                &QueryContext::default(),
+                10,
+                false,
+            )
+            .await;
+        assert_eq!(results.len(), 3);
+
+        // lowercase query matches all regardless of smart_case setting
+        let results_smart = index
+            .search(
+                "git",
+                IndexFilterMode::Global,
+                &QueryContext::default(),
+                10,
+                true,
+            )
+            .await;
+        let results_ignore = index
+            .search(
+                "git",
+                IndexFilterMode::Global,
+                &QueryContext::default(),
+                10,
+                false,
+            )
+            .await;
+        assert_eq!(results_smart.len(), 3);
+        assert_eq!(results_ignore.len(), 3);
     }
 }

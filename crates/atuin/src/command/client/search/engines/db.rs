@@ -8,12 +8,13 @@ use atuin_client::{
     settings::SearchMode,
 };
 use eyre::Result;
+use norm::CaseSensitivity;
 use norm::Metric;
 use norm::fzf::{FzfParser, FzfV2};
 use std::ops::Range;
 use tracing::{Level, instrument};
 
-pub struct Search(pub SearchMode);
+pub struct Search(pub SearchMode, pub bool);
 
 #[async_trait]
 impl SearchEngine for Search {
@@ -33,6 +34,7 @@ impl SearchEngine for Search {
                     limit: Some(200),
                     ..Default::default()
                 },
+                self.1,
             )
             .await
             // ignore errors as it may be caused by incomplete regex
@@ -45,9 +47,12 @@ impl SearchEngine for Search {
         if self.0 == SearchMode::Prefix {
             return vec![];
         } else if self.0 == SearchMode::FullText {
-            return get_highlight_indices_fulltext(command, search_input);
+            return get_highlight_indices_fulltext(command, search_input, self.1);
         }
         let mut fzf = FzfV2::new();
+        if !self.1 {
+            fzf.set_case_sensitivity(CaseSensitivity::Insensitive);
+        }
         let mut parser = FzfParser::new();
         let query = parser.parse(search_input);
         let mut ranges: Vec<Range<usize>> = Vec::new();
@@ -59,12 +64,19 @@ impl SearchEngine for Search {
 }
 
 #[instrument(skip_all, level = Level::TRACE, name = "db_highlight_fulltext")]
-pub fn get_highlight_indices_fulltext(command: &str, search_input: &str) -> Vec<usize> {
+pub fn get_highlight_indices_fulltext(
+    command: &str,
+    search_input: &str,
+    smart_case: bool,
+) -> Vec<usize> {
     let mut ranges = vec![];
     let lower_command = command.to_ascii_lowercase();
 
     for token in QueryTokenizer::new(search_input) {
-        let matchee = if token.has_uppercase() {
+        // Match case-sensitively only when smart_case is enabled and the token
+        // contains uppercase characters, mirroring the SQL query logic.
+        let case_sensitive = smart_case && token.has_uppercase();
+        let matchee = if case_sensitive {
             command
         } else {
             &lower_command
@@ -84,18 +96,33 @@ pub fn get_highlight_indices_fulltext(command: &str, search_input: &str) -> Vec<
                 }
             }
             QueryToken::MatchStart(term, _) => {
-                if matchee.starts_with(term) {
+                let term = if case_sensitive {
+                    term.to_string()
+                } else {
+                    term.to_ascii_lowercase()
+                };
+                if matchee.starts_with(&term) {
                     ranges.push(0..term.len());
                 }
             }
             QueryToken::MatchEnd(term, _) => {
-                if matchee.ends_with(term) {
+                let term = if case_sensitive {
+                    term.to_string()
+                } else {
+                    term.to_ascii_lowercase()
+                };
+                if matchee.ends_with(&term) {
                     let l = matchee.len();
                     ranges.push((l - term.len())..l);
                 }
             }
             QueryToken::Match(term, _) | QueryToken::MatchFull(term, _) => {
-                for (idx, m) in matchee.match_indices(term) {
+                let term = if case_sensitive {
+                    term.to_string()
+                } else {
+                    term.to_ascii_lowercase()
+                };
+                for (idx, m) in matchee.match_indices(&*term) {
                     ranges.push(idx..(idx + m.len()));
                 }
             }

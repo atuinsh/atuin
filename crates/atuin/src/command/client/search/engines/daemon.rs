@@ -18,6 +18,7 @@ use super::{SearchEngine, SearchState};
 pub struct Search {
     client: Option<SearchClient>,
     query_id: u64,
+    smart_case: bool,
     #[cfg(unix)]
     socket_path: String,
     #[cfg(not(unix))]
@@ -29,6 +30,7 @@ impl Search {
         Search {
             client: None,
             query_id: 0,
+            smart_case: settings.search.smart_case,
             #[cfg(unix)]
             socket_path: settings.daemon.socket_path.clone(),
             #[cfg(not(unix))]
@@ -77,6 +79,7 @@ impl Search {
                     limit: Some(200),
                     ..Default::default()
                 },
+                self.smart_case,
             )
             .await
             .map_or(Vec::new(), |r| r.into_iter().collect());
@@ -190,11 +193,20 @@ impl SearchEngine for Search {
     fn get_highlight_indices(&self, command: &str, search_input: &str) -> Vec<usize> {
         // Use fulltext highlighting for regex queries
         if Self::contains_regex_pattern(search_input) {
-            return super::db::get_highlight_indices_fulltext(command, search_input);
+            return super::db::get_highlight_indices_fulltext(
+                command,
+                search_input,
+                self.smart_case,
+            );
         }
 
         let mut matcher = Matcher::new(Config::DEFAULT);
-        let pattern = Pattern::parse(search_input, CaseMatching::Smart, Normalization::Smart);
+        let case_matching = if self.smart_case {
+            CaseMatching::Smart
+        } else {
+            CaseMatching::Ignore
+        };
+        let pattern = Pattern::parse(search_input, case_matching, Normalization::Smart);
 
         let mut indices: Vec<u32> = Vec::new();
         let mut haystack_buf = Vec::new();

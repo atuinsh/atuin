@@ -17,6 +17,11 @@ use serde_with::DeserializeFromStr;
 use time::{OffsetDateTime, UtcOffset, format_description::FormatItem, macros::format_description};
 
 pub const HISTORY_PAGE_SIZE: i64 = 100;
+
+/// Serde default helper that returns `true`.
+fn default_true() -> bool {
+    true
+}
 static EXAMPLE_CONFIG: &str = include_str!("../config.toml");
 
 static DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
@@ -565,6 +570,14 @@ pub struct Search {
     /// The overall frecency score multiplier for the search index (default: 1.0).
     /// Applied after combining recency and frequency scores.
     pub frecency_score_multiplier: f64,
+
+    /// Use smart-case matching for search queries (default: true).
+    /// When true, queries with all lowercase characters match case-insensitively,
+    /// while queries containing uppercase characters match case-sensitively.
+    /// When false, all queries match case-insensitively regardless of casing.
+    /// Similar to fzf's --smart-case / --no-smart-case options.
+    #[serde(default = "default_true")]
+    pub smart_case: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -834,6 +847,7 @@ impl Default for Search {
             recency_score_multiplier: 1.0,
             frequency_score_multiplier: 1.0,
             frecency_score_multiplier: 1.0,
+            smart_case: true,
         }
     }
 }

@@ -328,6 +328,7 @@ async fn run_non_interactive(
             &context,
             query.join(" ").as_str(),
             opt_filter,
+            settings.search.smart_case,
         )
         .await?;
 

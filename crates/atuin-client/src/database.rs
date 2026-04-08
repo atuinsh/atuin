@@ -132,6 +132,7 @@ pub trait Database: Send + Sync + 'static {
         context: &Context,
         query: &str,
         filter_options: OptFilters,
+        smart_case: bool,
     ) -> Result<Vec<History>>;
 
     async fn query_history(&self, query: &str) -> Result<Vec<History>>;
@@ -456,6 +457,7 @@ impl Database for Sqlite {
         context: &Context,
         query: &str,
         filter_options: OptFilters,
+        smart_case: bool,
     ) -> Result<Vec<History>> {
         let mut sql = SqlBuilder::select_from("history");
 
@@ -510,8 +512,9 @@ impl Database for Sqlite {
             _ => {
                 let mut is_or = false;
                 for token in QueryTokenizer::new(query) {
-                    // TODO smart case mode could be made configurable like in fzf
-                    let (is_glob, glob) = if token.has_uppercase() {
+                    // Use GLOB (case-sensitive) when smart_case is enabled and the
+                    // token contains uppercase chars, otherwise LIKE (case-insensitive).
+                    let (is_glob, glob) = if smart_case && token.has_uppercase() {
                         (true, "*")
                     } else {
                         (false, "%")
@@ -959,6 +962,7 @@ mod test {
                 OptFilters {
                     ..Default::default()
                 },
+                true, // smart_case: use default behavior in tests
             )
             .await?;
 
@@ -1238,6 +1242,91 @@ mod test {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn test_search_smart_case_disabled() {
+        let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())
+            .await
+            .unwrap();
+        new_history_item(&mut db, "ls /home/ellie").await.unwrap();
+        new_history_item(&mut db, "cd /home/Ellie").await.unwrap();
+        new_history_item(&mut db, "/home/ellie/.bin/rustup")
+            .await
+            .unwrap();
+
+        let context = Context {
+            hostname: "test:host".to_string(),
+            session: "beepboopiamasession".to_string(),
+            cwd: "/home/ellie".to_string(),
+            host_id: "test-host".to_string(),
+            git_root: None,
+        };
+
+        // With smart_case=true (default), "Ellie" should only match the one with uppercase E
+        let results = db
+            .search(
+                SearchMode::Fuzzy,
+                FilterMode::Global,
+                &context,
+                "Ellie",
+                OptFilters::default(),
+                true,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            results.len(),
+            1,
+            "smart_case=true: uppercase query should match case-sensitively"
+        );
+
+        // With smart_case=false, "Ellie" should match all entries containing ellie/Ellie
+        let results = db
+            .search(
+                SearchMode::Fuzzy,
+                FilterMode::Global,
+                &context,
+                "Ellie",
+                OptFilters::default(),
+                false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            results.len(),
+            3,
+            "smart_case=false: uppercase query should still match case-insensitively"
+        );
+
+        // Lowercase query should always match case-insensitively regardless of smart_case
+        let results_smart = db
+            .search(
+                SearchMode::Fuzzy,
+                FilterMode::Global,
+                &context,
+                "ellie",
+                OptFilters::default(),
+                true,
+            )
+            .await
+            .unwrap();
+        let results_no_smart = db
+            .search(
+                SearchMode::Fuzzy,
+                FilterMode::Global,
+                &context,
+                "ellie",
+                OptFilters::default(),
+                false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            results_smart.len(),
+            results_no_smart.len(),
+            "lowercase queries should behave identically regardless of smart_case"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_paged_basic() {
         let mut db = Sqlite::new("sqlite::memory:", test_local_timeout())
             .await
@@ -1385,6 +1474,7 @@ mod test {
                 OptFilters {
                     ..Default::default()
                 },
+                true,
             )
             .await
             .unwrap();
