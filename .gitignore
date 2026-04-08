@@ -13,3 +13,5 @@ ui/backend/target
 ui/backend/gen
 
 sqlite-server.db*
+
+.atuin/permissions.*.toml
