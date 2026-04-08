@@ -46,6 +46,9 @@ thiserror = { workspace = true }
 regex = { workspace = true }
 time = { workspace = true }
 toml = "1.1"
+tree-sitter = "0.26.8"
+tree-sitter-bash = "0.25.1"
+tree-sitter-fish = "3.6.0"
 typed-builder = { workspace = true }
 
 [dev-dependencies]

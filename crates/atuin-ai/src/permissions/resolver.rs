@@ -6,14 +6,13 @@ use crate::permissions::check::{PermissionChecker, PermissionRequest, Permission
 use crate::permissions::walker::PermissionWalker;
 use crate::tools::ClientToolCall;
 
+/// Resolves permissions for client tool calls by walking the filesystem to find permission files,
 pub(crate) struct PermissionResolver {
     checker: PermissionChecker,
     working_dir: PathBuf,
 }
 
 impl PermissionResolver {
-    /// Walk the filesystem from `working_dir` to find permission files,
-    /// then build a checker from them.
     pub async fn new(working_dir: PathBuf, global_dir: Option<PathBuf>) -> Result<Self> {
         let mut walker = PermissionWalker::new(working_dir.clone(), global_dir);
         walker.walk().await?;

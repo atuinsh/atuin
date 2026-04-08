@@ -322,6 +322,7 @@ impl PermissableToolCall for WriteToolCall {
 pub(crate) struct ShellToolCall {
     pub dir: Option<PathBuf>,
     pub command: String,
+    pub shell: String,
 }
 
 impl TryFrom<&serde_json::Value> for ShellToolCall {
@@ -335,9 +336,16 @@ impl TryFrom<&serde_json::Value> for ShellToolCall {
             .and_then(|v| v.as_str())
             .ok_or(eyre::eyre!("Missing command"))?;
 
+        let shell = value
+            .get("shell")
+            .and_then(|v| v.as_str())
+            .unwrap_or("bash")
+            .to_string();
+
         Ok(ShellToolCall {
             dir: dir.map(PathBuf::from),
             command: command.to_string(),
+            shell,
         })
     }
 }
@@ -352,15 +360,14 @@ impl PermissableToolCall for ShellToolCall {
             return false;
         }
 
-        if let Some(scope) = rule.scope.as_ref() {
-            if scope == "*" {
-                return true;
-            }
+        let Some(scope) = rule.scope.as_ref() else {
+            // Shell without scope matches all shell commands
+            return true;
+        };
 
-            todo!("split command into subcommands, check each");
-        }
-
-        true
+        let shell_kind = crate::permissions::shell::ShellKind::from_shell_name(&self.shell);
+        let parsed = crate::permissions::shell::parse_shell_command(&self.command, shell_kind);
+        crate::permissions::shell::any_subcommand_matches(&parsed.subcommands, scope)
     }
 }
 
