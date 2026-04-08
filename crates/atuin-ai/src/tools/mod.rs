@@ -1,4 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::{
+    io::BufRead,
+    path::{Path, PathBuf},
+};
 
 use eyre::Result;
 
@@ -209,8 +212,35 @@ impl ReadToolCall {
             return ToolOutcome::Success(format!("Directory contents:\n{}", files.join("\n")));
         }
 
-        match std::fs::read_to_string(&path) {
-            Ok(content) => ToolOutcome::Success(content),
+        let file = match std::fs::File::open(&path) {
+            Ok(file) => file,
+            Err(e) => return ToolOutcome::Error(format!("Error opening file: {e}")),
+        };
+        let reader = std::io::BufReader::new(file);
+
+        let relevent_lines = if let Some((start, end)) = self.view_range {
+            reader
+                .lines()
+                .skip(start as usize)
+                .take((end - start) as usize)
+                .collect::<Result<Vec<_>, _>>()
+        } else {
+            reader.lines().collect::<Result<Vec<_>, _>>()
+        };
+
+        match relevent_lines {
+            Ok(lines) => {
+                let joined = lines.join("\n");
+                if joined.len() > 100_000 {
+                    ToolOutcome::Error(format!(
+                        "Error: file is too large to read ({} bytes in {} lines); use view_range to read a subset of the file",
+                        joined.len(),
+                        lines.len()
+                    ))
+                } else {
+                    ToolOutcome::Success(joined)
+                }
+            }
             Err(e) => ToolOutcome::Error(format!("Error reading file: {e}")),
         }
     }

@@ -578,18 +578,29 @@ impl Session {
             .find(|call| call.id == id)
     }
 
-    /// Record a tool execution result and remove the pending tool call.
-    pub fn complete_tool_call(&mut self, id: &str, outcome: ToolOutcome) {
+    /// Record a tool call, its execution result, and remove it from the pending queue.
+    pub fn complete_tool_call(&mut self, pending: &PendingToolCall, outcome: ToolOutcome) {
+        let desc = pending.tool.descriptor();
+
+        // Record the tool call so the view can render a ToolCall → ToolResult pair
+        self.add_tool_call(
+            pending.id.clone(),
+            desc.canonical_names[0].to_string(),
+            serde_json::json!({}),
+        );
+
+        // Record the result
         match outcome {
             ToolOutcome::Success(content) => {
                 self.conversation
-                    .add_tool_result(id.to_string(), content, false);
+                    .add_tool_result(pending.id.clone(), content, false);
             }
             ToolOutcome::Error(msg) => {
-                self.conversation.add_tool_result(id.to_string(), msg, true);
+                self.conversation
+                    .add_tool_result(pending.id.clone(), msg, true);
             }
         }
-        self.pending_tool_calls.retain(|c| c.id != id);
+        self.pending_tool_calls.retain(|c| c.id != pending.id);
     }
 
     /// Get the footer text for current mode

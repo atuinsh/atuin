@@ -157,7 +157,7 @@ fn user_turn_view(events: &[turn::UiEvent], first_turn: bool) -> Elements {
     element! {
         View(padding_top: Cells::from(padding)) {
             Text {
-                Span(text: "You", style: label_style)
+                Span(text: " You ", style: label_style.reversed())
             }
             #(for event in events {
                 #(match event {
@@ -185,9 +185,9 @@ fn agent_turn_view(events: &[turn::UiEvent], busy: bool) -> Elements {
     element! {
         View {
             Spinner(
-                label: "Atuin AI",
-                label_style: label_style,
-                done_label_style: label_style,
+                label: " Atuin AI ",
+                label_style: label_style.reversed(),
+                done_label_style: label_style.reversed(),
                 hide_checkmark: true,
                 label_first: true,
                 done: !busy,

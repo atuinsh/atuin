@@ -188,7 +188,7 @@ fn on_check_tool_permission(handle: &Handle<Session>, tx: &mpsc::Sender<AiTuiEve
             PermissionResponse::Allowed => {
                 let outcome = tool_call.tool.execute();
                 h2.update(move |state| {
-                    state.complete_tool_call(&id_clone, outcome);
+                    state.complete_tool_call(&tool_call, outcome);
                 });
                 let _ = tx_for_task.send(AiTuiEvent::ContinueAfterTools);
             }
@@ -199,7 +199,7 @@ fn on_check_tool_permission(handle: &Handle<Session>, tx: &mpsc::Sender<AiTuiEve
                         .events
                         .push(ConversationEvent::OutOfBandOutput {
                             name: "System".to_string(),
-                            content: format!("Permission denied for tool call {:?}", &tool_call),
+                            content: format!("Permission denied for tool call {:?}", &id_clone),
                             command: None,
                         });
                 });
