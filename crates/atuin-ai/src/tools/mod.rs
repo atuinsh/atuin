@@ -6,6 +6,12 @@ pub(crate) mod descriptor;
 
 use crate::permissions::rule::Rule;
 
+/// Result of executing a client-side tool.
+pub(crate) enum ToolOutcome {
+    Success(String),
+    Error(String),
+}
+
 /// A pending tool call from the server, awaiting permissions or execution.
 #[derive(Debug, Clone)]
 pub(crate) struct PendingToolCall {
@@ -17,6 +23,23 @@ pub(crate) struct PendingToolCall {
 impl PendingToolCall {
     pub(crate) fn target_dir(&self) -> Option<&Path> {
         self.tool.target_dir()
+    }
+
+    /// Mark this tool call as waiting for user permission.
+    pub fn mark_asking(&mut self) {
+        self.state = ToolCallState::AskingForPermission;
+    }
+
+    /// Mark this tool call as currently executing.
+    #[expect(dead_code)]
+    pub fn mark_executing(&mut self) {
+        self.state = ToolCallState::Executing;
+    }
+
+    /// Mark this tool call as denied.
+    #[expect(dead_code)]
+    pub fn mark_denied(&mut self, reason: String) {
+        self.state = ToolCallState::Denied(reason);
     }
 }
 
@@ -84,6 +107,14 @@ impl ClientToolCall {
             ClientToolCall::AtuinHistory(tool) => tool.target_dir(),
         }
     }
+
+    /// Execute this client-side tool and return the result.
+    pub fn execute(&self) -> ToolOutcome {
+        match self {
+            ClientToolCall::Read(tool) => tool.execute(),
+            _ => ToolOutcome::Error("Client-side tool execution not yet implemented".to_string()),
+        }
+    }
 }
 
 /// A trait for tool calls that can be checked against permission rules.
@@ -144,6 +175,44 @@ impl TryFrom<&serde_json::Value> for ReadToolCall {
             path: PathBuf::from(path),
             view_range,
         })
+    }
+}
+
+impl ReadToolCall {
+    fn execute(&self) -> ToolOutcome {
+        let mut path = self.path.clone();
+
+        if path.is_relative()
+            && let Ok(current_dir) = std::env::current_dir()
+        {
+            path = current_dir.join(path);
+        }
+
+        if !path.exists() {
+            return ToolOutcome::Error(format!("Error: file does not exist: {}", path.display()));
+        }
+
+        if path.is_dir() {
+            let Some(files) = std::fs::read_dir(&path).ok().and_then(|entries| {
+                entries
+                    .filter_map(|entry| entry.ok())
+                    .map(|entry| entry.file_name().to_string_lossy().to_string())
+                    .collect::<Vec<_>>()
+                    .into()
+            }) else {
+                return ToolOutcome::Error(format!(
+                    "Error: could not read directory: {}",
+                    path.display()
+                ));
+            };
+
+            return ToolOutcome::Success(format!("Directory contents:\n{}", files.join("\n")));
+        }
+
+        match std::fs::read_to_string(&path) {
+            Ok(content) => ToolOutcome::Success(content),
+            Err(e) => ToolOutcome::Error(format!("Error reading file: {e}")),
+        }
     }
 }
 

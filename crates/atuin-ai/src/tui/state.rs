@@ -7,7 +7,7 @@ use std::collections::VecDeque;
 
 use tokio::task::AbortHandle;
 
-use crate::tools::{ClientToolCall, PendingToolCall, ToolCallState};
+use crate::tools::{ClientToolCall, PendingToolCall, ToolCallState, ToolOutcome};
 
 /// Streaming status indicators from server
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -576,6 +576,20 @@ impl Session {
         self.pending_tool_calls
             .iter_mut()
             .find(|call| call.id == id)
+    }
+
+    /// Record a tool execution result and remove the pending tool call.
+    pub fn complete_tool_call(&mut self, id: &str, outcome: ToolOutcome) {
+        match outcome {
+            ToolOutcome::Success(content) => {
+                self.conversation
+                    .add_tool_result(id.to_string(), content, false);
+            }
+            ToolOutcome::Error(msg) => {
+                self.conversation.add_tool_result(id.to_string(), msg, true);
+            }
+        }
+        self.pending_tool_calls.retain(|c| c.id != id);
     }
 
     /// Get the footer text for current mode

@@ -2,15 +2,14 @@ use std::path::PathBuf;
 use std::sync::mpsc;
 
 use crate::context::{AppContext, ClientContext};
-use crate::permissions::check::{PermissionChecker, PermissionRequest, PermissionResponse};
-use crate::permissions::walker::PermissionWalker;
+use crate::permissions::check::PermissionResponse;
+use crate::permissions::resolver::PermissionResolver;
 use crate::stream::{ChatRequest, run_chat_stream};
 use crate::tools::ToolCallState;
 use crate::tui::ConversationEvent;
 use crate::tui::events::{AiTuiEvent, PermissionResult};
 use crate::tui::state::{ExitAction, Session};
 use eye_declare::Handle;
-use serde_json::json;
 use tokio::task::JoinHandle;
 
 pub(crate) fn dispatch(
@@ -146,143 +145,54 @@ fn on_slash_command(handle: &Handle<Session>, command: String) {
 }
 
 fn on_check_tool_permission(handle: &Handle<Session>, tx: &mpsc::Sender<AiTuiEvent>, id: String) {
-    eprintln!("Checking tool call permission: {:?}", &id);
     let h2 = handle.clone();
     let tx_for_task = tx.clone();
-
     let id_clone = id.clone();
+
     tokio::spawn(async move {
+        // 1. Fetch the pending tool call
         let Ok(Some(tool_call)) = h2
             .fetch(move |state| state.pending_tool_call(&id).cloned())
             .await
         else {
-            // todo: raise error
-            eprintln!("Error getting pending tool call: {:?}", &id_clone);
+            eprintln!("Pending tool call not found: {:?}", &id_clone);
             return;
         };
 
+        // 2. Resolve working directory
         let Some(working_dir) = tool_call
             .target_dir()
             .map(PathBuf::from)
             .or_else(|| std::env::current_dir().ok())
         else {
-            // todo: raise error
             eprintln!(
-                "Error getting working directory for tool call: {:?}",
-                &tool_call
+                "Cannot resolve working directory for tool call: {:?}",
+                &id_clone
             );
             return;
         };
 
-        let mut walker = PermissionWalker::new(working_dir.clone(), None); // todo: get global dir
-
-        let Ok(_) = walker.walk().await else {
-            eprintln!("Error walking filesystem for permissions check");
-            // todo: raise error
+        // 3. Create permission resolver and check
+        let Ok(resolver) = PermissionResolver::new(working_dir, None).await else {
+            eprintln!("Failed to create permission resolver");
             return;
         };
 
-        let checker = PermissionChecker::new(walker.rules().to_owned());
-        let request = PermissionRequest::new(working_dir, Box::new(&tool_call.tool));
-
-        let Ok(response) = checker.check(&request).await else {
-            // todo: raise error
-            eprintln!("Error checking tool call permission");
+        let Ok(response) = resolver.check(&tool_call.tool).await else {
+            eprintln!("Permission check failed for tool call: {:?}", &id_clone);
             return;
         };
 
+        // 4. Handle response
         match response {
             PermissionResponse::Allowed => {
-                eprintln!("Executing tool call: {:?}", tool_call);
-
-                let id_clone2 = id_clone.clone();
+                let outcome = tool_call.tool.execute();
                 h2.update(move |state| {
-                    state.add_tool_call(id_clone2.clone(), "read".to_string(), json!({}));
-
-                    let mut tool_call = state.pending_tool_call_mut(&id_clone2);
-
-                    let Some(tool_call) = tool_call.as_mut() else {
-                        eprintln!("Error getting pending tool call: {:?}", &id_clone2);
-                        return;
-                    };
-
-                    tool_call.state = ToolCallState::Executing;
-
-                    //
-
-                    // state.events.push(ConversationEvent::OutOfBandOutput {
-                    //     name: "System".to_string(),
-                    //     content: format!(
-                    //         "Permission granted for tool call {:?}",
-                    //         &tool_call
-                    //     ),
-                    //     command: None,
-                    // });
+                    state.complete_tool_call(&id_clone, outcome);
                 });
-
-                if let crate::tools::ClientToolCall::Read(read) = tool_call.tool {
-                    let mut path = read.path.clone();
-
-                    if path.is_relative()
-                        && let Ok(current_dir) = std::env::current_dir()
-                    {
-                        path = current_dir.join(path);
-                    }
-
-                    if !path.exists() {
-                        let id = id_clone.clone();
-                        h2.update(move |state| {
-                            state.conversation.add_tool_result(
-                                id.clone(),
-                                format!("Error: file does not exist: {}", path.display()),
-                                true,
-                            );
-                            state.pending_tool_calls.retain(|c| c.id != id);
-                        });
-                        return;
-                    }
-
-                    if path.is_dir() {
-                        let Some(files) = std::fs::read_dir(&path)
-                            .map_err(|e| {
-                                eprintln!("Error reading directory: {}", e);
-                                e
-                            })
-                            .ok()
-                            .and_then(|entries| {
-                                entries
-                                    .filter_map(|entry| entry.ok())
-                                    .map(|entry| entry.file_name().to_string_lossy().to_string())
-                                    .collect::<Vec<_>>()
-                                    .into()
-                            })
-                        else {
-                            h2.update(move |state| {
-                                state.conversation.add_tool_result(
-                                    id_clone.clone(),
-                                    format!("Error: could not read directory: {}", path.display()),
-                                    true,
-                                );
-                                state.pending_tool_calls.retain(|c| c.id != id_clone);
-                            });
-                            return;
-                        };
-
-                        h2.update(move |state| {
-                            state.conversation.add_tool_result(
-                                id_clone.clone(),
-                                format!("Directory contents:\n{}", files.join("\n")),
-                                false,
-                            );
-                            state.pending_tool_calls.retain(|c| c.id != id_clone);
-
-                            let _ = tx_for_task.send(AiTuiEvent::ContinueAfterTools);
-                        });
-                    }
-                }
+                let _ = tx_for_task.send(AiTuiEvent::ContinueAfterTools);
             }
             PermissionResponse::Denied => {
-                eprintln!("Permission denied for tool call: {:?}", &tool_call);
                 h2.update(move |state| {
                     state
                         .conversation
@@ -295,24 +205,10 @@ fn on_check_tool_permission(handle: &Handle<Session>, tx: &mpsc::Sender<AiTuiEve
                 });
             }
             PermissionResponse::Ask => {
-                eprintln!("Asking for permission for tool call: {:?}", &tool_call);
                 h2.update(move |state| {
-                    let mut tool_call = state.pending_tool_call_mut(&id_clone);
-
-                    let Some(tool_call) = tool_call.as_mut() else {
-                        eprintln!("Error getting pending tool call: {:?}", &id_clone);
-                        return;
-                    };
-
-                    eprintln!(
-                        "Setting tool call state to AskingForPermission: {:?}",
-                        &tool_call
-                    );
-                    tool_call.state = ToolCallState::AskingForPermission;
-                    eprintln!(
-                        "Tool call state set to AskingForPermission: {:?}",
-                        &tool_call
-                    );
+                    if let Some(tc) = state.pending_tool_call_mut(&id_clone) {
+                        tc.mark_asking();
+                    }
                 });
             }
         }
