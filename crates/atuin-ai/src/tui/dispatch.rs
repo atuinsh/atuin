@@ -36,7 +36,7 @@ pub(crate) fn dispatch(
             on_check_tool_permission(handle, tx, id);
         }
         AiTuiEvent::SelectPermission(result) => {
-            on_select_permission(handle, result);
+            on_select_permission(handle, tx, result);
         }
         AiTuiEvent::CancelGeneration => {
             on_cancel_generation(handle);
@@ -189,10 +189,13 @@ fn on_check_tool_permission(handle: &Handle<Session>, tx: &mpsc::Sender<AiTuiEve
                 let outcome = tool_call.tool.execute();
                 h2.update(move |state| {
                     state.complete_tool_call(&tool_call, outcome);
+                    if !state.has_unresolved_tool_calls() {
+                        let _ = tx_for_task.send(AiTuiEvent::ContinueAfterTools);
+                    }
                 });
-                let _ = tx_for_task.send(AiTuiEvent::ContinueAfterTools);
             }
             PermissionResponse::Denied => {
+                let tx = tx_for_task.clone();
                 h2.update(move |state| {
                     state
                         .conversation
@@ -202,6 +205,10 @@ fn on_check_tool_permission(handle: &Handle<Session>, tx: &mpsc::Sender<AiTuiEve
                             content: format!("Permission denied for tool call {:?}", &id_clone),
                             command: None,
                         });
+                    state.pending_tool_calls.retain(|c| c.id != id_clone);
+                    if !state.has_unresolved_tool_calls() {
+                        let _ = tx.send(AiTuiEvent::ContinueAfterTools);
+                    }
                 });
             }
             PermissionResponse::Ask => {
@@ -215,10 +222,12 @@ fn on_check_tool_permission(handle: &Handle<Session>, tx: &mpsc::Sender<AiTuiEve
     });
 }
 
-fn on_select_permission(handle: &Handle<Session>, permission: PermissionResult) {
-    // Okay, we have permssion information.
-    // If accepted, we can start executing.
-    // If denied, we can show an error message.
+fn on_select_permission(
+    handle: &Handle<Session>,
+    tx: &mpsc::Sender<AiTuiEvent>,
+    permission: PermissionResult,
+) {
+    let tx = tx.clone();
     handle.update(move |state| {
         let tool_call = state
             .pending_tool_calls
@@ -232,7 +241,11 @@ fn on_select_permission(handle: &Handle<Session>, permission: PermissionResult) 
 
         match permission {
             PermissionResult::Allow => {
-                state.pending_tool_calls.remove(index);
+                if let Some(call) = state.pending_tool_calls.remove(index) {
+                    if !state.has_unresolved_tool_calls() {
+                        let _ = tx.send(AiTuiEvent::ContinueAfterTools);
+                    }
+                }
             }
             PermissionResult::AlwaysAllowInDir => {
                 //
@@ -250,6 +263,9 @@ fn on_select_permission(handle: &Handle<Session>, permission: PermissionResult) 
                     "Permission denied on the user's system".to_string(),
                     true,
                 );
+                if !state.has_unresolved_tool_calls() {
+                    let _ = tx.send(AiTuiEvent::ContinueAfterTools);
+                }
             }
         }
     });

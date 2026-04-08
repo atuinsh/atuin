@@ -603,6 +603,16 @@ impl Session {
         self.pending_tool_calls.retain(|c| c.id != pending.id);
     }
 
+    /// Returns true if any tool calls are still in CheckingPermissions or AskingForPermission state.
+    pub fn has_unresolved_tool_calls(&self) -> bool {
+        self.pending_tool_calls.iter().any(|tc| {
+            matches!(
+                tc.state,
+                ToolCallState::CheckingPermissions | ToolCallState::AskingForPermission
+            )
+        })
+    }
+
     /// Get the footer text for current mode
     pub fn footer_text(&self) -> &'static str {
         match self.interaction.mode {
