@@ -449,6 +449,7 @@ impl AtuinHistoryToolCall {
     pub(crate) async fn execute(&self, db: &atuin_client::database::Sqlite) -> ToolOutcome {
         use atuin_client::database::{self, Database as _, OptFilters};
         use atuin_client::settings::SearchMode;
+        use time::UtcOffset;
 
         let context = match database::current_context().await {
             Ok(ctx) => ctx,
@@ -484,20 +485,65 @@ impl AtuinHistoryToolCall {
             return ToolOutcome::Success("No matching history entries found.".to_string());
         }
 
+        let local_offset = UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC);
+
         let formatted: Vec<String> = results
             .iter()
             .enumerate()
             .map(|(i, h)| {
+                let ts = h.timestamp.to_offset(local_offset);
+                let time_str = format!(
+                    "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+                    ts.year(),
+                    ts.month() as u8,
+                    ts.day(),
+                    ts.hour(),
+                    ts.minute(),
+                    ts.second(),
+                );
+
+                let duration_str = format_duration(h.duration);
+
                 format!(
-                    "{}. `{}` (cwd: {}, exit: {})",
+                    "{}. `{}` [{}] ({}, exit: {}){}",
                     i + 1,
                     h.command,
+                    time_str,
                     h.cwd,
-                    h.exit
+                    h.exit,
+                    duration_str,
                 )
             })
             .collect();
 
         ToolOutcome::Success(formatted.join("\n"))
+    }
+}
+
+fn format_duration(nanos: i64) -> String {
+    if nanos <= 0 {
+        return String::new();
+    }
+
+    let total_secs = nanos / 1_000_000_000;
+    let millis = (nanos % 1_000_000_000) / 1_000_000;
+
+    if total_secs >= 3600 {
+        let hours = total_secs / 3600;
+        let mins = (total_secs % 3600) / 60;
+        let secs = total_secs % 60;
+        format!(", {hours}h{mins}m{secs}s")
+    } else if total_secs >= 60 {
+        let mins = total_secs / 60;
+        let secs = total_secs % 60;
+        format!(", {mins}m{secs}s")
+    } else if total_secs > 0 {
+        if millis > 0 {
+            format!(", {total_secs}.{millis:03}s")
+        } else {
+            format!(", {total_secs}s")
+        }
+    } else {
+        format!(", {millis}ms")
     }
 }

@@ -44,6 +44,7 @@ ratatui-core = "0.1"
 ratatui-widgets = "0.3"
 thiserror = { workspace = true }
 regex = { workspace = true }
+time = { workspace = true }
 toml = "1.1"
 typed-builder = { workspace = true }
 
