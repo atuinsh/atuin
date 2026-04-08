@@ -2,6 +2,8 @@ use std::path::{Path, PathBuf};
 
 use eyre::Result;
 
+pub(crate) mod descriptor;
+
 use crate::permissions::rule::Rule;
 
 /// A pending tool call from the server, awaiting permissions or execution.
@@ -56,6 +58,15 @@ impl TryFrom<(&str, &serde_json::Value)> for ClientToolCall {
 }
 
 impl ClientToolCall {
+    pub(crate) fn descriptor(&self) -> &'static descriptor::ToolDescriptor {
+        match self {
+            ClientToolCall::Read(_) => descriptor::READ,
+            ClientToolCall::Write(_) => descriptor::WRITE,
+            ClientToolCall::Shell(_) => descriptor::SHELL,
+            ClientToolCall::AtuinHistory(_) => descriptor::ATUIN_HISTORY,
+        }
+    }
+
     pub(crate) fn matches_rule(&self, rule: &Rule) -> bool {
         match self {
             ClientToolCall::Read(tool) => tool.matches_rule(rule),

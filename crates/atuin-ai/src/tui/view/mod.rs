@@ -1,7 +1,5 @@
 //! View function that builds the eye-declare element tree from app state.
 
-use std::sync::mpsc;
-
 use eye_declare::{
     Cells, Column, Elements, HStack, Span, Spinner, Text, View, WidthConstraint, element,
 };
@@ -74,7 +72,7 @@ fn input_view(state: &AppState) -> Elements {
 
     element! {
         #(if first_pending_tool_call.is_some() {
-            #(tool_call_view(first_pending_tool_call.unwrap(), state.tx.clone()))
+            #(tool_call_view(first_pending_tool_call.unwrap()))
         })
 
         #(if first_pending_tool_call.is_none() {
@@ -99,12 +97,13 @@ fn input_view(state: &AppState) -> Elements {
     }
 }
 
-fn tool_call_view(tool_call: &PendingToolCall, tx: mpsc::Sender<AiTuiEvent>) -> Elements {
-    let (verb, tool_desc) = match &tool_call.tool {
-        ClientToolCall::Read(tool) => ("read", tool.path.display().to_string()),
-        ClientToolCall::Write(tool) => ("write to", tool.path.display().to_string()),
-        ClientToolCall::Shell(tool) => ("run", tool.command.clone()),
-        ClientToolCall::AtuinHistory(tool) => ("search your Atuin history for", tool.query.clone()),
+fn tool_call_view(tool_call: &PendingToolCall) -> Elements {
+    let verb = tool_call.tool.descriptor().display_verb;
+    let tool_desc = match &tool_call.tool {
+        ClientToolCall::Read(tool) => tool.path.display().to_string(),
+        ClientToolCall::Write(tool) => tool.path.display().to_string(),
+        ClientToolCall::Shell(tool) => tool.command.clone(),
+        ClientToolCall::AtuinHistory(tool) => tool.query.clone(),
     };
 
     element! {
@@ -140,8 +139,8 @@ fn tool_call_view(tool_call: &PendingToolCall, tx: mpsc::Sender<AiTuiEvent>) -> 
                         _ => unreachable!(),
                     };
 
-                    let _ = tx.send(AiTuiEvent::SelectPermission(value));
-                }) as Box<dyn Fn(&SelectOption) + Send + Sync>)
+                    Some(AiTuiEvent::SelectPermission(value))
+                }) as Box<dyn Fn(&SelectOption) -> Option<AiTuiEvent> + Send + Sync>)
             }
         }
     }

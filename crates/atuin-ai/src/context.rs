@@ -1,0 +1,62 @@
+use atuin_client::distro::detect_linux_distribution;
+
+/// Session-scoped context for the AI chat session.
+/// Holds the API configuration and client settings needed by the event loop and stream task.
+#[derive(Clone, Debug)]
+pub(crate) struct AppContext {
+    pub endpoint: String,
+    pub token: String,
+    pub send_cwd: bool,
+}
+
+/// Machine identity — computed once per session.
+#[derive(Clone, Debug)]
+pub(crate) struct ClientContext {
+    pub os: String,
+    pub shell: Option<String>,
+    pub distro: Option<String>,
+}
+
+impl ClientContext {
+    pub(crate) fn detect() -> Self {
+        let os = detect_os();
+        let shell = crate::commands::detect_shell();
+        let distro = if os == "linux" {
+            Some(detect_linux_distribution())
+        } else {
+            None
+        };
+        Self { os, shell, distro }
+    }
+
+    /// Serialize to the JSON format the API expects for the "context" field.
+    /// The `pwd` field is always dynamic (current working directory), so it's
+    /// computed fresh on each call if `send_cwd` is true.
+    pub(crate) fn to_json(&self, send_cwd: bool) -> serde_json::Value {
+        let mut ctx = serde_json::json!({
+            "os": self.os,
+            "shell": self.shell,
+            "pwd": if send_cwd {
+                std::env::current_dir().ok().map(|p| p.to_string_lossy().into_owned())
+            } else {
+                None
+            },
+        });
+
+        if let Some(ref distro) = self.distro {
+            ctx["distro"] = serde_json::json!(distro);
+        }
+
+        ctx
+    }
+}
+
+/// Move the `detect_os` function here since it's about client identity.
+fn detect_os() -> String {
+    match std::env::consts::OS {
+        "macos" => "macos".to_string(),
+        "linux" => "linux".to_string(),
+        "windows" => "windows".to_string(),
+        other => format!("Other: {other}"),
+    }
+}

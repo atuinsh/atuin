@@ -2,7 +2,8 @@
 // SSE streaming
 // ───────────────────────────────────────────────────────────────────
 
-use atuin_client::distro::detect_linux_distribution;
+use std::sync::mpsc;
+
 use atuin_common::tls::ensure_crypto_provider;
 
 use eventsource_stream::Eventsource;
@@ -12,7 +13,7 @@ use futures::StreamExt;
 use reqwest::Url;
 
 use crate::{
-    commands::detect_shell,
+    context::{AppContext, ClientContext},
     tools::ClientToolCall,
     tui::{AppState, events::AiTuiEvent},
 };
@@ -37,11 +38,29 @@ enum ChatStreamEvent {
     Error(String),
 }
 
+/// Per-turn request payload for the chat API.
+pub(crate) struct ChatRequest {
+    pub messages: Vec<serde_json::Value>,
+    pub session_id: Option<String>,
+    /// Requested capabilities. Currently always ["client_tools_v1"].
+    pub capabilities: Vec<String>,
+}
+
+impl ChatRequest {
+    pub(crate) fn new(messages: Vec<serde_json::Value>, session_id: Option<String>) -> Self {
+        Self {
+            messages,
+            session_id,
+            capabilities: vec!["client_tools_v1".to_string()],
+        }
+    }
+}
+
 fn create_chat_stream(
     hub_address: String,
     token: String,
-    session_id: Option<String>,
-    messages: Vec<serde_json::Value>,
+    request: ChatRequest,
+    client_ctx: ClientContext,
     send_cwd: bool,
 ) -> std::pin::Pin<Box<dyn futures::Stream<Item = Result<ChatStreamEvent>> + Send>> {
     Box::pin(async_stream::stream! {
@@ -56,30 +75,15 @@ fn create_chat_stream(
 
         tracing::debug!("Sending SSE request to {endpoint}");
 
-        let os = detect_os();
-        let shell = detect_shell();
-
-        let mut context = serde_json::json!({
-            "os": os,
-            "shell": shell,
-            "pwd": if send_cwd { std::env::current_dir()
-                .ok()
-                .map(|path| path.to_string_lossy().into_owned()) } else { None },
-        });
-
-        if os == "linux" {
-            context["distro"] = serde_json::json!(detect_linux_distribution());
-        }
+        let context = client_ctx.to_json(send_cwd);
 
         let mut request_body = serde_json::json!({
-            "messages": messages,
+            "messages": request.messages,
             "context": context,
-            "capabilities": [
-                "client_tools_v1"
-            ]
+            "capabilities": request.capabilities,
         });
 
-        if let Some(ref sid) = session_id {
+        if let Some(ref sid) = request.session_id {
             tracing::trace!("Including session_id in request: {sid}");
             request_body["session_id"] = serde_json::json!(sid);
         }
@@ -197,13 +201,18 @@ fn create_chat_stream(
 
 pub(crate) async fn run_chat_stream(
     handle: Handle<AppState>,
-    endpoint: String,
-    token: String,
-    session_id: Option<String>,
-    messages: Vec<serde_json::Value>,
-    send_cwd: bool,
+    tx: mpsc::Sender<AiTuiEvent>,
+    app_ctx: AppContext,
+    client_ctx: ClientContext,
+    request: ChatRequest,
 ) {
-    let stream = create_chat_stream(endpoint, token, session_id, messages, send_cwd);
+    let stream = create_chat_stream(
+        app_ctx.endpoint.clone(),
+        app_ctx.token.clone(),
+        request,
+        client_ctx,
+        app_ctx.send_cwd,
+    );
     futures::pin_mut!(stream);
 
     while let Some(event) = stream.next().await {
@@ -219,9 +228,11 @@ pub(crate) async fn run_chat_stream(
 
                 if let Ok(tool) = ClientToolCall::try_from((name.as_str(), &input)) {
                     // Recognized as a client-side tool call.
+                    let id_for_update = id.clone();
                     handle.update(move |state| {
-                        state.handle_client_tool_call(id.clone(), tool);
+                        state.handle_client_tool_call(id_for_update, tool);
                     });
+                    let _ = tx.send(AiTuiEvent::CheckToolCallPermission(id));
                     continue;
                 }
 
@@ -283,13 +294,4 @@ fn hub_url(base: &str, path: &str) -> Result<Url> {
     Url::parse(&base_with_slash)?
         .join(stripped)
         .context("failed to build hub URL")
-}
-
-fn detect_os() -> String {
-    match std::env::consts::OS {
-        "macos" => "macos".to_string(),
-        "linux" => "linux".to_string(),
-        "windows" => "windows".to_string(),
-        other => format!("Other: {other}"),
-    }
 }

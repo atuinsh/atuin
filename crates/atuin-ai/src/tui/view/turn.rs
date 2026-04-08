@@ -1,3 +1,4 @@
+use crate::tools::descriptor;
 use crate::tui::ConversationEvent;
 
 /// Server-sent danger level for a suggested command
@@ -312,7 +313,7 @@ impl TurnBuilder {
     fn add_tool_call(&mut self, id: &str, name: &str, _input: &serde_json::Value) {
         self.start_agent_turn();
         if let UiTurn::Agent { events } = self.turn_mut_unsafe() {
-            let is_client = matches!(name, "file_read");
+            let is_client = descriptor::by_name(name).is_some_and(|d| d.is_client);
 
             events.push(UiEvent::ToolCall(ToolCallDetails {
                 tool_use_id: id.to_string(),
@@ -392,25 +393,15 @@ impl ToolSummary {
 
     /// Present-tense progressive verb for a tool name (e.g. "Searching...")
     fn progressive_verb(name: &str) -> String {
-        match name {
-            "search" => "Searching...".into(),
-            "read" | "read_file" => "Reading file...".into(),
-            "write" | "write_file" => "Writing file...".into(),
-            "execute" | "run" | "bash" => "Running command...".into(),
-            "list" | "list_files" => "Listing files...".into(),
-            _ => format!("Running {}...", name.replace('_', " ")),
-        }
+        descriptor::by_name(name)
+            .map(|d| d.progressive_verb.to_string())
+            .unwrap_or_else(|| format!("Running {}...", name.replace('_', " ")))
     }
 
     /// Past-tense verb for a tool name (e.g. "Searched")
     fn past_verb(name: &str) -> String {
-        match name {
-            "search" => "Searched".into(),
-            "read" | "read_file" => "Read file".into(),
-            "write" | "write_file" => "Wrote file".into(),
-            "execute" | "run" | "bash" => "Ran command".into(),
-            "list" | "list_files" => "Listed files".into(),
-            _ => format!("Ran {}", name.replace('_', " ")),
-        }
+        descriptor::by_name(name)
+            .map(|d| d.past_verb.to_string())
+            .unwrap_or_else(|| format!("Ran {}", name.replace('_', " ")))
     }
 }

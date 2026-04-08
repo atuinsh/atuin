@@ -1503,8 +1503,6 @@ dependencies = [
 [[package]]
 name = "eye_declare"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cac5c1a3b194e6674e9e44dbfb035f31c4df7a1ff6c8765181c50e8482bb393a"
 dependencies = [
  "crossterm",
  "eye_declare_macros",
@@ -1519,8 +1517,6 @@ dependencies = [
 [[package]]
 name = "eye_declare_macros"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "98595776b5e10c6ea519c09940fb7995b64da1e9a70cc94aa6c08b3bd404925a"
 dependencies = [
  "proc-macro2",
  "quote",

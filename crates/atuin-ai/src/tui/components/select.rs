@@ -7,6 +7,8 @@ use typed_builder::TypedBuilder;
 
 use crate::tui::events::AiTuiEvent;
 
+type OnSelectFn = Box<dyn Fn(&SelectOption) -> Option<AiTuiEvent> + Send + Sync + 'static>;
+
 #[derive(TypedBuilder)]
 pub(crate) struct SelectOption {
     #[builder(setter(into))]
@@ -28,7 +30,7 @@ pub(crate) struct PermissionSelectorState {
 #[props]
 pub(crate) struct Select {
     pub options: Vec<SelectOption>,
-    pub on_select: Box<dyn Fn(&SelectOption) + Send + Sync + 'static>,
+    pub on_select: OnSelectFn,
 }
 
 #[component(props = Select, state = PermissionSelectorState)]
@@ -66,7 +68,11 @@ pub(crate) fn permission_selector(
                 }
                 KeyCode::Enter => {
                     let option = &props.options[state.selected_option];
-                    (props.on_select)(&option);
+                    if let Some(event) = (props.on_select)(option)
+                        && let Some(ref tx) = state.tx
+                    {
+                        let _ = tx.send(event);
+                    }
                     return EventResult::Consumed;
                 }
                 _ => {}

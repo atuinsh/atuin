@@ -3,14 +3,11 @@
 //! This module contains the core state types that represent the application's
 //! domain model. Conversation events match the API protocol format.
 
-use std::{collections::VecDeque, sync::mpsc};
+use std::collections::VecDeque;
 
 use tokio::task::AbortHandle;
 
-use crate::{
-    tools::{ClientToolCall, PendingToolCall, ToolCallState},
-    tui::events::AiTuiEvent,
-};
+use crate::tools::{ClientToolCall, PendingToolCall, ToolCallState};
 
 /// Streaming status indicators from server
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -148,8 +145,6 @@ pub(crate) enum ExitAction {
 /// The view function derives the UI from this state.
 #[derive(Debug)]
 pub(crate) struct AppState {
-    /// Channel to send events to the main event loop
-    pub tx: mpsc::Sender<AiTuiEvent>,
     /// Current application mode
     pub mode: AppMode,
     /// Conversation events (source of truth, matches API protocol)
@@ -175,9 +170,8 @@ pub(crate) struct AppState {
 }
 
 impl AppState {
-    pub fn new(tx: mpsc::Sender<AiTuiEvent>) -> Self {
+    pub fn new() -> Self {
         Self {
-            tx,
             mode: AppMode::Input,
             events: Vec::new(),
             error: None,
@@ -377,8 +371,6 @@ impl AppState {
         // Client tool calls can only happen at the last part of a turn
         self.streaming_status = None;
         self.mode = AppMode::Input;
-
-        let _ = self.tx.send(AiTuiEvent::CheckToolCallPermission(id));
     }
 
     pub(crate) fn handle_select_permission(&mut self, permission: String) {

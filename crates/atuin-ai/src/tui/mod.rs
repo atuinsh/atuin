@@ -3,4 +3,4 @@ pub(crate) mod events;
 pub(crate) mod state;
 pub(crate) mod view;
 
-pub(crate) use state::{AppMode, AppState, ConversationEvent, ExitAction};
+pub(crate) use state::{AppState, ConversationEvent};

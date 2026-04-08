@@ -1,9 +1,10 @@
 use std::path::PathBuf;
 use std::sync::mpsc;
 
+use crate::context::{AppContext, ClientContext};
 use crate::permissions::check::{PermissionChecker, PermissionRequest, PermissionResponse};
 use crate::permissions::walker::PermissionWalker;
-use crate::stream::run_chat_stream;
+use crate::stream::{ChatRequest, run_chat_stream};
 use crate::tools::ToolCallState;
 use crate::tui::ConversationEvent;
 use crate::tui::events::{AiTuiEvent, PermissionResult};
@@ -47,7 +48,13 @@ pub(crate) async fn run(
         ensure_hub_session(settings).await?
     };
 
-    let action = run_inline_tui(endpoint.to_string(), token, initial_command, settings).await?;
+    let ctx = AppContext {
+        endpoint: endpoint.to_string(),
+        token,
+        send_cwd: settings.ai.send_cwd,
+    };
+
+    let action = run_inline_tui(ctx, initial_command).await?;
     emit_shell_result(action, output_for_hook);
 
     Ok(())
@@ -113,15 +120,11 @@ async fn ensure_hub_session(settings: &atuin_client::settings::Settings) -> Resu
 // Main TUI entry point
 // ───────────────────────────────────────────────────────────────────
 
-async fn run_inline_tui(
-    endpoint: String,
-    token: String,
-    initial_prompt: Option<String>,
-    settings: &atuin_client::settings::Settings,
-) -> Result<Action> {
+async fn run_inline_tui(ctx: AppContext, initial_prompt: Option<String>) -> Result<Action> {
     let (tx, rx) = mpsc::channel::<AiTuiEvent>();
 
-    let mut initial_state = AppState::new(tx.clone());
+    let initial_state = AppState::new();
+    let client_ctx = ClientContext::detect();
     // initial_state
     //     .pending_tool_calls
     //     .push_back(crate::tools::PendingToolCall {
@@ -159,29 +162,31 @@ async fn run_inline_tui(
         .ctrl_c(CtrlCBehavior::Deliver)
         .keyboard_protocol(eye_declare::KeyboardProtocol::Enhanced)
         .bracketed_paste(true)
-        .with_context(tx)
+        .with_context(tx.clone())
         .extra_newlines_at_exit(1)
         .build()?;
 
-    let send_cwd = settings.ai.send_cwd;
-
     // Event loop: receives AiTuiEvent from components, mutates state via Handle.
     let h = handle.clone();
-    let ep = endpoint.clone();
-    let tk = token.clone();
     tokio::task::spawn_blocking(move || {
+        // Clone tx for use in each loop iteration (run_chat_stream and update closures
+        // move tx clones into spawned tasks/closures).
+        let tx = tx.clone();
+        let client_ctx = client_ctx;
         while let Ok(event) = rx.recv() {
             match event {
                 AiTuiEvent::ContinueAfterTools => {
-                    let ep = ep.clone();
-                    let tk = tk.clone();
+                    let ctx = ctx.clone();
                     let h2 = h.clone();
+                    let tx2 = tx.clone();
+                    let cc = client_ctx.clone();
                     h.update(move |state| {
                         state.start_streaming();
                         let messages = state.events_to_messages();
                         let sid = state.session_id.clone();
+                        let request = ChatRequest::new(messages, sid);
                         let task = tokio::spawn(async move {
-                            run_chat_stream(h2, ep, tk, sid, messages, send_cwd).await;
+                            run_chat_stream(h2, tx2, ctx, cc, request).await;
                         });
                         state.stream_abort = Some(task.abort_handle());
                     });
@@ -221,17 +226,19 @@ async fn run_inline_tui(
                     }
 
                     // Start generation and spawn streaming task
-                    let ep = ep.clone();
-                    let tk = tk.clone();
+                    let ctx = ctx.clone();
                     let h2 = h.clone();
+                    let tx2 = tx.clone();
+                    let cc = client_ctx.clone();
                     h.update(move |state| {
                         state.start_generating(input);
                         state.start_streaming();
                         state.is_input_blank = true;
                         let messages = state.events_to_messages();
                         let sid = state.session_id.clone();
+                        let request = ChatRequest::new(messages, sid);
                         let task = tokio::spawn(async move {
-                            run_chat_stream(h2, ep, tk, sid, messages, send_cwd).await;
+                            run_chat_stream(h2, tx2, ctx, cc, request).await;
                         });
                         state.stream_abort = Some(task.abort_handle());
                     });
@@ -246,6 +253,7 @@ async fn run_inline_tui(
                 AiTuiEvent::CheckToolCallPermission(id) => {
                     eprintln!("Checking tool call permission: {:?}", &id);
                     let h2 = h.clone();
+                    let tx_for_task = tx.clone();
 
                     let id_clone = id.clone();
                     tokio::spawn(async move {
@@ -325,87 +333,82 @@ async fn run_inline_tui(
                                     // });
                                 });
 
-                                match tool_call.tool {
-                                    crate::tools::ClientToolCall::Read(read) => {
-                                        let mut path = read.path.clone();
+                                if let crate::tools::ClientToolCall::Read(read) = tool_call.tool {
+                                    let mut path = read.path.clone();
 
-                                        if path.is_relative() {
-                                            if let Ok(current_dir) = std::env::current_dir() {
-                                                path = current_dir.join(path);
-                                            }
-                                        }
+                                    if path.is_relative()
+                                        && let Ok(current_dir) = std::env::current_dir()
+                                    {
+                                        path = current_dir.join(path);
+                                    }
 
-                                        if !path.exists() {
-                                            let id = id_clone.clone();
-                                            h2.update(move |state| {
-                                                state.add_tool_result(
-                                                    id.clone(),
-                                                    format!(
-                                                        "Error: file does not exist: {}",
-                                                        path.display()
-                                                    ),
-                                                    true,
-                                                );
-                                                state.pending_tool_calls.retain(|c| c.id != id);
-                                            });
-                                            return;
-                                        }
+                                    if !path.exists() {
+                                        let id = id_clone.clone();
+                                        h2.update(move |state| {
+                                            state.add_tool_result(
+                                                id.clone(),
+                                                format!(
+                                                    "Error: file does not exist: {}",
+                                                    path.display()
+                                                ),
+                                                true,
+                                            );
+                                            state.pending_tool_calls.retain(|c| c.id != id);
+                                        });
+                                        return;
+                                    }
 
-                                        if path.is_dir() {
-                                            let Some(files) = std::fs::read_dir(&path)
-                                                .map_err(|e| {
-                                                    eprintln!("Error reading directory: {}", e);
-                                                    e
-                                                })
-                                                .ok()
-                                                .and_then(|entries| {
-                                                    entries
-                                                        .filter_map(|entry| entry.ok())
-                                                        .map(|entry| {
-                                                            entry
-                                                                .file_name()
-                                                                .to_string_lossy()
-                                                                .to_string()
-                                                        })
-                                                        .collect::<Vec<_>>()
-                                                        .into()
-                                                })
-                                            else {
-                                                h2.update(move |state| {
-                                                    state.add_tool_result(
-                                                        id_clone.clone(),
-                                                        format!(
-                                                            "Error: could not read directory: {}",
-                                                            path.display()
-                                                        ),
-                                                        true,
-                                                    );
-                                                    state
-                                                        .pending_tool_calls
-                                                        .retain(|c| c.id != id_clone);
-                                                });
-                                                return;
-                                            };
-
+                                    if path.is_dir() {
+                                        let Some(files) = std::fs::read_dir(&path)
+                                            .map_err(|e| {
+                                                eprintln!("Error reading directory: {}", e);
+                                                e
+                                            })
+                                            .ok()
+                                            .and_then(|entries| {
+                                                entries
+                                                    .filter_map(|entry| entry.ok())
+                                                    .map(|entry| {
+                                                        entry
+                                                            .file_name()
+                                                            .to_string_lossy()
+                                                            .to_string()
+                                                    })
+                                                    .collect::<Vec<_>>()
+                                                    .into()
+                                            })
+                                        else {
                                             h2.update(move |state| {
                                                 state.add_tool_result(
                                                     id_clone.clone(),
                                                     format!(
-                                                        "Directory contents:\n{}",
-                                                        files.join("\n")
+                                                        "Error: could not read directory: {}",
+                                                        path.display()
                                                     ),
-                                                    false,
+                                                    true,
                                                 );
                                                 state
                                                     .pending_tool_calls
                                                     .retain(|c| c.id != id_clone);
-
-                                                let _ =
-                                                    state.tx.send(AiTuiEvent::ContinueAfterTools);
                                             });
-                                        }
+                                            return;
+                                        };
+
+                                        h2.update(move |state| {
+                                            state.add_tool_result(
+                                                id_clone.clone(),
+                                                format!(
+                                                    "Directory contents:\n{}",
+                                                    files.join("\n")
+                                                ),
+                                                false,
+                                            );
+                                            state.pending_tool_calls.retain(|c| c.id != id_clone);
+
+                                            let _ =
+                                                tx_for_task.send(AiTuiEvent::ContinueAfterTools);
+                                        });
                                     }
-                                    _ => {}
                                 }
                             }
                             PermissionResponse::Denied => {
@@ -536,16 +539,18 @@ async fn run_inline_tui(
                 }
 
                 AiTuiEvent::Retry => {
-                    let ep = ep.clone();
-                    let tk = tk.clone();
+                    let ctx = ctx.clone();
                     let h2 = h.clone();
+                    let tx2 = tx.clone();
+                    let cc = client_ctx.clone();
                     h.update(move |state| {
                         state.retry();
                         state.start_streaming();
                         let messages = state.events_to_messages();
                         let sid = state.session_id.clone();
+                        let request = ChatRequest::new(messages, sid);
                         let task = tokio::spawn(async move {
-                            run_chat_stream(h2, ep, tk, sid, messages, send_cwd).await;
+                            run_chat_stream(h2, tx2, ctx, cc, request).await;
                         });
                         state.stream_abort = Some(task.abort_handle());
                     });
