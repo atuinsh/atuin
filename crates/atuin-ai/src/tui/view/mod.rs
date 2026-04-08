@@ -13,7 +13,7 @@ use super::components::atuin_ai::AtuinAi;
 use super::components::input_box::InputBox;
 use super::components::markdown::Markdown;
 use super::components::select::Select;
-use super::state::{AppMode, AppState};
+use super::state::{AppMode, Session};
 
 mod turn;
 
@@ -25,23 +25,24 @@ mod turn;
 /// - Error display (if in error state)
 /// - Spacer
 /// - Input box (bordered, with contextual keybindings)
-pub(crate) fn ai_view(state: &AppState) -> Elements {
+pub(crate) fn ai_view(state: &Session) -> Elements {
     let mut turn_builder = turn::TurnBuilder::new();
 
-    for event in &state.events {
+    for event in &state.conversation.events {
         turn_builder.add_event(event);
     }
     let turns = turn_builder.build();
 
-    let busy = state.mode == AppMode::Streaming || state.mode == AppMode::Generating;
+    let busy = state.interaction.mode == AppMode::Streaming
+        || state.interaction.mode == AppMode::Generating;
     let last_index = turns.len().saturating_sub(1);
 
     element! {
         AtuinAi(
-            mode: state.mode,
-            has_command: state.has_any_command(),
-            is_input_blank: state.is_input_blank,
-            pending_confirmation: state.confirmation_pending,
+            mode: state.interaction.mode,
+            has_command: state.conversation.has_any_command(),
+            is_input_blank: state.interaction.is_input_blank,
+            pending_confirmation: state.interaction.confirmation_pending,
         ) {
             #(for (index, turn) in turns.iter().enumerate() {
                 #(match turn {
@@ -64,7 +65,7 @@ pub(crate) fn ai_view(state: &AppState) -> Elements {
     }
 }
 
-fn input_view(state: &AppState) -> Elements {
+fn input_view(state: &Session) -> Elements {
     let first_pending_tool_call = state
         .pending_tool_calls
         .iter()
@@ -82,11 +83,11 @@ fn input_view(state: &AppState) -> Elements {
                     title: "Generate a command or ask a question",
                     title_right: "Atuin AI",
                     footer: state.footer_text(),
-                    active: state.mode == AppMode::Input && !state.confirmation_pending,
+                    active: state.interaction.mode == AppMode::Input && !state.interaction.confirmation_pending,
                 )
 
-                #(if state.is_input_blank && state.has_any_command() && state.mode == AppMode::Input {
-                    #(if state.confirmation_pending {
+                #(if state.interaction.is_input_blank && state.conversation.has_any_command() && state.interaction.mode == AppMode::Input {
+                    #(if state.interaction.confirmation_pending {
                         Text { Span(text: "[Enter] Confirm dangerous command  [Esc] Cancel", style: Style::default().fg(Color::Gray)) }
                     } else {
                         Text { Span(text: "[Enter] Execute suggested command  [Tab] Insert Command", style: Style::default().fg(Color::Gray)) }

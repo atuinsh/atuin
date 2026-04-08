@@ -15,11 +15,20 @@ use reqwest::Url;
 use crate::{
     context::{AppContext, ClientContext},
     tools::ClientToolCall,
-    tui::{AppState, events::AiTuiEvent},
+    tui::{Session, events::AiTuiEvent},
 };
 
+/// Frames that alter the stream lifecycle — terminal or state-changing.
 #[derive(Debug, Clone)]
-enum ChatStreamEvent {
+pub(crate) enum StreamControl {
+    Done { session_id: String },
+    Error(String),
+    StatusChanged(String),
+}
+
+/// Frames that carry conversation content — they mutate the event log.
+#[derive(Debug, Clone)]
+pub(crate) enum StreamContent {
     TextChunk(String),
     ToolCall {
         id: String,
@@ -31,11 +40,13 @@ enum ChatStreamEvent {
         content: String,
         is_error: bool,
     },
-    Status(String),
-    Done {
-        session_id: String,
-    },
-    Error(String),
+}
+
+/// A frame from the SSE stream, classified as control or content.
+#[derive(Debug, Clone)]
+pub(crate) enum StreamFrame {
+    Content(StreamContent),
+    Control(StreamControl),
 }
 
 /// Per-turn request payload for the chat API.
@@ -62,7 +73,7 @@ fn create_chat_stream(
     request: ChatRequest,
     client_ctx: ClientContext,
     send_cwd: bool,
-) -> std::pin::Pin<Box<dyn futures::Stream<Item = Result<ChatStreamEvent>> + Send>> {
+) -> std::pin::Pin<Box<dyn futures::Stream<Item = Result<StreamFrame>> + Send>> {
     Box::pin(async_stream::stream! {
         ensure_crypto_provider();
         let endpoint = match hub_url(&hub_address, "/api/cli/chat") {
@@ -134,7 +145,7 @@ fn create_chat_stream(
                             if let Ok(json) = serde_json::from_str::<serde_json::Value>(&data)
                                 && let Some(content) = json.get("content").and_then(|v| v.as_str())
                             {
-                                yield Ok(ChatStreamEvent::TextChunk(content.to_string()));
+                                yield Ok(StreamFrame::Content(StreamContent::TextChunk(content.to_string())));
                             }
                         }
                         "tool_call" => {
@@ -142,7 +153,7 @@ fn create_chat_stream(
                                 let id = json.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
                                 let name = json.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
                                 let input = json.get("input").cloned().unwrap_or(serde_json::json!({}));
-                                yield Ok(ChatStreamEvent::ToolCall { id, name, input });
+                                yield Ok(StreamFrame::Content(StreamContent::ToolCall { id, name, input }));
                             }
                         }
                         "tool_result" => {
@@ -150,14 +161,14 @@ fn create_chat_stream(
                                 let tool_use_id = json.get("tool_use_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
                                 let content = json.get("content").and_then(|v| v.as_str()).unwrap_or("").to_string();
                                 let is_error = json.get("is_error").and_then(|v| v.as_bool()).unwrap_or(false);
-                                yield Ok(ChatStreamEvent::ToolResult { tool_use_id, content, is_error });
+                                yield Ok(StreamFrame::Content(StreamContent::ToolResult { tool_use_id, content, is_error }));
                             }
                         }
                         "status" => {
                             if let Ok(json) = serde_json::from_str::<serde_json::Value>(&data)
                                 && let Some(state) = json.get("state").and_then(|v| v.as_str())
                             {
-                                yield Ok(ChatStreamEvent::Status(state.to_string()));
+                                yield Ok(StreamFrame::Control(StreamControl::StatusChanged(state.to_string())));
                             }
                         }
                         "done" => {
@@ -166,9 +177,9 @@ fn create_chat_stream(
                                     .and_then(|v| v.as_str())
                                     .unwrap_or("")
                                     .to_string();
-                                yield Ok(ChatStreamEvent::Done { session_id });
+                                yield Ok(StreamFrame::Control(StreamControl::Done { session_id }));
                             } else {
-                                yield Ok(ChatStreamEvent::Done { session_id: String::new() });
+                                yield Ok(StreamFrame::Control(StreamControl::Done { session_id: String::new() }));
                             }
                             break;
                         }
@@ -176,10 +187,10 @@ fn create_chat_stream(
                             if let Ok(json) = serde_json::from_str::<serde_json::Value>(&data) {
                                 let message = json.get("message").and_then(|v| v.as_str()).unwrap_or("Unknown error").to_string();
                                 tracing::error!("SSE error: {}", message);
-                                yield Ok(ChatStreamEvent::Error(message));
+                                yield Ok(StreamFrame::Control(StreamControl::Error(message)));
                             } else {
                                 tracing::error!("SSE error: {}", data);
-                                yield Ok(ChatStreamEvent::Error(data));
+                                yield Ok(StreamFrame::Control(StreamControl::Error(data)));
                             }
                             break;
                         }
@@ -200,7 +211,7 @@ fn create_chat_stream(
 // ───────────────────────────────────────────────────────────────────
 
 pub(crate) async fn run_chat_stream(
-    handle: Handle<AppState>,
+    handle: Handle<Session>,
     tx: mpsc::Sender<AiTuiEvent>,
     app_ctx: AppContext,
     client_ctx: ClientContext,
@@ -217,61 +228,14 @@ pub(crate) async fn run_chat_stream(
 
     while let Some(event) = stream.next().await {
         match event {
-            Ok(ChatStreamEvent::TextChunk(text)) => {
-                tracing::trace!(text = %text, "Processing TextChunk");
-                handle.update(move |state| {
-                    state.append_streaming_text(&text);
-                });
+            Ok(StreamFrame::Content(content)) => {
+                apply_content_frame(&handle, &tx, content);
             }
-            Ok(ChatStreamEvent::ToolCall { id, name, input }) => {
-                tracing::trace!(id = %id, name = %name, "Processing ToolCall");
-
-                if let Ok(tool) = ClientToolCall::try_from((name.as_str(), &input)) {
-                    // Recognized as a client-side tool call.
-                    let id_for_update = id.clone();
-                    handle.update(move |state| {
-                        state.handle_client_tool_call(id_for_update, tool);
-                    });
-                    let _ = tx.send(AiTuiEvent::CheckToolCallPermission(id));
-                    continue;
+            Ok(StreamFrame::Control(control)) => {
+                let terminal = apply_control_frame(&handle, control);
+                if terminal {
+                    break;
                 }
-
-                handle.update(move |state| {
-                    state.add_tool_call(id, name, input);
-                });
-            }
-            Ok(ChatStreamEvent::ToolResult {
-                tool_use_id,
-                content,
-                is_error,
-            }) => {
-                tracing::trace!(tool_use_id = %tool_use_id, "Processing ToolResult");
-                handle.update(move |state| {
-                    state.add_tool_result(tool_use_id, content, is_error);
-                });
-            }
-            Ok(ChatStreamEvent::Status(status)) => {
-                tracing::trace!(status = %status, "Processing Status");
-                handle.update(move |state| {
-                    state.update_streaming_status(&status);
-                });
-            }
-            Ok(ChatStreamEvent::Done { session_id }) => {
-                tracing::trace!(session_id = %session_id, "Processing Done");
-                handle.update(move |state| {
-                    if !session_id.is_empty() {
-                        state.store_session_id(session_id);
-                    }
-                    state.finalize_streaming();
-                });
-                break;
-            }
-            Ok(ChatStreamEvent::Error(msg)) => {
-                tracing::trace!(error = %msg, "Processing Error");
-                handle.update(move |state| {
-                    state.streaming_error(msg);
-                });
-                break;
             }
             Err(e) => {
                 let msg = e.to_string();
@@ -280,6 +244,76 @@ pub(crate) async fn run_chat_stream(
                 });
                 break;
             }
+        }
+    }
+}
+
+/// Apply a content frame to session state.
+/// Control flow: always continues the stream.
+fn apply_content_frame(
+    handle: &Handle<Session>,
+    tx: &mpsc::Sender<AiTuiEvent>,
+    content: StreamContent,
+) {
+    match content {
+        StreamContent::TextChunk(text) => {
+            handle.update(move |state| {
+                state.conversation.append_streaming_text(&text);
+            });
+        }
+        StreamContent::ToolCall { id, name, input } => {
+            if let Ok(tool) = ClientToolCall::try_from((name.as_str(), &input)) {
+                // Client-side tool — queue for permission check
+                let id_for_update = id.clone();
+                handle.update(move |state| {
+                    state.handle_client_tool_call(id_for_update, tool);
+                });
+                let _ = tx.send(AiTuiEvent::CheckToolCallPermission(id));
+            } else {
+                // Server-side tool
+                handle.update(move |state| {
+                    state.add_tool_call(id, name, input);
+                });
+            }
+        }
+        StreamContent::ToolResult {
+            tool_use_id,
+            content,
+            is_error,
+        } => {
+            handle.update(move |state| {
+                state
+                    .conversation
+                    .add_tool_result(tool_use_id, content, is_error);
+            });
+        }
+    }
+}
+
+/// Apply a control frame to session state.
+/// Returns true if the stream should terminate.
+fn apply_control_frame(handle: &Handle<Session>, control: StreamControl) -> bool {
+    match control {
+        StreamControl::StatusChanged(status) => {
+            handle.update(move |state| {
+                state.update_streaming_status(&status);
+            });
+            false
+        }
+        StreamControl::Done { session_id } => {
+            handle.update(move |state| {
+                if !session_id.is_empty() {
+                    state.conversation.store_session_id(session_id);
+                }
+                state.finalize_streaming();
+            });
+            true
+        }
+        StreamControl::Error(msg) => {
+            handle.update(move |state| {
+                state.streaming_error(msg);
+            });
+            true
         }
     }
 }
