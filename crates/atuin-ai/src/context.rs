@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use atuin_client::distro::detect_linux_distribution;
 
 /// Session-scoped context for the AI chat session.
@@ -7,6 +9,7 @@ pub(crate) struct AppContext {
     pub endpoint: String,
     pub token: String,
     pub send_cwd: bool,
+    pub history_db: Arc<atuin_client::database::Sqlite>,
 }
 
 /// Machine identity — computed once per session.

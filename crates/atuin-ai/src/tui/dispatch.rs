@@ -33,10 +33,10 @@ pub(crate) fn dispatch(
             on_slash_command(handle, cmd);
         }
         AiTuiEvent::CheckToolCallPermission(id) => {
-            on_check_tool_permission(handle, tx, id);
+            on_check_tool_permission(handle, tx, app_ctx, id);
         }
         AiTuiEvent::SelectPermission(result) => {
-            on_select_permission(handle, tx, result);
+            on_select_permission(handle, tx, app_ctx, result);
         }
         AiTuiEvent::CancelGeneration => {
             on_cancel_generation(handle);
@@ -144,10 +144,16 @@ fn on_slash_command(handle: &Handle<Session>, command: String) {
     });
 }
 
-fn on_check_tool_permission(handle: &Handle<Session>, tx: &mpsc::Sender<AiTuiEvent>, id: String) {
+fn on_check_tool_permission(
+    handle: &Handle<Session>,
+    tx: &mpsc::Sender<AiTuiEvent>,
+    app_ctx: &AppContext,
+    id: String,
+) {
     let h2 = handle.clone();
     let tx_for_task = tx.clone();
     let id_clone = id.clone();
+    let db = app_ctx.history_db.clone();
 
     tokio::spawn(async move {
         // 1. Fetch the pending tool call
@@ -155,7 +161,6 @@ fn on_check_tool_permission(handle: &Handle<Session>, tx: &mpsc::Sender<AiTuiEve
             .fetch(move |state| state.pending_tool_call(&id).cloned())
             .await
         else {
-            // eprintln!("Pending tool call not found: {:?}", &id_clone);
             return;
         };
 
@@ -165,28 +170,22 @@ fn on_check_tool_permission(handle: &Handle<Session>, tx: &mpsc::Sender<AiTuiEve
             .map(PathBuf::from)
             .or_else(|| std::env::current_dir().ok())
         else {
-            // eprintln!(
-            //     "Cannot resolve working directory for tool call: {:?}",
-            //     &id_clone
-            // );
             return;
         };
 
         // 3. Create permission resolver and check
         let Ok(resolver) = PermissionResolver::new(working_dir, None).await else {
-            // eprintln!("Failed to create permission resolver");
             return;
         };
 
         let Ok(response) = resolver.check(&tool_call.tool).await else {
-            // eprintln!("Permission check failed for tool call: {:?}", &id_clone);
             return;
         };
 
         // 4. Handle response
         match response {
             PermissionResponse::Allowed => {
-                let outcome = tool_call.tool.execute();
+                let outcome = tool_call.tool.execute(&db).await;
                 h2.update(move |state| {
                     state.complete_tool_call(&tool_call, outcome);
                     if !state.has_unresolved_tool_calls() {
@@ -225,35 +224,59 @@ fn on_check_tool_permission(handle: &Handle<Session>, tx: &mpsc::Sender<AiTuiEve
 fn on_select_permission(
     handle: &Handle<Session>,
     tx: &mpsc::Sender<AiTuiEvent>,
+    app_ctx: &AppContext,
     permission: PermissionResult,
 ) {
     let tx = tx.clone();
-    handle.update(move |state| {
-        let tool_call = state
-            .pending_tool_calls
-            .iter()
-            .enumerate()
-            .find(|(_, call)| call.state == ToolCallState::AskingForPermission);
+    let h2 = handle.clone();
+    let db = app_ctx.history_db.clone();
 
-        let Some((index, _)) = tool_call else {
-            return;
-        };
+    match permission {
+        PermissionResult::Allow => {
+            // Fetch the tool call that's asking for permission, then execute it async
+            let h3 = h2.clone();
+            let tx2 = tx.clone();
+            tokio::spawn(async move {
+                let Ok(Some(tool_call)) = h3
+                    .fetch(move |state| {
+                        state
+                            .pending_tool_calls
+                            .iter()
+                            .find(|tc| tc.state == ToolCallState::AskingForPermission)
+                            .cloned()
+                    })
+                    .await
+                else {
+                    return;
+                };
 
-        match permission {
-            PermissionResult::Allow => {
-                if let Some(call) = state.pending_tool_calls.remove(index) {
+                let outcome = tool_call.tool.execute(&db).await;
+                h3.update(move |state| {
+                    state.complete_tool_call(&tool_call, outcome);
                     if !state.has_unresolved_tool_calls() {
-                        let _ = tx.send(AiTuiEvent::ContinueAfterTools);
+                        let _ = tx2.send(AiTuiEvent::ContinueAfterTools);
                     }
-                }
-            }
-            PermissionResult::AlwaysAllowInDir => {
-                //
-            }
-            PermissionResult::AlwaysAllow => {
-                //
-            }
-            PermissionResult::Deny => {
+                });
+            });
+        }
+        PermissionResult::AlwaysAllowInDir => {
+            //
+        }
+        PermissionResult::AlwaysAllow => {
+            //
+        }
+        PermissionResult::Deny => {
+            h2.update(move |state| {
+                let tool_call = state
+                    .pending_tool_calls
+                    .iter()
+                    .enumerate()
+                    .find(|(_, call)| call.state == ToolCallState::AskingForPermission);
+
+                let Some((index, _)) = tool_call else {
+                    return;
+                };
+
                 let Some(call) = state.pending_tool_calls.remove(index) else {
                     return;
                 };
@@ -266,9 +289,9 @@ fn on_select_permission(
                 if !state.has_unresolved_tool_calls() {
                     let _ = tx.send(AiTuiEvent::ContinueAfterTools);
                 }
-            }
+            });
         }
-    });
+    }
 }
 
 fn on_cancel_generation(handle: &Handle<Session>) {

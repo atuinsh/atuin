@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::mpsc;
 
 use crate::context::{AppContext, ClientContext};
@@ -42,10 +43,16 @@ pub(crate) async fn run(
         ensure_hub_session(settings).await?
     };
 
+    let history_db_path = PathBuf::from(settings.db_path.as_str());
+    let history_db = atuin_client::database::Sqlite::new(history_db_path, settings.local_timeout)
+        .await
+        .context("failed to open history database for AI")?;
+
     let ctx = AppContext {
         endpoint: endpoint.to_string(),
         token,
         send_cwd: settings.ai.send_cwd,
+        history_db: std::sync::Arc::new(history_db),
     };
 
     let action = run_inline_tui(ctx, initial_command).await?;

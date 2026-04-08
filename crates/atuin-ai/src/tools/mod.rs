@@ -112,9 +112,10 @@ impl ClientToolCall {
     }
 
     /// Execute this client-side tool and return the result.
-    pub fn execute(&self) -> ToolOutcome {
+    pub async fn execute(&self, db: &atuin_client::database::Sqlite) -> ToolOutcome {
         match self {
             ClientToolCall::Read(tool) => tool.execute(),
+            ClientToolCall::AtuinHistory(tool) => tool.execute(db).await,
             _ => ToolOutcome::Error("Client-side tool execution not yet implemented".to_string()),
         }
     }
@@ -367,6 +368,7 @@ impl PermissableToolCall for ShellToolCall {
 pub(crate) struct AtuinHistoryToolCall {
     pub filter_modes: Vec<HistorySearchFilterMode>,
     pub query: String,
+    pub limit: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -376,6 +378,18 @@ pub(crate) enum HistorySearchFilterMode {
     Session,
     Directory,
     Workspace,
+}
+
+impl From<&HistorySearchFilterMode> for atuin_client::settings::FilterMode {
+    fn from(mode: &HistorySearchFilterMode) -> Self {
+        match mode {
+            HistorySearchFilterMode::Global => Self::Global,
+            HistorySearchFilterMode::Host => Self::Host,
+            HistorySearchFilterMode::Session => Self::Session,
+            HistorySearchFilterMode::Directory => Self::Directory,
+            HistorySearchFilterMode::Workspace => Self::Workspace,
+        }
+    }
 }
 
 impl TryFrom<&serde_json::Value> for AtuinHistoryToolCall {
@@ -407,9 +421,16 @@ impl TryFrom<&serde_json::Value> for AtuinHistoryToolCall {
             .and_then(|v| v.as_str())
             .ok_or(eyre::eyre!("Missing query"))?;
 
+        let limit = value
+            .get("limit")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(10)
+            .clamp(1, 50);
+
         Ok(AtuinHistoryToolCall {
             filter_modes,
             query: query.to_string(),
+            limit,
         })
     }
 }
@@ -420,10 +441,63 @@ impl PermissableToolCall for AtuinHistoryToolCall {
     }
 
     fn matches_rule(&self, rule: &Rule) -> bool {
-        if rule.tool != "AtuinHistory" {
-            return false;
+        rule.tool == "AtuinHistory"
+    }
+}
+
+impl AtuinHistoryToolCall {
+    pub(crate) async fn execute(&self, db: &atuin_client::database::Sqlite) -> ToolOutcome {
+        use atuin_client::database::{self, Database as _, OptFilters};
+        use atuin_client::settings::SearchMode;
+
+        let context = match database::current_context().await {
+            Ok(ctx) => ctx,
+            Err(e) => return ToolOutcome::Error(format!("Failed to get history context: {e}")),
+        };
+
+        let filter_mode = self
+            .filter_modes
+            .first()
+            .map(atuin_client::settings::FilterMode::from)
+            .unwrap_or(atuin_client::settings::FilterMode::Global);
+
+        let filter_options = OptFilters {
+            limit: Some(self.limit),
+            ..Default::default()
+        };
+
+        let results = match db
+            .search(
+                SearchMode::Fuzzy,
+                filter_mode,
+                &context,
+                &self.query,
+                filter_options,
+            )
+            .await
+        {
+            Ok(results) => results,
+            Err(e) => return ToolOutcome::Error(format!("History search failed: {e}")),
+        };
+
+        if results.is_empty() {
+            return ToolOutcome::Success("No matching history entries found.".to_string());
         }
 
-        todo!()
+        let formatted: Vec<String> = results
+            .iter()
+            .enumerate()
+            .map(|(i, h)| {
+                format!(
+                    "{}. `{}` (cwd: {}, exit: {})",
+                    i + 1,
+                    h.command,
+                    h.cwd,
+                    h.exit
+                )
+            })
+            .collect();
+
+        ToolOutcome::Success(formatted.join("\n"))
     }
 }
