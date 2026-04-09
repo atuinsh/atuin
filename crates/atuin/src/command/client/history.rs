@@ -104,7 +104,7 @@ pub enum Cmd {
         format: Option<String>,
     },
 
-    /// Get the last command ran
+    /// Get the last command you ran
     Last {
         #[arg(long)]
         human: bool,
