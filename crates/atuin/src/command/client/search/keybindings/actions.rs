@@ -46,6 +46,7 @@ pub enum Action {
     // Commands — other
     Copy,
     Delete,
+    DeleteAll,
     ReturnOriginal,
     ReturnQuery,
     Exit,
@@ -125,6 +126,7 @@ impl Action {
             "return-selection" => Ok(Action::ReturnSelection),
             "copy" => Ok(Action::Copy),
             "delete" => Ok(Action::Delete),
+            "delete-all" => Ok(Action::DeleteAll),
             "return-original" => Ok(Action::ReturnOriginal),
             "return-query" => Ok(Action::ReturnQuery),
             "exit" => Ok(Action::Exit),
@@ -191,6 +193,7 @@ impl Action {
             Action::ReturnSelectionNth(n) => format!("return-selection-{n}"),
             Action::Copy => "copy".to_string(),
             Action::Delete => "delete".to_string(),
+            Action::DeleteAll => "delete-all".to_string(),
             Action::ReturnOriginal => "return-original".to_string(),
             Action::ReturnQuery => "return-query".to_string(),
             Action::Exit => "exit".to_string(),

@@ -664,8 +664,22 @@ pub struct Ai {
     /// Only necessary for custom AI endpoints.
     pub api_token: Option<String>,
 
+    /// Deprecated: use opening.send_cwd instead. Kept for backwards compatibility.
+    #[serde(default)]
+    pub send_cwd: Option<bool>,
+
+    /// Configuration for what context is sent in the opening AI request.
+    #[serde(default)]
+    pub opening: AiOpening,
+}
+
+#[derive(Default, Clone, Debug, Deserialize, Serialize)]
+pub struct AiOpening {
     /// Whether or not to send the current working directory to the AI endpoint.
-    pub send_cwd: bool,
+    pub send_cwd: Option<bool>,
+
+    /// Whether or not to send the last command as context in the opening AI request.
+    pub send_last_command: Option<bool>,
 }
 
 impl Default for Preview {
@@ -1080,6 +1094,7 @@ pub struct Settings {
     pub history_format: String,
     pub prefers_reduced_motion: bool,
     pub store_failed: bool,
+    pub no_mouse: bool,
 
     #[serde(with = "serde_regex", default = "RegexSet::empty", skip_serializing)]
     pub history_filter: RegexSet,
@@ -1524,6 +1539,8 @@ impl Settings {
             .set_default("search.frecency_score_multiplier", 1.0)?
             .set_default("meta.db_path", meta_path.to_str())?
             .set_default("ai.send_cwd", false)?
+            .set_default("ai.opening.send_cwd", false)?
+            .set_default("ai.opening.send_last_command", false)?
             .set_default(
                 "search.filters",
                 vec![
@@ -1547,6 +1564,7 @@ impl Settings {
                     .map(|_| config::Value::new(None, config::ValueKind::Boolean(true)))
                     .unwrap_or_else(|| config::Value::new(None, config::ValueKind::Boolean(false))),
             )?
+            .set_default("no_mouse", false)?
             .add_source(
                 Environment::with_prefix("atuin")
                     .prefix_separator("_")
@@ -1573,7 +1591,12 @@ impl Settings {
         Ok(config_file)
     }
 
-    pub fn new() -> Result<Self> {
+    /// Build a merged `Config` from defaults, config file, and environment.
+    ///
+    /// This resolves `data_dir`, initializes the data directory on disk,
+    /// and layers defaults → config file → env overrides. Both `new()` and
+    /// `get_config_value()` use this so the resolution logic lives in one place.
+    fn build_config() -> Result<Config> {
         let config_file = Self::get_config_path()?;
 
         // extract data_dir first so we can use it as the base for other path defaults
@@ -1633,20 +1656,105 @@ impl Settings {
             config_builder
         };
 
-        let config = config_builder.build()?;
-        let mut settings: Settings = config
+        // all paths should be expanded
+        let built = config_builder.build_cloned()?;
+        config_builder = [
+            "db_path",
+            "record_store_path",
+            "key_path",
+            "daemon.socket_path",
+            "daemon.pidfile_path",
+            "logs.dir",
+            "logs.search.file",
+            "logs.daemon.file",
+        ]
+        .iter()
+        .map(|key| (key, built.get_string(key).unwrap_or_default()))
+        .filter_map(|(key, value)| match Self::expand_path(value) {
+            Ok(expanded) => Some((key, expanded)),
+            Err(e) => {
+                log::warn!("failed to expand path for {key}: {e}");
+                None
+            }
+        })
+        .fold(config_builder, |builder, (key, value)| {
+            builder
+                .set_override(key, value)
+                .unwrap_or_else(|_| panic!("failed to set absolute path override for {key}"))
+        });
+
+        config_builder.build().map_err(Into::into)
+    }
+
+    /// Look up a single config value by dotted key (e.g. `"daemon.sync_frequency"`).
+    ///
+    /// Returns the effective value after merging defaults, config file, and
+    /// environment — without the side-effects of full `Settings` construction
+    /// (meta store init, path expansion, etc.).
+    pub fn get_config_value(key: &str) -> Result<String> {
+        let config = Self::build_config()?;
+        let value: config::Value = config
+            .get(key)
+            .map_err(|e| eyre!("failed to get config value '{}': {}", key, e))?;
+        Ok(Self::format_resolved_value(&value, key))
+    }
+
+    fn format_resolved_value(value: &config::Value, prefix: &str) -> String {
+        use config::ValueKind;
+
+        match &value.kind {
+            ValueKind::Nil => String::new(),
+            ValueKind::Boolean(b) => b.to_string(),
+            ValueKind::I64(i) => i.to_string(),
+            ValueKind::I128(i) => i.to_string(),
+            ValueKind::U64(u) => u.to_string(),
+            ValueKind::U128(u) => u.to_string(),
+            ValueKind::Float(f) => f.to_string(),
+            ValueKind::String(s) => s.clone(),
+            ValueKind::Array(arr) => {
+                let items: Vec<String> = arr
+                    .iter()
+                    .map(|v| Self::format_resolved_value(v, ""))
+                    .collect();
+                format!("[{}]", items.join(", "))
+            }
+            ValueKind::Table(map) => {
+                let mut lines = Vec::new();
+                let mut keys: Vec<_> = map.keys().collect();
+                keys.sort();
+
+                for k in keys {
+                    let v = &map[k];
+                    let full_key = if prefix.is_empty() {
+                        k.clone()
+                    } else {
+                        format!("{}.{}", prefix, k)
+                    };
+
+                    match &v.kind {
+                        ValueKind::Table(_) => {
+                            lines.push(Self::format_resolved_value(v, &full_key));
+                        }
+                        _ => {
+                            lines.push(format!(
+                                "{} = {}",
+                                full_key,
+                                Self::format_resolved_value(v, "")
+                            ));
+                        }
+                    }
+                }
+
+                lines.join("\n")
+            }
+        }
+    }
+
+    pub fn new() -> Result<Self> {
+        let config = Self::build_config()?;
+        let settings: Settings = config
             .try_deserialize()
             .map_err(|e| eyre!("failed to deserialize: {}", e))?;
-
-        // all paths should be expanded
-        settings.db_path = Self::expand_path(settings.db_path)?;
-        settings.record_store_path = Self::expand_path(settings.record_store_path)?;
-        settings.key_path = Self::expand_path(settings.key_path)?;
-        settings.daemon.socket_path = Self::expand_path(settings.daemon.socket_path)?;
-        settings.daemon.pidfile_path = Self::expand_path(settings.daemon.pidfile_path)?;
-        settings.logs.dir = Self::expand_path(settings.logs.dir)?;
-        settings.logs.search.file = Self::expand_path(settings.logs.search.file)?;
-        settings.logs.daemon.file = Self::expand_path(settings.logs.daemon.file)?;
 
         // Validate UI settings
         settings.ui.validate()?;

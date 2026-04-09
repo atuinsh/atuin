@@ -201,6 +201,7 @@ Note: `select-next` and `select-previous` respect the `invert` setting. When `in
 | `return-query` | Close the TUI and return the current search query |
 | `copy` | Copy the selected entry to the clipboard |
 | `delete` | Delete the selected entry from history |
+| `delete-all` | Delete **all** history entries matching the selected command text |
 | `exit` | Exit the TUI (behavior depends on the `exit_mode` setting) |
 | `redraw` | Redraw the screen |
 | `cycle-filter-mode` | Cycle through filter modes (global, host, session, directory) |
@@ -386,6 +387,43 @@ This is equivalent to setting `enter_accept = false`, but expressed directly as 
 [keymap.inspector]
 # Use 'delete' key in inspector to remove entries
 "delete" = "delete"
+```
+
+### Custom prefix bindings
+
+Prefix mode is a two-step shortcut: press the prefix key (++ctrl+a++ by default), then a second key. This is useful for actions you don't need on a single key. The default prefix bindings are:
+
+| Key | Action |
+|-----|--------|
+| `d` | Delete the selected entry |
+| `D` | Delete all entries matching the selected command |
+| `a` | Move cursor to start of line |
+| `c` | Clear context (if in a switched context), otherwise switch context |
+
+You can customize these with `[keymap.prefix]`:
+
+```toml
+[keymap.prefix]
+# Add a binding to copy the selected entry
+"y" = "copy"
+
+# Make 'x' delete instead of 'd'
+"x" = "delete"
+"d" = "noop"
+```
+
+To change which key enters prefix mode, set `prefix` under `[keys]`:
+
+```toml
+[keys]
+prefix = "x"  # ctrl-x instead of ctrl-a
+```
+
+Or bind `enter-prefix-mode` directly in your keymap:
+
+```toml
+[keymap.emacs]
+"ctrl-x" = "enter-prefix-mode"
 ```
 
 ## Relationship with `[keys]`

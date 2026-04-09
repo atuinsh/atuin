@@ -265,14 +265,10 @@ impl Cmd {
                 while !entries.is_empty() {
                     for entry in &entries {
                         eprintln!("deleting {}", entry.id);
-
-                        if settings.sync.records {
-                            let (id, _) = history_store.delete(entry.id.clone()).await?;
-                            history_store.incremental_build(&db, &[id]).await?;
-                        } else {
-                            db.delete(entry.clone()).await?;
-                        }
                     }
+
+                    let ids = history_store.delete_entries(entries).await?;
+                    history_store.incremental_build(&db, &ids).await?;
 
                     entries =
                         run_non_interactive(settings, opt_filter.clone(), &query, &db).await?;

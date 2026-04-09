@@ -700,7 +700,9 @@ Atuin version: > 18.3
 
 Default: `a`
 
-Which key to use as the prefix
+Which key to use as the prefix. Prefix mode is a two-step shortcut system: you press ++ctrl++ and the prefix key to enter prefix mode, then press a second key to trigger an action. For example, with the default prefix `a`, pressing ++ctrl+a++ then ++d++ deletes the selected entry.
+
+See the [key binding page](key-binding.md#prefix-mode) for the full list of default prefix shortcuts, or the [advanced key binding page](advanced-key-binding.md#custom-prefix-bindings) to customize them.
 
 ### `exit_past_line_start`
 

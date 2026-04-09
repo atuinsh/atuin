@@ -83,6 +83,7 @@ fn create_chat_stream(
     request: ChatRequest,
     client_ctx: ClientContext,
     send_cwd: bool,
+    last_command: Option<String>,
 ) -> std::pin::Pin<Box<dyn futures::Stream<Item = Result<StreamFrame>> + Send>> {
     Box::pin(async_stream::stream! {
         ensure_crypto_provider();
@@ -96,7 +97,7 @@ fn create_chat_stream(
 
         tracing::debug!("Sending SSE request to {endpoint}");
 
-        let context = client_ctx.to_json(send_cwd);
+        let context = client_ctx.to_json(send_cwd, last_command.as_deref());
 
         let mut request_body = serde_json::json!({
             "messages": request.messages,
@@ -233,6 +234,7 @@ pub(crate) async fn run_chat_stream(
         request,
         client_ctx,
         app_ctx.send_cwd,
+        app_ctx.last_command.clone(),
     );
     futures::pin_mut!(stream);
 

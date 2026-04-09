@@ -49,6 +49,7 @@ mod account;
 #[cfg(feature = "daemon")]
 mod daemon;
 
+mod config;
 mod default_config;
 mod doctor;
 mod dotfiles;
@@ -132,6 +133,9 @@ pub enum Cmd {
     /// Print the default atuin configuration (config.toml)
     #[command()]
     DefaultConfig,
+
+    #[command(subcommand)]
+    Config(config::Cmd),
 
     /// Run the AI assistant
     #[cfg(feature = "ai")]
@@ -331,6 +335,7 @@ impl Cmd {
             Self::History(history) => return history.run(&settings).await,
             Self::Init(init) => return init.run(&settings).await,
             Self::Doctor => return doctor::run(&settings).await,
+            Self::Config(config) => return config.run(&settings).await,
             _ => {}
         }
 
@@ -378,7 +383,7 @@ impl Cmd {
             #[cfg(feature = "daemon")]
             Self::Daemon(cmd) => cmd.run(settings, sqlite_store, db).await,
 
-            Self::History(_) | Self::Init(_) | Self::Doctor => unreachable!(),
+            Self::History(_) | Self::Init(_) | Self::Doctor | Self::Config(_) => unreachable!(),
 
             #[cfg(feature = "ai")]
             Self::Ai(cli) => atuin_ai::commands::run(cli, &settings).await,

@@ -6,6 +6,7 @@ use crate::tui::dispatch;
 use crate::tui::events::AiTuiEvent;
 use crate::tui::state::{ExitAction, Session};
 use crate::tui::view::ai_view;
+use atuin_client::database::{Database, Sqlite};
 use eye_declare::{Application, CtrlCBehavior};
 use eyre::{Context as _, Result, bail};
 use tracing::{debug, info};
@@ -44,14 +45,25 @@ pub(crate) async fn run(
     };
 
     let history_db_path = PathBuf::from(settings.db_path.as_str());
-    let history_db = atuin_client::database::Sqlite::new(history_db_path, settings.local_timeout)
+    let history_db = Sqlite::new(history_db_path, settings.local_timeout)
         .await
         .context("failed to open history database for AI")?;
+
+    // Support both legacy [ai] send_cwd and new [ai.opening] send_cwd
+    let send_cwd =
+        settings.ai.opening.send_cwd.unwrap_or(false) || settings.ai.send_cwd.unwrap_or(false);
+
+    let last_command = if settings.ai.opening.send_last_command.unwrap_or(false) {
+        history_db.last().await.ok().flatten().map(|h| h.command)
+    } else {
+        None
+    };
 
     let ctx = AppContext {
         endpoint: endpoint.to_string(),
         token,
-        send_cwd: settings.ai.send_cwd,
+        send_cwd,
+        last_command,
         history_db: std::sync::Arc::new(history_db),
     };
 
@@ -72,26 +84,26 @@ async fn ensure_hub_session(settings: &atuin_client::settings::Settings) -> Resu
 
     info!("No Hub session found, prompting for authentication");
 
-    println!("Atuin AI requires authenticating with Atuin Hub.");
+    eprintln!("Atuin AI requires authenticating with Atuin Hub.");
     if will_sync {
-        println!(
+        eprintln!(
             "Once logged in, your shell history will be synchronized via Atuin Hub if auto_sync is enabled or when manually syncing."
-        )
+        );
     }
-    println!(
+    eprintln!(
         "If you have an existing Atuin sync account, you can log in with your existing credentials."
     );
-    println!("Press enter to begin (or esc to cancel).");
+    eprintln!("Press enter to begin (or esc to cancel).");
     if !wait_for_login_confirmation()? {
         bail!("authentication canceled");
     }
 
     debug!("Starting Atuin Hub authentication...");
-    println!("Authenticating with Atuin Hub...");
+    eprintln!("Authenticating with Atuin Hub...");
 
     let session = atuin_client::hub::HubAuthSession::start(hub_address.as_ref()).await?;
-    println!("Open this URL to continue:");
-    println!("{}", session.auth_url);
+    eprintln!("Open this URL to continue:");
+    eprintln!("{}", session.auth_url);
 
     let token = session
         .wait_for_completion(
@@ -118,14 +130,13 @@ async fn ensure_hub_session(settings: &atuin_client::settings::Settings) -> Resu
 }
 
 // ───────────────────────────────────────────────────────────────────
-// Main TUI entry point
-// ───────────────────────────────────────────────────────────────────
 
 async fn run_inline_tui(ctx: AppContext, initial_prompt: Option<String>) -> Result<Action> {
+    let client_ctx = ClientContext::detect();
+
     let (tx, rx) = mpsc::channel::<AiTuiEvent>();
 
     let initial_state = Session::new();
-    let client_ctx = ClientContext::detect();
 
     println!();
 
@@ -171,32 +182,6 @@ async fn run_inline_tui(ctx: AppContext, initial_prompt: Option<String>) -> Resu
 // Helpers
 // ───────────────────────────────────────────────────────────────────
 
-#[derive(Clone)]
-enum Action {
-    Execute(String),
-    Insert(String),
-    Print(String),
-    Cancel,
-}
-
-fn emit_shell_result(action: Action, output_for_hook: bool) {
-    if output_for_hook {
-        match action {
-            Action::Execute(output) => eprintln!("__atuin_ai_execute__:{output}"),
-            Action::Insert(output) => eprintln!("__atuin_ai_insert__:{output}"),
-            Action::Print(output) => eprintln!("__atuin_ai_print__:{output}"),
-            Action::Cancel => eprintln!("__atuin_ai_cancel__"),
-        }
-    } else {
-        match action {
-            Action::Execute(output) => eprintln!("{output}"),
-            Action::Insert(output) => eprintln!("{output}"),
-            Action::Print(output) => eprintln!("{output}"),
-            Action::Cancel => eprintln!(),
-        }
-    }
-}
-
 fn wait_for_login_confirmation() -> Result<bool> {
     use crossterm::{
         event::{self, Event, KeyCode},
@@ -220,6 +205,32 @@ fn wait_for_login_confirmation() -> Result<bool> {
                 KeyCode::Esc => return Ok(false),
                 _ => {}
             }
+        }
+    }
+}
+
+#[derive(Clone)]
+enum Action {
+    Execute(String),
+    Insert(String),
+    Print(String),
+    Cancel,
+}
+
+fn emit_shell_result(action: Action, output_for_hook: bool) {
+    if output_for_hook {
+        match action {
+            Action::Execute(output) => eprintln!("__atuin_ai_execute__:{output}"),
+            Action::Insert(output) => eprintln!("__atuin_ai_insert__:{output}"),
+            Action::Print(output) => eprintln!("__atuin_ai_print__:{output}"),
+            Action::Cancel => eprintln!("__atuin_ai_cancel__"),
+        }
+    } else {
+        match action {
+            Action::Execute(output) | Action::Insert(output) | Action::Print(output) => {
+                println!("{output}");
+            }
+            Action::Cancel => {}
         }
     }
 }
