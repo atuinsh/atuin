@@ -1,20 +1,14 @@
-use std::path::PathBuf;
-
 use eyre::Result;
 
 use crate::{permissions::file::RuleFile, tools::PermissableToolCall};
 
 pub(crate) struct PermissionRequest<'t> {
-    working_dir: PathBuf,
-    call: Box<&'t (dyn PermissableToolCall + Send + Sync)>,
+    call: &'t (dyn PermissableToolCall + Send + Sync),
 }
 
 impl<'t> PermissionRequest<'t> {
-    pub fn new(
-        working_dir: PathBuf,
-        call: Box<&'t (dyn PermissableToolCall + Send + Sync)>,
-    ) -> Self {
-        Self { working_dir, call }
+    pub fn new(call: &'t (dyn PermissableToolCall + Send + Sync)) -> Self {
+        Self { call }
     }
 }
 

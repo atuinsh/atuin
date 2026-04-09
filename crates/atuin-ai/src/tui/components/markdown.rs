@@ -20,14 +20,6 @@ pub(crate) struct Markdown {
     pub source: String,
 }
 
-impl Markdown {
-    pub fn new(source: impl Into<String>) -> Self {
-        Self {
-            source: source.into(),
-        }
-    }
-}
-
 /// Style configuration for markdown rendering.
 pub(crate) struct MarkdownStyles {
     pub base: Style,
@@ -106,22 +98,14 @@ fn parse_markdown<'a>(source: &'a str, styles: &'a MarkdownStyles) -> Text<'stat
     for event in parser {
         match event {
             Event::Start(Tag::Strong) => {
-                let bold = style_stack
-                    .last()
-                    .copied()
-                    .unwrap_or(styles.base)
-                    .add_modifier(Modifier::BOLD);
+                let bold = style_stack.last().copied().unwrap_or(styles.bold);
                 style_stack.push(bold);
             }
             Event::End(TagEnd::Strong) => {
                 style_stack.pop();
             }
             Event::Start(Tag::Emphasis) => {
-                let italic = style_stack
-                    .last()
-                    .copied()
-                    .unwrap_or(styles.base)
-                    .add_modifier(Modifier::ITALIC);
+                let italic = style_stack.last().copied().unwrap_or(styles.italic);
                 style_stack.push(italic);
             }
             Event::End(TagEnd::Emphasis) => {

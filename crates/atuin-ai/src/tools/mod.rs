@@ -94,7 +94,9 @@ pub(crate) struct ToolPreview {
 pub(crate) enum ToolPhase {
     CheckingPermissions,
     AskingForPermission,
+    #[expect(dead_code)]
     Denied(String),
+    #[expect(dead_code)]
     Executing,
     /// Shell command is executing with live preview output.
     ExecutingWithPreview {
@@ -197,6 +199,7 @@ impl ToolTracker {
     }
 
     /// Remove a tool by ID and return it.
+    #[expect(dead_code)]
     pub fn remove(&mut self, id: &str) -> Option<TrackedTool> {
         let pos = self.tools.iter().position(|t| t.id == id)?;
         Some(self.tools.remove(pos))
@@ -227,6 +230,7 @@ impl ToolTracker {
     }
 
     /// Find the first tool that is asking for permission (mutable).
+    #[expect(dead_code)]
     pub fn asking_for_permission_mut(&mut self) -> Option<&mut TrackedTool> {
         self.tools
             .iter_mut()
@@ -459,6 +463,7 @@ impl PermissableToolCall for ReadToolCall {
 }
 
 #[derive(Debug, Clone)]
+#[expect(dead_code)]
 pub(crate) struct WriteToolCall {
     pub path: PathBuf,
     pub content: String,

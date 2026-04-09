@@ -25,15 +25,6 @@ impl StreamingStatus {
             _ => Self::Thinking,
         }
     }
-
-    pub(crate) fn display_text(&self) -> &'static str {
-        match self {
-            Self::Processing => "Processing...",
-            Self::Searching => "Searching...",
-            Self::Thinking => "Thinking...",
-            Self::WaitingForTools => "Waiting for tools...",
-        }
-    }
 }
 
 /// Conversation event types matching the API protocol
@@ -64,46 +55,6 @@ pub(crate) enum ConversationEvent {
 }
 
 impl ConversationEvent {
-    /// Convert to JSON for API calls
-    pub(crate) fn to_json(&self) -> serde_json::Value {
-        match self {
-            ConversationEvent::UserMessage { content } => serde_json::json!({
-                "type": "user_message",
-                "content": content
-            }),
-            ConversationEvent::Text { content } => serde_json::json!({
-                "type": "text",
-                "content": content
-            }),
-            ConversationEvent::ToolCall { id, name, input } => serde_json::json!({
-                "type": "tool_call",
-                "id": id,
-                "name": name,
-                "input": input
-            }),
-            ConversationEvent::ToolResult {
-                tool_use_id,
-                content,
-                is_error,
-            } => serde_json::json!({
-                "type": "tool_result",
-                "tool_use_id": tool_use_id,
-                "content": content,
-                "is_error": is_error
-            }),
-            ConversationEvent::OutOfBandOutput {
-                name,
-                command,
-                content,
-            } => serde_json::json!({
-                "type": "out_of_band_output",
-                "name": name,
-                "command": command,
-                "content": content
-            }),
-        }
-    }
-
     /// Extract command from a suggest_command tool call
     pub(crate) fn as_command(&self) -> Option<&str> {
         if let ConversationEvent::ToolCall { name, input, .. } = self
@@ -302,38 +253,6 @@ impl Conversation {
             .unwrap_or(false)
     }
 
-    /// Count non-suggest_command tool calls since the last user message
-    pub fn tool_count_since_last_user(&self) -> usize {
-        let last_user_idx = self
-            .events
-            .iter()
-            .rposition(|e| matches!(e, ConversationEvent::UserMessage { .. }))
-            .unwrap_or(0);
-
-        let mut completed = 0;
-        let mut in_flight = false;
-
-        for event in &self.events[last_user_idx..] {
-            match event {
-                ConversationEvent::ToolCall { name, .. } if name != "suggest_command" => {
-                    if in_flight {
-                        completed += 1;
-                    }
-                    in_flight = true;
-                }
-                ConversationEvent::ToolResult { .. } => {
-                    if in_flight {
-                        completed += 1;
-                        in_flight = false;
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        completed
-    }
-
     /// Get a mutable reference to the last Text event's content (the streaming buffer).
     fn streaming_content_mut(&mut self) -> Option<&mut String> {
         self.events.iter_mut().rev().find_map(|e| {
@@ -483,6 +402,7 @@ impl Session {
     }
 
     /// Generation error occurred
+    #[expect(dead_code)]
     pub fn generation_error(&mut self, error: String) {
         self.interaction.error = Some(error);
         self.interaction.mode = AppMode::Error;
@@ -599,12 +519,6 @@ impl Session {
 
         // Client tool calls can only happen at the last part of a turn
         self.interaction.streaming_status = None;
-        self.interaction.mode = AppMode::Input;
-    }
-
-    /// Start edit mode for refinement
-    pub fn start_edit_mode(&mut self) {
-        self.interaction.confirmation_pending = false;
         self.interaction.mode = AppMode::Input;
     }
 

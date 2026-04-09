@@ -12,7 +12,7 @@ pub mod init;
 pub(crate) mod inline;
 
 #[derive(Args, Debug)]
-pub(crate) struct AiArgs {
+pub struct AiArgs {
     /// Enable verbose logging
     #[arg(short, long, global = true)]
     verbose: bool,

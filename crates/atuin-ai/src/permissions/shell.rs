@@ -296,13 +296,13 @@ fn parse_fallback(code: &str) -> ParsedShellCommand {
 
 fn push_segment(segment: &mut String, commands: &mut Vec<ShellCommand>) {
     let trimmed = segment.trim();
-    if !trimmed.is_empty() {
-        if let Some(name) = trimmed.split_whitespace().next() {
-            commands.push(ShellCommand {
-                name: name.to_string(),
-                full: trimmed.to_string(),
-            });
-        }
+    if !trimmed.is_empty()
+        && let Some(name) = trimmed.split_whitespace().next()
+    {
+        commands.push(ShellCommand {
+            name: name.to_string(),
+            full: trimmed.to_string(),
+        });
     }
     segment.clear();
 }
@@ -340,9 +340,8 @@ pub(crate) fn any_subcommand_matches(subcommands: &[ShellCommand], scope: &str) 
         });
     }
 
-    if scope.ends_with('*') {
+    if let Some(prefix) = scope.strip_suffix('*') {
         // Prefix/glob matching: `ls*` matches `lsof`, `ls`, etc.
-        let prefix = &scope[..scope.len() - 1];
         return subcommands.iter().any(|cmd| cmd.full.starts_with(prefix));
     }
 
@@ -688,30 +687,6 @@ mod tests {
 #[cfg(test)]
 mod adversarial {
     use super::*;
-
-    /// Helper: parse with POSIX and return sorted unique command names
-    fn posix(code: &str) -> Vec<String> {
-        let mut n: Vec<String> = parse_shell_command(code, ShellKind::Posix)
-            .subcommands
-            .iter()
-            .map(|c| c.name.clone())
-            .collect();
-        n.sort();
-        n.dedup();
-        n
-    }
-
-    /// Helper: parse with fish and return sorted unique command names
-    fn fish(code: &str) -> Vec<String> {
-        let mut n: Vec<String> = parse_shell_command(code, ShellKind::Fish)
-            .subcommands
-            .iter()
-            .map(|c| c.name.clone())
-            .collect();
-        n.sort();
-        n.dedup();
-        n
-    }
 
     fn cmd_names(cmds: &[ShellCommand]) -> Vec<&str> {
         cmds.iter().map(|c| c.name.as_str()).collect()

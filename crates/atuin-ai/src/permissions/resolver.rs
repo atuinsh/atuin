@@ -9,7 +9,6 @@ use crate::tools::ClientToolCall;
 /// Resolves permissions for client tool calls by walking the filesystem to find permission files,
 pub(crate) struct PermissionResolver {
     checker: PermissionChecker,
-    working_dir: PathBuf,
 }
 
 impl PermissionResolver {
@@ -17,15 +16,12 @@ impl PermissionResolver {
         let mut walker = PermissionWalker::new(working_dir.clone(), global_dir);
         walker.walk().await?;
         let checker = PermissionChecker::new(walker.rules().to_owned());
-        Ok(Self {
-            checker,
-            working_dir,
-        })
+        Ok(Self { checker })
     }
 
     /// Check whether `tool` is allowed, denied, or needs user confirmation.
     pub async fn check(&self, tool: &ClientToolCall) -> Result<PermissionResponse> {
-        let request = PermissionRequest::new(self.working_dir.clone(), Box::new(tool));
+        let request = PermissionRequest::new(tool);
         self.checker.check(&request).await
     }
 }

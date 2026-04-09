@@ -11,6 +11,7 @@ pub(crate) enum AiTuiEvent {
     /// User submitted text input (Enter in Input mode)
     SubmitInput(String),
     /// User entered a slash command (e.g. "/help")
+    #[allow(unused)]
     SlashCommand(String),
     /// Check the permission for a tool call
     CheckToolCallPermission(String),
