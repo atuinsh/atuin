@@ -300,25 +300,20 @@ fn tool_summary_view(summary: &turn::ToolSummary) -> Elements {
 fn tool_status_view(name: &str, status: &turn::ToolResultStatus) -> Elements {
     match status {
         turn::ToolResultStatus::Pending => {
-            let millis = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis();
-            let frame = (millis / 80) as usize % SPINNER_FRAMES.len();
-
             element! {
-                Text {
-                    Span(text: format!("{} ", SPINNER_FRAMES[frame]), style: Style::default().fg(Color::DarkGray))
-                    Span(text: format!("Running: {name}"), style: Style::default().fg(Color::Yellow))
-                }
+                Spinner(
+                    label: format!("Running: {name}"),
+                    label_style: Style::default().fg(Color::Yellow),
+                    done: false,
+                )
             }
         }
         turn::ToolResultStatus::Success => {
             element! {
-                Text {
-                    Span(text: "✓ ", style: Style::default().fg(Color::Green))
-                    Span(text: format!("Ran: {name}"), style: Style::default().fg(Color::Green))
-                }
+                Spinner(
+                    label: format!("Ran: {name}"),
+                    done: true,
+                )
             }
         }
         turn::ToolResultStatus::Error => {
@@ -332,35 +327,14 @@ fn tool_status_view(name: &str, status: &turn::ToolResultStatus) -> Elements {
     }
 }
 
-const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-
-/// Render a spinner/status line for a command preview.
-///
-/// Uses the system clock to compute the animation frame so it advances on
-/// every re-render (triggered by output updates) without needing a separate
-/// interval timer. This works around eye_declare's use_interval resetting
-/// last_tick on every rebuild.
+/// Render a spinner/status line for a command preview (shell tools).
 fn preview_spinner_view(name: &str, done: bool) -> Elements {
-    if done {
-        element! {
-            Text {
-                Span(text: "✓ ", style: Style::default().fg(Color::Green))
-                Span(text: format!("Ran: {name}"), style: Style::default().fg(Color::Green))
-            }
-        }
-    } else {
-        let millis = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis();
-        let frame = (millis / 80) as usize % SPINNER_FRAMES.len();
-
-        element! {
-            Text {
-                Span(text: format!("{} ", SPINNER_FRAMES[frame]), style: Style::default().fg(Color::DarkGray))
-                Span(text: format!("Running: {name}"), style: Style::default().fg(Color::Yellow))
-            }
-        }
+    element! {
+        Spinner(
+            label: if done { format!("Ran: {name}") } else { format!("Running: {name}") },
+            label_style: Style::default().fg(Color::Yellow),
+            done: done,
+        )
     }
 }
 
