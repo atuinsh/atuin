@@ -126,9 +126,8 @@ fn on_submit_input(
     }
 
     if input.starts_with('/') {
-        let input_clone = input.clone();
         handle.update(move |state| {
-            state.conversation.handle_slash_command(&input_clone);
+            state.conversation.handle_slash_command(&input);
         });
         return;
     }
@@ -240,8 +239,6 @@ fn execute_shell_tool(
     });
 
     // 4. Spawn the streaming execution task
-    let h_exec = h.clone();
-    let tx_exec = tx.clone();
     let tc_id_finish = tc_id;
     tokio::spawn(async move {
         let outcome =
@@ -250,10 +247,10 @@ fn execute_shell_tool(
         // Wait for the output task to finish so the final preview lines are captured
         let _ = output_task.await;
 
-        h_exec.update(move |state| {
+        h.update(move |state| {
             state.finish_tool_call(&tc_id_finish, outcome);
             if !state.tool_tracker.has_unresolved() {
-                let _ = tx_exec.send(AiTuiEvent::ContinueAfterTools);
+                let _ = tx.send(AiTuiEvent::ContinueAfterTools);
             }
         });
     });
@@ -344,10 +341,9 @@ fn on_select_permission(
     match permission {
         PermissionResult::Allow => {
             // Fetch the tool that's asking for permission, then execute it
-            let h3 = h2.clone();
             let db = app_ctx.history_db.clone();
             tokio::spawn(async move {
-                let Ok(Some((tool_id, tool))) = h3
+                let Ok(Some((tool_id, tool))) = h2
                     .fetch(move |state| {
                         state
                             .tool_tracker
@@ -359,7 +355,7 @@ fn on_select_permission(
                     return;
                 };
 
-                execute_tool(&h3, &tx, tool_id, tool, &db);
+                execute_tool(&h2, &tx, tool_id, tool, &db);
             });
         }
         PermissionResult::AlwaysAllowInDir => {

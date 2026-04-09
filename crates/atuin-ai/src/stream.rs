@@ -277,9 +277,8 @@ fn apply_content_frame(
             if let Ok(tool) = ClientToolCall::try_from((name.as_str(), &input)) {
                 // Client-side tool — add to tracker and conversation, queue permission check
                 let id_for_event = id.clone();
-                let input_for_event = input.clone();
                 handle.update(move |state| {
-                    state.handle_client_tool_call(id_for_event, tool, input_for_event);
+                    state.handle_client_tool_call(id_for_event, tool, input);
                 });
                 let _ = tx.send(AiTuiEvent::CheckToolCallPermission(id));
             } else {
