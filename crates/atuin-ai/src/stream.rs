@@ -61,14 +61,18 @@ impl ChatRequest {
         Self {
             messages,
             session_id,
-            capabilities: vec![
-                "client_v1_read_file".to_string(),
-                "client_v1_atuin_history".to_string(),
-                "client_v1_execute_shell_command".to_string(),
-                // "client_v1_create_file".to_string()
-                // "client_v1_append_to_file".to_string()
-                // "client_v1_str_replace".to_string()
-            ],
+            capabilities: {
+                let mut caps = vec!["client_v1_atuin_history".to_string()];
+                if let Ok(extra) = std::env::var("ATUIN_AI__ADDITIONAL_CAPS") {
+                    caps.extend(
+                        extra
+                            .split(',')
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty()),
+                    );
+                }
+                caps
+            },
         }
     }
 }
