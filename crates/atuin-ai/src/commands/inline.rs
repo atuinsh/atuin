@@ -126,28 +126,6 @@ async fn run_inline_tui(ctx: AppContext, initial_prompt: Option<String>) -> Resu
 
     let initial_state = Session::new();
     let client_ctx = ClientContext::detect();
-    // initial_state
-    //     .pending_tool_calls
-    //     .push_back(crate::tools::PendingToolCall {
-    //         id: "1".to_string(),
-    //         state: crate::tools::ToolCallState::CheckingPermissions,
-    //         tool: crate::tools::ClientToolCall::Read(crate::tools::ReadToolCall {
-    //             path: std::path::PathBuf::from("test.txt"),
-    //         }),
-    //     });
-    // initial_state
-    //     .pending_tool_calls
-    //     .push_back(crate::tools::PendingToolCall {
-    //         id: "2".to_string(),
-    //         state: crate::tools::ToolCallState::CheckingPermissions,
-    //         tool: crate::tools::ClientToolCall::Shell(crate::tools::ShellToolCall {
-    //             dir: None,
-    //             command: "ls -lah".to_string(),
-    //         }),
-    //     });
-
-    // let _ = tx.send(AiTuiEvent::CheckToolCallPermission("1".to_string()));
-    // let _ = tx.send(AiTuiEvent::CheckToolCallPermission("2".to_string()));
 
     println!();
 

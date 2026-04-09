@@ -53,7 +53,6 @@ pub(crate) enum StreamFrame {
 pub(crate) struct ChatRequest {
     pub messages: Vec<serde_json::Value>,
     pub session_id: Option<String>,
-    /// Requested capabilities. Currently always ["client_tools_v1"].
     pub capabilities: Vec<String>,
 }
 
@@ -62,7 +61,14 @@ impl ChatRequest {
         Self {
             messages,
             session_id,
-            capabilities: vec!["client_tools_v1".to_string()],
+            capabilities: vec![
+                "client_v1_read_file".to_string(),
+                "client_v1_atuin_history".to_string(),
+                "client_v1_execute_shell_command".to_string(),
+                // "client_v1_create_file".to_string()
+                // "client_v1_append_to_file".to_string()
+                // "client_v1_str_replace".to_string()
+            ],
         }
     }
 }
