@@ -174,13 +174,50 @@ impl Conversation {
                     i += 1;
                 }
                 ConversationEvent::Text { content } => {
-                    messages.push(serde_json::json!({
-                        "role": "assistant",
-                        "content": content
-                    }));
-                    i += 1;
+                    // Check if the next event(s) are ToolCalls — if so, combine
+                    // into a single assistant message with mixed content blocks.
+                    let next_is_tool_call = events
+                        .get(i + 1)
+                        .is_some_and(|e| matches!(e, ConversationEvent::ToolCall { .. }));
+
+                    if next_is_tool_call {
+                        let mut content_blocks = Vec::new();
+
+                        if !content.is_empty() {
+                            content_blocks.push(serde_json::json!({
+                                "type": "text",
+                                "text": content
+                            }));
+                        }
+
+                        while let Some(ConversationEvent::ToolCall { id, name, input }) =
+                            events.get(i + 1)
+                        {
+                            content_blocks.push(serde_json::json!({
+                                "type": "tool_use",
+                                "id": id,
+                                "name": name,
+                                "input": input
+                            }));
+                            i += 1;
+                        }
+
+                        messages.push(serde_json::json!({
+                            "role": "assistant",
+                            "content": content_blocks
+                        }));
+                        i += 1;
+                    } else {
+                        messages.push(serde_json::json!({
+                            "role": "assistant",
+                            "content": content
+                        }));
+                        i += 1;
+                    }
                 }
                 ConversationEvent::ToolCall { .. } => {
+                    // ToolCalls without preceding Text (shouldn't normally happen,
+                    // but handle defensively)
                     let mut tool_uses = Vec::new();
                     while i < events.len() {
                         if let ConversationEvent::ToolCall { id, name, input } = &events[i] {
