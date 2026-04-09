@@ -3,11 +3,9 @@
 //! This module contains the core state types that represent the application's
 //! domain model. Conversation events match the API protocol format.
 
-use std::collections::VecDeque;
-
 use tokio::task::AbortHandle;
 
-use crate::tools::{ClientToolCall, PendingToolCall, ToolCallState, ToolOutcome};
+use crate::tools::{ClientToolCall, ToolOutcome, ToolTracker};
 
 /// Streaming status indicators from server
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -117,6 +115,7 @@ impl ConversationEvent {
     }
 }
 
+/// Application mode for key handling and footer text.
 #[derive(Debug, Clone, PartialEq, Eq, Copy)]
 pub(crate) enum AppMode {
     /// User is typing input
@@ -127,8 +126,6 @@ pub(crate) enum AppMode {
     Streaming,
     /// Error state, can retry
     Error,
-    /// Shell tool is executing with live preview
-    ExecutingPreview,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -190,8 +187,9 @@ impl Conversation {
                             }));
                         }
 
-                        while let Some(ConversationEvent::ToolCall { id, name, input }) =
-                            events.get(i + 1)
+                        while let Some(ConversationEvent::ToolCall {
+                            id, name, input, ..
+                        }) = events.get(i + 1)
                         {
                             content_blocks.push(serde_json::json!({
                                 "type": "tool_use",
@@ -220,7 +218,10 @@ impl Conversation {
                     // but handle defensively)
                     let mut tool_uses = Vec::new();
                     while i < events.len() {
-                        if let ConversationEvent::ToolCall { id, name, input } = &events[i] {
+                        if let ConversationEvent::ToolCall {
+                            id, name, input, ..
+                        } = &events[i]
+                        {
                             tool_uses.push(serde_json::json!({
                                 "type": "tool_use",
                                 "id": id,
@@ -452,14 +453,12 @@ impl Interaction {
 pub(crate) struct Session {
     pub conversation: Conversation,
     pub interaction: Interaction,
-    /// Tool calls that are pending permission checking + execution
-    pub pending_tool_calls: VecDeque<PendingToolCall>,
+    /// Tracks all tool calls through their full lifecycle.
+    pub tool_tracker: ToolTracker,
     /// Exit action (set when exiting)
     pub exit_action: Option<ExitAction>,
     /// Abort handle for the active streaming task, if any
     pub stream_abort: Option<AbortHandle>,
-    /// Sender to interrupt a running shell command preview.
-    pub shell_abort_tx: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
 impl Session {
@@ -467,10 +466,9 @@ impl Session {
         Self {
             conversation: Conversation::new(),
             interaction: Interaction::new(),
-            pending_tool_calls: VecDeque::new(),
+            tool_tracker: ToolTracker::new(),
             exit_action: None,
             stream_abort: None,
-            shell_abort_tx: None,
         }
     }
 
@@ -582,12 +580,22 @@ impl Session {
         self.interaction.mode = AppMode::Error;
     }
 
-    pub(crate) fn handle_client_tool_call(&mut self, id: String, tool: ClientToolCall) {
-        self.pending_tool_calls.push_back(PendingToolCall {
-            id: id.clone(),
-            state: ToolCallState::CheckingPermissions,
-            tool,
-        });
+    pub(crate) fn handle_client_tool_call(
+        &mut self,
+        id: String,
+        tool: ClientToolCall,
+        input: serde_json::Value,
+    ) {
+        let desc = tool.descriptor();
+        let name = desc.canonical_names[0].to_string();
+
+        self.tool_tracker.insert(id.clone(), tool);
+
+        // Add the ToolCall event to the conversation immediately so it appears
+        // in the view. Preview data is sourced from tool_tracker.
+        self.conversation
+            .events
+            .push(ConversationEvent::ToolCall { id, name, input });
 
         // Client tool calls can only happen at the last part of a turn
         self.interaction.streaming_status = None;
@@ -606,54 +614,56 @@ impl Session {
         self.interaction.mode = AppMode::Generating;
     }
 
-    // ===== Query methods =====
+    // ===== Tool lifecycle methods =====
 
-    /// Get a pending tool call by ID
-    pub(crate) fn pending_tool_call(&self, id: &str) -> Option<&PendingToolCall> {
-        self.pending_tool_calls.iter().find(|call| call.id == id)
-    }
+    /// Finish a tool call: transition tracker to Completed, push ToolResult to conversation.
+    ///
+    /// For shell commands, captures the final preview from the ExecutingWithPreview phase
+    /// and patches exit_code/interrupted from the authoritative ToolOutcome.
+    pub fn finish_tool_call(&mut self, tool_id: &str, outcome: ToolOutcome) {
+        let mut preview = self.tool_tracker.get(tool_id).and_then(|t| t.preview());
 
-    /// Get a mutable pending tool call by ID
-    pub(crate) fn pending_tool_call_mut(&mut self, id: &str) -> Option<&mut PendingToolCall> {
-        self.pending_tool_calls
-            .iter_mut()
-            .find(|call| call.id == id)
-    }
+        // Patch preview with authoritative outcome data (handles race where
+        // final VT100 update hasn't been applied yet).
+        if let Some(ref mut p) = preview
+            && let ToolOutcome::Structured {
+                exit_code,
+                interrupted,
+                ..
+            } = &outcome
+        {
+            p.interrupted = *interrupted;
+            if p.exit_code.is_none() {
+                p.exit_code = *exit_code;
+            }
+        }
 
-    /// Record a tool call event in the conversation.
-    /// Call this BEFORE execution begins so the ToolCall shows in chat output.
-    pub fn begin_tool_call(&mut self, id: &str, tool: &ClientToolCall, input: serde_json::Value) {
-        let desc = tool.descriptor();
-        self.add_tool_call(id.to_string(), desc.canonical_names[0].to_string(), input);
-    }
+        // Transition tracker entry to Completed
+        if let Some(tracked) = self.tool_tracker.get_mut(tool_id) {
+            tracked.complete(preview);
+        }
 
-    /// Record the result of a tool call and remove it from the pending queue.
-    /// Call this AFTER execution completes. The ToolCall event must already exist
-    /// in the conversation (added by `begin_tool_call`).
-    pub fn finish_tool_call(&mut self, pending: &PendingToolCall, outcome: ToolOutcome) {
         let content = outcome.format_for_llm();
         let is_error = outcome.is_error();
         self.conversation
-            .add_tool_result(pending.id.clone(), content, is_error);
-        self.pending_tool_calls.retain(|c| c.id != pending.id);
+            .add_tool_result(tool_id.to_string(), content, is_error);
     }
 
-    /// Record a tool call, its execution result, and remove it from the pending queue.
-    /// Convenience method that combines begin + finish for tools that don't need
-    /// the ToolCall visible during execution.
-    pub fn complete_tool_call(&mut self, pending: &PendingToolCall, outcome: ToolOutcome) {
-        self.begin_tool_call(&pending.id, &pending.tool, serde_json::json!({}));
-        self.finish_tool_call(pending, outcome);
-    }
-
-    /// Returns true if any tool calls are still in CheckingPermissions or AskingForPermission state.
-    pub fn has_unresolved_tool_calls(&self) -> bool {
-        self.pending_tool_calls.iter().any(|tc| {
-            matches!(
-                tc.state,
-                ToolCallState::CheckingPermissions | ToolCallState::AskingForPermission
-            )
-        })
+    /// Record a tool call event + its result in one step (for simple non-preview tools).
+    pub fn complete_tool_call(
+        &mut self,
+        tool_id: &str,
+        tool: &ClientToolCall,
+        outcome: ToolOutcome,
+    ) {
+        // Push the ToolCall event so it appears in the conversation
+        let desc = tool.descriptor();
+        self.add_tool_call(
+            tool_id.to_string(),
+            desc.canonical_names[0].to_string(),
+            serde_json::json!({}),
+        );
+        self.finish_tool_call(tool_id, outcome);
     }
 
     /// Get the footer text for current mode
@@ -671,7 +681,6 @@ impl Session {
                 }
             }
             AppMode::Generating | AppMode::Streaming => "[Esc] Cancel",
-            AppMode::ExecutingPreview => "[Ctrl+C] Interrupt  [Esc] Interrupt",
             AppMode::Error => "[Enter]/[r] Retry  [Esc] Exit",
         }
     }

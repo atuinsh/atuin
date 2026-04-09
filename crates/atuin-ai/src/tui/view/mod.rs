@@ -6,7 +6,7 @@ use eye_declare::{
 };
 use ratatui_core::style::{Color, Modifier, Style};
 
-use crate::tools::{ClientToolCall, PendingToolCall, ToolCallState};
+use crate::tools::{ClientToolCall, TrackedTool};
 use crate::tui::components::select::SelectOption;
 use crate::tui::events::{AiTuiEvent, PermissionResult};
 
@@ -27,7 +27,7 @@ mod turn;
 /// - Spacer
 /// - Input box (bordered, with contextual keybindings)
 pub(crate) fn ai_view(state: &Session) -> Elements {
-    let mut turn_builder = turn::TurnBuilder::new();
+    let mut turn_builder = turn::TurnBuilder::new(&state.tool_tracker);
 
     for event in &state.conversation.events {
         turn_builder.add_event(event);
@@ -44,6 +44,7 @@ pub(crate) fn ai_view(state: &Session) -> Elements {
             has_command: state.conversation.has_any_command(),
             is_input_blank: state.interaction.is_input_blank,
             pending_confirmation: state.interaction.confirmation_pending,
+            has_executing_preview: state.tool_tracker.has_executing_preview(),
         ) {
             #(for (index, turn) in turns.iter().enumerate() {
                 #(match turn {
@@ -67,26 +68,14 @@ pub(crate) fn ai_view(state: &Session) -> Elements {
 }
 
 fn input_view(state: &Session) -> Elements {
-    let asking_tool = state
-        .pending_tool_calls
-        .iter()
-        .find(|call| call.state == ToolCallState::AskingForPermission);
-
-    let executing_tool = state
-        .pending_tool_calls
-        .iter()
-        .find(|call| matches!(call.state, ToolCallState::ExecutingPreview { .. }));
+    let asking_tool = state.tool_tracker.asking_for_permission();
 
     element! {
         #(if let Some(tc) = asking_tool {
             #(tool_call_view(tc))
         })
 
-        #(if let Some(tc) = executing_tool {
-            #(executing_preview_view(tc))
-        })
-
-        #(if asking_tool.is_none() && executing_tool.is_none() {
+        #(if asking_tool.is_none() {
             View(key: "input-box", padding_top: Cells::from(1)) {
                 InputBox(
                     key: "input",
@@ -108,7 +97,7 @@ fn input_view(state: &Session) -> Elements {
     }
 }
 
-fn tool_call_view(tool_call: &PendingToolCall) -> Elements {
+fn tool_call_view(tool_call: &TrackedTool) -> Elements {
     let verb = tool_call.tool.descriptor().display_verb;
     let tool_desc = match &tool_call.tool {
         ClientToolCall::Read(tool) => tool.path.display().to_string(),
@@ -153,70 +142,6 @@ fn tool_call_view(tool_call: &PendingToolCall) -> Elements {
                     Some(AiTuiEvent::SelectPermission(value))
                 }) as Box<dyn Fn(&SelectOption) -> Option<AiTuiEvent> + Send + Sync>)
             }
-        }
-    }
-}
-
-fn executing_preview_view(tool_call: &PendingToolCall) -> Elements {
-    let (command, output_lines, exit_code, interrupted) = match &tool_call.state {
-        ToolCallState::ExecutingPreview {
-            command,
-            output_lines,
-            exit_code,
-            interrupted,
-        } => (
-            command.clone(),
-            output_lines.clone(),
-            *exit_code,
-            *interrupted,
-        ),
-        _ => return element! {},
-    };
-
-    let spinner_done = exit_code.is_some() || interrupted;
-
-    element! {
-        View(key: format!("preview-{}", tool_call.id), padding_left: Cells::from(2), padding_top: Cells::from(1)) {
-            // Command header with spinner
-            Spinner(
-                label: format!(" Running: {}", command),
-                label_style: Style::default().fg(Color::Yellow),
-                done: spinner_done,
-            )
-
-            // Fixed-height viewport showing the VT100 screen output
-            Viewport(
-                lines: output_lines,
-                height: 10,
-                border: BorderType::Plain,
-                border_style: Style::default().fg(Color::DarkGray),
-                style: Style::default().fg(Color::White),
-            )
-
-            // Status line
-            #(if let Some(code) = exit_code {
-                #(if code == 0 {
-                    Text {
-                        Span(text: format!("Exit code: {code}"), style: Style::default().fg(Color::Green))
-                    }
-                } else {
-                    Text {
-                        Span(text: format!("Exit code: {code}"), style: Style::default().fg(Color::Red))
-                    }
-                })
-            })
-
-            #(if interrupted {
-                Text {
-                    Span(text: "Interrupted", style: Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
-                }
-            })
-
-            #(if !spinner_done {
-                Text {
-                    Span(text: "[Ctrl+C] Interrupt", style: Style::default().fg(Color::DarkGray))
-                }
-            })
         }
     }
 }
@@ -282,11 +207,50 @@ fn agent_turn_view(events: &[turn::UiEvent], busy: bool) -> Elements {
                         suggested_command_view(details)
                     },
                     turn::UiEvent::ToolCall(details) => {
+                        let preview_done = details.preview.as_ref().is_some_and(|p| p.exit_code.is_some() || p.interrupted);
+                        let tool_key = details.tool_use_id.clone();
+
                         element! {
-                            View(padding_left: Cells::from(2)) {
-                                Text {
-                                    Span(text: format!("Running tool: {}", details.name), style: Style::default().fg(Color::Blue))
-                                }
+                            View(key: format!("tool-output-{tool_key}"), padding_left: Cells::from(2)) {
+                                #(if let Some(ref preview) = details.preview {
+                                    View(key: format!("preview-{tool_key}")) {
+                                        #(preview_spinner_view(&details.name, preview_done))
+                                        Viewport(
+                                            key: format!("viewport-{tool_key}"),
+                                            lines: preview.lines.clone(),
+                                            height: 10,
+                                            border: BorderType::Plain,
+                                            border_style: Style::default().fg(Color::DarkGray),
+                                            style: Style::default().fg(Color::White),
+                                            wrap: false,
+                                        )
+                                        #(if let Some(code) = preview.exit_code {
+                                            #(if code == 0 {
+                                                Text {
+                                                    Span(text: format!("Exit code: {code}"), style: Style::default().fg(Color::Green))
+                                                }
+                                            } else {
+                                                Text {
+                                                    Span(text: format!("Exit code: {code}"), style: Style::default().fg(Color::Red))
+                                                }
+                                            })
+                                        })
+                                        #(if preview.interrupted {
+                                            Text {
+                                                Span(text: "Interrupted", style: Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
+                                            }
+                                        })
+                                        #(if !preview_done {
+                                            Text {
+                                                Span(text: "[Ctrl+C] Interrupt", style: Style::default().fg(Color::DarkGray))
+                                            }
+                                        })
+                                    }
+                                } else {
+                                    Text {
+                                        Span(text: format!("Running tool: {}", details.name), style: Style::default().fg(Color::Blue))
+                                    }
+                                })
                             }
                         }
                     }
@@ -331,6 +295,38 @@ fn out_of_band_output_view(details: &turn::OutOfBandOutputDetails) -> Elements {
 fn tool_summary_view(summary: &turn::ToolSummary) -> Elements {
     element! {
         Spinner(label: summary.summary(), done: !summary.any_pending())
+    }
+}
+
+const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/// Render a spinner/status line for a command preview.
+///
+/// Uses the system clock to compute the animation frame so it advances on
+/// every re-render (triggered by output updates) without needing a separate
+/// interval timer. This works around eye_declare's use_interval resetting
+/// last_tick on every rebuild.
+fn preview_spinner_view(name: &str, done: bool) -> Elements {
+    if done {
+        element! {
+            Text {
+                Span(text: "✓ ", style: Style::default().fg(Color::Green))
+                Span(text: format!("Ran: {name}"), style: Style::default().fg(Color::Green))
+            }
+        }
+    } else {
+        let millis = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        let frame = (millis / 80) as usize % SPINNER_FRAMES.len();
+
+        element! {
+            Text {
+                Span(text: format!("{} ", SPINNER_FRAMES[frame]), style: Style::default().fg(Color::DarkGray))
+                Span(text: format!("Running: {name}"), style: Style::default().fg(Color::Yellow))
+            }
+        }
     }
 }
 

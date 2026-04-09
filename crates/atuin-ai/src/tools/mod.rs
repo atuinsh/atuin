@@ -81,56 +81,23 @@ impl ToolOutcome {
     }
 }
 
-/// A pending tool call from the server, awaiting permissions or execution.
-#[derive(Debug, Clone)]
-pub(crate) struct PendingToolCall {
-    pub id: String,
-    pub state: ToolCallState,
-    pub tool: ClientToolCall,
-}
-
-impl PendingToolCall {
-    pub(crate) fn target_dir(&self) -> Option<&Path> {
-        self.tool.target_dir()
-    }
-
-    /// Mark this tool call as waiting for user permission.
-    pub fn mark_asking(&mut self) {
-        self.state = ToolCallState::AskingForPermission;
-    }
-
-    /// Mark this tool call as currently executing.
-    #[expect(dead_code)]
-    pub fn mark_executing(&mut self) {
-        self.state = ToolCallState::Executing;
-    }
-
-    /// Mark this tool call as denied.
-    #[expect(dead_code)]
-    pub fn mark_denied(&mut self, reason: String) {
-        self.state = ToolCallState::Denied(reason);
-    }
-
-    /// Mark this tool call as executing with a live preview.
-    pub fn mark_executing_preview(&mut self, command: String) {
-        self.state = ToolCallState::ExecutingPreview {
-            command,
-            output_lines: Vec::new(),
-            exit_code: None,
-            interrupted: false,
-        };
-    }
-}
-
-/// State of a pending tool call
+/// Cached VT100 preview data for a shell tool call.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ToolCallState {
+pub(crate) struct ToolPreview {
+    pub lines: Vec<String>,
+    pub exit_code: Option<i32>,
+    pub interrupted: bool,
+}
+
+/// Lifecycle phase of a tracked tool call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ToolPhase {
     CheckingPermissions,
     AskingForPermission,
     Denied(String),
     Executing,
     /// Shell command is executing with live preview output.
-    ExecutingPreview {
+    ExecutingWithPreview {
         command: String,
         /// Current VT100 screen lines (plain text, viewport-sized).
         output_lines: Vec<String>,
@@ -139,6 +106,142 @@ pub(crate) enum ToolCallState {
         /// Whether the command was interrupted by the user.
         interrupted: bool,
     },
+    /// Tool execution has completed. Preview is cached for rendering history.
+    Completed {
+        preview: Option<ToolPreview>,
+    },
+}
+
+/// A tracked tool call through its full lifecycle.
+#[derive(Debug)]
+pub(crate) struct TrackedTool {
+    pub id: String,
+    pub tool: ClientToolCall,
+    pub phase: ToolPhase,
+    /// Sender to interrupt a running shell command (only set during ExecutingWithPreview).
+    pub abort_tx: Option<tokio::sync::oneshot::Sender<()>>,
+}
+
+impl TrackedTool {
+    pub(crate) fn target_dir(&self) -> Option<&Path> {
+        self.tool.target_dir()
+    }
+
+    pub fn mark_asking(&mut self) {
+        self.phase = ToolPhase::AskingForPermission;
+    }
+
+    pub fn mark_executing_preview(&mut self, command: String) {
+        self.phase = ToolPhase::ExecutingWithPreview {
+            command,
+            output_lines: Vec::new(),
+            exit_code: None,
+            interrupted: false,
+        };
+    }
+
+    pub fn complete(&mut self, preview: Option<ToolPreview>) {
+        self.phase = ToolPhase::Completed { preview };
+        self.abort_tx = None;
+    }
+
+    /// Extract the current preview, whether live or completed.
+    pub fn preview(&self) -> Option<ToolPreview> {
+        match &self.phase {
+            ToolPhase::ExecutingWithPreview {
+                output_lines,
+                exit_code,
+                interrupted,
+                ..
+            } => Some(ToolPreview {
+                lines: output_lines.clone(),
+                exit_code: *exit_code,
+                interrupted: *interrupted,
+            }),
+            ToolPhase::Completed { preview } => preview.clone(),
+            _ => None,
+        }
+    }
+}
+
+/// Tracks all tool calls through their full lifecycle.
+///
+/// Single source of truth for tool execution state. Entries persist after
+/// completion so cached previews remain available for rendering history.
+#[derive(Debug)]
+pub(crate) struct ToolTracker {
+    tools: Vec<TrackedTool>,
+}
+
+impl ToolTracker {
+    pub fn new() -> Self {
+        Self { tools: Vec::new() }
+    }
+
+    /// Insert a new tool call in CheckingPermissions phase.
+    pub fn insert(&mut self, id: String, tool: ClientToolCall) {
+        self.tools.push(TrackedTool {
+            id,
+            tool,
+            phase: ToolPhase::CheckingPermissions,
+            abort_tx: None,
+        });
+    }
+
+    pub fn get(&self, id: &str) -> Option<&TrackedTool> {
+        self.tools.iter().find(|t| t.id == id)
+    }
+
+    pub fn get_mut(&mut self, id: &str) -> Option<&mut TrackedTool> {
+        self.tools.iter_mut().find(|t| t.id == id)
+    }
+
+    /// Remove a tool by ID and return it.
+    pub fn remove(&mut self, id: &str) -> Option<TrackedTool> {
+        let pos = self.tools.iter().position(|t| t.id == id)?;
+        Some(self.tools.remove(pos))
+    }
+
+    /// True if any tool is still in CheckingPermissions or AskingForPermission.
+    pub fn has_unresolved(&self) -> bool {
+        self.tools.iter().any(|t| {
+            matches!(
+                t.phase,
+                ToolPhase::CheckingPermissions | ToolPhase::AskingForPermission
+            )
+        })
+    }
+
+    /// True if any tool is currently executing with a preview.
+    pub fn has_executing_preview(&self) -> bool {
+        self.tools
+            .iter()
+            .any(|t| matches!(t.phase, ToolPhase::ExecutingWithPreview { .. }))
+    }
+
+    /// Find the first tool that is asking for permission.
+    pub fn asking_for_permission(&self) -> Option<&TrackedTool> {
+        self.tools
+            .iter()
+            .find(|t| t.phase == ToolPhase::AskingForPermission)
+    }
+
+    /// Find the first tool that is asking for permission (mutable).
+    pub fn asking_for_permission_mut(&mut self) -> Option<&mut TrackedTool> {
+        self.tools
+            .iter_mut()
+            .find(|t| t.phase == ToolPhase::AskingForPermission)
+    }
+
+    /// Get the preview for a tool by ID (live or cached).
+    pub fn preview_for(&self, id: &str) -> Option<ToolPreview> {
+        self.get(id)?.preview()
+    }
+
+    /// Iterate mutably over all tracked tools.
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut TrackedTool> {
+        self.tools.iter_mut()
+    }
 }
 
 /// A tool call from the server, with parsed input parameters.

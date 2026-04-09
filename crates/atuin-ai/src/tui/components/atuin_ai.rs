@@ -22,6 +22,7 @@ pub(crate) struct AtuinAi {
     pub has_command: bool,
     pub is_input_blank: bool,
     pub pending_confirmation: bool,
+    pub has_executing_preview: bool,
 }
 
 #[derive(Default)]
@@ -57,13 +58,10 @@ fn atuin_ai(
 
         // Ctrl+C — interrupt executing command or exit
         if modifiers.contains(KeyModifiers::CONTROL) && *code == KeyCode::Char('c') {
-            match props.mode {
-                AppMode::ExecutingPreview => {
-                    let _ = tx.send(AiTuiEvent::InterruptToolExecution);
-                }
-                _ => {
-                    let _ = tx.send(AiTuiEvent::Exit);
-                }
+            if props.has_executing_preview {
+                let _ = tx.send(AiTuiEvent::InterruptToolExecution);
+            } else {
+                let _ = tx.send(AiTuiEvent::Exit);
             }
             return EventResult::Consumed;
         }
@@ -71,6 +69,11 @@ fn atuin_ai(
         match props.mode {
             AppMode::Input => match code {
                 KeyCode::Esc => {
+                    if props.has_executing_preview {
+                        let _ = tx.send(AiTuiEvent::InterruptToolExecution);
+                        return EventResult::Consumed;
+                    }
+
                     if props.pending_confirmation {
                         let _ = tx.send(AiTuiEvent::CancelConfirmation);
                         return EventResult::Consumed;
@@ -100,13 +103,6 @@ fn atuin_ai(
             AppMode::Generating | AppMode::Streaming => match code {
                 KeyCode::Esc => {
                     let _ = tx.send(AiTuiEvent::CancelGeneration);
-                    EventResult::Consumed
-                }
-                _ => EventResult::Ignored,
-            },
-            AppMode::ExecutingPreview => match code {
-                KeyCode::Esc => {
-                    let _ = tx.send(AiTuiEvent::InterruptToolExecution);
                     EventResult::Consumed
                 }
                 _ => EventResult::Ignored,

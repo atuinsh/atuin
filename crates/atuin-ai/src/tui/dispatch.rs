@@ -5,10 +5,10 @@ use crate::context::{AppContext, ClientContext};
 use crate::permissions::check::PermissionResponse;
 use crate::permissions::resolver::PermissionResolver;
 use crate::stream::{ChatRequest, run_chat_stream};
-use crate::tools::{ClientToolCall, PendingToolCall, ToolCallState};
+use crate::tools::{ClientToolCall, ToolPhase};
 use crate::tui::ConversationEvent;
 use crate::tui::events::{AiTuiEvent, PermissionResult};
-use crate::tui::state::{AppMode, ExitAction, Session};
+use crate::tui::state::{ExitAction, Session};
 use eye_declare::Handle;
 use tokio::task::JoinHandle;
 
@@ -152,21 +152,21 @@ fn on_slash_command(handle: &Handle<Session>, command: String) {
 // ───────────────────────────────────────────────────────────────────
 
 /// Execute a tool call. Handles Shell tools (streaming with preview) and
-/// non-shell tools (synchronous) uniformly. Callers provide the resolved
-/// PendingToolCall; this function handles all state transitions.
+/// non-shell tools (synchronous) uniformly.
 fn execute_tool(
     handle: &Handle<Session>,
     tx: &mpsc::Sender<AiTuiEvent>,
-    tool_call: PendingToolCall,
+    tool_id: String,
+    tool: ClientToolCall,
     db: &std::sync::Arc<atuin_client::database::Sqlite>,
 ) {
-    match &tool_call.tool {
+    match &tool {
         ClientToolCall::Shell(shell_call) => {
             let shell_call = shell_call.clone();
-            execute_shell_tool(handle, tx, tool_call, &shell_call);
+            execute_shell_tool(handle, tx, &tool_id, &shell_call);
         }
         _ => {
-            execute_simple_tool(handle, tx, tool_call, db);
+            execute_simple_tool(handle, tx, tool_id, tool, db);
         }
     }
 }
@@ -175,7 +175,8 @@ fn execute_tool(
 fn execute_simple_tool(
     handle: &Handle<Session>,
     tx: &mpsc::Sender<AiTuiEvent>,
-    tool_call: PendingToolCall,
+    tool_id: String,
+    tool: ClientToolCall,
     db: &std::sync::Arc<atuin_client::database::Sqlite>,
 ) {
     let h = handle.clone();
@@ -183,95 +184,78 @@ fn execute_simple_tool(
     let db = db.clone();
 
     tokio::spawn(async move {
-        let outcome = tool_call.tool.execute(&db).await;
+        let outcome = tool.execute(&db).await;
         h.update(move |state| {
-            state.complete_tool_call(&tool_call, outcome);
-            if !state.has_unresolved_tool_calls() {
+            state.complete_tool_call(&tool_id, &tool, outcome);
+            if !state.tool_tracker.has_unresolved() {
                 let _ = tx.send(AiTuiEvent::ContinueAfterTools);
             }
         });
     });
 }
 
-/// Execute a shell tool with streaming VT100 preview. The ToolCall event is
-/// added to the conversation immediately so it persists in chat output.
-/// A live preview renders in the input area during execution.
+/// Execute a shell tool with streaming VT100 preview.
 fn execute_shell_tool(
     handle: &Handle<Session>,
     tx: &mpsc::Sender<AiTuiEvent>,
-    tool_call: PendingToolCall,
+    tool_id: &str,
     shell_call: &crate::tools::ShellToolCall,
 ) {
     let h = handle.clone();
     let tx = tx.clone();
     let shell_call = shell_call.clone();
     let command = shell_call.command.clone();
+    let tc_id = tool_id.to_string();
 
-    // Extract all data we need before moving into closures
-    let tc_id = tool_call.id.clone();
-    let tc_id_for_update = tc_id.clone();
-    let tc_for_finish = tool_call.clone();
-    let tool_for_begin = tool_call.tool.clone();
-
-    // Build the input JSON for the ToolCall event (matches server format)
-    let input_json = serde_json::json!({
-        "command": shell_call.command,
-        "dir": shell_call.dir,
-        "shell": shell_call.shell,
-    });
-
-    // 1. Immediately add the ToolCall event to conversation and enter preview mode
-    h.update(move |state| {
-        state.begin_tool_call(&tc_id_for_update, &tool_for_begin, input_json);
-        if let Some(tc) = state.pending_tool_call_mut(&tc_id_for_update) {
-            tc.mark_executing_preview(command);
-        }
-        state.interaction.mode = AppMode::ExecutingPreview;
-        state.shell_abort_tx = None; // will be set below
-    });
-
-    // 2. Set up channels for streaming output and interruption
+    // 1. Set up channels for streaming output and interruption
     let (output_tx, mut output_rx) = tokio::sync::mpsc::channel::<Vec<String>>(32);
     let (abort_tx, abort_rx) = tokio::sync::oneshot::channel::<()>();
 
+    // 2. Mark as executing with preview and store the abort sender on the tracker entry
+    let tc_id_setup = tc_id.clone();
     h.update(move |state| {
-        state.shell_abort_tx = Some(abort_tx);
+        if let Some(tracked) = state.tool_tracker.get_mut(&tc_id_setup) {
+            tracked.mark_executing_preview(command);
+            tracked.abort_tx = Some(abort_tx);
+        }
     });
 
-    // 3. Spawn the streaming execution task
-    let h_exec = h.clone();
-    let tx_exec = tx.clone();
-    tokio::spawn(async move {
-        let outcome =
-            crate::tools::execute_shell_command_streaming(&shell_call, output_tx, abort_rx).await;
-
-        h_exec.update(move |state| {
-            state.finish_tool_call(&tc_for_finish, outcome);
-            state.shell_abort_tx = None;
-            state.interaction.mode = AppMode::Input;
-            if !state.has_unresolved_tool_calls() {
-                let _ = tx_exec.send(AiTuiEvent::ContinueAfterTools);
-            }
-        });
-    });
-
-    // 4. Spawn a task to consume output updates and feed them to state
+    // 3. Spawn a task to consume output updates and feed them to state
     let h_output = h.clone();
-    let preview_id = tc_id;
-    tokio::spawn(async move {
+    let preview_id = tc_id.clone();
+    let output_task = tokio::spawn(async move {
         while let Some(lines) = output_rx.recv().await {
             let id = preview_id.clone();
             h_output.update(move |state| {
-                if let Some(tc) = state.pending_tool_call_mut(&id)
-                    && let ToolCallState::ExecutingPreview {
+                if let Some(tracked) = state.tool_tracker.get_mut(&id)
+                    && let ToolPhase::ExecutingWithPreview {
                         ref mut output_lines,
                         ..
-                    } = tc.state
+                    } = tracked.phase
                 {
                     *output_lines = lines;
                 }
             });
         }
+    });
+
+    // 4. Spawn the streaming execution task
+    let h_exec = h.clone();
+    let tx_exec = tx.clone();
+    let tc_id_finish = tc_id;
+    tokio::spawn(async move {
+        let outcome =
+            crate::tools::execute_shell_command_streaming(&shell_call, output_tx, abort_rx).await;
+
+        // Wait for the output task to finish so the final preview lines are captured
+        let _ = output_task.await;
+
+        h_exec.update(move |state| {
+            state.finish_tool_call(&tc_id_finish, outcome);
+            if !state.tool_tracker.has_unresolved() {
+                let _ = tx_exec.send(AiTuiEvent::ContinueAfterTools);
+            }
+        });
     });
 }
 
@@ -291,20 +275,21 @@ fn on_check_tool_permission(
     let db = app_ctx.history_db.clone();
 
     tokio::spawn(async move {
-        // 1. Fetch the pending tool call
-        let Ok(Some(tool_call)) = h2
-            .fetch(move |state| state.pending_tool_call(&id).cloned())
+        // 1. Fetch the tracked tool's data (clone what we need for permission check)
+        let Ok(Some((tool, target_dir))) = h2
+            .fetch(move |state| {
+                state
+                    .tool_tracker
+                    .get(&id)
+                    .map(|t| (t.tool.clone(), t.target_dir().map(PathBuf::from)))
+            })
             .await
         else {
             return;
         };
 
         // 2. Resolve working directory
-        let Some(working_dir) = tool_call
-            .target_dir()
-            .map(PathBuf::from)
-            .or_else(|| std::env::current_dir().ok())
-        else {
+        let Some(working_dir) = target_dir.or_else(|| std::env::current_dir().ok()) else {
             return;
         };
 
@@ -313,14 +298,14 @@ fn on_check_tool_permission(
             return;
         };
 
-        let Ok(response) = resolver.check(&tool_call.tool).await else {
+        let Ok(response) = resolver.check(&tool).await else {
             return;
         };
 
         // 4. Handle response
         match response {
             PermissionResponse::Allowed => {
-                execute_tool(&h2, &tx_for_task, tool_call, &db);
+                execute_tool(&h2, &tx_for_task, id_clone, tool, &db);
             }
             PermissionResponse::Denied => {
                 let tx = tx_for_task.clone();
@@ -333,16 +318,16 @@ fn on_check_tool_permission(
                             content: format!("Permission denied for tool call {:?}", &id_clone),
                             command: None,
                         });
-                    state.pending_tool_calls.retain(|c| c.id != id_clone);
-                    if !state.has_unresolved_tool_calls() {
+                    state.tool_tracker.remove(&id_clone);
+                    if !state.tool_tracker.has_unresolved() {
                         let _ = tx.send(AiTuiEvent::ContinueAfterTools);
                     }
                 });
             }
             PermissionResponse::Ask => {
                 h2.update(move |state| {
-                    if let Some(tc) = state.pending_tool_call_mut(&id_clone) {
-                        tc.mark_asking();
+                    if let Some(tracked) = state.tool_tracker.get_mut(&id_clone) {
+                        tracked.mark_asking();
                     }
                 });
             }
@@ -361,24 +346,23 @@ fn on_select_permission(
 
     match permission {
         PermissionResult::Allow => {
-            // Fetch the tool call that's asking for permission, then execute it
+            // Fetch the tool that's asking for permission, then execute it
             let h3 = h2.clone();
             let db = app_ctx.history_db.clone();
             tokio::spawn(async move {
-                let Ok(Some(tool_call)) = h3
+                let Ok(Some((tool_id, tool))) = h3
                     .fetch(move |state| {
                         state
-                            .pending_tool_calls
-                            .iter()
-                            .find(|tc| tc.state == ToolCallState::AskingForPermission)
-                            .cloned()
+                            .tool_tracker
+                            .asking_for_permission()
+                            .map(|t| (t.id.clone(), t.tool.clone()))
                     })
                     .await
                 else {
                     return;
                 };
 
-                execute_tool(&h3, &tx, tool_call, &db);
+                execute_tool(&h3, &tx, tool_id, tool, &db);
             });
         }
         PermissionResult::AlwaysAllowInDir => {
@@ -389,26 +373,18 @@ fn on_select_permission(
         }
         PermissionResult::Deny => {
             h2.update(move |state| {
-                let tool_call = state
-                    .pending_tool_calls
-                    .iter()
-                    .enumerate()
-                    .find(|(_, call)| call.state == ToolCallState::AskingForPermission);
-
-                let Some((index, _)) = tool_call else {
+                let Some(tracked) = state.tool_tracker.asking_for_permission_mut() else {
                     return;
                 };
-
-                let Some(call) = state.pending_tool_calls.remove(index) else {
-                    return;
-                };
+                let tool_id = tracked.id.clone();
+                tracked.complete(None);
 
                 state.conversation.add_tool_result(
-                    call.id,
+                    tool_id,
                     "Permission denied on the user's system".to_string(),
                     true,
                 );
-                if !state.has_unresolved_tool_calls() {
+                if !state.tool_tracker.has_unresolved() {
                     let _ = tx.send(AiTuiEvent::ContinueAfterTools);
                 }
             });
@@ -492,28 +468,26 @@ fn on_exit(handle: &Handle<Session>) {
 
 fn on_interrupt_tool_execution(handle: &Handle<Session>) {
     handle.update(move |state| {
-        // Send interrupt signal to the running shell command
-        if let Some(abort_tx) = state.shell_abort_tx.take() {
-            let _ = abort_tx.send(());
-        }
-
-        // Mark the executing preview as interrupted
-        for tc in &mut state.pending_tool_calls {
-            if let ToolCallState::ExecutingPreview {
+        // Find executing previews, send interrupt, and mark as interrupted
+        for tracked in state.tool_tracker.iter_mut() {
+            if let ToolPhase::ExecutingWithPreview {
                 ref mut interrupted,
                 ref mut exit_code,
                 ..
-            } = tc.state
+            } = tracked.phase
             {
                 *interrupted = true;
                 if exit_code.is_none() {
                     *exit_code = Some(-1);
                 }
+                // Send interrupt signal via the tracker entry's abort channel
+                if let Some(abort_tx) = tracked.abort_tx.take() {
+                    let _ = abort_tx.send(());
+                }
             }
         }
 
-        // Return to input mode — the spawned execution task will handle
-        // finalizing and sending ContinueAfterTools when the process exits.
-        state.interaction.mode = AppMode::Input;
+        // The spawned execution task will handle finalizing and sending
+        // ContinueAfterTools when the process exits. Input mode is already active.
     });
 }

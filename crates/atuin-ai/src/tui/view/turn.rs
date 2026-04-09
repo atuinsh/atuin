@@ -1,4 +1,5 @@
 use crate::tools::descriptor;
+use crate::tools::{ToolPreview, ToolTracker};
 use crate::tui::ConversationEvent;
 
 /// Server-sent danger level for a suggested command
@@ -92,6 +93,7 @@ pub(crate) struct ToolCallDetails {
     pub(crate) name: String,
     pub(crate) status: ToolResultStatus,
     pub(crate) is_client: bool,
+    pub(crate) preview: Option<ToolPreview>,
 }
 
 #[derive(Debug)]
@@ -122,17 +124,19 @@ pub(crate) enum UiTurn {
     OutOfBand { events: Vec<UiEvent> },
 }
 
-pub(crate) struct TurnBuilder {
+pub(crate) struct TurnBuilder<'a> {
     turns: Vec<UiTurn>,
     current_turn: Option<UiTurn>,
+    tracker: &'a ToolTracker,
 }
 
 /// A struct to iteratively build [UiTurn] events from [ConversationEvent]s.
-impl TurnBuilder {
-    pub(crate) fn new() -> Self {
+impl<'a> TurnBuilder<'a> {
+    pub(crate) fn new(tracker: &'a ToolTracker) -> Self {
         Self {
             turns: Vec::new(),
             current_turn: None,
+            tracker,
         }
     }
 
@@ -311,15 +315,17 @@ impl TurnBuilder {
     }
 
     fn add_tool_call(&mut self, id: &str, name: &str, _input: &serde_json::Value) {
+        let is_client = descriptor::by_name(name).is_some_and(|d| d.is_client);
+        let preview = self.tracker.preview_for(id);
+
         self.start_agent_turn();
         if let UiTurn::Agent { events } = self.turn_mut_unsafe() {
-            let is_client = descriptor::by_name(name).is_some_and(|d| d.is_client);
-
             events.push(UiEvent::ToolCall(ToolCallDetails {
                 tool_use_id: id.to_string(),
                 name: name.to_string(),
                 status: ToolResultStatus::Pending,
                 is_client,
+                preview,
             }));
         }
     }
