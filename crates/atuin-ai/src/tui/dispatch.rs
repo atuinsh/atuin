@@ -171,7 +171,8 @@ fn execute_tool(
     }
 }
 
-/// Execute a non-shell tool synchronously and complete the tool call.
+/// Execute a non-shell tool and finish the tool call.
+/// The ToolCall event is already in the conversation (added by handle_client_tool_call).
 fn execute_simple_tool(
     handle: &Handle<Session>,
     tx: &mpsc::Sender<AiTuiEvent>,
@@ -186,7 +187,7 @@ fn execute_simple_tool(
     tokio::spawn(async move {
         let outcome = tool.execute(&db).await;
         h.update(move |state| {
-            state.complete_tool_call(&tool_id, &tool, outcome);
+            state.finish_tool_call(&tool_id, outcome);
             if !state.tool_tracker.has_unresolved() {
                 let _ = tx.send(AiTuiEvent::ContinueAfterTools);
             }

@@ -649,23 +649,6 @@ impl Session {
             .add_tool_result(tool_id.to_string(), content, is_error);
     }
 
-    /// Record a tool call event + its result in one step (for simple non-preview tools).
-    pub fn complete_tool_call(
-        &mut self,
-        tool_id: &str,
-        tool: &ClientToolCall,
-        outcome: ToolOutcome,
-    ) {
-        // Push the ToolCall event so it appears in the conversation
-        let desc = tool.descriptor();
-        self.add_tool_call(
-            tool_id.to_string(),
-            desc.canonical_names[0].to_string(),
-            serde_json::json!({}),
-        );
-        self.finish_tool_call(tool_id, outcome);
-    }
-
     /// Get the footer text for current mode
     pub fn footer_text(&self) -> &'static str {
         match self.interaction.mode {
