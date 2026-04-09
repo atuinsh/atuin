@@ -6,7 +6,6 @@ use crate::permissions::check::PermissionResponse;
 use crate::permissions::resolver::PermissionResolver;
 use crate::stream::{ChatRequest, run_chat_stream};
 use crate::tools::{ClientToolCall, ToolPhase};
-use crate::tui::ConversationEvent;
 use crate::tui::events::{AiTuiEvent, PermissionResult};
 use crate::tui::state::{ExitAction, Session};
 use eye_declare::Handle;
@@ -311,15 +310,12 @@ fn on_check_tool_permission(
             PermissionResponse::Denied => {
                 let tx = tx_for_task.clone();
                 h2.update(move |state| {
-                    state
-                        .conversation
-                        .events
-                        .push(ConversationEvent::OutOfBandOutput {
-                            name: "System".to_string(),
-                            content: format!("Permission denied for tool call {:?}", &id_clone),
-                            command: None,
-                        });
-                    state.tool_tracker.remove(&id_clone);
+                    state.finish_tool_call(
+                        &id_clone,
+                        crate::tools::ToolOutcome::Error(
+                            "Permission denied on the user's system".to_string(),
+                        ),
+                    );
                     if !state.tool_tracker.has_unresolved() {
                         let _ = tx.send(AiTuiEvent::ContinueAfterTools);
                     }
@@ -374,16 +370,14 @@ fn on_select_permission(
         }
         PermissionResult::Deny => {
             h2.update(move |state| {
-                let Some(tracked) = state.tool_tracker.asking_for_permission_mut() else {
+                let Some(tracked) = state.tool_tracker.asking_for_permission() else {
                     return;
                 };
                 let tool_id = tracked.id.clone();
-                tracked.complete(None);
 
-                state.conversation.add_tool_result(
-                    tool_id,
-                    "Permission denied on the user's system".to_string(),
-                    true,
+                state.finish_tool_call(
+                    &tool_id,
+                    crate::tools::ToolOutcome::Error("Permission denied by the user".to_string()),
                 );
                 if !state.tool_tracker.has_unresolved() {
                     let _ = tx.send(AiTuiEvent::ContinueAfterTools);

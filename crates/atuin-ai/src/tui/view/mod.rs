@@ -247,9 +247,7 @@ fn agent_turn_view(events: &[turn::UiEvent], busy: bool) -> Elements {
                                         })
                                     }
                                 } else {
-                                    Text {
-                                        Span(text: format!("Running tool: {}", details.name), style: Style::default().fg(Color::Blue))
-                                    }
+                                    #(tool_status_view(&details.name, &details.status))
                                 })
                             }
                         }
@@ -295,6 +293,42 @@ fn out_of_band_output_view(details: &turn::OutOfBandOutputDetails) -> Elements {
 fn tool_summary_view(summary: &turn::ToolSummary) -> Elements {
     element! {
         Spinner(label: summary.summary(), done: !summary.any_pending())
+    }
+}
+
+/// Render a status indicator for a non-preview tool call (e.g. atuin_history, read_file).
+fn tool_status_view(name: &str, status: &turn::ToolResultStatus) -> Elements {
+    match status {
+        turn::ToolResultStatus::Pending => {
+            let millis = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis();
+            let frame = (millis / 80) as usize % SPINNER_FRAMES.len();
+
+            element! {
+                Text {
+                    Span(text: format!("{} ", SPINNER_FRAMES[frame]), style: Style::default().fg(Color::DarkGray))
+                    Span(text: format!("Running: {name}"), style: Style::default().fg(Color::Yellow))
+                }
+            }
+        }
+        turn::ToolResultStatus::Success => {
+            element! {
+                Text {
+                    Span(text: "✓ ", style: Style::default().fg(Color::Green))
+                    Span(text: format!("Ran: {name}"), style: Style::default().fg(Color::Green))
+                }
+            }
+        }
+        turn::ToolResultStatus::Error => {
+            element! {
+                Text {
+                    Span(text: "✗ ", style: Style::default().fg(Color::Red))
+                    Span(text: format!("{name}: denied"), style: Style::default().fg(Color::Red))
+                }
+            }
+        }
     }
 }
 
