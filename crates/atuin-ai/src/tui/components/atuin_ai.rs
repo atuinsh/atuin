@@ -55,9 +55,16 @@ fn atuin_ai(
             return EventResult::Ignored;
         };
 
-        // Ctrl+C always exits
+        // Ctrl+C — interrupt executing command or exit
         if modifiers.contains(KeyModifiers::CONTROL) && *code == KeyCode::Char('c') {
-            let _ = tx.send(AiTuiEvent::Exit);
+            match props.mode {
+                AppMode::ExecutingPreview => {
+                    let _ = tx.send(AiTuiEvent::InterruptToolExecution);
+                }
+                _ => {
+                    let _ = tx.send(AiTuiEvent::Exit);
+                }
+            }
             return EventResult::Consumed;
         }
 
@@ -93,6 +100,13 @@ fn atuin_ai(
             AppMode::Generating | AppMode::Streaming => match code {
                 KeyCode::Esc => {
                     let _ = tx.send(AiTuiEvent::CancelGeneration);
+                    EventResult::Consumed
+                }
+                _ => EventResult::Ignored,
+            },
+            AppMode::ExecutingPreview => match code {
+                KeyCode::Esc => {
+                    let _ = tx.send(AiTuiEvent::InterruptToolExecution);
                     EventResult::Consumed
                 }
                 _ => EventResult::Ignored,

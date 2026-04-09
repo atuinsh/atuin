@@ -127,6 +127,8 @@ pub(crate) enum AppMode {
     Streaming,
     /// Error state, can retry
     Error,
+    /// Shell tool is executing with live preview
+    ExecutingPreview,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -419,6 +421,8 @@ pub(crate) struct Session {
     pub exit_action: Option<ExitAction>,
     /// Abort handle for the active streaming task, if any
     pub stream_abort: Option<AbortHandle>,
+    /// Sender to interrupt a running shell command preview.
+    pub shell_abort_tx: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
 impl Session {
@@ -429,6 +433,7 @@ impl Session {
             pending_tool_calls: VecDeque::new(),
             exit_action: None,
             stream_abort: None,
+            shell_abort_tx: None,
         }
     }
 
@@ -578,29 +583,30 @@ impl Session {
             .find(|call| call.id == id)
     }
 
-    /// Record a tool call, its execution result, and remove it from the pending queue.
-    pub fn complete_tool_call(&mut self, pending: &PendingToolCall, outcome: ToolOutcome) {
-        let desc = pending.tool.descriptor();
+    /// Record a tool call event in the conversation.
+    /// Call this BEFORE execution begins so the ToolCall shows in chat output.
+    pub fn begin_tool_call(&mut self, id: &str, tool: &ClientToolCall, input: serde_json::Value) {
+        let desc = tool.descriptor();
+        self.add_tool_call(id.to_string(), desc.canonical_names[0].to_string(), input);
+    }
 
-        // Record the tool call so the view can render a ToolCall → ToolResult pair
-        self.add_tool_call(
-            pending.id.clone(),
-            desc.canonical_names[0].to_string(),
-            serde_json::json!({}),
-        );
-
-        // Record the result
-        match outcome {
-            ToolOutcome::Success(content) => {
-                self.conversation
-                    .add_tool_result(pending.id.clone(), content, false);
-            }
-            ToolOutcome::Error(msg) => {
-                self.conversation
-                    .add_tool_result(pending.id.clone(), msg, true);
-            }
-        }
+    /// Record the result of a tool call and remove it from the pending queue.
+    /// Call this AFTER execution completes. The ToolCall event must already exist
+    /// in the conversation (added by `begin_tool_call`).
+    pub fn finish_tool_call(&mut self, pending: &PendingToolCall, outcome: ToolOutcome) {
+        let content = outcome.format_for_llm();
+        let is_error = outcome.is_error();
+        self.conversation
+            .add_tool_result(pending.id.clone(), content, is_error);
         self.pending_tool_calls.retain(|c| c.id != pending.id);
+    }
+
+    /// Record a tool call, its execution result, and remove it from the pending queue.
+    /// Convenience method that combines begin + finish for tools that don't need
+    /// the ToolCall visible during execution.
+    pub fn complete_tool_call(&mut self, pending: &PendingToolCall, outcome: ToolOutcome) {
+        self.begin_tool_call(&pending.id, &pending.tool, serde_json::json!({}));
+        self.finish_tool_call(pending, outcome);
     }
 
     /// Returns true if any tool calls are still in CheckingPermissions or AskingForPermission state.
@@ -628,6 +634,7 @@ impl Session {
                 }
             }
             AppMode::Generating | AppMode::Streaming => "[Esc] Cancel",
+            AppMode::ExecutingPreview => "[Ctrl+C] Interrupt  [Esc] Interrupt",
             AppMode::Error => "[Enter]/[r] Retry  [Esc] Exit",
         }
     }

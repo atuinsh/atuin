@@ -26,6 +26,8 @@ pub(crate) enum AiTuiEvent {
     InsertCommand,
     /// Cancel confirmation of dangerous command
     CancelConfirmation,
+    /// Interrupt a running tool execution (Ctrl+C during ExecutingPreview)
+    InterruptToolExecution,
     /// Retry after error
     Retry,
     /// Exit the application

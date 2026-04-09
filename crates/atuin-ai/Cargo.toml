@@ -50,6 +50,7 @@ tree-sitter = "0.26.8"
 tree-sitter-bash = "0.25.1"
 tree-sitter-fish = "3.6.0"
 typed-builder = { workspace = true }
+vt100 = "0.16"
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

@@ -1,6 +1,7 @@
 use std::{
     io::BufRead,
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 use eyre::Result;
@@ -11,8 +12,73 @@ use crate::permissions::rule::Rule;
 
 /// Result of executing a client-side tool.
 pub(crate) enum ToolOutcome {
+    /// Simple success with a text result (used by Read, AtuinHistory).
     Success(String),
+    /// Error with a message.
     Error(String),
+    /// Structured shell result with separated stdout, stderr, exit code, and duration.
+    Structured {
+        stdout: String,
+        stderr: String,
+        exit_code: Option<i32>,
+        duration_ms: u64,
+        interrupted: bool,
+    },
+}
+
+impl ToolOutcome {
+    /// Format this outcome as a string for the tool result sent to the LLM.
+    pub fn format_for_llm(&self) -> String {
+        match self {
+            ToolOutcome::Success(s) => s.clone(),
+            ToolOutcome::Error(e) => e.clone(),
+            ToolOutcome::Structured {
+                stdout,
+                stderr,
+                exit_code,
+                duration_ms,
+                interrupted,
+            } => {
+                let mut parts = Vec::new();
+
+                if let Some(code) = exit_code {
+                    parts.push(format!("Exit code: {code}"));
+                }
+
+                parts.push(format!("Duration: {duration_ms}ms"));
+
+                if !stdout.is_empty() {
+                    parts.push(format!("stdout:\n{stdout}"));
+                } else {
+                    parts.push("stdout: (empty)".to_string());
+                }
+
+                if !stderr.is_empty() {
+                    parts.push(format!("stderr:\n{stderr}"));
+                } else {
+                    parts.push("stderr: (empty)".to_string());
+                }
+
+                if *interrupted {
+                    parts.push("[Interrupted by user]".to_string());
+                }
+
+                parts.join("\n\n")
+            }
+        }
+    }
+
+    /// Whether this outcome represents an error.
+    pub fn is_error(&self) -> bool {
+        match self {
+            ToolOutcome::Error(_) => true,
+            ToolOutcome::Structured {
+                exit_code: Some(code),
+                ..
+            } if *code != 0 => true,
+            _ => false,
+        }
+    }
 }
 
 /// A pending tool call from the server, awaiting permissions or execution.
@@ -44,6 +110,16 @@ impl PendingToolCall {
     pub fn mark_denied(&mut self, reason: String) {
         self.state = ToolCallState::Denied(reason);
     }
+
+    /// Mark this tool call as executing with a live preview.
+    pub fn mark_executing_preview(&mut self, command: String) {
+        self.state = ToolCallState::ExecutingPreview {
+            command,
+            output_lines: Vec::new(),
+            exit_code: None,
+            interrupted: false,
+        };
+    }
 }
 
 /// State of a pending tool call
@@ -53,6 +129,16 @@ pub(crate) enum ToolCallState {
     AskingForPermission,
     Denied(String),
     Executing,
+    /// Shell command is executing with live preview output.
+    ExecutingPreview {
+        command: String,
+        /// Current VT100 screen lines (plain text, viewport-sized).
+        output_lines: Vec<String>,
+        /// Exit code once the process completes.
+        exit_code: Option<i32>,
+        /// Whether the command was interrupted by the user.
+        interrupted: bool,
+    },
 }
 
 /// A tool call from the server, with parsed input parameters.
@@ -74,7 +160,7 @@ impl TryFrom<(&str, &serde_json::Value)> for ClientToolCall {
             "str_replace" => Ok(ClientToolCall::Write(WriteToolCall::try_from(input)?)),
             "file_create" => Ok(ClientToolCall::Write(WriteToolCall::try_from(input)?)),
             "file_insert" => Ok(ClientToolCall::Write(WriteToolCall::try_from(input)?)),
-            "shell" => Ok(ClientToolCall::Shell(ShellToolCall::try_from(input)?)),
+            "execute_shell_command" => Ok(ClientToolCall::Shell(ShellToolCall::try_from(input)?)),
             "atuin_history" => Ok(ClientToolCall::AtuinHistory(
                 AtuinHistoryToolCall::try_from(input)?,
             )),
@@ -368,6 +454,167 @@ impl PermissableToolCall for ShellToolCall {
         let shell_kind = crate::permissions::shell::ShellKind::from_shell_name(&self.shell);
         let parsed = crate::permissions::shell::parse_shell_command(&self.command, shell_kind);
         crate::permissions::shell::any_subcommand_matches(&parsed.subcommands, scope)
+    }
+}
+
+/// Preview viewport height for VT100 emulation.
+const PREVIEW_HEIGHT: u16 = 10;
+
+/// Default terminal width for VT100 emulation.
+const PREVIEW_WIDTH: u16 = 120;
+
+/// Extract plain text lines from a VT100 screen buffer.
+fn vt100_screen_lines(screen: &vt100::Screen) -> Vec<String> {
+    let (rows, cols) = screen.size();
+    let mut lines = Vec::with_capacity(rows as usize);
+    for row in 0..rows {
+        let mut line = String::with_capacity(cols as usize);
+        for col in 0..cols {
+            if let Some(cell) = screen.cell(row, col) {
+                line.push_str(cell.contents());
+            }
+        }
+        // Trim trailing whitespace for cleaner display
+        lines.push(line.trim_end().to_string());
+    }
+    lines
+}
+
+/// Execute a shell command with VT100 emulation and streaming output.
+///
+/// Feeds stdout+stderr into a `vt100::Parser` so that ANSI escape sequences,
+/// progress bars (`\r`), and cursor movement are handled correctly. Periodically
+/// sends the current screen state as `Vec<String>` through `output_tx` for the
+/// live preview.
+///
+/// Captures the FULL stdout and stderr separately for the tool result sent to the LLM.
+/// Returns a `ToolOutcome::Structured` with full output, exit code, and duration.
+pub(crate) async fn execute_shell_command_streaming(
+    shell_call: &ShellToolCall,
+    output_tx: tokio::sync::mpsc::Sender<Vec<String>>,
+    mut interrupt_rx: tokio::sync::oneshot::Receiver<()>,
+) -> ToolOutcome {
+    use tokio::io::AsyncReadExt;
+
+    let start = std::time::Instant::now();
+
+    // TODO: check if this is proper for all shells we support
+    let mut cmd = tokio::process::Command::new(&shell_call.shell);
+    cmd.arg("-c").arg(&shell_call.command);
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+
+    if let Some(ref dir) = shell_call.dir {
+        cmd.current_dir(dir);
+    }
+
+    let mut child = match cmd.spawn() {
+        Ok(child) => child,
+        Err(e) => return ToolOutcome::Error(format!("Failed to spawn command: {e}")),
+    };
+
+    let stdout = child.stdout.take().expect("stdout was piped");
+    let stderr = child.stderr.take().expect("stderr was piped");
+
+    // VT100 emulator for the live preview (viewport-sized)
+    let mut parser = vt100::Parser::new(PREVIEW_HEIGHT, PREVIEW_WIDTH, 0);
+
+    let mut stdout_reader = tokio::io::BufReader::new(stdout);
+    let mut stderr_reader = tokio::io::BufReader::new(stderr);
+
+    let mut stdout_buf = [0u8; 4096];
+    let mut stderr_buf = [0u8; 4096];
+    let mut stdout_done = false;
+    let mut stderr_done = false;
+
+    // Full output buffers (for the LLM, not the preview)
+    let mut full_stdout = Vec::<u8>::new();
+    let mut full_stderr = Vec::<u8>::new();
+
+    let mut interval = tokio::time::interval(Duration::from_millis(50));
+
+    // Send initial empty screen
+    let initial_lines = vt100_screen_lines(parser.screen());
+    let _ = output_tx.send(initial_lines).await;
+
+    let mut interrupted = false;
+
+    loop {
+        tokio::select! {
+            biased;
+
+            // Check for interrupt signal
+            _ = &mut interrupt_rx, if !interrupted => {
+                interrupted = true;
+                let _ = child.start_kill();
+            }
+
+            // Read stdout
+            result = stdout_reader.read(&mut stdout_buf), if !stdout_done => {
+                match result {
+                    Ok(0) => stdout_done = true,
+                    Ok(n) => {
+                        full_stdout.extend_from_slice(&stdout_buf[..n]);
+                        parser.process(&stdout_buf[..n]);
+                    }
+                    Err(_) => stdout_done = true,
+                }
+            }
+
+            // Read stderr
+            result = stderr_reader.read(&mut stderr_buf), if !stderr_done => {
+                match result {
+                    Ok(0) => stderr_done = true,
+                    Ok(n) => {
+                        full_stderr.extend_from_slice(&stderr_buf[..n]);
+                        // Feed stderr to the preview parser too, so it shows in the VT100 screen
+                        parser.process(&stderr_buf[..n]);
+                    }
+                    Err(_) => stderr_done = true,
+                }
+            }
+
+            // Periodic screen snapshot for preview
+            _ = interval.tick() => {
+                let lines = vt100_screen_lines(parser.screen());
+                let _ = output_tx.send(lines).await;
+            }
+        }
+
+        // Exit when both streams are done
+        if stdout_done && stderr_done {
+            break;
+        }
+    }
+
+    // Wait for process to finish
+    let exit_code = match child.wait().await {
+        Ok(status) => status.code(),
+        Err(e) => {
+            if interrupted {
+                None
+            } else {
+                return ToolOutcome::Error(format!("Failed to wait for command: {e}"));
+            }
+        }
+    };
+
+    let duration = start.elapsed();
+
+    // Send final screen state
+    let final_lines = vt100_screen_lines(parser.screen());
+    let _ = output_tx.send(final_lines).await;
+
+    // Strip ANSI from the raw bytes for clean LLM output
+    let stdout_text = String::from_utf8_lossy(&full_stdout).to_string();
+    let stderr_text = String::from_utf8_lossy(&full_stderr).to_string();
+
+    ToolOutcome::Structured {
+        stdout: stdout_text,
+        stderr: stderr_text,
+        exit_code,
+        duration_ms: duration.as_millis() as u64,
+        interrupted,
     }
 }
 

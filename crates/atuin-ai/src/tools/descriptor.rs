@@ -35,7 +35,7 @@ pub(crate) const WRITE: &ToolDescriptor = &ToolDescriptor {
 };
 
 pub(crate) const SHELL: &ToolDescriptor = &ToolDescriptor {
-    canonical_names: &["shell"],
+    canonical_names: &["execute_shell_command"],
     display_verb: "run",
     progressive_verb: "Running command...",
     past_verb: "Ran command",

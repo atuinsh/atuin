@@ -1,7 +1,8 @@
 //! View function that builds the eye-declare element tree from app state.
 
 use eye_declare::{
-    Cells, Column, Elements, HStack, Span, Spinner, Text, View, WidthConstraint, element,
+    BorderType, Cells, Column, Elements, HStack, Span, Spinner, Text, View, Viewport,
+    WidthConstraint, element,
 };
 use ratatui_core::style::{Color, Modifier, Style};
 
@@ -66,17 +67,26 @@ pub(crate) fn ai_view(state: &Session) -> Elements {
 }
 
 fn input_view(state: &Session) -> Elements {
-    let first_pending_tool_call = state
+    let asking_tool = state
         .pending_tool_calls
         .iter()
         .find(|call| call.state == ToolCallState::AskingForPermission);
 
+    let executing_tool = state
+        .pending_tool_calls
+        .iter()
+        .find(|call| matches!(call.state, ToolCallState::ExecutingPreview { .. }));
+
     element! {
-        #(if first_pending_tool_call.is_some() {
-            #(tool_call_view(first_pending_tool_call.unwrap()))
+        #(if let Some(tc) = asking_tool {
+            #(tool_call_view(tc))
         })
 
-        #(if first_pending_tool_call.is_none() {
+        #(if let Some(tc) = executing_tool {
+            #(executing_preview_view(tc))
+        })
+
+        #(if asking_tool.is_none() && executing_tool.is_none() {
             View(key: "input-box", padding_top: Cells::from(1)) {
                 InputBox(
                     key: "input",
@@ -143,6 +153,70 @@ fn tool_call_view(tool_call: &PendingToolCall) -> Elements {
                     Some(AiTuiEvent::SelectPermission(value))
                 }) as Box<dyn Fn(&SelectOption) -> Option<AiTuiEvent> + Send + Sync>)
             }
+        }
+    }
+}
+
+fn executing_preview_view(tool_call: &PendingToolCall) -> Elements {
+    let (command, output_lines, exit_code, interrupted) = match &tool_call.state {
+        ToolCallState::ExecutingPreview {
+            command,
+            output_lines,
+            exit_code,
+            interrupted,
+        } => (
+            command.clone(),
+            output_lines.clone(),
+            *exit_code,
+            *interrupted,
+        ),
+        _ => return element! {},
+    };
+
+    let spinner_done = exit_code.is_some() || interrupted;
+
+    element! {
+        View(key: format!("preview-{}", tool_call.id), padding_left: Cells::from(2), padding_top: Cells::from(1)) {
+            // Command header with spinner
+            Spinner(
+                label: format!(" Running: {}", command),
+                label_style: Style::default().fg(Color::Yellow),
+                done: spinner_done,
+            )
+
+            // Fixed-height viewport showing the VT100 screen output
+            Viewport(
+                lines: output_lines,
+                height: 10,
+                border: BorderType::Plain,
+                border_style: Style::default().fg(Color::DarkGray),
+                style: Style::default().fg(Color::White),
+            )
+
+            // Status line
+            #(if let Some(code) = exit_code {
+                #(if code == 0 {
+                    Text {
+                        Span(text: format!("Exit code: {code}"), style: Style::default().fg(Color::Green))
+                    }
+                } else {
+                    Text {
+                        Span(text: format!("Exit code: {code}"), style: Style::default().fg(Color::Red))
+                    }
+                })
+            })
+
+            #(if interrupted {
+                Text {
+                    Span(text: "Interrupted", style: Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
+                }
+            })
+
+            #(if !spinner_done {
+                Text {
+                    Span(text: "[Ctrl+C] Interrupt", style: Style::default().fg(Color::DarkGray))
+                }
+            })
         }
     }
 }

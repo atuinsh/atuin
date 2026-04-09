@@ -5,10 +5,10 @@ use crate::context::{AppContext, ClientContext};
 use crate::permissions::check::PermissionResponse;
 use crate::permissions::resolver::PermissionResolver;
 use crate::stream::{ChatRequest, run_chat_stream};
-use crate::tools::ToolCallState;
+use crate::tools::{ClientToolCall, PendingToolCall, ToolCallState};
 use crate::tui::ConversationEvent;
 use crate::tui::events::{AiTuiEvent, PermissionResult};
-use crate::tui::state::{ExitAction, Session};
+use crate::tui::state::{AppMode, ExitAction, Session};
 use eye_declare::Handle;
 use tokio::task::JoinHandle;
 
@@ -46,6 +46,9 @@ pub(crate) fn dispatch(
         }
         AiTuiEvent::CancelConfirmation => {
             on_cancel_confirmation(handle);
+        }
+        AiTuiEvent::InterruptToolExecution => {
+            on_interrupt_tool_execution(handle);
         }
         AiTuiEvent::InsertCommand => {
             on_insert_command(handle);
@@ -144,6 +147,138 @@ fn on_slash_command(handle: &Handle<Session>, command: String) {
     });
 }
 
+// ───────────────────────────────────────────────────────────────────
+// Tool execution dispatch
+// ───────────────────────────────────────────────────────────────────
+
+/// Execute a tool call. Handles Shell tools (streaming with preview) and
+/// non-shell tools (synchronous) uniformly. Callers provide the resolved
+/// PendingToolCall; this function handles all state transitions.
+fn execute_tool(
+    handle: &Handle<Session>,
+    tx: &mpsc::Sender<AiTuiEvent>,
+    tool_call: PendingToolCall,
+    db: &std::sync::Arc<atuin_client::database::Sqlite>,
+) {
+    match &tool_call.tool {
+        ClientToolCall::Shell(shell_call) => {
+            let shell_call = shell_call.clone();
+            execute_shell_tool(handle, tx, tool_call, &shell_call);
+        }
+        _ => {
+            execute_simple_tool(handle, tx, tool_call, db);
+        }
+    }
+}
+
+/// Execute a non-shell tool synchronously and complete the tool call.
+fn execute_simple_tool(
+    handle: &Handle<Session>,
+    tx: &mpsc::Sender<AiTuiEvent>,
+    tool_call: PendingToolCall,
+    db: &std::sync::Arc<atuin_client::database::Sqlite>,
+) {
+    let h = handle.clone();
+    let tx = tx.clone();
+    let db = db.clone();
+
+    tokio::spawn(async move {
+        let outcome = tool_call.tool.execute(&db).await;
+        h.update(move |state| {
+            state.complete_tool_call(&tool_call, outcome);
+            if !state.has_unresolved_tool_calls() {
+                let _ = tx.send(AiTuiEvent::ContinueAfterTools);
+            }
+        });
+    });
+}
+
+/// Execute a shell tool with streaming VT100 preview. The ToolCall event is
+/// added to the conversation immediately so it persists in chat output.
+/// A live preview renders in the input area during execution.
+fn execute_shell_tool(
+    handle: &Handle<Session>,
+    tx: &mpsc::Sender<AiTuiEvent>,
+    tool_call: PendingToolCall,
+    shell_call: &crate::tools::ShellToolCall,
+) {
+    let h = handle.clone();
+    let tx = tx.clone();
+    let shell_call = shell_call.clone();
+    let command = shell_call.command.clone();
+
+    // Extract all data we need before moving into closures
+    let tc_id = tool_call.id.clone();
+    let tc_id_for_update = tc_id.clone();
+    let tc_for_finish = tool_call.clone();
+    let tool_for_begin = tool_call.tool.clone();
+
+    // Build the input JSON for the ToolCall event (matches server format)
+    let input_json = serde_json::json!({
+        "command": shell_call.command,
+        "dir": shell_call.dir,
+        "shell": shell_call.shell,
+    });
+
+    // 1. Immediately add the ToolCall event to conversation and enter preview mode
+    h.update(move |state| {
+        state.begin_tool_call(&tc_id_for_update, &tool_for_begin, input_json);
+        if let Some(tc) = state.pending_tool_call_mut(&tc_id_for_update) {
+            tc.mark_executing_preview(command);
+        }
+        state.interaction.mode = AppMode::ExecutingPreview;
+        state.shell_abort_tx = None; // will be set below
+    });
+
+    // 2. Set up channels for streaming output and interruption
+    let (output_tx, mut output_rx) = tokio::sync::mpsc::channel::<Vec<String>>(32);
+    let (abort_tx, abort_rx) = tokio::sync::oneshot::channel::<()>();
+
+    h.update(move |state| {
+        state.shell_abort_tx = Some(abort_tx);
+    });
+
+    // 3. Spawn the streaming execution task
+    let h_exec = h.clone();
+    let tx_exec = tx.clone();
+    tokio::spawn(async move {
+        let outcome =
+            crate::tools::execute_shell_command_streaming(&shell_call, output_tx, abort_rx).await;
+
+        h_exec.update(move |state| {
+            state.finish_tool_call(&tc_for_finish, outcome);
+            state.shell_abort_tx = None;
+            state.interaction.mode = AppMode::Input;
+            if !state.has_unresolved_tool_calls() {
+                let _ = tx_exec.send(AiTuiEvent::ContinueAfterTools);
+            }
+        });
+    });
+
+    // 4. Spawn a task to consume output updates and feed them to state
+    let h_output = h.clone();
+    let preview_id = tc_id;
+    tokio::spawn(async move {
+        while let Some(lines) = output_rx.recv().await {
+            let id = preview_id.clone();
+            h_output.update(move |state| {
+                if let Some(tc) = state.pending_tool_call_mut(&id)
+                    && let ToolCallState::ExecutingPreview {
+                        ref mut output_lines,
+                        ..
+                    } = tc.state
+                {
+                    *output_lines = lines;
+                }
+            });
+        }
+    });
+}
+
+// ───────────────────────────────────────────────────────────────────
+// Permission handlers
+// ───────────────────────────────────────────────────────────────────
+
 fn on_check_tool_permission(
     handle: &Handle<Session>,
     tx: &mpsc::Sender<AiTuiEvent>,
@@ -185,13 +320,7 @@ fn on_check_tool_permission(
         // 4. Handle response
         match response {
             PermissionResponse::Allowed => {
-                let outcome = tool_call.tool.execute(&db).await;
-                h2.update(move |state| {
-                    state.complete_tool_call(&tool_call, outcome);
-                    if !state.has_unresolved_tool_calls() {
-                        let _ = tx_for_task.send(AiTuiEvent::ContinueAfterTools);
-                    }
-                });
+                execute_tool(&h2, &tx_for_task, tool_call, &db);
             }
             PermissionResponse::Denied => {
                 let tx = tx_for_task.clone();
@@ -229,13 +358,12 @@ fn on_select_permission(
 ) {
     let tx = tx.clone();
     let h2 = handle.clone();
-    let db = app_ctx.history_db.clone();
 
     match permission {
         PermissionResult::Allow => {
-            // Fetch the tool call that's asking for permission, then execute it async
+            // Fetch the tool call that's asking for permission, then execute it
             let h3 = h2.clone();
-            let tx2 = tx.clone();
+            let db = app_ctx.history_db.clone();
             tokio::spawn(async move {
                 let Ok(Some(tool_call)) = h3
                     .fetch(move |state| {
@@ -250,13 +378,7 @@ fn on_select_permission(
                     return;
                 };
 
-                let outcome = tool_call.tool.execute(&db).await;
-                h3.update(move |state| {
-                    state.complete_tool_call(&tool_call, outcome);
-                    if !state.has_unresolved_tool_calls() {
-                        let _ = tx2.send(AiTuiEvent::ContinueAfterTools);
-                    }
-                });
+                execute_tool(&h3, &tx, tool_call, &db);
             });
         }
         PermissionResult::AlwaysAllowInDir => {
@@ -293,6 +415,10 @@ fn on_select_permission(
         }
     }
 }
+
+// ───────────────────────────────────────────────────────────────────
+// Other handlers
+// ───────────────────────────────────────────────────────────────────
 
 fn on_cancel_generation(handle: &Handle<Session>) {
     handle.update(|state| match state.interaction.mode {
@@ -361,5 +487,33 @@ fn on_exit(handle: &Handle<Session>) {
         }
         state.exit_action = Some(ExitAction::Cancel);
         h2.exit();
+    });
+}
+
+fn on_interrupt_tool_execution(handle: &Handle<Session>) {
+    handle.update(move |state| {
+        // Send interrupt signal to the running shell command
+        if let Some(abort_tx) = state.shell_abort_tx.take() {
+            let _ = abort_tx.send(());
+        }
+
+        // Mark the executing preview as interrupted
+        for tc in &mut state.pending_tool_calls {
+            if let ToolCallState::ExecutingPreview {
+                ref mut interrupted,
+                ref mut exit_code,
+                ..
+            } = tc.state
+            {
+                *interrupted = true;
+                if exit_code.is_none() {
+                    *exit_code = Some(-1);
+                }
+            }
+        }
+
+        // Return to input mode — the spawned execution task will handle
+        // finalizing and sending ContinueAfterTools when the process exits.
+        state.interaction.mode = AppMode::Input;
     });
 }
