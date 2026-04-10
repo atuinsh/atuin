@@ -308,7 +308,7 @@ async fn set_ai_enabled(enabled: bool) -> Result<()> {
 
     if !enabled {
         println!(
-            "Atuin AI keybind disabled. You can reenable with `atuin config set ai.enabled true`.",
+            "Atuin AI keybind disabled. You can re-enable with `atuin config set ai.enabled true`.",
         );
         println!("Restart your shell for changes to take effect.");
         // Two printlns to ensure the message is visible above the shell prompt after program ends.
