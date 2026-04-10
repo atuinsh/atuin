@@ -1,9 +1,13 @@
 use std::io::Read;
 use std::path::PathBuf;
 
+use atuin_client::settings::Settings;
 use atuin_common::utils::home_dir;
-use eyre::Result;
+use clap::{Parser, Subcommand};
+use eyre::{Result, bail};
 use serde_json::Value;
+
+use super::history;
 
 const HOOK_EVENT_TYPES: &[&str] = &["PreToolUse", "PostToolUse", "PostToolUseFailure"];
 
@@ -19,7 +23,7 @@ const CLAUDE_CODE: AgentSpec = AgentSpec {
     aliases: &["claude-code", "claude"],
     actor_name: "claude-code",
     config_path: &[".claude", "settings.json"],
-    hook_command: "atuin ai hook claude-code",
+    hook_command: "atuin hook claude-code",
     matcher: "Bash",
 };
 
@@ -27,7 +31,7 @@ const CODEX: AgentSpec = AgentSpec {
     aliases: &["codex"],
     actor_name: "codex",
     config_path: &[".codex", "hooks.json"],
-    hook_command: "atuin ai hook codex",
+    hook_command: "atuin hook codex",
     matcher: "^Bash$",
 };
 
@@ -64,6 +68,38 @@ impl Agent {
 
     fn matcher(&self) -> &'static str {
         self.0.matcher
+    }
+}
+
+#[derive(Subcommand, Debug)]
+enum Action {
+    /// Install hooks for an AI agent to capture commands in atuin history
+    Install {
+        /// Agent to install hooks for (e.g., "claude-code")
+        #[arg(value_name = "AGENT")]
+        agent: String,
+    },
+}
+
+#[derive(Parser, Debug)]
+#[command(infer_subcommands = true, args_conflicts_with_subcommands = true)]
+pub struct Cmd {
+    #[command(subcommand)]
+    action: Option<Action>,
+
+    /// Which agent's hook format to parse (e.g., "claude-code")
+    #[arg(value_name = "AGENT", hide = true)]
+    agent: Option<String>,
+}
+
+impl Cmd {
+    pub async fn run(self, settings: &Settings) -> Result<()> {
+        match (self.action, self.agent) {
+            (Some(Action::Install { agent }), None) => install(&agent),
+            (None, Some(agent)) => handle(&agent, settings).await,
+            (None, None) => bail!("expected `atuin hook <agent>` or `atuin hook install <agent>`"),
+            (Some(_), Some(_)) => bail!("hook action cannot be combined with a positional agent"),
+        }
     }
 }
 
@@ -122,7 +158,7 @@ fn parse_hook_stdin(input: &str) -> Result<HookEvent> {
             } else {
                 v.get("tool_response")
                     .and_then(|tr| tr.get("exitCode"))
-                    .and_then(|e| e.as_i64())
+                    .and_then(Value::as_i64)
                     .unwrap_or(0)
             };
 
@@ -136,7 +172,7 @@ fn id_file_path(tool_use_id: &str) -> PathBuf {
     std::env::temp_dir().join(format!("atuin-hook-{tool_use_id}"))
 }
 
-pub async fn handle(agent_name: &str, _settings: &atuin_client::settings::Settings) -> Result<()> {
+async fn handle(agent_name: &str, settings: &Settings) -> Result<()> {
     let agent = Agent::from_name(agent_name)?;
 
     let mut input = String::new();
@@ -146,31 +182,20 @@ pub async fn handle(agent_name: &str, _settings: &atuin_client::settings::Settin
         return Ok(());
     }
 
-    let event = parse_hook_stdin(&input)?;
-    let atuin_bin = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("atuin"));
-
-    match event {
+    match parse_hook_stdin(&input)? {
         HookEvent::Start {
             command,
             intent,
             tool_use_id,
         } => {
-            let actor = agent.actor_name();
-            let mut args = vec!["history", "start", "--author", actor];
-
-            if let Some(ref i) = intent {
-                args.extend(["--intent", i.as_str()]);
-            }
-
-            args.extend(["--", &command]);
-
-            let output = tokio::process::Command::new(&atuin_bin)
-                .args(&args)
-                .output()
-                .await?;
-
-            let history_id = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !history_id.is_empty() {
+            if let Some(history_id) = history::start_history_entry(
+                settings,
+                &command,
+                Some(agent.actor_name()),
+                intent.as_deref(),
+            )
+            .await?
+            {
                 std::fs::write(id_file_path(&tool_use_id), &history_id)?;
             }
         }
@@ -180,11 +205,7 @@ pub async fn handle(agent_name: &str, _settings: &atuin_client::settings::Settin
             if let Ok(history_id) = std::fs::read_to_string(&id_path) {
                 let history_id = history_id.trim();
                 if !history_id.is_empty() {
-                    let exit_str = exit.to_string();
-                    let _ = tokio::process::Command::new(&atuin_bin)
-                        .args(["history", "end", "--exit", &exit_str, "--", history_id])
-                        .output()
-                        .await;
+                    let _ = history::end_history_entry(settings, history_id, exit, None).await;
                 }
                 let _ = std::fs::remove_file(&id_path);
             }
@@ -195,7 +216,7 @@ pub async fn handle(agent_name: &str, _settings: &atuin_client::settings::Settin
     Ok(())
 }
 
-pub async fn install(agent_name: &str) -> Result<()> {
+fn install(agent_name: &str) -> Result<()> {
     let agent = Agent::from_name(agent_name)?;
     let config_path = agent.config_path();
 
@@ -230,7 +251,6 @@ pub async fn install(agent_name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Shared logic: add PreToolUse + PostToolUse entries to a hooks object.
 fn add_hook_entries(hooks: &mut Value, agent: &Agent) -> Result<()> {
     let hook_command = agent.hook_command();
     let matcher = agent.matcher();
@@ -271,6 +291,42 @@ fn add_hook_entries(hooks: &mut Value, agent: &Agent) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        Atuin,
+        command::{AtuinCmd, client},
+    };
+    use clap::Parser;
+
+    #[test]
+    fn parse_hook_agent_command() {
+        let cmd = Cmd::try_parse_from(["hook", "codex"]).unwrap();
+
+        assert!(matches!(
+            (cmd.action, cmd.agent.as_deref()),
+            (None, Some("codex"))
+        ));
+    }
+
+    #[test]
+    fn parse_hook_install_command() {
+        let cmd = Cmd::try_parse_from(["hook", "install", "codex"]).unwrap();
+
+        match (cmd.action, cmd.agent) {
+            (Some(Action::Install { agent }), None) => assert_eq!(agent, "codex"),
+            other => panic!("unexpected parsed command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_top_level_hook_command() {
+        let cmd = Atuin::try_parse_from(["atuin", "hook", "codex"]).unwrap();
+
+        assert!(matches!(
+            cmd.atuin,
+            AtuinCmd::Client(client::Cmd::Hook(Cmd { action: None, agent: Some(agent) }))
+                if agent == "codex"
+        ));
+    }
 
     #[test]
     fn test_parse_pre_tool_use() {
