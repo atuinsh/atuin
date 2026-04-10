@@ -188,7 +188,7 @@ fn execute_simple_tool(
         let outcome = tool.execute(&db).await;
         h.update(move |state| {
             state.finish_tool_call(&tool_id, outcome);
-            if !state.tool_tracker.has_unresolved() {
+            if !state.tool_tracker.has_pending() {
                 let _ = tx.send(AiTuiEvent::ContinueAfterTools);
             }
         });
@@ -251,7 +251,7 @@ fn execute_shell_tool(
 
         h.update(move |state| {
             state.finish_tool_call(&tc_id_finish, outcome);
-            if !state.tool_tracker.has_unresolved() {
+            if !state.tool_tracker.has_pending() {
                 let _ = tx.send(AiTuiEvent::ContinueAfterTools);
             }
         });
@@ -315,7 +315,7 @@ fn on_check_tool_permission(
                             "Permission denied on the user's system".to_string(),
                         ),
                     );
-                    if !state.tool_tracker.has_unresolved() {
+                    if !state.tool_tracker.has_pending() {
                         let _ = tx.send(AiTuiEvent::ContinueAfterTools);
                     }
                 });
@@ -433,7 +433,7 @@ fn on_select_permission(
                     &tool_id,
                     crate::tools::ToolOutcome::Error("Permission denied by the user".to_string()),
                 );
-                if !state.tool_tracker.has_unresolved() {
+                if !state.tool_tracker.has_pending() {
                     let _ = tx.send(AiTuiEvent::ContinueAfterTools);
                 }
             });

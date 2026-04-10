@@ -16,6 +16,10 @@ pub(crate) enum RuleDisposition {
 /// If the file doesn't exist it is created (along with parent directories).
 /// If it does exist, `toml_edit` is used to append the rule while preserving
 /// existing formatting and comments.
+///
+/// **Not concurrent-safe.** The read-modify-write cycle is not atomic. In the
+/// current UI this is fine — the Select widget serializes permission decisions —
+/// but callers should not invoke this concurrently for the same file.
 pub(crate) async fn write_rule(
     file_path: &Path,
     rule: &Rule,
@@ -88,10 +92,8 @@ mod tests {
 
     #[tokio::test]
     async fn creates_new_file_with_allow_rule() {
-        let dir = std::env::temp_dir().join("atuin-writer-test-new");
-        let _ = tokio::fs::remove_dir_all(&dir).await;
-
-        let file = dir.join("permissions.ai.toml");
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("permissions.ai.toml");
         let rule = Rule {
             tool: "AtuinHistory".to_string(),
             scope: None,
@@ -104,17 +106,12 @@ mod tests {
         let content = tokio::fs::read_to_string(&file).await.unwrap();
         assert!(content.contains("[permissions]"));
         assert!(content.contains(r#""AtuinHistory""#));
-
-        let _ = tokio::fs::remove_dir_all(&dir).await;
     }
 
     #[tokio::test]
     async fn appends_to_existing_file() {
-        let dir = std::env::temp_dir().join("atuin-writer-test-append");
-        let _ = tokio::fs::remove_dir_all(&dir).await;
-        tokio::fs::create_dir_all(&dir).await.unwrap();
-
-        let file = dir.join("permissions.ai.toml");
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("permissions.ai.toml");
         let existing = r#"# My permissions
 [permissions]
 allow = ["Read"]
@@ -135,17 +132,12 @@ allow = ["Read"]
         // Both rules present
         assert!(content.contains(r#""Read""#));
         assert!(content.contains(r#""AtuinHistory""#));
-
-        let _ = tokio::fs::remove_dir_all(&dir).await;
     }
 
     #[tokio::test]
     async fn does_not_duplicate_existing_rule() {
-        let dir = std::env::temp_dir().join("atuin-writer-test-dedup");
-        let _ = tokio::fs::remove_dir_all(&dir).await;
-        tokio::fs::create_dir_all(&dir).await.unwrap();
-
-        let file = dir.join("permissions.ai.toml");
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("permissions.ai.toml");
         let existing = r#"[permissions]
 allow = ["AtuinHistory"]
 "#;
@@ -162,17 +154,12 @@ allow = ["AtuinHistory"]
         let content = tokio::fs::read_to_string(&file).await.unwrap();
         // Should appear exactly once
         assert_eq!(content.matches("AtuinHistory").count(), 1);
-
-        let _ = tokio::fs::remove_dir_all(&dir).await;
     }
 
     #[tokio::test]
     async fn handles_inline_table_permissions() {
-        let dir = std::env::temp_dir().join("atuin-writer-test-inline");
-        let _ = tokio::fs::remove_dir_all(&dir).await;
-        tokio::fs::create_dir_all(&dir).await.unwrap();
-
-        let file = dir.join("permissions.ai.toml");
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("permissions.ai.toml");
         // Inline table style — as_table_mut() would return None for this
         let existing = r#"permissions = { allow = ["Read"] }
 "#;
@@ -189,16 +176,12 @@ allow = ["AtuinHistory"]
         let content = tokio::fs::read_to_string(&file).await.unwrap();
         assert!(content.contains(r#""Read""#));
         assert!(content.contains(r#""AtuinHistory""#));
-
-        let _ = tokio::fs::remove_dir_all(&dir).await;
     }
 
     #[tokio::test]
     async fn writes_deny_rule() {
-        let dir = std::env::temp_dir().join("atuin-writer-test-deny");
-        let _ = tokio::fs::remove_dir_all(&dir).await;
-
-        let file = dir.join("permissions.ai.toml");
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("permissions.ai.toml");
         let rule = Rule {
             tool: "Shell".to_string(),
             scope: None,
@@ -211,7 +194,5 @@ allow = ["AtuinHistory"]
         let content = tokio::fs::read_to_string(&file).await.unwrap();
         assert!(content.contains("deny"));
         assert!(content.contains(r#""Shell""#));
-
-        let _ = tokio::fs::remove_dir_all(&dir).await;
     }
 }

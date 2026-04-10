@@ -250,7 +250,8 @@ impl ToolTracker {
         Some(self.tools.remove(pos))
     }
 
-    /// True if any tool is still in CheckingPermissions or AskingForPermission.
+    /// True if any tool is still awaiting a permission decision.
+    #[expect(dead_code)]
     pub fn has_unresolved(&self) -> bool {
         self.tools.iter().any(|t| {
             matches!(
@@ -258,6 +259,15 @@ impl ToolTracker {
                 ToolPhase::CheckingPermissions | ToolPhase::AskingForPermission
             )
         })
+    }
+
+    /// True if any tool has not yet reached the Completed phase.
+    /// Use this to gate `ContinueAfterTools` — we must wait for all tools
+    /// (including those still executing) before resuming the conversation.
+    pub fn has_pending(&self) -> bool {
+        self.tools
+            .iter()
+            .any(|t| !matches!(t.phase, ToolPhase::Completed { .. }))
     }
 
     /// True if any tool is currently executing with a preview.

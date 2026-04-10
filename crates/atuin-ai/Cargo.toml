@@ -56,3 +56,4 @@ vt100 = "0.16"
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
