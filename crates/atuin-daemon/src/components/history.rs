@@ -20,9 +20,9 @@ use crate::{
     daemon::{Component, DaemonHandle},
     events::DaemonEvent,
     history::{
-        EndHistoryReply, EndHistoryRequest, HistoryEventKind, ShutdownReply, ShutdownRequest,
-        StartHistoryReply, StartHistoryRequest, StatusReply, StatusRequest, TailHistoryReply,
-        TailHistoryRequest,
+        EndHistoryReply, EndHistoryRequest, HistoryEntry, HistoryEventKind, RecordMeta,
+        ShutdownReply, ShutdownRequest, StartHistoryReply, StartHistoryRequest, StatusReply,
+        StatusRequest, TailHistoryReply, TailHistoryRequest,
         history_server::{History as HistorySvc, HistoryServer},
     },
 };
@@ -124,18 +124,22 @@ fn history_to_tail_reply(
 ) -> TailHistoryReply {
     TailHistoryReply {
         kind: kind as i32,
-        timestamp: history.timestamp.unix_timestamp_nanos() as u64,
-        id: history.id.0,
-        command: history.command,
-        cwd: history.cwd,
-        session: history.session,
-        hostname: history.hostname,
-        author: history.author,
-        intent: history.intent.unwrap_or_default(),
-        exit: history.exit,
-        duration: history.duration,
-        record_id: record_id.unwrap_or_default(),
-        record_idx: record_idx.unwrap_or_default(),
+        history: Some(HistoryEntry {
+            timestamp: history.timestamp.unix_timestamp_nanos() as u64,
+            id: history.id.0,
+            command: history.command,
+            cwd: history.cwd,
+            session: history.session,
+            hostname: history.hostname,
+            author: history.author,
+            intent: history.intent.unwrap_or_default(),
+            exit: history.exit,
+            duration: history.duration,
+        }),
+        record: match (record_id, record_idx) {
+            (Some(id), Some(idx)) => Some(RecordMeta { id, idx }),
+            _ => None,
+        },
     }
 }
 

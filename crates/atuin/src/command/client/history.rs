@@ -437,7 +437,11 @@ struct TailJsonRecord<'a> {
 #[cfg(feature = "daemon")]
 impl TailEvent {
     fn from_proto(reply: TailHistoryReply) -> Result<Self> {
-        let timestamp = OffsetDateTime::from_unix_timestamp_nanos(i128::from(reply.timestamp))
+        let record = reply.record;
+        let history = reply
+            .history
+            .ok_or_else(|| eyre::eyre!("daemon sent a history tail event without history"))?;
+        let timestamp = OffsetDateTime::from_unix_timestamp_nanos(i128::from(history.timestamp))
             .context("invalid daemon history timestamp")?;
         let kind = match HistoryEventKind::try_from(reply.kind)
             .unwrap_or(HistoryEventKind::Unspecified)
@@ -446,24 +450,28 @@ impl TailEvent {
             HistoryEventKind::Ended => TailKind::Ended,
             HistoryEventKind::Unspecified => bail!("daemon sent an unspecified history tail event"),
         };
+        let (record_id, record_idx) = match record {
+            Some(record) => (normalize_optional_field(record.id), Some(record.idx)),
+            None => (None, None),
+        };
 
         Ok(Self {
             kind,
             history: History {
-                id: reply.id.into(),
+                id: history.id.into(),
                 timestamp,
-                duration: reply.duration,
-                exit: reply.exit,
-                command: reply.command,
-                cwd: reply.cwd,
-                session: reply.session,
-                hostname: reply.hostname,
-                author: reply.author,
-                intent: normalize_optional_field(reply.intent),
+                duration: history.duration,
+                exit: history.exit,
+                command: history.command,
+                cwd: history.cwd,
+                session: history.session,
+                hostname: history.hostname,
+                author: history.author,
+                intent: normalize_optional_field(history.intent),
                 deleted_at: None,
             },
-            record_id: normalize_optional_field(reply.record_id),
-            record_idx: matches!(kind, TailKind::Ended).then_some(reply.record_idx),
+            record_id,
+            record_idx,
         })
     }
 

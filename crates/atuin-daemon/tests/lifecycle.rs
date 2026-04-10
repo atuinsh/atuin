@@ -171,14 +171,14 @@ mod unix {
             HistoryEventKind::try_from(started.kind).unwrap(),
             HistoryEventKind::Started
         );
-        assert_eq!(started.id, start_reply.id);
-        assert_eq!(started.command, "git status");
-        assert_eq!(started.cwd, "/tmp/repo");
-        assert_eq!(started.hostname, "test-host:ellie");
-        assert_eq!(started.author, "claude");
-        assert_eq!(started.intent, "inspect repository state");
-        assert_eq!(started.record_id, "");
-        assert_eq!(started.record_idx, 0);
+        let started_history = started.history.unwrap();
+        assert_eq!(started_history.id, start_reply.id);
+        assert_eq!(started_history.command, "git status");
+        assert_eq!(started_history.cwd, "/tmp/repo");
+        assert_eq!(started_history.hostname, "test-host:ellie");
+        assert_eq!(started_history.author, "claude");
+        assert_eq!(started_history.intent, "inspect repository state");
+        assert!(started.record.is_none());
 
         let end_reply = client
             .end_history(start_reply.id.clone(), 1_000_000, 0)
@@ -190,11 +190,13 @@ mod unix {
             HistoryEventKind::try_from(ended.kind).unwrap(),
             HistoryEventKind::Ended
         );
-        assert_eq!(ended.id, start_reply.id);
-        assert_eq!(ended.exit, 0);
-        assert_eq!(ended.duration, 1_000_000);
-        assert_eq!(ended.record_id, end_reply.id);
-        assert_eq!(ended.record_idx, end_reply.idx);
+        let ended_history = ended.history.unwrap();
+        assert_eq!(ended_history.id, start_reply.id);
+        assert_eq!(ended_history.exit, 0);
+        assert_eq!(ended_history.duration, 1_000_000);
+        let ended_record = ended.record.unwrap();
+        assert_eq!(ended_record.id, end_reply.id);
+        assert_eq!(ended_record.idx, end_reply.idx);
     }
 
     #[tokio::test]

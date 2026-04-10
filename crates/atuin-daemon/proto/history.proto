@@ -54,20 +54,28 @@ enum HistoryEventKind {
   HISTORY_EVENT_KIND_ENDED = 2;
 }
 
+message HistoryEntry {
+  uint64 timestamp = 1; // nanosecond unix epoch
+  string id = 2;
+  string command = 3;
+  string cwd = 4;
+  string session = 5;
+  string hostname = 6;
+  string author = 7;
+  string intent = 8;
+  int64 exit = 9;
+  int64 duration = 10;
+}
+
+message RecordMeta {
+  string id = 1;
+  uint64 idx = 2;
+}
+
 message TailHistoryReply {
   HistoryEventKind kind = 1;
-  uint64 timestamp = 2; // nanosecond unix epoch
-  string id = 3;
-  string command = 4;
-  string cwd = 5;
-  string session = 6;
-  string hostname = 7;
-  string author = 8;
-  string intent = 9;
-  int64 exit = 10;
-  int64 duration = 11;
-  string record_id = 12;
-  uint64 record_idx = 13;
+  HistoryEntry history = 2;
+  RecordMeta record = 3;
 }
 
 service History {
