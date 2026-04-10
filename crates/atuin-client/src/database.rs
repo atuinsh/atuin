@@ -91,7 +91,7 @@ impl Context {
 /// Each entry is OR'd: `$all-user` → NOT IN agents, `$all-agent` → IN agents, literal → exact match.
 fn apply_author_filter(sql: &mut SqlBuilder, authors: &[String]) {
     let mut conditions: Vec<String> = Vec::new();
-    let agent_list: String = KNOWN_AGENTS.iter().map(|a| quote(a)).join(", ");
+    let agent_list: String = KNOWN_AGENTS.iter().map(quote).join(", ");
 
     for author in authors {
         match author.as_str() {

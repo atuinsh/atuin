@@ -389,6 +389,7 @@ fn parse_fmt(format: &str) -> ParsedFmt<'_> {
 }
 
 impl Cmd {
+    #[allow(clippy::too_many_arguments)]
     async fn handle_capture_agent(
         db: &impl Database,
         history_store: HistoryStore,
@@ -453,7 +454,7 @@ impl Cmd {
         }
 
         let id = daemon::start_history(settings, h).await?;
-        daemon::end_history(settings, id, duration as u64, exit).await?;
+        daemon::end_history(settings, id, duration.cast_unsigned(), exit).await?;
 
         Ok(())
     }

@@ -213,7 +213,7 @@ fn add_hook_entries(hooks: &mut Value, agent: &Agent) -> Result<()> {
         Agent::Codex => "^Bash$", // Codex uses regex matchers
     };
 
-    for event_type in &["PreToolUse", "PostToolUse"] {
+    for event_type in &["PreToolUse", "PostToolUse", "PostToolUseFailure"] {
         let event_hooks = hooks
             .as_object_mut()
             .ok_or_else(|| eyre::eyre!("hooks is not a JSON object"))?
