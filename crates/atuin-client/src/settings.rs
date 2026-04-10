@@ -679,7 +679,7 @@ pub struct Ai {
 
 #[derive(Default, Clone, Debug, Deserialize, Serialize)]
 pub struct AiCapabilities {
-    /// Whether the AI can request to search Atuin history. `None` = unset (defaults to enabled).
+    /// Whether the AI can request to search Atuin history. `None` = unset (defaults to enabled, and the ai will ask for permission).
     pub enable_history_search: Option<bool>,
 }
 
