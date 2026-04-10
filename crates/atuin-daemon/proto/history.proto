@@ -46,9 +46,34 @@ message ShutdownReply {
   bool accepted = 1;
 }
 
+message TailHistoryRequest {}
+
+enum HistoryEventKind {
+  HISTORY_EVENT_KIND_UNSPECIFIED = 0;
+  HISTORY_EVENT_KIND_STARTED = 1;
+  HISTORY_EVENT_KIND_ENDED = 2;
+}
+
+message TailHistoryReply {
+  HistoryEventKind kind = 1;
+  uint64 timestamp = 2; // nanosecond unix epoch
+  string id = 3;
+  string command = 4;
+  string cwd = 5;
+  string session = 6;
+  string hostname = 7;
+  string author = 8;
+  string intent = 9;
+  int64 exit = 10;
+  int64 duration = 11;
+  string record_id = 12;
+  uint64 record_idx = 13;
+}
+
 service History {
   rpc StartHistory(StartHistoryRequest) returns (StartHistoryReply);
   rpc EndHistory(EndHistoryRequest) returns (EndHistoryReply);
+  rpc TailHistory(TailHistoryRequest) returns (stream TailHistoryReply);
   rpc Status(StatusRequest) returns (StatusReply);
   rpc Shutdown(ShutdownRequest) returns (ShutdownReply);
 }

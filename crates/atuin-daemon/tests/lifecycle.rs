@@ -146,6 +146,58 @@ mod unix {
     }
 
     #[tokio::test]
+    async fn test_tail_history_streams_started_and_ended_events() {
+        use atuin_client::history::History;
+        use atuin_daemon::history::HistoryEventKind;
+
+        let (mut client, _handle, _tmp) = start_test_daemon().await;
+        let mut stream = client.tail_history().await.unwrap();
+
+        let history = History::daemon()
+            .timestamp(time::OffsetDateTime::now_utc())
+            .command("git status".to_string())
+            .cwd("/tmp/repo".to_string())
+            .session("tail-session".to_string())
+            .hostname("test-host:ellie".to_string())
+            .author("claude".to_string())
+            .intent("inspect repository state".to_string())
+            .build()
+            .into();
+
+        let start_reply = client.start_history(history).await.unwrap();
+
+        let started = stream.message().await.unwrap().unwrap();
+        assert_eq!(
+            HistoryEventKind::try_from(started.kind).unwrap(),
+            HistoryEventKind::Started
+        );
+        assert_eq!(started.id, start_reply.id);
+        assert_eq!(started.command, "git status");
+        assert_eq!(started.cwd, "/tmp/repo");
+        assert_eq!(started.hostname, "test-host:ellie");
+        assert_eq!(started.author, "claude");
+        assert_eq!(started.intent, "inspect repository state");
+        assert_eq!(started.record_id, "");
+        assert_eq!(started.record_idx, 0);
+
+        let end_reply = client
+            .end_history(start_reply.id.clone(), 1_000_000, 0)
+            .await
+            .unwrap();
+
+        let ended = stream.message().await.unwrap().unwrap();
+        assert_eq!(
+            HistoryEventKind::try_from(ended.kind).unwrap(),
+            HistoryEventKind::Ended
+        );
+        assert_eq!(ended.id, start_reply.id);
+        assert_eq!(ended.exit, 0);
+        assert_eq!(ended.duration, 1_000_000);
+        assert_eq!(ended.record_id, end_reply.id);
+        assert_eq!(ended.record_idx, end_reply.idx);
+    }
+
+    #[tokio::test]
     async fn test_end_unknown_history_fails() {
         let (mut client, _handle, _tmp) = start_test_daemon().await;
 

@@ -23,7 +23,8 @@ use crate::control::{
 use crate::events::DaemonEvent;
 use crate::history::{
     EndHistoryReply, EndHistoryRequest, ShutdownRequest, StartHistoryReply, StartHistoryRequest,
-    StatusReply, StatusRequest, history_client::HistoryClient as HistoryServiceClient,
+    StatusReply, StatusRequest, TailHistoryReply, TailHistoryRequest,
+    history_client::HistoryClient as HistoryServiceClient,
 };
 use crate::search::{
     FilterMode as RpcFilterMode, SearchContext as RpcSearchContext, SearchRequest, SearchResponse,
@@ -138,6 +139,14 @@ impl HistoryClient {
 
     pub async fn status(&mut self) -> Result<StatusReply> {
         Ok(self.client.status(StatusRequest {}).await?.into_inner())
+    }
+
+    pub async fn tail_history(&mut self) -> Result<tonic::Streaming<TailHistoryReply>> {
+        Ok(self
+            .client
+            .tail_history(TailHistoryRequest {})
+            .await?
+            .into_inner())
     }
 
     pub async fn shutdown(&mut self) -> Result<bool> {
@@ -344,8 +353,8 @@ fn daemon_event_to_proto(event: DaemonEvent) -> crate::control::send_event_reque
         DaemonEvent::SettingsReloaded => Event::SettingsReloaded(SettingsReloadedEvent {}),
         DaemonEvent::ShutdownRequested => Event::Shutdown(ShutdownEvent {}),
         // These events are internal and not sent via the control service
-        DaemonEvent::HistoryStarted(_)
-        | DaemonEvent::HistoryEnded(_)
+        DaemonEvent::HistoryStarted { .. }
+        | DaemonEvent::HistoryEnded { .. }
         | DaemonEvent::RecordsAdded(_)
         | DaemonEvent::SyncCompleted { .. }
         | DaemonEvent::SyncFailed { .. } => {
