@@ -113,6 +113,11 @@
 ## default history list format - can also be specified with the --format arg
 # history_format = "{time}\t{command}\t{duration}"
 
+## Defaults to true. If enabled, strip trailing spaces and tabs from commands
+## before saving them to history.
+## Escaped trailing spaces (for example `printf foo\\ `) are preserved.
+# strip_trailing_whitespace = true
+
 ## prevent commands matching any of these regexes from being written to history.
 ## Note that these regular expressions are unanchored, i.e. if they don't start
 ## with ^ or end with $, they'll match anywhere in the command.
