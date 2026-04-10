@@ -1106,8 +1106,10 @@ pub struct Settings {
     pub word_chars: String,
     pub scroll_context_lines: usize,
     pub history_format: String,
+    pub strip_trailing_whitespace: bool,
     pub prefers_reduced_motion: bool,
     pub store_failed: bool,
+    pub no_mouse: bool,
 
     #[serde(with = "serde_regex", default = "RegexSet::empty", skip_serializing)]
     pub history_filter: RegexSet,
@@ -1510,6 +1512,7 @@ impl Settings {
             .set_default("workspaces", false)?
             .set_default("ctrl_n_shortcuts", false)?
             .set_default("secrets_filter", true)?
+            .set_default("strip_trailing_whitespace", true)?
             .set_default("network_connect_timeout", 5)?
             .set_default("network_timeout", 30)?
             .set_default("local_timeout", 2.0)?
@@ -1577,6 +1580,7 @@ impl Settings {
                     .map(|_| config::Value::new(None, config::ValueKind::Boolean(true)))
                     .unwrap_or_else(|| config::Value::new(None, config::ValueKind::Boolean(false))),
             )?
+            .set_default("no_mouse", false)?
             .add_source(
                 Environment::with_prefix("atuin")
                     .prefix_separator("_")

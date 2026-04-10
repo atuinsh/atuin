@@ -95,7 +95,7 @@ Atuin also has a community Discord, available [here](https://discord.gg/jR3tfchV
 
 This will sign you up for the Atuin Cloud sync server. Everything is end-to-end encrypted, so your secrets are safe!
 
-Read more in the [docs](https://docs.atuin.sh) for an offline setup, self hosted server, and more.
+Read the [docs](https://docs.atuin.sh) for an offline setup, self-hosted server, and more.
 
 ```
 curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | sh

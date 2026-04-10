@@ -376,6 +376,30 @@ fn apply_start_metadata(history: &mut History, author: Option<&str>, intent: Opt
     }
 }
 
+fn normalize_command_for_storage<'a>(command: &'a str, settings: &Settings) -> &'a str {
+    if !settings.strip_trailing_whitespace {
+        return command;
+    }
+
+    let trimmed = command.trim_end_matches([' ', '\t']);
+    if trimmed.len() == command.len() {
+        return command;
+    }
+
+    let trailing_backslashes = trimmed
+        .as_bytes()
+        .iter()
+        .rev()
+        .take_while(|&&byte| byte == b'\\')
+        .count();
+
+    if trailing_backslashes % 2 == 1 {
+        command
+    } else {
+        trimmed
+    }
+}
+
 async fn handle_start(
     db: &impl Database,
     settings: &Settings,
@@ -386,6 +410,7 @@ async fn handle_start(
     // It's better for atuin to silently fail here and attempt to
     // store whatever is ran, than to throw an error to the terminal
     let cwd = utils::get_current_dir();
+    let command = normalize_command_for_storage(command, settings);
 
     let mut h: History = History::capture()
         .timestamp(OffsetDateTime::now_utc())
@@ -420,6 +445,7 @@ async fn handle_daemon_start(
     // It's better for atuin to silently fail here and attempt to
     // store whatever is ran, than to throw an error to the terminal
     let cwd = utils::get_current_dir();
+    let command = normalize_command_for_storage(command, settings);
 
     let mut h: History = History::capture()
         .timestamp(OffsetDateTime::now_utc())
@@ -850,6 +876,67 @@ impl Cmd {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn normalize_command_strips_trailing_spaces_and_tabs() {
+        let settings = Settings::utc();
+
+        assert!(settings.strip_trailing_whitespace);
+        assert_eq!(normalize_command_for_storage("ls   \t", &settings), "ls");
+    }
+
+    #[test]
+    fn normalize_command_preserves_escaped_trailing_space() {
+        let settings = Settings::utc();
+
+        assert_eq!(
+            normalize_command_for_storage("printf foo\\ ", &settings),
+            "printf foo\\ "
+        );
+        assert_eq!(
+            normalize_command_for_storage("printf foo\\\\ ", &settings),
+            "printf foo\\\\"
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_start_saves_trimmed_command() {
+        let db = Sqlite::new("sqlite::memory:", 2.0).await.unwrap();
+        let settings = Settings::utc();
+
+        handle_start(&db, &settings, "ls   \t", None, None)
+            .await
+            .unwrap();
+
+        let history = db
+            .before(OffsetDateTime::now_utc() + time::Duration::SECOND, 1)
+            .await
+            .unwrap()
+            .pop()
+            .unwrap();
+        assert_eq!(history.command, "ls");
+    }
+
+    #[tokio::test]
+    async fn handle_start_can_keep_trailing_whitespace() {
+        let db = Sqlite::new("sqlite::memory:", 2.0).await.unwrap();
+        let settings = Settings {
+            strip_trailing_whitespace: false,
+            ..Settings::utc()
+        };
+
+        handle_start(&db, &settings, "ls   \t", None, None)
+            .await
+            .unwrap();
+
+        let history = db
+            .before(OffsetDateTime::now_utc() + time::Duration::SECOND, 1)
+            .await
+            .unwrap()
+            .pop()
+            .unwrap();
+        assert_eq!(history.command, "ls   \t");
+    }
 
     #[test]
     fn test_format_string_no_panic() {

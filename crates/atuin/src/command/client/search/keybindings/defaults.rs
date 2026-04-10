@@ -404,6 +404,7 @@ pub fn default_prefix_keymap() -> Keymap {
     let mut km = Keymap::new();
 
     km.bind(key("d"), Action::Delete);
+    km.bind(key("D"), Action::DeleteAll);
     km.bind(key("a"), Action::CursorStart);
     km.bind_conditional(
         key("c"),
