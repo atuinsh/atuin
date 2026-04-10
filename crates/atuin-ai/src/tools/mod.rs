@@ -980,61 +980,105 @@ mod tests {
         }
     }
 
+    // ── Cross-platform tests ──
+
     #[test]
     fn no_scope_matches_everything() {
-        assert!(read_tool("/any/path.txt").matches_rule(&read_rule(None)));
-        assert!(write_tool("/any/path.txt").matches_rule(&write_rule(None)));
+        assert!(read_tool("any/path.txt").matches_rule(&read_rule(None)));
+        assert!(write_tool("any/path.txt").matches_rule(&write_rule(None)));
     }
 
     #[test]
     fn wildcard_star_matches_everything() {
-        assert!(read_tool("/foo/bar.rs").matches_rule(&read_rule(Some("*"))));
+        assert!(read_tool("foo/bar.rs").matches_rule(&read_rule(Some("*"))));
     }
 
     #[test]
     fn wrong_tool_never_matches() {
-        assert!(!read_tool("/foo.txt").matches_rule(&write_rule(None)));
-        assert!(!write_tool("/foo.txt").matches_rule(&read_rule(None)));
+        assert!(!read_tool("foo.txt").matches_rule(&write_rule(None)));
+        assert!(!write_tool("foo.txt").matches_rule(&read_rule(None)));
     }
 
     #[test]
     fn extension_glob() {
-        assert!(read_tool("/home/user/notes.md").matches_rule(&read_rule(Some("*.md"))));
-        assert!(!read_tool("/home/user/notes.txt").matches_rule(&read_rule(Some("*.md"))));
-    }
-
-    #[test]
-    fn absolute_glob() {
-        assert!(
-            read_tool("/home/user/src/main.rs")
-                .matches_rule(&read_rule(Some("/home/user/src/*.rs")))
-        );
-        assert!(
-            !read_tool("/home/user/docs/readme.md")
-                .matches_rule(&read_rule(Some("/home/user/src/*.rs")))
-        );
-    }
-
-    #[test]
-    fn double_star_glob() {
-        assert!(
-            read_tool("/project/crates/foo/src/lib.rs")
-                .matches_rule(&read_rule(Some("/project/crates/**/*.rs")))
-        );
-        assert!(
-            !read_tool("/project/crates/foo/src/lib.py")
-                .matches_rule(&read_rule(Some("/project/crates/**/*.rs")))
-        );
+        assert!(read_tool("notes.md").matches_rule(&read_rule(Some("*.md"))));
+        assert!(!read_tool("notes.txt").matches_rule(&read_rule(Some("*.md"))));
     }
 
     #[test]
     fn relative_multi_segment_glob() {
         // This matches against the path relative to cwd
         let cwd = std::env::current_dir().unwrap();
-        let abs = cwd.join("crates/atuin-ai/src/lib.rs");
+        let abs = cwd
+            .join("crates")
+            .join("atuin-ai")
+            .join("src")
+            .join("lib.rs");
         let tool = read_tool(abs.to_str().unwrap());
         assert!(tool.matches_rule(&read_rule(Some("crates/**/*.rs"))));
         assert!(!tool.matches_rule(&read_rule(Some("crates/**/*.py"))));
+    }
+
+    // ── Unix-specific tests (absolute paths with forward slashes) ──
+
+    #[cfg(unix)]
+    mod unix {
+        use super::*;
+
+        #[test]
+        fn absolute_glob() {
+            assert!(
+                read_tool("/home/user/src/main.rs")
+                    .matches_rule(&read_rule(Some("/home/user/src/*.rs")))
+            );
+            assert!(
+                !read_tool("/home/user/docs/readme.md")
+                    .matches_rule(&read_rule(Some("/home/user/src/*.rs")))
+            );
+        }
+
+        #[test]
+        fn double_star_glob() {
+            assert!(
+                read_tool("/project/crates/foo/src/lib.rs")
+                    .matches_rule(&read_rule(Some("/project/crates/**/*.rs")))
+            );
+            assert!(
+                !read_tool("/project/crates/foo/src/lib.py")
+                    .matches_rule(&read_rule(Some("/project/crates/**/*.rs")))
+            );
+        }
+    }
+
+    // ── Windows-specific tests (absolute paths with drive letters) ──
+
+    #[cfg(windows)]
+    mod windows {
+        use super::*;
+
+        #[test]
+        fn absolute_glob() {
+            assert!(
+                read_tool(r"C:\Users\dev\src\main.rs")
+                    .matches_rule(&read_rule(Some("C:/Users/dev/src/*.rs")))
+            );
+            assert!(
+                !read_tool(r"C:\Users\dev\docs\readme.md")
+                    .matches_rule(&read_rule(Some("C:/Users/dev/src/*.rs")))
+            );
+        }
+
+        #[test]
+        fn double_star_glob() {
+            assert!(
+                read_tool(r"C:\project\crates\foo\src\lib.rs")
+                    .matches_rule(&read_rule(Some("C:/project/crates/**/*.rs")))
+            );
+            assert!(
+                !read_tool(r"C:\project\crates\foo\src\lib.py")
+                    .matches_rule(&read_rule(Some("C:/project/crates/**/*.rs")))
+            );
+        }
     }
 }
 
