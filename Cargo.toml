@@ -69,6 +69,7 @@ rustls = { version = "0.23", default-features = false, features = [
   "std",
   "tls12",
 ] }
+glob-match = "0.2.1"
 regex = "1.10.5"
 toml_edit = "0.25.4"
 

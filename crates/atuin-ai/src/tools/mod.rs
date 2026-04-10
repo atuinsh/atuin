@@ -13,6 +13,48 @@ pub(crate) mod descriptor;
 
 use crate::permissions::rule::Rule;
 
+/// Check whether a file path matches a scope glob pattern.
+///
+/// Resolves relative paths against the current directory before matching so
+/// that `./foo.md` and `/cwd/foo.md` match the same glob. Supports `*`, `**`,
+/// `?`, and `[...]` via `glob_match`.
+fn path_matches_scope(path: &Path, scope: &str) -> bool {
+    let path = if path.is_relative() {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(path))
+            .unwrap_or_else(|_| path.to_path_buf())
+    } else {
+        path.to_path_buf()
+    };
+    let path_str = path.to_string_lossy();
+
+    // If the scope is also relative, try matching against both the absolute
+    // path and just the filename/relative portion.
+    if !scope.starts_with('/') {
+        // Match against filename (e.g. "*.md" matches any .md file)
+        if let Some(name) = path.file_name().and_then(|n| n.to_str())
+            && glob_match::glob_match(scope, name)
+        {
+            return true;
+        }
+        // Also try matching against the full absolute path in case the scope
+        // is a relative multi-segment pattern like "crates/**/*.rs"
+        if glob_match::glob_match(scope, &path_str) {
+            return true;
+        }
+        // And match relative to cwd (so "src/*.rs" works from project root)
+        if let Ok(cwd) = std::env::current_dir()
+            && let Ok(rel) = path.strip_prefix(&cwd)
+        {
+            return glob_match::glob_match(scope, &rel.to_string_lossy());
+        }
+        return false;
+    }
+
+    // Absolute scope — match against absolute path
+    glob_match::glob_match(scope, &path_str)
+}
+
 /// Result of executing a client-side tool.
 pub(crate) enum ToolOutcome {
     /// Simple success with a text result (used by Read, AtuinHistory).
@@ -449,15 +491,10 @@ impl PermissableToolCall for ReadToolCall {
             return false;
         }
 
-        if let Some(scope) = rule.scope.as_ref() {
-            if scope == "*" {
-                return true;
-            }
-
-            todo!("check path vs scope glob");
+        match rule.scope.as_deref() {
+            None | Some("*") => true,
+            Some(scope) => path_matches_scope(&self.path, scope),
         }
-
-        true
     }
 }
 
@@ -499,15 +536,10 @@ impl PermissableToolCall for WriteToolCall {
             return false;
         }
 
-        if let Some(scope) = rule.scope.as_ref() {
-            if scope == "*" {
-                return true;
-            }
-
-            todo!("check path vs scope glob");
+        match rule.scope.as_deref() {
+            None | Some("*") => true,
+            Some(scope) => path_matches_scope(&self.path, scope),
         }
-
-        true
     }
 }
 
@@ -878,6 +910,97 @@ impl AtuinHistoryToolCall {
             .collect();
 
         ToolOutcome::Success(formatted.join("\n"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn read_rule(scope: Option<&str>) -> Rule {
+        Rule {
+            tool: "Read".to_string(),
+            scope: scope.map(String::from),
+        }
+    }
+
+    fn write_rule(scope: Option<&str>) -> Rule {
+        Rule {
+            tool: "Write".to_string(),
+            scope: scope.map(String::from),
+        }
+    }
+
+    fn read_tool(path: &str) -> ReadToolCall {
+        ReadToolCall {
+            path: PathBuf::from(path),
+            offset: 0,
+            limit: 100,
+        }
+    }
+
+    fn write_tool(path: &str) -> WriteToolCall {
+        WriteToolCall {
+            path: PathBuf::from(path),
+            content: String::new(),
+        }
+    }
+
+    #[test]
+    fn no_scope_matches_everything() {
+        assert!(read_tool("/any/path.txt").matches_rule(&read_rule(None)));
+        assert!(write_tool("/any/path.txt").matches_rule(&write_rule(None)));
+    }
+
+    #[test]
+    fn wildcard_star_matches_everything() {
+        assert!(read_tool("/foo/bar.rs").matches_rule(&read_rule(Some("*"))));
+    }
+
+    #[test]
+    fn wrong_tool_never_matches() {
+        assert!(!read_tool("/foo.txt").matches_rule(&write_rule(None)));
+        assert!(!write_tool("/foo.txt").matches_rule(&read_rule(None)));
+    }
+
+    #[test]
+    fn extension_glob() {
+        assert!(read_tool("/home/user/notes.md").matches_rule(&read_rule(Some("*.md"))));
+        assert!(!read_tool("/home/user/notes.txt").matches_rule(&read_rule(Some("*.md"))));
+    }
+
+    #[test]
+    fn absolute_glob() {
+        assert!(
+            read_tool("/home/user/src/main.rs")
+                .matches_rule(&read_rule(Some("/home/user/src/*.rs")))
+        );
+        assert!(
+            !read_tool("/home/user/docs/readme.md")
+                .matches_rule(&read_rule(Some("/home/user/src/*.rs")))
+        );
+    }
+
+    #[test]
+    fn double_star_glob() {
+        assert!(
+            read_tool("/project/crates/foo/src/lib.rs")
+                .matches_rule(&read_rule(Some("/project/crates/**/*.rs")))
+        );
+        assert!(
+            !read_tool("/project/crates/foo/src/lib.py")
+                .matches_rule(&read_rule(Some("/project/crates/**/*.rs")))
+        );
+    }
+
+    #[test]
+    fn relative_multi_segment_glob() {
+        // This matches against the path relative to cwd
+        let cwd = std::env::current_dir().unwrap();
+        let abs = cwd.join("crates/atuin-ai/src/lib.rs");
+        let tool = read_tool(abs.to_str().unwrap());
+        assert!(tool.matches_rule(&read_rule(Some("crates/**/*.rs"))));
+        assert!(!tool.matches_rule(&read_rule(Some("crates/**/*.py"))));
     }
 }
 
