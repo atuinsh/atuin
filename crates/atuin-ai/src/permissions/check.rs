@@ -32,20 +32,9 @@ impl PermissionChecker {
         request: &'t PermissionRequest<'t>,
     ) -> Result<PermissionResponse> {
         // Files are in order from deepest to shallowest, so we can stop at the first match.
-        // Within a file, deny rules take precedence over ask and allow rules.
-        // Ask rules take precedence over allow rules.
+        // Within a file, the priority is ask -> deny -> allow
+        // The first rule type that matches is the one that applies, even if a later rule would contradict it.
         for file in &self.files {
-            for rule in &file.content.permissions.deny {
-                if request.call.matches_rule(rule) {
-                    tracing::debug!(
-                        "Permission 'DENY' by rule: {} in file: {}",
-                        rule,
-                        file.path.display()
-                    );
-                    return Ok(PermissionResponse::Denied);
-                }
-            }
-
             for rule in &file.content.permissions.ask {
                 if request.call.matches_rule(rule) {
                     tracing::debug!(
@@ -54,6 +43,17 @@ impl PermissionChecker {
                         file.path.display()
                     );
                     return Ok(PermissionResponse::Ask);
+                }
+            }
+
+            for rule in &file.content.permissions.deny {
+                if request.call.matches_rule(rule) {
+                    tracing::debug!(
+                        "Permission 'DENY' by rule: {} in file: {}",
+                        rule,
+                        file.path.display()
+                    );
+                    return Ok(PermissionResponse::Denied);
                 }
             }
 
