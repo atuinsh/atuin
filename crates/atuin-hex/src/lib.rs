@@ -222,7 +222,7 @@ mod app {
     fn handle_parser_msg(parser: &mut vt100::Parser, msg: ParserMsg) {
         match msg {
             ParserMsg::Data(data) => parser.process(&data),
-            ParserMsg::Resize { rows, cols } => parser.set_size(rows, cols),
+            ParserMsg::Resize { rows, cols } => parser.screen_mut().set_size(rows, cols),
             ParserMsg::ScreenRequest(reply_tx) => {
                 let _ = reply_tx.send(encode_screen(parser));
             }
