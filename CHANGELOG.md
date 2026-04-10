@@ -4,6 +4,36 @@ All notable changes to this project will be documented in this file.
 
 ## [unreleased]
 
+### Bug Fixes
+
+- *(ui)* Make preview line breaking algorithm aware of CJK double-width characters ([#3360](https://github.com/atuinsh/atuin/issues/3360))
+- *(ui)* When inverted, invert scroll events handling ([#3373](https://github.com/atuinsh/atuin/issues/3373))
+- Replace `e>|` with `|` in nushell integration to restore history recording ([#3358](https://github.com/atuinsh/atuin/issues/3358))
+- Resolve git worktrees to main repo in workspace filter ([#3366](https://github.com/atuinsh/atuin/issues/3366))
+
+
+### Documentation
+
+- Remove docker-compose duplication ([#3376](https://github.com/atuinsh/atuin/issues/3376))
+- Cover prefix mode properly ([#3383](https://github.com/atuinsh/atuin/issues/3383))
+- Minor readability improvement to README ([#3381](https://github.com/atuinsh/atuin/issues/3381))
+
+
+### Features
+
+- Opt-in to sharing last command with ai ([#3367](https://github.com/atuinsh/atuin/issues/3367))
+- Add 'atuin config' subcommand for reading and setting config values ([#3368](https://github.com/atuinsh/atuin/issues/3368))
+- Option to disable mouse support ([#3372](https://github.com/atuinsh/atuin/issues/3372))
+- Add support for deleting all matching commands via keybindings ([#3375](https://github.com/atuinsh/atuin/issues/3375))
+- Add strip_trailing_whitespace, on by default ([#3390](https://github.com/atuinsh/atuin/issues/3390))
+- Client-tool execution + permission system ([#3370](https://github.com/atuinsh/atuin/issues/3370))
+
+
+### Miscellaneous Tasks
+
+- Update to eye-declare 0.3.0 ([#3365](https://github.com/atuinsh/atuin/issues/3365))
+
+
 ## 18.13.6
 
 ### Bug Fixes
@@ -22,6 +52,7 @@ All notable changes to this project will be documented in this file.
 ### Miscellaneous Tasks
 
 - *(ci)* Switch most workflows to depot ci ([#3352](https://github.com/atuinsh/atuin/issues/3352))
+- Prepare 18.13.6 release ([#3356](https://github.com/atuinsh/atuin/issues/3356))
 
 
 ## 18.13.5
