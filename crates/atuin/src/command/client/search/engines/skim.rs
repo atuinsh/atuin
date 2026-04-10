@@ -1,7 +1,11 @@
-use std::path::Path;
+use std::{collections::HashMap, path::Path};
 
 use async_trait::async_trait;
-use atuin_client::{database::Database, history::History, settings::FilterMode};
+use atuin_client::{
+    database::Database,
+    history::{History, author_matches_filters},
+    settings::FilterMode,
+};
 use eyre::Result;
 use fuzzy_matcher::{FuzzyMatcher, skim::SkimMatcherV2};
 use itertools::Itertools;
@@ -53,7 +57,23 @@ impl SearchEngine for Search {
 
 #[instrument(skip_all, level = Level::TRACE, name = "load_all_history")]
 async fn load_all_history(db: &dyn Database) -> Vec<(History, i32)> {
-    db.all_with_count().await.unwrap()
+    let histories = db
+        .query_history("SELECT * FROM history WHERE deleted_at IS NULL ORDER BY timestamp DESC")
+        .await
+        .unwrap_or_default();
+
+    let mut counts = HashMap::new();
+    for history in &histories {
+        *counts.entry(history.command.clone()).or_insert(0) += 1;
+    }
+
+    histories
+        .into_iter()
+        .map(|history| {
+            let count = counts.get(&history.command).copied().unwrap_or(1);
+            (history, count)
+        })
+        .collect()
 }
 
 #[allow(clippy::too_many_lines)]
@@ -71,6 +91,9 @@ async fn fuzzy_search(
     for (i, (history, count)) in all_history.iter().enumerate() {
         if i % 256 == 0 {
             yield_now().await;
+        }
+        if !author_matches_filters(&history.author, &state.authors) {
+            continue;
         }
         let context = &state.context;
         let git_root = context
@@ -219,4 +242,63 @@ fn path_dist(a: &Path, b: &Path) -> usize {
     }
 
     b.len() - a.len() + dist
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::command::client::search::cursor::Cursor;
+    use atuin_client::{
+        database::{Context, Database, Sqlite},
+        history::{AUTHOR_FILTER_ALL_USER, History},
+        settings::FilterMode,
+    };
+    use time::macros::datetime;
+
+    fn context() -> Context {
+        Context {
+            session: uuid::Uuid::now_v7().as_simple().to_string(),
+            cwd: "/tmp".to_string(),
+            hostname: "host:user".to_string(),
+            host_id: String::new(),
+            git_root: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn skim_search_uses_author_filters() {
+        let mut db = Sqlite::new(":memory:", 0.1).await.unwrap();
+
+        let user_history: History = History::import()
+            .timestamp(datetime!(2024-01-01 10:00 UTC))
+            .command("git status")
+            .cwd("/tmp")
+            .author("ellie")
+            .build()
+            .into();
+        let agent_history: History = History::import()
+            .timestamp(datetime!(2024-01-01 11:00 UTC))
+            .command("git stash")
+            .cwd("/tmp")
+            .author("codex")
+            .build()
+            .into();
+
+        db.save_bulk(&[user_history.clone(), agent_history])
+            .await
+            .unwrap();
+
+        let mut engine = Search::new();
+        let state = SearchState {
+            input: Cursor::from("git st".to_owned()),
+            filter_mode: FilterMode::Global,
+            context: context(),
+            custom_context: None,
+            authors: vec![AUTHOR_FILTER_ALL_USER.to_string()],
+        };
+
+        let results = engine.query(&state, &mut db).await.unwrap();
+
+        assert_eq!(results, vec![user_history]);
+    }
 }

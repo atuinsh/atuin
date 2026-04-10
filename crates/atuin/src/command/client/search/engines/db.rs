@@ -108,3 +108,62 @@ pub fn get_highlight_indices_fulltext(command: &str, search_input: &str) -> Vec<
     ret.dedup();
     ret
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::command::client::search::cursor::Cursor;
+    use atuin_client::{
+        database::{Context, Database, Sqlite},
+        history::{AUTHOR_FILTER_ALL_USER, History},
+        settings::FilterMode,
+    };
+    use time::macros::datetime;
+
+    fn context() -> Context {
+        Context {
+            session: uuid::Uuid::now_v7().as_simple().to_string(),
+            cwd: "/tmp".to_string(),
+            hostname: "host:user".to_string(),
+            host_id: String::new(),
+            git_root: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn empty_query_uses_author_filters() {
+        let mut db = Sqlite::new(":memory:", 0.1).await.unwrap();
+
+        let user_history: History = History::import()
+            .timestamp(datetime!(2024-01-01 10:00 UTC))
+            .command("git status")
+            .cwd("/tmp")
+            .author("ellie")
+            .build()
+            .into();
+        let agent_history: History = History::import()
+            .timestamp(datetime!(2024-01-01 11:00 UTC))
+            .command("git diff")
+            .cwd("/tmp")
+            .author("codex")
+            .build()
+            .into();
+
+        db.save_bulk(&[user_history.clone(), agent_history])
+            .await
+            .unwrap();
+
+        let mut engine = Search(SearchMode::Fuzzy);
+        let state = SearchState {
+            input: Cursor::from(String::new()),
+            filter_mode: FilterMode::Global,
+            context: context(),
+            custom_context: None,
+            authors: vec![AUTHOR_FILTER_ALL_USER.to_string()],
+        };
+
+        let results = engine.query(&state, &mut db).await.unwrap();
+
+        assert_eq!(results, vec![user_history]);
+    }
+}

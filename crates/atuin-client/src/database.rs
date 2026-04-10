@@ -92,17 +92,25 @@ impl Context {
 fn apply_author_filter(sql: &mut SqlBuilder, authors: &[String]) {
     let mut conditions: Vec<String> = Vec::new();
     let agent_list: String = KNOWN_AGENTS.iter().map(quote).join(", ");
+    let author_expr = "CASE \
+        WHEN author IS NULL OR trim(author) = '' THEN \
+            CASE \
+                WHEN instr(hostname, ':') > 0 THEN substr(hostname, instr(hostname, ':') + 1) \
+                ELSE hostname \
+            END \
+        ELSE author \
+    END";
 
     for author in authors {
         match author.as_str() {
             AUTHOR_FILTER_ALL_USER => {
-                conditions.push(format!("author NOT IN ({agent_list})"));
+                conditions.push(format!("{author_expr} NOT IN ({agent_list})"));
             }
             AUTHOR_FILTER_ALL_AGENT => {
-                conditions.push(format!("author IN ({agent_list})"));
+                conditions.push(format!("{author_expr} IN ({agent_list})"));
             }
             literal => {
-                conditions.push(format!("author = {}", quote(literal)));
+                conditions.push(format!("{author_expr} = {}", quote(literal)));
             }
         }
     }

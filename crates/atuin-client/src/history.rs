@@ -23,6 +23,19 @@ pub const KNOWN_AGENTS: &[&str] = &["claude-code", "codex", "copilot"];
 pub const AUTHOR_FILTER_ALL_USER: &str = "$all-user";
 pub const AUTHOR_FILTER_ALL_AGENT: &str = "$all-agent";
 
+pub fn is_known_agent(author: &str) -> bool {
+    KNOWN_AGENTS.contains(&author)
+}
+
+pub fn author_matches_filters(author: &str, filters: &[String]) -> bool {
+    filters.is_empty()
+        || filters.iter().any(|filter| match filter.as_str() {
+            AUTHOR_FILTER_ALL_USER => !is_known_agent(author),
+            AUTHOR_FILTER_ALL_AGENT => is_known_agent(author),
+            literal => author == literal,
+        })
+}
+
 pub(crate) const HISTORY_VERSION_V0: &str = "v0";
 pub(crate) const HISTORY_VERSION_V1: &str = "v1";
 const HISTORY_RECORD_VERSION_V0: u16 = 0;

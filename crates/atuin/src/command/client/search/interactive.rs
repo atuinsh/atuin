@@ -1596,6 +1596,7 @@ fn compute_popup_placement(
 )]
 pub async fn history(
     query: &[String],
+    authors: Vec<String>,
     settings: &Settings,
     mut db: impl Database,
     history_store: &HistoryStore,
@@ -1764,7 +1765,7 @@ pub async fn history(
             filter_mode: default_filter_mode,
             context: initial_context.clone(),
             custom_context: None,
-            authors: settings.search.authors.clone(),
+            authors,
         },
         engine: engines::engine(search_mode, settings),
         results_len: 0,

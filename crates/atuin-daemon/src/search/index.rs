@@ -118,6 +118,68 @@ pub struct CommandData {
     sessions: HashSet<[u8; 16]>,
     /// All authors who have run this command (interned keys).
     authors: HashSet<Spur>,
+    /// Per-invocation metadata for returning the newest row that matches the active filters.
+    invocations: Vec<InvocationData>,
+}
+
+struct InvocationData {
+    id: [u8; 16],
+    timestamp: i64,
+    directory: Spur,
+    host: Spur,
+    session: [u8; 16],
+    author: Spur,
+}
+
+impl InvocationData {
+    fn new(history: &History, interner: &ThreadedRodeo) -> Option<Self> {
+        Some(Self {
+            id: parse_uuid_bytes(&history.id.0)?,
+            timestamp: history.timestamp.unix_timestamp(),
+            directory: interner.get_or_intern(with_trailing_slash(&history.cwd)),
+            host: interner.get_or_intern(&history.hostname),
+            session: parse_uuid_bytes(&history.session)?,
+            author: interner.get_or_intern(&history.author),
+        })
+    }
+
+    fn matches_mode(&self, mode: &IndexFilterMode, interner: &ThreadedRodeo) -> bool {
+        match mode {
+            IndexFilterMode::Global => true,
+            IndexFilterMode::Directory(dir) => {
+                interner.get(dir).is_some_and(|spur| self.directory == spur)
+            }
+            IndexFilterMode::Workspace(prefix) => {
+                interner.resolve(&self.directory).starts_with(prefix)
+            }
+            IndexFilterMode::Host(hostname) => {
+                interner.get(hostname).is_some_and(|spur| self.host == spur)
+            }
+            IndexFilterMode::Session(session) => {
+                parse_uuid_bytes(session).is_some_and(|bytes| self.session == bytes)
+            }
+        }
+    }
+
+    fn matches_authors(
+        &self,
+        authors: &[String],
+        interner: &ThreadedRodeo,
+        agent_spurs: &HashSet<Spur>,
+    ) -> bool {
+        authors.is_empty()
+            || authors.iter().any(|filter| match filter.as_str() {
+                AUTHOR_FILTER_ALL_USER => !agent_spurs.contains(&self.author),
+                AUTHOR_FILTER_ALL_AGENT => agent_spurs.contains(&self.author),
+                literal => interner
+                    .get(literal)
+                    .is_some_and(|spur| self.author == spur),
+            })
+    }
+
+    fn id_string(&self) -> String {
+        format_uuid_bytes(&self.id)
+    }
 }
 
 impl CommandData {
@@ -130,6 +192,7 @@ impl CommandData {
 
         let dir_key = interner.get_or_intern(with_trailing_slash(&history.cwd));
         let host_key = interner.get_or_intern(&history.hostname);
+        let invocation = InvocationData::new(history, interner)?;
 
         let mut directories = HashSet::new();
         directories.insert(dir_key);
@@ -154,6 +217,7 @@ impl CommandData {
             hosts,
             sessions,
             authors,
+            invocations: vec![invocation],
         })
     }
 
@@ -168,6 +232,9 @@ impl CommandData {
         };
 
         let timestamp = history.timestamp.unix_timestamp();
+        let Some(invocation) = InvocationData::new(history, interner) else {
+            return false;
+        };
 
         // Update global frecency
         self.global_frecency.record_use(timestamp);
@@ -178,6 +245,7 @@ impl CommandData {
         self.hosts.insert(interner.get_or_intern(&history.hostname));
         self.sessions.insert(session);
         self.authors.insert(interner.get_or_intern(&history.author));
+        self.invocations.push(invocation);
 
         // Update most recent if this invocation is newer
         if timestamp > self.most_recent_timestamp {
@@ -191,6 +259,27 @@ impl CommandData {
     /// Get the most recent history ID for this command.
     pub fn most_recent_id(&self) -> String {
         format_uuid_bytes(&self.most_recent_id)
+    }
+
+    pub fn most_recent_matching_id(
+        &self,
+        mode: &IndexFilterMode,
+        authors: &[String],
+        interner: &ThreadedRodeo,
+        agent_spurs: &HashSet<Spur>,
+    ) -> Option<String> {
+        if matches!(mode, IndexFilterMode::Global) && authors.is_empty() {
+            return Some(self.most_recent_id());
+        }
+
+        self.invocations
+            .iter()
+            .filter(|invocation| {
+                invocation.matches_mode(mode, interner)
+                    && invocation.matches_authors(authors, interner, agent_spurs)
+            })
+            .max_by_key(|invocation| invocation.timestamp)
+            .map(InvocationData::id_string)
     }
 
     /// Check if any invocation matches a directory filter (exact match).
@@ -373,6 +462,10 @@ impl SearchIndex {
         // Build filter based on mode + authors
         let mode_filter = self.build_filter(&filter_mode);
         let author_filter = self.build_author_filter(authors);
+        let agent_spurs: HashSet<Spur> = KNOWN_AGENTS
+            .iter()
+            .filter_map(|author| self.interner.get(author))
+            .collect();
         let filter =
             match (mode_filter, author_filter) {
                 (Some(mf), Some(af)) => Some(Arc::new(move |cmd: &String| mf(cmd) && af(cmd))
@@ -410,9 +503,14 @@ impl SearchIndex {
                 .filter_map(|item| {
                     let cmd = item.data;
                     // DashMap<Arc<str>, _>::get accepts &str via Borrow trait
-                    self.commands
-                        .get(cmd.as_str())
-                        .map(|data| data.most_recent_id())
+                    self.commands.get(cmd.as_str()).and_then(|data| {
+                        data.most_recent_matching_id(
+                            &filter_mode,
+                            authors,
+                            &self.interner,
+                            &agent_spurs,
+                        )
+                    })
                 })
                 .collect()
         })
@@ -698,6 +796,86 @@ mod tests {
         assert!(data.has_invocation_in_workspace(&check1, &interner));
         assert!(data.has_invocation_in_workspace(&check2, &interner));
         assert!(!data.has_invocation_in_workspace(&check3, &interner));
+    }
+
+    #[tokio::test]
+    async fn search_index_returns_latest_matching_author_invocation() {
+        let index = SearchIndex::new();
+
+        let user_history: History = History::import()
+            .timestamp(datetime!(2024-01-01 10:00 UTC))
+            .command("git status")
+            .cwd("/home/user/project")
+            .author("ellie")
+            .build()
+            .into();
+        let agent_history: History = History::import()
+            .timestamp(datetime!(2024-01-01 11:00 UTC))
+            .command("git status")
+            .cwd("/home/user/project")
+            .author("codex")
+            .build()
+            .into();
+
+        index.add_history(&user_history);
+        index.add_history(&agent_history);
+
+        let user_results = index
+            .search(
+                "git",
+                IndexFilterMode::Global,
+                &QueryContext::default(),
+                &[AUTHOR_FILTER_ALL_USER.to_string()],
+                10,
+            )
+            .await;
+        assert_eq!(
+            user_results,
+            vec![Uuid::parse_str(&user_history.id.0).unwrap().to_string()]
+        );
+
+        let agent_results = index
+            .search(
+                "git",
+                IndexFilterMode::Global,
+                &QueryContext::default(),
+                &[AUTHOR_FILTER_ALL_AGENT.to_string()],
+                10,
+            )
+            .await;
+        assert_eq!(
+            agent_results,
+            vec![Uuid::parse_str(&agent_history.id.0).unwrap().to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn search_index_returns_latest_matching_directory_invocation() {
+        let index = SearchIndex::new();
+
+        let dir1 = "/home/user/project";
+        let dir2 = "/home/user/other";
+
+        let project_history = make_history("git status", dir1, datetime!(2024-01-01 10:00 UTC));
+        let other_history = make_history("git status", dir2, datetime!(2024-01-01 11:00 UTC));
+
+        index.add_history(&project_history);
+        index.add_history(&other_history);
+
+        let results = index
+            .search(
+                "git",
+                IndexFilterMode::Directory(with_trailing_slash(dir1)),
+                &QueryContext::default(),
+                &[],
+                10,
+            )
+            .await;
+
+        assert_eq!(
+            results,
+            vec![Uuid::parse_str(&project_history.id.0).unwrap().to_string()]
+        );
     }
 
     #[tokio::test]
