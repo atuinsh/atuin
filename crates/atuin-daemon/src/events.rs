@@ -8,7 +8,7 @@
 //! Control gRPC service.
 
 use atuin_client::history::{History, HistoryId};
-use atuin_common::record::{RecordId, RecordIdx};
+use atuin_common::record::RecordId;
 
 /// Events that flow through the daemon's event bus.
 ///
@@ -18,14 +18,10 @@ use atuin_common::record::{RecordId, RecordIdx};
 pub enum DaemonEvent {
     // ---- History lifecycle ----
     /// A command has started running.
-    HistoryStarted { history: History },
+    HistoryStarted(History),
 
     /// A command has finished running.
-    HistoryEnded {
-        history: History,
-        record_id: RecordId,
-        idx: RecordIdx,
-    },
+    HistoryEnded(History),
 
     // ---- Sync ----
     /// Records were synced from the server.

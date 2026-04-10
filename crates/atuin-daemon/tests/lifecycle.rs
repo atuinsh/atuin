@@ -178,9 +178,8 @@ mod unix {
         assert_eq!(started_history.hostname, "test-host:ellie");
         assert_eq!(started_history.author, "claude");
         assert_eq!(started_history.intent, "inspect repository state");
-        assert!(started.record.is_none());
 
-        let end_reply = client
+        client
             .end_history(start_reply.id.clone(), 1_000_000, 0)
             .await
             .unwrap();
@@ -194,9 +193,6 @@ mod unix {
         assert_eq!(ended_history.id, start_reply.id);
         assert_eq!(ended_history.exit, 0);
         assert_eq!(ended_history.duration, 1_000_000);
-        let ended_record = ended.record.unwrap();
-        assert_eq!(ended_record.id, end_reply.id);
-        assert_eq!(ended_record.idx, end_reply.idx);
     }
 
     #[tokio::test]

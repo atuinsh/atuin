@@ -212,10 +212,10 @@ impl Component for SearchComponent {
                         .await;
                 }
             }
-            DaemonEvent::HistoryStarted { history } => {
+            DaemonEvent::HistoryStarted(history) => {
                 debug!(id = %history.id, command = %history.command, "History started (no index action)");
             }
-            DaemonEvent::HistoryEnded { history, .. } => {
+            DaemonEvent::HistoryEnded(history) => {
                 span!(Level::TRACE, "inject_history_ended")
                     .in_scope(async || {
                         self.index.read().await.add_history(history);

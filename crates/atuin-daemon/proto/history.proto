@@ -67,15 +67,9 @@ message HistoryEntry {
   int64 duration = 10;
 }
 
-message RecordMeta {
-  string id = 1;
-  uint64 idx = 2;
-}
-
 message TailHistoryReply {
   HistoryEventKind kind = 1;
   HistoryEntry history = 2;
-  RecordMeta record = 3;
 }
 
 service History {

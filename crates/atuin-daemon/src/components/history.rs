@@ -20,9 +20,9 @@ use crate::{
     daemon::{Component, DaemonHandle},
     events::DaemonEvent,
     history::{
-        EndHistoryReply, EndHistoryRequest, HistoryEntry, HistoryEventKind, RecordMeta,
-        ShutdownReply, ShutdownRequest, StartHistoryReply, StartHistoryRequest, StatusReply,
-        StatusRequest, TailHistoryReply, TailHistoryRequest,
+        EndHistoryReply, EndHistoryRequest, HistoryEntry, HistoryEventKind, ShutdownReply,
+        ShutdownRequest, StartHistoryReply, StartHistoryRequest, StatusReply, StatusRequest,
+        TailHistoryReply, TailHistoryRequest,
         history_server::{History as HistorySvc, HistoryServer},
     },
 };
@@ -116,12 +116,7 @@ pub struct HistoryGrpcService {
     inner: Arc<HistoryComponentInner>,
 }
 
-fn history_to_tail_reply(
-    kind: HistoryEventKind,
-    history: History,
-    record_id: Option<String>,
-    record_idx: Option<u64>,
-) -> TailHistoryReply {
+fn history_to_tail_reply(kind: HistoryEventKind, history: History) -> TailHistoryReply {
     TailHistoryReply {
         kind: kind as i32,
         history: Some(HistoryEntry {
@@ -136,10 +131,6 @@ fn history_to_tail_reply(
             exit: history.exit,
             duration: history.duration,
         }),
-        record: match (record_id, record_idx) {
-            (Some(id), Some(idx)) => Some(RecordMeta { id, idx }),
-            _ => None,
-        },
     }
 }
 
@@ -174,7 +165,7 @@ impl HistorySvc for HistoryGrpcService {
 
         // Emit the event
         if let Some(handle) = self.inner.handle.read().await.as_ref() {
-            handle.emit(DaemonEvent::HistoryStarted { history: h.clone() });
+            handle.emit(DaemonEvent::HistoryStarted(h.clone()));
         }
 
         let id = h.id.clone();
@@ -239,11 +230,7 @@ impl HistorySvc for HistoryGrpcService {
                 .map_err(|e| Status::internal(format!("failed to push record to store: {e:?}")))?;
 
             // Emit the event
-            handle.emit(DaemonEvent::HistoryEnded {
-                history,
-                record_id: record_id.clone(),
-                idx,
-            });
+            handle.emit(DaemonEvent::HistoryEnded(history));
 
             let reply = EndHistoryReply {
                 id: record_id.0.to_string(),
@@ -290,22 +277,12 @@ impl HistorySvc for HistoryGrpcService {
                 };
 
                 let reply = match event {
-                    DaemonEvent::HistoryStarted { history } => Some(history_to_tail_reply(
-                        HistoryEventKind::Started,
-                        history,
-                        None,
-                        None,
-                    )),
-                    DaemonEvent::HistoryEnded {
-                        history,
-                        record_id,
-                        idx,
-                    } => Some(history_to_tail_reply(
-                        HistoryEventKind::Ended,
-                        history,
-                        Some(record_id.0.to_string()),
-                        Some(idx),
-                    )),
+                    DaemonEvent::HistoryStarted(history) => {
+                        Some(history_to_tail_reply(HistoryEventKind::Started, history))
+                    }
+                    DaemonEvent::HistoryEnded(history) => {
+                        Some(history_to_tail_reply(HistoryEventKind::Ended, history))
+                    }
                     _ => None,
                 };
 

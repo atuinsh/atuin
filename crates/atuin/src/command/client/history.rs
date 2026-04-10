@@ -387,8 +387,6 @@ enum TailKind {
 struct TailEvent {
     kind: TailKind,
     history: History,
-    record_id: Option<String>,
-    record_idx: Option<u64>,
 }
 
 #[cfg(feature = "daemon")]
@@ -396,8 +394,6 @@ struct TailEvent {
 struct TailJsonEvent<'a> {
     event: &'static str,
     history: TailJsonHistory<'a>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    record: Option<TailJsonRecord<'a>>,
 }
 
 #[cfg(feature = "daemon")]
@@ -428,16 +424,8 @@ struct TailJsonHistory<'a> {
 }
 
 #[cfg(feature = "daemon")]
-#[derive(Serialize)]
-struct TailJsonRecord<'a> {
-    id: &'a str,
-    idx: u64,
-}
-
-#[cfg(feature = "daemon")]
 impl TailEvent {
     fn from_proto(reply: TailHistoryReply) -> Result<Self> {
-        let record = reply.record;
         let history = reply
             .history
             .ok_or_else(|| eyre::eyre!("daemon sent a history tail event without history"))?;
@@ -449,10 +437,6 @@ impl TailEvent {
             HistoryEventKind::Started => TailKind::Started,
             HistoryEventKind::Ended => TailKind::Ended,
             HistoryEventKind::Unspecified => bail!("daemon sent an unspecified history tail event"),
-        };
-        let (record_id, record_idx) = match record {
-            Some(record) => (normalize_optional_field(record.id), Some(record.idx)),
-            None => (None, None),
         };
 
         Ok(Self {
@@ -470,8 +454,6 @@ impl TailEvent {
                 intent: normalize_optional_field(history.intent),
                 deleted_at: None,
             },
-            record_id,
-            record_idx,
         })
     }
 
@@ -509,10 +491,6 @@ impl TailEvent {
                     .finished_at()
                     .map(|time| format_history_time(time, tz))
                     .transpose()?,
-            },
-            record: match (self.record_id.as_deref(), self.record_idx) {
-                (Some(id), Some(idx)) => Some(TailJsonRecord { id, idx }),
-                _ => None,
             },
         };
 
@@ -557,11 +535,6 @@ impl TailEvent {
         push_pretty_field(&mut out, "session", &self.history.session);
         push_pretty_field(&mut out, "exit", &self.exit_display());
         push_pretty_field(&mut out, "duration", &self.duration_display());
-
-        if let (Some(record_id), Some(idx)) = (&self.record_id, self.record_idx) {
-            push_pretty_field(&mut out, "record", record_id);
-            push_pretty_field(&mut out, "idx", &idx.to_string());
-        }
 
         out.push('\n');
 
@@ -1242,14 +1215,12 @@ mod tests {
                 intent: Some("inspect repository state".to_owned()),
                 deleted_at: None,
             },
-            record_id: matches!(kind, TailKind::Ended).then_some("record-id".to_owned()),
-            record_idx: matches!(kind, TailKind::Ended).then_some(42),
         }
     }
 
     #[cfg(feature = "daemon")]
     #[test]
-    fn test_tail_json_output_includes_record_metadata() {
+    fn test_tail_json_output_contains_history_fields() {
         let json = sample_tail_event(TailKind::Ended)
             .render(false, Timezone(time::UtcOffset::UTC))
             .unwrap();
@@ -1259,8 +1230,7 @@ mod tests {
         assert_eq!(value["history"]["id"], "history-id");
         assert_eq!(value["history"]["duration_ns"], 12_345_678);
         assert_eq!(value["history"]["success"], true);
-        assert_eq!(value["record"]["id"], "record-id");
-        assert_eq!(value["record"]["idx"], 42);
+        assert!(value.get("record").is_none());
     }
 
     #[cfg(feature = "daemon")]
@@ -1278,6 +1248,5 @@ mod tests {
         assert!(plain.contains("pending"));
         assert!(plain.contains("duration:"));
         assert!(plain.contains("running"));
-        assert!(!plain.contains("record-id"));
     }
 }

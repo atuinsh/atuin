@@ -353,8 +353,8 @@ fn daemon_event_to_proto(event: DaemonEvent) -> crate::control::send_event_reque
         DaemonEvent::SettingsReloaded => Event::SettingsReloaded(SettingsReloadedEvent {}),
         DaemonEvent::ShutdownRequested => Event::Shutdown(ShutdownEvent {}),
         // These events are internal and not sent via the control service
-        DaemonEvent::HistoryStarted { .. }
-        | DaemonEvent::HistoryEnded { .. }
+        DaemonEvent::HistoryStarted(_)
+        | DaemonEvent::HistoryEnded(_)
         | DaemonEvent::RecordsAdded(_)
         | DaemonEvent::SyncCompleted { .. }
         | DaemonEvent::SyncFailed { .. } => {
