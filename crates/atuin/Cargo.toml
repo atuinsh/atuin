@@ -104,6 +104,8 @@ arboard = { version = "3.4", optional = true, default-features = false, features
 
 [target.'cfg(unix)'.dependencies]
 daemonize = "0.5.0"
+# Enable tree-sitter shell parsing on non-Windows (tree-sitter 0.26 doesn't cross-compile to Windows)
+atuin-ai = { path = "../atuin-ai", version = "18.13.6", optional = true, default-features = false, features = ["tree-sitter"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_System_Console"] }

@@ -1,5 +1,3 @@
-use tree_sitter::{Parser, Tree};
-
 /// Extracted command info from a shell command string.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ShellCommand {
@@ -38,225 +36,248 @@ impl ShellKind {
 
 /// Parse a shell command string and extract all subcommands.
 pub(crate) fn parse_shell_command(code: &str, shell: ShellKind) -> ParsedShellCommand {
+    #[cfg(feature = "tree-sitter")]
     match shell {
-        ShellKind::Posix => parse_posix(code),
-        ShellKind::Fish => parse_fish(code),
+        ShellKind::Posix => ts::parse_posix(code),
+        ShellKind::Fish => ts::parse_fish(code),
         ShellKind::Other => parse_fallback(code),
     }
-}
 
-// ────────────────────────────────────────────────────────────────
-// POSIX (bash/zsh/sh) parser
-// ────────────────────────────────────────────────────────────────
-
-fn bash_parser() -> Parser {
-    let mut parser = Parser::new();
-    parser
-        .set_language(&tree_sitter_bash::LANGUAGE.into())
-        .expect("failed to set bash language");
-    parser
-}
-
-fn parse_posix(code: &str) -> ParsedShellCommand {
-    let mut parser = bash_parser();
-    let Some(tree) = parser.parse(code, None) else {
-        return parse_fallback(code);
-    };
-
-    let mut commands = Vec::new();
-    walk_bash_tree(&tree, code.as_bytes(), &mut commands);
-    ParsedShellCommand {
-        subcommands: commands,
+    #[cfg(not(feature = "tree-sitter"))]
+    {
+        let _ = shell;
+        parse_fallback(code)
     }
 }
 
-/// Leaf node kinds that never contain nested commands.
-const BASH_LEAVES: &[&str] = &[
-    "command_name",
-    "word",
-    "number",
-    "simple_expansion",
-    "expansion",
-    "arithmetic_expansion",
-    "ansi_c_string",
-    "special_variable_name",
-    "variable_name",
-    "file_descriptor",
-    "heredoc_body",
-    "heredoc_start",
-    "regex",
-    "heredoc_redirect",
-];
+// ────────────────────────────────────────────────────────────────
+// Tree-sitter parsers (POSIX + Fish)
+// Disabled on platforms where tree-sitter doesn't cross-compile
+// (e.g. Windows); falls back to word-level extraction.
+// ────────────────────────────────────────────────────────────────
 
-fn walk_bash_tree(tree: &Tree, source: &[u8], commands: &mut Vec<ShellCommand>) {
-    walk_bash_node(tree.root_node(), source, commands);
-}
+#[cfg(feature = "tree-sitter")]
+mod ts {
+    use super::{ParsedShellCommand, ShellCommand, parse_fallback};
+    use tree_sitter_lib::{Parser, Tree};
 
-fn walk_bash_node(node: tree_sitter::Node, source: &[u8], commands: &mut Vec<ShellCommand>) {
-    match node.kind() {
-        "command" => {
-            if let Some(cmd) = extract_bash_command(node, source) {
-                commands.push(cmd);
+    fn bash_parser() -> Parser {
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_bash::LANGUAGE.into())
+            .expect("failed to set bash language");
+        parser
+    }
+
+    pub(super) fn parse_posix(code: &str) -> ParsedShellCommand {
+        let mut parser = bash_parser();
+        let Some(tree) = parser.parse(code, None) else {
+            return parse_fallback(code);
+        };
+
+        let mut commands = Vec::new();
+        walk_bash_tree(&tree, code.as_bytes(), &mut commands);
+        ParsedShellCommand {
+            subcommands: commands,
+        }
+    }
+
+    /// Leaf node kinds that never contain nested commands.
+    const BASH_LEAVES: &[&str] = &[
+        "command_name",
+        "word",
+        "number",
+        "simple_expansion",
+        "expansion",
+        "arithmetic_expansion",
+        "ansi_c_string",
+        "special_variable_name",
+        "variable_name",
+        "file_descriptor",
+        "heredoc_body",
+        "heredoc_start",
+        "regex",
+        "heredoc_redirect",
+    ];
+
+    fn walk_bash_tree(tree: &Tree, source: &[u8], commands: &mut Vec<ShellCommand>) {
+        walk_bash_node(tree.root_node(), source, commands);
+    }
+
+    fn walk_bash_node(
+        node: tree_sitter_lib::Node,
+        source: &[u8],
+        commands: &mut Vec<ShellCommand>,
+    ) {
+        match node.kind() {
+            "command" => {
+                if let Some(cmd) = extract_bash_command(node, source) {
+                    commands.push(cmd);
+                }
+                // Descend into all non-leaf children to find nested commands
+                // (e.g. command_substitution inside a string inside a command)
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    if !BASH_LEAVES.contains(&child.kind()) {
+                        walk_bash_node(child, source, commands);
+                    }
+                }
             }
-            // Descend into all non-leaf children to find nested commands
-            // (e.g. command_substitution inside a string inside a command)
-            let mut cursor = node.walk();
-            for child in node.children(&mut cursor) {
-                if !BASH_LEAVES.contains(&child.kind()) {
+            // Other nodes: descend into all children
+            _ => {
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
                     walk_bash_node(child, source, commands);
                 }
             }
         }
-        // Other nodes: descend into all children
-        _ => {
-            let mut cursor = node.walk();
-            for child in node.children(&mut cursor) {
-                walk_bash_node(child, source, commands);
+    }
+
+    /// Extract the full command string and name from a bash `command` node.
+    fn extract_bash_command(node: tree_sitter_lib::Node, source: &[u8]) -> Option<ShellCommand> {
+        // A `command` node has children like:
+        //   variable_assignment* command_name argument* redirect*
+        // We want the command_name and all arguments (skipping assignments and redirects).
+        let mut name = None;
+        let mut name_start = None;
+        let mut arg_end = None;
+
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            match child.kind() {
+                "command_name" => {
+                    name = child.utf8_text(source).ok().map(|s| s.to_string());
+                    name_start = Some(child.start_byte());
+                }
+                "word"
+                | "string"
+                | "raw_string"
+                | "concatenation"
+                | "number"
+                | "simple_expansion"
+                | "expansion"
+                | "arithmetic_expansion"
+                | "ansi_c_string"
+                | "process_substitution" => {
+                    arg_end = Some(child.end_byte());
+                }
+                _ => {}
             }
         }
+
+        let name = name?;
+        let full = if let (Some(start), Some(end)) = (name_start, arg_end) {
+            std::str::from_utf8(&source[start..end]).ok()?.to_string()
+        } else {
+            name.clone()
+        };
+
+        Some(ShellCommand { name, full })
     }
-}
 
-/// Extract the full command string and name from a bash `command` node.
-fn extract_bash_command(node: tree_sitter::Node, source: &[u8]) -> Option<ShellCommand> {
-    // A `command` node has children like:
-    //   variable_assignment* command_name argument* redirect*
-    // We want the command_name and all arguments (skipping assignments and redirects).
-    let mut name = None;
-    let mut name_start = None;
-    let mut arg_end = None;
+    // ────────────────────────────────────────────────────────────────
+    // Fish parser
+    // ────────────────────────────────────────────────────────────────
 
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        match child.kind() {
-            "command_name" => {
-                name = child.utf8_text(source).ok().map(|s| s.to_string());
-                name_start = Some(child.start_byte());
-            }
-            "word"
-            | "string"
-            | "raw_string"
-            | "concatenation"
-            | "number"
-            | "simple_expansion"
-            | "expansion"
-            | "arithmetic_expansion"
-            | "ansi_c_string"
-            | "process_substitution" => {
-                arg_end = Some(child.end_byte());
-            }
-            _ => {}
+    fn fish_parser() -> Parser {
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_fish::language())
+            .expect("failed to set fish language");
+        parser
+    }
+
+    pub(super) fn parse_fish(code: &str) -> ParsedShellCommand {
+        let mut parser = fish_parser();
+        let Some(tree) = parser.parse(code, None) else {
+            return parse_fallback(code);
+        };
+
+        let mut commands = Vec::new();
+        walk_fish_tree(&tree, code.as_bytes(), &mut commands);
+        ParsedShellCommand {
+            subcommands: commands,
         }
     }
 
-    let name = name?;
-    let full = if let (Some(start), Some(end)) = (name_start, arg_end) {
-        std::str::from_utf8(&source[start..end]).ok()?.to_string()
-    } else {
-        name.clone()
-    };
+    const FISH_COMPOUND: &[&str] = &[
+        "conditional_execution",
+        "pipe",
+        "job",
+        "command_substitution",
+        "block",
+        "for_statement",
+        "while_statement",
+        "if_statement",
+        "switch_statement",
+        "function_definition",
+        "begin_statement",
+        "redirected_statement",
+    ];
 
-    Some(ShellCommand { name, full })
-}
-
-// ────────────────────────────────────────────────────────────────
-// Fish parser
-// ────────────────────────────────────────────────────────────────
-
-fn fish_parser() -> Parser {
-    let mut parser = Parser::new();
-    parser
-        .set_language(&tree_sitter_fish::language())
-        .expect("failed to set fish language");
-    parser
-}
-
-fn parse_fish(code: &str) -> ParsedShellCommand {
-    let mut parser = fish_parser();
-    let Some(tree) = parser.parse(code, None) else {
-        return parse_fallback(code);
-    };
-
-    let mut commands = Vec::new();
-    walk_fish_tree(&tree, code.as_bytes(), &mut commands);
-    ParsedShellCommand {
-        subcommands: commands,
+    fn walk_fish_tree(tree: &Tree, source: &[u8], commands: &mut Vec<ShellCommand>) {
+        walk_fish_node(tree.root_node(), source, commands);
     }
-}
 
-const FISH_COMPOUND: &[&str] = &[
-    "conditional_execution",
-    "pipe",
-    "job",
-    "command_substitution",
-    "block",
-    "for_statement",
-    "while_statement",
-    "if_statement",
-    "switch_statement",
-    "function_definition",
-    "begin_statement",
-    "redirected_statement",
-];
-
-fn walk_fish_tree(tree: &Tree, source: &[u8], commands: &mut Vec<ShellCommand>) {
-    walk_fish_node(tree.root_node(), source, commands);
-}
-
-fn walk_fish_node(node: tree_sitter::Node, source: &[u8], commands: &mut Vec<ShellCommand>) {
-    match node.kind() {
-        "command" => {
-            if let Some(cmd) = extract_fish_command(node, source) {
-                commands.push(cmd);
+    fn walk_fish_node(
+        node: tree_sitter_lib::Node,
+        source: &[u8],
+        commands: &mut Vec<ShellCommand>,
+    ) {
+        match node.kind() {
+            "command" => {
+                if let Some(cmd) = extract_fish_command(node, source) {
+                    commands.push(cmd);
+                }
+                // Still descend into compound children (e.g. command_substitution inside a command)
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    if FISH_COMPOUND.contains(&child.kind()) {
+                        walk_fish_node(child, source, commands);
+                    }
+                }
             }
-            // Still descend into compound children (e.g. command_substitution inside a command)
-            let mut cursor = node.walk();
-            for child in node.children(&mut cursor) {
-                if FISH_COMPOUND.contains(&child.kind()) {
+            // Other nodes: descend into all children
+            _ => {
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
                     walk_fish_node(child, source, commands);
                 }
             }
         }
-        // Other nodes: descend into all children
-        _ => {
-            let mut cursor = node.walk();
-            for child in node.children(&mut cursor) {
-                walk_fish_node(child, source, commands);
-            }
-        }
     }
-}
 
-fn extract_fish_command(node: tree_sitter::Node, source: &[u8]) -> Option<ShellCommand> {
-    // In fish, a `command` node has:
-    //   name (command_name or word) followed by arguments (word, string, etc.)
-    let mut name = None;
+    fn extract_fish_command(node: tree_sitter_lib::Node, source: &[u8]) -> Option<ShellCommand> {
+        // In fish, a `command` node has:
+        //   name (command_name or word) followed by arguments (word, string, etc.)
+        let mut name = None;
 
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        match child.kind() {
-            "command_name" | "word" => {
-                let text = child.utf8_text(source).ok()?.to_string();
-                if name.is_none() {
-                    name = Some(text);
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            match child.kind() {
+                "command_name" | "word" => {
+                    let text = child.utf8_text(source).ok()?.to_string();
+                    if name.is_none() {
+                        name = Some(text);
+                    }
                 }
+                "string"
+                | "concatenation"
+                | "command_substitution"
+                | "escape_sequence"
+                | "double_quote_string"
+                | "single_quote_string" => {}
+                _ => {}
             }
-            "string"
-            | "concatenation"
-            | "command_substitution"
-            | "escape_sequence"
-            | "double_quote_string"
-            | "single_quote_string" => {}
-            _ => {}
         }
+
+        let name = name?;
+        // Get the full text of the command node
+        let full = node.utf8_text(source).ok()?.trim().to_string();
+
+        Some(ShellCommand { name, full })
     }
-
-    let name = name?;
-    // Get the full text of the command node
-    let full = node.utf8_text(source).ok()?.trim().to_string();
-
-    Some(ShellCommand { name, full })
-}
+} // mod ts
 
 // ────────────────────────────────────────────────────────────────
 // Fallback (word-level extraction for nushell / unknown shells)
