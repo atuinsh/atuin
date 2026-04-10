@@ -480,6 +480,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "tree-sitter")]
     #[test]
     fn command_substitution() {
         let result = parse_shell_command("echo $(git rev-parse HEAD)", ShellKind::Posix);
@@ -488,6 +489,7 @@ mod tests {
         assert!(n.contains(&"git"), "should contain git: {n:?}");
     }
 
+    #[cfg(feature = "tree-sitter")]
     #[test]
     fn backtick_substitution() {
         let result = parse_shell_command("echo `date`", ShellKind::Posix);
@@ -496,6 +498,7 @@ mod tests {
         assert!(n.contains(&"date"), "should contain date: {n:?}");
     }
 
+    #[cfg(feature = "tree-sitter")]
     #[test]
     fn subshell() {
         let result = parse_shell_command("(cd /tmp && ls)", ShellKind::Posix);
@@ -508,12 +511,14 @@ mod tests {
         assert_eq!(names(&result.subcommands), vec!["echo", "echo"]);
     }
 
+    #[cfg(feature = "tree-sitter")]
     #[test]
     fn for_loop() {
         let result = parse_shell_command("for f in *.txt; do cat $f; done", ShellKind::Posix);
         assert!(names(&result.subcommands).contains(&"cat"));
     }
 
+    #[cfg(feature = "tree-sitter")]
     #[test]
     fn if_statement() {
         let result = parse_shell_command(
@@ -590,6 +595,7 @@ mod tests {
         assert!(!any_subcommand_matches(&commands, "cat"));
     }
 
+    #[cfg(feature = "tree-sitter")]
     #[test]
     fn nested_substitution() {
         let result = parse_shell_command(
@@ -624,6 +630,7 @@ mod tests {
         assert!(n.contains(&"git"), "should contain git: {n:?}");
     }
 
+    #[cfg(feature = "tree-sitter")]
     #[test]
     fn fish_command_substitution() {
         let result = parse_shell_command("echo (date)", ShellKind::Fish);
@@ -632,6 +639,7 @@ mod tests {
         assert!(n.contains(&"date"), "should contain date: {n:?}");
     }
 
+    #[cfg(feature = "tree-sitter")]
     #[test]
     fn variable_assignment_excluded() {
         let result = parse_shell_command("FOO=bar ls -la /tmp", ShellKind::Posix);
@@ -639,6 +647,7 @@ mod tests {
         assert_eq!(fulls(&result.subcommands), vec!["ls -la /tmp"]);
     }
 
+    #[cfg(feature = "tree-sitter")]
     #[test]
     fn variable_assignment_multiple() {
         let result = parse_shell_command("A=1 B=2 git status", ShellKind::Posix);
@@ -705,7 +714,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "tree-sitter"))]
 mod adversarial {
     use super::*;
 
