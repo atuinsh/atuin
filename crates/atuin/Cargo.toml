@@ -104,7 +104,11 @@ arboard = { version = "3.4", optional = true, default-features = false, features
 
 [target.'cfg(unix)'.dependencies]
 daemonize = "0.5.0"
-# Enable tree-sitter shell parsing on non-Windows (tree-sitter 0.26 doesn't cross-compile to Windows)
+
+# Enable tree-sitter shell parsing on platforms where tree-sitter's bundled C
+# compiles cleanly. tree-sitter 0.26's portable/endian.h fails on illumos,
+# Windows cross-compiles, and potentially other exotic targets.
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
 atuin-ai = { path = "../atuin-ai", version = "18.13.6", optional = true, default-features = false, features = ["tree-sitter"] }
 
 [target.'cfg(windows)'.dependencies]
