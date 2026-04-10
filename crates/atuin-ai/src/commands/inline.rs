@@ -21,7 +21,7 @@ pub(crate) async fn run(
     if !settings.ai.enabled.unwrap_or(false) {
         emit_shell_result(
             Action::Print(
-                "Atuin AI is not enabled. Please enable it in your settings or run `atuin setup`."
+                "Atuin AI is not enabled. Please enable it in your settings with `atuin config set ai.enabled true` or run `atuin setup`.\nRun `atuin config set ai.enabled false` to disable the ? keybinding."
                     .to_string(),
             ),
             output_for_hook,
