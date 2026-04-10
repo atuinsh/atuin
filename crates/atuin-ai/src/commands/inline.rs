@@ -18,15 +18,25 @@ pub(crate) async fn run(
     settings: &atuin_client::settings::Settings,
     output_for_hook: bool,
 ) -> Result<()> {
-    if !settings.ai.enabled.unwrap_or(false) {
-        emit_shell_result(
-            Action::Print(
-                "Atuin AI is not enabled. Please enable it in your settings with `atuin config set ai.enabled true` or run `atuin setup`.\nRun `atuin config set ai.enabled false` to disable the ? keybinding."
-                    .to_string(),
-            ),
-            output_for_hook,
-        );
+    if settings.ai.enabled == Some(false) {
         return Ok(());
+    }
+
+    if settings.ai.enabled.is_none() {
+        match prompt_ai_setup()? {
+            SetupChoice::EnableAi => {
+                set_ai_enabled(true).await?;
+            }
+            SetupChoice::DisableKeybind => {
+                set_ai_enabled(false).await?;
+                emit_shell_result(Action::Cancel, output_for_hook);
+                return Ok(());
+            }
+            SetupChoice::Cancel => {
+                emit_shell_result(Action::Cancel, output_for_hook);
+                return Ok(());
+            }
+        }
     }
 
     let endpoint = api_endpoint.as_deref().unwrap_or(
@@ -90,26 +100,26 @@ async fn ensure_hub_session(settings: &atuin_client::settings::Settings) -> Resu
 
     info!("No Hub session found, prompting for authentication");
 
-    eprintln!("Atuin AI requires authenticating with Atuin Hub.");
+    println!("Atuin AI requires authenticating with Atuin Hub.");
     if will_sync {
-        eprintln!(
+        println!(
             "Once logged in, your shell history will be synchronized via Atuin Hub if auto_sync is enabled or when manually syncing."
         );
     }
-    eprintln!(
+    println!(
         "If you have an existing Atuin sync account, you can log in with your existing credentials."
     );
-    eprintln!("Press enter to begin (or esc to cancel).");
+    println!("Press enter to begin (or esc to cancel).");
     if !wait_for_login_confirmation()? {
         bail!("authentication canceled");
     }
 
     debug!("Starting Atuin Hub authentication...");
-    eprintln!("Authenticating with Atuin Hub...");
+    println!("Authenticating with Atuin Hub...");
 
     let session = atuin_client::hub::HubAuthSession::start(hub_address.as_ref()).await?;
-    eprintln!("Open this URL to continue:");
-    eprintln!("{}", session.auth_url);
+    println!("Open this URL to continue:");
+    println!("{}", session.auth_url);
 
     let token = session
         .wait_for_completion(
@@ -188,6 +198,127 @@ async fn run_inline_tui(ctx: AppContext, initial_prompt: Option<String>) -> Resu
 // Helpers
 // ───────────────────────────────────────────────────────────────────
 
+enum SetupChoice {
+    EnableAi,
+    DisableKeybind,
+    Cancel,
+}
+
+fn prompt_ai_setup() -> Result<SetupChoice> {
+    use crossterm::{
+        cursor,
+        event::{self, Event, KeyCode},
+        terminal,
+    };
+
+    let options = ["Enable Atuin AI", "Disable ? Keybind", "Cancel"];
+    let mut selected: usize = 0;
+    let mut stdout = std::io::stdout();
+
+    // Print header before raw mode so newlines render correctly.
+    // Use stdout because the shell hook swaps stdout/stderr — stdout goes
+    // to the terminal in both hook and non-hook modes.
+    println!();
+    println!("  Atuin AI is not yet configured.");
+    println!();
+
+    terminal::enable_raw_mode().context("failed to enable raw mode")?;
+    struct Guard;
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            let _ = terminal::disable_raw_mode();
+        }
+    }
+    let _guard = Guard;
+
+    crossterm::execute!(stdout, cursor::Hide)?;
+
+    loop {
+        render_setup_options(&mut stdout, &options, selected)?;
+
+        let ev = event::read().context("failed to read key event")?;
+
+        crossterm::execute!(stdout, cursor::MoveUp(options.len() as u16))?;
+
+        if let Event::Key(key) = ev {
+            match key.code {
+                KeyCode::Up | KeyCode::Char('k') => {
+                    selected = selected.saturating_sub(1);
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    if selected < options.len() - 1 {
+                        selected += 1;
+                    }
+                }
+                KeyCode::Enter => break,
+                KeyCode::Esc => {
+                    selected = 2;
+                    break;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // Final render with selection visible
+    render_setup_options(&mut stdout, &options, selected)?;
+    crossterm::execute!(stdout, cursor::Show)?;
+
+    Ok(match selected {
+        0 => SetupChoice::EnableAi,
+        1 => SetupChoice::DisableKeybind,
+        _ => SetupChoice::Cancel,
+    })
+}
+
+fn render_setup_options(
+    w: &mut impl std::io::Write,
+    options: &[&str],
+    selected: usize,
+) -> Result<()> {
+    use crossterm::{
+        style::Stylize,
+        terminal::{Clear, ClearType},
+    };
+
+    for (i, option) in options.iter().enumerate() {
+        if i == selected {
+            write!(w, "\r  {}", format!("> {option}").bold().cyan())?;
+        } else {
+            write!(w, "\r    {option}")?;
+        }
+        crossterm::execute!(w, Clear(ClearType::UntilNewLine))?;
+        write!(w, "\r\n")?;
+    }
+    w.flush()?;
+    Ok(())
+}
+
+async fn set_ai_enabled(enabled: bool) -> Result<()> {
+    let config_file = atuin_client::settings::Settings::get_config_path()?;
+    let config_str = tokio::fs::read_to_string(&config_file).await?;
+    let mut doc = config_str.parse::<toml_edit::DocumentMut>()?;
+
+    if !doc.contains_key("ai") {
+        doc["ai"] = toml_edit::table();
+    }
+    doc["ai"]["enabled"] = toml_edit::value(enabled);
+
+    tokio::fs::write(&config_file, doc.to_string()).await?;
+
+    if !enabled {
+        println!(
+            "Atuin AI keybind disabled. You can reenable with `atuin config set ai.enabled true`.",
+        );
+        println!("Restart your shell for changes to take effect.");
+        // Two printlns to ensure the message is visible above the shell prompt after program ends.
+        println!();
+        println!();
+    }
+
+    Ok(())
+}
+
 fn wait_for_login_confirmation() -> Result<bool> {
     use crossterm::{
         event::{self, Event, KeyCode},
@@ -219,7 +350,6 @@ fn wait_for_login_confirmation() -> Result<bool> {
 enum Action {
     Execute(String),
     Insert(String),
-    Print(String),
     Cancel,
 }
 
@@ -228,12 +358,11 @@ fn emit_shell_result(action: Action, output_for_hook: bool) {
         match action {
             Action::Execute(output) => eprintln!("__atuin_ai_execute__:{output}"),
             Action::Insert(output) => eprintln!("__atuin_ai_insert__:{output}"),
-            Action::Print(output) => eprintln!("__atuin_ai_print__:{output}"),
             Action::Cancel => eprintln!("__atuin_ai_cancel__"),
         }
     } else {
         match action {
-            Action::Execute(output) | Action::Insert(output) | Action::Print(output) => {
+            Action::Execute(output) | Action::Insert(output) => {
                 println!("{output}");
             }
             Action::Cancel => {}
