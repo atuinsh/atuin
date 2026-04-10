@@ -61,7 +61,7 @@ pub(crate) const ATUIN_HISTORY: &ToolDescriptor = &ToolDescriptor {
 // These appear in tool summaries but aren't client-side tools.
 
 pub(crate) const SERVER_SEARCH: &ToolDescriptor = &ToolDescriptor {
-    canonical_names: &["search"],
+    canonical_names: &["web_search"],
     capability: None,
     display_verb: "search",
     progressive_verb: "Searching...",
@@ -69,21 +69,12 @@ pub(crate) const SERVER_SEARCH: &ToolDescriptor = &ToolDescriptor {
     is_client: false,
 };
 
-pub(crate) const SERVER_EXECUTE: &ToolDescriptor = &ToolDescriptor {
-    canonical_names: &["execute", "run", "bash"],
+pub(crate) const SERVER_SCRAPE: &ToolDescriptor = &ToolDescriptor {
+    canonical_names: &["web_scrape"],
     capability: None,
-    display_verb: "run",
-    progressive_verb: "Running command...",
-    past_verb: "Ran command",
-    is_client: false,
-};
-
-pub(crate) const SERVER_LIST: &ToolDescriptor = &ToolDescriptor {
-    canonical_names: &["list", "list_files"],
-    capability: None,
-    display_verb: "list",
-    progressive_verb: "Listing files...",
-    past_verb: "Listed files",
+    display_verb: "scrape",
+    progressive_verb: "Scraping...",
+    past_verb: "Scraped",
     is_client: false,
 };
 
@@ -94,8 +85,7 @@ const ALL_DESCRIPTORS: &[&ToolDescriptor] = &[
     SHELL,
     ATUIN_HISTORY,
     SERVER_SEARCH,
-    SERVER_EXECUTE,
-    SERVER_LIST,
+    SERVER_SCRAPE,
 ];
 
 /// Look up a tool descriptor by its canonical wire name.
