@@ -36,7 +36,7 @@ pub struct SearchState {
     pub authors: Vec<String>,
 }
 
-pub(crate) async fn search_db(
+async fn search_db(
     state: &SearchState,
     db: &dyn Database,
     mode: SearchMode,
