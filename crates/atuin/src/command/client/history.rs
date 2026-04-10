@@ -451,7 +451,7 @@ impl TailEvent {
                 session: history.session,
                 hostname: history.hostname,
                 author: history.author,
-                intent: normalize_optional_field(history.intent),
+                intent: normalize_optional_field(&history.intent),
                 deleted_at: None,
             },
         })
@@ -641,7 +641,7 @@ fn format_duration_ns(duration_ns: i64) -> String {
         }
     }
 
-    F(Duration::from_nanos(duration_ns.max(0) as u64)).to_string()
+    F(Duration::from_nanos(duration_ns.max(0).cast_unsigned())).to_string()
 }
 
 #[cfg(feature = "daemon")]
@@ -656,10 +656,8 @@ fn push_pretty_field(out: &mut String, label: &str, value: &str) {
     let mut lines = value.lines();
     if let Some(first) = lines.next() {
         out.push_str(first);
-        out.push('\n');
-    } else {
-        out.push('\n');
     }
+    out.push('\n');
 
     for line in lines {
         out.push_str("             ");
@@ -669,7 +667,7 @@ fn push_pretty_field(out: &mut String, label: &str, value: &str) {
 }
 
 #[cfg(feature = "daemon")]
-fn normalize_optional_field(value: String) -> Option<String> {
+fn normalize_optional_field(value: &str) -> Option<String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
         None
@@ -850,14 +848,14 @@ impl Cmd {
     #[cfg(feature = "daemon")]
     async fn handle_tail(settings: &Settings) -> Result<()> {
         let tty = std::io::stdout().is_terminal();
-        let stdout = std::io::stdout();
-        let mut out = stdout.lock();
         let mut client = daemon::tail_client(settings).await?;
         let mut stream = client.tail_history().await?;
+        let stdout = std::io::stdout();
 
         while let Some(reply) = stream.message().await? {
             let event = TailEvent::from_proto(reply)?;
             let rendered = event.render(tty, settings.timezone)?;
+            let mut out = stdout.lock();
 
             match out.write_all(rendered.as_bytes()) {
                 Ok(()) => out.flush()?,
@@ -1031,6 +1029,7 @@ impl Cmd {
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines)]
     pub async fn run(self, settings: &Settings) -> Result<()> {
         let context = current_context().await?;
 

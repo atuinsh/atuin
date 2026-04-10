@@ -471,13 +471,12 @@ pub async fn tail_client(settings: &Settings) -> Result<HistoryClient> {
         Probe::NeedsRestart(reason) if !settings.daemon.autostart => {
             bail!("{reason}. Enable `daemon.autostart = true` or restart the daemon manually");
         }
-        Probe::NeedsRestart(_) => {}
         Probe::Unreachable(err) if is_legacy_daemon_error(&err) => {
             return Err(err.wrap_err(LEGACY_DAEMON_RESTART_MESSAGE));
         }
         Probe::Unreachable(err) if !settings.daemon.autostart => return Err(err),
         Probe::Unreachable(err) if !should_retry_after_error(&err) => return Err(err),
-        Probe::Unreachable(_) => {}
+        Probe::NeedsRestart(_) | Probe::Unreachable(_) => {}
     }
 
     restart_daemon(settings).await
