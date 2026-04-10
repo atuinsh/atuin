@@ -2,7 +2,7 @@ use std::io::Read;
 use std::path::PathBuf;
 
 use atuin_common::utils::home_dir;
-use eyre::{bail, Result};
+use eyre::{Result, bail};
 use serde_json::Value;
 
 enum Agent {
@@ -111,10 +111,7 @@ fn id_file_path(tool_use_id: &str) -> PathBuf {
     std::env::temp_dir().join(format!("atuin-hook-{tool_use_id}"))
 }
 
-pub async fn handle(
-    agent_name: &str,
-    _settings: &atuin_client::settings::Settings,
-) -> Result<()> {
+pub async fn handle(agent_name: &str, _settings: &atuin_client::settings::Settings) -> Result<()> {
     let agent = Agent::from_name(agent_name)?;
 
     let mut input = String::new();
@@ -228,9 +225,10 @@ fn add_hook_entries(hooks: &mut Value, agent: &Agent) -> Result<()> {
             .ok_or_else(|| eyre::eyre!("hooks.{event_type} is not an array"))?;
 
         let already_installed = arr.iter().any(|entry| {
-            entry["hooks"]
-                .as_array()
-                .is_some_and(|h| h.iter().any(|hook| hook["command"].as_str() == Some(hook_command)))
+            entry["hooks"].as_array().is_some_and(|h| {
+                h.iter()
+                    .any(|hook| hook["command"].as_str() == Some(hook_command))
+            })
         });
 
         if already_installed {

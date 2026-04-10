@@ -373,12 +373,13 @@ impl SearchIndex {
         // Build filter based on mode + authors
         let mode_filter = self.build_filter(&filter_mode);
         let author_filter = self.build_author_filter(authors);
-        let filter = match (mode_filter, author_filter) {
-            (Some(mf), Some(af)) => Some(Arc::new(move |cmd: &String| mf(cmd) && af(cmd))
-                as atuin_nucleo::Filter<String>),
-            (Some(f), None) | (None, Some(f)) => Some(f),
-            (None, None) => None,
-        };
+        let filter =
+            match (mode_filter, author_filter) {
+                (Some(mf), Some(af)) => Some(Arc::new(move |cmd: &String| mf(cmd) && af(cmd))
+                    as atuin_nucleo::Filter<String>),
+                (Some(f), None) | (None, Some(f)) => Some(f),
+                (None, None) => None,
+            };
         nucleo.set_filter(filter);
 
         // Build scorer from precomputed frecency (or None if not available)
@@ -727,7 +728,13 @@ mod tests {
 
         // Search for "git" - should match 2 commands
         let results = index
-            .search("git", IndexFilterMode::Global, &QueryContext::default(), &[], 10)
+            .search(
+                "git",
+                IndexFilterMode::Global,
+                &QueryContext::default(),
+                &[],
+                10,
+            )
             .await;
         assert_eq!(results.len(), 2);
 
