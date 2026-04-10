@@ -263,10 +263,9 @@ impl TryFrom<(&str, &serde_json::Value)> for ClientToolCall {
     fn try_from((name, input): (&str, &serde_json::Value)) -> Result<Self, Self::Error> {
         match name {
             "read_file" => Ok(ClientToolCall::Read(ReadToolCall::try_from(input)?)),
-            // TODO: split these into separate tool calls, but rely on Write permissions for all
-            "str_replace" => Ok(ClientToolCall::Write(WriteToolCall::try_from(input)?)),
-            "file_create" => Ok(ClientToolCall::Write(WriteToolCall::try_from(input)?)),
-            "file_insert" => Ok(ClientToolCall::Write(WriteToolCall::try_from(input)?)),
+            "create_file" => Ok(ClientToolCall::Write(WriteToolCall::try_from(input)?)),
+            // "append_to_file" => Ok(ClientToolCall::Append(AppendToolCall::try_from(input)?)),
+            // "str_replace" => Ok(ClientToolCall::StrReplace(StrReplaceToolCall::try_from(input)?)),
             "execute_shell_command" => Ok(ClientToolCall::Shell(ShellToolCall::try_from(input)?)),
             "atuin_history" => Ok(ClientToolCall::AtuinHistory(
                 AtuinHistoryToolCall::try_from(input)?,
@@ -283,6 +282,17 @@ impl ClientToolCall {
             ClientToolCall::Write(_) => descriptor::WRITE,
             ClientToolCall::Shell(_) => descriptor::SHELL,
             ClientToolCall::AtuinHistory(_) => descriptor::ATUIN_HISTORY,
+        }
+    }
+
+    /// The permission rule name for this tool category (e.g. "Write" covers
+    /// str_replace, file_create, file_insert).
+    pub(crate) fn rule_name(&self) -> &'static str {
+        match self {
+            ClientToolCall::Read(_) => "Read",
+            ClientToolCall::Write(_) => "Write",
+            ClientToolCall::Shell(_) => "Shell",
+            ClientToolCall::AtuinHistory(_) => "AtuinHistory",
         }
     }
 

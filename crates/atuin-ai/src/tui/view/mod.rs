@@ -69,10 +69,11 @@ pub(crate) fn ai_view(state: &Session) -> Elements {
 
 fn input_view(state: &Session) -> Elements {
     let asking_tool = state.tool_tracker.asking_for_permission();
+    let in_git_project = state.in_git_project;
 
     element! {
         #(if let Some(tc) = asking_tool {
-            #(tool_call_view(tc))
+            #(tool_call_view(tc, in_git_project))
         })
 
         #(if asking_tool.is_none() {
@@ -97,13 +98,19 @@ fn input_view(state: &Session) -> Elements {
     }
 }
 
-fn tool_call_view(tool_call: &TrackedTool) -> Elements {
+fn tool_call_view(tool_call: &TrackedTool, in_git_project: bool) -> Elements {
     let verb = tool_call.tool.descriptor().display_verb;
     let tool_desc = match &tool_call.tool {
         ClientToolCall::Read(tool) => tool.path.display().to_string(),
         ClientToolCall::Write(tool) => tool.path.display().to_string(),
         ClientToolCall::Shell(tool) => tool.command.clone(),
         ClientToolCall::AtuinHistory(tool) => tool.query.clone(),
+    };
+
+    let dir_label = if in_git_project {
+        "Always allow in this workspace"
+    } else {
+        "Always allow in this directory"
     };
 
     element! {
@@ -119,7 +126,7 @@ fn tool_call_view(tool_call: &TrackedTool) -> Elements {
                         .value("allow")
                         .build(),
                     SelectOption::builder()
-                        .label("Always allow in this directory")
+                        .label(dir_label)
                         .value("always-allow-in-dir")
                         .build(),
                     SelectOption::builder()

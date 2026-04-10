@@ -59,12 +59,17 @@ pub(crate) async fn run(
         None
     };
 
+    let git_root = std::env::current_dir()
+        .ok()
+        .and_then(|cwd| atuin_common::utils::in_git_repo(cwd.to_str()?));
+
     let ctx = AppContext {
         endpoint: endpoint.to_string(),
         token,
         send_cwd,
         last_command,
         history_db: std::sync::Arc::new(history_db),
+        git_root,
     };
 
     let action = run_inline_tui(ctx, initial_command).await?;
@@ -136,7 +141,7 @@ async fn run_inline_tui(ctx: AppContext, initial_prompt: Option<String>) -> Resu
 
     let (tx, rx) = mpsc::channel::<AiTuiEvent>();
 
-    let initial_state = Session::new();
+    let initial_state = Session::new(ctx.git_root.is_some());
 
     println!();
 

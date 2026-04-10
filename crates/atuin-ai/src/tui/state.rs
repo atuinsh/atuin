@@ -374,6 +374,8 @@ pub(crate) struct Session {
     pub interaction: Interaction,
     /// Tracks all tool calls through their full lifecycle.
     pub tool_tracker: ToolTracker,
+    /// Whether the session is running inside a git project (for permission UI labels).
+    pub in_git_project: bool,
     /// Exit action (set when exiting)
     pub exit_action: Option<ExitAction>,
     /// Abort handle for the active streaming task, if any
@@ -381,11 +383,12 @@ pub(crate) struct Session {
 }
 
 impl Session {
-    pub fn new() -> Self {
+    pub fn new(in_git_project: bool) -> Self {
         Self {
             conversation: Conversation::new(),
             interaction: Interaction::new(),
             tool_tracker: ToolTracker::new(),
+            in_git_project,
             exit_action: None,
             stream_abort: None,
         }

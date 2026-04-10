@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use atuin_client::distro::detect_linux_distribution;
@@ -11,6 +12,9 @@ pub(crate) struct AppContext {
     pub send_cwd: bool,
     pub last_command: Option<String>,
     pub history_db: Arc<atuin_client::database::Sqlite>,
+    /// Git root of the current working directory, if inside a git repo.
+    /// Resolves through worktrees to the main repo root.
+    pub git_root: Option<PathBuf>,
 }
 
 /// Machine identity — computed once per session.

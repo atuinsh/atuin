@@ -4,6 +4,8 @@ use std::sync::mpsc;
 use crate::context::{AppContext, ClientContext};
 use crate::permissions::check::PermissionResponse;
 use crate::permissions::resolver::PermissionResolver;
+use crate::permissions::rule::Rule;
+use crate::permissions::writer::{self, RuleDisposition};
 use crate::stream::{ChatRequest, run_chat_stream};
 use crate::tools::{ClientToolCall, ToolPhase};
 use crate::tui::events::{AiTuiEvent, PermissionResult};
@@ -291,7 +293,7 @@ fn on_check_tool_permission(
         };
 
         // 3. Create permission resolver and check
-        let Ok(resolver) = PermissionResolver::new(working_dir, None).await else {
+        let Ok(resolver) = PermissionResolver::new(working_dir).await else {
             return;
         };
 
@@ -359,10 +361,66 @@ fn on_select_permission(
             });
         }
         PermissionResult::AlwaysAllowInDir => {
-            //
+            let db = app_ctx.history_db.clone();
+            let git_root = app_ctx.git_root.clone();
+            tokio::spawn(async move {
+                let Ok(Some((tool_id, tool))) = h2
+                    .fetch(move |state| {
+                        state
+                            .tool_tracker
+                            .asking_for_permission()
+                            .map(|t| (t.id.clone(), t.tool.clone()))
+                    })
+                    .await
+                else {
+                    return;
+                };
+
+                // Write the rule to the project (git root) or cwd permissions file
+                let project_root = git_root
+                    .or_else(|| std::env::current_dir().ok())
+                    .unwrap_or_else(|| PathBuf::from("."));
+                let file_path = writer::project_permissions_path(&project_root);
+                let rule = Rule {
+                    tool: tool.rule_name().to_string(),
+                    scope: None,
+                };
+                if let Err(e) = writer::write_rule(&file_path, &rule, RuleDisposition::Allow).await
+                {
+                    tracing::error!("Failed to write project permission rule: {e}");
+                }
+
+                execute_tool(&h2, &tx, tool_id, tool, &db);
+            });
         }
         PermissionResult::AlwaysAllow => {
-            //
+            let db = app_ctx.history_db.clone();
+            tokio::spawn(async move {
+                let Ok(Some((tool_id, tool))) = h2
+                    .fetch(move |state| {
+                        state
+                            .tool_tracker
+                            .asking_for_permission()
+                            .map(|t| (t.id.clone(), t.tool.clone()))
+                    })
+                    .await
+                else {
+                    return;
+                };
+
+                // Write the rule to the global permissions file
+                let file_path = writer::global_permissions_path();
+                let rule = Rule {
+                    tool: tool.rule_name().to_string(),
+                    scope: None,
+                };
+                if let Err(e) = writer::write_rule(&file_path, &rule, RuleDisposition::Allow).await
+                {
+                    tracing::error!("Failed to write global permission rule: {e}");
+                }
+
+                execute_tool(&h2, &tx, tool_id, tool, &db);
+            });
         }
         PermissionResult::Deny => {
             h2.update(move |state| {

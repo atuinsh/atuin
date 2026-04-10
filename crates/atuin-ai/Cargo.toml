@@ -46,6 +46,7 @@ thiserror = { workspace = true }
 regex = { workspace = true }
 time = { workspace = true }
 toml = "1.1"
+toml_edit = { workspace = true }
 tree-sitter = "0.26.8"
 tree-sitter-bash = "0.25.1"
 tree-sitter-fish = "3.6.0"

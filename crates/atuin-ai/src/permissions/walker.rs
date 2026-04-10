@@ -13,6 +13,7 @@ struct FoundRuleFile {
 
 pub(crate) struct PermissionWalker {
     start: PathBuf,
+    /// Direct path to the global permissions file (e.g. `~/.config/atuin/permissions.ai.toml`).
     global_permissions_file: Option<PathBuf>,
     rules: Vec<RuleFile>,
 }
@@ -33,22 +34,14 @@ impl PermissionWalker {
     /// Walks the filesystem starting from the start path and collecting permission files along the way.
     /// Walks to the root, then checks the global permissions file, if any.
     pub async fn walk(&mut self) -> Result<()> {
-        let mut to_check = self
-            .start
-            .ancestors()
-            .map(PathBuf::from)
-            .collect::<Vec<_>>();
+        let dirs_to_check: Vec<PathBuf> = self.start.ancestors().map(PathBuf::from).collect();
+        let dir_count = dirs_to_check.len();
 
-        if let Some(global_path) = self.global_permissions_file.as_ref() {
-            to_check.push(global_path.clone());
-        }
-
-        let size = to_check.len();
         let mut set: JoinSet<Result<Option<FoundRuleFile>>> = JoinSet::new();
 
-        for (index, path) in to_check.into_iter().enumerate() {
+        for (index, path) in dirs_to_check.into_iter().enumerate() {
             set.spawn(async move {
-                match check_for_permissions(&path).await {
+                match check_dir_for_permissions(&path).await {
                     Ok(Some(rule_file)) => Ok(Some(FoundRuleFile {
                         depth: index,
                         file: rule_file,
@@ -59,7 +52,23 @@ impl PermissionWalker {
             });
         }
 
-        let mut found = Vec::with_capacity(size);
+        // Check the global file separately (it's a direct file path, not a dir/.atuin/ pattern)
+        if let Some(global_path) = self.global_permissions_file.clone() {
+            let depth = dir_count; // sorts after all directory-walk entries
+            set.spawn(async move {
+                match load_permissions_file(&global_path).await {
+                    Ok(Some(rule_file)) => Ok(Some(FoundRuleFile {
+                        depth,
+                        file: rule_file,
+                    })),
+                    Ok(None) => Ok(None),
+                    Err(e) => Err(e),
+                }
+            });
+        }
+
+        let capacity = dir_count + usize::from(self.global_permissions_file.is_some());
+        let mut found = Vec::with_capacity(capacity);
         while let Some(result) = set.join_next().await {
             let result = result?; // JoinErrors result in failure to walk the filesystem
 
@@ -72,7 +81,7 @@ impl PermissionWalker {
                 }
                 Err(e) => {
                     tracing::error!(
-                        "Error while walking filesystem for permissions check; skipping folder: {}",
+                        "Error while walking filesystem for permissions check; skipping: {}",
                         e
                     );
                     continue;
@@ -87,21 +96,26 @@ impl PermissionWalker {
     }
 }
 
-// Checks a directory for `.atuin/permissions.ai.toml` and returns the RuleFile if found.
-// Returns None if no permissions file is found.
-// Returns an error if any FS or deserialization errors occur.
-async fn check_for_permissions(path: &Path) -> Result<Option<RuleFile>> {
-    let permissions_file = path.join(".atuin").join("permissions.ai.toml");
+/// Checks a directory for `.atuin/permissions.ai.toml` and returns the RuleFile if found.
+async fn check_dir_for_permissions(path: &Path) -> Result<Option<RuleFile>> {
+    let file_path = path.join(".atuin").join("permissions.ai.toml");
+    load_permissions_file(&file_path).await
+}
 
-    if !tokio::fs::try_exists(&permissions_file).await? {
+/// Load a permissions file from an exact path. Returns None if the file doesn't exist.
+async fn load_permissions_file(file_path: &Path) -> Result<Option<RuleFile>> {
+    if !tokio::fs::try_exists(file_path).await? {
         return Ok(None);
     }
 
-    let content = tokio::fs::read_to_string(permissions_file).await?;
-    let content: RuleFileContent = toml::from_str(&content)?;
+    let raw = tokio::fs::read_to_string(file_path).await?;
+    let content: RuleFileContent = toml::from_str(&raw)?;
 
-    Ok(Some(RuleFile {
-        path: path.to_path_buf(),
-        content,
-    }))
+    // Use the file's parent as the rule file path (for logging/debugging)
+    let path = file_path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| file_path.to_path_buf());
+
+    Ok(Some(RuleFile { path, content }))
 }
