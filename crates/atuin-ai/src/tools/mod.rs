@@ -6,6 +6,9 @@ use std::{
 
 use eyre::Result;
 
+const DEFAULT_FILE_READ_LINES: u64 = 100;
+const MAX_FILE_READ_LINES: u64 = 1000;
+
 pub(crate) mod descriptor;
 
 use crate::permissions::rule::Rule;
@@ -347,7 +350,8 @@ impl PermissableToolCall for ClientToolCall {
 #[derive(Debug, Clone)]
 pub(crate) struct ReadToolCall {
     pub path: PathBuf,
-    pub view_range: Option<(u64, u64)>,
+    pub offset: u64,
+    pub limit: u64,
 }
 
 impl TryFrom<&serde_json::Value> for ReadToolCall {
@@ -359,28 +363,17 @@ impl TryFrom<&serde_json::Value> for ReadToolCall {
             .and_then(|v| v.as_str())
             .ok_or(eyre::eyre!("Missing path"))?;
 
-        let view_range = value.get("view_range").and_then(|v| v.as_array());
-
-        let is_proper_size = view_range
-            .map(|arr| arr.len() == 2 && arr.iter().all(|v| v.is_u64()))
-            .unwrap_or(true);
-
-        if !is_proper_size {
-            return Err(eyre::eyre!(
-                "Invalid view_range: must be an array of two integers"
-            ));
-        }
-
-        let view_range = view_range.map(|arr| {
-            // SAFETY: already checked that the array has two elements and they are both u64
-            let start = arr[0].as_u64().unwrap();
-            let end = arr[1].as_u64().unwrap();
-            (start, end)
-        });
+        let offset = value.get("offset").and_then(|v| v.as_u64()).unwrap_or(0);
+        let limit = value
+            .get("limit")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(DEFAULT_FILE_READ_LINES)
+            .min(MAX_FILE_READ_LINES);
 
         Ok(ReadToolCall {
             path: PathBuf::from(path),
-            view_range,
+            offset,
+            limit,
         })
     }
 }
@@ -422,15 +415,11 @@ impl ReadToolCall {
         };
         let reader = std::io::BufReader::new(file);
 
-        let relevent_lines = if let Some((start, end)) = self.view_range {
-            reader
-                .lines()
-                .skip(start as usize)
-                .take((end - start) as usize)
-                .collect::<Result<Vec<_>, _>>()
-        } else {
-            reader.lines().collect::<Result<Vec<_>, _>>()
-        };
+        let relevent_lines = reader
+            .lines()
+            .skip(self.offset as usize)
+            .take(self.limit as usize)
+            .collect::<Result<Vec<_>, _>>();
 
         match relevent_lines {
             Ok(lines) => {
