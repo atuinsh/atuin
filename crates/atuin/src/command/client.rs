@@ -154,11 +154,15 @@ impl Cmd {
             daemon::daemonize_current_process()?;
         }
 
+        #[cfg(feature = "ai")]
         let mut runtime = if matches!(&self, Self::Ai(_)) {
             tokio::runtime::Builder::new_multi_thread()
         } else {
             tokio::runtime::Builder::new_current_thread()
         };
+
+        #[cfg(not(feature = "ai"))]
+        let mut runtime = tokio::runtime::Builder::new_current_thread();
 
         let runtime = runtime.enable_all().build().unwrap();
 
