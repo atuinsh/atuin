@@ -36,6 +36,29 @@ pub struct SearchState {
     pub authors: Vec<String>,
 }
 
+pub(crate) async fn search_db(
+    state: &SearchState,
+    db: &dyn Database,
+    mode: SearchMode,
+    query: &str,
+) -> Result<Vec<History>> {
+    Ok(db
+        .search(
+            mode,
+            state.filter_mode,
+            &state.context,
+            query,
+            OptFilters {
+                limit: Some(200),
+                authors: state.authors.clone(),
+                ..Default::default()
+            },
+        )
+        .await?
+        .into_iter()
+        .collect())
+}
+
 impl SearchState {
     pub(crate) fn rotate_filter_mode(&mut self, settings: &Settings, offset: isize) {
         let mut i = settings
@@ -76,21 +99,7 @@ pub trait SearchEngine: Send + Sync + 'static {
         state: &SearchState,
         db: &mut dyn Database,
     ) -> Result<Vec<History>> {
-        Ok(db
-            .search(
-                SearchMode::FullText,
-                state.filter_mode,
-                &state.context,
-                "",
-                OptFilters {
-                    limit: Some(200),
-                    authors: state.authors.clone(),
-                    ..Default::default()
-                },
-            )
-            .await?
-            .into_iter()
-            .collect::<Vec<_>>())
+        search_db(state, db, SearchMode::FullText, "").await
     }
 
     async fn query(&mut self, state: &SearchState, db: &mut dyn Database) -> Result<Vec<History>> {

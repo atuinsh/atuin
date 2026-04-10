@@ -131,6 +131,44 @@ struct InvocationData {
     author: Spur,
 }
 
+#[derive(Default)]
+struct CompiledAuthorFilter {
+    include_all_users: bool,
+    include_all_agents: bool,
+    literal_authors: HashSet<Spur>,
+}
+
+impl CompiledAuthorFilter {
+    fn new(filters: &[String], interner: &ThreadedRodeo) -> Self {
+        let mut compiled = Self::default();
+
+        for filter in filters {
+            match filter.as_str() {
+                AUTHOR_FILTER_ALL_USER => compiled.include_all_users = true,
+                AUTHOR_FILTER_ALL_AGENT => compiled.include_all_agents = true,
+                literal => {
+                    if let Some(author) = interner.get(literal) {
+                        compiled.literal_authors.insert(author);
+                    }
+                }
+            }
+        }
+
+        compiled
+    }
+
+    fn is_empty(&self) -> bool {
+        !self.include_all_users && !self.include_all_agents && self.literal_authors.is_empty()
+    }
+
+    fn matches_author(&self, author: Spur, agent_authors: &HashSet<Spur>) -> bool {
+        self.is_empty()
+            || self.literal_authors.contains(&author)
+            || (self.include_all_users && !agent_authors.contains(&author))
+            || (self.include_all_agents && agent_authors.contains(&author))
+    }
+}
+
 impl InvocationData {
     fn new(history: &History, interner: &ThreadedRodeo) -> Option<Self> {
         Some(Self {
@@ -163,18 +201,10 @@ impl InvocationData {
 
     fn matches_authors(
         &self,
-        authors: &[String],
-        interner: &ThreadedRodeo,
-        agent_spurs: &HashSet<Spur>,
+        filter: &CompiledAuthorFilter,
+        agent_authors: &HashSet<Spur>,
     ) -> bool {
-        authors.is_empty()
-            || authors.iter().any(|filter| match filter.as_str() {
-                AUTHOR_FILTER_ALL_USER => !agent_spurs.contains(&self.author),
-                AUTHOR_FILTER_ALL_AGENT => agent_spurs.contains(&self.author),
-                literal => interner
-                    .get(literal)
-                    .is_some_and(|spur| self.author == spur),
-            })
+        filter.matches_author(self.author, agent_authors)
     }
 
     fn id_string(&self) -> String {
@@ -261,12 +291,12 @@ impl CommandData {
         format_uuid_bytes(&self.most_recent_id)
     }
 
-    pub fn most_recent_matching_id(
+    fn most_recent_matching_id(
         &self,
         mode: &IndexFilterMode,
-        authors: &[String],
+        authors: &CompiledAuthorFilter,
         interner: &ThreadedRodeo,
-        agent_spurs: &HashSet<Spur>,
+        agent_authors: &HashSet<Spur>,
     ) -> Option<String> {
         if matches!(mode, IndexFilterMode::Global) && authors.is_empty() {
             return Some(self.most_recent_id());
@@ -276,7 +306,7 @@ impl CommandData {
             .iter()
             .filter(|invocation| {
                 invocation.matches_mode(mode, interner)
-                    && invocation.matches_authors(authors, interner, agent_spurs)
+                    && invocation.matches_authors(authors, agent_authors)
             })
             .max_by_key(|invocation| invocation.timestamp)
             .map(InvocationData::id_string)
@@ -312,21 +342,14 @@ impl CommandData {
         parse_uuid_bytes(session).is_some_and(|bytes| self.sessions.contains(&bytes))
     }
 
-    /// Check if any invocation has the given author.
-    pub fn has_author(&self, author: &str, interner: &ThreadedRodeo) -> bool {
-        interner
-            .get(author)
-            .is_some_and(|spur| self.authors.contains(&spur))
-    }
-
-    /// Check if any invocation has an author NOT in the given set.
-    pub fn has_non_agent_author(&self, agent_spurs: &HashSet<Spur>) -> bool {
-        self.authors.iter().any(|a| !agent_spurs.contains(a))
-    }
-
-    /// Check if any invocation has an author IN the given set.
-    pub fn has_agent_author(&self, agent_spurs: &HashSet<Spur>) -> bool {
-        self.authors.iter().any(|a| agent_spurs.contains(a))
+    fn matches_authors(
+        &self,
+        filter: &CompiledAuthorFilter,
+        agent_authors: &HashSet<Spur>,
+    ) -> bool {
+        self.authors
+            .iter()
+            .any(|author| filter.matches_author(*author, agent_authors))
     }
 }
 
@@ -461,8 +484,9 @@ impl SearchIndex {
 
         // Build filter based on mode + authors
         let mode_filter = self.build_filter(&filter_mode);
-        let author_filter = self.build_author_filter(authors);
-        let agent_spurs: HashSet<Spur> = KNOWN_AGENTS
+        let compiled_authors = CompiledAuthorFilter::new(authors, &self.interner);
+        let author_filter = self.build_author_filter(&compiled_authors);
+        let agent_authors: HashSet<Spur> = KNOWN_AGENTS
             .iter()
             .filter_map(|author| self.interner.get(author))
             .collect();
@@ -506,9 +530,9 @@ impl SearchIndex {
                     self.commands.get(cmd.as_str()).and_then(|data| {
                         data.most_recent_matching_id(
                             &filter_mode,
-                            authors,
+                            &compiled_authors,
                             &self.interner,
-                            &agent_spurs,
+                            &agent_authors,
                         )
                     })
                 })
@@ -588,13 +612,15 @@ impl SearchIndex {
     /// Build author filter predicate.
     /// Same pre-computation approach as `build_filter`: find all commands with
     /// a matching author, collect into a HashSet, wrap as a Nucleo Filter closure.
-    fn build_author_filter(&self, authors: &[String]) -> Option<atuin_nucleo::Filter<String>> {
+    fn build_author_filter(
+        &self,
+        authors: &CompiledAuthorFilter,
+    ) -> Option<atuin_nucleo::Filter<String>> {
         if authors.is_empty() {
             return None;
         }
 
-        // Pre-intern known agents for O(1) lookups
-        let agent_spurs: HashSet<Spur> = KNOWN_AGENTS
+        let agent_authors: HashSet<Spur> = KNOWN_AGENTS
             .iter()
             .filter_map(|a| self.interner.get(a))
             .collect();
@@ -602,11 +628,7 @@ impl SearchIndex {
         let passing_commands: Arc<HashSet<String>> = {
             let mut set = HashSet::new();
             for entry in self.commands.iter() {
-                let passes = authors.iter().any(|filter| match filter.as_str() {
-                    AUTHOR_FILTER_ALL_USER => entry.has_non_agent_author(&agent_spurs),
-                    AUTHOR_FILTER_ALL_AGENT => entry.has_agent_author(&agent_spurs),
-                    literal => entry.has_author(literal, &self.interner),
-                });
+                let passes = entry.matches_authors(authors, &agent_authors);
                 if passes {
                     set.insert(entry.key().to_string());
                 }

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use async_trait::async_trait;
 use atuin_client::{
-    database::{Database, OptFilters},
+    database::Database,
     history::History,
     settings::{SearchMode, Settings},
 };
@@ -15,7 +15,7 @@ use eyre::Result;
 use tracing::{Level, debug, instrument, span};
 use uuid::Uuid;
 
-use super::{SearchEngine, SearchState};
+use super::{SearchEngine, SearchState, search_db};
 
 pub struct Search {
     client: Option<SearchClient>,
@@ -69,21 +69,9 @@ impl Search {
         state: &SearchState,
         db: &dyn Database,
     ) -> Result<Vec<History>> {
-        let results = db
-            .search(
-                SearchMode::FullText,
-                state.filter_mode,
-                &state.context,
-                state.input.as_str(),
-                OptFilters {
-                    limit: Some(200),
-                    authors: state.authors.clone(),
-                    ..Default::default()
-                },
-            )
+        search_db(state, db, SearchMode::FullText, state.input.as_str())
             .await
-            .map_or(Vec::new(), |r| r.into_iter().collect());
-        Ok(results)
+            .map_or_else(|_| Ok(Vec::new()), Ok)
     }
 
     #[instrument(skip_all, level = Level::TRACE, name = "hydrate_from_db", fields(count = ids.len()))]

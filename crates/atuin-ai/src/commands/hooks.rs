@@ -2,43 +2,68 @@ use std::io::Read;
 use std::path::PathBuf;
 
 use atuin_common::utils::home_dir;
-use eyre::{Result, bail};
+use eyre::Result;
 use serde_json::Value;
 
-enum Agent {
-    ClaudeCode,
-    Codex,
+const HOOK_EVENT_TYPES: &[&str] = &["PreToolUse", "PostToolUse", "PostToolUseFailure"];
+
+struct AgentSpec {
+    aliases: &'static [&'static str],
+    actor_name: &'static str,
+    config_path: &'static [&'static str],
+    hook_command: &'static str,
+    matcher: &'static str,
 }
+
+const CLAUDE_CODE: AgentSpec = AgentSpec {
+    aliases: &["claude-code", "claude"],
+    actor_name: "claude-code",
+    config_path: &[".claude", "settings.json"],
+    hook_command: "atuin ai hook claude-code",
+    matcher: "Bash",
+};
+
+const CODEX: AgentSpec = AgentSpec {
+    aliases: &["codex"],
+    actor_name: "codex",
+    config_path: &[".codex", "hooks.json"],
+    hook_command: "atuin ai hook codex",
+    matcher: "^Bash$",
+};
+
+const AGENTS: &[&AgentSpec] = &[&CLAUDE_CODE, &CODEX];
+
+struct Agent(&'static AgentSpec);
 
 impl Agent {
     fn from_name(name: &str) -> Result<Self> {
-        match name {
-            "claude-code" | "claude" => Ok(Self::ClaudeCode),
-            "codex" => Ok(Self::Codex),
-            _ => bail!("unknown agent: {name}. Supported agents: claude-code, codex"),
-        }
+        AGENTS
+            .iter()
+            .copied()
+            .find(|spec| spec.aliases.contains(&name))
+            .map(Self)
+            .ok_or_else(|| {
+                eyre::eyre!("unknown agent: {name}. Supported agents: claude-code, codex")
+            })
     }
 
     fn actor_name(&self) -> &'static str {
-        match self {
-            Self::ClaudeCode => "claude-code",
-            Self::Codex => "codex",
-        }
+        self.0.actor_name
     }
 
     fn config_path(&self) -> PathBuf {
-        let home = home_dir();
-        match self {
-            Self::ClaudeCode => home.join(".claude").join("settings.json"),
-            Self::Codex => home.join(".codex").join("hooks.json"),
-        }
+        self.0
+            .config_path
+            .iter()
+            .fold(home_dir(), |path, segment| path.join(segment))
     }
 
     fn hook_command(&self) -> &'static str {
-        match self {
-            Self::ClaudeCode => "atuin ai hook claude-code",
-            Self::Codex => "atuin ai hook codex",
-        }
+        self.0.hook_command
+    }
+
+    fn matcher(&self) -> &'static str {
+        self.0.matcher
     }
 }
 
@@ -208,12 +233,9 @@ pub async fn install(agent_name: &str) -> Result<()> {
 /// Shared logic: add PreToolUse + PostToolUse entries to a hooks object.
 fn add_hook_entries(hooks: &mut Value, agent: &Agent) -> Result<()> {
     let hook_command = agent.hook_command();
-    let matcher_str = match agent {
-        Agent::ClaudeCode => "Bash",
-        Agent::Codex => "^Bash$", // Codex uses regex matchers
-    };
+    let matcher = agent.matcher();
 
-    for event_type in &["PreToolUse", "PostToolUse", "PostToolUseFailure"] {
+    for event_type in HOOK_EVENT_TYPES {
         let event_hooks = hooks
             .as_object_mut()
             .ok_or_else(|| eyre::eyre!("hooks is not a JSON object"))?
@@ -237,7 +259,7 @@ fn add_hook_entries(hooks: &mut Value, agent: &Agent) -> Result<()> {
         }
 
         arr.push(serde_json::json!({
-            "matcher": matcher_str,
+            "matcher": matcher,
             "hooks": [{"type": "command", "command": hook_command}]
         }));
         eprintln!("hooks.{event_type}: installed atuin hook");

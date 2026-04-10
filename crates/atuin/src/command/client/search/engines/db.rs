@@ -1,8 +1,7 @@
-use super::{SearchEngine, SearchState};
+use super::{SearchEngine, SearchState, search_db};
 use async_trait::async_trait;
 use atuin_client::{
     database::Database,
-    database::OptFilters,
     database::{QueryToken, QueryTokenizer},
     history::History,
     settings::SearchMode,
@@ -23,22 +22,10 @@ impl SearchEngine for Search {
         state: &SearchState,
         db: &mut dyn Database,
     ) -> Result<Vec<History>> {
-        let results = db
-            .search(
-                self.0,
-                state.filter_mode,
-                &state.context,
-                state.input.as_str(),
-                OptFilters {
-                    limit: Some(200),
-                    authors: state.authors.clone(),
-                    ..Default::default()
-                },
-            )
+        search_db(state, db, self.0, state.input.as_str())
             .await
             // ignore errors as it may be caused by incomplete regex
-            .map_or(Vec::new(), |r| r.into_iter().collect());
-        Ok(results)
+            .map_or_else(|_| Ok(Vec::new()), Ok)
     }
 
     #[instrument(skip_all, level = Level::TRACE, name = "db_highlight")]

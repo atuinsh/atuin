@@ -136,30 +136,6 @@ pub enum Cmd {
         dry_run: bool,
     },
 
-    /// Capture a command run by an AI agent (flag-based, no stdin)
-    #[command(name = "capture-agent", hide = true)]
-    CaptureAgent {
-        /// Who ran the command (e.g., "claude-code", "codex")
-        #[arg(long)]
-        actor: String,
-
-        /// The command that was run
-        #[arg(long)]
-        command: String,
-
-        /// Why the command was run
-        #[arg(long)]
-        intent: Option<String>,
-
-        /// Exit code (default: 0)
-        #[arg(long, default_value = "0")]
-        exit: i64,
-
-        /// Duration in nanoseconds (default: 0)
-        #[arg(long, default_value = "0")]
-        duration: i64,
-    },
-
     /// Delete duplicate history entries (that have the same command, cwd and hostname)
     Dedup {
         /// List matching history lines without performing the actual deletion.
@@ -389,76 +365,6 @@ fn parse_fmt(format: &str) -> ParsedFmt<'_> {
 }
 
 impl Cmd {
-    #[allow(clippy::too_many_arguments)]
-    async fn handle_capture_agent(
-        db: &impl Database,
-        history_store: HistoryStore,
-        settings: &Settings,
-        actor: &str,
-        command: &str,
-        intent: Option<&str>,
-        exit: i64,
-        duration: i64,
-    ) -> Result<()> {
-        let cwd = utils::get_current_dir();
-
-        let mut h: History = History::import()
-            .timestamp(OffsetDateTime::now_utc())
-            .command(command)
-            .cwd(cwd)
-            .exit(exit)
-            .duration(duration)
-            .author(actor)
-            .build()
-            .into();
-
-        if let Some(intent) = intent {
-            h.intent = Some(intent.to_owned());
-        }
-
-        if !h.should_save(settings) {
-            return Ok(());
-        }
-
-        db.save(&h).await?;
-        history_store.push(h).await?;
-
-        Ok(())
-    }
-
-    #[cfg(feature = "daemon")]
-    async fn handle_daemon_capture_agent(
-        settings: &Settings,
-        actor: &str,
-        command: &str,
-        intent: Option<&str>,
-        exit: i64,
-        duration: i64,
-    ) -> Result<()> {
-        let cwd = utils::get_current_dir();
-
-        let mut h: History = History::capture()
-            .timestamp(OffsetDateTime::now_utc())
-            .command(command)
-            .cwd(cwd)
-            .author(actor)
-            .build()
-            .into();
-
-        if let Some(intent) = intent {
-            h.intent = Some(intent.to_owned());
-        }
-
-        if !h.should_save(settings) {
-            return Ok(());
-        }
-
-        let id = daemon::start_history(settings, h).await?;
-        daemon::end_history(settings, id, duration.cast_unsigned(), exit).await?;
-
-        Ok(())
-    }
-
     fn apply_start_metadata(history: &mut History, author: Option<&str>, intent: Option<&str>) {
         if let Some(author) = author.map(str::trim).filter(|author| !author.is_empty()) {
             author.clone_into(&mut history.author);
@@ -807,24 +713,6 @@ impl Cmd {
                     return Self::handle_daemon_end(settings, &id, exit, duration).await;
                 }
 
-                Self::CaptureAgent {
-                    actor,
-                    command,
-                    intent,
-                    exit,
-                    duration,
-                } => {
-                    return Self::handle_daemon_capture_agent(
-                        settings,
-                        &actor,
-                        &command,
-                        intent.as_deref(),
-                        exit,
-                        duration,
-                    )
-                    .await;
-                }
-
                 _ => {}
             }
         }
@@ -850,25 +738,6 @@ impl Cmd {
             }
             Self::End { id, exit, duration } => {
                 Self::handle_end(&db, store, history_store, settings, &id, exit, duration).await
-            }
-            Self::CaptureAgent {
-                actor,
-                command,
-                intent,
-                exit,
-                duration,
-            } => {
-                Self::handle_capture_agent(
-                    &db,
-                    history_store,
-                    settings,
-                    &actor,
-                    &command,
-                    intent.as_deref(),
-                    exit,
-                    duration,
-                )
-                .await
             }
             Self::List {
                 session,
