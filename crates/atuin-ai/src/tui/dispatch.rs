@@ -74,12 +74,13 @@ fn launch_stream(
     let tx2 = tx.clone();
     let app = app_ctx.clone();
     let cc = client_ctx.clone();
+    let caps = app_ctx.capabilities.clone();
     handle.update(move |state| {
         (setup)(state);
         state.start_streaming();
         let messages = state.conversation.events_to_messages();
         let sid = state.conversation.session_id.clone();
-        let request = ChatRequest::new(messages, sid);
+        let request = ChatRequest::new(messages, sid, &caps);
         let task: JoinHandle<()> = tokio::spawn(async move {
             run_chat_stream(h2, tx2, app, cc, request).await;
         });

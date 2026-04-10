@@ -4,6 +4,7 @@
 
 use std::sync::mpsc;
 
+use atuin_client::settings::AiCapabilities;
 use atuin_common::tls::ensure_crypto_provider;
 
 use eventsource_stream::Eventsource;
@@ -57,22 +58,28 @@ pub(crate) struct ChatRequest {
 }
 
 impl ChatRequest {
-    pub(crate) fn new(messages: Vec<serde_json::Value>, session_id: Option<String>) -> Self {
+    pub(crate) fn new(
+        messages: Vec<serde_json::Value>,
+        session_id: Option<String>,
+        capabilities: &AiCapabilities,
+    ) -> Self {
+        let mut caps = vec![];
+        if capabilities.enable_history_search.unwrap_or(true) {
+            caps.push("client_v1_atuin_history".to_string());
+        }
+        if let Ok(extra) = std::env::var("ATUIN_AI__ADDITIONAL_CAPS") {
+            caps.extend(
+                extra
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty()),
+            );
+        }
+
         Self {
             messages,
             session_id,
-            capabilities: {
-                let mut caps = vec!["client_v1_atuin_history".to_string()];
-                if let Ok(extra) = std::env::var("ATUIN_AI__ADDITIONAL_CAPS") {
-                    caps.extend(
-                        extra
-                            .split(',')
-                            .map(|s| s.trim().to_string())
-                            .filter(|s| !s.is_empty()),
-                    );
-                }
-                caps
-            },
+            capabilities: caps,
         }
     }
 }

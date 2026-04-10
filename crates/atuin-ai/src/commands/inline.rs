@@ -70,6 +70,7 @@ pub(crate) async fn run(
         last_command,
         history_db: std::sync::Arc::new(history_db),
         git_root,
+        capabilities: settings.ai.capabilities.clone(),
     };
 
     let action = run_inline_tui(ctx, initial_command).await?;
