@@ -26,7 +26,8 @@ fn path_matches_scope(path: &Path, scope: &str) -> bool {
     } else {
         path.to_path_buf()
     };
-    let path_str = path.to_string_lossy();
+    // Normalize to forward slashes so globs work on Windows too.
+    let path_str = path.to_string_lossy().replace('\\', "/");
 
     // If the scope is also relative, try matching against both the absolute
     // path and just the filename/relative portion.
@@ -46,7 +47,8 @@ fn path_matches_scope(path: &Path, scope: &str) -> bool {
         if let Ok(cwd) = std::env::current_dir()
             && let Ok(rel) = path.strip_prefix(&cwd)
         {
-            return glob_match::glob_match(scope, &rel.to_string_lossy());
+            let rel_str = rel.to_string_lossy().replace('\\', "/");
+            return glob_match::glob_match(scope, &rel_str);
         }
         return false;
     }
