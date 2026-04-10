@@ -789,6 +789,7 @@ impl Cmd {
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines)]
     pub async fn run(self, settings: &Settings) -> Result<()> {
         let context = current_context().await?;
 
