@@ -228,6 +228,7 @@ pub(crate) async fn run_chat_stream(
     client_ctx: ClientContext,
     request: ChatRequest,
 ) {
+    let capabilities = request.capabilities.clone();
     let stream = create_chat_stream(
         app_ctx.endpoint.clone(),
         app_ctx.token.clone(),
@@ -241,7 +242,7 @@ pub(crate) async fn run_chat_stream(
     while let Some(event) = stream.next().await {
         match event {
             Ok(StreamFrame::Content(content)) => {
-                apply_content_frame(&handle, &tx, content);
+                apply_content_frame(&handle, &tx, &capabilities, content);
             }
             Ok(StreamFrame::Control(control)) => {
                 let terminal = apply_control_frame(&handle, control);
@@ -265,6 +266,7 @@ pub(crate) async fn run_chat_stream(
 fn apply_content_frame(
     handle: &Handle<Session>,
     tx: &mpsc::Sender<AiTuiEvent>,
+    capabilities: &[String],
     content: StreamContent,
 ) {
     match content {
@@ -275,6 +277,26 @@ fn apply_content_frame(
         }
         StreamContent::ToolCall { id, name, input } => {
             if let Ok(tool) = ClientToolCall::try_from((name.as_str(), &input)) {
+                // Enforce capability gating: reject tool calls the client didn't advertise.
+                if let Some(required_cap) = tool.descriptor().capability
+                    && !capabilities.iter().any(|c| c == required_cap)
+                {
+                    tracing::warn!(
+                        tool = name,
+                        capability = required_cap,
+                        "Rejecting tool call: capability not advertised"
+                    );
+                    handle.update(move |state| {
+                        state.add_tool_call(id.clone(), name, input.clone());
+                        state.conversation.add_tool_result(
+                            id,
+                            format!("Tool not enabled: capability '{required_cap}' was not advertised by this client"),
+                            true,
+                        );
+                    });
+                    return;
+                }
+
                 // Client-side tool — add to tracker and conversation, queue permission check
                 let id_for_event = id.clone();
                 handle.update(move |state| {
