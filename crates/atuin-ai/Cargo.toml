@@ -12,6 +12,10 @@ repository = { workspace = true }
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[features]
+default = []
+tree-sitter = ["dep:tree-sitter-lib", "dep:tree-sitter-bash", "dep:tree-sitter-fish"]
+
 [dependencies]
 atuin-client = { workspace = true }
 atuin-common = { workspace = true }
@@ -39,9 +43,21 @@ async-stream = "0.3"
 uuid = { workspace = true }
 tui-textarea-2 = "0.10.2"
 unicode-width = "0.2"
-eye_declare = "0.3"
+eye_declare = "0.4"
 ratatui-core = "0.1"
 ratatui-widgets = "0.3"
+thiserror = { workspace = true }
+glob-match = { workspace = true }
+regex = { workspace = true }
+time = { workspace = true }
+toml = "1.1"
+toml_edit = { workspace = true }
+tree-sitter-lib = { package = "tree-sitter", version = "0.26.8", optional = true }
+tree-sitter-bash = { version = "0.25.1", optional = true }
+tree-sitter-fish = { version = "3.6.0", optional = true }
+typed-builder = { workspace = true }
+vt100 = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
+tempfile = { workspace = true }

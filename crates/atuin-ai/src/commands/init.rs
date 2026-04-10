@@ -1,6 +1,6 @@
 use crate::commands::detect_shell;
 
-pub async fn run(shell: String) -> eyre::Result<()> {
+pub(crate) async fn run(shell: String) -> eyre::Result<()> {
     let integration = match shell.as_str() {
         "zsh" => generate_zsh_integration(),
         "bash" => generate_bash_integration(),

@@ -671,6 +671,16 @@ pub struct Ai {
     /// Configuration for what context is sent in the opening AI request.
     #[serde(default)]
     pub opening: AiOpening,
+
+    /// Tool capability flags.
+    #[serde(default)]
+    pub capabilities: AiCapabilities,
+}
+
+#[derive(Default, Clone, Debug, Deserialize, Serialize)]
+pub struct AiCapabilities {
+    /// Whether the AI can request to search Atuin history. `None` = unset (defaults to enabled, and the ai will ask for permission).
+    pub enable_history_search: Option<bool>,
 }
 
 #[derive(Default, Clone, Debug, Deserialize, Serialize)]

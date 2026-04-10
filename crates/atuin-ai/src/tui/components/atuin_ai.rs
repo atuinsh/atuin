@@ -22,10 +22,11 @@ pub(crate) struct AtuinAi {
     pub has_command: bool,
     pub is_input_blank: bool,
     pub pending_confirmation: bool,
+    pub has_executing_preview: bool,
 }
 
 #[derive(Default)]
-pub struct AtuinAiState {
+pub(crate) struct AtuinAiState {
     tx: Option<mpsc::Sender<AiTuiEvent>>,
 }
 
@@ -55,15 +56,24 @@ fn atuin_ai(
             return EventResult::Ignored;
         };
 
-        // Ctrl+C always exits
+        // Ctrl+C — interrupt executing command or exit
         if modifiers.contains(KeyModifiers::CONTROL) && *code == KeyCode::Char('c') {
-            let _ = tx.send(AiTuiEvent::Exit);
+            if props.has_executing_preview {
+                let _ = tx.send(AiTuiEvent::InterruptToolExecution);
+            } else {
+                let _ = tx.send(AiTuiEvent::Exit);
+            }
             return EventResult::Consumed;
         }
 
         match props.mode {
             AppMode::Input => match code {
                 KeyCode::Esc => {
+                    if props.has_executing_preview {
+                        let _ = tx.send(AiTuiEvent::InterruptToolExecution);
+                        return EventResult::Consumed;
+                    }
+
                     if props.pending_confirmation {
                         let _ = tx.send(AiTuiEvent::CancelConfirmation);
                         return EventResult::Consumed;

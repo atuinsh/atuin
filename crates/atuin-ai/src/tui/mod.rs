@@ -1,6 +1,7 @@
-pub mod components;
-pub mod events;
-pub mod state;
-pub mod view;
+pub(crate) mod components;
+pub(crate) mod dispatch;
+pub(crate) mod events;
+pub(crate) mod state;
+pub(crate) mod view;
 
-pub use state::{AppMode, AppState, ConversationEvent, ExitAction};
+pub(crate) use state::{ConversationEvent, Session};

@@ -1,5 +1,9 @@
 [workspace]
-members = ["crates/*", "crates/atuin-nucleo/matcher", "crates/atuin-nucleo/bench"]
+members = [
+  "crates/*",
+  "crates/atuin-nucleo/matcher",
+  "crates/atuin-nucleo/bench",
+]
 
 resolver = "2"
 exclude = ["ui/backend", "crates/atuin-nucleo/matcher/fuzz"]
@@ -65,6 +69,10 @@ rustls = { version = "0.23", default-features = false, features = [
   "std",
   "tls12",
 ] }
+glob-match = "0.2.1"
+vt100 = "0.16"
+regex = "1.10.5"
+toml_edit = "0.25.4"
 
 [workspace.dependencies.tracing-subscriber]
 version = "0.3"

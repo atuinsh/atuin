@@ -154,11 +154,21 @@ impl Cmd {
             daemon::daemonize_current_process()?;
         }
 
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
+        #[cfg(feature = "ai")]
+        let mut runtime = if matches!(&self, Self::Ai(_)) {
+            tokio::runtime::Builder::new_multi_thread()
+        } else {
+            tokio::runtime::Builder::new_current_thread()
+        };
 
+        #[cfg(not(feature = "ai"))]
+        let mut runtime = tokio::runtime::Builder::new_current_thread();
+
+        let runtime = runtime.enable_all().build().unwrap();
+
+        // For non-history commands, we want to initialize logging and the theme manager before
+        // doing anything else. History commands are performance-sensitive and run before and after
+        // every shell command, so we want to skip any unnecessary initialization for them.
         let settings = Settings::new().wrap_err("could not load client settings")?;
         let theme_manager = theme::ThemeManager::new(settings.theme.debug, None);
         let res = runtime.block_on(self.run_inner(settings, theme_manager));

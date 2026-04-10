@@ -1,5 +1,8 @@
+use crate::tools::descriptor;
+use crate::tools::{ToolPreview, ToolTracker};
 use crate::tui::ConversationEvent;
 
+/// Server-sent danger level for a suggested command
 #[derive(Debug)]
 pub(crate) enum DangerLevel {
     Low(Option<String>),
@@ -37,6 +40,7 @@ impl From<(&String, &String)> for DangerLevel {
     }
 }
 
+/// Server-sent confidence level for a suggested command
 #[derive(Debug)]
 pub(crate) enum ConfidenceLevel {
     Low(Option<String>),
@@ -85,9 +89,11 @@ pub(crate) enum UiEvent {
 
 #[derive(Debug)]
 pub(crate) struct ToolCallDetails {
-    tool_use_id: String,
-    name: String,
-    status: ToolResultStatus,
+    pub(crate) tool_use_id: String,
+    pub(crate) name: String,
+    pub(crate) status: ToolResultStatus,
+    pub(crate) is_client: bool,
+    pub(crate) preview: Option<ToolPreview>,
 }
 
 #[derive(Debug)]
@@ -118,16 +124,19 @@ pub(crate) enum UiTurn {
     OutOfBand { events: Vec<UiEvent> },
 }
 
-pub(crate) struct TurnBuilder {
+pub(crate) struct TurnBuilder<'a> {
     turns: Vec<UiTurn>,
     current_turn: Option<UiTurn>,
+    tracker: &'a ToolTracker,
 }
 
-impl TurnBuilder {
-    pub(crate) fn new() -> Self {
+/// A struct to iteratively build [UiTurn] events from [ConversationEvent]s.
+impl<'a> TurnBuilder<'a> {
+    pub(crate) fn new(tracker: &'a ToolTracker) -> Self {
         Self {
             turns: Vec::new(),
             current_turn: None,
+            tracker,
         }
     }
 
@@ -174,7 +183,7 @@ impl TurnBuilder {
 
                 for event in events.drain(..) {
                     match event {
-                        UiEvent::ToolCall(details) => {
+                        UiEvent::ToolCall(details) if !details.is_client => {
                             pending_tools.push(details);
                         }
                         other => {
@@ -306,12 +315,17 @@ impl TurnBuilder {
     }
 
     fn add_tool_call(&mut self, id: &str, name: &str, _input: &serde_json::Value) {
+        let is_client = descriptor::by_name(name).is_some_and(|d| d.is_client);
+        let preview = self.tracker.preview_for(id);
+
         self.start_agent_turn();
         if let UiTurn::Agent { events } = self.turn_mut_unsafe() {
             events.push(UiEvent::ToolCall(ToolCallDetails {
                 tool_use_id: id.to_string(),
                 name: name.to_string(),
                 status: ToolResultStatus::Pending,
+                is_client,
+                preview,
             }));
         }
     }
@@ -385,25 +399,15 @@ impl ToolSummary {
 
     /// Present-tense progressive verb for a tool name (e.g. "Searching...")
     fn progressive_verb(name: &str) -> String {
-        match name {
-            "search" => "Searching...".into(),
-            "read" | "read_file" => "Reading file...".into(),
-            "write" | "write_file" => "Writing file...".into(),
-            "execute" | "run" | "bash" => "Running command...".into(),
-            "list" | "list_files" => "Listing files...".into(),
-            _ => format!("Running {}...", name.replace('_', " ")),
-        }
+        descriptor::by_name(name)
+            .map(|d| d.progressive_verb.to_string())
+            .unwrap_or_else(|| format!("Running {}...", name.replace('_', " ")))
     }
 
     /// Past-tense verb for a tool name (e.g. "Searched")
     fn past_verb(name: &str) -> String {
-        match name {
-            "search" => "Searched".into(),
-            "read" | "read_file" => "Read file".into(),
-            "write" | "write_file" => "Wrote file".into(),
-            "execute" | "run" | "bash" => "Ran command".into(),
-            "list" | "list_files" => "Listed files".into(),
-            _ => format!("Ran {}", name.replace('_', " ")),
-        }
+        descriptor::by_name(name)
+            .map(|d| d.past_verb.to_string())
+            .unwrap_or_else(|| format!("Ran {}", name.replace('_', " ")))
     }
 }
