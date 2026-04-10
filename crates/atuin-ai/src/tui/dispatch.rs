@@ -270,65 +270,93 @@ fn on_check_tool_permission(
 ) {
     let h2 = handle.clone();
     let tx_for_task = tx.clone();
-    let id_clone = id.clone();
     let db = app_ctx.history_db.clone();
 
     tokio::spawn(async move {
-        // 1. Fetch the tracked tool's data (clone what we need for permission check)
-        let Ok(Some((tool, target_dir))) = h2
-            .fetch(move |state| {
-                state
-                    .tool_tracker
-                    .get(&id)
-                    .map(|t| (t.tool.clone(), t.target_dir().map(PathBuf::from)))
-            })
-            .await
-        else {
-            return;
-        };
+        let id_for_error = id.clone();
+        let result = check_tool_permission_inner(&h2, &tx_for_task, &db, id).await;
 
-        // 2. Resolve working directory
-        let Some(working_dir) = target_dir.or_else(|| std::env::current_dir().ok()) else {
-            return;
-        };
-
-        // 3. Create permission resolver and check
-        let Ok(resolver) = PermissionResolver::new(working_dir).await else {
-            return;
-        };
-
-        let Ok(response) = resolver.check(&tool).await else {
-            return;
-        };
-
-        // 4. Handle response
-        match response {
-            PermissionResponse::Allowed => {
-                execute_tool(&h2, &tx_for_task, id_clone, tool, &db);
-            }
-            PermissionResponse::Denied => {
-                let tx = tx_for_task.clone();
-                h2.update(move |state| {
-                    state.finish_tool_call(
-                        &id_clone,
-                        crate::tools::ToolOutcome::Error(
-                            "Permission denied on the user's system".to_string(),
-                        ),
-                    );
-                    if !state.tool_tracker.has_pending() {
-                        let _ = tx.send(AiTuiEvent::ContinueAfterTools);
-                    }
-                });
-            }
-            PermissionResponse::Ask => {
-                h2.update(move |state| {
-                    if let Some(tracked) = state.tool_tracker.get_mut(&id_clone) {
-                        tracked.mark_asking();
-                    }
-                });
-            }
+        // If the inner function didn't handle the tool (returned an error message),
+        // finish the tool call with that error so the conversation doesn't stall.
+        if let Err(error_msg) = result {
+            let tx = tx_for_task.clone();
+            h2.update(move |state| {
+                state.finish_tool_call(&id_for_error, crate::tools::ToolOutcome::Error(error_msg));
+                if !state.tool_tracker.has_pending() {
+                    let _ = tx.send(AiTuiEvent::ContinueAfterTools);
+                }
+            });
         }
     });
+}
+
+/// Inner permission check that returns Err(message) if the tool call should be
+/// finished with an error. Returns Ok(()) if the tool was handled (executed,
+/// denied, or sent to the permission UI).
+async fn check_tool_permission_inner(
+    h2: &Handle<Session>,
+    tx: &mpsc::Sender<AiTuiEvent>,
+    db: &std::sync::Arc<atuin_client::database::Sqlite>,
+    id: String,
+) -> Result<(), String> {
+    // 1. Fetch the tracked tool's data
+    let id_for_fetch = id.clone();
+    let (tool, target_dir) = h2
+        .fetch(move |state| {
+            state
+                .tool_tracker
+                .get(&id_for_fetch)
+                .map(|t| (t.tool.clone(), t.target_dir().map(PathBuf::from)))
+        })
+        .await
+        .map_err(|e| format!("Internal error fetching tool state: {e}"))?
+        .ok_or_else(|| "Internal error: tool not found in tracker".to_string())?;
+
+    // 2. Resolve working directory
+    let working_dir = target_dir
+        .or_else(|| std::env::current_dir().ok())
+        .ok_or_else(|| "Could not determine working directory".to_string())?;
+
+    // 3. Create permission resolver and check
+    let resolver = PermissionResolver::new(working_dir)
+        .await
+        .map_err(|e| format!("Permission check failed: {e}"))?;
+
+    let response = resolver
+        .check(&tool)
+        .await
+        .map_err(|e| format!("Permission check failed: {e}"))?;
+
+    // 4. Handle response — all paths here handle the tool, so return Ok
+    let id_clone = id.clone();
+    match response {
+        PermissionResponse::Allowed => {
+            execute_tool(h2, tx, id, tool, db);
+        }
+        PermissionResponse::Denied => {
+            let tx = tx.clone();
+            h2.update(move |state| {
+                state.finish_tool_call(
+                    &id_clone,
+                    crate::tools::ToolOutcome::Error(
+                        "Permission denied on the user's system".to_string(),
+                    ),
+                );
+                if !state.tool_tracker.has_pending() {
+                    let _ = tx.send(AiTuiEvent::ContinueAfterTools);
+                }
+            });
+        }
+        PermissionResponse::Ask => {
+            h2.update(move |state| {
+                if let Some(tracked) = state.tool_tracker.get_mut(&id_clone) {
+                    tracked.mark_asking();
+                }
+            });
+        }
+    }
+
+    Ok(())
 }
 
 fn on_select_permission(

@@ -629,6 +629,27 @@ fn vt100_screen_lines(screen: &vt100::Screen) -> Vec<String> {
     lines
 }
 
+/// Strip ANSI escape sequences from raw bytes using a VT100 parser.
+///
+/// Uses a large virtual screen so scrollback is preserved, then extracts
+/// the plain text contents. This handles all escape sequences (colors,
+/// cursor movement, progress bars, etc.) not just simple SGR codes.
+fn strip_ansi_via_vt100(raw: &[u8]) -> String {
+    if raw.is_empty() {
+        return String::new();
+    }
+    // Use the contents_formatted → screen approach: feed bytes into a parser
+    // with enough rows to hold everything, then read back the plain text.
+    // Estimate rows: one row per ~PREVIEW_WIDTH bytes, plus generous padding.
+    let estimated_rows = (raw.len() / PREVIEW_WIDTH as usize + 1).min(10_000) as u16;
+    let mut parser = vt100::Parser::new(estimated_rows, PREVIEW_WIDTH, 0);
+    parser.process(raw);
+    let screen = parser.screen();
+    // screen.contents() returns the full plain-text content with trailing
+    // whitespace trimmed per line and trailing blank lines removed.
+    screen.contents()
+}
+
 /// Execute a shell command with VT100 emulation and streaming output.
 ///
 /// Feeds stdout+stderr into a `vt100::Parser` so that ANSI escape sequences,
@@ -754,9 +775,10 @@ pub(crate) async fn execute_shell_command_streaming(
     let final_lines = vt100_screen_lines(parser.screen());
     let _ = output_tx.send(final_lines).await;
 
-    // Strip ANSI from the raw bytes for clean LLM output
-    let stdout_text = String::from_utf8_lossy(&full_stdout).to_string();
-    let stderr_text = String::from_utf8_lossy(&full_stderr).to_string();
+    // Strip ANSI escape sequences for clean LLM output by running
+    // the raw bytes through a VT100 parser and extracting plain text.
+    let stdout_text = strip_ansi_via_vt100(&full_stdout);
+    let stderr_text = strip_ansi_via_vt100(&full_stderr);
 
     ToolOutcome::Structured {
         stdout: stdout_text,
