@@ -4,7 +4,7 @@ use atuin_client::{
     history::History,
     settings::{SearchMode, Settings},
 };
-use atuin_daemon::client::SearchClient;
+use atuin_daemon::client::{DaemonClientErrorKind, SearchClient, classify_error};
 use atuin_nucleo_matcher::{
     Config, Matcher, Utf32Str,
     pattern::{CaseMatching, Normalization, Pattern},
@@ -14,10 +14,12 @@ use tracing::{Level, debug, instrument, span};
 use uuid::Uuid;
 
 use super::{SearchEngine, SearchState};
+use crate::command::client::daemon;
 
 pub struct Search {
     client: Option<SearchClient>,
     query_id: u64,
+    settings: Settings,
     #[cfg(unix)]
     socket_path: String,
     #[cfg(not(unix))]
@@ -29,6 +31,7 @@ impl Search {
         Search {
             client: None,
             query_id: 0,
+            settings: settings.clone(),
             #[cfg(unix)]
             socket_path: settings.daemon.socket_path.clone(),
             #[cfg(not(unix))]
@@ -39,15 +42,29 @@ impl Search {
     #[instrument(skip_all, level = Level::TRACE, name = "get_daemon_client")]
     async fn get_client(&mut self) -> Result<&mut SearchClient> {
         if self.client.is_none() {
-            #[cfg(unix)]
-            let client = SearchClient::new(self.socket_path.clone()).await?;
-
-            #[cfg(not(unix))]
-            let client = SearchClient::new(self.tcp_port).await?;
-
-            self.client = Some(client);
+            self.connect().await?;
         }
         Ok(self.client.as_mut().unwrap())
+    }
+
+    async fn connect(&mut self) -> Result<()> {
+        #[cfg(unix)]
+        let client = SearchClient::new(self.socket_path.clone()).await?;
+
+        #[cfg(not(unix))]
+        let client = SearchClient::new(self.tcp_port).await?;
+
+        self.client = Some(client);
+        Ok(())
+    }
+
+    fn should_retry(err: &eyre::Report) -> bool {
+        matches!(
+            classify_error(err),
+            DaemonClientErrorKind::Connect
+                | DaemonClientErrorKind::Unavailable
+                | DaemonClientErrorKind::Unimplemented
+        )
     }
 
     fn next_query_id(&mut self) -> u64 {
@@ -115,17 +132,41 @@ impl SearchEngine for Search {
         let span =
             span!(Level::TRACE, "daemon_search.req_resp", query = %query, query_id = query_id);
 
-        let client = self.get_client().await?;
+        // Try to connect and search; if it fails with a retriable error,
+        // auto-start the daemon and retry once.
+        let first_attempt = async {
+            let client = self.get_client().await?;
+            client
+                .search(
+                    query.clone(),
+                    query_id,
+                    state.filter_mode,
+                    Some(state.context.clone()),
+                )
+                .await
+        }
+        .await;
 
-        let _span = span.enter();
-        let mut stream = client
-            .search(
-                query.clone(),
-                query_id,
-                state.filter_mode,
-                Some(state.context.clone()),
-            )
-            .await?;
+        let mut stream = match first_attempt {
+            Ok(stream) => stream,
+            Err(err) if self.settings.daemon.autostart && Self::should_retry(&err) => {
+                debug!("daemon not available, attempting auto-start");
+                self.client = None;
+
+                daemon::ensure_daemon_running(&self.settings).await?;
+
+                let client = self.get_client().await?;
+                client
+                    .search(
+                        query.clone(),
+                        query_id,
+                        state.filter_mode,
+                        Some(state.context.clone()),
+                    )
+                    .await?
+            }
+            Err(err) => return Err(err),
+        };
 
         let mut ids = Vec::with_capacity(200);
         span!(Level::TRACE, "daemon_search.resp")
@@ -155,7 +196,6 @@ impl SearchEngine for Search {
                 }
             })
             .await;
-        drop(_span);
         drop(span);
 
         if ids.is_empty() {
