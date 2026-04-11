@@ -70,6 +70,7 @@ nav:
       - Basic usage: guide/basic-usage.md
       - Advanced usage: guide/advanced-usage.md
       - Shell Integration: guide/shell-integration.md
+      - AI Agent Hooks: guide/agent-hooks.md
       - Deleting history: guide/delete-history.md
       - Syncing dotfiles: guide/dotfiles.md
       - Theming: guide/theming.md
