@@ -517,6 +517,23 @@ pub async fn emit_event(settings: &Settings, event: DaemonEvent) {
     }
 }
 
+pub async fn tail_client(settings: &Settings) -> Result<HistoryClient> {
+    match probe(settings).await {
+        Probe::Ready(client) => return Ok(client),
+        Probe::NeedsRestart(reason) if !settings.daemon.autostart => {
+            bail!("{reason}. Enable `daemon.autostart = true` or restart the daemon manually");
+        }
+        Probe::Unreachable(err) if is_legacy_daemon_error(&err) => {
+            return Err(err.wrap_err(LEGACY_DAEMON_RESTART_MESSAGE));
+        }
+        Probe::Unreachable(err) if !settings.daemon.autostart => return Err(err),
+        Probe::Unreachable(err) if !should_retry_after_error(&err) => return Err(err),
+        Probe::NeedsRestart(_) | Probe::Unreachable(_) => {}
+    }
+
+    restart_daemon(settings).await
+}
+
 async fn status_cmd(settings: &Settings) -> Result<()> {
     match probe(settings).await {
         Probe::Ready(mut client) => {

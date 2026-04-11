@@ -671,6 +671,16 @@ pub struct Ai {
     /// Configuration for what context is sent in the opening AI request.
     #[serde(default)]
     pub opening: AiOpening,
+
+    /// Tool capability flags.
+    #[serde(default)]
+    pub capabilities: AiCapabilities,
+}
+
+#[derive(Default, Clone, Debug, Deserialize, Serialize)]
+pub struct AiCapabilities {
+    /// Whether the AI can request to search Atuin history. `None` = unset (defaults to enabled, and the ai will ask for permission).
+    pub enable_history_search: Option<bool>,
 }
 
 #[derive(Default, Clone, Debug, Deserialize, Serialize)]
@@ -1092,6 +1102,7 @@ pub struct Settings {
     pub word_chars: String,
     pub scroll_context_lines: usize,
     pub history_format: String,
+    pub strip_trailing_whitespace: bool,
     pub prefers_reduced_motion: bool,
     pub store_failed: bool,
     pub no_mouse: bool,
@@ -1497,6 +1508,7 @@ impl Settings {
             .set_default("workspaces", false)?
             .set_default("ctrl_n_shortcuts", false)?
             .set_default("secrets_filter", true)?
+            .set_default("strip_trailing_whitespace", true)?
             .set_default("network_connect_timeout", 5)?
             .set_default("network_timeout", 30)?
             .set_default("local_timeout", 2.0)?
