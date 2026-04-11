@@ -9,7 +9,7 @@ use eyre::Result;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{EnvFilter, Layer, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 pub mod init;
-pub mod inline;
+pub(crate) mod inline;
 
 #[derive(Args, Debug)]
 pub struct AiArgs {
@@ -71,7 +71,7 @@ pub async fn run(
     }
 }
 
-pub fn detect_shell() -> Option<String> {
+pub(crate) fn detect_shell() -> Option<String> {
     Some(Shell::current().to_string())
 }
 

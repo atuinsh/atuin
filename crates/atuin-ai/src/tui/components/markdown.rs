@@ -16,20 +16,12 @@ use ratatui_widgets::paragraph::{Paragraph, Wrap};
 
 /// A markdown rendering component backed by pulldown-cmark.
 #[props]
-pub struct Markdown {
+pub(crate) struct Markdown {
     pub source: String,
 }
 
-impl Markdown {
-    pub fn new(source: impl Into<String>) -> Self {
-        Self {
-            source: source.into(),
-        }
-    }
-}
-
 /// Style configuration for markdown rendering.
-pub struct MarkdownStyles {
+pub(crate) struct MarkdownStyles {
     pub base: Style,
     pub code_inline: Style,
     pub code_block: Style,
@@ -98,26 +90,22 @@ fn parse_markdown<'a>(source: &'a str, styles: &'a MarkdownStyles) -> Text<'stat
 
     let mut style_stack: Vec<Style> = vec![styles.base];
     let mut in_code_block = false;
+    let mut in_list_item = false;
+    // True until the first paragraph inside a list item has been opened.
+    // The first paragraph should flow inline with the "- " prefix.
+    let mut list_item_first_para = false;
 
     for event in parser {
         match event {
             Event::Start(Tag::Strong) => {
-                let bold = style_stack
-                    .last()
-                    .copied()
-                    .unwrap_or(styles.base)
-                    .add_modifier(Modifier::BOLD);
+                let bold = style_stack.last().copied().unwrap_or(styles.bold);
                 style_stack.push(bold);
             }
             Event::End(TagEnd::Strong) => {
                 style_stack.pop();
             }
             Event::Start(Tag::Emphasis) => {
-                let italic = style_stack
-                    .last()
-                    .copied()
-                    .unwrap_or(styles.base)
-                    .add_modifier(Modifier::ITALIC);
+                let italic = style_stack.last().copied().unwrap_or(styles.italic);
                 style_stack.push(italic);
             }
             Event::End(TagEnd::Emphasis) => {
@@ -170,12 +158,17 @@ fn parse_markdown<'a>(source: &'a str, styles: &'a MarkdownStyles) -> Text<'stat
                 lines.push(Vec::new());
             }
             Event::Start(Tag::Paragraph) => {
-                if current_line > 0 || !lines[0].is_empty() {
-                    // Two line advances: one to end the current line, one for a blank separator.
+                if in_list_item && list_item_first_para {
+                    // First paragraph flows inline with the "- " prefix
+                    list_item_first_para = false;
+                } else if current_line > 0 || !lines[0].is_empty() {
                     current_line += 1;
                     lines.push(Vec::new());
-                    current_line += 1;
-                    lines.push(Vec::new());
+                    if !in_list_item {
+                        // Blank separator between paragraphs (but not inside list items)
+                        current_line += 1;
+                        lines.push(Vec::new());
+                    }
                 }
             }
             Event::End(TagEnd::Paragraph) => {}
@@ -197,8 +190,12 @@ fn parse_markdown<'a>(source: &'a str, styles: &'a MarkdownStyles) -> Text<'stat
                     lines.push(Vec::new());
                 }
                 lines[current_line].push(Span::styled("- ", Style::default().fg(Color::DarkGray)));
+                in_list_item = true;
+                list_item_first_para = true;
             }
-            Event::End(TagEnd::Item) => {}
+            Event::End(TagEnd::Item) => {
+                in_list_item = false;
+            }
             Event::Start(Tag::List(_)) => {
                 if current_line > 0 || !lines[0].is_empty() {
                     current_line += 1;
