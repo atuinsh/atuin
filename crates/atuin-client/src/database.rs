@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     env,
     path::{Path, PathBuf},
     str::FromStr,
@@ -266,6 +267,156 @@ impl Sqlite {
             .build()
             .into()
     }
+
+    async fn search_inner(
+        &self,
+        search_mode: SearchMode,
+        filter: FilterMode,
+        context: &Context,
+        query: &str,
+        filter_options: OptFilters,
+        before: Option<i64>,
+    ) -> Result<Vec<History>> {
+        let mut sql = SqlBuilder::select_from("history");
+
+        if !filter_options.include_duplicates {
+            sql.group_by("command").having("max(timestamp)");
+        }
+
+        if let Some(limit) = filter_options.limit {
+            sql.limit(limit);
+        }
+
+        if let Some(offset) = filter_options.offset {
+            sql.offset(offset);
+        }
+
+        if filter_options.reverse {
+            sql.order_asc("timestamp");
+        } else {
+            sql.order_desc("timestamp");
+        }
+
+        let git_root = if let Some(git_root) = context.git_root.clone() {
+            git_root.to_str().unwrap_or("/").to_string()
+        } else {
+            context.cwd.clone()
+        };
+
+        let session_start = get_session_start_time(&context.session);
+
+        match filter {
+            FilterMode::Global => &mut sql,
+            FilterMode::Host => {
+                sql.and_where_eq("lower(hostname)", quote(context.hostname.to_lowercase()))
+            }
+            FilterMode::Session => sql.and_where_eq("session", quote(&context.session)),
+            FilterMode::SessionPreload => {
+                sql.and_where_eq("session", quote(&context.session));
+                if let Some(session_start) = session_start {
+                    sql.or_where_lt("timestamp", session_start);
+                }
+                &mut sql
+            }
+            FilterMode::Directory => sql.and_where_eq("cwd", quote(&context.cwd)),
+            FilterMode::Workspace => sql.and_where_like_left("cwd", git_root),
+        };
+
+        let mut regexes = Vec::new();
+        match search_mode {
+            SearchMode::Prefix => sql.and_where_like_left("command", query.replace('*', "%")),
+            _ => {
+                let mut is_or = false;
+                for token in QueryTokenizer::new(query) {
+                    // TODO smart case mode could be made configurable like in fzf
+                    let (is_glob, glob) = if token.has_uppercase() {
+                        (true, "*")
+                    } else {
+                        (false, "%")
+                    };
+                    let param = match token {
+                        QueryToken::Regex(r) => {
+                            regexes.push(String::from(r));
+                            continue;
+                        }
+                        QueryToken::Or => {
+                            if !is_or {
+                                is_or = true;
+                                continue;
+                            } else {
+                                format!("{glob}|{glob}")
+                            }
+                        }
+                        QueryToken::MatchStart(term, _) => {
+                            format!("{term}{glob}")
+                        }
+                        QueryToken::MatchEnd(term, _) => {
+                            format!("{glob}{term}")
+                        }
+                        QueryToken::MatchFull(term, _) => {
+                            format!("{glob}{term}{glob}")
+                        }
+                        QueryToken::Match(term, _) => {
+                            if search_mode == SearchMode::FullText {
+                                format!("{glob}{term}{glob}")
+                            } else {
+                                term.split("").join(glob)
+                            }
+                        }
+                    };
+
+                    sql.fuzzy_condition("command", param, token.is_inverse(), is_glob, is_or);
+                    is_or = false;
+                }
+
+                &mut sql
+            }
+        };
+
+        for regex in regexes {
+            sql.and_where("command regexp ?".bind(&regex));
+        }
+
+        filter_options
+            .exit
+            .map(|exit| sql.and_where_eq("exit", exit));
+
+        filter_options
+            .exclude_exit
+            .map(|exclude_exit| sql.and_where_ne("exit", exclude_exit));
+
+        filter_options
+            .cwd
+            .map(|cwd| sql.and_where_eq("cwd", quote(cwd)));
+
+        filter_options
+            .exclude_cwd
+            .map(|exclude_cwd| sql.and_where_ne("cwd", quote(exclude_cwd)));
+
+        if let Some(before) = before {
+            sql.and_where_lt("timestamp", quote(before));
+        }
+
+        filter_options.after.map(|after| {
+            interim::parse_date_string(
+                after.as_str(),
+                OffsetDateTime::now_utc(),
+                interim::Dialect::Uk,
+            )
+            .map(|after| sql.and_where_gt("timestamp", quote(after.unix_timestamp_nanos() as i64)))
+        });
+
+        sql.and_where_is_null("deleted_at");
+
+        let query = sql.sql().expect("bug in search query. please report");
+
+        let res = sqlx::query(&query)
+            .map(Self::query_history)
+            .fetch_all(&self.pool)
+            .await?;
+
+        Ok(res)
+    }
 }
 
 #[async_trait]
@@ -455,156 +606,58 @@ impl Database for Sqlite {
         filter: FilterMode,
         context: &Context,
         query: &str,
-        filter_options: OptFilters,
+        mut filter_options: OptFilters,
     ) -> Result<Vec<History>> {
-        let mut sql = SqlBuilder::select_from("history");
-
-        if !filter_options.include_duplicates {
-            sql.group_by("command").having("max(timestamp)");
-        }
-
-        if let Some(limit) = filter_options.limit {
-            sql.limit(limit);
-        }
-
-        if let Some(offset) = filter_options.offset {
-            sql.offset(offset);
-        }
-
-        if filter_options.reverse {
-            sql.order_asc("timestamp");
-        } else {
-            sql.order_desc("timestamp");
-        }
-
-        let git_root = if let Some(git_root) = context.git_root.clone() {
-            git_root.to_str().unwrap_or("/").to_string()
-        } else {
-            context.cwd.clone()
-        };
-
-        let session_start = get_session_start_time(&context.session);
-
-        match filter {
-            FilterMode::Global => &mut sql,
-            FilterMode::Host => {
-                sql.and_where_eq("lower(hostname)", quote(context.hostname.to_lowercase()))
-            }
-            FilterMode::Session => sql.and_where_eq("session", quote(&context.session)),
-            FilterMode::SessionPreload => {
-                sql.and_where_eq("session", quote(&context.session));
-                if let Some(session_start) = session_start {
-                    sql.or_where_lt("timestamp", session_start);
-                }
-                &mut sql
-            }
-            FilterMode::Directory => sql.and_where_eq("cwd", quote(&context.cwd)),
-            FilterMode::Workspace => sql.and_where_like_left("cwd", git_root),
-        };
-
-        let orig_query = query;
-
-        let mut regexes = Vec::new();
-        match search_mode {
-            SearchMode::Prefix => sql.and_where_like_left("command", query.replace('*', "%")),
-            _ => {
-                let mut is_or = false;
-                for token in QueryTokenizer::new(query) {
-                    // TODO smart case mode could be made configurable like in fzf
-                    let (is_glob, glob) = if token.has_uppercase() {
-                        (true, "*")
-                    } else {
-                        (false, "%")
-                    };
-                    let param = match token {
-                        QueryToken::Regex(r) => {
-                            regexes.push(String::from(r));
-                            continue;
-                        }
-                        QueryToken::Or => {
-                            if !is_or {
-                                is_or = true;
-                                continue;
-                            } else {
-                                format!("{glob}|{glob}")
-                            }
-                        }
-                        QueryToken::MatchStart(term, _) => {
-                            format!("{term}{glob}")
-                        }
-                        QueryToken::MatchEnd(term, _) => {
-                            format!("{glob}{term}")
-                        }
-                        QueryToken::MatchFull(term, _) => {
-                            format!("{glob}{term}{glob}")
-                        }
-                        QueryToken::Match(term, _) => {
-                            if search_mode == SearchMode::FullText {
-                                format!("{glob}{term}{glob}")
-                            } else {
-                                term.split("").join(glob)
-                            }
-                        }
-                    };
-
-                    sql.fuzzy_condition("command", param, token.is_inverse(), is_glob, is_or);
-                    is_or = false;
-                }
-
-                &mut sql
-            }
-        };
-
-        for regex in regexes {
-            sql.and_where("command regexp ?".bind(&regex));
-        }
-
-        filter_options
-            .exit
-            .map(|exit| sql.and_where_eq("exit", exit));
-
-        filter_options
-            .exclude_exit
-            .map(|exclude_exit| sql.and_where_ne("exit", exclude_exit));
-
-        filter_options
-            .cwd
-            .map(|cwd| sql.and_where_eq("cwd", quote(cwd)));
-
-        filter_options
-            .exclude_cwd
-            .map(|exclude_cwd| sql.and_where_ne("cwd", quote(exclude_cwd)));
-
-        filter_options.before.map(|before| {
+        let mut before = filter_options.before.as_ref().and_then(|before| {
             interim::parse_date_string(
                 before.as_str(),
                 OffsetDateTime::now_utc(),
                 interim::Dialect::Uk,
             )
-            .map(|before| {
-                sql.and_where_lt("timestamp", quote(before.unix_timestamp_nanos() as i64))
-            })
+            .ok()
+            .map(|before| before.unix_timestamp_nanos() as i64)
         });
+        if filter_options.include_duplicates || filter_options.limit.is_none() {
+            let result = self
+                .search_inner(search_mode, filter, context, query, filter_options, before)
+                .await?;
+            return Ok(ordering::reorder_fuzzy(search_mode, query, result));
+        }
 
-        filter_options.after.map(|after| {
-            interim::parse_date_string(
-                after.as_str(),
-                OffsetDateTime::now_utc(),
-                interim::Dialect::Uk,
-            )
-            .map(|after| sql.and_where_gt("timestamp", quote(after.unix_timestamp_nanos() as i64)))
-        });
+        let mut result = vec![];
+        let mut seen_commands = HashSet::new();
+        let limit = filter_options.limit.unwrap() as usize;
+        let page_size = limit + limit / 2;
+        filter_options.limit = Some(page_size as i64);
+        filter_options.include_duplicates = true;
+        while result.len() < limit {
+            let res = self
+                .search_inner(
+                    search_mode,
+                    filter,
+                    context,
+                    query,
+                    filter_options.clone(),
+                    before,
+                )
+                .await?;
+            let over = res.len() < page_size;
+            if let Some(last) = res.iter().last() {
+                before = Some(last.timestamp.unix_timestamp_nanos() as i64);
+            }
+            for h in res {
+                if !seen_commands.contains(&h.command) {
+                    seen_commands.insert(h.command.clone());
+                    result.push(h);
+                }
+            }
+            if over {
+                break;
+            }
+        }
 
-        sql.and_where_is_null("deleted_at");
-
-        let query = sql.sql().expect("bug in search query. please report");
-
-        let res = sqlx::query(&query)
-            .map(Self::query_history)
-            .fetch_all(&self.pool)
-            .await?;
-
-        Ok(ordering::reorder_fuzzy(search_mode, orig_query, res))
+        result.truncate(limit);
+        Ok(ordering::reorder_fuzzy(search_mode, query, result))
     }
 
     async fn query_history(&self, query: &str) -> Result<Vec<History>> {
