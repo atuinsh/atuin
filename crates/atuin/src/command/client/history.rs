@@ -11,15 +11,14 @@ use eyre::{Context, Result, bail};
 use runtime_format::{FormatKey, FormatKeyError, ParseSegment, ParsedFmt};
 
 #[cfg(feature = "daemon")]
+use super::daemon as daemon_cmd;
+#[cfg(feature = "daemon")]
 use colored::Colorize;
 #[cfg(feature = "daemon")]
 use serde::Serialize;
 
 #[cfg(feature = "daemon")]
-use atuin_daemon::{
-    emit_event,
-    history::{HistoryEventKind, TailHistoryReply},
-};
+use atuin_daemon::history::{HistoryEventKind, TailHistoryReply};
 
 use atuin_client::{
     database::{Database, Sqlite, current_context},
@@ -1025,7 +1024,7 @@ impl Cmd {
             }
 
             #[cfg(feature = "daemon")]
-            let _ = emit_event(atuin_daemon::DaemonEvent::HistoryPruned).await;
+            daemon_cmd::emit_event(settings, atuin_daemon::DaemonEvent::HistoryPruned).await;
         }
         Ok(())
     }
@@ -1086,7 +1085,8 @@ impl Cmd {
             }
 
             #[cfg(feature = "daemon")]
-            let _ = emit_event(atuin_daemon::DaemonEvent::HistoryDeleted { ids }).await;
+            daemon_cmd::emit_event(settings, atuin_daemon::DaemonEvent::HistoryDeleted { ids })
+                .await;
         }
         Ok(())
     }

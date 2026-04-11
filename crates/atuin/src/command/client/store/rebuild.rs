@@ -4,7 +4,7 @@ use clap::Args;
 use eyre::{Result, bail};
 
 #[cfg(feature = "daemon")]
-use atuin_daemon::emit_event;
+use crate::command::client::daemon as daemon_cmd;
 
 use atuin_client::{
     database::Database, encryption, history::store::HistoryStore,
@@ -61,7 +61,7 @@ impl Rebuild {
         history_store.build(database).await?;
 
         #[cfg(feature = "daemon")]
-        let _ = emit_event(atuin_daemon::DaemonEvent::HistoryRebuilt).await;
+        daemon_cmd::emit_event(settings, atuin_daemon::DaemonEvent::HistoryRebuilt).await;
 
         Ok(())
     }
