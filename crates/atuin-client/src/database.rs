@@ -5,6 +5,7 @@ use std::{
     time::Duration,
 };
 
+use crate::history::{AUTHOR_FILTER_ALL_AGENT, AUTHOR_FILTER_ALL_USER, KNOWN_AGENTS};
 use async_trait::async_trait;
 use atuin_common::utils;
 use fs_err as fs;
@@ -53,6 +54,8 @@ pub struct OptFilters {
     pub offset: Option<i64>,
     pub reverse: bool,
     pub include_duplicates: bool,
+    /// Author filter. Supports special values `$all-user` and `$all-agent`.
+    pub authors: Vec<String>,
 }
 
 pub async fn current_context() -> eyre::Result<Context> {
@@ -82,6 +85,38 @@ impl Context {
             host_id: String::new(),
             git_root: utils::in_git_repo(entry.cwd.as_str()),
         }
+    }
+}
+
+/// Each entry is OR'd: `$all-user` → NOT IN agents, `$all-agent` → IN agents, literal → exact match.
+fn apply_author_filter(sql: &mut SqlBuilder, authors: &[String]) {
+    let mut conditions: Vec<String> = Vec::new();
+    let agent_list: String = KNOWN_AGENTS.iter().map(quote).join(", ");
+    let author_expr = "CASE \
+        WHEN author IS NULL OR trim(author) = '' THEN \
+            CASE \
+                WHEN instr(hostname, ':') > 0 THEN substr(hostname, instr(hostname, ':') + 1) \
+                ELSE hostname \
+            END \
+        ELSE author \
+    END";
+
+    for author in authors {
+        match author.as_str() {
+            AUTHOR_FILTER_ALL_USER => {
+                conditions.push(format!("{author_expr} NOT IN ({agent_list})"));
+            }
+            AUTHOR_FILTER_ALL_AGENT => {
+                conditions.push(format!("{author_expr} IN ({agent_list})"));
+            }
+            literal => {
+                conditions.push(format!("{author_expr} = {}", quote(literal)));
+            }
+        }
+    }
+
+    if !conditions.is_empty() {
+        sql.and_where(format!("({})", conditions.join(" OR ")));
     }
 }
 
@@ -594,6 +629,10 @@ impl Database for Sqlite {
             )
             .map(|after| sql.and_where_gt("timestamp", quote(after.unix_timestamp_nanos() as i64)))
         });
+
+        if !filter_options.authors.is_empty() {
+            apply_author_filter(&mut sql, &filter_options.authors);
+        }
 
         sql.and_where_is_null("deleted_at");
 

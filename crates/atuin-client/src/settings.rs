@@ -565,6 +565,13 @@ pub struct Search {
     /// The overall frecency score multiplier for the search index (default: 1.0).
     /// Applied after combining recency and frequency scores.
     pub frecency_score_multiplier: f64,
+
+    /// Filter history by author. Special values:
+    /// - `$all-user`: any author that is NOT a known AI agent (default)
+    /// - `$all-agent`: any known AI agent author
+    /// - literal strings like "ellie", "claude-code"
+    #[serde(default = "Search::default_authors")]
+    pub authors: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -844,7 +851,14 @@ impl Default for Search {
             recency_score_multiplier: 1.0,
             frequency_score_multiplier: 1.0,
             frecency_score_multiplier: 1.0,
+            authors: Self::default_authors(),
         }
+    }
+}
+
+impl Search {
+    fn default_authors() -> Vec<String> {
+        vec![crate::history::AUTHOR_FILTER_ALL_USER.to_string()]
     }
 }
 

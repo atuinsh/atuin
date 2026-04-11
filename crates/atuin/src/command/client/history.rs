@@ -374,6 +374,235 @@ fn parse_fmt(format: &str) -> ParsedFmt<'_> {
     }
 }
 
+fn apply_start_metadata(history: &mut History, author: Option<&str>, intent: Option<&str>) {
+    if let Some(author) = author.map(str::trim).filter(|author| !author.is_empty()) {
+        author.clone_into(&mut history.author);
+    }
+
+    if let Some(intent) = intent.map(str::trim).filter(|intent| !intent.is_empty()) {
+        history.intent = Some(intent.to_owned());
+    } else if intent.is_some() {
+        history.intent = None;
+    }
+}
+
+fn normalize_command_for_storage<'a>(command: &'a str, settings: &Settings) -> &'a str {
+    if !settings.strip_trailing_whitespace {
+        return command;
+    }
+
+    let trimmed = command.trim_end_matches([' ', '\t']);
+    if trimmed.len() == command.len() {
+        return command;
+    }
+
+    let trailing_backslashes = trimmed
+        .as_bytes()
+        .iter()
+        .rev()
+        .take_while(|&&byte| byte == b'\\')
+        .count();
+
+    if trailing_backslashes % 2 == 1 {
+        command
+    } else {
+        trimmed
+    }
+}
+
+async fn handle_start(
+    db: &impl Database,
+    settings: &Settings,
+    command: &str,
+    author: Option<&str>,
+    intent: Option<&str>,
+) -> Result<Option<String>> {
+    // It's better for atuin to silently fail here and attempt to
+    // store whatever is ran, than to throw an error to the terminal
+    let cwd = utils::get_current_dir();
+    let command = normalize_command_for_storage(command, settings);
+
+    let mut h: History = History::capture()
+        .timestamp(OffsetDateTime::now_utc())
+        .command(command)
+        .cwd(cwd)
+        .build()
+        .into();
+    apply_start_metadata(&mut h, author, intent);
+
+    if !h.should_save(settings) {
+        return Ok(None);
+    }
+
+    let id = h.id.0.clone();
+
+    // Silently ignore database errors to avoid breaking the shell
+    // This is important when disk is full or database is locked
+    if let Err(e) = db.save(&h).await {
+        debug!("failed to save history: {e}");
+    }
+
+    Ok(Some(id))
+}
+
+#[cfg(feature = "daemon")]
+async fn handle_daemon_start(
+    settings: &Settings,
+    command: &str,
+    author: Option<&str>,
+    intent: Option<&str>,
+) -> Result<Option<String>> {
+    // It's better for atuin to silently fail here and attempt to
+    // store whatever is ran, than to throw an error to the terminal
+    let cwd = utils::get_current_dir();
+    let command = normalize_command_for_storage(command, settings);
+
+    let mut h: History = History::capture()
+        .timestamp(OffsetDateTime::now_utc())
+        .command(command)
+        .cwd(cwd)
+        .build()
+        .into();
+    apply_start_metadata(&mut h, author, intent);
+
+    if !h.should_save(settings) {
+        return Ok(None);
+    }
+
+    // Attempt to start history via daemon, but silently ignore errors
+    // to avoid breaking the shell when the daemon is unavailable or disk is full
+    let resp = match daemon::start_history(settings, h.clone()).await {
+        Ok(id) => id,
+        Err(e) => {
+            debug!("failed to start history via daemon: {e}");
+            h.id.0.clone()
+        }
+    };
+
+    Ok(Some(resp))
+}
+
+#[allow(unused_variables)]
+async fn handle_end(
+    db: &impl Database,
+    store: SqliteStore,
+    history_store: HistoryStore,
+    settings: &Settings,
+    id: &str,
+    exit: i64,
+    duration: Option<u64>,
+) -> Result<()> {
+    if id.trim() == "" {
+        return Ok(());
+    }
+
+    let Some(mut h) = db.load(id).await? else {
+        warn!("history entry is missing");
+        return Ok(());
+    };
+
+    if h.duration > 0 {
+        debug!("cannot end history - already has duration");
+
+        // returning OK as this can occur if someone Ctrl-c a prompt
+        return Ok(());
+    }
+
+    if !settings.store_failed && exit > 0 {
+        debug!("history has non-zero exit code, and store_failed is false");
+
+        // the history has already been inserted half complete. remove it
+        db.delete(h).await?;
+
+        return Ok(());
+    }
+
+    h.exit = exit;
+    h.duration = match duration {
+        Some(value) => i64::try_from(value).context("command took over 292 years")?,
+        None => i64::try_from((OffsetDateTime::now_utc() - h.timestamp).whole_nanoseconds())
+            .context("command took over 292 years")?,
+    };
+
+    db.update(&h).await?;
+    history_store.push(h).await?;
+
+    if settings.should_sync().await? {
+        #[cfg(feature = "sync")]
+        {
+            if settings.sync.records {
+                let (_, downloaded) = record::sync::sync(settings, &store).await?;
+                Settings::save_sync_time().await?;
+
+                crate::sync::build(settings, &store, db, Some(&downloaded)).await?;
+            } else {
+                debug!("running periodic background sync");
+                sync::sync(settings, false, db).await?;
+            }
+        }
+        #[cfg(not(feature = "sync"))]
+        debug!("not compiled with sync support");
+    } else {
+        debug!("sync disabled! not syncing");
+    }
+
+    Ok(())
+}
+
+#[cfg(feature = "daemon")]
+async fn handle_daemon_end(
+    settings: &Settings,
+    id: &str,
+    exit: i64,
+    duration: Option<u64>,
+) -> Result<()> {
+    daemon::end_history(settings, id.to_string(), duration.unwrap_or(0), exit).await?;
+
+    Ok(())
+}
+
+pub(super) async fn start_history_entry(
+    settings: &Settings,
+    command: &str,
+    author: Option<&str>,
+    intent: Option<&str>,
+) -> Result<Option<String>> {
+    #[cfg(feature = "daemon")]
+    if settings.daemon.enabled {
+        return handle_daemon_start(settings, command, author, intent).await;
+    }
+
+    let db_path = PathBuf::from(settings.db_path.as_str());
+    let db = Sqlite::new(db_path, settings.local_timeout).await?;
+    handle_start(&db, settings, command, author, intent).await
+}
+
+pub(super) async fn end_history_entry(
+    settings: &Settings,
+    id: &str,
+    exit: i64,
+    duration: Option<u64>,
+) -> Result<()> {
+    #[cfg(feature = "daemon")]
+    if settings.daemon.enabled {
+        return handle_daemon_end(settings, id, exit, duration).await;
+    }
+
+    let db_path = PathBuf::from(settings.db_path.as_str());
+    let record_store_path = PathBuf::from(settings.record_store_path.as_str());
+
+    let db = Sqlite::new(db_path, settings.local_timeout).await?;
+    let store = SqliteStore::new(record_store_path, settings.local_timeout).await?;
+
+    let encryption_key: [u8; 32] = encryption::load_key(settings)
+        .context("could not load encryption key")?
+        .into();
+    let host_id = Settings::host_id().await?;
+    let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
+
+    handle_end(&db, store, history_store, settings, id, exit, duration).await
+}
+
 #[cfg(feature = "daemon")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TailKind {
@@ -676,200 +905,6 @@ fn normalize_optional_field(value: &str) -> Option<String> {
 }
 
 impl Cmd {
-    fn normalize_command_for_storage<'a>(command: &'a str, settings: &Settings) -> &'a str {
-        if !settings.strip_trailing_whitespace {
-            return command;
-        }
-
-        let trimmed = command.trim_end_matches([' ', '\t']);
-        if trimmed.len() == command.len() {
-            return command;
-        }
-
-        let trailing_backslashes = trimmed
-            .as_bytes()
-            .iter()
-            .rev()
-            .take_while(|&&byte| byte == b'\\')
-            .count();
-
-        if trailing_backslashes % 2 == 1 {
-            command
-        } else {
-            trimmed
-        }
-    }
-
-    fn apply_start_metadata(history: &mut History, author: Option<&str>, intent: Option<&str>) {
-        if let Some(author) = author.map(str::trim).filter(|author| !author.is_empty()) {
-            author.clone_into(&mut history.author);
-        }
-
-        if let Some(intent) = intent.map(str::trim).filter(|intent| !intent.is_empty()) {
-            history.intent = Some(intent.to_owned());
-        } else if intent.is_some() {
-            history.intent = None;
-        }
-    }
-
-    #[allow(clippy::too_many_lines, clippy::cast_possible_truncation)]
-    async fn handle_start(
-        db: &impl Database,
-        settings: &Settings,
-        command: &str,
-        author: Option<&str>,
-        intent: Option<&str>,
-    ) -> Result<()> {
-        // It's better for atuin to silently fail here and attempt to
-        // store whatever is ran, than to throw an error to the terminal
-        let cwd = utils::get_current_dir();
-        let command = Self::normalize_command_for_storage(command, settings);
-
-        let mut h: History = History::capture()
-            .timestamp(OffsetDateTime::now_utc())
-            .command(command)
-            .cwd(cwd)
-            .build()
-            .into();
-        Self::apply_start_metadata(&mut h, author, intent);
-
-        if !h.should_save(settings) {
-            return Ok(());
-        }
-
-        // print the ID
-        // we use this as the key for calling end
-        println!("{}", h.id);
-
-        // Silently ignore database errors to avoid breaking the shell
-        // This is important when disk is full or database is locked
-        if let Err(e) = db.save(&h).await {
-            debug!("failed to save history: {e}");
-        }
-
-        Ok(())
-    }
-
-    #[cfg(feature = "daemon")]
-    async fn handle_daemon_start(
-        settings: &Settings,
-        command: &str,
-        author: Option<&str>,
-        intent: Option<&str>,
-    ) -> Result<()> {
-        // It's better for atuin to silently fail here and attempt to
-        // store whatever is ran, than to throw an error to the terminal
-        let cwd = utils::get_current_dir();
-        let command = Self::normalize_command_for_storage(command, settings);
-
-        let mut h: History = History::capture()
-            .timestamp(OffsetDateTime::now_utc())
-            .command(command)
-            .cwd(cwd)
-            .build()
-            .into();
-        Self::apply_start_metadata(&mut h, author, intent);
-
-        if !h.should_save(settings) {
-            return Ok(());
-        }
-
-        // Attempt to start history via daemon, but silently ignore errors
-        // to avoid breaking the shell when the daemon is unavailable or disk is full
-        let resp = match daemon::start_history(settings, h.clone()).await {
-            Ok(id) => id,
-            Err(e) => {
-                debug!("failed to start history via daemon: {e}");
-                h.id.0.clone()
-            }
-        };
-
-        // print the ID
-        // we use this as the key for calling end
-        println!("{resp}");
-
-        Ok(())
-    }
-
-    #[allow(unused_variables)]
-    async fn handle_end(
-        db: &impl Database,
-        store: SqliteStore,
-        history_store: HistoryStore,
-        settings: &Settings,
-        id: &str,
-        exit: i64,
-        duration: Option<u64>,
-    ) -> Result<()> {
-        if id.trim() == "" {
-            return Ok(());
-        }
-
-        let Some(mut h) = db.load(id).await? else {
-            warn!("history entry is missing");
-            return Ok(());
-        };
-
-        if h.duration > 0 {
-            debug!("cannot end history - already has duration");
-
-            // returning OK as this can occur if someone Ctrl-c a prompt
-            return Ok(());
-        }
-
-        if !settings.store_failed && exit > 0 {
-            debug!("history has non-zero exit code, and store_failed is false");
-
-            // the history has already been inserted half complete. remove it
-            db.delete(h).await?;
-
-            return Ok(());
-        }
-
-        h.exit = exit;
-        h.duration = match duration {
-            Some(value) => i64::try_from(value).context("command took over 292 years")?,
-            None => i64::try_from((OffsetDateTime::now_utc() - h.timestamp).whole_nanoseconds())
-                .context("command took over 292 years")?,
-        };
-
-        db.update(&h).await?;
-        history_store.push(h).await?;
-
-        if settings.should_sync().await? {
-            #[cfg(feature = "sync")]
-            {
-                if settings.sync.records {
-                    let (_, downloaded) = record::sync::sync(settings, &store).await?;
-                    Settings::save_sync_time().await?;
-
-                    crate::sync::build(settings, &store, db, Some(&downloaded)).await?;
-                } else {
-                    debug!("running periodic background sync");
-                    sync::sync(settings, false, db).await?;
-                }
-            }
-            #[cfg(not(feature = "sync"))]
-            debug!("not compiled with sync support");
-        } else {
-            debug!("sync disabled! not syncing");
-        }
-
-        Ok(())
-    }
-
-    #[cfg(feature = "daemon")]
-    async fn handle_daemon_end(
-        settings: &Settings,
-        id: &str,
-        exit: i64,
-        duration: Option<u64>,
-    ) -> Result<()> {
-        daemon::end_history(settings, id.to_string(), duration.unwrap_or(0), exit).await?;
-
-        Ok(())
-    }
-
     #[cfg(feature = "daemon")]
     async fn handle_tail(settings: &Settings) -> Result<()> {
         let tty = std::io::stdout().is_terminal();
@@ -892,6 +927,7 @@ impl Cmd {
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines, clippy::cast_possible_truncation)]
     #[allow(clippy::too_many_arguments)]
     #[allow(clippy::fn_params_excessive_bools)]
     async fn handle_list(
@@ -1057,145 +1093,125 @@ impl Cmd {
 
     #[allow(clippy::too_many_lines)]
     pub async fn run(self, settings: &Settings) -> Result<()> {
-        let context = current_context().await?;
-
-        #[cfg(feature = "daemon")]
-        // Skip initializing any databases for start/end, if the daemon is enabled
-        if settings.daemon.enabled {
-            match self {
-                Self::Start { .. } => {
-                    let command = self.get_start_command().unwrap_or_default();
-                    let (author, intent) = self.get_start_metadata().unwrap_or_default();
-                    return Self::handle_daemon_start(settings, &command, author, intent).await;
-                }
-
-                Self::End { id, exit, duration } => {
-                    return Self::handle_daemon_end(settings, &id, exit, duration).await;
-                }
-
-                Self::Tail => {
-                    return Self::handle_tail(settings).await;
-                }
-
-                _ => {}
-            }
-        }
-
-        if matches!(self, Self::Tail) {
-            #[cfg(feature = "daemon")]
-            bail!("`atuin history tail` requires `daemon.enabled = true`");
-
-            #[cfg(not(feature = "daemon"))]
-            bail!("`atuin history tail` requires Atuin to be built with the `daemon` feature");
-        }
-
-        let db_path = PathBuf::from(settings.db_path.as_str());
-        let record_store_path = PathBuf::from(settings.record_store_path.as_str());
-
-        let db = Sqlite::new(db_path, settings.local_timeout).await?;
-        let store = SqliteStore::new(record_store_path, settings.local_timeout).await?;
-
-        let encryption_key: [u8; 32] = encryption::load_key(settings)
-            .context("could not load encryption key")?
-            .into();
-
-        let host_id = Settings::host_id().await?;
-        let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
-
         match self {
-            Self::Start { .. } => {
-                let command = self.get_start_command().unwrap_or_default();
-                let (author, intent) = self.get_start_metadata().unwrap_or_default();
-                Self::handle_start(&db, settings, &command, author, intent).await
-            }
-            Self::End { id, exit, duration } => {
-                Self::handle_end(&db, store, history_store, settings, &id, exit, duration).await
-            }
-            Self::Tail => unreachable!("tail handled before database initialization"),
-            Self::List {
-                session,
-                cwd,
-                human,
-                cmd_only,
-                print0,
-                reverse,
-                timezone,
-                format,
+            Self::Start {
+                cmd_env,
+                author,
+                intent,
+                command,
             } => {
-                let mode = ListMode::from_flags(human, cmd_only);
-                let tz = timezone.unwrap_or(settings.timezone);
-                Self::handle_list(
-                    &db, settings, context, session, cwd, mode, format, false, print0, reverse, tz,
-                )
-                .await
-            }
+                let command = if cmd_env {
+                    std::env::var("ATUIN_COMMAND_LINE").unwrap_or_default()
+                } else {
+                    command.join(" ")
+                };
 
-            Self::Last {
-                human,
-                cmd_only,
-                timezone,
-                format,
-            } => {
-                let last = db.last().await?;
-                let last = last.as_slice();
-                let tz = timezone.unwrap_or(settings.timezone);
-                print_list(
-                    last,
-                    ListMode::from_flags(human, cmd_only),
-                    match format {
-                        None => Some(settings.history_format.as_str()),
-                        _ => format.as_deref(),
-                    },
-                    false,
-                    true,
-                    tz,
-                );
+                if let Some(id) =
+                    start_history_entry(settings, &command, author.as_deref(), intent.as_deref())
+                        .await?
+                {
+                    println!("{id}");
+                }
 
                 Ok(())
             }
-
-            Self::InitStore => history_store.init_store(&db).await,
-
-            Self::Prune { dry_run } => {
-                Self::handle_prune(&db, settings, store, context, dry_run).await
+            Self::End { id, exit, duration } => {
+                end_history_entry(settings, &id, exit, duration).await
             }
+            Self::Tail => {
+                #[cfg(feature = "daemon")]
+                {
+                    return Self::handle_tail(settings).await;
+                }
 
-            Self::Dedup {
-                dry_run,
-                before,
-                dupkeep,
-            } => {
-                let before = i64::try_from(
-                    interim::parse_date_string(
-                        before.as_str(),
-                        OffsetDateTime::now_utc(),
-                        interim::Dialect::Uk,
-                    )?
-                    .unix_timestamp_nanos(),
-                )?;
-                Self::handle_dedup(&db, settings, store, before, dupkeep, dry_run).await
+                #[cfg(not(feature = "daemon"))]
+                bail!("`atuin history tail` requires Atuin to be built with the `daemon` feature");
             }
-        }
-    }
+            cmd => {
+                let context = current_context().await?;
 
-    /// Returns the command line to use for the `Start` variant.
-    /// Returns `None` for any other variant.
-    fn get_start_command(&self) -> Option<String> {
-        match self {
-            Self::Start { cmd_env: true, .. } => {
-                Some(std::env::var("ATUIN_COMMAND_LINE").unwrap_or_default())
+                let db_path = PathBuf::from(settings.db_path.as_str());
+                let record_store_path = PathBuf::from(settings.record_store_path.as_str());
+
+                let db = Sqlite::new(db_path, settings.local_timeout).await?;
+                let store = SqliteStore::new(record_store_path, settings.local_timeout).await?;
+
+                let encryption_key: [u8; 32] = encryption::load_key(settings)
+                    .context("could not load encryption key")?
+                    .into();
+
+                let host_id = Settings::host_id().await?;
+                let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
+
+                match cmd {
+                    Self::List {
+                        session,
+                        cwd,
+                        human,
+                        cmd_only,
+                        print0,
+                        reverse,
+                        timezone,
+                        format,
+                    } => {
+                        let mode = ListMode::from_flags(human, cmd_only);
+                        let tz = timezone.unwrap_or(settings.timezone);
+                        Self::handle_list(
+                            &db, settings, context, session, cwd, mode, format, false, print0,
+                            reverse, tz,
+                        )
+                        .await
+                    }
+
+                    Self::Last {
+                        human,
+                        cmd_only,
+                        timezone,
+                        format,
+                    } => {
+                        let last = db.last().await?;
+                        let last = last.as_slice();
+                        let tz = timezone.unwrap_or(settings.timezone);
+                        print_list(
+                            last,
+                            ListMode::from_flags(human, cmd_only),
+                            match format {
+                                None => Some(settings.history_format.as_str()),
+                                _ => format.as_deref(),
+                            },
+                            false,
+                            true,
+                            tz,
+                        );
+
+                        Ok(())
+                    }
+
+                    Self::InitStore => history_store.init_store(&db).await,
+
+                    Self::Prune { dry_run } => {
+                        Self::handle_prune(&db, settings, store, context, dry_run).await
+                    }
+
+                    Self::Dedup {
+                        dry_run,
+                        before,
+                        dupkeep,
+                    } => {
+                        let before = i64::try_from(
+                            interim::parse_date_string(
+                                before.as_str(),
+                                OffsetDateTime::now_utc(),
+                                interim::Dialect::Uk,
+                            )?
+                            .unix_timestamp_nanos(),
+                        )?;
+                        Self::handle_dedup(&db, settings, store, before, dupkeep, dry_run).await
+                    }
+
+                    Self::Start { .. } | Self::End { .. } | Self::Tail => unreachable!(),
+                }
             }
-            Self::Start { command, .. } => Some(command.join(" ")),
-            _ => None,
-        }
-    }
-
-    /// Returns `(author, intent)` for the `Start` variant.
-    /// Returns `None` for any other variant.
-    fn get_start_metadata(&self) -> Option<(Option<&str>, Option<&str>)> {
-        match self {
-            Self::Start { author, intent, .. } => Some((author.as_deref(), intent.as_deref())),
-            _ => None,
         }
     }
 }
@@ -1212,10 +1228,7 @@ mod tests {
         let settings = Settings::utc();
 
         assert!(settings.strip_trailing_whitespace);
-        assert_eq!(
-            Cmd::normalize_command_for_storage("ls   \t", &settings),
-            "ls"
-        );
+        assert_eq!(normalize_command_for_storage("ls   \t", &settings), "ls");
     }
 
     #[test]
@@ -1223,11 +1236,11 @@ mod tests {
         let settings = Settings::utc();
 
         assert_eq!(
-            Cmd::normalize_command_for_storage("printf foo\\ ", &settings),
+            normalize_command_for_storage("printf foo\\ ", &settings),
             "printf foo\\ "
         );
         assert_eq!(
-            Cmd::normalize_command_for_storage("printf foo\\\\ ", &settings),
+            normalize_command_for_storage("printf foo\\\\ ", &settings),
             "printf foo\\\\"
         );
     }
@@ -1237,7 +1250,7 @@ mod tests {
         let db = Sqlite::new("sqlite::memory:", 2.0).await.unwrap();
         let settings = Settings::utc();
 
-        Cmd::handle_start(&db, &settings, "ls   \t", None, None)
+        handle_start(&db, &settings, "ls   \t", None, None)
             .await
             .unwrap();
 
@@ -1258,7 +1271,7 @@ mod tests {
             ..Settings::utc()
         };
 
-        Cmd::handle_start(&db, &settings, "ls   \t", None, None)
+        handle_start(&db, &settings, "ls   \t", None, None)
             .await
             .unwrap();
 

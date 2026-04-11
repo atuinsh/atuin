@@ -304,6 +304,7 @@ impl SearchSvc for SearchGrpcService {
                             .try_into()
                             .unwrap_or(FilterMode::Global);
                         let proto_context = search_req.context;
+                        let authors = search_req.authors;
 
                         debug!(
                             "search request: query = {}, query_id = {}, filter_mode = {}, context = {:?}",
@@ -332,7 +333,13 @@ impl SearchSvc for SearchGrpcService {
                                 .in_scope(|| async {
                                     let index = index.read().await;
                                     index
-                                        .search(&query, index_filter, &query_context, RESULTS_LIMIT)
+                                        .search(
+                                            &query,
+                                            index_filter,
+                                            &query_context,
+                                            &authors,
+                                            RESULTS_LIMIT,
+                                        )
                                         .await
                                 })
                                 .await;

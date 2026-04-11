@@ -576,6 +576,33 @@ frequency_score_multiplier = 0.8
 frecency_score_multiplier = 2.0
 ```
 
+#### `authors`
+
+Default: `["$all-user"]`
+
+Filter search results by command author. This controls which commands appear in interactive search based on who (or what) ran them. Useful when AI coding agents are recording commands via [agent hooks](../guide/agent-hooks.md).
+
+Special values:
+
+| Value | Meaning |
+|-------|---------|
+| `$all-user` | Commands from any author that is **not** a known AI agent |
+| `$all-agent` | Commands from any known AI agent |
+
+You can also use literal author names like `"claude-code"` or `"codex"`.
+
+```toml
+[search]
+# Default: only show human-authored commands
+authors = ["$all-user"]
+
+# Show everything (no author filtering)
+# authors = []
+
+# Show commands from you and Claude Code
+# authors = ["$all-user", "claude-code"]
+```
+
 ## Stats
 
 This section of client config is specifically for configuring Atuin stats calculations

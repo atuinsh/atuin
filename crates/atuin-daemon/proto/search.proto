@@ -23,6 +23,7 @@ message SearchRequest {
   uint64 query_id = 2;  // Incrementing ID to match responses to queries
   FilterMode filter_mode = 3;
   SearchContext context = 4;
+  repeated string authors = 5;  // Author filter ($all-user, $all-agent, or literals)
 }
 
 message SearchResponse {

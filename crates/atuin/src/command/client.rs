@@ -54,6 +54,7 @@ mod default_config;
 mod doctor;
 mod dotfiles;
 mod history;
+mod hook;
 mod import;
 mod info;
 mod init;
@@ -75,6 +76,9 @@ pub enum Cmd {
     /// Manipulate shell history
     #[command(subcommand)]
     History(history::Cmd),
+
+    /// Manage AI-agent shell hooks
+    Hook(hook::Cmd),
 
     /// Import shell history from file
     #[command(subcommand)]
@@ -337,6 +341,7 @@ impl Cmd {
         // runs
         match self {
             Self::History(history) => return history.run(&settings).await,
+            Self::Hook(hook) => return hook.run(&settings).await,
             Self::Init(init) => return init.run(&settings).await,
             Self::Doctor => return doctor::run(&settings).await,
             Self::Config(config) => return config.run(&settings).await,
@@ -387,7 +392,9 @@ impl Cmd {
             #[cfg(feature = "daemon")]
             Self::Daemon(cmd) => cmd.run(settings, sqlite_store, db).await,
 
-            Self::History(_) | Self::Init(_) | Self::Doctor | Self::Config(_) => unreachable!(),
+            Self::History(_) | Self::Hook(_) | Self::Init(_) | Self::Doctor | Self::Config(_) => {
+                unreachable!()
+            }
 
             #[cfg(feature = "ai")]
             Self::Ai(cli) => atuin_ai::commands::run(cli, &settings).await,

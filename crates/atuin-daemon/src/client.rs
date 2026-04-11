@@ -213,12 +213,14 @@ impl SearchClient {
         query_id: u64,
         filter_mode: FilterMode,
         context: Option<Context>,
+        authors: Vec<String>,
     ) -> Result<tonic::Streaming<SearchResponse>> {
         let request = SearchRequest {
             query,
             query_id,
             filter_mode: RpcFilterMode::from(filter_mode).into(),
             context: context.map(RpcSearchContext::from),
+            authors,
         };
         let request_stream = tokio_stream::once(request);
         let response = span!(Level::TRACE, "daemon_client_search.request")
