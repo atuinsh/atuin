@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## 18.14.1
+
+### Bug Fixes
+
+- Ensure we can publish to crates ([#3403](https://github.com/atuinsh/atuin/issues/3403))
+- Thread remote and content_length through system for server tool calls ([#3404](https://github.com/atuinsh/atuin/issues/3404))
+
+
+### Documentation
+
+- Add Tools & Permissions doc section ([#3402](https://github.com/atuinsh/atuin/issues/3402))
+
+
 ## 18.14.0
 
 ### Bug Fixes
