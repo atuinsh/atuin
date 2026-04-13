@@ -42,15 +42,11 @@ Only `Bash` tool invocations are captured. Other tool types (file writes, web fe
 
 By default, Atuin's interactive search shows only your own commands. Agent-run commands are hidden so they don't clutter your history.
 
-This is controlled by the `search.authors` setting in `~/.config/atuin/config.toml`:
+Today this default is built into the search UI rather than configurable via `config.toml`. Interactive search uses the equivalent of:
 
-```toml
-[search]
-# Default: only show commands from human users
-authors = ["$all-user"]
-```
+- `$all-user` — any author that is **not** a known AI agent
 
-### Special filter values
+For explicit author filtering, use the CLI `atuin search --author ...` flag. Special values:
 
 | Value | Meaning |
 |-------|---------|
@@ -59,22 +55,19 @@ authors = ["$all-user"]
 
 You can also use literal author names:
 
-```toml
-[search]
+```shell
 # Show only your own commands and Claude Code commands
-authors = ["$all-user", "claude-code"]
+atuin search --author '$all-user' --author 'claude-code' -- ''
 ```
 
-```toml
-[search]
+```shell
 # Show everything (no filtering)
-authors = []
+atuin search -- ''
 ```
 
-```toml
-[search]
+```shell
 # Show only agent commands
-authors = ["$all-agent"]
+atuin search --author '$all-agent' -- ''
 ```
 
 Currently recognized agent names are: `claude-code`, `codex`, `copilot`, and `pi`.
