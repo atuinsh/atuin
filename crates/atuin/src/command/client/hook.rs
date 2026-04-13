@@ -77,7 +77,7 @@ impl Agent {
         self.0.actor_name
     }
 
-    fn path(&self, path: &'static [&'static str]) -> PathBuf {
+    fn path(path: &'static [&'static str]) -> PathBuf {
         path.iter()
             .fold(home_dir(), |path, segment| path.join(segment))
     }
@@ -245,7 +245,7 @@ fn install(agent_name: &str) -> Result<()> {
             hook_command: _,
             matcher: _,
         } => {
-            let config_path = agent.path(config_path);
+            let config_path = Agent::path(config_path);
 
             if let Some(parent) = config_path.parent() {
                 std::fs::create_dir_all(parent)?;
@@ -276,7 +276,7 @@ fn install(agent_name: &str) -> Result<()> {
             );
         }
         InstallKind::PiExtension { extension_path } => {
-            let extension_path = agent.path(extension_path);
+            let extension_path = Agent::path(extension_path);
 
             if let Some(parent) = extension_path.parent() {
                 std::fs::create_dir_all(parent)?;
