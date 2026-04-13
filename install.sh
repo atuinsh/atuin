@@ -75,6 +75,39 @@ fi
 
 ATUIN_BIN="$HOME/.atuin/bin/atuin"
 
+__atuin_install_agent_hook(){
+  agent="$1"
+  agent_name="$2"
+  agent_config_dir="$3"
+  shift 3
+
+  detected="no"
+
+  if [ -d "$agent_config_dir" ]; then
+    detected="yes"
+  else
+    for agent_command in "$@"; do
+      if command -v "$agent_command" > /dev/null 2>&1; then
+        detected="yes"
+        break
+      fi
+    done
+  fi
+
+  if [ "$detected" = "yes" ]; then
+    echo "Detected $agent_name — installing Atuin hooks..."
+    if ! "$ATUIN_BIN" hook install "$agent"; then
+      echo "Failed to install Atuin hooks for $agent_name (this version of Atuin may not support it yet)."
+    fi
+    echo ""
+  fi
+}
+
+__atuin_install_agent_hook "claude-code" "Claude Code" "$HOME/.claude" claude
+__atuin_install_agent_hook "codex" "Codex" "$HOME/.codex" codex
+__atuin_install_agent_hook "pi" "pi" "$HOME/.config/pi" pi
+__atuin_install_agent_hook "opencode" "OpenCode" "$HOME/.config/opencode" opencode
+
 echo ""
 echo "Atuin installed successfully!"
 echo ""

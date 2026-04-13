@@ -1,10 +1,10 @@
 # AI Agent Hooks
 
-Atuin can capture commands run by AI coding agents (like Claude Code and Codex) alongside your regular shell history. Each command is tagged with the agent that ran it, so you can filter your history by author.
+Atuin can capture commands run by AI coding agents (like Claude Code, Codex, and pi) alongside your regular shell history. Each command is tagged with the agent that ran it, so you can filter your history by author.
 
 ## Quick Start
 
-Install hooks for your agent, then restart the agent:
+Install hooks for your agent, then restart or reload the agent:
 
 ```shell
 # Claude Code
@@ -12,6 +12,9 @@ atuin hook install claude-code
 
 # Codex
 atuin hook install codex
+
+# pi
+atuin hook install pi
 ```
 
 That's it. Commands the agent runs will now appear in your Atuin history, tagged with the agent's name.
@@ -20,12 +23,13 @@ That's it. Commands the agent runs will now appear in your Atuin history, tagged
 
 AI coding agents support hook systems that notify external tools when they're about to run a shell command and when the command finishes. Atuin uses these hooks to record each command as a history entry, just like commands you type yourself.
 
-When `atuin hook install` runs, it writes the agent's config file to register Atuin as a hook handler:
+When `atuin hook install` runs, it writes the agent's config file or extension to register Atuin as a hook handler:
 
-| Agent | Config file |
-|-------|-------------|
+| Agent | Config file / extension |
+|-------|-------------------------|
 | Claude Code | `~/.claude/settings.json` |
 | Codex | `~/.codex/hooks.json` |
+| pi | `~/.pi/agent/extensions/atuin.ts` |
 
 The hook lifecycle:
 
@@ -38,15 +42,11 @@ Only `Bash` tool invocations are captured. Other tool types (file writes, web fe
 
 By default, Atuin's interactive search shows only your own commands. Agent-run commands are hidden so they don't clutter your history.
 
-This is controlled by the `search.authors` setting in `~/.config/atuin/config.toml`:
+Today this default is built into the search UI rather than configurable via `config.toml`. Interactive search uses the equivalent of:
 
-```toml
-[search]
-# Default: only show commands from human users
-authors = ["$all-user"]
-```
+- `$all-user` — any author that is **not** a known AI agent
 
-### Special filter values
+For explicit author filtering, use the CLI `atuin search --author ...` flag. Special values:
 
 | Value | Meaning |
 |-------|---------|
@@ -55,25 +55,22 @@ authors = ["$all-user"]
 
 You can also use literal author names:
 
-```toml
-[search]
+```shell
 # Show only your own commands and Claude Code commands
-authors = ["$all-user", "claude-code"]
+atuin search --author '$all-user' --author 'claude-code' -- ''
 ```
 
-```toml
-[search]
+```shell
 # Show everything (no filtering)
-authors = []
+atuin search -- ''
 ```
 
-```toml
-[search]
+```shell
 # Show only agent commands
-authors = ["$all-agent"]
+atuin search --author '$all-agent' -- ''
 ```
 
-Currently recognized agent names are: `claude-code`, `codex`, and `copilot`.
+Currently recognized agent names are: `claude-code`, `codex`, `copilot`, and `pi`.
 
 ## Supported Agents
 
@@ -92,6 +89,16 @@ atuin hook install codex
 ```
 
 This adds hook entries to `~/.codex/hooks.json`. Codex calls `atuin hook codex` on each Bash tool use matching `^Bash$`.
+
+### pi
+
+```shell
+atuin hook install pi
+```
+
+This writes Atuin's extension to `~/.pi/agent/extensions/atuin.ts`.
+
+Then restart pi or run `/reload`. The extension wraps pi's built-in `bash` tool and records every bash command with author `pi` by calling `atuin history start` before execution and `atuin history end` afterwards.
 
 ## Verifying Installation
 
@@ -113,6 +120,9 @@ cat ~/.claude/settings.json | grep atuin
 
 # Codex
 cat ~/.codex/hooks.json | grep atuin
+
+# pi
+ls ~/.pi/agent/extensions/atuin.ts
 ```
 
 ## Re-installing
@@ -124,3 +134,5 @@ hooks.PreToolUse: already installed, skipping
 hooks.PostToolUse: already installed, skipping
 hooks.PostToolUseFailure: already installed, skipping
 ```
+
+For pi, reinstalling will also skip if the managed extension already matches the bundled version.

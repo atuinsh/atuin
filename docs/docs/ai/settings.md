@@ -28,7 +28,7 @@ Settings that control what capabilities are sent to the LLM. These are specified
 
 Default: `true`
 
-Whether or not to include the "history search" capability in the context sent to the LLM. This allows the AI to request to search your command history for relevant commands when generating suggestions or answering questions.
+Whether or not to include the "history search" capability in the context sent to the LLM. This allows the AI to request to search your Atuin history for relevant commands when generating suggestions or answering questions.
 
 **Example config**
 
