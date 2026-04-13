@@ -410,6 +410,10 @@ pub(crate) struct Session {
     pub exit_action: Option<ExitAction>,
     /// Abort handle for the active streaming task, if any
     pub stream_abort: Option<AbortHandle>,
+    /// Index into `conversation.events` where the current TUI invocation starts.
+    /// Events before this index are historical context sent to the API but not
+    /// rendered in the TUI.
+    pub view_start_index: usize,
 }
 
 impl Session {
@@ -421,6 +425,7 @@ impl Session {
             in_git_project,
             exit_action: None,
             stream_abort: None,
+            view_start_index: 0,
         }
     }
 

@@ -29,7 +29,7 @@ mod turn;
 pub(crate) fn ai_view(state: &Session) -> Elements {
     let mut turn_builder = turn::TurnBuilder::new(&state.tool_tracker);
 
-    for event in &state.conversation.events {
+    for event in &state.conversation.events[state.view_start_index..] {
         turn_builder.add_event(event);
     }
     let turns = turn_builder.build();
