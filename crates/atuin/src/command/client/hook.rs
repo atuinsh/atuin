@@ -10,7 +10,7 @@ use serde_json::Value;
 use super::history;
 
 const HOOK_EVENT_TYPES: &[&str] = &["PreToolUse", "PostToolUse", "PostToolUseFailure"];
-const PI_EXTENSION_SOURCE: &str = include_str!("../../../../../examples/pi/atuin.ts");
+const PI_EXTENSION_SOURCE: &str = include_str!("../../../../../contrib/pi/atuin.ts");
 
 enum InstallKind {
     JsonHooks {
