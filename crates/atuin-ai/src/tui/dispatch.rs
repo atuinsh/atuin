@@ -6,6 +6,7 @@ use crate::permissions::check::PermissionResponse;
 use crate::permissions::resolver::PermissionResolver;
 use crate::permissions::rule::Rule;
 use crate::permissions::writer::{self, RuleDisposition};
+use crate::session::SessionManager;
 use crate::stream::{ChatRequest, run_chat_stream};
 use crate::tools::{ClientToolCall, ToolPhase};
 use crate::tui::events::{AiTuiEvent, PermissionResult};
@@ -19,6 +20,7 @@ pub(crate) fn dispatch(
     tx: &mpsc::Sender<AiTuiEvent>,
     app_ctx: &AppContext,
     client_ctx: &ClientContext,
+    session_mgr: &mut SessionManager,
 ) {
     match event {
         AiTuiEvent::ContinueAfterTools => {
@@ -59,6 +61,35 @@ pub(crate) fn dispatch(
         }
         AiTuiEvent::Exit => {
             on_exit(handle);
+        }
+    }
+
+    // Persist any new conversation events after each dispatch cycle.
+    persist_session(handle, session_mgr);
+}
+
+/// Persist new events and the server session ID if it has changed.
+/// Called from the dispatch thread (sync), bridges to async via the tokio handle.
+fn persist_session(handle: &Handle<Session>, session_mgr: &mut SessionManager) {
+    let Ok((events, server_sid)) = handle
+        .fetch(|state| {
+            (
+                state.conversation.events.clone(),
+                state.conversation.session_id.clone(),
+            )
+        })
+        .blocking_recv()
+    else {
+        return;
+    };
+
+    let rt = tokio::runtime::Handle::current();
+    if let Err(e) = rt.block_on(session_mgr.persist_events(&events)) {
+        tracing::warn!("failed to persist session events: {e}");
+    }
+    if let Some(ref sid) = server_sid {
+        if let Err(e) = rt.block_on(session_mgr.persist_server_session_id(sid)) {
+            tracing::warn!("failed to persist server session ID: {e}");
         }
     }
 }

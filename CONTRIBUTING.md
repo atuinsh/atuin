@@ -17,6 +17,7 @@ export ATUIN_RECORD_STORE_PATH=/tmp/atuin_records.db
 export ATUIN_DB_PATH=/tmp/atuin_dev.db
 export ATUIN_KV__DB_PATH=/tmp/atuin_kv.db
 export ATUIN_SCRIPTS__DB_PATH=/tmp/atuin_scripts.db
+export ATUIN_AI__DB_PATH=/tmp/atuin_ai_sessions.db
 ```
 
 It is also recommended to update your `$PATH` so that the pre-exec scripts would use the locally built version:

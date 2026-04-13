@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::mpsc;
 
 use crate::context::{AppContext, ClientContext};
+use crate::session::{LocalSessionService, SessionManager, SessionService};
 use crate::tui::dispatch;
 use crate::tui::events::AiTuiEvent;
 use crate::tui::state::{ExitAction, Session};
@@ -83,7 +84,7 @@ pub(crate) async fn run(
         capabilities: settings.ai.capabilities.clone(),
     };
 
-    let action = run_inline_tui(ctx, initial_command).await?;
+    let action = run_inline_tui(ctx, initial_command, settings).await?;
     emit_shell_result(action, output_for_hook);
 
     Ok(())
@@ -147,12 +148,48 @@ async fn ensure_hub_session(settings: &atuin_client::settings::Settings) -> Resu
 
 // ───────────────────────────────────────────────────────────────────
 
-async fn run_inline_tui(ctx: AppContext, initial_prompt: Option<String>) -> Result<Action> {
+async fn run_inline_tui(
+    ctx: AppContext,
+    initial_prompt: Option<String>,
+    settings: &atuin_client::settings::Settings,
+) -> Result<Action> {
     let client_ctx = ClientContext::detect();
 
-    let (tx, rx) = mpsc::channel::<AiTuiEvent>();
+    // Open the session service and check for a resumable session
+    let service = LocalSessionService::open(&settings.ai.db_path, settings.local_timeout)
+        .await
+        .context("failed to open AI session database")?;
 
-    let initial_state = Session::new(ctx.git_root.is_some());
+    let cwd = std::env::current_dir()
+        .ok()
+        .map(|p| p.to_string_lossy().into_owned());
+    let git_root_str = ctx
+        .git_root
+        .as_ref()
+        .map(|p| p.to_string_lossy().into_owned());
+    let max_age_secs: i64 = 30 * 60; // 30 minutes
+
+    let resumable = service
+        .find_resumable(cwd.as_deref(), git_root_str.as_deref(), max_age_secs)
+        .await?;
+
+    let (session_mgr, initial_state) = if let Some(stored) = resumable {
+        debug!(session_id = %stored.id, "resuming AI session");
+        let (mgr, events, server_sid) = SessionManager::resume(Box::new(service), &stored).await?;
+        let mut session = Session::new(ctx.git_root.is_some());
+        session.conversation.events = events;
+        session.conversation.session_id = server_sid;
+        session.view_start_index = session.conversation.events.len();
+        (mgr, session)
+    } else {
+        debug!("creating new AI session");
+        let mgr =
+            SessionManager::create_new(Box::new(service), cwd.as_deref(), git_root_str.as_deref())
+                .await?;
+        (mgr, Session::new(ctx.git_root.is_some()))
+    };
+
+    let (tx, rx) = mpsc::channel::<AiTuiEvent>();
 
     println!();
 
@@ -177,8 +214,9 @@ async fn run_inline_tui(ctx: AppContext, initial_prompt: Option<String>) -> Resu
     tokio::task::spawn_blocking(move || {
         let tx = tx.clone();
         let client_ctx = client_ctx;
+        let mut session_mgr = session_mgr;
         while let Ok(event) = rx.recv() {
-            dispatch::dispatch(&h, event, &tx, &ctx, &client_ctx);
+            dispatch::dispatch(&h, event, &tx, &ctx, &client_ctx, &mut session_mgr);
         }
     });
 

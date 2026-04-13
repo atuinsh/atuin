@@ -271,6 +271,7 @@ name = "atuin-ai"
 version = "18.14.0"
 dependencies = [
  "async-stream",
+ "async-trait",
  "atuin-client",
  "atuin-common",
  "clap",

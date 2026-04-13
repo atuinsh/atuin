@@ -8,6 +8,12 @@ Default: `false`
 
 Whether or not the AI feature are enabled. When set to `false`, the question mark keybinding will output a message with instructions to run `atuin setup` to enable the feature.
 
+### db_path
+
+Default: `ai_sessions.db` in the Atuin data directory.
+
+The path to the SQLite database where Atuin AI sessions are stored.
+
 ### endpoint
 
 Default: `null`
