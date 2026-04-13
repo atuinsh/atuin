@@ -1,9 +1,7 @@
-use std::collections::HashMap;
-
 use async_trait::async_trait;
 use atuin_client::{
-    database::Database,
-    history::History,
+    database::{Database, OptFilters},
+    history::{AUTHOR_FILTER_ALL_USER, History},
     settings::{SearchMode, Settings},
 };
 use atuin_daemon::client::{DaemonClientErrorKind, SearchClient, classify_error};
@@ -15,7 +13,7 @@ use eyre::Result;
 use tracing::{Level, debug, instrument, span};
 use uuid::Uuid;
 
-use super::{SearchEngine, SearchState, search_db};
+use super::{SearchEngine, SearchState};
 use crate::command::client::daemon;
 
 pub struct Search {
@@ -86,9 +84,21 @@ impl Search {
         state: &SearchState,
         db: &dyn Database,
     ) -> Result<Vec<History>> {
-        search_db(state, db, SearchMode::FullText, state.input.as_str())
+        let results = db
+            .search(
+                SearchMode::FullText,
+                state.filter_mode,
+                &state.context,
+                state.input.as_str(),
+                OptFilters {
+                    limit: Some(200),
+                    authors: vec![AUTHOR_FILTER_ALL_USER.to_string()],
+                    ..Default::default()
+                },
+            )
             .await
-            .map_or_else(|_| Ok(Vec::new()), Ok)
+            .map_or(Vec::new(), |r| r.into_iter().collect());
+        Ok(results)
     }
 
     #[instrument(skip_all, level = Level::TRACE, name = "hydrate_from_db", fields(count = ids.len()))]
@@ -133,7 +143,6 @@ impl SearchEngine for Search {
                     query_id,
                     state.filter_mode,
                     Some(state.context.clone()),
-                    state.authors.clone(),
                 )
                 .await
         }
@@ -154,7 +163,6 @@ impl SearchEngine for Search {
                         query_id,
                         state.filter_mode,
                         Some(state.context.clone()),
-                        state.authors.clone(),
                     )
                     .await?
             }
@@ -199,14 +207,12 @@ impl SearchEngine for Search {
         // // Hydrate from local database
         let results = self.hydrate_from_db(db, &ids).await?;
 
-        // Reorder results to match the order from the daemon (which is ranked by relevance)
+        // // Reorder results to match the order from the daemon (which is ranked by relevance)
         let ordered_results = span!(Level::TRACE, "reorder_results").in_scope(|| {
-            let results_by_id: HashMap<&str, &History> =
-                results.iter().map(|h| (h.id.0.as_str(), h)).collect();
             let mut ordered_results = Vec::with_capacity(results.len());
             for id in &ids {
-                if let Some(history) = results_by_id.get(id.as_str()) {
-                    ordered_results.push((*history).clone());
+                if let Some(history) = results.iter().find(|h| h.id.0 == *id) {
+                    ordered_results.push(history.clone());
                 }
             }
             ordered_results

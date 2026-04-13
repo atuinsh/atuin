@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use atuin_client::{
     database::{Context, Database, OptFilters},
-    history::{History, HistoryId},
+    history::{AUTHOR_FILTER_ALL_USER, History, HistoryId},
     settings::{FilterMode, SearchMode, Settings},
 };
 use eyre::Result;
@@ -33,30 +33,6 @@ pub struct SearchState {
     pub filter_mode: FilterMode,
     pub context: Context,
     pub custom_context: Option<HistoryId>,
-    pub authors: Vec<String>,
-}
-
-async fn search_db(
-    state: &SearchState,
-    db: &dyn Database,
-    mode: SearchMode,
-    query: &str,
-) -> Result<Vec<History>> {
-    Ok(db
-        .search(
-            mode,
-            state.filter_mode,
-            &state.context,
-            query,
-            OptFilters {
-                limit: Some(200),
-                authors: state.authors.clone(),
-                ..Default::default()
-            },
-        )
-        .await?
-        .into_iter()
-        .collect())
 }
 
 impl SearchState {
@@ -94,17 +70,23 @@ pub trait SearchEngine: Send + Sync + 'static {
         db: &mut dyn Database,
     ) -> Result<Vec<History>>;
 
-    async fn empty_query(
-        &mut self,
-        state: &SearchState,
-        db: &mut dyn Database,
-    ) -> Result<Vec<History>> {
-        search_db(state, db, SearchMode::FullText, "").await
-    }
-
     async fn query(&mut self, state: &SearchState, db: &mut dyn Database) -> Result<Vec<History>> {
         if state.input.as_str().is_empty() {
-            self.empty_query(state, db).await
+            Ok(db
+                .search(
+                    SearchMode::FullText,
+                    state.filter_mode,
+                    &state.context,
+                    "",
+                    OptFilters {
+                        limit: Some(200),
+                        authors: vec![AUTHOR_FILTER_ALL_USER.to_string()],
+                        ..Default::default()
+                    },
+                )
+                .await?
+                .into_iter()
+                .collect::<Vec<_>>())
         } else {
             self.full_query(state, db).await
         }

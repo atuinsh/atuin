@@ -146,12 +146,6 @@ pub struct Cmd {
 }
 
 impl Cmd {
-    fn resolved_authors(&self, settings: &Settings) -> Vec<String> {
-        self.author
-            .clone()
-            .unwrap_or_else(|| settings.search.authors.clone())
-    }
-
     /// Returns true if this search command will run in interactive (TUI) mode
     pub fn is_interactive(&self) -> bool {
         self.interactive
@@ -168,7 +162,6 @@ impl Cmd {
         store: SqliteStore,
         theme: &Theme,
     ) -> Result<()> {
-        let authors = self.resolved_authors(settings);
         let query = self.query.unwrap_or_else(|| {
             std::env::var("ATUIN_QUERY").map_or_else(
                 |_| vec![],
@@ -233,8 +226,7 @@ impl Cmd {
         let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
         if self.interactive {
-            let item =
-                interactive::history(&query, authors, settings, db, &history_store, theme).await?;
+            let item = interactive::history(&query, settings, db, &history_store, theme).await?;
 
             if let Some(result_file) = self.result_file {
                 let mut file = File::create(result_file)?;
@@ -261,7 +253,7 @@ impl Cmd {
                 offset: self.offset,
                 reverse: self.reverse,
                 include_duplicates: self.include_duplicates,
-                authors,
+                authors: self.author.clone().unwrap_or_default(),
             };
 
             let mut entries =
@@ -351,7 +343,6 @@ async fn run_non_interactive(
 #[cfg(test)]
 mod tests {
     use super::Cmd;
-    use atuin_client::settings::Settings;
     use clap::Parser;
 
     #[test]
@@ -373,22 +364,12 @@ mod tests {
     }
 
     #[test]
-    fn search_authors_default_to_settings() {
-        let cmd = Cmd::try_parse_from(["search"]).unwrap();
-        let settings = Settings::default();
-
-        assert_eq!(cmd.resolved_authors(&settings), settings.search.authors);
-    }
-
-    #[test]
-    fn search_authors_cli_override_config() {
+    fn search_author_cli_flag() {
         let cmd =
             Cmd::try_parse_from(["search", "--author", "codex", "--author", "ellie"]).unwrap();
-        let settings = Settings::default();
-
         assert_eq!(
-            cmd.resolved_authors(&settings),
-            vec!["codex".to_string(), "ellie".to_string()]
+            cmd.author,
+            Some(vec!["codex".to_string(), "ellie".to_string()])
         );
     }
 }
