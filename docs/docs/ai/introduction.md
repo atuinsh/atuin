@@ -10,7 +10,7 @@ Atuin AI currently supports zsh, bash, and fish shells. Your shell's usual `atui
 
 !!! note "Disabling Atuin AI"
 
-    You can disable the default question mark key binding by passing `--disable-ai` to your shell's `atuin init` call.
+    You can disable the default question mark key binding by passing `--disable-ai` to your shell's `atuin init` call, or by setting `ai.enabled` to `false` in your Atuin config.
 
 ## Settings
 
@@ -26,7 +26,7 @@ Prompt the LLM to create a command, and get one back, no fuss. Press `enter` to 
 
 ### Follow-up
 
-You can follow-up with a refinement prompt to update the command that will be inserted.
+You can follow-up with another prompt to update the command that will be inserted.
 
 [![Basic Atuin AI refinement usage](./images/basic-refine.png)](./images/basic-refine.png)
 
