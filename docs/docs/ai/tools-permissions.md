@@ -19,7 +19,7 @@ A permission file is a TOML file with the following format:
 [permissions]
 
 allow = [
-    # rules for automaticallyt allowed tools
+    # rules for automatically allowed tools
 ]
 
 deny = [
