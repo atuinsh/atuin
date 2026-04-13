@@ -147,6 +147,9 @@ pub(crate) struct SessionManager {
     persisted_count: usize,
     /// ID of the last persisted event, used as `parent_id` for the next one.
     head_id: Option<String>,
+    /// Stored for creating a new session on `/new`.
+    directory: Option<String>,
+    git_root: Option<String>,
 }
 
 impl SessionManager {
@@ -169,26 +172,31 @@ impl SessionManager {
             invocation_id,
             persisted_count: 0,
             head_id: None,
+            directory: directory.map(String::from),
+            git_root: git_root.map(String::from),
         })
     }
 
     /// Load an existing session and return a manager for it, along with the
-    /// deserialized conversation events and the server session ID.
+    /// deserialized conversation events, the server session ID, and the
+    /// timestamp of the last stored event.
     pub async fn resume(
         service: Box<dyn SessionService>,
         stored: &StoredSession,
-    ) -> Result<(Self, Vec<ConversationEvent>, Option<String>)> {
+    ) -> Result<(Self, Vec<ConversationEvent>, Option<String>, Option<i64>)> {
         let invocation_id = atuin_common::utils::uuid_v7().to_string();
         let stored_events = service.load_events(&stored.id).await?;
 
         let mut events = Vec::with_capacity(stored_events.len());
         let mut last_event_id = None;
+        let mut last_event_ts = None;
         for se in &stored_events {
             events.push(event_serde::deserialize_event(
                 &se.event_type,
                 &se.event_data,
             )?);
             last_event_id = Some(se.id.clone());
+            last_event_ts = Some(se.created_at);
         }
 
         let manager = Self {
@@ -197,9 +205,16 @@ impl SessionManager {
             invocation_id,
             persisted_count: events.len(),
             head_id: last_event_id,
+            directory: stored.directory.clone(),
+            git_root: stored.git_root.clone(),
         };
 
-        Ok((manager, events, stored.server_session_id.clone()))
+        Ok((
+            manager,
+            events,
+            stored.server_session_id.clone(),
+            last_event_ts,
+        ))
     }
 
     /// Persist any new events since the last persist call.
@@ -235,6 +250,26 @@ impl SessionManager {
     /// Archive the current session (for `/new` command).
     pub async fn archive(&self) -> Result<()> {
         self.service.archive(&self.session_id).await
+    }
+
+    /// Archive the current session and reset to a fresh one.
+    pub async fn archive_and_reset(&mut self) -> Result<()> {
+        self.service.archive(&self.session_id).await?;
+
+        let new_session_id = atuin_common::utils::uuid_v7().to_string();
+        self.service
+            .create_session(
+                &new_session_id,
+                self.directory.as_deref(),
+                self.git_root.as_deref(),
+            )
+            .await?;
+
+        self.session_id = new_session_id;
+        self.invocation_id = atuin_common::utils::uuid_v7().to_string();
+        self.persisted_count = 0;
+        self.head_id = None;
+        Ok(())
     }
 
     pub fn session_id(&self) -> &str {
@@ -328,13 +363,15 @@ mod tests {
             .unwrap()
             .expect("should find session");
 
-        let (mut mgr, loaded_events, server_sid) = SessionManager::resume(Box::new(svc), &stored)
-            .await
-            .unwrap();
+        let (mut mgr, loaded_events, server_sid, last_ts) =
+            SessionManager::resume(Box::new(svc), &stored)
+                .await
+                .unwrap();
 
         assert_eq!(loaded_events.len(), 3);
         assert_eq!(server_sid.as_deref(), Some("srv-abc"));
         assert_ne!(mgr.invocation_id(), inv_id, "new invocation ID on resume");
+        assert!(last_ts.is_some(), "should have a last event timestamp");
 
         // Persisting again with the same events should be a no-op
         mgr.persist_events(&loaded_events).await.unwrap();

@@ -414,6 +414,10 @@ pub(crate) struct Session {
     /// Events before this index are historical context sent to the API but not
     /// rendered in the TUI.
     pub view_start_index: usize,
+    /// Whether this session was resumed from a prior invocation.
+    pub is_resumed: bool,
+    /// Time of the last event from a previous invocation when resuming a session
+    pub last_event_time: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl Session {
@@ -426,6 +430,8 @@ impl Session {
             exit_action: None,
             stream_abort: None,
             view_start_index: 0,
+            is_resumed: false,
+            last_event_time: None,
         }
     }
 

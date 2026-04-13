@@ -175,11 +175,15 @@ async fn run_inline_tui(
 
     let (session_mgr, initial_state) = if let Some(stored) = resumable {
         debug!(session_id = %stored.id, "resuming AI session");
-        let (mgr, events, server_sid) = SessionManager::resume(Box::new(service), &stored).await?;
+        let (mgr, events, server_sid, last_event_ts) =
+            SessionManager::resume(Box::new(service), &stored).await?;
         let mut session = Session::new(ctx.git_root.is_some());
         session.conversation.events = events;
         session.conversation.session_id = server_sid;
         session.view_start_index = session.conversation.events.len();
+        session.is_resumed = true;
+        session.last_event_time =
+            last_event_ts.and_then(|ts| chrono::DateTime::from_timestamp(ts, 0));
         (mgr, session)
     } else {
         debug!("creating new AI session");

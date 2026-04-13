@@ -10,7 +10,7 @@ use crate::session::SessionManager;
 use crate::stream::{ChatRequest, run_chat_stream};
 use crate::tools::{ClientToolCall, ToolPhase};
 use crate::tui::events::{AiTuiEvent, PermissionResult};
-use crate::tui::state::{ExitAction, Session};
+use crate::tui::state::{ConversationEvent, ExitAction, Session};
 use eye_declare::Handle;
 use tokio::task::JoinHandle;
 
@@ -30,7 +30,7 @@ pub(crate) fn dispatch(
             on_input_updated(handle, input);
         }
         AiTuiEvent::SubmitInput(input) => {
-            on_submit_input(handle, tx, app_ctx, client_ctx, input);
+            on_submit_input(handle, tx, app_ctx, client_ctx, input, session_mgr);
         }
         AiTuiEvent::SlashCommand(cmd) => {
             on_slash_command(handle, cmd);
@@ -142,6 +142,7 @@ fn on_submit_input(
     app_ctx: &AppContext,
     client_ctx: &ClientContext,
     input: String,
+    session_mgr: &mut SessionManager,
 ) {
     let input = input.trim().to_string();
     if input.is_empty() {
@@ -160,9 +161,13 @@ fn on_submit_input(
     }
 
     if input.starts_with('/') {
-        handle.update(move |state| {
-            state.conversation.handle_slash_command(&input);
-        });
+        if input.trim() == "/new" {
+            on_new_session(handle, session_mgr);
+        } else {
+            handle.update(move |state| {
+                state.conversation.handle_slash_command(&input);
+            });
+        }
         return;
     }
 
@@ -561,6 +566,31 @@ fn on_retry(
 ) {
     launch_stream(handle, tx, app_ctx, client_ctx, |state| {
         state.retry();
+    });
+}
+
+fn on_new_session(handle: &Handle<Session>, session_mgr: &mut SessionManager) {
+    let rt = tokio::runtime::Handle::current();
+
+    if let Err(e) = rt.block_on(session_mgr.archive_and_reset()) {
+        tracing::warn!("failed to start new session: {e}");
+        return;
+    }
+
+    handle.update(|state| {
+        state.conversation.events.clear();
+        state.conversation.session_id = None;
+        state.tool_tracker = crate::tools::ToolTracker::new();
+        state.view_start_index = 0;
+        state.is_resumed = false;
+        state
+            .conversation
+            .events
+            .push(ConversationEvent::OutOfBandOutput {
+                name: "System".to_string(),
+                command: Some("/new".to_string()),
+                content: "Started a new session.".to_string(),
+            });
     });
 }
 
