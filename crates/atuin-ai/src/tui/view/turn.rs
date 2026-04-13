@@ -159,6 +159,7 @@ impl<'a> TurnBuilder<'a> {
                 tool_use_id,
                 content,
                 is_error,
+                ..
             } => {
                 self.add_tool_result(tool_use_id, content, *is_error);
             }

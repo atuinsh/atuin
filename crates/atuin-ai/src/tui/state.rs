@@ -40,11 +40,16 @@ pub(crate) enum ConversationEvent {
         name: String,
         input: serde_json::Value,
     },
-    /// Tool result (usually from server-side execution)
+    /// Tool result (from server-side or client-side execution)
     ToolResult {
         tool_use_id: String,
         content: String,
         is_error: bool,
+        /// Server-side results are stored in the DB; the client sends an opaque
+        /// reference (`remote: true`) instead of the full content.
+        remote: bool,
+        /// Approximate content length for token estimation of remote results.
+        content_length: Option<usize>,
     },
     /// Out-of-band output from the system - not sent to the server
     OutOfBandOutput {
@@ -193,15 +198,31 @@ impl Conversation {
                     tool_use_id,
                     content,
                     is_error,
+                    remote,
+                    content_length,
                 } => {
-                    messages.push(serde_json::json!({
-                        "role": "user",
-                        "content": [{
+                    let tool_result = if *remote {
+                        let mut obj = serde_json::json!({
+                            "type": "tool_result",
+                            "tool_use_id": tool_use_id,
+                            "remote": true,
+                            "is_error": is_error
+                        });
+                        if let Some(len) = content_length {
+                            obj["content_length"] = serde_json::json!(len);
+                        }
+                        obj
+                    } else {
+                        serde_json::json!({
                             "type": "tool_result",
                             "tool_use_id": tool_use_id,
                             "content": content,
                             "is_error": is_error
-                        }]
+                        })
+                    };
+                    messages.push(serde_json::json!({
+                        "role": "user",
+                        "content": [tool_result]
                     }));
                     i += 1;
                 }
@@ -299,11 +320,20 @@ impl Conversation {
     }
 
     /// Add a tool result event during streaming
-    pub fn add_tool_result(&mut self, tool_use_id: String, content: String, is_error: bool) {
+    pub fn add_tool_result(
+        &mut self,
+        tool_use_id: String,
+        content: String,
+        is_error: bool,
+        remote: bool,
+        content_length: Option<usize>,
+    ) {
         self.events.push(ConversationEvent::ToolResult {
             tool_use_id,
             content,
             is_error,
+            remote,
+            content_length,
         });
     }
 
@@ -563,7 +593,7 @@ impl Session {
         let content = outcome.format_for_llm();
         let is_error = outcome.is_error();
         self.conversation
-            .add_tool_result(tool_id.to_string(), content, is_error);
+            .add_tool_result(tool_id.to_string(), content, is_error, false, None);
     }
 
     /// Get the footer text for current mode
