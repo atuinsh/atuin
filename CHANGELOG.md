@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [unreleased]
+## 18.14.0
 
 ### Bug Fixes
 
@@ -10,6 +10,7 @@ All notable changes to this project will be documented in this file.
 - *(ui)* When inverted, invert scroll events handling ([#3373](https://github.com/atuinsh/atuin/issues/3373))
 - Replace `e>|` with `|` in nushell integration to restore history recording ([#3358](https://github.com/atuinsh/atuin/issues/3358))
 - Resolve git worktrees to main repo in workspace filter ([#3366](https://github.com/atuinsh/atuin/issues/3366))
+- Ensure daemon is running ([#3384](https://github.com/atuinsh/atuin/issues/3384))
 
 
 ### Documentation
@@ -27,11 +28,22 @@ All notable changes to this project will be documented in this file.
 - Add support for deleting all matching commands via keybindings ([#3375](https://github.com/atuinsh/atuin/issues/3375))
 - Add strip_trailing_whitespace, on by default ([#3390](https://github.com/atuinsh/atuin/issues/3390))
 - Client-tool execution + permission system ([#3370](https://github.com/atuinsh/atuin/issues/3370))
+- Add history tail for live monitoring view ([#3389](https://github.com/atuinsh/atuin/issues/3389))
+- Track coding agent shell usage ([#3388](https://github.com/atuinsh/atuin/issues/3388))
+- Remove agent search from tui ([#3397](https://github.com/atuinsh/atuin/issues/3397))
+- Add pi hook installer ([#3398](https://github.com/atuinsh/atuin/issues/3398))
+- Autoinstall ai shell history hooks ([#3399](https://github.com/atuinsh/atuin/issues/3399))
 
 
 ### Miscellaneous Tasks
 
 - Update to eye-declare 0.3.0 ([#3365](https://github.com/atuinsh/atuin/issues/3365))
+- Prepare 18.14.0-beta.1 release ([#3393](https://github.com/atuinsh/atuin/issues/3393))
+
+
+### Refactor
+
+- Rename examples -> contrib ([#3400](https://github.com/atuinsh/atuin/issues/3400))
 
 
 ## 18.13.6
