@@ -40,6 +40,8 @@ pub(crate) enum StreamContent {
         tool_use_id: String,
         content: String,
         is_error: bool,
+        remote: bool,
+        content_length: Option<usize>,
     },
 }
 
@@ -179,7 +181,9 @@ fn create_chat_stream(
                                 let tool_use_id = json.get("tool_use_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
                                 let content = json.get("content").and_then(|v| v.as_str()).unwrap_or("").to_string();
                                 let is_error = json.get("is_error").and_then(|v| v.as_bool()).unwrap_or(false);
-                                yield Ok(StreamFrame::Content(StreamContent::ToolResult { tool_use_id, content, is_error }));
+                                let remote = json.get("remote").and_then(|v| v.as_bool()).unwrap_or(false);
+                                let content_length = json.get("content_length").and_then(|v| v.as_u64()).map(|v| v as usize);
+                                yield Ok(StreamFrame::Content(StreamContent::ToolResult { tool_use_id, content, is_error, remote, content_length }));
                             }
                         }
                         "status" => {
@@ -299,6 +303,8 @@ fn apply_content_frame(
                             id,
                             format!("Tool not enabled: capability '{required_cap}' was not advertised by this client"),
                             true,
+                            false,
+                            None,
                         );
                     });
                     return;
@@ -321,11 +327,17 @@ fn apply_content_frame(
             tool_use_id,
             content,
             is_error,
+            remote,
+            content_length,
         } => {
             handle.update(move |state| {
-                state
-                    .conversation
-                    .add_tool_result(tool_use_id, content, is_error);
+                state.conversation.add_tool_result(
+                    tool_use_id,
+                    content,
+                    is_error,
+                    remote,
+                    content_length,
+                );
             });
         }
     }
