@@ -19,7 +19,7 @@ mod builder;
 pub mod store;
 
 /// Known AI agent author values. Used to expand `$all-agent` and `$all-user` filters.
-pub const KNOWN_AGENTS: &[&str] = &["claude-code", "codex", "copilot"];
+pub const KNOWN_AGENTS: &[&str] = &["claude-code", "codex", "copilot", "pi"];
 pub const AUTHOR_FILTER_ALL_USER: &str = "$all-user";
 pub const AUTHOR_FILTER_ALL_AGENT: &str = "$all-agent";
 
@@ -540,9 +540,12 @@ mod tests {
     use regex::RegexSet;
     use time::macros::datetime;
 
-    use crate::{history::HISTORY_VERSION, settings::Settings};
+    use crate::{
+        history::{AUTHOR_FILTER_ALL_AGENT, AUTHOR_FILTER_ALL_USER, HISTORY_VERSION},
+        settings::Settings,
+    };
 
-    use super::History;
+    use super::{History, author_matches_filters, is_known_agent};
 
     // Test that we don't save history where necessary
     #[test]
@@ -601,6 +604,19 @@ mod tests {
         assert!(!stripe_key.should_save(&settings));
         assert!(!secret_dir.should_save(&settings));
         assert!(!with_psql.should_save(&settings));
+    }
+
+    #[test]
+    fn known_agents_include_pi() {
+        assert!(is_known_agent("pi"));
+        assert!(author_matches_filters(
+            "pi",
+            &[AUTHOR_FILTER_ALL_AGENT.to_string()]
+        ));
+        assert!(!author_matches_filters(
+            "pi",
+            &[AUTHOR_FILTER_ALL_USER.to_string()]
+        ));
     }
 
     #[test]
