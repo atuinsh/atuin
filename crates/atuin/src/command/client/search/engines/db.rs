@@ -4,7 +4,7 @@ use atuin_client::{
     database::Database,
     database::OptFilters,
     database::{QueryToken, QueryTokenizer},
-    history::{History, AUTHOR_FILTER_ALL_USER},
+    history::{AUTHOR_FILTER_ALL_USER, History},
     settings::SearchMode,
 };
 use eyre::Result;

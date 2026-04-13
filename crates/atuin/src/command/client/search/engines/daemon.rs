@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use atuin_client::{
     database::{Database, OptFilters},
-    history::{History, AUTHOR_FILTER_ALL_USER},
+    history::{AUTHOR_FILTER_ALL_USER, History},
     settings::{SearchMode, Settings},
 };
 use atuin_daemon::client::{DaemonClientErrorKind, SearchClient, classify_error};

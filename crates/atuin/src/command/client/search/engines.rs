@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use atuin_client::{
     database::{Context, Database, OptFilters},
-    history::{History, HistoryId, AUTHOR_FILTER_ALL_USER},
+    history::{AUTHOR_FILTER_ALL_USER, History, HistoryId},
     settings::{FilterMode, SearchMode, Settings},
 };
 use eyre::Result;

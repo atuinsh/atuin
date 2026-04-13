@@ -226,8 +226,7 @@ impl Cmd {
         let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
         if self.interactive {
-            let item =
-                interactive::history(&query, settings, db, &history_store, theme).await?;
+            let item = interactive::history(&query, settings, db, &history_store, theme).await?;
 
             if let Some(result_file) = self.result_file {
                 let mut file = File::create(result_file)?;
