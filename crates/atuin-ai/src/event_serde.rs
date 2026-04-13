@@ -34,12 +34,16 @@ pub(crate) fn serialize_event(event: &ConversationEvent) -> (String, String) {
             tool_use_id,
             content,
             is_error,
+            remote,
+            content_length,
         } => (
             "tool_result".to_string(),
             serde_json::json!({
                 "tool_use_id": tool_use_id,
                 "content": content,
                 "is_error": is_error,
+                "remote": remote,
+                "content_length": content_length,
             })
             .to_string(),
         ),
@@ -87,6 +91,11 @@ pub(crate) fn deserialize_event(event_type: &str, event_data: &str) -> Result<Co
                 .get("is_error")
                 .and_then(Value::as_bool)
                 .ok_or_else(|| eyre!("tool_result missing 'is_error' field"))?,
+            remote: data.get("remote").and_then(Value::as_bool).unwrap_or(false),
+            content_length: data
+                .get("content_length")
+                .and_then(Value::as_u64)
+                .map(|v| v as usize),
         }),
         "out_of_band_output" => Ok(ConversationEvent::OutOfBandOutput {
             name: json_string(&data, "name")?,
@@ -167,6 +176,8 @@ mod tests {
             tool_use_id: "tc_123".to_string(),
             content: "file contents here".to_string(),
             is_error: false,
+            remote: false,
+            content_length: None,
         };
         let result = round_trip(&event);
         match result {
@@ -174,10 +185,14 @@ mod tests {
                 tool_use_id,
                 content,
                 is_error,
+                remote,
+                content_length,
             } => {
                 assert_eq!(tool_use_id, "tc_123");
                 assert_eq!(content, "file contents here");
                 assert!(!is_error);
+                assert!(!remote);
+                assert!(content_length.is_none());
             }
             _ => panic!("expected ToolResult"),
         }
@@ -189,10 +204,57 @@ mod tests {
             tool_use_id: "tc_456".to_string(),
             content: "permission denied".to_string(),
             is_error: true,
+            remote: false,
+            content_length: None,
         };
         let result = round_trip(&event);
         match result {
             ConversationEvent::ToolResult { is_error, .. } => assert!(is_error),
+            _ => panic!("expected ToolResult"),
+        }
+    }
+
+    #[test]
+    fn test_tool_result_remote() {
+        let event = ConversationEvent::ToolResult {
+            tool_use_id: "tc_789".to_string(),
+            content: "ref:abc123".to_string(),
+            is_error: false,
+            remote: true,
+            content_length: Some(4096),
+        };
+        let result = round_trip(&event);
+        match result {
+            ConversationEvent::ToolResult {
+                remote,
+                content_length,
+                ..
+            } => {
+                assert!(remote);
+                assert_eq!(content_length, Some(4096));
+            }
+            _ => panic!("expected ToolResult"),
+        }
+    }
+
+    #[test]
+    fn test_tool_result_backwards_compat() {
+        // Old stored data without remote/content_length fields should deserialize
+        // with defaults (remote=false, content_length=None)
+        let event = deserialize_event(
+            "tool_result",
+            r#"{"tool_use_id":"tc_old","content":"old result","is_error":false}"#,
+        )
+        .unwrap();
+        match event {
+            ConversationEvent::ToolResult {
+                remote,
+                content_length,
+                ..
+            } => {
+                assert!(!remote);
+                assert!(content_length.is_none());
+            }
             _ => panic!("expected ToolResult"),
         }
     }
