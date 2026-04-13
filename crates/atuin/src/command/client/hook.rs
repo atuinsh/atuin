@@ -10,32 +10,54 @@ use serde_json::Value;
 use super::history;
 
 const HOOK_EVENT_TYPES: &[&str] = &["PreToolUse", "PostToolUse", "PostToolUseFailure"];
+const PI_EXTENSION_SOURCE: &str = include_str!("../../../../../examples/pi/atuin.ts");
+
+enum InstallKind {
+    JsonHooks {
+        config_path: &'static [&'static str],
+        hook_command: &'static str,
+        matcher: &'static str,
+    },
+    PiExtension {
+        extension_path: &'static [&'static str],
+    },
+}
 
 struct AgentSpec {
     aliases: &'static [&'static str],
     actor_name: &'static str,
-    config_path: &'static [&'static str],
-    hook_command: &'static str,
-    matcher: &'static str,
+    install_kind: InstallKind,
 }
 
 const CLAUDE_CODE: AgentSpec = AgentSpec {
     aliases: &["claude-code", "claude"],
     actor_name: "claude-code",
-    config_path: &[".claude", "settings.json"],
-    hook_command: "atuin hook claude-code",
-    matcher: "Bash",
+    install_kind: InstallKind::JsonHooks {
+        config_path: &[".claude", "settings.json"],
+        hook_command: "atuin hook claude-code",
+        matcher: "Bash",
+    },
 };
 
 const CODEX: AgentSpec = AgentSpec {
     aliases: &["codex"],
     actor_name: "codex",
-    config_path: &[".codex", "hooks.json"],
-    hook_command: "atuin hook codex",
-    matcher: "^Bash$",
+    install_kind: InstallKind::JsonHooks {
+        config_path: &[".codex", "hooks.json"],
+        hook_command: "atuin hook codex",
+        matcher: "^Bash$",
+    },
 };
 
-const AGENTS: &[&AgentSpec] = &[&CLAUDE_CODE, &CODEX];
+const PI: AgentSpec = AgentSpec {
+    aliases: &["pi"],
+    actor_name: "pi",
+    install_kind: InstallKind::PiExtension {
+        extension_path: &[".pi", "agent", "extensions", "atuin.ts"],
+    },
+};
+
+const AGENTS: &[&AgentSpec] = &[&CLAUDE_CODE, &CODEX, &PI];
 
 struct Agent(&'static AgentSpec);
 
@@ -47,7 +69,7 @@ impl Agent {
             .find(|spec| spec.aliases.contains(&name))
             .map(Self)
             .ok_or_else(|| {
-                eyre::eyre!("unknown agent: {name}. Supported agents: claude-code, codex")
+                eyre::eyre!("unknown agent: {name}. Supported agents: claude-code, codex, pi")
             })
     }
 
@@ -55,19 +77,13 @@ impl Agent {
         self.0.actor_name
     }
 
-    fn config_path(&self) -> PathBuf {
-        self.0
-            .config_path
-            .iter()
+    fn path(path: &'static [&'static str]) -> PathBuf {
+        path.iter()
             .fold(home_dir(), |path, segment| path.join(segment))
     }
 
-    fn hook_command(&self) -> &'static str {
-        self.0.hook_command
-    }
-
-    fn matcher(&self) -> &'static str {
-        self.0.matcher
+    fn install_kind(&self) -> &InstallKind {
+        &self.0.install_kind
     }
 }
 
@@ -175,6 +191,10 @@ fn id_file_path(tool_use_id: &str) -> PathBuf {
 async fn handle(agent_name: &str, settings: &Settings) -> Result<()> {
     let agent = Agent::from_name(agent_name)?;
 
+    if matches!(agent.install_kind(), InstallKind::PiExtension { .. }) {
+        bail!("`atuin hook pi` is not supported. Use `atuin hook install pi` and reload pi.");
+    }
+
     let mut input = String::new();
     std::io::stdin().read_to_string(&mut input)?;
 
@@ -218,42 +238,80 @@ async fn handle(agent_name: &str, settings: &Settings) -> Result<()> {
 
 fn install(agent_name: &str) -> Result<()> {
     let agent = Agent::from_name(agent_name)?;
-    let config_path = agent.config_path();
 
-    if let Some(parent) = config_path.parent() {
-        std::fs::create_dir_all(parent)?;
+    match agent.install_kind() {
+        InstallKind::JsonHooks {
+            config_path,
+            hook_command: _,
+            matcher: _,
+        } => {
+            let config_path = Agent::path(config_path);
+
+            if let Some(parent) = config_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+
+            let mut root: Value = if config_path.exists() {
+                let content = std::fs::read_to_string(&config_path)?;
+                serde_json::from_str(&content)?
+            } else {
+                Value::Object(serde_json::Map::new())
+            };
+
+            let hooks = root
+                .as_object_mut()
+                .ok_or_else(|| eyre::eyre!("config is not a JSON object"))?
+                .entry("hooks")
+                .or_insert_with(|| Value::Object(serde_json::Map::new()));
+
+            add_hook_entries(hooks, &agent)?;
+
+            let content = serde_json::to_string_pretty(&root)?;
+            std::fs::write(&config_path, content)?;
+
+            eprintln!(
+                "\nAtuin hooks installed for {}. Config: {}",
+                agent.actor_name(),
+                config_path.display()
+            );
+        }
+        InstallKind::PiExtension { extension_path } => {
+            let extension_path = Agent::path(extension_path);
+
+            if let Some(parent) = extension_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+
+            let already_installed = std::fs::read_to_string(&extension_path)
+                .is_ok_and(|existing| existing == PI_EXTENSION_SOURCE);
+
+            if already_installed {
+                eprintln!("pi extension: already installed, skipping");
+            } else {
+                std::fs::write(&extension_path, PI_EXTENSION_SOURCE)?;
+                eprintln!("pi extension: installed atuin extension");
+            }
+
+            eprintln!(
+                "\nAtuin extension installed for {}. Extension: {}\nReload pi with `/reload` or restart pi.",
+                agent.actor_name(),
+                extension_path.display()
+            );
+        }
     }
-
-    let mut root: Value = if config_path.exists() {
-        let content = std::fs::read_to_string(&config_path)?;
-        serde_json::from_str(&content)?
-    } else {
-        Value::Object(serde_json::Map::new())
-    };
-
-    let hooks = root
-        .as_object_mut()
-        .ok_or_else(|| eyre::eyre!("config is not a JSON object"))?
-        .entry("hooks")
-        .or_insert_with(|| Value::Object(serde_json::Map::new()));
-
-    add_hook_entries(hooks, &agent)?;
-
-    let content = serde_json::to_string_pretty(&root)?;
-    std::fs::write(&config_path, content)?;
-
-    eprintln!(
-        "\nAtuin hooks installed for {}. Config: {}",
-        agent.actor_name(),
-        config_path.display()
-    );
 
     Ok(())
 }
 
 fn add_hook_entries(hooks: &mut Value, agent: &Agent) -> Result<()> {
-    let hook_command = agent.hook_command();
-    let matcher = agent.matcher();
+    let InstallKind::JsonHooks {
+        config_path: _,
+        hook_command,
+        matcher,
+    } = agent.install_kind()
+    else {
+        bail!("agent does not use JSON hooks")
+    };
 
     for event_type in HOOK_EVENT_TYPES {
         let event_hooks = hooks
@@ -315,6 +373,26 @@ mod tests {
             (Some(Action::Install { agent }), None) => assert_eq!(agent, "codex"),
             other => panic!("unexpected parsed command: {other:?}"),
         }
+    }
+
+    #[test]
+    fn parse_hook_install_pi_command() {
+        let cmd = Cmd::try_parse_from(["hook", "install", "pi"]).unwrap();
+
+        match (cmd.action, cmd.agent) {
+            (Some(Action::Install { agent }), None) => assert_eq!(agent, "pi"),
+            other => panic!("unexpected parsed command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn agent_from_name_supports_pi() {
+        let agent = Agent::from_name("pi").unwrap();
+        assert_eq!(agent.actor_name(), "pi");
+        assert!(matches!(
+            agent.install_kind(),
+            InstallKind::PiExtension { .. }
+        ));
     }
 
     #[test]
