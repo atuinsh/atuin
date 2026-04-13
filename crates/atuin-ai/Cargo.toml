@@ -17,6 +17,7 @@ default = []
 tree-sitter = ["dep:tree-sitter-lib", "dep:tree-sitter-bash", "dep:tree-sitter-fish"]
 
 [dependencies]
+async-trait = { workspace = true }
 atuin-client = { workspace = true }
 atuin-common = { workspace = true }
 tokio = { workspace = true }

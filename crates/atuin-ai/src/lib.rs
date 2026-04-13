@@ -2,6 +2,7 @@ pub mod commands;
 pub(crate) mod context;
 pub(crate) mod event_serde;
 pub(crate) mod permissions;
+pub(crate) mod session;
 pub(crate) mod store;
 pub(crate) mod stream;
 pub(crate) mod tools;
