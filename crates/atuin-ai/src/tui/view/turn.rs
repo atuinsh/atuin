@@ -170,6 +170,9 @@ impl<'a> TurnBuilder<'a> {
             } => {
                 self.add_out_of_band_output(name, command.as_deref(), content);
             }
+            ConversationEvent::SystemContext { .. } => {
+                // Not rendered in the TUI — only sent to the API
+            }
         }
     }
 

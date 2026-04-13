@@ -57,6 +57,9 @@ pub(crate) enum ConversationEvent {
         command: Option<String>,
         content: String,
     },
+    /// Context injected for the LLM that is not rendered in the TUI.
+    /// Converted to a user message in the API protocol.
+    SystemContext { content: String },
 }
 
 impl ConversationEvent {
@@ -227,7 +230,14 @@ impl Conversation {
                     i += 1;
                 }
                 ConversationEvent::OutOfBandOutput { .. } => {
-                    // Out-of-band output is not sent to the server, so we don't need to add it to the messages
+                    // Out-of-band output is not sent to the server
+                    i += 1;
+                }
+                ConversationEvent::SystemContext { content } => {
+                    messages.push(serde_json::json!({
+                        "role": "user",
+                        "content": content
+                    }));
                     i += 1;
                 }
             }

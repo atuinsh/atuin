@@ -180,6 +180,13 @@ async fn run_inline_tui(
         let mut session = Session::new(ctx.git_root.is_some());
         session.conversation.events = events;
         session.conversation.session_id = server_sid;
+        // Inject an invocation boundary so the LLM knows prior messages
+        // are from an earlier interaction.
+        session.conversation.events.push(
+            crate::tui::state::ConversationEvent::SystemContext {
+                content: "[Note: The user has started a new invocation of Atuin AI. Prior messages from this session are from an earlier invocation.]".to_string(),
+            },
+        );
         session.view_start_index = session.conversation.events.len();
         session.is_resumed = true;
         session.last_event_time =

@@ -60,6 +60,10 @@ pub(crate) fn serialize_event(event: &ConversationEvent) -> (String, String) {
             })
             .to_string(),
         ),
+        ConversationEvent::SystemContext { content } => (
+            "system_context".to_string(),
+            serde_json::json!({ "content": content }).to_string(),
+        ),
     }
 }
 
@@ -103,6 +107,9 @@ pub(crate) fn deserialize_event(event_type: &str, event_data: &str) -> Result<Co
                 .get("command")
                 .and_then(|v| if v.is_null() { None } else { v.as_str() })
                 .map(String::from),
+            content: json_string(&data, "content")?,
+        }),
+        "system_context" => Ok(ConversationEvent::SystemContext {
             content: json_string(&data, "content")?,
         }),
         other => Err(eyre!("unknown event type: {other}")),
@@ -354,5 +361,16 @@ mod tests {
             }
             _ => panic!("expected ToolCall"),
         }
+    }
+
+    #[test]
+    fn test_system_context() {
+        let event = ConversationEvent::SystemContext {
+            content: "[system: new invocation started]".to_string(),
+        };
+        let result = round_trip(&event);
+        assert!(
+            matches!(result, ConversationEvent::SystemContext { content } if content == "[system: new invocation started]")
+        );
     }
 }

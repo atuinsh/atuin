@@ -42,9 +42,9 @@ pub(crate) fn ai_view(state: &Session) -> Elements {
         .last_event_time
         .map(|t| {
             let human = chrono_humanize::HumanTime::from(t - chrono::Utc::now());
-            format!("  Continuing previous session (last active {human}) ")
+            format!("  Continuing previous session (last active: {human}) - type /new to start a new session")
         })
-        .unwrap_or_else(|| "  Continuing previous session ".to_string());
+        .unwrap_or_else(|| "  Continuing previous session - type /new to start a new session".to_string());
 
     element! {
         AtuinAi(
