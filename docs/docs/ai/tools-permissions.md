@@ -72,7 +72,7 @@ The `AtuinHistory` tool allows Atuin AI to search your Atuin history for relevan
 
 **Config value:** `ai.capabilities.enable_history_search` (see [settings documentation](./settings.md#capabilities))
 
-**Example config:**
+**Example permissions file:**
 
 ```toml
 [permissions]
