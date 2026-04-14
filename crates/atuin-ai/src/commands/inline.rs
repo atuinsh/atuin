@@ -177,26 +177,36 @@ async fn run_inline_tui(
         debug!(session_id = %stored.id, "resuming AI session");
         let (mgr, events, server_sid, last_event_ts) =
             SessionManager::resume(Box::new(service), &stored).await?;
-        let mut session = Session::new(ctx.git_root.is_some());
-        session.conversation.events = events;
-        session.conversation.session_id = server_sid;
-        // Inject an invocation boundary so the LLM knows prior messages
-        // are from an earlier interaction.
-        session.conversation.events.push(
-            crate::tui::state::ConversationEvent::SystemContext {
-                content: "[Note: The user has started a new invocation of Atuin AI. Prior messages from this session are from an earlier invocation.]".to_string(),
-            },
-        );
-        session.view_start_index = session.conversation.events.len();
-        session.is_resumed = true;
-        session.last_event_time =
-            last_event_ts.and_then(|ts| chrono::DateTime::from_timestamp(ts, 0));
-        (mgr, session)
+
+        // Only treat this as a meaningful resume if there are API-visible events
+        // (not just OutOfBandOutput or SystemContext).
+        let has_api_content = events.iter().any(|e| e.is_api_content());
+
+        if has_api_content {
+            let mut session = Session::new(ctx.git_root.is_some());
+            session.conversation.events = events;
+            session.conversation.session_id = server_sid;
+            // Inject an invocation boundary so the LLM knows prior messages
+            // are from an earlier interaction.
+            session.conversation.events.push(
+                crate::tui::state::ConversationEvent::SystemContext {
+                    content: "[Note: The user has started a new invocation of Atuin AI. Prior messages from this session are from an earlier invocation.]".to_string(),
+                },
+            );
+            session.view_start_index = session.conversation.events.len();
+            session.is_resumed = true;
+            session.last_event_time =
+                last_event_ts.and_then(|ts| chrono::DateTime::from_timestamp(ts, 0));
+            (mgr, session)
+        } else {
+            // No meaningful content — treat as a fresh session
+            debug!("resumable session has no API-visible content, starting fresh");
+            (mgr, Session::new(ctx.git_root.is_some()))
+        }
     } else {
         debug!("creating new AI session");
         let mgr =
-            SessionManager::create_new(Box::new(service), cwd.as_deref(), git_root_str.as_deref())
-                .await?;
+            SessionManager::create_new(Box::new(service), cwd.as_deref(), git_root_str.as_deref());
         (mgr, Session::new(ctx.git_root.is_some()))
     };
 

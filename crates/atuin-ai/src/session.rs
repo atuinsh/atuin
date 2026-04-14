@@ -150,23 +150,24 @@ pub(crate) struct SessionManager {
     /// Stored for creating a new session on `/new`.
     directory: Option<String>,
     git_root: Option<String>,
+    /// Whether the session row has been created in the database. New sessions
+    /// are deferred until the first event is persisted, so empty sessions
+    /// don't linger and get spuriously resumed.
+    persisted_to_db: bool,
 }
 
 impl SessionManager {
-    /// Create a new session and return a manager for it.
-    pub async fn create_new(
+    /// Create a new session manager. The database row is deferred until the
+    /// first event is persisted.
+    pub fn create_new(
         service: Box<dyn SessionService>,
         directory: Option<&str>,
         git_root: Option<&str>,
-    ) -> Result<Self> {
+    ) -> Self {
         let session_id = atuin_common::utils::uuid_v7().to_string();
         let invocation_id = atuin_common::utils::uuid_v7().to_string();
 
-        service
-            .create_session(&session_id, directory, git_root)
-            .await?;
-
-        Ok(Self {
+        Self {
             service,
             session_id,
             invocation_id,
@@ -174,7 +175,8 @@ impl SessionManager {
             head_id: None,
             directory: directory.map(String::from),
             git_root: git_root.map(String::from),
-        })
+            persisted_to_db: false,
+        }
     }
 
     /// Load an existing session and return a manager for it, along with the
@@ -207,6 +209,7 @@ impl SessionManager {
             head_id: last_event_id,
             directory: stored.directory.clone(),
             git_root: stored.git_root.clone(),
+            persisted_to_db: true,
         };
 
         Ok((
@@ -217,8 +220,27 @@ impl SessionManager {
         ))
     }
 
+    /// Ensure the session row exists in the database.
+    async fn ensure_persisted(&mut self) -> Result<()> {
+        if !self.persisted_to_db {
+            self.service
+                .create_session(
+                    &self.session_id,
+                    self.directory.as_deref(),
+                    self.git_root.as_deref(),
+                )
+                .await?;
+            self.persisted_to_db = true;
+        }
+        Ok(())
+    }
+
     /// Persist any new events since the last persist call.
     pub async fn persist_events(&mut self, events: &[ConversationEvent]) -> Result<()> {
+        if self.persisted_count >= events.len() {
+            return Ok(());
+        }
+        self.ensure_persisted().await?;
         for event in &events[self.persisted_count..] {
             let event_id = atuin_common::utils::uuid_v7().to_string();
             let (event_type, event_data) = event_serde::serialize_event(event);
@@ -241,7 +263,8 @@ impl SessionManager {
     }
 
     /// Persist the server session ID if it has changed.
-    pub async fn persist_server_session_id(&self, server_session_id: &str) -> Result<()> {
+    pub async fn persist_server_session_id(&mut self, server_session_id: &str) -> Result<()> {
+        self.ensure_persisted().await?;
         self.service
             .update_server_session_id(&self.session_id, server_session_id)
             .await
@@ -249,26 +272,24 @@ impl SessionManager {
 
     /// Archive the current session (for `/new` command).
     pub async fn archive(&self) -> Result<()> {
-        self.service.archive(&self.session_id).await
+        if self.persisted_to_db {
+            self.service.archive(&self.session_id).await?;
+        }
+        Ok(())
     }
 
     /// Archive the current session and reset to a fresh one.
+    /// The new session row is deferred until the first event is persisted.
     pub async fn archive_and_reset(&mut self) -> Result<()> {
-        self.service.archive(&self.session_id).await?;
+        if self.persisted_to_db {
+            self.service.archive(&self.session_id).await?;
+        }
 
-        let new_session_id = atuin_common::utils::uuid_v7().to_string();
-        self.service
-            .create_session(
-                &new_session_id,
-                self.directory.as_deref(),
-                self.git_root.as_deref(),
-            )
-            .await?;
-
-        self.session_id = new_session_id;
+        self.session_id = atuin_common::utils::uuid_v7().to_string();
         self.invocation_id = atuin_common::utils::uuid_v7().to_string();
         self.persisted_count = 0;
         self.head_id = None;
+        self.persisted_to_db = false;
         Ok(())
     }
 
@@ -295,9 +316,7 @@ mod tests {
     #[tokio::test]
     async fn test_create_new_and_persist() {
         let service = test_service().await;
-        let mut mgr = SessionManager::create_new(service, Some("/tmp"), None)
-            .await
-            .unwrap();
+        let mut mgr = SessionManager::create_new(service, Some("/tmp"), None);
 
         let events = vec![
             ConversationEvent::UserMessage {
@@ -380,9 +399,7 @@ mod tests {
     #[tokio::test]
     async fn test_incremental_persist() {
         let service = test_service().await;
-        let mut mgr = SessionManager::create_new(service, Some("/tmp"), None)
-            .await
-            .unwrap();
+        let mut mgr = SessionManager::create_new(service, Some("/tmp"), None);
 
         let mut events = vec![ConversationEvent::UserMessage {
             content: "first".to_string(),
@@ -408,9 +425,7 @@ mod tests {
             .await
             .unwrap();
 
-        let mgr = SessionManager::create_new(Box::new(svc), Some("/tmp"), None)
-            .await
-            .unwrap();
+        let mgr = SessionManager::create_new(Box::new(svc), Some("/tmp"), None);
 
         mgr.archive().await.unwrap();
     }
@@ -418,9 +433,7 @@ mod tests {
     #[tokio::test]
     async fn test_persist_server_session_id() {
         let service = test_service().await;
-        let mgr = SessionManager::create_new(service, Some("/tmp"), None)
-            .await
-            .unwrap();
+        let mut mgr = SessionManager::create_new(service, Some("/tmp"), None);
 
         mgr.persist_server_session_id("srv-123").await.unwrap();
     }
@@ -433,9 +446,7 @@ mod tests {
             .unwrap();
 
         let session_id = {
-            let mut mgr = SessionManager::create_new(Box::new(svc), Some("/tmp"), None)
-                .await
-                .unwrap();
+            let mut mgr = SessionManager::create_new(Box::new(svc), Some("/tmp"), None);
 
             let events = vec![
                 ConversationEvent::UserMessage {

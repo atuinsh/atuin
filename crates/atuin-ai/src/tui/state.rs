@@ -63,6 +63,19 @@ pub(crate) enum ConversationEvent {
 }
 
 impl ConversationEvent {
+    /// Whether this event represents actual conversation content sent to the API.
+    /// Used to determine if a resumed session has meaningful context.
+    pub(crate) fn is_api_content(&self) -> bool {
+        match self {
+            ConversationEvent::UserMessage { .. } => true,
+            ConversationEvent::Text { .. } => true,
+            ConversationEvent::ToolCall { .. } => true,
+            ConversationEvent::ToolResult { .. } => true,
+            ConversationEvent::OutOfBandOutput { .. } => false,
+            ConversationEvent::SystemContext { .. } => false,
+        }
+    }
+
     /// Extract command from a suggest_command tool call
     pub(crate) fn as_command(&self) -> Option<&str> {
         if let ConversationEvent::ToolCall { name, input, .. } = self
