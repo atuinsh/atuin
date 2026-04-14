@@ -65,7 +65,7 @@ impl ChatRequest {
         session_id: Option<String>,
         capabilities: &AiCapabilities,
     ) -> Self {
-        let mut caps = vec![];
+        let mut caps = vec!["client_invocations".to_string()];
         if capabilities.enable_history_search.unwrap_or(true) {
             caps.push("client_v1_atuin_history".to_string());
         }
