@@ -90,6 +90,13 @@ pub(crate) fn ai_view(state: &Session) -> Elements {
 fn input_view(state: &Session) -> Elements {
     let asking_tool = state.tool_tracker.asking_for_permission();
     let in_git_project = state.in_git_project;
+    let slash_results = state
+        .interaction
+        .slash_command_search_results
+        .iter()
+        .take(4)
+        .collect::<Vec<_>>();
+    let first_slash_result = slash_results.first().cloned();
 
     element! {
         #(if let Some(tc) = asking_tool {
@@ -104,6 +111,7 @@ fn input_view(state: &Session) -> Elements {
                     title_right: "Atuin AI",
                     footer: state.footer_text(),
                     active: state.interaction.mode == AppMode::Input && !state.interaction.confirmation_pending,
+                    slash_suggestion: first_slash_result.map(|r| r.clone())
                 )
 
                 #(if state.interaction.is_input_blank && state.conversation.has_any_command() && state.interaction.mode == AppMode::Input {
@@ -111,6 +119,23 @@ fn input_view(state: &Session) -> Elements {
                         Text { Span(text: "[Enter] Confirm dangerous command  [Esc] Cancel", style: Style::default().fg(Color::Gray)) }
                     } else {
                         Text { Span(text: "[Enter] Execute suggested command  [Tab] Insert Command", style: Style::default().fg(Color::Gray)) }
+                    })
+                })
+
+                #(if !slash_results.is_empty() {
+                    #(for (i, result) in slash_results.iter().enumerate() {
+                        Text {
+                            Span(text: format!("/{}", &result.command.name[..result.span.0]), style: Style::default().fg(Color::Blue))
+                            Span(text: &result.command.name[result.span.0..result.span.1], style: Style::default().fg(Color::Blue).add_modifier(Modifier::UNDERLINED))
+                            Span(text: format!("{}", &result.command.name[result.span.1..]), style: Style::default().fg(Color::Blue))
+                            Span(text: " - ")
+                            Span(text: &result.command.description)
+
+                            #(if i == 0 {
+                                Span(text: " [Tab] Insert", style: Style::default().fg(Color::Gray).add_modifier(Modifier::ITALIC).dim())
+                            })
+                        }
+
                     })
                 })
             }

@@ -1,6 +1,7 @@
 pub(crate) mod components;
 pub(crate) mod dispatch;
 pub(crate) mod events;
+pub(crate) mod slash;
 pub(crate) mod state;
 pub(crate) mod view;
 

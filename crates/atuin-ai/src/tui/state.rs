@@ -5,7 +5,10 @@
 
 use tokio::task::AbortHandle;
 
-use crate::tools::{ClientToolCall, ToolOutcome, ToolTracker};
+use crate::{
+    tools::{ClientToolCall, ToolOutcome, ToolTracker},
+    tui::slash::{SlashCommandRegistry, SlashCommandSearchResult},
+};
 
 /// Streaming status indicators from server
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -366,10 +369,17 @@ impl Conversation {
     }
 
     /// Handle a slash command
-    pub fn handle_slash_command(&mut self, command: &str) {
+    pub fn handle_slash_command(&mut self, command: &str, registry: &SlashCommandRegistry) {
         match command.trim() {
             "/help" => {
-                let content = include_str!("./content/help.md");
+                let commands = registry
+                    .get_commands()
+                    .iter()
+                    .map(|cmd| format!("- `/{}` - {}", cmd.name, cmd.description))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+
+                let content = include_str!("./content/help.md").replace("{commands}", &commands);
 
                 self.events.push(ConversationEvent::OutOfBandOutput {
                     name: "System".to_string(),
@@ -393,6 +403,10 @@ pub(crate) struct Interaction {
     pub mode: AppMode,
     /// Whether the input is blank
     pub is_input_blank: bool,
+    /// The currently in-progress slash command (if any)
+    pub slash_command_input: Option<String>,
+    /// Search results for the current slash command input
+    pub slash_command_search_results: Vec<SlashCommandSearchResult>,
     /// True when user has pressed Enter once on a dangerous command
     pub confirmation_pending: bool,
     /// Current streaming status
@@ -408,6 +422,8 @@ impl Interaction {
         Self {
             mode: AppMode::Input,
             is_input_blank: false,
+            slash_command_input: None,
+            slash_command_search_results: Vec::new(),
             confirmation_pending: false,
             streaming_status: None,
             was_interrupted: false,
@@ -445,6 +461,8 @@ pub(crate) struct Session {
     /// longer sent to the API. Accumulated by `/new` commands within a single
     /// TUI lifetime.
     pub archived_view_events: Vec<ConversationEvent>,
+    /// A registry of available slash commands
+    pub slash_registry: SlashCommandRegistry,
 }
 
 impl Session {
@@ -460,6 +478,7 @@ impl Session {
             is_resumed: false,
             last_event_time: None,
             archived_view_events: Vec::new(),
+            slash_registry: Default::default(),
         }
     }
 

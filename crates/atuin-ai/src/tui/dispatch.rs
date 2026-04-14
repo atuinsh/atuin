@@ -129,10 +129,30 @@ fn on_continue_after_tools(
 }
 
 fn on_input_updated(handle: &Handle<Session>, input: String) {
-    let input_blank = input.trim().is_empty();
+    let input_blank = input.is_empty();
+    let slash_command = if input.starts_with('/') {
+        Some(input.trim_start_matches('/').to_string())
+    } else {
+        None
+    };
 
     handle.update(move |state| {
         state.interaction.is_input_blank = input_blank;
+        state.interaction.slash_command_input = slash_command;
+
+        if let Some(ref query) = state.interaction.slash_command_input.as_ref() {
+            let mut results = state.slash_registry.search_fuzzy(query);
+
+            results.sort_by(|a, b| {
+                b.relevance
+                    .partial_cmp(&a.relevance)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+
+            state.interaction.slash_command_search_results = results;
+        } else {
+            state.interaction.slash_command_search_results.clear();
+        }
     });
 }
 
@@ -144,6 +164,11 @@ fn on_submit_input(
     input: String,
     session_mgr: &mut SessionManager,
 ) {
+    handle.update(move |state| {
+        state.interaction.slash_command_input = None;
+        state.interaction.slash_command_search_results.clear();
+    });
+
     let input = input.trim().to_string();
     if input.is_empty() {
         let h2 = handle.clone();
@@ -165,7 +190,9 @@ fn on_submit_input(
             on_new_session(handle, session_mgr);
         } else {
             handle.update(move |state| {
-                state.conversation.handle_slash_command(&input);
+                state
+                    .conversation
+                    .handle_slash_command(&input, &state.slash_registry);
             });
         }
         return;
@@ -180,7 +207,9 @@ fn on_submit_input(
 
 fn on_slash_command(handle: &Handle<Session>, command: String) {
     handle.update(move |state| {
-        state.conversation.handle_slash_command(&command);
+        state
+            .conversation
+            .handle_slash_command(&command, &state.slash_registry);
     });
 }
 
