@@ -14,6 +14,12 @@ Default: `ai_sessions.db` in the Atuin data directory.
 
 The path to the SQLite database where Atuin AI sessions are stored.
 
+### session_continue_minutes
+
+Default: `60` (minutes)
+
+The amount of time after the last interaction with Atuin AI that a session is considered "recent" and can be automatically continued. If you interact with Atuin AI and then invoke it again within this time window, the second interaction will be part of the same session. If you wait longer than this time window, a new session will be started. You can always start a new session manually by using the `/new` slash command in the Atuin AI interface.
+
 ### endpoint
 
 Default: `null`
@@ -28,7 +34,7 @@ The API token for the Atuin AI endpoint. Used for AI features like command gener
 
 ## Capabilities
 
-Settings that control what capabilities are sent to the LLM. These are specified under `[ai.capabilities]`.
+Settings that control what capabilities are sent to the LLM, which the LLM uses to understand what features the client has available. These are specified under `[ai.capabilities]`.
 
 ### enable_history_search
 

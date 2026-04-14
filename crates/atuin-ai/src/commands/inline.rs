@@ -167,7 +167,9 @@ async fn run_inline_tui(
         .git_root
         .as_ref()
         .map(|p| p.to_string_lossy().into_owned());
-    let max_age_secs: i64 = 30 * 60; // 30 minutes
+
+    let session_window_mins = settings.ai.session_continue_minutes.max(0); // treat negative values as 0 to avoid confusion
+    let max_age_secs: i64 = session_window_mins * 60;
 
     let resumable = service
         .find_resumable(cwd.as_deref(), git_root_str.as_deref(), max_age_secs)

@@ -667,6 +667,9 @@ pub struct Ai {
     /// Path to the AI sessions database.
     pub db_path: String,
 
+    /// The maximum time in minutes that an AI session can be automatically resumed.
+    pub session_continue_minutes: i64,
+
     /// Deprecated: use opening.send_cwd instead. Kept for backwards compatibility.
     #[serde(default)]
     pub send_cwd: Option<bool>,
@@ -1555,6 +1558,7 @@ impl Settings {
             .set_default("search.frecency_score_multiplier", 1.0)?
             .set_default("meta.db_path", meta_path.to_str())?
             .set_default("ai.db_path", ai_sessions_path.to_str())?
+            .set_default("ai.session_continue_minutes", 60)?
             .set_default("ai.send_cwd", false)?
             .set_default("ai.opening.send_cwd", false)?
             .set_default("ai.opening.send_last_command", false)?
