@@ -253,7 +253,7 @@ impl AiSessionStore {
             "SELECT id, session_id, parent_id, invocation_id, event_type, event_data, created_at
                  FROM session_events
                  WHERE session_id = ?1
-                 ORDER BY created_at ASC",
+                 ORDER BY created_at ASC, rowid ASC",
         )
         .bind(session_id)
         .fetch_all(&self.pool)
