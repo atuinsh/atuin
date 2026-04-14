@@ -185,7 +185,13 @@ impl SessionManager {
     pub async fn resume(
         service: Box<dyn SessionService>,
         stored: &StoredSession,
-    ) -> Result<(Self, Vec<ConversationEvent>, Option<String>, Option<i64>)> {
+    ) -> Result<(
+        Self,
+        Vec<ConversationEvent>,
+        Option<String>,
+        Option<i64>,
+        String,
+    )> {
         let invocation_id = atuin_common::utils::uuid_v7().to_string();
         let stored_events = service.load_events(&stored.id).await?;
 
@@ -204,7 +210,7 @@ impl SessionManager {
         let manager = Self {
             service,
             session_id: stored.id.clone(),
-            invocation_id,
+            invocation_id: invocation_id.clone(),
             persisted_count: events.len(),
             head_id: last_event_id,
             directory: stored.directory.clone(),
@@ -217,6 +223,7 @@ impl SessionManager {
             events,
             stored.server_session_id.clone(),
             last_event_ts,
+            invocation_id,
         ))
     }
 
@@ -382,7 +389,7 @@ mod tests {
             .unwrap()
             .expect("should find session");
 
-        let (mut mgr, loaded_events, server_sid, last_ts) =
+        let (mut mgr, loaded_events, server_sid, last_ts, _invocation_id) =
             SessionManager::resume(Box::new(svc), &stored)
                 .await
                 .unwrap();

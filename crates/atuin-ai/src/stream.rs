@@ -57,6 +57,7 @@ pub(crate) struct ChatRequest {
     pub messages: Vec<serde_json::Value>,
     pub session_id: Option<String>,
     pub capabilities: Vec<String>,
+    pub invocation_id: String,
 }
 
 impl ChatRequest {
@@ -64,6 +65,7 @@ impl ChatRequest {
         messages: Vec<serde_json::Value>,
         session_id: Option<String>,
         capabilities: &AiCapabilities,
+        invocation_id: String,
     ) -> Self {
         let mut caps = vec!["client_invocations".to_string()];
         if capabilities.enable_history_search.unwrap_or(true) {
@@ -82,6 +84,7 @@ impl ChatRequest {
             messages,
             session_id,
             capabilities: caps,
+            invocation_id,
         }
     }
 }
@@ -112,6 +115,7 @@ fn create_chat_stream(
             "messages": request.messages,
             "context": context,
             "capabilities": request.capabilities,
+            "invocation_id": request.invocation_id
         });
 
         if let Some(ref sid) = request.session_id {

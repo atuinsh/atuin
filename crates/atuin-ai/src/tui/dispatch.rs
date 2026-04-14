@@ -111,7 +111,7 @@ fn launch_stream(
         state.start_streaming();
         let messages = state.conversation.events_to_messages();
         let sid = state.conversation.session_id.clone();
-        let request = ChatRequest::new(messages, sid, &caps);
+        let request = ChatRequest::new(messages, sid, &caps, state.invocation_id.clone());
         let task: JoinHandle<()> = tokio::spawn(async move {
             run_chat_stream(h2, tx2, app, cc, request).await;
         });

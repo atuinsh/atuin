@@ -177,7 +177,7 @@ async fn run_inline_tui(
 
     let (session_mgr, initial_state) = if let Some(stored) = resumable {
         debug!(session_id = %stored.id, "resuming AI session");
-        let (mgr, events, server_sid, last_event_ts) =
+        let (mgr, events, server_sid, last_event_ts, invocation_id) =
             SessionManager::resume(Box::new(service), &stored).await?;
 
         // Only treat this as a meaningful resume if there are API-visible events
@@ -185,7 +185,7 @@ async fn run_inline_tui(
         let has_api_content = events.iter().any(|e| e.is_api_content());
 
         if has_api_content {
-            let mut session = Session::new(ctx.git_root.is_some());
+            let mut session = Session::new(ctx.git_root.is_some(), Some(invocation_id));
             session.conversation.events = events;
             session.conversation.session_id = server_sid;
             // Inject an invocation boundary so the LLM knows prior messages
@@ -203,13 +203,16 @@ async fn run_inline_tui(
         } else {
             // No meaningful content — treat as a fresh session
             debug!("resumable session has no API-visible content, starting fresh");
-            (mgr, Session::new(ctx.git_root.is_some()))
+            (
+                mgr,
+                Session::new(ctx.git_root.is_some(), Some(invocation_id)),
+            )
         }
     } else {
         debug!("creating new AI session");
         let mgr =
             SessionManager::create_new(Box::new(service), cwd.as_deref(), git_root_str.as_deref());
-        (mgr, Session::new(ctx.git_root.is_some()))
+        (mgr, Session::new(ctx.git_root.is_some(), None))
     };
 
     let (tx, rx) = mpsc::channel::<AiTuiEvent>();

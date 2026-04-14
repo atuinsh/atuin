@@ -468,10 +468,12 @@ pub(crate) struct Session {
     pub archived_view_events: Vec<ConversationEvent>,
     /// A registry of available slash commands
     pub slash_registry: SlashCommandRegistry,
+    /// The unique ID for this invocation
+    pub invocation_id: String,
 }
 
 impl Session {
-    pub fn new(in_git_project: bool) -> Self {
+    pub fn new(in_git_project: bool, invocation_id: Option<String>) -> Self {
         Self {
             conversation: Conversation::new(),
             interaction: Interaction::new(),
@@ -484,6 +486,7 @@ impl Session {
             last_event_time: None,
             archived_view_events: Vec::new(),
             slash_registry: Default::default(),
+            invocation_id: invocation_id.unwrap_or_else(|| uuid::Uuid::now_v7().to_string()),
         }
     }
 
