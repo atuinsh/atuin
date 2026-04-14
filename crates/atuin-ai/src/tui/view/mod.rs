@@ -99,7 +99,7 @@ fn input_view(state: &Session) -> Elements {
                     title_right: "Atuin AI",
                     footer: state.footer_text(),
                     active: state.interaction.mode == AppMode::Input && !state.interaction.confirmation_pending,
-                    slash_suggestion: first_slash_result.map(|r| r.clone())
+                    slash_suggestion: first_slash_result.cloned()
                 )
 
                 #(if state.interaction.is_input_blank && state.conversation.has_any_command() && state.interaction.mode == AppMode::Input {

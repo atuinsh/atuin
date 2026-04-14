@@ -278,6 +278,7 @@ impl SessionManager {
     }
 
     /// Archive the current session (for `/new` command).
+    #[allow(dead_code)] // used in tests; will be used by dispatch for `/new`
     pub async fn archive(&self) -> Result<()> {
         if self.persisted_to_db {
             self.service.archive(&self.session_id).await?;
@@ -300,10 +301,12 @@ impl SessionManager {
         Ok(())
     }
 
+    #[allow(dead_code)] // used in tests; part of public API for dispatch/daemon
     pub fn session_id(&self) -> &str {
         &self.session_id
     }
 
+    #[allow(dead_code)] // used in tests; part of public API for dispatch/daemon
     pub fn invocation_id(&self) -> &str {
         &self.invocation_id
     }

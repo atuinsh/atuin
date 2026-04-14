@@ -88,10 +88,10 @@ fn persist_session(handle: &Handle<Session>, session_mgr: &mut SessionManager) {
     if let Err(e) = rt.block_on(session_mgr.persist_events(&events)) {
         tracing::warn!("failed to persist session events: {e}");
     }
-    if let Some(ref sid) = server_sid {
-        if let Err(e) = rt.block_on(session_mgr.persist_server_session_id(sid)) {
-            tracing::warn!("failed to persist server session ID: {e}");
-        }
+    if let Some(ref sid) = server_sid
+        && let Err(e) = rt.block_on(session_mgr.persist_server_session_id(sid))
+    {
+        tracing::warn!("failed to persist server session ID: {e}");
     }
 }
 
@@ -142,7 +142,7 @@ fn on_input_updated(handle: &Handle<Session>, input: String) {
         state.interaction.is_input_blank = input_blank;
         state.interaction.slash_command_input = slash_command;
 
-        if let Some(ref query) = state.interaction.slash_command_input.as_ref() {
+        if let Some(query) = state.interaction.slash_command_input.as_ref() {
             let mut results = state.slash_registry.search_fuzzy(query);
 
             results.sort_by(|a, b| {

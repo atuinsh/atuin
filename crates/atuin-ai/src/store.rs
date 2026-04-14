@@ -6,7 +6,10 @@ use eyre::{Result, eyre};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions};
 use time::OffsetDateTime;
 
+// Database row mappings — all columns are kept even if not yet read in
+// non-test code, since they're part of the schema and used in tests.
 #[derive(Debug)]
+#[allow(dead_code)]
 pub(crate) struct StoredSession {
     pub id: String,
     pub head_id: Option<String>,
@@ -19,6 +22,7 @@ pub(crate) struct StoredSession {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub(crate) struct StoredEvent {
     pub id: String,
     pub session_id: String,
@@ -28,6 +32,21 @@ pub(crate) struct StoredEvent {
     pub event_data: String,
     pub created_at: i64,
 }
+
+/// Row type returned by session queries (avoids clippy::type_complexity).
+type SessionRow = (
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    i64,
+    i64,
+    Option<i64>,
+);
+
+/// Row type returned by event queries.
+type EventRow = (String, String, Option<String>, String, String, String, i64);
 
 pub(crate) struct AiSessionStore {
     pool: SqlitePool,
@@ -102,17 +121,9 @@ impl AiSessionStore {
         })
     }
 
+    #[allow(dead_code)] // used in tests; will be used by daemon service
     pub async fn get_session(&self, id: &str) -> Result<Option<StoredSession>> {
-        let row: Option<(
-            String,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            i64,
-            i64,
-            Option<i64>,
-        )> = sqlx::query_as(
+        let row: Option<SessionRow> = sqlx::query_as(
             "SELECT id, head_id, server_session_id, directory, git_root,
                     created_at, updated_at, archived_at
              FROM sessions WHERE id = ?1",
@@ -156,16 +167,7 @@ impl AiSessionStore {
     ) -> Result<Option<StoredSession>> {
         let cutoff = OffsetDateTime::now_utc().unix_timestamp() - max_age_secs;
 
-        let row: Option<(
-            String,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            i64,
-            i64,
-            Option<i64>,
-        )> = sqlx::query_as(
+        let row: Option<SessionRow> = sqlx::query_as(
             "SELECT id, head_id, server_session_id, directory, git_root,
                     created_at, updated_at, archived_at
              FROM sessions
@@ -247,16 +249,15 @@ impl AiSessionStore {
 
     /// Load all events for a session, ordered chronologically.
     pub async fn load_events(&self, session_id: &str) -> Result<Vec<StoredEvent>> {
-        let rows: Vec<(String, String, Option<String>, String, String, String, i64)> =
-            sqlx::query_as(
-                "SELECT id, session_id, parent_id, invocation_id, event_type, event_data, created_at
+        let rows: Vec<EventRow> = sqlx::query_as(
+            "SELECT id, session_id, parent_id, invocation_id, event_type, event_data, created_at
                  FROM session_events
                  WHERE session_id = ?1
                  ORDER BY created_at ASC",
-            )
-            .bind(session_id)
-            .fetch_all(&self.pool)
-            .await?;
+        )
+        .bind(session_id)
+        .fetch_all(&self.pool)
+        .await?;
 
         Ok(rows
             .into_iter()

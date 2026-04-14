@@ -252,7 +252,7 @@ impl Conversation {
                 self.events.push(ConversationEvent::OutOfBandOutput {
                     name: "System".to_string(),
                     command: Some("/help".to_string()),
-                    content: content.to_string(),
+                    content,
                 });
             }
             _ => self.events.push(ConversationEvent::OutOfBandOutput {
@@ -266,9 +266,10 @@ impl Conversation {
 
 /// Convert a slice of conversation events to Claude API message format.
 ///
-/// This is the canonical conversion used by both `Conversation::events_to_messages()`
-/// and the context window builder. The logic handles combining adjacent Text + ToolCall
-/// events into single assistant messages with mixed content blocks.
+/// This is the canonical event-to-message conversion, used by the context window
+/// builder to convert turn slices independently. The logic handles combining
+/// adjacent Text + ToolCall events into single assistant messages with mixed
+/// content blocks.
 pub(crate) fn events_to_messages(events: &[ConversationEvent]) -> Vec<serde_json::Value> {
     let mut messages = Vec::new();
     let mut i = 0;

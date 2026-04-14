@@ -135,7 +135,7 @@ fn input_box(
                     // If there's a slash command suggestion, Tab accepts it.
                     if let Some(suggestion) = &props.slash_suggestion {
                         textarea.clear();
-                        textarea.insert_str(&format!("/{}", &suggestion.command.name));
+                        textarea.insert_str(format!("/{}", suggestion.command.name));
                         // Manually trigger an input update event so the slash suggestion box can update immediately
                         if let Some(ref tx) = state.tx {
                             let _ = tx.send(AiTuiEvent::InputUpdated(textarea.lines().join("\n")));
