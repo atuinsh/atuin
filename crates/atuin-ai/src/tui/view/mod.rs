@@ -8,6 +8,7 @@ use ratatui_core::style::{Color, Modifier, Style};
 
 use crate::tools::{ClientToolCall, TrackedTool};
 use crate::tui::components::select::SelectOption;
+use crate::tui::components::session_continue::SessionContinue;
 use crate::tui::events::{AiTuiEvent, PermissionResult};
 
 use super::components::atuin_ai::AtuinAi;
@@ -41,14 +42,6 @@ pub(crate) fn ai_view(state: &Session) -> Elements {
         || state.interaction.mode == AppMode::Generating;
     let last_index = turns.len().saturating_sub(1);
 
-    let resume_label = state
-        .last_event_time
-        .map(|t| {
-            let human = chrono_humanize::HumanTime::from(t - chrono::Utc::now());
-            format!("  Continuing previous session (last active: {human}) - type /new to start a new session")
-        })
-        .unwrap_or_else(|| "  Continuing previous session - type /new to start a new session".to_string());
-
     element! {
         AtuinAi(
             mode: state.interaction.mode,
@@ -57,13 +50,8 @@ pub(crate) fn ai_view(state: &Session) -> Elements {
             pending_confirmation: state.interaction.confirmation_pending,
             has_executing_preview: state.tool_tracker.has_executing_preview(),
         ) {
-            #(if !state.is_exiting() && state.is_resumed {
-                Text {
-                    Span(
-                        text: resume_label,
-                        style: Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
-                    )
-                }
+            #(if state.is_resumed && (!state.is_exiting() || !turns.is_empty()) {
+                SessionContinue(key: "continuation-notice", continued_at: state.last_event_time)
             })
 
             #(for (index, turn) in turns.iter().enumerate() {
