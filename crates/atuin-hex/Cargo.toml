@@ -13,7 +13,7 @@ repository = { workspace = true }
 [dependencies]
 clap = { workspace = true }
 
-# [target.'cfg(all(unix, not(target_os = "illumos")))'.dependencies]
+[target.'cfg(unix)'.dependencies]
 crossterm = { workspace = true }
 eyre = { workspace = true }
 portable-pty = "0.9"
