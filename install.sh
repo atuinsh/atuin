@@ -106,7 +106,6 @@ __atuin_install_agent_hook(){
 __atuin_install_agent_hook "claude-code" "Claude Code" "$HOME/.claude" claude
 __atuin_install_agent_hook "codex" "Codex" "$HOME/.codex" codex
 __atuin_install_agent_hook "pi" "pi" "$HOME/.config/pi" pi
-__atuin_install_agent_hook "opencode" "OpenCode" "$HOME/.config/opencode" opencode
 
 echo ""
 echo "Atuin installed successfully!"
