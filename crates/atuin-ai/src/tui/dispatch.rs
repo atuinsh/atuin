@@ -578,11 +578,18 @@ fn on_new_session(handle: &Handle<Session>, session_mgr: &mut SessionManager) {
     }
 
     handle.update(|state| {
+        // Move the current invocation's visible events to the archived view
+        // so they remain on screen but are no longer sent to the API.
+        let visible_events: Vec<ConversationEvent> =
+            state.conversation.events[state.view_start_index..].to_vec();
+        state.archived_view_events.extend(visible_events);
+
         state.conversation.events.clear();
         state.conversation.session_id = None;
         state.tool_tracker = crate::tools::ToolTracker::new();
         state.view_start_index = 0;
         state.is_resumed = false;
+        state.last_event_time = None;
         state
             .conversation
             .events

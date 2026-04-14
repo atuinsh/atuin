@@ -428,6 +428,10 @@ pub(crate) struct Session {
     pub is_resumed: bool,
     /// Time of the last event from a previous invocation when resuming a session
     pub last_event_time: Option<chrono::DateTime<chrono::Utc>>,
+    /// Events from archived sessions that are still rendered on screen but no
+    /// longer sent to the API. Accumulated by `/new` commands within a single
+    /// TUI lifetime.
+    pub archived_view_events: Vec<ConversationEvent>,
 }
 
 impl Session {
@@ -442,6 +446,7 @@ impl Session {
             view_start_index: 0,
             is_resumed: false,
             last_event_time: None,
+            archived_view_events: Vec::new(),
         }
     }
 

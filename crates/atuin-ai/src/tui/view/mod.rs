@@ -29,6 +29,9 @@ mod turn;
 pub(crate) fn ai_view(state: &Session) -> Elements {
     let mut turn_builder = turn::TurnBuilder::new(&state.tool_tracker);
 
+    for event in &state.archived_view_events {
+        turn_builder.add_event(event);
+    }
     for event in &state.conversation.events[state.view_start_index..] {
         turn_builder.add_event(event);
     }
@@ -287,7 +290,7 @@ fn out_of_band_turn_view(events: &[turn::UiEvent]) -> Elements {
     element! {
         View {
             Text {
-                Span(text: "System", style: Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD))
+                Span(text: " System ", style: Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD).add_modifier(Modifier::REVERSED))
             }
             #(for event in events {
                 #(match event {
