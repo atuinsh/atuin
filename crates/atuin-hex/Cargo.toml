@@ -13,9 +13,9 @@ repository = { workspace = true }
 [dependencies]
 clap = { workspace = true }
 
-[target.'cfg(all(unix, not(target_os = "illumos")))'.dependencies]
+# [target.'cfg(all(unix, not(target_os = "illumos")))'.dependencies]
 crossterm = { workspace = true }
 eyre = { workspace = true }
-portable-pty = "0.8"
+portable-pty = "0.9"
 signal-hook = "0.3"
 vt100 = { workspace = true }

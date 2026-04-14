@@ -151,15 +151,15 @@ end
     }
 }
 
-#[cfg(any(not(unix), target_os = "illumos"))]
+#[cfg(not(unix))]
 mod app {
     pub(crate) fn main() {
-        eprintln!("atuin hex currently supports unix platforms excluding illumos");
+        eprintln!("atuin hex currently supports unix platforms");
         std::process::exit(1);
     }
 }
 
-#[cfg(all(unix, not(target_os = "illumos")))]
+#[cfg(unix)]
 mod app {
     use std::io::{Read, Write};
     use std::os::unix::net::UnixListener;
