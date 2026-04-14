@@ -130,143 +130,6 @@ impl Conversation {
         }
     }
 
-    /// Convert conversation events to Claude API message format
-    pub fn events_to_messages(&self) -> Vec<serde_json::Value> {
-        let mut messages = Vec::new();
-        let mut i = 0;
-        let events = &self.events;
-
-        while i < events.len() {
-            match &events[i] {
-                ConversationEvent::UserMessage { content } => {
-                    messages.push(serde_json::json!({
-                        "role": "user",
-                        "content": content
-                    }));
-                    i += 1;
-                }
-                ConversationEvent::Text { content } if content.is_empty() => {
-                    // Skip empty text events (e.g. streaming buffer before
-                    // any data arrived).
-                    i += 1;
-                }
-                ConversationEvent::Text { content } => {
-                    // Check if the next event(s) are ToolCalls — if so, combine
-                    // into a single assistant message with mixed content blocks.
-                    let next_is_tool_call = events
-                        .get(i + 1)
-                        .is_some_and(|e| matches!(e, ConversationEvent::ToolCall { .. }));
-
-                    if next_is_tool_call {
-                        let mut content_blocks = Vec::new();
-
-                        if !content.is_empty() {
-                            content_blocks.push(serde_json::json!({
-                                "type": "text",
-                                "text": content
-                            }));
-                        }
-
-                        while let Some(ConversationEvent::ToolCall {
-                            id, name, input, ..
-                        }) = events.get(i + 1)
-                        {
-                            content_blocks.push(serde_json::json!({
-                                "type": "tool_use",
-                                "id": id,
-                                "name": name,
-                                "input": input
-                            }));
-                            i += 1;
-                        }
-
-                        messages.push(serde_json::json!({
-                            "role": "assistant",
-                            "content": content_blocks
-                        }));
-                        i += 1;
-                    } else {
-                        messages.push(serde_json::json!({
-                            "role": "assistant",
-                            "content": content
-                        }));
-                        i += 1;
-                    }
-                }
-                ConversationEvent::ToolCall { .. } => {
-                    // ToolCalls without preceding Text (shouldn't normally happen,
-                    // but handle defensively)
-                    let mut tool_uses = Vec::new();
-                    while i < events.len() {
-                        if let ConversationEvent::ToolCall {
-                            id, name, input, ..
-                        } = &events[i]
-                        {
-                            tool_uses.push(serde_json::json!({
-                                "type": "tool_use",
-                                "id": id,
-                                "name": name,
-                                "input": input
-                            }));
-                            i += 1;
-                        } else {
-                            break;
-                        }
-                    }
-                    messages.push(serde_json::json!({
-                        "role": "assistant",
-                        "content": tool_uses
-                    }));
-                }
-                ConversationEvent::ToolResult {
-                    tool_use_id,
-                    content,
-                    is_error,
-                    remote,
-                    content_length,
-                } => {
-                    let tool_result = if *remote {
-                        let mut obj = serde_json::json!({
-                            "type": "tool_result",
-                            "tool_use_id": tool_use_id,
-                            "remote": true,
-                            "is_error": is_error
-                        });
-                        if let Some(len) = content_length {
-                            obj["content_length"] = serde_json::json!(len);
-                        }
-                        obj
-                    } else {
-                        serde_json::json!({
-                            "type": "tool_result",
-                            "tool_use_id": tool_use_id,
-                            "content": content,
-                            "is_error": is_error
-                        })
-                    };
-                    messages.push(serde_json::json!({
-                        "role": "user",
-                        "content": [tool_result]
-                    }));
-                    i += 1;
-                }
-                ConversationEvent::OutOfBandOutput { .. } => {
-                    // Out-of-band output is not sent to the server
-                    i += 1;
-                }
-                ConversationEvent::SystemContext { content } => {
-                    messages.push(serde_json::json!({
-                        "role": "user",
-                        "content": content
-                    }));
-                    i += 1;
-                }
-            }
-        }
-
-        messages
-    }
-
     /// Get the most recent command from events
     pub fn current_command(&self) -> Option<&str> {
         self.events.iter().rev().find_map(|e| e.as_command())
@@ -399,6 +262,146 @@ impl Conversation {
             }),
         }
     }
+}
+
+/// Convert a slice of conversation events to Claude API message format.
+///
+/// This is the canonical conversion used by both `Conversation::events_to_messages()`
+/// and the context window builder. The logic handles combining adjacent Text + ToolCall
+/// events into single assistant messages with mixed content blocks.
+pub(crate) fn events_to_messages(events: &[ConversationEvent]) -> Vec<serde_json::Value> {
+    let mut messages = Vec::new();
+    let mut i = 0;
+
+    while i < events.len() {
+        match &events[i] {
+            ConversationEvent::UserMessage { content } => {
+                messages.push(serde_json::json!({
+                    "role": "user",
+                    "content": content
+                }));
+                i += 1;
+            }
+            ConversationEvent::Text { content } if content.is_empty() => {
+                // Skip empty text events (e.g. streaming buffer before
+                // any data arrived).
+                i += 1;
+            }
+            ConversationEvent::Text { content } => {
+                // Check if the next event(s) are ToolCalls — if so, combine
+                // into a single assistant message with mixed content blocks.
+                let next_is_tool_call = events
+                    .get(i + 1)
+                    .is_some_and(|e| matches!(e, ConversationEvent::ToolCall { .. }));
+
+                if next_is_tool_call {
+                    let mut content_blocks = Vec::new();
+
+                    if !content.is_empty() {
+                        content_blocks.push(serde_json::json!({
+                            "type": "text",
+                            "text": content
+                        }));
+                    }
+
+                    while let Some(ConversationEvent::ToolCall {
+                        id, name, input, ..
+                    }) = events.get(i + 1)
+                    {
+                        content_blocks.push(serde_json::json!({
+                            "type": "tool_use",
+                            "id": id,
+                            "name": name,
+                            "input": input
+                        }));
+                        i += 1;
+                    }
+
+                    messages.push(serde_json::json!({
+                        "role": "assistant",
+                        "content": content_blocks
+                    }));
+                    i += 1;
+                } else {
+                    messages.push(serde_json::json!({
+                        "role": "assistant",
+                        "content": content
+                    }));
+                    i += 1;
+                }
+            }
+            ConversationEvent::ToolCall { .. } => {
+                // ToolCalls without preceding Text (shouldn't normally happen,
+                // but handle defensively)
+                let mut tool_uses = Vec::new();
+                while i < events.len() {
+                    if let ConversationEvent::ToolCall {
+                        id, name, input, ..
+                    } = &events[i]
+                    {
+                        tool_uses.push(serde_json::json!({
+                            "type": "tool_use",
+                            "id": id,
+                            "name": name,
+                            "input": input
+                        }));
+                        i += 1;
+                    } else {
+                        break;
+                    }
+                }
+                messages.push(serde_json::json!({
+                    "role": "assistant",
+                    "content": tool_uses
+                }));
+            }
+            ConversationEvent::ToolResult {
+                tool_use_id,
+                content,
+                is_error,
+                remote,
+                content_length,
+            } => {
+                let tool_result = if *remote {
+                    let mut obj = serde_json::json!({
+                        "type": "tool_result",
+                        "tool_use_id": tool_use_id,
+                        "remote": true,
+                        "is_error": is_error
+                    });
+                    if let Some(len) = content_length {
+                        obj["content_length"] = serde_json::json!(len);
+                    }
+                    obj
+                } else {
+                    serde_json::json!({
+                        "type": "tool_result",
+                        "tool_use_id": tool_use_id,
+                        "content": content,
+                        "is_error": is_error
+                    })
+                };
+                messages.push(serde_json::json!({
+                    "role": "user",
+                    "content": [tool_result]
+                }));
+                i += 1;
+            }
+            ConversationEvent::OutOfBandOutput { .. } => {
+                // Out-of-band output is not sent to the server
+                i += 1;
+            }
+            ConversationEvent::SystemContext { content } => {
+                messages.push(serde_json::json!({
+                    "role": "user",
+                    "content": content
+                }));
+                i += 1;
+            }
+        }
+    }
+
+    messages
 }
 
 /// Ephemeral UI/presentation state

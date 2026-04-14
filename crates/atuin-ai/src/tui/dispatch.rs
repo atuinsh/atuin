@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::mpsc;
 
 use crate::context::{AppContext, ClientContext};
+use crate::context_window::ContextWindowBuilder;
 use crate::permissions::check::PermissionResponse;
 use crate::permissions::resolver::PermissionResolver;
 use crate::permissions::rule::Rule;
@@ -109,7 +110,8 @@ fn launch_stream(
     handle.update(move |state| {
         (setup)(state);
         state.start_streaming();
-        let messages = state.conversation.events_to_messages();
+        let messages =
+            ContextWindowBuilder::with_default_budget().build(&state.conversation.events);
         let sid = state.conversation.session_id.clone();
         let request = ChatRequest::new(messages, sid, &caps, state.invocation_id.clone());
         let task: JoinHandle<()> = tokio::spawn(async move {
