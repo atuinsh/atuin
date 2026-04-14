@@ -17,6 +17,9 @@ COPY . .
 RUN cargo build --release --bin atuin-server
 
 FROM debian:bookworm-20260202-slim AS runtime
+LABEL org.opencontainers.image.source="https://github.com/atuinsh/atuin" \
+  org.opencontainers.image.url="https://atuin.sh" \
+  org.opencontainers.image.licenses="MIT"
 
 RUN useradd -c 'atuin user' atuin && mkdir /config && chown atuin:atuin /config
 # Install ca-certificates for webhooks to work
