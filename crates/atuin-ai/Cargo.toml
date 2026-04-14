@@ -17,6 +17,7 @@ default = []
 tree-sitter = ["dep:tree-sitter-lib", "dep:tree-sitter-bash", "dep:tree-sitter-fish"]
 
 [dependencies]
+async-trait = { workspace = true }
 atuin-client = { workspace = true }
 atuin-common = { workspace = true }
 tokio = { workspace = true }
@@ -36,6 +37,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 crossterm = { workspace = true, features = ["use-dev-tty", "event-stream"] }
 ratatui = { workspace = true }
+fs-err = { workspace = true }
 futures = "0.3"
 eventsource-stream = "0.2"
 pulldown-cmark = "0.13.0"
@@ -43,7 +45,7 @@ async-stream = "0.3"
 uuid = { workspace = true }
 tui-textarea-2 = "0.10.2"
 unicode-width = "0.2"
-eye_declare = "0.4"
+eye_declare = "0.4.2"
 ratatui-core = "0.1"
 ratatui-widgets = "0.3"
 thiserror = { workspace = true }
@@ -55,8 +57,11 @@ toml_edit = { workspace = true }
 tree-sitter-lib = { package = "tree-sitter", version = "0.26.8", optional = true }
 tree-sitter-bash = { version = "0.25.1", optional = true }
 tree-sitter-fish = { version = "3.6.0", optional = true }
+sqlx = { workspace = true, features = ["sqlite"] }
 typed-builder = { workspace = true }
 vt100 = { workspace = true }
+chrono = "0.4"
+chrono-humanize = "0.2"
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

@@ -2,14 +2,16 @@ use std::path::PathBuf;
 use std::sync::mpsc;
 
 use crate::context::{AppContext, ClientContext};
+use crate::context_window::ContextWindowBuilder;
 use crate::permissions::check::PermissionResponse;
 use crate::permissions::resolver::PermissionResolver;
 use crate::permissions::rule::Rule;
 use crate::permissions::writer::{self, RuleDisposition};
+use crate::session::SessionManager;
 use crate::stream::{ChatRequest, run_chat_stream};
 use crate::tools::{ClientToolCall, ToolPhase};
 use crate::tui::events::{AiTuiEvent, PermissionResult};
-use crate::tui::state::{ExitAction, Session};
+use crate::tui::state::{ConversationEvent, ExitAction, Session};
 use eye_declare::Handle;
 use tokio::task::JoinHandle;
 
@@ -19,6 +21,7 @@ pub(crate) fn dispatch(
     tx: &mpsc::Sender<AiTuiEvent>,
     app_ctx: &AppContext,
     client_ctx: &ClientContext,
+    session_mgr: &mut SessionManager,
 ) {
     match event {
         AiTuiEvent::ContinueAfterTools => {
@@ -28,7 +31,7 @@ pub(crate) fn dispatch(
             on_input_updated(handle, input);
         }
         AiTuiEvent::SubmitInput(input) => {
-            on_submit_input(handle, tx, app_ctx, client_ctx, input);
+            on_submit_input(handle, tx, app_ctx, client_ctx, input, session_mgr);
         }
         AiTuiEvent::SlashCommand(cmd) => {
             on_slash_command(handle, cmd);
@@ -61,6 +64,35 @@ pub(crate) fn dispatch(
             on_exit(handle);
         }
     }
+
+    // Persist any new conversation events after each dispatch cycle.
+    persist_session(handle, session_mgr);
+}
+
+/// Persist new events and the server session ID if it has changed.
+/// Called from the dispatch thread (sync), bridges to async via the tokio handle.
+fn persist_session(handle: &Handle<Session>, session_mgr: &mut SessionManager) {
+    let Ok((events, server_sid)) = handle
+        .fetch(|state| {
+            (
+                state.conversation.events.clone(),
+                state.conversation.session_id.clone(),
+            )
+        })
+        .blocking_recv()
+    else {
+        return;
+    };
+
+    let rt = tokio::runtime::Handle::current();
+    if let Err(e) = rt.block_on(session_mgr.persist_events(&events)) {
+        tracing::warn!("failed to persist session events: {e}");
+    }
+    if let Some(ref sid) = server_sid
+        && let Err(e) = rt.block_on(session_mgr.persist_server_session_id(sid))
+    {
+        tracing::warn!("failed to persist server session ID: {e}");
+    }
 }
 
 fn launch_stream(
@@ -78,9 +110,10 @@ fn launch_stream(
     handle.update(move |state| {
         (setup)(state);
         state.start_streaming();
-        let messages = state.conversation.events_to_messages();
+        let messages =
+            ContextWindowBuilder::with_default_budget().build(&state.conversation.events);
         let sid = state.conversation.session_id.clone();
-        let request = ChatRequest::new(messages, sid, &caps);
+        let request = ChatRequest::new(messages, sid, &caps, state.invocation_id.clone());
         let task: JoinHandle<()> = tokio::spawn(async move {
             run_chat_stream(h2, tx2, app, cc, request).await;
         });
@@ -98,10 +131,30 @@ fn on_continue_after_tools(
 }
 
 fn on_input_updated(handle: &Handle<Session>, input: String) {
-    let input_blank = input.trim().is_empty();
+    let input_blank = input.is_empty();
+    let slash_command = if input.starts_with('/') {
+        Some(input.trim_start_matches('/').to_string())
+    } else {
+        None
+    };
 
     handle.update(move |state| {
         state.interaction.is_input_blank = input_blank;
+        state.interaction.slash_command_input = slash_command;
+
+        if let Some(query) = state.interaction.slash_command_input.as_ref() {
+            let mut results = state.slash_registry.search_fuzzy(query);
+
+            results.sort_by(|a, b| {
+                b.relevance
+                    .partial_cmp(&a.relevance)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+
+            state.interaction.slash_command_search_results = results;
+        } else {
+            state.interaction.slash_command_search_results.clear();
+        }
     });
 }
 
@@ -111,7 +164,13 @@ fn on_submit_input(
     app_ctx: &AppContext,
     client_ctx: &ClientContext,
     input: String,
+    session_mgr: &mut SessionManager,
 ) {
+    handle.update(move |state| {
+        state.interaction.slash_command_input = None;
+        state.interaction.slash_command_search_results.clear();
+    });
+
     let input = input.trim().to_string();
     if input.is_empty() {
         let h2 = handle.clone();
@@ -129,9 +188,15 @@ fn on_submit_input(
     }
 
     if input.starts_with('/') {
-        handle.update(move |state| {
-            state.conversation.handle_slash_command(&input);
-        });
+        if input.trim() == "/new" {
+            on_new_session(handle, session_mgr);
+        } else {
+            handle.update(move |state| {
+                state
+                    .conversation
+                    .handle_slash_command(&input, &state.slash_registry);
+            });
+        }
         return;
     }
 
@@ -144,7 +209,9 @@ fn on_submit_input(
 
 fn on_slash_command(handle: &Handle<Session>, command: String) {
     handle.update(move |state| {
-        state.conversation.handle_slash_command(&command);
+        state
+            .conversation
+            .handle_slash_command(&command, &state.slash_registry);
     });
 }
 
@@ -530,6 +597,38 @@ fn on_retry(
 ) {
     launch_stream(handle, tx, app_ctx, client_ctx, |state| {
         state.retry();
+    });
+}
+
+fn on_new_session(handle: &Handle<Session>, session_mgr: &mut SessionManager) {
+    let rt = tokio::runtime::Handle::current();
+
+    if let Err(e) = rt.block_on(session_mgr.archive_and_reset()) {
+        tracing::warn!("failed to start new session: {e}");
+        return;
+    }
+
+    handle.update(|state| {
+        // Move the current invocation's visible events to the archived view
+        // so they remain on screen but are no longer sent to the API.
+        let visible_events: Vec<ConversationEvent> =
+            state.conversation.events[state.view_start_index..].to_vec();
+        state.archived_view_events.extend(visible_events);
+
+        state.conversation.events.clear();
+        state.conversation.session_id = None;
+        state.tool_tracker = crate::tools::ToolTracker::new();
+        state.view_start_index = 0;
+        state.is_resumed = false;
+        state.last_event_time = None;
+        state
+            .conversation
+            .events
+            .push(ConversationEvent::OutOfBandOutput {
+                name: "System".to_string(),
+                command: Some("/new".to_string()),
+                content: "Started a new session.".to_string(),
+            });
     });
 }
 

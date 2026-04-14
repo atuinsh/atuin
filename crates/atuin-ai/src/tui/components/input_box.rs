@@ -19,7 +19,7 @@ use ratatui_core::{
 };
 use tui_textarea::TextArea;
 
-use crate::tui::events::AiTuiEvent;
+use crate::tui::{events::AiTuiEvent, slash::SlashCommandSearchResult};
 
 /// A bordered text input box backed by tui-textarea.
 ///
@@ -35,6 +35,8 @@ pub(crate) struct InputBox {
     pub footer: String,
     /// Whether the input is currently active (shows cursor, accepts input)
     pub active: bool,
+    /// If the user has typed a slash command, this holds the best match for it.
+    pub slash_suggestion: Option<SlashCommandSearchResult>,
 }
 
 pub(crate) struct InputBoxState {
@@ -128,6 +130,18 @@ fn input_box(
                 {
                     textarea.insert_newline();
                     return EventResult::Consumed;
+                }
+                crossterm::event::KeyCode::Tab if props.slash_suggestion.is_some() => {
+                    // If there's a slash command suggestion, Tab accepts it.
+                    if let Some(suggestion) = &props.slash_suggestion {
+                        textarea.clear();
+                        textarea.insert_str(format!("/{}", suggestion.command.name));
+                        // Manually trigger an input update event so the slash suggestion box can update immediately
+                        if let Some(ref tx) = state.tx {
+                            let _ = tx.send(AiTuiEvent::InputUpdated(textarea.lines().join("\n")));
+                        }
+                        return EventResult::Consumed;
+                    }
                 }
                 crossterm::event::KeyCode::Enter => {
                     if key.modifiers.contains(KeyModifiers::SHIFT) {

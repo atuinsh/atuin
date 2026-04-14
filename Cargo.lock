@@ -271,14 +271,18 @@ name = "atuin-ai"
 version = "18.14.1"
 dependencies = [
  "async-stream",
+ "async-trait",
  "atuin-client",
  "atuin-common",
+ "chrono",
+ "chrono-humanize",
  "clap",
  "crossterm",
  "directories",
  "eventsource-stream",
  "eye_declare",
  "eyre",
+ "fs-err",
  "futures",
  "glob-match",
  "pretty_assertions",
@@ -290,6 +294,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "sqlx",
  "tempfile",
  "thiserror 2.0.18",
  "time",
@@ -823,9 +828,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c673075a2e0e5f4a1dde27ce9dee1ea4558c7ffe648f576438a20ca1d2acc4b0"
 dependencies = [
  "iana-time-zone",
+ "js-sys",
  "num-traits",
  "serde",
+ "wasm-bindgen",
  "windows-link",
+]
+
+[[package]]
+name = "chrono-humanize"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "799627e6b4d27827a814e837b9d8a504832086081806d45b1afa34dc982b023b"
+dependencies = [
+ "chrono",
 ]
 
 [[package]]
@@ -1516,9 +1532,9 @@ dependencies = [
 
 [[package]]
 name = "eye_declare"
-version = "0.4.0"
+version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9abe8051754adccf30ac4a0d54ce083a645fee7d4fc6c78d9d9770821bad45d"
+checksum = "cd705fa26778c4cd8cd93f08b76986495601e5fc7039ff0f80499d0f1398ca62"
 dependencies = [
  "crossterm",
  "eye_declare_macros",
@@ -1532,9 +1548,9 @@ dependencies = [
 
 [[package]]
 name = "eye_declare_macros"
-version = "0.4.0"
+version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "39251ef16365f347032ab2344ad806f64d59f29fb171b4bafd05595fbda2604d"
+checksum = "ae446305ea9f3f4679bd632a43e69eed48ba5484d5d692882a4c43e4666fe25d"
 dependencies = [
  "proc-macro2",
  "quote",

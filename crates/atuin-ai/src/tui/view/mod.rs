@@ -8,6 +8,7 @@ use ratatui_core::style::{Color, Modifier, Style};
 
 use crate::tools::{ClientToolCall, TrackedTool};
 use crate::tui::components::select::SelectOption;
+use crate::tui::components::session_continue::SessionContinue;
 use crate::tui::events::{AiTuiEvent, PermissionResult};
 
 use super::components::atuin_ai::AtuinAi;
@@ -29,7 +30,10 @@ mod turn;
 pub(crate) fn ai_view(state: &Session) -> Elements {
     let mut turn_builder = turn::TurnBuilder::new(&state.tool_tracker);
 
-    for event in &state.conversation.events {
+    for event in &state.archived_view_events {
+        turn_builder.add_event(event);
+    }
+    for event in &state.conversation.events[state.view_start_index..] {
         turn_builder.add_event(event);
     }
     let turns = turn_builder.build();
@@ -46,6 +50,10 @@ pub(crate) fn ai_view(state: &Session) -> Elements {
             pending_confirmation: state.interaction.confirmation_pending,
             has_executing_preview: state.tool_tracker.has_executing_preview(),
         ) {
+            #(if state.is_resumed && (!state.is_exiting() || !turns.is_empty()) {
+                SessionContinue(key: "continuation-notice", continued_at: state.last_event_time)
+            })
+
             #(for (index, turn) in turns.iter().enumerate() {
                 #(match turn {
                     turn::UiTurn::User { events } => {
@@ -70,6 +78,13 @@ pub(crate) fn ai_view(state: &Session) -> Elements {
 fn input_view(state: &Session) -> Elements {
     let asking_tool = state.tool_tracker.asking_for_permission();
     let in_git_project = state.in_git_project;
+    let slash_results = state
+        .interaction
+        .slash_command_search_results
+        .iter()
+        .take(4)
+        .collect::<Vec<_>>();
+    let first_slash_result = slash_results.first().cloned();
 
     element! {
         #(if let Some(tc) = asking_tool {
@@ -84,6 +99,7 @@ fn input_view(state: &Session) -> Elements {
                     title_right: "Atuin AI",
                     footer: state.footer_text(),
                     active: state.interaction.mode == AppMode::Input && !state.interaction.confirmation_pending,
+                    slash_suggestion: first_slash_result.cloned()
                 )
 
                 #(if state.interaction.is_input_blank && state.conversation.has_any_command() && state.interaction.mode == AppMode::Input {
@@ -91,6 +107,23 @@ fn input_view(state: &Session) -> Elements {
                         Text { Span(text: "[Enter] Confirm dangerous command  [Esc] Cancel", style: Style::default().fg(Color::Gray)) }
                     } else {
                         Text { Span(text: "[Enter] Execute suggested command  [Tab] Insert Command", style: Style::default().fg(Color::Gray)) }
+                    })
+                })
+
+                #(if !slash_results.is_empty() {
+                    #(for (i, result) in slash_results.iter().enumerate() {
+                        Text {
+                            Span(text: format!("/{}", &result.command.name[..result.span.0]), style: Style::default().fg(Color::Blue))
+                            Span(text: &result.command.name[result.span.0..result.span.1], style: Style::default().fg(Color::Blue).add_modifier(Modifier::UNDERLINED))
+                            Span(text: format!("{}", &result.command.name[result.span.1..]), style: Style::default().fg(Color::Blue))
+                            Span(text: " - ")
+                            Span(text: &result.command.description)
+
+                            #(if i == 0 {
+                                Span(text: " [Tab] Insert", style: Style::default().fg(Color::Gray).add_modifier(Modifier::ITALIC).dim())
+                            })
+                        }
+
                     })
                 })
             }
@@ -270,7 +303,7 @@ fn out_of_band_turn_view(events: &[turn::UiEvent]) -> Elements {
     element! {
         View {
             Text {
-                Span(text: "System", style: Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD))
+                Span(text: " System ", style: Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD).add_modifier(Modifier::REVERSED))
             }
             #(for event in events {
                 #(match event {
