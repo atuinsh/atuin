@@ -12,12 +12,15 @@ use eye_declare::Handle;
 use eyre::{Context, Result};
 use futures::StreamExt;
 use reqwest::Url;
+use reqwest::header::USER_AGENT;
 
 use crate::{
     context::{AppContext, ClientContext},
     tools::ClientToolCall,
     tui::{Session, events::AiTuiEvent},
 };
+
+static APP_USER_AGENT: &str = concat!("atuin/", env!("CARGO_PKG_VERSION"));
 
 /// Frames that alter the stream lifecycle — terminal or state-changing.
 #[derive(Debug, Clone)]
@@ -127,6 +130,7 @@ fn create_chat_stream(
         let response = match client
             .post(endpoint.clone())
             .header("Accept", "text/event-stream")
+            .header(USER_AGENT, APP_USER_AGENT)
             .bearer_auth(&token)
             .json(&request_body)
             .send()
