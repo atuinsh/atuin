@@ -145,6 +145,11 @@ impl Conversation {
                     }));
                     i += 1;
                 }
+                ConversationEvent::Text { content } if content.is_empty() => {
+                    // Skip empty text events (e.g. streaming buffer before
+                    // any data arrived).
+                    i += 1;
+                }
                 ConversationEvent::Text { content } => {
                     // Check if the next event(s) are ToolCalls — if so, combine
                     // into a single assistant message with mixed content blocks.
@@ -513,11 +518,10 @@ impl Session {
     // ===== Streaming lifecycle methods =====
 
     /// Start streaming response.
-    /// Pushes an empty Text event that will be mutated in-place as chunks arrive.
+    /// The Text event for streamed content is created lazily by
+    /// `append_streaming_text` when the first chunk arrives, so we
+    /// don't leave an empty assistant turn in the conversation.
     pub fn start_streaming(&mut self) {
-        self.conversation.events.push(ConversationEvent::Text {
-            content: String::new(),
-        });
         self.interaction.streaming_status = None;
         self.interaction.was_interrupted = false;
         self.interaction.mode = AppMode::Streaming;
