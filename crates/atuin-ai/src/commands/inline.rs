@@ -175,7 +175,7 @@ async fn run_inline_tui(
         .find_resumable(cwd.as_deref(), git_root_str.as_deref(), max_age_secs)
         .await?;
 
-    let (session_mgr, initial_state) = if let Some(stored) = resumable {
+    let (mut session_mgr, initial_state) = if let Some(stored) = resumable {
         debug!(session_id = %stored.id, "resuming AI session");
         let (mgr, events, server_sid, last_event_ts, invocation_id) =
             SessionManager::resume(Box::new(service), &stored).await?;
@@ -240,21 +240,17 @@ async fn run_inline_tui(
     // via block_on. It signals exit via an AtomicBool rather than querying the handle
     // (which would hang if the TUI thread has already stopped processing).
     let h = handle.clone();
-    let exiting = dispatch::exit_flag();
     let dispatch_handle = tokio::task::spawn_blocking(move || {
-        let tx = tx.clone();
-        let client_ctx = client_ctx;
-        let mut session_mgr = session_mgr;
+        let mut dctx = dispatch::DispatchContext {
+            handle: &h,
+            tx: &tx,
+            app_ctx: &ctx,
+            client_ctx: &client_ctx,
+            session_mgr: &mut session_mgr,
+            exiting: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        };
         while let Ok(event) = rx.recv() {
-            if !dispatch::dispatch(
-                &h,
-                event,
-                &tx,
-                &ctx,
-                &client_ctx,
-                &mut session_mgr,
-                &exiting,
-            ) {
+            if !dispatch::dispatch(&mut dctx, event) {
                 break;
             }
         }
