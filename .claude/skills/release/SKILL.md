@@ -151,22 +151,31 @@ Show the PR URL to the user.
 
 Start a **persistent Monitor** that polls the PR status every 30 seconds.
 The monitor script must:
-- Emit on **every** terminal state (`MERGED`, `CLOSED`), not just success
-- Include CI check summary in each poll so the user sees progress
+- **Only emit output** on meaningful state changes: all checks green, PR
+  merged, or PR closed. Silent polls keep the monitor quiet and avoid
+  flooding notifications.
 - Handle transient API errors gracefully (don't crash on a single failure)
 - Exit 0 on `MERGED`, exit 1 on `CLOSED`
 
 Example monitor script (substitute the actual PR number):
 ```bash
+checks_passed=false
 while true; do
-  json=$(gh pr view PR_NUM --repo atuinsh/atuin --json state,statusCheckRollup 2>/dev/null) || { echo "API error, retrying..."; sleep 30; continue; }
+  json=$(gh pr view PR_NUM --repo atuinsh/atuin --json state,statusCheckRollup 2>/dev/null) || { sleep 30; continue; }
   state=$(echo "$json" | jq -r '.state')
   case "$state" in
     MERGED) echo "PR #PR_NUM has been merged!"; exit 0 ;;
     CLOSED) echo "PR #PR_NUM was closed without merging."; exit 1 ;;
   esac
-  checks=$(echo "$json" | jq -r '[.statusCheckRollup[]? | .conclusion // .status] | group_by(.) | map("\(.[0]): \(length)") | join(", ")' 2>/dev/null)
-  echo "PR #PR_NUM is $state — checks: ${checks:-pending}"
+  # Only notify once when all checks go green
+  if [ "$checks_passed" = false ]; then
+    total=$(echo "$json" | jq '[.statusCheckRollup[]?] | length' 2>/dev/null)
+    success=$(echo "$json" | jq '[.statusCheckRollup[]? | select(.conclusion == "SUCCESS")] | length' 2>/dev/null)
+    if [ "$total" -gt 0 ] 2>/dev/null && [ "$total" = "$success" ]; then
+      echo "All $total checks passed on PR #PR_NUM — ready to merge!"
+      checks_passed=true
+    fi
+  fi
   sleep 30
 done
 ```
