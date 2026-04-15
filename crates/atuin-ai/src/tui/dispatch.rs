@@ -1,4 +1,6 @@
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 
 use crate::context::{AppContext, ClientContext};
@@ -15,6 +17,15 @@ use crate::tui::state::{ConversationEvent, ExitAction, Session};
 use eye_declare::Handle;
 use tokio::task::JoinHandle;
 
+/// Shared flag set by any handler that calls `h.exit()`. Read by
+/// `dispatch()` to know when to break the loop — without round-tripping
+/// through the handle, which would hang if the TUI has already stopped.
+pub(crate) fn exit_flag() -> Arc<AtomicBool> {
+    Arc::new(AtomicBool::new(false))
+}
+
+/// Dispatch a single event. Returns `true` to keep the loop running,
+/// `false` to shut down (after the final persist has completed).
 pub(crate) fn dispatch(
     handle: &Handle<Session>,
     event: AiTuiEvent,
@@ -22,7 +33,8 @@ pub(crate) fn dispatch(
     app_ctx: &AppContext,
     client_ctx: &ClientContext,
     session_mgr: &mut SessionManager,
-) {
+    exiting: &Arc<AtomicBool>,
+) -> bool {
     match event {
         AiTuiEvent::ContinueAfterTools => {
             on_continue_after_tools(handle, tx, app_ctx, client_ctx);
@@ -31,7 +43,7 @@ pub(crate) fn dispatch(
             on_input_updated(handle, input);
         }
         AiTuiEvent::SubmitInput(input) => {
-            on_submit_input(handle, tx, app_ctx, client_ctx, input, session_mgr);
+            on_submit_input(handle, tx, app_ctx, client_ctx, input, session_mgr, exiting);
         }
         AiTuiEvent::SlashCommand(cmd) => {
             on_slash_command(handle, cmd);
@@ -46,7 +58,7 @@ pub(crate) fn dispatch(
             on_cancel_generation(handle);
         }
         AiTuiEvent::ExecuteCommand => {
-            on_execute_command(handle);
+            on_execute_command(handle, exiting);
         }
         AiTuiEvent::CancelConfirmation => {
             on_cancel_confirmation(handle);
@@ -55,18 +67,24 @@ pub(crate) fn dispatch(
             on_interrupt_tool_execution(handle);
         }
         AiTuiEvent::InsertCommand => {
-            on_insert_command(handle);
+            on_insert_command(handle, exiting);
         }
         AiTuiEvent::Retry => {
             on_retry(handle, tx, app_ctx, client_ctx);
         }
         AiTuiEvent::Exit => {
-            on_exit(handle);
+            on_exit(handle, exiting);
         }
     }
 
     // Persist any new conversation events after each dispatch cycle.
     persist_session(handle, session_mgr);
+
+    // The exiting flag is set by any handler that calls h.exit(). We
+    // read it here rather than querying state through the handle,
+    // because the TUI thread may have already stopped processing
+    // handle requests by this point.
+    !exiting.load(Ordering::Acquire)
 }
 
 /// Persist new events and the server session ID if it has changed.
@@ -84,14 +102,7 @@ fn persist_session(handle: &Handle<Session>, session_mgr: &mut SessionManager) {
         return;
     };
 
-    // try_current() instead of current(): the dispatch thread outlives the
-    // TUI event loop, so on exit the tokio runtime may already be tearing
-    // down. Gracefully skip rather than panic; data is persisted earlier
-    // in the turn, so no data is lost.
-    let Ok(rt) = tokio::runtime::Handle::try_current() else {
-        tracing::debug!("tokio runtime gone, skipping session persist");
-        return;
-    };
+    let rt = tokio::runtime::Handle::current();
     if let Err(e) = rt.block_on(session_mgr.persist_events(&events)) {
         tracing::warn!("failed to persist session events: {e}");
     }
@@ -172,6 +183,7 @@ fn on_submit_input(
     client_ctx: &ClientContext,
     input: String,
     session_mgr: &mut SessionManager,
+    exiting: &Arc<AtomicBool>,
 ) {
     handle.update(move |state| {
         state.interaction.slash_command_input = None;
@@ -181,6 +193,7 @@ fn on_submit_input(
     let input = input.trim().to_string();
     if input.is_empty() {
         let h2 = handle.clone();
+        let exiting = exiting.clone();
         handle.update(move |state| {
             if state.conversation.has_any_command() {
                 state.exit_action = Some(ExitAction::Execute(
@@ -189,6 +202,7 @@ fn on_submit_input(
             } else {
                 state.exit_action = Some(ExitAction::Cancel);
             }
+            exiting.store(true, Ordering::Release);
             h2.exit();
         });
         return;
@@ -560,8 +574,9 @@ fn on_cancel_generation(handle: &Handle<Session>) {
     });
 }
 
-fn on_execute_command(handle: &Handle<Session>) {
+fn on_execute_command(handle: &Handle<Session>, exiting: &Arc<AtomicBool>) {
     let h2 = handle.clone();
+    let exiting = exiting.clone();
     handle.update(move |state| {
         let cmd = state.conversation.current_command().map(|c| c.to_string());
         if let Some(cmd) = cmd {
@@ -572,6 +587,7 @@ fn on_execute_command(handle: &Handle<Session>) {
             } else {
                 state.interaction.confirmation_pending = false;
                 state.exit_action = Some(ExitAction::Execute(cmd));
+                exiting.store(true, Ordering::Release);
                 h2.exit();
             }
         }
@@ -584,13 +600,15 @@ fn on_cancel_confirmation(handle: &Handle<Session>) {
     });
 }
 
-fn on_insert_command(handle: &Handle<Session>) {
+fn on_insert_command(handle: &Handle<Session>, exiting: &Arc<AtomicBool>) {
     let h2 = handle.clone();
+    let exiting = exiting.clone();
     handle.update(move |state| {
         let cmd = state.conversation.current_command().map(|c| c.to_string());
         if let Some(cmd) = cmd {
             state.interaction.confirmation_pending = false;
             state.exit_action = Some(ExitAction::Insert(cmd));
+            exiting.store(true, Ordering::Release);
             h2.exit();
         }
     });
@@ -608,13 +626,7 @@ fn on_retry(
 }
 
 fn on_new_session(handle: &Handle<Session>, session_mgr: &mut SessionManager) {
-    // See comment in persist_session — runtime may be gone on exit,
-    // so shut down gracefully by skipping rather than panicking. No data is
-    // lost since we persist at the start of the turn before dispatch.
-    let Ok(rt) = tokio::runtime::Handle::try_current() else {
-        tracing::debug!("tokio runtime gone, skipping new session");
-        return;
-    };
+    let rt = tokio::runtime::Handle::current();
 
     if let Err(e) = rt.block_on(session_mgr.archive_and_reset()) {
         tracing::warn!("failed to start new session: {e}");
@@ -645,13 +657,15 @@ fn on_new_session(handle: &Handle<Session>, session_mgr: &mut SessionManager) {
     });
 }
 
-fn on_exit(handle: &Handle<Session>) {
+fn on_exit(handle: &Handle<Session>, exiting: &Arc<AtomicBool>) {
     let h2 = handle.clone();
+    let exiting = exiting.clone();
     handle.update(move |state| {
         if let Some(abort) = state.stream_abort.take() {
             abort.abort();
         }
         state.exit_action = Some(ExitAction::Cancel);
+        exiting.store(true, Ordering::Release);
         h2.exit();
     });
 }

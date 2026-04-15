@@ -236,17 +236,36 @@ async fn run_inline_tui(
         .build()?;
 
     // Event loop: receives AiTuiEvent from components, mutates state via Handle.
+    // The dispatch thread processes events synchronously, including async persistence
+    // via block_on. It signals exit via an AtomicBool rather than querying the handle
+    // (which would hang if the TUI thread has already stopped processing).
     let h = handle.clone();
-    tokio::task::spawn_blocking(move || {
+    let exiting = dispatch::exit_flag();
+    let dispatch_handle = tokio::task::spawn_blocking(move || {
         let tx = tx.clone();
         let client_ctx = client_ctx;
         let mut session_mgr = session_mgr;
         while let Ok(event) = rx.recv() {
-            dispatch::dispatch(&h, event, &tx, &ctx, &client_ctx, &mut session_mgr);
+            if !dispatch::dispatch(
+                &h,
+                event,
+                &tx,
+                &ctx,
+                &client_ctx,
+                &mut session_mgr,
+                &exiting,
+            ) {
+                break;
+            }
         }
     });
 
     app.run_loop().await?;
+
+    // Wait for the dispatch thread to finish its final persist before the
+    // tokio runtime tears down. This prevents panics from block_on calls
+    // racing with runtime shutdown.
+    let _ = dispatch_handle.await;
 
     // Map exit action to return value
     let result = match app.state().exit_action {
