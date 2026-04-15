@@ -23,7 +23,7 @@ pub(crate) struct ToolDescriptor {
 
 pub(crate) const READ: &ToolDescriptor = &ToolDescriptor {
     canonical_names: &["read_file"],
-    capability: Some("client_v1_read"),
+    capability: Some("client_v1_read_file"),
     display_verb: "read",
     progressive_verb: "Reading file...",
     past_verb: "Read file",
