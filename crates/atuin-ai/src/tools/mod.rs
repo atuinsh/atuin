@@ -614,6 +614,27 @@ const PREVIEW_HEIGHT: u16 = 10;
 /// Default terminal width for VT100 emulation.
 const PREVIEW_WIDTH: u16 = 120;
 
+/// Normalize newlines for VT100 processing.
+///
+/// When subprocess output is captured via pipes (no PTY), bare `\n` (LF) bytes
+/// are not translated to `\r\n` (CR+LF) the way a kernel terminal driver would
+/// with the `ONLCR` flag. In VT100, LF only moves the cursor down without
+/// returning to column 0. This causes lines to start at progressively higher
+/// column offsets and eventually wrap, producing garbled output.
+///
+/// This function inserts `\r` before any `\n` that isn't already preceded by
+/// `\r`, mimicking the terminal driver's ONLCR behavior.
+fn normalize_newlines_for_vt100(data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(data.len() + data.len() / 8);
+    for (i, &b) in data.iter().enumerate() {
+        if b == b'\n' && (i == 0 || data[i - 1] != b'\r') {
+            out.push(b'\r');
+        }
+        out.push(b);
+    }
+    out
+}
+
 /// Extract plain text lines from a VT100 screen buffer.
 fn vt100_screen_lines(screen: &vt100::Screen) -> Vec<String> {
     let (rows, cols) = screen.size();
@@ -640,12 +661,14 @@ fn strip_ansi_via_vt100(raw: &[u8]) -> String {
     if raw.is_empty() {
         return String::new();
     }
+    // Normalize bare LF to CR+LF so lines start at column 0 in the VT100 screen.
+    let normalized = normalize_newlines_for_vt100(raw);
     // Use the contents_formatted → screen approach: feed bytes into a parser
     // with enough rows to hold everything, then read back the plain text.
     // Estimate rows: one row per ~PREVIEW_WIDTH bytes, plus generous padding.
-    let estimated_rows = (raw.len() / PREVIEW_WIDTH as usize + 1).min(10_000) as u16;
+    let estimated_rows = (normalized.len() / PREVIEW_WIDTH as usize + 1).min(10_000) as u16;
     let mut parser = vt100::Parser::new(estimated_rows, PREVIEW_WIDTH, 0);
-    parser.process(raw);
+    parser.process(&normalized);
     let screen = parser.screen();
     // screen.contents() returns the full plain-text content with trailing
     // whitespace trimmed per line and trailing blank lines removed.
@@ -727,7 +750,8 @@ pub(crate) async fn execute_shell_command_streaming(
                     Ok(0) => stdout_done = true,
                     Ok(n) => {
                         full_stdout.extend_from_slice(&stdout_buf[..n]);
-                        parser.process(&stdout_buf[..n]);
+                        let normalized = normalize_newlines_for_vt100(&stdout_buf[..n]);
+                        parser.process(&normalized);
                     }
                     Err(_) => stdout_done = true,
                 }
@@ -740,7 +764,8 @@ pub(crate) async fn execute_shell_command_streaming(
                     Ok(n) => {
                         full_stderr.extend_from_slice(&stderr_buf[..n]);
                         // Feed stderr to the preview parser too, so it shows in the VT100 screen
-                        parser.process(&stderr_buf[..n]);
+                        let normalized = normalize_newlines_for_vt100(&stderr_buf[..n]);
+                        parser.process(&normalized);
                     }
                     Err(_) => stderr_done = true,
                 }
