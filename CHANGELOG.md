@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## 18.15.1
+
+### Bug Fixes
+
+- Enter runs suggested command when selecting permissions ([#3418](https://github.com/atuinsh/atuin/issues/3418))
+
 ## 18.15.0
 
 ### Bug Fixes
