@@ -84,6 +84,10 @@ fn persist_session(handle: &Handle<Session>, session_mgr: &mut SessionManager) {
         return;
     };
 
+    // try_current() instead of current(): the dispatch thread outlives the
+    // TUI event loop, so on exit the tokio runtime may already be tearing
+    // down. Gracefully skip rather than panic; data is persisted earlier
+    // in the turn, so no data is lost.
     let Ok(rt) = tokio::runtime::Handle::try_current() else {
         tracing::debug!("tokio runtime gone, skipping session persist");
         return;
@@ -604,6 +608,9 @@ fn on_retry(
 }
 
 fn on_new_session(handle: &Handle<Session>, session_mgr: &mut SessionManager) {
+    // See comment in persist_session — runtime may be gone on exit,
+    // so shut down gracefully by skipping rather than panicking. No data is
+    // lost since we persist at the start of the turn before dispatch.
     let Ok(rt) = tokio::runtime::Handle::try_current() else {
         tracing::debug!("tokio runtime gone, skipping new session");
         return;
