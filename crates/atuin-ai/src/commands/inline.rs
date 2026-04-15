@@ -256,12 +256,14 @@ async fn run_inline_tui(
         }
     });
 
-    app.run_loop().await?;
+    let run_result = app.run_loop().await;
 
     // Wait for the dispatch thread to finish its final persist before the
     // tokio runtime tears down. This prevents panics from block_on calls
-    // racing with runtime shutdown.
+    // racing with runtime shutdown — including on the error path.
     let _ = dispatch_handle.await;
+
+    run_result?;
 
     // Map exit action to return value
     let result = match app.state().exit_action {
