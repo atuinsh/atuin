@@ -525,10 +525,14 @@ impl Session {
     // ===== Streaming lifecycle methods =====
 
     /// Start streaming response.
-    /// The Text event for streamed content is created lazily by
-    /// `append_streaming_text` when the first chunk arrives, so we
-    /// don't leave an empty assistant turn in the conversation.
+    /// Pushes an empty Text event so the UI immediately creates an agent
+    /// turn (which renders the spinner). The empty event is skipped by
+    /// `events_to_messages` so it never becomes an empty assistant turn
+    /// in the API payload.
     pub fn start_streaming(&mut self) {
+        self.conversation.events.push(ConversationEvent::Text {
+            content: String::new(),
+        });
         self.interaction.streaming_status = None;
         self.interaction.was_interrupted = false;
         self.interaction.mode = AppMode::Streaming;

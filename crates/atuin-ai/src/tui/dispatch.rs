@@ -84,7 +84,10 @@ fn persist_session(handle: &Handle<Session>, session_mgr: &mut SessionManager) {
         return;
     };
 
-    let rt = tokio::runtime::Handle::current();
+    let Ok(rt) = tokio::runtime::Handle::try_current() else {
+        tracing::debug!("tokio runtime gone, skipping session persist");
+        return;
+    };
     if let Err(e) = rt.block_on(session_mgr.persist_events(&events)) {
         tracing::warn!("failed to persist session events: {e}");
     }
@@ -601,7 +604,10 @@ fn on_retry(
 }
 
 fn on_new_session(handle: &Handle<Session>, session_mgr: &mut SessionManager) {
-    let rt = tokio::runtime::Handle::current();
+    let Ok(rt) = tokio::runtime::Handle::try_current() else {
+        tracing::debug!("tokio runtime gone, skipping new session");
+        return;
+    };
 
     if let Err(e) = rt.block_on(session_mgr.archive_and_reset()) {
         tracing::warn!("failed to start new session: {e}");
