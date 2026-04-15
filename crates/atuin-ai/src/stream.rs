@@ -74,6 +74,16 @@ impl ChatRequest {
         if capabilities.enable_history_search.unwrap_or(true) {
             caps.push("client_v1_atuin_history".to_string());
         }
+        if capabilities.enable_file_read.unwrap_or(true) {
+            caps.push("client_v1_read_file".to_string());
+        }
+        if capabilities.enable_file_write.unwrap_or(true) {
+            // TODO: this should prob be cap per tool?
+            caps.push("client_v1_write_file".to_string());
+        }
+        if capabilities.enable_command_execution.unwrap_or(true) {
+            caps.push("client_v1_execute_shell_command".to_string());
+        }
         if let Ok(extra) = std::env::var("ATUIN_AI__ADDITIONAL_CAPS") {
             caps.extend(
                 extra

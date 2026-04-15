@@ -31,8 +31,8 @@ pub(crate) const READ: &ToolDescriptor = &ToolDescriptor {
 };
 
 pub(crate) const WRITE: &ToolDescriptor = &ToolDescriptor {
-    canonical_names: &["str_replace", "file_create", "file_insert"],
-    capability: Some("client_v1_write"),
+    canonical_names: &["write_file"],
+    capability: Some("client_v1_write_file"),
     display_verb: "write to",
     progressive_verb: "Writing file...",
     past_verb: "Wrote file",
@@ -41,7 +41,7 @@ pub(crate) const WRITE: &ToolDescriptor = &ToolDescriptor {
 
 pub(crate) const SHELL: &ToolDescriptor = &ToolDescriptor {
     canonical_names: &["execute_shell_command"],
-    capability: Some("client_v1_shell"),
+    capability: Some("client_v1_execute_shell_command"),
     display_verb: "run",
     progressive_verb: "Running command...",
     past_verb: "Ran command",

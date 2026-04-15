@@ -687,6 +687,12 @@ pub struct Ai {
 pub struct AiCapabilities {
     /// Whether the AI can request to search Atuin history. `None` = unset (defaults to enabled, and the ai will ask for permission).
     pub enable_history_search: Option<bool>,
+    /// Whether the AI can request to read files. `None` = unset (defaults to enabled, and the ai will ask for permission).
+    pub enable_file_read: Option<bool>,
+    /// Whether the AI can request to write to files. `None` = unset (defaults to enabled, and the ai will ask for permission).
+    pub enable_file_write: Option<bool>,
+    /// Whether the AI can request to execute bash commands. `None` = unset (defaults to enabled, and the ai will ask for permission).
+    pub enable_command_execution: Option<bool>,
 }
 
 #[derive(Default, Clone, Debug, Deserialize, Serialize)]
