@@ -1,5 +1,7 @@
+use std::path::PathBuf;
+
 use crate::tools::descriptor;
-use crate::tools::{ToolPreview, ToolTracker};
+use crate::tools::{ClientToolCall, ToolPreview, ToolTracker};
 use crate::tui::ConversationEvent;
 
 /// Server-sent danger level for a suggested command
@@ -87,13 +89,47 @@ pub(crate) enum UiEvent {
     OutOfBandOutput(OutOfBandOutputDetails),
 }
 
+/// Tool-type-specific data for rendering in the view layer.
+///
+/// Each variant carries the data a per-tool renderer component needs.
+/// Built by TurnBuilder from ToolTracker + ConversationEvent data.
+#[derive(Debug)]
+pub(crate) enum ToolRenderData {
+    /// Shell command with live/cached VT100 output preview.
+    Shell {
+        command: String,
+        preview: Option<ToolPreview>,
+    },
+    /// File read operation.
+    FileRead { path: PathBuf },
+    /// File write/create operation.
+    FileWrite { path: PathBuf },
+    /// Atuin history search.
+    HistorySearch { query: String },
+    /// Server-side tool — no client rendering data available.
+    Remote,
+}
+
+impl ToolRenderData {
+    pub(crate) fn is_remote(&self) -> bool {
+        matches!(self, ToolRenderData::Remote)
+    }
+
+    /// Extract the shell preview, if this is a Shell tool.
+    pub(crate) fn shell_preview(&self) -> Option<&ToolPreview> {
+        match self {
+            ToolRenderData::Shell { preview, .. } => preview.as_ref(),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct ToolCallDetails {
     pub(crate) tool_use_id: String,
     pub(crate) name: String,
     pub(crate) status: ToolResultStatus,
-    pub(crate) is_client: bool,
-    pub(crate) preview: Option<ToolPreview>,
+    pub(crate) render_data: ToolRenderData,
 }
 
 #[derive(Debug)]
@@ -187,7 +223,7 @@ impl<'a> TurnBuilder<'a> {
 
                 for event in events.drain(..) {
                     match event {
-                        UiEvent::ToolCall(details) if !details.is_client => {
+                        UiEvent::ToolCall(details) if details.render_data.is_remote() => {
                             pending_tools.push(details);
                         }
                         other => {
@@ -319,8 +355,7 @@ impl<'a> TurnBuilder<'a> {
     }
 
     fn add_tool_call(&mut self, id: &str, name: &str, _input: &serde_json::Value) {
-        let is_client = descriptor::by_name(name).is_some_and(|d| d.is_client);
-        let preview = self.tracker.preview_for(id);
+        let render_data = self.build_render_data(id, name);
 
         self.start_agent_turn();
         if let UiTurn::Agent { events } = self.turn_mut_unsafe() {
@@ -328,9 +363,36 @@ impl<'a> TurnBuilder<'a> {
                 tool_use_id: id.to_string(),
                 name: name.to_string(),
                 status: ToolResultStatus::Pending,
-                is_client,
-                preview,
+                render_data,
             }));
+        }
+    }
+
+    /// Build tool-type-specific render data from the ToolTracker.
+    ///
+    /// For client-side tools, the tracker holds the typed `ClientToolCall` and
+    /// any live/cached preview data. For server-side (or unknown) tools, we
+    /// fall back to `ToolRenderData::Remote`.
+    fn build_render_data(&self, id: &str, _name: &str) -> ToolRenderData {
+        if let Some(tracked) = self.tracker.get(id) {
+            match &tracked.tool {
+                ClientToolCall::Shell(shell) => ToolRenderData::Shell {
+                    command: shell.command.clone(),
+                    preview: tracked.preview(),
+                },
+                ClientToolCall::Read(read) => ToolRenderData::FileRead {
+                    path: read.path.clone(),
+                },
+                ClientToolCall::Write(write) => ToolRenderData::FileWrite {
+                    path: write.path.clone(),
+                },
+                ClientToolCall::AtuinHistory(history) => ToolRenderData::HistorySearch {
+                    query: history.query.clone(),
+                },
+            }
+        } else {
+            // Not in tracker → server-side tool
+            ToolRenderData::Remote
         }
     }
 

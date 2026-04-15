@@ -1,7 +1,7 @@
 //! View function that builds the eye-declare element tree from app state.
 
 use eye_declare::{
-    BorderType, Cells, Column, Elements, HStack, Span, Spinner, Text, View, Viewport,
+    BorderType, Cells, Column, Direction, Elements, HStack, Span, Spinner, Text, View, Viewport,
     WidthConstraint, element,
 };
 use ratatui_core::style::{Color, Modifier, Style};
@@ -247,44 +247,45 @@ fn agent_turn_view(events: &[turn::UiEvent], busy: bool) -> Elements {
                         suggested_command_view(details)
                     },
                     turn::UiEvent::ToolCall(details) => {
-                        let preview_done = details.preview.as_ref().is_some_and(|p| p.exit_code.is_some() || p.interrupted);
+                        let shell_preview = details.render_data.shell_preview();
+                        let preview_done = shell_preview.is_some_and(|p| p.exit_code.is_some() || p.interrupted);
                         let tool_key = details.tool_use_id.clone();
 
                         element! {
                             View(key: format!("tool-output-{tool_key}"), padding_left: Cells::from(2)) {
-                                #(if let Some(ref preview) = details.preview {
+                                #(if let Some(preview) = shell_preview {
                                     View(key: format!("preview-{tool_key}")) {
                                         #(preview_spinner_view(&details.name, preview_done))
-                                        Viewport(
-                                            key: format!("viewport-{tool_key}"),
-                                            lines: preview.lines.clone(),
-                                            height: 10,
-                                            border: BorderType::Plain,
-                                            border_style: Style::default().fg(Color::DarkGray),
-                                            style: Style::default().fg(Color::White),
-                                            wrap: false,
-                                        )
-                                        #(if let Some(code) = preview.exit_code {
-                                            #(if code == 0 {
+                                        View(padding_left: Cells::from(2)) {
+                                            Viewport(
+                                                key: format!("viewport-{tool_key}"),
+                                                lines: preview.lines.clone(),
+                                                height: 5,
+                                                style: Style::default().fg(Color::Gray),
+                                                wrap: false,
+                                            )
+                                            #(if let Some(code) = preview.exit_code {
+                                                #(if code == 0 {
+                                                    Text {
+                                                        Span(text: format!("Exit code: {code}"), style: Style::default().fg(Color::Green))
+                                                    }
+                                                } else {
+                                                    Text {
+                                                        Span(text: format!("Exit code: {code}"), style: Style::default().fg(Color::Red))
+                                                    }
+                                                })
+                                            })
+                                            #(if preview.interrupted {
                                                 Text {
-                                                    Span(text: format!("Exit code: {code}"), style: Style::default().fg(Color::Green))
-                                                }
-                                            } else {
-                                                Text {
-                                                    Span(text: format!("Exit code: {code}"), style: Style::default().fg(Color::Red))
+                                                    Span(text: "Interrupted", style: Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
                                                 }
                                             })
-                                        })
-                                        #(if preview.interrupted {
-                                            Text {
-                                                Span(text: "Interrupted", style: Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
-                                            }
-                                        })
-                                        #(if !preview_done {
-                                            Text {
-                                                Span(text: "[Ctrl+C] Interrupt", style: Style::default().fg(Color::DarkGray))
-                                            }
-                                        })
+                                            #(if !preview_done {
+                                                Text {
+                                                    Span(text: "[Ctrl+C] Interrupt", style: Style::default().fg(Color::DarkGray))
+                                                }
+                                            })
+                                        }
                                     }
                                 } else {
                                     #(tool_status_view(&details.name, &details.status))

@@ -295,9 +295,6 @@ impl ToolTracker {
     }
 
     /// Get the preview for a tool by ID (live or cached).
-    pub fn preview_for(&self, id: &str) -> Option<ToolPreview> {
-        self.get(id)?.preview()
-    }
 
     /// Iterate mutably over all tracked tools.
     pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut TrackedTool> {
