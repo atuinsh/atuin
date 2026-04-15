@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## 18.15.0
+
+### Bug Fixes
+
+- Install script incorrectly tries to install opencode hooks ([#3410](https://github.com/atuinsh/atuin/issues/3410))
+- Dependency fix ([#3414](https://github.com/atuinsh/atuin/issues/3414))
+- Loss of loading spinners + tokio panic on exit ([#3415](https://github.com/atuinsh/atuin/issues/3415))
+
+
+### Features
+
+- Add OCI standard labels to Dockerfile ([#3412](https://github.com/atuinsh/atuin/issues/3412))
+- Enable atuin hex for illumos ([#3413](https://github.com/atuinsh/atuin/issues/3413))
+- Allow resuming previous AI sessions ([#3407](https://github.com/atuinsh/atuin/issues/3407))
+
+
+### Miscellaneous Tasks
+
+- Add release script ([#3411](https://github.com/atuinsh/atuin/issues/3411))
+
 ## 18.14.1
 
 ### Bug Fixes
