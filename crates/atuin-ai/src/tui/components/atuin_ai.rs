@@ -1,8 +1,9 @@
 //! Top-level AtuinAi component that translates key events into AiTuiEvents.
 //!
-//! This component wraps the entire view and handles key events that bubble up
-//! from child components (or aren't consumed by them). It maps raw key events
-//! to semantic `AiTuiEvent` variants based on the current `AppMode`.
+//! Global shortcuts (Ctrl+C, Esc) are handled in the capture phase so they
+//! fire regardless of which child is focused. Contextual shortcuts (Enter,
+//! Tab) are handled in the bubble phase so child components like the
+//! permission Select can consume them first.
 
 use std::sync::mpsc;
 
@@ -41,6 +42,7 @@ fn atuin_ai(
         state.tx = tx.cloned();
     });
 
+    // Capture phase: global shortcuts that must fire regardless of child focus.
     hooks.use_event_capture(move |event, props, state| {
         let Event::Key(KeyEvent {
             code,
@@ -66,28 +68,53 @@ fn atuin_ai(
             return EventResult::Consumed;
         }
 
-        match props.mode {
-            AppMode::Input => match code {
-                KeyCode::Esc => {
+        // Esc — always handled at the top level
+        if *code == KeyCode::Esc {
+            match props.mode {
+                AppMode::Input => {
                     if props.has_executing_preview {
                         let _ = tx.send(AiTuiEvent::InterruptToolExecution);
-                        return EventResult::Consumed;
-                    }
-
-                    if props.pending_confirmation {
+                    } else if props.pending_confirmation {
                         let _ = tx.send(AiTuiEvent::CancelConfirmation);
-                        return EventResult::Consumed;
+                    } else {
+                        let _ = tx.send(AiTuiEvent::Exit);
                     }
-
-                    let _ = tx.send(AiTuiEvent::Exit);
-                    EventResult::Consumed
                 }
+                AppMode::Generating | AppMode::Streaming => {
+                    let _ = tx.send(AiTuiEvent::CancelGeneration);
+                }
+                AppMode::Error => {
+                    let _ = tx.send(AiTuiEvent::Exit);
+                }
+            }
+            return EventResult::Consumed;
+        }
+
+        EventResult::Ignored
+    });
+
+    // Bubble phase: contextual shortcuts that children (e.g. Select) may handle first.
+    hooks.use_event(move |event, props, state| {
+        let Event::Key(KeyEvent {
+            code,
+            kind: KeyEventKind::Press,
+            ..
+        }) = event
+        else {
+            return EventResult::Ignored;
+        };
+
+        let Some(ref tx) = state.read().tx else {
+            return EventResult::Ignored;
+        };
+
+        match props.mode {
+            AppMode::Input => match code {
                 KeyCode::Tab => {
                     if props.has_command && props.is_input_blank {
                         let _ = tx.send(AiTuiEvent::InsertCommand);
                         return EventResult::Consumed;
                     }
-
                     EventResult::Ignored
                 }
                 KeyCode::Enter => {
@@ -95,29 +122,18 @@ fn atuin_ai(
                         let _ = tx.send(AiTuiEvent::ExecuteCommand);
                         return EventResult::Consumed;
                     }
-
                     EventResult::Ignored
                 }
                 _ => EventResult::Ignored,
             },
-            AppMode::Generating | AppMode::Streaming => match code {
-                KeyCode::Esc => {
-                    let _ = tx.send(AiTuiEvent::CancelGeneration);
-                    EventResult::Consumed
-                }
-                _ => EventResult::Ignored,
-            },
             AppMode::Error => match code {
-                KeyCode::Esc => {
-                    let _ = tx.send(AiTuiEvent::Exit);
-                    EventResult::Consumed
-                }
                 KeyCode::Enter | KeyCode::Char('r') => {
                     let _ = tx.send(AiTuiEvent::Retry);
                     EventResult::Consumed
                 }
                 _ => EventResult::Ignored,
             },
+            _ => EventResult::Ignored,
         }
     });
 
