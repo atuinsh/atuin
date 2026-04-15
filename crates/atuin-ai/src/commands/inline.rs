@@ -175,7 +175,7 @@ async fn run_inline_tui(
         .find_resumable(cwd.as_deref(), git_root_str.as_deref(), max_age_secs)
         .await?;
 
-    let (session_mgr, initial_state) = if let Some(stored) = resumable {
+    let (mut session_mgr, initial_state) = if let Some(stored) = resumable {
         debug!(session_id = %stored.id, "resuming AI session");
         let (mgr, events, server_sid, last_event_ts, invocation_id) =
             SessionManager::resume(Box::new(service), &stored).await?;
@@ -236,17 +236,34 @@ async fn run_inline_tui(
         .build()?;
 
     // Event loop: receives AiTuiEvent from components, mutates state via Handle.
+    // The dispatch thread processes events synchronously, including async persistence
+    // via block_on. It signals exit via an AtomicBool rather than querying the handle
+    // (which would hang if the TUI thread has already stopped processing).
     let h = handle.clone();
-    tokio::task::spawn_blocking(move || {
-        let tx = tx.clone();
-        let client_ctx = client_ctx;
-        let mut session_mgr = session_mgr;
+    let dispatch_handle = tokio::task::spawn_blocking(move || {
+        let mut dctx = dispatch::DispatchContext {
+            handle: &h,
+            tx: &tx,
+            app_ctx: &ctx,
+            client_ctx: &client_ctx,
+            session_mgr: &mut session_mgr,
+            exiting: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        };
         while let Ok(event) = rx.recv() {
-            dispatch::dispatch(&h, event, &tx, &ctx, &client_ctx, &mut session_mgr);
+            if !dispatch::dispatch(&mut dctx, event) {
+                break;
+            }
         }
     });
 
-    app.run_loop().await?;
+    let run_result = app.run_loop().await;
+
+    // Wait for the dispatch thread to finish its final persist before the
+    // tokio runtime tears down. This prevents panics from block_on calls
+    // racing with runtime shutdown — including on the error path.
+    let _ = dispatch_handle.await;
+
+    run_result?;
 
     // Map exit action to return value
     let result = match app.state().exit_action {
