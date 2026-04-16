@@ -90,6 +90,16 @@ fn atuin_ai(
             return EventResult::Consumed;
         }
 
+        if *code == KeyCode::Tab
+            && matches!(props.mode, AppMode::Input)
+            && modifiers.contains(KeyModifiers::NONE)
+            && props.has_command
+            && props.is_input_blank
+        {
+            let _ = tx.send(AiTuiEvent::InsertCommand);
+            return EventResult::Consumed;
+        }
+
         EventResult::Ignored
     });
 
@@ -110,13 +120,6 @@ fn atuin_ai(
 
         match props.mode {
             AppMode::Input => match code {
-                KeyCode::Tab => {
-                    if props.has_command && props.is_input_blank {
-                        let _ = tx.send(AiTuiEvent::InsertCommand);
-                        return EventResult::Consumed;
-                    }
-                    EventResult::Ignored
-                }
                 KeyCode::Enter => {
                     if props.has_command && props.is_input_blank {
                         let _ = tx.send(AiTuiEvent::ExecuteCommand);
