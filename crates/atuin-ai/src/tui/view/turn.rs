@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use crate::tools::descriptor;
-use crate::tools::{ClientToolCall, ToolPreview, ToolTracker};
+use crate::tools::{ClientToolCall, HistorySearchFilterMode, ToolPreview, ToolTracker};
 use crate::tui::ConversationEvent;
 
 /// Server-sent danger level for a suggested command
@@ -82,11 +82,44 @@ impl From<(&String, &String)> for ConfidenceLevel {
 
 #[derive(Debug)]
 pub(crate) enum UiEvent {
-    Text { content: String },
+    Text {
+        content: String,
+    },
     ToolCall(ToolCallDetails),
+    /// Consecutive client-side tool calls of the same groupable kind, collapsed
+    /// into one unit so the view can render a shared status line + a list of
+    /// individual entries.
+    ToolGroup(ToolGroup),
     ToolSummary(ToolSummary),
     SuggestedCommand(SuggestedCommandDetails),
     OutOfBandOutput(OutOfBandOutputDetails),
+}
+
+/// A run of consecutive client-side tool calls of the same groupable kind.
+#[derive(Debug)]
+pub(crate) struct ToolGroup {
+    pub(crate) kind: ToolGroupKind,
+    pub(crate) calls: Vec<ToolCallDetails>,
+}
+
+impl ToolGroup {
+    /// True if any call in the group is still pending.
+    pub(crate) fn any_pending(&self) -> bool {
+        self.calls
+            .iter()
+            .any(|c| c.status == ToolResultStatus::Pending)
+    }
+}
+
+/// Which kind of client-side tools this group holds.
+///
+/// Only tool types that benefit from grouped presentation appear here.
+/// Shell (needs its own viewport) and FileWrite (wants diffs/contents) are
+/// intentionally absent — those render as individual `UiEvent::ToolCall`s.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub(crate) enum ToolGroupKind {
+    FileRead,
+    HistorySearch,
 }
 
 /// Tool-type-specific data for rendering in the view layer.
@@ -105,7 +138,10 @@ pub(crate) enum ToolRenderData {
     /// File write/create operation.
     FileWrite { path: PathBuf },
     /// Atuin history search.
-    HistorySearch { query: String },
+    HistorySearch {
+        query: String,
+        filter_modes: Vec<HistorySearchFilterMode>,
+    },
     /// Server-side tool — no client rendering data available.
     Remote,
 }
@@ -115,10 +151,14 @@ impl ToolRenderData {
         matches!(self, ToolRenderData::Remote)
     }
 
-    /// Extract the shell preview, if this is a Shell tool.
-    pub(crate) fn shell_preview(&self) -> Option<&ToolPreview> {
+    /// The group kind this tool should collapse into, if any.
+    ///
+    /// Returns `None` for tools that render as individual `UiEvent::ToolCall`s
+    /// (shell, file writes, remote).
+    pub(crate) fn group_kind(&self) -> Option<ToolGroupKind> {
         match self {
-            ToolRenderData::Shell { preview, .. } => preview.as_ref(),
+            ToolRenderData::FileRead { .. } => Some(ToolGroupKind::FileRead),
+            ToolRenderData::HistorySearch { .. } => Some(ToolGroupKind::HistorySearch),
             _ => None,
         }
     }
@@ -215,33 +255,49 @@ impl<'a> TurnBuilder<'a> {
     pub(crate) fn build(&mut self) -> Vec<UiTurn> {
         self.commit_turn();
 
-        // Collapse consecutive tool calls within each agent turn into ToolSummary
+        // Within each agent turn:
+        // - Consecutive remote tool calls collapse into a ToolSummary
+        // - Consecutive client-side tool calls of the same group kind collapse
+        //   into a ToolGroup (e.g. N file reads → one group)
+        // - All other events pass through unchanged
         for turn in &mut self.turns {
             if let UiTurn::Agent { events } = turn {
                 let mut new_events: Vec<UiEvent> = Vec::new();
-                let mut pending_tools: Vec<ToolCallDetails> = Vec::new();
+                let mut pending_remote: Vec<ToolCallDetails> = Vec::new();
+                let mut pending_group: Option<(ToolGroupKind, Vec<ToolCallDetails>)> = None;
 
                 for event in events.drain(..) {
                     match event {
                         UiEvent::ToolCall(details) if details.render_data.is_remote() => {
-                            pending_tools.push(details);
+                            flush_group(&mut pending_group, &mut new_events);
+                            pending_remote.push(details);
+                        }
+                        UiEvent::ToolCall(details)
+                            if details.render_data.group_kind().is_some() =>
+                        {
+                            flush_remote(&mut pending_remote, &mut new_events);
+
+                            let kind = details.render_data.group_kind().unwrap();
+                            match pending_group.as_mut() {
+                                Some((current_kind, calls)) if *current_kind == kind => {
+                                    calls.push(details);
+                                }
+                                _ => {
+                                    flush_group(&mut pending_group, &mut new_events);
+                                    pending_group = Some((kind, vec![details]));
+                                }
+                            }
                         }
                         other => {
-                            if !pending_tools.is_empty() {
-                                new_events.push(UiEvent::ToolSummary(ToolSummary {
-                                    tool_calls: std::mem::take(&mut pending_tools),
-                                }));
-                            }
+                            flush_remote(&mut pending_remote, &mut new_events);
+                            flush_group(&mut pending_group, &mut new_events);
                             new_events.push(other);
                         }
                     }
                 }
 
-                if !pending_tools.is_empty() {
-                    new_events.push(UiEvent::ToolSummary(ToolSummary {
-                        tool_calls: pending_tools,
-                    }));
-                }
+                flush_remote(&mut pending_remote, &mut new_events);
+                flush_group(&mut pending_group, &mut new_events);
 
                 *events = new_events;
             }
@@ -388,6 +444,7 @@ impl<'a> TurnBuilder<'a> {
                 },
                 ClientToolCall::AtuinHistory(history) => ToolRenderData::HistorySearch {
                     query: history.query.clone(),
+                    filter_modes: history.filter_modes.clone(),
                 },
             }
         } else {
@@ -423,6 +480,25 @@ impl<'a> TurnBuilder<'a> {
                 content: content.to_string(),
             }));
         }
+    }
+}
+
+/// Drain pending remote tool calls into a `ToolSummary`.
+fn flush_remote(pending: &mut Vec<ToolCallDetails>, out: &mut Vec<UiEvent>) {
+    if !pending.is_empty() {
+        out.push(UiEvent::ToolSummary(ToolSummary {
+            tool_calls: std::mem::take(pending),
+        }));
+    }
+}
+
+/// Drain a pending client-side tool group into a `ToolGroup`.
+fn flush_group(
+    pending: &mut Option<(ToolGroupKind, Vec<ToolCallDetails>)>,
+    out: &mut Vec<UiEvent>,
+) {
+    if let Some((kind, calls)) = pending.take() {
+        out.push(UiEvent::ToolGroup(ToolGroup { kind, calls }));
     }
 }
 

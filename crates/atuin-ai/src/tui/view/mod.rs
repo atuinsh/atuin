@@ -6,7 +6,7 @@ use eye_declare::{
 };
 use ratatui_core::style::{Color, Modifier, Style};
 
-use crate::tools::{ClientToolCall, TrackedTool};
+use crate::tools::{ClientToolCall, HistorySearchFilterMode, ToolPreview, TrackedTool};
 use crate::tui::components::select::SelectOption;
 use crate::tui::components::session_continue::SessionContinue;
 use crate::tui::events::{AiTuiEvent, PermissionResult};
@@ -247,48 +247,41 @@ fn agent_turn_view(events: &[turn::UiEvent], busy: bool) -> Elements {
                         suggested_command_view(details)
                     },
                     turn::UiEvent::ToolCall(details) => {
-                        let shell_preview = details.render_data.shell_preview();
-                        let preview_done = shell_preview.is_some_and(|p| p.exit_code.is_some() || p.interrupted);
                         let tool_key = details.tool_use_id.clone();
 
                         element! {
                             View(key: format!("tool-output-{tool_key}"), padding_left: Cells::from(2)) {
-                                #(if let Some(preview) = shell_preview {
-                                    View(key: format!("preview-{tool_key}")) {
-                                        #(preview_spinner_view(&details.name, preview_done))
-                                        View(padding_left: Cells::from(2)) {
-                                            Viewport(
-                                                key: format!("viewport-{tool_key}"),
-                                                lines: preview.lines.clone(),
-                                                height: 5,
-                                                style: Style::default().fg(Color::Gray),
-                                                wrap: false,
-                                            )
-                                            #(if let Some(code) = preview.exit_code {
-                                                #(if code == 0 {
-                                                    Text {
-                                                        Span(text: format!("Exit code: {code}"), style: Style::default().fg(Color::Green))
-                                                    }
-                                                } else {
-                                                    Text {
-                                                        Span(text: format!("Exit code: {code}"), style: Style::default().fg(Color::Red))
-                                                    }
-                                                })
-                                            })
-                                            #(if preview.interrupted {
-                                                Text {
-                                                    Span(text: "Interrupted", style: Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
-                                                }
-                                            })
-                                            #(if !preview_done {
-                                                Text {
-                                                    Span(text: "[Ctrl+C] Interrupt", style: Style::default().fg(Color::DarkGray))
-                                                }
-                                            })
-                                        }
-                                    }
-                                } else {
-                                    #(tool_status_view(&details.name, &details.status))
+                                #(match &details.render_data {
+                                    turn::ToolRenderData::Shell { command, preview } => {
+                                        shell_tool_view(&tool_key, command, preview.as_ref())
+                                    },
+                                    turn::ToolRenderData::FileWrite { path } => {
+                                        file_write_tool_view(&details.status, path)
+                                    },
+                                    turn::ToolRenderData::Remote => {
+                                        tool_status_view(&details.name, &details.status)
+                                    },
+                                    // FileRead and HistorySearch are always grouped —
+                                    // they arrive via UiEvent::ToolGroup, never here.
+                                    turn::ToolRenderData::FileRead { .. }
+                                    | turn::ToolRenderData::HistorySearch { .. } => {
+                                        element!{}
+                                    },
+                                })
+                            }
+                        }
+                    }
+                    turn::UiEvent::ToolGroup(group) => {
+                        let group_key = group.calls
+                            .first()
+                            .map(|c| c.tool_use_id.as_str())
+                            .unwrap_or("empty");
+
+                        element! {
+                            View(key: format!("group-{group_key}"), padding_left: Cells::from(2)) {
+                                #(match group.kind {
+                                    turn::ToolGroupKind::FileRead => file_read_group_view(group),
+                                    turn::ToolGroupKind::HistorySearch => history_search_group_view(group),
                                 })
                             }
                         }
@@ -368,15 +361,273 @@ fn tool_status_view(name: &str, status: &turn::ToolResultStatus) -> Elements {
     }
 }
 
-/// Render a spinner/status line for a command preview (shell tools).
-fn preview_spinner_view(name: &str, done: bool) -> Elements {
+// ───────────────────────────────────────────────────────────────────
+// Per-tool view functions
+// ───────────────────────────────────────────────────────────────────
+
+/// Render a shell command execution with live VT100 output viewport.
+fn shell_tool_view(tool_key: &str, command: &str, preview: Option<&ToolPreview>) -> Elements {
+    let preview_done = preview.is_some_and(|p| p.exit_code.is_some() || p.interrupted);
+
     element! {
-        Spinner(
-            label: if done { format!("Ran: {name}") } else { format!("Running: {name}") },
-            label_style: Style::default().fg(Color::Yellow),
-            done: done,
-        )
+        #(if let Some(preview) = preview {
+            View(key: format!("preview-{tool_key}")) {
+                Spinner(
+                    label: if preview_done { format!("Ran: {command}") } else { format!("Running: {command}") },
+                    label_style: Style::default().fg(Color::Yellow),
+                    done: preview_done,
+                )
+                View(padding_left: Cells::from(2)) {
+                    Viewport(
+                        key: format!("viewport-{tool_key}"),
+                        lines: preview.lines.clone(),
+                        height: 5,
+                        style: Style::default().fg(Color::Gray),
+                        wrap: false,
+                    )
+                    #(if let Some(code) = preview.exit_code {
+                        #(if code == 0 {
+                            Text {
+                                Span(text: format!("Exit code: {code}"), style: Style::default().fg(Color::Green))
+                            }
+                        } else {
+                            Text {
+                                Span(text: format!("Exit code: {code}"), style: Style::default().fg(Color::Red))
+                            }
+                        })
+                    })
+                    #(if preview.interrupted {
+                        Text {
+                            Span(text: "Interrupted", style: Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
+                        }
+                    })
+                    #(if !preview_done {
+                        Text {
+                            Span(text: "[Ctrl+C] Interrupt", style: Style::default().fg(Color::DarkGray))
+                        }
+                    })
+                }
+            }
+        } else {
+            Spinner(
+                label: format!("Running: {command}"),
+                label_style: Style::default().fg(Color::Yellow),
+                done: false,
+            )
+        })
     }
+}
+
+/// Render a file write tool call status with the target path.
+fn file_write_tool_view(status: &turn::ToolResultStatus, path: &std::path::Path) -> Elements {
+    let display_path = path.display();
+    match status {
+        turn::ToolResultStatus::Pending => {
+            element! {
+                Spinner(
+                    label: format!("Writing: {display_path}"),
+                    label_style: Style::default().fg(Color::Yellow),
+                    done: false,
+                )
+            }
+        }
+        turn::ToolResultStatus::Success => {
+            element! {
+                Spinner(label: format!("Wrote: {display_path}"), done: true)
+            }
+        }
+        turn::ToolResultStatus::Error => {
+            element! {
+                Text {
+                    Span(text: "✗ ", style: Style::default().fg(Color::Red))
+                    Span(text: format!("Write {display_path}: denied"), style: Style::default().fg(Color::Red))
+                }
+            }
+        }
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────
+// Tool group view functions
+// ───────────────────────────────────────────────────────────────────
+
+/// Max entries shown under a tool group header. When the group holds more
+/// than this, only the most recent `MAX_GROUP_ENTRIES` are displayed; the
+/// count in the header line tells the full story.
+const MAX_GROUP_ENTRIES: usize = 5;
+
+/// Format a filesystem path for display in tool rows.
+///
+/// - Relative to the current working directory if the path is under it
+/// - `~/...` prefix if the path is under the user's home directory
+/// - Absolute otherwise (and relative paths pass through unchanged)
+fn format_path_for_display(path: &std::path::Path) -> String {
+    if let Ok(cwd) = std::env::current_dir()
+        && let Ok(relative) = path.strip_prefix(&cwd)
+    {
+        return relative.display().to_string();
+    }
+
+    if let Ok(home) = std::env::var("HOME")
+        && let Ok(relative) = path.strip_prefix(&home)
+    {
+        return format!("~/{}", relative.display());
+    }
+
+    path.display().to_string()
+}
+
+fn filter_mode_label(mode: &HistorySearchFilterMode) -> &'static str {
+    match mode {
+        HistorySearchFilterMode::Global => "global",
+        HistorySearchFilterMode::Host => "host",
+        HistorySearchFilterMode::Session => "session",
+        HistorySearchFilterMode::Directory => "directory",
+        HistorySearchFilterMode::Workspace => "workspace",
+    }
+}
+
+/// Format a list of filter modes as `"(global, workspace)"`, or an empty
+/// string if the list is empty.
+fn format_filter_modes(modes: &[HistorySearchFilterMode]) -> String {
+    if modes.is_empty() {
+        return String::new();
+    }
+    let parts: Vec<&'static str> = modes.iter().map(filter_mode_label).collect();
+    format!("({})", parts.join(", "))
+}
+
+/// Tree-connector marker for a row in a grouped list: `└ ` for the first
+/// visible row, two spaces for subsequent rows.
+fn tree_marker(is_first: bool) -> &'static str {
+    if is_first { "└ " } else { "  " }
+}
+
+/// 2-char status marker column: ✓ / ✗ / blank.
+fn status_marker_view(status: &turn::ToolResultStatus) -> Elements {
+    match status {
+        turn::ToolResultStatus::Pending => element! {
+            Text { Span(text: "  ") }
+        },
+        turn::ToolResultStatus::Success => element! {
+            Text { Span(text: "✓ ", style: Style::default().fg(Color::Green)) }
+        },
+        turn::ToolResultStatus::Error => element! {
+            Text { Span(text: "✗ ", style: Style::default().fg(Color::Red)) }
+        },
+    }
+}
+
+/// Compute the slice of calls to show — the most recent `MAX_GROUP_ENTRIES`.
+fn visible_group_calls(group: &turn::ToolGroup) -> &[turn::ToolCallDetails] {
+    let start = group.calls.len().saturating_sub(MAX_GROUP_ENTRIES);
+    &group.calls[start..]
+}
+
+/// Render a single row in a grouped list: [tree marker][status][content].
+fn group_row_view(is_first: bool, status: &turn::ToolResultStatus, content: Elements) -> Elements {
+    element! {
+        HStack {
+            View(width: WidthConstraint::Fixed(2)) {
+                Text { Span(text: tree_marker(is_first)) }
+            }
+            View(width: WidthConstraint::Fixed(2)) {
+                #(status_marker_view(status))
+            }
+            Column {
+                #(content)
+            }
+        }
+    }
+}
+
+/// Render a group of consecutive `read_file` tool calls.
+fn file_read_group_view(group: &turn::ToolGroup) -> Elements {
+    let count = group.calls.len();
+    let label = if count == 1 {
+        "Read 1 file".to_string()
+    } else {
+        format!("Read {count} files")
+    };
+    let done = !group.any_pending();
+    let visible = visible_group_calls(group);
+
+    element! {
+        View {
+            Spinner(label: label, done: done, hide_checkmark: true)
+            #(for (i, details) in visible.iter().enumerate() {
+                #(file_read_row(i == 0, details))
+            })
+        }
+    }
+}
+
+fn file_read_row(is_first: bool, details: &turn::ToolCallDetails) -> Elements {
+    let path_str = match &details.render_data {
+        turn::ToolRenderData::FileRead { path } => format_path_for_display(path),
+        _ => String::new(),
+    };
+
+    let content = element! {
+        Text { Span(text: path_str) }
+    };
+
+    group_row_view(is_first, &details.status, content)
+}
+
+/// Render a group of consecutive `atuin_history` tool calls.
+fn history_search_group_view(group: &turn::ToolGroup) -> Elements {
+    let done = !group.any_pending();
+    let visible = visible_group_calls(group);
+
+    element! {
+        View {
+            Spinner(label: "Searched Atuin history:", done: done, hide_checkmark: true)
+            #(for (i, details) in visible.iter().enumerate() {
+                #(history_search_row(i == 0, details))
+            })
+        }
+    }
+}
+
+fn history_search_row(is_first: bool, details: &turn::ToolCallDetails) -> Elements {
+    let (query, filter_modes) = match &details.render_data {
+        turn::ToolRenderData::HistorySearch {
+            query,
+            filter_modes,
+        } => (query.as_str(), filter_modes.as_slice()),
+        _ => ("", [].as_slice()),
+    };
+
+    let is_empty_query = query.trim().is_empty();
+    let filter_label = format_filter_modes(filter_modes);
+
+    let content = if is_empty_query {
+        element! {
+            Text {
+                Span(
+                    text: "recent commands",
+                    style: Style::default().fg(Color::Gray).add_modifier(Modifier::ITALIC),
+                )
+                #(if !filter_label.is_empty() {
+                    Span(text: " ")
+                    Span(text: filter_label, style: Style::default().fg(Color::DarkGray))
+                })
+            }
+        }
+    } else {
+        element! {
+            Text {
+                Span(text: query.to_string())
+                #(if !filter_label.is_empty() {
+                    Span(text: " ")
+                    Span(text: filter_label, style: Style::default().fg(Color::DarkGray))
+                })
+            }
+        }
+    };
+
+    group_row_view(is_first, &details.status, content)
 }
 
 fn suggested_command_view(details: &turn::SuggestedCommandDetails) -> Elements {
