@@ -157,6 +157,14 @@ The monitor script must:
 - Handle transient API errors gracefully (don't crash on a single failure)
 - Exit 0 on `MERGED`, exit 1 on `CLOSED`
 
+The rollup mixes two entry shapes: `CheckRun` entries use `status` +
+`conclusion`, while `StatusContext` entries use `state`. A check counts
+as "passing" when it's in a terminal state with a non-failing outcome.
+Treat `SUCCESS`, `SKIPPED`, and `NEUTRAL` as passing — some release
+workflows (e.g. `announce`, `build-global-artifacts`) are conditional
+and report `SKIPPED` on non-tag events, which is expected, not a
+failure.
+
 Example monitor script (substitute the actual PR number):
 ```bash
 checks_passed=false
@@ -167,11 +175,27 @@ while true; do
     MERGED) echo "PR #PR_NUM has been merged!"; exit 0 ;;
     CLOSED) echo "PR #PR_NUM was closed without merging."; exit 1 ;;
   esac
-  # Only notify once when all checks go green
+  # Only notify once when all checks reach a terminal passing state.
+  # CheckRun entries carry `status`/`conclusion`; StatusContext entries
+  # carry `state`. SKIPPED and NEUTRAL count as passing.
   if [ "$checks_passed" = false ]; then
-    total=$(echo "$json" | jq '[.statusCheckRollup[]?] | length' 2>/dev/null)
-    success=$(echo "$json" | jq '[.statusCheckRollup[]? | select(.conclusion == "SUCCESS")] | length' 2>/dev/null)
-    if [ "$total" -gt 0 ] 2>/dev/null && [ "$total" = "$success" ]; then
+    counts=$(echo "$json" | jq -r '
+      [.statusCheckRollup[]?] as $all
+      | ($all | map(select(
+          (.status == "COMPLETED" and (.conclusion | IN("SUCCESS","SKIPPED","NEUTRAL")))
+          or .state == "SUCCESS"
+        )) | length) as $passing
+      | ($all | map(select(
+          (.status == "COMPLETED" and (.conclusion | IN("FAILURE","TIMED_OUT","CANCELLED","ACTION_REQUIRED","STALE")))
+          or (.state | IN("FAILURE","ERROR"))
+        )) | length) as $failing
+      | "\($all | length) \($passing) \($failing)"
+    ' 2>/dev/null)
+    read -r total passing failing <<<"$counts"
+    if [ "${failing:-0}" -gt 0 ] 2>/dev/null; then
+      echo "PR #PR_NUM has $failing failing check(s) — investigate before merging."
+      checks_passed=true  # don't re-notify
+    elif [ "${total:-0}" -gt 0 ] 2>/dev/null && [ "$total" = "$passing" ]; then
       echo "All $total checks passed on PR #PR_NUM — ready to merge!"
       checks_passed=true
     fi
