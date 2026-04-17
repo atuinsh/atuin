@@ -633,6 +633,12 @@ fn normalize_newlines_for_vt100(data: &[u8]) -> Vec<u8> {
 }
 
 /// Extract plain text lines from a VT100 screen buffer.
+///
+/// Strips trailing blank lines so the result only contains rows with actual
+/// content. Without this, the fixed-size VT100 screen (PREVIEW_HEIGHT rows)
+/// would always return that many lines, and downstream components that use
+/// tail-mode display (like the Viewport) would show the blank padding rows
+/// instead of the real output.
 fn vt100_screen_lines(screen: &vt100::Screen) -> Vec<String> {
     let (rows, cols) = screen.size();
     let mut lines = Vec::with_capacity(rows as usize);
@@ -643,8 +649,10 @@ fn vt100_screen_lines(screen: &vt100::Screen) -> Vec<String> {
                 line.push_str(cell.contents());
             }
         }
-        // Trim trailing whitespace for cleaner display
         lines.push(line.trim_end().to_string());
+    }
+    while lines.last().is_some_and(|l| l.is_empty()) {
+        lines.pop();
     }
     lines
 }
@@ -660,10 +668,13 @@ fn strip_ansi_via_vt100(raw: &[u8]) -> String {
     }
     // Normalize bare LF to CR+LF so lines start at column 0 in the VT100 screen.
     let normalized = normalize_newlines_for_vt100(raw);
-    // Use the contents_formatted → screen approach: feed bytes into a parser
-    // with enough rows to hold everything, then read back the plain text.
-    // Estimate rows: one row per ~PREVIEW_WIDTH bytes, plus generous padding.
-    let estimated_rows = (normalized.len() / PREVIEW_WIDTH as usize + 1).min(10_000) as u16;
+    // Feed bytes into a VT100 parser large enough to hold all output, then
+    // read back the plain text. We estimate rows from the number of newlines
+    // (not total byte length) because real output typically has short lines
+    // that would be severely under-counted by a bytes÷width estimate.
+    let newline_count = normalized.iter().filter(|&&b| b == b'\n').count();
+    let wrap_estimate = normalized.len() / PREVIEW_WIDTH as usize;
+    let estimated_rows = (newline_count + wrap_estimate + 1).min(10_000) as u16;
     let mut parser = vt100::Parser::new(estimated_rows, PREVIEW_WIDTH, 0);
     parser.process(&normalized);
     let screen = parser.screen();
