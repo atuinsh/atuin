@@ -59,6 +59,7 @@ tree-sitter-bash = { version = "0.25.1", optional = true }
 tree-sitter-fish = { version = "3.6.0", optional = true }
 sqlx = { workspace = true, features = ["sqlite"] }
 typed-builder = { workspace = true }
+shellexpand = { workspace = true }
 vt100 = { workspace = true }
 chrono = "0.4"
 chrono-humanize = "0.2"

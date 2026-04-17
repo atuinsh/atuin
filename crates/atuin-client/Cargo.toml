@@ -38,7 +38,7 @@ humantime = "2.1.0"
 async-trait = { workspace = true }
 itertools = { workspace = true }
 rand = { workspace = true }
-shellexpand = "3"
+shellexpand = { workspace = true }
 sqlx = { workspace = true, features = ["sqlite", "regexp"] }
 minspan = "0.1.5"
 regex = { workspace = true }

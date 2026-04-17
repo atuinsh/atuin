@@ -398,6 +398,14 @@ impl PermissableToolCall for ClientToolCall {
     }
 }
 
+/// Expand shell constructs (`~`, `$HOME`, etc.) in a path string.
+///
+/// Tool call paths arrive as raw strings from the API without shell
+/// expansion. Uses `shellexpand` (same as `atuin-client`).
+fn expand_path(path: &str) -> PathBuf {
+    PathBuf::from(shellexpand::tilde(path).into_owned())
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct ReadToolCall {
     pub path: PathBuf,
@@ -422,7 +430,7 @@ impl TryFrom<&serde_json::Value> for ReadToolCall {
             .min(MAX_FILE_READ_LINES);
 
         Ok(ReadToolCall {
-            path: PathBuf::from(path),
+            path: expand_path(path),
             offset,
             limit,
         })
@@ -529,7 +537,7 @@ impl TryFrom<&serde_json::Value> for WriteToolCall {
             .ok_or(eyre::eyre!("Missing content"))?;
 
         Ok(WriteToolCall {
-            path: PathBuf::from(path),
+            path: expand_path(path),
             content: content.to_string(),
         })
     }
@@ -577,7 +585,7 @@ impl TryFrom<&serde_json::Value> for ShellToolCall {
             .to_string();
 
         Ok(ShellToolCall {
-            dir: dir.map(PathBuf::from),
+            dir: dir.map(expand_path),
             command: command.to_string(),
             shell,
         })
@@ -1000,7 +1008,7 @@ mod tests {
 
     fn read_tool(path: &str) -> ReadToolCall {
         ReadToolCall {
-            path: PathBuf::from(path),
+            path: expand_path(path),
             offset: 0,
             limit: 100,
         }
@@ -1008,7 +1016,7 @@ mod tests {
 
     fn write_tool(path: &str) -> WriteToolCall {
         WriteToolCall {
-            path: PathBuf::from(path),
+            path: expand_path(path),
             content: String::new(),
         }
     }
