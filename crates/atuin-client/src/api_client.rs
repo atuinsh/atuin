@@ -257,6 +257,20 @@ impl<'a> Client<'a> {
         Ok(())
     }
 
+    /// Ask the server to replace the encrypted payload of existing records we own.
+    /// See the `repair` handler on the server side; this is the transport layer
+    /// for `atuin store repair`.
+    pub async fn repair_records(&self, records: &[Record<EncryptedData>]) -> Result<()> {
+        let url = self.sync_addr.append_path("api/v0/record/repair")?;
+
+        debug!("requesting repair of {} records at {url}", records.len());
+
+        let resp = self.client.post(url).json(records).send().await?;
+        handle_resp_error(resp).await?;
+
+        Ok(())
+    }
+
     pub async fn next_records(
         &self,
         host: HostId,
