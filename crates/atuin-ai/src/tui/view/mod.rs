@@ -68,6 +68,16 @@ pub(crate) fn ai_view(state: &Session) -> Elements {
                 })
             })
 
+            #({
+                let needs_pending_banner = busy && !matches!(turns.last(), Some(turn::UiTurn::Agent { .. }));
+                if needs_pending_banner {
+                    let empty: &[turn::UiEvent] = &[];
+                    agent_turn_view(empty, true)
+                } else {
+                    element! {}
+                }
+            })
+
             #(if !state.is_exiting() {
                 #(input_view(state))
             })
