@@ -135,7 +135,7 @@ impl SqliteStore {
     }
 
     #[instrument(level = "trace", skip_all, err)]
-    async fn load_all(&self) -> Result<Vec<Record<paseto_v4::EncryptedData>>> {
+    pub async fn load_all(&self) -> Result<Vec<Record<paseto_v4::EncryptedData>>> {
         let res =
             sqlx::query_as::<_, DbRecord>("select * from store ").fetch_all(&self.pool).await?;
 
