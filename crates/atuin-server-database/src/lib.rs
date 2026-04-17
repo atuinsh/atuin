@@ -118,6 +118,18 @@ pub trait Database: Sized + Clone + Send + Sync + 'static {
     async fn delete_store(&self, user: &User) -> DbResult<()>;
 
     async fn add_records(&self, user: &User, record: &[Record<EncryptedData>]) -> DbResult<()>;
+
+    /// Replace the encrypted payload of existing records that the user owns.
+    ///
+    /// Only the `data` and `cek` columns are updated - all other fields (id, host, idx,
+    /// timestamp, version, tag) are preserved, because PASETO implicit assertions are
+    /// bound to those fields and any change would break decryption.
+    ///
+    /// Records that do not exist, or are owned by another user, must be silently skipped.
+    /// This is the single code path that mutates existing rows in the record store -
+    /// callers should be aware it breaks append-only semantics by design.
+    async fn repair_records(&self, user: &User, records: &[Record<EncryptedData>]) -> DbResult<()>;
+
     async fn next_records(
         &self,
         user: &User,

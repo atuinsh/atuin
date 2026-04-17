@@ -135,6 +135,7 @@ pub fn router<DB: Database>(database: DB, settings: Settings) -> Router {
         .route("/api/v0/record", post(handlers::v0::record::post))
         .route("/api/v0/record", get(handlers::v0::record::index))
         .route("/api/v0/record/next", get(handlers::v0::record::next))
+        .route("/api/v0/record/repair", post(handlers::v0::record::repair))
         .route("/api/v0/store", delete(handlers::v0::store::delete));
 
     let path = settings.path.as_str();
