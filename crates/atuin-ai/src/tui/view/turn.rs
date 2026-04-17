@@ -177,7 +177,6 @@ pub(crate) struct SuggestedCommandDetails {
     pub(crate) command: String,
     pub(crate) danger_level: DangerLevel,
     pub(crate) confidence_level: ConfidenceLevel,
-    pub(crate) first_event_in_turn: bool,
 }
 
 #[derive(Debug)]
@@ -347,6 +346,9 @@ impl<'a> TurnBuilder<'a> {
     }
 
     fn add_agent_text(&mut self, content: &str) {
+        if content.trim().is_empty() {
+            return;
+        }
         self.start_agent_turn();
         if let UiTurn::Agent { events } = self.turn_mut_unsafe() {
             events.push(UiEvent::Text {
@@ -395,8 +397,6 @@ impl<'a> TurnBuilder<'a> {
             let danger = DangerLevel::from((&danger_level, &danger_notes));
             let confidence = ConfidenceLevel::from((&confidence_level, &confidence_notes));
 
-            let first_event_in_turn = events.is_empty();
-
             events.push(UiEvent::SuggestedCommand(SuggestedCommandDetails {
                 command: input
                     .get("command")
@@ -405,7 +405,6 @@ impl<'a> TurnBuilder<'a> {
                     .to_string(),
                 danger_level: danger,
                 confidence_level: confidence,
-                first_event_in_turn,
             }));
         }
     }

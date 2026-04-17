@@ -231,7 +231,10 @@ fn agent_turn_view(events: &[turn::UiEvent], busy: bool) -> Elements {
                 label_first: true,
                 done: !busy,
             )
-            #(for event in events {
+            #(for (i, event) in events.iter().enumerate() {
+                #(if i > 0 {
+                    Text { Span(text: "") }
+                })
                 #(match event {
                     turn::UiEvent::Text { content } => {
                         element! {
@@ -261,8 +264,6 @@ fn agent_turn_view(events: &[turn::UiEvent], busy: bool) -> Elements {
                                     turn::ToolRenderData::Remote => {
                                         tool_status_view(&details.name, &details.status)
                                     },
-                                    // FileRead and HistorySearch are always grouped —
-                                    // they arrive via UiEvent::ToolGroup, never here.
                                     turn::ToolRenderData::FileRead { .. }
                                     | turn::ToolRenderData::HistorySearch { .. } => {
                                         element!{}
@@ -365,6 +366,9 @@ fn tool_status_view(name: &str, status: &turn::ToolResultStatus) -> Elements {
 // Per-tool view functions
 // ───────────────────────────────────────────────────────────────────
 
+/// Max output lines shown for a shell command preview.
+const MAX_SHELL_PREVIEW_LINES: u16 = 5;
+
 /// Render a shell command execution with live VT100 output viewport.
 fn shell_tool_view(tool_key: &str, command: &str, preview: Option<&ToolPreview>) -> Elements {
     let preview_done = preview.is_some_and(|p| p.exit_code.is_some() || p.interrupted);
@@ -374,39 +378,24 @@ fn shell_tool_view(tool_key: &str, command: &str, preview: Option<&ToolPreview>)
             View(key: format!("preview-{tool_key}")) {
                 Spinner(
                     label: if preview_done { format!("Ran: {command}") } else { format!("Running: {command}") },
-                    label_style: Style::default().fg(Color::Yellow),
                     done: preview_done,
+                    hide_checkmark: true,
                 )
-                View(padding_left: Cells::from(2)) {
-                    Viewport(
-                        key: format!("viewport-{tool_key}"),
-                        lines: preview.lines.clone(),
-                        height: 5,
-                        style: Style::default().fg(Color::Gray),
-                        wrap: false,
-                    )
-                    #(if let Some(code) = preview.exit_code {
-                        #(if code == 0 {
-                            Text {
-                                Span(text: format!("Exit code: {code}"), style: Style::default().fg(Color::Green))
-                            }
-                        } else {
-                            Text {
-                                Span(text: format!("Exit code: {code}"), style: Style::default().fg(Color::Red))
-                            }
-                        })
-                    })
-                    #(if preview.interrupted {
-                        Text {
-                            Span(text: "Interrupted", style: Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
-                        }
-                    })
-                    #(if !preview_done {
-                        Text {
-                            Span(text: "[Ctrl+C] Interrupt", style: Style::default().fg(Color::DarkGray))
-                        }
-                    })
+                HStack {
+                    View(width: WidthConstraint::Fixed(2)) {
+                        Text { Span(text: "└ ") }
+                    }
+                    Column {
+                        Viewport(
+                            key: format!("viewport-{tool_key}"),
+                            lines: preview.lines.clone(),
+                            height: (preview.lines.len() as u16).clamp(1, MAX_SHELL_PREVIEW_LINES),
+                            style: Style::default().fg(Color::Gray),
+                            wrap: false,
+                        )
+                    }
                 }
+                #(shell_tool_footer(preview, preview_done))
             }
         } else {
             Spinner(
@@ -416,6 +405,34 @@ fn shell_tool_view(tool_key: &str, command: &str, preview: Option<&ToolPreview>)
             )
         })
     }
+}
+
+fn shell_tool_footer(preview: &ToolPreview, preview_done: bool) -> Elements {
+    if preview.interrupted {
+        return element! {
+            Text {
+                Span(text: "Interrupted", style: Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
+            }
+        };
+    }
+    if !preview_done {
+        return element! {
+            Text {
+                Span(text: "[Ctrl+C] Interrupt", style: Style::default().fg(Color::DarkGray))
+            }
+        };
+    }
+    if let Some(code) = preview.exit_code {
+        let style = if code == 0 {
+            Style::default().fg(Color::Green)
+        } else {
+            Style::default().fg(Color::Red)
+        };
+        return element! {
+            Text { Span(text: format!("Exit code: {code}"), style: style) }
+        };
+    }
+    element! {}
 }
 
 /// Render a file write tool call status with the target path.
@@ -553,12 +570,10 @@ fn file_read_group_view(group: &turn::ToolGroup) -> Elements {
     let visible = visible_group_calls(group);
 
     element! {
-        View {
-            Spinner(label: label, done: done, hide_checkmark: true)
-            #(for (i, details) in visible.iter().enumerate() {
-                #(file_read_row(i == 0, details))
-            })
-        }
+        Spinner(label: label, done: done, hide_checkmark: true)
+        #(for (i, details) in visible.iter().enumerate() {
+            #(file_read_row(i == 0, details))
+        })
     }
 }
 
@@ -581,12 +596,10 @@ fn history_search_group_view(group: &turn::ToolGroup) -> Elements {
     let visible = visible_group_calls(group);
 
     element! {
-        View {
-            Spinner(label: "Searched Atuin history:", done: done, hide_checkmark: true)
-            #(for (i, details) in visible.iter().enumerate() {
-                #(history_search_row(i == 0, details))
-            })
-        }
+        Spinner(label: "Searched Atuin history:", done: done, hide_checkmark: true)
+        #(for (i, details) in visible.iter().enumerate() {
+            #(history_search_row(i == 0, details))
+        })
     }
 }
 
@@ -665,9 +678,6 @@ fn suggested_command_view(details: &turn::SuggestedCommandDetails) -> Elements {
 
     element! {
         View {
-            #(if !details.first_event_in_turn {
-                Text { Span(text: "") }
-            })
             Text {
                 Span(text: "  Suggested command:", style: Style::default().fg(Color::Cyan))
             }
