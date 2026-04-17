@@ -267,7 +267,7 @@ fn print_fun_facts(wrapped_stats: &WrappedStats, stats: &Stats, year: i32) {
 
     // Time patterns
     if let Some((hour, count)) = &wrapped_stats.busiest_hour {
-        println!("\n🕘 Most Productive Hour: {bold}{hour}{reset} ({count} commands)",);
+        println!("\n🕘 Most Productive Hour: {bold}{hour}{reset} ({count} commands)");
 
         // Night owl or early bird
         let hour_num = hour

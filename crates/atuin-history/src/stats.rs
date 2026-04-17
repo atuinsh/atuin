@@ -79,25 +79,19 @@ fn split_at_pipe(command: &str) -> Vec<&str> {
     while let Some((i, c)) = graphemes.next() {
         let current = i;
         match c {
-            "\"" => {
-                if command[start..current] != *"\"" {
-                    quoted = !quoted;
-                }
+            "\"" if command[start..current] != *"\"" => {
+                quoted = !quoted;
             }
-            "'" => {
-                if command[start..current] != *"'" {
-                    quoted = !quoted;
-                }
+            "'" if command[start..current] != *"'" => {
+                quoted = !quoted;
             }
-            "\\" => if graphemes.next().is_some() {},
-            "|" => {
-                if !quoted {
-                    if current > start && command[start..].starts_with('|') {
-                        start += 1;
-                    }
-                    result.push(&command[start..current]);
-                    start = current;
+            "\\" if graphemes.next().is_some() => {}
+            "|" if !quoted => {
+                if current > start && command[start..].starts_with('|') {
+                    start += 1;
                 }
+                result.push(&command[start..current]);
+                start = current;
             }
             _ => {}
         }
