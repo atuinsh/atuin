@@ -493,16 +493,20 @@ impl Database for Sqlite {
         filter_options: OptFilters,
     ) -> Result<Vec<History>> {
         let mut sql = SqlBuilder::select_from("history");
+        let exit_filter = filter_options.exit;
+        let exclude_exit_filter = filter_options.exclude_exit;
+        let filter_after_dedup = !filter_options.include_duplicates
+            && (exit_filter.is_some() || exclude_exit_filter.is_some());
 
         if !filter_options.include_duplicates {
             sql.group_by("command").having("max(timestamp)");
         }
 
-        if let Some(limit) = filter_options.limit {
+        if !filter_after_dedup && let Some(limit) = filter_options.limit {
             sql.limit(limit);
         }
 
-        if let Some(offset) = filter_options.offset {
+        if !filter_after_dedup && let Some(offset) = filter_options.offset {
             sql.offset(offset);
         }
 
@@ -594,13 +598,11 @@ impl Database for Sqlite {
             sql.and_where("command regexp ?".bind(&regex));
         }
 
-        filter_options
-            .exit
-            .map(|exit| sql.and_where_eq("exit", exit));
+        if filter_options.include_duplicates {
+            exit_filter.map(|exit| sql.and_where_eq("exit", exit));
 
-        filter_options
-            .exclude_exit
-            .map(|exclude_exit| sql.and_where_ne("exit", exclude_exit));
+            exclude_exit_filter.map(|exclude_exit| sql.and_where_ne("exit", exclude_exit));
+        }
 
         filter_options
             .cwd
@@ -643,7 +645,17 @@ impl Database for Sqlite {
             .fetch_all(&self.pool)
             .await?;
 
-        Ok(ordering::reorder_fuzzy(search_mode, orig_query, res))
+        let res = ordering::reorder_fuzzy(search_mode, orig_query, res);
+        if filter_after_dedup {
+            let res = filter_history_by_exit(res, exit_filter, exclude_exit_filter);
+            Ok(apply_offset_limit(
+                res,
+                filter_options.offset,
+                filter_options.limit,
+            ))
+        } else {
+            Ok(res)
+        }
     }
 
     async fn query_history(&self, query: &str) -> Result<Vec<History>> {
@@ -965,6 +977,39 @@ impl SqlBuilderExt for SqlBuilder {
             self.and_where(cond)
         }
     }
+}
+
+fn filter_history_by_exit(
+    res: Vec<History>,
+    exit_filter: Option<i64>,
+    exclude_exit_filter: Option<i64>,
+) -> Vec<History> {
+    res.into_iter()
+        .filter(|history| {
+            exit_filter.is_none_or(|exit| history.exit == exit)
+                && exclude_exit_filter.is_none_or(|exclude_exit| history.exit != exclude_exit)
+        })
+        .collect()
+}
+
+fn apply_offset_limit(
+    mut res: Vec<History>,
+    offset: Option<i64>,
+    limit: Option<i64>,
+) -> Vec<History> {
+    if let Some(offset) = offset
+        && offset > 0
+    {
+        res = res.into_iter().skip(offset as usize).collect();
+    }
+
+    if let Some(limit) = limit
+        && limit >= 0
+    {
+        res.truncate(limit as usize);
+    }
+
+    res
 }
 
 #[cfg(test)]
@@ -1430,6 +1475,194 @@ mod test {
         let duration = start.elapsed();
 
         assert!(duration < Duration::from_secs(15));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_search_exclude_exit_uses_latest_deduped_command() {
+        let context = Context {
+            hostname: "test:host".to_string(),
+            session: "beepboopiamasession".to_string(),
+            cwd: "/home/ellie".to_string(),
+            host_id: "test-host".to_string(),
+            git_root: None,
+        };
+
+        let db = Sqlite::new("sqlite::memory:", test_local_timeout())
+            .await
+            .unwrap();
+
+        let mut first: History = History::capture()
+            .timestamp(OffsetDateTime::from_unix_timestamp(1).unwrap())
+            .command("same command")
+            .cwd("/home/ellie")
+            .build()
+            .into();
+        first.exit = 1;
+        first.duration = 1;
+        first.session = "beep boop".to_string();
+        first.hostname = "booop".to_string();
+        db.save(&first).await.unwrap();
+
+        let mut second: History = History::capture()
+            .timestamp(OffsetDateTime::from_unix_timestamp(2).unwrap())
+            .command("same command")
+            .cwd("/home/ellie")
+            .build()
+            .into();
+        second.exit = 0;
+        second.duration = 1;
+        second.session = "beep boop".to_string();
+        second.hostname = "booop".to_string();
+        db.save(&second).await.unwrap();
+
+        let results = db
+            .search(
+                SearchMode::Fuzzy,
+                FilterMode::Global,
+                &context,
+                "same",
+                OptFilters {
+                    exclude_exit: Some(0),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            results.is_empty(),
+            "expected latest deduped command to be excluded, got exits {:?}",
+            results.iter().map(|h| h.exit).collect::<Vec<_>>()
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_search_exit_uses_latest_deduped_command() {
+        let context = Context {
+            hostname: "test:host".to_string(),
+            session: "beepboopiamasession".to_string(),
+            cwd: "/home/ellie".to_string(),
+            host_id: "test-host".to_string(),
+            git_root: None,
+        };
+
+        let db = Sqlite::new("sqlite::memory:", test_local_timeout())
+            .await
+            .unwrap();
+
+        let mut first: History = History::capture()
+            .timestamp(OffsetDateTime::from_unix_timestamp(1).unwrap())
+            .command("same command")
+            .cwd("/home/ellie")
+            .build()
+            .into();
+        first.exit = 0;
+        first.duration = 1;
+        first.session = "beep boop".to_string();
+        first.hostname = "booop".to_string();
+        db.save(&first).await.unwrap();
+
+        let mut second: History = History::capture()
+            .timestamp(OffsetDateTime::from_unix_timestamp(2).unwrap())
+            .command("same command")
+            .cwd("/home/ellie")
+            .build()
+            .into();
+        second.exit = 1;
+        second.duration = 1;
+        second.session = "beep boop".to_string();
+        second.hostname = "booop".to_string();
+        db.save(&second).await.unwrap();
+
+        let results = db
+            .search(
+                SearchMode::Fuzzy,
+                FilterMode::Global,
+                &context,
+                "same",
+                OptFilters {
+                    exit: Some(0),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            results.is_empty(),
+            "expected latest deduped command to fail the exit filter, got exits {:?}",
+            results.iter().map(|h| h.exit).collect::<Vec<_>>()
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_search_exclude_exit_applies_limit_after_filtering() {
+        let context = Context {
+            hostname: "test:host".to_string(),
+            session: "beepboopiamasession".to_string(),
+            cwd: "/home/ellie".to_string(),
+            host_id: "test-host".to_string(),
+            git_root: None,
+        };
+
+        let db = Sqlite::new("sqlite::memory:", test_local_timeout())
+            .await
+            .unwrap();
+
+        let mut older_excluded: History = History::capture()
+            .timestamp(OffsetDateTime::from_unix_timestamp(1).unwrap())
+            .command("same command")
+            .cwd("/home/ellie")
+            .build()
+            .into();
+        older_excluded.exit = 1;
+        older_excluded.duration = 1;
+        older_excluded.session = "beep boop".to_string();
+        older_excluded.hostname = "booop".to_string();
+        db.save(&older_excluded).await.unwrap();
+
+        let mut next_match: History = History::capture()
+            .timestamp(OffsetDateTime::from_unix_timestamp(2).unwrap())
+            .command("other command")
+            .cwd("/home/ellie")
+            .build()
+            .into();
+        next_match.exit = 1;
+        next_match.duration = 1;
+        next_match.session = "beep boop".to_string();
+        next_match.hostname = "booop".to_string();
+        db.save(&next_match).await.unwrap();
+
+        let mut latest_excluded: History = History::capture()
+            .timestamp(OffsetDateTime::from_unix_timestamp(3).unwrap())
+            .command("same command")
+            .cwd("/home/ellie")
+            .build()
+            .into();
+        latest_excluded.exit = 0;
+        latest_excluded.duration = 1;
+        latest_excluded.session = "beep boop".to_string();
+        latest_excluded.hostname = "booop".to_string();
+        db.save(&latest_excluded).await.unwrap();
+
+        let results = db
+            .search(
+                SearchMode::Fuzzy,
+                FilterMode::Global,
+                &context,
+                "command",
+                OptFilters {
+                    exclude_exit: Some(0),
+                    limit: Some(1),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].command, "other command");
+        assert_eq!(results[0].exit, 1);
     }
 }
 
