@@ -355,7 +355,7 @@ This supports regular expressions, so you can hide pretty much whatever you want
 
 ```toml
 ## Note that these regular expressions are unanchored, i.e. if they don't start
-## with ^ or end with $, they'll match anywhere in the command.
+## with ^ or end with $, they'll match anywhere in the path.
 # cwd_filter = [
 #   "^/very/secret/directory",
 # ]
