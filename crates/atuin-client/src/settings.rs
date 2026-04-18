@@ -689,6 +689,8 @@ pub struct AiCapabilities {
     pub enable_history_search: Option<bool>,
     /// Whether the AI can request to read files. `None` = unset (defaults to enabled, and the ai will ask for permission).
     pub enable_file_read: Option<bool>,
+    /// Whether the AI can request to edit files (str_replace). `None` = unset (defaults to enabled, and the ai will ask for permission).
+    pub enable_file_edit: Option<bool>,
     /// Whether the AI can request to write to files. `None` = unset (defaults to enabled, and the ai will ask for permission).
     pub enable_file_write: Option<bool>,
     /// Whether the AI can request to execute bash commands. `None` = unset (defaults to enabled, and the ai will ask for permission).

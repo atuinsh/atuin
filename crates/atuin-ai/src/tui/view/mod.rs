@@ -145,6 +145,7 @@ fn tool_call_view(tool_call: &TrackedTool, in_git_project: bool) -> Elements {
     let verb = tool_call.tool.descriptor().display_verb;
     let tool_desc = match &tool_call.tool {
         ClientToolCall::Read(tool) => tool.path.display().to_string(),
+        ClientToolCall::Edit(tool) => tool.path.display().to_string(),
         ClientToolCall::Write(tool) => tool.path.display().to_string(),
         ClientToolCall::Shell(tool) => tool.command.clone(),
         ClientToolCall::AtuinHistory(tool) => tool.query.clone(),
@@ -267,6 +268,9 @@ fn agent_turn_view(events: &[turn::UiEvent], busy: bool) -> Elements {
                                 #(match &details.render_data {
                                     turn::ToolRenderData::Shell { command, preview } => {
                                         shell_tool_view(&tool_key, command, preview.as_ref())
+                                    },
+                                    turn::ToolRenderData::FileEdit { path } => {
+                                        file_edit_tool_view(&details.status, path)
                                     },
                                     turn::ToolRenderData::FileWrite { path } => {
                                         file_write_tool_view(&details.status, path)
@@ -443,6 +447,35 @@ fn shell_tool_footer(preview: &ToolPreview, preview_done: bool) -> Elements {
         };
     }
     element! {}
+}
+
+/// Render a file edit tool call status with the target path.
+fn file_edit_tool_view(status: &turn::ToolResultStatus, path: &std::path::Path) -> Elements {
+    let display_path = format_path_for_display(path);
+    match status {
+        turn::ToolResultStatus::Pending => {
+            element! {
+                Spinner(
+                    label: format!("Editing: {display_path}"),
+                    label_style: Style::default().fg(Color::Yellow),
+                    done: false,
+                )
+            }
+        }
+        turn::ToolResultStatus::Success => {
+            element! {
+                Spinner(label: format!("Edited: {display_path}"), done: true)
+            }
+        }
+        turn::ToolResultStatus::Error => {
+            element! {
+                Text {
+                    Span(text: "✗ ", style: Style::default().fg(Color::Red))
+                    Span(text: format!("Edit {display_path}: failed"), style: Style::default().fg(Color::Red))
+                }
+            }
+        }
+    }
 }
 
 /// Render a file write tool call status with the target path.

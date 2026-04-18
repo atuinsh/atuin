@@ -135,6 +135,8 @@ pub(crate) enum ToolRenderData {
     },
     /// File read operation.
     FileRead { path: PathBuf },
+    /// File edit (str_replace) operation.
+    FileEdit { path: PathBuf },
     /// File write/create operation.
     FileWrite { path: PathBuf },
     /// Atuin history search.
@@ -437,6 +439,9 @@ impl<'a> TurnBuilder<'a> {
                 },
                 ClientToolCall::Read(read) => ToolRenderData::FileRead {
                     path: read.path.clone(),
+                },
+                ClientToolCall::Edit(edit) => ToolRenderData::FileEdit {
+                    path: edit.path.clone(),
                 },
                 ClientToolCall::Write(write) => ToolRenderData::FileWrite {
                     path: write.path.clone(),

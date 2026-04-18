@@ -30,6 +30,15 @@ pub(crate) const READ: &ToolDescriptor = &ToolDescriptor {
     is_client: true,
 };
 
+pub(crate) const EDIT: &ToolDescriptor = &ToolDescriptor {
+    canonical_names: &["edit_file"],
+    capability: Some("client_v1_edit_file"),
+    display_verb: "edit",
+    progressive_verb: "Editing file...",
+    past_verb: "Edited file",
+    is_client: true,
+};
+
 pub(crate) const WRITE: &ToolDescriptor = &ToolDescriptor {
     canonical_names: &["write_file"],
     capability: Some("client_v1_write_file"),
@@ -81,6 +90,7 @@ pub(crate) const SERVER_SCRAPE: &ToolDescriptor = &ToolDescriptor {
 /// All known tool descriptors, for lookup by name.
 const ALL_DESCRIPTORS: &[&ToolDescriptor] = &[
     READ,
+    EDIT,
     WRITE,
     SHELL,
     ATUIN_HISTORY,

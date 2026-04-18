@@ -306,6 +306,7 @@ impl ToolTracker {
 #[derive(Debug, Clone)]
 pub(crate) enum ClientToolCall {
     Read(ReadToolCall),
+    Edit(EditToolCall),
     Write(WriteToolCall),
     Shell(ShellToolCall),
     AtuinHistory(AtuinHistoryToolCall),
@@ -317,9 +318,8 @@ impl TryFrom<(&str, &serde_json::Value)> for ClientToolCall {
     fn try_from((name, input): (&str, &serde_json::Value)) -> Result<Self, Self::Error> {
         match name {
             "read_file" => Ok(ClientToolCall::Read(ReadToolCall::try_from(input)?)),
+            "edit_file" => Ok(ClientToolCall::Edit(EditToolCall::try_from(input)?)),
             "create_file" => Ok(ClientToolCall::Write(WriteToolCall::try_from(input)?)),
-            // "append_to_file" => Ok(ClientToolCall::Append(AppendToolCall::try_from(input)?)),
-            // "str_replace" => Ok(ClientToolCall::StrReplace(StrReplaceToolCall::try_from(input)?)),
             "execute_shell_command" => Ok(ClientToolCall::Shell(ShellToolCall::try_from(input)?)),
             "atuin_history" => Ok(ClientToolCall::AtuinHistory(
                 AtuinHistoryToolCall::try_from(input)?,
@@ -333,6 +333,7 @@ impl ClientToolCall {
     pub(crate) fn descriptor(&self) -> &'static descriptor::ToolDescriptor {
         match self {
             ClientToolCall::Read(_) => descriptor::READ,
+            ClientToolCall::Edit(_) => descriptor::EDIT,
             ClientToolCall::Write(_) => descriptor::WRITE,
             ClientToolCall::Shell(_) => descriptor::SHELL,
             ClientToolCall::AtuinHistory(_) => descriptor::ATUIN_HISTORY,
@@ -344,6 +345,7 @@ impl ClientToolCall {
     pub(crate) fn rule_name(&self) -> &'static str {
         match self {
             ClientToolCall::Read(_) => "Read",
+            ClientToolCall::Edit(_) => "Edit",
             ClientToolCall::Write(_) => "Write",
             ClientToolCall::Shell(_) => "Shell",
             ClientToolCall::AtuinHistory(_) => "AtuinHistory",
@@ -353,6 +355,7 @@ impl ClientToolCall {
     pub(crate) fn matches_rule(&self, rule: &Rule) -> bool {
         match self {
             ClientToolCall::Read(tool) => tool.matches_rule(rule),
+            ClientToolCall::Edit(tool) => tool.matches_rule(rule),
             ClientToolCall::Write(tool) => tool.matches_rule(rule),
             ClientToolCall::Shell(tool) => tool.matches_rule(rule),
             ClientToolCall::AtuinHistory(tool) => tool.matches_rule(rule),
@@ -362,6 +365,7 @@ impl ClientToolCall {
     pub(crate) fn target_dir(&self) -> Option<&Path> {
         match self {
             ClientToolCall::Read(tool) => tool.target_dir(),
+            ClientToolCall::Edit(tool) => tool.target_dir(),
             ClientToolCall::Write(tool) => tool.target_dir(),
             ClientToolCall::Shell(tool) => tool.target_dir(),
             ClientToolCall::AtuinHistory(tool) => tool.target_dir(),
@@ -505,6 +509,64 @@ impl PermissableToolCall for ReadToolCall {
 
     fn matches_rule(&self, rule: &Rule) -> bool {
         if rule.tool != "Read" {
+            return false;
+        }
+
+        match rule.scope.as_deref() {
+            None | Some("*") => true,
+            Some(scope) => path_matches_scope(&self.path, scope),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct EditToolCall {
+    pub path: PathBuf,
+    pub old_string: String,
+    pub new_string: String,
+    pub replace_all: bool,
+}
+
+impl TryFrom<&serde_json::Value> for EditToolCall {
+    type Error = eyre::Error;
+
+    fn try_from(value: &serde_json::Value) -> Result<Self, Self::Error> {
+        let path = value
+            .get("file_path")
+            .and_then(|v| v.as_str())
+            .ok_or(eyre::eyre!("Missing file_path"))?;
+
+        let old_string = value
+            .get("old_string")
+            .and_then(|v| v.as_str())
+            .ok_or(eyre::eyre!("Missing old_string"))?;
+
+        let new_string = value
+            .get("new_string")
+            .and_then(|v| v.as_str())
+            .ok_or(eyre::eyre!("Missing new_string"))?;
+
+        let replace_all = value
+            .get("replace_all")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        Ok(EditToolCall {
+            path: expand_path(path),
+            old_string: old_string.to_string(),
+            new_string: new_string.to_string(),
+            replace_all,
+        })
+    }
+}
+
+impl PermissableToolCall for EditToolCall {
+    fn target_dir(&self) -> Option<&Path> {
+        Some(&self.path)
+    }
+
+    fn matches_rule(&self, rule: &Rule) -> bool {
+        if rule.tool != "Edit" {
             return false;
         }
 

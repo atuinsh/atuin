@@ -77,8 +77,10 @@ impl ChatRequest {
         if capabilities.enable_file_read.unwrap_or(true) {
             caps.push("client_v1_read_file".to_string());
         }
+        if capabilities.enable_file_edit.unwrap_or(true) {
+            caps.push("client_v1_edit_file".to_string());
+        }
         if capabilities.enable_file_write.unwrap_or(true) {
-            // TODO: this should prob be cap per tool?
             caps.push("client_v1_write_file".to_string());
         }
         if capabilities.enable_command_execution.unwrap_or(true) {
