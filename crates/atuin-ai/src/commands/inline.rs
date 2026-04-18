@@ -199,6 +199,14 @@ async fn run_inline_tui(
             session.is_resumed = true;
             session.last_event_time =
                 last_event_ts.and_then(|ts| chrono::DateTime::from_timestamp(ts, 0));
+
+            // Restore file read tracker from session metadata
+            if let Ok(Some(json)) = mgr.get_metadata(crate::file_tracker::METADATA_KEY).await {
+                if let Ok(tracker) = crate::file_tracker::FileReadTracker::from_json(&json) {
+                    session.file_tracker = tracker;
+                }
+            }
+
             (mgr, session)
         } else {
             // No meaningful content — treat as a fresh session

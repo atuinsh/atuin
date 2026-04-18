@@ -61,15 +61,16 @@ pub(crate) fn dispatch(ctx: &mut DispatchContext, event: AiTuiEvent) -> bool {
     !ctx.exiting.load(Ordering::Acquire)
 }
 
-/// Persist new events and the server session ID if it has changed.
+/// Persist new events, server session ID, and file tracker state.
 /// Called from the dispatch thread (sync), bridges to async via the tokio handle.
 fn persist_session(ctx: &mut DispatchContext) {
-    let Ok((events, server_sid)) = ctx
+    let Ok((events, server_sid, file_tracker_json)) = ctx
         .handle
         .fetch(|state| {
             (
                 state.conversation.events.clone(),
                 state.conversation.session_id.clone(),
+                state.file_tracker.to_json().ok(),
             )
         })
         .blocking_recv()
@@ -85,6 +86,14 @@ fn persist_session(ctx: &mut DispatchContext) {
         && let Err(e) = rt.block_on(ctx.session_mgr.persist_server_session_id(sid))
     {
         tracing::warn!("failed to persist server session ID: {e}");
+    }
+    if let Some(ref json) = file_tracker_json
+        && let Err(e) = rt.block_on(
+            ctx.session_mgr
+                .set_metadata(crate::file_tracker::METADATA_KEY, json),
+        )
+    {
+        tracing::warn!("failed to persist file tracker: {e}");
     }
 }
 
@@ -231,13 +240,45 @@ fn execute_simple_tool(
 
     tokio::spawn(async move {
         let outcome = tool.execute(&db).await;
+
+        // After a successful file read, capture tracking data for freshness
+        // checking. This re-stats the file to get content hash and mtime.
+        let read_tracking = if let ClientToolCall::Read(ref read_tool) = tool
+            && !outcome.is_error()
+        {
+            capture_read_tracking(&read_tool.path)
+        } else {
+            None
+        };
+
         h.update(move |state| {
+            if let Some((path, content, mtime)) = read_tracking {
+                state.file_tracker.record_read(path, &content, mtime);
+            }
             state.finish_tool_call(&tool_id, outcome);
             if !state.tool_tracker.has_pending() {
                 let _ = tx.send(AiTuiEvent::ContinueAfterTools);
             }
         });
     });
+}
+
+/// Capture file content and mtime for the read tracker.
+/// Returns None for directories or if the file can't be read.
+fn capture_read_tracking(
+    path: &std::path::Path,
+) -> Option<(std::path::PathBuf, Vec<u8>, std::time::SystemTime)> {
+    let resolved = if path.is_relative() {
+        std::env::current_dir().ok()?.join(path)
+    } else {
+        path.to_path_buf()
+    };
+    if !resolved.is_file() {
+        return None;
+    }
+    let content = std::fs::read(&resolved).ok()?;
+    let mtime = std::fs::metadata(&resolved).ok()?.modified().ok()?;
+    Some((resolved, content, mtime))
 }
 
 /// Execute a shell tool with streaming VT100 preview.
