@@ -232,6 +232,10 @@ fn execute_tool(
             let edit_call = edit_call.clone();
             execute_edit_tool(handle, tx, tool_id, edit_call);
         }
+        ClientToolCall::Write(write_call) => {
+            let write_call = write_call.clone();
+            execute_write_tool(handle, tx, tool_id, write_call);
+        }
         _ => {
             execute_simple_tool(handle, tx, tool_id, tool, db);
         }
@@ -378,6 +382,69 @@ fn execute_edit_tool(
                 && let Some(tracked) = state.tool_tracker.get_mut(&tc_id)
             {
                 tracked.edit_preview = Some(preview);
+            }
+            state.finish_tool_call(&tc_id, outcome);
+            if !state.tool_tracker.has_pending() {
+                let _ = tx.send(AiTuiEvent::ContinueAfterTools);
+            }
+        });
+    });
+}
+
+/// Execute a write_file tool call.
+///
+/// Snapshots the existing file (if any) before overwriting, writes atomically,
+/// stores a content preview on the tracker, and updates the file tracker.
+fn execute_write_tool(
+    handle: &Handle<Session>,
+    tx: &mpsc::Sender<AiTuiEvent>,
+    tool_id: String,
+    write_call: crate::tools::WriteToolCall,
+) {
+    let h = handle.clone();
+    let tx = tx.clone();
+
+    tokio::spawn(async move {
+        let resolved = write_call.resolved_path();
+
+        // 1. Snapshot the existing file before overwriting (if it exists).
+        if resolved.exists() {
+            if let Ok(original_content) = std::fs::read(&resolved) {
+                let snap_path = resolved.clone();
+                h.update(move |state| {
+                    if let Some(ref mut store) = state.snapshot_store {
+                        if let Err(e) = store.ensure_snapshot(&snap_path, &original_content) {
+                            tracing::warn!("failed to create file snapshot: {e}");
+                        }
+                    }
+                });
+            }
+        }
+
+        // 2. Execute: check exists/overwrite, atomic write
+        let (outcome, new_bytes) = write_call.execute(&resolved);
+
+        // 3. Build content preview on success
+        let write_preview = if new_bytes.is_some() {
+            Some(crate::diff::WritePreview::from_content(&write_call.content))
+        } else {
+            None
+        };
+
+        // 4. Update tracker, store preview, and finish
+        let tc_id = tool_id;
+        h.update(move |state| {
+            if let Some(ref new_bytes) = new_bytes {
+                if let Ok(mtime) = std::fs::metadata(&resolved).and_then(|m| m.modified()) {
+                    state
+                        .file_tracker
+                        .update_after_edit(&resolved, new_bytes, mtime);
+                }
+            }
+            if let Some(preview) = write_preview {
+                if let Some(tracked) = state.tool_tracker.get_mut(&tc_id) {
+                    tracked.write_preview = Some(preview);
+                }
             }
             state.finish_tool_call(&tc_id, outcome);
             if !state.tool_tracker.has_pending() {

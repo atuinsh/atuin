@@ -296,8 +296,8 @@ fn agent_turn_view(events: &[turn::UiEvent], busy: bool) -> Elements {
                                     turn::ToolRenderData::FileEdit { path, preview } => {
                                         file_edit_tool_view(&tool_key, &details.status, path, preview.as_ref())
                                     },
-                                    turn::ToolRenderData::FileWrite { path } => {
-                                        file_write_tool_view(&details.status, path)
+                                    turn::ToolRenderData::FileWrite { path, preview } => {
+                                        file_write_tool_view(&tool_key, &details.status, path, preview.as_ref())
                                     },
                                     turn::ToolRenderData::Remote => {
                                         tool_status_view(&details.name, &details.status)
@@ -577,10 +577,16 @@ fn file_edit_tool_view(
     }
 }
 
-/// Render a file write tool call status with the target path.
-fn file_write_tool_view(status: &turn::ToolResultStatus, path: &std::path::Path) -> Elements {
-    let display_path = path.display();
-    match status {
+/// Render a file write tool call with content preview.
+fn file_write_tool_view(
+    key: &str,
+    status: &turn::ToolResultStatus,
+    path: &std::path::Path,
+    preview: Option<&crate::diff::WritePreview>,
+) -> Elements {
+    let display_path = format_path_for_display(path);
+
+    let status_line = match status {
         turn::ToolResultStatus::Pending => {
             element! {
                 Spinner(
@@ -591,16 +597,60 @@ fn file_write_tool_view(status: &turn::ToolResultStatus, path: &std::path::Path)
             }
         }
         turn::ToolResultStatus::Success => {
+            let line_info = preview
+                .map(|p| format!(" ({} lines)", p.total_lines))
+                .unwrap_or_default();
             element! {
-                Spinner(label: format!("Wrote: {display_path}"), done: true)
+                Spinner(label: format!("Wrote: {display_path}{line_info}"), done: true)
             }
         }
         turn::ToolResultStatus::Error => {
             element! {
                 Text {
                     Span(text: "✗ ", style: Style::default().fg(Color::Red))
-                    Span(text: format!("Write {display_path}: denied"), style: Style::default().fg(Color::Red))
+                    Span(text: format!("Write {display_path}: failed"), style: Style::default().fg(Color::Red))
                 }
+            }
+        }
+    };
+
+    let Some(preview) = preview else {
+        return status_line;
+    };
+    if preview.lines.is_empty() {
+        return status_line;
+    }
+
+    let gutter_width = preview.total_lines.to_string().len().max(2) as u16 + 1;
+    let remaining = preview.remaining_lines();
+
+    element! {
+        View(key: key.to_string()) {
+            #(status_line)
+
+            View(key: format!("{key}-content"), padding_left: Cells::from(2)) {
+                #(for (idx, line) in preview.lines.iter().enumerate() {
+                    HStack(key: format!("{key}-line-{idx}")) {
+                        View(width: WidthConstraint::Fixed(gutter_width)) {
+                            Text { Span(
+                                text: format!("{:>width$}", idx + 1, width = (gutter_width - 1) as usize),
+                                style: Style::default().fg(Color::DarkGray)
+                            ) }
+                        }
+                        View {
+                            Text { Span(text: line, style: Style::default().fg(Color::DarkGray)) }
+                        }
+                    }
+                })
+
+                #(if remaining > 0 {
+                    Text {
+                        Span(
+                            text: format!("     ... +{remaining} more lines"),
+                            style: Style::default().fg(Color::DarkGray)
+                        )
+                    }
+                })
             }
         }
     }

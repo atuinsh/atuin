@@ -101,6 +101,40 @@ impl EditPreview {
     }
 }
 
+/// Maximum lines to show in a write preview.
+const WRITE_PREVIEW_LINES: usize = 20;
+
+/// A content preview for a write_file operation.
+///
+/// Shows the first N lines of the written content plus a count of
+/// remaining lines if truncated.
+#[derive(Debug, Clone)]
+pub(crate) struct WritePreview {
+    /// First lines of content (up to WRITE_PREVIEW_LINES).
+    pub lines: Vec<String>,
+    /// Total number of lines in the written file.
+    pub total_lines: usize,
+}
+
+impl WritePreview {
+    /// Create a preview from file content.
+    pub fn from_content(content: &str) -> Self {
+        let all_lines: Vec<&str> = content.lines().collect();
+        let total_lines = all_lines.len();
+        let lines = all_lines
+            .into_iter()
+            .take(WRITE_PREVIEW_LINES)
+            .map(String::from)
+            .collect();
+        WritePreview { lines, total_lines }
+    }
+
+    /// Number of lines not shown in the preview.
+    pub fn remaining_lines(&self) -> usize {
+        self.total_lines.saturating_sub(self.lines.len())
+    }
+}
+
 /// Build a single DiffHunk from a group of adjacent raw hunks.
 fn build_hunk(group: &[&imara_diff::Hunk], input: &InternedInput<&str>) -> DiffHunk {
     let first = group.first().unwrap();
