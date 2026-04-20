@@ -175,7 +175,7 @@ async fn run_inline_tui(
         .find_resumable(cwd.as_deref(), git_root_str.as_deref(), max_age_secs)
         .await?;
 
-    let (mut session_mgr, initial_state) = if let Some(stored) = resumable {
+    let (mut session_mgr, mut initial_state) = if let Some(stored) = resumable {
         debug!(session_id = %stored.id, "resuming AI session");
         let (mgr, events, server_sid, last_event_ts, invocation_id) =
             SessionManager::resume(Box::new(service), &stored).await?;
@@ -232,6 +232,16 @@ async fn run_inline_tui(
             SessionManager::create_new(Box::new(service), cwd.as_deref(), git_root_str.as_deref());
         (mgr, Session::new(ctx.git_root.is_some(), None))
     };
+
+    // Initialize the snapshot store now that we know the session ID.
+    let snapshot_dir = atuin_common::utils::data_dir()
+        .join("ai")
+        .join("snapshots")
+        .join(session_mgr.session_id());
+    match crate::snapshots::SnapshotStore::open(snapshot_dir) {
+        Ok(store) => initial_state.snapshot_store = Some(store),
+        Err(e) => tracing::warn!("failed to open snapshot store: {e}"),
+    }
 
     let (tx, rx) = mpsc::channel::<AiTuiEvent>();
 
