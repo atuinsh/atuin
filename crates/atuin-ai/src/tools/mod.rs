@@ -796,6 +796,9 @@ impl WriteToolCall {
             );
         }
 
+        // Capture before the write — after atomic_write the file always exists.
+        let existed = resolved_path.exists();
+
         // Write atomically
         let content_bytes = self.content.as_bytes().to_vec();
         if let Err(e) = crate::snapshots::atomic_write_file(resolved_path, &content_bytes) {
@@ -803,11 +806,7 @@ impl WriteToolCall {
         }
 
         let line_count = self.content.lines().count();
-        let verb = if self.overwrite && resolved_path.exists() {
-            "Overwrote"
-        } else {
-            "Created"
-        };
+        let verb = if existed { "Overwrote" } else { "Created" };
         (
             ToolOutcome::Success(format!(
                 "{verb} {} ({line_count} lines).",
