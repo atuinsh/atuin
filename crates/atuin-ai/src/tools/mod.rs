@@ -169,6 +169,8 @@ pub(crate) struct TrackedTool {
     pub phase: ToolPhase,
     /// Sender to interrupt a running shell command (only set during ExecutingWithPreview).
     pub abort_tx: Option<tokio::sync::oneshot::Sender<()>>,
+    /// Diff preview for completed edit tool calls.
+    pub edit_preview: Option<crate::diff::EditPreview>,
 }
 
 impl TrackedTool {
@@ -234,6 +236,7 @@ impl ToolTracker {
             tool,
             phase: ToolPhase::CheckingPermissions,
             abort_tx: None,
+            edit_preview: None,
         });
     }
 

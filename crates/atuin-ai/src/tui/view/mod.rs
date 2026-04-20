@@ -294,8 +294,8 @@ fn agent_turn_view(events: &[turn::UiEvent], busy: bool) -> Elements {
                                     turn::ToolRenderData::Shell { command, preview } => {
                                         shell_tool_view(&tool_key, command, preview.as_ref())
                                     },
-                                    turn::ToolRenderData::FileEdit { path } => {
-                                        file_edit_tool_view(&details.status, path)
+                                    turn::ToolRenderData::FileEdit { path, preview } => {
+                                        file_edit_tool_view(&tool_key, &details.status, path, preview.as_ref())
                                     },
                                     turn::ToolRenderData::FileWrite { path } => {
                                         file_write_tool_view(&details.status, path)
@@ -474,10 +474,18 @@ fn shell_tool_footer(preview: &ToolPreview, preview_done: bool) -> Elements {
     element! {}
 }
 
-/// Render a file edit tool call status with the target path.
-fn file_edit_tool_view(status: &turn::ToolResultStatus, path: &std::path::Path) -> Elements {
+/// Render a file edit tool call with diff preview.
+fn file_edit_tool_view(
+    key: &str,
+    status: &turn::ToolResultStatus,
+    path: &std::path::Path,
+    preview: Option<&crate::diff::EditPreview>,
+) -> Elements {
+    use crate::diff::DiffLine;
+
     let display_path = format_path_for_display(path);
-    match status {
+
+    let status_line = match status {
         turn::ToolResultStatus::Pending => {
             element! {
                 Spinner(
@@ -498,6 +506,54 @@ fn file_edit_tool_view(status: &turn::ToolResultStatus, path: &std::path::Path) 
                     Span(text: "✗ ", style: Style::default().fg(Color::Red))
                     Span(text: format!("Edit {display_path}: failed"), style: Style::default().fg(Color::Red))
                 }
+            }
+        }
+    };
+
+    // If no preview, just show the status line
+    let Some(preview) = preview else {
+        return status_line;
+    };
+    if preview.hunks.is_empty() {
+        return status_line;
+    }
+
+    // Calculate the line number gutter width from the total line count
+    let max_line_num = preview.line_count();
+    let gutter_width = max_line_num.to_string().len().max(2) as u16 + 1; // +1 for spacing
+
+    element! {
+        View(key: key.to_string()) {
+            #(status_line)
+
+            View(key: format!("{key}-diff"), padding_left: Cells::from(2)) {
+                #(for (hunk_idx, hunk) in preview.hunks.iter().enumerate() {
+                    View(key: format!("{key}-hunk-{hunk_idx}")) {
+                        #(for (line_idx, line) in hunk.lines.iter().enumerate() {
+                            #({
+                                let (prefix, text, style) = match line {
+                                    DiffLine::Context(t) => (" ", t.as_str(), Style::default().fg(Color::DarkGray)),
+                                    DiffLine::Added(t) => ("+", t.as_str(), Style::default().fg(Color::Green)),
+                                    DiffLine::Removed(t) => ("-", t.as_str(), Style::default().fg(Color::Red)),
+                                };
+                                let line_num = format!("{:>width$}", line_idx + 1, width = (gutter_width - 1) as usize);
+                                element! {
+                                    HStack(key: format!("{key}-hunk-{hunk_idx}-line-{line_idx}")) {
+                                        View(width: WidthConstraint::Fixed(gutter_width)) {
+                                            Text { Span(text: line_num, style: Style::default().fg(Color::DarkGray)) }
+                                        }
+                                        View {
+                                            Text {
+                                                Span(text: prefix, style: style)
+                                                Span(text: text, style: style)
+                                            }
+                                        }
+                                    }
+                                }
+                            })
+                        })
+                    }
+                })
             }
         }
     }

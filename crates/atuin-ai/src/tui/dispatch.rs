@@ -312,22 +312,23 @@ fn execute_edit_tool(
     tokio::spawn(async move {
         let resolved = edit_call.resolved_path();
 
-        // 1. Snapshot the original file before editing.
-        //    Read content in this task; write the snapshot via h.update()
-        //    which has &mut SnapshotStore.
-        if let Ok(original_content) = std::fs::read(&resolved) {
+        // 1. Read the original file content (used for snapshot + diff).
+        let old_content = std::fs::read(&resolved).ok();
+
+        // 2. Snapshot the original file before editing.
+        if let Some(ref content) = old_content {
             let snap_path = resolved.clone();
-            let content = original_content;
+            let snap_content = content.clone();
             h.update(move |state| {
                 if let Some(ref mut store) = state.snapshot_store {
-                    if let Err(e) = store.ensure_snapshot(&snap_path, &content) {
+                    if let Err(e) = store.ensure_snapshot(&snap_path, &snap_content) {
                         tracing::warn!("failed to create file snapshot: {e}");
                     }
                 }
             });
         }
 
-        // 2. Fetch a clone of the file tracker for freshness checking.
+        // 3. Fetch a clone of the file tracker for freshness checking.
         let Ok(tracker) = h.fetch(|state| state.file_tracker.clone()).await else {
             let tc_id = tool_id.clone();
             h.update(move |state| {
@@ -342,17 +343,40 @@ fn execute_edit_tool(
             return;
         };
 
-        // 3. Execute: freshness check → read → match → atomic write
+        // 4. Execute: freshness check → read → match → atomic write
         let (outcome, new_bytes) = edit_call.execute(&resolved, &tracker);
 
-        // 4. Update tracker and finish the tool call
+        // 5. Compute diff preview on success
+        let edit_preview = if let Some(ref new_bytes) = new_bytes {
+            if let Some(ref old_bytes) = old_content {
+                let old_str = String::from_utf8_lossy(old_bytes);
+                let new_str = String::from_utf8_lossy(new_bytes);
+                let preview = crate::diff::EditPreview::compute(&old_str, &new_str);
+                if preview.hunks.is_empty() {
+                    None
+                } else {
+                    Some(preview)
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // 6. Update tracker, store diff preview, and finish the tool call
         let tc_id = tool_id;
         h.update(move |state| {
-            if let Some(new_bytes) = new_bytes {
+            if let Some(ref new_bytes) = new_bytes {
                 if let Ok(mtime) = std::fs::metadata(&resolved).and_then(|m| m.modified()) {
                     state
                         .file_tracker
-                        .update_after_edit(&resolved, &new_bytes, mtime);
+                        .update_after_edit(&resolved, new_bytes, mtime);
+                }
+            }
+            if let Some(preview) = edit_preview {
+                if let Some(tracked) = state.tool_tracker.get_mut(&tc_id) {
+                    tracked.edit_preview = Some(preview);
                 }
             }
             state.finish_tool_call(&tc_id, outcome);
