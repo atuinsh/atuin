@@ -16,6 +16,7 @@ pub(crate) struct ToolDescriptor {
     /// Past-tense verb for summaries (e.g. "Read file").
     pub past_verb: &'static str,
     /// Whether this tool is executed client-side (by the CLI).
+    #[expect(dead_code)]
     pub is_client: bool,
 }
 

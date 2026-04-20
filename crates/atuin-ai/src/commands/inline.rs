@@ -201,20 +201,19 @@ async fn run_inline_tui(
                 last_event_ts.and_then(|ts| chrono::DateTime::from_timestamp(ts, 0));
 
             // Restore file read tracker from session metadata
-            if let Ok(Some(json)) = mgr.get_metadata(crate::file_tracker::METADATA_KEY).await {
-                if let Ok(tracker) = crate::file_tracker::FileReadTracker::from_json(&json) {
-                    session.file_tracker = tracker;
-                }
+            if let Ok(Some(json)) = mgr.get_metadata(crate::file_tracker::METADATA_KEY).await
+                && let Ok(tracker) = crate::file_tracker::FileReadTracker::from_json(&json)
+            {
+                session.file_tracker = tracker;
             }
 
             // Restore edit permission grants from session metadata
             if let Ok(Some(json)) = mgr
                 .get_metadata(crate::edit_permissions::METADATA_KEY)
                 .await
+                && let Ok(cache) = crate::edit_permissions::EditPermissionCache::from_json(&json)
             {
-                if let Ok(cache) = crate::edit_permissions::EditPermissionCache::from_json(&json) {
-                    session.edit_permissions = cache;
-                }
+                session.edit_permissions = cache;
             }
 
             (mgr, session)

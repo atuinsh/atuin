@@ -1,8 +1,7 @@
 //! View function that builds the eye-declare element tree from app state.
 
 use eye_declare::{
-    BorderType, Cells, Column, Direction, Elements, HStack, Span, Spinner, Text, View, Viewport,
-    WidthConstraint, element,
+    Cells, Column, Elements, HStack, Span, Spinner, Text, View, Viewport, WidthConstraint, element,
 };
 use ratatui_core::style::{Color, Modifier, Style};
 

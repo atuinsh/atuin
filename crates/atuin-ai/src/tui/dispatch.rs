@@ -320,10 +320,10 @@ fn execute_edit_tool(
             let snap_path = resolved.clone();
             let snap_content = content.clone();
             h.update(move |state| {
-                if let Some(ref mut store) = state.snapshot_store {
-                    if let Err(e) = store.ensure_snapshot(&snap_path, &snap_content) {
-                        tracing::warn!("failed to create file snapshot: {e}");
-                    }
+                if let Some(ref mut store) = state.snapshot_store
+                    && let Err(e) = store.ensure_snapshot(&snap_path, &snap_content)
+                {
+                    tracing::warn!("failed to create file snapshot: {e}");
                 }
             });
         }
@@ -367,17 +367,17 @@ fn execute_edit_tool(
         // 6. Update tracker, store diff preview, and finish the tool call
         let tc_id = tool_id;
         h.update(move |state| {
-            if let Some(ref new_bytes) = new_bytes {
-                if let Ok(mtime) = std::fs::metadata(&resolved).and_then(|m| m.modified()) {
-                    state
-                        .file_tracker
-                        .update_after_edit(&resolved, new_bytes, mtime);
-                }
+            if let Some(ref new_bytes) = new_bytes
+                && let Ok(mtime) = std::fs::metadata(&resolved).and_then(|m| m.modified())
+            {
+                state
+                    .file_tracker
+                    .update_after_edit(&resolved, new_bytes, mtime);
             }
-            if let Some(preview) = edit_preview {
-                if let Some(tracked) = state.tool_tracker.get_mut(&tc_id) {
-                    tracked.edit_preview = Some(preview);
-                }
+            if let Some(preview) = edit_preview
+                && let Some(tracked) = state.tool_tracker.get_mut(&tc_id)
+            {
+                tracked.edit_preview = Some(preview);
             }
             state.finish_tool_call(&tc_id, outcome);
             if !state.tool_tracker.has_pending() {

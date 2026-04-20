@@ -297,8 +297,6 @@ impl ToolTracker {
             .find(|t| t.phase == ToolPhase::AskingForPermission)
     }
 
-    /// Get the preview for a tool by ID (live or cached).
-
     /// Iterate mutably over all tracked tools.
     pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut TrackedTool> {
         self.tools.iter_mut()
