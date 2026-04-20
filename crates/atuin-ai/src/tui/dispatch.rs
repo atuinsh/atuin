@@ -566,11 +566,10 @@ async fn check_tool_permission_inner(
         .map_err(|e| format!("Internal error fetching tool state: {e}"))?
         .ok_or_else(|| "Internal error: tool not found in tracker".to_string())?;
 
-    // 2. For edit tools, check session-scoped permission grants before
+    // 2. For file-based tools, check session-scoped permission grants before
     //    hitting the filesystem-based resolver. A valid grant means the user
     //    already approved this file recently.
-    if let ClientToolCall::Edit(ref edit) = tool {
-        let resolved = edit.resolved_path();
+    if let Some(resolved) = tool.resolved_file_path() {
         let has_grant = h2
             .fetch(move |state| state.edit_permissions.has_valid_grant(&resolved))
             .await
@@ -669,8 +668,7 @@ fn on_select_permission(ctx: &mut DispatchContext, permission: PermissionResult)
                     return;
                 };
 
-                if let ClientToolCall::Edit(ref edit) = tool {
-                    let resolved = edit.resolved_path();
+                if let Some(resolved) = tool.resolved_file_path() {
                     h2.update(move |state| {
                         state.edit_permissions.grant(resolved);
                     });
@@ -727,11 +725,16 @@ fn on_select_permission(ctx: &mut DispatchContext, permission: PermissionResult)
                     return;
                 };
 
-                // Write the rule to the global permissions file
+                // Write the rule to the global permissions file.
+                // For file-based tools, scope to the specific file path so the
+                // grant doesn't blanket-allow all files.
                 let file_path = writer::global_permissions_path();
+                let scope = tool
+                    .resolved_file_path()
+                    .map(|p| p.to_string_lossy().to_string());
                 let rule = Rule {
                     tool: tool.rule_name().to_string(),
-                    scope: None,
+                    scope,
                 };
                 if let Err(e) = writer::write_rule(&file_path, &rule, RuleDisposition::Allow).await
                 {

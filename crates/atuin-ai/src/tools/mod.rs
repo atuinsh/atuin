@@ -359,6 +359,17 @@ impl ClientToolCall {
         }
     }
 
+    /// The resolved file path for this tool call, if it's a file-based tool.
+    /// Used to build scoped permission rules like `Write(/abs/path/to/file)`.
+    pub(crate) fn resolved_file_path(&self) -> Option<PathBuf> {
+        match self {
+            ClientToolCall::Read(tool) => Some(tool.resolved_path()),
+            ClientToolCall::Edit(tool) => Some(tool.resolved_path()),
+            ClientToolCall::Write(tool) => Some(tool.resolved_path()),
+            _ => None,
+        }
+    }
+
     pub(crate) fn matches_rule(&self, rule: &Rule) -> bool {
         match self {
             ClientToolCall::Read(tool) => tool.matches_rule(rule),
@@ -449,14 +460,18 @@ impl TryFrom<&serde_json::Value> for ReadToolCall {
 }
 
 impl ReadToolCall {
-    fn execute(&self) -> ToolOutcome {
-        let mut path = self.path.clone();
-
-        if path.is_relative()
-            && let Ok(current_dir) = std::env::current_dir()
-        {
-            path = current_dir.join(path);
+    pub fn resolved_path(&self) -> PathBuf {
+        if self.path.is_relative() {
+            std::env::current_dir()
+                .map(|cwd| cwd.join(&self.path))
+                .unwrap_or_else(|_| self.path.clone())
+        } else {
+            self.path.clone()
         }
+    }
+
+    fn execute(&self) -> ToolOutcome {
+        let path = self.resolved_path();
 
         if !path.exists() {
             return ToolOutcome::Error(format!("Error: file does not exist: {}", path.display()));
