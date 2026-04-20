@@ -10,7 +10,6 @@
 //! invocations within the same logical session.
 
 use std::collections::HashMap;
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -128,9 +127,7 @@ fn system_time_to_ms(t: SystemTime) -> i64 {
 }
 
 fn hash_content(content: &[u8]) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    content.hash(&mut hasher);
-    hasher.finish()
+    xxhash_rust::xxh3::xxh3_64(content)
 }
 
 #[cfg(test)]

@@ -61,6 +61,7 @@ sqlx = { workspace = true, features = ["sqlite"] }
 typed-builder = { workspace = true }
 shellexpand = { workspace = true }
 imara-diff = { workspace = true }
+xxhash-rust = { workspace = true }
 vt100 = { workspace = true }
 tempfile = { workspace = true }
 chrono = "0.4"
