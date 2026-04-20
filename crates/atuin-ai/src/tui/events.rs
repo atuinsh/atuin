@@ -38,7 +38,34 @@ pub(crate) enum AiTuiEvent {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum PermissionResult {
     Allow,
+    /// Per-file, time-limited grant scoped to the current session.
+    AllowFileForSession,
     AlwaysAllowInDir,
     AlwaysAllow,
     Deny,
+}
+
+impl PermissionResult {
+    /// String identifier used as the SelectOption value.
+    pub fn as_value_str(&self) -> &'static str {
+        match self {
+            Self::Allow => "allow",
+            Self::AllowFileForSession => "allow-file-session",
+            Self::AlwaysAllowInDir => "always-allow-in-dir",
+            Self::AlwaysAllow => "always-allow",
+            Self::Deny => "deny",
+        }
+    }
+
+    /// Parse from a SelectOption value string.
+    pub fn from_value_str(s: &str) -> Option<Self> {
+        match s {
+            "allow" => Some(Self::Allow),
+            "allow-file-session" => Some(Self::AllowFileForSession),
+            "always-allow-in-dir" => Some(Self::AlwaysAllowInDir),
+            "always-allow" => Some(Self::AlwaysAllow),
+            "deny" => Some(Self::Deny),
+            _ => None,
+        }
+    }
 }

@@ -207,6 +207,16 @@ async fn run_inline_tui(
                 }
             }
 
+            // Restore edit permission grants from session metadata
+            if let Ok(Some(json)) = mgr
+                .get_metadata(crate::edit_permissions::METADATA_KEY)
+                .await
+            {
+                if let Ok(cache) = crate::edit_permissions::EditPermissionCache::from_json(&json) {
+                    session.edit_permissions = cache;
+                }
+            }
+
             (mgr, session)
         } else {
             // No meaningful content — treat as a fresh session

@@ -151,11 +151,7 @@ fn tool_call_view(tool_call: &TrackedTool, in_git_project: bool) -> Elements {
         ClientToolCall::AtuinHistory(tool) => tool.query.clone(),
     };
 
-    let dir_label = if in_git_project {
-        "Always allow in this workspace"
-    } else {
-        "Always allow in this directory"
-    };
+    let select_options = permission_options_for_tool(&tool_call.tool, in_git_project);
 
     element! {
         View(key: format!("tool-call-{}", tool_call.id), padding_left: Cells::from(2), padding_top: Cells::from(1)) {
@@ -164,35 +160,64 @@ fn tool_call_view(tool_call: &TrackedTool, in_git_project: bool) -> Elements {
                 Span(text: &tool_desc, style: Style::default().fg(Color::Yellow))
             }
             View(padding_left: Cells::from(2)) {
-                Select(options: [
-                    SelectOption::builder()
-                        .label("Allow")
-                        .value("allow")
-                        .build(),
-                    SelectOption::builder()
-                        .label(dir_label)
-                        .value("always-allow-in-dir")
-                        .build(),
-                    SelectOption::builder()
-                        .label("Always allow")
-                        .value("always-allow")
-                        .build(),
-                    SelectOption::builder()
-                        .label("Deny")
-                        .value("deny")
-                        .build(),
-                ], on_select: Box::new(move |option: &SelectOption| {
-                    let value = match option.value.as_str() {
-                        "allow" => PermissionResult::Allow,
-                        "always-allow-in-dir" => PermissionResult::AlwaysAllowInDir,
-                        "always-allow" => PermissionResult::AlwaysAllow,
-                        "deny" => PermissionResult::Deny,
-                        _ => unreachable!(),
-                    };
-
-                    Some(AiTuiEvent::SelectPermission(value))
+                Select(options: select_options, on_select: Box::new(move |option: &SelectOption| {
+                    PermissionResult::from_value_str(option.value.as_str())
+                        .map(AiTuiEvent::SelectPermission)
                 }) as Box<dyn Fn(&SelectOption) -> Option<AiTuiEvent> + Send + Sync>)
             }
+        }
+    }
+}
+
+/// Build the permission SelectOptions appropriate for a tool call.
+///
+/// Edit tools get a per-file session-scoped option instead of the
+/// workspace-level "Always allow in this directory". Other tools
+/// keep the standard set.
+fn permission_options_for_tool(tool: &ClientToolCall, in_git_project: bool) -> Vec<SelectOption> {
+    match tool {
+        ClientToolCall::Edit(_) => vec![
+            SelectOption::builder()
+                .label("Allow")
+                .value(PermissionResult::Allow.as_value_str())
+                .build(),
+            SelectOption::builder()
+                .label("Allow this file for this session")
+                .value(PermissionResult::AllowFileForSession.as_value_str())
+                .build(),
+            SelectOption::builder()
+                .label("Always allow")
+                .value(PermissionResult::AlwaysAllow.as_value_str())
+                .build(),
+            SelectOption::builder()
+                .label("Deny")
+                .value(PermissionResult::Deny.as_value_str())
+                .build(),
+        ],
+        _ => {
+            let dir_label = if in_git_project {
+                "Always allow in this workspace"
+            } else {
+                "Always allow in this directory"
+            };
+            vec![
+                SelectOption::builder()
+                    .label("Allow")
+                    .value(PermissionResult::Allow.as_value_str())
+                    .build(),
+                SelectOption::builder()
+                    .label(dir_label)
+                    .value(PermissionResult::AlwaysAllowInDir.as_value_str())
+                    .build(),
+                SelectOption::builder()
+                    .label("Always allow")
+                    .value(PermissionResult::AlwaysAllow.as_value_str())
+                    .build(),
+                SelectOption::builder()
+                    .label("Deny")
+                    .value(PermissionResult::Deny.as_value_str())
+                    .build(),
+            ]
         }
     }
 }

@@ -61,16 +61,17 @@ pub(crate) fn dispatch(ctx: &mut DispatchContext, event: AiTuiEvent) -> bool {
     !ctx.exiting.load(Ordering::Acquire)
 }
 
-/// Persist new events, server session ID, and file tracker state.
+/// Persist new events, server session ID, file tracker, and edit permissions.
 /// Called from the dispatch thread (sync), bridges to async via the tokio handle.
 fn persist_session(ctx: &mut DispatchContext) {
-    let Ok((events, server_sid, file_tracker_json)) = ctx
+    let Ok((events, server_sid, file_tracker_json, edit_perms_json)) = ctx
         .handle
         .fetch(|state| {
             (
                 state.conversation.events.clone(),
                 state.conversation.session_id.clone(),
                 state.file_tracker.to_json().ok(),
+                state.edit_permissions.to_json().ok(),
             )
         })
         .blocking_recv()
@@ -94,6 +95,14 @@ fn persist_session(ctx: &mut DispatchContext) {
         )
     {
         tracing::warn!("failed to persist file tracker: {e}");
+    }
+    if let Some(ref json) = edit_perms_json
+        && let Err(e) = rt.block_on(
+            ctx.session_mgr
+                .set_metadata(crate::edit_permissions::METADATA_KEY, json),
+        )
+    {
+        tracing::warn!("failed to persist edit permissions: {e}");
     }
 }
 
@@ -466,12 +475,28 @@ async fn check_tool_permission_inner(
         .map_err(|e| format!("Internal error fetching tool state: {e}"))?
         .ok_or_else(|| "Internal error: tool not found in tracker".to_string())?;
 
-    // 2. Resolve working directory
+    // 2. For edit tools, check session-scoped permission grants before
+    //    hitting the filesystem-based resolver. A valid grant means the user
+    //    already approved this file recently.
+    if let ClientToolCall::Edit(ref edit) = tool {
+        let resolved = edit.resolved_path();
+        let has_grant = h2
+            .fetch(move |state| state.edit_permissions.has_valid_grant(&resolved))
+            .await
+            .unwrap_or(false);
+
+        if has_grant {
+            execute_tool(h2, tx, id, tool, db);
+            return Ok(());
+        }
+    }
+
+    // 3. Resolve working directory
     let working_dir = target_dir
         .or_else(|| std::env::current_dir().ok())
         .ok_or_else(|| "Could not determine working directory".to_string())?;
 
-    // 3. Create permission resolver and check
+    // 4. Create permission resolver and check
     let resolver = PermissionResolver::new(working_dir)
         .await
         .map_err(|e| format!("Permission check failed: {e}"))?;
@@ -481,7 +506,7 @@ async fn check_tool_permission_inner(
         .await
         .map_err(|e| format!("Permission check failed: {e}"))?;
 
-    // 4. Handle response — all paths here handle the tool, so return Ok
+    // 5. Handle response — all paths here handle the tool, so return Ok
     let id_clone = id.clone();
     match response {
         PermissionResponse::Allowed => {
@@ -533,6 +558,32 @@ fn on_select_permission(ctx: &mut DispatchContext, permission: PermissionResult)
                 else {
                     return;
                 };
+
+                execute_tool(&h2, &tx, tool_id, tool, &db);
+            });
+        }
+        PermissionResult::AllowFileForSession => {
+            // Cache a session-scoped, time-limited grant for this file
+            let db = ctx.app_ctx.history_db.clone();
+            tokio::spawn(async move {
+                let Ok(Some((tool_id, tool))) = h2
+                    .fetch(move |state| {
+                        state
+                            .tool_tracker
+                            .asking_for_permission()
+                            .map(|t| (t.id.clone(), t.tool.clone()))
+                    })
+                    .await
+                else {
+                    return;
+                };
+
+                if let ClientToolCall::Edit(ref edit) = tool {
+                    let resolved = edit.resolved_path();
+                    h2.update(move |state| {
+                        state.edit_permissions.grant(resolved);
+                    });
+                }
 
                 execute_tool(&h2, &tx, tool_id, tool, &db);
             });
