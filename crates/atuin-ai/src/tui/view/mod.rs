@@ -175,7 +175,7 @@ fn tool_call_view(tool_call: &TrackedTool, in_git_project: bool) -> Elements {
 /// keep the standard set.
 fn permission_options_for_tool(tool: &ClientToolCall, in_git_project: bool) -> Vec<SelectOption> {
     match tool {
-        ClientToolCall::Edit(_) => vec![
+        ClientToolCall::Edit(_) | ClientToolCall::Write(_) => vec![
             SelectOption::builder()
                 .label("Allow")
                 .value(PermissionResult::Allow.as_value_str())
