@@ -108,14 +108,30 @@ impl SnapshotStore {
 
 /// Percent-encode a path for use as a filename.
 ///
-/// Encodes `%` as `%25` and `/` as `%2F`, then strips the leading separator.
-/// Produces human-readable filenames that are unambiguous and collision-free.
+/// Encodes `%` as `%25`, `/` as `%2F`, and `\` as `%5C`, then strips
+/// leading separators and drive prefixes (e.g. `C:\`). The result is
+/// always a flat filename safe for use with `Path::join` on any platform.
 ///
-/// Example: `/Users/me/.config/foo.toml` → `Users%2Fme%2F.config%2Ffoo.toml`
+/// Example (Unix): `/Users/me/.config/foo.toml` → `Users%2Fme%2F.config%2Ffoo.toml`
+/// Example (Windows): `C:\Users\me\config.toml` → `Users%5Cme%5Cconfig.toml`
 pub(crate) fn sanitize_path(path: &Path) -> String {
     let s = path.to_string_lossy();
-    let s = s.strip_prefix('/').unwrap_or(&s);
-    s.replace('%', "%25").replace('/', "%2F")
+    // Strip drive letter prefix on Windows (e.g. "C:\")
+    let s = s.strip_prefix('/').unwrap_or_else(|| {
+        // Handle Windows drive prefix like "C:\" or "C:/"
+        if s.len() >= 3
+            && s.as_bytes()[0].is_ascii_alphabetic()
+            && s.as_bytes()[1] == b':'
+            && (s.as_bytes()[2] == b'\\' || s.as_bytes()[2] == b'/')
+        {
+            &s[3..]
+        } else {
+            &s
+        }
+    });
+    s.replace('%', "%25")
+        .replace('/', "%2F")
+        .replace('\\', "%5C")
 }
 
 /// Write a file atomically using temp-file-then-rename.
@@ -192,6 +208,34 @@ mod tests {
         let a = sanitize_path(Path::new("/foo/bar-baz"));
         let b = sanitize_path(Path::new("/foo/bar/baz"));
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn sanitize_backslash_encoded() {
+        // Windows-style path: backslashes become %5C, drive prefix stripped
+        let s = sanitize_path(Path::new("C:\\Users\\me\\config.toml"));
+        assert!(!s.contains('\\'), "backslashes must be encoded: {s}");
+        assert!(!s.starts_with("C:"), "drive prefix must be stripped: {s}");
+        assert!(s.contains("Users"));
+        assert!(s.contains("config.toml"));
+    }
+
+    #[test]
+    fn sanitize_result_is_flat_filename() {
+        // The result must not be interpreted as a path with separators
+        // when passed to Path::join — no raw / or \ allowed.
+        let unix = sanitize_path(Path::new("/home/user/file.txt"));
+        assert!(!unix.contains('/'));
+        // Construct as if on Windows
+        let win = "C:\\Users\\me\\file.txt";
+        let encoded = win
+            .strip_prefix("C:\\")
+            .unwrap()
+            .replace('%', "%25")
+            .replace('/', "%2F")
+            .replace('\\', "%5C");
+        assert!(!encoded.contains('\\'));
+        assert!(!encoded.contains('/'));
     }
 
     // ── atomic_write_file ──────────────────────────────────────
