@@ -320,7 +320,7 @@ impl TryFrom<(&str, &serde_json::Value)> for ClientToolCall {
         match name {
             "read_file" => Ok(ClientToolCall::Read(ReadToolCall::try_from(input)?)),
             "edit_file" => Ok(ClientToolCall::Edit(EditToolCall::try_from(input)?)),
-            "create_file" => Ok(ClientToolCall::Write(WriteToolCall::try_from(input)?)),
+            "write_file" => Ok(ClientToolCall::Write(WriteToolCall::try_from(input)?)),
             "execute_shell_command" => Ok(ClientToolCall::Shell(ShellToolCall::try_from(input)?)),
             "atuin_history" => Ok(ClientToolCall::AtuinHistory(
                 AtuinHistoryToolCall::try_from(input)?,
@@ -614,7 +614,7 @@ impl EditToolCall {
         if self.old_string.is_empty() {
             return (
                 ToolOutcome::Error(
-                    "old_string must not be empty. To create a new file, use create_file instead."
+                    "old_string must not be empty. To create a new file, use write_file instead."
                         .to_string(),
                 ),
                 None,
