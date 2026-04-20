@@ -1327,22 +1327,22 @@ mod tests {
     mod edit {
         use super::*;
         use crate::file_tracker::FileReadTracker;
-        use std::io::Write as _;
 
-        /// Helper: create a temp file, record it in a tracker, return both.
-        fn setup_tracked_file(content: &str) -> (tempfile::NamedTempFile, FileReadTracker) {
-            let mut tmp = tempfile::NamedTempFile::new().unwrap();
-            write!(tmp, "{content}").unwrap();
-            tmp.flush().unwrap();
+        /// Helper: create a temp file (with a closed handle), record it in a tracker.
+        /// Returns the TempDir (keeps the path alive) and tracker.
+        /// The file handle is closed so atomic_write_file can rename over it on Windows.
+        fn setup_tracked_file(content: &str) -> (tempfile::TempDir, PathBuf, FileReadTracker) {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("test_file.toml");
+            std::fs::write(&path, content).unwrap();
 
-            let path = tmp.path().to_path_buf();
             let file_content = std::fs::read(&path).unwrap();
             let mtime = std::fs::metadata(&path).unwrap().modified().unwrap();
 
             let mut tracker = FileReadTracker::default();
-            tracker.record_read(path, &file_content, mtime);
+            tracker.record_read(path.clone(), &file_content, mtime);
 
-            (tmp, tracker)
+            (dir, path, tracker)
         }
 
         fn edit_call(path: &Path, old: &str, new: &str, replace_all: bool) -> EditToolCall {
@@ -1356,8 +1356,7 @@ mod tests {
 
         #[test]
         fn successful_single_replacement() {
-            let (tmp, tracker) = setup_tracked_file("[section]\nkey = old_value\n");
-            let path = tmp.path().to_path_buf();
+            let (_dir, path, tracker) = setup_tracked_file("[section]\nkey = old_value\n");
 
             let call = edit_call(&path, "old_value", "new_value", false);
             let (outcome, new_bytes) = call.execute(&path, &tracker);
@@ -1372,8 +1371,7 @@ mod tests {
 
         #[test]
         fn successful_replace_all() {
-            let (tmp, tracker) = setup_tracked_file("aaa bbb aaa ccc aaa");
-            let path = tmp.path().to_path_buf();
+            let (_dir, path, tracker) = setup_tracked_file("aaa bbb aaa ccc aaa");
 
             let call = edit_call(&path, "aaa", "xxx", true);
             let (outcome, _) = call.execute(&path, &tracker);
@@ -1387,8 +1385,9 @@ mod tests {
 
         #[test]
         fn error_file_not_read() {
-            let tmp = tempfile::NamedTempFile::new().unwrap();
-            let path = tmp.path().to_path_buf();
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("unread.txt");
+            std::fs::write(&path, "content").unwrap();
             let tracker = FileReadTracker::default(); // empty — never read
 
             let call = edit_call(&path, "x", "y", false);
@@ -1405,8 +1404,7 @@ mod tests {
 
         #[test]
         fn error_file_modified_since_read() {
-            let (tmp, tracker) = setup_tracked_file("original");
-            let path = tmp.path().to_path_buf();
+            let (_dir, path, tracker) = setup_tracked_file("original");
 
             // Modify the file after the read was recorded
             std::thread::sleep(std::time::Duration::from_millis(10));
@@ -1426,8 +1424,7 @@ mod tests {
 
         #[test]
         fn error_no_match() {
-            let (tmp, tracker) = setup_tracked_file("hello world");
-            let path = tmp.path().to_path_buf();
+            let (_dir, path, tracker) = setup_tracked_file("hello world");
 
             let call = edit_call(&path, "nonexistent", "replacement", false);
             let (outcome, new_bytes) = call.execute(&path, &tracker);
@@ -1443,8 +1440,7 @@ mod tests {
 
         #[test]
         fn error_multiple_matches_without_replace_all() {
-            let (tmp, tracker) = setup_tracked_file("foo bar foo baz foo");
-            let path = tmp.path().to_path_buf();
+            let (_dir, path, tracker) = setup_tracked_file("foo bar foo baz foo");
 
             let call = edit_call(&path, "foo", "qux", false);
             let (outcome, new_bytes) = call.execute(&path, &tracker);
@@ -1466,8 +1462,7 @@ mod tests {
 
         #[test]
         fn error_empty_old_string() {
-            let (tmp, tracker) = setup_tracked_file("content");
-            let path = tmp.path().to_path_buf();
+            let (_dir, path, tracker) = setup_tracked_file("content");
 
             let call = edit_call(&path, "", "something", false);
             let (outcome, new_bytes) = call.execute(&path, &tracker);
@@ -1479,7 +1474,8 @@ mod tests {
         #[test]
         fn error_file_does_not_exist() {
             let tracker = FileReadTracker::default();
-            let path = PathBuf::from("/tmp/nonexistent_atuin_test_file.txt");
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("nonexistent.txt");
 
             let call = edit_call(&path, "x", "y", false);
             let (outcome, new_bytes) = call.execute(&path, &tracker);
@@ -1496,8 +1492,7 @@ mod tests {
         #[test]
         fn preserves_file_when_no_match() {
             let original = "[config]\nport = 8080\nhost = localhost\n";
-            let (tmp, tracker) = setup_tracked_file(original);
-            let path = tmp.path().to_path_buf();
+            let (_dir, path, tracker) = setup_tracked_file(original);
 
             let call = edit_call(&path, "port = 9090", "port = 3000", false);
             let (outcome, _) = call.execute(&path, &tracker);
@@ -1509,8 +1504,7 @@ mod tests {
         #[test]
         fn multiline_replacement() {
             let content = "[section]\nkey1 = val1\nkey2 = val2\n[other]\n";
-            let (tmp, tracker) = setup_tracked_file(content);
-            let path = tmp.path().to_path_buf();
+            let (_dir, path, tracker) = setup_tracked_file(content);
 
             let call = edit_call(
                 &path,
