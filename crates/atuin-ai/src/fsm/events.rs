@@ -67,6 +67,8 @@ pub(crate) enum Event {
     ToolExecutionDone {
         tool_id: String,
         outcome: ToolOutcome,
+        /// Preview data computed by the driver (diff, content preview, final shell state).
+        preview: Option<super::tools::ToolPreviewData>,
     },
     /// Live preview update for an executing shell command.
     ToolPreviewUpdate {

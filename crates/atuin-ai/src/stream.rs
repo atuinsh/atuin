@@ -100,7 +100,7 @@ impl ChatRequest {
     }
 }
 
-fn create_chat_stream(
+pub(crate) fn create_chat_stream(
     hub_address: String,
     token: String,
     request: ChatRequest,

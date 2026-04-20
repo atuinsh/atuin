@@ -18,7 +18,7 @@ use serde_json::Value;
 use crate::context_window::ContextWindowBuilder;
 use crate::tui::state::ConversationEvent;
 
-use effects::{Effect, ExitAction};
+use effects::{Effect, ExitAction, PermissionTarget};
 use events::{Event, PermissionChoice, PermissionResponse};
 use tools::{ToolManager, ToolState};
 
@@ -401,9 +401,14 @@ impl AgentFsm {
                 self.handle_permission_choice(tool_id, choice)
             }
 
-            (AgentState::Turn { .. }, Event::ToolExecutionDone { tool_id, outcome }) => {
-                self.handle_tool_done(tool_id, outcome)
-            }
+            (
+                AgentState::Turn { .. },
+                Event::ToolExecutionDone {
+                    tool_id,
+                    outcome,
+                    preview,
+                },
+            ) => self.handle_tool_done(tool_id, outcome, preview),
 
             (
                 AgentState::Turn { .. },
@@ -687,7 +692,7 @@ impl AgentFsm {
                 vec![
                     Effect::ExecuteTool { tool_id, tool },
                     Effect::WritePermissionRule {
-                        path: std::path::PathBuf::new(), // driver fills in project root
+                        target: PermissionTarget::Project,
                         rule,
                         disposition: crate::permissions::writer::RuleDisposition::Allow,
                     },
@@ -706,7 +711,7 @@ impl AgentFsm {
                 vec![
                     Effect::ExecuteTool { tool_id, tool },
                     Effect::WritePermissionRule {
-                        path: std::path::PathBuf::new(), // driver fills in global path
+                        target: PermissionTarget::Global,
                         rule,
                         disposition: crate::permissions::writer::RuleDisposition::Allow,
                     },
@@ -731,6 +736,7 @@ impl AgentFsm {
         &mut self,
         tool_id: String,
         outcome: crate::tools::ToolOutcome,
+        preview: Option<tools::ToolPreviewData>,
     ) -> Vec<Effect> {
         let Some(tracked) = self.ctx.tools.get_mut(&tool_id) else {
             return vec![];
@@ -742,6 +748,9 @@ impl AgentFsm {
         }
 
         tracked.state = ToolState::Completed;
+        if preview.is_some() {
+            tracked.preview = preview;
+        }
 
         let content = outcome.format_for_llm();
         let is_error = outcome.is_error();

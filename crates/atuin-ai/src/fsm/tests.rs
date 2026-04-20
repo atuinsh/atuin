@@ -173,6 +173,7 @@ fn tool_done_after_stream_done_continues_conversation() {
     let effects = fsm.handle(Event::ToolExecutionDone {
         tool_id: "t1".into(),
         outcome: crate::tools::ToolOutcome::Success("file contents".into()),
+        preview: None,
     });
 
     // Turn complete → continuation
@@ -208,6 +209,7 @@ fn tool_done_before_stream_done_stays_in_turn() {
     let effects = fsm.handle(Event::ToolExecutionDone {
         tool_id: "t1".into(),
         outcome: crate::tools::ToolOutcome::Success("contents".into()),
+        preview: None,
     });
 
     // Still in Turn — stream phase is Streaming, not Done
@@ -305,6 +307,7 @@ fn stale_tool_result_after_cancel_is_ignored() {
     let effects = fsm.handle(Event::ToolExecutionDone {
         tool_id: "t1".into(),
         outcome: crate::tools::ToolOutcome::Success("contents".into()),
+        preview: None,
     });
 
     assert_eq!(fsm.state, AgentState::Idle { confirmation: None });

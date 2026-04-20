@@ -2,6 +2,7 @@ pub mod commands;
 pub(crate) mod context;
 pub(crate) mod context_window;
 pub(crate) mod diff;
+pub(crate) mod driver;
 pub(crate) mod edit_permissions;
 pub(crate) mod event_serde;
 pub(crate) mod file_tracker;

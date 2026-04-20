@@ -11,6 +11,15 @@ use crate::permissions::rule::Rule;
 use crate::permissions::writer::RuleDisposition;
 use crate::tools::ClientToolCall;
 
+/// Where to write a permission rule.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PermissionTarget {
+    /// Project-level: `<git_root_or_cwd>/.atuin/permissions.ai.toml`
+    Project,
+    /// Global: `~/.config/atuin/permissions.ai.toml`
+    Global,
+}
+
 /// Side effects the driver should execute after a state transition.
 #[derive(Debug, Clone)]
 pub(crate) enum Effect {
@@ -42,7 +51,7 @@ pub(crate) enum Effect {
     Persist,
     /// Write a permanent permission rule to disk.
     WritePermissionRule {
-        path: PathBuf,
+        target: PermissionTarget,
         rule: Rule,
         disposition: RuleDisposition,
     },
