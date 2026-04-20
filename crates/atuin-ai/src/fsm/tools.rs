@@ -59,6 +59,38 @@ impl TrackedTool {
     pub fn file_path(&self) -> Option<PathBuf> {
         self.tool.resolved_file_path()
     }
+
+    /// Extract shell preview data (for TurnBuilder compatibility).
+    pub fn shell_preview(&self) -> Option<crate::tools::ToolPreview> {
+        match &self.preview {
+            Some(ToolPreviewData::Shell {
+                lines,
+                exit_code,
+                interrupted,
+            }) => Some(crate::tools::ToolPreview {
+                lines: lines.clone(),
+                exit_code: *exit_code,
+                interrupted: *interrupted,
+            }),
+            _ => None,
+        }
+    }
+
+    /// Extract edit diff preview (for TurnBuilder compatibility).
+    pub fn edit_preview(&self) -> Option<&EditPreview> {
+        match &self.preview {
+            Some(ToolPreviewData::Edit(p)) => Some(p),
+            _ => None,
+        }
+    }
+
+    /// Extract write content preview (for TurnBuilder compatibility).
+    pub fn write_preview(&self) -> Option<&WritePreview> {
+        match &self.preview {
+            Some(ToolPreviewData::Write(p)) => Some(p),
+            _ => None,
+        }
+    }
 }
 
 /// Manages tool call lifecycles for a single turn.

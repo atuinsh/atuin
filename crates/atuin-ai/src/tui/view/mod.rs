@@ -5,7 +5,10 @@ use eye_declare::{
 };
 use ratatui_core::style::{Color, Modifier, Style};
 
-use crate::tools::{ClientToolCall, HistorySearchFilterMode, ToolPreview, TrackedTool};
+use crate::driver::ViewState;
+use crate::fsm::tools::TrackedTool;
+use crate::fsm::{AgentState, PendingConfirmation, StreamPhase};
+use crate::tools::{ClientToolCall, HistorySearchFilterMode, ToolPreview};
 use crate::tui::components::select::SelectOption;
 use crate::tui::components::session_continue::SessionContinue;
 use crate::tui::events::{AiTuiEvent, PermissionResult};
@@ -14,9 +17,22 @@ use super::components::atuin_ai::AtuinAi;
 use super::components::input_box::InputBox;
 use super::components::markdown::Markdown;
 use super::components::select::Select;
-use super::state::{AppMode, Session};
+use super::state::AppMode;
 
 mod turn;
+
+impl From<&AgentState> for AppMode {
+    fn from(state: &AgentState) -> Self {
+        match state {
+            AgentState::Idle { .. } => AppMode::Input,
+            AgentState::Turn {
+                stream: StreamPhase::Connecting,
+            } => AppMode::Generating,
+            AgentState::Turn { .. } => AppMode::Streaming,
+            AgentState::Error(_) => AppMode::Error,
+        }
+    }
+}
 
 /// Build the element tree from current state.
 ///
@@ -26,28 +42,27 @@ mod turn;
 /// - Error display (if in error state)
 /// - Spacer
 /// - Input box (bordered, with contextual keybindings)
-pub(crate) fn ai_view(state: &Session) -> Elements {
-    let mut turn_builder = turn::TurnBuilder::new(&state.tool_tracker);
+pub(crate) fn ai_view(state: &ViewState) -> Elements {
+    let mut turn_builder = turn::TurnBuilder::new(&state.tools);
 
-    for event in &state.archived_view_events {
+    for event in &state.archived_events {
         turn_builder.add_event(event);
     }
-    for event in &state.conversation.events[state.view_start_index..] {
+    for event in &state.visible_events {
         turn_builder.add_event(event);
     }
     let turns = turn_builder.build();
 
-    let busy = state.interaction.mode == AppMode::Streaming
-        || state.interaction.mode == AppMode::Generating;
+    let busy = state.is_busy();
     let last_index = turns.len().saturating_sub(1);
 
     element! {
         AtuinAi(
-            mode: state.interaction.mode,
-            has_command: state.conversation.has_any_command(),
-            is_input_blank: state.interaction.is_input_blank,
-            pending_confirmation: state.interaction.confirmation_pending,
-            has_executing_preview: state.tool_tracker.has_executing_preview(),
+            mode: AppMode::from(&state.agent_state),
+            has_command: state.has_command(),
+            is_input_blank: state.is_input_blank,
+            pending_confirmation: state.has_confirmation(),
+            has_executing_preview: state.tools.has_executing_preview(),
         ) {
             #(if state.is_resumed && (!state.is_exiting() || !turns.is_empty()) {
                 SessionContinue(key: "continuation-notice", continued_at: state.last_event_time)
@@ -84,11 +99,10 @@ pub(crate) fn ai_view(state: &Session) -> Elements {
     }
 }
 
-fn input_view(state: &Session) -> Elements {
-    let asking_tool = state.tool_tracker.asking_for_permission();
+fn input_view(state: &ViewState) -> Elements {
+    let asking_tool = state.tools.awaiting_permission();
     let in_git_project = state.in_git_project;
     let slash_results = state
-        .interaction
         .slash_command_search_results
         .iter()
         .take(4)
@@ -107,12 +121,12 @@ fn input_view(state: &Session) -> Elements {
                     title: "Generate a command or ask a question",
                     title_right: "Atuin AI",
                     footer: state.footer_text(),
-                    active: state.interaction.mode == AppMode::Input && !state.interaction.confirmation_pending,
+                    active: state.is_input_active(),
                     slash_suggestion: first_slash_result.cloned()
                 )
 
-                #(if state.interaction.is_input_blank && state.conversation.has_any_command() && state.interaction.mode == AppMode::Input {
-                    #(if state.interaction.confirmation_pending {
+                #(if state.is_input_blank && state.has_command() && state.is_input_active() {
+                    #(if state.has_confirmation() {
                         Text { Span(text: "[Enter] Confirm dangerous command  [Esc] Cancel", style: Style::default().fg(Color::Gray)) }
                     } else {
                         Text { Span(text: "[Enter] Execute suggested command  [Tab] Insert Command", style: Style::default().fg(Color::Gray)) }
@@ -140,7 +154,7 @@ fn input_view(state: &Session) -> Elements {
     }
 }
 
-fn tool_call_view(tool_call: &TrackedTool, in_git_project: bool) -> Elements {
+fn tool_call_view(tool_call: &crate::fsm::tools::TrackedTool, in_git_project: bool) -> Elements {
     let verb = tool_call.tool.descriptor().display_verb;
     let tool_desc = match &tool_call.tool {
         ClientToolCall::Read(tool) => tool.path.display().to_string(),

@@ -79,6 +79,55 @@ impl ViewState {
     pub fn is_exiting(&self) -> bool {
         self.exit_action.is_some()
     }
+
+    /// Whether the agent is busy (streaming or executing tools).
+    pub fn is_busy(&self) -> bool {
+        matches!(self.agent_state, AgentState::Turn { .. })
+    }
+
+    /// Whether there's a pending confirmation for a dangerous command.
+    pub fn has_confirmation(&self) -> bool {
+        matches!(
+            self.agent_state,
+            AgentState::Idle {
+                confirmation: Some(_)
+            }
+        )
+    }
+
+    /// Whether the user can type in the input box.
+    pub fn is_input_active(&self) -> bool {
+        matches!(self.agent_state, AgentState::Idle { .. }) && !self.has_confirmation()
+    }
+
+    /// Whether any command has been suggested in the conversation.
+    pub fn has_command(&self) -> bool {
+        self.all_events.iter().any(|e| {
+            if let ConversationEvent::ToolCall { name, input, .. } = e {
+                name == "suggest_command" && input.get("command").and_then(|v| v.as_str()).is_some()
+            } else {
+                false
+            }
+        })
+    }
+
+    /// Footer text based on current state.
+    pub fn footer_text(&self) -> &'static str {
+        match &self.agent_state {
+            AgentState::Idle { confirmation: None } => {
+                if self.has_command() && self.is_input_blank {
+                    "[Enter] Execute suggested command  [Tab] Insert Command"
+                } else {
+                    "[Enter] Send  [Shift+Enter] New line  [Esc] Exit"
+                }
+            }
+            AgentState::Idle {
+                confirmation: Some(_),
+            } => "[Enter] Confirm dangerous command  [Esc] Cancel",
+            AgentState::Turn { .. } => "[Esc] Cancel",
+            AgentState::Error(_) => "[Enter]/[r] Retry  [Esc] Exit",
+        }
+    }
 }
 
 /// Main driver loop. Processes events, transitions FSM, syncs view, executes effects.
