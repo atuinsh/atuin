@@ -102,7 +102,7 @@ impl EditPreview {
 }
 
 /// Maximum lines to show in a write preview.
-const WRITE_PREVIEW_LINES: usize = 20;
+const WRITE_PREVIEW_LINES: usize = 10;
 
 /// A content preview for a write_file operation.
 ///
