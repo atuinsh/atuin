@@ -5,6 +5,7 @@ use eyre::Result;
 use crate::permissions::rule::Rule;
 
 /// Whether a rule should be added to the allow or deny list.
+#[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub(crate) enum RuleDisposition {
     Allow,

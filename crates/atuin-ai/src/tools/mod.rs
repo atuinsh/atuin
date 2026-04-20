@@ -58,6 +58,7 @@ fn path_matches_scope(path: &Path, scope: &str) -> bool {
 }
 
 /// Result of executing a client-side tool.
+#[derive(Debug, Clone)]
 pub(crate) enum ToolOutcome {
     /// Simple success with a text result (used by Read, AtuinHistory).
     Success(String),
