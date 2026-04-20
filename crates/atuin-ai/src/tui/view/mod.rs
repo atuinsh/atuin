@@ -518,8 +518,8 @@ fn file_edit_tool_view(
         return status_line;
     }
 
-    // Calculate the line number gutter width from the total line count
-    let max_line_num = preview.line_count();
+    // Calculate the line number gutter width from the highest line number
+    let max_line_num = preview.max_line_number();
     let gutter_width = max_line_num.to_string().len().max(2) as u16 + 1; // +1 for spacing
 
     element! {
@@ -528,31 +528,47 @@ fn file_edit_tool_view(
 
             View(key: format!("{key}-diff"), padding_left: Cells::from(2)) {
                 #(for (hunk_idx, hunk) in preview.hunks.iter().enumerate() {
-                    View(key: format!("{key}-hunk-{hunk_idx}")) {
-                        #(for (line_idx, line) in hunk.lines.iter().enumerate() {
-                            #({
-                                let (prefix, text, style) = match line {
-                                    DiffLine::Context(t) => (" ", t.as_str(), Style::default().fg(Color::DarkGray)),
-                                    DiffLine::Added(t) => ("+", t.as_str(), Style::default().fg(Color::Green)),
-                                    DiffLine::Removed(t) => ("-", t.as_str(), Style::default().fg(Color::Red)),
-                                };
-                                let line_num = format!("{:>width$}", line_idx + 1, width = (gutter_width - 1) as usize);
-                                element! {
+                    #({
+                        let gutter_w = gutter_width;
+                        let mut before_pos = hunk.start_line;
+                        let lines_with_nums: Vec<_> = hunk.lines.iter().enumerate().map(|(line_idx, line)| {
+                            let (prefix, text, style, gutter) = match line {
+                                DiffLine::Context(t) => {
+                                    let num = format!("{:>width$}", before_pos, width = (gutter_w - 1) as usize);
+                                    before_pos += 1;
+                                    (" ", t.as_str(), Style::default().fg(Color::DarkGray), num)
+                                }
+                                DiffLine::Removed(t) => {
+                                    let num = format!("{:>width$}", before_pos, width = (gutter_w - 1) as usize);
+                                    before_pos += 1;
+                                    ("-", t.as_str(), Style::default().fg(Color::Red), num)
+                                }
+                                DiffLine::Added(t) => {
+                                    let num = " ".repeat((gutter_w - 1) as usize);
+                                    ("+", t.as_str(), Style::default().fg(Color::Green), num)
+                                }
+                            };
+                            (line_idx, prefix, text.to_string(), style, gutter)
+                        }).collect();
+
+                        element! {
+                            View(key: format!("{key}-hunk-{hunk_idx}")) {
+                                #(for (line_idx, prefix, text, style, gutter) in &lines_with_nums {
                                     HStack(key: format!("{key}-hunk-{hunk_idx}-line-{line_idx}")) {
-                                        View(width: WidthConstraint::Fixed(gutter_width)) {
-                                            Text { Span(text: line_num, style: Style::default().fg(Color::DarkGray)) }
+                                        View(width: WidthConstraint::Fixed(gutter_w)) {
+                                            Text { Span(text: gutter, style: Style::default().fg(Color::DarkGray)) }
                                         }
                                         View {
                                             Text {
-                                                Span(text: prefix, style: style)
-                                                Span(text: text, style: style)
+                                                Span(text: *prefix, style: *style)
+                                                Span(text: text, style: *style)
                                             }
                                         }
                                     }
-                                }
-                            })
-                        })
-                    }
+                                })
+                            }
+                        }
+                    })
                 })
             }
         }

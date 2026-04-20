@@ -18,6 +18,8 @@ pub(crate) struct EditPreview {
 /// A contiguous group of diff lines (context + changes).
 #[derive(Debug, Clone)]
 pub(crate) struct DiffHunk {
+    /// 1-indexed line number of the first line in this hunk (in the original file).
+    pub start_line: u32,
     pub lines: Vec<DiffLine>,
 }
 
@@ -72,9 +74,22 @@ impl EditPreview {
         EditPreview { hunks }
     }
 
-    /// Total number of lines across all hunks (for sizing).
-    pub fn line_count(&self) -> usize {
-        self.hunks.iter().map(|h| h.lines.len()).sum()
+    /// The highest original-file line number that will be displayed (for gutter width).
+    /// Only counts Context and Removed lines since Added lines don't have
+    /// a position in the original file.
+    pub fn max_line_number(&self) -> u32 {
+        self.hunks
+            .iter()
+            .map(|h| {
+                let before_lines = h
+                    .lines
+                    .iter()
+                    .filter(|l| matches!(l, DiffLine::Context(_) | DiffLine::Removed(_)))
+                    .count() as u32;
+                h.start_line + before_lines.saturating_sub(1)
+            })
+            .max()
+            .unwrap_or(0)
     }
 }
 
@@ -113,7 +128,10 @@ fn build_hunk(group: &[&imara_diff::Hunk], input: &InternedInput<&str>) -> DiffH
         lines.push(DiffLine::Context(token_text(input, true, i)));
     }
 
-    DiffHunk { lines }
+    DiffHunk {
+        start_line: context_start + 1, // 1-indexed
+        lines,
+    }
 }
 
 /// Extract the text content of a token, trimming the trailing newline
@@ -219,11 +237,25 @@ mod tests {
     }
 
     #[test]
-    fn line_count_sums_all_hunks() {
+    fn max_line_number_reflects_file_position() {
         let old = "a\nb\nc\n";
         let new = "a\nX\nc\n";
         let preview = EditPreview::compute(old, new);
-        assert_eq!(preview.line_count(), preview.hunks[0].lines.len());
+        // 3-line file, context + removed lines span positions 1-3
+        assert_eq!(preview.max_line_number(), 3);
+    }
+
+    #[test]
+    fn start_line_is_correct_for_later_changes() {
+        // Change at line 10 with 3 context lines → start_line = 7
+        let mut lines: Vec<String> = (1..=15).map(|i| format!("line{i}")).collect();
+        let old = lines.join("\n") + "\n";
+        lines[9] = "CHANGED".to_string();
+        let new = lines.join("\n") + "\n";
+
+        let preview = EditPreview::compute(&old, &new);
+        assert_eq!(preview.hunks.len(), 1);
+        assert_eq!(preview.hunks[0].start_line, 7); // line 10 - 3 context = line 7
     }
 
     #[test]
