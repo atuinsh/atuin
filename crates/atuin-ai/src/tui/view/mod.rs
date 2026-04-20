@@ -530,33 +530,36 @@ fn file_edit_tool_view(
                 #(for (hunk_idx, hunk) in preview.hunks.iter().enumerate() {
                     #({
                         let gutter_w = gutter_width;
-                        let mut before_pos = hunk.start_line;
-                        let lines_with_nums: Vec<_> = hunk.lines.iter().enumerate().map(|(line_idx, line)| {
-                            let (prefix, text, style, gutter) = match line {
+                        let mut before_pos = hunk.before_start;
+                        let mut after_pos = hunk.after_start;
+                        let lines_rendered: Vec<_> = hunk.lines.iter().enumerate().map(|(line_idx, line)| {
+                            let (prefix, text, style, gutter_text, gutter_style) = match line {
                                 DiffLine::Context(t) => {
-                                    let num = format!("{:>width$}", before_pos, width = (gutter_w - 1) as usize);
+                                    let num = format!("{:>width$}", after_pos, width = (gutter_w - 1) as usize);
                                     before_pos += 1;
-                                    (" ", t.as_str(), Style::default().fg(Color::DarkGray), num)
+                                    after_pos += 1;
+                                    (" ", t.as_str(), Style::default().fg(Color::DarkGray), num, Style::default().fg(Color::DarkGray))
                                 }
                                 DiffLine::Removed(t) => {
                                     let num = format!("{:>width$}", before_pos, width = (gutter_w - 1) as usize);
                                     before_pos += 1;
-                                    ("-", t.as_str(), Style::default().fg(Color::Red), num)
+                                    ("-", t.as_str(), Style::default().fg(Color::Red), num, Style::default().fg(Color::Red))
                                 }
                                 DiffLine::Added(t) => {
-                                    let num = " ".repeat((gutter_w - 1) as usize);
-                                    ("+", t.as_str(), Style::default().fg(Color::Green), num)
+                                    let num = format!("{:>width$}", after_pos, width = (gutter_w - 1) as usize);
+                                    after_pos += 1;
+                                    ("+", t.as_str(), Style::default().fg(Color::Green), num, Style::default().fg(Color::Green))
                                 }
                             };
-                            (line_idx, prefix, text.to_string(), style, gutter)
+                            (line_idx, prefix, text.to_string(), style, gutter_text, gutter_style)
                         }).collect();
 
                         element! {
                             View(key: format!("{key}-hunk-{hunk_idx}")) {
-                                #(for (line_idx, prefix, text, style, gutter) in &lines_with_nums {
+                                #(for (line_idx, prefix, text, style, gutter_text, gutter_style) in &lines_rendered {
                                     HStack(key: format!("{key}-hunk-{hunk_idx}-line-{line_idx}")) {
                                         View(width: WidthConstraint::Fixed(gutter_w)) {
-                                            Text { Span(text: gutter, style: Style::default().fg(Color::DarkGray)) }
+                                            Text { Span(text: gutter_text, style: *gutter_style) }
                                         }
                                         View {
                                             Text {

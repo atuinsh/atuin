@@ -19,7 +19,9 @@ pub(crate) struct EditPreview {
 #[derive(Debug, Clone)]
 pub(crate) struct DiffHunk {
     /// 1-indexed line number of the first line in this hunk (in the original file).
-    pub start_line: u32,
+    pub before_start: u32,
+    /// 1-indexed line number of the first line in this hunk (in the new file).
+    pub after_start: u32,
     pub lines: Vec<DiffLine>,
 }
 
@@ -74,19 +76,25 @@ impl EditPreview {
         EditPreview { hunks }
     }
 
-    /// The highest original-file line number that will be displayed (for gutter width).
-    /// Only counts Context and Removed lines since Added lines don't have
-    /// a position in the original file.
+    /// The highest line number (from either file) that will be displayed.
+    /// Used to calculate gutter width.
     pub fn max_line_number(&self) -> u32 {
         self.hunks
             .iter()
             .map(|h| {
-                let before_lines = h
-                    .lines
-                    .iter()
-                    .filter(|l| matches!(l, DiffLine::Context(_) | DiffLine::Removed(_)))
-                    .count() as u32;
-                h.start_line + before_lines.saturating_sub(1)
+                let mut before_pos = h.before_start;
+                let mut after_pos = h.after_start;
+                for line in &h.lines {
+                    match line {
+                        DiffLine::Context(_) => {
+                            before_pos += 1;
+                            after_pos += 1;
+                        }
+                        DiffLine::Removed(_) => before_pos += 1,
+                        DiffLine::Added(_) => after_pos += 1,
+                    }
+                }
+                before_pos.max(after_pos).saturating_sub(1)
             })
             .max()
             .unwrap_or(0)
@@ -100,6 +108,10 @@ fn build_hunk(group: &[&imara_diff::Hunk], input: &InternedInput<&str>) -> DiffH
 
     let context_start = first.before.start.saturating_sub(CONTEXT_LINES);
     let context_end = (last.before.end + CONTEXT_LINES).min(input.before.len() as u32);
+
+    // The after-file position of context_start: same offset as before since
+    // context before the first change is identical in both files.
+    let after_context_start = first.after.start - (first.before.start - context_start);
 
     let mut lines = Vec::new();
     let mut pos = context_start;
@@ -129,7 +141,8 @@ fn build_hunk(group: &[&imara_diff::Hunk], input: &InternedInput<&str>) -> DiffH
     }
 
     DiffHunk {
-        start_line: context_start + 1, // 1-indexed
+        before_start: context_start + 1,      // 1-indexed
+        after_start: after_context_start + 1, // 1-indexed
         lines,
     }
 }
@@ -247,7 +260,7 @@ mod tests {
 
     #[test]
     fn start_line_is_correct_for_later_changes() {
-        // Change at line 10 with 3 context lines → start_line = 7
+        // Change at line 10 with 3 context lines → before_start = 7
         let mut lines: Vec<String> = (1..=15).map(|i| format!("line{i}")).collect();
         let old = lines.join("\n") + "\n";
         lines[9] = "CHANGED".to_string();
@@ -255,7 +268,8 @@ mod tests {
 
         let preview = EditPreview::compute(&old, &new);
         assert_eq!(preview.hunks.len(), 1);
-        assert_eq!(preview.hunks[0].start_line, 7); // line 10 - 3 context = line 7
+        assert_eq!(preview.hunks[0].before_start, 7); // line 10 - 3 context = line 7
+        assert_eq!(preview.hunks[0].after_start, 7); // same for a simple replacement
     }
 
     #[test]
