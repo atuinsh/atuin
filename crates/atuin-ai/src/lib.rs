@@ -5,6 +5,7 @@ pub(crate) mod event_serde;
 pub(crate) mod file_tracker;
 pub(crate) mod permissions;
 pub(crate) mod session;
+pub(crate) mod snapshots;
 pub(crate) mod store;
 pub(crate) mod stream;
 pub(crate) mod tools;
