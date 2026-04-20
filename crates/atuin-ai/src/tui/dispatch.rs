@@ -219,6 +219,10 @@ fn execute_tool(
             let shell_call = shell_call.clone();
             execute_shell_tool(handle, tx, &tool_id, &shell_call);
         }
+        ClientToolCall::Edit(edit_call) => {
+            let edit_call = edit_call.clone();
+            execute_edit_tool(handle, tx, tool_id, edit_call);
+        }
         _ => {
             execute_simple_tool(handle, tx, tool_id, tool, db);
         }
@@ -279,6 +283,75 @@ fn capture_read_tracking(
     let content = std::fs::read(&resolved).ok()?;
     let mtime = std::fs::metadata(&resolved).ok()?.modified().ok()?;
     Some((resolved, content, mtime))
+}
+
+/// Execute an edit_file tool call.
+///
+/// Orchestrates snapshot → execute → tracker update. The snapshot and
+/// tracker mutations happen via `h.update()` (on the TUI thread) since
+/// they need mutable Session state. The actual file I/O (freshness check,
+/// read, match, atomic write) runs in the tokio task.
+fn execute_edit_tool(
+    handle: &Handle<Session>,
+    tx: &mpsc::Sender<AiTuiEvent>,
+    tool_id: String,
+    edit_call: crate::tools::EditToolCall,
+) {
+    let h = handle.clone();
+    let tx = tx.clone();
+
+    tokio::spawn(async move {
+        let resolved = edit_call.resolved_path();
+
+        // 1. Snapshot the original file before editing.
+        //    Read content in this task; write the snapshot via h.update()
+        //    which has &mut SnapshotStore.
+        if let Ok(original_content) = std::fs::read(&resolved) {
+            let snap_path = resolved.clone();
+            let content = original_content;
+            h.update(move |state| {
+                if let Some(ref mut store) = state.snapshot_store {
+                    if let Err(e) = store.ensure_snapshot(&snap_path, &content) {
+                        tracing::warn!("failed to create file snapshot: {e}");
+                    }
+                }
+            });
+        }
+
+        // 2. Fetch a clone of the file tracker for freshness checking.
+        let Ok(tracker) = h.fetch(|state| state.file_tracker.clone()).await else {
+            let tc_id = tool_id.clone();
+            h.update(move |state| {
+                state.finish_tool_call(
+                    &tc_id,
+                    crate::tools::ToolOutcome::Error("Internal error: TUI unavailable".into()),
+                );
+                if !state.tool_tracker.has_pending() {
+                    let _ = tx.send(AiTuiEvent::ContinueAfterTools);
+                }
+            });
+            return;
+        };
+
+        // 3. Execute: freshness check → read → match → atomic write
+        let (outcome, new_bytes) = edit_call.execute(&resolved, &tracker);
+
+        // 4. Update tracker and finish the tool call
+        let tc_id = tool_id;
+        h.update(move |state| {
+            if let Some(new_bytes) = new_bytes {
+                if let Ok(mtime) = std::fs::metadata(&resolved).and_then(|m| m.modified()) {
+                    state
+                        .file_tracker
+                        .update_after_edit(&resolved, &new_bytes, mtime);
+                }
+            }
+            state.finish_tool_call(&tc_id, outcome);
+            if !state.tool_tracker.has_pending() {
+                let _ = tx.send(AiTuiEvent::ContinueAfterTools);
+            }
+        });
+    });
 }
 
 /// Execute a shell tool with streaming VT100 preview.

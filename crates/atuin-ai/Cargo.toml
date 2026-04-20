@@ -61,9 +61,9 @@ sqlx = { workspace = true, features = ["sqlite"] }
 typed-builder = { workspace = true }
 shellexpand = { workspace = true }
 vt100 = { workspace = true }
+tempfile = { workspace = true }
 chrono = "0.4"
 chrono-humanize = "0.2"
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
-tempfile = { workspace = true }

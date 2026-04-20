@@ -560,6 +560,147 @@ impl TryFrom<&serde_json::Value> for EditToolCall {
     }
 }
 
+impl EditToolCall {
+    /// Resolve the edit path to an absolute path.
+    pub fn resolved_path(&self) -> PathBuf {
+        if self.path.is_relative() {
+            std::env::current_dir()
+                .map(|cwd| cwd.join(&self.path))
+                .unwrap_or_else(|_| self.path.clone())
+        } else {
+            self.path.clone()
+        }
+    }
+
+    /// Execute the edit against the filesystem.
+    ///
+    /// Checks freshness via the provided tracker, validates matches, applies
+    /// the replacement, and writes atomically. Returns the outcome and (on
+    /// success) the new file content bytes for tracker updates.
+    ///
+    /// Callers should snapshot the file before calling this method and
+    /// update the file tracker after a successful return.
+    pub fn execute(
+        &self,
+        resolved_path: &Path,
+        file_tracker: &crate::file_tracker::FileReadTracker,
+    ) -> (ToolOutcome, Option<Vec<u8>>) {
+        use crate::file_tracker::FreshnessCheck;
+
+        // 1. Basic validation
+        if !resolved_path.exists() {
+            return (
+                ToolOutcome::Error(format!(
+                    "Error: file does not exist: {}",
+                    resolved_path.display()
+                )),
+                None,
+            );
+        }
+        if resolved_path.is_dir() {
+            return (
+                ToolOutcome::Error(format!(
+                    "Error: path is a directory, not a file: {}",
+                    resolved_path.display()
+                )),
+                None,
+            );
+        }
+        if self.old_string.is_empty() {
+            return (
+                ToolOutcome::Error(
+                    "old_string must not be empty. To create a new file, use create_file instead."
+                        .to_string(),
+                ),
+                None,
+            );
+        }
+
+        // 2. Freshness check
+        match file_tracker.check_freshness(resolved_path) {
+            Ok(FreshnessCheck::NotRead) => {
+                return (
+                    ToolOutcome::Error(
+                        "File has not been read yet. Read it first before editing.".to_string(),
+                    ),
+                    None,
+                );
+            }
+            Ok(FreshnessCheck::Stale) => {
+                return (
+                    ToolOutcome::Error(
+                        "File has been modified since read, either by the user or by a linter. Read it again before attempting to edit it.".to_string(),
+                    ),
+                    None,
+                );
+            }
+            Err(e) => {
+                return (
+                    ToolOutcome::Error(format!("Error checking file state: {e}")),
+                    None,
+                );
+            }
+            Ok(FreshnessCheck::Fresh) => {}
+        }
+
+        // 3. Read current contents
+        let content = match std::fs::read_to_string(resolved_path) {
+            Ok(c) => c,
+            Err(e) => return (ToolOutcome::Error(format!("Error reading file: {e}")), None),
+        };
+
+        // 4. Find and validate matches
+        let match_count = content.matches(&self.old_string).count();
+
+        if match_count == 0 {
+            return (
+                ToolOutcome::Error(format!(
+                    "old_string not found in {}. Make sure it matches exactly, including whitespace and indentation.",
+                    resolved_path.display()
+                )),
+                None,
+            );
+        }
+
+        if match_count > 1 && !self.replace_all {
+            return (
+                ToolOutcome::Error(format!(
+                    "Found {match_count} matches of old_string in {}, but replace_all is false. Either provide more context to make the match unique, or set replace_all to true.",
+                    resolved_path.display()
+                )),
+                None,
+            );
+        }
+
+        // 5. Apply replacement
+        let new_content = if self.replace_all {
+            content.replace(&self.old_string, &self.new_string)
+        } else {
+            content.replacen(&self.old_string, &self.new_string, 1)
+        };
+
+        // 6. Write atomically
+        let new_bytes = new_content.into_bytes();
+        if let Err(e) = crate::snapshots::atomic_write_file(resolved_path, &new_bytes) {
+            return (ToolOutcome::Error(format!("Error writing file: {e}")), None);
+        }
+
+        // 7. Success
+        let verb = if match_count == 1 {
+            "occurrence"
+        } else {
+            "occurrences"
+        };
+        (
+            ToolOutcome::Success(format!(
+                "Edited {}: replaced {match_count} {verb} of old_string with new_string.",
+                resolved_path.display()
+            )),
+            Some(new_bytes),
+        )
+    }
+}
+
 impl PermissableToolCall for EditToolCall {
     fn target_dir(&self) -> Option<&Path> {
         Some(&self.path)
@@ -1149,6 +1290,213 @@ mod tests {
             assert!(
                 !read_tool("/project/crates/foo/src/lib.py")
                     .matches_rule(&read_rule(Some("/project/crates/**/*.rs")))
+            );
+        }
+    }
+
+    // ── edit_file execution tests ──
+
+    mod edit {
+        use super::*;
+        use crate::file_tracker::FileReadTracker;
+        use std::io::Write as _;
+
+        /// Helper: create a temp file, record it in a tracker, return both.
+        fn setup_tracked_file(content: &str) -> (tempfile::NamedTempFile, FileReadTracker) {
+            let mut tmp = tempfile::NamedTempFile::new().unwrap();
+            write!(tmp, "{content}").unwrap();
+            tmp.flush().unwrap();
+
+            let path = tmp.path().to_path_buf();
+            let file_content = std::fs::read(&path).unwrap();
+            let mtime = std::fs::metadata(&path).unwrap().modified().unwrap();
+
+            let mut tracker = FileReadTracker::default();
+            tracker.record_read(path, &file_content, mtime);
+
+            (tmp, tracker)
+        }
+
+        fn edit_call(path: &Path, old: &str, new: &str, replace_all: bool) -> EditToolCall {
+            EditToolCall {
+                path: path.to_path_buf(),
+                old_string: old.to_string(),
+                new_string: new.to_string(),
+                replace_all,
+            }
+        }
+
+        #[test]
+        fn successful_single_replacement() {
+            let (tmp, tracker) = setup_tracked_file("[section]\nkey = old_value\n");
+            let path = tmp.path().to_path_buf();
+
+            let call = edit_call(&path, "old_value", "new_value", false);
+            let (outcome, new_bytes) = call.execute(&path, &tracker);
+
+            assert!(matches!(outcome, ToolOutcome::Success(_)));
+            assert!(new_bytes.is_some());
+            assert_eq!(
+                std::fs::read_to_string(&path).unwrap(),
+                "[section]\nkey = new_value\n"
+            );
+        }
+
+        #[test]
+        fn successful_replace_all() {
+            let (tmp, tracker) = setup_tracked_file("aaa bbb aaa ccc aaa");
+            let path = tmp.path().to_path_buf();
+
+            let call = edit_call(&path, "aaa", "xxx", true);
+            let (outcome, _) = call.execute(&path, &tracker);
+
+            assert!(matches!(outcome, ToolOutcome::Success(ref s) if s.contains("3 occurrences")));
+            assert_eq!(
+                std::fs::read_to_string(&path).unwrap(),
+                "xxx bbb xxx ccc xxx"
+            );
+        }
+
+        #[test]
+        fn error_file_not_read() {
+            let tmp = tempfile::NamedTempFile::new().unwrap();
+            let path = tmp.path().to_path_buf();
+            let tracker = FileReadTracker::default(); // empty — never read
+
+            let call = edit_call(&path, "x", "y", false);
+            let (outcome, new_bytes) = call.execute(&path, &tracker);
+
+            assert!(new_bytes.is_none());
+            match outcome {
+                ToolOutcome::Error(msg) => {
+                    assert!(msg.contains("not been read yet"), "got: {msg}");
+                }
+                _ => panic!("expected error"),
+            }
+        }
+
+        #[test]
+        fn error_file_modified_since_read() {
+            let (tmp, tracker) = setup_tracked_file("original");
+            let path = tmp.path().to_path_buf();
+
+            // Modify the file after the read was recorded
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            std::fs::write(&path, "modified externally").unwrap();
+
+            let call = edit_call(&path, "original", "replaced", false);
+            let (outcome, new_bytes) = call.execute(&path, &tracker);
+
+            assert!(new_bytes.is_none());
+            match outcome {
+                ToolOutcome::Error(msg) => {
+                    assert!(msg.contains("modified since read"), "got: {msg}");
+                }
+                _ => panic!("expected error"),
+            }
+        }
+
+        #[test]
+        fn error_no_match() {
+            let (tmp, tracker) = setup_tracked_file("hello world");
+            let path = tmp.path().to_path_buf();
+
+            let call = edit_call(&path, "nonexistent", "replacement", false);
+            let (outcome, new_bytes) = call.execute(&path, &tracker);
+
+            assert!(new_bytes.is_none());
+            match outcome {
+                ToolOutcome::Error(msg) => {
+                    assert!(msg.contains("not found"), "got: {msg}");
+                }
+                _ => panic!("expected error"),
+            }
+        }
+
+        #[test]
+        fn error_multiple_matches_without_replace_all() {
+            let (tmp, tracker) = setup_tracked_file("foo bar foo baz foo");
+            let path = tmp.path().to_path_buf();
+
+            let call = edit_call(&path, "foo", "qux", false);
+            let (outcome, new_bytes) = call.execute(&path, &tracker);
+
+            assert!(new_bytes.is_none());
+            match outcome {
+                ToolOutcome::Error(msg) => {
+                    assert!(msg.contains("3 matches"), "got: {msg}");
+                    assert!(msg.contains("replace_all"), "got: {msg}");
+                }
+                _ => panic!("expected error"),
+            }
+            // File should be unchanged
+            assert_eq!(
+                std::fs::read_to_string(&path).unwrap(),
+                "foo bar foo baz foo"
+            );
+        }
+
+        #[test]
+        fn error_empty_old_string() {
+            let (tmp, tracker) = setup_tracked_file("content");
+            let path = tmp.path().to_path_buf();
+
+            let call = edit_call(&path, "", "something", false);
+            let (outcome, new_bytes) = call.execute(&path, &tracker);
+
+            assert!(new_bytes.is_none());
+            assert!(matches!(outcome, ToolOutcome::Error(_)));
+        }
+
+        #[test]
+        fn error_file_does_not_exist() {
+            let tracker = FileReadTracker::default();
+            let path = PathBuf::from("/tmp/nonexistent_atuin_test_file.txt");
+
+            let call = edit_call(&path, "x", "y", false);
+            let (outcome, new_bytes) = call.execute(&path, &tracker);
+
+            assert!(new_bytes.is_none());
+            match outcome {
+                ToolOutcome::Error(msg) => {
+                    assert!(msg.contains("does not exist"), "got: {msg}");
+                }
+                _ => panic!("expected error"),
+            }
+        }
+
+        #[test]
+        fn preserves_file_when_no_match() {
+            let original = "[config]\nport = 8080\nhost = localhost\n";
+            let (tmp, tracker) = setup_tracked_file(original);
+            let path = tmp.path().to_path_buf();
+
+            let call = edit_call(&path, "port = 9090", "port = 3000", false);
+            let (outcome, _) = call.execute(&path, &tracker);
+
+            assert!(matches!(outcome, ToolOutcome::Error(_)));
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+        }
+
+        #[test]
+        fn multiline_replacement() {
+            let content = "[section]\nkey1 = val1\nkey2 = val2\n[other]\n";
+            let (tmp, tracker) = setup_tracked_file(content);
+            let path = tmp.path().to_path_buf();
+
+            let call = edit_call(
+                &path,
+                "key1 = val1\nkey2 = val2",
+                "key1 = new1\nkey2 = new2",
+                false,
+            );
+            let (outcome, new_bytes) = call.execute(&path, &tracker);
+
+            assert!(matches!(outcome, ToolOutcome::Success(_)));
+            assert!(new_bytes.is_some());
+            assert_eq!(
+                std::fs::read_to_string(&path).unwrap(),
+                "[section]\nkey1 = new1\nkey2 = new2\n[other]\n"
             );
         }
     }
