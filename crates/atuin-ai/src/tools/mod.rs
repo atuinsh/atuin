@@ -343,12 +343,15 @@ impl ClientToolCall {
         }
     }
 
-    /// The permission rule name for this tool category (e.g. "Write" covers
-    /// str_replace, file_create, file_insert).
+    /// The permission rule name for this tool category.
+    ///
+    /// Edit and Write share the `"Write"` rule name — a Write permission
+    /// covers both str_replace edits and full file creates. Write also
+    /// implies Read (checked in `ReadToolCall::matches_rule`).
     pub(crate) fn rule_name(&self) -> &'static str {
         match self {
             ClientToolCall::Read(_) => "Read",
-            ClientToolCall::Edit(_) => "Edit",
+            ClientToolCall::Edit(_) => "Write",
             ClientToolCall::Write(_) => "Write",
             ClientToolCall::Shell(_) => "Shell",
             ClientToolCall::AtuinHistory(_) => "AtuinHistory",
@@ -511,7 +514,8 @@ impl PermissableToolCall for ReadToolCall {
     }
 
     fn matches_rule(&self, rule: &Rule) -> bool {
-        if rule.tool != "Read" {
+        // Write implies Read — a Write permission on a path also permits reading it.
+        if rule.tool != "Read" && rule.tool != "Write" {
             return false;
         }
 
@@ -710,7 +714,7 @@ impl PermissableToolCall for EditToolCall {
     }
 
     fn matches_rule(&self, rule: &Rule) -> bool {
-        if rule.tool != "Edit" {
+        if rule.tool != "Write" {
             return false;
         }
 
@@ -1241,9 +1245,23 @@ mod tests {
     }
 
     #[test]
-    fn wrong_tool_never_matches() {
-        assert!(!read_tool("foo.txt").matches_rule(&write_rule(None)));
+    fn write_implies_read() {
+        // A Write rule also permits reads on the same path
+        assert!(read_tool("foo.txt").matches_rule(&write_rule(None)));
+        // But a Read rule does not permit writes
         assert!(!write_tool("foo.txt").matches_rule(&read_rule(None)));
+    }
+
+    #[test]
+    fn edit_uses_write_rule() {
+        let edit = EditToolCall {
+            path: expand_path("/home/user/config.toml"),
+            old_string: "x".into(),
+            new_string: "y".into(),
+            replace_all: false,
+        };
+        assert!(edit.matches_rule(&write_rule(None)));
+        assert!(!edit.matches_rule(&read_rule(None)));
     }
 
     #[test]
