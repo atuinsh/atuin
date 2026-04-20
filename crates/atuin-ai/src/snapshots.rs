@@ -111,7 +111,7 @@ impl SnapshotStore {
 /// Produces human-readable filenames that are unambiguous and collision-free.
 ///
 /// Example: `/Users/me/.config/foo.toml` → `Users%2Fme%2F.config%2Ffoo.toml`
-fn sanitize_path(path: &Path) -> String {
+pub(crate) fn sanitize_path(path: &Path) -> String {
     let s = path.to_string_lossy();
     let s = s.strip_prefix('/').unwrap_or(&s);
     s.replace('%', "%25").replace('/', "%2F")

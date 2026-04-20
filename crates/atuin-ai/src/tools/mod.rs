@@ -1501,6 +1501,218 @@ mod tests {
         }
     }
 
+    // ── Integration tests: full edit lifecycle ──
+    //
+    // These exercise the cross-component flow that dispatch orchestrates:
+    // FileReadTracker → SnapshotStore → EditToolCall.execute → tracker update
+
+    mod edit_integration {
+        use super::*;
+        use crate::edit_permissions::EditPermissionCache;
+        use crate::file_tracker::FileReadTracker;
+        use crate::snapshots::SnapshotStore;
+
+        /// Simulate a file read (what dispatch does after ReadToolCall.execute).
+        fn simulate_read(tracker: &mut FileReadTracker, path: &std::path::Path) {
+            let content = std::fs::read(path).unwrap();
+            let mtime = std::fs::metadata(path).unwrap().modified().unwrap();
+            tracker.record_read(path.to_path_buf(), &content, mtime);
+        }
+
+        /// Simulate a tracker update after edit (what dispatch does after execute).
+        fn simulate_tracker_update(
+            tracker: &mut FileReadTracker,
+            path: &std::path::Path,
+            new_bytes: &[u8],
+        ) {
+            let mtime = std::fs::metadata(path).unwrap().modified().unwrap();
+            tracker.update_after_edit(path, new_bytes, mtime);
+        }
+
+        #[test]
+        fn full_read_snapshot_edit_cycle() {
+            let dir = tempfile::tempdir().unwrap();
+            let file_path = dir.path().join("config.toml");
+            std::fs::write(&file_path, "[db]\nhost = localhost\nport = 5432\n").unwrap();
+
+            let snapshot_dir = dir.path().join("snapshots").join("session-1");
+            let mut tracker = FileReadTracker::default();
+            let mut store = SnapshotStore::open(snapshot_dir.clone()).unwrap();
+
+            // 1. Simulate reading the file
+            simulate_read(&mut tracker, &file_path);
+
+            // 2. Snapshot before edit
+            let original = std::fs::read(&file_path).unwrap();
+            store.ensure_snapshot(&file_path, &original).unwrap();
+
+            // 3. Execute edit
+            let call = EditToolCall {
+                path: file_path.clone(),
+                old_string: "host = localhost".to_string(),
+                new_string: "host = 10.0.0.1".to_string(),
+                replace_all: false,
+            };
+            let (outcome, new_bytes) = call.execute(&file_path, &tracker);
+            assert!(matches!(outcome, ToolOutcome::Success(_)));
+            let new_bytes = new_bytes.unwrap();
+
+            // 4. Update tracker (simulating what dispatch does)
+            simulate_tracker_update(&mut tracker, &file_path, &new_bytes);
+
+            // Verify: file was edited
+            assert_eq!(
+                std::fs::read_to_string(&file_path).unwrap(),
+                "[db]\nhost = 10.0.0.1\nport = 5432\n"
+            );
+
+            // Verify: snapshot has original content
+            assert!(store.has_snapshot(&file_path));
+            let snapshot_name = crate::snapshots::sanitize_path(&file_path);
+            let snapshot_content =
+                std::fs::read_to_string(snapshot_dir.join(snapshot_name)).unwrap();
+            assert_eq!(snapshot_content, "[db]\nhost = localhost\nport = 5432\n");
+        }
+
+        #[test]
+        fn second_edit_without_reread() {
+            let dir = tempfile::tempdir().unwrap();
+            let file_path = dir.path().join("config.toml");
+            std::fs::write(&file_path, "key1 = aaa\nkey2 = bbb\n").unwrap();
+
+            let mut tracker = FileReadTracker::default();
+
+            // Read the file
+            simulate_read(&mut tracker, &file_path);
+
+            // First edit
+            let call1 = EditToolCall {
+                path: file_path.clone(),
+                old_string: "key1 = aaa".to_string(),
+                new_string: "key1 = xxx".to_string(),
+                replace_all: false,
+            };
+            let (outcome, new_bytes) = call1.execute(&file_path, &tracker);
+            assert!(matches!(outcome, ToolOutcome::Success(_)));
+            simulate_tracker_update(&mut tracker, &file_path, &new_bytes.unwrap());
+
+            // Second edit — should work without re-reading because tracker was updated
+            let call2 = EditToolCall {
+                path: file_path.clone(),
+                old_string: "key2 = bbb".to_string(),
+                new_string: "key2 = yyy".to_string(),
+                replace_all: false,
+            };
+            let (outcome, new_bytes) = call2.execute(&file_path, &tracker);
+            assert!(matches!(outcome, ToolOutcome::Success(_)));
+            assert!(new_bytes.is_some());
+            assert_eq!(
+                std::fs::read_to_string(&file_path).unwrap(),
+                "key1 = xxx\nkey2 = yyy\n"
+            );
+        }
+
+        #[test]
+        fn external_modification_between_edits() {
+            let dir = tempfile::tempdir().unwrap();
+            let file_path = dir.path().join("config.toml");
+            std::fs::write(&file_path, "value = original\n").unwrap();
+
+            let mut tracker = FileReadTracker::default();
+            simulate_read(&mut tracker, &file_path);
+
+            // First edit succeeds
+            let call1 = EditToolCall {
+                path: file_path.clone(),
+                old_string: "value = original".to_string(),
+                new_string: "value = edited".to_string(),
+                replace_all: false,
+            };
+            let (outcome, new_bytes) = call1.execute(&file_path, &tracker);
+            assert!(matches!(outcome, ToolOutcome::Success(_)));
+            simulate_tracker_update(&mut tracker, &file_path, &new_bytes.unwrap());
+
+            // External modification (e.g., user edits the file)
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            std::fs::write(&file_path, "value = user_changed\n").unwrap();
+
+            // Second edit should fail (stale)
+            let call2 = EditToolCall {
+                path: file_path.clone(),
+                old_string: "value = edited".to_string(),
+                new_string: "value = second_edit".to_string(),
+                replace_all: false,
+            };
+            let (outcome, new_bytes) = call2.execute(&file_path, &tracker);
+            assert!(new_bytes.is_none());
+            match outcome {
+                ToolOutcome::Error(msg) => assert!(msg.contains("modified since read")),
+                _ => panic!("expected stale error"),
+            }
+
+            // File should be unchanged (the user's edit preserved)
+            assert_eq!(
+                std::fs::read_to_string(&file_path).unwrap(),
+                "value = user_changed\n"
+            );
+        }
+
+        #[test]
+        fn snapshot_only_created_once_per_file() {
+            let dir = tempfile::tempdir().unwrap();
+            let file_path = dir.path().join("config.toml");
+            std::fs::write(&file_path, "a = 1\nb = 2\n").unwrap();
+
+            let snapshot_dir = dir.path().join("snapshots").join("session-1");
+            let mut tracker = FileReadTracker::default();
+            let mut store = SnapshotStore::open(snapshot_dir).unwrap();
+
+            simulate_read(&mut tracker, &file_path);
+
+            // First edit — snapshot should be created
+            let original = std::fs::read(&file_path).unwrap();
+            let created = store.ensure_snapshot(&file_path, &original).unwrap();
+            assert!(created);
+
+            let call1 = EditToolCall {
+                path: file_path.clone(),
+                old_string: "a = 1".to_string(),
+                new_string: "a = 10".to_string(),
+                replace_all: false,
+            };
+            let (_, new_bytes) = call1.execute(&file_path, &tracker);
+            simulate_tracker_update(&mut tracker, &file_path, &new_bytes.unwrap());
+
+            // Second edit — snapshot should NOT be recreated
+            let content_before_second = std::fs::read(&file_path).unwrap();
+            let created = store
+                .ensure_snapshot(&file_path, &content_before_second)
+                .unwrap();
+            assert!(!created); // idempotent — already snapshotted
+        }
+
+        #[test]
+        fn permission_cache_grant_and_check() {
+            let mut cache = EditPermissionCache::default();
+            let path = std::path::PathBuf::from("/Users/me/.config/atuin/config.toml");
+
+            // Initially no grant
+            assert!(!cache.has_valid_grant(&path));
+
+            // Grant permission
+            cache.grant(path.clone());
+            assert!(cache.has_valid_grant(&path));
+
+            // Different file has no grant
+            assert!(!cache.has_valid_grant(std::path::Path::new("/other/file.toml")));
+
+            // Roundtrip through JSON (simulates session persistence)
+            let json = cache.to_json().unwrap();
+            let restored = EditPermissionCache::from_json(&json).unwrap();
+            assert!(restored.has_valid_grant(&path));
+        }
+    }
+
     // ── Windows-specific tests (absolute paths with drive letters) ──
 
     #[cfg(windows)]
