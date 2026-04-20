@@ -42,6 +42,18 @@ Default: `true`
 
 Whether or not to include the "history search" capability in the context sent to the LLM. This allows the AI to request to search your Atuin history for relevant commands when generating suggestions or answering questions.
 
+### enable_file_tools
+
+Default: `true`
+
+Whether or not to include the "file tools" capability in the context sent to the LLM. This allows the AI to request to read and update files on your system.
+
+### enable_command_execution
+
+Default: `true`
+
+Whether or not to include the "command execution" capability in the context sent to the LLM. This allows the AI to request to execute commands on your system.
+
 **Example config**
 
 ```toml

@@ -773,6 +773,9 @@ pub(crate) struct ShellToolCall {
     pub dir: Option<PathBuf>,
     pub command: String,
     pub shell: String,
+    // allow dead code here; this will be tied into o11y and user-facing descriptions
+    #[expect(dead_code)]
+    pub description: Option<String>,
 }
 
 impl TryFrom<&serde_json::Value> for ShellToolCall {
@@ -792,10 +795,16 @@ impl TryFrom<&serde_json::Value> for ShellToolCall {
             .unwrap_or("bash")
             .to_string();
 
+        let description = value
+            .get("description")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
         Ok(ShellToolCall {
             dir: dir.map(expand_path),
             command: command.to_string(),
             shell,
+            description,
         })
     }
 }
