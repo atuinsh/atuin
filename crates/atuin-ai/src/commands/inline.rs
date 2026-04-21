@@ -2,10 +2,12 @@ use std::path::PathBuf;
 use std::sync::mpsc;
 
 use crate::context::{AppContext, ClientContext};
+use crate::driver::{DriverEvent, DriverMeta, IoContext, ViewState, run_driver};
+use crate::fsm::AgentFsm;
+use crate::fsm::effects::ExitAction;
 use crate::session::{LocalSessionService, SessionManager, SessionService};
-use crate::tui::dispatch;
 use crate::tui::events::AiTuiEvent;
-use crate::tui::state::{ExitAction, Session};
+use crate::tui::state::ConversationEvent;
 use crate::tui::view::ai_view;
 use atuin_client::database::{Database, Sqlite};
 use eye_declare::{Application, CtrlCBehavior};
@@ -175,124 +177,173 @@ async fn run_inline_tui(
         .find_resumable(cwd.as_deref(), git_root_str.as_deref(), max_age_secs)
         .await?;
 
-    let (mut session_mgr, mut initial_state) = if let Some(stored) = resumable {
+    // ─── Build FSM ───────────────────────────────────────────────
+    let (
+        session_mgr,
+        fsm,
+        is_resumed,
+        last_event_time,
+        view_start_index,
+        file_tracker,
+        edit_permissions,
+    ) = if let Some(stored) = resumable {
         debug!(session_id = %stored.id, "resuming AI session");
-        let (mgr, events, server_sid, last_event_ts, invocation_id) =
+        let (mgr, mut events, server_sid, last_event_ts, invocation_id) =
             SessionManager::resume(Box::new(service), &stored).await?;
 
-        // Only treat this as a meaningful resume if there are API-visible events
-        // (not just OutOfBandOutput or SystemContext).
         let has_api_content = events.iter().any(|e| e.is_api_content());
 
         if has_api_content {
-            let mut session = Session::new(ctx.git_root.is_some(), Some(invocation_id));
-            session.conversation.events = events;
-            session.conversation.session_id = server_sid;
-            // Inject an invocation boundary so the LLM knows prior messages
-            // are from an earlier interaction.
-            session.conversation.events.push(
-                crate::tui::state::ConversationEvent::SystemContext {
+            events.push(ConversationEvent::SystemContext {
                     content: "[Note: The user has started a new invocation of Atuin AI. Prior messages from this session are from an earlier invocation.]".to_string(),
-                },
-            );
-            session.view_start_index = session.conversation.events.len();
-            session.is_resumed = true;
-            session.last_event_time =
-                last_event_ts.and_then(|ts| chrono::DateTime::from_timestamp(ts, 0));
+                });
+            let view_start = events.len();
+            let last_time = last_event_ts.and_then(|ts| chrono::DateTime::from_timestamp(ts, 0));
 
-            // Restore file read tracker from session metadata
-            if let Ok(Some(json)) = mgr.get_metadata(crate::file_tracker::METADATA_KEY).await
+            let ft = if let Ok(Some(json)) =
+                mgr.get_metadata(crate::file_tracker::METADATA_KEY).await
                 && let Ok(tracker) = crate::file_tracker::FileReadTracker::from_json(&json)
             {
-                session.file_tracker = tracker;
-            }
+                tracker
+            } else {
+                Default::default()
+            };
 
-            // Restore edit permission grants from session metadata
-            if let Ok(Some(json)) = mgr
+            let ep = if let Ok(Some(json)) = mgr
                 .get_metadata(crate::edit_permissions::METADATA_KEY)
                 .await
                 && let Ok(cache) = crate::edit_permissions::EditPermissionCache::from_json(&json)
             {
-                session.edit_permissions = cache;
-            }
+                cache
+            } else {
+                Default::default()
+            };
 
-            (mgr, session)
+            let caps = ctx.capabilities_as_strings();
+            let fsm = AgentFsm::from_session(events, server_sid, caps, invocation_id);
+            (mgr, fsm, true, last_time, view_start, ft, ep)
         } else {
-            // No meaningful content — treat as a fresh session
             debug!("resumable session has no API-visible content, starting fresh");
+            let caps = ctx.capabilities_as_strings();
+            let fsm = AgentFsm::new(caps, invocation_id);
             (
                 mgr,
-                Session::new(ctx.git_root.is_some(), Some(invocation_id)),
+                fsm,
+                false,
+                None,
+                0,
+                Default::default(),
+                Default::default(),
             )
         }
     } else {
         debug!("creating new AI session");
         let mgr =
             SessionManager::create_new(Box::new(service), cwd.as_deref(), git_root_str.as_deref());
-        (mgr, Session::new(ctx.git_root.is_some(), None))
+        let invocation_id = uuid::Uuid::now_v7().to_string();
+        let caps = ctx.capabilities_as_strings();
+        let fsm = AgentFsm::new(caps, invocation_id);
+        (
+            mgr,
+            fsm,
+            false,
+            None,
+            0,
+            Default::default(),
+            Default::default(),
+        )
     };
 
-    // Initialize the snapshot store now that we know the session ID.
+    // ─── Snapshot store ─────────────────────────────────────────
     let snapshot_dir = atuin_common::utils::data_dir()
         .join("ai")
         .join("snapshots")
         .join(session_mgr.session_id());
-    match crate::snapshots::SnapshotStore::open(snapshot_dir) {
-        Ok(store) => initial_state.snapshot_store = Some(store),
-        Err(e) => tracing::warn!("failed to open snapshot store: {e}"),
-    }
+    let snapshot_store = crate::snapshots::SnapshotStore::open(snapshot_dir).ok();
 
-    let (tx, rx) = mpsc::channel::<AiTuiEvent>();
+    let in_git_project = ctx.git_root.is_some();
+
+    // ─── Build initial ViewState ────────────────────────────────
+    let initial_view = ViewState {
+        agent_state: fsm.state.clone(),
+        visible_events: fsm.ctx.events[view_start_index..].to_vec(),
+        all_events: fsm.ctx.events.clone(),
+        session_id: fsm.ctx.session_id.clone(),
+        tools: fsm.ctx.tools.clone(),
+        current_response: String::new(),
+        is_resumed,
+        last_event_time,
+        in_git_project,
+        invocation_id: fsm.ctx.invocation_id.clone(),
+        archived_events: Vec::new(),
+        is_input_blank: true,
+        slash_command_input: None,
+        slash_command_search_results: Vec::new(),
+        exit_action: None,
+        slash_registry: Default::default(),
+    };
+
+    // ─── Build IoContext ────────────────────────────────────────
+    let io = IoContext {
+        app_ctx: ctx.clone(),
+        client_ctx: client_ctx.clone(),
+        session_mgr,
+        file_tracker,
+        edit_permissions,
+        snapshot_store,
+    };
+
+    // ─── Channel + Application ──────────────────────────────────
+    // Components emit DriverEvent::Tui(AiTuiEvent) via a wrapping sender.
+    // Spawned tasks emit DriverEvent::Fsm(Event) directly.
+    let (tx, rx) = mpsc::channel::<DriverEvent>();
+
+    // Wrap sender for components: they send AiTuiEvent, we wrap it
+    let tui_tx = DriverEventSender(tx.clone());
 
     println!();
 
-    // If there's an initial prompt, send it as a SubmitInput event
-    // so it flows through the same path as user-typed input.
     if let Some(prompt) = initial_prompt {
-        let _ = tx.send(AiTuiEvent::SubmitInput(prompt));
+        let _ = tui_tx
+            .0
+            .send(DriverEvent::Tui(AiTuiEvent::SubmitInput(prompt)));
     }
 
     let (mut app, handle) = Application::builder()
-        .state(initial_state)
+        .state(initial_view)
         .view(ai_view)
         .ctrl_c(CtrlCBehavior::Deliver)
         .keyboard_protocol(eye_declare::KeyboardProtocol::Enhanced)
         .bracketed_paste(true)
-        .with_context(tx.clone())
+        .with_context(tui_tx)
         .extra_newlines_at_exit(1)
         .build()?;
 
-    // Event loop: receives AiTuiEvent from components, mutates state via Handle.
-    // The dispatch thread processes events synchronously, including async persistence
-    // via block_on. It signals exit via an AtomicBool rather than querying the handle
-    // (which would hang if the TUI thread has already stopped processing).
+    // ─── Driver loop ────────────────────────────────────────────
     let h = handle.clone();
+    let exiting = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let exiting_clone = exiting.clone();
     let dispatch_handle = tokio::task::spawn_blocking(move || {
-        let mut dctx = dispatch::DispatchContext {
-            handle: &h,
-            tx: &tx,
-            app_ctx: &ctx,
-            client_ctx: &client_ctx,
-            session_mgr: &mut session_mgr,
-            exiting: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        };
-        while let Ok(event) = rx.recv() {
-            if !dispatch::dispatch(&mut dctx, event) {
-                break;
-            }
-        }
+        run_driver(
+            fsm,
+            io,
+            h,
+            rx,
+            tx,
+            exiting_clone,
+            DriverMeta {
+                view_start_index,
+                is_resumed,
+                last_event_time,
+                in_git_project,
+            },
+        );
     });
 
     let run_result = app.run_loop().await;
-
-    // Wait for the dispatch thread to finish its final persist before the
-    // tokio runtime tears down. This prevents panics from block_on calls
-    // racing with runtime shutdown — including on the error path.
     let _ = dispatch_handle.await;
-
     run_result?;
 
-    // Map exit action to return value
     let result = match app.state().exit_action {
         Some(ExitAction::Execute(ref cmd)) => Action::Execute(cmd.clone()),
         Some(ExitAction::Insert(ref cmd)) => Action::Insert(cmd.clone()),
@@ -300,6 +351,21 @@ async fn run_inline_tui(
     };
 
     Ok(result)
+}
+
+/// Wrapper around `mpsc::Sender<DriverEvent>` that components use as context.
+///
+/// Components call `tx.send(AiTuiEvent::...)` via eye-declare's context system.
+/// This wrapper implements the same interface but wraps events in `DriverEvent::Tui`.
+#[derive(Debug, Clone)]
+pub(crate) struct DriverEventSender(pub mpsc::Sender<DriverEvent>);
+
+impl DriverEventSender {
+    pub fn send(&self, event: AiTuiEvent) -> Result<(), mpsc::SendError<AiTuiEvent>> {
+        self.0
+            .send(DriverEvent::Tui(event))
+            .map_err(|_| mpsc::SendError(AiTuiEvent::Exit))
+    }
 }
 
 // ───────────────────────────────────────────────────────────────────

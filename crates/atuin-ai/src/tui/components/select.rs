@@ -1,10 +1,9 @@
-use std::sync::mpsc;
-
 use crossterm::event::KeyCode;
 use eye_declare::{Elements, EventResult, Hooks, Span, Text, View, component, element, props};
 use ratatui::style::Style;
 use typed_builder::TypedBuilder;
 
+use crate::commands::inline::DriverEventSender;
 use crate::tui::events::AiTuiEvent;
 
 type OnSelectFn = Box<dyn Fn(&SelectOption) -> Option<AiTuiEvent> + Send + Sync + 'static>;
@@ -24,7 +23,7 @@ pub(crate) struct SelectOption {
 #[derive(Default)]
 pub(crate) struct PermissionSelectorState {
     selected_option: usize,
-    tx: Option<mpsc::Sender<AiTuiEvent>>,
+    tx: Option<DriverEventSender>,
 }
 
 #[props]
@@ -42,7 +41,7 @@ pub(crate) fn permission_selector(
     hooks.use_focusable(true);
     hooks.use_autofocus();
 
-    hooks.use_context::<mpsc::Sender<AiTuiEvent>>(|tx, _, state| {
+    hooks.use_context::<DriverEventSender>(|tx, _, state| {
         state.tx = tx.cloned();
     });
 

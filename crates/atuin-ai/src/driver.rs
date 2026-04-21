@@ -17,7 +17,7 @@ use crate::context::{AppContext, ClientContext};
 use crate::edit_permissions::EditPermissionCache;
 use crate::file_tracker::FileReadTracker;
 use crate::fsm::effects::{Effect, ExitAction, PermissionTarget};
-use crate::fsm::events::{Event, PermissionResponse};
+use crate::fsm::events::{Event, PermissionChoice, PermissionResponse};
 use crate::fsm::tools::ToolPreviewData;
 use crate::fsm::{AgentFsm, AgentState};
 use crate::permissions::resolver::PermissionResolver;
@@ -25,9 +25,29 @@ use crate::permissions::writer;
 use crate::session::SessionManager;
 use crate::stream::ChatRequest;
 use crate::tools::ClientToolCall;
+use crate::tui::events::{AiTuiEvent, PermissionResult};
 use crate::tui::state::ConversationEvent;
 
-/// IO-side state that the driver owns. Not visible to the FSM.
+// ============================================================================
+// Driver event — the unified channel type
+// ============================================================================
+
+/// Events processed by the driver loop.
+///
+/// Components emit `Tui` variants via the channel. Spawned async tasks
+/// (stream, tool execution) emit `Fsm` variants directly.
+#[derive(Debug)]
+pub(crate) enum DriverEvent {
+    /// Event from a TUI component (key press, input change, etc.)
+    Tui(AiTuiEvent),
+    /// Internal FSM event (from spawned stream/tool tasks)
+    Fsm(Event),
+}
+
+// ============================================================================
+// IO context (driver-owned, not visible to FSM)
+// ============================================================================
+
 pub(crate) struct IoContext {
     pub app_ctx: AppContext,
     pub client_ctx: ClientContext,
@@ -37,22 +57,20 @@ pub(crate) struct IoContext {
     pub snapshot_store: Option<crate::snapshots::SnapshotStore>,
 }
 
+// ============================================================================
+// ViewState (Handle payload for the render thread)
+// ============================================================================
+
 /// State pushed to the Handle for the view/render thread.
-///
-/// Synced from the FSM after each transition. The view function reads this.
+/// Synced from the FSM after each transition.
 #[derive(Debug)]
 pub(crate) struct ViewState {
     // ─── From FSM ───────────────────────────────────────────────
     pub agent_state: AgentState,
-    /// Visible events (from view_start_index onward).
     pub visible_events: Vec<ConversationEvent>,
-    /// Full conversation events (for API message building — retained for persistence).
     pub all_events: Vec<ConversationEvent>,
-    /// Server session ID.
     pub session_id: Option<String>,
-    /// Tool manager state for render data lookups.
     pub tools: crate::fsm::tools::ToolManager,
-    /// Streaming text being accumulated (not yet in events).
     pub current_response: String,
 
     // ─── Session metadata (set once) ────────────────────────────
@@ -63,15 +81,12 @@ pub(crate) struct ViewState {
 
     // ─── View-only ──────────────────────────────────────────────
     pub archived_events: Vec<ConversationEvent>,
-    pub view_start_index: usize,
 
     // ─── Ephemeral interaction state ────────────────────────────
     pub is_input_blank: bool,
     pub slash_command_input: Option<String>,
     pub slash_command_search_results: Vec<crate::tui::slash::SlashCommandSearchResult>,
     pub exit_action: Option<ExitAction>,
-
-    // ─── Slash registry (for /help rendering) ───────────────────
     pub slash_registry: crate::tui::slash::SlashCommandRegistry,
 }
 
@@ -80,12 +95,10 @@ impl ViewState {
         self.exit_action.is_some()
     }
 
-    /// Whether the agent is busy (streaming or executing tools).
     pub fn is_busy(&self) -> bool {
         matches!(self.agent_state, AgentState::Turn { .. })
     }
 
-    /// Whether there's a pending confirmation for a dangerous command.
     pub fn has_confirmation(&self) -> bool {
         matches!(
             self.agent_state,
@@ -95,12 +108,10 @@ impl ViewState {
         )
     }
 
-    /// Whether the user can type in the input box.
     pub fn is_input_active(&self) -> bool {
         matches!(self.agent_state, AgentState::Idle { .. }) && !self.has_confirmation()
     }
 
-    /// Whether any command has been suggested in the conversation.
     pub fn has_command(&self) -> bool {
         self.all_events.iter().any(|e| {
             if let ConversationEvent::ToolCall { name, input, .. } = e {
@@ -111,7 +122,6 @@ impl ViewState {
         })
     }
 
-    /// Footer text based on current state.
     pub fn footer_text(&self) -> &'static str {
         match &self.agent_state {
             AgentState::Idle { confirmation: None } => {
@@ -130,63 +140,173 @@ impl ViewState {
     }
 }
 
+// ============================================================================
+// Driver metadata (immutable-ish session context)
+// ============================================================================
+
+pub(crate) struct DriverMeta {
+    pub view_start_index: usize,
+    pub is_resumed: bool,
+    pub last_event_time: Option<chrono::DateTime<chrono::Utc>>,
+    pub in_git_project: bool,
+}
+
+// ============================================================================
+// Main driver loop
+// ============================================================================
+
 /// Main driver loop. Processes events, transitions FSM, syncs view, executes effects.
 ///
 /// Runs on a blocking thread. Returns when the event channel closes or exit is requested.
+/// The Handle already contains the initial ViewState (set by Application::builder).
 pub(crate) fn run_driver(
     mut fsm: AgentFsm,
     mut io: IoContext,
     handle: Handle<ViewState>,
-    rx: mpsc::Receiver<Event>,
-    tx: mpsc::Sender<Event>,
+    rx: mpsc::Receiver<DriverEvent>,
+    tx: mpsc::Sender<DriverEvent>,
     exiting: Arc<AtomicBool>,
-    initial_view: ViewState,
+    meta: DriverMeta,
 ) {
-    // Push the initial view state so the first render has something.
-    let view_start_index = initial_view.view_start_index;
-    let is_resumed = initial_view.is_resumed;
-    let last_event_time = initial_view.last_event_time;
-    let in_git_project = initial_view.in_git_project;
-    handle.update(|vs| *vs = initial_view);
+    let mut view_start_index = meta.view_start_index;
+    let is_resumed = meta.is_resumed;
+    let last_event_time = meta.last_event_time;
+    let in_git_project = meta.in_git_project;
 
-    while let Ok(event) = rx.recv() {
-        // 1. Feed event to FSM
-        let effects = fsm.handle(event);
+    while let Ok(driver_event) = rx.recv() {
+        // Translate DriverEvent to FSM Event (or handle directly)
+        let fsm_event = match driver_event {
+            DriverEvent::Fsm(event) => Some(event),
+            DriverEvent::Tui(tui_event) => translate_tui_event(tui_event, &handle),
+        };
 
-        // 2. Sync ViewState to Handle
-        sync_view_state(
-            &handle,
-            &fsm,
-            view_start_index,
-            is_resumed,
-            last_event_time,
-            in_git_project,
-        );
+        if let Some(event) = fsm_event {
+            // Feed event to FSM
+            let effects = fsm.handle(event);
 
-        // 3. Execute effects
-        for effect in effects {
-            execute_effect(
-                &effect,
-                &fsm,
-                &mut io,
+            // Sync ViewState to Handle
+            sync_view_state(
                 &handle,
-                &tx,
-                &exiting,
+                &fsm,
+                view_start_index,
+                is_resumed,
+                last_event_time,
+                in_git_project,
+            );
+
+            // Execute effects (only persist when FSM says to)
+            for effect in &effects {
+                if matches!(effect, Effect::ArchiveSession) {
+                    view_start_index = 0;
+                }
+                if matches!(effect, Effect::Persist) {
+                    persist(&fsm, &mut io);
+                }
+                execute_effect(effect, &fsm, &mut io, &handle, &tx, &exiting);
+            }
+        } else {
+            // Event was handled directly (e.g. InputUpdated) — just sync
+            sync_view_state(
+                &handle,
+                &fsm,
+                view_start_index,
+                is_resumed,
+                last_event_time,
                 in_git_project,
             );
         }
 
-        // 4. Persist after each cycle
-        persist(&fsm, &mut io);
-
-        // 5. Check exit
         if exiting.load(Ordering::Acquire) {
             break;
         }
     }
 }
 
-/// Push current FSM state into the Handle for the view to read.
+// ============================================================================
+// TUI event translation
+// ============================================================================
+
+/// Translate a TUI event into an FSM event.
+/// Returns None for events handled directly (e.g. InputUpdated).
+fn translate_tui_event(event: AiTuiEvent, handle: &Handle<ViewState>) -> Option<Event> {
+    match event {
+        AiTuiEvent::SubmitInput(input) => {
+            // Clear slash command state on any submit
+            handle.update(|vs| {
+                vs.slash_command_input = None;
+                vs.slash_command_search_results.clear();
+            });
+
+            let input = input.trim().to_string();
+            if input.is_empty() {
+                Some(Event::ExecuteCommand)
+            } else if input == "/new" {
+                Some(Event::NewSession)
+            } else if input.starts_with('/') {
+                Some(Event::SlashCommand(input))
+            } else {
+                Some(Event::UserSubmit(input))
+            }
+        }
+        AiTuiEvent::InputUpdated(text) => {
+            let is_blank = text.is_empty();
+            handle.update(move |vs| {
+                vs.is_input_blank = is_blank;
+                if text.starts_with('/') {
+                    let query = text.trim_start_matches('/').to_string();
+                    let mut results = vs.slash_registry.search_fuzzy(&query);
+                    results.sort_by(|a, b| {
+                        b.relevance
+                            .partial_cmp(&a.relevance)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    });
+                    vs.slash_command_input = Some(query);
+                    vs.slash_command_search_results = results;
+                } else {
+                    vs.slash_command_input = None;
+                    vs.slash_command_search_results.clear();
+                }
+            });
+            None
+        }
+        AiTuiEvent::CancelGeneration => Some(Event::Cancel),
+        AiTuiEvent::ExecuteCommand => Some(Event::ExecuteCommand),
+        AiTuiEvent::InsertCommand => Some(Event::InsertCommand),
+        AiTuiEvent::CancelConfirmation => Some(Event::Cancel),
+        AiTuiEvent::InterruptToolExecution => Some(Event::InterruptTools),
+        AiTuiEvent::Retry => Some(Event::Retry),
+        AiTuiEvent::Exit => Some(Event::Cancel),
+        AiTuiEvent::SelectPermission(result) => {
+            let tool_id = handle
+                .fetch(|vs| vs.tools.awaiting_permission().map(|t| t.id.clone()))
+                .blocking_recv()
+                .ok()
+                .flatten();
+
+            let Some(tool_id) = tool_id else {
+                return None;
+            };
+
+            let choice = match result {
+                PermissionResult::Allow => PermissionChoice::Allow,
+                PermissionResult::AllowFileForSession => PermissionChoice::AllowForSession,
+                PermissionResult::AlwaysAllowInDir => PermissionChoice::AlwaysAllowInProject,
+                PermissionResult::AlwaysAllow => PermissionChoice::AlwaysAllow,
+                PermissionResult::Deny => PermissionChoice::Deny,
+            };
+            Some(Event::PermissionUserChoice { tool_id, choice })
+        }
+        // These were internal signals in the old system — no longer needed
+        AiTuiEvent::CheckToolCallPermission(_) => None,
+        AiTuiEvent::ContinueAfterTools => None,
+        AiTuiEvent::SlashCommand(cmd) => Some(Event::SlashCommand(cmd)),
+    }
+}
+
+// ============================================================================
+// ViewState sync
+// ============================================================================
+
 fn sync_view_state(
     handle: &Handle<ViewState>,
     fsm: &AgentFsm,
@@ -196,14 +316,25 @@ fn sync_view_state(
     in_git_project: bool,
 ) {
     let state = fsm.state.clone();
-    let visible_events = fsm.ctx.events[view_start_index..].to_vec();
+    let safe_start = view_start_index.min(fsm.ctx.events.len());
+    let mut visible_events = fsm.ctx.events[safe_start..].to_vec();
+    let all_events = fsm.ctx.events.clone();
     let tools = fsm.ctx.tools.clone();
     let current_response = fsm.ctx.current_response.clone();
     let session_id = fsm.ctx.session_id.clone();
 
+    // Lesson 3: inject streaming text as a synthetic event for live rendering
+    let trimmed = current_response.trim_start();
+    if !trimmed.is_empty() {
+        visible_events.push(ConversationEvent::Text {
+            content: trimmed.to_string(),
+        });
+    }
+
     handle.update(move |vs| {
         vs.agent_state = state;
         vs.visible_events = visible_events;
+        vs.all_events = all_events;
         vs.tools = tools;
         vs.current_response = current_response;
         vs.session_id = session_id;
@@ -213,15 +344,17 @@ fn sync_view_state(
     });
 }
 
-/// Execute a single effect.
+// ============================================================================
+// Effect execution
+// ============================================================================
+
 fn execute_effect(
     effect: &Effect,
     fsm: &AgentFsm,
     io: &mut IoContext,
     handle: &Handle<ViewState>,
-    tx: &mpsc::Sender<Event>,
+    tx: &mpsc::Sender<DriverEvent>,
     exiting: &Arc<AtomicBool>,
-    _in_git_project: bool,
 ) {
     match effect {
         Effect::StartStream {
@@ -237,19 +370,13 @@ fn execute_effect(
                 &app.capabilities,
                 fsm.ctx.invocation_id.clone(),
             );
-
             tokio::spawn(async move {
                 run_stream_bridge(request, app, cc, tx).await;
             });
         }
 
         Effect::AbortStream => {
-            // The stream task holds no abort handle in the new architecture.
-            // It will naturally stop when it can't send events (channel closed or
-            // FSM ignores stale events). For immediate abort, we'd need to track
-            // a JoinHandle — deferred for now; the FSM's stale-event handling
-            // makes this safe.
-            //
+            // Stream tasks stop naturally when the FSM ignores stale events.
             // TODO: Add JoinHandle tracking for immediate abort if latency matters.
         }
 
@@ -263,13 +390,13 @@ fn execute_effect(
                 .or_else(|| std::env::current_dir().ok())
                 .unwrap_or_else(|| PathBuf::from("."));
 
-            // Check session grants first
+            // Check session grants first (synchronous)
             if let Some(resolved) = tool.resolved_file_path() {
                 if io.edit_permissions.has_valid_grant(&resolved) {
-                    let _ = tx.send(Event::PermissionResolved {
+                    let _ = tx.send(DriverEvent::Fsm(Event::PermissionResolved {
                         tool_id,
                         response: PermissionResponse::SessionGranted,
-                    });
+                    }));
                     return;
                 }
             }
@@ -290,7 +417,10 @@ fn execute_effect(
                     },
                     Err(_) => PermissionResponse::Ask,
                 };
-                let _ = tx.send(Event::PermissionResolved { tool_id, response });
+                let _ = tx.send(DriverEvent::Fsm(Event::PermissionResolved {
+                    tool_id,
+                    response,
+                }));
             });
         }
 
@@ -311,20 +441,18 @@ fn execute_effect(
                             tokio::sync::mpsc::channel::<Vec<String>>(16);
                         let (_interrupt_tx, interrupt_rx) = tokio::sync::oneshot::channel();
 
-                        // Forward preview updates in a separate task
                         let preview_id = tool_id_for_preview;
                         let tx_fwd = tx_preview;
                         tokio::spawn(async move {
                             while let Some(lines) = output_rx.recv().await {
-                                let _ = tx_fwd.send(Event::ToolPreviewUpdate {
+                                let _ = tx_fwd.send(DriverEvent::Fsm(Event::ToolPreviewUpdate {
                                     tool_id: preview_id.clone(),
                                     lines,
                                     exit_code: None,
-                                });
+                                }));
                             }
                         });
 
-                        // Run the command (blocking on completion)
                         let outcome = crate::tools::execute_shell_command_streaming(
                             &shell_call,
                             output_tx,
@@ -347,22 +475,21 @@ fn execute_effect(
                             None
                         };
 
-                        let _ = tx.send(Event::ToolExecutionDone {
+                        let _ = tx.send(DriverEvent::Fsm(Event::ToolExecutionDone {
                             tool_id,
                             outcome,
                             preview,
-                        });
+                        }));
                     });
                 }
                 _ => {
-                    // Simple tools (read, edit, write, history)
                     tokio::spawn(async move {
                         let outcome = tool.execute(&db).await;
-                        let _ = tx.send(Event::ToolExecutionDone {
+                        let _ = tx.send(DriverEvent::Fsm(Event::ToolExecutionDone {
                             tool_id,
                             outcome,
                             preview: None,
-                        });
+                        }));
                     });
                 }
             }
@@ -370,12 +497,10 @@ fn execute_effect(
 
         Effect::AbortTool { tool_id: _ } => {
             // TODO: Track interrupt senders per tool and send abort signal.
-            // For now, the process will be killed when the task is dropped.
         }
 
         Effect::Persist => {
-            // Persistence is done after every cycle in the main loop.
-            // This effect is a no-op since we always persist.
+            // Handled inline in the driver loop (before this function is called).
         }
 
         Effect::WritePermissionRule {
@@ -424,14 +549,12 @@ fn execute_effect(
             let tx = tx.clone();
             tokio::spawn(async move {
                 tokio::time::sleep(duration).await;
-                let _ = tx.send(Event::ConfirmationTimeout { timeout_id });
+                let _ = tx.send(DriverEvent::Fsm(Event::ConfirmationTimeout { timeout_id }));
             });
         }
 
         Effect::CancelTimeout { timeout_id: _ } => {
-            // Timeout cancellation is implicit: the FSM checks the timeout_id
-            // when the event arrives and ignores it if it doesn't match.
-            // No explicit cancellation mechanism needed.
+            // Implicit: FSM checks timeout_id and ignores mismatches.
         }
 
         Effect::ExitApp(action) => {
@@ -446,7 +569,10 @@ fn execute_effect(
     }
 }
 
-/// Persist conversation state to disk.
+// ============================================================================
+// Persistence
+// ============================================================================
+
 fn persist(fsm: &AgentFsm, io: &mut IoContext) {
     let rt = tokio::runtime::Handle::current();
 
@@ -476,14 +602,15 @@ fn persist(fsm: &AgentFsm, io: &mut IoContext) {
     }
 }
 
-/// Bridge between the streaming SSE connection and FSM events.
-///
-/// Translates `StreamFrame`s into FSM `Event`s and sends them on the channel.
+// ============================================================================
+// Stream bridge
+// ============================================================================
+
 async fn run_stream_bridge(
     request: ChatRequest,
     app_ctx: AppContext,
     client_ctx: ClientContext,
-    tx: mpsc::Sender<Event>,
+    tx: mpsc::Sender<DriverEvent>,
 ) {
     use crate::stream::{StreamContent, StreamControl, StreamFrame, create_chat_stream};
     use futures::StreamExt;
@@ -498,8 +625,7 @@ async fn run_stream_bridge(
     );
     futures::pin_mut!(stream);
 
-    // Signal stream started
-    let _ = tx.send(Event::StreamStarted);
+    let _ = tx.send(DriverEvent::Fsm(Event::StreamStarted));
 
     while let Some(frame) = stream.next().await {
         let event = match frame {
@@ -539,8 +665,8 @@ async fn run_stream_bridge(
                 event,
                 Event::StreamDone { .. } | Event::StreamError(_) | Event::SuggestCommand { .. }
             );
-            if tx.send(event).is_err() {
-                break; // Channel closed
+            if tx.send(DriverEvent::Fsm(event)).is_err() {
+                break;
             }
             if is_terminal {
                 break;
