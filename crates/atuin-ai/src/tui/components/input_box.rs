@@ -98,7 +98,10 @@ fn input_box(
     state: &InputBoxState,
     hooks: &mut Hooks<InputBox, InputBoxState>,
 ) -> Elements {
-    hooks.use_focusable(props.active);
+    // Always focusable so focus isn't lost when the permission Select is
+    // removed from the tree. The `active` prop controls visual state and
+    // whether keystrokes are processed, not focusability.
+    hooks.use_focusable(true);
     hooks.use_autofocus();
 
     hooks.use_context::<DriverEventSender>(|tx, _, state| {
