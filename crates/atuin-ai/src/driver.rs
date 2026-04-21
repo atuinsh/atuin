@@ -460,7 +460,63 @@ fn execute_effect(
                         }));
                     });
                 }
+                ClientToolCall::Edit(edit_call) => {
+                    let edit_call = edit_call.clone();
+                    let resolved = edit_call.resolved_path();
+                    let file_tracker = io.file_tracker.clone();
+
+                    // Snapshot before editing
+                    if let Ok(content) = std::fs::read(&resolved) {
+                        if let Some(ref mut store) = io.snapshot_store {
+                            if let Err(e) = store.ensure_snapshot(&resolved, &content) {
+                                tracing::warn!("Failed to snapshot before edit: {e}");
+                            }
+                        }
+                    }
+
+                    tokio::task::spawn_blocking(move || {
+                        let (outcome, _new_content) = edit_call.execute(&resolved, &file_tracker);
+
+                        let _ = tx.send(DriverEvent::Fsm(Event::ToolExecutionDone {
+                            tool_id,
+                            outcome,
+                            preview: None, // TODO: diff preview
+                        }));
+                    });
+                }
+                ClientToolCall::Write(write_call) => {
+                    let write_call = write_call.clone();
+                    let resolved = write_call.resolved_path();
+
+                    // Snapshot existing file before overwriting
+                    if let Ok(content) = std::fs::read(&resolved) {
+                        if let Some(ref mut store) = io.snapshot_store {
+                            if let Err(e) = store.ensure_snapshot(&resolved, &content) {
+                                tracing::warn!("Failed to snapshot before write: {e}");
+                            }
+                        }
+                    }
+
+                    tokio::task::spawn_blocking(move || {
+                        let (outcome, _written_bytes) = write_call.execute(&resolved);
+
+                        let preview = if !outcome.is_error() {
+                            Some(ToolPreviewData::Write(
+                                crate::diff::WritePreview::from_content(&write_call.content),
+                            ))
+                        } else {
+                            None
+                        };
+
+                        let _ = tx.send(DriverEvent::Fsm(Event::ToolExecutionDone {
+                            tool_id,
+                            outcome,
+                            preview,
+                        }));
+                    });
+                }
                 _ => {
+                    // Read, AtuinHistory — generic async execution
                     tokio::spawn(async move {
                         let outcome = tool.execute(&db).await;
                         let _ = tx.send(DriverEvent::Fsm(Event::ToolExecutionDone {
