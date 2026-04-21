@@ -506,20 +506,20 @@ fn execute_effect(effect: &Effect, ctx: DriverContext) {
                         )
                         .await;
 
-                        let preview = if let crate::tools::ToolOutcome::Structured {
-                            exit_code,
-                            interrupted,
-                            ..
-                        } = &outcome
-                        {
-                            Some(ToolPreviewData::Shell {
-                                lines: vec![],
-                                exit_code: *exit_code,
-                                interrupted: *interrupted,
-                            })
-                        } else {
-                            None
-                        };
+                        let preview =
+                            if let crate::tools::ToolOutcome::Structured { exit_code, .. } =
+                                &outcome
+                            {
+                                Some(ToolPreviewData::Shell {
+                                    lines: vec![],
+                                    exit_code: *exit_code,
+                                    // Reason is set by the FSM in handle_tool_done
+                                    // based on whether it was a user interrupt or timeout.
+                                    interrupted: None,
+                                })
+                            } else {
+                                None
+                            };
 
                         let _ = tx.send(DriverEvent::Fsm(Event::ToolExecutionDone {
                             tool_id,

@@ -470,7 +470,7 @@ impl AgentFsm {
                         tracked.preview = Some(tools::ToolPreviewData::Shell {
                             lines,
                             exit_code,
-                            interrupted: false,
+                            interrupted: None,
                         });
                     }
                 }
@@ -479,6 +479,11 @@ impl AgentFsm {
 
             (AgentState::Turn { .. }, Event::InterruptTools) => {
                 let ids = self.ctx.tools.executing_ids();
+                for id in &ids {
+                    if let Some(tracked) = self.ctx.tools.get_mut(id) {
+                        tracked.interrupt_reason = Some(tools::InterruptReason::User);
+                    }
+                }
                 ids.into_iter()
                     .map(|tool_id| Effect::AbortTool { tool_id })
                     .collect()
@@ -827,6 +832,19 @@ impl AgentFsm {
 
         tracked.state = ToolState::Completed;
 
+        // If the FSM tagged this tool with an interrupt reason (user or timeout),
+        // use it; otherwise derive from the outcome's interrupted flag.
+        let reason = tracked.interrupt_reason.take().or_else(|| {
+            if let crate::tools::ToolOutcome::Structured {
+                interrupted: true, ..
+            } = &outcome
+            {
+                Some(tools::InterruptReason::User)
+            } else {
+                None
+            }
+        });
+
         // Merge shell preview: the final ToolExecutionDone carries exit_code/interrupted
         // but has empty lines (the live lines were accumulated via ToolPreviewUpdate).
         // Preserve the accumulated lines and fold in the terminal metadata.
@@ -839,14 +857,20 @@ impl AgentFsm {
                 }),
                 Some(tools::ToolPreviewData::Shell {
                     exit_code: final_exit,
-                    interrupted: final_interrupted,
                     ..
                 }),
             ) => {
                 *exit_code = final_exit;
-                *interrupted = final_interrupted;
+                *interrupted = reason.clone();
             }
-            (_, Some(p)) => {
+            (_, Some(mut p)) => {
+                if let tools::ToolPreviewData::Shell {
+                    ref mut interrupted,
+                    ..
+                } = p
+                {
+                    *interrupted = reason.clone();
+                }
                 tracked.preview = Some(p);
             }
             _ => {}
@@ -855,7 +879,15 @@ impl AgentFsm {
         // Clean up any pending execution timeout for this tool
         self.ctx.tool_timeout_ids.retain(|_, tid| tid != &tool_id);
 
-        let content = outcome.format_for_llm();
+        // Format LLM content — override the generic "[Interrupted by user]" with
+        // a specific message when the FSM knows the reason.
+        let mut content = outcome.format_for_llm();
+        if let Some(tools::InterruptReason::Timeout(secs)) = &reason {
+            content = content.replace(
+                "[Interrupted by user]",
+                &format!("[Timed out after {secs}s]"),
+            );
+        }
         let is_error = outcome.is_error();
         self.ctx.events.push(ConversationEvent::ToolResult {
             tool_use_id: tool_id,
@@ -875,13 +907,20 @@ impl AgentFsm {
             return vec![];
         }
 
-        let Some(tracked) = self.ctx.tools.get(&tool_id) else {
+        let Some(tracked) = self.ctx.tools.get_mut(&tool_id) else {
             return vec![];
         };
 
         if tracked.is_resolved() {
             return vec![];
         }
+
+        // Tag the tool so handle_tool_done can distinguish timeout from user interrupt
+        let timeout_secs = match &tracked.tool {
+            crate::tools::ClientToolCall::Shell(s) => s.timeout_secs,
+            _ => 0,
+        };
+        tracked.interrupt_reason = Some(tools::InterruptReason::Timeout(timeout_secs));
 
         // Abort the tool — the driver sends the interrupt signal via oneshot,
         // and execute_shell_command_streaming returns a Structured outcome with

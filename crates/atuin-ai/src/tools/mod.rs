@@ -134,7 +134,7 @@ impl ToolOutcome {
 pub(crate) struct ToolPreview {
     pub lines: Vec<String>,
     pub exit_code: Option<i32>,
-    pub interrupted: bool,
+    pub interrupted: Option<crate::fsm::tools::InterruptReason>,
 }
 
 /// A tool call from the server, with parsed input parameters.
