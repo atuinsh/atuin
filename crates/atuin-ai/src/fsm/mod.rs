@@ -447,11 +447,24 @@ impl AgentFsm {
                 },
             ) => {
                 if let Some(tracked) = self.ctx.tools.get_mut(&tool_id) {
-                    tracked.preview = Some(tools::ToolPreviewData::Shell {
-                        lines,
-                        exit_code,
-                        interrupted: false,
-                    });
+                    if tracked.is_resolved() {
+                        // Tool already completed — a late preview update raced with
+                        // ToolExecutionDone. Update lines (they may carry the final
+                        // screen) but preserve the finalized exit_code/interrupted.
+                        if let Some(tools::ToolPreviewData::Shell {
+                            lines: existing_lines,
+                            ..
+                        }) = &mut tracked.preview
+                        {
+                            *existing_lines = lines;
+                        }
+                    } else {
+                        tracked.preview = Some(tools::ToolPreviewData::Shell {
+                            lines,
+                            exit_code,
+                            interrupted: false,
+                        });
+                    }
                 }
                 vec![]
             }
@@ -799,8 +812,30 @@ impl AgentFsm {
         }
 
         tracked.state = ToolState::Completed;
-        if preview.is_some() {
-            tracked.preview = preview;
+
+        // Merge shell preview: the final ToolExecutionDone carries exit_code/interrupted
+        // but has empty lines (the live lines were accumulated via ToolPreviewUpdate).
+        // Preserve the accumulated lines and fold in the terminal metadata.
+        match (&mut tracked.preview, preview) {
+            (
+                Some(tools::ToolPreviewData::Shell {
+                    exit_code,
+                    interrupted,
+                    ..
+                }),
+                Some(tools::ToolPreviewData::Shell {
+                    exit_code: final_exit,
+                    interrupted: final_interrupted,
+                    ..
+                }),
+            ) => {
+                *exit_code = final_exit;
+                *interrupted = final_interrupted;
+            }
+            (_, Some(p)) => {
+                tracked.preview = Some(p);
+            }
+            _ => {}
         }
 
         let content = outcome.format_for_llm();
