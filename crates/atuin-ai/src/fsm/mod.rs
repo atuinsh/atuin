@@ -217,7 +217,7 @@ impl AgentFsm {
                     let timeout_id = self.ctx.next_timeout_id();
                     self.state = AgentState::Idle {
                         confirmation: Some(PendingConfirmation {
-                            command: cmd.clone(),
+                            command: cmd,
                             timeout_id,
                         }),
                     };

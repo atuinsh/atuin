@@ -144,6 +144,16 @@ impl ViewState {
 // Main driver loop
 // ============================================================================
 
+struct DriverContext<'a> {
+    fsm: &'a mut AgentFsm,
+    io: &'a mut IoContext,
+    handle: &'a Handle<ViewState>,
+    tx: &'a mpsc::Sender<DriverEvent>,
+    exiting: &'a Arc<AtomicBool>,
+    stream_cancel_tx: &'a mut Option<tokio::sync::watch::Sender<()>>,
+    tool_abort_txs: &'a mut std::collections::HashMap<String, tokio::sync::oneshot::Sender<()>>,
+}
+
 /// Main driver loop. Processes events, transitions FSM, syncs view, executes effects.
 ///
 /// Runs on a blocking thread. Returns when the event channel closes or exit is requested.
@@ -189,16 +199,18 @@ pub(crate) fn run_driver(
                 if matches!(effect, Effect::Persist) {
                     persist(&fsm, &mut io);
                 }
-                execute_effect(
-                    effect,
-                    &fsm,
-                    &mut io,
-                    &handle,
-                    &tx,
-                    &exiting,
-                    &mut stream_cancel_tx,
-                    &mut tool_abort_txs,
-                );
+
+                let ctx = DriverContext {
+                    fsm: &mut fsm,
+                    io: &mut io,
+                    handle: &handle,
+                    tx: &tx,
+                    exiting: &exiting,
+                    stream_cancel_tx: &mut stream_cancel_tx,
+                    tool_abort_txs: &mut tool_abort_txs,
+                };
+
+                execute_effect(effect, ctx);
             }
 
             // Final sync after effects — ensures the render thread sees
@@ -283,11 +295,7 @@ fn translate_tui_event(event: AiTuiEvent, handle: &Handle<ViewState>) -> Option<
                 .fetch(|vs| vs.tools.awaiting_permission().map(|t| t.id.clone()))
                 .blocking_recv()
                 .ok()
-                .flatten();
-
-            let Some(tool_id) = tool_id else {
-                return None;
-            };
+                .flatten()?;
 
             let choice = match result {
                 PermissionResult::Allow => PermissionChoice::Allow,
@@ -373,16 +381,17 @@ fn sync_view_state(handle: &Handle<ViewState>, fsm: &AgentFsm, in_git_project: b
 // Effect execution
 // ============================================================================
 
-fn execute_effect(
-    effect: &Effect,
-    fsm: &AgentFsm,
-    io: &mut IoContext,
-    handle: &Handle<ViewState>,
-    tx: &mpsc::Sender<DriverEvent>,
-    exiting: &Arc<AtomicBool>,
-    stream_cancel_tx: &mut Option<tokio::sync::watch::Sender<()>>,
-    tool_abort_txs: &mut std::collections::HashMap<String, tokio::sync::oneshot::Sender<()>>,
-) {
+fn execute_effect(effect: &Effect, ctx: DriverContext) {
+    let DriverContext {
+        fsm,
+        io,
+        handle,
+        tx,
+        exiting,
+        stream_cancel_tx,
+        tool_abort_txs,
+    } = ctx;
+
     match effect {
         Effect::StartStream {
             messages,
@@ -425,14 +434,14 @@ fn execute_effect(
                 .unwrap_or_else(|| PathBuf::from("."));
 
             // Check session grants first (synchronous)
-            if let Some(resolved) = tool.resolved_file_path() {
-                if io.edit_permissions.has_valid_grant(&resolved) {
-                    let _ = tx.send(DriverEvent::Fsm(Event::PermissionResolved {
-                        tool_id,
-                        response: PermissionResponse::SessionGranted,
-                    }));
-                    return;
-                }
+            if let Some(resolved) = tool.resolved_file_path()
+                && io.edit_permissions.has_valid_grant(&resolved)
+            {
+                let _ = tx.send(DriverEvent::Fsm(Event::PermissionResolved {
+                    tool_id,
+                    response: PermissionResponse::SessionGranted,
+                }));
+                return;
             }
 
             tokio::spawn(async move {
@@ -524,23 +533,22 @@ fn execute_effect(
 
                     // Capture old content for snapshot + diff preview
                     let old_content = std::fs::read(&resolved).ok();
-                    if let Some(ref content) = old_content {
-                        if let Some(ref mut store) = io.snapshot_store {
-                            if let Err(e) = store.ensure_snapshot(&resolved, content) {
-                                tracing::warn!("Failed to snapshot before edit: {e}");
-                            }
-                        }
+                    if let Some(ref content) = old_content
+                        && let Some(ref mut store) = io.snapshot_store
+                        && let Err(e) = store.ensure_snapshot(&resolved, content)
+                    {
+                        tracing::warn!("Failed to snapshot before edit: {e}");
                     }
 
                     // Edit is fast (file read + string replace + write) — run inline
                     let (outcome, new_content) = edit_call.execute(&resolved, &io.file_tracker);
 
                     // Update file tracker with new content
-                    if let Some(new_bytes) = &new_content {
-                        if let Ok(mtime) = std::fs::metadata(&resolved).and_then(|m| m.modified()) {
-                            io.file_tracker
-                                .update_after_edit(&resolved, new_bytes, mtime);
-                        }
+                    if let Some(new_bytes) = &new_content
+                        && let Ok(mtime) = std::fs::metadata(&resolved).and_then(|m| m.modified())
+                    {
+                        io.file_tracker
+                            .update_after_edit(&resolved, new_bytes, mtime);
                     }
 
                     // Compute diff preview
@@ -568,23 +576,22 @@ fn execute_effect(
                     let resolved = write_call.resolved_path();
 
                     // Snapshot existing file before overwriting
-                    if let Ok(content) = std::fs::read(&resolved) {
-                        if let Some(ref mut store) = io.snapshot_store {
-                            if let Err(e) = store.ensure_snapshot(&resolved, &content) {
-                                tracing::warn!("Failed to snapshot before write: {e}");
-                            }
-                        }
+                    if let Ok(content) = std::fs::read(&resolved)
+                        && let Some(ref mut store) = io.snapshot_store
+                        && let Err(e) = store.ensure_snapshot(&resolved, &content)
+                    {
+                        tracing::warn!("Failed to snapshot before write: {e}");
                     }
 
                     // Write is fast (atomic file write) — run inline
                     let (outcome, written_bytes) = write_call.execute(&resolved);
 
                     // Update file tracker with new content
-                    if let Some(new_bytes) = &written_bytes {
-                        if let Ok(mtime) = std::fs::metadata(&resolved).and_then(|m| m.modified()) {
-                            io.file_tracker
-                                .update_after_edit(&resolved, new_bytes, mtime);
-                        }
+                    if let Some(new_bytes) = &written_bytes
+                        && let Ok(mtime) = std::fs::metadata(&resolved).and_then(|m| m.modified())
+                    {
+                        io.file_tracker
+                            .update_after_edit(&resolved, new_bytes, mtime);
                     }
 
                     let preview = if !outcome.is_error() {
@@ -608,14 +615,12 @@ fn execute_effect(
                     // Track the read for freshness checking on subsequent edits
                     if !outcome.is_error() {
                         let resolved = read_call.resolved_path();
-                        if resolved.is_file() {
-                            if let Ok(content) = std::fs::read(&resolved) {
-                                if let Ok(mtime) =
-                                    std::fs::metadata(&resolved).and_then(|m| m.modified())
-                                {
-                                    io.file_tracker.record_read(resolved, &content, mtime);
-                                }
-                            }
+                        if resolved.is_file()
+                            && let Ok(content) = std::fs::read(&resolved)
+                            && let Ok(mtime) =
+                                std::fs::metadata(&resolved).and_then(|m| m.modified())
+                        {
+                            io.file_tracker.record_read(resolved, &content, mtime);
                         }
                     }
 
@@ -722,26 +727,26 @@ fn persist(fsm: &AgentFsm, io: &mut IoContext) {
     if let Err(e) = rt.block_on(io.session_mgr.persist_events(&fsm.ctx.events)) {
         tracing::warn!("Failed to persist session events: {e}");
     }
-    if let Some(ref sid) = fsm.ctx.session_id {
-        if let Err(e) = rt.block_on(io.session_mgr.persist_server_session_id(sid)) {
-            tracing::warn!("Failed to persist server session ID: {e}");
-        }
+    if let Some(ref sid) = fsm.ctx.session_id
+        && let Err(e) = rt.block_on(io.session_mgr.persist_server_session_id(sid))
+    {
+        tracing::warn!("Failed to persist server session ID: {e}");
     }
-    if let Ok(json) = io.file_tracker.to_json() {
-        if let Err(e) = rt.block_on(
+    if let Ok(json) = io.file_tracker.to_json()
+        && let Err(e) = rt.block_on(
             io.session_mgr
                 .set_metadata(crate::file_tracker::METADATA_KEY, &json),
-        ) {
-            tracing::warn!("Failed to persist file tracker: {e}");
-        }
+        )
+    {
+        tracing::warn!("Failed to persist file tracker: {e}");
     }
-    if let Ok(json) = io.edit_permissions.to_json() {
-        if let Err(e) = rt.block_on(
+    if let Ok(json) = io.edit_permissions.to_json()
+        && let Err(e) = rt.block_on(
             io.session_mgr
                 .set_metadata(crate::edit_permissions::METADATA_KEY, &json),
-        ) {
-            tracing::warn!("Failed to persist edit permissions: {e}");
-        }
+        )
+    {
+        tracing::warn!("Failed to persist edit permissions: {e}");
     }
     tracing::trace!(elapsed_ms = start.elapsed().as_millis(), "persist complete");
 }
