@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 
+use crate::fsm::tools::ToolManager;
 use crate::tools::descriptor;
-use crate::tools::{ClientToolCall, HistorySearchFilterMode, ToolPreview, ToolTracker};
+use crate::tools::{ClientToolCall, HistorySearchFilterMode, ToolPreview};
 use crate::tui::ConversationEvent;
 
 /// Server-sent danger level for a suggested command
@@ -210,12 +211,12 @@ pub(crate) enum UiTurn {
 pub(crate) struct TurnBuilder<'a> {
     turns: Vec<UiTurn>,
     current_turn: Option<UiTurn>,
-    tracker: &'a ToolTracker,
+    tracker: &'a ToolManager,
 }
 
 /// A struct to iteratively build [UiTurn] events from [ConversationEvent]s.
 impl<'a> TurnBuilder<'a> {
-    pub(crate) fn new(tracker: &'a ToolTracker) -> Self {
+    pub(crate) fn new(tracker: &'a ToolManager) -> Self {
         Self {
             turns: Vec::new(),
             current_turn: None,
@@ -441,18 +442,18 @@ impl<'a> TurnBuilder<'a> {
             match &tracked.tool {
                 ClientToolCall::Shell(shell) => ToolRenderData::Shell {
                     command: shell.command.clone(),
-                    preview: tracked.preview(),
+                    preview: tracked.shell_preview(),
                 },
                 ClientToolCall::Read(read) => ToolRenderData::FileRead {
                     path: read.path.clone(),
                 },
                 ClientToolCall::Edit(edit) => ToolRenderData::FileEdit {
                     path: edit.path.clone(),
-                    preview: tracked.edit_preview.clone(),
+                    preview: tracked.edit_preview().cloned(),
                 },
                 ClientToolCall::Write(write) => ToolRenderData::FileWrite {
                     path: write.path.clone(),
-                    preview: tracked.write_preview.clone(),
+                    preview: tracked.write_preview().cloned(),
                 },
                 ClientToolCall::AtuinHistory(history) => ToolRenderData::HistorySearch {
                     query: history.query.clone(),

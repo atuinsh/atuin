@@ -13,12 +13,8 @@ pub(crate) enum AiTuiEvent {
     /// User entered a slash command (e.g. "/help")
     #[allow(unused)]
     SlashCommand(String),
-    /// Check the permission for a tool call
-    CheckToolCallPermission(String),
     /// User selected a permission
     SelectPermission(PermissionResult),
-    /// Continue after client tools have completed
-    ContinueAfterTools,
     /// Cancel active generation or streaming (Esc during Generating/Streaming)
     CancelGeneration,
     /// Execute the suggested command

@@ -19,6 +19,32 @@ pub(crate) struct AppContext {
     pub capabilities: AiCapabilities,
 }
 
+impl AppContext {
+    pub(crate) fn capabilities_as_strings(&self) -> Vec<String> {
+        let mut caps = vec!["client_invocations".to_string()];
+        if self.capabilities.enable_history_search.unwrap_or(true) {
+            caps.push("client_v1_atuin_history".to_string());
+        }
+        if self.capabilities.enable_file_tools.unwrap_or(true) {
+            caps.push("client_v1_read_file".to_string());
+            caps.push("client_v1_edit_file".to_string());
+            caps.push("client_v1_write_file".to_string());
+        }
+        if self.capabilities.enable_command_execution.unwrap_or(true) {
+            caps.push("client_v1_execute_shell_command".to_string());
+        }
+        if let Ok(extra) = std::env::var("ATUIN_AI__ADDITIONAL_CAPS") {
+            caps.extend(
+                extra
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty()),
+            );
+        }
+        caps
+    }
+}
+
 /// Machine identity — computed once per session.
 #[derive(Clone, Debug)]
 pub(crate) struct ClientContext {

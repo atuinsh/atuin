@@ -6,7 +6,7 @@
 //!
 //! On Enter, sends `AiTuiEvent::SubmitInput` via the context-provided channel.
 
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, Mutex};
 
 use crossterm::event::KeyModifiers;
 use eye_declare::{Canvas, Elements, EventResult, Hooks, component, element, props};
@@ -19,6 +19,7 @@ use ratatui_core::{
 };
 use tui_textarea::TextArea;
 
+use crate::commands::inline::DriverEventSender;
 use crate::tui::{events::AiTuiEvent, slash::SlashCommandSearchResult};
 
 /// A bordered text input box backed by tui-textarea.
@@ -41,7 +42,7 @@ pub(crate) struct InputBox {
 
 pub(crate) struct InputBoxState {
     textarea: Arc<Mutex<TextArea<'static>>>,
-    tx: Option<mpsc::Sender<AiTuiEvent>>,
+    tx: Option<DriverEventSender>,
 }
 
 impl Default for InputBoxState {
@@ -97,10 +98,13 @@ fn input_box(
     state: &InputBoxState,
     hooks: &mut Hooks<InputBox, InputBoxState>,
 ) -> Elements {
-    hooks.use_focusable(props.active);
+    // Always focusable so focus isn't lost when the permission Select is
+    // removed from the tree. The `active` prop controls visual state and
+    // whether keystrokes are processed, not focusability.
+    hooks.use_focusable(true);
     hooks.use_autofocus();
 
-    hooks.use_context::<mpsc::Sender<AiTuiEvent>>(|tx, _, state| {
+    hooks.use_context::<DriverEventSender>(|tx, _, state| {
         state.tx = tx.cloned();
     });
 

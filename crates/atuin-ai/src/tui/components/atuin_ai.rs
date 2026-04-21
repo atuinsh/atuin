@@ -5,11 +5,10 @@
 //! Tab) are handled in the bubble phase so child components like the
 //! permission Select can consume them first.
 
-use std::sync::mpsc;
-
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use eye_declare::{Elements, EventResult, Hooks, component, props};
 
+use crate::commands::inline::DriverEventSender;
 use crate::tui::events::AiTuiEvent;
 use crate::tui::state::AppMode;
 
@@ -28,7 +27,7 @@ pub(crate) struct AtuinAi {
 
 #[derive(Default)]
 pub(crate) struct AtuinAiState {
-    tx: Option<mpsc::Sender<AiTuiEvent>>,
+    tx: Option<DriverEventSender>,
 }
 
 #[component(props = AtuinAi, state = AtuinAiState, children = Elements)]
@@ -38,7 +37,7 @@ fn atuin_ai(
     hooks: &mut Hooks<AtuinAi, AtuinAiState>,
     children: Elements,
 ) -> Elements {
-    hooks.use_context::<mpsc::Sender<AiTuiEvent>>(|tx, _, state| {
+    hooks.use_context::<DriverEventSender>(|tx, _, state| {
         state.tx = tx.cloned();
     });
 
