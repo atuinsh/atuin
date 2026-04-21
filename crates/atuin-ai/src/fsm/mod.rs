@@ -93,7 +93,10 @@ pub(crate) struct AgentContext {
     /// Accumulated text from current stream (committed to events on tool call or stream end).
     pub current_response: String,
     /// Per-tool lifecycle state and cached render data.
+    /// Tools persist across turns for rendering history.
     pub tools: ToolManager,
+    /// Whether the current turn had any client tool calls (gates continuation).
+    pub turn_has_tools: bool,
     /// Counter for generating unique timeout IDs.
     next_timeout_id: u64,
     /// Capabilities advertised to the server.
@@ -134,6 +137,7 @@ impl AgentFsm {
                 session_id: None,
                 current_response: String::new(),
                 tools: ToolManager::new(),
+                turn_has_tools: false,
                 next_timeout_id: 0,
                 capabilities,
                 invocation_id,
@@ -155,6 +159,7 @@ impl AgentFsm {
                 session_id,
                 current_response: String::new(),
                 tools: ToolManager::new(),
+                turn_has_tools: false,
                 next_timeout_id: 0,
                 capabilities,
                 invocation_id,
@@ -256,9 +261,11 @@ impl AgentFsm {
             }
 
             (AgentState::Idle { .. }, Event::NewSession) => {
+                // Don't clear tools — archived events still reference them
+                // for rendering. The driver handles archiving visible events.
                 self.ctx.events.clear();
                 self.ctx.session_id = None;
-                self.ctx.tools.clear();
+                self.ctx.turn_has_tools = false;
                 self.state = AgentState::Idle { confirmation: None };
                 vec![Effect::ArchiveSession, Effect::Persist]
             }
@@ -519,8 +526,10 @@ impl AgentFsm {
         self.ctx
             .events
             .push(ConversationEvent::UserMessage { content: msg });
-        self.ctx.tools.clear();
+        // Don't clear tools — completed tools persist for rendering history.
+        // Tools are only cleared on /new (session reset).
         self.ctx.current_response.clear();
+        self.ctx.turn_has_tools = false;
 
         let messages = self.build_messages();
         let session_id = self.ctx.session_id.clone();
@@ -598,6 +607,7 @@ impl AgentFsm {
         // Track the tool and push ToolCall event
         let tool_for_effect = tool.clone();
         self.ctx.tools.insert(id.clone(), tool);
+        self.ctx.turn_has_tools = true;
         self.ctx.events.push(ConversationEvent::ToolCall {
             id: id.clone(),
             name,
@@ -784,15 +794,13 @@ impl AgentFsm {
         }
 
         // Turn is complete. Check if we need to continue (tool results to send back).
-        // We continue if there were any client tools that produced results (the LLM
-        // needs to see them and respond).
-        let has_tool_results = !self.ctx.tools.is_empty();
-
-        if has_tool_results {
-            // Continue conversation with tool results
+        // We continue if this turn had any client tool calls (the LLM needs to see
+        // the results and respond).
+        if self.ctx.turn_has_tools {
+            // Continue conversation with tool results.
+            // Don't clear tools — they persist for rendering history.
             let messages = self.build_messages();
             let session_id = self.ctx.session_id.clone();
-            self.ctx.tools.clear();
             self.ctx.current_response.clear();
             self.state = AgentState::Turn {
                 stream: StreamPhase::Connecting,
