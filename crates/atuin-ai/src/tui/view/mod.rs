@@ -91,6 +91,15 @@ pub(crate) fn ai_view(state: &ViewState) -> Elements {
                 }
             })
 
+            #(if let AgentState::Error(ref msg) = state.agent_state {
+                View(key: "error-display", padding_left: Cells::from(2), padding_top: Cells::from(1)) {
+                    Text {
+                        Span(text: "Error: ", style: Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
+                        Span(text: msg, style: Style::default().fg(Color::Red))
+                    }
+                }
+            })
+
             #(if !state.is_exiting() {
                 #(input_view(state))
             })

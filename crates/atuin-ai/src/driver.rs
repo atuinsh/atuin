@@ -111,8 +111,9 @@ impl ViewState {
         matches!(self.agent_state, AgentState::Idle { .. }) && !self.has_confirmation()
     }
 
+    /// Whether any command has been suggested in the current invocation.
     pub fn has_command(&self) -> bool {
-        self.all_events.iter().any(|e| {
+        self.visible_events.iter().any(|e| {
             if let ConversationEvent::ToolCall { name, input, .. } = e {
                 name == "suggest_command" && input.get("command").and_then(|v| v.as_str()).is_some()
             } else {
@@ -225,7 +226,11 @@ fn translate_tui_event(event: AiTuiEvent, handle: &Handle<ViewState>) -> Option<
             } else if input == "/new" {
                 Some(Event::NewSession)
             } else if input.starts_with('/') {
-                Some(Event::SlashCommand(input))
+                let content = resolve_slash_command(&input, handle);
+                Some(Event::SlashCommand {
+                    command: input,
+                    content,
+                })
             } else {
                 Some(Event::UserSubmit(input))
             }
@@ -278,7 +283,34 @@ fn translate_tui_event(event: AiTuiEvent, handle: &Handle<ViewState>) -> Option<
             };
             Some(Event::PermissionUserChoice { tool_id, choice })
         }
-        AiTuiEvent::SlashCommand(cmd) => Some(Event::SlashCommand(cmd)),
+        AiTuiEvent::SlashCommand(cmd) => {
+            let content = resolve_slash_command(&cmd, handle);
+            Some(Event::SlashCommand {
+                command: cmd,
+                content,
+            })
+        }
+    }
+}
+
+/// Resolve a slash command to its output content.
+fn resolve_slash_command(command: &str, handle: &Handle<ViewState>) -> String {
+    match command.trim() {
+        "/help" => {
+            let commands = handle
+                .fetch(|vs| {
+                    vs.slash_registry
+                        .get_commands()
+                        .iter()
+                        .map(|cmd| format!("- `/{}` — {}", cmd.name, cmd.description))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                })
+                .blocking_recv()
+                .unwrap_or_default();
+            include_str!("tui/content/help.md").replace("{commands}", &commands)
+        }
+        _ => format!("Unknown command: {command}"),
     }
 }
 

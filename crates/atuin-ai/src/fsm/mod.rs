@@ -210,7 +210,8 @@ impl AgentFsm {
             (AgentState::Idle { confirmation: None }, Event::ExecuteCommand) => {
                 let cmd = self.current_command();
                 let Some(cmd) = cmd else {
-                    return vec![];
+                    // No command suggested — exit
+                    return vec![Effect::ExitApp(ExitAction::Cancel)];
                 };
                 if self.is_current_command_dangerous() {
                     let timeout_id = self.ctx.next_timeout_id();
@@ -295,8 +296,8 @@ impl AgentFsm {
                 vec![Effect::ArchiveSession, Effect::Persist]
             }
 
-            (AgentState::Idle { .. }, Event::SlashCommand(cmd)) => {
-                self.handle_slash_command(&cmd);
+            (AgentState::Idle { .. }, Event::SlashCommand { command, content }) => {
+                self.handle_slash_command(&command, &content);
                 vec![]
             }
 
@@ -528,8 +529,8 @@ impl AgentFsm {
             // ================================================================
             // Fallthrough — ignore events with no valid transition
             // ================================================================
-            (_, Event::SlashCommand(cmd)) => {
-                self.handle_slash_command(&cmd);
+            (_, Event::SlashCommand { command, content }) => {
+                self.handle_slash_command(&command, &content);
                 vec![]
             }
 
@@ -851,10 +852,9 @@ impl AgentFsm {
     }
 
     /// Get the most recent suggested command from the conversation.
+    /// Get the most recent command from the current invocation only.
     fn current_command(&self) -> Option<String> {
-        self.ctx
-            .events
-            .iter()
+        self.current_invocation_events()
             .rev()
             .find_map(|e| e.as_command())
             .map(|s| s.to_string())
@@ -862,9 +862,7 @@ impl AgentFsm {
 
     /// Check if the most recent command is dangerous.
     fn is_current_command_dangerous(&self) -> bool {
-        self.ctx
-            .events
-            .iter()
+        self.current_invocation_events()
             .rev()
             .find_map(|e| {
                 if let ConversationEvent::ToolCall { name, input, .. } = e
@@ -882,13 +880,18 @@ impl AgentFsm {
             .unwrap_or(false)
     }
 
+    /// Events from the current invocation only (from view_start_index onward).
+    fn current_invocation_events(&self) -> impl DoubleEndedIterator<Item = &ConversationEvent> {
+        let start = self.ctx.view_start_index.min(self.ctx.events.len());
+        self.ctx.events[start..].iter()
+    }
+
     /// Handle a slash command by pushing an OOB event.
-    fn handle_slash_command(&mut self, command: &str) {
-        // /new is handled separately as Event::NewSession
+    fn handle_slash_command(&mut self, command: &str, content: &str) {
         self.ctx.events.push(ConversationEvent::OutOfBandOutput {
             name: "System".to_string(),
             command: Some(command.to_string()),
-            content: format!("Unknown command: {command}"),
+            content: content.to_string(),
         });
     }
 }

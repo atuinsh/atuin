@@ -87,7 +87,9 @@ pub(crate) enum Event {
 
     // ─── Slash commands ─────────────────────────────────────────
     /// User submitted a slash command (other than /new).
-    SlashCommand(String),
+    /// The driver resolves known commands (like /help) and passes the
+    /// rendered content; the FSM just pushes an OOB event.
+    SlashCommand { command: String, content: String },
 }
 
 /// Result of the permission resolver check.
