@@ -409,6 +409,14 @@ macOS does not have an ++alt++ key, although terminal emulators can often be con
 ctrl_n_shortcuts = true
 ```
 
+### show_numeric_shortcuts
+
+Atuin version: >= 18.9
+
+Default: `true`
+
+Whether to show numeric shortcuts (1..9) beside list items in the TUI. Set this to `false` to hide the moving numbers if you find them distracting.
+
 ### `network_timeout`
 
 Atuin version: >= 18.0
