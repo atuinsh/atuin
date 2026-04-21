@@ -471,7 +471,7 @@ impl ReadToolCall {
         }
     }
 
-    fn execute(&self) -> ToolOutcome {
+    pub fn execute(&self) -> ToolOutcome {
         let path = self.resolved_path();
 
         if !path.exists() {

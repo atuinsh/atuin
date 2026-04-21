@@ -471,22 +471,46 @@ fn execute_effect(
                 ClientToolCall::Edit(edit_call) => {
                     let resolved = edit_call.resolved_path();
 
-                    // Snapshot before editing
-                    if let Ok(content) = std::fs::read(&resolved) {
+                    // Capture old content for snapshot + diff preview
+                    let old_content = std::fs::read(&resolved).ok();
+                    if let Some(ref content) = old_content {
                         if let Some(ref mut store) = io.snapshot_store {
-                            if let Err(e) = store.ensure_snapshot(&resolved, &content) {
+                            if let Err(e) = store.ensure_snapshot(&resolved, content) {
                                 tracing::warn!("Failed to snapshot before edit: {e}");
                             }
                         }
                     }
 
                     // Edit is fast (file read + string replace + write) — run inline
-                    let (outcome, _new_content) = edit_call.execute(&resolved, &io.file_tracker);
+                    let (outcome, new_content) = edit_call.execute(&resolved, &io.file_tracker);
+
+                    // Update file tracker with new content
+                    if let Some(new_bytes) = &new_content {
+                        if let Ok(mtime) = std::fs::metadata(&resolved).and_then(|m| m.modified()) {
+                            io.file_tracker
+                                .update_after_edit(&resolved, new_bytes, mtime);
+                        }
+                    }
+
+                    // Compute diff preview
+                    let preview = match (&old_content, &new_content) {
+                        (Some(old_bytes), Some(new_bytes)) => {
+                            let old_str = String::from_utf8_lossy(old_bytes);
+                            let new_str = String::from_utf8_lossy(new_bytes);
+                            let diff = crate::diff::EditPreview::compute(&old_str, &new_str);
+                            if diff.hunks.is_empty() {
+                                None
+                            } else {
+                                Some(ToolPreviewData::Edit(diff))
+                            }
+                        }
+                        _ => None,
+                    };
 
                     let _ = tx.send(DriverEvent::Fsm(Event::ToolExecutionDone {
                         tool_id,
                         outcome,
-                        preview: None, // TODO: diff preview
+                        preview,
                     }));
                 }
                 ClientToolCall::Write(write_call) => {
@@ -502,7 +526,15 @@ fn execute_effect(
                     }
 
                     // Write is fast (atomic file write) — run inline
-                    let (outcome, _written_bytes) = write_call.execute(&resolved);
+                    let (outcome, written_bytes) = write_call.execute(&resolved);
+
+                    // Update file tracker with new content
+                    if let Some(new_bytes) = &written_bytes {
+                        if let Ok(mtime) = std::fs::metadata(&resolved).and_then(|m| m.modified()) {
+                            io.file_tracker
+                                .update_after_edit(&resolved, new_bytes, mtime);
+                        }
+                    }
 
                     let preview = if !outcome.is_error() {
                         Some(ToolPreviewData::Write(
@@ -518,8 +550,32 @@ fn execute_effect(
                         preview,
                     }));
                 }
-                _ => {
-                    // Read, AtuinHistory — generic async execution
+                ClientToolCall::Read(read_call) => {
+                    // Read is fast (file read) — run inline so we can update file_tracker
+                    let outcome = read_call.execute();
+
+                    // Track the read for freshness checking on subsequent edits
+                    if !outcome.is_error() {
+                        let resolved = read_call.resolved_path();
+                        if resolved.is_file() {
+                            if let Ok(content) = std::fs::read(&resolved) {
+                                if let Ok(mtime) =
+                                    std::fs::metadata(&resolved).and_then(|m| m.modified())
+                                {
+                                    io.file_tracker.record_read(resolved, &content, mtime);
+                                }
+                            }
+                        }
+                    }
+
+                    let _ = tx.send(DriverEvent::Fsm(Event::ToolExecutionDone {
+                        tool_id,
+                        outcome,
+                        preview: None,
+                    }));
+                }
+                ClientToolCall::AtuinHistory(_) => {
+                    // History search needs async DB access
                     tokio::spawn(async move {
                         let outcome = tool.execute(&db).await;
                         let _ = tx.send(DriverEvent::Fsm(Event::ToolExecutionDone {
